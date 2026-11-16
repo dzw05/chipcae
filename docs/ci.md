@@ -201,7 +201,7 @@ At 80% of the budget (1,200 minutes, unless `ACTIONS_MINUTE_BUDGET` or `ACTIONS_
 
 ## Who can start a run
 
-Pushes by the Cursor agent identity (`cursoragent` / `cursor[bot]`) do not trigger Actions on this repository. A push by `dzw05` is what starts the workflows. The runs below exist because `dzw05` pushed empty commit `c30a289`; GitHub then ran the workflows for `cbb8b5b`. Commit `c3d65bc` (the ccache path fix, pushed by `cursoragent`) has no Actions run. Do not read a missing check on an agent push as a passing or failing build.
+Pushes by the Cursor agent identity (`cursoragent` / `cursor[bot]`) are not a reliable way to start Actions on this repository. A push by `dzw05` is what reliably starts the workflows. The cold and nightly runs below exist because `dzw05` pushed empty commit `c30a289`; GitHub then ran the workflows for `cbb8b5b`. Commit `c3d65bc` (the ccache path fix, pushed by `cursoragent`) has no Actions run. A later `cursor[bot]` pull-request run did complete on `fbb160e` (run 43900495478). Do not read a missing check on an agent push as a passing or failing build.
 
 ## Monthly estimate
 
@@ -218,12 +218,12 @@ Both workflows succeeded. Times are UTC, from `gh run view --json jobs` on 2026-
 | --- | --- | --- | --- | --- |
 | `CI / Lint` | 43899064936 | 15:41:24→15:41:33, 9 s | 1 | pip cache miss |
 | `CI / Build and test` | 43899064936 | 15:41:37→15:42:27, 50 s | 1 | cold. `actions/cache` reported no `~/.cache/ccache` entry and did not save one |
-| `CI / Build and test` | — | TBD | TBD | warm not measured. `c3d65bc` did not start a run |
+| `CI / Build and test` | [43900495478](https://github.com/dzw05/chipcae/actions/runs/43900495478) | 15:49:12→15:49:51, 39 s | 1 | warm. ccache 21/21 hits, 0 misses. Head `fbb160e` |
 | Nightly clang | 43899065127 | 39 s | 1 | cold |
 | Nightly CUDA compile | 43899065127 | 15:41:25→15:44:26, about 3 min 1 s | 4 | `nvcc -c` only, not executed |
 | Actions usage | 43899065127 | 7 s | 1 | no billing token, skip path |
 
-The cold build is already at the 1-minute billing floor (50 s rounds up to 1). A warm rebuild cannot bill less than that. Its wall time is still unknown.
+The cold build is already at the 1-minute billing floor (50 s rounds up to 1). The warm rebuild is faster on the clock (39 s, 100% ccache hits) and still bills 1 minute.
 
 ### Assumptions
 
@@ -233,7 +233,7 @@ The cold build is already at the 1-minute billing floor (50 s rounds up to 1). A
 - Every calendar day: nightly clang, nightly CUDA compile, and the usage check (3 jobs).
 - That is **8 jobs on a workday** (4 + 1 + 3). Weekend days are the 3 nightly jobs only.
 - Tier B stays off, so it adds 0 hosted minutes.
-- Build billed minutes in the formula are the measured cold value, 1. Warm is TBD and cannot lower a 1-minute bill.
+- Build billed minutes in the formula are 1. The warm run is also 1 billed minute, so the cache does not change the monthly total.
 
 ```
 builds = 22 * 2 = 44
