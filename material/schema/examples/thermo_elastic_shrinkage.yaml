@@ -35,7 +35,7 @@ chemical_shrinkage:
     value: 0.0025  # 无量纲，正值表示收缩
     measure: volumetric
   schedule:
-    cure_step_id: "mold_cure"
+    cure_step_ids: ["mold_cure"]
     profile: linear_ramp
 
 provenance:

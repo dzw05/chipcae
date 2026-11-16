@@ -60,12 +60,12 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // 驱动器可实例化；CHUNK 1 的本构为 NotImplemented。
+    // 驱动器可实例化；本构返回 Ok。
     driver::SinglePointDriver drive(*mat);
     const Vec6 eps{1e-4, 0.0, 0.0, 0.0, 0.0, 0.0};
     const auto res = drive.strain_control(eps, 300.0, 1.0);
-    if (res.status.code != StatusCode::NotImplemented) {
-        std::printf("FAIL: expected NotImplemented from CHUNK 1 constitutive stub\n");
+    if (res.status.code != StatusCode::Ok) {
+        std::printf("FAIL: expected Ok from constitutive kernel\n");
         return 1;
     }
 

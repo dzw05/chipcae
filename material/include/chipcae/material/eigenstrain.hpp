@@ -78,8 +78,9 @@ private:
 };
 
 // ---- P0：简化固化收缩（等效各向同性化学收缩应变）----
-class ShrinkageSchedule { // 由 Schema 构造，不可变；只在 cure_step_id
-                          // 所指固化步内按线性斜坡（默认）或表格施加 s_eff
+class ShrinkageSchedule { // 由 Schema 构造，不可变；只在 cure_step_ids（P0 校验恰好一项）
+                          // 中唯一 id 所指固化步内（由 ProcessClock.step_id
+                          // 判断）按线性斜坡（默认）或表格施加 s_eff
 public:
     // 返回该时刻累计体积收缩率 s_ch ≥ 0（正值表示收缩），单调不减
     Real shrinkage(const ProcessClock&, bool) const noexcept {

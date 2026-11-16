@@ -7,16 +7,6 @@ unit_system: SI
 model: prony_viscoelastic
 density: 1900.0  # kg/m^3
 
-elastic:
-  symmetry: isotropic
-  table:
-    temperatures: [298.15, 448.15]
-    columns:
-      E: [2.6e9, 1.2e9]
-      nu: [0.35, 0.35]
-    interpolation: linear
-    extrapolation: error
-
 thermal_expansion:
   cte_type: tangent
   symmetry: isotropic

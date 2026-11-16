@@ -77,7 +77,10 @@ public:
 template <MaterialModel M, class MS>
 class MaterialAdapter final : public IMaterial<MS> {
 public:
-    explicit MaterialAdapter(M model) : model_(std::move(model)) {}
+    explicit MaterialAdapter(M model) : model_(std::move(model)) {
+        if constexpr (requires { model_.approximation_notes(); })
+            notes_[0] = model_.approximation_notes();
+    }
 
     std::string_view model_id() const override { return M::model_id; }
 
@@ -87,17 +90,20 @@ public:
 
     bool tangent_symmetric() const override { return M::tangent_symmetric; }
 
-    std::span<const std::string_view> approximation_notes() const override { return {}; }
+    std::span<const std::string_view> approximation_notes() const override {
+        return notes_[0].empty() ? std::span<const std::string_view>{}
+                                 : std::span<const std::string_view>{notes_, 1};
+    }
 
     void init_state(Soa<Real, MS> state) const override {
         const std::size_t n_points = state.extent(1);
-        const std::size_t stride = state.stride(1);
+        const std::size_t stride = state.stride(0);
         const M model = model_;
         Kokkos::parallel_for(
             "chipcae::material::init_state",
             Kokkos::RangePolicy<ExecSpaceFor<MS>, std::size_t>(0, n_points),
             KOKKOS_LAMBDA(const std::size_t j) {
-                model.init_state(StateRef{&state(0, j), stride});
+                model.init_state(StateRef{state.extent(0) ? &state(0, j) : nullptr, stride});
             });
     }
 
@@ -128,8 +134,9 @@ public:
                     pin.R = &R;
                 }
                 PointOutput pout{};
-                ConstStateRef s_old{&state_old(0, j), state_stride_old};
-                StateRef s_new{&state_new(0, j), state_stride_new};
+                ConstStateRef s_old{state_old.extent(0) ? &state_old(0, j) : nullptr,
+                                    state_stride_old};
+                StateRef s_new{state_new.extent(0) ? &state_new(0, j) : nullptr, state_stride_new};
                 const StatusCode code = model.update(ctx, pin, s_old, s_new, pout);
                 pout.status.code = code;
                 for (int i = 0; i < 6; ++i) {
@@ -151,6 +158,7 @@ public:
     }
 
 private:
+    std::string_view notes_[1]{};
     M model_;
 };
 

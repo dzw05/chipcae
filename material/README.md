@@ -55,6 +55,12 @@ CPU/GPU consistency item stays `pending`.
 
 ## Status
 
-CHUNK 1 skeleton: `mandel.hpp` is fully implemented and tested (T3); constitutive
-models, thermal strain, shift and chemical shrinkage are declared with `TODO(K3)`
-stubs returning `StatusCode::NotImplemented`. See `DELIVERY.md`.
+CHUNK 2 implements thermo-elastic and isotropic Prony point kernels, thermal
+strain/CTE conversion, temperature tables, shift functions and reduced-time
+integration. T0, T3 and focused `core_math` checks pass on CPU. Chemical shrinkage
+and activation combinators remain for chunk 3; the full acceptance suite and GPU
+validation remain pending. See `DELIVERY.md`.
+
+Shrinkage binds through `chemical_shrinkage.schedule.cure_step_ids`, an array
+with exactly one string id in P0. The schedule is later evaluated against
+`ProcessClock.step_id` after the process layer resolves that id.

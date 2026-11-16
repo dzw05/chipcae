@@ -455,13 +455,9 @@
         "schedule": {
           "type": "object",
           "required": [
-            "cure_step_id"
+            "cure_step_ids"
           ],
           "properties": {
-            "cure_step_id": {
-              "type": "string",
-              "description": "施加收缩的固化工艺步（用户指定）"
-            },
             "profile": {
               "enum": [
                 "linear_ramp",
@@ -490,7 +486,21 @@
                   }
                 }
               }
+            },
+            "cure_step_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "maxItems": 1,
+              "description": "P0: exactly one cure process step id"
             }
+          },
+          "not": {
+            "required": [
+              "cure_step_id"
+            ]
           }
         }
       }

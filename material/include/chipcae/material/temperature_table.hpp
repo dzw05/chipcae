@@ -26,6 +26,7 @@ public:
     std::size_t num_temperatures() const noexcept { return temperatures_.size(); }
     std::size_t num_columns() const noexcept { return columns_.size(); }
     const std::vector<Real>& temperatures() const noexcept { return temperatures_; }
+    const std::vector<std::vector<Real>>& columns() const noexcept { return columns_; }
     Interpolation interpolation() const noexcept { return interpolation_; }
     Extrapolation extrapolation() const noexcept { return extrapolation_; }
 
@@ -36,8 +37,10 @@ public:
     // 分段线性插值。out_of_range 时按 extrapolation 处理：Clamp 截断，Error 返回 OutOfRange。
     // v0 只实现 linear；pchip / constant 返回 NotImplemented（D6）。
     StatusCode evaluate(std::size_t column, Real T, Real& value) const noexcept;
+    bool clamped_warning() const noexcept { return clamped_warning_; }
 
 private:
+    mutable bool clamped_warning_ = false;
     std::vector<Real> temperatures_;
     std::vector<std::vector<Real>> columns_;
     Interpolation interpolation_ = Interpolation::Linear;

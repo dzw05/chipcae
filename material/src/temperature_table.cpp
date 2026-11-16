@@ -1,6 +1,8 @@
 // chipcae/material/src/temperature_table.cpp
 #include "chipcae/material/temperature_table.hpp"
 
+#include <cmath>
+#include <stdexcept>
 #include <utility>
 
 namespace chipcae::material {
@@ -10,7 +12,25 @@ TemperatureTable::TemperatureTable(std::vector<Real> temperatures,
                                    Interpolation interpolation,
                                    Extrapolation extrapolation)
     : temperatures_(std::move(temperatures)), columns_(std::move(columns)),
-      interpolation_(interpolation), extrapolation_(extrapolation) {}
+      interpolation_(interpolation), extrapolation_(extrapolation) {
+    if (temperatures_.empty() || columns_.empty())
+        throw std::invalid_argument("temperature table is empty");
+    if (interpolation != Interpolation::Linear)
+        throw std::invalid_argument("interpolation: only linear implemented");
+    for (std::size_t i = 0; i < temperatures_.size(); ++i) {
+        if (!std::isfinite(temperatures_[i]) || (i && temperatures_[i] < temperatures_[i - 1]))
+            throw std::invalid_argument("temperatures must be nondecreasing and finite");
+        if (i > 1 && temperatures_[i] == temperatures_[i - 2])
+            throw std::invalid_argument("at most two knots at a CTE jump");
+    }
+    for (const auto& col : columns_) {
+        if (col.size() != temperatures_.size())
+            throw std::invalid_argument("column length mismatch");
+        for (Real v : col)
+            if (!std::isfinite(v))
+                throw std::invalid_argument("nonfinite table value");
+    }
+}
 
 bool TemperatureTable::strictly_increasing() const noexcept {
     for (std::size_t i = 1; i < temperatures_.size(); ++i)
@@ -27,37 +47,27 @@ bool TemperatureTable::has_duplicate_temperatures() const noexcept {
 }
 
 StatusCode TemperatureTable::evaluate(std::size_t column, Real T, Real& value) const noexcept {
-    if (column >= columns_.size())
+    if (column >= columns_.size() || !std::isfinite(T))
         return StatusCode::Failed;
     const auto& col = columns_[column];
-    if (col.size() != temperatures_.size() || temperatures_.empty())
-        return StatusCode::Failed;
-    if (interpolation_ != Interpolation::Linear)
-        return StatusCode::NotImplemented; // D6
-
-    const std::size_t n = temperatures_.size();
-    if (T <= temperatures_.front()) {
-        if (T < temperatures_.front() && extrapolation_ == Extrapolation::Error)
+    if (T < temperatures_.front() || T > temperatures_.back()) {
+        if (extrapolation_ == Extrapolation::Error)
             return StatusCode::OutOfRange;
+        clamped_warning_ = true;
+    }
+    if (T < temperatures_.front()) {
         value = col.front();
         return StatusCode::Ok;
     }
     if (T >= temperatures_.back()) {
-        if (T > temperatures_.back() && extrapolation_ == Extrapolation::Error)
-            return StatusCode::OutOfRange;
         value = col.back();
         return StatusCode::Ok;
     }
-    for (std::size_t i = 1; i < n; ++i) {
-        if (T <= temperatures_[i]) {
-            const Real t0 = temperatures_[i - 1];
-            const Real t1 = temperatures_[i];
-            const Real w = (T - t0) / (t1 - t0);
-            value = col[i - 1] + w * (col[i] - col[i - 1]);
-            return StatusCode::Ok;
-        }
-    }
-    return StatusCode::OutOfRange;
+    std::size_t i = 0;
+    while (i + 1 < temperatures_.size() && temperatures_[i + 1] <= T)
+        ++i;
+    value = col[i] + (T - temperatures_[i]) / (temperatures_[i + 1] - temperatures_[i]) *
+                         (col[i + 1] - col[i]);
+    return StatusCode::Ok;
 }
-
 } // namespace chipcae::material
