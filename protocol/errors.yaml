@@ -1,0 +1,10 @@
+# Error code table for the chipcae desktop <-> kernel protocol.
+# Maintained by the architecture group.
+#
+# Fields:
+#   code       Integer identifier, unique and stable once published
+#   name       Upper-snake identifier used in generated headers
+#   retryable  Whether the client may retry the same call
+#   message    Default English message; localized text lives in the GUI
+
+errors: []

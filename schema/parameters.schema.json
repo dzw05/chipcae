@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chipcae.local/schema/parameters.schema.json",
+  "title": "chipcae parameters",
+  "description": "Snapshot of kernel parameter declarations. This file is a placeholder.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {}
+}

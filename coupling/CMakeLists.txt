@@ -1,0 +1,14 @@
+add_library(chipcae_coupling
+    src/coupler.cpp
+    src/field_mapper.cpp
+    src/precice_adapter.cpp
+)
+add_library(chipcae::coupling ALIAS chipcae_coupling)
+
+target_include_directories(chipcae_coupling
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(chipcae_coupling PUBLIC chipcae::core)
+chipcae_set_warnings(chipcae_coupling)

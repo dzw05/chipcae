@@ -1,0 +1,19 @@
+name: Nightly MPI/GPU
+
+# Placeholder. Multi-node MPI and GPU jobs will run on on-demand cloud machines
+# once a vendor and budget are chosen. They are not part of the pull-request
+# quick check.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  placeholder:
+    name: Cloud runners not provisioned
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remind
+        run: |
+          echo "Cloud MPI/GPU runners are not provisioned yet."
+          echo "This workflow is a placeholder for on-demand or nightly jobs."
+          echo "Default CI continues to use GitHub-hosted CPU runners only."

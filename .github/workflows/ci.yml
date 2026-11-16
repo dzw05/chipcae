@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quick-check:
+    name: Format, build, and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++ cmake ninja-build python3 python3-pip
+          sudo python3 -m pip install --break-system-packages clang-format==23.1.5
+
+      - name: License policy
+        run: python3 cmake/check_license_policy.py .
+
+      - name: Format
+        run: |
+          mapfile -t files < <(git ls-files '*.cpp' '*.hpp' '*.h' '*.cc' '*.cxx')
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No C++ sources to format"
+            exit 0
+          fi
+          clang-format --dry-run --Werror "${files[@]}"
+
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
