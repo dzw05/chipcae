@@ -68,6 +68,11 @@ target_include_directories(chipcae_material
         ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_features(chipcae_material PUBLIC cxx_std_20)
 target_link_libraries(chipcae_material PUBLIC ${CHIPCAE_MATERIAL_KOKKOS_TARGET})
+# Host and device floating-point contraction are set explicitly so T11's
+# exact T_sf zero and CPU/GPU comparisons stay consistent across compilers.
+target_compile_options(chipcae_material PUBLIC
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-ffp-contract=fast>
+    $<$<COMPILE_LANGUAGE:CUDA>:--fmad=true>)
 
 # ---- Optional Python bindings ----
 if(CHIPCAE_MATERIAL_ENABLE_PYTHON)

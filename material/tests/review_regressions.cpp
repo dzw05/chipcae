@@ -50,8 +50,11 @@ void ramps(const std::string& fixtures) {
               "validation exposes coded ramp warning");
         auto p = parse_material_json(json, false, {true, 1});
         auto& table = p.kind == ModelKind::ThermoElastic ? p.elastic_table : p.bulk_table;
-        check(table.strictly_increasing() && table.temperatures()[1] - table.temperatures()[0] >= 1,
-              "imported ramp spacing");
+        const Real mid = table.temperatures()[0] + 0.5; // lo = mid - w/2 with w = 1
+        check(table.strictly_increasing() &&
+                  table.temperatures()[1] - table.temperatures()[0] >= 1 &&
+                  table.temperatures()[0] == mid - 0.5 && table.temperatures()[1] == mid + 0.5,
+              "imported ramp is centered on the duplicate temperature");
         check(p.warning_codes.size() == 1 && p.warning_codes[0] == WarningCode::ModulusRampApplied,
               "card exposes coded ramp warning");
         check(table.columns()[0][0] == (p.kind == ModelKind::ThermoElastic ? 1e9 : 4e9) &&
@@ -71,9 +74,33 @@ void ramps(const std::string& fixtures) {
                      right - left + 1,
                      std::string(name) == "E" ? "[1e9,2e9,3e9,4e9,5e9]" : "[0.3,0.3,0.3,0.3,0.3]");
     }
+    try {
+        parse_material_json(json, false, {true, 2});
+        check(false, "neighbour inside ramp must be rejected");
+    } catch (const std::exception& e) {
+        std::string message = e.what();
+        check(message.find("elastic.table") != std::string::npos &&
+                  message.find("neighbouring knot") != std::string::npos,
+              "close-neighbour error includes the field path");
+    }
+    // Well-separated jumps: only the duplicate pairs move; the upper bound is unchanged.
+    json.replace(json.find("[250,250,250.25,250.25,250.5]"),
+                 std::string("[250,250,250.25,250.25,250.5]").size(),
+                 "[250,250,260,270,270,280]");
+    for (auto name : {"E", "nu"}) {
+        auto key = std::string("\"") + name + "\"";
+        start = json.find(key);
+        left = json.find('[', start);
+        right = json.find(']', left);
+        json.replace(left,
+                     right - left + 1,
+                     std::string(name) == "E" ? "[1e9,2e9,3e9,4e9,5e9,6e9]"
+                                              : "[0.3,0.3,0.3,0.3,0.3,0.3]");
+    }
     auto p = parse_material_json(json, false, {true, 2});
-    check(p.elastic_table.temperatures() == std::vector<Real>({250, 252, 252.25, 254.25, 254.5}),
-          "later knots shift and multiple ramps remain increasing");
+    check(p.elastic_table.temperatures() == std::vector<Real>({249, 251, 260, 269, 271, 280}),
+          "local ramps are centered and do not accumulate an offset");
+    check(p.elastic_table.temperatures().back() == 280, "upper bound unchanged");
     check(p.warning_codes.size() == 2, "each ramp emits coded event");
     check(p.parameter_hash != parse_material_json(json, false, {true, 1}).parameter_hash,
           "ramp width affects parameter identity");
@@ -95,9 +122,17 @@ void spaces() {
     p.elastic_table = TemperatureTable({250, 400}, {{1e9, 2e9}, {.3, .3}});
     check(bool(make_material<MS>(p)), "factory exported for memory space");
     p.kind = ModelKind::PronyViscoelastic;
-    p.prony = PronyHostParams{VolumetricMode::ElasticBulk, 2, .3, {{3, 1}}};
+    p.prony = PronyHostParams{};
     p.bulk_table = TemperatureTable({250, 400}, {{5, 5}});
     p.shift = ShiftParams{ShiftType::Table, 300, 300, 0, 0, 0, {250, 400}, {0, 0}};
+    bool missing = false;
+    try {
+        make_material<MS>(p);
+    } catch (const std::exception& e) {
+        missing = std::string(e.what()).find("volumetric_mode") != std::string::npos;
+    }
+    check(missing, "factory rejects a missing Prony mode");
+    p.prony = PronyHostParams{VolumetricMode::ElasticBulk, 2, .3, {{3, 1}}};
     check(bool(make_material<MS>(p)), "Prony factory and table shift construction");
 }
 int main(int argc, char** argv) {

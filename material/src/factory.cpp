@@ -54,6 +54,8 @@ std::unique_ptr<IMaterial<MS>> make_material(const MaterialParams& validated) {
                 : ThermoElastic<MS>{},
             validated);
     case ModelKind::PronyViscoelastic:
+        if (!validated.prony.mode)
+            throw std::invalid_argument("viscoelastic.volumetric_mode: required");
         return wrap<MS>(
             PronyViscoelastic<MS>{validated.prony,
                                   validated.bulk_table,

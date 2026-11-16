@@ -375,7 +375,7 @@
       "measured_error": 1.3768985951401191e-12,
       "tolerance": 1e-08,
       "seed": 20261116,
-      "note": "1 K, factor-10 modulus ramp, Lipschitz bounds and timestep halvings; duplicate rejection in T16",
+      "note": "1 K factor-10 ramp Lipschitz/halving; ImportOptions{true,1} duplicate-knot import with WarningCode::ModulusRampApplied, Lipschitz/halving and T1-style FD tangent; default duplicate rejection in T16",
       "checks": [
         {
           "test": "T22",

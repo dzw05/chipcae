@@ -1,30 +1,35 @@
 #pragma once
 #include "chipcae/material/shift.hpp"
 #include "chipcae/material/thermo_elastic.hpp"
+
+#include <optional>
 namespace chipcae::material {
 enum class VolumetricMode : std::uint8_t { ElasticBulk, ConstantPoissonFromE };
 struct PronyTerm {
     Real G = 0, tau = 0;
 };
 struct PronyHostParams {
-    VolumetricMode mode;
+    std::optional<VolumetricMode> mode;
     Real infinity = 0, poisson = 0.3;
     std::vector<PronyTerm> terms;
-    explicit PronyHostParams(VolumetricMode mode,
+    PronyHostParams() = default;
+    explicit PronyHostParams(VolumetricMode volumetric_mode,
                              Real infinity = 0,
                              Real poisson = 0.3,
                              std::vector<PronyTerm> terms = {})
-        : mode(mode), infinity(infinity), poisson(poisson), terms(std::move(terms)) {}
+        : mode(volumetric_mode), infinity(infinity), poisson(poisson), terms(std::move(terms)) {}
 };
 // Immutable parameter snapshot in the explicitly selected memory space.
 template <class MS>
 struct PronyParams {
-    VolumetricMode mode_;
+    VolumetricMode mode_{};
     int n_;
     Real ginf_, ratio_ = 0;
     Kokkos::View<const Real*, MS, Kokkos::MemoryTraits<Kokkos::RandomAccess>> g_, tau_;
-    explicit PronyParams(const PronyHostParams& p)
-        : mode_(p.mode), n_(p.terms.size()), ginf_(p.infinity) {
+    explicit PronyParams(const PronyHostParams& p) : n_(p.terms.size()), ginf_(p.infinity) {
+        if (!p.mode)
+            throw std::invalid_argument("viscoelastic.volumetric_mode: required");
+        mode_ = *p.mode;
         if (n_ > 9000)
             throw std::invalid_argument("too many Prony branches for StateField offsets");
         if (!(p.infinity >= 0) || !std::isfinite(p.infinity))

@@ -34,7 +34,7 @@ struct MaterialParams {
     TemperatureTable elastic_table;
     ThermalStrainParams thermal;
     TemperatureTable cte_table;
-    PronyHostParams prony{VolumetricMode::ElasticBulk};
+    PronyHostParams prony;
     TemperatureTable bulk_table;
     ShiftParams shift;
     std::vector<std::string> cure_step_ids;

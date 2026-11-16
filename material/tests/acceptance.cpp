@@ -330,6 +330,7 @@ MaterialParams params(bool visco = false, bool shrink = false, bool activation =
     p.elastic_table = TemperatureTable({200, 500}, {{2e9, 2e9}, {.25, .25}});
     p.thermal.T_sf = 300;
     p.cte_table = TemperatureTable({200, 500}, {{1e-5, 1e-5}});
+    p.prony.mode = VolumetricMode::ElasticBulk;
     p.prony.infinity = 2e9;
     p.prony.terms = {{3e9, .7}, {1e9, 3}};
     p.bulk_table = TemperatureTable({200, 500}, {{4e9, 4e9}});
@@ -536,6 +537,48 @@ struct Batch {
         out.status = Vec1<Status, Kokkos::HostSpace>("status", n);
     }
 };
+#if defined(KOKKOS_ENABLE_SERIAL)
+template <class M>
+void serial_batch(const M& model, const StepContext& ctx, const Batch& b, std::uint32_t n_reals) {
+    const int N = static_cast<int>(b.e.extent(1));
+    Soa<Real, Kokkos::HostSpace> stress("serial_stress", 6, N), tangent("serial_C", 36, N),
+        state("serial_state", n_reals, N);
+    Vec1<Status, Kokkos::HostSpace> status("serial_status", N);
+    auto in = b.in;
+    auto old = b.s;
+    Kokkos::parallel_for(
+        "chipcae::material::t15_serial_batch",
+        Kokkos::RangePolicy<Kokkos::Serial>(0, N),
+        KOKKOS_LAMBDA(const int n) {
+            PointInput pin{};
+            for (int j = 0; j < 6; ++j) {
+                pin.strain_n[j] = in.strain_n(j, n);
+                pin.strain_np1[j] = in.strain_np1(j, n);
+            }
+            pin.T_n = in.T_n(n);
+            pin.T_np1 = in.T_np1(n);
+            PointOutput pout{};
+            ConstStateRef s_old{n_reals ? &old(0, n) : nullptr, old.extent(1)};
+            StateRef s_new{n_reals ? &state(0, n) : nullptr, state.extent(1)};
+            model.update(ctx, pin, s_old, s_new, pout);
+            for (int j = 0; j < 6; ++j)
+                stress(j, n) = pout.stress[j];
+            for (int j = 0; j < 36; ++j)
+                tangent(j, n) = pout.tangent[j];
+            status(n) = pout.status;
+        });
+    Kokkos::fence();
+    for (int n = 0; n < N; ++n) {
+        for (int j = 0; j < 6; ++j)
+            require(stress(j, n) == b.out.stress(j, n), "Serial batch stress");
+        for (int j = 0; j < 36; ++j)
+            require(tangent(j, n) == b.out.tangent(j, n), "Serial batch tangent");
+        require(status(n).code == b.out.status(n).code, "Serial batch status");
+        for (unsigned j = 0; j < n_reals; ++j)
+            require(state(j, n) == b.sn(j, n), "Serial batch state");
+    }
+}
+#endif
 void t15() {
     for (bool v : {false, true})
         for (bool shrink : {false, true})
@@ -569,6 +612,9 @@ void t15() {
                             require(q.next[j] == b.sn(j, n), "batch vs point state bitwise");
                         require(q.out.status.code == b.out.status(n).code, "batch vs point status");
                     }
+#if defined(KOKKOS_ENABLE_SERIAL)
+                    serial_batch(model, ctx, b, m->layout().n_reals);
+#endif
                 };
                 auto combine = [&](auto base) {
                     if (shrink) {
@@ -838,6 +884,9 @@ void t21() {
     ctx.clock = {2, 0, 10, 0, 0};
     factory->update_batch(ctx, b.in, b.s, b.sn, b.out);
     Kokkos::fence();
+#if defined(KOKKOS_ENABLE_SERIAL)
+    serial_batch(WithActivation<Shrunk, false>{m}, ctx, b, factory->layout().n_reals);
+#endif
     driver::SinglePointDriver d(
         *factory); // driver exposes the process clock for process-bound control.
     d.context().clock = ctx.clock;
@@ -879,14 +928,12 @@ void t21() {
     p.eval();
     require(p.next.back() == .006, "after cure hold");
 }
-void t22() {
-    ThermoElastic<Kokkos::HostSpace> m(
-        ElasticSymmetry::Isotropic,
-        TemperatureTable({299, 300, 301, 302}, {{1e9, 1e9, 1e10, 1e10}, {.25, .25, .25, .25}}));
+void lipschitz_and_halving(ThermoElastic<Kokkos::HostSpace> m, const char* tag) {
     std::vector<Real> ds, dc;
+    const Vec6 strain{.001, -.002, .003, .004, .005, .006};
     for (Real h : {.1, .05, .025}) {
         Point p(m);
-        p.in.strain_np1 = {.001, -.002, .003, .004, .005, .006};
+        p.in.strain_np1 = strain;
         p.in.T_np1 = 299.5;
         p.eval();
         auto prev = p.out;
@@ -904,21 +951,84 @@ void t22() {
             prev = p.out;
         }
         Point unit(elastic(9e9));
-        unit.in.strain_np1 = p.in.strain_np1;
+        unit.in.strain_np1 = strain;
         unit.eval();
         Real Ls = mandel_norm(unit.out.stress), Lc = 0;
         for (auto v : unit.out.tangent)
             Lc += v * v;
         Lc = std::sqrt(Lc);
-        error(maxs / (Ls * h) - 1, 1e-8, "stress Lipschitz bound");
-        error(maxc / (Lc * h) - 1, 1e-8, "tangent Lipschitz bound");
+        error(maxs / (Ls * h) - 1, 1e-8, (std::string(tag) + " stress Lipschitz bound").c_str());
+        error(maxc / (Lc * h) - 1, 1e-8, (std::string(tag) + " tangent Lipschitz bound").c_str());
         ds.push_back(maxs);
         dc.push_back(maxc);
     }
     for (int i = 1; i < 3; ++i) {
-        error(std::abs(ds[i - 1] / ds[i] - 2), .1, "stress ramp halving");
-        error(std::abs(dc[i - 1] / dc[i] - 2), .1, "tangent ramp halving");
+        error(std::abs(ds[i - 1] / ds[i] - 2),
+              .1,
+              (std::string(tag) + " stress ramp halving").c_str());
+        error(std::abs(dc[i - 1] / dc[i] - 2),
+              .1,
+              (std::string(tag) + " tangent ramp halving").c_str());
     }
+}
+void tangent_fd_on_ramp(ThermoElastic<Kokkos::HostSpace> m) {
+    // T1-style strain FD, staying off the modulus-ramp endpoints (D16).
+    const Vec6 strain{.001, -.002, .003, .004, .005, .006};
+    for (Real T : {299.5, 300.25, 300.5, 300.75, 301.5}) {
+        Point p(m);
+        p.in.strain_np1 = strain;
+        p.in.T_n = p.in.T_np1 = T;
+        p.eval();
+        auto C = p.out.tangent;
+        Real h = 1e-6 * std::max(mandel_norm(strain), 1e-4);
+        Mat6 fd{};
+        for (int j = 0; j < 6; ++j) {
+            p.in.strain_np1 = strain;
+            p.in.strain_np1[j] += h;
+            p.eval();
+            auto plus = p.out.stress;
+            p.in.strain_np1 = strain;
+            p.in.strain_np1[j] -= h;
+            p.eval();
+            for (int i = 0; i < 6; ++i)
+                fd[6 * i + j] = (plus[i] - p.out.stress[i]) / (2 * h);
+        }
+        error(relative(fd, C), 1e-6, "imported ramp FD tangent");
+    }
+}
+void t22() {
+    ThermoElastic<Kokkos::HostSpace> explicit_ramp(
+        ElasticSymmetry::Isotropic,
+        TemperatureTable({299, 300, 301, 302}, {{1e9, 1e9, 1e10, 1e10}, {.25, .25, .25, .25}}));
+    lipschitz_and_halving(explicit_ramp, "explicit");
+    const char* card = R"({
+      "id":"illustrative","schema_version":"1","unit_system":"SI","density":1000,
+      "model":"thermo_elastic",
+      "provenance":{"source_type":"illustrative","confidence":"illustrative"},
+      "elastic":{"symmetry":"isotropic","table":{
+        "temperatures":[299,300.5,300.5,302],
+        "columns":{"E":[1e9,1e9,1e10,1e10],"nu":[0.25,0.25,0.25,0.25]},
+        "interpolation":"linear","extrapolation":"error"}},
+      "thermal_expansion":{"cte_type":"tangent","symmetry":"isotropic",
+        "stress_free_temperature":300,
+        "table":{"temperatures":[250,400],"columns":{"alpha":[1e-5,1e-5]},
+          "interpolation":"linear","extrapolation":"error"}}
+    })";
+    auto validation = validate_material_json(card, false, ImportOptions{true, 1});
+    require(validation.ok, "duplicate modulus card imports with ramp");
+    require(std::find(validation.warning_codes.begin(),
+                      validation.warning_codes.end(),
+                      WarningCode::ModulusRampApplied) != validation.warning_codes.end(),
+            "import warning code");
+    auto imported = parse_material_json(card, false, ImportOptions{true, 1});
+    require(imported.warning_codes.size() == 1 &&
+                imported.warning_codes[0] == WarningCode::ModulusRampApplied,
+            "parsed card warning code");
+    require(imported.elastic_table.temperatures() == std::vector<Real>({299, 300, 301, 302}),
+            "centered 1 K ramp recovers the explicit table knots");
+    ThermoElastic<Kokkos::HostSpace> from_import(imported.elastic_symmetry, imported.elastic_table);
+    lipschitz_and_halving(from_import, "imported");
+    tangent_fd_on_ramp(from_import);
 }
 template <class M>
 void activation_test(M model) {

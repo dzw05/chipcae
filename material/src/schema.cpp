@@ -224,26 +224,33 @@ TemperatureTable table(const Json& j,
         // are malformed, rather than jumps that can be repaired.
         TemperatureTable source(temperatures, columns);
         if (!cte && options.modulus_ramp && source.has_duplicate_temperatures()) {
-            Real shift = 0;
-            for (std::size_t i = 0; i < temperatures.size(); ++i) {
-                if (i && source.temperatures()[i] == source.temperatures()[i - 1]) {
-                    temperatures[i] = temperatures[i - 1] + options.modulus_ramp_width;
-                    // Round upward when addition would shorten the requested width.
-                    if (temperatures[i] - temperatures[i - 1] < options.modulus_ramp_width)
-                        temperatures[i] =
-                            std::nextafter(temperatures[i], std::numeric_limits<Real>::infinity());
-                    shift = temperatures[i] - source.temperatures()[i];
-                    if (params) {
-                        params->warning_codes.push_back(WarningCode::ModulusRampApplied);
-                        params->warnings.push_back(j.path + ": modulus jump converted to ramp");
-                    }
-                } else
-                    temperatures[i] += shift;
-                if (!std::isfinite(temperatures[i]) ||
-                    (i && (!(temperatures[i] > temperatures[i - 1]) ||
-                           (source.temperatures()[i] == source.temperatures()[i - 1] &&
-                            temperatures[i] - temperatures[i - 1] < options.modulus_ramp_width))))
-                    throw std::runtime_error("temperatures: ramp spacing cannot be represented");
+            const Real width = options.modulus_ramp_width;
+            const auto& knots = source.temperatures();
+            for (std::size_t i = 1; i < temperatures.size(); ++i) {
+                if (knots[i] != knots[i - 1])
+                    continue;
+                const Real mid = knots[i];
+                Real lo = mid - width / 2, hi = mid + width / 2;
+                if (hi - lo < width) {
+                    lo = std::nextafter(lo, -std::numeric_limits<Real>::infinity());
+                    hi = std::nextafter(hi, std::numeric_limits<Real>::infinity());
+                }
+                auto inside = [&](Real T) { return T >= lo && T <= hi; };
+                if ((i >= 2 && inside(knots[i - 2])) ||
+                    (i + 1 < knots.size() && inside(knots[i + 1])))
+                    throw std::runtime_error(j.path +
+                                             ": neighbouring knot falls inside the modulus ramp");
+                temperatures[i - 1] = lo;
+                temperatures[i] = hi;
+                if (!std::isfinite(lo) || !std::isfinite(hi) || !(hi > lo) ||
+                    (i >= 2 && !(lo > temperatures[i - 2])) ||
+                    (i + 1 < temperatures.size() && !(hi < knots[i + 1])))
+                    throw std::runtime_error(j.path +
+                                             ": temperatures: ramp spacing cannot be represented");
+                if (params) {
+                    params->warning_codes.push_back(WarningCode::ModulusRampApplied);
+                    params->warnings.push_back(j.path + ": modulus jump converted to ramp");
+                }
             }
         }
         TemperatureTable t(temperatures,

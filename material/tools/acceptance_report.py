@@ -27,7 +27,7 @@ notes = {
     'T19': 'Exact splice, one-sided limits, reference above/below Tg',
     'T20': 'E1 closed forms; both ramp directions and endpoints exactly Tg',
     'T21': 'Free/constrained/uniaxial shrinkage; one/50-step elastic and viscoelastic; table/step binding',
-    'T22': '1 K, factor-10 modulus ramp, Lipschitz bounds and timestep halvings; duplicate rejection in T16',
+    'T22': '1 K factor-10 ramp Lipschitz/halving; ImportOptions{true,1} duplicate-knot import with WarningCode::ModulusRampApplied, Lipschitz/halving and T1-style FD tangent; default duplicate rejection in T16',
     'T23': 'Activation thermal zero, incremental stress, excluded/soft frozen state and bitwise event discard',
     'T24-pt': 'Biaxial constrained cooling and force/moment release; Timoshenko curvature',
 }

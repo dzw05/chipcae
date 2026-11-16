@@ -49,7 +49,7 @@ comparison), plus skipped T24 and pending T25 entries.
 | T19 | pass | 7.29668e-08 | 1.11111e-07 |
 | T20 | pass | 7.84813e-13 | 1e-10 |
 | T21 | pass | 2.32831e-16 | 1e-12 |
-| T22 | pass (Lipschitz/halving + coded ramp import regressions) | 1.3769e-12 | 1e-08 |
+| T22 | pass (Lipschitz/halving, ramp import in t22(), T1-style FD, WarningCode::ModulusRampApplied) | 1.3769e-12 | 1e-08 |
 | T23 | pass | 4.35401e-16 | 1e-12 |
 | T24 | skip | — | — |
 | T25 | pending | — | 1e-12 |
@@ -150,6 +150,9 @@ canonical positive exponent spelling (`e+`).
 - T24 is skipped for later K2/P1 FEM convergence work. T24pt tests constrained
   material stresses and the Timoshenko force/moment release formula to 1e-12;
   it does not claim structural mesh convergence.
+- T14 and T16-d19 invoke Python (SciPy NNLS and the D19 YAML helper). Point
+  CMake at an interpreter that has `scipy`, `numpy`, and `PyYAML`, for example
+  `-DK3_TEST_PYTHON=/path/to/python`. If unset, CMake uses `Python3_EXECUTABLE`.
 - `CHIPCAE_MATERIAL_ENABLE_PYTHON` defaults ON. CMake emits a STATUS message and
   skips the optional module if Python development headers (including Python.h)
   or nanobind are missing. `material/python/bindings.cpp` is still a stub that
@@ -160,11 +163,15 @@ canonical positive exponent spelling (`e+`).
   Python. Full JSON-Schema code generation, unknown-field rejection, and general import tooling are not implemented.
   Modulus import defaults to rejecting repeated temperatures. The JSON/file import
   API accepts `ImportOptions{true, width_K}` (third argument); width must be at
-  least 1 K. Each duplicate pair becomes a linear ramp, preserving values and
-  shifting later knots by its width to keep the original gaps. Both elastic and
-  bulk tables are supported; CTE jumps remain unchanged. Each conversion emits
+  least 1 K. Each duplicate pair at T_j becomes a local ramp
+  `(T_j-w/2, E_lower)` / `(T_j+w/2, E_upper)`; every other knot is left
+  untouched. A neighbouring knot that falls inside `[T_j-w/2, T_j+w/2]` is an
+  error that includes the field path. Both elastic and bulk tables are
+  supported; CTE jumps remain unchanged. Each conversion emits
   `WarningCode::ModulusRampApplied` in the card/validation warning event list,
-  with a readable card warning; no printf logging is used.
+  with a readable card warning; no printf logging is used. T22 imports such a
+  card, runs Lipschitz/halving and a T1-style tangent FD check, and records the
+  warning code in its METRIC-bearing run.
 - Host TemperatureTable and fit-range clamping expose warnings. General
   device-table clamp-warning aggregation and application logging of activation
   thermal-reference changes are left to the host integration layer.
