@@ -11,3 +11,4 @@ target_include_directories(chipcae_mesh
 
 target_link_libraries(chipcae_mesh PUBLIC chipcae::core chipcae::geometry)
 chipcae_set_warnings(chipcae_mesh)
+add_subdirectory(background)
