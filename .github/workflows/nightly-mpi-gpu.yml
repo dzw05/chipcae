@@ -1,19 +1,176 @@
-name: Nightly MPI/GPU
+name: Tier B and nightly
 
-# Placeholder. Multi-node MPI and GPU jobs will run on on-demand cloud machines
-# once a vendor and budget are chosen. They are not part of the pull-request
-# quick check.
+# Nightly hosted extras (clang, CUDA compile-only) plus the Tier B skeleton.
+# Tier B jobs do not start unless the repository variable TIER_B_ENABLED is
+# the string true. No cloud vendor and no credentials are configured here.
+#
+# Schedule: 18:00 UTC every day, which is 02:00 Asia/Shanghai (CST, UTC+8)
+# the following calendar day. China has no daylight-saving time.
+#
+# pull_request type "labeled" is the run-heavy trigger. Other labels skip
+# every job and do not consume a runner.
 
 on:
+  schedule:
+    - cron: "0 18 * * *"
+  pull_request:
+    types: [labeled]
   workflow_dispatch:
 
+concurrency:
+  group: tier-b-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
-  placeholder:
-    name: Cloud runners not provisioned
+  clang-extra:
+    name: Nightly clang build
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write
     steps:
-      - name: Remind
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install clang and ccache
         run: |
-          echo "Cloud MPI/GPU runners are not provisioned yet."
-          echo "This workflow is a placeholder for on-demand or nightly jobs."
-          echo "Default CI continues to use GitHub-hosted CPU runners only."
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang g++ cmake ccache
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-clang-release-${{ hashFiles('**/*.cpp', '**/*.hpp', '**/*.h', '**/CMakeLists.txt', 'cmake/**') }}
+          restore-keys: |
+            ccache-clang-release-
+
+      - name: Configure, build, test
+        env:
+          CCACHE_DIR: ~/.cache/ccache
+          CCACHE_MAXSIZE: 200M
+        run: |
+          set -euo pipefail
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure --output-junit "$PWD/build/junit.xml"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-clang-junit-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: build/junit.xml
+
+  cuda-compile:
+    name: Nightly CUDA compile
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compile smoke translation unit
+        run: |
+          set -euo pipefail
+          if ! command -v nvcc >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends nvidia-cuda-toolkit
+          fi
+          nvcc -c bench/cuda/smoke.cu -o "$RUNNER_TEMP/chipcae_cuda_smoke.o"
+          echo "nvcc compiled bench/cuda/smoke.cu. The object was not linked or executed."
+
+  tier-b-disabled:
+    name: Tier B disabled
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.label.name == 'run-heavy' &&
+      vars.TIER_B_ENABLED != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Explain the skip
+        run: |
+          echo "The run-heavy label is set, but TIER_B_ENABLED is not true."
+          echo "No self-hosted runner was requested."
+          echo "No cloud vendor and no credentials are configured. See docs/ci.md."
+
+  tier-b-mpi:
+    name: Tier B MPI
+    if: vars.TIER_B_ENABLED == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'run-heavy')
+    runs-on: ${{ fromJSON(vars.TIER_B_MPI_RUNS_ON || '["self-hosted","linux","x64","mpi"]') }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Multi-rank MPI
+        run: |
+          set -euo pipefail
+          echo "Tier B MPI skeleton. Ranks above 2 stay on this self-hosted label."
+          if [ ! -x build/chipcae_test_core ]; then
+            echo "The MPI communicator is still a serial stub (core/src/parallel.cpp)."
+            echo "When it is wired, configure with -DCHIPCAE_ENABLE_MPI=ON and run:"
+            echo "  mpirun -np 4 ./build/chipcae_test_core"
+            echo "Skipping the launch so an empty runner does not fail the skeleton."
+            exit 0
+          fi
+          mpirun -np 4 ./build/chipcae_test_core
+
+  tier-b-gpu:
+    name: Tier B GPU
+    if: vars.TIER_B_ENABLED == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'run-heavy')
+    runs-on: ${{ fromJSON(vars.TIER_B_GPU_RUNS_ON || '["self-hosted","linux","gpu"]') }}
+    timeout-minutes: 30
+    steps:
+      - name: GPU slot
+        run: |
+          echo "Tier B GPU skeleton. No device binary is launched."
+          echo "CPU/GPU consistency is tools/consistency/compare.py (relative 1e-6)."
+          echo "Wire the solver launch here after a runner with this label exists."
+
+  tier-b-perf:
+    name: Tier B perf
+    if: vars.TIER_B_ENABLED == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'run-heavy')
+    runs-on: ${{ fromJSON(vars.TIER_B_PERF_RUNS_ON || '["self-hosted","linux","x64"]') }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Perf gate
+        run: |
+          set -euo pipefail
+          python3 -c "import yaml" 2>/dev/null || pip3 install --user pyyaml
+          make -C bench
+          mkdir -p build
+          for kind in microbenchmark end_to_end_cpu end_to_end_gpu scaling; do
+            python3 tools/perf/harness.py \
+              --config bench/perf_config.yaml \
+              --binary bench/poisson_microbench \
+              --kind "$kind" \
+              --grid 48 \
+              --runner-label "self-hosted" \
+              --build-config gcc-release \
+              --output "build/perf-${kind}.json"
+          done
+          python3 tools/perf/compare_baseline.py \
+            --config bench/perf_config.yaml \
+            --summary build/perf-microbenchmark.json \
+            --baseline bench/baselines/poisson_microbenchmark_gcc-release.json \
+            --profile nightly \
+            --tier b \
+            --output build/perf-compare.json \
+            --github-output "$GITHUB_OUTPUT"
+          echo "Baselines are not updated by this job. Use a PR labeled perf-baseline-update."

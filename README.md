@@ -55,7 +55,17 @@ ctest --test-dir build --output-on-failure
 | `tests/` | 单元测试、集成测试、验证测试 |
 | `docs/adr/` | 技术决策记录 |
 | `cmake/` | CMake 模块与许可证策略 |
-| `.github/workflows/` | CI：快速检查，以及云端 MPI/GPU 占位工作流 |
+| `.github/workflows/` | 托管 CI、夜间额外配置，以及默认关闭的 Tier B |
+| `bench/` | 独立性能微基准，不进 CMake |
+| `tools/perf/` | 重复次数、中位数和基线比较 |
+| `tools/consistency/` | CPU / GPU 结果比较 |
+| `docs/ci.md` | 分钟预算、必选检查和 Tier B 开关 |
+
+## 持续集成
+
+必选状态检查只加 **`CI / Lint`**（格式、许可证、YAML/配置，以及性能门槛和 CPU/GPU 一致性的 Python 单测）。不要把 `CI / Build and test` 标成必选：推送到 `main`、草稿，以及只改文档的 PR 会跳过它，跳过的必选检查会挡住合并。
+
+托管分钟预算、Tier B 开关（`TIER_B_ENABLED`）和性能门槛写在 [docs/ci.md](docs/ci.md)。仓库设置没有在这个改动里动过。
 
 ## 许可
 

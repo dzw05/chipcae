@@ -1,0 +1,118 @@
+# Performance-gate defaults for chipcae K7.
+# Hosted Tier A wall-clock time is informational and never blocks a merge.
+# Per-commit blocking metrics are iteration counts and peak memory only.
+# Change a number here only with the matching unit test and docs/ci.md.
+
+schema_version: 1
+
+repetitions:
+  microbenchmark:
+    warmup: 1
+    n: 7
+    aggregate: median
+  end_to_end_cpu:
+    warmup: 0
+    n: 3
+    aggregate: median
+  end_to_end_gpu:
+    warmup: 1
+    n: 3
+    aggregate: median
+  scaling:
+    warmup: 0
+    n: 2
+    aggregate: best
+
+noise:
+  # Coefficient of variation above this discards the set and reruns once.
+  cv_max: 0.05
+  reruns: 1
+
+baseline:
+  # Median of the last K stored samples with the same runner label and build config.
+  per_commit_k: 20
+  nightly_k: 10
+  auto_update: false
+  update_label: perf-baseline-update
+  # Emit a hint when a tracked metric improves by more than this fraction.
+  improvement_hint: 0.10
+
+thresholds:
+  per_commit:
+    wall_time:
+      warn: 0.05
+      block: 0.10
+      # Reported for diagnosis. Per-commit wall time does not block on any tier.
+      mad_band: 3
+      blocks: false
+    dof_per_s:
+      warn: 0.05
+      block: 0.10
+      blocks: false
+    iterations:
+      warn: 0.02
+      block: 0.10
+      blocks: true
+    peak_memory:
+      warn: 0.05
+      block: 0.10
+      blocks: true
+  nightly:
+    wall_time:
+      warn: 0.05
+      # Above this, set block_next_day. The current job stays green.
+      block_next_day: 0.15
+      blocks: false
+    dof_per_s:
+      warn: 0.05
+      block_next_day: 0.15
+      blocks: false
+    iterations:
+      warn: 0.02
+      block: 0.10
+      blocks: true
+    peak_memory:
+      warn: 0.05
+      block: 0.10
+      blocks: true
+
+tiers:
+  # Tier A is GitHub-hosted (or TIER_A_RUNNER). Timing never blocks and never
+  # sets block_next_day.
+  a:
+    timing_informational: true
+  # Tier B is a dedicated self-hosted runner. Per-commit wall time still does
+  # not block. Nightly wall time / DOF/s can set block_next_day.
+  b:
+    timing_informational: false
+
+metrics:
+  wall_s:
+    group: wall_time
+    higher_is_worse: true
+  dof_per_s:
+    group: dof_per_s
+    higher_is_worse: false
+  linear_iterations:
+    group: iterations
+    higher_is_worse: true
+  newton_iterations:
+    group: iterations
+    higher_is_worse: true
+  peak_rss_bytes:
+    group: peak_memory
+    higher_is_worse: true
+  peak_gpu_bytes:
+    group: peak_memory
+    higher_is_worse: true
+
+# Kinds the hosted pull-request job is allowed to launch.
+tier_a_kinds:
+  - microbenchmark
+
+# Kinds the Tier B perf job may launch once runners exist.
+tier_b_kinds:
+  - microbenchmark
+  - end_to_end_cpu
+  - end_to_end_gpu
+  - scaling
