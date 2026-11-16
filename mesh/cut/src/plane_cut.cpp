@@ -449,9 +449,9 @@ build_cut_layer(HexMeshArrays& mesh, const CutGeometry& g, const CutOptions& o) 
             if (r.name == name)
                 report = &r;
         if (!report) {
-            HexMeshArrays::InterfaceReport report;
-            report.name = name;
-            m.preparation_report.push_back(report);
+            HexMeshArrays::InterfaceReport added;
+            added.name = name;
+            m.preparation_report.push_back(added);
             fill_interface_sides(m.preparation_report.back(), m);
             report = &m.preparation_report.back();
         }

@@ -117,7 +117,7 @@ int main(int argc, char** argv) {
             expect(registered, "registered EB face group");
         }
         expect(!layered.face_sets.contains("exposed:void"), "no exposed:void group");
-        Index aligned = 0;
+        chipcae::Index aligned = 0;
         bool listed = false;
         for (const auto& r : layered.preparation_report)
             if (r.name.ends_with("|void")) {
