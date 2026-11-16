@@ -451,7 +451,7 @@
       "measured_error": null,
       "tolerance": 1e-12,
       "seed": null,
-      "note": "No CUDA toolkit/GPU; scripts ready, awaiting cloud GPU"
+      "note": "Awaiting a self-hosted GPU runner and architect ruling"
     },
     {
       "id": "CPU/GPU-100-step",
@@ -459,7 +459,7 @@
       "measured_error": null,
       "tolerance": 1e-11,
       "seed": null,
-      "note": "No GPU; 100-step consistency awaits cloud GPU"
+      "note": "GPU consistency awaits the self-hosted runner"
     }
   ]
 }

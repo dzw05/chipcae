@@ -8,7 +8,7 @@ Build independently from this repository root:
 
 ```sh
 cmake -S material -B material/build-cpu -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/workspace/deps/kokkos \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$KOKKOS_ROOT" \
   -DCHIPCAE_MATERIAL_ENABLE_PYTHON=OFF
 cmake --build material/build-cpu -j 4
 OMP_NUM_THREADS=4 OMP_PROC_BIND=false material/scripts/run_all_acceptance.sh
@@ -20,8 +20,9 @@ FEM work. T25 and the 100-step CPU/GPU comparison remain pending. CUDA scripts
 fail clearly without the toolkit; there are no GPU results.
 
 Each acceptance ID has its own executable/target and CTest label. T14 invokes
-SciPy's fixed-tau NNLS in `/workspace/deps/venv/bin/python` (override
-`K3_TEST_PYTHON` on another host). T24-pt's CTest label/target is `T24pt`.
+SciPy's fixed-tau NNLS with `K3_TEST_PYTHON` set to a Python environment that
+has NumPy and SciPy (defaults to `Python3_EXECUTABLE`). T24-pt's CTest label is
+`T24pt` and its executable is `material_T24pt`.
 T15 also runs independent 1- and 4-thread processes and compares complete output
 bytes. See [DELIVERY.md](DELIVERY.md) for status, measurements and limitations,
 and [DESIGN.md](DESIGN.md) for layouts and dispatch.
@@ -40,15 +41,17 @@ into trial, then commit or discard. The single-point driver's `context()` expose
 its ProcessClock. Save/restore accepts a POD byte stream with hash checks;
 transfer_from fits affine fields inside the same material identity.
 
-Native Python bindings stay optional and disabled here because Python.h is
-unavailable. The current optional module exposes validation only; full driver,
-batch and CTE bindings remain unfinished. These examples run without that module:
+Native Python bindings are optional. The option defaults ON, but configuration
+silently skips the module with a STATUS message when Python development headers
+(including Python.h) or nanobind are unavailable. The current bindings.cpp is a
+stub that only exposes `validate_material_json`; full driver, batch and CTE
+bindings remain unfinished. These examples run without that module:
 
 ```sh
 python3 material/python/examples/relaxation.py
 python3 material/python/examples/cte_conversion.py
 python3 material/python/examples/schema_error.py
-/workspace/deps/venv/bin/python material/tools/dma_nnls.py
+python3 material/tools/dma_nnls.py
 material/build-cpu/material_card_check material/tests/valid_elastic.json
 ```
 

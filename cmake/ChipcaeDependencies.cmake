@@ -6,11 +6,11 @@ if(CHIPCAE_ENABLE_MPI)
 endif()
 
 if(CHIPCAE_ENABLE_KOKKOS)
-    find_package(Kokkos 4.4 REQUIRED)
+    find_package(Kokkos 4.3 REQUIRED)
 endif()
 
 if(CHIPCAE_REQUIRE_KOKKOS)
-    find_package(Kokkos 4.4 REQUIRED)
+    find_package(Kokkos 4.3 REQUIRED)
 endif()
 
 if(CHIPCAE_ENABLE_HDF5)

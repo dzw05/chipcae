@@ -9,7 +9,7 @@
       "binaryDir": "${sourceDir}/build-cpu",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_PREFIX_PATH": "/workspace/deps/kokkos",
+        "CMAKE_PREFIX_PATH": "$env{KOKKOS_ROOT}",
         "CHIPCAE_MATERIAL_ENABLE_TESTS": "ON",
         "CHIPCAE_MATERIAL_ENABLE_PYTHON": "ON"
       }
@@ -32,7 +32,7 @@
       "binaryDir": "${sourceDir}/build-cuda",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_PREFIX_PATH": "/workspace/deps/kokkos-cuda"
+        "CMAKE_PREFIX_PATH": "$env{KOKKOS_ROOT}"
       }
     }
   ],

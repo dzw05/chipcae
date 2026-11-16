@@ -7,7 +7,7 @@ No push, PR, workflow/settings change, cloud work, or new C++ dependency.
 
 ```sh
 cmake -S material -B material/build-cpu -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/workspace/deps/kokkos \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$KOKKOS_ROOT" \
   -DCHIPCAE_MATERIAL_ENABLE_PYTHON=OFF
 cmake --build material/build-cpu -j 4
 BUILD_JOBS=4 OMP_NUM_THREADS=4 OMP_PROC_BIND=false \
@@ -24,7 +24,7 @@ order from 2 (limit 0.2), rather than labelling an order as an error. Seeds are
 
 CPU result: **24 acceptance IDs pass, 0 fail; T24 skip; 2 GPU entries pending.**
 CTest: 27 passing checks (including T0, core_math and the extra T15 thread
-comparison), plus the explicitly skipped T24/T25 entries.
+comparison), plus skipped T24 and pending T25 entries.
 
 | ID | Status | Measured error | Tolerance |
 | --- | --- | ---: | ---: |
@@ -49,7 +49,7 @@ comparison), plus the explicitly skipped T24/T25 entries.
 | T19 | pass | 7.29668e-08 | 1.11111e-07 |
 | T20 | pass | 7.84813e-13 | 1e-10 |
 | T21 | pass | 2.32831e-16 | 1e-12 |
-| T22 | pass | 1.3769e-12 | 1e-08 |
+| T22 | pass (Lipschitz/halving + coded ramp import regressions) | 1.3769e-12 | 1e-08 |
 | T23 | pass | 4.35401e-16 | 1e-12 |
 | T24 | skip | — | — |
 | T25 | pending | — | 1e-12 |
@@ -138,23 +138,33 @@ canonical positive exponent spelling (`e+`).
 
 ## Environmental limits, deviations and unfinished work
 
-- **GPU: scripts ready, awaiting cloud GPU.** No CUDA toolkit or GPU is available.
-  Both CUDA scripts were invoked and returned 2 with the explicit nvcc-missing
-  diagnostic. T25 and CPU/GPU-100-step remain pending, never counted as failures.
+- **GPU: pending self-hosted runner.** T25 remains pending until a self-hosted
+  GPU runner is available and the architect clears the device validation. The
+  current machine's lack of a GPU is not the acceptance criterion. The nightly
+  CUDA Kokkos configuration remains a disabled placeholder; when enabled, its
+  required check is CUDA compilation. CPU/GPU-100-step remains pending.
   CUDA compilation, independent host/device parameter placement and device factory
-  instantiation are unvalidated; the current point suite is CPU only. The T25
-  CTest entry is explicitly skipped, not a GPU result. A real device consistency
-  suite must replace it when that integration is undertaken.
+  device factory instantiation is not validated by T25; T25's CTest entry is
+  explicitly pending, not a GPU result. A real device consistency suite awaits
+  the self-hosted runner and architect ruling.
 - T24 is skipped for later K2/P1 FEM convergence work. T24pt tests constrained
   material stresses and the Timoshenko force/moment release formula to 1e-12;
   it does not claim structural mesh convergence.
-- Python.h is unavailable. Nanobind remains optional/disabled. The existing module
-  only exposes validation; native driver/batch/CTE bindings remain unfinished.
+- `CHIPCAE_MATERIAL_ENABLE_PYTHON` defaults ON. CMake emits a STATUS message and
+  skips the optional module if Python development headers (including Python.h)
+  or nanobind are missing. `material/python/bindings.cpp` is still a stub that
+  only exposes `validate_material_json`; native driver/batch/CTE bindings remain
+  unfinished.
   Three runnable examples and the minimal NNLS tool do not need that module.
 - JSON is a documented subset (no Unicode escapes); YAML may be converted with
-  Python. Full JSON-Schema code generation, unknown-field rejection, automatic
-  duplicate-modulus ramp import, and general import tooling are not implemented.
-  Repeated modulus temperatures are rejected; the tested 1 K ramp is explicit.
+  Python. Full JSON-Schema code generation, unknown-field rejection, and general import tooling are not implemented.
+  Modulus import defaults to rejecting repeated temperatures. The JSON/file import
+  API accepts `ImportOptions{true, width_K}` (third argument); width must be at
+  least 1 K. Each duplicate pair becomes a linear ramp, preserving values and
+  shifting later knots by its width to keep the original gaps. Both elastic and
+  bulk tables are supported; CTE jumps remain unchanged. Each conversion emits
+  `WarningCode::ModulusRampApplied` in the card/validation warning event list,
+  with a readable card warning; no printf logging is used.
 - Host TemperatureTable and fit-range clamping expose warnings. General
   device-table clamp-warning aggregation and application logging of activation
   thermal-reference changes are left to the host integration layer.

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PREFIX="${KOKKOS_PREFIX:-/workspace/deps/kokkos}"
+PREFIX="${KOKKOS_PREFIX:-${KOKKOS_ROOT:-}}"
 BUILD="${BUILD_DIR:-${ROOT}/build-cpu}"
 
 if [ ! -f "${PREFIX}/include/Kokkos_Core.hpp" ]; then

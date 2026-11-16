@@ -7,7 +7,7 @@ BUILD="${BUILD_DIR:-${ROOT}/build-cuda}"
 
 if ! command -v nvcc >/dev/null 2>&1; then
     echo "ERROR: no CUDA toolkit found (nvcc missing). GPU tests not run." >&2
-    echo "T25 / CPU-GPU consistency remain pending until a GPU runner is available." >&2
+    echo "T25 / CPU-GPU consistency remain pending until a self-hosted GPU runner is available." >&2
     exit 2
 fi
 

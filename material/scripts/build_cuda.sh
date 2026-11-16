@@ -3,12 +3,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PREFIX="${KOKKOS_CUDA_PREFIX:-/workspace/deps/kokkos-cuda}"
+PREFIX="${KOKKOS_CUDA_PREFIX:-${KOKKOS_ROOT:-}}"
 BUILD="${BUILD_DIR:-${ROOT}/build-cuda}"
 
 if ! command -v nvcc >/dev/null 2>&1; then
     echo "ERROR: no CUDA toolkit found (nvcc missing). CUDA build not attempted." >&2
-    echo "This environment has no GPU; T25 stays pending." >&2
+    echo "T25 remains pending until a self-hosted GPU runner is available." >&2
     exit 2
 fi
 

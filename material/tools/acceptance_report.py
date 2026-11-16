@@ -33,7 +33,9 @@ notes = {
 }
 results = {}
 for tc in ET.parse(junit).iter('testcase'):
-    name = tc.get('name')
+    name = tc.get('name') or ''
+    if name.startswith('material_'):
+        name = name[len('material_'):]
     tid = {'t03_mandel': 'T3', 'T15_threads': 'T15', 'T24pt': 'T24-pt'}.get(name, name)
     if tid not in notes:
         continue
@@ -58,7 +60,7 @@ for i in range(1,24):
     tid=f'T{i}'
     if tid not in results:
         results[tid]=dict(id=tid,status='fail',measured_error=None,tolerance=None,seed=None,note='Missing CPU test result')
-for tid,state,note,tol in [('T24','skip','Later K2/P1 FEM structural convergence work',None),('T25','pending','No CUDA toolkit/GPU; scripts ready, awaiting cloud GPU',1e-12),('CPU/GPU-100-step','pending','No GPU; 100-step consistency awaits cloud GPU',1e-11)]:
+for tid,state,note,tol in [('T24','skip','Later K2/P1 FEM structural convergence work',None),('T25','pending','Awaiting a self-hosted GPU runner and architect ruling',1e-12),('CPU/GPU-100-step','pending','GPU consistency awaits the self-hosted runner',1e-11)]:
     results[tid]=dict(id=tid,status=state,measured_error=None,tolerance=tol,seed=None,note=note)
 counts=dict(collections.Counter(r['status'] for r in results.values()))
 report=dict(library='chipcae_material',chunk=3,ctest_status=int(status),counts=counts,tests=list(results.values()))
