@@ -424,7 +424,7 @@ void run_timoshenko(const Options& o) {
            "ref,rel_err_cut,rel_err_fitted,warpage_cut,warpage_fitted,thermal_error_cut,thermal_"
            "error_fitted,residual_cut,parameters\n";
     double ref = curvature_reference();
-    std::vector<int> levels = o.N ? std::vector<int>{o.N} : std::vector<int>{4, 8, 16, 32};
+    std::vector<int> levels = o.N ? std::vector<int>{o.N} : std::vector<int>{4, 8, 16, 32, 64};
     for (int Nt : levels) {
         auto fitted = strip(Nt, true, 0, o);
         for (auto [gn, gg] : std::vector<std::pair<double, double>>{

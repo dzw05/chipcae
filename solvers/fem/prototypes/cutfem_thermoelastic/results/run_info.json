@@ -1,6 +1,6 @@
 {
   "hypre": true,
-  "seconds_before_plot": 48,
+  "seconds_before_plot": 82,
   "kokkos": true,
   "precision": "FP64",
   "build_type": "Release -O2",

@@ -22,3 +22,9 @@ timoshenko example parameters Nt=32 gamma_g=0.3 cut=-1.7381 fitted=-1.73877 ref=
 timoshenko example parameters Nt=32 gamma_g=1 cut=-1.73661 fitted=-1.73877 ref=-1.74016 T_error=1.36491e-08
 timoshenko example parameters Nt=32 gamma_g=0.1 cut=-1.73854 fitted=-1.73877 ref=-1.74016 T_error=1.14428e-08
 timoshenko example parameters Nt=32 gamma_g=0.1 cut=-1.73854 fitted=-1.73877 ref=-1.74016 T_error=1.14428e-08
+timoshenko example parameters Nt=64 gamma_g=0.01 cut=-1.73981 fitted=-1.7398 ref=-1.74016 T_error=4.11729e-08
+timoshenko example parameters Nt=64 gamma_g=0.1 cut=-1.73978 fitted=-1.7398 ref=-1.74016 T_error=4.38141e-08
+timoshenko example parameters Nt=64 gamma_g=0.3 cut=-1.73973 fitted=-1.7398 ref=-1.74016 T_error=4.63699e-08
+timoshenko example parameters Nt=64 gamma_g=1 cut=-1.73954 fitted=-1.7398 ref=-1.74016 T_error=4.27632e-08
+timoshenko example parameters Nt=64 gamma_g=0.1 cut=-1.73978 fitted=-1.7398 ref=-1.74016 T_error=4.38141e-08
+timoshenko example parameters Nt=64 gamma_g=0.1 cut=-1.73978 fitted=-1.7398 ref=-1.74016 T_error=4.38141e-08

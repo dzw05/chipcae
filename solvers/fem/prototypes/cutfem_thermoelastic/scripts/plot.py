@@ -143,7 +143,7 @@ if candidates:
     lines.append(f'- 在已测参数中，所有物理和 vf 均 SPD 且最细条带曲率相对误差最小的组合为 gamma_N={gn:g}, gamma_g={gg:g}（Nt={sample["Nt"]} 误差 {100*err:.5g}%）；建议作为稳定默认候选。粗网格误差及迭代波动见表，精度/稳定性存在权衡。')
 else:
     lines.append('- 已测条带精度参数中没有覆盖所有扫描物理与 vf 的 SPD 组合，无法据此推荐稳定默认值。')
-for nt in [4, 32]:
+for nt in [4, 32, 64]:
     comparison = [a for a in strip if int(a['Nt']) == nt and number(a, 'gamma_N') == 10 and number(a, 'gamma_g') in (.1, .3)]
     if len(comparison) == 2:
         by_g = {number(a, 'gamma_g'): number(a, 'rel_err_cut') for a in comparison}
@@ -155,6 +155,56 @@ if all(a['amg_status'] == 'unavailable' for a in gp):
 else:
     lines.append('- 本次启用了 hypre 3.2.1；不定矩阵跳过 AMG，其他矩阵实测 AMG-PCG 迭代数见表。')
 lines += ['- 2D Q1、FP64，3D 未实现。递归积分采用角点采样的分片线性 level set；小于子单元且角点不可见的封闭几何不在保证范围内。', f"- 实际默认 gamma_N={info.get('gamma_N')}、gamma_g={info.get('gamma_g_default')}；MMS 表记录实际参数。", '']
+# A5-style acceptance comparison (measured on this 2D Q1 prototype only).
+spectrum_path = r / 'gp_spectrum.csv'
+spec = {}
+if spectrum_path.exists():
+    with spectrum_path.open() as f:
+        spec = {(a['physics'], a['vf'], a['gamma_N'], a['gamma_g']): a for a in csv.DictReader(f)}
+gn_def, gg_def = float(info.get('gamma_N', 20)), float(info.get('gamma_g_default', .1))
+lines += ['## A5 验收对照（2D Q1 自写原型实测）', '',
+          '> 以下全部是本目录 2D Q1、FP64、单进程自写原型的实测，**不是** MFEM 4.10 3D 正式实现的结果；门槛借用架构 A5：曲率相对 Timoshenko ≤2%，AMG 迭代数变化 ≤2×。', '',
+          f'### 曲率（默认 gamma_N={gn_def:g}, gamma_g={gg_def:g}，cut 网格；来源 timoshenko.csv）', '',
+          '| Nt | ndof | kappa_cut | kappa_ref | rel_err_cut | rel_err_fitted | ≤2% |', '| --- | --- | --- | --- | --- | --- | --- |']
+for a in sorted([a for a in strip if number(a, 'gamma_N') == gn_def and np.isclose(number(a, 'gamma_g'), gg_def)], key=lambda a: int(a['Nt'])):
+    e = number(a, 'rel_err_cut')
+    lines.append(f"| {a['Nt']} | {a['ndof']} | {number(a, 'kappa_cut'):.6g} | {number(a, 'kappa_ref'):.6g} | {100*e:.4g}% | {100*number(a, 'rel_err_fitted'):.4g}% | {'是' if e <= .02 else '否'} |")
+lines += ['', '### AMG 迭代数：gamma_g 10 倍范围 × vf 0.5→1e-4（来源 gp_sweep.csv / gp_spectrum.csv）', '',
+          '比值 = 该范围内（5 个 vf × 网格上的 gamma_g）AMG-PCG 迭代数 最大/最小。不定矩阵不跑 AMG，单独计数；“仅 SPD”比值只在剩余情形上算，不能当作整段通过。', '',
+          '| physics | gamma_N | gamma_g 范围 | 情形数 | 不定数 | AMG 最小 | AMG 最大 | 比值(仅 SPD) | 全部 SPD 且 ≤2× |', '| --- | --- | --- | --- | --- | --- | --- | --- | --- |']
+for physics in ['thermal', 'elastic', 'elastic_dirichlet_cut']:
+    for gn in [10, 20, 40]:
+        for low in [.03, .1]:
+            subset = [a for a in gp if a['physics'] == physics and number(a, 'gamma_N') == gn and low * (1-1e-9) <= number(a, 'gamma_g') <= 10 * low * (1+1e-9)]
+            if not subset:
+                continue
+            indef = [a for a in subset if a['indefinite'] != '0']
+            ok = [number(a, 'amg_iterations') for a in subset if a['indefinite'] == '0' and a['amg_status'] == 'ok']
+            if ok:
+                lo, hi = min(ok), max(ok)
+                rat = f'{hi/lo:.3g}'
+                gate = '是' if not indef and len(ok) == len(subset) and hi / lo <= 2 else '否'
+                lines.append(f'| {physics} | {gn} | {low:g}–{10*low:g} | {len(subset)} | {len(indef)} | {lo:g} | {hi:g} | {rat} | {gate} |')
+            else:
+                lines.append(f'| {physics} | {gn} | {low:g}–{10*low:g} | {len(subset)} | {len(indef)} | N/A | N/A | N/A | 否（无 AMG 数据） |')
+lines += ['', f'### gamma_g=0（无 GP）：条件数与定性（gamma_N={gn_def:g}，来源 gp_spectrum.csv 全谱）', '',
+          '对照同 vf 下 gamma_g=' + f'{gg_def:g}' + ' 的 kappa。“不定”= 最小特征值 ≤0，括号内为负特征值个数。', '',
+          '| physics | vf | kappa(gamma_g=0) | kappa(gamma_g=' + f'{gg_def:g}' + ') | 比值 |', '| --- | --- | --- | --- | --- |']
+def fmt_k(a):
+    if a is None:
+        return 'N/A', None
+    if a['indefinite'] != '0':
+        return f"不定（{a['negative_eigenvalues']} 个负特征值）", None
+    return f"{float(a['kappa']):.3e}", float(a['kappa'])
+for physics in ['thermal', 'elastic', 'elastic_dirichlet_cut']:
+    for vf in ['0.5', '0.1', '0.01', '0.001', '0.0001']:
+        a0 = spec.get((physics, vf, f'{gn_def:g}', '0'))
+        a1 = spec.get((physics, vf, f'{gn_def:g}', f'{gg_def:g}'))
+        s0, k0 = fmt_k(a0)
+        s1, k1 = fmt_k(a1)
+        ratio_s = f'{k0/k1:.3g}' if k0 and k1 else '—'
+        lines.append(f'| {physics} | {vf} | {s0} | {s1} | {ratio_s} |')
+lines += ['', '解读：thermal 和 elastic_dirichlet_cut（切割边界上 Nitsche）在 gamma_g=0 时 vf≤0.01 即不定；elastic（切割边为自由边，无 Nitsche）保持正定但 kappa 随 vf 增大到 1e17 量级，接近 FP64 奇异。gamma_N=20 下加 GP（gamma_g=0.1）后三类全部 SPD，kappa 在 vf 0.5→1e-4 内变化 ≤7.1×（thermal 最大，elastic 约 1.14×）；gamma_N=10 时 thermal 在 gamma_g=0.1 仍有不定情形（见上表）。AMG 迭代数本身在 gamma_g=0 的 SPD 情形下几乎不变，因此 GP 必要性的证据主要是谱（不定/条件数），不是迭代数。', '']
 bench = r / 'kokkos_bench.csv'
 if info.get('kokkos') and bench.exists():
     import csv
