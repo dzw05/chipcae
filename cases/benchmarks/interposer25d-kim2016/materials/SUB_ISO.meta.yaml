@@ -6,7 +6,7 @@ elastic:
   symmetry: isotropic
   table:
     temperatures: [298.15, 423.15, 453.15, 518.15]
-    columns: {E: [3.10e10, 2.50e10, 1.95e10, 1.45e10], nu: [0.3, 0.3, 0.3, 0.3]}
+    columns: {E: [3.10e+10, 2.50e+10, 1.95e+10, 1.45e+10], nu: [0.3, 0.3, 0.3, 0.3]}
     interpolation: linear
     extrapolation: clamp
 thermal_expansion:

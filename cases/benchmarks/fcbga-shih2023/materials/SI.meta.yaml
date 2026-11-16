@@ -8,7 +8,7 @@ elastic:
   symmetry: isotropic
   table:
     temperatures: [298.15]
-    columns: {E: [1.31e11], nu: [0.28]}
+    columns: {E: [1.31e+11], nu: [0.28]}
     interpolation: linear
     extrapolation: clamp
 thermal_expansion:

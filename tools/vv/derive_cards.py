@@ -6,7 +6,9 @@
   2) B0/B1 全覆盖退化叠层的 Hsueh(2002) 曲率参考值（SC-1），并与宽板 Timoshenko 交叉核对（SC-2）
   3) 聚合物 E(T) 表（chipcae 选定的 Tg±20°C 对数线性过渡）与相对 T_sf 的割线 CTE 表
   4) 由 Chen et al. 2022 EMC Prony 形状缩放得到的 chipcae 选定底填 Prony
-  5) 各网格级别的单元数估计
+  5) 各网格级别的单元数估计（mesh_counts.py）
+  6) P-KIM2016 均质层：Kim 2016 Table 3 组分重推（kim2016_homogenized；SnAg E(T) tbd）
+  Prony 形状缩放系数 s 的灵敏度卡见 prony_scale.py
 所有输入值在 YAML 里都带 source/status 标签；本脚本输出的数值属于"派生(derived)"。
 """
 import json, math, sys
@@ -99,6 +101,46 @@ def prony_scaled(E0, Einf):
     target = 1.0 - Einf/E0
     return [[round(wi*target/s, 6), t] for wi, t in zip(w, CHEN_TAU)], E0c, s
 
+# ---------------------------------------------------------------- 5) P-KIM2016 组分（Kim 2016 Table 3, p.238）
+# P-KIM2016（validation）的均质层只用 Kim 2016 Table 3 组分重新推导；公式仍为上面的 park_inplane（式 1-4）。
+# 默认 = Kim/Park 面内等效、各向同性用法（Kim 2016 p.236：in-plane effective property 作 isotropic）。
+# 备选（不作默认、不生成冻结卡）：Voigt 横观各向同性卡——式 (1)-(4) 不给 G_xz、ν_xy，备选卡参数 tbd；
+# Halpin–Tsai 不作默认，本脚本不实现。
+CU_KIM2016 = dict(E=125.0, nu=0.3, a=16.5e-6, cite="Kim2016 Table 3 (p.238) Cu")
+# SnAg：Table 3 给 ν = 0.4、CTE = 21.5 ppm/°C；E 为「−74.995 T + 52,582」，转引 Lau 1996（Kim 文献 [14]）。
+# 该式的单位与温度标度（°C 还是 K、MPa 还是 kPa）原文未注明，Lau 1996 原文尚未核对 → E = None（tbd），
+# 不进冻结卡。核对后把 E(T) 传给 kim2016_homogenized(snag_E_GPa=...) 即可。
+SNAG_KIM2016 = dict(E=None, nu=0.4, a=21.5e-6, cite="Kim2016 Table 3 (p.238) SnAg; E(T) 转引 Lau 1996 [14]，tbd")
+UF_INTERPOSER_KIM2016 = dict(Eg=7.9, Er=0.2, nu=0.3, ag=26e-6, ar=107e-6, Tg=122.0)   # Kim 2016 Table 3 Underfill (for interposer)
+UF_ASIC_MEM_KIM2016 = dict(Eg=7.5, Er=0.1, nu=0.3, ag=30e-6, ar=105e-6, Tg=135.0)     # Kim 2016 Table 3 Underfill (for ASIC and memory)
+PHI_C4_KIM2016 = 0.10     # Kim 2016 p.239「about 10% in C4/underfill layer」
+PHI_UBUMP_KIM2016 = 0.03  # Kim 2016 p.239「less than 3% in micro bump/underfill layer」，取上限（chosen）
+
+
+def _hom_pair(fib, uf, cs):
+    g = park_inplane(fib["E"], fib["nu"], fib["a"], cs, uf["Eg"], uf["nu"], uf["ag"])
+    r = park_inplane(fib["E"], fib["nu"], fib["a"], cs, uf["Er"], uf["nu"], uf["ar"])
+    return dict(cs=cs, glassy=dict(E_GPa=round(g[0], 4), alpha_ppm=round(g[1]*1e6, 4), alpha_z_ppm=round(g[2]*1e6, 4), nu=round(g[3], 4)),
+                rubbery=dict(E_GPa=round(r[0], 4), alpha_ppm=round(r[1]*1e6, 4), alpha_z_ppm=round(r[2]*1e6, 4), nu=round(r[3], 4)),
+                Tg=uf["Tg"])
+
+
+def kim2016_homogenized(snag_E_GPa=None):
+    """P-KIM2016 均质层（Kim 2016 Table 3 组分 + 式 1-4）。
+    微凸点层：纤维按 Cu（chosen 简化，沿用 X/PW 卡做法；Kim p.239 称该层为 solder 体积分数），φ = 0.03。
+    C4 层：纤维 SnAg，φ = 0.10；SnAg E(T) 未核对时返回 status = tbd，不给数值。"""
+    out = {"I25D_UBUMP_UF_KIM2016": dict(_hom_pair(CU_KIM2016, UF_ASIC_MEM_KIM2016, PHI_UBUMP_KIM2016),
+                                         fiber="Cu (Kim2016 Table 3)", status="derived")}
+    if snag_E_GPa is None:
+        out["I25D_C4_UF_KIM2016"] = dict(cs=PHI_C4_KIM2016, status="tbd",
+                                         reason="SnAg E(T) 转引 Lau 1996，式中单位/温度标度未注明，原文未核对")
+    else:
+        fib = dict(SNAG_KIM2016, E=snag_E_GPa)
+        out["I25D_C4_UF_KIM2016"] = dict(_hom_pair(fib, UF_INTERPOSER_KIM2016, PHI_C4_KIM2016),
+                                         fiber="SnAg (Kim2016 Table 3)", status="provisional_not_frozen")
+    return out
+
+
 # ---------------------------------------------------------------- main
 def main():
     out = {}
@@ -120,6 +162,8 @@ def main():
                          rubbery=dict(E_GPa=round(r[0],4), alpha_ppm=round(r[1]*1e6,4), alpha_z_ppm=round(r[2]*1e6,4), nu=round(r[3],4)),
                          Tg=uf["Tg"])
     out["homogenized"] = hom
+    hk = kim2016_homogenized()
+    out["homogenized_P_KIM2016"] = hk
 
     eb = lambda E, nu: E/(1-nu)
     # ---- SC-1 FCBGA 全覆盖：衬底 1.2 + 均质层 0.025 + 芯片 0.78, Tsf=150 -> 25
@@ -194,6 +238,11 @@ def main():
                            ("I25D_UBUMP_UF", hom["I25D_UBUMP_UF"]["glassy"]["E_GPa"], hom["I25D_UBUMP_UF"]["rubbery"]["E_GPa"])]:
         terms, E0c, s = prony_scaled(E0, Einf)
         pr[name] = dict(E0_GPa=E0, Einf_GPa=Einf, sum_alpha=round(sum(t[0] for t in terms), 6), terms=terms)
+    hu = hk["I25D_UBUMP_UF_KIM2016"]
+    terms, _, _ = prony_scaled(hu["glassy"]["E_GPa"], hu["rubbery"]["E_GPa"])
+    pr["I25D_UBUMP_UF_KIM2016"] = dict(E0_GPa=hu["glassy"]["E_GPa"], Einf_GPa=hu["rubbery"]["E_GPa"],
+                                       sum_alpha=round(sum(t[0] for t in terms), 6), terms=terms,
+                                       status="borrowed_shape_sensitivity_only")
     E0c = sum(CHEN_EI) + CHEN_EINF
     pr["EMC_Chen2022"] = dict(E0_GPa=round(E0c, 5), Einf_GPa=CHEN_EINF,
                               terms=[[round(e/E0c, 6), t] for e, t in zip(CHEN_EI, CHEN_TAU)],

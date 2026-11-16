@@ -108,17 +108,23 @@ series:
         geometry: {substrate: [40, 40, 1.15], interposer: [26.4, 19.5, 0.1], asic: [18.5, 18.6, 0.4], memory_each: [8, 4, 0.5], unit: mm, cite: "Kim2016 Table 1 (p.235)"}
         underfill_T_sf_C: {value: 165, cite: "Kim2016 p.239（C4/底填与微凸点/底填层）"}
         c4_solder_volume_fraction: {value: 0.10, cite: "Kim2016 p.239「about 10%」"}
+        homogenization: {formula: "Kim2016 式 (1)-(4)（转引 Park），面内等效作各向同性", cite: "Kim2016 p.236", default: true, alternates: {voigt_transversely_isotropic: "仅备选卡；未生成（式 1-4 不给 G_xz、ν_xy，tbd）", halpin_tsai: "不作默认，未实现"}}
+        ubump_uf_layer: {card: I25D_UBUMP_UF_KIM2016, fiber: "Cu 125 GPa / ν 0.3 / 16.5 ppm（Kim2016 Table 3）", matrix: "Underfill (for ASIC and memory)（Kim2016 Table 3）", T_sf_C: 165, T_sf_cite: "Kim2016 p.239", source: derived, tool: "tools/vv/derive_cards.py → homogenized_P_KIM2016"}
+        c4_uf_layer: {card: tbd, fiber: "SnAg ν 0.4 / 21.5 ppm（Kim2016 Table 3）；E(T) tbd", matrix: "Underfill (for interposer)（Kim2016 Table 3）", status: tbd, note: "SnAg E(T)「−74.995 T + 52,582」转引 Lau 1996 [14]，单位与温度标度未注明，原文未核对，不进冻结卡"}
         stiffener_material: {cite: "Kim2016 Table 3 (p.238)，见 geometry.stiffener"}
-      verification_only_not_for_P: [SI]   # SI = Chen 2022 Table 7（131 GPa / 2.8 ppm），仅 X/PW
-      borrowed_sensitivity_only: [I25D_C4_UF.viscoelastic, I25D_UBUMP_UF.viscoelastic]  # Chen 2022 EMC Prony/WLF；区间见各卡 p_series_sensitivity
+      verification_only_not_for_P: [SI, I25D_UBUMP_UF]   # SI = Chen 2022 Table 7（131 GPa / 2.8 ppm）；I25D_UBUMP_UF = Chen 2022 Cu；仅 X/PW
+      borrowed_sensitivity_only: [I25D_C4_UF.viscoelastic, I25D_UBUMP_UF_KIM2016.viscoelastic]  # Chen 2022 EMC Prony/WLF；区间见各卡 p_series_sensitivity；报告 s = 1、s = 0（E ≡ E0）、E ≡ E∞ 三端点（tools/vv/prony_scale.py）
+      borrowed_until_tbd_resolved: [I25D_C4_UF]  # C4 层 SnAg E(T) 核对前，暂用 SAC305 均质卡并在报告中标明
       chosen:
-        - {item: ubump_solder_volume_fraction, value: 0.03, note: "Kim2016 p.239 仅给「less than 3%」，取上限"}
-        - {item: homogenization_fiber_props, note: "C4 用 SAC305（Depiver 2024），微凸点用 Cu（Chen 2022）；Kim2016 Table 3 有 SnAg、Cu（125 GPa/16.5 ppm/0.3），P 系列应改用 Kim 值重算，待核对"}
+        - {item: ubump_solder_volume_fraction, value: 0.03, note: "Kim2016 p.239 仅给「less than 3%」，0.03 为上限"}
+        - {item: ubump_fiber_material, value: Cu, note: "Kim2016 p.239 称微凸点层为 solder 体积分数，未写明微凸点材料；按 Cu（Kim Table 3）为简化"}
+        - {item: cte_step_at_Tg, note: "均质层 CTE 在 Tg 处阶跃（本目录统一约定）"}
       tbd:
         - {item: chip_layout_xy, note: "Kim2016 未给 ASIC/存储块平面坐标"}
         - {item: stiffener_dimensions, note: "Kim2016 未给，见 geometry.stiffener"}
         - {item: interposer_passivation_IMD_and_0p4pct_strain, note: "Kim2016 p.238–239 用钝化/IMD 层与 0.4% 面内压应变模拟中介层残余翘曲；本卡未建"}
         - {item: underfill_viscoelastic, note: "Kim2016 未做粘弹性（p.239）；P 系列底填按 Kim Table 3 弹性 E(T) 或作灵敏度参数"}
+        - {item: c4_uf_layer_SnAg_E_T, note: "SnAg E(T) 转引 Lau 1996，待核对原文；核对后用 derive_cards.kim2016_homogenized(snag_E_GPa=...) 重推"}
         - {item: published_curves, note: "Fig.8、Fig.10 未数字化"}
 loads:
   T_sf_C: {value: 165, unit: degC, source: chosen, note: "统一 T_sf 为简化；P 系列须改用文献分部件零应力温度"}

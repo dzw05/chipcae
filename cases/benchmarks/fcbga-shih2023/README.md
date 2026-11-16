@@ -37,7 +37,9 @@ B0 线弹性、温度无关、小变形；B1 加 E(T) 与 Tg 处 CTE 阶跃；B2
 
 - **X 系列**（verification）：单一 WLF、固定设置；X-OFF（NLGEOM 关，允许四分之一）与 X-ON（全模型）。
 - **PW 系列**（verification）：跨 Tg 分段移位，只与 `tools/vv/pw_reference.py` 及开源实现比。单元级冻结值见 `tests/vv/test_pw_reference.py`（16.32000 / 16.24540 与 10.44021 / 9.35481 MPa）。
-- **P-SHIH2023**（validation）：Shih 2023 已发表室温 FE 最大翘曲 128 µm（实测约 122 µm）。图 12 E(T) 尚未数字化（待核对）。B 系列是简化模型，不期望等于 128 µm。数字化后开源复现与 128 µm 相差 ≤10%（建议）。P 系列底填若无文献 Prony，不得借用 EMC 卡。P 系列参数清单（文献 / 借用 / chosen / tbd）见 `benchmark.yaml` 的 `series.P-SHIH2023.parameters`：`SUB_ISO` 借自 Kim 2016；Shih 2023 Table 3 自带芯片（131 GPa / 2.8 ppm / ν 0.30）、基板与底填的 CTE、Tg、ν，E(T) 在图 12，尚未数字化。
+- **P-SHIH2023**（validation）：Shih 2023 已发表室温 FE 最大翘曲 128 µm（实测约 122 µm）。图 12 E(T) 尚未数字化（待核对）。B 系列是简化模型，不期望等于 128 µm。数字化后开源复现与 128 µm 相差 ≤10%（建议）。P 系列底填若无文献 Prony，不得借用 EMC 卡。P 系列参数清单（文献 / 借用 / chosen / tbd）见 `benchmark.yaml` 的 `series.P-SHIH2023.parameters`：`SUB_ISO` 借自 Kim 2016；Shih 2023 Table 3 自带芯片（131 GPa / 2.8 ppm / ν 0.30，卡 `SI_SHIH2023`，P-SHIH2023 专用；`SI` 仅 X/PW）、基板与底填的 CTE、Tg、ν，E(T) 在图 12，尚未数字化。
+  - **注意**：P-SHIH2023 的基板（`SUB_ISO`，Kim 2016）与底填/凸点均质层（`FCBGA_BUMP_UF`）参数是借用的。Shih 图 12 数字化之前，结果**不算**对 128 µm 翘曲（Shih 2023 p.9 的 FE 预测值；实测约 122 µm）的复现。均质层不按 Kim 组分重推，改用 Shih 图 12 的「Equivalent material (Underfill+Solder bump)」曲线（数字化 tbd）。
+  - Prony 形状缩放 s 只作灵敏度：由 `tools/vv/prony_scale.py` 在加载前生成 Schema v1 卡（s 不是运行时字段），只缩放 E_i、τ_i 不变，E0 不变，E∞(s) = E0 − s(E0 − E∞_ref)。报告 s = 1、s = 0（E ≡ E0）、E ≡ E∞ 三个端点；中间值不是默认本构。`constant_poisson_from_E` 为近似。
 
 ## 公开参考与容差
 

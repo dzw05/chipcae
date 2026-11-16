@@ -78,21 +78,23 @@ series:
   P-SHIH2023:
     type: validation
     literature_only: true
-    published_FE_max_warpage_um: {value: 128, unit: um, source: literature, cite: Shih2023}
+    published_FE_max_warpage_um: {value: 128, unit: um, source: literature, cite: "Shih2023 p.9（FE 预测最大翘曲 128 µm / 5.04 mil；shadow moiré 实测约 122 µm / 4.8 mil，二者相差 <5%）"}
+    reproduction_claim: {status: not_allowed_yet, note: "P-SHIH2023 的基板与底填参数为借用；Shih 2023 Fig.12 数字化之前，结果不算对 128 µm 翘曲的复现"}
     emc_borrowed_underfill_forbidden: true
     figure12_ET_digitized: {status: tbd}
     parameters:  # P 系列只用文献参数；chosen / tbd / 借用项全部列出
       literature:
         geometry: {substrate: [40, 40, 1.2], die: [15.5, 15.5, 0.78], underfill_t_um: 25, unit: mm, cite: "Shih2023 Table 1 (p.4)"}
-        die: {E_GPa: 131, CTE_ppm_per_K: 2.8, nu: 0.30, cite: "Shih2023 Table 3 (p.8)", note: "materials/SI 为 Chen 2022 Table 7（ν = 0.28），P 系列应按 Shih 2023 取 ν = 0.30"}
+        die: {card: SI_SHIH2023, E_GPa: 131, CTE_ppm_per_K: 2.8, nu: 0.30, cite: "Shih2023 Table 3 (p.8)", note: "materials/SI 为 Chen 2022 Table 7（ν = 0.28），仅 X/PW"}
         substrate_Shih: {E: "Shih2023 Fig.12（未数字化，tbd）", CTE_ppm_per_K: {xy: 23.46, z: [52.65, 156.4]}, Tg_C: 156, nu: 0.30, cite: "Shih2023 Table 3 (p.8)"}
         underfill_Shih: {E: "Shih2023 Fig.12（含 Underfill+Solder bump 等效材料曲线，未数字化，tbd）", CTE_ppm_per_K: [32, 110], Tg_C: 70, nu: 0.30, cite: "Shih2023 Table 3 (p.8)"}
       borrowed:
         - {card: SUB_ISO, from: "Kim2016 Table 3 (p.238) 基板", status: borrowed, note: "不是 Shih 2023 基板；Shih 2023 Fig.12 数字化后应替换"}
-        - {card: FCBGA_BUMP_UF.viscoelastic, from: "Chen 2022 EMC Prony/WLF", status: borrowed_sensitivity_only, note: "区间见 materials/FCBGA_BUMP_UF.meta.yaml p_series_sensitivity"}
+        - {card: FCBGA_BUMP_UF.viscoelastic, from: "Chen 2022 EMC Prony/WLF", status: borrowed_sensitivity_only, note: "区间见 materials/FCBGA_BUMP_UF.meta.yaml p_series_sensitivity；s 灵敏度报告 s = 1、s = 0（E ≡ E0）、E ≡ E∞ 三端点（tools/vv/prony_scale.py）"}
+        - {card: FCBGA_BUMP_UF.elastic_endpoints, from: "Kim2016 Table 3 底填 + SAC305 均质化", status: borrowed, note: "P-SHIH2023 不按 Kim 组分重推；改用 Shih2023 Fig.12「Equivalent material (Underfill+Solder bump)」曲线数字化（tbd）"}
       verification_only_not_for_P: [SI, FCBGA_BUMP_UF]   # 均质层基体取 Kim 2016 底填（借用），不是 Shih 2023 底填
       chosen: [bump_uf_footprint, die_position, T_end_C]
-      tbd: [figure12_ET_digitized, substrate_Shih.E, underfill_Shih.E]
+      tbd: [figure12_ET_digitized, substrate_Shih.E, underfill_Shih.E, equivalent_bump_uf_layer_ET]
 loads:
   T_sf_C: {value: 150, unit: degC, source: literature, cite: Shih2023}
   T_end_C: {value: 25, unit: degC, source: chosen}
