@@ -1,74 +1,38 @@
 #include "chipcae/mesh/background/tensor_grid.hpp"
 
 #include "chipcae/mesh/background/activation.hpp"
-#include "chipcae/mesh/background/column_partition.hpp"
 #include "chipcae/mesh/background/sfc.hpp"
+#include "chipcae/par/column_extrude_partitioner.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <numeric>
 #include <set>
-#ifdef K1_HAVE_METIS
-#include <metis.h>
-#endif
+#include <stdexcept>
 namespace chipcae::mesh {
-Expected<std::vector<Local>>
-ColumnExtrudePartitioner::partition(Local nx, Local ny, Local nz, Local ranks, bool use_metis) {
-    if (nx < 1 || ny < 1 || nz < 1 || ranks < 1)
-        return Error{"partition", "positive dimensions required"};
-    std::vector<Local> order(static_cast<std::size_t>(nx) * ny), owner(order.size());
-    std::iota(order.begin(), order.end(), 0);
-    std::sort(order.begin(), order.end(), [&](Local a, Local b) {
-        return morton(a % nx, a / nx) < morton(b % nx, b / nx);
-    });
-    for (std::size_t i = 0; i < order.size(); ++i)
-        owner[order[i]] = static_cast<Local>(i * static_cast<std::size_t>(ranks) / order.size());
-#ifdef K1_HAVE_METIS
-    if (use_metis && ranks > 1) {
-        idx_t n = nx * ny, ncon = 1, np = ranks, obj = 0;
-        std::vector<idx_t> offsets{0}, adj, weights(static_cast<std::size_t>(n), nz),
-            part(static_cast<std::size_t>(n));
-        for (Local y = 0; y < ny; ++y)
-            for (Local x = 0; x < nx; ++x) {
-                for (auto d :
-                     std::array<std::array<Local, 2>, 4>{{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}}) {
-                    Local a = x + d[0], b = y + d[1];
-                    if (a >= 0 && b >= 0 && a < nx && b < ny)
-                        adj.push_back(a + nx * b);
-                }
-                offsets.push_back(static_cast<idx_t>(adj.size()));
-            }
-        idx_t options[METIS_NOPTIONS];
-        METIS_SetDefaultOptions(options);
-        options[METIS_OPTION_SEED] = 0;
-        if (METIS_PartGraphKway(&n,
-                                &ncon,
-                                offsets.data(),
-                                adj.data(),
-                                weights.data(),
-                                nullptr,
-                                nullptr,
-                                &np,
-                                nullptr,
-                                nullptr,
-                                options,
-                                &obj,
-                                part.data()) != METIS_OK)
-            return Error{"partition", "METIS failure"};
-        std::copy(part.begin(), part.end(), owner.begin());
-    }
-#else
-    (void)use_metis;
-#endif
-    std::vector<Local> result;
-    result.reserve(owner.size() * static_cast<std::size_t>(nz));
-    for (auto column : order)
-        for (Local z = 0; z < nz; ++z)
-            result.push_back(owner[column]);
-    return result;
-}
 namespace {
+Expected<std::vector<Local>>
+expand_column_partition(std::size_t nx, std::size_t ny, std::size_t nz, int ranks) {
+    if (!nx || !ny || !nz || ranks < 1)
+        return Error{"partition", "positive dimensions required"};
+    try {
+        auto structured = par::ColumnExtrudePartitioner::partition(nx, ny, nz, ranks);
+        const auto columns = nx * ny;
+        std::vector<std::size_t> order(columns);
+        std::iota(order.begin(), order.end(), 0);
+        std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+            return morton(a % nx, a / nx) < morton(b % nx, b / nx);
+        });
+        std::vector<Local> result(columns * nz);
+        for (std::size_t mi = 0; mi < columns; ++mi)
+            for (std::size_t k = 0; k < nz; ++k)
+                result[mi * nz + k] = structured(k * columns + order[mi]);
+        return result;
+    } catch (const std::exception& e) {
+        return Error{"partition", e.what()};
+    }
+}
 bool contains(const Footprint& f, Real x, Real y) {
     if (x < f.box[0] || y < f.box[1] || x > f.box[2] || y > f.box[3])
         return false;
@@ -326,11 +290,7 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
     for (auto& a : m.attribute)
         a = remap[a];
     m.attr_table = std::move(compact);
-    auto part = ColumnExtrudePartitioner::partition(static_cast<Local>(nx),
-                                                    static_cast<Local>(ny),
-                                                    static_cast<Local>(nz),
-                                                    o.ranks,
-                                                    o.use_metis);
+    auto part = expand_column_partition(nx, ny, nz, o.ranks);
     if (!part)
         return part.error();
     m.partitioning = std::move(part.value());

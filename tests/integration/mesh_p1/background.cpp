@@ -1,10 +1,12 @@
 #include "chipcae/mesh/background/activation.hpp"
 #include "chipcae/mesh/background/sfc.hpp"
+#include "chipcae/par/column_extrude_partitioner.hpp"
 #include "support.hpp"
 
 #include <algorithm>
 #include <iostream>
 #include <limits>
+#include <numeric>
 #include <set>
 using namespace chipcae::mesh;
 using k1::expect;
@@ -70,7 +72,7 @@ int main() {
     Local next = 1;
     for (auto a : attrs)
         expect(a == next++, "compact attributes");
-    std::size_t nz = m.axes[2].size() - 1;
+    std::size_t nx = m.axes[0].size() - 1, ny = m.axes[1].size() - 1, nz = m.axes[2].size() - 1;
     std::vector<int> load(4);
     for (std::size_t e = 0; e < m.attribute.size(); ++e) {
         expect(m.partitioning[e] == m.partitioning[(e / nz) * nz], "column ownership");
@@ -80,6 +82,29 @@ int main() {
         expect(std::abs(double(n) * 4 / m.attribute.size() - 1) <=
                    k1::threshold("partition_imbalance"),
                "rank balance");
+    for (int ranks : {1, 2, 4}) {
+        auto opts = o;
+        opts.ranks = ranks;
+        auto grid = build_tensor_grid(s, opts);
+        expect(bool(grid), "partition grid at rank count");
+        const auto& g = grid.value();
+        auto structured = chipcae::par::ColumnExtrudePartitioner::partition(nx, ny, nz, ranks);
+        std::vector<std::size_t> order(nx * ny);
+        std::iota(order.begin(), order.end(), 0);
+        std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+            return morton(a % nx, a / nx) < morton(b % nx, b / nx);
+        });
+        expect(g.partitioning.size() == g.attribute.size() &&
+                   g.elem_gid.size() == g.attribute.size(),
+               "partition and GID lengths");
+        for (std::size_t e = 0; e < g.attribute.size(); ++e) {
+            auto mi = e / nz, k = e % nz;
+            expect(g.elem_gid[e] == static_cast<chipcae::Index>(e),
+                   "Morton column times nz plus k GID");
+            expect(g.partitioning[e] == structured(k * (nx * ny) + order[mi]),
+                   "element rank equals column rank");
+        }
+    }
     o.cell_budget = 1;
     expect(!build_tensor_grid(s, o), "budget failure");
     o.cell_budget = 50000;

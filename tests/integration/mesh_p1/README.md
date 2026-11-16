@@ -33,7 +33,7 @@ timeout 600 ctest --test-dir build-k1-cpu -LE gpu --timeout 60 --output-on-failu
 ```
 
 The dependency prefix is local, versioned by script digest and cached.
-`CHIPCAE_K1_USE_METIS` defaults to OFF. HDF5 is built parallel because the
+Partitioning uses `chipcae::par::ColumnExtrudePartitioner`. HDF5 is built parallel because the
 existing root dependency policy requires it when MPI is enabled.
 
 Optional-dependency mesh tests (schema, MFEM, HDF5, MPI) run in the weekday
