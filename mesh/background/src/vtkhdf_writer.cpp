@@ -12,8 +12,10 @@
 #endif
 namespace chipcae::mesh {
 namespace {
-thread_local bool collective = false;
-thread_local int writer_rank = 0, writer_size = 1;
+struct WriterContext {
+    bool collective = false;
+    int rank = 0, size = 1;
+};
 struct ErrorSilencer {
     H5E_auto2_t handler{};
     void* data{};
@@ -58,19 +60,21 @@ hid_t native<unsigned char>() {
     return H5T_NATIVE_UCHAR;
 }
 template <class T>
-void dataset(hid_t parent, const char* name, const std::vector<T>& data, hsize_t components = 1) {
+void dataset(hid_t parent,
+             const char* name,
+             const std::vector<T>& data,
+             const WriterContext& ctx,
+             hsize_t components = 1) {
     hsize_t dims[2] = {data.size() / components, components};
     H5 space(H5Screate_simple(components == 1 ? 1 : 2, dims, nullptr), H5Sclose);
     H5 set(H5Dcreate2(parent, name, native<T>(), space, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT),
            H5Dclose);
     H5 transfer(H5Pcreate(H5P_DATASET_XFER), H5Pclose);
 #if defined(H5_HAVE_PARALLEL) && defined(CHIPCAE_ENABLE_MPI)
-    if (collective) {
+    if (ctx.collective) {
         check(H5Pset_dxpl_mpio(transfer, H5FD_MPIO_COLLECTIVE));
-        hsize_t begin =
-            dims[0] * static_cast<hsize_t>(writer_rank) / static_cast<hsize_t>(writer_size);
-        hsize_t end =
-            dims[0] * static_cast<hsize_t>(writer_rank + 1) / static_cast<hsize_t>(writer_size);
+        hsize_t begin = dims[0] * static_cast<hsize_t>(ctx.rank) / static_cast<hsize_t>(ctx.size);
+        hsize_t end = dims[0] * static_cast<hsize_t>(ctx.rank + 1) / static_cast<hsize_t>(ctx.size);
         hsize_t count[2] = {end - begin, components}, start[2] = {begin, 0};
         hsize_t memory_dims[2] = {std::max(hsize_t(1), end - begin), components};
         H5 memory(H5Screate_simple(components == 1 ? 1 : 2, memory_dims, nullptr), H5Sclose);
@@ -104,17 +108,23 @@ void header(hid_t root, const std::string& type) {
     H5 a(H5Acreate2(root, "Type", ts, scalar, H5P_DEFAULT, H5P_DEFAULT), H5Aclose);
     check(H5Awrite(a, ts, type.c_str()));
 }
-void topology(hid_t root, const char* name, const std::vector<Index>& connectivity, Index stride) {
+void topology(hid_t root,
+              const char* name,
+              const std::vector<Index>& connectivity,
+              Index stride,
+              const WriterContext& ctx) {
     H5 g(H5Gcreate2(root, name, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT), H5Gclose);
     Index cells = static_cast<Index>(connectivity.size()) / stride;
-    dataset(g, "NumberOfCells", std::vector<Index>{cells});
-    dataset(
-        g, "NumberOfConnectivityIds", std::vector<Index>{static_cast<Index>(connectivity.size())});
-    dataset(g, "Connectivity", connectivity);
+    dataset(g, "NumberOfCells", std::vector<Index>{cells}, ctx);
+    dataset(g,
+            "NumberOfConnectivityIds",
+            std::vector<Index>{static_cast<Index>(connectivity.size())},
+            ctx);
+    dataset(g, "Connectivity", connectivity, ctx);
     std::vector<Index> offsets(static_cast<std::size_t>(cells + 1));
     for (Index i = 0; i <= cells; ++i)
         offsets[static_cast<std::size_t>(i)] = i * stride;
-    dataset(g, "Offsets", offsets);
+    dataset(g, "Offsets", offsets, ctx);
 }
 } // namespace
 Expected<VtkhdfFiles> write_vtkhdf(const std::filesystem::path& stem,
@@ -123,11 +133,26 @@ Expected<VtkhdfFiles> write_vtkhdf(const std::filesystem::path& stem,
                                    const Communicator& comm,
                                    bool debug_per_rank) {
     ErrorSilencer hush;
-    writer_rank = comm.rank();
-    writer_size = comm.size();
-    collective = false;
+    WriterContext ctx;
+    ctx.rank = comm.rank();
+    ctx.size = comm.size();
 #if defined(H5_HAVE_PARALLEL) && defined(CHIPCAE_ENABLE_MPI)
-    collective = !debug_per_rank;
+    ctx.collective = !debug_per_rank;
+#endif
+#ifdef CHIPCAE_ENABLE_MPI
+    // Communicator is a world snapshot and has no native handle, so MPI-IO and
+    // the agreement reduction use MPI_COMM_WORLD after checking the snapshot.
+    auto vtkhdf_comm = MPI_COMM_WORLD;
+    if (!comm.is_serial()) {
+        int wr = 0, ws = 1, ready = 0;
+        MPI_Initialized(&ready);
+        if (ready) {
+            MPI_Comm_rank(MPI_COMM_WORLD, &wr);
+            MPI_Comm_size(MPI_COMM_WORLD, &ws);
+        }
+        if (wr != comm.rank() || ws != comm.size())
+            return Error{"vtkhdf", "Communicator snapshot does not match MPI_COMM_WORLD"};
+    }
 #endif
     auto suffix = debug_per_rank ? ".rank" + std::to_string(comm.rank()) : std::string{};
     VtkhdfFiles paths{stem.string() + suffix + ".vtkhdf", stem.string() + suffix + ".eb.vtkhdf"};
@@ -136,7 +161,7 @@ Expected<VtkhdfFiles> write_vtkhdf(const std::filesystem::path& stem,
 #ifdef CHIPCAE_ENABLE_MPI
         if (!debug_per_rank) {
             int flag = ok ? 1 : 0, all = flag;
-            MPI_Allreduce(&flag, &all, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+            MPI_Allreduce(&flag, &all, 1, MPI_INT, MPI_MIN, vtkhdf_comm);
             if (!all)
                 return Error{"vtkhdf", "collective write failed"};
         }
@@ -148,12 +173,12 @@ Expected<VtkhdfFiles> write_vtkhdf(const std::filesystem::path& stem,
     bool ok = true;
     std::filesystem::path grid_tmp = paths.grid.string() + ".tmp",
                           eb_tmp = paths.embedded_boundary.string() + ".tmp";
-    if (collective || debug_per_rank || comm.rank() == 0)
+    if (ctx.collective || debug_per_rank || comm.rank() == 0)
         try {
             H5 access(H5Pcreate(H5P_FILE_ACCESS), H5Pclose);
 #if defined(H5_HAVE_PARALLEL) && defined(CHIPCAE_ENABLE_MPI)
-            if (collective)
-                check(H5Pset_fapl_mpio(access, MPI_COMM_WORLD, MPI_INFO_NULL));
+            if (ctx.collective)
+                check(H5Pset_fapl_mpio(access, vtkhdf_comm, MPI_INFO_NULL));
 #endif
             if (m.hex.size() != 8 * m.attribute.size() ||
                 m.partitioning.size() != m.attribute.size())
@@ -188,17 +213,22 @@ Expected<VtkhdfFiles> write_vtkhdf(const std::filesystem::path& stem,
                 H5 root(H5Gcreate2(file, "VTKHDF", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT),
                         H5Gclose);
                 header(root, "UnstructuredGrid");
-                dataset(
-                    root, "NumberOfPoints", std::vector<Index>{static_cast<Index>(nodes.size())});
-                dataset(
-                    root, "NumberOfCells", std::vector<Index>{static_cast<Index>(cells.size())});
+                dataset(root,
+                        "NumberOfPoints",
+                        std::vector<Index>{static_cast<Index>(nodes.size())},
+                        ctx);
+                dataset(root,
+                        "NumberOfCells",
+                        std::vector<Index>{static_cast<Index>(cells.size())},
+                        ctx);
                 dataset(root,
                         "NumberOfConnectivityIds",
-                        std::vector<Index>{static_cast<Index>(connectivity.size())});
-                dataset(root, "Points", points, 3);
-                dataset(root, "Connectivity", connectivity);
-                dataset(root, "Offsets", offsets);
-                dataset(root, "Types", std::vector<unsigned char>(cells.size(), 12));
+                        std::vector<Index>{static_cast<Index>(connectivity.size())},
+                        ctx);
+                dataset(root, "Points", points, ctx, 3);
+                dataset(root, "Connectivity", connectivity, ctx);
+                dataset(root, "Offsets", offsets, ctx);
+                dataset(root, "Types", std::vector<unsigned char>(cells.size(), 12), ctx);
                 H5 cd(H5Gcreate2(root, "CellData", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT),
                       H5Gclose);
                 std::map<std::string, std::vector<Local>> fields;
@@ -226,8 +256,8 @@ Expected<VtkhdfFiles> write_vtkhdf(const std::filesystem::path& stem,
                 }
                 for (auto name :
                      {"attribute", "layer", "region", "material", "body", "rank", "cell_kind"})
-                    dataset(cd, name, fields[name]);
-                dataset(cd, "vol_frac", vf);
+                    dataset(cd, name, fields[name], ctx);
+                dataset(cd, "vol_frac", vf, ctx);
                 check(H5Fflush(file, H5F_SCOPE_GLOBAL));
             }
             {
@@ -268,22 +298,20 @@ Expected<VtkhdfFiles> write_vtkhdf(const std::filesystem::path& stem,
                                     weights.push_back(0);
                                 }
                         }
-                dataset(
-                    root, "NumberOfPoints", std::vector<Index>{static_cast<Index>(eb.size() / 3)});
-                dataset(root, "Points", eb, 3);
-                topology(root, "Vertices", verts, 1);
-                topology(root, "Lines", {}, 2);
-                topology(root, "Polygons", triangles, 3);
-                topology(root, "Strips", {}, 3);
+                dataset(root,
+                        "NumberOfPoints",
+                        std::vector<Index>{static_cast<Index>(eb.size() / 3)},
+                        ctx);
+                dataset(root, "Points", eb, ctx, 3);
+                topology(root, "Vertices", verts, 1, ctx);
+                topology(root, "Lines", {}, 2, ctx);
+                topology(root, "Polygons", triangles, 3, ctx);
+                topology(root, "Strips", {}, 3, ctx);
                 H5 pd(H5Gcreate2(root, "PointData", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT),
                       H5Gclose);
-                dataset(pd, "normal", normals, 3);
-                dataset(pd, "area_weight", weights);
+                dataset(pd, "normal", normals, ctx, 3);
+                dataset(pd, "area_weight", weights, ctx);
                 check(H5Fflush(file, H5F_SCOPE_GLOBAL));
-            }
-            if (!collective || comm.rank() == 0) {
-                std::filesystem::rename(grid_tmp, paths.grid);
-                std::filesystem::rename(eb_tmp, paths.embedded_boundary);
             }
         } catch (const std::exception& e) {
             std::error_code ec;
@@ -291,6 +319,29 @@ Expected<VtkhdfFiles> write_vtkhdf(const std::filesystem::path& stem,
             std::filesystem::remove(eb_tmp, ec);
             ok = false;
         }
-    return agree(ok);
+    auto result = agree(ok);
+    if (!result) {
+        if (debug_per_rank || comm.rank() == 0) {
+            std::error_code ec;
+            std::filesystem::remove(grid_tmp, ec);
+            std::filesystem::remove(eb_tmp, ec);
+            std::filesystem::remove(paths.grid, ec);
+            std::filesystem::remove(paths.embedded_boundary, ec);
+        }
+#ifdef CHIPCAE_ENABLE_MPI
+        if (!debug_per_rank)
+            MPI_Barrier(vtkhdf_comm);
+#endif
+        return result;
+    }
+    if (debug_per_rank || comm.rank() == 0) {
+        std::filesystem::rename(grid_tmp, paths.grid);
+        std::filesystem::rename(eb_tmp, paths.embedded_boundary);
+    }
+#ifdef CHIPCAE_ENABLE_MPI
+    if (!debug_per_rank)
+        MPI_Barrier(vtkhdf_comm);
+#endif
+    return result;
 }
 } // namespace chipcae::mesh

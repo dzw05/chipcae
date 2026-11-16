@@ -100,24 +100,28 @@ std::vector<Face> clip(std::vector<Face> faces, V n, Real d, Real snap) {
     }
     return out;
 }
-Local embedded_attribute(const HexMeshArrays& m, BodyId body) {
-    // Body IDs are never boundary attributes. Reserve a range above aligned patches.
+std::map<BodyId, Local> compact_embedded_attributes(const HexMeshArrays& m,
+                                                    const std::vector<Local>& used_bodies) {
     Local next = 7;
     for (const auto& [name, list] : m.face_sets)
         if (!name.ends_with("|void"))
             for (auto a : list)
                 next = std::max(next, a + 1);
-    return next + body;
+    std::set<BodyId> used(used_bodies.begin(), used_bodies.end());
+    std::map<BodyId, Local> out;
+    for (const auto& [name, body] : m.attr_table.bodies)
+        if (used.contains(body))
+            out[body] = next++;
+    return out;
 }
 void register_embedded(HexMeshArrays& m, const CutLayerArrays& c) {
-    for (const auto& [name, body] : m.attr_table.bodies) {
-        auto attr_test = embedded_attribute(m, body);
-        if (std::find(c.bq_bdr_attr.begin(), c.bq_bdr_attr.end(), attr_test) == c.bq_bdr_attr.end())
-            continue;
-        auto ref = canonical_interface("body:" + name, "void");
-        auto attr = embedded_attribute(m, body);
-        m.face_sets[ref] = {attr};
-        m.attr_table.boundary_names[attr] = ref;
+    for (const auto& [ref, attrs] : c.face_sets) {
+        auto& list = m.face_sets[ref];
+        for (auto attr : attrs) {
+            if (std::find(list.begin(), list.end(), attr) == list.end())
+                list.push_back(attr);
+            m.attr_table.boundary_names[attr] = ref;
+        }
     }
 }
 Expected<CutLayerArrays>
@@ -224,7 +228,7 @@ generate(const HexMeshArrays& m, const CutGeometry& g, const CutOptions& o) {
                             c.bq_n[k].push_back(f.normal[k]);
                         }
                         c.bq_w.push_back(area / 3);
-                        c.bq_bdr_attr.push_back(embedded_attribute(m, body));
+                        c.bq_bdr_attr.push_back(body);
                     }
                 } else
                     exterior = add(exterior, mul(f.normal, area));
@@ -237,11 +241,12 @@ generate(const HexMeshArrays& m, const CutGeometry& g, const CutOptions& o) {
         c.bq_off.push_back(static_cast<Local>(c.bq_w.size()));
         c.exterior_area_vector.push_back(exterior);
     }
-    for (const auto& [name, body] : m.attr_table.bodies) {
-        auto attr = embedded_attribute(m, body);
-        if (std::find(c.bq_bdr_attr.begin(), c.bq_bdr_attr.end(), attr) != c.bq_bdr_attr.end())
-            c.face_sets[canonical_interface("body:" + name, "void")] = {attr};
-    }
+    auto eb = compact_embedded_attributes(m, c.bq_bdr_attr);
+    for (auto& a : c.bq_bdr_attr)
+        a = eb.at(a);
+    for (const auto& [name, body] : m.attr_table.bodies)
+        if (eb.contains(body))
+            c.face_sets[canonical_interface("body:" + name, "void")] = {eb[body]};
     return c;
 }
 } // namespace

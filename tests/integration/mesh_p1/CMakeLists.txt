@@ -4,6 +4,24 @@ add_test(NAME k1_public_headers
     -DROOT=${PROJECT_SOURCE_DIR}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/check_standalone_headers.cmake)
 set_tests_properties(k1_public_headers PROPERTIES LABELS "mesh;tierA" TIMEOUT 60)
+if(CHIPCAE_ENABLE_KOKKOS)
+  set(_k1_kokkos_inc "")
+  if(DEFINED Kokkos_INCLUDE_DIRS)
+    set(_k1_kokkos_inc ${Kokkos_INCLUDE_DIRS})
+  elseif(TARGET Kokkos::kokkos)
+    get_target_property(_k1_kokkos_inc Kokkos::kokkos INTERFACE_INCLUDE_DIRECTORIES)
+  endif()
+  if(_k1_kokkos_inc)
+    add_test(NAME k1_public_headers_kokkos
+      COMMAND ${CMAKE_COMMAND}
+        -DCOMPILER=${CMAKE_CXX_COMPILER}
+        -DROOT=${PROJECT_SOURCE_DIR}
+        -DDEFS=CHIPCAE_ENABLE_KOKKOS
+        "-DINCLUDES=${_k1_kokkos_inc}"
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/check_standalone_headers.cmake)
+    set_tests_properties(k1_public_headers_kokkos PROPERTIES LABELS "mesh;tierA" TIMEOUT 60)
+  endif()
+endif()
 
 if(CHIPCAE_ENABLE_JSONCONS)
   add_executable(k1_schema schema.cpp)

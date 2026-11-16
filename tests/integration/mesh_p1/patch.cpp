@@ -90,7 +90,7 @@ int main(int argc, char** argv) {
                       << " hypre_before_setup=" << HYPRE_GetError() << std::endl;
         expect(HYPRE_GetError() == 0, "hypre error before AMG setup");
         mfem::HypreBoomerAMG preconditioner(*A.As<mfem::HypreParMatrix>());
-        expect(HYPRE_GetError() == 0, "hypre error after AMG setup");
+        expect(HYPRE_GetError() == 0, "hypre error after AMG construct");
         preconditioner.SetSystemsOptions(3);
         preconditioner.SetPrintLevel(0);
         mfem::CGSolver solver(MPI_COMM_WORLD);
@@ -102,7 +102,7 @@ int main(int argc, char** argv) {
         solver.SetOperator(*A);
         solver.SetRelTol(k1::threshold("patch_relative") / 100);
         solver.SetAbsTol(0);
-        solver.SetMaxIter(1000);
+        solver.SetMaxIter(static_cast<int>(k1::threshold("amg_pcg_max_iter")));
         solver.SetPrintLevel(0);
         solver.Mult(B, X);
         expect(solver.GetConverged(), "elasticity solve converged");

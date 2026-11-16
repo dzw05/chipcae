@@ -108,7 +108,9 @@ unchanged. `vf_min` is still 1e-8 and was not renamed (awaiting a
 product decision). `partition_imbalance` is 0.25. `snap_tol` and
 `snap_phi` are 1e-14 m absolute.
 
-`CHIPCAE_K1_USE_METIS` defaults to OFF.
+K1 no longer has a separate METIS option; partitioning uses
+`chipcae::par::ColumnExtrudePartitioner` (METIS if that library was built
+with it).
 
 ## Hypre initialization (M6-1)
 
@@ -142,3 +144,46 @@ after setup and after the solve, and caps AMG-PCG iterations with
 Full-dependency logs are written under `/workspace/tasks/logs/k1-g1-fulldep/`.
 The G1 gate also needs the first green nightly after merge (not done
 here; nothing is merged in this work).
+
+## Round-3 additions
+
+- R3-1: resolving an `interface:A|B` reference records the user-written
+  string in `preparation_report`, the body names each side resolves to,
+  and aligned vs cut patch counts and areas. A mixed-reference test
+  covers `interface:layer:base|body:cap` and
+  `interface:layer:substrate|body:solder_*`.
+- R3-2: deleted `chipcae::mesh::ColumnExtrudePartitioner`. The mesh takes
+  the column→rank map from `chipcae::par::ColumnExtrudePartitioner` and
+  expands it into the element partition array in Morton column index ×
+  nz + k order. par's structured `(k*ny+j)*nx+i` order stays inside par
+  and is not written to files, halos, or other external interfaces.
+  The same mesh is checked at 1, 2, and 4 ranks: each element's rank
+  equals its column's rank. par was not modified.
+- Numbering: one global element and node GID rule, mesh's column Morton
+  index × nz + k (nodes use nz+1).
+
+### Carried-over nits (not fixed in this round)
+
+- nit 4: nightly runs OpenMPI as a second, independent MPI
+  implementation. G1 evidence is the first green nightly after merge;
+  local MPICH logs are only supporting.
+- nit 6: `GhostPenaltyCache` holds a full mesh copy. This must be
+  changed to an attribute→gid map before G3 performance work or
+  scale-up.
+
+### Cheap nits fixed in this round
+
+- Old nit 7: `vtkhdf_writer.cpp` no longer uses `thread_local` writer
+  state. Rank 0 renames the final files only after `agree()`, then all ranks
+  barrier before returning so readers see the final names.
+  `MPI_COMM_WORLD` remains only because `Communicator` has no native
+  handle; the writer checks that the snapshot matches world.
+- Old nit 13: embedded-boundary attributes are packed compactly above
+  the aligned-patch range, one id per body that actually has cut faces.
+- patch test: the pre-Mult hypre check is labeled "after AMG construct";
+  `SetMaxIter` uses `amg_pcg_max_iter`.
+- `k1_public_headers_kokkos` compiles public headers with
+  `CHIPCAE_ENABLE_KOKKOS` when Kokkos include dirs are available.
+- Comment on `HexMeshArrays::face_sets`: cut-face attributes in
+  `bdr_attribute_sets` are not attached to MFEM boundary elements;
+  solvers must read cut faces from `CutLayerArrays`.
