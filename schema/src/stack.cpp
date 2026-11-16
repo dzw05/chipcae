@@ -29,23 +29,39 @@ Expected<StackModel> load_stack(const std::filesystem::path& file,
             return Error{"$", "cannot open instance or schema"};
         J j = J::parse(input), s = J::parse(specification);
         auto validator = jsoncons::jsonschema::make_json_schema(s);
-        std::string failure;
+        Error failure;
         validator.validate(j, [&](const jsoncons::jsonschema::validation_message& m) {
-            if (failure.empty())
-                failure = m.instance_location().string() + ": " + m.message();
+            if (failure.reason.empty())
+                failure = Error{"$" + m.instance_location().string(), m.message()};
             return jsoncons::jsonschema::walk_result::advance;
         });
-        if (!failure.empty())
-            return Error{"$", failure};
+        if (!failure.reason.empty())
+            return failure;
         StackModel model;
         model.id = j.at("id").as<std::string>();
         model.outline = footprint(j.at("outline"));
+        if (!(model.outline.box[2] > model.outline.box[0] &&
+              model.outline.box[3] > model.outline.box[1]))
+            return Error{"$/outline/box", "positive rectangle required"};
         model.symmetry = j.at("symmetry").as<std::string>();
+        if (model.symmetry != "none")
+            return Error{"$/symmetry", "symmetry other than none is not implemented"};
         model.package_type = j.at("package_type").as<std::string>();
+        auto warn_solder = [&](std::string material) {
+            auto original = material;
+            for (auto& c : material)
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (material.find("sac") != std::string::npos ||
+                material.find("solder") != std::string::npos)
+                model.warnings.push_back("solder material name: " + original +
+                                         "; verify equivalent properties");
+        };
         std::set<std::string> names, refs;
         auto unique = [&](const std::string& name) { return names.insert(name).second; };
         auto inside = [&](const Footprint& f) {
             const auto& b = model.outline.box;
+            if (!(f.box[2] > f.box[0] && f.box[3] > f.box[1]))
+                return false;
             if (f.box[0] < b[0] || f.box[1] < b[1] || f.box[2] > b[2] || f.box[3] > b[3])
                 return false;
             for (auto p : f.polygon)
@@ -59,6 +75,8 @@ Expected<StackModel> load_stack(const std::filesystem::path& file,
             Layer v;
             v.name = l.at("name").as<std::string>();
             v.kind = l.at("kind").as<std::string>();
+            if (v.name == "void")
+                return Error{path + "/name", "void is a reserved name"};
             if (!unique(v.name))
                 return Error{path + "/name", "duplicate name"};
             refs.insert("layer:" + v.name);
@@ -68,14 +86,12 @@ Expected<StackModel> load_stack(const std::filesystem::path& file,
             if (l.contains("material"))
                 v.material = l.at("material").as<std::string>();
             v.body = l.get_value_or<std::string>("body", v.name);
+            if (v.body == "void")
+                return Error{path + "/body", "void is a reserved name"};
             refs.insert("body:" + v.body);
-            auto solder = [](std::string m) {
-                for (auto& c : m)
-                    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                return m.find("sac") != std::string::npos || m.find("solder") != std::string::npos;
-            };
-            if (v.kind == "Homogenized" && solder(v.material))
-                return Error{path + "/material", "solder forbidden in homogenized layer"};
+            if (v.kind == "Homogenized" && !v.material.ends_with("_eq"))
+                return Error{path + "/material", "homogenized material must end with _eq"};
+            warn_solder(v.material);
             if (l.contains("regions"))
                 for (const auto& r : l.at("regions").array_range()) {
                     Inclusion a;
@@ -83,13 +99,19 @@ Expected<StackModel> load_stack(const std::filesystem::path& file,
                     a.material = r.at("material").as<std::string>();
                     a.body = r.get_value_or<std::string>("body", a.name);
                     a.footprint = footprint(r.at("footprint"));
+                    if (a.name == "void")
+                        return Error{path + "/regions/" + a.name, "void is a reserved name"};
+                    if (a.body == "void")
+                        return Error{path + "/regions/" + a.name + "/body",
+                                     "void is a reserved name"};
                     if (!unique(a.name))
                         return Error{path + "/regions", "duplicate name"};
                     if (!inside(a.footprint))
                         return Error{path + "/regions/" + a.name + "/footprint", "outside outline"};
-                    if (v.kind == "Homogenized" && solder(a.material))
+                    if (v.kind == "Homogenized" && !a.material.ends_with("_eq"))
                         return Error{path + "/regions/" + a.name,
-                                     "solder forbidden in homogenized layer"};
+                                     "homogenized material must end with _eq"};
+                    warn_solder(a.material);
                     refs.insert("region:" + a.name);
                     refs.insert("body:" + a.body);
                     v.regions.push_back(a);
@@ -99,6 +121,8 @@ Expected<StackModel> load_stack(const std::filesystem::path& file,
         if (j.contains("activation_groups"))
             for (const auto& g : j.at("activation_groups").array_range()) {
                 auto name = g.at("name").as<std::string>();
+                if (name == "void")
+                    return Error{"$/activation_groups/" + name, "void is a reserved name"};
                 if (!unique(name))
                     return Error{"$/activation_groups/" + name, "duplicate name"};
                 for (const auto& m : g.at("members").array_range()) {

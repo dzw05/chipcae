@@ -1,0 +1,74 @@
+# Reusable workflow. Called from ci.yml only. Do not add pull_request/push triggers.
+name: Mesh
+
+on:
+  workflow_call:
+
+concurrency:
+  group: mesh-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  mesh-tests:
+    name: Mesh tests
+    runs-on: ${{ vars.TIER_A_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++ cmake ccache ninja-build
+          ccache --version
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-gcc-release-${{ hashFiles('schema/**', 'mesh/**', 'tests/integration/mesh_p1/**', '**/CMakeLists.txt', 'cmake/**') }}
+          restore-keys: |
+            ccache-gcc-release-
+
+      - name: Configure
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+          CCACHE_MAXSIZE: 200M
+        run: |
+          set -euo pipefail
+          mkdir -p "$CCACHE_DIR"
+          ccache --zero-stats
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCHIPCAE_WARNINGS_AS_ERRORS=ON
+
+      - name: Build mesh test targets
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+          CCACHE_MAXSIZE: 200M
+        run: |
+          set -euo pipefail
+          # Default flags are OFF, so only Tier A mesh tests exist (k1_background, k1_cut).
+          cmake --build build --target k1_background k1_cut --parallel
+          ccache --show-stats
+
+      - name: Run mesh tests
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -L mesh --output-on-failure --timeout 60
+
+  gpu-nightly-hook:
+    name: GPU nightly hook (disabled)
+    if: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Run GPU hook
+        run: bash tests/integration/mesh_p1/nightly/run_gpu.sh

@@ -16,7 +16,7 @@
       "name": "substrate",
       "thickness": 0.001,
       "kind": "Homogenized",
-      "material": "organic",
+      "material": "organic_eq",
       "n_elem_min": 2,
       "grading": 1
     },
@@ -24,7 +24,7 @@
       "name": "interposer",
       "thickness": 0.0003,
       "kind": "Homogenized",
-      "material": "silicon",
+      "material": "silicon_eq",
       "n_elem_min": 2,
       "grading": 1
     },
@@ -32,7 +32,7 @@
       "name": "microbump_eq",
       "thickness": 5e-05,
       "kind": "Homogenized",
-      "material": "bump_equivalent",
+      "material": "SAC305_ball_eq",
       "n_elem_min": 2,
       "grading": 1
     },

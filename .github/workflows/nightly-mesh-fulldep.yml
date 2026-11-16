@@ -1,0 +1,91 @@
+name: Nightly mesh full dependencies
+on:
+  schedule:
+    - cron: '0 18 * * 0-4'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Force dependency build and tests even when unchanged
+        type: boolean
+        default: true
+permissions:
+  contents: read
+concurrency:
+  group: nightly-mesh-fulldep-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  mesh-full:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/cache/restore@v4
+        with:
+          path: .k1-last-success
+          key: k1-success-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: k1-success-${{ github.ref_name }}-
+      - name: Check changes since this job last succeeded
+        id: changes
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          run=true
+          if [[ "$FORCE" != true && -f .k1-last-success ]]; then
+            previous=$(cat .k1-last-success)
+            if git cat-file -e "$previous^{commit}" 2>/dev/null; then
+              if [[ -z $(git diff --name-only "$previous" HEAD -- schema/ mesh/ core/ CMakeLists.txt cmake/ tests/integration/mesh_p1/ tests/CMakeLists.txt) ]]; then
+                run=false
+              fi
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "Full-dependency mesh run: $run"
+      - name: Install build tools and MPI
+        if: steps.changes.outputs.run == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake g++ ccache libopenmpi-dev openmpi-bin curl
+      - name: Compiler identity
+        if: steps.changes.outputs.run == 'true'
+        id: compiler
+        run: echo "id=$(g++ -dumpmachine)-gcc-$(g++ -dumpfullversion)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        if: steps.changes.outputs.run == 'true'
+        with:
+          path: |
+            build-k1-deps/prefix
+            .ccache
+          key: k1-linux-metis5.1.0-hypre3.2.1-hdf51.14.6-jsoncons1.4.0-mfem4.10-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/build_deps_cpu.sh') }}
+      - name: Build dependencies and run mesh tests
+        if: steps.changes.outputs.run == 'true'
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+          CMAKE_BUILD_PARALLEL_LEVEL: '2'
+          OMPI_MCA_rmaps_base_oversubscribe: '1'
+        run: |
+          set -euo pipefail
+          tests/integration/mesh_p1/ci/build_deps_cpu.sh
+          cmake -S . -B build-k1-full -G Ninja -DCHIPCAE_WARNINGS_AS_ERRORS=ON \
+            -DCMAKE_PREFIX_PATH="$PWD/build-k1-deps/prefix" \
+            -DCHIPCAE_ENABLE_MPI=ON -DCHIPCAE_ENABLE_MFEM=ON \
+            -DCHIPCAE_ENABLE_HYPRE=ON -DCHIPCAE_ENABLE_HDF5=ON -DCHIPCAE_ENABLE_JSONCONS=ON
+          cmake --build build-k1-full --parallel 2
+          ctest --test-dir build-k1-full -L mesh -LE gpu --output-on-failure --output-junit mesh-results.xml
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.changes.outputs.run == 'true'
+        with:
+          name: mesh-full-results
+          path: |
+            build-k1-full/mesh-results.xml
+            build-k1-full/Testing/Temporary/LastTest.log
+      - name: Stamp successful tested SHA
+        if: success() && steps.changes.outputs.run == 'true'
+        run: git rev-parse HEAD > .k1-last-success
+      - uses: actions/cache/save@v4
+        if: success() && steps.changes.outputs.run == 'true'
+        with:
+          path: .k1-last-success
+          key: k1-success-${{ github.ref_name }}-${{ github.run_id }}

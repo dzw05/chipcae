@@ -16,7 +16,7 @@
       "name": "substrate",
       "thickness": 0.001,
       "kind": "Homogenized",
-      "material": "organic",
+      "material": "organic_eq",
       "n_elem_min": 2,
       "grading": 1
     },
@@ -24,7 +24,7 @@
       "name": "bump_eq",
       "thickness": 0.0001,
       "kind": "Homogenized",
-      "material": "bump_equivalent",
+      "material": "SAC305_ball_eq",
       "n_elem_min": 2,
       "grading": 1
     },

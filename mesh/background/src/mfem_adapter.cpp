@@ -26,6 +26,21 @@ Expected<MfemAdapter> MfemAdapter::create(HexMeshArrays arrays, const Communicat
         arrays.hex.size() != 8 * arrays.attribute.size() ||
         arrays.elem_gid.size() != arrays.attribute.size())
         return Error{"mfem", "invalid array dimensions"};
+    if (arrays.vertices.size() % 3 || arrays.bdr_quad.size() != 4 * arrays.bdr_attribute.size())
+        return Error{"mfem", "invalid vertex or boundary dimensions"};
+    const auto nv = arrays.vertices.size() / 3;
+    for (const auto* indices : {&arrays.hex, &arrays.bdr_quad})
+        for (auto v : *indices)
+            if (v < 0 || static_cast<std::size_t>(v) >= nv)
+                return Error{"mfem", "vertex index out of range"};
+    std::set<Local> attrs(arrays.attribute.begin(), arrays.attribute.end());
+    Local next = 1;
+    for (auto a : attrs)
+        if (a != next++)
+            return Error{"mfem", "attributes must be positive and contiguous"};
+    for (auto a : arrays.bdr_attribute)
+        if (a < 1)
+            return Error{"mfem", "boundary attributes must be positive"};
     for (auto p : arrays.partitioning)
         if (p < 0 || p >= comm.size())
             return Error{"partitioning", "rank out of communicator range"};
@@ -52,12 +67,19 @@ Expected<MfemAdapter> MfemAdapter::create(HexMeshArrays arrays, const Communicat
                 list.Append(v);
             mesh.attribute_sets.SetAttributeSet(name, list);
         }
+        for (const auto& [name, attrs] : a.face_sets) {
+            mfem::Array<int> list;
+            for (auto v : attrs)
+                list.Append(v);
+            mesh.bdr_attribute_sets.SetAttributeSet(name, list);
+        }
     };
     sets(*p->serial);
 #ifdef CHIPCAE_ENABLE_MPI
 #ifndef MFEM_USE_MPI
 #error "CHIPCAE_ENABLE_MPI requires a parallel MFEM build"
 #endif
+    // A1 currently exposes only a world snapshot, not a native communicator handle.
     p->parallel =
         std::make_unique<mfem::ParMesh>(MPI_COMM_WORLD, *p->serial, a.partitioning.data());
     sets(*p->parallel);
@@ -89,6 +111,81 @@ const std::vector<Index>& MfemAdapter::elem_gid() const {
 }
 const HexMeshArrays& MfemAdapter::arrays() const {
     return impl_->arrays;
+}
+Expected<cut::CutLayerArrays> MfemAdapter::local_cut(const cut::CutLayerArrays& c) const {
+    cut::CutLayerArrays d;
+    d.void_attribute = c.void_attribute;
+    d.face_sets = c.face_sets;
+    std::map<Index, Local> owned;
+    for (std::size_t i = 0; i < impl_->gids.size(); ++i)
+        owned[impl_->gids[i]] = static_cast<Local>(i);
+    for (std::size_t i = 0; i < c.cut_elem_gid.size(); ++i)
+        if (owned.contains(c.cut_elem_gid[i])) {
+            d.cut_elem.push_back(owned[c.cut_elem_gid[i]]);
+            d.cut_elem_gid.push_back(c.cut_elem_gid[i]);
+            for (Local sub = c.sub_off[i]; sub < c.sub_off[i + 1]; ++sub) {
+                if (std::find(c.small_subs.begin(), c.small_subs.end(), sub) != c.small_subs.end())
+                    d.small_subs.push_back(static_cast<Local>(d.sub_attribute.size()));
+                d.sub_attribute.push_back(c.sub_attribute[sub]);
+                d.sub_volfrac.push_back(c.sub_volfrac[sub]);
+                d.exterior_area_vector.push_back(c.exterior_area_vector[sub]);
+                for (Local q = c.vq_off[sub]; q < c.vq_off[sub + 1]; ++q) {
+                    for (int k = 0; k < 3; ++k)
+                        d.vq_xi[k].push_back(c.vq_xi[k][q]);
+                    d.vq_w.push_back(c.vq_w[q]);
+                }
+                for (Local q = c.bq_off[sub]; q < c.bq_off[sub + 1]; ++q) {
+                    for (int k = 0; k < 3; ++k) {
+                        d.bq_xi[k].push_back(c.bq_xi[k][q]);
+                        d.bq_n[k].push_back(c.bq_n[k][q]);
+                    }
+                    d.bq_w.push_back(c.bq_w[q]);
+                    d.bq_bdr_attr.push_back(c.bq_bdr_attr[q]);
+                }
+                d.vq_off.push_back(static_cast<Local>(d.vq_w.size()));
+                d.bq_off.push_back(static_cast<Local>(d.bq_w.size()));
+            }
+            d.sub_off.push_back(static_cast<Local>(d.sub_attribute.size()));
+        }
+    for (std::size_t i = 0; i < c.gp_face.size(); ++i)
+        if (owned.contains(c.gp_elem_gid[0][i]) || owned.contains(c.gp_elem_gid[1][i])) {
+            if (c.gp_face[i] < 0)
+                return Error{"gp", "backfill local faces before localization"};
+            for (int k = 0; k < 2; ++k)
+                d.gp_elem_gid[k].push_back(c.gp_elem_gid[k][i]);
+            d.gp_face.push_back(c.gp_face[i]);
+            d.gp_face_gid.push_back(c.gp_face_gid[i]);
+            d.gp_face_minus.push_back(c.gp_face_minus[i]);
+            d.gp_face_plus.push_back(c.gp_face_plus[i]);
+            d.gp_owner_rank.push_back(c.gp_owner_rank[i]);
+        }
+    const auto& arrays = impl_->arrays;
+    for (auto e : c.void_elem)
+        if (e >= 0 && static_cast<std::size_t>(e) < arrays.elem_gid.size() &&
+            owned.contains(arrays.elem_gid[e]))
+            d.void_elem.push_back(owned[arrays.elem_gid[e]]);
+    std::map<std::array<Real, 3>, Local> nodes;
+    for (std::size_t n = 0; n < arrays.node_gid.size(); ++n)
+        nodes[{arrays.vertices[3 * n], arrays.vertices[3 * n + 1], arrays.vertices[3 * n + 2]}] =
+            static_cast<Local>(n);
+#ifdef CHIPCAE_ENABLE_MPI
+    const auto& mesh = *impl_->parallel;
+#else
+    const auto& mesh = *impl_->serial;
+#endif
+    for (const auto& ls : c.level_sets) {
+        cut::BodyLevelSet local;
+        local.body = ls.body;
+        for (int n = 0; n < mesh.GetNV(); ++n) {
+            auto* x = mesh.GetVertex(n);
+            auto it = nodes.find({x[0], x[1], x[2]});
+            if (it == nodes.end())
+                return Error{"cut/phi", "local node missing from source arrays"};
+            local.phi.push_back(ls.phi.at(it->second));
+        }
+        d.level_sets.push_back(std::move(local));
+    }
+    return d;
 }
 Expected<bool> MfemAdapter::backfill_gp(cut::CutLayerArrays& c, cut::GhostPenaltyCache& cache) {
     auto& mesh = local();
@@ -145,6 +242,23 @@ Expected<bool> MfemAdapter::backfill_gp(cut::CutLayerArrays& c, cut::GhostPenalt
             return f.error();
         cache.faces.face[i] = f.value();
     }
+    cut::GhostFaces local_faces;
+    std::vector<Local> offsets{0};
+    for (std::size_t mask = 0; mask < cache.hashes.size(); ++mask) {
+        for (Local i = cache.offsets[mask]; i < cache.offsets[mask + 1]; ++i)
+            if (cache.faces.owner_rank[i] == chipcae::Communicator::world().rank()) {
+                for (int k = 0; k < 2; ++k)
+                    local_faces.elem_gid[k].push_back(cache.faces.elem_gid[k][i]);
+                local_faces.face.push_back(cache.faces.face[i]);
+                local_faces.face_gid.push_back(cache.faces.face_gid[i]);
+                local_faces.face_minus.push_back(cache.faces.face_minus[i]);
+                local_faces.face_plus.push_back(cache.faces.face_plus[i]);
+                local_faces.owner_rank.push_back(cache.faces.owner_rank[i]);
+            }
+        offsets.push_back(static_cast<Local>(local_faces.face.size()));
+    }
+    cache.faces = std::move(local_faces);
+    cache.offsets = std::move(offsets);
     return true;
 }
 } // namespace chipcae::mesh

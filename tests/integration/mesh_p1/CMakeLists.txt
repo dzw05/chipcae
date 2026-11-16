@@ -1,8 +1,32 @@
+add_test(NAME k1_public_headers
+  COMMAND ${CMAKE_COMMAND}
+    -DCOMPILER=${CMAKE_CXX_COMPILER}
+    -DROOT=${PROJECT_SOURCE_DIR}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/check_standalone_headers.cmake)
+set_tests_properties(k1_public_headers PROPERTIES LABELS "mesh;tierA" TIMEOUT 60)
+if(CHIPCAE_ENABLE_KOKKOS)
+  set(_k1_kokkos_inc "")
+  if(DEFINED Kokkos_INCLUDE_DIRS)
+    set(_k1_kokkos_inc ${Kokkos_INCLUDE_DIRS})
+  elseif(TARGET Kokkos::kokkos)
+    get_target_property(_k1_kokkos_inc Kokkos::kokkos INTERFACE_INCLUDE_DIRECTORIES)
+  endif()
+  if(_k1_kokkos_inc)
+    # Kokkos CI builds enable the OpenMP backend; the syntax-only check must
+    # pass the same OpenMP flag or Kokkos headers #error.
+    add_test(NAME k1_public_headers_kokkos
+      COMMAND ${CMAKE_COMMAND}
+        -DCOMPILER=${CMAKE_CXX_COMPILER}
+        -DROOT=${PROJECT_SOURCE_DIR}
+        -DDEFS=CHIPCAE_ENABLE_KOKKOS
+        "-DINCLUDES=${_k1_kokkos_inc}"
+        "-DFLAGS=-fopenmp"
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/check_standalone_headers.cmake)
+    set_tests_properties(k1_public_headers_kokkos PROPERTIES LABELS "mesh;tierA" TIMEOUT 60)
+  endif()
+endif()
+
 if(CHIPCAE_ENABLE_JSONCONS)
-  add_library(chipcae_stack ${PROJECT_SOURCE_DIR}/schema/src/stack.cpp)
-  target_include_directories(chipcae_stack PUBLIC ${PROJECT_SOURCE_DIR}/schema/include)
-  target_link_libraries(chipcae_stack PUBLIC chipcae::core jsoncons)
-  chipcae_set_warnings(chipcae_stack)
   add_executable(k1_schema schema.cpp)
   target_link_libraries(k1_schema PRIVATE chipcae_stack)
   target_compile_definitions(k1_schema PRIVATE K1_ROOT="${PROJECT_SOURCE_DIR}")
@@ -42,7 +66,39 @@ if(CHIPCAE_ENABLE_HDF5)
   target_link_libraries(k1_vtkhdf PRIVATE chipcae_mesh_vtkhdf)
   target_include_directories(k1_vtkhdf PRIVATE ${HDF5_INCLUDE_DIRS})
   target_compile_definitions(k1_vtkhdf PRIVATE K1_ROOT="${PROJECT_SOURCE_DIR}")
+  if(CHIPCAE_ENABLE_MFEM)
+    target_link_libraries(k1_vtkhdf PRIVATE chipcae_mesh_mfem)
+  endif()
   chipcae_set_warnings(k1_vtkhdf)
   add_test(NAME k1_vtkhdf COMMAND k1_vtkhdf)
-  set_tests_properties(k1_vtkhdf PROPERTIES LABELS "mesh;hdf5" TIMEOUT 60)
+  set_tests_properties(k1_vtkhdf PROPERTIES LABELS "mesh;hdf5" TIMEOUT 60 RUN_SERIAL TRUE)
+  if(CHIPCAE_ENABLE_MPI)
+    foreach(n 2 4)
+      add_test(NAME k1_vtkhdf_${n} COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${n} $<TARGET_FILE:k1_vtkhdf>)
+      set_tests_properties(k1_vtkhdf_${n} PROPERTIES LABELS "mesh;hdf5;mpi" TIMEOUT 60 PROCESSORS ${n} RUN_SERIAL TRUE)
+    endforeach()
+  endif()
+endif()
+if(CHIPCAE_ENABLE_MFEM)
+  foreach(name patch cut_mfem)
+    add_executable(k1_${name} ${name}.cpp)
+    target_link_libraries(k1_${name} PRIVATE chipcae_mesh_mfem)
+    target_compile_definitions(k1_${name} PRIVATE K1_ROOT="${PROJECT_SOURCE_DIR}")
+    chipcae_set_warnings(k1_${name})
+    if(CHIPCAE_ENABLE_MPI)
+      foreach(n 1 2 4)
+        add_test(NAME k1_${name}_${n} COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${n} ${MPIEXEC_PREFLAGS} $<TARGET_FILE:k1_${name}> ${MPIEXEC_POSTFLAGS})
+        set_tests_properties(k1_${name}_${n} PROPERTIES LABELS "mesh;mfem;mpi" TIMEOUT 60 PROCESSORS ${n})
+      endforeach()
+    else()
+      add_test(NAME k1_${name} COMMAND k1_${name})
+      set_tests_properties(k1_${name} PROPERTIES LABELS "mesh;mfem" TIMEOUT 60)
+    endif()
+  endforeach()
+  add_test(NAME k1_patch_gpu COMMAND k1_patch cuda)
+  set_tests_properties(k1_patch_gpu PROPERTIES LABELS "mesh;mfem;gpu" TIMEOUT 60 SKIP_RETURN_CODE 77)
+endif()
+if(CHIPCAE_ENABLE_MFEM)
+  add_test(NAME k1_cut_mfem_gpu COMMAND k1_cut_mfem cuda)
+  set_tests_properties(k1_cut_mfem_gpu PROPERTIES LABELS "mesh;mfem;gpu" TIMEOUT 60 SKIP_RETURN_CODE 77)
 endif()

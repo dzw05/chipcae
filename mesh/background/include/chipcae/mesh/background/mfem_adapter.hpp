@@ -30,6 +30,8 @@ public:
 #endif
     const std::vector<Index>& elem_gid() const;
     const HexMeshArrays& arrays() const;
+    // Call after GP backfill. Produces local MFEM indices and local-node phi arrays.
+    Expected<cut::CutLayerArrays> local_cut(const cut::CutLayerArrays&) const;
     Expected<bool> backfill_gp(cut::CutLayerArrays&, cut::GhostPenaltyCache&);
 };
 } // namespace chipcae::mesh

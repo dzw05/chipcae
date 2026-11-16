@@ -1,13 +1,19 @@
 #include "chipcae/mesh/background/activation.hpp"
 #include "chipcae/mesh/background/sfc.hpp"
+#include "chipcae/par/column_extrude_partitioner.hpp"
 #include "support.hpp"
 
 #include <algorithm>
 #include <iostream>
+#include <limits>
+#include <numeric>
 #include <set>
 using namespace chipcae::mesh;
 using k1::expect;
 int main() {
+#ifdef CHIPCAE_ENABLE_KOKKOS
+    Kokkos::ScopeGuard guard;
+#endif
     auto s = k1::stack();
     auto o = k1::options();
     o.nx = 4;
@@ -28,6 +34,21 @@ int main() {
     expect(std::set<chipcae::Index>(m.node_gid.begin(), m.node_gid.end()).size() ==
                m.node_gid.size(),
            "node GID uniqueness");
+    for (int ranks : {1, 2, 4}) {
+        auto opts = o;
+        opts.ranks = ranks;
+        auto other = build_tensor_grid(s, opts);
+        expect(bool(other) && other.value().elem_gid == m.elem_gid &&
+                   other.value().node_gid == m.node_gid && other.value().hex == m.hex &&
+                   other.value().vertices == m.vertices,
+               "SFC rank-independent geometric GIDs");
+    }
+    for (std::size_t n = 0; n < m.node_layer.size(); ++n) {
+        auto z = m.vertices[3 * n + 2];
+        expect(m.node_layer[n] == (z <= .5 ? 0 : 1), "interface and top node_layer");
+    }
+    auto device = upload<chipcae::HostSpace>(m);
+    expect(device.node_column.extent(0) == m.node_gid.size(), "hex upload");
     double volume = 0;
     std::vector<int> counts(s.layers.size());
     for (std::size_t e = 0; e < m.attribute.size(); ++e) {
@@ -51,16 +72,39 @@ int main() {
     Local next = 1;
     for (auto a : attrs)
         expect(a == next++, "compact attributes");
-    std::size_t columns = (m.axes[0].size() - 1) * (m.axes[1].size() - 1);
+    std::size_t nx = m.axes[0].size() - 1, ny = m.axes[1].size() - 1, nz = m.axes[2].size() - 1;
     std::vector<int> load(4);
     for (std::size_t e = 0; e < m.attribute.size(); ++e) {
-        expect(m.partitioning[e] == m.partitioning[e % columns], "column ownership");
+        expect(m.partitioning[e] == m.partitioning[(e / nz) * nz], "column ownership");
         ++load[m.partitioning[e]];
     }
     for (auto n : load)
         expect(std::abs(double(n) * 4 / m.attribute.size() - 1) <=
                    k1::threshold("partition_imbalance"),
                "rank balance");
+    for (int ranks : {1, 2, 4}) {
+        auto opts = o;
+        opts.ranks = ranks;
+        auto grid = build_tensor_grid(s, opts);
+        expect(bool(grid), "partition grid at rank count");
+        const auto& g = grid.value();
+        auto structured = chipcae::par::ColumnExtrudePartitioner::partition(nx, ny, nz, ranks);
+        std::vector<std::size_t> order(nx * ny);
+        std::iota(order.begin(), order.end(), 0);
+        std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+            return morton(a % nx, a / nx) < morton(b % nx, b / nx);
+        });
+        expect(g.partitioning.size() == g.attribute.size() &&
+                   g.elem_gid.size() == g.attribute.size(),
+               "partition and GID lengths");
+        for (std::size_t e = 0; e < g.attribute.size(); ++e) {
+            auto mi = e / nz, k = e % nz;
+            expect(g.elem_gid[e] == static_cast<chipcae::Index>(e),
+                   "Morton column times nz plus k GID");
+            expect(g.partitioning[e] == structured(k * (nx * ny) + order[mi]),
+                   "element rank equals column rank");
+        }
+    }
     o.cell_budget = 1;
     expect(!build_tensor_grid(s, o), "budget failure");
     o.cell_budget = 50000;
@@ -77,6 +121,77 @@ int main() {
                      "faceset:1",
                      "interface:base|top"})
         expect(bool(resolve_activation(s, m, nullptr, {ref})), "resolve prefix");
+    auto side = resolve_interface_side(m, "layer:base");
+    auto volume_ref = resolve_volume_ref(s, m, nullptr, {"layer:base"});
+    expect(bool(side) && bool(volume_ref) && side.value().size() == 1 &&
+               volume_ref.value().cells.bodies.size() == 2,
+           "split interface and volume layer semantics");
+    expect(bool(resolve_activation(s, m, nullptr, {"interface:body:cap|layer:base"})),
+           "mixed interface sides");
+    expect(!resolve_activation(s, m, nullptr, {"interface:layer:base|body:base"}),
+           "overlap interface rejected");
+    expect(!resolve_activation(s, m, nullptr, {"interface:void|void"}), "void overlap rejected");
+    auto ab = resolve_activation(s, m, nullptr, {"interface:base|top"});
+    auto ba = resolve_activation(s, m, nullptr, {"interface:top|base"});
+    expect(bool(ab) && bool(ba) &&
+               ab.value().faces.bdr_attributes == ba.value().faces.bdr_attributes,
+           "A|B equals B|A");
+    bool report_ok = false;
+    for (const auto& r : m.preparation_report)
+        if (r.name == "interface:body:base|body:cap" || r.name == "interface:body:cap|body:base") {
+            expect(r.aligned_faces > 0 && r.aligned_area > 0, "aligned interface report");
+            expect(!r.side_a_bodies.empty() && !r.side_b_bodies.empty(), "interface sides listed");
+            report_ok = true;
+        }
+    expect(report_ok, "preparation report has mixed body sides");
+    auto mixed_ref = resolve_activation(s, m, nullptr, {"interface:layer:base|body:cap"});
+    expect(bool(mixed_ref), "mixed layer/body interface");
+    bool mixed_listed = false;
+    for (const auto& r : m.preparation_report)
+        if (r.name == "interface:layer:base|body:cap") {
+            expect(r.side_a_bodies == std::vector<std::string>{"base"},
+                   "mixed ref side A body names");
+            expect(r.side_b_bodies == std::vector<std::string>{"cap"},
+                   "mixed ref side B body names");
+            expect(r.aligned_faces > 0 && r.aligned_area > 0 && r.cut_faces == 0,
+                   "mixed ref aligned vs cut counts");
+            mixed_listed = true;
+        }
+    expect(mixed_listed, "user-written mixed interface recorded");
+
+    StackModel soldered;
+    soldered.id = "soldered";
+    soldered.outline.box = {0, 0, 1, 1};
+    Layer substrate;
+    substrate.name = "substrate";
+    substrate.kind = "Explicit";
+    substrate.material = "organic";
+    substrate.thickness = .5;
+    substrate.n_elem_min = 2;
+    substrate.regions = {{"solder_a", "solder", "solder_a", {{.1, .1, .4, .4}, {}}},
+                         {"solder_b", "solder", "solder_b", {{.6, .6, .9, .9}, {}}}};
+    soldered.layers = {substrate};
+    auto solder_opts = o;
+    solder_opts.nx = 8;
+    solder_opts.ny = 8;
+    solder_opts.ranks = 1;
+    auto solder_grid = build_tensor_grid(soldered, solder_opts);
+    expect(bool(solder_grid), "substrate/solder grid");
+    auto& sm = solder_grid.value();
+    auto wildcard =
+        resolve_activation(soldered, sm, nullptr, {"interface:layer:substrate|body:solder_*"});
+    expect(bool(wildcard), "wildcard mixed interface");
+    bool wildcard_listed = false;
+    for (const auto& r : sm.preparation_report)
+        if (r.name == "interface:layer:substrate|body:solder_*") {
+            expect(r.side_a_bodies == std::vector<std::string>{"substrate"},
+                   "wildcard side A is substrate matrix");
+            expect(r.side_b_bodies == std::vector<std::string>{"solder_a", "solder_b"},
+                   "wildcard side B solder bodies");
+            expect(r.aligned_faces > 0 && r.aligned_area > 0, "wildcard shared aligned faces");
+            wildcard_listed = true;
+        }
+    expect(wildcard_listed, "user-written wildcard interface recorded");
     auto overlap = resolve_activation(s, m, nullptr, {"group:overlap"});
     auto layer = resolve_activation(s, m, nullptr, {"layer:base"});
     expect(overlap.value().cells.attributes == layer.value().cells.attributes, "overlap union");
@@ -88,6 +203,18 @@ int main() {
     expect(!check_no_reactivation(s, m, {{{}, {"layer:base"}}, {{"body:die"}, {}}}),
            "alias reactivation");
     expect(mask_hash({1, 2, 1}) == mask_hash({2, 1}), "canonical mask");
+    expect(!resolve_activation(s, m, nullptr, {"*"}), "prefix required");
+    expect(!check_no_reactivation(s, m, {{{"body:die"}, {"region:die"}}}), "same-step conflict");
+    auto metis_options = o;
+    metis_options.use_metis = true;
+    auto metis_grid = build_tensor_grid(s, metis_options);
+    expect(bool(metis_grid), "METIS or SFC fallback");
+    for (std::size_t e = 0; e < metis_grid.value().partitioning.size(); ++e)
+        expect(metis_grid.value().partitioning[e] == metis_grid.value().partitioning[(e / nz) * nz],
+               "METIS column ownership");
+    auto huge = o;
+    huge.nx = std::numeric_limits<Local>::max();
+    expect(!build_tensor_grid(s, huge), "budget checked before allocation");
     auto duplicate = s;
     duplicate.layers[1].regions = duplicate.layers[0].regions;
     expect(!build_tensor_grid(duplicate, o), "cross-layer duplicate");

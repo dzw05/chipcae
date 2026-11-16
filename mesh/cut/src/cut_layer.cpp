@@ -3,58 +3,14 @@
 #include <algorithm>
 #include <set>
 namespace chipcae::mesh::cut {
-namespace {
-template <class T>
-View1<T, DeviceSpace> upload(const std::vector<T>& source, const std::string& name) {
-    View1<T, DeviceSpace> view(name, source.size());
-#ifdef CHIPCAE_ENABLE_KOKKOS
-    auto host = Kokkos::create_mirror_view(view);
-    for (std::size_t i = 0; i < source.size(); ++i)
-        host(i) = source[i];
-    Kokkos::deep_copy(view, host);
-#else
-    for (std::size_t i = 0; i < source.size(); ++i)
-        view(i) = source[i];
-#endif
-    return view;
-}
-ActivationMask canonical(ActivationMask mask) {
-    std::sort(mask.begin(), mask.end());
-    mask.erase(std::unique(mask.begin(), mask.end()), mask.end());
-    return mask;
-}
-} // namespace
-DeviceCutLayerArrays to_device(const CutLayerArrays& c) {
-    DeviceCutLayerArrays d;
-#define K1_UPLOAD(field) d.field = upload(c.field, #field)
-    K1_UPLOAD(cut_elem);
-    K1_UPLOAD(sub_off);
-    K1_UPLOAD(sub_attribute);
-    K1_UPLOAD(sub_volfrac);
-    K1_UPLOAD(vq_off);
-    K1_UPLOAD(vq_w);
-    K1_UPLOAD(bq_off);
-    K1_UPLOAD(bq_w);
-    K1_UPLOAD(bq_bdr_attr);
-    K1_UPLOAD(gp_face);
-    K1_UPLOAD(cut_elem_gid);
-    K1_UPLOAD(void_elem);
-    K1_UPLOAD(small_subs);
-#undef K1_UPLOAD
-    for (int i = 0; i < 3; ++i) {
-        d.vq_xi[i] = upload(c.vq_xi[i], "vq_xi");
-        d.bq_xi[i] = upload(c.bq_xi[i], "bq_xi");
-        d.bq_n[i] = upload(c.bq_n[i], "bq_n");
-    }
-    for (int i = 0; i < 2; ++i)
-        d.gp_elem_gid[i] = upload(c.gp_elem_gid[i], "gp_elem_gid");
-    for (const auto& l : c.level_sets)
-        d.level_sets.push_back({l.body, upload(l.phi, "phi")});
-    d.void_attribute = c.void_attribute;
-    return d;
-}
 Expected<ActivationResolution> resolve_cut_activation(const StackModel& s,
                                                       const HexMeshArrays& m,
+                                                      const CutLayerArrays& c,
+                                                      const std::vector<std::string>& refs) {
+    return resolve_activation(s, m, &c, refs);
+}
+Expected<ActivationResolution> resolve_cut_activation(const StackModel& s,
+                                                      HexMeshArrays& m,
                                                       const CutLayerArrays& c,
                                                       const std::vector<std::string>& refs) {
     return resolve_activation(s, m, &c, refs);
@@ -64,13 +20,15 @@ Expected<GhostPenaltyCache> GhostPenaltyCache::prepare(const HexMeshArrays& m,
                                                        const CutLayerArrays& c,
                                                        std::vector<ActivationMask> masks) {
     GhostPenaltyCache cache;
+    cache.mesh_ = m;
     std::set<Index> cut(c.cut_elem_gid.begin(), c.cut_elem_gid.end());
     struct Neighbor {
-        Local a, b, face;
+        Local a, b, fa, fb;
+        Index gid;
     };
     std::vector<Neighbor> pairs;
     constexpr int ids[6][4] = {
-        {0, 3, 2, 1}, {4, 5, 6, 7}, {0, 1, 5, 4}, {3, 7, 6, 2}, {0, 4, 7, 3}, {1, 2, 6, 5}};
+        {0, 3, 2, 1}, {0, 1, 5, 4}, {1, 2, 6, 5}, {2, 3, 7, 6}, {3, 0, 4, 7}, {4, 5, 6, 7}};
     std::map<std::array<Local, 4>, std::pair<Local, Local>> faces;
     for (std::size_t e = 0; e < m.attribute.size(); ++e)
         for (Local f = 0; f < 6; ++f) {
@@ -79,49 +37,68 @@ Expected<GhostPenaltyCache> GhostPenaltyCache::prepare(const HexMeshArrays& m,
                 key[j] = m.hex[8 * e + ids[f][j]];
             std::sort(key.begin(), key.end());
             auto [it, inserted] = faces.emplace(key, std::pair{static_cast<Local>(e), f});
-            if (!inserted)
-                pairs.push_back({it->second.first, static_cast<Local>(e), -1});
+            if (!inserted) {
+                auto a = it->second.first, b = static_cast<Local>(e), fa = it->second.second,
+                     fb = f;
+                if (m.elem_gid[a] > m.elem_gid[b]) {
+                    std::swap(a, b);
+                    std::swap(fa, fb);
+                }
+                pairs.push_back({a, b, fa, fb, m.elem_gid[a] * 6 + fa});
+            }
         }
-    for (auto& mask : masks)
-        mask = canonical(mask);
-    std::sort(masks.begin(), masks.end(), [](const auto& a, const auto& b) {
+    std::vector<std::vector<Index>> sets;
+    for (const auto& mask : masks)
+        sets.push_back(activated_gids(m, mask));
+    std::sort(sets.begin(), sets.end(), [](const auto& a, const auto& b) {
         return mask_hash(a) < mask_hash(b);
     });
-    for (const auto& mask : masks) {
-        auto hash = mask_hash(mask);
+    for (const auto& ids : sets) {
+        auto hash = mask_hash(ids);
         if (!cache.hashes.empty() && cache.hashes.back() == hash) {
-            if (cache.masks_.back() != mask)
+            if (cache.masks_.back() != ids)
                 return Error{"gp/cache", "hash collision"};
             continue;
         }
         cache.hashes.push_back(hash);
-        cache.masks_.push_back(mask);
+        cache.masks_.push_back(ids);
         for (auto p : pairs)
             if ((cut.contains(m.elem_gid[p.a]) || cut.contains(m.elem_gid[p.b])) &&
-                std::binary_search(mask.begin(), mask.end(), m.attribute[p.a]) &&
-                std::binary_search(mask.begin(), mask.end(), m.attribute[p.b])) {
+                std::binary_search(ids.begin(), ids.end(), m.elem_gid[p.a]) &&
+                std::binary_search(ids.begin(), ids.end(), m.elem_gid[p.b])) {
                 cache.faces.elem_gid[0].push_back(m.elem_gid[p.a]);
                 cache.faces.elem_gid[1].push_back(m.elem_gid[p.b]);
-                cache.faces.face.push_back(p.face);
+                cache.faces.face.push_back(-1);
+                cache.faces.face_gid.push_back(p.gid);
+                cache.faces.face_minus.push_back(p.fa);
+                cache.faces.face_plus.push_back(p.fb);
+                cache.faces.owner_rank.push_back(m.partitioning[p.a]);
             }
         cache.offsets.push_back(static_cast<Local>(cache.faces.face.size()));
     }
     return cache;
 }
 Expected<GhostFaces> GhostPenaltyCache::lookup(ActivationMask mask) const {
-    mask = canonical(mask);
-    auto h = mask_hash(mask);
+    for (auto a : mask)
+        if (a < 1 || static_cast<std::size_t>(a) > mesh_.attr_table.entries.size())
+            return Error{"gp/cache", "invalid attribute mask"};
+    auto ids = activated_gids(mesh_, mask);
+    auto h = mask_hash(ids);
     auto it = std::lower_bound(hashes.begin(), hashes.end(), h);
     if (it == hashes.end() || *it != h)
         return Error{"gp/cache", "unbudgeted activation mask"};
     auto i = static_cast<std::size_t>(it - hashes.begin());
-    if (masks_[i] != mask)
+    if (masks_[i] != ids)
         return Error{"gp/cache", "hash collision"};
     GhostFaces out;
     for (Local k = offsets[i]; k < offsets[i + 1]; ++k) {
         out.elem_gid[0].push_back(faces.elem_gid[0][k]);
         out.elem_gid[1].push_back(faces.elem_gid[1][k]);
         out.face.push_back(faces.face[k]);
+        out.face_gid.push_back(faces.face_gid[k]);
+        out.face_minus.push_back(faces.face_minus[k]);
+        out.face_plus.push_back(faces.face_plus[k]);
+        out.owner_rank.push_back(faces.owner_rank[k]);
     }
     return out;
 }
