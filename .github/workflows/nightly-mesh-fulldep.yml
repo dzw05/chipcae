@@ -115,11 +115,12 @@ jobs:
 
       - name: Restore ccache
         id: cache-ccache
-        if: steps.changes.outputs.run == 'true'
+        # Skip restore when rebuild_deps is set so a polluted ccache cannot taint a forced rebuild.
+        if: steps.changes.outputs.run == 'true' && inputs.rebuild_deps != true
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ccache-k1-fulldep-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('schema/**', 'mesh/**', 'core/**', 'tests/integration/mesh_p1/**', '**/CMakeLists.txt', 'cmake/**') }}
+          key: ccache-k1-fulldep-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'schema/**', 'mesh/**', 'core/**', 'tests/**', 'solvers/**', 'geometry/**', 'io/**', 'material/**', 'kernel/**', 'coupling/**', 'protocol/**') }}
           restore-keys: |
             ccache-k1-fulldep-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-
             ccache-k1-fulldep-
@@ -218,12 +219,27 @@ jobs:
             build-k1-full/mesh-results.xml
             build-k1-full/Testing/Temporary/LastTest.log
 
+      - name: Fail if a cache key could not be replaced
+        if: success() && steps.changes.outputs.run == 'true' && steps.deps.outputs.delete_bad_cache == 'true' && steps.cache-delete.outputs.delete_ok != 'true'
+        run: |
+          echo "Rebuilt the prefix, but could not delete the existing k1-deps cache key; not saved." >&2
+          echo "Delete it by hand with: gh cache delete <cache-id>" >&2
+          exit 1
+
       - name: Stamp successful tested SHA
-        if: success() && steps.changes.outputs.run == 'true'
+        if: >-
+          success()
+          && steps.changes.outputs.run == 'true'
+          && (steps.deps.outputs.delete_bad_cache != 'true'
+              || steps.cache-delete.outputs.delete_ok == 'true')
         run: git rev-parse HEAD > .k1-last-success
 
       - uses: actions/cache/save@v4
-        if: success() && steps.changes.outputs.run == 'true'
+        if: >-
+          success()
+          && steps.changes.outputs.run == 'true'
+          && (steps.deps.outputs.delete_bad_cache != 'true'
+              || steps.cache-delete.outputs.delete_ok == 'true')
         with:
           path: .k1-last-success
           key: k1-success-${{ github.ref_name }}-${{ github.run_id }}
@@ -245,14 +261,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ccache-k1-fulldep-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('schema/**', 'mesh/**', 'core/**', 'tests/integration/mesh_p1/**', '**/CMakeLists.txt', 'cmake/**') }}
-
-      - name: Fail if a cache key could not be replaced
-        if: success() && steps.changes.outputs.run == 'true' && steps.deps.outputs.delete_bad_cache == 'true' && steps.cache-delete.outputs.delete_ok != 'true'
-        run: |
-          echo "Rebuilt the prefix, but could not delete the existing k1-deps cache key; not saved." >&2
-          echo "Delete it by hand with: gh cache delete <cache-id>" >&2
-          exit 1
+          key: ccache-k1-fulldep-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'schema/**', 'mesh/**', 'core/**', 'tests/**', 'solvers/**', 'geometry/**', 'io/**', 'material/**', 'kernel/**', 'coupling/**', 'protocol/**') }}
 
       - name: Report cache sizes
         if: always()
