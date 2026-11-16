@@ -225,6 +225,7 @@ jobs:
             -DCHIPCAE_WARNINGS_AS_ERRORS=ON \
             -DKokkos_ROOT="$HOME/deps/kokkos" \
             -DCHIPCAE_REQUIRE_KOKKOS=ON \
+            -DCHIPCAE_ENABLE_KOKKOS=ON \
             -DCHIPCAE_MATERIAL_ENABLE_PYTHON=OFF
 
       - name: Build

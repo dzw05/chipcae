@@ -27,7 +27,25 @@ add_test(NAME event_log COMMAND chipcae_test_event_log)
 add_executable(chipcae_test_par par/test_par.cpp)
 target_link_libraries(chipcae_test_par PRIVATE chipcae::core chipcae::coupling)
 chipcae_set_warnings(chipcae_test_par)
+if(CHIPCAE_ENABLE_METIS)
+    target_compile_definitions(chipcae_test_par PRIVATE CHIPCAE_ENABLE_METIS=1)
+endif()
 add_test(NAME par COMMAND chipcae_test_par)
 set_tests_properties(par PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
 add_test(NAME par_public_headers COMMAND ${CMAKE_COMMAND}
     -DROOT=${PROJECT_SOURCE_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/par/check_headers.cmake)
+if(CHIPCAE_ENABLE_MPI)
+    add_executable(chipcae_test_par_mpi par/test_par_mpi.cpp)
+    target_link_libraries(chipcae_test_par_mpi PRIVATE chipcae::core)
+    chipcae_set_warnings(chipcae_test_par_mpi)
+    if(NOT MPIEXEC_EXECUTABLE)
+        message(FATAL_ERROR "CHIPCAE_ENABLE_MPI tests require MPIEXEC_EXECUTABLE")
+    endif()
+    add_test(NAME par_mpi_2 COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                                    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:chipcae_test_par_mpi>
+                                    ${MPIEXEC_POSTFLAGS})
+    add_test(NAME par_mpi_4 COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 4
+                                    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:chipcae_test_par_mpi>
+                                    ${MPIEXEC_POSTFLAGS})
+    set_tests_properties(par_mpi_2 par_mpi_4 PROPERTIES LABELS "mpi;par")
+endif()

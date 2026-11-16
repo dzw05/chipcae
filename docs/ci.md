@@ -15,6 +15,8 @@ Repository settings (branch protection, variables, secrets) are not changed by t
 | `CI / Build and test` | Non-draft pull request that changes something other than docs | `vars.TIER_A_RUNNER` or `ubuntu-latest` | No. Success or skipped both count as passing for `ci-ok` |
 | `Tier B and nightly / Nightly clang build` | 18:00 UTC daily, or manual dispatch | `ubuntu-latest` | No |
 | `Tier B and nightly / Nightly CUDA compile` | Same nightly schedule. `nvcc -c` only, the object is not run | `ubuntu-latest` | No |
+| `Nightly MPI and CUDA Kokkos / Nightly MPI communication` | 18:00 UTC Sunday–Thursday (`0 18 * * 0-4`), or manual dispatch. Real `mpirun -np 2` and `-np 4` allreduce tests | `ubuntu-latest` | No |
+| `Nightly MPI and CUDA Kokkos / Nightly CUDA Kokkos core compile` | Same weekday schedule. Compile-only (`chipcae_core`, `chipcae_test_core_types`, `chipcae_test_par`) with Kokkos CUDA; binaries are not run. First run is the verification (no local nvcc) | `ubuntu-latest` | No |
 | `Tier B and nightly / Hosted minutes` is a different workflow | See usage alert | `ubuntu-latest` | No |
 | Tier B MPI, GPU, perf | Nightly, manual dispatch, or a pull request labeled `run-heavy`, and only when `TIER_B_ENABLED` is `true` | Self-hosted labels below | Only after runners exist |
 
@@ -85,9 +87,9 @@ Override a label list with a repository variable set to a JSON array. Unset mean
 | GPU | `[self-hosted, linux, gpu]` | `TIER_B_GPU_RUNS_ON` |
 | Perf baseline | `[self-hosted, linux, x64]` | `TIER_B_PERF_RUNS_ON` |
 
-The MPI job does not launch `mpirun` until `build/chipcae_test_core` exists. The communicator in `core/src/parallel.cpp` is still a serial stub, and this change does not modify it. When that path is real, the job should run `mpirun -np 4` on a Tier B runner. Rank 2 is not part of the hosted pull-request job.
+The hosted weekday job `Nightly MPI communication` (`.github/workflows/nightly-mpi.yml`) builds with `-DCHIPCAE_ENABLE_MPI=ON` and runs `par_mpi_2` / `par_mpi_4`, which call `Communicator::allreduce_sum` and `deterministic_allreduce_sum` under `mpirun`. That is the real MPI communication path. The Tier B MPI job remains a self-hosted skeleton for ranks above the hosted quota and still does not block a merge.
 
-The GPU job does not launch a device binary. CUDA on the hosted nightly is compile-only (`nvcc -c bench/cuda/smoke.cu`).
+The GPU job does not launch a device binary. Daily CUDA on the hosted nightly remains compile-only (`nvcc -c bench/cuda/smoke.cu`). The weekday `Nightly CUDA Kokkos core compile` job additionally builds Kokkos with CUDA and compiles `chipcae_core` plus the core/par tests so the A3 pinned-staging `static_assert` is checked. Those binaries are not executed. This CUDA Kokkos path has not been compiled on the development machine (no nvcc); the first scheduled run is the verification.
 
 ### Enabling Tier B later
 
@@ -218,7 +220,8 @@ The cold build is already at the 1-minute billing floor (50 s rounds up to 1). T
 - **2 code pull requests per workday.** Each runs Lint and Build and test (4 jobs).
 - **1 push to `main` per workday**, Lint only (1 job).
 - Every calendar day: nightly clang, nightly CUDA compile, and the usage check (3 jobs).
-- That is **8 jobs on a workday** (4 + 1 + 3). Weekend days are the 3 nightly jobs only.
+- Beijing workdays only (cron `0 18 * * 0-4`): hosted MPI communication tests and CUDA Kokkos core compile (2 jobs). Remeasure their billed minutes after the first green run and keep the monthly total under the 1,200-minute warning line.
+- That was **8 jobs on a workday** (4 + 1 + 3) before these two weekday jobs. Weekend days remain the 3 daily nightly jobs only.
 - Tier B stays off, so it adds 0 hosted minutes.
 - Build billed minutes in the formula are 1. The warm run is also 1 billed minute, so the cache does not change the monthly total.
 

@@ -2,9 +2,13 @@
 
 #include <array>
 #include <bit>
+#include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
+#include <string>
 
 namespace chipcae::io {
 namespace {
@@ -253,7 +257,7 @@ bool read_record(std::ifstream& in, Event& event, std::uint64_t& offset) {
     const auto size = get<std::uint32_t>(header, p);
     const auto expected_crc = get<std::uint32_t>(header, p);
     if (size > kMaxRecordBytes)
-        throw std::runtime_error("event record exceeds size limit");
+        return false; // oversized length is a dropped tail, not a hard error
     Bytes body(size);
     in.read(reinterpret_cast<char*>(body.data()), size);
     if (in.gcount() != static_cast<std::streamsize>(size) || crc32(body) != expected_crc)
@@ -278,6 +282,22 @@ public:
                 has_last = true;
             }
             in.close();
+            const auto file_size = std::filesystem::file_size(path);
+            if (file_size > valid_end) {
+                const auto salvage = path.string() + ".corrupt-" + std::to_string(valid_end);
+                {
+                    std::ifstream src(path, std::ios::binary);
+                    src.seekg(static_cast<std::streamoff>(valid_end));
+                    std::ofstream dst(salvage, std::ios::binary);
+                    if (!src || !dst || !(dst << src.rdbuf()))
+                        throw std::runtime_error("cannot salvage event log tail");
+                }
+                static std::once_flag warn;
+                std::call_once(warn, [&] {
+                    std::cerr << "warning: event log truncated; dropped tail saved to " << salvage
+                              << "\n";
+                });
+            }
             std::filesystem::resize_file(path, valid_end);
         }
         stream.open(path, std::ios::binary | std::ios::app);
@@ -333,6 +353,9 @@ std::vector<Event> EventLogReader::read_from(std::uint64_t seq, std::uint64_t* n
         }
         throw std::runtime_error("cannot open event log");
     }
+    const auto file_size = std::filesystem::file_size(path_);
+    if (!boundaries_.empty() && file_size < *boundaries_.rbegin())
+        boundaries_ = {0};
     std::uint64_t offset = 0;
     const auto requested = next_offset ? *next_offset : 0;
     if (requested != 0 && !boundaries_.contains(requested)) {

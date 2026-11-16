@@ -43,8 +43,10 @@ StepResult run_steps(Solver& thermal,
                     return failure();
                 auto sub = step;
                 sub.t0 = t;
-                sub.t1 = t + dt;
-                sub.shrinkage_increment = step.shrinkage_increment * dt / span;
+                // Snap the last substep to step.t1 so floating-point drift cannot
+                // invent an extra ~1 ulp interval or extrapolate temperature past t1.
+                sub.t1 = (step.t1 - t <= dt) ? step.t1 : t + dt;
+                sub.shrinkage_increment = step.shrinkage_increment * (sub.t1 - sub.t0) / span;
                 if (t > step.t0)
                     sub.activation_mask_id.reset();
                 if (step.temperature_curve_id) {
@@ -60,6 +62,7 @@ StepResult run_steps(Solver& thermal,
                     result = mechanical.advance(sub);
                 if (result.status == StepResult::Status::Converged) {
                     previous_temperature = sub.temperature;
+                    t = sub.t1;
                     break;
                 }
                 if (policy.restore)
@@ -73,7 +76,6 @@ StepResult run_steps(Solver& thermal,
                 if (dt < policy.minimum_dt)
                     return failure();
             }
-            t += dt;
         }
     }
     return result;

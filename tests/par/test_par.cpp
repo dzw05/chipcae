@@ -305,7 +305,11 @@ int main(int argc, char** argv) {
     par::stage_from_host(host, device);
     auto copy = par::stage_to_host(device);
     require(std::memcmp(host.data(), copy.data(), 3 * sizeof(int)) == 0);
+#ifdef CHIPCAE_ENABLE_METIS
+    require(par::ColumnExtrudePartitioner::uses_metis());
+#else
     require(!par::ColumnExtrudePartitioner::uses_metis());
+#endif
     std::cerr << std::setprecision(17);
     step_loop();
     load_regressions();
