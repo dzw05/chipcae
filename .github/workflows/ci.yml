@@ -158,17 +158,18 @@ jobs:
       - name: Cache ccache
         uses: actions/cache@v4
         with:
-          path: ~/.cache/ccache
+          path: ${{ github.workspace }}/.ccache
           key: ccache-gcc-release-${{ hashFiles('**/*.cpp', '**/*.hpp', '**/*.h', '**/CMakeLists.txt', 'cmake/**') }}
           restore-keys: |
             ccache-gcc-release-
 
       - name: Configure
         env:
-          CCACHE_DIR: ~/.cache/ccache
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
           CCACHE_MAXSIZE: 200M
         run: |
           set -euo pipefail
+          mkdir -p "$CCACHE_DIR"
           ccache --zero-stats
           cmake -B build -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
@@ -176,7 +177,7 @@ jobs:
 
       - name: Build
         env:
-          CCACHE_DIR: ~/.cache/ccache
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
           CCACHE_MAXSIZE: 200M
         run: |
           set -euo pipefail
@@ -191,7 +192,7 @@ jobs:
       - name: Perf microbenchmark (informational timing)
         id: perf
         env:
-          CCACHE_DIR: ~/.cache/ccache
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
           RUNNER_LABEL: ${{ vars.TIER_A_RUNNER || 'ubuntu-latest' }}
         run: |
           set -euo pipefail
