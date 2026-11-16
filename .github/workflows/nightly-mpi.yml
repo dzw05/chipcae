@@ -28,8 +28,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Skip if main has no commits in 24h
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: bash tools/ci/nightly_freshness.sh
 
       - name: Install toolchain
+        if: steps.gate.outputs.run == 'true'
         run: |
           set -euo pipefail
           sudo apt-get update
@@ -37,6 +46,7 @@ jobs:
             g++ cmake ninja-build ccache libopenmpi-dev openmpi-bin
 
       - name: Cache ccache
+        if: steps.gate.outputs.run == 'true'
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.ccache
@@ -45,6 +55,7 @@ jobs:
             ccache-gcc-mpi-
 
       - name: Configure, build, test
+        if: steps.gate.outputs.run == 'true'
         env:
           CCACHE_DIR: ${{ github.workspace }}/.ccache
           CCACHE_MAXSIZE: 200M
@@ -65,7 +76,7 @@ jobs:
           ctest --test-dir build -R '^par_mpi_' --output-on-failure --output-junit "$PWD/build/junit-mpi.xml"
 
       - name: Upload test results
-        if: always()
+        if: always() && steps.gate.outputs.run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: nightly-mpi-junit-${{ github.run_id }}
@@ -76,20 +87,34 @@ jobs:
   cuda-kokkos-core-compile:
     name: Nightly CUDA Kokkos core compile
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Skip if main has no commits in 24h
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: bash tools/ci/nightly_freshness.sh
 
       - name: Install toolchain
+        if: steps.gate.outputs.run == 'true'
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            g++ cmake ninja-build ccache nvidia-cuda-toolkit
+          sudo apt-get install -y --no-install-recommends g++ cmake ninja-build ccache
+          curl -fsSLO https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cuda-nvcc-12-6 cuda-cudart-dev-12-6
+          echo /usr/local/cuda-12.6/bin >> "$GITHUB_PATH"
 
-      - name: Read Kokkos pin
-        id: pin
+      - name: Cache identity
+        if: steps.gate.outputs.run == 'true'
+        id: cache-key
         run: |
           set -euo pipefail
           ver=$(sed -n 's/.*KOKKOS_VERSION: "\([^"]*\)".*/\1/p' .github/workflows/ci.yml | head -n 1)
@@ -97,29 +122,42 @@ jobs:
             echo "Could not read KOKKOS_VERSION from .github/workflows/ci.yml" >&2
             exit 1
           fi
+          image_os="${ImageOS:-unknown}"
+          gcc_ver="$(gcc -dumpversion)"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "image_os=$image_os" >> "$GITHUB_OUTPUT"
+          echo "gcc=$gcc_ver" >> "$GITHUB_OUTPUT"
+          echo "kokkos_key=kokkos-cuda-${ver}-${RUNNER_OS}-${image_os}-gcc${gcc_ver}-cuda12.6" >> "$GITHUB_OUTPUT"
+          echo "Kokkos cache key: kokkos-cuda-${ver}-${RUNNER_OS}-${image_os}-gcc${gcc_ver}-cuda12.6"
 
-      - name: Cache Kokkos CUDA and ccache
+      - name: Cache Kokkos CUDA
+        if: steps.gate.outputs.run == 'true'
+        id: cache-kokkos
         uses: actions/cache@v4
         with:
-          path: |
-            ~/deps/kokkos-cuda
-            ${{ github.workspace }}/.ccache
-          key: kokkos-${{ steps.pin.outputs.version }}-${{ runner.os }}-${{ env.ImageOS }}-gcc-cuda-sm70-Release
+          path: ~/deps/kokkos-cuda
+          key: ${{ steps.cache-key.outputs.kokkos_key }}
           restore-keys: |
-            kokkos-${{ steps.pin.outputs.version }}-${{ runner.os }}-
+            kokkos-cuda-${{ steps.cache-key.outputs.version }}-${{ runner.os }}-
+
+      - name: Cache ccache
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-cuda-kokkos-${{ steps.cache-key.outputs.image_os }}-gcc${{ steps.cache-key.outputs.gcc }}-${{ hashFiles('**/*.cpp', '**/*.hpp', '**/*.h', '**/CMakeLists.txt', 'cmake/**') }}
+          restore-keys: |
+            ccache-cuda-kokkos-${{ steps.cache-key.outputs.image_os }}-gcc${{ steps.cache-key.outputs.gcc }}-
+            ccache-cuda-kokkos-
 
       - name: Install Kokkos (CUDA)
+        if: steps.gate.outputs.run == 'true' && steps.cache-kokkos.outputs.cache-hit != 'true'
         env:
-          KOKKOS_VERSION: ${{ steps.pin.outputs.version }}
+          KOKKOS_VERSION: ${{ steps.cache-key.outputs.version }}
         run: |
           set -euo pipefail
+          export PATH="/usr/local/cuda-12.6/bin:$PATH"
           prefix="$HOME/deps/kokkos-cuda"
-          if [ -f "$prefix/lib/cmake/Kokkos/KokkosConfig.cmake" ] || \
-             [ -f "$prefix/lib64/cmake/Kokkos/KokkosConfig.cmake" ]; then
-            echo "Reusing cached Kokkos $KOKKOS_VERSION (CUDA)"
-            exit 0
-          fi
           src="$RUNNER_TEMP/kokkos-src"
           build="$RUNNER_TEMP/kokkos-build"
           curl -fsSL "https://github.com/kokkos/kokkos/archive/refs/tags/${KOKKOS_VERSION}.tar.gz" \
@@ -129,6 +167,7 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$prefix" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_STANDARD=20 \
+            -DCUDAToolkit_ROOT=/usr/local/cuda-12.6 \
             -DKokkos_ENABLE_CUDA=ON \
             -DKokkos_ENABLE_CUDA_LAMBDA=ON \
             -DKokkos_ENABLE_SERIAL=ON \
@@ -137,11 +176,13 @@ jobs:
           cmake --install "$build"
 
       - name: Compile core and par tests
+        if: steps.gate.outputs.run == 'true'
         env:
           CCACHE_DIR: ${{ github.workspace }}/.ccache
           CCACHE_MAXSIZE: 200M
         run: |
           set -euo pipefail
+          export PATH="/usr/local/cuda-12.6/bin:$PATH"
           mkdir -p "$CCACHE_DIR"
           wrapper="$HOME/deps/kokkos-cuda/bin/nvcc_wrapper"
           if [ ! -x "$wrapper" ]; then
@@ -153,6 +194,7 @@ jobs:
             -DCMAKE_CXX_COMPILER="$wrapper" \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCHIPCAE_WARNINGS_AS_ERRORS=ON \
+            -DCUDAToolkit_ROOT=/usr/local/cuda-12.6 \
             -DKokkos_ROOT="$HOME/deps/kokkos-cuda" \
             -DCHIPCAE_REQUIRE_KOKKOS=ON \
             -DCHIPCAE_ENABLE_KOKKOS=ON \

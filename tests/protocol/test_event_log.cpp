@@ -205,6 +205,32 @@ void regression_tests(const std::filesystem::path& path) {
             same(make_event(i + 1), events[i]);
         std::filesystem::remove(salvage);
     }
+    // A second salvage at the same offset is sequenced and does not overwrite.
+    {
+        auto corrupt = clean;
+        corrupt.at(offsets[3] + 12) ^= 1;
+        const auto first =
+            std::filesystem::path(path.string() + ".corrupt-" + std::to_string(offsets[3]));
+        const auto second = std::filesystem::path(first.string() + "-1");
+        std::filesystem::remove(first);
+        std::filesystem::remove(second);
+        save(path, corrupt);
+        {
+            EventLogWriter writer(path);
+        }
+        expect(std::filesystem::exists(first), "first salvage at offset");
+        const auto first_size = std::filesystem::file_size(first);
+        save(path, corrupt);
+        {
+            EventLogWriter writer(path);
+        }
+        expect(std::filesystem::exists(second) &&
+                   std::filesystem::file_size(second) == first_size &&
+                   std::filesystem::file_size(first) == first_size,
+               "second salvage is sequenced");
+        std::filesystem::remove(first);
+        std::filesystem::remove(second);
+    }
     // An unknown kind with a matching CRC is a hard error.
     auto unknown = clean;
     unknown.at(32) = 99;

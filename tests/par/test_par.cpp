@@ -2,6 +2,7 @@
 #include "chipcae/par/column_extrude_partitioner.hpp"
 #include "chipcae/par/halo_plan.hpp"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
@@ -218,6 +219,41 @@ void load_regressions() {
     const double e8 = prony_error(8), e16 = prony_error(16), ratio = e8 / e16;
     require(e8 > 0 && e16 > 0 && ratio >= 1.9);
     std::cerr << "Prony e(8)=" << e8 << " e(16)=" << e16 << " ratio=" << ratio << '\n';
+
+    // Forced first-substep cutbacks must not invent a ~1 ulp trailing interval.
+    auto snap_cutbacks = [&](int cuts) {
+        LoadStep step;
+        step.t0 = 0.1;
+        step.t1 = 0.7;
+        step.shrinkage_increment = 0.125;
+        const double nominal = (step.t1 - step.t0) / static_cast<double>(1 << cuts);
+        int remaining_cuts = cuts, substeps = 0;
+        double shrink = 0, last_t1 = 0, min_dt = 1e300;
+        thermal.fn = [](const LoadStep&) { return outcome(); };
+        mechanical.fn = [&](const LoadStep& sub) {
+            if (remaining_cuts-- > 0)
+                return outcome(StepResult::Status::CutBack);
+            const double sub_dt = sub.t1 - sub.t0;
+            min_dt = std::min(min_dt, sub_dt);
+            last_t1 = sub.t1;
+            shrink += sub.shrinkage_increment;
+            ++substeps;
+            return outcome();
+        };
+        coupling::StepLoopPolicy snap_policy;
+        snap_policy.save = [] {};
+        snap_policy.restore = [] {};
+        require(coupling::run_steps(thermal, mechanical, std::span(&step, 1), snap_policy).status ==
+                StepResult::Status::Converged);
+        require(substeps == (1 << cuts));
+        require(min_dt >= 0.5 * nominal);
+        require(std::memcmp(&last_t1, &step.t1, sizeof(double)) == 0);
+        require(std::abs(shrink - step.shrinkage_increment) / step.shrinkage_increment <= 1e-15);
+        std::cerr << "snap cuts=" << cuts << " substeps=" << substeps << " min_dt=" << min_dt
+                  << " last_t1=" << last_t1 << " shrink=" << shrink << '\n';
+    };
+    snap_cutbacks(4);
+    snap_cutbacks(7);
 }
 #if defined(KOKKOS_ENABLE_CUDA) || defined(KOKKOS_ENABLE_HIP)
 static_assert(std::is_same_v<par::StagingSpace, Kokkos::SharedHostPinnedSpace>);

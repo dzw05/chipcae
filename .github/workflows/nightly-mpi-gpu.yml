@@ -35,14 +35,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Skip if main has no commits in 24h
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: bash tools/ci/nightly_freshness.sh
 
       - name: Install clang and ccache
+        if: steps.gate.outputs.run == 'true'
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang g++ cmake ccache
 
       - name: Cache ccache
+        if: steps.gate.outputs.run == 'true'
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.ccache
@@ -51,6 +61,7 @@ jobs:
             ccache-clang-release-
 
       - name: Configure, build, test
+        if: steps.gate.outputs.run == 'true'
         env:
           CCACHE_DIR: ${{ github.workspace }}/.ccache
           CCACHE_MAXSIZE: 200M
@@ -64,7 +75,7 @@ jobs:
           ctest --test-dir build --output-on-failure --output-junit "$PWD/build/junit.xml"
 
       - name: Upload test results
-        if: always()
+        if: always() && steps.gate.outputs.run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: nightly-clang-junit-${{ github.run_id }}
@@ -80,8 +91,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Skip if main has no commits in 24h
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: bash tools/ci/nightly_freshness.sh
 
       - name: Compile smoke translation unit
+        if: steps.gate.outputs.run == 'true'
         run: |
           set -euo pipefail
           if ! command -v nvcc >/dev/null 2>&1; then

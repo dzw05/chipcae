@@ -266,6 +266,18 @@ bool read_record(std::ifstream& in, Event& event, std::uint64_t& offset) {
     offset += 16 + size;
     return true;
 }
+std::filesystem::path salvage_path(const std::filesystem::path& path, std::uint64_t valid_end) {
+    const auto base = path.string() + ".corrupt-" + std::to_string(valid_end);
+    if (!std::filesystem::exists(base))
+        return base;
+    for (unsigned n = 1; n < 10000; ++n) {
+        const auto candidate = base + "-" + std::to_string(n);
+        if (!std::filesystem::exists(candidate))
+            return candidate;
+    }
+    throw std::runtime_error("too many event log salvage files at this offset");
+}
+
 } // namespace
 
 class EventLogWriter::Impl {
@@ -284,7 +296,7 @@ public:
             in.close();
             const auto file_size = std::filesystem::file_size(path);
             if (file_size > valid_end) {
-                const auto salvage = path.string() + ".corrupt-" + std::to_string(valid_end);
+                const auto salvage = salvage_path(path, valid_end);
                 {
                     std::ifstream src(path, std::ios::binary);
                     src.seekg(static_cast<std::streamoff>(valid_end));

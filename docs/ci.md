@@ -12,15 +12,15 @@ Repository settings (branch protection, variables, secrets) are not changed by t
 | --- | --- | --- | --- |
 | `CI / ci-ok` | After `Lint` and `Build and test` (including when the build is skipped) | `ubuntu-latest` | Yes. This is the only hard gate (ADR-0006) |
 | `CI / Lint` | Pull request (`opened`, `synchronize`, `reopened`, `ready_for_review`), including drafts, and push to `main` | Always `ubuntu-latest` | No. It is an input to `ci-ok` |
-| `CI / Build and test` | Non-draft pull request that changes something other than docs | `vars.TIER_A_RUNNER` or `ubuntu-latest` | No. Success or skipped both count as passing for `ci-ok` |
-| `Tier B and nightly / Nightly clang build` | 18:00 UTC daily, or manual dispatch | `ubuntu-latest` | No |
-| `Tier B and nightly / Nightly CUDA compile` | Same nightly schedule. `nvcc -c` only, the object is not run | `ubuntu-latest` | No |
-| `Nightly MPI and CUDA Kokkos / Nightly MPI communication` | 18:00 UTC Sunday–Thursday (`0 18 * * 0-4`), or manual dispatch. Real `mpirun -np 2` and `-np 4` allreduce tests | `ubuntu-latest` | No |
-| `Nightly MPI and CUDA Kokkos / Nightly CUDA Kokkos core compile` | Same weekday schedule. Compile-only (`chipcae_core`, `chipcae_test_core_types`, `chipcae_test_par`) with Kokkos CUDA; binaries are not run. First run is the verification (no local nvcc) | `ubuntu-latest` | No |
+| `CI / Build and test` | Non-draft pull request that changes something other than docs, and a push to `main` that changes code | `vars.TIER_A_RUNNER` or `ubuntu-latest` | No. Success or skipped both count as passing for `ci-ok` |
+| `Tier B and nightly / Nightly clang build` | 18:00 UTC daily, or manual dispatch; skipped if main had no commits in 24h | `ubuntu-latest` | No |
+| `Tier B and nightly / Nightly CUDA compile` | Same nightly schedule; skipped if main had no commits in 24h. `nvcc -c` only, the object is not run. Kept until the Kokkos CUDA job's first green run | `ubuntu-latest` | No |
+| `Nightly MPI and CUDA Kokkos / Nightly MPI communication` | 18:00 UTC Sunday–Thursday (`0 18 * * 0-4`), or manual dispatch; skipped if main had no commits in 24h. Real `mpirun -np 2` and `-np 4` allreduce tests | `ubuntu-latest` | No |
+| `Nightly MPI and CUDA Kokkos / Nightly CUDA Kokkos core compile` | Same weekday schedule, skipped if main had no commits in 24h. Compile-only with Kokkos CUDA 12.6 (`nvcc` from NVIDIA's apt repo); binaries are not run. Timeout 40 minutes. First run is the verification (no local nvcc) | `ubuntu-latest` | No |
 | `Tier B and nightly / Hosted minutes` is a different workflow | See usage alert | `ubuntu-latest` | No |
 | Tier B MPI, GPU, perf | Nightly, manual dispatch, or a pull request labeled `run-heavy`, and only when `TIER_B_ENABLED` is `true` | Self-hosted labels below | Only after runners exist |
 
-Push to `main` does **not** build or test again. Merge already ran the pull-request build.
+Pushes to `main` that change code also run `Build and test`, so the squash-merged tree is built and later pull requests can reuse the Kokkos and ccache entries on the default branch. Docs-only pushes (`docs/**`, `*.md`, `LICENSE`, `CODEOWNERS`) are ignored by `paths-ignore` and do not start the workflow. `cancel-in-progress` is on for main as well, so a burst of merges keeps only the latest build.
 
 Draft pull requests run lint and `ci-ok`. The build-and-test job stays skipped until the pull request is marked ready (`ready_for_review`), which then runs the full check. `ci-ok` still requires lint to succeed; a skipped build counts as passing.
 
@@ -28,7 +28,7 @@ Concurrency group `ci-<workflow>-<ref>` uses `cancel-in-progress`. A newer push 
 
 ### Docs-only pulls
 
-`CI / Lint` still runs. `CI / Build and test` is skipped when every changed file is `docs/**`, a `*.md` file, `LICENSE`, or `CODEOWNERS`. `CI / ci-ok` still passes in that case because a skipped build is treated as success. That is why individual jobs are not required checks: GitHub treats a skipped required check as not passed.
+`CI / Lint` still runs on docs-only pull requests. `CI / Build and test` is skipped when every changed file is `docs/**`, a `*.md` file, `LICENSE`, or `CODEOWNERS`. A docs-only push to `main` does not start the workflow. `CI / ci-ok` still passes on a docs-only pull because a skipped build is treated as success. That is why individual jobs are not required checks: GitHub treats a skipped required check as not passed.
 
 ### Single configuration
 
@@ -52,7 +52,7 @@ The build job uploads `build/junit.xml` from `ctest --output-junit`, plus the pe
 
 `main` does not use branch protection. The only hard gate is the aggregate job `CI / ci-ok` in the `CI` workflow (ADR-0006). Do not enable branch protection or a ruleset, and do not mark `CI / Lint` or `CI / Build and test` as required checks.
 
-`ci-ok` runs with `if: always()` after `lint` and `build-test`. It passes only when lint is `success` and the build is `success` or `skipped`. It fails when lint is skipped or either job fails, including a per-commit iteration or memory-gate failure in the build job. Drafts, pushes to `main`, and docs-only pulls skip the build, so `ci-ok` still passes if lint passed.
+`ci-ok` runs with `if: always()` after `lint` and `build-test`. It passes only when lint is `success` and the build is `success` or `skipped`. It fails when lint is skipped or either job fails, including a per-commit iteration or memory-gate failure in the build job. Drafts and docs-only pulls skip the build, so `ci-ok` still passes if lint passed. A code push to `main` runs the build.
 
 A later mesh job (A4) may be added to `ci-ok`'s `needs` the same way, counting `skipped` as passing. Do not give Mesh its own required check.
 
@@ -214,31 +214,32 @@ Both workflows succeeded. Times are UTC, from `gh run view --json jobs` on 2026-
 
 The cold build is already at the 1-minute billing floor (50 s rounds up to 1). The warm rebuild is faster on the clock (39 s, 100% ccache hits) and still bills 1 minute.
 
-### Assumptions
+### Assumptions (updated 2026-11-17)
 
 - 22 workdays in a 30-day month, 8 weekend days.
-- **2 code pull requests per workday.** Each runs Lint and Build and test (4 jobs).
-- **1 push to `main` per workday**, Lint only (1 job).
-- Every calendar day: nightly clang, nightly CUDA compile, and the usage check (3 jobs).
-- Beijing workdays only (cron `0 18 * * 0-4`): hosted MPI communication tests and CUDA Kokkos core compile (2 jobs). Remeasure their billed minutes after the first green run and keep the monthly total under the 1,200-minute warning line.
-- That was **8 jobs on a workday** (4 + 1 + 3) before these two weekday jobs. Weekend days remain the 3 daily nightly jobs only.
+- **2 code pull requests per workday.** Each runs Lint and Build and test.
+- **2–3 code pushes to `main` per workday** also run Build and test (concurrency cancels superseded runs). Docs-only pushes do not start the workflow.
+- Every calendar day: nightly clang, nightly CUDA smoke (`nvcc -c bench/cuda/smoke.cu`), and the usage check, each skipped when main has had no commits in the last 24 hours.
+- Beijing workdays only (cron `0 18 * * 0-4`): hosted MPI communication tests and CUDA Kokkos core compile, also skipped when main is unchanged in the last 24 hours. Remeasure billed minutes after the first green CUDA Kokkos run. Do not delete the daily smoke.cu job until that first green run.
 - Tier B stays off, so it adds 0 hosted minutes.
-- Build billed minutes in the formula are 1. The warm run is also 1 billed minute, so the cache does not change the monthly total.
+- PR Build and test is billed at 3 minutes (measured 2:26 on PR #19).
 
-```
-builds = 22 * 2 = 44
-lints  = 22 * 2 + 22 = 66
+| Item | Times / month | Billed minutes each | Total |
+| --- | --- | --- | --- |
+| PR build-test | 44 | 3 | 132 |
+| Lint (PR + push) | 66 | 1 | 66 |
+| Daily clang | 30 (often skipped) | 2 | 60 |
+| Daily CUDA smoke | 30 (often skipped; drop after first green Kokkos CUDA run, saving ~120) | 4 | 120 |
+| Daily usage check | 30 | 1 | 30 |
+| Weekday MPI | 22 | 3 | 66 |
+| Weekday CUDA Kokkos (hot cache ~8 min; 1–2 cold starts at 30–40 min amortized) | 22 | ~10 | ~220 |
+| Main build-test (gross 130–200; net ~60–130 after cache reuse and nightly dedup) | ~44–66 | 3 | net ~60–130 |
+| **Total after this change** | | | **about 650–830** |
+| After dropping the daily smoke.cu job | | | **about 530–710** |
 
-monthly = 44 * 1
-        + 66 * 1
-        + 30 * 1
-        + 30 * 4
-        + 30 * 1
-        = 44 + 66 + 30 + 120 + 30
-        = 290 minutes/month
-```
+650–830 minutes stays under the 1,200-minute warning line and the 2,000-minute free allowance (the project budget is 1,500). The risk is a cold CUDA Kokkos build hitting the 40-minute timeout; the cache key and separate ccache entry are there to keep the hot path short. Re-measure after the first green CUDA Kokkos run.
 
-290 is under the 1,500-minute cap (1,500 / 290 ≈ 5.2). The 80% alert is 1,200 minutes. This total is the M0 skeleton. Build time will grow with the solver code, so the 1,500-minute budget leaves about 5× headroom on the build job before the 80% alert. Re-measure this estimate at each milestone. Do not keep using 290 after the compile stops being a one-minute job.
+When a writer drops an event-log tail it writes `<path>.corrupt-<offset>`, or `<path>.corrupt-<offset>-<n>` if that name already exists. The library does not rotate or delete these files; the operator cleans them up.
 
 ## What is intentionally out of this tree
 

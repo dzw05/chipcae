@@ -90,7 +90,10 @@ struct Event {
 // fields have le32 element counts; Plugin contains key then version strings.
 // Reads are inclusive by seq and stop at an incomplete or CRC-mismatched tail.
 // The writer flushes without fsync: an accepted MVP tradeoff. A crash may lose
-// flushed but non-durable records; reopening truncates a torn tail.
+// flushed but non-durable records; reopening truncates a torn tail. A dropped
+// tail is first copied to <path>.corrupt-<offset>, or <path>.corrupt-<offset>-<n>
+// if that name already exists. The library does not rotate or delete these
+// files; the operator is responsible for cleaning them up.
 class EventLogWriter {
 public:
     explicit EventLogWriter(const std::filesystem::path& path);
