@@ -188,15 +188,48 @@ void regression_tests(const std::filesystem::path& path) {
         corrupt.at(flip) ^= 1;
         save(path, corrupt);
         expect(EventLogReader(path).read_from(0).size() == 3, "CRC tail read");
+        const auto salvage =
+            std::filesystem::path(path.string() + ".corrupt-" + std::to_string(offsets[3]));
+        std::filesystem::remove(salvage);
         {
             EventLogWriter writer(path);
             expect(std::filesystem::file_size(path) == offsets[3], "CRC tail truncate");
+            expect(std::filesystem::exists(salvage) &&
+                       std::filesystem::file_size(salvage) == corrupt.size() - offsets[3],
+                   "CRC tail salvaged");
             writer.append(make_event(4));
         }
         const auto events = EventLogReader(path).read_from(0);
         expect(events.size() == 4, "CRC recovery append");
         for (std::size_t i = 0; i < events.size(); ++i)
             same(make_event(i + 1), events[i]);
+        std::filesystem::remove(salvage);
+    }
+    // A second salvage at the same offset is sequenced and does not overwrite.
+    {
+        auto corrupt = clean;
+        corrupt.at(offsets[3] + 12) ^= 1;
+        const auto first =
+            std::filesystem::path(path.string() + ".corrupt-" + std::to_string(offsets[3]));
+        const auto second = std::filesystem::path(first.string() + "-1");
+        std::filesystem::remove(first);
+        std::filesystem::remove(second);
+        save(path, corrupt);
+        {
+            EventLogWriter writer(path);
+        }
+        expect(std::filesystem::exists(first), "first salvage at offset");
+        const auto first_size = std::filesystem::file_size(first);
+        save(path, corrupt);
+        {
+            EventLogWriter writer(path);
+        }
+        expect(std::filesystem::exists(second) &&
+                   std::filesystem::file_size(second) == first_size &&
+                   std::filesystem::file_size(first) == first_size,
+               "second salvage is sequenced");
+        std::filesystem::remove(first);
+        std::filesystem::remove(second);
     }
     // An unknown kind with a matching CRC is a hard error.
     auto unknown = clean;
@@ -244,18 +277,40 @@ void regression_tests(const std::filesystem::path& path) {
     const auto repaired = torn_reader.read_from(6, &cursor);
     expect(repaired.size() == 1, "poll repaired tail");
     same(make_event(6), repaired.front());
-    // Both directions enforce the frozen 64 MiB limit.
+    // A length field above 64 MiB is a dropped tail, not an exception, so a
+    // Writer can still reopen and recover the prefix.
     auto oversized = clean;
     store32(oversized, 8, 64u * 1024u * 1024u + 1);
     save(path, oversized);
-    rejected = false;
-    try {
-        (void)EventLogReader(path).read_from(0);
-    } catch (const std::runtime_error&) {
-        rejected = true;
+    expect(EventLogReader(path).read_from(0).empty(), "reader oversized length is a dropped tail");
+    const auto oversized_salvage = std::filesystem::path(path.string() + ".corrupt-0");
+    std::filesystem::remove(oversized_salvage);
+    {
+        EventLogWriter writer(path);
+        expect(std::filesystem::file_size(path) == 0, "writer oversized length truncate");
+        expect(std::filesystem::exists(oversized_salvage), "writer oversized length salvage");
+        writer.append(make_event(1));
     }
-    expect(rejected, "reader size limit");
+    expect(EventLogReader(path).read_from(0).size() == 1, "writer recovers after oversized length");
+    std::filesystem::remove(oversized_salvage);
     std::filesystem::remove(path);
+    // A Reader cache is cleared when the file shrinks below the largest stored
+    // boundary so a later resume cannot seek into the middle of a new record.
+    {
+        save(path, clean);
+        EventLogReader cached(path);
+        std::uint64_t stale = 0;
+        expect(cached.read_from(0, &stale).size() == 6, "cache fill");
+        // Keep a valid three-record prefix so a stale interior cursor would
+        // land past EOF (and, after a rewrite, mid-record) if the cache survived.
+        save(path,
+             std::vector<std::uint8_t>(clean.begin(),
+                                       clean.begin() + static_cast<std::ptrdiff_t>(offsets[3])));
+        stale = offsets[4];
+        const auto prefix = cached.read_from(1, &stale);
+        expect(prefix.size() == 3, "shrunk file clears stale cursor");
+        std::filesystem::remove(path);
+    }
     {
         EventLogWriter writer(path);
         auto large = make_event(3);

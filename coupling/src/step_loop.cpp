@@ -33,6 +33,7 @@ StepResult run_steps(Solver& thermal,
         const auto start_temperature = step.temperature_t0 ? step.temperature_t0 : step.temperature;
         const auto end_temperature = step.temperature ? step.temperature : step.temperature_t0;
         auto previous_temperature = start_temperature;
+        double shrink_applied = 0;
         while (t < step.t1) {
             dt = std::min(dt, step.t1 - t);
             if (policy.save)
@@ -43,8 +44,15 @@ StepResult run_steps(Solver& thermal,
                     return failure();
                 auto sub = step;
                 sub.t0 = t;
-                sub.t1 = t + dt;
-                sub.shrinkage_increment = step.shrinkage_increment * dt / span;
+                // Snap when the remainder is within a relative slop of dt so a
+                // 1 ulp leftover cannot become an extra near-zero substep.
+                const double remaining = step.t1 - t;
+                sub.t1 = (remaining <= dt * (1.0 + 1e-9)) ? step.t1 : t + dt;
+                // The last substep takes the leftover so the increments sum to
+                // the parent value within a rounding unit, not ~N ulps.
+                sub.shrinkage_increment = (sub.t1 == step.t1)
+                                              ? step.shrinkage_increment - shrink_applied
+                                              : step.shrinkage_increment * (sub.t1 - sub.t0) / span;
                 if (t > step.t0)
                     sub.activation_mask_id.reset();
                 if (step.temperature_curve_id) {
@@ -60,6 +68,8 @@ StepResult run_steps(Solver& thermal,
                     result = mechanical.advance(sub);
                 if (result.status == StepResult::Status::Converged) {
                     previous_temperature = sub.temperature;
+                    shrink_applied += sub.shrinkage_increment;
+                    t = sub.t1;
                     break;
                 }
                 if (policy.restore)
@@ -73,7 +83,6 @@ StepResult run_steps(Solver& thermal,
                 if (dt < policy.minimum_dt)
                     return failure();
             }
-            t += dt;
         }
     }
     return result;

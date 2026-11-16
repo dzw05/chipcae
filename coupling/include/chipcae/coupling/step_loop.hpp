@@ -8,6 +8,8 @@ namespace chipcae::coupling {
 /// Both solvers share a mesh/context; mechanical reads the thermal state there.
 /// Hooks snapshot/restore BOTH solvers and shared fields at each interval start.
 /// CutBack requires hooks because thermal may already have changed shared state.
+/// Activation is sent with the first substep on every attempt, including after a
+/// cutback; a failed first substep relies on restore to roll the activation back.
 struct StepLoopPolicy {
     double minimum_dt = 1e-12;
     int maximum_cutbacks = 16;

@@ -1,0 +1,204 @@
+name: Nightly MPI and CUDA Kokkos
+
+# Hosted weekday extras, not part of pull-request ci-ok.
+# 18:00 UTC Sunday–Thursday is 02:00 Asia/Shanghai Monday–Friday.
+# Jobs are time-limited and cache their toolchains so they stay inside the
+# 1,500-minute hosted budget. They do not run on pull requests.
+#
+# The Kokkos(CUDA)+core compile job has not been executed on the development
+# machine (no nvcc). Treat the first scheduled run as the verification.
+
+on:
+  schedule:
+    - cron: "0 18 * * 0-4"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-mpi-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  mpi-comm:
+    name: Nightly MPI communication
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Skip if main has no commits in 24h
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: bash tools/ci/nightly_freshness.sh
+
+      - name: Install toolchain
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++ cmake ninja-build ccache libopenmpi-dev openmpi-bin
+
+      - name: Cache ccache
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-gcc-mpi-${{ hashFiles('**/*.cpp', '**/*.hpp', '**/*.h', '**/CMakeLists.txt', 'cmake/**') }}
+          restore-keys: |
+            ccache-gcc-mpi-
+
+      - name: Configure, build, test
+        if: steps.gate.outputs.run == 'true'
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+          CCACHE_MAXSIZE: 200M
+          OMPI_MCA_btl: self,tcp
+          OMPI_MCA_pml: ob1
+          OMPI_MCA_coll: "^ucc"
+          OMPI_ALLOW_RUN_AS_ROOT: "1"
+          OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p "$CCACHE_DIR"
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCHIPCAE_WARNINGS_AS_ERRORS=ON \
+            -DCHIPCAE_ENABLE_MPI=ON \
+            -DMPIEXEC_PREFLAGS="--oversubscribe"
+          cmake --build build --parallel --target chipcae_test_par_mpi
+          ctest --test-dir build -R '^par_mpi_' --output-on-failure --output-junit "$PWD/build/junit-mpi.xml"
+
+      - name: Upload test results
+        if: always() && steps.gate.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-mpi-junit-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: build/junit-mpi.xml
+
+  cuda-kokkos-core-compile:
+    name: Nightly CUDA Kokkos core compile
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Skip if main has no commits in 24h
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: bash tools/ci/nightly_freshness.sh
+
+      - name: Install toolchain
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++ cmake ninja-build ccache
+          curl -fsSLO https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cuda-nvcc-12-6 cuda-cudart-dev-12-6
+          echo /usr/local/cuda-12.6/bin >> "$GITHUB_PATH"
+
+      - name: Cache identity
+        if: steps.gate.outputs.run == 'true'
+        id: cache-key
+        run: |
+          set -euo pipefail
+          ver=$(sed -n 's/.*KOKKOS_VERSION: "\([^"]*\)".*/\1/p' .github/workflows/ci.yml | head -n 1)
+          if [ -z "$ver" ]; then
+            echo "Could not read KOKKOS_VERSION from .github/workflows/ci.yml" >&2
+            exit 1
+          fi
+          image_os="${ImageOS:-unknown}"
+          gcc_ver="$(gcc -dumpversion)"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "image_os=$image_os" >> "$GITHUB_OUTPUT"
+          echo "gcc=$gcc_ver" >> "$GITHUB_OUTPUT"
+          echo "kokkos_key=kokkos-cuda-${ver}-${RUNNER_OS}-${image_os}-gcc${gcc_ver}-cuda12.6" >> "$GITHUB_OUTPUT"
+          echo "Kokkos cache key: kokkos-cuda-${ver}-${RUNNER_OS}-${image_os}-gcc${gcc_ver}-cuda12.6"
+
+      - name: Cache Kokkos CUDA
+        if: steps.gate.outputs.run == 'true'
+        id: cache-kokkos
+        uses: actions/cache@v4
+        with:
+          path: ~/deps/kokkos-cuda
+          key: ${{ steps.cache-key.outputs.kokkos_key }}
+          restore-keys: |
+            kokkos-cuda-${{ steps.cache-key.outputs.version }}-${{ runner.os }}-
+
+      - name: Cache ccache
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-cuda-kokkos-${{ steps.cache-key.outputs.image_os }}-gcc${{ steps.cache-key.outputs.gcc }}-${{ hashFiles('**/*.cpp', '**/*.hpp', '**/*.h', '**/CMakeLists.txt', 'cmake/**') }}
+          restore-keys: |
+            ccache-cuda-kokkos-${{ steps.cache-key.outputs.image_os }}-gcc${{ steps.cache-key.outputs.gcc }}-
+            ccache-cuda-kokkos-
+
+      - name: Install Kokkos (CUDA)
+        if: steps.gate.outputs.run == 'true' && steps.cache-kokkos.outputs.cache-hit != 'true'
+        env:
+          KOKKOS_VERSION: ${{ steps.cache-key.outputs.version }}
+        run: |
+          set -euo pipefail
+          export PATH="/usr/local/cuda-12.6/bin:$PATH"
+          prefix="$HOME/deps/kokkos-cuda"
+          src="$RUNNER_TEMP/kokkos-src"
+          build="$RUNNER_TEMP/kokkos-build"
+          curl -fsSL "https://github.com/kokkos/kokkos/archive/refs/tags/${KOKKOS_VERSION}.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP"
+          mv "$RUNNER_TEMP/kokkos-${KOKKOS_VERSION}" "$src"
+          cmake -S "$src" -B "$build" -G Ninja \
+            -DCMAKE_INSTALL_PREFIX="$prefix" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_STANDARD=20 \
+            -DCUDAToolkit_ROOT=/usr/local/cuda-12.6 \
+            -DKokkos_ENABLE_CUDA=ON \
+            -DKokkos_ENABLE_CUDA_LAMBDA=ON \
+            -DKokkos_ENABLE_SERIAL=ON \
+            -DKokkos_ARCH_VOLTA70=ON
+          cmake --build "$build" --parallel
+          cmake --install "$build"
+
+      - name: Compile core and par tests
+        if: steps.gate.outputs.run == 'true'
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+          CCACHE_MAXSIZE: 200M
+        run: |
+          set -euo pipefail
+          export PATH="/usr/local/cuda-12.6/bin:$PATH"
+          mkdir -p "$CCACHE_DIR"
+          wrapper="$HOME/deps/kokkos-cuda/bin/nvcc_wrapper"
+          if [ ! -x "$wrapper" ]; then
+            echo "nvcc_wrapper not found under $HOME/deps/kokkos-cuda/bin" >&2
+            ls -la "$HOME/deps/kokkos-cuda/bin" >&2 || true
+            exit 1
+          fi
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER="$wrapper" \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCHIPCAE_WARNINGS_AS_ERRORS=ON \
+            -DCUDAToolkit_ROOT=/usr/local/cuda-12.6 \
+            -DKokkos_ROOT="$HOME/deps/kokkos-cuda" \
+            -DCHIPCAE_REQUIRE_KOKKOS=ON \
+            -DCHIPCAE_ENABLE_KOKKOS=ON \
+            -DCHIPCAE_MATERIAL_ENABLE_PYTHON=OFF
+          cmake --build build --parallel --target chipcae_core chipcae_test_core_types chipcae_test_par
+          echo "Compiled core and par tests with Kokkos CUDA. Binaries were not executed."
+          echo "This compile path was not verified on the development machine (no nvcc)."

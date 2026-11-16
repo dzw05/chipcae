@@ -1,7 +1,8 @@
 name: CI
 
 # Hosted Tier A. Linux only.
-# Pull requests run lint plus one Release build. Pushes to main run lint only.
+# Pull requests run lint plus one Release build. Pushes to main also run the
+# build when they change code. Docs-only pushes are ignored.
 # Draft pull requests run lint (and ci-ok); build-test waits until the PR is marked ready.
 # Docs-only pull requests skip the build.
 # Build-and-test can move later by setting the TIER_A_RUNNER repository variable
@@ -14,6 +15,11 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "LICENSE"
+      - "CODEOWNERS"
 
 # Kokkos install pin (4.x). The only place this version is set for CI.
 # "4.7.01" is the GitHub tag for the 4.7.1 release (CMake reports 4.7.1).
@@ -26,7 +32,7 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 jobs:
   lint:
@@ -98,22 +104,35 @@ jobs:
         id: paths
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "code=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          base="${{ github.event.pull_request.base.sha }}"
-          if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
-            git fetch --no-tags --depth=1 origin "$base" || true
-          fi
-          if git diff --name-only "$base"...HEAD > /tmp/chipcae-changed 2>/dev/null; then
-            :
-          elif git diff --name-only "$base" HEAD > /tmp/chipcae-changed 2>/dev/null; then
-            :
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+              git fetch --no-tags --depth=1 origin "$base" || true
+            fi
+            if git diff --name-only "$base"...HEAD > /tmp/chipcae-changed 2>/dev/null; then
+              :
+            elif git diff --name-only "$base" HEAD > /tmp/chipcae-changed 2>/dev/null; then
+              :
+            else
+              echo "code=true" >> "$GITHUB_OUTPUT"
+              echo "could not diff against the base; running the build"
+              exit 0
+            fi
           else
-            echo "code=true" >> "$GITHUB_OUTPUT"
-            echo "could not diff against the base; running the build"
-            exit 0
+            before="${{ github.event.before }}"
+            if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
+              echo "code=true" >> "$GITHUB_OUTPUT"
+              echo "push has no usable before SHA; running the build"
+              exit 0
+            fi
+            if ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
+              git fetch --no-tags --depth=1 origin "$before" || true
+            fi
+            if ! git diff --name-only "$before".."${{ github.sha }}" > /tmp/chipcae-changed 2>/dev/null; then
+              echo "code=true" >> "$GITHUB_OUTPUT"
+              echo "could not diff against github.event.before; running the build"
+              exit 0
+            fi
           fi
           code=false
           if [ ! -s /tmp/chipcae-changed ]; then
@@ -141,8 +160,7 @@ jobs:
     name: Build and test
     needs: lint
     if: |
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.draft == false &&
+      (github.event_name == 'push' || github.event.pull_request.draft == false) &&
       needs.lint.result == 'success' &&
       needs.lint.outputs.code == 'true'
     runs-on: ${{ vars.TIER_A_RUNNER || 'ubuntu-latest' }}
@@ -225,6 +243,7 @@ jobs:
             -DCHIPCAE_WARNINGS_AS_ERRORS=ON \
             -DKokkos_ROOT="$HOME/deps/kokkos" \
             -DCHIPCAE_REQUIRE_KOKKOS=ON \
+            -DCHIPCAE_ENABLE_KOKKOS=ON \
             -DCHIPCAE_MATERIAL_ENABLE_PYTHON=OFF
 
       - name: Build
