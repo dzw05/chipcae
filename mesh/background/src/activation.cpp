@@ -1,5 +1,7 @@
 #include "chipcae/mesh/background/activation.hpp"
 
+#include "../../cut/include/chipcae/mesh/cut/cut_layer.hpp"
+
 #include <algorithm>
 #include <set>
 namespace chipcae::mesh {
@@ -18,9 +20,6 @@ Expected<ActivationResolution> resolve_activation(const StackModel& s,
                                                   const HexMeshArrays& m,
                                                   const cut::CutLayerArrays* cut,
                                                   const std::vector<std::string>& refs) {
-    // Cut subregion mapping is completed in K1-3 without introducing a solver dependency.
-    if (cut)
-        return Error{"activation", "cut mapping requires cut-layer resolver"};
     ActivationResolution out;
     std::set<Local> attrs, faces;
     std::vector<std::string> expanded;
@@ -38,6 +37,15 @@ Expected<ActivationResolution> resolve_activation(const StackModel& s,
             expanded.push_back(ref);
     }
     for (const auto& ref : expanded) {
+        if (ref.starts_with("faceset:body:")) {
+            auto body = m.attr_table.bodies.find(ref.substr(13));
+            if (!cut || body == m.attr_table.bodies.end())
+                return Error{ref, "unknown embedded body"};
+            for (std::size_t i = 0; i < cut->sub_attribute.size(); ++i)
+                if (m.attr_table.entries[cut->sub_attribute[i] - 1].body == body->second)
+                    out.faces.eb_subs.push_back(static_cast<Local>(i));
+            continue;
+        }
         if (ref.starts_with("faceset:") || ref.starts_with("interface:")) {
             auto it = m.face_sets.find(ref);
             if (it == m.face_sets.end())
@@ -75,6 +83,16 @@ Expected<ActivationResolution> resolve_activation(const StackModel& s,
                 v *= m.vertices[3 * n6 + a] - m.vertices[3 * n0 + a];
             out.cells.volume += v;
         }
+    if (cut)
+        for (std::size_t i = 0; i < cut->sub_attribute.size(); ++i)
+            if (attrs.contains(cut->sub_attribute[i])) {
+                out.cells.cut_subs.push_back(static_cast<Local>(i));
+                auto e = cut->cut_elem[i];
+                Real v = 1;
+                for (int k = 0; k < 3; ++k)
+                    v *= m.vertices[3 * m.hex[e * 8 + 6] + k] - m.vertices[3 * m.hex[e * 8] + k];
+                out.cells.volume -= v * (1 - cut->sub_volfrac[i]);
+            }
     out.cells.n_elem_global = static_cast<Index>(out.cells.elems.size());
     return out;
 }

@@ -1,1 +1,4 @@
-# Cut target is introduced by K1-3.
+add_library(chipcae_mesh_cut src/plane_cut.cpp src/cut_layer.cpp)
+target_include_directories(chipcae_mesh_cut PUBLIC include)
+target_link_libraries(chipcae_mesh_cut PUBLIC chipcae_mesh_background)
+chipcae_set_warnings(chipcae_mesh_cut)
