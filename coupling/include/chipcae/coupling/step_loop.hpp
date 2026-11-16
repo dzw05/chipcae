@@ -1,5 +1,6 @@
 #pragma once
 #include "chipcae/core/solver.hpp"
+
 #include <functional>
 #include <span>
 
@@ -13,6 +14,8 @@ struct StepLoopPolicy {
     std::function<void()> save;
     std::function<void()> restore;
 };
-StepResult run_steps(Solver& thermal, Solver& mechanical,
-                     std::span<const LoadStep> steps, const StepLoopPolicy& policy = {});
-}
+StepResult run_steps(Solver& thermal,
+                     Solver& mechanical,
+                     std::span<const LoadStep> steps,
+                     const StepLoopPolicy& policy = {});
+} // namespace chipcae::coupling
