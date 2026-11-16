@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -16,13 +17,22 @@ EXCLUDED = (
     "deal.ii",
     "cgal",
     "openfoam",
+    "parmetis",
+    "libigl",
 )
 
 SCAN_SUFFIXES = {".cmake", ".txt", ".yml", ".yaml", ".sh", ".py", ".md"}
-SCAN_FILES = {"CMakeLists.txt", "CMakeLists.tx"}
 SKIP_DIRS = {".git", "build", "build-debug", "build-release", ".cache"}
 # Policy documents may mention excluded names while explaining why they are banned.
-ALLOW_MENTION_DIRS = {"docs", "cmake"}
+ALLOW_MENTION_DIRS = {"docs"}
+ALLOW_MENTION_FILES = {"cmake/ChipcaeLicensePolicy.cmake", "cmake/check_license_policy.py", "cmake/dependencies.allowlist"}
+DEP_RE = re.compile(r'(find_package|FetchContent_Declare|ExternalProject_Add|pkg_check_modules)\s*\(\s*([A-Za-z0-9_.\-]+)', re.I)
+TRANSITIONAL = {"pybind11"}  # remove once PR1 lands
+
+
+def normalize(name):
+    return "python" if name.lower() == "python3" else name.lower()
+
 
 
 def should_skip(path: Path, root: Path) -> bool:
@@ -32,7 +42,7 @@ def should_skip(path: Path, root: Path) -> bool:
 
 def is_policy_doc(path: Path, root: Path) -> bool:
     rel = path.relative_to(root)
-    return rel.parts and rel.parts[0] in ALLOW_MENTION_DIRS
+    return rel.as_posix() in ALLOW_MENTION_FILES or (rel.parts and rel.parts[0] in ALLOW_MENTION_DIRS)
 
 
 def iter_files(root: Path):
@@ -45,11 +55,17 @@ def iter_files(root: Path):
 
 def main() -> int:
     root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
+    allowed = {normalize(line.split("#", 1)[0].strip()) for line in (root / "cmake/dependencies.allowlist").read_text().splitlines() if line.split("#", 1)[0].strip()}
     violations = []
     for path in iter_files(root):
         if is_policy_doc(path, root):
             continue
         text = path.read_text(encoding="utf-8", errors="replace").lower()
+        for _, dependency in DEP_RE.findall(text):
+            if normalize(dependency) in TRANSITIONAL:
+                print(f"Warning: transitional dependency {dependency}; remove once PR1 lands.")
+            elif normalize(dependency) not in allowed:
+                violations.append(f"{path.relative_to(root)}: dependency '{dependency}' is not allowlisted")
         for name in EXCLUDED:
             # Require a token-like occurrence so comments about "not using X" in
             # CMake still get caught if someone adds find_package(AMReX).

@@ -1,0 +1,21 @@
+# Owner-gated dependency list; new dependencies require owner approval.
+Kokkos
+KokkosKernels
+MPI
+HDF5
+HYPRE
+PETSc
+MFEM
+jsoncons
+Protobuf
+gRPC
+Qt6
+VTK
+OpenCASCADE
+nanobind
+Python
+Python3
+METIS
+Zoltan
+ArborX
+MUMPS

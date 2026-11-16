@@ -2,9 +2,12 @@
 #
 # Allowed third-party dependencies (permissive or LGPL with dynamic linking):
 #   Kokkos, MPI implementations, HDF5, Hypre, PETSc, jsoncons, gRPC/Protobuf,
-#   MFEM (conditional), Qt6, VTK, OCCT.
+#   MFEM (conditional), Qt6, VTK, OCCT, nanobind, METIS, Zoltan,
+#   Kokkos Kernels, ArborX.
+#   MUMPS (CeCILL-C): optional direct solver, dynamic linking only, default OFF.
 #
 # Excluded:
+#   ParMETIS (non-commercial only), libigl (contains GPL modules).
 #   GPL libraries such as p4est, t8code and Basilisk.
 #   AMReX is not a project dependency (see ADR-0002).
 #   deal.II is a backup only and must not be added until a non-p4est path is confirmed.
