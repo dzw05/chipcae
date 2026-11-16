@@ -32,6 +32,10 @@ ctest --test-dir build --output-on-failure
 | `CHIPCAE_ENABLE_PYTHON` | 构建 Python 绑定 |
 | `CHIPCAE_BUILD_TESTS` | 构建测试 |
 
+Python 绑定使用 nanobind（需要 Python 3.9+ 开发头文件）。
+同时开启 MPI 与 HDF5 时必须使用并行 HDF5，每个输出步集体写一个 VTKHDF 文件。
+`CHIPCAE_ENABLE_PRECICE`（v2 适配器）、`CHIPCAE_ENABLE_PARTICLES`（内核粒子链接）默认 OFF；`CHIPCAE_WARNINGS_AS_ERRORS` 默认 OFF，CI 启用。
+
 ## 仓库结构
 
 | 目录 | 职责 |

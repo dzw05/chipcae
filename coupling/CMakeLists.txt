@@ -1,7 +1,6 @@
 add_library(chipcae_coupling
     src/coupler.cpp
     src/field_mapper.cpp
-    src/precice_adapter.cpp
 )
 add_library(chipcae::coupling ALIAS chipcae_coupling)
 
@@ -12,3 +11,7 @@ target_include_directories(chipcae_coupling
 
 target_link_libraries(chipcae_coupling PUBLIC chipcae::core)
 chipcae_set_warnings(chipcae_coupling)
+
+if(CHIPCAE_ENABLE_PRECICE)
+    target_sources(chipcae_coupling PRIVATE src/precice_adapter.cpp)
+endif()

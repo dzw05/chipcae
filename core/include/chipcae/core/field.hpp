@@ -9,6 +9,8 @@
 
 namespace chipcae {
 
+/// Placeholder std::vector storage: replace after F4 freezes the Kokkos Layout.
+/// Agents must not treat this storage or interface as final.
 /// A named, densely stored field with one or more components per entry.
 class Field {
 public:

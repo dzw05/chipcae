@@ -44,14 +44,16 @@ int main() {
     expect(hex.layer_count() == 2, "layer count");
 
     chipcae::solvers::fvm::ConjugateHeatTransferSolver cht(mesh);
-    expect(cht.solve() == chipcae::solvers::fvm::SolveStatus::not_implemented, "FVM placeholder");
+    expect(cht.solve().failure_reason == chipcae::FailureReason::not_implemented,
+           "FVM placeholder");
 
     chipcae::solvers::fem::ThermalStressSolver fem(hex);
-    expect(fem.solve() == chipcae::solvers::fem::SolveStatus::not_implemented, "FEM placeholder");
+    expect(fem.solve().failure_reason == chipcae::FailureReason::not_implemented,
+           "FEM placeholder");
 
     chipcae::solvers::particles::ParticleSolver particles(chipcae::solvers::particles::Method::mpm,
                                                           0);
-    expect(particles.solve() == chipcae::solvers::particles::SolveStatus::not_implemented,
+    expect(particles.solve().failure_reason == chipcae::FailureReason::not_implemented,
            "particle placeholder");
 
     if (failed != 0) {
