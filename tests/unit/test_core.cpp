@@ -9,7 +9,9 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 
 namespace {
@@ -67,11 +69,19 @@ int main() {
     expect(job.state == chipcae::jobmgr::JobState::queued, "job starts queued");
     expect(manager.find("run-1") != nullptr, "job lookup");
 
-    const auto manifest_path = std::filesystem::temp_directory_path() / "chipcae_manifest_test.csv";
+    const auto manifest_path =
+        std::filesystem::temp_directory_path() / "chipcae_manifest_test.json";
     chipcae::io::ResultManifest manifest;
     manifest.add({"temperature", "temperature.vtkhdf", "field"});
     manifest.write(manifest_path);
     expect(std::filesystem::exists(manifest_path), "manifest file written");
+    std::ifstream manifest_input(manifest_path);
+    const std::string manifest_text((std::istreambuf_iterator<char>(manifest_input)), {});
+    expect(manifest_text.find("\"manifest_version\": 1") != std::string::npos,
+           "manifest contains version");
+    expect(manifest_text.find("temperature.vtkhdf") != std::string::npos,
+           "manifest contains added entry");
+    manifest_input.close();
     std::filesystem::remove(manifest_path);
 
     if (failed != 0) {

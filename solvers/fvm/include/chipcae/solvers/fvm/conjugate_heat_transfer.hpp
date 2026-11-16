@@ -1,16 +1,15 @@
 #pragma once
 
+#include "chipcae/core/solver.hpp"
 #include "chipcae/mesh/cut_cell_mesh.hpp"
 
 namespace chipcae::solvers::fvm {
 
-enum class SolveStatus { ok, not_implemented };
-
-class ConjugateHeatTransferSolver {
+class ConjugateHeatTransferSolver : public Solver {
 public:
     explicit ConjugateHeatTransferSolver(const mesh::CutCellMesh& mesh);
 
-    SolveStatus solve();
+    StepResult solve() override;
     const mesh::CutCellMesh& mesh() const noexcept { return mesh_; }
 
 private:
