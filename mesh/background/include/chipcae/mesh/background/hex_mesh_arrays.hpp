@@ -22,6 +22,8 @@ struct HexMeshArrays {
     std::vector<Real> vertices;
     std::vector<Local> hex, attribute, bdr_quad, bdr_attribute;
     std::vector<Index> elem_gid, node_gid;
+    // Hard constraint: a column never crosses ranks. The column-to-rank map
+    // from par is expanded in Morton column order and passed to mfem::ParMesh.
     std::vector<Local> partitioning, node_layer;
     std::vector<Index> node_column;
     std::vector<Real> attr_frame, nodes;

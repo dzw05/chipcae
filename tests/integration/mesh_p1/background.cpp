@@ -8,6 +8,8 @@
 #include <limits>
 #include <numeric>
 #include <set>
+#include <sstream>
+#include <unordered_map>
 using namespace chipcae::mesh;
 using k1::expect;
 int main() {
@@ -105,6 +107,27 @@ int main() {
                    "element rank equals column rank");
         }
     }
+    for (bool use_metis : {false, true})
+        for (int ranks : {1, 2, 4}) {
+            auto opts = o;
+            opts.use_metis = use_metis;
+            opts.ranks = ranks;
+            auto grid = build_tensor_grid(s, opts);
+            expect(bool(grid), "column ownership grid at rank count");
+            const auto& g = grid.value();
+            std::unordered_map<chipcae::Index, int> column_ranks;
+            for (std::size_t e = 0; e < g.partitioning.size(); ++e) {
+                const auto column = g.elem_gid[e] / static_cast<chipcae::Index>(nz);
+                auto [it, inserted] = column_ranks.emplace(column, g.partitioning[e]);
+                if (!inserted && it->second != g.partitioning[e]) {
+                    std::ostringstream message;
+                    message << (use_metis ? "METIS" : "SFC") << " column " << column
+                            << " has conflicting ranks " << it->second << " and "
+                            << g.partitioning[e] << " (requested " << ranks << " ranks)";
+                    throw std::runtime_error(message.str());
+                }
+            }
+        }
     o.cell_budget = 1;
     expect(!build_tensor_grid(s, o), "budget failure");
     o.cell_budget = 50000;
