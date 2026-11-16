@@ -16,8 +16,9 @@ on:
     branches: [main]
 
 # Kokkos install pin (4.x). The only place this version is set for CI.
+# "4.7.01" is the GitHub tag for the 4.7.1 release (CMake reports 4.7.1).
 env:
-  KOKKOS_VERSION: "4.7.1"
+  KOKKOS_VERSION: "4.7.01"
 
 permissions:
   contents: read
