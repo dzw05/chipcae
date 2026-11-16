@@ -33,6 +33,7 @@ int main(int argc, char** argv) {
     (void)argv;
 #endif
     auto s = k1::stack();
+    s.activation_groups.clear();
     s.layers.resize(1);
     s.layers[0].thickness = 1;
     s.layers[0].n_elem_min = 1;

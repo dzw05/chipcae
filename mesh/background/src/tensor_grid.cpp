@@ -1,5 +1,6 @@
 #include "chipcae/mesh/background/tensor_grid.hpp"
 
+#include "chipcae/mesh/background/activation.hpp"
 #include "chipcae/mesh/background/column_partition.hpp"
 #include "chipcae/mesh/background/sfc.hpp"
 
@@ -278,6 +279,12 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
     if (!part)
         return part.error();
     m.partitioning = std::move(part.value());
+    for (const auto& [name, members] : s.activation_groups) {
+        auto group = resolve_activation(s, m, nullptr, members);
+        if (!group)
+            return group.error();
+        m.attr_table.references["group:" + name] = group.value().cells.attributes;
+    }
     return m;
 }
 } // namespace chipcae::mesh
