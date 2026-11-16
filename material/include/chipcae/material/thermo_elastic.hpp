@@ -3,6 +3,7 @@
 #include "chipcae/material/thermal_strain.hpp"
 namespace chipcae::material {
 enum class ElasticSymmetry : std::uint8_t { Isotropic, TransverselyIsotropic, Orthotropic };
+template <class MS>
 class ThermoElastic {
 public:
     static constexpr std::string_view model_id = "thermo_elastic@1";
@@ -11,7 +12,7 @@ public:
     ThermoElastic() = default;
     ThermoElastic(ElasticSymmetry symmetry,
                   const TemperatureTable& constants,
-                  ThermalStrain thermal = {})
+                  ThermalStrain<MS> thermal = {})
         : symmetry_(symmetry), constants_(constants), thermal_(thermal) {
         if (!constants.strictly_increasing())
             throw std::invalid_argument("elastic.table: duplicate temperatures");
@@ -139,8 +140,8 @@ public:
 
 private:
     ElasticSymmetry symmetry_ = ElasticSymmetry::Isotropic;
-    TableView constants_{};
-    ThermalStrain thermal_{};
+    TableView<MS> constants_{};
+    ThermalStrain<MS> thermal_{};
 };
-static_assert(MaterialModel<ThermoElastic>);
+static_assert(MaterialModel<ThermoElastic<Kokkos::HostSpace>>);
 } // namespace chipcae::material

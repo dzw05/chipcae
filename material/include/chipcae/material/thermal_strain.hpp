@@ -14,7 +14,7 @@ enum class CteType : std::uint8_t { Tangent, Secant };
 
 enum class ThermalSymmetry : std::uint8_t { Isotropic, TransverselyIsotropic, Orthotropic };
 
-// 只读参数（主机侧）；内核使用不可变 TableView 快照。
+// 只读参数（主机侧）；内核使用不可变 TableView<MS> 快照。
 struct ThermalStrainParams {
     CteType cte_type = CteType::Tangent;
     ThermalSymmetry symmetry = ThermalSymmetry::Isotropic;
@@ -25,6 +25,7 @@ struct ThermalStrainParams {
 };
 
 // ε_th(T) 的权威实现（局部坐标对角张量）；主机/设备共用的小函数对象。
+template <class MS>
 class ThermalStrain {
 public:
     ThermalStrain() = default;
@@ -56,7 +57,9 @@ public:
                 code = table_.evaluate(c, T, a);
                 if (code == StatusCode::Ok)
                     code = table_.evaluate(c, T_sf, b);
-                if (code == StatusCode::Ok)
+                // Enforce the exact zero point even when contraction fuses only
+                // one product in the secant subtraction. Keep range/status checks.
+                if (code == StatusCode::Ok && T != T_sf)
                     v = a * (T - params_.T_ref) - b * (T_sf - params_.T_ref);
             }
             if (code != StatusCode::Ok)
@@ -73,7 +76,7 @@ public:
 
 private:
     ThermalStrainParams params_{};
-    TableView table_{};
+    TableView<MS> table_{};
 };
 
 } // namespace chipcae::material

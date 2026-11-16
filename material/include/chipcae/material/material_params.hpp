@@ -12,6 +12,8 @@
 
 namespace chipcae::material {
 
+enum class WarningCode : std::uint8_t { ModulusRampApplied = 1 };
+
 // v0 只带主机侧必要字段；后续 chunk 按 Schema 扩展。设备端参数另建只读 View。
 struct MaterialParams {
     bool has_shrinkage = false, has_activation = false;
@@ -32,11 +34,12 @@ struct MaterialParams {
     TemperatureTable elastic_table;
     ThermalStrainParams thermal;
     TemperatureTable cte_table;
-    PronyParams prony;
+    PronyHostParams prony{VolumetricMode::ElasticBulk};
     TemperatureTable bulk_table;
     ShiftParams shift;
     std::vector<std::string> cure_step_ids;
     std::vector<std::string> warnings;
+    std::vector<WarningCode> warning_codes;
     std::string id;
     ModelKind kind = ModelKind::ThermoElastic;
     std::string model_id; // 如 "thermo_elastic@1"

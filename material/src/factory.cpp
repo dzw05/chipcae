@@ -46,21 +46,36 @@ template <class MS>
 std::unique_ptr<IMaterial<MS>> make_material(const MaterialParams& validated) {
     switch (validated.kind) {
     case ModelKind::ThermoElastic:
-        return wrap<MS>(validated.elastic_table.num_temperatures()
-                            ? ThermoElastic{validated.elastic_symmetry,
-                                            validated.elastic_table,
-                                            ThermalStrain{validated.thermal, validated.cte_table}}
-                            : ThermoElastic{},
-                        validated);
+        return wrap<MS>(
+            validated.elastic_table.num_temperatures()
+                ? ThermoElastic<MS>{validated.elastic_symmetry,
+                                    validated.elastic_table,
+                                    ThermalStrain<MS>{validated.thermal, validated.cte_table}}
+                : ThermoElastic<MS>{},
+            validated);
     case ModelKind::PronyViscoelastic:
-        return wrap<MS>(PronyViscoelastic{validated.prony,
-                                          validated.bulk_table,
-                                          ShiftFunction{validated.shift},
-                                          ThermalStrain{validated.thermal, validated.cte_table}},
-                        validated);
+        return wrap<MS>(
+            PronyViscoelastic<MS>{validated.prony,
+                                  validated.bulk_table,
+                                  ShiftFunction<MS>{validated.shift},
+                                  ThermalStrain<MS>{validated.thermal, validated.cte_table}},
+            validated);
     }
     return nullptr;
 }
+
+template <class MS, bool Distinct = !std::is_same_v<MS, Kokkos::HostSpace>>
+struct InstantiateDefault {};
+template <class MS>
+struct InstantiateDefault<MS, true> {
+    using Factory = std::unique_ptr<IMaterial<MS>> (*)(const MaterialParams&);
+    static Factory const fn;
+    static std::unique_ptr<IMaterial<MS>> create(const MaterialParams& p) { return fn(p); }
+};
+template <class MS>
+typename InstantiateDefault<MS, true>::Factory const InstantiateDefault<MS, true>::fn =
+    &make_material<MS>;
+template struct InstantiateDefault<Kokkos::DefaultExecutionSpace::memory_space>;
 
 template std::unique_ptr<IMaterial<Kokkos::HostSpace>>
 make_material<Kokkos::HostSpace>(const MaterialParams&);

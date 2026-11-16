@@ -60,19 +60,21 @@ Real relative(const A& a, const B& b) {
 Real random(Real a, Real b) {
     return std::uniform_real_distribution<Real>(a, b)(rng);
 }
-ThermoElastic elastic(Real E = 2e9, Real nu = .25, ThermalStrain th = {}) {
-    return ThermoElastic(
+ThermoElastic<Kokkos::HostSpace>
+elastic(Real E = 2e9, Real nu = .25, ThermalStrain<Kokkos::HostSpace> th = {}) {
+    return ThermoElastic<Kokkos::HostSpace>(
         ElasticSymmetry::Isotropic, TemperatureTable({200, 500}, {{E, E}, {nu, nu}}), th);
 }
-PronyViscoelastic prony(VolumetricMode mode = VolumetricMode::ElasticBulk,
-                        ShiftFunction shift = {},
-                        ThermalStrain thermal = {}) {
-    PronyParams p;
+PronyViscoelastic<Kokkos::HostSpace> prony(VolumetricMode mode = VolumetricMode::ElasticBulk,
+                                           ShiftFunction<Kokkos::HostSpace> shift = {},
+                                           ThermalStrain<Kokkos::HostSpace> thermal = {}) {
+    PronyHostParams p{VolumetricMode::ElasticBulk};
     p.mode = mode;
     p.infinity = 2e9;
     p.terms = {{3e9, .7}, {1e9, 3.}};
     p.poisson = .25;
-    return PronyViscoelastic(p, TemperatureTable({200, 500}, {{4e9, 4e9}}), shift, thermal);
+    return PronyViscoelastic<Kokkos::HostSpace>(
+        p, TemperatureTable({200, 500}, {{4e9, 4e9}}), shift, thermal);
 }
 template <class M>
 struct Point {
@@ -97,7 +99,7 @@ struct Point {
         in.T_n = in.T_np1;
     }
 };
-using Shrunk = WithEigenstrains<ThermoElastic, EquivalentCureShrinkage>;
+using Shrunk = WithEigenstrains<ThermoElastic<Kokkos::HostSpace>, EquivalentCureShrinkage>;
 EquivalentCureShrinkage source() {
     return {ShrinkageSchedule(.006, 2, 0, 10)};
 }
@@ -261,7 +263,7 @@ void t5() {
                      ElasticSymmetry::Orthotropic}) {
         auto m = sym == ElasticSymmetry::Isotropic
                      ? elastic()
-                     : ThermoElastic(
+                     : ThermoElastic<Kokkos::HostSpace>(
                            sym,
                            sym == ElasticSymmetry::Orthotropic
                                ? TemperatureTable(
@@ -366,7 +368,7 @@ void t9() {
     sp.type = ShiftType::Arrhenius;
     sp.T_ref = 300;
     sp.E_a = 30000;
-    ShiftFunction shift(sp);
+    ShiftFunction<Kokkos::HostSpace> shift(sp);
     Real loga;
     shift.evaluate(330, loga);
     Real a = std::pow(10., loga);
@@ -437,7 +439,7 @@ void t11() {
     CteTable tan{{250, 300, 350}, {1e-5, 2e-5, 3e-5}, 250};
     ThermalStrainParams tp;
     tp.T_sf = 275;
-    ThermalStrain th(
+    ThermalStrain<Kokkos::HostSpace> th(
         tp,
         TemperatureTable(
             tan.temperatures, {tan.alpha}, Interpolation::Linear, Extrapolation::Clamp));
@@ -446,7 +448,8 @@ void t11() {
         tangent_to_secant(tan, T, secT);
         tangent_to_secant(tan, tp.T_sf, sec0);
         Vec6 eps;
-        th.evaluate(T, eps);
+        last_input.T_np1 = T;
+        require(th.evaluate(T, eps) == StatusCode::Ok, "tangent evaluate status");
         Real expected = secT * (T - 250) - sec0 * (tp.T_sf - 250);
         error(std::abs(eps[0] - expected), 1e-12, "CTE exact conversion");
         Point p(elastic(2e9, .25, th));
@@ -460,19 +463,23 @@ void t11() {
     auto secparams = tp;
     secparams.cte_type = CteType::Secant;
     secparams.T_ref = 250;
-    ThermalStrain secant(
+    ThermalStrain<Kokkos::HostSpace> secant(
         secparams,
         TemperatureTable(
             tan.temperatures, {secant_nodes}, Interpolation::Linear, Extrapolation::Clamp));
     for (int i = 0; i <= 100; ++i) {
         Vec6 a, b;
         Real T = 250 + i;
-        th.evaluate(T, a);
-        secant.evaluate(T, b);
+        last_input.T_np1 = T;
+        require(th.evaluate(T, a) == StatusCode::Ok, "tangent evaluate status");
+        require(secant.evaluate(T, b) == StatusCode::Ok, "secant evaluate status");
         error(relative(a, b), 1e-12, "tangent and secant kernel equivalence");
     }
     Vec6 zero;
-    th.evaluate(tp.T_sf, zero);
+    require(th.evaluate(tp.T_sf, zero) == StatusCode::Ok, "thermal zero status");
+    Vec6 seczero;
+    require(secant.evaluate(tp.T_sf, seczero) == StatusCode::Ok, "secant zero status");
+    require(mandel_norm(seczero) == 0, "secant thermal zero");
     require(mandel_norm(zero) == 0, "thermal zero");
 }
 void t12() {
@@ -577,12 +584,16 @@ void t15() {
                             compare(WithActivation<decltype(base), false>{base});
                     }
                 };
-                auto thermal = ThermalStrain{par.thermal, par.cte_table};
+                auto thermal = ThermalStrain<Kokkos::HostSpace>{par.thermal, par.cte_table};
                 if (v)
-                    combine(PronyViscoelastic{
-                        par.prony, par.bulk_table, ShiftFunction{par.shift}, thermal});
+                    combine(PronyViscoelastic<Kokkos::HostSpace>{
+                        par.prony,
+                        par.bulk_table,
+                        ShiftFunction<Kokkos::HostSpace>{par.shift},
+                        thermal});
                 else
-                    combine(ThermoElastic{par.elastic_symmetry, par.elastic_table, thermal});
+                    combine(ThermoElastic<Kokkos::HostSpace>{
+                        par.elastic_symmetry, par.elastic_table, thermal});
                 // Persist complete result for the external 1-thread/N-thread bitwise comparison.
                 if (const char* path = std::getenv("K3_BATCH_DUMP")) {
                     std::ofstream f(path, std::ios::binary | std::ios::app);
@@ -703,7 +714,7 @@ void t17() {
     require(rejected, "driver preserves card identity independently of ModelKind");
 }
 void t18() {
-    PronyParams a;
+    PronyHostParams a{VolumetricMode::ElasticBulk};
     a.infinity = 2e9;
     a.terms = {{3e9, .7}, {1e9, 3}};
     a.poisson = .25;
@@ -714,8 +725,8 @@ void t18() {
     for (auto& t : shear.terms)
         t.G /= 2.5;
     Real K = 6e9 / 1.5;
-    Point p(PronyViscoelastic(shear, TemperatureTable({300}, {{K}}))),
-        q(PronyViscoelastic(b, TemperatureTable({300}, {{K}})));
+    Point p(PronyViscoelastic<Kokkos::HostSpace>(shear, TemperatureTable({300}, {{K}}))),
+        q(PronyViscoelastic<Kokkos::HostSpace>(b, TemperatureTable({300}, {{K}})));
     for (int i = 0; i < 100; ++i) {
         p.ctx.dt = q.ctx.dt = random(0, 1);
         p.in.strain_np1[5] = q.in.strain_np1[5] = random(-.01, .01);
@@ -753,7 +764,7 @@ ShiftParams splice(Real ref = 320) {
 void t19() {
     for (Real ref : {280., 320.}) {
         auto sp = splice(ref);
-        ShiftFunction f(sp);
+        ShiftFunction<Kokkos::HostSpace> f(sp);
         Real L, Lm, Lp, Lref;
         f.evaluate(300, L);
         f.evaluate(300 - 1e-6, Lm);
@@ -801,7 +812,7 @@ Real analytic_xi(Real a, Real b, Real dt, const ShiftParams& p) {
 void t20() {
     for (Real ref : {280., 320.}) {
         auto sp = splice(ref);
-        ShiftFunction f(sp);
+        ShiftFunction<Kokkos::HostSpace> f(sp);
         for (auto pair : std::vector<std::pair<Real, Real>>{
                  {340, 270}, {270, 340}, {300, 270}, {340, 300}, {270, 300}, {300, 340}}) {
             Real xi;
@@ -869,7 +880,7 @@ void t21() {
     require(p.next.back() == .006, "after cure hold");
 }
 void t22() {
-    ThermoElastic m(
+    ThermoElastic<Kokkos::HostSpace> m(
         ElasticSymmetry::Isotropic,
         TemperatureTable({299, 300, 301, 302}, {{1e9, 1e9, 1e10, 1e10}, {.25, .25, .25, .25}}));
     std::vector<Real> ds, dc;
@@ -952,7 +963,7 @@ void activation_test(M model) {
 void t23() {
     ThermalStrainParams tp;
     tp.T_sf = 300;
-    ThermalStrain th(tp, TemperatureTable({200, 500}, {{1e-5, 1e-5}}));
+    ThermalStrain<Kokkos::HostSpace> th(tp, TemperatureTable({200, 500}, {{1e-5, 1e-5}}));
     activation_test(elastic(2e9, .25, th));
     activation_test(prony(VolumetricMode::ElasticBulk, {}, th));
     activation_test(Shrunk{elastic(2e9, .25, th), source()});
@@ -988,7 +999,7 @@ void t24pt() {
     auto point_stress = [&](Real E, Real nu, Real alpha) {
         ThermalStrainParams tp;
         tp.T_sf = 400;
-        ThermalStrain th(tp, TemperatureTable({200, 500}, {{alpha, alpha}}));
+        ThermalStrain<Kokkos::HostSpace> th(tp, TemperatureTable({200, 500}, {{alpha, alpha}}));
         Point p(WithActivation{elastic(E, nu, th)});
         p.old[1] = 400;
         p.old[8] = 0;

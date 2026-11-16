@@ -29,6 +29,7 @@ struct ShiftParams {
 };
 
 // Immutable device parameters; host vectors never enter a captured kernel object.
+template <class MS>
 class ShiftFunction {
 public:
     ShiftFunction() = default;
@@ -42,9 +43,11 @@ public:
         if (type_ == ShiftType::PiecewiseWlfArrhenius && !(tg_ > 0))
             throw std::invalid_argument("glass_transition.T_g must be positive");
         if (type_ == ShiftType::Table)
-            table_ = TableView(TemperatureTable(p.table_T, {p.table_log10}));
+            table_ = TableView<MS>(TemperatureTable(p.table_T, {p.table_log10}));
         Real v;
-        if (evaluate(ref_, v) != StatusCode::Ok)
+        if ((type_ == ShiftType::Table
+                 ? TemperatureTable(p.table_T, {p.table_log10}).evaluate(0, ref_, v)
+                 : evaluate(ref_, v)) != StatusCode::Ok)
             throw std::invalid_argument("invalid shift reference");
     }
     KOKKOS_INLINE_FUNCTION StatusCode evaluate(Real T, Real& log10_aT) const noexcept {
@@ -148,7 +151,7 @@ public:
 private:
     ShiftType type_ = ShiftType::WLF;
     Real ref_ = 300, tg_ = 300, c1_ = 0, c2_ = 1e30, ea_ = 0;
-    TableView table_{};
+    TableView<MS> table_{};
     KOKKOS_INLINE_FUNCTION StatusCode raw(Real T, Real& v) const noexcept {
         if (!(T > 0) || !Kokkos::isfinite(T))
             return StatusCode::OutOfRange;

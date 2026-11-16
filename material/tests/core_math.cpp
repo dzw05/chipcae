@@ -23,7 +23,7 @@ int main(int argc, char** argv) {
                          Extrapolation::Clamp);
     ThermalStrainParams tp;
     tp.T_sf = 250;
-    ThermalStrain thermal(tp, cte);
+    ThermalStrain<Kokkos::HostSpace> thermal(tp, cte);
     Vec6 th;
     check(thermal.evaluate(350, th) == StatusCode::Ok && near(th[0], 0.003),
           "CTE exact integral across jump");
@@ -47,8 +47,8 @@ int main(int argc, char** argv) {
           "off-knot exact inverse CTE conversion");
     check(secant_to_tangent(sec, 325., exact) == StatusCode::Ok && near(exact, 4e-5),
           "off-knot exact CTE derivative");
-    ThermoElastic elastic(ElasticSymmetry::Isotropic,
-                          TemperatureTable({250, 400}, {{2e9, 1e9}, {0.25, 0.25}}));
+    ThermoElastic<Kokkos::HostSpace> elastic(
+        ElasticSymmetry::Isotropic, TemperatureTable({250, 400}, {{2e9, 1e9}, {0.25, 0.25}}));
     PointInput in;
     in.T_n = in.T_np1 = 300;
     in.strain_np1 = {1e-3, 0, 0, 0, 0, 2e-3};
@@ -86,7 +86,7 @@ int main(int argc, char** argv) {
     sp.C1 = 4;
     sp.C2 = 100;
     sp.E_a = 30000;
-    ShiftFunction shift(sp);
+    ShiftFunction<Kokkos::HostSpace> shift(sp);
     Real val;
     shift.evaluate(320, val);
     check(val == 0, "shift normalization");
@@ -99,24 +99,24 @@ int main(int argc, char** argv) {
     shift.reduced_time_increment(340, 280, 2, val);
     check(near(val, dxi), "shift direction symmetry");
     sp.T_ref = 280;
-    ShiftFunction below(sp);
+    ShiftFunction<Kokkos::HostSpace> below(sp);
     below.evaluate(280, val);
     check(val == 0, "shift normalization below splice");
     sp.type = ShiftType::Table;
     sp.T_ref = 300;
     sp.table_T = {250, 300, 350};
     sp.table_log10 = {1, 0, -2};
-    ShiftFunction tableShift(sp);
+    ShiftFunction<Kokkos::HostSpace> tableShift(sp);
     check(tableShift.reduced_time_increment(250, 350, 1, val) == StatusCode::Ok &&
               near(val, ((1 - 0.1) / std::log(10.) + (100 - 1) / (2 * std::log(10.))) / 2, 1e-10),
           "table shift knot splitting");
     for (auto mode : {VolumetricMode::ElasticBulk, VolumetricMode::ConstantPoissonFromE}) {
-        PronyParams pp;
+        PronyHostParams pp{VolumetricMode::ElasticBulk};
         pp.mode = mode;
         pp.infinity = 2;
         pp.terms = {{3, 2}};
         pp.poisson = 0.25;
-        PronyViscoelastic model(pp, TemperatureTable({250, 400}, {{5, 5}}));
+        PronyViscoelastic<Kokkos::HostSpace> model(pp, TemperatureTable({250, 400}, {{5, 5}}));
         Real old[32]{}, next[32]{};
         model.init_state({old, 1});
         in.strain_n = {};
@@ -154,11 +154,11 @@ int main(int argc, char** argv) {
         check(outputs(0).status.code == StatusCode::Ok, "Prony HostSpace kernel");
     }
     // Exercise actual batch adapter initialization with nonzero memory and N > 1.
-    PronyParams bp;
+    PronyHostParams bp{VolumetricMode::ElasticBulk};
     bp.infinity = 2;
     bp.terms = {{3, 2}};
-    PronyViscoelastic bm(bp, TemperatureTable({250, 400}, {{5, 5}}));
-    MaterialAdapter<PronyViscoelastic, Kokkos::HostSpace> adapter(bm);
+    PronyViscoelastic<Kokkos::HostSpace> bm(bp, TemperatureTable({250, 400}, {{5, 5}}));
+    MaterialAdapter<PronyViscoelastic<Kokkos::HostSpace>, Kokkos::HostSpace> adapter(bm);
     Soa<Real, Kokkos::HostSpace> bs("batch_state", 14, 2), bn("batch_next", 14, 2),
         strain("batch_strain", 6, 2);
     Kokkos::deep_copy(bs, 123.0);
@@ -203,7 +203,7 @@ int main(int argc, char** argv) {
                 ? TemperatureTable({300}, {{10.}, {5.}, {0.2}, {0.1}, {2.}})
                 : TemperatureTable({300},
                                    {{10.}, {8.}, {5.}, {0.2}, {0.1}, {0.15}, {3.}, {2.}, {1.}});
-        ThermoElastic anisotropic(symmetry, constants);
+        ThermoElastic<Kokkos::HostSpace> anisotropic(symmetry, constants);
         PointInput point;
         point.T_np1 = 300;
         point.strain_np1 = {0.01, -0.02, 0.03, 0.04, 0.05, 0.06};

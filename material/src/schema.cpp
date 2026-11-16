@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <regex>
 #include <sstream>
@@ -202,7 +203,11 @@ std::vector<Real> numbers(const Json& j) {
         a.push_back(v.num());
     return a;
 }
-TemperatureTable table(const Json& j, const std::vector<std::string>& names, bool cte = false) {
+TemperatureTable table(const Json& j,
+                       const std::vector<std::string>& names,
+                       bool cte = false,
+                       ImportOptions options = {},
+                       MaterialParams* params = nullptr) {
     auto interpolation = j.at("interpolation").str();
     if (interpolation != "linear")
         throw std::runtime_error(
@@ -214,7 +219,34 @@ TemperatureTable table(const Json& j, const std::vector<std::string>& names, boo
     for (const auto& name : names)
         columns.push_back(numbers(j.at("columns").at(name)));
     try {
-        TemperatureTable t(numbers(j.at("temperatures")),
+        auto temperatures = numbers(j.at("temperatures"));
+        // Validate the source first: descending knots and runs of >2 equal knots
+        // are malformed, rather than jumps that can be repaired.
+        TemperatureTable source(temperatures, columns);
+        if (!cte && options.modulus_ramp && source.has_duplicate_temperatures()) {
+            Real shift = 0;
+            for (std::size_t i = 0; i < temperatures.size(); ++i) {
+                if (i && source.temperatures()[i] == source.temperatures()[i - 1]) {
+                    temperatures[i] = temperatures[i - 1] + options.modulus_ramp_width;
+                    // Round upward when addition would shorten the requested width.
+                    if (temperatures[i] - temperatures[i - 1] < options.modulus_ramp_width)
+                        temperatures[i] =
+                            std::nextafter(temperatures[i], std::numeric_limits<Real>::infinity());
+                    shift = temperatures[i] - source.temperatures()[i];
+                    if (params) {
+                        params->warning_codes.push_back(WarningCode::ModulusRampApplied);
+                        params->warnings.push_back(j.path + ": modulus jump converted to ramp");
+                    }
+                } else
+                    temperatures[i] += shift;
+                if (!std::isfinite(temperatures[i]) ||
+                    (i && (!(temperatures[i] > temperatures[i - 1]) ||
+                           (source.temperatures()[i] == source.temperatures()[i - 1] &&
+                            temperatures[i] - temperatures[i - 1] < options.modulus_ramp_width))))
+                    throw std::runtime_error("temperatures: ramp spacing cannot be represented");
+            }
+        }
+        TemperatureTable t(temperatures,
                            columns,
                            Interpolation::Linear,
                            extrap == "error" ? Extrapolation::Error : Extrapolation::Clamp);
@@ -222,7 +254,10 @@ TemperatureTable table(const Json& j, const std::vector<std::string>& names, boo
             throw std::runtime_error("temperatures: duplicate modulus knots are forbidden");
         return t;
     } catch (const std::exception& e) {
-        throw std::runtime_error(j.path + ": " + e.what());
+        const std::string message = e.what();
+        if (message.starts_with(j.path + ":"))
+            throw;
+        throw std::runtime_error(j.path + ": " + message);
     }
 }
 void set_paths(Json& j, const std::string& path = "material") {
@@ -232,7 +267,10 @@ void set_paths(Json& j, const std::string& path = "material") {
     for (std::size_t i = 0; i < j.array.size(); ++i)
         set_paths(j.array[i], path + "[" + std::to_string(i) + "]");
 }
-MaterialParams decode(Json j, bool customer_delivery = false) {
+MaterialParams decode(Json j, bool customer_delivery = false, ImportOptions options = {}) {
+    if (options.modulus_ramp &&
+        (!std::isfinite(options.modulus_ramp_width) || options.modulus_ramp_width < 1))
+        throw std::runtime_error("import.modulus_ramp_width: must be finite and >= 1 K");
     set_paths(j);
     MaterialParams p;
     p.id = j.at("id").str();
@@ -301,7 +339,7 @@ MaterialParams decode(Json j, bool customer_delivery = false) {
             names = {"E1", "E2", "E3", "nu12", "nu13", "nu23", "G12", "G13", "G23"};
         } else
             throw std::runtime_error("elastic.symmetry: invalid");
-        p.elastic_table = table(el.at("table"), names);
+        p.elastic_table = table(el.at("table"), names, false, options, &p);
         for (Real T : p.elastic_table.temperatures()) {
             Real E;
             p.elastic_table.evaluate(0, T, E);
@@ -310,7 +348,7 @@ MaterialParams decode(Json j, bool customer_delivery = false) {
                 break;
             }
         }
-        ThermoElastic probe(p.elastic_symmetry, p.elastic_table);
+        ThermoElastic<Kokkos::HostSpace> probe(p.elastic_symmetry, p.elastic_table);
         auto& ts = p.elastic_table.temperatures();
         for (std::size_t i = 0; i < ts.size(); ++i)
             for (int sample = 0; sample <= 8; ++sample) {
@@ -360,7 +398,7 @@ MaterialParams decode(Json j, bool customer_delivery = false) {
             p.prony.terms.push_back({g, tau});
         }
         if (mode == "elastic_bulk") {
-            p.bulk_table = table(v.at("bulk_modulus"), {"K"});
+            p.bulk_table = table(v.at("bulk_modulus"), {"K"}, false, options, &p);
             for (Real T : p.bulk_table.temperatures()) {
                 Real K;
                 p.bulk_table.evaluate(0, T, K);
@@ -489,10 +527,11 @@ MaterialParams decode(Json j, bool customer_delivery = false) {
     return p;
 }
 } // namespace
-ValidationResult validate_material_json(std::string_view json, bool customer_delivery) {
+ValidationResult
+validate_material_json(std::string_view json, bool customer_delivery, ImportOptions options) {
     ValidationResult r;
     try {
-        decode(Reader{json}.read(), customer_delivery);
+        r.warning_codes = decode(Reader{json}.read(), customer_delivery, options).warning_codes;
     } catch (const std::exception& e) {
         r.ok = false;
         std::string message = e.what();
@@ -502,21 +541,33 @@ ValidationResult validate_material_json(std::string_view json, bool customer_del
     }
     return r;
 }
-MaterialParams parse_material_json(std::string_view json, bool customer_delivery) {
-    auto p = decode(Reader{json}.read(), customer_delivery);
+MaterialParams
+parse_material_json(std::string_view json, bool customer_delivery, ImportOptions options) {
+    auto p = decode(Reader{json}.read(), customer_delivery, options);
     p.parameter_hash = 14695981039346656037ull;
     for (unsigned char c : json) {
         p.parameter_hash ^= c;
         p.parameter_hash *= 1099511628211ull;
     }
+    // Import transformations affect effective parameter identity.
+    if (options.modulus_ramp) {
+        p.parameter_hash ^= 1;
+        p.parameter_hash *= 1099511628211ull;
+        auto width = std::bit_cast<std::uint64_t>(options.modulus_ramp_width);
+        for (int byte = 0; byte < 8; ++byte) {
+            p.parameter_hash ^= static_cast<unsigned char>(width >> (8 * byte));
+            p.parameter_hash *= 1099511628211ull;
+        }
+    }
     return p;
 }
-ValidationResult validate_material_file(const std::string& path, bool customer_delivery) {
+ValidationResult
+validate_material_file(const std::string& path, bool customer_delivery, ImportOptions options) {
     std::ifstream f(path);
     if (!f)
         return {false, {{path, "cannot open file"}}};
     std::ostringstream s;
     s << f.rdbuf();
-    return validate_material_json(s.str(), customer_delivery);
+    return validate_material_json(s.str(), customer_delivery, options);
 }
 } // namespace chipcae::material

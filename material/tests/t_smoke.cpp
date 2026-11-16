@@ -13,9 +13,10 @@
 
 using namespace chipcae::material;
 
-static_assert(MaterialModel<ThermoElastic>);
-static_assert(MaterialModel<WithActivation<ThermoElastic>>);
-static_assert(MaterialModel<WithEigenstrains<ThermoElastic, EquivalentCureShrinkage>>);
+static_assert(MaterialModel<ThermoElastic<Kokkos::HostSpace>>);
+static_assert(MaterialModel<WithActivation<ThermoElastic<Kokkos::HostSpace>>>);
+static_assert(
+    MaterialModel<WithEigenstrains<ThermoElastic<Kokkos::HostSpace>, EquivalentCureShrinkage>>);
 static_assert(EigenstrainSource<EquivalentCureShrinkage>);
 
 int main(int argc, char** argv) {

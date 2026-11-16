@@ -4,8 +4,9 @@
 #include <stdexcept>
 namespace chipcae::material {
 // Owning immutable device snapshot. Construct on host, capture by value in kernels.
+template <class MS>
 struct TableView {
-    using Space = Kokkos::DefaultExecutionSpace::memory_space;
+    using Space = MS;
     Kokkos::View<const Real*, Space, Kokkos::MemoryTraits<Kokkos::RandomAccess>> t, values;
     int n = 0, columns = 0;
     Extrapolation extrapolation = Extrapolation::Error;
@@ -13,18 +14,16 @@ struct TableView {
     explicit TableView(const TemperatureTable& table)
         : n(table.num_temperatures()), columns(table.num_columns()),
           extrapolation(table.extrapolation()) {
-        Kokkos::View<Real*, Space> a("table_T", n), b("table_values", n * columns);
-        auto ah = Kokkos::create_mirror_view(a);
-        auto bh = Kokkos::create_mirror_view(b);
+        Kokkos::View<Real*, MS> data("table_parameters", n * (columns + 1));
+        auto host = Kokkos::create_mirror_view(data);
         for (int i = 0; i < n; ++i)
-            ah(i) = table.temperatures()[i];
+            host(i) = table.temperatures()[i];
         for (int c = 0; c < columns; ++c)
             for (int i = 0; i < n; ++i)
-                bh(c * n + i) = table.columns()[c][i];
-        Kokkos::deep_copy(a, ah);
-        Kokkos::deep_copy(b, bh);
-        t = a;
-        values = b;
+                host(n + c * n + i) = table.columns()[c][i];
+        Kokkos::deep_copy(data, host);
+        t = Kokkos::subview(data, std::make_pair(0, n));
+        values = Kokkos::subview(data, std::make_pair(n, n * (columns + 1)));
     }
     KOKKOS_INLINE_FUNCTION StatusCode evaluate(int c,
                                                Real T,
