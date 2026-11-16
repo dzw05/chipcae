@@ -1,6 +1,9 @@
 #include "cutfem/assembly.hpp"
-
+#ifdef CUTFEM_WITH_KOKKOS
+#include "cutfem/kokkos_assembly.hpp"
+#endif
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <stdexcept>
 namespace chipcae::proto_cutfem {
@@ -65,6 +68,15 @@ System assemble(const HexMeshArrays& m, const CutLayer& c, const Problem& p) {
             pattern(face_nodes(m, f));
     s.A = CSRMatrix::pattern(std::move(rows));
     s.rhs.assign(s.A.n, 0);
+#ifdef CUTFEM_WITH_KOKKOS
+    ElementVolumes volumes;
+    if (p.kokkos_volume)
+        volumes = kokkos_volumes(m, c, p, s);
+#else
+    if (p.kokkos_volume)
+        throw std::runtime_error("Kokkos support is disabled");
+#endif
+    double host_volume_seconds = 0;
     for (int e = 0; e < m.n_elem; ++e)
         if (c.cell_state[e]) {
             CellMap map(m, e);
@@ -86,35 +98,51 @@ System assemble(const HexMeshArrays& m, const CutLayer& c, const Problem& p) {
                     B[2 * a + 1][2] = dx[a];
                 }
             };
-            for (int64_t q = c.vq_offsets[e]; q < c.vq_offsets[e + 1]; ++q) {
-                Point r{c.vq_xi[2 * q], c.vq_xi[2 * q + 1]}, x = map.physical(r);
-                double N[4], dx[4], dy[4];
-                map.shape(r, N, dx, dy);
-                double w = c.vq_w[q] * map.hx * map.hy;
-                auto f = p.source(x, mat);
-                if (nc == 1) {
-                    for (int a = 0; a < 4; ++a) {
-                        rhs[a] += w * f.x * N[a];
-                        for (int b = 0; b < 4; ++b)
-                            K[a][b] += w * k * (dx[a] * dx[b] + dy[a] * dy[b]);
+            auto volume_start = p.volume_seconds ? std::chrono::steady_clock::now()
+                                                 : std::chrono::steady_clock::time_point{};
+#ifdef CUTFEM_WITH_KOKKOS
+            if (p.kokkos_volume) {
+                if (!p.kokkos_atomic_scatter)
+                    for (int a = 0; a < nd; ++a) {
+                        rhs[a] = volumes.rhs[e * nd + a];
+                        for (int b = 0; b < nd; ++b)
+                            K[a][b] = volumes.matrix[(e * nd + a) * nd + b];
                     }
-                } else {
-                    double B[8][3], CB[8][3] = {};
-                    basis(dx, dy, B);
-                    for (int a = 0; a < 8; ++a)
-                        for (int i = 0; i < 3; ++i)
-                            for (int j = 0; j < 3; ++j)
-                                CB[a][i] += D[i][j] * B[a][j];
-                    double dt = delta_temperature(p, m, e, N, x);
-                    for (int a = 0; a < 8; ++a) {
-                        rhs[a] +=
-                            w * (N[a / 2] * (a % 2 ? f.y : f.x) + beta * dt * (B[a][0] + B[a][1]));
-                        for (int b = 0; b < 8; ++b)
+            } else
+#endif
+                for (int64_t q = c.vq_offsets[e]; q < c.vq_offsets[e + 1]; ++q) {
+                    Point r{c.vq_xi[2 * q], c.vq_xi[2 * q + 1]}, x = map.physical(r);
+                    double N[4], dx[4], dy[4];
+                    map.shape(r, N, dx, dy);
+                    double w = c.vq_w[q] * map.hx * map.hy;
+                    auto f = p.source(x, mat);
+                    if (nc == 1) {
+                        for (int a = 0; a < 4; ++a) {
+                            rhs[a] += w * f.x * N[a];
+                            for (int b = 0; b < 4; ++b)
+                                K[a][b] += w * k * (dx[a] * dx[b] + dy[a] * dy[b]);
+                        }
+                    } else {
+                        double B[8][3], CB[8][3] = {};
+                        basis(dx, dy, B);
+                        for (int a = 0; a < 8; ++a)
                             for (int i = 0; i < 3; ++i)
-                                K[a][b] += w * B[a][i] * CB[b][i];
+                                for (int j = 0; j < 3; ++j)
+                                    CB[a][i] += D[i][j] * B[a][j];
+                        double dt = delta_temperature(p, m, e, N, x);
+                        for (int a = 0; a < 8; ++a) {
+                            rhs[a] += w * (N[a / 2] * (a % 2 ? f.y : f.x) +
+                                           beta * dt * (B[a][0] + B[a][1]));
+                            for (int b = 0; b < 8; ++b)
+                                for (int i = 0; i < 3; ++i)
+                                    K[a][b] += w * B[a][i] * CB[b][i];
+                        }
                     }
                 }
-            }
+            if (!p.kokkos_volume && p.volume_seconds)
+                host_volume_seconds +=
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - volume_start)
+                        .count();
             for (int64_t q = c.bq_offsets[e]; q < c.bq_offsets[e + 1]; ++q) {
                 Point r{c.bq_xi[2 * q], c.bq_xi[2 * q + 1]},
                     x = map.physical(r), n{c.bq_normal[2 * q], c.bq_normal[2 * q + 1]};
@@ -215,6 +243,8 @@ System assemble(const HexMeshArrays& m, const CutLayer& c, const Problem& p) {
                     for (int comp = 0; comp < nc; ++comp)
                         s.A.add(d.dof(ns[i], comp), d.dof(ns[j], comp), KF[i][j]);
         }
+    if (!p.kokkos_volume && p.volume_seconds)
+        *p.volume_seconds = host_volume_seconds;
     return s;
 }
 chipcae::k5_stub::CvField nodal_field(const HexMeshArrays& m,

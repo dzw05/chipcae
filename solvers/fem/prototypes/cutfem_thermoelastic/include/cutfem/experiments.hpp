@@ -24,5 +24,8 @@ Point elastic_traction(Point, Point, const MaterialParamsSoA&, int = 0);
 void run_mms(bool elastic, bool bimat, const Options&);
 void run_timoshenko(const Options&);
 void run_gp_sweep(const Options&);
+#ifdef CUTFEM_WITH_KOKKOS
+void test_kokkos_timoshenko();
+#endif
 int run_unit_tests();
 } // namespace chipcae::proto_cutfem

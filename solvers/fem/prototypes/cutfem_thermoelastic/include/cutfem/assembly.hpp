@@ -14,6 +14,10 @@ struct BoundaryData {
 };
 struct Problem {
     int ncomp = 1;
+    bool kokkos_volume = false;
+    bool kokkos_serial = false;
+    bool kokkos_atomic_scatter = false;
+    double* volume_seconds = nullptr;
     double gamma_N = 20, gamma_g = .1;
     MaterialParamsSoA materials;
     std::function<Point(Point, int)> source = [](Point, int) { return Point{}; };

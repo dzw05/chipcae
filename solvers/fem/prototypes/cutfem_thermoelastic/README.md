@@ -5,7 +5,7 @@
 无必选外部依赖。可选 hypre 3.2.1（MPI、32-bit int、静态库）。只用 IJMatrix/ParCSR 与 BoomerAMG-PCG，不调用其他有限元库。
 
 仅 2D、Cartesian Q1、plane strain、FP64、单 MPI rank；3D 未实现。
-**未上 Kokkos**：本轮先验证积分、弱式、条件数和数组接口，避免引入并行后端掩盖数值问题；点核已留 `CHIPCAE_INLINE_FUNCTION`，后续替换为 KOKKOS_INLINE_FUNCTION。
+可选 Kokkos 仅用于热传导和弹性的体积分装配内核，默认仍使用原主机路径。
 
 ## 运行
 
@@ -13,9 +13,11 @@
 cd /workspace/chipcae/solvers/fem/prototypes/cutfem_thermoelastic
 ./run_all.sh
 ./run_all.sh --with-hypre
+./run_all.sh --with-kokkos
+./run_all.sh --with-hypre --with-kokkos
 ```
 
-需要 CMake≥3.20、C++20 编译器、Ninja、python3、numpy、matplotlib。脚本使用 Release `-O2`、`-j4`，实验顺序执行，BLAS/OpenMP 设单线程。
+需要 CMake≥3.20、C++20 编译器、Ninja、python3、numpy、matplotlib。脚本使用 Release `-O2`、`-j4`，实验顺序执行，BLAS 设单线程；Kokkos 计时分别使用 1、2、4 个 OpenMP 线程。
 默认无 hypre；`--with-hypre` 使用 `/workspace/tools/env/bin/mpicxx` 和只读的 `/workspace/prototypes/p1-mfem-thinlayer/deps/hypre`。脚本设运行时库路径。
 CMake 可指定 `-DHYPRE_ROOT=...` 与 `-DMPI_CXX_COMPILER=...`。hypre 的默认配置是 HMIS coarsening (10)、extended+i interpolation (6)、symmetric hybrid GS relaxation (6)、每次一轮 V-cycle、阈值 thermal 0.25 / elastic 0.5；elastic 设置 NumFunctions=2、Nodal=1，节点 DOF 交错。PCG 真相对残差目标 1e-8。针对安装库与系统链接器的 GOT relocation relaxation 兼容问题，hypre 路径添加 `--no-relax`，防止函数地址入栈被错误改写为函数调用。
 
@@ -33,6 +35,14 @@ CMake 可指定 `-DHYPRE_ROOT=...` 与 `-DMPI_CXX_COMPILER=...`。hypre 的默�
 `--solver direct|pcg|hypre` 控制 MMS/条带主求解器；gp_sweep 固定比较所有可用迭代解法。
 MMS 的 thermal 两变体与 elastic GP on/off 均执行；Timoshenko 扫描 gamma_N=10、gamma_g=0.01/0.1/0.3/1，并比较 gamma_N=20/40、gamma_g=0.1。gp_sweep 扫描 gamma_N=10/20/40、gamma_g=0/0.03/0.1/0.3/1/3 和五种 vf；包含热传导、左端夹持弹性及右侧切割端夹持弹性。
 `--gamma-g` 控制 MMS 稳定化；实验指定扫描值优先于该标量参数。
+
+## 可选 Kokkos 体积分装配
+
+`CUTFEM_WITH_KOKKOS=ON` 使用 Kokkos 4.7（本机 `/workspace/deps/kokkos`），`--with-kokkos` 自动配置、测试并运行计时。`Problem::kokkos_volume` 选择体积分内核，默认关闭；`kokkos_serial` 选择 Serial，否则使用默认执行空间；`kokkos_atomic_scatter` 选择原子 CSR 散射，默认采用确定性的主机散射。源项和温度回调在主机预先按积分点求值。每个活跃单元的矩阵与右端项在 Kokkos 中计算，材料点函数在每个积分点调用。Nitsche 边界、ghost penalty、CSR 结构构造和求解器仍在主机上。
+
+本机测试 Serial 与 OpenMP（1、2、4 线程），没有 CUDA 环境，未验证 GPU。单元测试比较热/弹性切割问题的矩阵和右端项，以及 Nt=16 Timoshenko 位移；主机和 Kokkos 相对误差阈值为 1e-12。计时为五次中位数，包括仅体积分内核和完整装配；主机体积分计时包含回调求值，Kokkos 内核计时不包含预先在主机求值的回调和数据传输，完整装配则包含这些开销。共享机器的 1 分钟负载也记录在 CSV 中。实测数字与完整表见 [Kokkos 计时汇总](results/summary.md) 和 [CSV](results/kokkos_bench.csv)。
+
+本次 63,228 自由度算例中，主机体积分/总装配中位数为 0.0461/0.1119 秒，OpenMP 4 线程为 0.0232/0.1279 秒；212,368 自由度算例分别为 0.1523/0.3380 秒和 0.0836/0.4605 秒。共享机器负载及全部后端数字见汇总表。
 
 ## 目录与接口
 

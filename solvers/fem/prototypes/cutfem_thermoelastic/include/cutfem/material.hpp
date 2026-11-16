@@ -5,12 +5,9 @@ struct MaterialParamsSoA {
     std::vector<double> E, nu, alpha, k;
     double T_stress_free = 0;
 };
-CHIPCAE_INLINE_FUNCTION int linear_thermoelastic_plane_strain(const MaterialParamsSoA& p,
-                                                              int mat,
-                                                              const double eps[3],
-                                                              double dT,
-                                                              double sig[3],
-                                                              double D[3][3]) {
+template <class Params>
+CHIPCAE_INLINE_FUNCTION int linear_thermoelastic_plane_strain(
+    const Params& p, int mat, const double eps[3], double dT, double sig[3], double D[3][3]) {
     if (mat < 0 || mat >= int(p.E.size()) || p.E[mat] <= 0 || p.nu[mat] <= -1 || p.nu[mat] >= 0.5)
         return 1;
     double E = p.E[mat], nu = p.nu[mat], mu = E / (2 * (1 + nu)),
@@ -27,10 +24,12 @@ CHIPCAE_INLINE_FUNCTION int linear_thermoelastic_plane_strain(const MaterialPara
     sig[2] = mu * eps[2];
     return 0;
 }
-CHIPCAE_INLINE_FUNCTION double thermal_conductivity(const MaterialParamsSoA& p, int mat) {
+template <class Params>
+CHIPCAE_INLINE_FUNCTION double thermal_conductivity(const Params& p, int mat) {
     return p.k[mat];
 }
-CHIPCAE_INLINE_FUNCTION double thermal_beta(const MaterialParamsSoA& p, int m) {
+template <class Params>
+CHIPCAE_INLINE_FUNCTION double thermal_beta(const Params& p, int m) {
     return p.E[m] / (1 - 2 * p.nu[m]) * p.alpha[m];
 }
 } // namespace chipcae::proto_cutfem

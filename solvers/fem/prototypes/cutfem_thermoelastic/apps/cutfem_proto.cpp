@@ -18,6 +18,9 @@ int main(int argc, char** argv) {
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
 #endif
+#ifdef CUTFEM_WITH_KOKKOS
+    Kokkos::initialize(argc, argv);
+#endif
     int result = 0;
     try {
         using namespace chipcae::proto_cutfem;
@@ -82,6 +85,9 @@ int main(int argc, char** argv) {
         std::cerr << "ERROR: " << e.what() << std::endl;
         result = 1;
     }
+#ifdef CUTFEM_WITH_KOKKOS
+    Kokkos::finalize();
+#endif
 #ifdef CUTFEM_WITH_HYPRE
     HYPRE_Finalize();
     MPI_Finalize();

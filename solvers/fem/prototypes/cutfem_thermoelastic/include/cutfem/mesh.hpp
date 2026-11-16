@@ -2,6 +2,10 @@
 #include <array>
 #include <cstdint>
 #include <vector>
+#ifdef CUTFEM_WITH_KOKKOS
+#include <Kokkos_Core.hpp>
+#define CHIPCAE_INLINE_FUNCTION KOKKOS_INLINE_FUNCTION
+#endif
 #ifndef CHIPCAE_INLINE_FUNCTION
 #define CHIPCAE_INLINE_FUNCTION inline
 #endif

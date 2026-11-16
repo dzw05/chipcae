@@ -154,7 +154,17 @@ if all(a['amg_status'] == 'unavailable' for a in gp):
     lines.append('- 本次未启用 hypre；AMG 列明确标为 unavailable。使用 ./run_all.sh --with-hypre 可重跑。')
 else:
     lines.append('- 本次启用了 hypre 3.2.1；不定矩阵跳过 AMG，其他矩阵实测 AMG-PCG 迭代数见表。')
-lines += ['- 未上 Kokkos；2D Q1、FP64、serial，3D 未实现。递归积分采用角点采样的分片线性 level set；小于子单元且角点不可见的封闭几何不在保证范围内。', f"- 实际默认 gamma_N={info.get('gamma_N')}、gamma_g={info.get('gamma_g_default')}；MMS 表记录实际参数。", '']
+lines += ['- 2D Q1、FP64，3D 未实现。递归积分采用角点采样的分片线性 level set；小于子单元且角点不可见的封闭几何不在保证范围内。', f"- 实际默认 gamma_N={info.get('gamma_N')}、gamma_g={info.get('gamma_g_default')}；MMS 表记录实际参数。", '']
+bench = r / 'kokkos_bench.csv'
+if info.get('kokkos') and bench.exists():
+    import csv
+    with bench.open() as f:
+        rows = list(csv.DictReader(f))
+    lines += ['## Kokkos 装配计时', '', '五次中位数；主机体积分计时包含回调，Kokkos 内核计时不含回调和数据传输；总时间包含主机准备、CSR 散射、边界及幽灵惩罚项。共享机器负载见 CSV。', '',
+              '| 网格 | 自由度 | 后端 | 线程 | 体积分 (s) | 总装配 (s) | 1 分钟负载 |', '|---|---:|---|---:|---:|---:|---:|']
+    for row in rows:
+        lines.append(f"| {row['nx']}×{row['ny']} | {row['ndof']} | {row['backend']} | {row['threads']} | {row['volume_seconds']} | {row['total_seconds']} | {row['load_average_1min']} |")
+    lines += ['']
 (r / 'summary.md').write_text('\n'.join(lines))
 # End-to-end checks enforce the requested asymptotic convergence for the stable path.
 for rows, variant in [(thermal, 'dirichlet'), (thermal, 'robin'), (elastic, 'gp_on'), (bimat, 'bimat')]:

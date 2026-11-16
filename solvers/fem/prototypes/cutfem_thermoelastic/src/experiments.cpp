@@ -275,7 +275,12 @@ double fit_curvature(const HexMeshArrays& m,
     }
     return 2 * a[2][3] / (L * L);
 }
-StripResult strip(int Nt, bool fitted, double gg, const Options& o) {
+StripResult strip(int Nt,
+                  bool fitted,
+                  double gg,
+                  const Options& o,
+                  bool kokkos = false,
+                  std::vector<double>* displacement = nullptr) {
     double hc = thick / Nt;
     if (!fitted) {
         auto aligns = [&](double thickness) {
@@ -311,6 +316,7 @@ StripResult strip(int Nt, bool fitted, double gg, const Options& o) {
     top.halfplanes[0].tag = -1;
     auto c = build_cut_layer(m, {bottom, top}, o.quadrature);
     Problem thermal;
+    thermal.kokkos_volume = kokkos;
     thermal.materials = strip_material();
     thermal.gamma_g = gg;
     thermal.gamma_N = o.gamma_N;
@@ -356,6 +362,8 @@ StripResult strip(int Nt, bool fitted, double gg, const Options& o) {
     if (step.status)
         throw std::runtime_error("Strip elastic solve failed");
     const auto& u = step.displacement;
+    if (displacement)
+        *displacement = u.values;
     if (step.stress.values.empty() || step.stress.offsets != c.vq_offsets)
         throw std::runtime_error("Invalid stress CSR field");
     result.kappa = fit_curvature(m, c, u, x0, .25);
@@ -392,6 +400,23 @@ StripResult strip(int Nt, bool fitted, double gg, const Options& o) {
     return result;
 }
 } // namespace
+#ifdef CUTFEM_WITH_KOKKOS
+void test_kokkos_timoshenko() {
+    Options o;
+    std::vector<double> host, device;
+    strip(16, false, .1, o, false, &host);
+    strip(16, false, .1, o, true, &device);
+    double error = 0, scale = 0;
+    for (size_t i = 0; i < host.size(); ++i) {
+        error = std::max(error, std::abs(host[i] - device[i]));
+        scale = std::max(scale, std::abs(host[i]));
+    }
+    if (error > 1e-12 * scale)
+        throw std::runtime_error("Timoshenko Nt=16 host/Kokkos solution mismatch");
+    std::cout << "PASS Kokkos Timoshenko Nt=16 displacement relative error=" << error / scale
+              << '\n';
+}
+#endif
 void run_timoshenko(const Options& o) {
     auto out = csv(o, "timoshenko.csv");
     out << "Nt,h,gamma_N,gamma_g,ndof,kappa_cut,kappa_cut_narrow,kappa_fitted,kappa_fitted_narrow,"

@@ -190,8 +190,58 @@ void material_test() {
             "invalid material returns status");
     std::cout << "PASS plane strain material and engineering shear\n";
 }
+#ifdef CUTFEM_WITH_KOKKOS
+void kokkos_test() {
+    // A two-layer cut strip, with thermal loading and Nitsche/ghost terms.
+    for (int nc : {1, 2}) {
+        auto m = tensor_mesh(linspace(0, 25, 400), linspace(-.5, .5, 20));
+        auto bottom = rectangle_body(.037, 24.94, -.47, 0, 0);
+        auto top = rectangle_body(.037, 24.94, 0, .31, 1);
+        bottom.halfplanes[2].tag = -1;
+        top.halfplanes[0].tag = -1;
+        auto c = build_cut_layer(m, {bottom, top});
+        Problem p;
+        p.ncomp = nc;
+        p.materials = {{20, 130}, {.3, .28}, {1e-5, 2.6e-6}, {.9, 150}, 125};
+        p.source = [](Point x, int mat) { return Point{1 + x.x * .01 + mat, .3 + x.y}; };
+        p.delta_temperature = [](Point x) { return -100 + x.x * .01; };
+        p.boundary = [](int, Point, Point) { return BoundaryData{BCType::Dirichlet, {.01, .02}}; };
+        auto host = assemble(m, c, p);
+        auto compare = [](const std::vector<double>& a, const std::vector<double>& b) {
+            double d = 0, scale = 0;
+            for (size_t i = 0; i < a.size(); ++i) {
+                d = std::max(d, std::abs(a[i] - b[i]));
+                scale = std::max(scale, std::abs(a[i]));
+            }
+            return d / std::max(scale, 1e-300);
+        };
+        for (bool serial : {true, false})
+            for (bool atomic : {false, true}) {
+                p.kokkos_volume = true;
+                p.kokkos_serial = serial;
+                p.kokkos_atomic_scatter = atomic;
+                auto k = assemble(m, c, p);
+                require(host.A.row == k.A.row && host.A.col == k.A.col, "Kokkos CSR pattern");
+                require(compare(host.A.val, k.A.val) <= 1e-12, "Kokkos matrix agreement");
+                require(compare(host.rhs, k.rhs) <= 1e-12, "Kokkos RHS agreement");
+                if (nc == 2 && !atomic && !serial) {
+                    auto h = host;
+                    auto a = banded_cholesky(h.A, h.rhs), b = banded_cholesky(k.A, k.rhs);
+                    require(a.stats.status == "ok" && b.stats.status == "ok",
+                            "strip solutions converge");
+                    require(compare(a.x, b.x) <= 1e-12, "Nt=16 strip solution agreement");
+                }
+            }
+    }
+    std::cout << "PASS Kokkos thermal/elastic cut assembly and Nt=16 strip solution\n";
+}
+#endif
 } // namespace
 int run_unit_tests() {
+#ifdef CUTFEM_WITH_KOKKOS
+    kokkos_test();
+    test_kokkos_timoshenko();
+#endif
     material_test();
     quadrature_test();
     recursive_test();

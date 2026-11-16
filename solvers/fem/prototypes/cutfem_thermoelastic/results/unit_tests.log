@@ -1,3 +1,5 @@
+PASS Kokkos thermal/elastic cut assembly and Nt=16 strip solution
+PASS Kokkos Timoshenko Nt=16 displacement relative error=0
 PASS plane strain material and engineering shear
 PASS cut area/perimeter, tags, offsets, CV IDs and fitted boundary
 PASS recursive subdivision vs half-plane (degree 4 moments and CutLayer CSR)
