@@ -5,11 +5,16 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: Force dependency build and tests even when unchanged
+        description: Force tests even when schema/mesh/deps are unchanged
         type: boolean
         default: true
+      rebuild_deps:
+        description: Discard the dependency prefix cache, rebuild, and replace the cache entry
+        type: boolean
+        default: false
 permissions:
   contents: read
+  actions: write
 concurrency:
   group: nightly-mesh-fulldep-${{ github.ref }}
   cancel-in-progress: false
@@ -17,23 +22,33 @@ jobs:
   mesh-full:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+      OMPI_MCA_rmaps_base_oversubscribe: '1'
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - uses: actions/cache/restore@v4
         with:
           path: .k1-last-success
           key: k1-success-${{ github.ref_name }}-${{ github.run_id }}
-          restore-keys: k1-success-${{ github.ref_name }}-
+          restore-keys: |
+            k1-success-${{ github.ref_name }}-
+
       - name: Check changes since this job last succeeded
         id: changes
         env:
           FORCE: ${{ inputs.force }}
+          REBUILD_DEPS: ${{ inputs.rebuild_deps }}
+          NARROW: ${{ vars.MESH_FULLDEP_NARROW }}
         run: |
           set -euo pipefail
           run=true
-          if [[ "$FORCE" != true && -f .k1-last-success ]]; then
+          if [[ "$FORCE" != true && "$REBUILD_DEPS" != true && -f .k1-last-success ]]; then
             previous=$(cat .k1-last-success)
             if git cat-file -e "$previous^{commit}" 2>/dev/null; then
               if [[ -z $(git diff --name-only "$previous" HEAD -- schema/ mesh/ core/ CMakeLists.txt cmake/ tests/integration/mesh_p1/ tests/CMakeLists.txt) ]]; then
@@ -41,39 +56,160 @@ jobs:
               fi
             fi
           fi
+          # Optional Tue/Fri narrowing (Beijing). UTC 18:00 Mon/Thu = 02:00 Tue/Fri CST.
+          # vars.MESH_FULLDEP_NARROW defaults to off when the repository variable is unset.
+          if [[ "$run" == true && "$NARROW" == true && "$FORCE" != true && "$REBUILD_DEPS" != true ]]; then
+            dow=$(date -u +%u)
+            deps_changed=false
+            if [[ -f .k1-last-success ]]; then
+              previous=$(cat .k1-last-success)
+              if git cat-file -e "$previous^{commit}" 2>/dev/null; then
+                if [[ -n $(git diff --name-only "$previous" HEAD -- tests/integration/mesh_p1/ci/deps.lock tests/integration/mesh_p1/ci/build_deps_cpu.sh) ]]; then
+                  deps_changed=true
+                fi
+              fi
+            fi
+            if [[ "$deps_changed" != true && "$dow" != 1 && "$dow" != 4 ]]; then
+              run=false
+            fi
+          fi
           echo "run=$run" >> "$GITHUB_OUTPUT"
           echo "Full-dependency mesh run: $run"
+
+      - name: Compiler identity
+        id: compiler
+        run: |
+          set -euo pipefail
+          # ImageOS is a runner env var; ${{ env.ImageOS }} is empty at parse time
+          # unless a previous step writes it to GITHUB_ENV. Use the step output in keys.
+          image_os="${ImageOS:-unknown}"
+          compiler_id="$(g++ -dumpmachine)-gcc-$(g++ -dumpfullversion)"
+          echo "id=$compiler_id" >> "$GITHUB_OUTPUT"
+          echo "image_os=$image_os" >> "$GITHUB_OUTPUT"
+          echo "ImageOS=$image_os" >> "$GITHUB_ENV"
+          echo "Cache identity: image_os=$image_os compiler=$compiler_id"
+
+      - name: Restore dependency prefix
+        id: cache-deps
+        if: ${{ inputs.rebuild_deps != true }}
+        uses: actions/cache/restore@v4
+        with:
+          path: build-k1-deps/prefix
+          key: k1-deps-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/deps.lock', 'tests/integration/mesh_p1/ci/build_deps_cpu.sh') }}
+
       - name: Install build tools and MPI
         if: steps.changes.outputs.run == 'true'
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y ninja-build cmake g++ ccache libopenmpi-dev openmpi-bin curl
-      - name: Compiler identity
+          # shellcheck source=tests/integration/mesh_p1/ci/deps.lock
+          source tests/integration/mesh_p1/ci/deps.lock
+          actual=$(dpkg-query -W -f='${Version}' "$SYSTEM_MPI_PACKAGE")
+          if [[ "$actual" != "$SYSTEM_MPI_VERSION" ]]; then
+            echo "System MPI mismatch: $SYSTEM_MPI_PACKAGE is $actual, deps.lock pins $SYSTEM_MPI_VERSION." >&2
+            echo "Update tests/integration/mesh_p1/ci/deps.lock and rerun so the cache key changes." >&2
+            exit 1
+          fi
+          echo "System MPI: $SYSTEM_MPI_PACKAGE $actual"
+
+      - name: Restore ccache
+        id: cache-ccache
         if: steps.changes.outputs.run == 'true'
-        id: compiler
-        run: echo "id=$(g++ -dumpmachine)-gcc-$(g++ -dumpfullversion)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
-        if: steps.changes.outputs.run == 'true'
+        uses: actions/cache/restore@v4
         with:
-          path: |
-            build-k1-deps/prefix
-            .ccache
-          key: k1-linux-metis5.1.0-hypre3.2.1-hdf51.14.6-jsoncons1.4.0-mfem4.10-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/build_deps_cpu.sh') }}
-      - name: Build dependencies and run mesh tests
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-k1-fulldep-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('schema/**', 'mesh/**', 'core/**', 'tests/integration/mesh_p1/**', '**/CMakeLists.txt', 'cmake/**') }}
+          restore-keys: |
+            ccache-k1-fulldep-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-
+            ccache-k1-fulldep-
+
+      - name: Decide whether to build dependencies
+        id: deps
         if: steps.changes.outputs.run == 'true'
-        env:
-          CCACHE_DIR: ${{ github.workspace }}/.ccache
-          CMAKE_BUILD_PARALLEL_LEVEL: '2'
-          OMPI_MCA_rmaps_base_oversubscribe: '1'
         run: |
           set -euo pipefail
+          need=true
+          delete_bad=false
+          verify=skipped
+          if [[ "${{ inputs.rebuild_deps }}" == "true" ]]; then
+            need=true
+            delete_bad=true
+            verify=rebuild_deps
+          elif [[ "${{ steps.cache-deps.outputs.cache-hit }}" == "true" ]]; then
+            if tests/integration/mesh_p1/ci/verify_prefix.sh build-k1-deps/prefix; then
+              need=false
+              verify=passed
+            else
+              echo "Restored prefix failed verification; discarding."
+              rm -rf build-k1-deps/prefix
+              delete_bad=true
+              need=true
+              verify=failed
+            fi
+          else
+            verify=cache_miss
+          fi
+          echo "need_build=$need" >> "$GITHUB_OUTPUT"
+          echo "delete_bad_cache=$delete_bad" >> "$GITHUB_OUTPUT"
+          echo "verify=$verify" >> "$GITHUB_OUTPUT"
+
+      - name: Delete stale or corrupt dependency cache
+        id: cache-delete
+        if: steps.changes.outputs.run == 'true' && steps.deps.outputs.delete_bad_cache == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          key="k1-deps-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/deps.lock', 'tests/integration/mesh_p1/ci/build_deps_cpu.sh') }}"
+          delete_ok=true
+          # gh cache delete takes a positional id or key, not --key (that flag is only on cache list).
+          ids=$(gh cache list --key "$key" --json id --jq '.[].id' || true)
+          if [[ -z "${ids}" ]]; then
+            echo "No existing cache entry for $key"
+          else
+            for id in $ids; do
+              if gh cache delete "$id"; then
+                echo "Deleted cache id $id for $key"
+              else
+                echo "Failed to delete cache id $id for $key. Will rebuild and test, but will not save a new prefix." >&2
+                delete_ok=false
+              fi
+            done
+          fi
+          echo "delete_ok=$delete_ok" >> "$GITHUB_OUTPUT"
+
+      - name: Build dependencies
+        id: build-deps
+        if: steps.changes.outputs.run == 'true' && steps.deps.outputs.need_build == 'true'
+        run: |
+          set -euo pipefail
+          start=$SECONDS
           tests/integration/mesh_p1/ci/build_deps_cpu.sh
+          tests/integration/mesh_p1/ci/verify_prefix.sh build-k1-deps/prefix
+          echo "secs=$((SECONDS - start))" >> "$GITHUB_OUTPUT"
+          echo "Dependency build and verify wall time: $((SECONDS - start))s"
+
+      - name: Build project and run mesh tests
+        id: tests
+        if: steps.changes.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          start=$SECONDS
           cmake -S . -B build-k1-full -G Ninja -DCHIPCAE_WARNINGS_AS_ERRORS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_PREFIX_PATH="$PWD/build-k1-deps/prefix" \
             -DCHIPCAE_ENABLE_MPI=ON -DCHIPCAE_ENABLE_MFEM=ON \
             -DCHIPCAE_ENABLE_HYPRE=ON -DCHIPCAE_ENABLE_HDF5=ON -DCHIPCAE_ENABLE_JSONCONS=ON
           cmake --build build-k1-full --parallel 2
+          build_secs=$((SECONDS - start))
+          test_start=$SECONDS
           ctest --test-dir build-k1-full -L mesh -LE gpu --output-on-failure --output-junit mesh-results.xml
+          echo "build_secs=$build_secs" >> "$GITHUB_OUTPUT"
+          echo "test_secs=$((SECONDS - test_start))" >> "$GITHUB_OUTPUT"
+          echo "Project build ${build_secs}s, ctest $((SECONDS - test_start))s"
+
       - uses: actions/upload-artifact@v4
         if: always() && steps.changes.outputs.run == 'true'
         with:
@@ -81,11 +217,69 @@ jobs:
           path: |
             build-k1-full/mesh-results.xml
             build-k1-full/Testing/Temporary/LastTest.log
+
       - name: Stamp successful tested SHA
         if: success() && steps.changes.outputs.run == 'true'
         run: git rev-parse HEAD > .k1-last-success
+
       - uses: actions/cache/save@v4
         if: success() && steps.changes.outputs.run == 'true'
         with:
           path: .k1-last-success
           key: k1-success-${{ github.ref_name }}-${{ github.run_id }}
+
+      - name: Save dependency prefix
+        if: >-
+          success()
+          && steps.changes.outputs.run == 'true'
+          && steps.deps.outputs.need_build == 'true'
+          && (steps.deps.outputs.delete_bad_cache != 'true'
+              || steps.cache-delete.outputs.delete_ok == 'true')
+        uses: actions/cache/save@v4
+        with:
+          path: build-k1-deps/prefix
+          key: k1-deps-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/deps.lock', 'tests/integration/mesh_p1/ci/build_deps_cpu.sh') }}
+
+      - name: Save ccache
+        if: success() && steps.changes.outputs.run == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-k1-fulldep-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('schema/**', 'mesh/**', 'core/**', 'tests/integration/mesh_p1/**', '**/CMakeLists.txt', 'cmake/**') }}
+
+      - name: Fail if a cache key could not be replaced
+        if: success() && steps.changes.outputs.run == 'true' && steps.deps.outputs.delete_bad_cache == 'true' && steps.cache-delete.outputs.delete_ok != 'true'
+        run: |
+          echo "Rebuilt the prefix, but could not delete the existing k1-deps cache key; not saved." >&2
+          echo "Delete it by hand with: gh cache delete <cache-id>" >&2
+          exit 1
+
+      - name: Report cache sizes
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "## Mesh full-dependency caches"
+            echo
+            echo "- tests run: \`${{ steps.changes.outputs.run || 'unknown' }}\`"
+            echo "- rebuild_deps: \`${{ inputs.rebuild_deps || false }}\`"
+            echo "- dependency cache-hit: \`${{ steps.cache-deps.outputs.cache-hit || 'false' }}\`"
+            echo "- ccache cache-hit: \`${{ steps.cache-ccache.outputs.cache-hit || 'false' }}\`"
+            echo "- verify: \`${{ steps.deps.outputs.verify || 'skipped' }}\`"
+            echo "- need_build: \`${{ steps.deps.outputs.need_build || 'false' }}\`"
+            echo "- dependency build seconds: \`${{ steps.build-deps.outputs.secs || 'n/a' }}\`"
+            echo "- project build seconds: \`${{ steps.tests.outputs.build_secs || 'n/a' }}\`"
+            echo "- ctest seconds: \`${{ steps.tests.outputs.test_secs || 'n/a' }}\`"
+            if [[ -d build-k1-deps/prefix ]]; then
+              echo "- prefix size: \`$(du -sh build-k1-deps/prefix | awk '{print $1}')\` (\`$(du -sb build-k1-deps/prefix | awk '{print $1}')\` bytes)"
+            else
+              echo "- prefix size: missing"
+            fi
+            if [[ -d .ccache ]]; then
+              echo "- ccache size: \`$(du -sh .ccache | awk '{print $1}')\` (\`$(du -sb .ccache | awk '{print $1}')\` bytes)"
+              ccache -s || true
+            else
+              echo "- ccache size: missing"
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "::notice::deps cache-hit=${{ steps.cache-deps.outputs.cache-hit || 'false' }} need_build=${{ steps.deps.outputs.need_build || 'false' }} verify=${{ steps.deps.outputs.verify || 'skipped' }} ccache-hit=${{ steps.cache-ccache.outputs.cache-hit || 'false' }}"

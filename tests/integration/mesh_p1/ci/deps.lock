@@ -1,0 +1,16 @@
+# tests/integration/mesh_p1/ci/deps.lock
+# Sourced by build_deps_cpu.sh. The nightly cache key hashes this file and the script.
+METIS_VERSION=5.1.0
+METIS_URL=https://github.com/mfem/tpls/raw/gh-pages/metis-5.1.0.tar.gz
+HYPRE_VERSION=3.2.1
+HYPRE_URL=https://github.com/hypre-space/hypre/archive/refs/tags/v3.2.1.tar.gz
+HDF5_VERSION=1.14.6
+HDF5_TAG=hdf5_1.14.6
+HDF5_URL=https://github.com/HDFGroup/hdf5/archive/refs/tags/hdf5_1.14.6.tar.gz
+JSONCONS_VERSION=1.4.0
+JSONCONS_URL=https://github.com/danielaparker/jsoncons/archive/refs/tags/v1.4.0.tar.gz
+MFEM_VERSION=4.10
+MFEM_URL=https://github.com/mfem/mfem/archive/refs/tags/v4.10.tar.gz
+# System MPI (apt). Bump this when the ubuntu-24.04 OpenMPI package changes, so the cache key changes.
+SYSTEM_MPI_PACKAGE=libopenmpi-dev
+SYSTEM_MPI_VERSION=4.1.6-7ubuntu2

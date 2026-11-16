@@ -17,6 +17,7 @@ Repository settings (branch protection, variables, secrets) are not changed by t
 | `Tier B and nightly / Nightly CUDA compile` | Same nightly schedule; skipped if main had no commits in 24h. `nvcc -c` only, the object is not run. Kept until the Kokkos CUDA job's first green run | `ubuntu-latest` | No |
 | `Nightly MPI and CUDA Kokkos / Nightly MPI communication` | 18:00 UTC Sunday–Thursday (`0 18 * * 0-4`), or manual dispatch; skipped if main had no commits in 24h. Real `mpirun -np 2` and `-np 4` allreduce tests | `ubuntu-latest` | No |
 | `Nightly MPI and CUDA Kokkos / Nightly CUDA Kokkos core compile` | Same weekday schedule, skipped if main had no commits in 24h. Compile-only with Kokkos CUDA 12.6 (`nvcc` from NVIDIA's apt repo); binaries are not run. Timeout 40 minutes. First run is the verification (no local nvcc) | `ubuntu-latest` | No |
+| `Nightly mesh full dependencies / mesh-full` | 18:00 UTC Sunday–Thursday (`0 18 * * 0-4`), or manual dispatch. Runs only when `schema/`, `mesh/`, `core/`, or the mesh dependency pins changed since the last success, unless `force` or `rebuild_deps` is set. Full METIS/hypre/HDF5/jsoncons/MFEM prefix, then `ctest -L mesh -LE gpu`. Timeout 45 minutes | `ubuntu-24.04` (do not change to `ubuntu-latest`) | No |
 | `Tier B and nightly / Hosted minutes` is a different workflow | See usage alert | `ubuntu-latest` | No |
 | Tier B MPI, GPU, perf | Nightly, manual dispatch, or a pull request labeled `run-heavy`, and only when `TIER_B_ENABLED` is `true` | Self-hosted labels below | Only after runners exist |
 
@@ -43,6 +44,16 @@ Do not point `TIER_A_RUNNER` at a label that has no runner. The build job waits 
 ### Compiler cache
 
 The build job installs `ccache` and restores `~/.cache/ccache` with `actions/cache`. The key is `ccache-gcc-release-` plus a hash of the C++ sources and CMake files. CMake is configured with `-DCMAKE_CXX_COMPILER_LAUNCHER=ccache`. There is no CMake file change for this; the flag is on the workflow command line.
+
+### Nightly mesh full-dependency cache
+
+File: `.github/workflows/nightly-mesh-fulldep.yml`. The job caches only `build-k1-deps/prefix` (METIS, hypre, HDF5, jsoncons, MFEM; about 95 MiB uncompressed). It does not cache `src` or `*-build`. OpenMPI stays an apt package, pinned in `tests/integration/mesh_p1/ci/deps.lock` as `libopenmpi-dev` 4.1.6-7ubuntu2. The prefix key is `k1-deps-` plus the runner `ImageOS`, the compiler identity (`g++ -dumpmachine`-gcc-`-dumpfullversion`), and `hashFiles` of `deps.lock` and `build_deps_cpu.sh`. It does not include repository sources, and it has no `restore-keys`. A separate `ccache` entry uses the key prefix `ccache-k1-fulldep-` and `CCACHE_MAXSIZE=500M`. Do not share `ccache-gcc-release-`, `ccache-gcc-mpi-`, `ccache-clang-release-`, or `ccache-cuda-kokkos-` with this job.
+
+On an exact prefix hit the job verifies `.k1-manifest` (compiler, ImageOS, MPI pin, dependency versions, and sha256 of the listed libraries and CMake configs) and runs a small `find_package(HYPRE/HDF5/MFEM)` link self-test. A failed check discards the prefix, deletes that cache key, and rebuilds. `workflow_dispatch` has `rebuild_deps` to force that path. The prefix is saved only after a complete build on a run whose tests passed. The job still restores the prefix when tests are skipped, so GitHub's 7-day unused eviction does not drop a warm cache after a quiet week.
+
+A measured cold run on main (43944561893, commit `09b62f9`) took 32 minutes 9 seconds, of which the dependency build was about 29.6 minutes (MFEM about 23 minutes) and `ctest` 13.67 seconds. The warm-cache target is ≤ 10 minutes (plan estimate 2–5 minutes). The 45-minute timeout is unchanged. If a warm run exceeds 10 minutes, or the monthly total looks set to cross the 1,200-minute warning line, the job can be narrowed to Beijing Tuesday and Friday (still using cron `0 18 * * 0-4`) by setting the repository variable `MESH_FULLDEP_NARROW` to `true` by hand. A change to `deps.lock` or `build_deps_cpu.sh` still runs that weekday. The variable is read with a default of off; this change does not create it.
+
+An older combined prefix+ccache entry named `k1-linux-metis5.1.0-hypre3.2.1-hdf51.14.6-jsoncons1.4.0-mfem4.10-x86_64-linux-gnu-gcc-13.3.0-93add7c7…` (about 60.77 MiB compressed, written by run 43944561893) is left in place until the new key has been measured warm. Do not restore it into the split caches.
 
 ### Artifacts
 
@@ -221,6 +232,7 @@ The cold build is already at the 1-minute billing floor (50 s rounds up to 1). T
 - **2–3 code pushes to `main` per workday** also run Build and test (concurrency cancels superseded runs). Docs-only pushes do not start the workflow.
 - Every calendar day: nightly clang, nightly CUDA smoke (`nvcc -c bench/cuda/smoke.cu`), and the usage check, each skipped when main has had no commits in the last 24 hours.
 - Beijing workdays only (cron `0 18 * * 0-4`): hosted MPI communication tests and CUDA Kokkos core compile, also skipped when main is unchanged in the last 24 hours. Remeasure billed minutes after the first green CUDA Kokkos run. Do not delete the daily smoke.cu job until that first green run.
+- Beijing workdays only, same cron: nightly mesh full-dependency tests, skipped when `schema/`, `mesh/`, `core/`, and the mesh dependency pins are unchanged since the last success. Count at most 22 runs, typically fewer. A warm run is planned at 4–8 billed minutes; a cold start is about 32 minutes. The 650–830-minute table below did not include this job; the row and the revised total add it.
 - Tier B stays off, so it adds 0 hosted minutes.
 - PR Build and test is billed at 3 minutes (measured 2:26 on PR #19).
 
@@ -234,10 +246,11 @@ The cold build is already at the 1-minute billing floor (50 s rounds up to 1). T
 | Weekday MPI | 22 | 3 | 66 |
 | Weekday CUDA Kokkos (hot cache ~8 min; 1–2 cold starts at 30–40 min amortized) | 22 | ~10 | ~220 |
 | Main build-test (gross 130–200; net ~60–130 after cache reuse and nightly dedup) | ~44–66 | 3 | net ~60–130 |
-| **Total after this change** | | | **about 650–830** |
-| After dropping the daily smoke.cu job | | | **about 530–710** |
+| Weekday mesh full-dependency (hot cache ~4–8 min; one 32-minute cold start amortized) | ≤22 (only when mesh/deps change) | ~4–8 hot, 32 cold | ~90–180 |
+| **Total after this change** | | | **about 740–1010** |
+| After dropping the daily smoke.cu job | | | **about 620–890** |
 
-650–830 minutes stays under the 1,200-minute warning line and the 2,000-minute free allowance (the project budget is 1,500). The risk is a cold CUDA Kokkos build hitting the 40-minute timeout; the cache key and separate ccache entry are there to keep the hot path short. Re-measure after the first green CUDA Kokkos run.
+The previous 650–830-minute planning total did not include the mesh full-dependency job. With a warm prefix cache the revised 740–1010 minutes still stays under the 1,200-minute warning line and the 2,000-minute free allowance (the project budget is 1,500). If this job ran cold every weekday, 22 × 32 ≈ 704 minutes on top of 650–830 would cross the warning line; that is why the prefix is cached first and the Tuesday/Friday narrowing stays off until a warm run is measured. The other risk is a cold CUDA Kokkos build hitting the 40-minute timeout. Re-measure after the first green CUDA Kokkos run and the first warm mesh full-dependency run.
 
 When a writer drops an event-log tail it writes `<path>.corrupt-<offset>`, or `<path>.corrupt-<offset>-<n>` if that name already exists. The library does not rotate or delete these files; the operator cleans them up.
 
