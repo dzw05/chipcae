@@ -30,6 +30,21 @@ std::string canonical_interface(std::string a, std::string b) {
         std::swap(a, b);
     return "interface:" + a + "|" + b;
 }
+
+void fill_interface_sides(HexMeshArrays::InterfaceReport& report, const HexMeshArrays& m) {
+    if (!report.name.starts_with("interface:"))
+        return;
+    auto rest = report.name.substr(10);
+    auto sep = rest.find('|');
+    if (sep == std::string::npos)
+        return;
+    auto a = resolve_interface_side(m, rest.substr(0, sep));
+    auto b = resolve_interface_side(m, rest.substr(sep + 1));
+    if (a)
+        report.side_a_bodies = a.value();
+    if (b)
+        report.side_b_bodies = b.value();
+}
 Expected<std::vector<BodyId>> resolve_interface_side(const HexMeshArrays& m,
                                                      const std::string& ref) {
     if (ref == "void")

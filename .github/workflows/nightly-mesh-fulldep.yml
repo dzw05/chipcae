@@ -1,7 +1,7 @@
 name: Nightly mesh full dependencies
 on:
   schedule:
-    - cron: '0 18 * * 1-5'
+    - cron: '0 18 * * 0-4'
   workflow_dispatch:
     inputs:
       force:
@@ -36,7 +36,7 @@ jobs:
           if [[ "$FORCE" != true && -f .k1-last-success ]]; then
             previous=$(cat .k1-last-success)
             if git cat-file -e "$previous^{commit}" 2>/dev/null; then
-              if [[ -z $(git diff --name-only "$previous" HEAD -- schema/ mesh/ tests/integration/mesh_p1/ci/build_deps_cpu.sh) ]]; then
+              if [[ -z $(git diff --name-only "$previous" HEAD -- schema/ mesh/ core/ CMakeLists.txt cmake/ tests/integration/mesh_p1/ tests/CMakeLists.txt) ]]; then
                 run=false
               fi
             fi

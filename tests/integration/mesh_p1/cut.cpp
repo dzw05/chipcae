@@ -116,12 +116,16 @@ int main(int argc, char** argv) {
                     registered = true;
             expect(registered, "registered EB face group");
         }
-        const auto& exposed = layered.face_sets.at("exposed:void");
-        for (const auto& [name, list] : layered.face_sets)
-            if (name.starts_with("interface:"))
-                for (auto a : list)
-                    expect(std::find(exposed.begin(), exposed.end(), a) == exposed.end(),
-                           "exposed and interface attributes disjoint");
+        expect(!layered.face_sets.contains("exposed:void"), "no exposed:void group");
+        Index aligned = 0;
+        bool listed = false;
+        for (const auto& r : layered.preparation_report)
+            if (r.name.ends_with("|void")) {
+                aligned += r.aligned_faces;
+                listed = listed || !r.side_a_bodies.empty();
+            }
+        expect(aligned > 0, "aligned exposed faces counted");
+        expect(listed, "void interface lists the solid side");
         for (std::size_t n = 0; n < layered.node_gid.size(); ++n) {
             auto it =
                 std::find(source.node_gid.begin(), source.node_gid.end(), layered.node_gid[n]);

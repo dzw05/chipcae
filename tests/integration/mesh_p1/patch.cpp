@@ -1,4 +1,5 @@
 #include "chipcae/mesh/background/mfem_adapter.hpp"
+#include "runtime.hpp"
 #include "support.hpp"
 
 #include <cstdlib>
@@ -28,7 +29,7 @@ int main(int argc, char** argv) {
 #endif
     }
 #ifdef CHIPCAE_ENABLE_MPI
-    MPI_Init(&argc, &argv);
+    k1::init_runtime(argc, argv);
 #endif
     {
         mfem::Device device(device_name.c_str());
@@ -40,7 +41,7 @@ int main(int argc, char** argv) {
         o.ranks = comm.size();
         auto grid = build_tensor_grid(s, o);
         expect(bool(grid), "multilayer grid");
-        expect(grid.value().attribute.size() <= 50000, "small CPU case");
+        expect(grid.value().attribute.size() <= k1::threshold("cell_budget"), "small CPU case");
         auto adapter = MfemAdapter::create(std::move(grid.value()), comm);
         expect(bool(adapter), "MFEM adapter");
         auto& mesh = adapter.value().local();
@@ -87,18 +88,9 @@ int main(int argc, char** argv) {
             std::cout << "FormLinearSystem rows="
                       << A.As<mfem::HypreParMatrix>()->GetGlobalNumRows()
                       << " hypre_before_setup=" << HYPRE_GetError() << std::endl;
-        // MFEM 4.10 + hypre 3.2.1 sets GENERIC during GetEssentialTrueDofs,
-        // before assembly/setup. The trace is saved with the G1 evidence.
-        // The eliminated operator is checked above; convergence and independent
-        // displacement/strain gates below remain mandatory.
-#if HYPRE_RELEASE_NUMBER == 30201
-        expect((HYPRE_GetError() & ~HYPRE_ERROR_GENERIC) == 0, "unexpected hypre error bits");
-        HYPRE_ClearAllErrors();
-#endif
+        expect(HYPRE_GetError() == 0, "hypre error before AMG setup");
         mfem::HypreBoomerAMG preconditioner(*A.As<mfem::HypreParMatrix>());
-#if HYPRE_RELEASE_NUMBER == 30201
-        preconditioner.SetErrorMode(mfem::HypreSolver::IGNORE_HYPRE_ERRORS);
-#endif
+        expect(HYPRE_GetError() == 0, "hypre error after AMG setup");
         preconditioner.SetSystemsOptions(3);
         preconditioner.SetPrintLevel(0);
         mfem::CGSolver solver(MPI_COMM_WORLD);
@@ -114,6 +106,11 @@ int main(int argc, char** argv) {
         solver.SetPrintLevel(0);
         solver.Mult(B, X);
         expect(solver.GetConverged(), "elasticity solve converged");
+#ifdef CHIPCAE_ENABLE_MPI
+        expect(HYPRE_GetError() == 0, "hypre error after solve");
+        expect(solver.GetNumIterations() <= k1::threshold("amg_pcg_max_iter"),
+               "AMG-PCG iteration budget");
+#endif
         a.RecoverFEMSolution(X, b, x);
         double relative =
             x.ComputeL2Error(displacement) / reference.ComputeL2Error(zero_coefficient);
@@ -144,6 +141,6 @@ int main(int argc, char** argv) {
             std::cout << "patch displacement=" << relative << " strain=" << strain_relative << '\n';
     }
 #ifdef CHIPCAE_ENABLE_MPI
-    MPI_Finalize();
+    k1::finalize_runtime();
 #endif
 }

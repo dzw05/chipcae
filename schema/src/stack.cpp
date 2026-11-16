@@ -75,6 +75,8 @@ Expected<StackModel> load_stack(const std::filesystem::path& file,
             Layer v;
             v.name = l.at("name").as<std::string>();
             v.kind = l.at("kind").as<std::string>();
+            if (v.name == "void")
+                return Error{path + "/name", "void is a reserved name"};
             if (!unique(v.name))
                 return Error{path + "/name", "duplicate name"};
             refs.insert("layer:" + v.name);
@@ -84,6 +86,8 @@ Expected<StackModel> load_stack(const std::filesystem::path& file,
             if (l.contains("material"))
                 v.material = l.at("material").as<std::string>();
             v.body = l.get_value_or<std::string>("body", v.name);
+            if (v.body == "void")
+                return Error{path + "/body", "void is a reserved name"};
             refs.insert("body:" + v.body);
             if (v.kind == "Homogenized" && !v.material.ends_with("_eq"))
                 return Error{path + "/material", "homogenized material must end with _eq"};
@@ -95,6 +99,11 @@ Expected<StackModel> load_stack(const std::filesystem::path& file,
                     a.material = r.at("material").as<std::string>();
                     a.body = r.get_value_or<std::string>("body", a.name);
                     a.footprint = footprint(r.at("footprint"));
+                    if (a.name == "void")
+                        return Error{path + "/regions/" + a.name, "void is a reserved name"};
+                    if (a.body == "void")
+                        return Error{path + "/regions/" + a.name + "/body",
+                                     "void is a reserved name"};
                     if (!unique(a.name))
                         return Error{path + "/regions", "duplicate name"};
                     if (!inside(a.footprint))
@@ -112,6 +121,8 @@ Expected<StackModel> load_stack(const std::filesystem::path& file,
         if (j.contains("activation_groups"))
             for (const auto& g : j.at("activation_groups").array_range()) {
                 auto name = g.at("name").as<std::string>();
+                if (name == "void")
+                    return Error{"$/activation_groups/" + name, "void is a reserved name"};
                 if (!unique(name))
                     return Error{"$/activation_groups/" + name, "duplicate name"};
                 for (const auto& m : g.at("members").array_range()) {

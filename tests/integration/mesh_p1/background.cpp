@@ -106,6 +106,19 @@ int main() {
     expect(!resolve_activation(s, m, nullptr, {"interface:layer:base|body:base"}),
            "overlap interface rejected");
     expect(!resolve_activation(s, m, nullptr, {"interface:void|void"}), "void overlap rejected");
+    auto ab = resolve_activation(s, m, nullptr, {"interface:base|top"});
+    auto ba = resolve_activation(s, m, nullptr, {"interface:top|base"});
+    expect(bool(ab) && bool(ba) &&
+               ab.value().faces.bdr_attributes == ba.value().faces.bdr_attributes,
+           "A|B equals B|A");
+    bool report_ok = false;
+    for (const auto& r : m.preparation_report)
+        if (r.name == "interface:body:base|body:cap" || r.name == "interface:body:cap|body:base") {
+            expect(r.aligned_faces > 0 && r.aligned_area > 0, "aligned interface report");
+            expect(!r.side_a_bodies.empty() && !r.side_b_bodies.empty(), "interface sides listed");
+            report_ok = true;
+        }
+    expect(report_ok, "preparation report has mixed body sides");
     auto overlap = resolve_activation(s, m, nullptr, {"group:overlap"});
     auto layer = resolve_activation(s, m, nullptr, {"layer:base"});
     expect(overlap.value().cells.attributes == layer.value().cells.attributes, "overlap union");

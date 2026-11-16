@@ -1,6 +1,7 @@
 #include "chipcae/mesh/background/mfem_adapter.hpp"
 
 #include "chipcae/mesh/cut/plane_cut.hpp"
+#include "runtime.hpp"
 #include "support.hpp"
 
 #include <algorithm>
@@ -10,7 +11,7 @@ using namespace chipcae::mesh;
 using k1::expect;
 int main(int argc, char** argv) {
 #ifdef CHIPCAE_ENABLE_MPI
-    MPI_Init(&argc, &argv);
+    k1::init_runtime(argc, argv);
 #else
     (void)argc;
     (void)argv;
@@ -59,8 +60,21 @@ int main(int argc, char** argv) {
         expect(a.elem_gid().size() == static_cast<std::size_t>(local.GetNE()), "local GID count");
         for (const auto& [name, attrs] : arrays.face_sets) {
             const auto& actual = local.bdr_attribute_sets.GetAttributeSet(name);
-            expect(actual.Size() == static_cast<int>(attrs.size()), "boundary attribute set");
+            expect(actual.Size() == static_cast<int>(attrs.size()), "boundary attribute set size");
+            for (auto a : attrs) {
+                bool found = false;
+                for (int i = 0; i < actual.Size(); ++i)
+                    found = found || actual[i] == a;
+                expect(found, "boundary attribute set membership");
+            }
         }
+#ifdef CHIPCAE_ENABLE_MPI
+        std::vector<Index> local_gids(adapter.value().elem_gid().begin(),
+                                      adapter.value().elem_gid().end());
+        std::sort(local_gids.begin(), local_gids.end());
+        expect(std::adjacent_find(local_gids.begin(), local_gids.end()) == local_gids.end(),
+               "local GIDs unique");
+#endif
         std::vector<double> gid_presence(arrays.elem_gid.size());
         for (int e = 0; e < local.GetNE(); ++e) {
             auto gid = a.elem_gid()[e];
@@ -136,6 +150,6 @@ int main(int argc, char** argv) {
                    "local-node level sets");
     }
 #ifdef CHIPCAE_ENABLE_MPI
-    MPI_Finalize();
+    k1::finalize_runtime();
 #endif
 }

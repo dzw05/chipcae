@@ -24,7 +24,7 @@ int main() {
     std::ifstream in(root / "schema/examples/fcbga_demo.stack.json");
     auto base = jsoncons::json::parse(in);
     const auto path = std::filesystem::current_path() / "negative.stack.json";
-    for (int i = 0; i < 11; ++i) {
+    for (int i = 0; i < 15; ++i) {
         auto j = base;
         if (i < 2) {
             j["external_refs"] = jsoncons::json::parse(
@@ -53,6 +53,14 @@ int main() {
             j["symmetry"] = "quarter";
         if (i == 10)
             j["symmetry"] = "invalid";
+        if (i == 11)
+            j["layers"][0]["name"] = "void";
+        if (i == 12)
+            j["layers"][2]["regions"][0]["name"] = "void";
+        if (i == 13)
+            j["layers"][0]["body"] = "void";
+        if (i == 14)
+            j["activation_groups"][0]["name"] = "void";
         {
             std::ofstream out(path);
             out << j;
@@ -70,7 +78,11 @@ int main() {
                                      "external_refs",
                                      "external_refs",
                                      "symmetry",
-                                     "symmetry"};
+                                     "symmetry",
+                                     "name",
+                                     "regions",
+                                     "body",
+                                     "activation_groups"};
         expect(result.error().path.find(paths[i]) != std::string::npos);
     }
     auto positive = base;

@@ -110,15 +110,32 @@ product decision). `partition_imbalance` is 0.25. `snap_tol` and
 
 `CHIPCAE_K1_USE_METIS` defaults to OFF.
 
-## Hypre 3.2.1 + MFEM 4.10 (M6-1)
+## Hypre initialization (M6-1)
 
-With this prefix and MPICH, `HYPRE_ERROR_GENERIC` is already set during
-`GetEssentialTrueDofs`, before BoomerAMG setup. The eliminated matrix
-diagonals are finite and positive. For `HYPRE_RELEASE_NUMBER == 30201`
-only, the patch test asserts that no other hypre bits are set, clears
-the generic flag, and uses `IGNORE_HYPRE_ERRORS` on the preconditioner.
-`GetConverged` and the 1e-10 displacement/strain gates remain
-mandatory. A later hypre/MFEM upgrade should drop this workaround.
+The earlier GENERIC error was a test bug, not a hypre 3.2.1 or MFEM 4.10
+defect. The tests called `MPI_Init` but not `mfem::Hypre::Init()`, so the
+first `HypreParMatrix` (built inside `GetEssentialTrueDofs`) auto-initialized
+hypre and left `HYPRE_ERROR_GENERIC` set; BoomerAMG then aborted on that
+stale bit. This is the same issue as mfem/mfem#4943. The tests now call
+`mfem::Hypre::Init()` after `MPI_Init` (see `runtime.hpp`). The version-gated
+error exemption is gone. The patch test also checks `HYPRE_GetError() == 0`
+after setup and after the solve, and caps AMG-PCG iterations with
+`amg_pcg_max_iter` in `k1.json`.
+
+## Round-2 additions
+
+- Exposed faces created by deleting void cells are registered per body as
+  `interface:<body>|void` and counted as aligned faces (N1). There is no
+  `exposed:void` group.
+- A layer, region, body, or activation group named `void` is rejected at
+  load (N2).
+- `InterfaceReport` lists `side_a_bodies` and `side_b_bodies` for each
+  interface (N3).
+- `cv_layout.hpp` now declares the design §3 CV types and is covered by
+  the standalone public-header compile test.
+- The mesh full-dep nightly cron is `0 18 * * 0-4` (02:00 Beijing time
+  Monday–Friday). The change gate also watches `core/`, CMake files, and
+  `tests/integration/mesh_p1/`.
 
 ## G1 evidence
 

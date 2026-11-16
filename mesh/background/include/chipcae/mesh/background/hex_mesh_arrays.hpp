@@ -29,6 +29,7 @@ struct HexMeshArrays {
     int order = 1;
     struct InterfaceReport {
         std::string name;
+        std::vector<BodyId> side_a_bodies, side_b_bodies;
         Index aligned_faces = 0, cut_faces = 0;
         Real aligned_area = 0, cut_area = 0;
     };

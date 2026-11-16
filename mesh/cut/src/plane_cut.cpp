@@ -1,8 +1,11 @@
 #include "chipcae/mesh/cut/plane_cut.hpp"
 
+#include "chipcae/mesh/background/activation.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <set>
+#include <tuple>
 namespace chipcae::mesh::cut {
 namespace {
 using V = std::array<Real, 3>;
@@ -318,7 +321,7 @@ build_cut_layer(HexMeshArrays& mesh, const CutGeometry& g, const CutOptions& o) 
     m.bdr_attribute.clear();
     constexpr int fi[6][4] = {
         {0, 3, 2, 1}, {4, 5, 6, 7}, {0, 1, 5, 4}, {3, 7, 6, 2}, {0, 4, 7, 3}, {1, 2, 6, 5}};
-    std::map<std::array<Local, 4>, std::pair<std::array<Local, 4>, int>> boundary;
+    std::map<std::array<Local, 4>, std::tuple<std::array<Local, 4>, int, Local>> boundary;
     for (std::size_t e = 0; e < m.attribute.size(); ++e)
         for (int f = 0; f < 6; ++f) {
             std::array<Local, 4> v;
@@ -328,26 +331,65 @@ build_cut_layer(HexMeshArrays& mesh, const CutGeometry& g, const CutOptions& o) 
             std::sort(key.begin(), key.end());
             auto it = boundary.find(key);
             if (it == boundary.end())
-                boundary[key] = {v, 1};
+                boundary[key] = {v, 1, static_cast<Local>(e)};
             else
-                ++it->second.second;
+                ++std::get<1>(it->second);
         }
-    Local exposed = 7;
+    auto quad_area = [&](const std::array<Local, 4>& q) {
+        Real area = 1;
+        std::array<Real, 3> span{};
+        for (int d = 0; d < 3; ++d) {
+            Real lo = m.vertices[3 * q[0] + d], hi = lo;
+            for (auto v : q) {
+                lo = std::min(lo, m.vertices[3 * v + d]);
+                hi = std::max(hi, m.vertices[3 * v + d]);
+            }
+            span[d] = hi - lo;
+        }
+        for (auto v : span)
+            if (v > 0)
+                area *= v;
+        return area;
+    };
+    auto body_name = [&](BodyId id) {
+        for (const auto& [name, body] : m.attr_table.bodies)
+            if (body == id)
+                return name;
+        return std::string{};
+    };
+    Local next_attr = 1;
+    for (auto a : m.bdr_attribute)
+        next_attr = std::max(next_attr, a + 1);
     for (const auto& [name, list] : m.face_sets)
         for (auto a : list)
-            exposed = std::max(exposed, a + 1);
-    bool has_exposed = false;
-    for (auto [key, v] : boundary)
-        if (v.second == 1) {
-            m.bdr_quad.insert(m.bdr_quad.end(), v.first.begin(), v.first.end());
-            m.bdr_attribute.push_back(original_boundary.contains(key) ? original_boundary[key]
-                                                                      : exposed);
-            has_exposed |= !original_boundary.contains(key);
+            next_attr = std::max(next_attr, a + 1);
+    std::map<BodyId, Local> exposed_attr;
+    for (auto [key, rec] : boundary)
+        if (std::get<1>(rec) == 1) {
+            m.bdr_quad.insert(m.bdr_quad.end(), std::get<0>(rec).begin(), std::get<0>(rec).end());
+            if (original_boundary.contains(key)) {
+                m.bdr_attribute.push_back(original_boundary[key]);
+                continue;
+            }
+            auto elem = std::get<2>(rec);
+            auto body = m.attr_table.entries[m.attribute[elem] - 1].body;
+            auto name = canonical_interface("body:" + body_name(body), "void");
+            auto [it, inserted] = exposed_attr.emplace(body, next_attr);
+            if (inserted) {
+                ++next_attr;
+                m.face_sets[name] = {it->second};
+                m.attr_table.boundary_names[it->second] = name;
+                HexMeshArrays::InterfaceReport report{name};
+                fill_interface_sides(report, m);
+                m.preparation_report.push_back(report);
+            }
+            m.bdr_attribute.push_back(it->second);
+            for (auto& r : m.preparation_report)
+                if (r.name == name) {
+                    ++r.aligned_faces;
+                    r.aligned_area += quad_area(std::get<0>(rec));
+                }
         }
-    if (has_exposed) {
-        m.face_sets["exposed:void"] = {exposed};
-        m.attr_table.boundary_names[exposed] = "exposed:void";
-    }
     // Retain aligned internal patches only when both adjacent cells survive.
     for (auto [key, v] : boundary)
         if (v.second == 2 && original_boundary.contains(key)) {
@@ -401,15 +443,22 @@ build_cut_layer(HexMeshArrays& mesh, const CutGeometry& g, const CutOptions& o) 
     c.gp_face_plus = gp.value().faces.face_plus;
     c.gp_owner_rank = gp.value().faces.owner_rank;
     for (const auto& [name, list] : c.face_sets) {
-        HexMeshArrays::InterfaceReport report{name};
+        HexMeshArrays::InterfaceReport* report = nullptr;
+        for (auto& r : m.preparation_report)
+            if (r.name == name)
+                report = &r;
+        if (!report) {
+            m.preparation_report.push_back({name});
+            fill_interface_sides(m.preparation_report.back(), m);
+            report = &m.preparation_report.back();
+        }
         for (std::size_t q = 0; q < c.bq_w.size(); ++q)
             if (std::find(list.begin(), list.end(), c.bq_bdr_attr[q]) != list.end())
-                report.cut_area += c.bq_w[q];
+                report->cut_area += c.bq_w[q];
         for (std::size_t sub = 0; sub < c.sub_attribute.size(); ++sub)
             if (c.bq_off[sub + 1] > c.bq_off[sub] &&
                 std::find(list.begin(), list.end(), c.bq_bdr_attr[c.bq_off[sub]]) != list.end())
-                ++report.cut_faces;
-        m.preparation_report.push_back(report);
+                ++report->cut_faces;
     }
     mesh = std::move(m);
     return result;

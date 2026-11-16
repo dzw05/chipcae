@@ -1,3 +1,10 @@
+add_test(NAME k1_public_headers
+  COMMAND ${CMAKE_COMMAND}
+    -DCOMPILER=${CMAKE_CXX_COMPILER}
+    -DROOT=${PROJECT_SOURCE_DIR}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/check_standalone_headers.cmake)
+set_tests_properties(k1_public_headers PROPERTIES LABELS "mesh;tierA" TIMEOUT 60)
+
 if(CHIPCAE_ENABLE_JSONCONS)
   add_executable(k1_schema schema.cpp)
   target_link_libraries(k1_schema PRIVATE chipcae_stack)
@@ -38,6 +45,9 @@ if(CHIPCAE_ENABLE_HDF5)
   target_link_libraries(k1_vtkhdf PRIVATE chipcae_mesh_vtkhdf)
   target_include_directories(k1_vtkhdf PRIVATE ${HDF5_INCLUDE_DIRS})
   target_compile_definitions(k1_vtkhdf PRIVATE K1_ROOT="${PROJECT_SOURCE_DIR}")
+  if(CHIPCAE_ENABLE_MFEM)
+    target_link_libraries(k1_vtkhdf PRIVATE chipcae_mesh_mfem)
+  endif()
   chipcae_set_warnings(k1_vtkhdf)
   add_test(NAME k1_vtkhdf COMMAND k1_vtkhdf)
   set_tests_properties(k1_vtkhdf PROPERTIES LABELS "mesh;hdf5" TIMEOUT 60 RUN_SERIAL TRUE)

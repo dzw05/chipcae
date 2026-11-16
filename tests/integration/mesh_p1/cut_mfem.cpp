@@ -1,5 +1,6 @@
 #include "chipcae/mesh/background/mfem_adapter.hpp"
 #include "chipcae/mesh/cut/plane_cut.hpp"
+#include "runtime.hpp"
 #include "support.hpp"
 
 #include <algorithm>
@@ -36,7 +37,7 @@ int main(int argc, char** argv) {
 #endif
     }
 #ifdef CHIPCAE_ENABLE_MPI
-    MPI_Init(&argc, &argv);
+    k1::init_runtime(argc, argv);
 #else
     (void)argc;
     (void)argv;
@@ -119,6 +120,6 @@ int main(int argc, char** argv) {
             std::cout << "MFEM cut G1 cells=" << sum[0] << '\n';
     }
 #ifdef CHIPCAE_ENABLE_MPI
-    MPI_Finalize();
+    k1::finalize_runtime();
 #endif
 }

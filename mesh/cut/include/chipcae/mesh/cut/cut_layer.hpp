@@ -86,8 +86,8 @@ Expected<ActivationResolution> resolve_cut_activation(const StackModel&,
                                                       const std::vector<std::string>&);
 struct GhostFaces {
     std::array<std::vector<Index>, 2> elem_gid;
-    std::vector<Local> face; // Legacy MFEM local mesh-face index; not the global identity.
-    std::vector<Index> face_gid;
+    std::vector<Local> face;     // Legacy MFEM local mesh-face index; not the global identity.
+    std::vector<Index> face_gid; // Global id: gid_minus * 6 + face_minus (MFEM Hexahedron 0-5).
     std::vector<Local> face_minus, face_plus, owner_rank;
     // elem_gid[0/1] are respectively gid_minus/gid_plus (strictly increasing).
 };

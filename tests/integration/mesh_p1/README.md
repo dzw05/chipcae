@@ -11,8 +11,7 @@ All numerical test tolerances come from `mesh/background/thresholds/k1.json`.
 The MFEM elasticity test uses H1 order one, a multilayer multi-attribute
 anisotropic tensor mesh, uniform positive Lamé constants, zero body load and
 affine displacement on every exterior boundary. It checks displacement L2
-and integrated symmetric-gradient relative errors <=1e-10. It runs at one
-and four ranks with MPI; a serial variant is available without MPI. Each
+and integrated symmetric-gradient relative errors <=1e-10. It runs at 1, 2 and 4 ranks with MPI; a serial variant is available without MPI. Each
 case has far fewer than 50k cells and a 60-second CTest limit.
 
 The MFEM cut-integral test checks >=1000 cut cells against an independent

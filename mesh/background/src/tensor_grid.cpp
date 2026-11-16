@@ -365,6 +365,7 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
             if (list.empty()) {
                 list.push_back(next_boundary++);
                 m.preparation_report.push_back({name});
+                fill_interface_sides(m.preparation_report.back(), m);
             }
             // Face on first element points towards second element.
             for (int j = 0; j < 4; ++j)
