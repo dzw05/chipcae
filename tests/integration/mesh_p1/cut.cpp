@@ -128,7 +128,27 @@ int main(int argc, char** argv) {
                 ++brute;
         }
     expect(all.value().face.size() == brute, "GP brute enumeration");
-    auto device = to_device(c);
+    std::vector<bool> used(mesh.node_gid.size());
+    for (auto v : mesh.hex)
+        used[v] = true;
+    expect(std::all_of(used.begin(), used.end(), [](bool v) { return v; }),
+           "no unreferenced vertices");
+    for (auto gid : mesh.node_gid)
+        expect(std::find(original.node_gid.begin(), original.node_gid.end(), gid) !=
+                       original.node_gid.end() ||
+                   gid >= 0,
+               "retained node GID");
+    for (std::size_t i = 0; i < all.value().face_gid.size(); ++i) {
+        expect(all.value().elem_gid[0][i] < all.value().elem_gid[1][i], "GP ordered GIDs");
+        expect(all.value().face_minus[i] >= 0 && all.value().face_minus[i] < 6 &&
+                   all.value().face_plus[i] >= 0 && all.value().face_plus[i] < 6,
+               "MFEM local face numbers");
+    }
+    expect(mask_hash({1, 2, 1}) == mask_hash({2, 1}) && mask_hash({1, 2}) != mask_hash({1, 3}),
+           "hash unique GID set");
+    auto device = to_device<chipcae::HostSpace>(c);
+    expect(device.ls_phi.extent(0) == c.level_sets.size() * mesh.node_gid.size(),
+           "flat level sets");
     expect(device.vq_w.size() == c.vq_w.size(), "A1 device mirror");
     auto activation = resolve_cut_activation(s, mesh, c, {"layer:base"});
     expect(bool(activation) && activation.value().cells.cut_subs.size() == c.cut_elem.size(),

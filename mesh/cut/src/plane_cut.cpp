@@ -97,6 +97,23 @@ std::vector<Face> clip(std::vector<Face> faces, V n, Real d, Real snap) {
     }
     return out;
 }
+Local embedded_attribute(const HexMeshArrays& m, BodyId body) {
+    // Body IDs are never boundary attributes. Reserve a range above aligned patches.
+    Local next = 7;
+    for (const auto& [name, list] : m.face_sets)
+        if (!name.ends_with("|void"))
+            for (auto a : list)
+                next = std::max(next, a + 1);
+    return next + body;
+}
+void register_embedded(HexMeshArrays& m) {
+    for (const auto& [name, body] : m.attr_table.bodies) {
+        auto ref = canonical_interface("body:" + name, "void");
+        auto attr = embedded_attribute(m, body);
+        m.face_sets[ref] = {attr};
+        m.attr_table.boundary_names[attr] = ref;
+    }
+}
 Expected<CutLayerArrays>
 generate(const HexMeshArrays& m, const CutGeometry& g, const CutOptions& o) {
     if (!(o.snap_phi >= 0) || !(o.vf_min >= 0 && o.vf_min < 1))
@@ -201,7 +218,7 @@ generate(const HexMeshArrays& m, const CutGeometry& g, const CutOptions& o) {
                             c.bq_n[k].push_back(f.normal[k]);
                         }
                         c.bq_w.push_back(area / 3);
-                        c.bq_bdr_attr.push_back(body);
+                        c.bq_bdr_attr.push_back(embedded_attribute(m, body));
                     }
                 } else
                     exterior = add(exterior, mul(f.normal, area));
@@ -228,6 +245,7 @@ build_cut_layer(HexMeshArrays& mesh, const CutGeometry& g, const CutOptions& o) 
         return result.error();
     auto& c = result.value();
     HexMeshArrays m = mesh;
+    register_embedded(m);
     std::set<Local> empty(c.void_elem.begin(), c.void_elem.end());
     std::vector<Local> map(m.attribute.size(), -1);
     m.hex.clear();
@@ -270,7 +288,7 @@ build_cut_layer(HexMeshArrays& mesh, const CutGeometry& g, const CutOptions& o) 
         a = attrmap[a];
     for (auto& a : c.sub_attribute)
         a = attrmap[a];
-    if (c.void_attribute)
+    if (c.void_attribute >= 1)
         c.void_attribute = attrmap[c.void_attribute];
     for (auto& [ref, list] : m.attr_table.references) {
         std::vector<Local> kept;
@@ -306,11 +324,61 @@ build_cut_layer(HexMeshArrays& mesh, const CutGeometry& g, const CutOptions& o) 
             else
                 ++it->second.second;
         }
+    Local exposed = 7;
+    for (const auto& [name, list] : m.face_sets)
+        for (auto a : list)
+            exposed = std::max(exposed, a + 1);
+    bool has_exposed = false;
     for (auto [key, v] : boundary)
         if (v.second == 1) {
             m.bdr_quad.insert(m.bdr_quad.end(), v.first.begin(), v.first.end());
-            m.bdr_attribute.push_back(original_boundary.contains(key) ? original_boundary[key] : 7);
+            m.bdr_attribute.push_back(original_boundary.contains(key) ? original_boundary[key]
+                                                                      : exposed);
+            has_exposed |= !original_boundary.contains(key);
         }
+    if (has_exposed) {
+        m.face_sets["exposed:void"] = {exposed};
+        m.attr_table.boundary_names[exposed] = "exposed:void";
+    }
+    // Retain aligned internal patches only when both adjacent cells survive.
+    for (auto [key, v] : boundary)
+        if (v.second == 2 && original_boundary.contains(key)) {
+            m.bdr_quad.insert(m.bdr_quad.end(), v.first.begin(), v.first.end());
+            m.bdr_attribute.push_back(original_boundary[key]);
+        }
+    // Compact vertices transactionally, preserving their original global identities.
+    std::vector<Local> remap(m.node_gid.size(), -1);
+    for (auto v : m.hex)
+        remap[v] = 0;
+    HexMeshArrays nodes;
+    for (std::size_t v = 0; v < remap.size(); ++v)
+        if (remap[v] == 0) {
+            remap[v] = static_cast<Local>(nodes.node_gid.size());
+            nodes.vertices.insert(
+                nodes.vertices.end(), m.vertices.begin() + 3 * v, m.vertices.begin() + 3 * v + 3);
+            nodes.node_gid.push_back(m.node_gid[v]);
+            nodes.node_layer.push_back(m.node_layer[v]);
+            nodes.node_column.push_back(m.node_column[v]);
+        }
+    for (auto& v : m.hex)
+        v = remap[v];
+    for (auto& v : m.bdr_quad)
+        v = remap[v];
+    for (auto& ls : c.level_sets) {
+        std::vector<Real> phi;
+        for (std::size_t v = 0; v < remap.size(); ++v)
+            if (remap[v] >= 0)
+                phi.push_back(ls.phi[v]);
+        ls.phi = std::move(phi);
+    }
+    m.vertices = std::move(nodes.vertices);
+    m.node_gid = std::move(nodes.node_gid);
+    m.node_layer = std::move(nodes.node_layer);
+    m.node_column = std::move(nodes.node_column);
+    m.attr_frame.assign(9 * m.attr_table.entries.size(), 0);
+    for (std::size_t a = 0; a < m.attr_table.entries.size(); ++a)
+        for (int d = 0; d < 3; ++d)
+            m.attr_frame[9 * a + 4 * d] = 1;
     ActivationMask active;
     for (std::size_t a = 1; a <= m.attr_table.entries.size(); ++a)
         if (static_cast<Local>(a) != c.void_attribute)
