@@ -6,11 +6,14 @@ if(CHIPCAE_ENABLE_MPI)
 endif()
 
 if(CHIPCAE_ENABLE_KOKKOS)
-    find_package(Kokkos REQUIRED)
+    find_package(Kokkos 4.4 REQUIRED)
 endif()
 
 if(CHIPCAE_ENABLE_HDF5)
     find_package(HDF5 REQUIRED COMPONENTS C)
+    if(CHIPCAE_ENABLE_MPI AND NOT HDF5_IS_PARALLEL)
+        message(FATAL_ERROR "MPI output requires parallel HDF5: one collective VTKHDF file per output step")
+    endif()
 endif()
 
 if(CHIPCAE_ENABLE_HYPRE)
@@ -35,15 +38,25 @@ if(CHIPCAE_ENABLE_GRPC)
 endif()
 
 if(CHIPCAE_ENABLE_QT)
-    find_package(Qt6 REQUIRED COMPONENTS Core Widgets)
+    find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets)
 endif()
 
 if(CHIPCAE_ENABLE_VTK)
-    find_package(VTK REQUIRED)
+    # VTK is for GUI/preview only; the kernel writes through HDF5.
+    find_package(VTK 9.7 REQUIRED COMPONENTS CommonCore IOHDF RenderingOpenGL2 GUISupportQt)
 endif()
 
 if(CHIPCAE_ENABLE_OCCT)
     find_package(OpenCASCADE REQUIRED)
+    if(DEFINED OpenCASCADE_BUILD_SHARED_LIBS AND NOT OpenCASCADE_BUILD_SHARED_LIBS)
+        message(FATAL_ERROR "OCCT requires dynamic linking (LGPL, ADR-0007)")
+    endif()
+    if(TARGET TKernel)
+        get_target_property(_occt_tkernel_type TKernel TYPE)
+        if(_occt_tkernel_type STREQUAL "STATIC_LIBRARY")
+            message(FATAL_ERROR "OCCT requires dynamic linking (LGPL, ADR-0007): TKernel is static")
+        endif()
+    endif()
 endif()
 
 if(CHIPCAE_ENABLE_PYTHON)
