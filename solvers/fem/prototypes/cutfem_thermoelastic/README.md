@@ -31,7 +31,7 @@ CMake 可指定 `-DHYPRE_ROOT=...` 与 `-DMPI_CXX_COMPILER=...`。hypre 的默�
 ```
 
 `--solver direct|pcg|hypre` 控制 MMS/条带主求解器；gp_sweep 固定比较所有可用迭代解法。
-MMS 的 thermal 两变体与 elastic GP on/off 均执行；Timoshenko 固定执行 gamma_g=0.01/0.1/1 扫描，gp_sweep 固定执行 0/0.03/0.1/0.3。
+MMS 的 thermal 两变体与 elastic GP on/off 均执行；Timoshenko 扫描 gamma_N=10、gamma_g=0.01/0.1/0.3/1，并比较 gamma_N=20/40、gamma_g=0.1。gp_sweep 扫描 gamma_N=10/20/40、gamma_g=0/0.03/0.1/0.3/1/3 和五种 vf；包含热传导、左端夹持弹性及右侧切割端夹持弹性。
 `--gamma-g` 控制 MMS 稳定化；实验指定扫描值优先于该标量参数。
 
 ## 目录与接口
@@ -52,7 +52,7 @@ CutLayer 显式三遍构建：count → exclusive prefix sum → fill。体积�
 
 ## 弱式与符号
 
-设 h=min(hx,hy)，默认 gamma_N=10、gamma_g=0.1。梯度均为物理坐标梯度，体积分只覆盖实际材料。
+设 h=min(hx,hy)，默认 gamma_N=20、gamma_g=0.1。梯度均为物理坐标梯度，体积分只覆盖实际材料。
 热传导方程 −div(k∇T)=f：
 
 $$
@@ -110,7 +110,7 @@ F 是两个 active、同材料且至少一侧 cut 的完整背景面；两点 Ga
 
 稀疏结构先建立 element/GP pattern，再累计局部矩阵。带状 LDLᵀ 从 CSR 的下三角提取，存储 O(n*b)、运算 O(n*b²)，利用节点排序的小半带宽。
 默认要求 SPD；仅 GP-off elastic MMS 允许负 pivot 的 LDLᵀ 求解以报告原方程的误差，同时标记 indefinite，不添加正则化。
-Jacobi-PCG 与无预条件 CG 均 FP64、上限 20000，1e-8 相对残差；用 alpha/beta 建 Lanczos 三对角矩阵，Sturm 二分取极端 Ritz 值，估计相应预条件算子条件数。无收敛记录 no_conv，非正 pᵀAp / Jacobi 非正对角记录 indefinite。扫描另外用带状 LDLᵀ 负 pivot 独立检查不定性；Ritz 条件数估计依赖 RHS 和停止阈值，极小单元的未激发模态会使估计偏低或不单调。
+Jacobi-PCG 与无预条件 CG 均 FP64、上限 20000，1e-8 相对残差；用 alpha/beta 建 Lanczos 三对角矩阵，Sturm 二分取极端 Ritz 值，估计相应预条件算子条件数。无收敛记录 no_conv，非正 pᵀAp / Jacobi 非正对角记录 indefinite。扫描另外用带状 LDLᵀ 负 pivot 独立检查不定性，并以 NumPy 对导出矩阵求完整特征谱；Ritz 条件数估计依赖 RHS 和停止阈值，极小单元的未激发模态会使估计偏低或不单调。
 
 ## 实验和 Timoshenko 对照
 
@@ -136,3 +136,7 @@ $$
 
 执行脚本生成 [results/summary.md](results/summary.md)，包括完整表、收敛阶和诚实 notes；[热 MMS](results/mms_thermal.png)、[弹性 MMS](results/mms_elastic.png)、[条带曲率](results/timoshenko.png)、[GP 扫描](results/gp_sweep.png)。
 最后从仓库根目录执行现有 `cmake/check_license_policy.py`，日志保存在 results/license_policy.log。代码不加入主构建，不改其他目录，不提交。
+
+GP 扫描可使用 `./build/cutfem_proto gp_sweep --dump-matrices` 将装配矩阵写入 `results/debug/`（不纳入版本控制）；`python3 scripts/spectrum.py --results results` 生成 `gp_spectrum.csv`，记录全谱极值、负特征值数及 Jacobi 缩放条件数。`run_all.sh` 自动运行该流程；矩阵内容 SHA-256 不变时复用 `results/debug/` 中的实测谱缓存。验收表对每个物理、Nitsche 系数和 ghost penalty 十倍区间统计全部 vf 的 SPD 状态与迭代数最大/最小比；求解失败或不定时比值标为不可用。
+
+按三种物理、全部 vf 的谱扫描，默认 Nitsche 系数取 20、GP 系数取 0.1；相较 10/0.1，小切割下保持正定，条带曲率精度见结果表。该选择仅针对本扫描的参数和模型，十倍 GP 区间的迭代波动见验收表。

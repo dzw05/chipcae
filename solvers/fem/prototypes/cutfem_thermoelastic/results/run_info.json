@@ -1,10 +1,10 @@
 {
   "hypre": true,
-  "seconds_before_plot": 12,
+  "seconds_before_plot": 34,
   "precision": "FP64",
   "build_type": "Release -O2",
   "build_jobs": 4,
   "experiment_processes": 1,
-  "gamma_N": 10,
+  "gamma_N": 20,
   "gamma_g_default": 0.1
 }

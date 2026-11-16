@@ -14,7 +14,7 @@ struct BoundaryData {
 };
 struct Problem {
     int ncomp = 1;
-    double gamma_N = 10, gamma_g = .1;
+    double gamma_N = 20, gamma_g = .1;
     MaterialParamsSoA materials;
     std::function<Point(Point, int)> source = [](Point, int) { return Point{}; };
     std::function<BoundaryData(int, Point, Point)> boundary = [](int, Point, Point) {

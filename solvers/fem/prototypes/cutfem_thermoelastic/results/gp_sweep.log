@@ -1,40 +1,270 @@
-gp_sweep thermal vf=0.5 gg=0 Jacobi=65 ok CG=68 ok AMG=8 ok
-gp_sweep thermal vf=0.5 gg=0.03 Jacobi=64 ok CG=70 ok AMG=8 ok
-gp_sweep thermal vf=0.5 gg=0.1 Jacobi=61 ok CG=71 ok AMG=8 ok
-gp_sweep thermal vf=0.5 gg=0.3 Jacobi=55 ok CG=74 ok AMG=7 ok
-gp_sweep thermal vf=0.1 gg=0 Jacobi=89 ok CG=1568 ok AMG=22 ok
-gp_sweep thermal vf=0.1 gg=0.03 Jacobi=61 ok CG=174 ok AMG=7 ok
-gp_sweep thermal vf=0.1 gg=0.1 Jacobi=61 ok CG=115 ok AMG=7 ok
-gp_sweep thermal vf=0.1 gg=0.3 Jacobi=61 ok CG=97 ok AMG=7 ok
-gp_sweep thermal vf=0.01 gg=0 Jacobi=0 indefinite CG=15 indefinite AMG=0 skipped_indefinite
-gp_sweep thermal vf=0.01 gg=0.03 Jacobi=2 indefinite CG=19 indefinite AMG=0 skipped_indefinite
-gp_sweep thermal vf=0.01 gg=0.1 Jacobi=164 ok CG=527 ok AMG=43 ok
-gp_sweep thermal vf=0.01 gg=0.3 Jacobi=61 ok CG=107 ok AMG=9 ok
-gp_sweep thermal vf=0.001 gg=0 Jacobi=0 indefinite CG=15 indefinite AMG=0 skipped_indefinite
-gp_sweep thermal vf=0.001 gg=0.03 Jacobi=2 indefinite CG=18 indefinite AMG=0 skipped_indefinite
-gp_sweep thermal vf=0.001 gg=0.1 Jacobi=13 indefinite CG=41 indefinite AMG=0 skipped_indefinite
-gp_sweep thermal vf=0.001 gg=0.3 Jacobi=61 ok CG=109 ok AMG=9 ok
-gp_sweep thermal vf=0.0001 gg=0 Jacobi=0 indefinite CG=15 indefinite AMG=0 skipped_indefinite
-gp_sweep thermal vf=0.0001 gg=0.03 Jacobi=2 indefinite CG=18 indefinite AMG=0 skipped_indefinite
-gp_sweep thermal vf=0.0001 gg=0.1 Jacobi=12 indefinite CG=40 indefinite AMG=0 skipped_indefinite
-gp_sweep thermal vf=0.0001 gg=0.3 Jacobi=61 ok CG=108 ok AMG=9 ok
-gp_sweep elastic vf=0.5 gg=0 Jacobi=307 ok CG=415 ok AMG=18 ok
-gp_sweep elastic vf=0.5 gg=0.03 Jacobi=309 ok CG=400 ok AMG=17 ok
-gp_sweep elastic vf=0.5 gg=0.1 Jacobi=318 ok CG=399 ok AMG=18 ok
-gp_sweep elastic vf=0.5 gg=0.3 Jacobi=348 ok CG=414 ok AMG=20 ok
-gp_sweep elastic vf=0.1 gg=0 Jacobi=304 ok CG=714 ok AMG=18 ok
-gp_sweep elastic vf=0.1 gg=0.03 Jacobi=311 ok CG=472 ok AMG=17 ok
-gp_sweep elastic vf=0.1 gg=0.1 Jacobi=317 ok CG=432 ok AMG=19 ok
-gp_sweep elastic vf=0.1 gg=0.3 Jacobi=349 ok CG=436 ok AMG=21 ok
-gp_sweep elastic vf=0.01 gg=0 Jacobi=302 ok CG=1839 ok AMG=19 ok
-gp_sweep elastic vf=0.01 gg=0.03 Jacobi=309 ok CG=515 ok AMG=18 ok
-gp_sweep elastic vf=0.01 gg=0.1 Jacobi=319 ok CG=453 ok AMG=19 ok
-gp_sweep elastic vf=0.01 gg=0.3 Jacobi=356 ok CG=445 ok AMG=21 ok
-gp_sweep elastic vf=0.001 gg=0 Jacobi=302 ok CG=1551 ok AMG=18 ok
-gp_sweep elastic vf=0.001 gg=0.03 Jacobi=308 ok CG=530 ok AMG=18 ok
-gp_sweep elastic vf=0.001 gg=0.1 Jacobi=319 ok CG=455 ok AMG=19 ok
-gp_sweep elastic vf=0.001 gg=0.3 Jacobi=356 ok CG=439 ok AMG=20 ok
-gp_sweep elastic vf=0.0001 gg=0 Jacobi=302 ok CG=1844 ok AMG=18 ok
-gp_sweep elastic vf=0.0001 gg=0.03 Jacobi=308 ok CG=531 ok AMG=18 ok
-gp_sweep elastic vf=0.0001 gg=0.1 Jacobi=320 ok CG=455 ok AMG=19 ok
-gp_sweep elastic vf=0.0001 gg=0.3 Jacobi=356 ok CG=440 ok AMG=20 ok
+gp_sweep thermal gamma_N=10 vf=0.5 gg=0 Jacobi=65 ok CG=68 ok AMG=8 ok
+gp_sweep thermal gamma_N=10 vf=0.5 gg=0.03 Jacobi=64 ok CG=70 ok AMG=8 ok
+gp_sweep thermal gamma_N=10 vf=0.5 gg=0.1 Jacobi=61 ok CG=71 ok AMG=8 ok
+gp_sweep thermal gamma_N=10 vf=0.5 gg=0.3 Jacobi=55 ok CG=74 ok AMG=7 ok
+gp_sweep thermal gamma_N=10 vf=0.5 gg=1 Jacobi=62 ok CG=95 ok AMG=7 ok
+gp_sweep thermal gamma_N=10 vf=0.5 gg=3 Jacobi=71 ok CG=143 ok AMG=7 ok
+gp_sweep thermal gamma_N=10 vf=0.1 gg=0 Jacobi=89 ok CG=1568 ok AMG=22 ok
+gp_sweep thermal gamma_N=10 vf=0.1 gg=0.03 Jacobi=61 ok CG=174 ok AMG=7 ok
+gp_sweep thermal gamma_N=10 vf=0.1 gg=0.1 Jacobi=61 ok CG=115 ok AMG=7 ok
+gp_sweep thermal gamma_N=10 vf=0.1 gg=0.3 Jacobi=61 ok CG=97 ok AMG=7 ok
+gp_sweep thermal gamma_N=10 vf=0.1 gg=1 Jacobi=64 ok CG=104 ok AMG=7 ok
+gp_sweep thermal gamma_N=10 vf=0.1 gg=3 Jacobi=71 ok CG=143 ok AMG=8 ok
+gp_sweep thermal gamma_N=10 vf=0.01 gg=0 Jacobi=0 indefinite CG=15 indefinite AMG=0 skipped_indefinite
+gp_sweep thermal gamma_N=10 vf=0.01 gg=0.03 Jacobi=2 indefinite CG=19 indefinite AMG=0 skipped_indefinite
+gp_sweep thermal gamma_N=10 vf=0.01 gg=0.1 Jacobi=164 ok CG=527 ok AMG=43 ok
+gp_sweep thermal gamma_N=10 vf=0.01 gg=0.3 Jacobi=61 ok CG=107 ok AMG=9 ok
+gp_sweep thermal gamma_N=10 vf=0.01 gg=1 Jacobi=64 ok CG=108 ok AMG=7 ok
+gp_sweep thermal gamma_N=10 vf=0.01 gg=3 Jacobi=72 ok CG=142 ok AMG=9 ok
+gp_sweep thermal gamma_N=10 vf=0.001 gg=0 Jacobi=0 indefinite CG=15 indefinite AMG=0 skipped_indefinite
+gp_sweep thermal gamma_N=10 vf=0.001 gg=0.03 Jacobi=2 indefinite CG=18 indefinite AMG=0 skipped_indefinite
+gp_sweep thermal gamma_N=10 vf=0.001 gg=0.1 Jacobi=13 indefinite CG=41 indefinite AMG=0 skipped_indefinite
+gp_sweep thermal gamma_N=10 vf=0.001 gg=0.3 Jacobi=61 ok CG=109 ok AMG=9 ok
+gp_sweep thermal gamma_N=10 vf=0.001 gg=1 Jacobi=64 ok CG=110 ok AMG=7 ok
+gp_sweep thermal gamma_N=10 vf=0.001 gg=3 Jacobi=72 ok CG=142 ok AMG=9 ok
+gp_sweep thermal gamma_N=10 vf=0.0001 gg=0 Jacobi=0 indefinite CG=15 indefinite AMG=0 skipped_indefinite
+gp_sweep thermal gamma_N=10 vf=0.0001 gg=0.03 Jacobi=2 indefinite CG=18 indefinite AMG=0 skipped_indefinite
+gp_sweep thermal gamma_N=10 vf=0.0001 gg=0.1 Jacobi=12 indefinite CG=40 indefinite AMG=0 skipped_indefinite
+gp_sweep thermal gamma_N=10 vf=0.0001 gg=0.3 Jacobi=61 ok CG=108 ok AMG=9 ok
+gp_sweep thermal gamma_N=10 vf=0.0001 gg=1 Jacobi=64 ok CG=110 ok AMG=7 ok
+gp_sweep thermal gamma_N=10 vf=0.0001 gg=3 Jacobi=72 ok CG=143 ok AMG=9 ok
+gp_sweep thermal gamma_N=20 vf=0.5 gg=0 Jacobi=67 ok CG=89 ok AMG=10 ok
+gp_sweep thermal gamma_N=20 vf=0.5 gg=0.03 Jacobi=67 ok CG=90 ok AMG=9 ok
+gp_sweep thermal gamma_N=20 vf=0.5 gg=0.1 Jacobi=64 ok CG=89 ok AMG=9 ok
+gp_sweep thermal gamma_N=20 vf=0.5 gg=0.3 Jacobi=60 ok CG=88 ok AMG=9 ok
+gp_sweep thermal gamma_N=20 vf=0.5 gg=1 Jacobi=57 ok CG=99 ok AMG=9 ok
+gp_sweep thermal gamma_N=20 vf=0.5 gg=3 Jacobi=67 ok CG=141 ok AMG=8 ok
+gp_sweep thermal gamma_N=20 vf=0.1 gg=0 Jacobi=65 ok CG=313 ok AMG=8 ok
+gp_sweep thermal gamma_N=20 vf=0.1 gg=0.03 Jacobi=59 ok CG=170 ok AMG=8 ok
+gp_sweep thermal gamma_N=20 vf=0.1 gg=0.1 Jacobi=58 ok CG=132 ok AMG=8 ok
+gp_sweep thermal gamma_N=20 vf=0.1 gg=0.3 Jacobi=59 ok CG=110 ok AMG=8 ok
+gp_sweep thermal gamma_N=20 vf=0.1 gg=1 Jacobi=61 ok CG=120 ok AMG=7 ok
+gp_sweep thermal gamma_N=20 vf=0.1 gg=3 Jacobi=68 ok CG=145 ok AMG=8 ok
+gp_sweep thermal gamma_N=20 vf=0.01 gg=0 Jacobi=0 indefinite CG=30 indefinite AMG=0 skipped_indefinite
+gp_sweep thermal gamma_N=20 vf=0.01 gg=0.03 Jacobi=4 indefinite CG=47 indefinite AMG=0 skipped_indefinite
+gp_sweep thermal gamma_N=20 vf=0.01 gg=0.1 Jacobi=60 ok CG=171 ok AMG=9 ok
+gp_sweep thermal gamma_N=20 vf=0.01 gg=0.3 Jacobi=59 ok CG=126 ok AMG=8 ok
+gp_sweep thermal gamma_N=20 vf=0.01 gg=1 Jacobi=62 ok CG=127 ok AMG=7 ok
+gp_sweep thermal gamma_N=20 vf=0.01 gg=3 Jacobi=69 ok CG=149 ok AMG=8 ok
+gp_sweep thermal gamma_N=20 vf=0.001 gg=0 Jacobi=0 indefinite CG=27 indefinite AMG=0 skipped_indefinite
+gp_sweep thermal gamma_N=20 vf=0.001 gg=0.03 Jacobi=3 indefinite CG=39 indefinite AMG=0 skipped_indefinite
+gp_sweep thermal gamma_N=20 vf=0.001 gg=0.1 Jacobi=60 ok CG=175 ok AMG=9 ok
+gp_sweep thermal gamma_N=20 vf=0.001 gg=0.3 Jacobi=59 ok CG=125 ok AMG=8 ok
+gp_sweep thermal gamma_N=20 vf=0.001 gg=1 Jacobi=62 ok CG=129 ok AMG=8 ok
+gp_sweep thermal gamma_N=20 vf=0.001 gg=3 Jacobi=69 ok CG=150 ok AMG=8 ok
+gp_sweep thermal gamma_N=20 vf=0.0001 gg=0 Jacobi=0 indefinite CG=27 indefinite AMG=0 skipped_indefinite
+gp_sweep thermal gamma_N=20 vf=0.0001 gg=0.03 Jacobi=3 indefinite CG=39 indefinite AMG=0 skipped_indefinite
+gp_sweep thermal gamma_N=20 vf=0.0001 gg=0.1 Jacobi=60 ok CG=175 ok AMG=9 ok
+gp_sweep thermal gamma_N=20 vf=0.0001 gg=0.3 Jacobi=59 ok CG=125 ok AMG=8 ok
+gp_sweep thermal gamma_N=20 vf=0.0001 gg=1 Jacobi=62 ok CG=127 ok AMG=8 ok
+gp_sweep thermal gamma_N=20 vf=0.0001 gg=3 Jacobi=69 ok CG=150 ok AMG=8 ok
+gp_sweep thermal gamma_N=40 vf=0.5 gg=0 Jacobi=68 ok CG=116 ok AMG=13 ok
+gp_sweep thermal gamma_N=40 vf=0.5 gg=0.03 Jacobi=68 ok CG=116 ok AMG=13 ok
+gp_sweep thermal gamma_N=40 vf=0.5 gg=0.1 Jacobi=67 ok CG=115 ok AMG=12 ok
+gp_sweep thermal gamma_N=40 vf=0.5 gg=0.3 Jacobi=65 ok CG=114 ok AMG=11 ok
+gp_sweep thermal gamma_N=40 vf=0.5 gg=1 Jacobi=59 ok CG=117 ok AMG=10 ok
+gp_sweep thermal gamma_N=40 vf=0.5 gg=3 Jacobi=61 ok CG=137 ok AMG=10 ok
+gp_sweep thermal gamma_N=40 vf=0.1 gg=0 Jacobi=68 ok CG=308 ok AMG=11 ok
+gp_sweep thermal gamma_N=40 vf=0.1 gg=0.03 Jacobi=63 ok CG=197 ok AMG=10 ok
+gp_sweep thermal gamma_N=40 vf=0.1 gg=0.1 Jacobi=62 ok CG=152 ok AMG=9 ok
+gp_sweep thermal gamma_N=40 vf=0.1 gg=0.3 Jacobi=59 ok CG=134 ok AMG=9 ok
+gp_sweep thermal gamma_N=40 vf=0.1 gg=1 Jacobi=59 ok CG=142 ok AMG=9 ok
+gp_sweep thermal gamma_N=40 vf=0.1 gg=3 Jacobi=64 ok CG=165 ok AMG=9 ok
+gp_sweep thermal gamma_N=40 vf=0.01 gg=0 Jacobi=0 indefinite CG=55 indefinite AMG=0 skipped_indefinite
+gp_sweep thermal gamma_N=40 vf=0.01 gg=0.03 Jacobi=61 ok CG=321 ok AMG=10 ok
+gp_sweep thermal gamma_N=40 vf=0.01 gg=0.1 Jacobi=61 ok CG=200 ok AMG=9 ok
+gp_sweep thermal gamma_N=40 vf=0.01 gg=0.3 Jacobi=58 ok CG=153 ok AMG=9 ok
+gp_sweep thermal gamma_N=40 vf=0.01 gg=1 Jacobi=60 ok CG=154 ok AMG=9 ok
+gp_sweep thermal gamma_N=40 vf=0.01 gg=3 Jacobi=66 ok CG=174 ok AMG=10 ok
+gp_sweep thermal gamma_N=40 vf=0.001 gg=0 Jacobi=0 indefinite CG=48 indefinite AMG=0 skipped_indefinite
+gp_sweep thermal gamma_N=40 vf=0.001 gg=0.03 Jacobi=63 ok CG=450 ok AMG=13 ok
+gp_sweep thermal gamma_N=40 vf=0.001 gg=0.1 Jacobi=61 ok CG=203 ok AMG=9 ok
+gp_sweep thermal gamma_N=40 vf=0.001 gg=0.3 Jacobi=59 ok CG=157 ok AMG=9 ok
+gp_sweep thermal gamma_N=40 vf=0.001 gg=1 Jacobi=60 ok CG=155 ok AMG=9 ok
+gp_sweep thermal gamma_N=40 vf=0.001 gg=3 Jacobi=66 ok CG=176 ok AMG=10 ok
+gp_sweep thermal gamma_N=40 vf=0.0001 gg=0 Jacobi=0 indefinite CG=48 indefinite AMG=0 skipped_indefinite
+gp_sweep thermal gamma_N=40 vf=0.0001 gg=0.03 Jacobi=62 ok CG=470 ok AMG=15 ok
+gp_sweep thermal gamma_N=40 vf=0.0001 gg=0.1 Jacobi=60 ok CG=203 ok AMG=9 ok
+gp_sweep thermal gamma_N=40 vf=0.0001 gg=0.3 Jacobi=59 ok CG=158 ok AMG=9 ok
+gp_sweep thermal gamma_N=40 vf=0.0001 gg=1 Jacobi=60 ok CG=155 ok AMG=9 ok
+gp_sweep thermal gamma_N=40 vf=0.0001 gg=3 Jacobi=66 ok CG=176 ok AMG=10 ok
+gp_sweep elastic gamma_N=10 vf=0.5 gg=0 Jacobi=307 ok CG=415 ok AMG=18 ok
+gp_sweep elastic gamma_N=10 vf=0.5 gg=0.03 Jacobi=309 ok CG=400 ok AMG=17 ok
+gp_sweep elastic gamma_N=10 vf=0.5 gg=0.1 Jacobi=318 ok CG=399 ok AMG=18 ok
+gp_sweep elastic gamma_N=10 vf=0.5 gg=0.3 Jacobi=348 ok CG=414 ok AMG=20 ok
+gp_sweep elastic gamma_N=10 vf=0.5 gg=1 Jacobi=432 ok CG=521 ok AMG=24 ok
+gp_sweep elastic gamma_N=10 vf=0.5 gg=3 Jacobi=606 ok CG=763 ok AMG=32 ok
+gp_sweep elastic gamma_N=10 vf=0.1 gg=0 Jacobi=304 ok CG=714 ok AMG=18 ok
+gp_sweep elastic gamma_N=10 vf=0.1 gg=0.03 Jacobi=311 ok CG=472 ok AMG=17 ok
+gp_sweep elastic gamma_N=10 vf=0.1 gg=0.1 Jacobi=317 ok CG=432 ok AMG=19 ok
+gp_sweep elastic gamma_N=10 vf=0.1 gg=0.3 Jacobi=349 ok CG=436 ok AMG=21 ok
+gp_sweep elastic gamma_N=10 vf=0.1 gg=1 Jacobi=446 ok CG=538 ok AMG=26 ok
+gp_sweep elastic gamma_N=10 vf=0.1 gg=3 Jacobi=631 ok CG=786 ok AMG=35 ok
+gp_sweep elastic gamma_N=10 vf=0.01 gg=0 Jacobi=302 ok CG=1839 ok AMG=19 ok
+gp_sweep elastic gamma_N=10 vf=0.01 gg=0.03 Jacobi=309 ok CG=515 ok AMG=18 ok
+gp_sweep elastic gamma_N=10 vf=0.01 gg=0.1 Jacobi=319 ok CG=453 ok AMG=19 ok
+gp_sweep elastic gamma_N=10 vf=0.01 gg=0.3 Jacobi=356 ok CG=445 ok AMG=21 ok
+gp_sweep elastic gamma_N=10 vf=0.01 gg=1 Jacobi=450 ok CG=547 ok AMG=27 ok
+gp_sweep elastic gamma_N=10 vf=0.01 gg=3 Jacobi=636 ok CG=790 ok AMG=36 ok
+gp_sweep elastic gamma_N=10 vf=0.001 gg=0 Jacobi=302 ok CG=1551 ok AMG=18 ok
+gp_sweep elastic gamma_N=10 vf=0.001 gg=0.03 Jacobi=308 ok CG=530 ok AMG=18 ok
+gp_sweep elastic gamma_N=10 vf=0.001 gg=0.1 Jacobi=319 ok CG=455 ok AMG=19 ok
+gp_sweep elastic gamma_N=10 vf=0.001 gg=0.3 Jacobi=356 ok CG=439 ok AMG=20 ok
+gp_sweep elastic gamma_N=10 vf=0.001 gg=1 Jacobi=451 ok CG=547 ok AMG=27 ok
+gp_sweep elastic gamma_N=10 vf=0.001 gg=3 Jacobi=634 ok CG=790 ok AMG=36 ok
+gp_sweep elastic gamma_N=10 vf=0.0001 gg=0 Jacobi=302 ok CG=1844 ok AMG=18 ok
+gp_sweep elastic gamma_N=10 vf=0.0001 gg=0.03 Jacobi=308 ok CG=531 ok AMG=18 ok
+gp_sweep elastic gamma_N=10 vf=0.0001 gg=0.1 Jacobi=320 ok CG=455 ok AMG=19 ok
+gp_sweep elastic gamma_N=10 vf=0.0001 gg=0.3 Jacobi=356 ok CG=440 ok AMG=20 ok
+gp_sweep elastic gamma_N=10 vf=0.0001 gg=1 Jacobi=451 ok CG=546 ok AMG=27 ok
+gp_sweep elastic gamma_N=10 vf=0.0001 gg=3 Jacobi=634 ok CG=790 ok AMG=36 ok
+gp_sweep elastic gamma_N=20 vf=0.5 gg=0 Jacobi=310 ok CG=516 ok AMG=19 ok
+gp_sweep elastic gamma_N=20 vf=0.5 gg=0.03 Jacobi=313 ok CG=498 ok AMG=18 ok
+gp_sweep elastic gamma_N=20 vf=0.5 gg=0.1 Jacobi=320 ok CG=496 ok AMG=19 ok
+gp_sweep elastic gamma_N=20 vf=0.5 gg=0.3 Jacobi=348 ok CG=504 ok AMG=20 ok
+gp_sweep elastic gamma_N=20 vf=0.5 gg=1 Jacobi=432 ok CG=561 ok AMG=24 ok
+gp_sweep elastic gamma_N=20 vf=0.5 gg=3 Jacobi=606 ok CG=773 ok AMG=32 ok
+gp_sweep elastic gamma_N=20 vf=0.1 gg=0 Jacobi=305 ok CG=877 ok AMG=19 ok
+gp_sweep elastic gamma_N=20 vf=0.1 gg=0.03 Jacobi=311 ok CG=577 ok AMG=18 ok
+gp_sweep elastic gamma_N=20 vf=0.1 gg=0.1 Jacobi=319 ok CG=533 ok AMG=20 ok
+gp_sweep elastic gamma_N=20 vf=0.1 gg=0.3 Jacobi=350 ok CG=532 ok AMG=21 ok
+gp_sweep elastic gamma_N=20 vf=0.1 gg=1 Jacobi=446 ok CG=580 ok AMG=26 ok
+gp_sweep elastic gamma_N=20 vf=0.1 gg=3 Jacobi=631 ok CG=795 ok AMG=35 ok
+gp_sweep elastic gamma_N=20 vf=0.01 gg=0 Jacobi=304 ok CG=2283 ok AMG=20 ok
+gp_sweep elastic gamma_N=20 vf=0.01 gg=0.03 Jacobi=311 ok CG=636 ok AMG=19 ok
+gp_sweep elastic gamma_N=20 vf=0.01 gg=0.1 Jacobi=318 ok CG=559 ok AMG=20 ok
+gp_sweep elastic gamma_N=20 vf=0.01 gg=0.3 Jacobi=356 ok CG=540 ok AMG=21 ok
+gp_sweep elastic gamma_N=20 vf=0.01 gg=1 Jacobi=450 ok CG=588 ok AMG=27 ok
+gp_sweep elastic gamma_N=20 vf=0.01 gg=3 Jacobi=636 ok CG=796 ok AMG=35 ok
+gp_sweep elastic gamma_N=20 vf=0.001 gg=0 Jacobi=304 ok CG=1933 ok AMG=19 ok
+gp_sweep elastic gamma_N=20 vf=0.001 gg=0.03 Jacobi=310 ok CG=654 ok AMG=19 ok
+gp_sweep elastic gamma_N=20 vf=0.001 gg=0.1 Jacobi=320 ok CG=560 ok AMG=20 ok
+gp_sweep elastic gamma_N=20 vf=0.001 gg=0.3 Jacobi=356 ok CG=534 ok AMG=21 ok
+gp_sweep elastic gamma_N=20 vf=0.001 gg=1 Jacobi=451 ok CG=589 ok AMG=27 ok
+gp_sweep elastic gamma_N=20 vf=0.001 gg=3 Jacobi=633 ok CG=801 ok AMG=36 ok
+gp_sweep elastic gamma_N=20 vf=0.0001 gg=0 Jacobi=304 ok CG=2301 ok AMG=19 ok
+gp_sweep elastic gamma_N=20 vf=0.0001 gg=0.03 Jacobi=310 ok CG=659 ok AMG=19 ok
+gp_sweep elastic gamma_N=20 vf=0.0001 gg=0.1 Jacobi=320 ok CG=561 ok AMG=20 ok
+gp_sweep elastic gamma_N=20 vf=0.0001 gg=0.3 Jacobi=356 ok CG=533 ok AMG=21 ok
+gp_sweep elastic gamma_N=20 vf=0.0001 gg=1 Jacobi=451 ok CG=587 ok AMG=27 ok
+gp_sweep elastic gamma_N=20 vf=0.0001 gg=3 Jacobi=635 ok CG=798 ok AMG=36 ok
+gp_sweep elastic gamma_N=40 vf=0.5 gg=0 Jacobi=318 ok CG=642 ok AMG=23 ok
+gp_sweep elastic gamma_N=40 vf=0.5 gg=0.03 Jacobi=323 ok CG=619 ok AMG=21 ok
+gp_sweep elastic gamma_N=40 vf=0.5 gg=0.1 Jacobi=322 ok CG=613 ok AMG=20 ok
+gp_sweep elastic gamma_N=40 vf=0.5 gg=0.3 Jacobi=350 ok CG=622 ok AMG=20 ok
+gp_sweep elastic gamma_N=40 vf=0.5 gg=1 Jacobi=433 ok CG=684 ok AMG=24 ok
+gp_sweep elastic gamma_N=40 vf=0.5 gg=3 Jacobi=607 ok CG=810 ok AMG=32 ok
+gp_sweep elastic gamma_N=40 vf=0.1 gg=0 Jacobi=316 ok CG=1082 ok AMG=22 ok
+gp_sweep elastic gamma_N=40 vf=0.1 gg=0.03 Jacobi=315 ok CG=720 ok AMG=21 ok
+gp_sweep elastic gamma_N=40 vf=0.1 gg=0.1 Jacobi=325 ok CG=664 ok AMG=21 ok
+gp_sweep elastic gamma_N=40 vf=0.1 gg=0.3 Jacobi=356 ok CG=659 ok AMG=22 ok
+gp_sweep elastic gamma_N=40 vf=0.1 gg=1 Jacobi=446 ok CG=709 ok AMG=27 ok
+gp_sweep elastic gamma_N=40 vf=0.1 gg=3 Jacobi=632 ok CG=832 ok AMG=35 ok
+gp_sweep elastic gamma_N=40 vf=0.01 gg=0 Jacobi=312 ok CG=2857 ok AMG=22 ok
+gp_sweep elastic gamma_N=40 vf=0.01 gg=0.03 Jacobi=317 ok CG=794 ok AMG=21 ok
+gp_sweep elastic gamma_N=40 vf=0.01 gg=0.1 Jacobi=325 ok CG=697 ok AMG=21 ok
+gp_sweep elastic gamma_N=40 vf=0.01 gg=0.3 Jacobi=359 ok CG=672 ok AMG=21 ok
+gp_sweep elastic gamma_N=40 vf=0.01 gg=1 Jacobi=450 ok CG=717 ok AMG=27 ok
+gp_sweep elastic gamma_N=40 vf=0.01 gg=3 Jacobi=637 ok CG=835 ok AMG=36 ok
+gp_sweep elastic gamma_N=40 vf=0.001 gg=0 Jacobi=312 ok CG=2424 ok AMG=22 ok
+gp_sweep elastic gamma_N=40 vf=0.001 gg=0.03 Jacobi=316 ok CG=815 ok AMG=21 ok
+gp_sweep elastic gamma_N=40 vf=0.001 gg=0.1 Jacobi=325 ok CG=698 ok AMG=21 ok
+gp_sweep elastic gamma_N=40 vf=0.001 gg=0.3 Jacobi=359 ok CG=664 ok AMG=22 ok
+gp_sweep elastic gamma_N=40 vf=0.001 gg=1 Jacobi=451 ok CG=716 ok AMG=27 ok
+gp_sweep elastic gamma_N=40 vf=0.001 gg=3 Jacobi=637 ok CG=835 ok AMG=36 ok
+gp_sweep elastic gamma_N=40 vf=0.0001 gg=0 Jacobi=312 ok CG=2974 ok AMG=21 ok
+gp_sweep elastic gamma_N=40 vf=0.0001 gg=0.03 Jacobi=319 ok CG=822 ok AMG=21 ok
+gp_sweep elastic gamma_N=40 vf=0.0001 gg=0.1 Jacobi=325 ok CG=699 ok AMG=21 ok
+gp_sweep elastic gamma_N=40 vf=0.0001 gg=0.3 Jacobi=359 ok CG=660 ok AMG=22 ok
+gp_sweep elastic gamma_N=40 vf=0.0001 gg=1 Jacobi=451 ok CG=718 ok AMG=27 ok
+gp_sweep elastic gamma_N=40 vf=0.0001 gg=3 Jacobi=636 ok CG=837 ok AMG=36 ok
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.5 gg=0 Jacobi=308 ok CG=401 ok AMG=20 ok
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.5 gg=0.03 Jacobi=310 ok CG=405 ok AMG=18 ok
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.5 gg=0.1 Jacobi=318 ok CG=406 ok AMG=19 ok
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.5 gg=0.3 Jacobi=347 ok CG=424 ok AMG=19 ok
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.5 gg=1 Jacobi=429 ok CG=523 ok AMG=23 ok
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.5 gg=3 Jacobi=604 ok CG=763 ok AMG=33 ok
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.1 gg=0 Jacobi=4 indefinite CG=206 indefinite AMG=0 skipped_indefinite
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.1 gg=0.03 Jacobi=309 ok CG=586 ok AMG=17 ok
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.1 gg=0.1 Jacobi=321 ok CG=516 ok AMG=18 ok
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.1 gg=0.3 Jacobi=352 ok CG=527 ok AMG=20 ok
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.1 gg=1 Jacobi=440 ok CG=605 ok AMG=24 ok
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.1 gg=3 Jacobi=620 ok CG=790 ok AMG=34 ok
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.01 gg=0 Jacobi=0 indefinite CG=27 indefinite AMG=0 skipped_indefinite
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.01 gg=0.03 Jacobi=6 indefinite CG=32 indefinite AMG=0 skipped_indefinite
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.01 gg=0.1 Jacobi=14 indefinite CG=48 indefinite AMG=0 skipped_indefinite
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.01 gg=0.3 Jacobi=353 ok CG=558 ok AMG=20 ok
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.01 gg=1 Jacobi=443 ok CG=631 ok AMG=26 ok
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.01 gg=3 Jacobi=624 ok CG=805 ok AMG=36 ok
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.001 gg=0 Jacobi=0 indefinite CG=25 indefinite AMG=0 skipped_indefinite
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.001 gg=0.03 Jacobi=6 indefinite CG=31 indefinite AMG=0 skipped_indefinite
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.001 gg=0.1 Jacobi=13 indefinite CG=42 indefinite AMG=0 skipped_indefinite
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.001 gg=0.3 Jacobi=353 ok CG=560 ok AMG=20 ok
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.001 gg=1 Jacobi=444 ok CG=633 ok AMG=26 ok
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.001 gg=3 Jacobi=623 ok CG=806 ok AMG=36 ok
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.0001 gg=0 Jacobi=0 indefinite CG=25 indefinite AMG=0 skipped_indefinite
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.0001 gg=0.03 Jacobi=6 indefinite CG=31 indefinite AMG=0 skipped_indefinite
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.0001 gg=0.1 Jacobi=13 indefinite CG=41 indefinite AMG=0 skipped_indefinite
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.0001 gg=0.3 Jacobi=353 ok CG=561 ok AMG=20 ok
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.0001 gg=1 Jacobi=444 ok CG=635 ok AMG=26 ok
+gp_sweep elastic_dirichlet_cut gamma_N=10 vf=0.0001 gg=3 Jacobi=623 ok CG=806 ok AMG=36 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.5 gg=0 Jacobi=315 ok CG=488 ok AMG=23 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.5 gg=0.03 Jacobi=317 ok CG=493 ok AMG=22 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.5 gg=0.1 Jacobi=323 ok CG=493 ok AMG=21 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.5 gg=0.3 Jacobi=347 ok CG=504 ok AMG=21 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.5 gg=1 Jacobi=429 ok CG=569 ok AMG=23 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.5 gg=3 Jacobi=604 ok CG=775 ok AMG=31 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.1 gg=0 Jacobi=315 ok CG=1027 ok AMG=21 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.1 gg=0.03 Jacobi=311 ok CG=679 ok AMG=18 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.1 gg=0.1 Jacobi=321 ok CG=621 ok AMG=18 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.1 gg=0.3 Jacobi=352 ok CG=624 ok AMG=20 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.1 gg=1 Jacobi=440 ok CG=703 ok AMG=25 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.1 gg=3 Jacobi=621 ok CG=855 ok AMG=35 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.01 gg=0 Jacobi=0 indefinite CG=45 indefinite AMG=0 skipped_indefinite
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.01 gg=0.03 Jacobi=9 indefinite CG=64 indefinite AMG=0 skipped_indefinite
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.01 gg=0.1 Jacobi=321 ok CG=679 ok AMG=18 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.01 gg=0.3 Jacobi=353 ok CG=661 ok AMG=20 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.01 gg=1 Jacobi=443 ok CG=737 ok AMG=26 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.01 gg=3 Jacobi=626 ok CG=891 ok AMG=35 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.001 gg=0 Jacobi=0 indefinite CG=39 indefinite AMG=0 skipped_indefinite
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.001 gg=0.03 Jacobi=9 indefinite CG=50 indefinite AMG=0 skipped_indefinite
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.001 gg=0.1 Jacobi=321 ok CG=690 ok AMG=19 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.001 gg=0.3 Jacobi=354 ok CG=663 ok AMG=20 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.001 gg=1 Jacobi=444 ok CG=739 ok AMG=26 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.001 gg=3 Jacobi=625 ok CG=896 ok AMG=35 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.0001 gg=0 Jacobi=0 indefinite CG=39 indefinite AMG=0 skipped_indefinite
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.0001 gg=0.03 Jacobi=9 indefinite CG=50 indefinite AMG=0 skipped_indefinite
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.0001 gg=0.1 Jacobi=321 ok CG=691 ok AMG=20 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.0001 gg=0.3 Jacobi=354 ok CG=664 ok AMG=20 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.0001 gg=1 Jacobi=444 ok CG=742 ok AMG=26 ok
+gp_sweep elastic_dirichlet_cut gamma_N=20 vf=0.0001 gg=3 Jacobi=625 ok CG=897 ok AMG=35 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.5 gg=0 Jacobi=324 ok CG=598 ok AMG=28 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.5 gg=0.03 Jacobi=325 ok CG=600 ok AMG=27 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.5 gg=0.1 Jacobi=334 ok CG=598 ok AMG=25 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.5 gg=0.3 Jacobi=354 ok CG=611 ok AMG=24 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.5 gg=1 Jacobi=429 ok CG=679 ok AMG=25 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.5 gg=3 Jacobi=606 ok CG=819 ok AMG=32 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.1 gg=0 Jacobi=322 ok CG=1176 ok AMG=25 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.1 gg=0.03 Jacobi=316 ok CG=802 ok AMG=21 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.1 gg=0.1 Jacobi=322 ok CG=731 ok AMG=19 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.1 gg=0.3 Jacobi=352 ok CG=736 ok AMG=20 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.1 gg=1 Jacobi=440 ok CG=829 ok AMG=24 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.1 gg=3 Jacobi=621 ok CG=979 ok AMG=33 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.01 gg=0 Jacobi=0 indefinite CG=84 indefinite AMG=0 skipped_indefinite
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.01 gg=0.03 Jacobi=309 ok CG=979 ok AMG=18 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.01 gg=0.1 Jacobi=321 ok CG=795 ok AMG=18 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.01 gg=0.3 Jacobi=353 ok CG=788 ok AMG=20 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.01 gg=1 Jacobi=443 ok CG=873 ok AMG=25 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.01 gg=3 Jacobi=625 ok CG=1034 ok AMG=36 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.001 gg=0 Jacobi=0 indefinite CG=67 indefinite AMG=0 skipped_indefinite
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.001 gg=0.03 Jacobi=21 indefinite CG=202 indefinite AMG=0 skipped_indefinite
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.001 gg=0.1 Jacobi=321 ok CG=807 ok AMG=18 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.001 gg=0.3 Jacobi=354 ok CG=792 ok AMG=20 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.001 gg=1 Jacobi=444 ok CG=875 ok AMG=25 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.001 gg=3 Jacobi=625 ok CG=1042 ok AMG=34 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.0001 gg=0 Jacobi=0 indefinite CG=66 indefinite AMG=0 skipped_indefinite
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.0001 gg=0.03 Jacobi=18 indefinite CG=188 indefinite AMG=0 skipped_indefinite
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.0001 gg=0.1 Jacobi=321 ok CG=815 ok AMG=18 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.0001 gg=0.3 Jacobi=354 ok CG=793 ok AMG=20 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.0001 gg=1 Jacobi=444 ok CG=880 ok AMG=25 ok
+gp_sweep elastic_dirichlet_cut gamma_N=40 vf=0.0001 gg=3 Jacobi=626 ok CG=1040 ok AMG=34 ok

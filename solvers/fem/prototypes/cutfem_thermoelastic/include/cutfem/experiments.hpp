@@ -5,10 +5,11 @@
 namespace chipcae::proto_cutfem {
 struct Options {
     std::string output = "results";
-    double gamma_N = 10, gamma_g = .1;
+    double gamma_N = 20, gamma_g = .1;
     int N = 0;
     std::string solver = "direct";
     bool gp_specified = false;
+    bool dump_matrices = false;
     CutIntegrationOptions quadrature;
 };
 MaterialParamsSoA mms_material();

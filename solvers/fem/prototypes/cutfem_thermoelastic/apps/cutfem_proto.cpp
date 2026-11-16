@@ -26,11 +26,15 @@ int main(int argc, char** argv) {
                 "Usage: cutfem_proto "
                 "{unit_tests|mms_thermal|mms_thermal_bimat|mms_elastic|timoshenko|gp_sweep} "
                 "[--output DIR] [--gamma-N X] [--gamma-g X] [--N N] [--solver direct|pcg|hypre] "
-                "[--quadrature halfplane|recursive] [--max-depth D]");
+                "[--quadrature halfplane|recursive] [--max-depth D] [--dump-matrices]");
         Options o;
         std::string experiment = argv[1];
         for (int i = 2; i < argc; ++i) {
             std::string a = argv[i];
+            if (a == "--dump-matrices") {
+                o.dump_matrices = true;
+                continue;
+            }
             if (i + 1 >= argc)
                 throw std::runtime_error("Missing argument for " + a);
             std::string b = argv[++i];

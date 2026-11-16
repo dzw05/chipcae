@@ -1,5 +1,5 @@
-thermal_bimat variant=0 N=8 L2=0.0025054 H1=0.0913803 orders=0,0 ok
-thermal_bimat variant=0 N=16 L2=0.000581748 H1=0.0446058 orders=2.10657,1.03465 ok
-thermal_bimat variant=0 N=32 L2=0.000140966 H1=0.0221742 orders=2.04505,1.00835 ok
-thermal_bimat variant=0 N=64 L2=3.48995e-05 H1=0.0110837 orders=2.01407,1.00045 ok
-thermal_bimat variant=0 N=128 L2=8.67412e-06 H1=0.00553808 orders=2.00842,1.00098 ok
+thermal_bimat variant=0 N=8 L2=0.00264119 H1=0.0897303 orders=0,0 ok
+thermal_bimat variant=0 N=16 L2=0.000596455 H1=0.0442935 orders=2.1467,1.0185 ok
+thermal_bimat variant=0 N=32 L2=0.000142346 H1=0.0220995 orders=2.06701,1.00308 ok
+thermal_bimat variant=0 N=64 L2=3.51161e-05 H1=0.0110632 orders=2.0192,0.99824 ok
+thermal_bimat variant=0 N=128 L2=8.70007e-06 H1=0.0055331 orders=2.01303,0.999613 ok

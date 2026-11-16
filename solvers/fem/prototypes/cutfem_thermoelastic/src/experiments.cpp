@@ -7,6 +7,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 namespace chipcae::proto_cutfem {
 MaterialParamsSoA mms_material() {
@@ -111,7 +112,7 @@ Errors errors(const HexMeshArrays& m,
 void run_mms(bool elastic, bool bimat, const Options& o) {
     auto out =
         csv(o, elastic ? "mms_elastic.csv" : (bimat ? "mms_thermal_bimat.csv" : "mms_thermal.csv"));
-    out << "N,h,variant,gamma_g,ndof,L2,H1,order_L2,order_H1,iterations,residual,status\n";
+    out << "N,h,variant,gamma_N,gamma_g,ndof,L2,H1,order_L2,order_H1,iterations,residual,status\n";
     std::vector<int> levels = o.N ? std::vector<int>{o.N} : std::vector<int>{8, 16, 32, 64, 128};
     int variants = bimat ? 1 : 2;
     for (int variant = 0; variant < variants; ++variant) {
@@ -199,9 +200,9 @@ void run_mms(bool elastic, bool bimat, const Options& o) {
             out << N << ',' << h << ','
                 << (elastic ? (variant ? "gp_off" : "gp_on")
                             : (bimat ? "bimat" : (variant ? "robin" : "dirichlet")))
-                << ',' << p.gamma_g << ',' << s.A.n << ',' << er.l2 << ',' << er.h1 << ',' << ol
-                << ',' << oh << ',' << u.stats.iterations << ',' << u.stats.residual << ','
-                << u.stats.status << '\n';
+                << ',' << p.gamma_N << ',' << p.gamma_g << ',' << s.A.n << ',' << er.l2 << ','
+                << er.h1 << ',' << ol << ',' << oh << ',' << u.stats.iterations << ','
+                << u.stats.residual << ',' << u.stats.status << '\n';
             out.flush();
             std::cout << (elastic ? "elastic" : (bimat ? "thermal_bimat" : "thermal"))
                       << " variant=" << variant << " N=" << N << " L2=" << er.l2 << " H1=" << er.h1
@@ -393,19 +394,23 @@ StripResult strip(int Nt, bool fitted, double gg, const Options& o) {
 } // namespace
 void run_timoshenko(const Options& o) {
     auto out = csv(o, "timoshenko.csv");
-    out << "Nt,h,gamma_g,ndof,kappa_cut,kappa_cut_narrow,kappa_fitted,kappa_fitted_narrow,kappa_"
+    out << "Nt,h,gamma_N,gamma_g,ndof,kappa_cut,kappa_cut_narrow,kappa_fitted,kappa_fitted_narrow,"
+           "kappa_"
            "ref,rel_err_cut,rel_err_fitted,warpage_cut,warpage_fitted,thermal_error_cut,thermal_"
            "error_fitted,residual_cut,parameters\n";
     double ref = curvature_reference();
     std::vector<int> levels = o.N ? std::vector<int>{o.N} : std::vector<int>{4, 8, 16, 32};
     for (int Nt : levels) {
         auto fitted = strip(Nt, true, 0, o);
-        for (double gg : {.01, .1, 1.}) {
-            auto cut = strip(Nt, false, gg, o);
-            out << Nt << ',' << thick / Nt << ',' << gg << ',' << cut.ndof << ',' << cut.kappa
-                << ',' << cut.kappa_narrow << ',' << fitted.kappa << ',' << fitted.kappa_narrow
-                << ',' << ref << ',' << std::abs((cut.kappa - ref) / ref) << ','
-                << std::abs((fitted.kappa - ref) / ref) << ',' << cut.warpage << ','
+        for (auto [gn, gg] : std::vector<std::pair<double, double>>{
+                 {10, .01}, {10, .1}, {10, .3}, {10, 1.}, {20, .1}, {40, .1}}) {
+            Options params = o;
+            params.gamma_N = gn;
+            auto cut = strip(Nt, false, gg, params);
+            out << Nt << ',' << thick / Nt << ',' << gn << ',' << gg << ',' << cut.ndof << ','
+                << cut.kappa << ',' << cut.kappa_narrow << ',' << fitted.kappa << ','
+                << fitted.kappa_narrow << ',' << ref << ',' << std::abs((cut.kappa - ref) / ref)
+                << ',' << std::abs((fitted.kappa - ref) / ref) << ',' << cut.warpage << ','
                 << fitted.warpage << ',' << cut.thermal_error << ',' << fitted.thermal_error << ','
                 << cut.residual << ",example parameters\n";
             out.flush();
@@ -417,64 +422,95 @@ void run_timoshenko(const Options& o) {
 }
 void run_gp_sweep(const Options& o) {
     auto out = csv(o, "gp_sweep.csv");
-    out << "physics,vf,min_volfrac,gamma_g,ndof,jacobi_iterations,jacobi_kappa,jacobi_residual,"
-           "jacobi_status,cg_iterations,cg_kappa,cg_residual,cg_status,amg_iterations,amg_residual,"
+    out << "physics,vf,min_volfrac,gamma_N,gamma_g,ndof,jacobi_iterations,jacobi_kappa_estimate,"
+           "jacobi_residual,"
+           "jacobi_status,cg_iterations,cg_kappa_estimate,cg_residual,cg_status,amg_iterations,amg_"
+           "residual,"
            "amg_status,indefinite,ldl_indefinite\n";
-    for (int nc : {1, 2})
-        for (double vf : {.5, .1, 1e-2, 1e-3, 1e-4})
-            for (double gg : {0., .03, .1, .3}) {
-                auto m = tensor_mesh(linspace(0, 4, 64), linspace(0, 1, 16));
-                double hx = 4. / 64, hy = 1. / 16;
-                auto body = rectangle_body(3.37 * hx, (59 + vf) * hx, 2.27 * hy, (13 + vf) * hy);
-                auto c = build_cut_layer(m, {body}, o.quadrature);
-                Problem p;
-                p.ncomp = nc;
-                p.gamma_N = o.gamma_N;
-                p.gamma_g = gg;
-                p.materials = {{1}, {.3}, {1e-3}, {1.3}, 0};
-                if (nc == 1) {
-                    p.source = [](Point, int) { return Point{1, 0}; };
-                    p.boundary = [](int, Point x, Point) {
-                        return BoundaryData{BCType::Dirichlet, {1 + .2 * x.x, 0}};
-                    };
-                } else {
-                    p.delta_temperature = [](Point) { return -100.; };
-                    p.boundary = [](int tag, Point, Point) {
-                        return tag == 3 ? BoundaryData{BCType::Dirichlet, {0, 0}} : BoundaryData{};
-                    };
+    for (int variant : {0, 1, 2})
+        for (double gn : {10., 20., 40.})
+            for (double vf : {.5, .1, 1e-2, 1e-3, 1e-4})
+                for (double gg : {0., .03, .1, .3, 1., 3.}) {
+                    int nc = variant == 0 ? 1 : 2;
+                    const std::string physics =
+                        variant == 0 ? "thermal"
+                                     : (variant == 1 ? "elastic" : "elastic_dirichlet_cut");
+                    auto m = tensor_mesh(linspace(0, 4, 64), linspace(0, 1, 16));
+                    double hx = 4. / 64, hy = 1. / 16;
+                    auto body =
+                        rectangle_body(3.37 * hx, (59 + vf) * hx, 2.27 * hy, (13 + vf) * hy);
+                    auto c = build_cut_layer(m, {body}, o.quadrature);
+                    Problem p;
+                    p.ncomp = nc;
+                    p.gamma_N = gn;
+                    p.gamma_g = gg;
+                    p.materials = {{1}, {.3}, {1e-3}, {1.3}, 0};
+                    if (nc == 1) {
+                        p.source = [](Point, int) { return Point{1, 0}; };
+                        p.boundary = [](int, Point x, Point) {
+                            return BoundaryData{BCType::Dirichlet, {1 + .2 * x.x, 0}};
+                        };
+                    } else {
+                        p.delta_temperature = [](Point) { return -100.; };
+                        p.boundary = [variant](int tag, Point, Point) {
+                            return tag == (variant == 2 ? 1 : 3)
+                                       ? BoundaryData{BCType::Dirichlet, {0, 0}}
+                                       : BoundaryData{};
+                        };
+                    }
+                    auto s = assemble(m, c, p);
+                    if (o.dump_matrices) {
+                        auto dir = std::filesystem::path(o.output) / "debug";
+                        std::filesystem::create_directories(dir);
+                        std::ostringstream name;
+                        name << physics << "_N" << gn << "_g" << gg << "_vf" << vf << ".mtx";
+                        std::ofstream matrix(dir / name.str());
+                        if (!matrix)
+                            throw std::runtime_error("Cannot create matrix dump");
+                        size_t nnz = 0;
+                        for (double value : s.A.val)
+                            if (value != 0)
+                                ++nnz;
+                        matrix << "%%MatrixMarket matrix coordinate real general\n"
+                               << s.A.n << ' ' << s.A.n << ' ' << nnz << '\n'
+                               << std::setprecision(17);
+                        for (int i = 0; i < s.A.n; ++i)
+                            for (int k = s.A.row[i]; k < s.A.row[i + 1]; ++k)
+                                if (s.A.val[k] != 0)
+                                    matrix << i + 1 << ' ' << s.A.col[k] + 1 << ' ' << s.A.val[k]
+                                           << '\n';
+                    }
+                    auto j = conjugate_gradient(s.A, s.rhs, true),
+                         cg = conjugate_gradient(s.A, s.rhs, false);
+                    LinearResult amg;
+                    bool indefinite = j.stats.indefinite || cg.stats.indefinite;
+                    // Independent algebraic check: distinguish genuine loss of coercivity
+                    // from a possible iterative-roundoff breakdown without tuning penalties.
+                    auto diagnostic = banded_cholesky(s.A, s.rhs, true);
+                    bool ldl_indefinite = diagnostic.stats.indefinite;
+                    if (!hypre_available())
+                        amg.stats.status = "unavailable";
+                    else if (indefinite || ldl_indefinite)
+                        amg.stats.status = "skipped_indefinite";
+                    else
+                        amg = hypre_pcg(s.A, s.rhs, nc);
+                    double minvf = 1;
+                    for (int e = 0; e < m.n_elem; ++e)
+                        if (c.cell_state[e])
+                            minvf = std::min(minvf, c.cell_volfrac[e]);
+                    out << physics << ',' << vf << ',' << minvf << ',' << gn << ',' << gg << ','
+                        << s.A.n << ',' << j.stats.iterations << ',' << j.stats.cond_est << ','
+                        << j.stats.residual << ',' << j.stats.status << ',' << cg.stats.iterations
+                        << ',' << cg.stats.cond_est << ',' << cg.stats.residual << ','
+                        << cg.stats.status << ',' << amg.stats.iterations << ','
+                        << amg.stats.residual << ',' << amg.stats.status << ',' << indefinite << ','
+                        << ldl_indefinite << '\n';
+                    out.flush();
+                    std::cout << "gp_sweep " << physics << " gamma_N=" << gn << " vf=" << vf
+                              << " gg=" << gg << " Jacobi=" << j.stats.iterations << " "
+                              << j.stats.status << " CG=" << cg.stats.iterations << " "
+                              << cg.stats.status << " AMG=" << amg.stats.iterations << " "
+                              << amg.stats.status << std::endl;
                 }
-                auto s = assemble(m, c, p);
-                auto j = conjugate_gradient(s.A, s.rhs, true),
-                     cg = conjugate_gradient(s.A, s.rhs, false);
-                LinearResult amg;
-                bool indefinite = j.stats.indefinite || cg.stats.indefinite;
-                // Independent algebraic check: distinguish genuine loss of coercivity
-                // from a possible iterative-roundoff breakdown without tuning penalties.
-                auto diagnostic = banded_cholesky(s.A, s.rhs, true);
-                bool ldl_indefinite = diagnostic.stats.indefinite;
-                if (!hypre_available())
-                    amg.stats.status = "unavailable";
-                else if (indefinite)
-                    amg.stats.status = "skipped_indefinite";
-                else
-                    amg = hypre_pcg(s.A, s.rhs, nc);
-                double minvf = 1;
-                for (int e = 0; e < m.n_elem; ++e)
-                    if (c.cell_state[e])
-                        minvf = std::min(minvf, c.cell_volfrac[e]);
-                out << (nc == 1 ? "thermal" : "elastic") << ',' << vf << ',' << minvf << ',' << gg
-                    << ',' << s.A.n << ',' << j.stats.iterations << ',' << j.stats.cond_est << ','
-                    << j.stats.residual << ',' << j.stats.status << ',' << cg.stats.iterations
-                    << ',' << cg.stats.cond_est << ',' << cg.stats.residual << ','
-                    << cg.stats.status << ',' << amg.stats.iterations << ',' << amg.stats.residual
-                    << ',' << amg.stats.status << ',' << indefinite << ',' << ldl_indefinite
-                    << '\n';
-                out.flush();
-                std::cout << "gp_sweep " << (nc == 1 ? "thermal" : "elastic") << " vf=" << vf
-                          << " gg=" << gg << " Jacobi=" << j.stats.iterations << " "
-                          << j.stats.status << " CG=" << cg.stats.iterations << " "
-                          << cg.stats.status << " AMG=" << amg.stats.iterations << " "
-                          << amg.stats.status << std::endl;
-            }
 }
 } // namespace chipcae::proto_cutfem
