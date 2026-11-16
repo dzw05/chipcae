@@ -1,2 +1,12 @@
-# Temporary default owner until module-level owners are assigned.
-* @dzw05
+# CODEOWNERS — 只有关键节点路径需要 Zhiwei 审批（其余由 AI 交叉审 + CI 门禁）
+/docs/adr/                        @dzw05
+/protocol/                        @dzw05
+/cmake/ChipcaeLicensePolicy.cmake @dzw05
+/cmake/check_license_policy.py    @dzw05
+/cmake/dependencies.allowlist     @dzw05
+/.github/                         @dzw05
+/CODEOWNERS                       @dzw05
+/cases/reference/                 @dzw05   # Ansys 对比基准数据
+# 模块段（模块负责人确定前暂不启用强制审批，仅作路由）
+# /core/ /geometry/ /mesh/ /solvers/fem/ /solvers/fvm/ /solvers/particles/
+# /coupling/ /io/ /kernel/ /jobmgr/ /preview/ /gui/ /python/ /schema/ /tests/

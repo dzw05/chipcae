@@ -16,9 +16,10 @@ chipcae 走闭源商用路线，目标用户是工业界工程师。若引入 GP
 
 - 内核与数值：Kokkos、MPI、HDF5、Hypre、PETSc、jsoncons、gRPC / Protobuf
 - 有限元底座：MFEM（见 ADR-0003，有条件采用）
+- 其他允许项：nanobind、METIS（Apache-2.0）、Zoltan、Kokkos Kernels、ArborX；MUMPS（CeCILL-C，仅动态链接，可选后端，默认 OFF）
 - 界面：Qt6、VTK、Open CASCADE（OCCT）
 
-明确排除 p4est、t8code、Basilisk 等 GPL 库。deal.II 本身是 LGPL，但其分布式网格依赖 p4est，因此只作为 MFEM 的备选，在确认可以避开 p4est 之前不得引入。
+明确排除 ParMETIS（仅限非商业用途）、libigl（含 GPL 模块）、p4est、t8code、Basilisk 等 GPL 库。deal.II 本身是 LGPL，但其分布式网格依赖 p4est，因此只作为 MFEM 的备选，在确认可以避开 p4est 之前不得引入。
 
 ## 后果
 
