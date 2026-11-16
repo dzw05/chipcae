@@ -22,6 +22,12 @@ include(ChipcaeLicensePolicy)
 include(ChipcaeDependencies)
 include(ChipcaeWarnings)
 
+if(CHIPCAE_BUILD_TESTS)
+    # Enable CTest before add_subdirectory(material) so K3 tests are registered
+    # in the top-level dashboard (enable_testing after a subdir would drop them).
+    enable_testing()
+endif()
+
 add_subdirectory(core)
 add_subdirectory(geometry)
 add_subdirectory(mesh)
@@ -35,6 +41,10 @@ add_subdirectory(jobmgr)
 add_subdirectory(preview)
 add_subdirectory(kernel)
 
+# Material point library (K3). Self-gated: no-op when Kokkos is unavailable and
+# CHIPCAE_MATERIAL_FETCH_KOKKOS is OFF, so a bare `cmake -B build` still succeeds.
+add_subdirectory(material)
+
 if(CHIPCAE_BUILD_GUI)
     add_subdirectory(gui)
 endif()
@@ -44,6 +54,5 @@ if(CHIPCAE_ENABLE_PYTHON)
 endif()
 
 if(CHIPCAE_BUILD_TESTS)
-    enable_testing()
     add_subdirectory(tests)
 endif()

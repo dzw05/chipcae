@@ -1,0 +1,44 @@
+# ILLUSTRATIVE ONLY — 参数为示意值，不得当作真实材料数据。
+# provenance.source_type = illustrative, confidence = illustrative.
+# 展示等效化学收缩（P0）与工艺步绑定；s_eff 为凝胶后有效体积收缩率。
+id: example_molding_compound_shrinkage
+schema_version: "1"
+unit_system: SI
+
+model: thermo_elastic
+density: 1900.0  # kg/m^3
+
+elastic:
+  symmetry: isotropic
+  table:
+    temperatures: [298.15, 448.15]
+    columns:
+      E: [2.2e+10, 1.0e+9]
+      nu: [0.3, 0.3]
+    interpolation: linear
+    extrapolation: error
+
+thermal_expansion:
+  cte_type: tangent
+  symmetry: isotropic
+  stress_free_temperature: 448.15
+  table:
+    temperatures: [298.15, 448.15]
+    columns:
+      alpha: [8.0e-6, 3.0e-5]
+    interpolation: linear
+    extrapolation: clamp
+
+chemical_shrinkage:
+  model: equivalent_isotropic
+  post_gel_shrinkage:
+    value: 0.0025  # 无量纲，正值表示收缩
+    measure: volumetric
+  schedule:
+    cure_step_ids: ["mold_cure"]
+    profile: linear_ramp
+
+provenance:
+  source_type: illustrative
+  confidence: illustrative
+  notes: "Synthetic values for tests only; not for engineering use."

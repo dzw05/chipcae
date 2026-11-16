@@ -1,0 +1,48 @@
+# ILLUSTRATIVE ONLY — 参数为示意值，不得当作真实材料数据。
+# provenance.source_type = illustrative, confidence = illustrative.
+id: example_prony_viscoelastic
+schema_version: "1"
+unit_system: SI
+
+model: prony_viscoelastic
+density: 1900.0  # kg/m^3
+
+thermal_expansion:
+  cte_type: tangent
+  symmetry: isotropic
+  stress_free_temperature: 448.15
+  table:
+    temperatures: [233.15, 298.15, 448.15]
+    columns:
+      alpha: [2.0e-5, 2.6e-5, 5.0e-5]
+    interpolation: linear
+    extrapolation: clamp
+
+glass_transition:
+  T_g: 400.0  # K
+  method: DMA_tan_delta_peak
+
+viscoelastic:
+  symmetry: isotropic
+  reference_temperature: 298.15  # K
+  volumetric_mode: elastic_bulk  # 必填，无默认（D14）
+  shear:
+    infinity: 2.0e+8
+    terms:
+      - {modulus: 6.0e+8, tau: 1.0e-1}
+      - {modulus: 4.0e+8, tau: 1.0e+1}
+  bulk_modulus:
+    temperatures: [298.15, 448.15]
+    columns:
+      K: [2.2e+9, 1.0e+9]
+    interpolation: linear
+    extrapolation: error
+  shift:
+    type: WLF
+    C1: 17.44
+    C2: 51.6
+
+provenance:
+  source_type: illustrative
+  confidence: illustrative
+  notes: "Synthetic values for tests only; not for engineering use."

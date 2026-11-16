@@ -1,0 +1,34 @@
+# ILLUSTRATIVE ONLY — 参数为示意值，不得当作真实材料数据。
+# provenance.source_type = illustrative, confidence = illustrative.
+id: example_thermo_elastic
+schema_version: "1"
+unit_system: SI
+
+model: thermo_elastic
+density: 1900.0  # kg/m^3
+
+elastic:
+  symmetry: isotropic
+  table:
+    temperatures: [233.15, 298.15, 423.15]
+    columns:
+      E: [2.0e+9, 2.2e+9, 1.5e+9]
+      nu: [0.35, 0.35, 0.35]
+    interpolation: linear
+    extrapolation: error
+
+thermal_expansion:
+  cte_type: tangent
+  symmetry: isotropic
+  stress_free_temperature: 448.15
+  table:
+    temperatures: [233.15, 298.15, 448.15]
+    columns:
+      alpha: [2.0e-5, 2.6e-5, 5.0e-5]
+    interpolation: linear
+    extrapolation: clamp
+
+provenance:
+  source_type: illustrative
+  confidence: illustrative
+  notes: "Synthetic values for tests only; not for engineering use."

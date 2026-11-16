@@ -1,6 +1,7 @@
 # Build trees
 /build/
 /build-*/
+/material/build*/
 /cmake-build-*/
 /out/
 /Testing/
@@ -46,3 +47,6 @@ Thumbs.db
 # Standalone benchmark binary (built by bench/Makefile, not CMake)
 /bench/poisson_microbench
 /.ccache/
+
+# Generated K3 delivery archive (rebuilt by scripts, not source)
+/material/chipcae_material.tar.gz
