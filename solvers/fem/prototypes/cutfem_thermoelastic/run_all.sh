@@ -17,7 +17,7 @@ fi
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 export MPLCONFIGDIR="$PWD/build/matplotlib"
 export LD_LIBRARY_PATH="/workspace/tools/env/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=Release -DCUTFEM_WITH_HYPRE="$with_hypre" -DCUTFEM_WITH_KOKKOS="$with_kokkos" -DKokkos_DIR=/workspace/deps/kokkos/lib/cmake/Kokkos -DMPI_CXX_COMPILER=/workspace/tools/env/bin/mpicxx
+cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=Release -DCUTFEM_WITH_HYPRE="$with_hypre" -DCUTFEM_WITH_KOKKOS="$with_kokkos" -DKokkos_DIR="${KOKKOS_DIR:-/workspace/deps/kokkos/lib/cmake/Kokkos}" -DMPI_CXX_COMPILER="${MPI_CXX:-/workspace/tools/env/bin/mpicxx}" ${HYPRE_ROOT:+-DHYPRE_ROOT="$HYPRE_ROOT"}
 cmake --build build -j4
 mkdir -p results
 ./build/cutfem_proto unit_tests | tee results/unit_tests.log
@@ -50,5 +50,5 @@ Path('results/run_info.json').write_text(json.dumps({
 PYINFO
 python3 scripts/spectrum.py --results results
 python3 scripts/plot.py --results results
-(cd /workspace/chipcae-cutfem && python3 cmake/check_license_policy.py) | tee results/license_policy.log
+(cd "$(git rev-parse --show-toplevel)" && python3 cmake/check_license_policy.py) | tee results/license_policy.log
 echo "run_all.sh succeeded (hypre=$with_hypre, kokkos=$with_kokkos, elapsed ${SECONDS}s)"

@@ -10,7 +10,7 @@
 ## 运行
 
 ```bash
-cd /workspace/chipcae/solvers/fem/prototypes/cutfem_thermoelastic
+cd solvers/fem/prototypes/cutfem_thermoelastic   # 从仓库根目录
 ./run_all.sh
 ./run_all.sh --with-hypre
 ./run_all.sh --with-kokkos
@@ -18,7 +18,7 @@ cd /workspace/chipcae/solvers/fem/prototypes/cutfem_thermoelastic
 ```
 
 需要 CMake≥3.20、C++20 编译器、Ninja、python3、numpy、matplotlib。脚本使用 Release `-O2`、`-j4`，实验顺序执行，BLAS 设单线程；Kokkos 计时分别使用 1、2、4 个 OpenMP 线程。
-默认无 hypre；`--with-hypre` 使用 `/workspace/tools/env/bin/mpicxx` 和只读的 `/workspace/prototypes/p1-mfem-thinlayer/deps/hypre`。脚本设运行时库路径。
+默认无 hypre；`--with-hypre` 使用 `/workspace/tools/env/bin/mpicxx` 和只读的 `/workspace/prototypes/p1-mfem-thinlayer/deps/hypre`。脚本设运行时库路径。路径可用环境变量 `KOKKOS_DIR`、`MPI_CXX`、`HYPRE_ROOT` 覆盖。
 CMake 可指定 `-DHYPRE_ROOT=...` 与 `-DMPI_CXX_COMPILER=...`。hypre 的默认配置是 HMIS coarsening (10)、extended+i interpolation (6)、symmetric hybrid GS relaxation (6)、每次一轮 V-cycle、阈值 thermal 0.25 / elastic 0.5；elastic 设置 NumFunctions=2、Nodal=1，节点 DOF 交错。PCG 真相对残差目标 1e-8。针对安装库与系统链接器的 GOT relocation relaxation 兼容问题，hypre 路径添加 `--no-relax`，防止函数地址入栈被错误改写为函数调用。
 
 单项调试：
