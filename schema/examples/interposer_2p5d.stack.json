@@ -1,0 +1,84 @@
+{
+  "id": "interposer_2p5d",
+  "unit": "m",
+  "outline": {
+    "box": [
+      0,
+      0,
+      0.02,
+      0.02
+    ]
+  },
+  "symmetry": "none",
+  "package_type": "2.5D",
+  "layers": [
+    {
+      "name": "substrate",
+      "thickness": 0.001,
+      "kind": "Homogenized",
+      "material": "organic",
+      "n_elem_min": 2,
+      "grading": 1
+    },
+    {
+      "name": "interposer",
+      "thickness": 0.0003,
+      "kind": "Homogenized",
+      "material": "silicon",
+      "n_elem_min": 2,
+      "grading": 1
+    },
+    {
+      "name": "microbump_eq",
+      "thickness": 5e-05,
+      "kind": "Homogenized",
+      "material": "bump_equivalent",
+      "n_elem_min": 2,
+      "grading": 1
+    },
+    {
+      "name": "dice",
+      "thickness": 0.0004,
+      "kind": "Explicit",
+      "material": "underfill",
+      "n_elem_min": 2,
+      "grading": 1,
+      "regions": [
+        {
+          "name": "die_a",
+          "material": "silicon",
+          "footprint": {
+            "box": [
+              0.002,
+              0.003,
+              0.008,
+              0.017
+            ]
+          }
+        },
+        {
+          "name": "die_b",
+          "material": "silicon",
+          "footprint": {
+            "box": [
+              0.011,
+              0.003,
+              0.018,
+              0.017
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "activation_groups": [
+    {
+      "name": "assembly",
+      "members": [
+        "layer:interposer",
+        "region:die_a",
+        "body:die_b"
+      ]
+    }
+  ]
+}
