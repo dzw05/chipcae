@@ -1,0 +1,37 @@
+name: Actions usage
+
+# Daily hosted-minute check. 01:00 UTC is 09:00 Asia/Shanghai (CST, UTC+8).
+# Without the ACTIONS_BILLING_TOKEN secret the job prints a skip line and
+# exits 0. This workflow does not create that secret. See docs/ci.md.
+
+on:
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: actions-usage
+  cancel-in-progress: true
+
+jobs:
+  usage:
+    name: Hosted minutes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check account minutes
+        env:
+          ACTIONS_BILLING_TOKEN: ${{ secrets.ACTIONS_BILLING_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTIONS_MINUTE_BUDGET: ${{ vars.ACTIONS_MINUTE_BUDGET || '1500' }}
+          ACTIONS_USAGE_ALERT_FRACTION: ${{ vars.ACTIONS_USAGE_ALERT_FRACTION || '0.8' }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python3 .github/scripts/check_actions_usage.py

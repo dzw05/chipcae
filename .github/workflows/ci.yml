@@ -1,97 +1,248 @@
 name: CI
 
+# Hosted Tier A. Linux only.
+# Pull requests run lint plus one Release build. Pushes to main run lint only.
+# Drafts are skipped. Docs-only pull requests skip the build.
+# Build-and-test can move later by setting the TIER_A_RUNNER repository variable
+# to a single runner label. Leave it unset to stay on ubuntu-latest.
+# The only hard merge gate is the aggregate job "CI / ci-ok" (ADR-0006).
+# Branch protection is not enabled and must not be turned on. See docs/ci.md.
+
 on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
   push:
     branches: [main]
-  pull_request:
 
 permissions:
   contents: read
   pull-requests: read
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      code: ${{ steps.f.outputs.code }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: f
-        with:
-          filters: |
-            code: ['**/*.cpp','**/*.hpp','**/CMakeLists.txt','cmake/**','protocol/**','.github/**','tests/**']
   lint:
+    name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 8
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    outputs:
+      code: ${{ steps.paths.outputs.code }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Fetch protocol baseline
         run: |
+          set -euo pipefail
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            git fetch --no-tags --depth=1 origin +refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
+            git fetch --no-tags --depth=1 origin "+refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
             echo "CHIPCAE_PROTOCOL_BASE=origin/${{ github.base_ref }}" >> "$GITHUB_ENV"
           elif [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
-            git fetch --no-tags --depth=1 origin ${{ github.event.before }}
+            git fetch --no-tags --depth=1 origin "${{ github.event.before }}"
             echo "CHIPCAE_PROTOCOL_BASE=${{ github.event.before }}" >> "$GITHUB_ENV"
           fi
-      - name: Install formatter
-        run: pipx install clang-format==23.1.5 || python3 -m pip install --user --break-system-packages clang-format==23.1.5
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-lint-clang-format-23.1.5
+
+      - name: Install lint tools
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --break-system-packages --disable-pip-version-check \
+            'clang-format==23.1.5' pyyaml
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: License policy
         run: python3 cmake/check_license_policy.py .
+
       - name: Format
         run: |
-          mapfile -t files < <(git ls-files '*.cpp' '*.hpp' '*.h' '*.cc' '*.cxx')
-          if [ ${#files[@]} -gt 0 ]; then
-            clang-format --dry-run --Werror "${files[@]}"
+          set -euo pipefail
+          mapfile -t files < <(git ls-files '*.cpp' '*.hpp' '*.h' '*.cc' '*.cxx' '*.cu')
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No C++ sources to format"
+            exit 0
           fi
+          clang-format --dry-run --Werror "${files[@]}"
+
+      - name: YAML and config
+        run: python3 tools/ci/check_configs.py .
+
       - name: Protocol compatibility
         run: python3 cmake/check_protocol_compat.py .
-  quick-check:
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    timeout-minutes: 20
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install build tools
+
+      - name: Baseline update label
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HAS_BASELINE_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'perf-baseline-update') }}
+        run: python3 tools/ci/check_baseline_label.py .
+
+      - name: Python unit tests
+        run: python3 -m unittest discover -s tools -t . -p 'test_*.py' -v
+
+      - name: Paths
+        id: paths
         run: |
-          sudo apt-get install -y --no-install-recommends ninja-build ccache || {
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends ninja-build ccache
-          }
-      - uses: hendrikmuhs/ccache-action@v1.2
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "code=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base="${{ github.event.pull_request.base.sha }}"
+          if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "$base" || true
+          fi
+          if git diff --name-only "$base"...HEAD > /tmp/chipcae-changed 2>/dev/null; then
+            :
+          elif git diff --name-only "$base" HEAD > /tmp/chipcae-changed 2>/dev/null; then
+            :
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "could not diff against the base; running the build"
+            exit 0
+          fi
+          code=false
+          if [ ! -s /tmp/chipcae-changed ]; then
+            echo "code=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            case "$file" in
+              docs/*|*.md|LICENSE|CODEOWNERS)
+                ;;
+              *)
+                code=true
+                ;;
+            esac
+          done < /tmp/chipcae-changed
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "non-doc changes: $code"
+
+  build-test:
+    name: Build and test
+    needs: lint
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      needs.lint.result == 'success' &&
+      needs.lint.outputs.code == 'true'
+    runs-on: ${{ vars.TIER_A_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++ cmake ccache python3-yaml
+          ccache --version
+          g++ --version
+          cmake --version
+
+      - name: Cache ccache
+        uses: actions/cache@v4
         with:
-          key: ${{ runner.os }}-gcc-release
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-gcc-release-${{ hashFiles('**/*.cpp', '**/*.hpp', '**/*.h', '**/CMakeLists.txt', 'cmake/**') }}
+          restore-keys: |
+            ccache-gcc-release-
+
       - name: Configure
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCHIPCAE_WARNINGS_AS_ERRORS=ON
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+          CCACHE_MAXSIZE: 200M
+        run: |
+          set -euo pipefail
+          mkdir -p "$CCACHE_DIR"
+          ccache --zero-stats
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCHIPCAE_WARNINGS_AS_ERRORS=ON
+
       - name: Build
-        run: cmake --build build
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+          CCACHE_MAXSIZE: 200M
+        run: |
+          set -euo pipefail
+          cmake --build build --parallel
+          ccache --show-stats
+
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: |
+          set -euo pipefail
+          ctest --test-dir build --output-on-failure --output-junit "$PWD/build/junit.xml"
+
+      - name: Perf microbenchmark (informational timing)
+        id: perf
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+          RUNNER_LABEL: ${{ vars.TIER_A_RUNNER || 'ubuntu-latest' }}
+        run: |
+          set -euo pipefail
+          make -C bench
+          python3 tools/perf/harness.py \
+            --config bench/perf_config.yaml \
+            --binary bench/poisson_microbench \
+            --kind microbenchmark \
+            --grid 48 \
+            --runner-label "$RUNNER_LABEL" \
+            --build-config gcc-release \
+            --output build/perf-summary.json
+          python3 tools/perf/compare_baseline.py \
+            --config bench/perf_config.yaml \
+            --summary build/perf-summary.json \
+            --baseline bench/baselines/poisson_microbenchmark_gcc-release.json \
+            --profile per-commit \
+            --tier a \
+            --output build/perf-compare.json \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Record an inconclusive perf run
+        if: steps.perf.outputs.inconclusive == 'true'
+        run: |
+          {
+            echo "### Perf noise"
+            echo "inconclusive=true. Timing was too noisy to gate (CV still above 5% after one rerun)."
+            echo "Hosted pull requests do not open an issue for this flag."
+            echo "The Tier B nightly perf job is the step that should open one. See docs/ci.md."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test and perf results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tier-a-results-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            build/junit.xml
+            build/perf-summary.json
+            build/perf-compare.json
+
   ci-ok:
     if: always()
-    needs: [changes, lint, quick-check]
+    needs: [lint, build-test]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Check results
         env:
-          CHANGES: ${{ needs.changes.result }}
           LINT: ${{ needs.lint.result }}
-          QUICK: ${{ needs.quick-check.result }}
-        run: test "$CHANGES" = success && test "$LINT" = success && { test "$QUICK" = success || test "$QUICK" = skipped; }
-
-  # TODO(later): enable a CUDA compile-only job (nvcc container, no GPU required)
-  # once optional-dependency build configs land. It should configure/build with
-  # Kokkos CUDA + MFEM device backends and not run tests.
-  # cuda-compile:
-  #   if: false
-  #   runs-on: ubuntu-latest
-  #   container: nvidia/cuda:12.4.1-devel-ubuntu22.04
-  #   timeout-minutes: 30
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - name: Configure CUDA build
-  #       run: echo "TODO: cmake -B build-cuda with CHIPCAE_ENABLE_KOKKOS=ON and CUDA backend"
+          BUILD: ${{ needs.build-test.result }}
+        run: test "$LINT" = success && { test "$BUILD" = success || test "$BUILD" = skipped; }

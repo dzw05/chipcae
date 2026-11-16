@@ -42,3 +42,7 @@ Thumbs.db
 # Local tooling
 .codex/
 .codebuddy/
+
+# Standalone benchmark binary (built by bench/Makefile, not CMake)
+/bench/poisson_microbench
+/.ccache/
