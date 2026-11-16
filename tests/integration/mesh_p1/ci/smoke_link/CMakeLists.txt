@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.20)
+project(k1_prefix_smoke LANGUAGES C CXX)
+find_package(MPI REQUIRED COMPONENTS CXX)
+find_package(HYPRE REQUIRED)
+find_package(HDF5 REQUIRED COMPONENTS C)
+find_package(MFEM REQUIRED)
+add_executable(k1_prefix_smoke smoke.cpp)
+target_link_libraries(k1_prefix_smoke PRIVATE MPI::MPI_CXX HYPRE::HYPRE ${HDF5_LIBRARIES} mfem)
