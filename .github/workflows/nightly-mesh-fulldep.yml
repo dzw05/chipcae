@@ -163,14 +163,19 @@ jobs:
           set -euo pipefail
           key="k1-deps-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/deps.lock', 'tests/integration/mesh_p1/ci/build_deps_cpu.sh') }}"
           delete_ok=true
+          # gh cache delete takes a positional id or key, not --key (that flag is only on cache list).
           ids=$(gh cache list --key "$key" --json id --jq '.[].id' || true)
           if [[ -z "${ids}" ]]; then
             echo "No existing cache entry for $key"
-          elif gh cache delete --key "$key"; then
-            echo "Deleted cache key $key"
           else
-            echo "Failed to delete cache key $key. Will rebuild and test, but will not save a new prefix." >&2
-            delete_ok=false
+            for id in $ids; do
+              if gh cache delete "$id"; then
+                echo "Deleted cache id $id for $key"
+              else
+                echo "Failed to delete cache id $id for $key. Will rebuild and test, but will not save a new prefix." >&2
+                delete_ok=false
+              fi
+            done
           fi
           echo "delete_ok=$delete_ok" >> "$GITHUB_OUTPUT"
 
@@ -246,7 +251,7 @@ jobs:
         if: success() && steps.changes.outputs.run == 'true' && steps.deps.outputs.delete_bad_cache == 'true' && steps.cache-delete.outputs.delete_ok != 'true'
         run: |
           echo "Rebuilt the prefix, but could not delete the existing k1-deps cache key; not saved." >&2
-          echo "Delete it by hand with: gh cache delete --key <k1-deps-...>" >&2
+          echo "Delete it by hand with: gh cache delete <cache-id>" >&2
           exit 1
 
       - name: Report cache sizes
