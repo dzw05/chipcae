@@ -1,0 +1,31 @@
+id: SI
+schema_version: "1"
+unit_system: SI
+model: thermo_elastic
+density: 2330.0  # kg/m^3，数量级常用值，本卡未引用文献密度，source: tbd
+material_frame: global
+elastic:
+  symmetry: isotropic
+  table:
+    temperatures: [298.15]
+    columns: {E: [1.31e11], nu: [0.28]}
+    interpolation: linear
+    extrapolation: clamp
+thermal_expansion:
+  cte_type: tangent
+  stress_free_temperature: 438.15  # 165 °C，本卡 chosen 统一 T_sf；P 系列须改用文献分部件温度
+  symmetry: isotropic
+  table:
+    temperatures: [298.15]
+    columns: {alpha: [2.8e-6]}
+    interpolation: linear
+    extrapolation: clamp
+provenance:
+  source_type: literature
+  reference: "Chen C. et al., Materials 15(5):1683 (2022), Table 7"
+  confidence: medium
+  import:
+    original_file: materials/SI.csv
+    original_units: {modulus: GPa, temperature: degC, alpha: ppm/K}
+    importer_version: "vv-template-0.1"
+  notes: "cited。硅本为立方各向异性，此处各向同性简化。密度未在原卡给出，标 tbd。"

@@ -1,0 +1,6 @@
+# SUB_ISO, Kim 2016 Table 3, E(T). T in K, E in Pa, alpha 1/K
+temperature_K,E_Pa,nu,alpha_1_per_K
+298.15,3.10e10,0.3,1.6e-5
+423.15,2.50e10,0.3,1.6e-5
+453.15,1.95e10,0.3,1.6e-5
+518.15,1.45e10,0.3,1.6e-5

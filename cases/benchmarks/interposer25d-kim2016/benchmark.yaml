@@ -1,0 +1,79 @@
+# V&V 规范格式 v0.1（不是求解器算例 schema）
+format: vv-benchmark-yaml
+format_version: "0.1"
+id: interposer25d-kim2016
+legacy_id: WV-PKG-I25D
+version: "0.1"
+title: chipcae 公开封装翘曲基准：2.5D 硅中介层（Kim 2016 尺寸 + chosen 布局）
+status: draft
+date: "2026-11-16"
+timezone: Asia/Shanghai
+purpose:
+  X_PW: verification
+  P: validation
+notes:
+  - 尚未在任何求解器中运行
+  - Kim 2016 原文采用 3D 半模型；文献封装不能当作四分之一对称
+  - 参数集 A 的四存储块双轴布局是 chosen verification 几何，不是原文布置
+references:
+  Kim2016: {citation: "Kim Y. et al., Microelectron. Reliab. 65:234-242 (2016)", doi: "10.1016/j.microrel.2016.07.153"}
+  Yahyaei2025: {citation: "Yahyaei et al. 2025 Table 2（C4 高 100 µm）", status: cited_in_v01_card}
+  Hisada2012: {citation: "Hisada 2012（逻辑–存储间隙 0.375 mm）", status: cited_in_v01_card}
+geometry:
+  parameter_set: A
+  symmetry:
+    kim2016_model: half
+    kim2016_biaxial_verified: false
+    evidence: "Table 1 ASIC 18.5×18.6 mm，中介层 26.4×19.5 mm 矩形；正文 Fig.7 为 3D half model；四存储块坐标未给出"
+    quarter_allowed: "仅适用于本卡 chosen 双轴布局，且仅 NLGEOM 关闭的小变形外部对照"
+    nlgeom_on: full_model
+    p_series: "full_model（对照可用 half，与原文一致）"
+    solver_default: full_model
+    full_model_variant_required: true
+  substrate_LxW_mm: {value: [40.0, 40.0], unit: mm, source: literature, cite: Kim2016}
+  substrate_t_mm: {value: 1.15, unit: mm, source: literature, cite: Kim2016}
+  interposer_LxW_mm: {value: [26.4, 19.5], unit: mm, source: literature, cite: Kim2016}
+  interposer_t_mm: {value: 0.10, unit: mm, source: literature, cite: Kim2016}
+  asic_literature_LxW_mm: {value: [18.5, 18.6], unit: mm, source: literature, cite: Kim2016, note: "P 系列用此尺寸，非正方"}
+  memory_literature_mm: {value: [8.0, 4.0, 0.5], unit: mm, source: literature, cite: Kim2016, note: "块数与平面位置原文未给出可核验坐标"}
+  soc_chosen_LxW_mm: {value: [14.0, 17.5], unit: mm, source: chosen, note: "仅 verification 布局"}
+  memory_count_chosen: {value: 4, source: chosen}
+  c4_uf_t_mm: {value: 0.10, unit: mm, source: literature, cite: Yahyaei2025}
+  ubump_uf_t_mm: {value: 0.025, unit: mm, source: chosen}
+mesh:
+  type: cut_cell
+  background: tensor_product_cartesian
+  z_alignment: layer_interfaces
+  cut_features: [c4, microbumps, fillets, chamfers]
+  variants:
+    F-ALIGNED:
+      description: z 向对齐层界面；无未对齐圆角
+    F-UNALIGNED:
+      description: 中介层上或芯片下底填圆角不与背景网格面对齐
+      fillet_radius_mm: {value: 0.05, unit: mm, source: chosen}
+      qoi: [W_bfp, path_P1, path_P2, kappa, sigma_die_center]
+      compare_to: F-ALIGNED
+      aligned_vs_unaligned_tolerance: {status: tbd, rationale: "同 FCBGA 卡：两套几何不是同一问题。建议先报告差值，全局翘曲相对差大于 2% 记为需讨论，不作 hard fail。"}
+tiers:
+  B0: {nlgeom: off}
+  B1: {nlgeom: off}
+  B2: {nlgeom: off}
+  B3: {nlgeom: on, model: full_only}
+  B4: {nlgeom: on, model: full_only}
+series:
+  X: {type: verification, variants: [X-OFF, X-ON], chosen_allowed: true}
+  PW: {type: verification, reference: tools/vv/pw_reference.py, chosen_allowed: true}
+  P-KIM2016:
+    type: validation
+    literature_only: true
+    kim2016_fea: {software: ANSYS 14.5, element: SOLID185, model: half, source: literature, cite: Kim2016}
+    curves: {figures: [8, 10], digitized: tbd}
+    emc_borrowed_underfill_forbidden: true
+loads:
+  T_sf_C: {value: 165, unit: degC, source: chosen, note: "统一 T_sf 为简化；P 系列须改用文献分部件零应力温度"}
+cpu_gpu_consistency:
+  warpage_disp_rel: 1.0e-6
+  stress_rel_of_max: 1.0e-6
+  linear_relative_residual: 1.0e-12
+  newton_tolerance: 1.0e-10
+  any_exceedance_blocks: true

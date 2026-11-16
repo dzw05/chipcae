@@ -1,0 +1,35 @@
+id: I25D_C4_UF
+schema_version: "1"
+unit_system: SI
+model: prony_viscoelastic
+glass_transition: {T_g: 395.15, method: DMA_tan_delta_peak}
+thermal_expansion:
+  cte_type: tangent
+  stress_free_temperature: 438.15
+  symmetry: isotropic
+  table:
+    temperatures: [298.15, 395.15, 395.15, 533.15]
+    columns: {alpha: [2.5974e-5, 2.5974e-5, 1.20313e-4, 1.20313e-4]}
+    interpolation: linear
+    extrapolation: clamp
+viscoelastic:
+  symmetry: isotropic
+  reference_temperature: 395.15
+  volumetric_mode: constant_poisson_from_E
+  poisson_ratio: 0.31
+  tensile:
+    infinity: 2.430e8
+    terms: []  # 完整 25 项见原 YAML materials.I25D_C4_UF.B2_viscoelastic；此处不手抄
+  shift:
+    type: WLF
+    C1: -2.45104e7
+    C2: -1.87386e8
+  approximation_notes: ["常泊松比换算为近似；与 K 弹性主模式只在纯剪下一致"]
+provenance:
+  source_type: fitted
+  reference: "均质化 derived（Kim 2016 式 1-4，c_s=0.10 chosen）；Prony 形状与 WLF 借自 Chen 2022 EMC（chosen）"
+  confidence: low
+  notes: >
+    X/PW verification 允许 chosen。P 系列禁止使用借自 EMC 的底填 Prony/WLF；
+    无文献底填卡时改为灵敏度参数并给范围，不得写入 P 系列冻结参考。
+    完整 Prony 表见原件 fcbga_v0.1.yaml。
