@@ -16,3 +16,19 @@ except ValueError as error:
 else:
     raise AssertionError("trailing junk accepted")
 assert math.isfinite(values[0])
+
+for text in (".inf", ".nan", "+.inf", "-.inf", "nan", "inf", "1_000", "3.10e_10", "3.1e10x"):
+    try:
+        number(load("value: " + text)["value"], "material.density")
+    except ValueError as error:
+        assert "material.density" in str(error), (text, error)
+    else:
+        raise AssertionError(f"invalid number accepted: {text}")
+
+for value in (float("inf"), float("-inf"), float("nan")):
+    try:
+        number(value, "material.density")
+    except ValueError as error:
+        assert "material.density" in str(error)
+    else:
+        raise AssertionError(f"non-finite typed number accepted: {value}")
