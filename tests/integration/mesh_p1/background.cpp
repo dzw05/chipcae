@@ -29,6 +29,21 @@ int main() {
     expect(std::set<chipcae::Index>(m.node_gid.begin(), m.node_gid.end()).size() ==
                m.node_gid.size(),
            "node GID uniqueness");
+    for (int ranks : {1, 2, 4}) {
+        auto opts = o;
+        opts.ranks = ranks;
+        auto other = build_tensor_grid(s, opts);
+        expect(bool(other) && other.value().elem_gid == m.elem_gid &&
+                   other.value().node_gid == m.node_gid && other.value().hex == m.hex &&
+                   other.value().vertices == m.vertices,
+               "SFC rank-independent geometric GIDs");
+    }
+    for (std::size_t n = 0; n < m.node_layer.size(); ++n) {
+        auto z = m.vertices[3 * n + 2];
+        expect(m.node_layer[n] == (z <= .5 ? 0 : 1), "interface and top node_layer");
+    }
+    auto device = upload<chipcae::HostSpace>(m);
+    expect(device.node_column.extent(0) == m.node_gid.size(), "hex upload");
     double volume = 0;
     std::vector<int> counts(s.layers.size());
     for (std::size_t e = 0; e < m.attribute.size(); ++e) {
@@ -52,10 +67,10 @@ int main() {
     Local next = 1;
     for (auto a : attrs)
         expect(a == next++, "compact attributes");
-    std::size_t columns = (m.axes[0].size() - 1) * (m.axes[1].size() - 1);
+    std::size_t nz = m.axes[2].size() - 1;
     std::vector<int> load(4);
     for (std::size_t e = 0; e < m.attribute.size(); ++e) {
-        expect(m.partitioning[e] == m.partitioning[e % columns], "column ownership");
+        expect(m.partitioning[e] == m.partitioning[(e / nz) * nz], "column ownership");
         ++load[m.partitioning[e]];
     }
     for (auto n : load)
@@ -78,6 +93,16 @@ int main() {
                      "faceset:1",
                      "interface:base|top"})
         expect(bool(resolve_activation(s, m, nullptr, {ref})), "resolve prefix");
+    auto side = resolve_interface_side(m, "layer:base");
+    auto volume_ref = resolve_volume_ref(s, m, nullptr, {"layer:base"});
+    expect(bool(side) && bool(volume_ref) && side.value().size() == 1 &&
+               volume_ref.value().cells.bodies.size() == 2,
+           "split interface and volume layer semantics");
+    expect(bool(resolve_activation(s, m, nullptr, {"interface:body:cap|layer:base"})),
+           "mixed interface sides");
+    expect(!resolve_activation(s, m, nullptr, {"interface:layer:base|body:base"}),
+           "overlap interface rejected");
+    expect(!resolve_activation(s, m, nullptr, {"interface:void|void"}), "void overlap rejected");
     auto overlap = resolve_activation(s, m, nullptr, {"group:overlap"});
     auto layer = resolve_activation(s, m, nullptr, {"layer:base"});
     expect(overlap.value().cells.attributes == layer.value().cells.attributes, "overlap union");
@@ -96,7 +121,7 @@ int main() {
     auto metis_grid = build_tensor_grid(s, metis_options);
     expect(bool(metis_grid), "METIS or SFC fallback");
     for (std::size_t e = 0; e < metis_grid.value().partitioning.size(); ++e)
-        expect(metis_grid.value().partitioning[e] == metis_grid.value().partitioning[e % columns],
+        expect(metis_grid.value().partitioning[e] == metis_grid.value().partitioning[(e / nz) * nz],
                "METIS column ownership");
     auto huge = o;
     huge.nx = std::numeric_limits<Local>::max();

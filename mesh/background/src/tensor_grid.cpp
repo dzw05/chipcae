@@ -63,8 +63,9 @@ ColumnExtrudePartitioner::partition(Local nx, Local ny, Local nz, Local ranks, b
 #endif
     std::vector<Local> result;
     result.reserve(owner.size() * static_cast<std::size_t>(nz));
-    for (Local z = 0; z < nz; ++z)
-        result.insert(result.end(), owner.begin(), owner.end());
+    for (auto column : order)
+        for (Local z = 0; z < nz; ++z)
+            result.push_back(owner[column]);
     return result;
 }
 namespace {
@@ -83,6 +84,8 @@ bool contains(const Footprint& f, Real x, Real y) {
 }
 } // namespace
 Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions& o) {
+    if (!s.symmetry.empty() && s.symmetry != "none")
+        return Error{"symmetry", "symmetry other than none is not implemented"};
     if (o.nx < 1 || o.ny < 1 || o.ranks < 1 || o.cell_budget < 1 || !(o.snap_tol >= 0) ||
         !(o.max_ratio >= 1) || !std::isfinite(o.snap_tol) || !std::isfinite(o.max_ratio))
         return Error{"grid", "invalid options"};
@@ -210,18 +213,30 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
     if ((nx + 1) * (ny + 1) * (nz + 1) >
         static_cast<std::size_t>(std::numeric_limits<Local>::max()))
         return Error{"grid", "local int32 capacity exceeded"};
-    auto node = [&](std::size_t x, std::size_t y, std::size_t k) {
-        return static_cast<Local>(x + (nx + 1) * (y + (ny + 1) * k));
+    std::vector<std::size_t> columns(nx * ny), node_columns((nx + 1) * (ny + 1));
+    std::iota(columns.begin(), columns.end(), 0);
+    std::iota(node_columns.begin(), node_columns.end(), 0);
+    auto sort_columns = [](auto& c, std::size_t width) {
+        std::sort(c.begin(), c.end(), [&](auto a, auto b) {
+            return morton(a % width, a / width) < morton(b % width, b / width);
+        });
     };
-    for (std::size_t k = 0; k <= nz; ++k)
-        for (std::size_t y = 0; y <= ny; ++y)
-            for (std::size_t x = 0; x <= nx; ++x) {
-                m.vertices.insert(m.vertices.end(), {axes[0][x], axes[1][y], axes[2][k]});
-                m.node_gid.push_back(static_cast<Index>(m.node_gid.size()));
-                m.node_layer.push_back(k == nz ? static_cast<Local>(s.layers.size())
-                                               : cell_layer[k]);
-                m.node_column.push_back(static_cast<Local>(x + (nx + 1) * y));
-            }
+    sort_columns(columns, nx);
+    sort_columns(node_columns, nx + 1);
+    std::vector<Local> node_index(node_columns.size());
+    for (std::size_t i = 0; i < node_columns.size(); ++i)
+        node_index[node_columns[i]] = static_cast<Local>(i);
+    auto node = [&](std::size_t x, std::size_t y, std::size_t k) {
+        return static_cast<Local>(node_index[x + (nx + 1) * y] * (nz + 1) + k);
+    };
+    for (auto column : node_columns)
+        for (std::size_t k = 0; k <= nz; ++k) {
+            auto x = column % (nx + 1), y = column / (nx + 1);
+            m.vertices.insert(m.vertices.end(), {axes[0][x], axes[1][y], axes[2][k]});
+            m.node_gid.push_back(static_cast<Index>(m.node_gid.size()));
+            m.node_layer.push_back(k == 0 ? 0 : cell_layer[k - 1]);
+            m.node_column.push_back(node_index[column]);
+        }
     std::vector<std::vector<Local>> attrs;
     for (const auto& l : s.layers) {
         std::vector<Local> row;
@@ -246,55 +261,51 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
             add(r.name, r.material, r.body);
         attrs.push_back(row);
     }
-    for (std::size_t k = 0; k < nz; ++k)
-        for (std::size_t y = 0; y < ny; ++y)
-            for (std::size_t x = 0; x < nx; ++x) {
-                std::array<Local, 8> h = {node(x, y, k),
-                                          node(x + 1, y, k),
-                                          node(x + 1, y + 1, k),
-                                          node(x, y + 1, k),
-                                          node(x, y, k + 1),
-                                          node(x + 1, y, k + 1),
-                                          node(x + 1, y + 1, k + 1),
-                                          node(x, y + 1, k + 1)};
-                m.hex.insert(m.hex.end(), h.begin(), h.end());
-                auto li = cell_layer[k];
-                Local attr = attrs[li][0];
-                for (std::size_t ri = 0; ri < s.layers[li].regions.size(); ++ri) {
-                    const auto& f = s.layers[li].regions[ri].footprint;
-                    if (contains(f,
-                                 (axes[0][x] + axes[0][x + 1]) / 2,
-                                 (axes[1][y] + axes[1][y + 1]) / 2))
-                        attr = attrs[li][ri + 1];
-                    if (!f.polygon.empty() && axes[0][x] < f.box[2] && axes[0][x + 1] > f.box[0] &&
-                        axes[1][y] < f.box[3] && axes[1][y + 1] > f.box[1])
-                        m.pending_cut.push_back(static_cast<Local>(m.attribute.size()));
-                }
-                m.attribute.push_back(attr);
-                m.elem_gid.push_back(static_cast<Index>(m.elem_gid.size()));
-                auto face = [&](std::array<int, 4> ids, Local a) {
-                    for (int i : ids)
-                        m.bdr_quad.push_back(h[i]);
-                    m.bdr_attribute.push_back(a);
-                };
-                if (x == 0)
-                    face({0, 4, 7, 3}, 1);
-                if (x + 1 == nx)
-                    face({1, 2, 6, 5}, 2);
-                if (y == 0)
-                    face({0, 1, 5, 4}, 3);
-                if (y + 1 == ny)
-                    face({3, 7, 6, 2}, 4);
-                if (k == 0)
-                    face({0, 3, 2, 1}, 5);
-                if (k + 1 == nz)
-                    face({4, 5, 6, 7}, 6);
+    for (auto column : columns)
+        for (std::size_t k = 0; k < nz; ++k) {
+            auto x = column % nx, y = column / nx;
+            std::array<Local, 8> h = {node(x, y, k),
+                                      node(x + 1, y, k),
+                                      node(x + 1, y + 1, k),
+                                      node(x, y + 1, k),
+                                      node(x, y, k + 1),
+                                      node(x + 1, y, k + 1),
+                                      node(x + 1, y + 1, k + 1),
+                                      node(x, y + 1, k + 1)};
+            m.hex.insert(m.hex.end(), h.begin(), h.end());
+            auto li = cell_layer[k];
+            Local attr = attrs[li][0];
+            for (std::size_t ri = 0; ri < s.layers[li].regions.size(); ++ri) {
+                const auto& f = s.layers[li].regions[ri].footprint;
+                if (contains(
+                        f, (axes[0][x] + axes[0][x + 1]) / 2, (axes[1][y] + axes[1][y + 1]) / 2))
+                    attr = attrs[li][ri + 1];
+                if (!f.polygon.empty() && axes[0][x] < f.box[2] && axes[0][x + 1] > f.box[0] &&
+                    axes[1][y] < f.box[3] && axes[1][y + 1] > f.box[1])
+                    m.pending_cut.push_back(static_cast<Local>(m.attribute.size()));
             }
+            m.attribute.push_back(attr);
+            m.elem_gid.push_back(static_cast<Index>(m.elem_gid.size()));
+            auto face = [&](std::array<int, 4> ids, Local a) {
+                for (int i : ids)
+                    m.bdr_quad.push_back(h[i]);
+                m.bdr_attribute.push_back(a);
+            };
+            if (x == 0)
+                face({0, 4, 7, 3}, 1);
+            if (x + 1 == nx)
+                face({1, 2, 6, 5}, 2);
+            if (y == 0)
+                face({0, 1, 5, 4}, 3);
+            if (y + 1 == ny)
+                face({3, 7, 6, 2}, 4);
+            if (k == 0)
+                face({0, 3, 2, 1}, 5);
+            if (k + 1 == nz)
+                face({4, 5, 6, 7}, 6);
+        }
     for (Local a = 1; a <= 6; ++a)
         m.face_sets["faceset:" + std::to_string(a)] = {a};
-    for (std::size_t i = 1; i < s.layers.size(); ++i)
-        m.face_sets["interface:" + s.layers[i - 1].name + "|" + s.layers[i].name] = {
-            static_cast<Local>(6 + i)};
     // Compact away tuple records that have no cells, retaining exact inverse maps.
     AttributeTable compact;
     compact.materials = m.attr_table.materials;
@@ -323,6 +334,70 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
     if (!part)
         return part.error();
     m.partitioning = std::move(part.value());
+    // Every actual body transition receives a dedicated aligned interface attribute.
+    constexpr int fi[6][4] = {
+        {0, 3, 2, 1}, {0, 1, 5, 4}, {1, 2, 6, 5}, {2, 3, 7, 6}, {3, 0, 4, 7}, {4, 5, 6, 7}};
+    std::map<std::array<Local, 4>, std::pair<std::size_t, int>> shared;
+    Local next_boundary = 7;
+    for (std::size_t e = 0; e < m.attribute.size(); ++e)
+        for (int f = 0; f < 6; ++f) {
+            std::array<Local, 4> q;
+            for (int j = 0; j < 4; ++j)
+                q[j] = m.hex[8 * e + fi[f][j]];
+            auto key = q;
+            std::sort(key.begin(), key.end());
+            auto [it, inserted] = shared.emplace(key, std::pair{e, f});
+            if (inserted)
+                continue;
+            auto a = m.attr_table.entries[m.attribute[it->second.first] - 1].body;
+            auto bbody = m.attr_table.entries[m.attribute[e] - 1].body;
+            if (a == bbody)
+                continue;
+            std::string an, bn;
+            for (const auto& [name, id] : m.attr_table.bodies) {
+                if (id == a)
+                    an = name;
+                if (id == bbody)
+                    bn = name;
+            }
+            auto name = canonical_interface("body:" + an, "body:" + bn);
+            auto& list = m.face_sets[name];
+            if (list.empty()) {
+                list.push_back(next_boundary++);
+                m.preparation_report.push_back({name});
+            }
+            // Face on first element points towards second element.
+            for (int j = 0; j < 4; ++j)
+                m.bdr_quad.push_back(m.hex[8 * it->second.first + fi[it->second.second][j]]);
+            m.bdr_attribute.push_back(list[0]);
+            Real area = 1;
+            std::array<Real, 3> span{};
+            for (int d = 0; d < 3; ++d) {
+                Real lo = m.vertices[3 * q[0] + d], hi = lo;
+                for (auto v : q) {
+                    lo = std::min(lo, m.vertices[3 * v + d]);
+                    hi = std::max(hi, m.vertices[3 * v + d]);
+                }
+                span[d] = hi - lo;
+            }
+            for (auto v : span)
+                if (v > 0)
+                    area *= v;
+            for (auto& r : m.preparation_report)
+                if (r.name == name) {
+                    ++r.aligned_faces;
+                    r.aligned_area += area;
+                }
+        }
+    m.internal_interfaces = !m.preparation_report.empty();
+    for (const auto& [name, list] : m.face_sets)
+        for (auto a : list)
+            m.attr_table.boundary_names[a] = name;
+    m.attr_frame.resize(9 * m.attr_table.entries.size());
+    for (std::size_t a = 0; a < m.attr_table.entries.size(); ++a)
+        for (int d = 0; d < 3; ++d)
+            m.attr_frame[9 * a + 4 * d] = 1;
+
     for (const auto& [name, members] : s.activation_groups) {
         auto group = resolve_activation(s, m, nullptr, members);
         if (!group)

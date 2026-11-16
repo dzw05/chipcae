@@ -1,4 +1,5 @@
 {
+  "cell_budget": 50000,
   "snap_tol": 1e-14,
   "max_ratio": 2.0,
   "volume_relative": 1e-12,

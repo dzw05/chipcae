@@ -41,6 +41,7 @@ inline chipcae::mesh::StackModel stack() {
 }
 inline chipcae::mesh::GridOptions options() {
     chipcae::mesh::GridOptions o;
+    o.cell_budget = static_cast<chipcae::Index>(threshold("cell_budget"));
     o.snap_tol = threshold("snap_tol");
     o.max_ratio = threshold("max_ratio");
     return o;

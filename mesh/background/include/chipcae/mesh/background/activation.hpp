@@ -21,7 +21,15 @@ struct ActivationResolution {
     ActivationSet cells;
     FaceSet faces;
 };
-std::uint64_t mask_hash(ActivationMask mask);
+// Hash the sorted unique global element IDs, never attribute numbers.
+std::uint64_t mask_hash(std::vector<Index> gids);
+std::vector<Index> activated_gids(const HexMeshArrays&, const ActivationMask&);
+std::string canonical_interface(std::string, std::string);
+Expected<std::vector<BodyId>> resolve_interface_side(const HexMeshArrays&, const std::string&);
+Expected<ActivationResolution> resolve_volume_ref(const StackModel&,
+                                                  const HexMeshArrays&,
+                                                  const cut::CutLayerArrays*,
+                                                  const std::vector<std::string>&);
 Expected<ActivationResolution> resolve_activation(const StackModel&,
                                                   const HexMeshArrays&,
                                                   const cut::CutLayerArrays*,
