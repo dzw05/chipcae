@@ -6,6 +6,7 @@ option(CHIPCAE_BUILD_GUI "Build the Qt6 desktop client" OFF)
 option(CHIPCAE_ENABLE_PYTHON "Build Python bindings" OFF)
 
 option(CHIPCAE_ENABLE_KOKKOS "Use Kokkos for on-node parallelism" OFF)
+option(CHIPCAE_REQUIRE_KOKKOS "Fail configure if Kokkos is missing (used by CI); default OFF so local builds can still skip material/" OFF)
 option(CHIPCAE_ENABLE_MPI "Use MPI for distributed parallelism" OFF)
 option(CHIPCAE_ENABLE_HDF5 "Enable HDF5 / VTKHDF I/O" OFF)
 option(CHIPCAE_ENABLE_HYPRE "Enable Hypre linear solvers" OFF)

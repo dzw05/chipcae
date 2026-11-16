@@ -11,7 +11,7 @@ Repository settings (branch protection, variables, secrets) are not changed by t
 | Workflow | When | Runner | Blocks a merge? |
 | --- | --- | --- | --- |
 | `CI / ci-ok` | After `Lint` and `Build and test` (including when the build is skipped) | `ubuntu-latest` | Yes. This is the only hard gate (ADR-0006) |
-| `CI / Lint` | Non-draft pull request (`opened`, `synchronize`, `ready_for_review`, `reopened`) and push to `main` | Always `ubuntu-latest` | No. It is an input to `ci-ok` |
+| `CI / Lint` | Pull request (`opened`, `synchronize`, `reopened`, `ready_for_review`), including drafts, and push to `main` | Always `ubuntu-latest` | No. It is an input to `ci-ok` |
 | `CI / Build and test` | Non-draft pull request that changes something other than docs | `vars.TIER_A_RUNNER` or `ubuntu-latest` | No. Success or skipped both count as passing for `ci-ok` |
 | `Tier B and nightly / Nightly clang build` | 18:00 UTC daily, or manual dispatch | `ubuntu-latest` | No |
 | `Tier B and nightly / Nightly CUDA compile` | Same nightly schedule. `nvcc -c` only, the object is not run | `ubuntu-latest` | No |
@@ -20,7 +20,7 @@ Repository settings (branch protection, variables, secrets) are not changed by t
 
 Push to `main` does **not** build or test again. Merge already ran the pull-request build.
 
-Draft pull requests skip every job (the job `if` is false, so GitHub does not bill them). Marking a draft ready fires `ready_for_review` and runs the checks.
+Draft pull requests run lint and `ci-ok`. The build-and-test job stays skipped until the pull request is marked ready (`ready_for_review`), which then runs the full check. `ci-ok` still requires lint to succeed; a skipped build counts as passing.
 
 Concurrency group `ci-<workflow>-<ref>` uses `cancel-in-progress`. A newer push cancels the older run on the same ref.
 
@@ -50,7 +50,7 @@ The build job uploads `build/junit.xml` from `ctest --output-junit`, plus the pe
 
 `main` does not use branch protection. The only hard gate is the aggregate job `CI / ci-ok` in the `CI` workflow (ADR-0006). Do not enable branch protection or a ruleset, and do not mark `CI / Lint` or `CI / Build and test` as required checks.
 
-`ci-ok` runs with `if: always()` after `lint` and `build-test`. It passes only when lint is `success` and the build is `success` or `skipped`. It fails when lint is skipped (drafts) or either job fails, including a per-commit iteration or memory-gate failure in the build job. Pushes to `main` and docs-only pulls skip the build, so `ci-ok` still passes if lint passed.
+`ci-ok` runs with `if: always()` after `lint` and `build-test`. It passes only when lint is `success` and the build is `success` or `skipped`. It fails when lint is skipped or either job fails, including a per-commit iteration or memory-gate failure in the build job. Drafts, pushes to `main`, and docs-only pulls skip the build, so `ci-ok` still passes if lint passed.
 
 A later mesh job (A4) may be added to `ci-ok`'s `needs` the same way, counting `skipped` as passing. Do not give Mesh its own required check.
 
@@ -192,7 +192,7 @@ Pushes by the Cursor agent identity (`cursoragent` / `cursor[bot]`) are not a re
 
 ## Monthly estimate
 
-Billed minutes are the job duration rounded up to the next minute. A skipped job costs 0. Drafts are skipped. Docs-only pulls do not start the build. Pushes to `main` do not build.
+Billed minutes are the job duration rounded up to the next minute. A skipped job costs 0. Drafts still run lint (about 11 seconds) and skip the build. Docs-only pulls do not start the build. Pushes to `main` do not build.
 
 ### Measured job time
 

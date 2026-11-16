@@ -91,6 +91,20 @@ jobs:
           nvcc -c bench/cuda/smoke.cu -o "$RUNNER_TEMP/chipcae_cuda_smoke.o"
           echo "nvcc compiled bench/cuda/smoke.cu. The object was not linked or executed."
 
+  # CUDA-enabled Kokkos is not built yet. When this job is turned on, cache the
+  # install under:
+  #   kokkos-${KOKKOS_VERSION}-${RUNNER_OS}-${ImageOS}-gcc$(gcc -dumpversion)-cuda${CUDA_VERSION}-sm_86-Release
+  # KOKKOS_VERSION is pinned only in .github/workflows/ci.yml (do not copy the tag here).
+  cuda-kokkos-placeholder:
+    name: Nightly CUDA Kokkos (disabled)
+    if: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Reserved cache key
+        run: |
+          echo "Disabled placeholder. Cache key formula is in the job comment above."
+
   tier-b-disabled:
     name: Tier B disabled
     if: |

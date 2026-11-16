@@ -9,6 +9,10 @@ if(CHIPCAE_ENABLE_KOKKOS)
     find_package(Kokkos 4.4 REQUIRED)
 endif()
 
+if(CHIPCAE_REQUIRE_KOKKOS)
+    find_package(Kokkos 4.4 REQUIRED)
+endif()
+
 if(CHIPCAE_ENABLE_HDF5)
     find_package(HDF5 REQUIRED COMPONENTS C)
     if(CHIPCAE_ENABLE_MPI AND NOT HDF5_IS_PARALLEL)

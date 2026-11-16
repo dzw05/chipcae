@@ -2,7 +2,8 @@ name: CI
 
 # Hosted Tier A. Linux only.
 # Pull requests run lint plus one Release build. Pushes to main run lint only.
-# Drafts are skipped. Docs-only pull requests skip the build.
+# Draft pull requests run lint (and ci-ok); build-test waits until the PR is marked ready.
+# Docs-only pull requests skip the build.
 # Build-and-test can move later by setting the TIER_A_RUNNER repository variable
 # to a single runner label. Leave it unset to stay on ubuntu-latest.
 # The only hard merge gate is the aggregate job "CI / ci-ok" (ADR-0006).
@@ -10,9 +11,13 @@ name: CI
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
+
+# Kokkos install pin (4.x). The only place this version is set for CI.
+env:
+  KOKKOS_VERSION: "4.7.1"
 
 permissions:
   contents: read
@@ -27,7 +32,6 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     timeout-minutes: 8
-    if: github.event_name == 'push' || github.event.pull_request.draft == false
     outputs:
       code: ${{ steps.paths.outputs.code }}
     steps:
@@ -117,8 +121,12 @@ jobs:
           fi
           while IFS= read -r file; do
             [ -z "$file" ] && continue
+            # material/ and tests/material/ are code and must trigger build-test.
             case "$file" in
               docs/*|*.md|LICENSE|CODEOWNERS)
+                ;;
+              material/*|tests/material/*)
+                code=true
                 ;;
               *)
                 code=true
@@ -137,7 +145,7 @@ jobs:
       needs.lint.result == 'success' &&
       needs.lint.outputs.code == 'true'
     runs-on: ${{ vars.TIER_A_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -148,10 +156,52 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends g++ cmake ccache python3-yaml
+          sudo apt-get install -y --no-install-recommends \
+            g++ cmake ninja-build ccache python3-yaml python3-numpy python3-scipy
           ccache --version
           g++ --version
           cmake --version
+
+      - name: Kokkos cache identity
+        id: kokkos-key
+        run: |
+          set -euo pipefail
+          prefix="$HOME/deps/kokkos"
+          mkdir -p "$HOME/deps"
+          key="kokkos-${KOKKOS_VERSION}-${RUNNER_OS}-${ImageOS:-unknown}-gcc$(gcc -dumpversion)-serial-openmp-Release"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "path=$prefix" >> "$GITHUB_OUTPUT"
+          echo "Kokkos cache key: $key"
+
+      - name: Cache Kokkos
+        id: cache-kokkos
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.kokkos-key.outputs.path }}
+          key: ${{ steps.kokkos-key.outputs.key }}
+
+      - name: Build Kokkos
+        if: steps.cache-kokkos.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/kokkos-src"
+          build="$RUNNER_TEMP/kokkos-build"
+          curl -fsSL "https://github.com/kokkos/kokkos/archive/refs/tags/${KOKKOS_VERSION}.tar.gz" \
+            -o "$RUNNER_TEMP/kokkos.tar.gz"
+          mkdir -p "$src" "$HOME/deps"
+          tar -xzf "$RUNNER_TEMP/kokkos.tar.gz" -C "$src" --strip-components=1
+          cmake -S "$src" -B "$build" -G Ninja \
+            -DCMAKE_INSTALL_PREFIX="$HOME/deps/kokkos" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_STANDARD=20 \
+            -DKokkos_ENABLE_SERIAL=ON \
+            -DKokkos_ENABLE_OPENMP=ON \
+            -DKokkos_ENABLE_CUDA=OFF \
+            -DKokkos_ENABLE_TESTS=OFF \
+            -DKokkos_ENABLE_EXAMPLES=OFF \
+            -DBUILD_SHARED_LIBS=OFF
+          cmake --build "$build" --parallel
+          cmake --install "$build"
 
       - name: Cache ccache
         uses: actions/cache@v4
@@ -171,7 +221,10 @@ jobs:
           ccache --zero-stats
           cmake -B build -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCHIPCAE_WARNINGS_AS_ERRORS=ON
+            -DCHIPCAE_WARNINGS_AS_ERRORS=ON \
+            -DKokkos_ROOT="$HOME/deps/kokkos" \
+            -DCHIPCAE_REQUIRE_KOKKOS=ON \
+            -DCHIPCAE_MATERIAL_ENABLE_PYTHON=OFF
 
       - name: Build
         env:
@@ -183,6 +236,9 @@ jobs:
           ccache --show-stats
 
       - name: Test
+        env:
+          OMP_NUM_THREADS: 2
+          OMP_PROC_BIND: "false"
         run: |
           set -euo pipefail
           ctest --test-dir build --output-on-failure --output-junit "$PWD/build/junit.xml"

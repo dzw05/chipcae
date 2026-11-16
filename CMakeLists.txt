@@ -22,6 +22,12 @@ include(ChipcaeLicensePolicy)
 include(ChipcaeDependencies)
 include(ChipcaeWarnings)
 
+if(CHIPCAE_BUILD_TESTS)
+    # Enable CTest before add_subdirectory(material) so K3 tests are registered
+    # in the top-level dashboard (enable_testing after a subdir would drop them).
+    enable_testing()
+endif()
+
 add_subdirectory(core)
 add_subdirectory(geometry)
 add_subdirectory(mesh)
@@ -48,6 +54,5 @@ if(CHIPCAE_ENABLE_PYTHON)
 endif()
 
 if(CHIPCAE_BUILD_TESTS)
-    enable_testing()
     add_subdirectory(tests)
 endif()

@@ -39,6 +39,11 @@ if(TARGET Kokkos::kokkos)
 elseif(TARGET Kokkos::kokkoscore)
     set(CHIPCAE_MATERIAL_KOKKOS_TARGET Kokkos::kokkoscore)
 else()
+    if(CHIPCAE_REQUIRE_KOKKOS)
+        message(FATAL_ERROR
+            "CHIPCAE_REQUIRE_KOKKOS=ON but Kokkos was not found. "
+            "Set Kokkos_ROOT or CMAKE_PREFIX_PATH to a Kokkos install.")
+    endif()
     message(STATUS
         "chipcae material: Kokkos not found; skipping the material library. "
         "Set CMAKE_PREFIX_PATH to a Kokkos install or enable CHIPCAE_MATERIAL_FETCH_KOKKOS.")
@@ -93,6 +98,11 @@ if(CHIPCAE_MATERIAL_ENABLE_TESTS)
     add_test(NAME t_smoke COMMAND t_smoke)
     set_tests_properties(t_smoke PROPERTIES LABELS "T0")
 
+    add_executable(exec_spaces tests/exec_spaces.cpp)
+    target_link_libraries(exec_spaces PRIVATE chipcae_material)
+    add_test(NAME exec_spaces COMMAND exec_spaces)
+    set_tests_properties(exec_spaces PROPERTIES LABELS "exec_spaces" ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
+
     add_executable(t03_mandel tests/t03_mandel.cpp)
     target_link_libraries(t03_mandel PRIVATE chipcae_material)
     add_test(NAME t03_mandel COMMAND t03_mandel)
@@ -112,7 +122,7 @@ if(CHIPCAE_MATERIAL_ENABLE_TESTS)
         add_executable(${id} $<TARGET_OBJECTS:acceptance_cases>)
         target_link_libraries(${id} PRIVATE chipcae_material)
         add_test(NAME ${id} COMMAND ${id} ${id} ${CMAKE_CURRENT_SOURCE_DIR}/tests/negative)
-        set_tests_properties(${id} PROPERTIES LABELS ${id} ENVIRONMENT "OMP_NUM_THREADS=4;OMP_PROC_BIND=false")
+        set_tests_properties(${id} PROPERTIES LABELS ${id} ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
     endforeach()
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     if(EXISTS "/workspace/deps/venv/bin/python")
