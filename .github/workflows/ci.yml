@@ -17,6 +17,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Fetch protocol baseline
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin +refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
+            echo "CHIPCAE_PROTOCOL_BASE=origin/${{ github.base_ref }}" >> "$GITHUB_ENV"
+          elif [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            git fetch --no-tags --depth=1 origin ${{ github.event.before }}
+            echo "CHIPCAE_PROTOCOL_BASE=${{ github.event.before }}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Protocol compatibility
+        run: python3 cmake/check_protocol_compat.py .
+
       - name: Install toolchain
         run: |
           sudo apt-get update

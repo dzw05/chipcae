@@ -1,0 +1,563 @@
+syntax = "proto3";
+
+package chipcae.jobs.v1;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "chipcae/run/v1/run.proto";   // chipcae.run.v1.RunEvent（内核侧事件，原样转发）
+
+// ============================================================
+// 服务：桌面界面 / Python 脚本 -> 作业管理层（chipcae-jobd）
+// 鉴权：每个调用带 metadata  authorization: Bearer <session_token>
+// 错误：标准 gRPC status code，details 带 google.rpc.ErrorInfo(domain="chipcae.jobs")
+// ============================================================
+service JobManager {
+  // ---- 能力与 Schema ----
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (Capabilities);
+  rpc GetSchemaBundle(GetSchemaBundleRequest) returns (stream FileChunk);
+
+  // ---- 文件暂存（内容寻址，按 sha256 去重，可续传）----
+  rpc CheckBlobs(CheckBlobsRequest) returns (CheckBlobsResponse);
+  rpc GetUploadStatus(GetUploadStatusRequest) returns (UploadStatus);
+  rpc UploadBlob(stream UploadBlobRequest) returns (UploadStatus);
+
+  // ---- 作业生命周期 ----
+  rpc Submit(SubmitRequest) returns (Job);          // client_request_id 幂等
+  rpc Cancel(CancelRequest) returns (Job);          // 硬取消：scancel / qdel / SIGTERM->SIGKILL
+  rpc Hold(JobRef) returns (Job);                   // 仅 QUEUED 可用
+  rpc Release(JobRef) returns (Job);
+  rpc List(ListJobsRequest) returns (ListJobsResponse);
+  rpc Get(JobRef) returns (Job);
+  rpc Control(ControlRequest) returns (ControlReply);  // 经共享文件系统上的控制文件转发给内核，生效结果以 Watch 中的 chipcae.run.v1.ControlAck 为准
+
+  // ---- 监控 ----
+  rpc Watch(stream WatchClientMessage) returns (stream WatchServerMessage);
+  rpc GetResidualHistory(ResidualHistoryRequest) returns (ResidualHistory);
+  rpc TailLog(TailLogRequest) returns (stream LogChunk);
+  rpc DownloadLog(DownloadLogRequest) returns (stream FileChunk);
+
+  // ---- 结果 ----
+  rpc ListOutputs(ListOutputsRequest) returns (ListOutputsResponse);
+  rpc FetchFile(FetchFileRequest) returns (stream FileChunk);      // 分块、按 offset 续传
+  rpc Extract(ExtractRequest) returns (stream ExtractUpdate);      // 服务端抽取
+  rpc ListCheckpoints(JobRef) returns (ListCheckpointsResponse);
+  rpc RestartFromCheckpoint(RestartRequest) returns (Job);
+}
+
+// ============================================================
+// 通用
+// ============================================================
+message JobRef { string run_id = 1; }
+
+message FileChunk {
+  string path = 1;            // 相对 run 目录或 schema 包根目录
+  uint64 offset = 2;          // 本块在文件中的起始偏移
+  bytes  data = 3;            // 建议 1-4 MiB / 块
+  uint64 total_size = 4;      // 首块必填
+  string file_sha256 = 5;     // 末块必填，供完整性校验
+  uint64 file_generation = 6; // 文件版本号，续传时须一致，否则从头拉
+  bool   last = 7;
+}
+
+// ============================================================
+// 能力与 Schema
+// ============================================================
+message GetCapabilitiesRequest {
+  string client_name = 1;     // "chipcae-gui" / "chipcae-py"
+  string client_version = 2;
+  repeated string supported_protocols = 3;  // ["chipcae.jobs.v1", "chipcae.run.v1"]
+}
+
+message Capabilities {
+  string server_version = 1;
+  repeated string protocols = 2;            // 服务端支持的协议包
+  repeated KernelInstall kernels = 3;       // 本机/集群上可用内核
+  repeated SchedulerInfo schedulers = 4;
+  Limits limits = 5;
+  repeated string features = 6;             // "extract", "checkpoint_restart", "pbs_hold" ...
+}
+
+message KernelInstall {
+  string kernel_version = 1;                // semver
+  string schema_bundle_hash = 2;            // sha256，与界面本地包比对
+  repeated PluginInfo plugins = 3;
+  string min_vtkhdf_version = 4;            // "2.5"（多面体下限）；共享面需 >= 2.9，可选
+}
+message PluginInfo { string key = 1; string version = 2; }
+
+// MVP 单机版只用 LOCAL；SLURM/PBS 供 v1 私有服务器版；不做云 SaaS。
+enum SchedulerType {
+  SCHEDULER_TYPE_UNSPECIFIED = 0;
+  SCHEDULER_TYPE_LOCAL = 1;
+  SCHEDULER_TYPE_SLURM = 2;
+  SCHEDULER_TYPE_PBS = 3;                   // PBS Pro / OpenPBS（不支持 Torque）
+  // 其他调度器经调度器插件接口扩展，枚举值只增不改
+}
+
+message SchedulerInfo {
+  SchedulerType type = 1;
+  repeated QueueInfo queues = 2;            // Slurm partition / PBS queue
+  repeated string accounts = 3;
+}
+message QueueInfo {
+  string name = 1;
+  uint32 max_nodes = 2;
+  google.protobuf.Duration max_walltime = 3;
+  uint32 gpus_per_node = 4;
+}
+
+message Limits {
+  uint32 max_upload_chunk_bytes = 1;
+  uint32 max_fetch_chunk_bytes = 2;
+  uint32 local_max_concurrent_runs = 3;
+  google.protobuf.Duration event_retention = 4;   // 作业结束后事件日志保留时长，默认 90 天，之后压缩归档
+  uint64 extract_cache_quota_bytes = 5;           // 每用户抽取缓存配额，默认 20 GB，LRU 淘汰
+  uint64 local_extract_threshold_bytes = 6;       // 读取量低于此值可在 jobd 节点本地抽取，默认 1 GB
+}
+
+message GetSchemaBundleRequest {
+  string schema_bundle_hash = 1;
+}
+
+// ============================================================
+// 文件暂存
+// ============================================================
+message BlobRef {
+  string sha256 = 1;
+  uint64 size = 2;
+  string logical_name = 3;    // 在 run 目录中的相对路径，如 "geom/cylinder.stl"
+}
+
+message CheckBlobsRequest { repeated BlobRef blobs = 1; }
+message CheckBlobsResponse { repeated string missing_sha256 = 1; }
+
+message GetUploadStatusRequest { string sha256 = 1; }
+message UploadStatus {
+  string sha256 = 1;
+  uint64 committed_bytes = 2; // 已落盘字节数，续传从这里开始
+  bool   complete = 3;        // 已校验 sha256 并入库
+}
+
+message UploadBlobRequest {
+  oneof msg {
+    BlobRef header = 1;       // 流的第一条
+    UploadChunk chunk = 2;
+  }
+}
+message UploadChunk { uint64 offset = 1; bytes data = 2; }
+
+// ============================================================
+// 提交与作业
+// ============================================================
+message RunProfile {          // 对应独立的 profile YAML，不进工况文件
+  SchedulerType scheduler = 1;
+  string queue = 2;
+  string account = 3;
+  uint32 nodes = 4;
+  uint32 ranks = 5;
+  uint32 ranks_per_node = 6;
+  uint32 cpus_per_rank = 7;
+  uint32 gpus_per_node = 8;
+  uint64 memory_per_node_mb = 9;
+  google.protobuf.Duration walltime = 10;
+  string kernel_version = 11;               // 空 = 服务端默认
+  map<string, string> env = 12;             // 白名单内的环境变量
+  repeated string extra_scheduler_args = 13;// 白名单校验，防注入
+}
+
+message SubmitRequest {
+  string client_request_id = 1;   // UUID，幂等键
+  string name = 2;
+  BlobRef case_file = 3;          // 工况 YAML（SI 数值）
+  repeated BlobRef inputs = 4;    // 几何等附件，须先 CheckBlobs/UploadBlob
+  RunProfile profile = 5;
+  string schema_bundle_hash = 6;  // 界面校验所用的 Schema 包
+  map<string, string> labels = 7;
+}
+
+enum JobState {
+  JOB_STATE_UNSPECIFIED = 0;
+  JOB_STATE_SUBMITTING = 1;   // 暂存/写作业脚本/调用 sbatch、qsub
+  JOB_STATE_QUEUED = 2;
+  JOB_STATE_HELD = 3;
+  JOB_STATE_STARTING = 4;     // 已分配资源，未收到内核握手
+  JOB_STATE_RUNNING = 5;
+  JOB_STATE_PAUSED = 6;       // 内核级暂停（Control PAUSE），调度器仍为运行
+  JOB_STATE_SUSPENDED = 7;    // 调度器挂起
+  JOB_STATE_FINISHING = 8;    // 进程退出中/作业层收尾（日志、manifest 索引）
+  JOB_STATE_COMPLETED = 9;
+  JOB_STATE_FAILED = 10;
+  JOB_STATE_CANCELLED = 11;
+}
+
+enum CompletionKind {
+  COMPLETION_KIND_UNSPECIFIED = 0;
+  COMPLETION_KIND_END_REACHED = 1;          // 到达 t_end / 收敛
+  COMPLETION_KIND_USER_STOP = 2;            // Control STOP
+  COMPLETION_KIND_STOP_AFTER_CHECKPOINT = 3;
+}
+
+message NativeStatus {
+  SchedulerType scheduler = 1;
+  string native_job_id = 2;       // Slurm JobId / PBS job id / 本地 PID
+  string native_state = 3;        // 原始字符串，如 "PENDING"、"Q"
+  string reason = 4;              // Slurm Reason / PBS comment
+  int32  exit_status_raw = 5;
+  google.protobuf.Timestamp observed_at = 6;
+}
+
+message ProgressSnapshot {
+  uint64 window = 1;              // 最后完成的全局窗口序号 n
+  double time = 2;                // t_n（秒）
+  double dt = 3;
+  google.protobuf.Duration eta = 4;
+}
+
+message Job {
+  string run_id = 1;              // 作业层分配，全局唯一
+  string client_request_id = 2;
+  string name = 3;
+  string owner = 4;
+  JobState state = 5;
+  NativeStatus native = 6;
+  RunProfile profile = 7;
+  string case_sha256 = 8;
+  string kernel_version = 9;
+  uint32 attempt = 10;            // 调度器 requeue 时 +1
+  string parent_run_id = 11;      // 从检查点重启时指向原作业
+  string result_dir = 12;         // 作业层所在主机上的绝对路径
+  bool   result_dir_local = 13;   // 界面能否直接访问该路径（本地模式为 true）
+  uint64 last_seq = 14;           // Watch 已产生的最大 seq
+  ProgressSnapshot progress = 15;
+  FailureInfo failure = 16;       // 仅 FAILED
+  CompletionKind completion = 17; // 仅 COMPLETED
+  google.protobuf.Timestamp submitted_at = 18;
+  google.protobuf.Timestamp started_at = 19;
+  google.protobuf.Timestamp ended_at = 20;
+  map<string, string> labels = 21;
+}
+
+message CancelRequest {
+  string run_id = 1;
+  google.protobuf.Duration grace = 2;   // SIGTERM 后等待多久再 SIGKILL（本地）
+}
+
+message ListJobsRequest {
+  repeated JobState states = 1;
+  string label_selector = 2;            // "project=abc"
+  uint32 page_size = 3;
+  string page_token = 4;
+}
+message ListJobsResponse { repeated Job jobs = 1; string next_page_token = 2; }
+
+// ============================================================
+// 失败原因（结构化）
+// ============================================================
+enum FailureCategory {
+  FAILURE_CATEGORY_UNSPECIFIED = 0;
+  FAILURE_CATEGORY_CASE_INVALID = 1;    // 工况校验失败
+  FAILURE_CATEGORY_DIVERGENCE = 2;      // NaN、残差爆炸、dt 过小
+  FAILURE_CATEGORY_IO = 3;
+  FAILURE_CATEGORY_MPI = 4;
+  FAILURE_CATEGORY_SCHEDULER = 5;       // TIMEOUT、NODE_FAIL、PREEMPTED、BOOT_FAIL
+  FAILURE_CATEGORY_MEMORY = 6;          // 主机 OOM
+  FAILURE_CATEGORY_GPU = 7;             // 设备内存、驱动
+  FAILURE_CATEGORY_LAUNCH = 8;          // 可执行文件、模块、环境
+  FAILURE_CATEGORY_INTERNAL = 9;        // 内核断言、未捕获异常
+  FAILURE_CATEGORY_JOB_MANAGER = 10;    // 作业层自身故障
+}
+
+message FailureInfo {               // 汇总规则见 3.4 节
+  FailureCategory category = 1;
+  string code = 2;                // protocol/errors.yaml 的 name（UPPER_SNAKE，如 "DIVERGENCE_NAN_IN_FIELD"）
+  string message = 3;
+  int32  rank = 4;                // -1 = 未知
+  string module = 5;              // "fvm.incompressible"、"coupling" ...
+  int32  exit_code = 6;           // 启动器（mpirun / srun）退出码
+  int32  signal = 7;
+  NativeStatus scheduler = 8;     // 调度器原始状态与原因
+  uint64 last_completed_window = 9;  // 最后完成的全局窗口序号 n
+  double time = 10;               // t_n
+  repeated string last_log_lines = 11;
+  repeated string diagnostic_files = 12;  // 相对 run 目录，如 diag/rank-3.json
+  string recoverable_checkpoint_id = 13;  // manifest 中最后一个已登记的检查点
+  bool   exit_event_seen = 14;    // 事件日志中是否有 KernelExit
+  uint32 error_code = 15;         // protocol/errors.yaml 的 code（整数，只增不改）
+}
+
+
+// ============================================================
+// 运行控制（转发到 chipcae.run.v1）
+// ============================================================
+enum ControlAction {
+  CONTROL_ACTION_UNSPECIFIED = 0;
+  CONTROL_ACTION_PAUSE = 1;
+  CONTROL_ACTION_RESUME = 2;
+  CONTROL_ACTION_STOP = 3;                  // 写最终结果后正常退出
+  CONTROL_ACTION_SET_OUTPUT_INTERVAL = 4;
+  CONTROL_ACTION_WRITE_OUTPUT_NOW = 5;
+  CONTROL_ACTION_CHECKPOINT_AND_STOP = 6;
+}
+
+message ControlRequest {
+  string run_id = 1;
+  string client_request_id = 2;   // 幂等
+  ControlAction action = 3;
+  oneof arg {
+    double output_interval_time = 10;   // 秒（SI）
+    uint64 output_interval_steps = 11;
+  }
+}
+enum ControlDelivery {
+  CONTROL_DELIVERY_UNSPECIFIED = 0;
+  CONTROL_DELIVERY_QUEUED = 1;    // 已原子写入控制文件，等待内核在下一时间窗口边界读取
+  CONTROL_DELIVERY_REJECTED = 2;  // 作业状态不允许（如已终止）
+}
+message ControlReply {
+  uint64 cmd_seq = 1;             // 作业层分配；同一 client_request_id 返回同一值
+  ControlDelivery delivery = 2;
+  string message = 3;
+  // 生效结果以 Watch 中的 chipcae.run.v1.ControlAck（APPLIED / NOOP / REJECTED + effective_step）为准
+}
+
+// ============================================================
+// Watch：双向流，带心跳与基于额度的背压
+// ============================================================
+message WatchFilter {
+  bool progress = 1;
+  bool residual = 2;
+  bool monitor = 3;
+  bool output = 4;
+  bool state = 5;                 // 作业状态变化总是推送，此项仅用于显式声明
+  LogLevel min_log_level = 6;
+  repeated int32 ranks = 7;       // 空 = 全部（内核默认只有 rank 0 汇总）
+  uint32 max_residual_hz = 8;     // 服务端合并后的最大推送频率
+}
+
+enum LogLevel {
+  LOG_LEVEL_UNSPECIFIED = 0; LOG_LEVEL_DEBUG = 1; LOG_LEVEL_INFO = 2;
+  LOG_LEVEL_WARN = 3; LOG_LEVEL_ERROR = 4;
+}
+
+message WatchClientMessage {
+  oneof msg {
+    WatchOpen open = 1;           // 流的第一条
+    WatchCredit credit = 2;       // 追加可接收的消息条数
+    WatchAck ack = 3;             // 已处理到的 seq（用于服务端统计与重连提示）
+    WatchFilter update_filter = 4;
+  }
+}
+message WatchOpen {
+  string run_id = 1;
+  uint64 from_seq = 2;            // 0 = 从头；重连时为 last_seen_seq + 1
+  WatchFilter filter = 3;
+  uint32 initial_credit = 4;      // 例如 1000
+  google.protobuf.Duration heartbeat_interval = 5;  // 建议 5s
+}
+message WatchCredit { uint32 messages = 1; }
+message WatchAck { uint64 seq = 1; }
+
+message WatchServerMessage {
+  uint64 seq = 1;                 // 作业层统一序号（每个 run 单调递增，持久化）
+  google.protobuf.Timestamp server_time = 2;
+  oneof payload {
+    chipcae.run.v1.RunEvent run_event = 10;  // 内核事件原样转发（内含内核自己的 seq）
+    JobStateChanged job_state = 11;
+    Heartbeat heartbeat = 12;
+    Gap gap = 13;                 // 因背压合并/丢弃了可合并事件
+    WatchEnd end = 14;            // 作业到终态且事件已全部送达
+    OutputAvailable outputs = 15; // 作业层读到 manifest 新代数后生成（结果到达的唯一依据）
+  }
+}
+
+message JobStateChanged {
+  JobState old_state = 1;
+  JobState new_state = 2;
+  NativeStatus native = 3;
+  FailureInfo failure = 4;
+  CompletionKind completion = 5;
+}
+message Heartbeat { uint64 last_seq = 1; JobState state = 2; }
+message Gap {
+  uint64 from_seq = 1; uint64 to_seq = 2;
+  string reason = 3;              // "backpressure" / "retention_expired"
+}
+message WatchEnd { JobState final_state = 1; }
+message OutputAvailable {
+  uint64 manifest_generation = 1;
+  repeated OutputStep new_steps = 2;
+  repeated Checkpoint new_checkpoints = 3;
+}
+
+// ============================================================
+// 残差历史：服务端降采样
+// ============================================================
+enum DownsampleMethod {
+  DOWNSAMPLE_METHOD_UNSPECIFIED = 0;
+  DOWNSAMPLE_METHOD_MIN_MAX = 1;  // 每个桶保留最小与最大值（保尖峰）
+  DOWNSAMPLE_METHOD_LTTB = 2;
+  DOWNSAMPLE_METHOD_STRIDE = 3;
+}
+
+message ResidualHistoryRequest {
+  string run_id = 1;
+  repeated SeriesKey series = 2;  // 空 = 全部
+  uint64 from_window = 3;
+  uint64 to_window = 4;           // 0 = 最新
+  uint32 max_points = 5;          // 可抽样点（flags = 0）的上限；带标记的点不计入、不丢弃
+  DownsampleMethod method = 6;    // 只作用于窗口内中间迭代
+}
+message SeriesKey {
+  string solver = 1; string field = 2;
+  bool coupling_interface = 3;    // 耦合子迭代界面残差（v2 双向耦合起）
+  bool linear = 4;                // 线性求解汇总序列
+}
+message ResidualSeries {
+  SeriesKey key = 1;
+  repeated uint64 window = 2 [packed = true];              // 全局窗口序号 n
+  repeated uint32 iteration = 3 [packed = true];           // 窗口内迭代号
+  repeated double norm = 4 [packed = true];
+  repeated double time = 5 [packed = true];                // t_n
+  bool downsampled = 6;
+  repeated uint32 flags = 7 [packed = true];               // chipcae.run.v1.ResidualFlag 位掩码，非 0 = 必须保留
+  repeated uint32 linear_iterations = 8 [packed = true];   // LINEAR_SUMMARY 点的线性迭代数
+  repeated uint32 window_iterations = 9 [packed = true];   // WINDOW_LAST 点：该窗口迭代总数
+  uint32 mandatory_points = 10;                            // 原样保留的带标记点数
+}
+message ResidualHistory {
+  repeated ResidualSeries series = 1;
+  uint64 as_of_seq = 2;           // 之后的增量从 Watch(from_seq = as_of_seq+1) 获取
+}
+
+// ============================================================
+// 日志
+// ============================================================
+message TailLogRequest {
+  string run_id = 1;
+  string stream_name = 2;         // "kernel"、"scheduler_stdout"、"scheduler_stderr"、"jobd"
+  int64  from_offset = 3;         // 负数 = 从末尾倒数字节
+  bool   follow = 4;              // true = 持续推送新内容
+}
+message LogChunk { string stream_name = 1; uint64 offset = 2; bytes data = 3; bool eof = 4; }
+
+message DownloadLogRequest { string run_id = 1; string stream_name = 2; uint64 offset = 3; }
+
+// ============================================================
+// 结果：基于 manifest
+// ============================================================
+message ListOutputsRequest {
+  string run_id = 1;
+  int64  since_window = 2;        // 全局窗口序号；-1 = 全部
+  uint64 since_generation = 3;    // manifest 代数，0 = 不限
+}
+
+message OutputFile {
+  string path = 1;                // 相对 run 目录
+  uint64 size = 2;
+  string sha256 = 3;
+  uint32 parts = 4;               // 本文件含的分区数（= 写出时 rank 数，各步可不同）
+}
+
+message OutputStep {              // 每个输出步一个 VTKHDF 文件（方案 A）
+  uint64 window = 1;              // 全局窗口序号 n
+  double time = 2;                // t_n
+  repeated OutputFile files = 3;
+  repeated string blocks = 4;     // manifest 中的块 id
+  bool complete = 5;              // 文件已关闭且校验和已写入
+}
+
+message ListOutputsResponse {
+  uint64 manifest_generation = 1;
+  repeated OutputStep steps = 2;
+  string manifest_path = 3;       // 相对 run 目录，可用 FetchFile 拉取全文
+}
+
+message FetchFileRequest {
+  string run_id = 1;
+  string path = 2;                // 相对 run 目录（结果、抽取产物、诊断文件）
+  uint64 offset = 3;              // 续传起点
+  uint64 length = 4;              // 0 = 到文件末尾
+  uint32 chunk_size = 5;
+  uint64 expected_generation = 6; // 续传时带上，文件变化则返回 FAILED_PRECONDITION
+}
+
+// ============================================================
+// 服务端抽取
+// ============================================================
+message ExtractRequest {
+  string run_id = 1;
+  string client_request_id = 2;   // 相同请求复用已有产物
+  repeated uint64 windows = 3;    // 全局窗口序号
+  repeated string blocks = 4;     // 空 = 全部块
+  repeated string arrays = 5;     // 只保留这些数组（取单个数组 = 只填一个）
+  ExtractPlacement placement = 6; // UNSPECIFIED = 由 jobd 按规则决定
+  oneof op {
+    SliceOp slice = 10;
+    IsoSurfaceOp iso = 11;
+    SubsampleOp subsample = 12;
+    ArraysOnlyOp arrays_only = 13;
+    ThumbnailOp thumbnail = 14;
+    StatsOp stats = 15;
+  }
+}
+message SliceOp { repeated double origin = 1; repeated double normal = 2; }
+message IsoSurfaceOp { string array = 1; repeated double values = 2; }
+message SubsampleOp {
+  oneof by {
+    double ratio = 1;             // 粒子/点保留比例
+    uint64 max_points = 2;
+    uint32 stride = 3;            // 规则块按步长抽稀
+  }
+}
+message ArraysOnlyOp {}
+message ThumbnailOp { uint32 width = 1; uint32 height = 2; string array = 3; }
+message StatsOp { repeated string arrays = 1; }   // 最小、最大、均值等统计量
+
+// 抽取由独立可执行文件 chipcae-extract 完成（基于 VTK）；内核不依赖 VTK
+enum ExtractPlacement {
+  EXTRACT_PLACEMENT_UNSPECIFIED = 0;
+  EXTRACT_PLACEMENT_BATCH_JOB = 1;  // 默认：作为小作业提交到计算节点
+  EXTRACT_PLACEMENT_LOCAL = 2;      // 读取量 < local_extract_threshold_bytes，或只做缩略图、统计量
+}
+message ExtractQueued {
+  ExtractPlacement placement = 1;
+  string native_job_id = 2;       // 小作业的调度器作业号
+}
+
+message ExtractUpdate {
+  oneof msg {
+    double progress = 1;          // 0..1
+    ExtractResult result = 2;
+    ExtractQueued queued = 3;
+  }
+}
+message ExtractResult {
+  string artifact_path = 1;       // 位于用户抽取缓存（LRU），VTKHDF / PNG / JSON，经 FetchFile 拉取
+  uint64 size = 2;
+  string sha256 = 3;
+  ExtractPlacement executed_on = 4;
+}
+
+// ============================================================
+// 检查点
+// ============================================================
+message Checkpoint {
+  string checkpoint_id = 1;
+  uint64 window = 2;              // 全局窗口序号 n
+  double time = 3;                // t_n
+  string kernel_version = 4;      // 写出该检查点的内核版本
+  string case_sha256 = 5;
+  uint32 ranks = 6;
+  repeated OutputFile files = 7;
+  bool readable_by_default_kernel = 8;  // 同一次版本内才为 true
+  // 内容为内核内部 HDF5 格式（每个检查点一个文件，集体写），界面不解析
+}
+message ListCheckpointsResponse { repeated Checkpoint checkpoints = 1; }
+
+message RestartRequest {
+  string client_request_id = 1;
+  string run_id = 2;              // 原作业
+  string checkpoint_id = 3;
+  BlobRef modified_case = 4;      // 可选：只允许改 x-restartModifiable 字段
+  RunProfile profile = 5;         // 允许与写检查点时不同的 ranks（读入时重新划分）
+}

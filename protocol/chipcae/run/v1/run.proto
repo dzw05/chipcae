@@ -2,29 +2,165 @@ syntax = "proto3";
 
 package chipcae.run.v1;
 
-// Launch a simulation job from the desktop client or job manager.
-message StartRunRequest {
-  string run_id = 1;
-  string case_uri = 2;
-  map<string, string> parameters = 3;
+import "google/protobuf/timestamp.proto";
+
+// Placeholder proto for the job-layer contract v0.3.
+// Field numbers are frozen: only add, never reuse; deleted fields must be reserved.
+
+message Plugin {
+  string key = 1;
+  string version = 2;
 }
 
-message StartRunResponse {
+// First event written by each kernel process after start.
+message KernelHello {
   string run_id = 1;
+  uint32 attempt = 2;                 // increments after scheduler requeue
+  repeated string protocols = 3;
+  string kernel_version = 4;
+  string schema_bundle_hash = 5;
+  repeated Plugin plugins = 6;
+  uint32 ranks = 7;
+  uint32 event_log_format = 8;        // currently 1
+  repeated uint32 vtkhdf_version = 9; // [2, 5] lower bound for polyhedra; [2, 9] optional shared faces
+  string case_sha256 = 10;
+  string git_sha = 11;
+  string protocol_version = 12;
+  repeated string features = 13;
 }
 
-message WatchRunRequest {
-  string run_id = 1;
+message Monitor {
+  string name = 1;
+  string quantity = 2;
+  string unit = 3;
+  uint64 window = 4;
+  double time = 5;
+  repeated double values = 6;
 }
 
-message RunProgress {
-  string run_id = 1;
-  string stage = 2;
-  double fraction = 3;
-  string message = 4;
+message ControlCommand {
+  enum Action {
+    ACTION_UNSPECIFIED = 0;
+    PAUSE = 1;
+    RESUME = 2;
+    STOP = 3;
+    SET_OUTPUT_INTERVAL = 4;
+    WRITE_OUTPUT_NOW = 5;
+    CHECKPOINT_AND_STOP = 6;
+  }
+  uint64 cmd_seq = 1;
+  string client_request_id = 2;
+  Action action = 3;
+  google.protobuf.Timestamp issued_at = 4;
+  oneof arg {
+    double output_interval_time = 10;
+    uint64 output_interval_steps = 11;
+  }
 }
 
-service RunService {
-  rpc StartRun(StartRunRequest) returns (StartRunResponse);
-  rpc WatchRun(WatchRunRequest) returns (stream RunProgress);
+message ControlAck {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    APPLIED = 1;
+    NOOP = 2;
+    REJECTED = 3;
+  }
+  uint64 cmd_seq = 1;
+  string client_request_id = 2;
+  Status status = 3;
+  uint64 effective_step = 4;   // last completed global window n
+  string message = 5;
+  double effective_time = 6;   // t_n
+}
+
+// Bitmask. Any non-zero flag must be kept as-is and is not downsampled.
+enum ResidualFlag {
+  RESIDUAL_FLAG_NONE = 0;
+  RESIDUAL_FLAG_WINDOW_FIRST = 1;
+  RESIDUAL_FLAG_WINDOW_LAST = 2;
+  RESIDUAL_FLAG_NOT_CONVERGED = 4;
+  RESIDUAL_FLAG_DIVERGED = 8;
+  RESIDUAL_FLAG_CUTBACK = 16;
+  RESIDUAL_FLAG_MAX_ITER = 32;
+  RESIDUAL_FLAG_LINEAR_SUMMARY = 64;
+  RESIDUAL_FLAG_INTERFACE = 128;
+}
+
+message ResidualBatch {
+  uint64 window = 1;
+  double time = 2;
+  message Point {
+    string solver = 1;
+    string field = 2;
+    uint32 iteration = 3;
+    double norm = 4;
+    uint32 flags = 5;
+    uint32 linear_iterations = 6;
+    uint32 window_iterations = 7;
+  }
+  repeated Point points = 3;
+  uint32 dropped_intermediate = 4;
+}
+
+message KernelExit {
+  int32 exit_code = 1;
+  uint64 last_completed_window = 2;
+  string reason = 3;  // end_reached / user_stop / checkpoint_and_stop / error
+}
+
+// v0.2-era event bodies. Field numbers 10-14 are reserved for these types.
+message Progress {
+  uint64 window = 1;
+  double time = 2;
+  double dt = 3;
+  double fraction = 4;
+  string message = 5;
+}
+
+message Residual {
+  string solver = 1;
+  string field = 2;
+  uint64 window = 3;
+  uint32 iteration = 4;
+  double norm = 5;
+  uint32 flags = 6;
+}
+
+// Not the authority for result arrival; the result manifest is.
+message OutputWritten {
+  uint64 window = 1;
+  double time = 2;
+  string path = 3;
+}
+
+message ErrorEvent {
+  string code = 1;     // protocol/errors.yaml name (UPPER_SNAKE)
+  string message = 2;
+  int32 rank = 3;
+  string module = 4;
+  uint64 window = 5;
+  uint32 error_code = 6;  // protocol/errors.yaml integer code
+}
+
+message LogEvent {
+  int32 level = 1;
+  int32 rank = 2;
+  string message = 3;
+}
+
+message RunEvent {
+  uint64 seq = 1;
+  int64 wall_time_unix_ns = 2;
+  oneof payload {
+    Progress progress = 10;
+    Residual residual = 11;
+    OutputWritten output = 12;
+    ErrorEvent error = 13;
+    LogEvent log = 14;
+    KernelHello hello = 15;
+    Monitor monitor = 16;
+    ControlAck control_ack = 17;
+    ResidualBatch residual_batch = 18;
+    KernelExit exit = 19;
+  }
 }
