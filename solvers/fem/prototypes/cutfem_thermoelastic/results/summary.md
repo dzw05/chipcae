@@ -1,6 +1,6 @@
 # 实测结果
 
-所有数值来自本目录 CSV；FP64、单进程、Release -O2。参数未按结果调整。hypre=True；构建和全部数值实验耗时 15 s（未含绘图/许可检查）。
+所有数值来自本目录 CSV；FP64、单进程、Release -O2。参数未按结果调整。hypre=True；构建和全部数值实验耗时 12 s（未含绘图/许可检查）。
 
 ## Manufactured solutions
 
