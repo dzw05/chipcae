@@ -47,6 +47,6 @@ if(CHIPCAE_ENABLE_OCCT)
 endif()
 
 if(CHIPCAE_ENABLE_PYTHON)
-    find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
-    find_package(pybind11 REQUIRED)
+    find_package(Python 3.9 REQUIRED COMPONENTS Interpreter Development.Module)
+    find_package(nanobind CONFIG REQUIRED)
 endif()
