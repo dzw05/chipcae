@@ -127,6 +127,15 @@ committed history while iterating. Activating the same material repeatedly at an
 arbitrary time inside an already-running cure schedule requires a process-layer
 rebinding of the remaining cure schedule.
 
+## D19 number parsing
+
+Schema number access coerces JSON numeric values and strictly validated quoted
+decimal/scientific strings to finite FP64 values. Invalid strings fail with their
+material field path. The Python YAML helper installs a PyYAML float resolver for
+scientific forms such as `3.10e10`; C++ and Python tests cover the requested
+equivalent spellings and trailing-junk rejection. Bundled material YAML cards use
+canonical positive exponent spelling (`e+`).
+
 ## Environmental limits, deviations and unfinished work
 
 - **GPU: scripts ready, awaiting cloud GPU.** No CUDA toolkit or GPU is available.

@@ -611,6 +611,29 @@ void t16(const char* directory) {
         ++n;
     }
     require(n >= 30, "semantic rule fixtures");
+    {
+        std::ifstream f(std::string(directory) + "/../valid_elastic.json");
+        std::stringstream input;
+        input << f.rdbuf();
+        auto card = input.str();
+        std::vector<Real> parsed;
+        for (const auto& literal : {"3.10e10", "3.10e+10", "3.1E10"}) {
+            auto candidate = card;
+            auto at = candidate.find("\"density\": 1000");
+            candidate.replace(at,
+                              std::string("\"density\": 1000").size(),
+                              "\"density\": \"" + std::string(literal) + "\"");
+            parsed.push_back(parse_material_json(candidate).density);
+        }
+        require(parsed[0] == parsed[1] && parsed[1] == parsed[2], "D19 exponent coercion");
+        auto bad = card;
+        auto at = bad.find("\"density\": 1000");
+        bad.replace(at, std::string("\"density\": 1000").size(), "\"density\": \"3.1e10x\"");
+        auto result = validate_material_json(bad);
+        require(!result.ok &&
+                    result.issues.front().message.find("material.density") != std::string::npos,
+                "D19 rejects trailing junk with path");
+    }
     // A load history is checked at update, not when validating an otherwise valid card.
     for (bool fitted : {false, true}) {
         auto card = std::string(directory) +

@@ -13,7 +13,7 @@ elastic:
   table:
     temperatures: [298.15, 448.15]
     columns:
-      E: [2.2e10, 1.0e9]
+      E: [2.2e+10, 1.0e+9]
       nu: [0.3, 0.3]
     interpolation: linear
     extrapolation: error

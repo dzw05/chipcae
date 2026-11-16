@@ -4,8 +4,10 @@
 
 #include <charconv>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <map>
+#include <regex>
 #include <sstream>
 #include <stdexcept>
 namespace chipcae::material {
@@ -25,9 +27,19 @@ struct Json {
     }
     bool has(const std::string& key) const { return object.contains(key); }
     Real num() const {
-        if (kind != Number)
-            throw std::runtime_error(path + ": expected number");
-        return number;
+        if (kind == Number)
+            return number;
+        if (kind == String) {
+            static const std::regex strict_number(
+                R"(^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$)");
+            if (std::regex_match(string, strict_number)) {
+                char* end = nullptr;
+                const Real value = std::strtod(string.c_str(), &end);
+                if (end == string.c_str() + string.size() && std::isfinite(value))
+                    return value;
+            }
+        }
+        throw std::runtime_error(path + ": expected finite number");
     }
     std::string str() const {
         if (kind != String)
