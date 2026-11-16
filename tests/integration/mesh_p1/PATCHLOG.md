@@ -187,3 +187,7 @@ here; nothing is merged in this work).
 - Comment on `HexMeshArrays::face_sets`: cut-face attributes in
   `bdr_attribute_sets` are not attached to MFEM boundary elements;
   solvers must read cut faces from `CutLayerArrays`.
+
+- `k1_public_headers_kokkos` passes `-fopenmp` so the check matches a
+  Kokkos build that enabled the OpenMP backend (required once CI
+  configures with `CHIPCAE_ENABLE_KOKKOS=ON`).

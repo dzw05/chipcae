@@ -12,12 +12,15 @@ if(CHIPCAE_ENABLE_KOKKOS)
     get_target_property(_k1_kokkos_inc Kokkos::kokkos INTERFACE_INCLUDE_DIRECTORIES)
   endif()
   if(_k1_kokkos_inc)
+    # Kokkos CI builds enable the OpenMP backend; the syntax-only check must
+    # pass the same OpenMP flag or Kokkos headers #error.
     add_test(NAME k1_public_headers_kokkos
       COMMAND ${CMAKE_COMMAND}
         -DCOMPILER=${CMAKE_CXX_COMPILER}
         -DROOT=${PROJECT_SOURCE_DIR}
         -DDEFS=CHIPCAE_ENABLE_KOKKOS
         "-DINCLUDES=${_k1_kokkos_inc}"
+        "-DFLAGS=-fopenmp"
         -P ${CMAKE_CURRENT_SOURCE_DIR}/check_standalone_headers.cmake)
     set_tests_properties(k1_public_headers_kokkos PROPERTIES LABELS "mesh;tierA" TIMEOUT 60)
   endif()
