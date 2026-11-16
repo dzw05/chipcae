@@ -155,7 +155,13 @@
       "minItems": 1
     },
     "symmetry": {
-      "type": "string"
+      "type": "string",
+      "enum": [
+        "none",
+        "half_x",
+        "half_y",
+        "quarter"
+      ]
     },
     "package_type": {
       "type": "string"

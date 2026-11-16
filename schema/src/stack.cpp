@@ -44,6 +44,8 @@ Expected<StackModel> load_stack(const std::filesystem::path& file,
               model.outline.box[3] > model.outline.box[1]))
             return Error{"$/outline/box", "positive rectangle required"};
         model.symmetry = j.at("symmetry").as<std::string>();
+        if (model.symmetry != "none")
+            return Error{"$/symmetry", "symmetry other than none is not implemented"};
         model.package_type = j.at("package_type").as<std::string>();
         std::set<std::string> names, refs;
         auto unique = [&](const std::string& name) { return names.insert(name).second; };
@@ -74,13 +76,8 @@ Expected<StackModel> load_stack(const std::filesystem::path& file,
                 v.material = l.at("material").as<std::string>();
             v.body = l.get_value_or<std::string>("body", v.name);
             refs.insert("body:" + v.body);
-            auto solder = [](std::string m) {
-                for (auto& c : m)
-                    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                return m.find("sac") != std::string::npos || m.find("solder") != std::string::npos;
-            };
-            if (v.kind == "Homogenized" && solder(v.material))
-                return Error{path + "/material", "solder forbidden in homogenized layer"};
+            if (v.kind == "Homogenized" && !v.material.ends_with("_eq"))
+                return Error{path + "/material", "homogenized material must end with _eq"};
             if (l.contains("regions"))
                 for (const auto& r : l.at("regions").array_range()) {
                     Inclusion a;
@@ -92,9 +89,9 @@ Expected<StackModel> load_stack(const std::filesystem::path& file,
                         return Error{path + "/regions", "duplicate name"};
                     if (!inside(a.footprint))
                         return Error{path + "/regions/" + a.name + "/footprint", "outside outline"};
-                    if (v.kind == "Homogenized" && solder(a.material))
+                    if (v.kind == "Homogenized" && !a.material.ends_with("_eq"))
                         return Error{path + "/regions/" + a.name,
-                                     "solder forbidden in homogenized layer"};
+                                     "homogenized material must end with _eq"};
                     refs.insert("region:" + a.name);
                     refs.insert("body:" + a.body);
                     v.regions.push_back(a);

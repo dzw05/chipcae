@@ -24,13 +24,15 @@ int main() {
     std::ifstream in(root / "schema/examples/fcbga_demo.stack.json");
     auto base = jsoncons::json::parse(in);
     const auto path = std::filesystem::current_path() / "negative.stack.json";
-    for (int i = 0; i < 9; ++i) {
+    for (int i = 0; i < 11; ++i) {
         auto j = base;
         if (i < 2) {
             j["external_refs"] = jsoncons::json::parse(
                 R"([{"path":"https://bad","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}])");
-            if (i == 1)
+            if (i == 1) {
+                j["external_refs"][0]["path"] = "external.bin";
                 j["external_refs"][0].erase("sha256");
+            }
         }
         if (i == 2)
             j["activation_groups"][0]["members"][0] = "group:assembly";
@@ -42,11 +44,15 @@ int main() {
             j["layers"][0]["material"] = "SAC305";
         if (i == 6)
             j["layers"][2]["regions"][0]["footprint"]["box"][2] = 1;
-        if (i >= 7)
+        if (i == 7 || i == 8)
             j["external_refs"] = jsoncons::json::parse(
                 i == 7
                     ? R"([{"path":"../escape","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}])"
                     : R"([{"path":"missing","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}])");
+        if (i == 9)
+            j["symmetry"] = "quarter";
+        if (i == 10)
+            j["symmetry"] = "invalid";
         {
             std::ofstream out(path);
             out << j;
@@ -54,8 +60,26 @@ int main() {
         auto result = load_stack(path, schema);
         expect(!result);
         expect(!result.error().reason.empty());
-        expect(!result.error().path.empty());
+        const std::string paths[] = {"external_refs",
+                                     "external_refs",
+                                     "activation_groups",
+                                     "layers",
+                                     "activation_groups",
+                                     "material",
+                                     "footprint",
+                                     "external_refs",
+                                     "external_refs",
+                                     "symmetry",
+                                     "symmetry"};
+        expect(result.error().path.find(paths[i]) != std::string::npos);
     }
+    auto positive = base;
+    positive["layers"][0]["material"] = "SAC305_ball_eq";
+    {
+        std::ofstream out(path);
+        out << positive;
+    }
+    expect(bool(load_stack(path, schema)));
     auto external = std::filesystem::current_path() / "external.bin";
     {
         std::ofstream bytes(external);
