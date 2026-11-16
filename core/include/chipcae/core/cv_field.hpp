@@ -64,6 +64,7 @@ public:
     const FieldDesc& desc() const noexcept { return desc_; }
     /// Copy this view into kernels; the descriptor and field object are host metadata.
     value_view raw() { return values_; }
+    value_view raw() const { return values_; }
     View1<const std::int32_t, M> block_offset() const { return offsets_; }
 
 private:

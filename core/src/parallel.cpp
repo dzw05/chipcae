@@ -30,6 +30,7 @@ void check(int result) {
 Communicator Communicator::world() {
     int rank = 0, size = 1;
 #ifdef CHIPCAE_ENABLE_MPI
+    // If MPI is not initialized (or has finalized), retain the serial fallback.
     if (active()) {
         check(MPI_Comm_rank(MPI_COMM_WORLD, &rank));
         check(MPI_Comm_size(MPI_COMM_WORLD, &size));

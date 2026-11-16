@@ -9,7 +9,8 @@ class ConjugateHeatTransferSolver : public Solver {
 public:
     explicit ConjugateHeatTransferSolver(const mesh::CutCellMesh& mesh);
 
-    StepResult solve() override;
+    std::string_view name() const override { return "conjugate_heat_transfer"; }
+    StepResult advance(const LoadStep& step) override;
     const mesh::CutCellMesh& mesh() const noexcept { return mesh_; }
 
 private:

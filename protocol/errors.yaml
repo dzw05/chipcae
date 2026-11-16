@@ -4,3 +4,4 @@
 schema_version: 1
 errors:
   - {code: 1, name: INTERNAL, retryable: false, message: "Internal error"}
+  - {code: 2, name: NOT_IMPLEMENTED, retryable: false, message: "Feature not implemented"}

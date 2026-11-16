@@ -13,6 +13,7 @@ public:
     bool is_serial() const noexcept { return size_ == 1; }
     bool gpu_aware() const noexcept;
     void allreduce_sum(std::span<double> values) const;
+    /// allreduce_max/min will be needed for dt and residual; deferred for now.
     /// Sum in ascending rank order, then broadcast (fixed process count).
     void deterministic_allreduce_sum(std::span<double> values) const;
 

@@ -9,7 +9,8 @@ class ThermalStressSolver : public Solver {
 public:
     explicit ThermalStressSolver(const mesh::LayeredHexMesh& mesh);
 
-    StepResult solve() override;
+    std::string_view name() const override { return "thermal_stress"; }
+    StepResult advance(const LoadStep& step) override;
     const mesh::LayeredHexMesh& mesh() const noexcept { return mesh_; }
 
 private:

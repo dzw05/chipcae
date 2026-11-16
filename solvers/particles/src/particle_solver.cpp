@@ -7,9 +7,12 @@ namespace chipcae::solvers::particles {
 ParticleSolver::ParticleSolver(Method method, std::size_t particle_count)
     : method_(method), particle_count_(particle_count) {}
 
-StepResult ParticleSolver::solve() {
+StepResult ParticleSolver::advance(const LoadStep&) {
     log(LogLevel::info, "Particle methods are reserved and not implemented in the MVP");
-    return {false, FailureReason::not_implemented, 0, std::nullopt};
+    StepResult result;
+    result.status = StepResult::Status::Failed;
+    result.code = ErrorCode::NOT_IMPLEMENTED;
+    return result;
 }
 
 } // namespace chipcae::solvers::particles

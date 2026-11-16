@@ -8,6 +8,11 @@
 #include <stdexcept>
 #include <type_traits>
 
+namespace chipcae::io {
+class Writer {};
+class Reader {};
+} // namespace chipcae::io
+
 namespace {
 void expect(bool condition, const char* message) {
     if (!condition)
@@ -18,27 +23,23 @@ public:
     std::string_view name() const override { return "test"; }
     void configure(const chipcae::CaseNode&) override {}
     void setup(chipcae::SimulationContext&) override {}
-    chipcae::StepResult advance(const chipcae::LoadStep&, double t0, double t1) override {
+    chipcae::StepResult advance(const chipcae::LoadStep& step) override {
         chipcae::StepResult result;
-        result.success = true;
-        result.failure_reason = chipcae::FailureReason::none;
-        result.iterations = 1;
-        result.suggested_next_step_size = t1 - t0;
         result.status = chipcae::StepResult::Status::Converged;
         result.nonlinear_iters = 1;
         result.linear_iters = 2;
         result.residual = 0.0;
-        result.dt_next_hint = t1 - t0;
-        result.code = {};
+        result.dt_next_hint = step.t1 - step.t0;
+        result.code = chipcae::ErrorCode::NONE;
         return result;
     }
-    chipcae::StepResult solve() override { return advance({}, 0.0, 0.0); }
-    void checkpoint(chipcae::io::Writer&) const override {}
-    void restart(chipcae::io::Reader&) override {}
 };
 static_assert(!std::is_abstract_v<TestSolver>);
 static_assert(chipcae::ErrorCode(chipcae::ErrorCode::INTERNAL).code() == 1);
 static_assert(chipcae::ErrorCode(chipcae::ErrorCode::INTERNAL).name() == "INTERNAL");
+static_assert(chipcae::ErrorCode(chipcae::ErrorCode::NOT_IMPLEMENTED).code() == 2);
+static_assert(chipcae::ErrorCode(chipcae::ErrorCode::NOT_IMPLEMENTED).name() == "NOT_IMPLEMENTED");
+static_assert(std::is_same_v<decltype(chipcae::ErrorCode{}.code()), std::uint32_t>);
 
 #ifdef CHIPCAE_ENABLE_KOKKOS
 template <class ExecutionSpace>
@@ -128,11 +129,30 @@ void common() {
     load.shrinkage_increment = 0.01;
     load.activation_mask_id = 3;
     chipcae::Solver& interface = solver;
-    const auto result = interface.advance(load, load.t0, load.t1);
+    load.temperature_t0 = 20.0;
+    load.temperature = 30.0;
+    const auto result = interface.advance(load);
     expect(interface.name() == "test" && result.status == chipcae::StepResult::Status::Converged &&
                result.code.code() == 0 && result.dt_next_hint == 1 && result.nonlinear_iters == 1 &&
                result.linear_iters == 2 && result.residual == 0,
            "solver contract");
+    expect(!interface.supports_checkpoint(), "checkpoint unsupported by default");
+    bool checkpoint_throws = false;
+    chipcae::io::Writer writer;
+    try {
+        interface.checkpoint(writer);
+    } catch (const std::logic_error&) {
+        checkpoint_throws = true;
+    }
+    expect(checkpoint_throws, "checkpoint throws by default");
+    bool restart_throws = false;
+    chipcae::io::Reader reader;
+    try {
+        interface.restart(reader);
+    } catch (const std::logic_error&) {
+        restart_throws = true;
+    }
+    expect(restart_throws, "restart throws by default");
 }
 } // namespace
 int main(int argc, char** argv) {
