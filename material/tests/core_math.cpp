@@ -219,7 +219,7 @@ int main(int argc, char** argv) {
             check(std::abs(global.stress[k] - expected[k]) < 1e-14, "anisotropic frame rotation");
     }
     const std::string card =
-        R"({"id":"test","schema_version":"1","unit_system":"SI","density":1000,"model":"thermo_elastic","provenance":{},"elastic":{"symmetry":"isotropic","table":{"temperatures":[250,400],"columns":{"E":[1e9,2e9],"nu":[0.3,0.3]},"interpolation":"linear","extrapolation":"error"}},"thermal_expansion":{"cte_type":"tangent","symmetry":"isotropic","stress_free_temperature":300,"table":{"temperatures":[250,400],"columns":{"alpha":[1e-5,2e-5]},"interpolation":"linear","extrapolation":"error"}},"chemical_shrinkage":{"schedule":{"cure_step_ids":["cure"]}}})";
+        R"({"id":"test","schema_version":"1","unit_system":"SI","density":1000,"model":"thermo_elastic","provenance":{"source_type":"illustrative","confidence":"illustrative"},"elastic":{"symmetry":"isotropic","table":{"temperatures":[250,400],"columns":{"E":[1e9,2e9],"nu":[0.3,0.3]},"interpolation":"linear","extrapolation":"error"}},"thermal_expansion":{"cte_type":"tangent","symmetry":"isotropic","stress_free_temperature":300,"table":{"temperatures":[250,400],"columns":{"alpha":[1e-5,2e-5]},"interpolation":"linear","extrapolation":"error"}},"chemical_shrinkage":{"model":"equivalent_isotropic","post_gel_shrinkage":{"value":0.002,"measure":"volumetric"},"schedule":{"cure_step_ids":["cure"]}}})";
     check(validate_material_json(card).ok && parse_material_json(card).cure_step_ids.size() == 1,
           "JSON parsed parameters");
     for (const auto& ids : {"[]", "[\"a\",\"b\"]", "\"cure\""}) {

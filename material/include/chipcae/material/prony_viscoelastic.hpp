@@ -64,8 +64,7 @@ public:
         l.n_reals = (mode_ == VolumetricMode::ElasticBulk ? 6 : 7) * n_ + 8;
         l.fields = std::span<const StateField>(fields_.data(),
                                                mode_ == VolumetricMode::ElasticBulk ? 4 : 5);
-        l.layout_hash = 0x70726f6e790001ull ^ (static_cast<std::uint64_t>(n_) << 8) ^
-                        static_cast<std::uint64_t>(mode_);
+        l.layout_hash = state_layout_hash(model_id, l.n_reals, l.fields);
         return l;
     }
     KOKKOS_INLINE_FUNCTION void init_state(StateRef s) const noexcept {
@@ -85,7 +84,8 @@ public:
         if (code != StatusCode::Ok)
             return ThermoElastic::finish(out, code);
         Vec6 th;
-        code = thermal_.evaluate(in.T_np1, th);
+        code = in.override_T_sf ? thermal_.evaluate(in.T_np1, in.T_sf, th)
+                                : thermal_.evaluate(in.T_np1, th);
         if (code != StatusCode::Ok)
             return ThermoElastic::finish(out, code);
         Vec6 e = in.strain_np1;

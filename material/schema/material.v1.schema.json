@@ -73,6 +73,17 @@
     },
     "provenance": {
       "$ref": "#/$defs/provenance"
+    },
+    "activation": {
+      "type": "object",
+      "description": "Presence enables the activation wrapper; all factory models still reserve the 9-Real record"
+    },
+    "process_step_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Optional process-id registry used to validate cure binding"
     }
   },
   "allOf": [
@@ -495,13 +506,42 @@
               "minItems": 1,
               "maxItems": 1,
               "description": "P0: exactly one cure process step id"
+            },
+            "t_start": {
+              "type": "number",
+              "default": 0,
+              "description": "Step-local schedule start in seconds; bind to process recipe before use"
+            },
+            "t_end": {
+              "type": "number",
+              "default": 1,
+              "description": "Step-local schedule end in seconds; must exceed t_start"
             }
           },
           "not": {
             "required": [
               "cure_step_id"
             ]
-          }
+          },
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "profile"
+                ],
+                "properties": {
+                  "profile": {
+                    "const": "table"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "fractions"
+                ]
+              }
+            }
+          ]
         }
       }
     },

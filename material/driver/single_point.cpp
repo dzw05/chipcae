@@ -1,14 +1,21 @@
 // chipcae/material/driver/single_point.cpp
 #include "single_point.hpp"
 
+#include <cmath>
+
 namespace chipcae::material::driver {
 
 SinglePointDriver::SinglePointDriver(const IMaterial<Kokkos::HostSpace>& material)
-    : material_(material), store_(material.layout(), 1) {}
+    : material_(material),
+      store_(material.layout(), 1, material.parameter_hash(), material.material_id()) {
+    reset();
+}
 
 void SinglePointDriver::reset() {
-    store_.discard();
+    material_.init_state(store_.trial());
+    store_.commit();
     strain_prev_ = Vec6{};
+    temperature_prev_ = 0;
 }
 
 DriverResult
@@ -30,7 +37,7 @@ SinglePointDriver::strain_control(const Vec6& strain_np1, Real T_np1, Real dt, R
         s_n(i, 0) = strain_prev_[i];
         s_np1(i, 0) = strain_np1[i];
     }
-    Tn_view(0) = T_np1;
+    Tn_view(0) = temperature_prev_ > 0 ? temperature_prev_ : T_np1;
     Tnp1_view(0) = T_np1;
 
     BatchInput<Kokkos::HostSpace> in{};
@@ -64,19 +71,68 @@ SinglePointDriver::strain_control(const Vec6& strain_np1, Real T_np1, Real dt, R
     if (result.status.code == StatusCode::Ok) {
         store_.commit();
         strain_prev_ = strain_np1;
+        temperature_prev_ = T_np1;
     }
     return result;
 }
 
 DriverResult SinglePointDriver::stress_control(
     const Vec6& stress_target, Real T_np1, Real dt, int max_iter, Real tol) {
-    (void)stress_target;
-    (void)T_np1;
-    (void)dt;
-    (void)max_iter;
-    (void)tol;
+    Vec6 guess = strain_prev_;
+    // Keep the committed handle fixed throughout Newton, accepting only the final iterate.
+    auto prev = strain_prev_;
+    Real oldT = temperature_prev_;
     DriverResult result;
-    result.status = Status{StatusCode::NotImplemented, 1.0}; // TODO(K3): 局部 Newton
+    Real initial_scale = 1;
+    for (int iter = 0; iter < max_iter; ++iter) {
+        result = strain_control(guess, T_np1, dt);
+        if (result.status.code != StatusCode::Ok)
+            return result;
+        store_.commit(); // undo handle swap performed by strain_control
+        strain_prev_ = prev;
+        temperature_prev_ = oldT;
+        Real a[6][7]{};
+        Real residual = 0, scale = 1;
+        for (int i = 0; i < 6; ++i) {
+            a[i][6] = stress_target[i] - result.stress[i];
+            residual += a[i][6] * a[i][6];
+            scale += stress_target[i] * stress_target[i];
+            for (int j = 0; j < 6; ++j)
+                a[i][j] = result.tangent[6 * i + j];
+        }
+        if (iter == 0)
+            initial_scale = std::max(scale, residual);
+        if (std::sqrt(residual) <= tol * std::sqrt(initial_scale)) {
+            store_.commit();
+            strain_prev_ = guess;
+            temperature_prev_ = T_np1;
+            return result;
+        }
+        for (int i = 0; i < 6; ++i) {
+            int pivot = i;
+            for (int j = i + 1; j < 6; ++j)
+                if (std::abs(a[j][i]) > std::abs(a[pivot][i]))
+                    pivot = j;
+            if (a[pivot][i] == 0) {
+                result.status.code = StatusCode::Failed;
+                return result;
+            }
+            for (int j = i; j < 7; ++j)
+                std::swap(a[i][j], a[pivot][j]);
+            Real d = a[i][i];
+            for (int j = i; j < 7; ++j)
+                a[i][j] /= d;
+            for (int k = 0; k < 6; ++k)
+                if (k != i) {
+                    Real f = a[k][i];
+                    for (int j = i; j < 7; ++j)
+                        a[k][j] -= f * a[i][j];
+                }
+        }
+        for (int i = 0; i < 6; ++i)
+            guess[i] += a[i][6];
+    }
+    result.status.code = StatusCode::Failed;
     return result;
 }
 

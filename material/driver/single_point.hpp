@@ -24,6 +24,7 @@ public:
     explicit SinglePointDriver(const IMaterial<Kokkos::HostSpace>& material);
 
     void reset();
+    StepContext& context() noexcept { return ctx_; }
 
     // 给定本步总应变与温度，推进一个时间步（控应变）。
     DriverResult strain_control(const Vec6& strain_np1, Real T_np1, Real dt, Real t_n = 0.0);
@@ -40,6 +41,7 @@ private:
     QuadratureStateStore<Kokkos::HostSpace> store_;
     StepContext ctx_{};
     Vec6 strain_prev_{};
+    Real temperature_prev_ = 0;
 };
 
 } // namespace chipcae::material::driver

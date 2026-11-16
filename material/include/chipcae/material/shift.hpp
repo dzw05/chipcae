@@ -147,7 +147,7 @@ public:
 
 private:
     ShiftType type_ = ShiftType::WLF;
-    Real ref_ = 300, tg_ = 300, c1_ = 0, c2_ = 1, ea_ = 0;
+    Real ref_ = 300, tg_ = 300, c1_ = 0, c2_ = 1e30, ea_ = 0;
     TableView table_{};
     KOKKOS_INLINE_FUNCTION StatusCode raw(Real T, Real& v) const noexcept {
         if (!(T > 0) || !Kokkos::isfinite(T))

@@ -1,66 +1,56 @@
 # chipcae_material
 
-Material-point library v0 for chipcae (namespace `chipcae::material`, C++20 + Kokkos,
-FP64/SI only, Mandel notation). This repository directory is independently buildable.
+C++20 + Kokkos material-point library: FP64, SI, Mandel notation, thermoelasticity,
+isotropic Prony viscoelasticity, chemical shrinkage and transactional activation.
+Both small strain and TotalLagrangian reference-strain kernels are supported.
 
-## Requirements
-
-- C++20 compiler (GCC 12+ tested with GCC 14)
-- CMake >= 3.24, Ninja
-- Kokkos (Serial + OpenMP for CPU) built with the same compiler
-- Optional: Python 3.9+ and nanobind for the Python module
-
-## Build and test (CPU)
+Build independently from this repository root:
 
 ```sh
 cmake -S material -B material/build-cpu -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_PREFIX_PATH=/workspace/deps/kokkos
-cmake --build material/build-cpu -j
-ctest --test-dir material/build-cpu --output-on-failure
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/workspace/deps/kokkos \
+  -DCHIPCAE_MATERIAL_ENABLE_PYTHON=OFF
+cmake --build material/build-cpu -j 4
+OMP_NUM_THREADS=4 OMP_PROC_BIND=false material/scripts/run_all_acceptance.sh
 ```
 
-Or with the helper script:
+The runner writes `material/acceptance_report.json` from measured CTest output.
+T1–T23 and T24-pt pass on CPU; T0 and core_math also pass. T24 is skipped for later
+FEM work. T25 and the 100-step CPU/GPU comparison remain pending. CUDA scripts
+fail clearly without the toolkit; there are no GPU results.
+
+Each acceptance ID has its own executable/target and CTest label. T14 invokes
+SciPy's fixed-tau NNLS in `/workspace/deps/venv/bin/python` (override
+`K3_TEST_PYTHON` on another host). T24-pt's CTest label/target is `T24pt`.
+T15 also runs independent 1- and 4-thread processes and compares complete output
+bytes. See [DELIVERY.md](DELIVERY.md) for status, measurements and limitations,
+and [DESIGN.md](DESIGN.md) for layouts and dispatch.
+
+Chemical shrinkage requires post_gel_shrinkage.value and measure, plus exactly
+one string in schedule.cure_step_ids. The process layer calls
+`params.bind_cure_step(ordinal, start_seconds, end_seconds)` before make_material;
+this resolves the string/clock ABI and actual process duration. Table profiles
+use `schedule.fractions.{t_norm,fraction}`. gel_conversion and the obsolete
+scalar cure_step_id are errors.
+
+Factory models always reserve a 9-Real ActivationRecord. has_activation enables
+the constitutive activation transform; has_shrinkage enables the eigenstrain
+source. activate/deactivate edit trial. Evaluate from an immutable event snapshot
+into trial, then commit or discard. The single-point driver's `context()` exposes
+its ProcessClock. Save/restore accepts a POD byte stream with hash checks;
+transfer_from fits affine fields inside the same material identity.
+
+Native Python bindings stay optional and disabled here because Python.h is
+unavailable. The current optional module exposes validation only; full driver,
+batch and CTE bindings remain unfinished. These examples run without that module:
 
 ```sh
-material/scripts/build_cpu.sh
-material/scripts/run_all_acceptance.sh   # writes material/acceptance_report.json
+python3 material/python/examples/relaxation.py
+python3 material/python/examples/cte_conversion.py
+python3 material/python/examples/schema_error.py
+/workspace/deps/venv/bin/python material/tools/dma_nnls.py
+material/build-cpu/material_card_check material/tests/valid_elastic.json
 ```
 
-If no Kokkos is installed, configure the library with the optional fetch switch instead:
-
-```sh
-cmake -S material -B material/build-cpu-fetch -G Ninja \
-  -DCHIPCAE_MATERIAL_FETCH_KOKKOS=ON
-```
-
-The top-level chipcae build also works without Kokkos: `material/` prints a STATUS
-message and is skipped.
-
-## GPU
-
-`material/scripts/build_cuda.sh` and `run_gpu_tests.sh` exist and exit non-zero with a
-clear message when no CUDA toolkit / GPU is present. No GPU results are fabricated; the
-CPU/GPU consistency item stays `pending`.
-
-## Layout
-
-- `include/chipcae/material/` — public headers (official v0.2.2 interfaces + helpers)
-- `src/` — factory, schema validation, state serialization (host side)
-- `driver/` — single-point strain/stress-controlled driver
-- `tests/` — one executable per test, ctest label = test id
-- `schema/` — JSON Schema and illustrative YAML examples
-- `python/` — optional nanobind module
-- `scripts/`, `ci/` — build, acceptance and CPU CI template
-
-## Status
-
-CHUNK 2 implements thermo-elastic and isotropic Prony point kernels, thermal
-strain/CTE conversion, temperature tables, shift functions and reduced-time
-integration. T0, T3 and focused `core_math` checks pass on CPU. Chemical shrinkage
-and activation combinators remain for chunk 3; the full acceptance suite and GPU
-validation remain pending. See `DELIVERY.md`.
-
-Shrinkage binds through `chemical_shrinkage.schedule.cure_step_ids`, an array
-with exactly one string id in P0. The schedule is later evaluated against
-`ProcessClock.step_id` after the process layer resolves that id.
+Parameters in examples/tests are illustrative. The CLI accepts `--delivery` to
+reject illustrative provenance. No new C++ dependencies were introduced.

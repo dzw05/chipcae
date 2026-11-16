@@ -1,42 +1,465 @@
 {
   "library": "chipcae_material",
-  "version": "0.1.0",
-  "chunk": 1,
+  "chunk": 3,
   "ctest_status": 0,
+  "counts": {
+    "pass": 24,
+    "skip": 1,
+    "pending": 2
+  },
   "tests": [
     {
-      "id": "T0",
-      "test": "t_smoke",
+      "id": "T3",
       "status": "pass",
-      "measured_error": null,
-      "tolerance": null,
-      "seed": null
+      "measured_error": 6.106226635438361e-15,
+      "tolerance": 1e-14,
+      "seed": 20261116,
+      "note": "200 Mandel convention/rotation groups",
+      "checks": [
+        {
+          "test": "t03_mandel",
+          "id": "T3",
+          "measured_error": 6.106226635438361e-15,
+          "tolerance": 1e-14,
+          "seed": 20261116
+        }
+      ]
     },
     {
-      "id": "T3",
-      "test": "t03_mandel",
+      "id": "T1",
       "status": "pass",
-      "measured_error": 0.0,
+      "measured_error": 2.680618684023456e-10,
+      "tolerance": 1e-06,
+      "seed": 20261116,
+      "note": "100 groups per model/kinematics; FD h per D16; samples avoid Tg and ramp endpoints",
+      "checks": [
+        {
+          "test": "T1",
+          "id": "T1",
+          "measured_error": 2.680618684023456e-10,
+          "tolerance": 1e-06,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T2",
+      "status": "pass",
+      "measured_error": 0,
+      "tolerance": 1e-13,
+      "seed": 20261116,
+      "note": "Tangent symmetry and Jacobi eigenvalue positivity",
+      "checks": [
+        {
+          "test": "T2",
+          "id": "T2",
+          "measured_error": 0,
+          "tolerance": 1e-13,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T4",
+      "status": "pass",
+      "measured_error": 2.505408897576158e-15,
+      "tolerance": 1e-12,
+      "seed": 20261116,
+      "note": "100 large rotations; Green strain, PK2, internals, Cauchy push-forward",
+      "checks": [
+        {
+          "test": "T4",
+          "id": "T4",
+          "measured_error": 2.505408897576158e-15,
+          "tolerance": 1e-12,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T5",
+      "status": "pass",
+      "measured_error": 9.702924889169965e-16,
+      "tolerance": 1e-12,
+      "seed": 20261116,
+      "note": "Isotropic, transverse-isotropic and orthotropic rotations",
+      "checks": [
+        {
+          "test": "T5",
+          "id": "T5",
+          "measured_error": 9.702924889169965e-16,
+          "tolerance": 1e-12,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T6",
+      "status": "pass",
+      "measured_error": 2.534598782680234e-16,
+      "tolerance": 1e-12,
+      "seed": 20261116,
+      "note": "Step relaxation: one, ten and unequal steps",
+      "checks": [
+        {
+          "test": "T6",
+          "id": "T6",
+          "measured_error": 2.534598782680234e-16,
+          "tolerance": 1e-12,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T7",
+      "status": "pass",
+      "measured_error": 2.6952466910543847e-16,
+      "tolerance": 1e-12,
+      "seed": 20261116,
+      "note": "Arbitrary-step constant strain-rate closed form",
+      "checks": [
+        {
+          "test": "T7",
+          "id": "T7",
+          "measured_error": 2.6952466910543847e-16,
+          "tolerance": 1e-12,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T8",
+      "status": "pass",
+      "measured_error": 0.000622988499428212,
+      "tolerance": 0.2,
+      "seed": 20261116,
+      "note": "Three timestep halvings; error reports maximum absolute deviation of order from 2; 8192-step reference",
+      "checks": [
+        {
+          "test": "T8",
+          "id": "T8",
+          "measured_error": 0.000622988499428212,
+          "tolerance": 0.2,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T9",
+      "status": "pass",
+      "measured_error": 0,
+      "tolerance": 1e-12,
+      "seed": 20261116,
+      "note": "Arrhenius isothermal time-temperature superposition",
+      "checks": [
+        {
+          "test": "T9",
+          "id": "T9",
+          "measured_error": 0,
+          "tolerance": 1e-12,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T10",
+      "status": "pass",
+      "measured_error": 0,
+      "tolerance": 0,
+      "seed": 20261116,
+      "note": "Checkpoint/replay/discard bitwise, s_applied, parameter mismatch rejection",
+      "checks": [
+        {
+          "test": "T10",
+          "id": "T10",
+          "measured_error": 0,
+          "tolerance": 0,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T11",
+      "status": "pass",
+      "measured_error": 2.387609649978559e-15,
+      "tolerance": 1e-12,
+      "seed": 20261116,
+      "note": "CTE conversion and actual tangent/secant kernels; free thermal expansion and zero point; rejection fixtures in T16",
+      "checks": [
+        {
+          "test": "T11",
+          "id": "T11",
+          "measured_error": 2.387609649978559e-15,
+          "tolerance": 1e-12,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T12",
+      "status": "pass",
+      "measured_error": 1.0103534683984268e-14,
+      "tolerance": 1e-13,
+      "seed": 20261116,
+      "note": "Instantaneous/equilibrium limits, g switch continuity, finite large x",
+      "checks": [
+        {
+          "test": "T12",
+          "id": "T12",
+          "measured_error": 1.0103534683984268e-14,
+          "tolerance": 1e-13,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T13",
+      "status": "pass",
+      "measured_error": 0,
       "tolerance": 1e-14,
-      "seed": 20261116
+      "seed": 20261116,
+      "note": "1000 fixed-seed strain/temperature steps; nonnegative dissipation",
+      "checks": [
+        {
+          "test": "T13",
+          "id": "T13",
+          "measured_error": 0,
+          "tolerance": 1e-14,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T15",
+      "status": "pass",
+      "measured_error": 0,
+      "tolerance": 0,
+      "seed": 20261116,
+      "note": "All eight factory instances: batch/single-point and independent 1/4-thread bitwise results",
+      "checks": [
+        {
+          "test": "T15",
+          "id": "T15",
+          "measured_error": 0,
+          "tolerance": 0,
+          "seed": 20261116
+        },
+        {
+          "test": "T15_threads",
+          "id": "T15",
+          "measured_error": 0,
+          "tolerance": 0,
+          "seed": 20261116
+        },
+        {
+          "test": "T15_threads",
+          "id": "T15",
+          "measured_error": 0,
+          "tolerance": 0,
+          "seed": 20261116
+        },
+        {
+          "test": "T15_threads",
+          "id": "T15",
+          "measured_error": 0,
+          "tolerance": 0,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T16",
+      "status": "pass",
+      "measured_error": 0,
+      "tolerance": 0,
+      "seed": 20261116,
+      "note": "One JSON negative per semantic condition, readable field paths",
+      "checks": [
+        {
+          "test": "T16",
+          "id": "T16",
+          "measured_error": 0,
+          "tolerance": 0,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T17",
+      "status": "pass",
+      "measured_error": 6.249637146985029e-16,
+      "tolerance": 1e-12,
+      "seed": 20261116,
+      "note": "Affine 3D least-squares transfer; nontransferable fields; material-id rejection",
+      "checks": [
+        {
+          "test": "T17",
+          "id": "T17",
+          "measured_error": 6.249637146985029e-16,
+          "tolerance": 1e-12,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T18",
+      "status": "pass",
+      "measured_error": 5.028575791171797e-16,
+      "tolerance": 1e-12,
+      "seed": 20261116,
+      "note": "Both volume modes: random shear, analytic volumetric relaxation, approximation note",
+      "checks": [
+        {
+          "test": "T18",
+          "id": "T18",
+          "measured_error": 5.028575791171797e-16,
+          "tolerance": 1e-12,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T19",
+      "status": "pass",
+      "measured_error": 7.29667610777085e-08,
+      "tolerance": 1.1111112222222222e-07,
+      "seed": 20261116,
+      "note": "Exact splice, one-sided limits, reference above/below Tg",
+      "checks": [
+        {
+          "test": "T19",
+          "id": "T19",
+          "measured_error": 7.29667610777085e-08,
+          "tolerance": 1.1111112222222222e-07,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T20",
+      "status": "pass",
+      "measured_error": 7.848132145121963e-13,
+      "tolerance": 1e-10,
+      "seed": 20261116,
+      "note": "E1 closed forms; both ramp directions and endpoints exactly Tg",
+      "checks": [
+        {
+          "test": "T20",
+          "id": "T20",
+          "measured_error": 7.848132145121963e-13,
+          "tolerance": 1e-10,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T21",
+      "status": "pass",
+      "measured_error": 2.328306436538696e-16,
+      "tolerance": 1e-12,
+      "seed": 20261116,
+      "note": "Free/constrained/uniaxial shrinkage; one/50-step elastic and viscoelastic; table/step binding",
+      "checks": [
+        {
+          "test": "T21",
+          "id": "T21",
+          "measured_error": 2.328306436538696e-16,
+          "tolerance": 1e-12,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T22",
+      "status": "pass",
+      "measured_error": 1.3768985951401191e-12,
+      "tolerance": 1e-08,
+      "seed": 20261116,
+      "note": "1 K, factor-10 modulus ramp, Lipschitz bounds and timestep halvings; duplicate rejection in T16",
+      "checks": [
+        {
+          "test": "T22",
+          "id": "T22",
+          "measured_error": 1.3768985951401191e-12,
+          "tolerance": 1e-08,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T23",
+      "status": "pass",
+      "measured_error": 4.3540127755023156e-16,
+      "tolerance": 1e-12,
+      "seed": 20261116,
+      "note": "Activation thermal zero, incremental stress, excluded/soft frozen state and bitwise event discard",
+      "checks": [
+        {
+          "test": "T23",
+          "id": "T23",
+          "measured_error": 4.3540127755023156e-16,
+          "tolerance": 1e-12,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T24-pt",
+      "status": "pass",
+      "measured_error": 5.418604070490057e-16,
+      "tolerance": 1e-12,
+      "seed": 20261116,
+      "note": "Biaxial constrained cooling and force/moment release; Timoshenko curvature",
+      "checks": [
+        {
+          "test": "T24pt",
+          "id": "T24pt",
+          "measured_error": 5.418604070490057e-16,
+          "tolerance": 1e-12,
+          "seed": 20261116
+        }
+      ]
+    },
+    {
+      "id": "T14",
+      "status": "pass",
+      "measured_error": 2.1317351116347989e-16,
+      "tolerance": 1e-06,
+      "seed": 20261116,
+      "note": "Fixed-tau SciPy Lawson-Hanson NNLS, synthetic DMA and recovered log shift",
+      "checks": [
+        {
+          "test": "T14",
+          "id": "T14",
+          "measured_error": 2.1317351116347989e-16,
+          "tolerance": 1e-06,
+          "seed": 20261116
+        }
+      ]
     },
     {
       "id": "T24",
-      "test": "structural warpage",
       "status": "skip",
       "measured_error": null,
       "tolerance": null,
       "seed": null,
-      "note": "later FEM work (K2/P1); point-level substitute T24-pt only"
+      "note": "Later K2/P1 FEM structural convergence work"
     },
     {
       "id": "T25",
-      "test": "CPU/GPU consistency",
       "status": "pending",
       "measured_error": null,
       "tolerance": 1e-12,
       "seed": null,
-      "note": "no GPU available; scripts ready"
+      "note": "No CUDA toolkit/GPU; scripts ready, awaiting cloud GPU"
+    },
+    {
+      "id": "CPU/GPU-100-step",
+      "status": "pending",
+      "measured_error": null,
+      "tolerance": 1e-11,
+      "seed": null,
+      "note": "No GPU; 100-step consistency awaits cloud GPU"
     }
   ]
 }

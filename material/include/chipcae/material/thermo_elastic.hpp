@@ -21,7 +21,7 @@ public:
         if (constants.num_columns() != static_cast<std::size_t>(expected))
             throw std::invalid_argument("elastic.table: column count");
     }
-    StateLayout layout() const { return {}; }
+    StateLayout layout() const { return {0, {}, state_layout_hash(model_id, 0, {})}; }
     KOKKOS_INLINE_FUNCTION void init_state(StateRef) const noexcept {}
     KOKKOS_INLINE_FUNCTION StatusCode update(const StepContext& ctx,
                                              const PointInput& in,
@@ -106,7 +106,8 @@ public:
                 C[i * 6 + col] = x[i];
         }
         Vec6 th;
-        auto code = thermal_.evaluate(in.T_np1, th);
+        auto code = in.override_T_sf ? thermal_.evaluate(in.T_np1, in.T_sf, th)
+                                     : thermal_.evaluate(in.T_np1, th);
         if (code != StatusCode::Ok)
             return finish(out, code);
         if (in.R) {

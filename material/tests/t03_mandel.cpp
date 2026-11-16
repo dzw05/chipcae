@@ -16,6 +16,7 @@ using namespace chipcae::material;
 namespace {
 
 constexpr Real kTol = 1e-14;
+Real max_error = 0;
 constexpr std::uint64_t kSeed = 20261116ull;
 
 Real rel_error(Real got, Real want) {
@@ -25,6 +26,7 @@ Real rel_error(Real got, Real want) {
 
 bool check_rel(const char* what, Real got, Real want, std::uint64_t seed, int iter) {
     const Real err = rel_error(got, want);
+    max_error = std::max(max_error, err);
     if (!(err <= kTol)) {
         std::printf("FAIL %s seed=%llu iter=%d got=%.17g want=%.17g rel=%.3e\n",
                     what,
@@ -39,6 +41,7 @@ bool check_rel(const char* what, Real got, Real want, std::uint64_t seed, int it
 }
 
 bool check_abs(const char* what, Real err, Real tol, std::uint64_t seed, int iter) {
+    max_error = std::max(max_error, err);
     if (!(err <= tol)) {
         std::printf("FAIL %s seed=%llu iter=%d abs_err=%.3e tol=%.1e\n",
                     what,
@@ -170,5 +173,8 @@ int main(int argc, char** argv) {
     }
     std::printf("T3 PASSED (seed=%llu, 200 random cases)\n",
                 static_cast<unsigned long long>(kSeed));
+    std::printf(
+        "METRIC {\"id\":\"T3\",\"measured_error\":%.17g,\"tolerance\":1e-14,\"seed\":20261116}\n",
+        max_error);
     return 0;
 }

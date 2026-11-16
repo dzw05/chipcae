@@ -1,0 +1,74 @@
+{
+  "id": "illustrative",
+  "schema_version": "1",
+  "unit_system": "SI",
+  "density": 1000,
+  "model": "thermo_elastic",
+  "provenance": {
+    "source_type": "illustrative",
+    "confidence": "illustrative"
+  },
+  "elastic": {
+    "symmetry": "isotropic",
+    "table": {
+      "temperatures": [
+        250,
+        400
+      ],
+      "columns": {
+        "E": [
+          1000000000.0,
+          2000000000.0
+        ],
+        "nu": [
+          0.3,
+          0.3
+        ]
+      },
+      "interpolation": "linear",
+      "extrapolation": "error"
+    }
+  },
+  "thermal_expansion": {
+    "cte_type": "tangent",
+    "symmetry": "isotropic",
+    "stress_free_temperature": 300,
+    "table": {
+      "temperatures": [
+        250,
+        400
+      ],
+      "columns": {
+        "alpha": [
+          1e-05,
+          2e-05
+        ]
+      },
+      "interpolation": "linear",
+      "extrapolation": "error"
+    }
+  },
+  "chemical_shrinkage": {
+    "model": "equivalent_isotropic",
+    "post_gel_shrinkage": {
+      "value": 0.002,
+      "measure": "volumetric"
+    },
+    "schedule": {
+      "cure_step_ids": [
+        "cure"
+      ],
+      "profile": "table",
+      "fractions": {
+        "t_norm": [
+          0,
+          1
+        ],
+        "fraction": [
+          0,
+          0.8
+        ]
+      }
+    }
+  }
+}

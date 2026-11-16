@@ -1,0 +1,72 @@
+{
+  "id": "illustrative",
+  "schema_version": "1",
+  "unit_system": "SI",
+  "density": 1000,
+  "model": "prony_viscoelastic",
+  "provenance": {
+    "source_type": "illustrative",
+    "confidence": "illustrative"
+  },
+  "thermal_expansion": {
+    "cte_type": "tangent",
+    "symmetry": "isotropic",
+    "stress_free_temperature": 300,
+    "table": {
+      "temperatures": [
+        250,
+        400
+      ],
+      "columns": {
+        "alpha": [
+          1e-05,
+          2e-05
+        ]
+      },
+      "interpolation": "linear",
+      "extrapolation": "error"
+    }
+  },
+  "glass_transition": {
+    "T_g": 300,
+    "method": "DSC"
+  },
+  "viscoelastic": {
+    "symmetry": "orthotropic",
+    "reference_temperature": 300,
+    "volumetric_mode": "elastic_bulk",
+    "shear": {
+      "infinity": 2000000000.0,
+      "terms": [
+        {
+          "modulus": 3000000000.0,
+          "tau": 1
+        },
+        {
+          "modulus": 1000000000.0,
+          "tau": 2
+        }
+      ]
+    },
+    "bulk_modulus": {
+      "temperatures": [
+        250,
+        400
+      ],
+      "columns": {
+        "K": [
+          4000000000.0,
+          4000000000.0
+        ]
+      },
+      "interpolation": "linear",
+      "extrapolation": "error"
+    },
+    "shift": {
+      "type": "piecewise_wlf_arrhenius",
+      "C1": 8,
+      "C2": 100,
+      "activation_energy": 30000
+    }
+  }
+}

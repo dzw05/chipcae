@@ -1,5 +1,7 @@
 #include "chipcae/material/schema.hpp"
 
+#include "chipcae/material/thermo_elastic.hpp"
+
 #include <charconv>
 #include <cmath>
 #include <fstream>
@@ -12,23 +14,24 @@ struct Json {
     enum Kind { Null, Number, String, Array, Object, Boolean } kind = Null;
     Real number = 0;
     std::string string;
+    std::string path = "material";
     std::vector<Json> array;
     std::map<std::string, Json> object;
     const Json& at(const std::string& key) const {
         auto it = object.find(key);
         if (kind != Object || it == object.end())
-            throw std::runtime_error(key + ": required field is missing");
+            throw std::runtime_error(path + "." + key + ": required field is missing");
         return it->second;
     }
     bool has(const std::string& key) const { return object.contains(key); }
     Real num() const {
         if (kind != Number)
-            throw std::runtime_error("expected number");
+            throw std::runtime_error(path + ": expected number");
         return number;
     }
     std::string str() const {
         if (kind != String)
-            throw std::runtime_error("expected string");
+            throw std::runtime_error(path + ": expected string");
         return string;
     }
 };
@@ -198,20 +201,43 @@ TemperatureTable table(const Json& j, const std::vector<std::string>& names, boo
     std::vector<std::vector<Real>> columns;
     for (const auto& name : names)
         columns.push_back(numbers(j.at("columns").at(name)));
-    TemperatureTable t(numbers(j.at("temperatures")),
-                       columns,
-                       Interpolation::Linear,
-                       extrap == "error" ? Extrapolation::Error : Extrapolation::Clamp);
-    if (!cte && !t.strictly_increasing())
-        throw std::runtime_error("temperatures: duplicate modulus knots are forbidden");
-    return t;
+    try {
+        TemperatureTable t(numbers(j.at("temperatures")),
+                           columns,
+                           Interpolation::Linear,
+                           extrap == "error" ? Extrapolation::Error : Extrapolation::Clamp);
+        if (!cte && !t.strictly_increasing())
+            throw std::runtime_error("temperatures: duplicate modulus knots are forbidden");
+        return t;
+    } catch (const std::exception& e) {
+        throw std::runtime_error(j.path + ": " + e.what());
+    }
 }
-MaterialParams decode(const Json& j) {
+void set_paths(Json& j, const std::string& path = "material") {
+    j.path = path;
+    for (auto& [k, v] : j.object)
+        set_paths(v, path + "." + k);
+    for (std::size_t i = 0; i < j.array.size(); ++i)
+        set_paths(j.array[i], path + "[" + std::to_string(i) + "]");
+}
+MaterialParams decode(Json j, bool customer_delivery = false) {
+    set_paths(j);
     MaterialParams p;
     p.id = j.at("id").str();
     if (j.at("schema_version").str() != "1" || j.at("unit_system").str() != "SI")
         throw std::runtime_error("schema_version/unit_system: expected 1/SI");
-    j.at("provenance");
+    const auto& provenance = j.at("provenance");
+    auto source = provenance.at("source_type").str(),
+         confidence = provenance.at("confidence").str();
+    if (source != "datasheet" && source != "measurement" && source != "literature" &&
+        source != "fitted" && source != "illustrative")
+        throw std::runtime_error("provenance.source_type: invalid");
+    if (confidence != "high" && confidence != "medium" && confidence != "low" &&
+        confidence != "illustrative")
+        throw std::runtime_error("provenance.confidence: invalid");
+    if (customer_delivery && (confidence == "illustrative" || source == "illustrative"))
+        throw std::runtime_error(
+            "provenance.confidence: illustrative cards forbidden in customer delivery");
     p.density = j.at("density").num();
     if (!(p.density > 0))
         throw std::runtime_error("density: must be positive");
@@ -243,6 +269,12 @@ MaterialParams decode(const Json& j) {
         throw std::runtime_error("thermal_expansion.symmetry: invalid");
     p.thermal.n_components = names.size();
     p.cte_table = table(th.at("table"), names, true);
+    for (Real T : p.cte_table.temperatures())
+        if (T < 0) {
+            p.warnings.push_back(
+                "thermal_expansion.table.temperatures: negative Kelvin; check units");
+            break;
+        }
     if (p.kind == ModelKind::ThermoElastic) {
         const auto& el = j.at("elastic");
         auto symmetry = el.at("symmetry").str();
@@ -258,11 +290,41 @@ MaterialParams decode(const Json& j) {
         } else
             throw std::runtime_error("elastic.symmetry: invalid");
         p.elastic_table = table(el.at("table"), names);
+        for (Real T : p.elastic_table.temperatures()) {
+            Real E;
+            p.elastic_table.evaluate(0, T, E);
+            if (E < 1e3) {
+                p.warnings.push_back("elastic.table: modulus below 1e3 Pa; check units");
+                break;
+            }
+        }
+        ThermoElastic probe(p.elastic_symmetry, p.elastic_table);
+        auto& ts = p.elastic_table.temperatures();
+        for (std::size_t i = 0; i < ts.size(); ++i)
+            for (int sample = 0; sample <= 8; ++sample) {
+                Real T = ts[i];
+                if (i + 1 < ts.size())
+                    T += (ts[i + 1] - ts[i]) * sample / 9;
+                PointInput in;
+                in.T_np1 = T;
+                PointOutput out;
+                if (probe.update({}, in, {nullptr, 1}, {nullptr, 1}, out) != StatusCode::Ok)
+                    throw std::runtime_error("elastic.table: non-SPD stiffness at T=" +
+                                             std::to_string(T));
+            }
     } else {
         if (j.has("elastic"))
             throw std::runtime_error("elastic: viscoelasticity must not also define a "
                                      "temperature-dependent elastic/shear table");
         const auto& v = j.at("viscoelastic");
+        if (v.has("fit") && v.at("fit").has("valid_temperature_range")) {
+            auto range = numbers(v.at("fit").at("valid_temperature_range"));
+            if (range.size() != 2 || !(range[0] > 0 && range[1] > range[0]))
+                throw std::runtime_error("viscoelastic.fit.valid_temperature_range: increasing "
+                                         "positive bounds required");
+            p.fit_temperature = {
+                true, p.cte_table.extrapolation() == Extrapolation::Clamp, range[0], range[1]};
+        }
         if (v.at("symmetry").str() != "isotropic")
             throw std::runtime_error("viscoelastic.symmetry: orthotropic NotImplemented");
         auto mode = v.at("volumetric_mode").str();
@@ -281,11 +343,19 @@ MaterialParams decode(const Json& j) {
             if (g < 0 || tau <= 0)
                 throw std::runtime_error(
                     "viscoelastic.terms: nonnegative modulus and positive tau required");
+            if (!p.prony.terms.empty() && tau <= p.prony.terms.back().tau)
+                throw std::runtime_error("viscoelastic.terms.tau: must be strictly increasing");
             p.prony.terms.push_back({g, tau});
         }
-        if (mode == "elastic_bulk")
+        if (mode == "elastic_bulk") {
             p.bulk_table = table(v.at("bulk_modulus"), {"K"});
-        else {
+            for (Real T : p.bulk_table.temperatures()) {
+                Real K;
+                p.bulk_table.evaluate(0, T, K);
+                if (!(K > 0))
+                    throw std::runtime_error("viscoelastic.bulk_modulus.K: must be positive");
+            }
+        } else {
             p.prony.poisson = v.at("poisson_ratio").num();
             if (!(p.prony.poisson > -1 && p.prony.poisson < 0.5))
                 throw std::runtime_error("viscoelastic.poisson_ratio: out of range");
@@ -336,7 +406,26 @@ MaterialParams decode(const Json& j) {
             p.shift.T_g > p.cte_table.temperatures().back())
             throw std::runtime_error("glass_transition.T_g: outside valid temperature range");
     }
+    if (j.has("activation"))
+        p.has_activation = true;
     if (j.has("chemical_shrinkage")) {
+        p.has_shrinkage = true;
+        const auto& ch = j.at("chemical_shrinkage");
+        if (ch.has("gel_conversion"))
+            throw std::runtime_error("chemical_shrinkage.gel_conversion: forbidden");
+        if (ch.at("model").str() != "equivalent_isotropic")
+            throw std::runtime_error("chemical_shrinkage.model: unsupported");
+        const auto& sh = ch.at("post_gel_shrinkage");
+        if (sh.has("gel_conversion"))
+            throw std::runtime_error(
+                "chemical_shrinkage.post_gel_shrinkage.gel_conversion: forbidden");
+        auto measure = sh.at("measure").str();
+        if (measure != "linear" && measure != "volumetric")
+            throw std::runtime_error("chemical_shrinkage.post_gel_shrinkage.measure: invalid");
+        Real effective = sh.at("value").num() * (measure == "linear" ? 3 : 1);
+        if (!(effective >= 0 && effective < 1))
+            throw std::runtime_error(
+                "chemical_shrinkage.post_gel_shrinkage.value: effective volume must be in [0,1)");
         const auto& schedule = j.at("chemical_shrinkage").at("schedule");
         if (schedule.has("cure_step_id"))
             throw std::runtime_error(
@@ -345,23 +434,64 @@ MaterialParams decode(const Json& j) {
         if (ids.kind != Json::Array || ids.array.size() != 1)
             throw std::runtime_error(
                 "chemical_shrinkage.schedule.cure_step_ids: P0 requires exactly one id");
-        p.cure_step_ids.push_back(ids.array[0].str());
+        if (schedule.has("gel_conversion"))
+            throw std::runtime_error("chemical_shrinkage.schedule.gel_conversion: forbidden");
+        auto id = ids.array[0].str();
+        if (id.empty())
+            throw std::runtime_error("chemical_shrinkage.schedule.cure_step_ids: empty id");
+        p.cure_step_ids.push_back(id);
+        auto profile = schedule.has("profile") ? schedule.at("profile").str() : "linear_ramp";
+        std::vector<Real> times, fractions;
+        if (profile == "table") {
+            times = numbers(schedule.at("fractions").at("t_norm"));
+            fractions = numbers(schedule.at("fractions").at("fraction"));
+        } else if (profile != "linear_ramp")
+            throw std::runtime_error("chemical_shrinkage.schedule.profile: unsupported");
+        auto step = process_step_id(id);
+        bool ordered = false;
+        if (j.has("process_step_ids")) {
+            bool found = false;
+            unsigned index = 0;
+            for (const auto& candidate : j.at("process_step_ids").array) {
+                if (candidate.str() == id) {
+                    if (found)
+                        throw std::runtime_error("process_step_ids: duplicate cure step");
+                    found = true;
+                    step = index;
+                }
+                ++index;
+            }
+            if (!found)
+                throw std::runtime_error(
+                    "chemical_shrinkage.schedule.cure_step_ids: unknown process step");
+            ordered = true;
+        }
+        p.shrinkage = ShrinkageSchedule(effective,
+                                        step,
+                                        schedule.has("t_start") ? schedule.at("t_start").num() : 0,
+                                        schedule.has("t_end") ? schedule.at("t_end").num() : 1,
+                                        times,
+                                        fractions,
+                                        ordered);
     }
     return p;
 }
 } // namespace
-ValidationResult validate_material_json(std::string_view json) {
+ValidationResult validate_material_json(std::string_view json, bool customer_delivery) {
     ValidationResult r;
     try {
-        decode(Reader{json}.read());
+        decode(Reader{json}.read(), customer_delivery);
     } catch (const std::exception& e) {
         r.ok = false;
-        r.issues.push_back({"material", e.what()});
+        std::string message = e.what();
+        auto colon = message.find(':');
+        r.issues.push_back(
+            {colon == std::string::npos ? "material" : message.substr(0, colon), message});
     }
     return r;
 }
-MaterialParams parse_material_json(std::string_view json) {
-    auto p = decode(Reader{json}.read());
+MaterialParams parse_material_json(std::string_view json, bool customer_delivery) {
+    auto p = decode(Reader{json}.read(), customer_delivery);
     p.parameter_hash = 14695981039346656037ull;
     for (unsigned char c : json) {
         p.parameter_hash ^= c;
@@ -369,12 +499,12 @@ MaterialParams parse_material_json(std::string_view json) {
     }
     return p;
 }
-ValidationResult validate_material_file(const std::string& path) {
+ValidationResult validate_material_file(const std::string& path, bool customer_delivery) {
     std::ifstream f(path);
     if (!f)
         return {false, {{path, "cannot open file"}}};
     std::ostringstream s;
     s << f.rdbuf();
-    return validate_material_json(s.str());
+    return validate_material_json(s.str(), customer_delivery);
 }
 } // namespace chipcae::material

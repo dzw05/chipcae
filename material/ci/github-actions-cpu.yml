@@ -20,6 +20,9 @@ jobs:
           sudo apt-get install -y cmake ninja-build g++-12 libomp-dev git
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
 
+      - name: Install acceptance-only Python dependencies
+        run: python3 -m pip install numpy scipy
+
       - name: Configure (fetch Kokkos Serial+OpenMP)
         run: |
           cmake -S material -B material/build-cpu -G Ninja \

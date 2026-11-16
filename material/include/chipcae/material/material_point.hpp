@@ -47,11 +47,18 @@ struct StepContext {      // 一个时间步内所有积分点共享
     bool need_dissipation = false;
 };
 
+struct TemperatureValidity {
+    bool enabled = false, clamp = false;
+    Real lower = 0, upper = 0;
+};
+
 struct PointInput {
     Vec6 strain_n{}, strain_np1{}; // ε 或 E（全局坐标，Mandel，SI）
     const Mat3* F_np1 = nullptr;   // 有限应变时由适配层提供（为乘法分解模型预留）
     Real T_n = 0, T_np1 = 0;       // 温度 [K]
-    const Mat3* R = nullptr;       // 全局→材料主轴的旋转（参考构型中定义）；nullptr = 重合
+    bool override_T_sf = false;
+    Real T_sf = 0;
+    const Mat3* R = nullptr; // 全局→材料主轴的旋转（参考构型中定义）；nullptr = 重合
 };
 
 struct PointOutput {
@@ -75,6 +82,34 @@ struct StateLayout { // 主机侧元数据，不进入设备内核
     std::span<const StateField> fields;
     std::uint64_t layout_hash = 0; // 模型 id + 版本 + 字段表 的哈希，restore 时校验
 };
+
+// Canonical FNV-1a: numeric metadata is encoded little endian, independent of host ABI.
+inline std::uint64_t
+state_layout_hash(std::string_view model, std::uint32_t count, std::span<const StateField> fields) {
+    std::uint64_t h = 14695981039346656037ull;
+    auto byte = [&](unsigned char b) {
+        h ^= b;
+        h *= 1099511628211ull;
+    };
+    auto number = [&](std::uint32_t n) {
+        for (int i = 0; i < 4; ++i)
+            byte(static_cast<unsigned char>(n >> (8 * i)));
+    };
+    for (unsigned char c : model)
+        byte(c);
+    byte(0);
+    number(1);
+    number(count);
+    for (auto f : fields) {
+        for (unsigned char c : f.name)
+            byte(c);
+        byte(0);
+        number(f.offset);
+        number(f.size);
+        byte(f.transferable ? 1 : 0);
+    }
+    return h;
+}
 
 // ---- 单个积分点在 SoA 状态 View 中的视图（步长 = 点数 N），设备可用 ----
 struct StateRef {
