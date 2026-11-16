@@ -6,9 +6,12 @@ namespace chipcae::solvers::fem {
 
 ThermalStressSolver::ThermalStressSolver(const mesh::LayeredHexMesh& mesh) : mesh_(mesh) {}
 
-StepResult ThermalStressSolver::solve() {
+StepResult ThermalStressSolver::advance(const LoadStep&) {
     log(LogLevel::info, "FEM thermal stress and warpage solve is not implemented yet");
-    return {false, FailureReason::not_implemented, 0, std::nullopt};
+    StepResult result;
+    result.status = StepResult::Status::Failed;
+    result.code = ErrorCode::NOT_IMPLEMENTED;
+    return result;
 }
 
 } // namespace chipcae::solvers::fem

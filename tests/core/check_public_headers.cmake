@@ -1,0 +1,8 @@
+file(GLOB_RECURSE headers "${HEADER_DIR}/*.hpp" "${HEADER_DIR}/*.h")
+foreach(header IN LISTS headers)
+    file(READ "${header}" contents)
+    if(contents MATCHES "MPI_Comm" OR contents MATCHES "#[ \t]*include[ \t]*[<\"](mpi\\.h|[^>\"\n]*/mpi(\\.h|/[^>\"\n]*)?)[>\"]")
+        message(FATAL_ERROR "Public header exposes MPI: ${header}")
+    endif()
+endforeach()
+message(STATUS "Public core headers contain no MPI headers or communicator handles")

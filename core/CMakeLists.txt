@@ -3,6 +3,7 @@ add_library(chipcae_core
     src/field.cpp
     src/parameter.cpp
     src/parallel.cpp
+    src/solver.cpp
 )
 add_library(chipcae::core ALIAS chipcae_core)
 

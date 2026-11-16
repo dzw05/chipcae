@@ -5,6 +5,7 @@
 #include "chipcae/solvers/fvm/conjugate_heat_transfer.hpp"
 #include "chipcae/solvers/particles/particle_solver.hpp"
 
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 
@@ -44,16 +45,19 @@ int main() {
     expect(hex.layer_count() == 2, "layer count");
 
     chipcae::solvers::fvm::ConjugateHeatTransferSolver cht(mesh);
-    expect(cht.solve().failure_reason == chipcae::FailureReason::not_implemented,
+    expect(cht.advance({}).code.code() ==
+               static_cast<std::uint32_t>(chipcae::ErrorCode::NOT_IMPLEMENTED),
            "FVM placeholder");
 
     chipcae::solvers::fem::ThermalStressSolver fem(hex);
-    expect(fem.solve().failure_reason == chipcae::FailureReason::not_implemented,
+    expect(fem.advance({}).code.code() ==
+               static_cast<std::uint32_t>(chipcae::ErrorCode::NOT_IMPLEMENTED),
            "FEM placeholder");
 
     chipcae::solvers::particles::ParticleSolver particles(chipcae::solvers::particles::Method::mpm,
                                                           0);
-    expect(particles.solve().failure_reason == chipcae::FailureReason::not_implemented,
+    expect(particles.advance({}).code.code() ==
+               static_cast<std::uint32_t>(chipcae::ErrorCode::NOT_IMPLEMENTED),
            "particle placeholder");
 
     if (failed != 0) {

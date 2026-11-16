@@ -16,7 +16,8 @@ public:
 
     Method method() const noexcept { return method_; }
     std::size_t particle_count() const noexcept { return particle_count_; }
-    StepResult solve() override;
+    std::string_view name() const override { return "particle_solver"; }
+    StepResult advance(const LoadStep& step) override;
 
 private:
     Method method_{Method::mpm};

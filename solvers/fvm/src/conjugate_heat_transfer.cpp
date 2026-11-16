@@ -7,9 +7,12 @@ namespace chipcae::solvers::fvm {
 ConjugateHeatTransferSolver::ConjugateHeatTransferSolver(const mesh::CutCellMesh& mesh)
     : mesh_(mesh) {}
 
-StepResult ConjugateHeatTransferSolver::solve() {
+StepResult ConjugateHeatTransferSolver::advance(const LoadStep&) {
     log(LogLevel::info, "FVM conjugate heat transfer solve is not implemented yet");
-    return {false, FailureReason::not_implemented, 0, std::nullopt};
+    StepResult result;
+    result.status = StepResult::Status::Failed;
+    result.code = ErrorCode::NOT_IMPLEMENTED;
+    return result;
 }
 
 } // namespace chipcae::solvers::fvm
