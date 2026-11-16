@@ -199,56 +199,56 @@ The API returns the **account** total for the billing period, not this repositor
 
 At 80% of the budget (1,200 minutes, unless `ACTIONS_MINUTE_BUDGET` or `ACTIONS_USAGE_ALERT_FRACTION` is set) the job opens or updates an issue titled `[actions-usage] Hosted Actions minutes are past 80% of the chipcae budget`.
 
+## Who can start a run
+
+Pushes by the Cursor agent identity (`cursoragent` / `cursor[bot]`) do not trigger Actions on this repository. A push by `dzw05` is what starts the workflows. The runs below exist because `dzw05` pushed empty commit `c30a289`; GitHub then ran the workflows for `cbb8b5b`. Commit `c3d65bc` (the ccache path fix, pushed by `cursoragent`) has no Actions run. Do not read a missing check on an agent push as a passing or failing build.
+
 ## Monthly estimate
 
 Billed minutes are the job duration rounded up to the next minute. A skipped job costs 0. Drafts are skipped. Docs-only pulls do not start the build. Pushes to `main` do not build.
 
 ### Measured job time
 
-No GitHub-hosted job has run on this branch, so there is no duration to round up. Do not treat the cells below as measurements.
+Both workflows succeeded. Times are UTC, from `gh run view --json jobs` on 2026-11-16.
 
-What was queried on 2026-11-16, after merging `main` into the branch (`cbb8b5b`, pull request mergeable and clean):
+- CI: run [43899064936](https://github.com/dzw05/chipcae/actions/runs/43899064936), head `cbb8b5b`.
+- Measure hosted nightly: run [43899065127](https://github.com/dzw05/chipcae/actions/runs/43899065127), same head. That workflow has since been removed so later pull requests do not compile CUDA.
 
-- `gh run list` for `cursor/k7-ci-perf-gate-1e60` returned no runs. `actions/runs?head_sha=` for `0303604` and `cbb8b5b` returned `total_count: 0`.
-- The commit status is `pending` with an empty status list. The only check suite is the `cursor` app, stuck `queued` since the push, with zero check runs. There are no job logs.
-- Every Actions run currently visible on the repository was triggered by `dzw05`. `actions/runs?actor=cursoragent` is empty. These commits are authored and pushed by `cursoragent`, which did not start Actions. The first push also could not run: the pull request conflicted with `main`, so GitHub had no merge ref.
-- Nothing is `queued`, `waiting`, or `action_required` in Actions.
+| Job | Run | Wall time | Billed minutes (ceil) | Cache |
+| --- | --- | --- | --- | --- |
+| `CI / Lint` | 43899064936 | 15:41:24→15:41:33, 9 s | 1 | pip cache miss |
+| `CI / Build and test` | 43899064936 | 15:41:37→15:42:27, 50 s | 1 | cold. `actions/cache` reported no `~/.cache/ccache` entry and did not save one |
+| `CI / Build and test` | — | TBD | TBD | warm not measured. `c3d65bc` did not start a run |
+| Nightly clang | 43899065127 | 39 s | 1 | cold |
+| Nightly CUDA compile | 43899065127 | 15:41:25→15:44:26, about 3 min 1 s | 4 | `nvcc -c` only, not executed |
+| Actions usage | 43899065127 | 7 s | 1 | no billing token, skip path |
 
-| Job | Wall time | Billed minutes (ceil) | Cache |
-| --- | --- | --- | --- |
-| `CI / Lint` | not run | — | — |
-| `CI / Build and test` | not run | — | cold ccache not observed |
-| `CI / Build and test` | not run | — | warm ccache not observed |
-| Nightly clang | not run | — | — |
-| Nightly CUDA compile | not run | — | — |
-| Actions usage | not run | — | — |
-
-A push or workflow re-run by an actor that Actions accepts (the runs above used `dzw05`) is what produces the missing numbers. The one-shot measurement workflow was removed so that a later push does not also compile CUDA on every pull-request update.
+The cold build is already at the 1-minute billing floor (50 s rounds up to 1). A warm rebuild cannot bill less than that. Its wall time is still unknown.
 
 ### Assumptions
-
-Planning rate for the monthly total, once billed minutes exist:
 
 - 22 workdays in a 30-day month, 8 weekend days.
 - **2 code pull requests per workday.** Each runs Lint and Build and test (4 jobs).
 - **1 push to `main` per workday**, Lint only (1 job).
 - Every calendar day: nightly clang, nightly CUDA compile, and the usage check (3 jobs).
 - That is **8 jobs on a workday** (4 + 1 + 3). Weekend days are the 3 nightly jobs only.
-- Tier B stays off, so it adds 0 hosted minutes. Drafts are not an extra line. The 44 builds use the warm-cache billed minute; the cold-cache build is reported beside it and is not multiplied.
+- Tier B stays off, so it adds 0 hosted minutes.
+- Build billed minutes in the formula are the measured cold value, 1. Warm is TBD and cannot lower a 1-minute bill.
 
 ```
 builds = 22 * 2 = 44
 lints  = 22 * 2 + 22 = 66
-nightly jobs = 30 clang + 30 cuda + 30 usage
 
-monthly = 44 * billed(build, warm)
-        + 66 * billed(lint)
-        + 30 * billed(clang)
-        + 30 * billed(cuda)
-        + 30 * billed(usage)
+monthly = 44 * 1
+        + 66 * 1
+        + 30 * 1
+        + 30 * 4
+        + 30 * 1
+        = 44 + 66 + 30 + 120 + 30
+        = 290 minutes/month
 ```
 
-The numeric total is **not computed**. There are no billed minutes to multiply, so this document does not claim the sum is under 1,500. The cap remains 1,500. Fill the table from `gh run view --json jobs` and evaluate the formula before treating the budget as checked. The usage issue still fires at 1,200 account minutes.
+290 is under the 1,500-minute cap (1,500 / 290 ≈ 5.2). The 80% alert is 1,200 minutes. This total is the M0 skeleton. Build time will grow with the solver code, so the 1,500-minute budget leaves about 5× headroom on the build job before the 80% alert. Re-measure this estimate at each milestone. Do not keep using 290 after the compile stops being a one-minute job.
 
 ## What is intentionally out of this tree
 
