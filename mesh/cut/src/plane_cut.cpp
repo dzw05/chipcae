@@ -377,7 +377,7 @@ build_cut_layer(HexMeshArrays& mesh, const CutGeometry& g, const CutOptions& o) 
             auto [it, inserted] = exposed_attr.emplace(body, next_attr);
             if (inserted) {
                 ++next_attr;
-                m.face_sets[name] = {it->second};
+                m.face_sets[name].push_back(it->second);
                 m.attr_table.boundary_names[it->second] = name;
                 HexMeshArrays::InterfaceReport report;
                 report.name = name;

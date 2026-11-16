@@ -61,16 +61,16 @@ int main(int argc, char** argv) {
         for (const auto& [name, attrs] : arrays.face_sets) {
             const auto& actual = local.bdr_attribute_sets.GetAttributeSet(name);
             expect(actual.Size() == static_cast<int>(attrs.size()), "boundary attribute set size");
-            for (auto a : attrs) {
+            for (auto attr : attrs) {
                 bool found = false;
                 for (int i = 0; i < actual.Size(); ++i)
-                    found = found || actual[i] == a;
+                    found = found || actual[i] == attr;
                 expect(found, "boundary attribute set membership");
             }
         }
 #ifdef CHIPCAE_ENABLE_MPI
-        std::vector<Index> local_gids(adapter.value().elem_gid().begin(),
-                                      adapter.value().elem_gid().end());
+        std::vector<chipcae::Index> local_gids(adapter.value().elem_gid().begin(),
+                                               adapter.value().elem_gid().end());
         std::sort(local_gids.begin(), local_gids.end());
         expect(std::adjacent_find(local_gids.begin(), local_gids.end()) == local_gids.end(),
                "local GIDs unique");
