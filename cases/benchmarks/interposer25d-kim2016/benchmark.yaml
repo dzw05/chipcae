@@ -40,6 +40,17 @@ geometry:
   memory_count_chosen: {value: 4, source: chosen}
   c4_uf_t_mm: {value: 0.10, unit: mm, source: literature, cite: Yahyaei2025}
   ubump_uf_t_mm: {value: 0.025, unit: mm, source: chosen}
+  stiffener:
+    present_in_kim2016: true   # Kim 2016 §2.1 (p.235)：stiffener 经粘接剂贴在基板上；Fig.7 半模型含 stiffener 与 stiffener adhesive（p.237）
+    used_in: [P-KIM2016]       # X/PW verification 默认不建加强圈（v0.1 原卡 external_magnitude_reference）
+    outer_LxW_mm: {value: tbd, status: 待核对, note: "Kim 2016 Table 1（p.235）与正文均未给加强圈尺寸"}
+    ring_width_mm: {value: tbd, status: 待核对, note: "同上"}
+    ring_t_mm: {value: tbd, status: 待核对, note: "同上"}
+    adhesive_t_mm: {value: tbd, status: 待核对, note: "同上"}
+    material: {E_GPa: 118, CTE_ppm_per_K: 17.7, nu: 0.3, source: literature, cite: "Kim2016 Table 3 (p.238) Stiffener"}
+    adhesive_material: {E_GPa_at_0C: 3.3, E_GPa_at_245C: 0.1, CTE_ppm_per_K: [20, 55], Tg_C: 165, nu: 0.3, source: literature, cite: "Kim2016 Table 3 (p.238) Stiffener adhesive"}
+    attach_temperature_C: {value: 175, source: literature, cite: "Kim2016 §2.1 (p.235)"}
+    note: "v0.1 原卡另有 chosen 尺寸（宽 4.0、厚 1.0、粘接 0.1 mm，仅 R1 变体）；不是 Kim 2016 数据，P 系列不得使用"
 mesh:
   type: cut_cell
   background: tensor_product_cartesian
@@ -51,9 +62,28 @@ mesh:
     F-UNALIGNED:
       description: 中介层上或芯片下底填圆角不与背景网格面对齐
       fillet_radius_mm: {value: 0.05, unit: mm, source: chosen}
-      qoi: [W_bfp, path_P1, path_P2, kappa, sigma_die_center]
+      qoi: [W_bfp, S_cc, path_P1, path_P2, kappa, sigma_die_center]
       compare_to: F-ALIGNED
       aligned_vs_unaligned_tolerance: {status: tbd, rationale: "同 FCBGA 卡：两套几何不是同一问题。建议先报告差值，全局翘曲相对差大于 2% 记为需讨论，不作 hard fail。"}
+qoi_definitions:
+  # 来源：v0.1 原卡 interposer25d_v0.1.yaml qoi（S_cc、profile_P1、profile_P2）与 interposer25d_v0.1.md §5.1。
+  # 坐标：原点在衬底底面中心，z 向上（衬底 → 芯片）；底面 = 衬底底面 z = 0（BGA 侧）。
+  S_cc: {unit: um, definition: "W_bfp 同一残差场（扣最小二乘平面后）：中心点值减四个角点平均，带号，正 = 中心高（∩）"}
+  path_P1:
+    unit: um
+    surface: 衬底底面 z = 0
+    path: {fixed: "y = 0", along: x, range_mm: [0.0, 20.0]}
+    n_points: 41
+    best_fit_plane_removed: true   # 先扣最佳拟合平面（与 W_bfp 同一残差场）
+    metric: max_abs_diff_over_Wref
+  path_P2:
+    unit: um
+    surface: 衬底底面 z = 0
+    path: {fixed: "x = 0", along: y, range_mm: [0.0, 20.0]}
+    n_points: 41
+    best_fit_plane_removed: true
+    metric: max_abs_diff_over_Wref
+    note: 中介层为矩形（26.4×19.5 mm），w(x,y) ≠ w(y,x)，P1 与 P2 分别报告
 tiers:
   B0: {nlgeom: off}
   B1: {nlgeom: off}
@@ -69,6 +99,27 @@ series:
     kim2016_fea: {software: ANSYS 14.5, element: SOLID185, model: half, source: literature, cite: Kim2016}
     curves: {figures: [8, 10], digitized: tbd}
     emc_borrowed_underfill_forbidden: true
+    parameters:  # P 系列只用文献参数；chosen / tbd / 借用项全部列出
+      literature:
+        substrate: {card: SUB_ISO, cite: "Kim2016 Table 3 (p.238)", T_sf_C: 185, T_sf_cite: "Kim2016 p.239"}
+        interposer: {card: SI_KIM2016_INTERPOSER, E_GPa: 168, CTE_ppm_per_K: 3.3, nu: 0.28, cite: "Kim2016 Table 3 (p.238)", T_sf_C: 180, T_sf_cite: "Kim2016 p.239"}
+        asic: {card: SI_KIM2016_ASIC, E_GPa: 169, CTE_ppm_per_K: 3.3, nu: 0.28, cite: "Kim2016 Table 3 (p.238)", T_sf_C: 180, T_sf_cite: "Kim2016 p.239"}
+        memory: {card: SI_KIM2016_MEMORY, E_GPa: 169, CTE_ppm_per_K: 2.6, nu: 0.28, cite: "Kim2016 Table 3 (p.238)", T_sf_C: 180, T_sf_cite: "Kim2016 p.239"}
+        geometry: {substrate: [40, 40, 1.15], interposer: [26.4, 19.5, 0.1], asic: [18.5, 18.6, 0.4], memory_each: [8, 4, 0.5], unit: mm, cite: "Kim2016 Table 1 (p.235)"}
+        underfill_T_sf_C: {value: 165, cite: "Kim2016 p.239（C4/底填与微凸点/底填层）"}
+        c4_solder_volume_fraction: {value: 0.10, cite: "Kim2016 p.239「about 10%」"}
+        stiffener_material: {cite: "Kim2016 Table 3 (p.238)，见 geometry.stiffener"}
+      verification_only_not_for_P: [SI]   # SI = Chen 2022 Table 7（131 GPa / 2.8 ppm），仅 X/PW
+      borrowed_sensitivity_only: [I25D_C4_UF.viscoelastic, I25D_UBUMP_UF.viscoelastic]  # Chen 2022 EMC Prony/WLF；区间见各卡 p_series_sensitivity
+      chosen:
+        - {item: ubump_solder_volume_fraction, value: 0.03, note: "Kim2016 p.239 仅给「less than 3%」，取上限"}
+        - {item: homogenization_fiber_props, note: "C4 用 SAC305（Depiver 2024），微凸点用 Cu（Chen 2022）；Kim2016 Table 3 有 SnAg、Cu（125 GPa/16.5 ppm/0.3），P 系列应改用 Kim 值重算，待核对"}
+      tbd:
+        - {item: chip_layout_xy, note: "Kim2016 未给 ASIC/存储块平面坐标"}
+        - {item: stiffener_dimensions, note: "Kim2016 未给，见 geometry.stiffener"}
+        - {item: interposer_passivation_IMD_and_0p4pct_strain, note: "Kim2016 p.238–239 用钝化/IMD 层与 0.4% 面内压应变模拟中介层残余翘曲；本卡未建"}
+        - {item: underfill_viscoelastic, note: "Kim2016 未做粘弹性（p.239）；P 系列底填按 Kim Table 3 弹性 E(T) 或作灵敏度参数"}
+        - {item: published_curves, note: "Fig.8、Fig.10 未数字化"}
 loads:
   T_sf_C: {value: 165, unit: degC, source: chosen, note: "统一 T_sf 为简化；P 系列须改用文献分部件零应力温度"}
 cpu_gpu_consistency:

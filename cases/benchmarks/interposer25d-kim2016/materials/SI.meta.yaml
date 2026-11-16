@@ -28,4 +28,5 @@ provenance:
     original_file: materials/SI.csv
     original_units: {modulus: GPa, temperature: degC, alpha: ppm/K}
     importer_version: "vv-template-0.1"
-  notes: "cited。硅本为立方各向异性，此处各向同性简化。密度未在原卡给出，标 tbd。"
+  notes: "cited。硅本为立方各向异性，此处各向同性简化。密度未在原卡给出，标 tbd。仅用于 X/PW verification（与 FCBGA 卡一致）；P-KIM2016 不得使用本卡，改用 SI_KIM2016_{INTERPOSER,ASIC,MEMORY}（Kim 2016 Table 3，p.238）。"
+vv_usage: {series: [X, PW], p_series_allowed: false}  # V&V 扩展字段

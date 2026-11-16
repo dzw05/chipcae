@@ -1,0 +1,28 @@
+id: SI_KIM2016_INTERPOSER
+schema_version: "1"
+unit_system: SI
+model: thermo_elastic
+# 中介层；Kim 2016 中介层 CTE 为 DIC 实测（§2.2）。仅供 P-KIM2016（validation）使用；X/PW verification 仍用 SI（Chen 2022）。
+material_frame: global
+elastic:
+  symmetry: isotropic
+  table:
+    temperatures: [298.15]
+    columns: {E: [1.68e+11], nu: [0.28]}  # Kim 2016 Table 3 (p.238)「Interposer」：E = 168 GPa，ν = 0.28；温度无关（Table 3 Temp. 列为 –）
+    interpolation: linear
+    extrapolation: clamp
+thermal_expansion:
+  cte_type: tangent
+  stress_free_temperature: 453.15  # 180 °C：Kim 2016 p.239「stress free temperature of the interposer including the passivation and IMD layers was to be 180 °C」
+  symmetry: isotropic
+  table:
+    temperatures: [298.15]
+    columns: {alpha: [3.3e-6]}  # Kim 2016 Table 3 (p.238)：CTE = 3.3 ppm/°C
+    interpolation: linear
+    extrapolation: clamp
+provenance:
+  source_type: literature
+  reference: "Kim Y. et al., Microelectron. Reliab. 65:234-242 (2016), Table 3 (p.238)「Interposer」"
+  confidence: medium
+  notes: "cited。各向同性。密度未在 Kim 2016 给出，source: tbd（本卡不写密度）。"
+vv_usage: {series: [P-KIM2016], p_series_allowed: true}  # V&V 扩展字段

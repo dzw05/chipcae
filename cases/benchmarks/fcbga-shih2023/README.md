@@ -37,7 +37,7 @@ B0 线弹性、温度无关、小变形；B1 加 E(T) 与 Tg 处 CTE 阶跃；B2
 
 - **X 系列**（verification）：单一 WLF、固定设置；X-OFF（NLGEOM 关，允许四分之一）与 X-ON（全模型）。
 - **PW 系列**（verification）：跨 Tg 分段移位，只与 `tools/vv/pw_reference.py` 及开源实现比。单元级冻结值见 `tests/vv/test_pw_reference.py`（16.32000 / 16.24540 与 10.44021 / 9.35481 MPa）。
-- **P-SHIH2023**（validation）：Shih 2023 已发表室温 FE 最大翘曲 128 µm（实测约 122 µm）。图 12 E(T) 尚未数字化（待核对）。B 系列是简化模型，不期望等于 128 µm。数字化后开源复现与 128 µm 相差 ≤10%（建议）。P 系列底填若无文献 Prony，不得借用 EMC 卡。
+- **P-SHIH2023**（validation）：Shih 2023 已发表室温 FE 最大翘曲 128 µm（实测约 122 µm）。图 12 E(T) 尚未数字化（待核对）。B 系列是简化模型，不期望等于 128 µm。数字化后开源复现与 128 µm 相差 ≤10%（建议）。P 系列底填若无文献 Prony，不得借用 EMC 卡。P 系列参数清单（文献 / 借用 / chosen / tbd）见 `benchmark.yaml` 的 `series.P-SHIH2023.parameters`：`SUB_ISO` 借自 Kim 2016；Shih 2023 Table 3 自带芯片（131 GPa / 2.8 ppm / ν 0.30）、基板与底填的 CTE、Tg、ν，E(T) 在图 12，尚未数字化。
 
 ## 公开参考与容差
 

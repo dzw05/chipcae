@@ -14,9 +14,9 @@
 
 ## 网格（MVP：cut-cell 主路径）
 
-与 FCBGA 卡相同：张量积笛卡尔背景网格，z 向对齐层界面；C4/微凸点、圆角、斜边用 cut。新增 `F-UNALIGNED` 变体（中介层上底填或芯片下底填圆角不与网格对齐），QoI 与容差约定同 FCBGA 卡（W_bfp、沿 P1/P2 路径的翘曲、κ、芯片中心应力；对齐 vs 非对齐容差待首次收敛后定）。
+与 FCBGA 卡相同：张量积笛卡尔背景网格，z 向对齐层界面；C4/微凸点、圆角、斜边用 cut。新增 `F-UNALIGNED` 变体（中介层上底填或芯片下底填圆角不与网格对齐），QoI：W_bfp、S_cc、沿 P1/P2 路径的翘曲、κ、芯片中心应力（对齐 vs 非对齐容差待首次收敛后定）。路径定义（衬底底面 z = 0，原点在底面中心）：**P1** 为 y = 0、x ∈ [0, 20] mm；**P2** 为 x = 0、y ∈ [0, 20] mm；各 41 点，先扣最佳拟合平面，度量 max|Δw| / W_ref（见 `benchmark.yaml` 的 `qoi_definitions`）。
 
 ## 系列
 
 - X / PW：verification，约定同 FCBGA 卡。PW 冻结值同一套测试 `tests/vv/test_pw_reference.py`。
-- **P-KIM2016**（validation）：已发表 Ansys 14.5 半模型结果（图 8、图 10 等）。布局、加强圈尺寸与曲线数字化待核对。数字化前只比趋势；之后开源复现与已发表曲线相差 ≤15%（建议）。P 系列不得借用 EMC 底填卡。B 系列是简化模型，不期望等于 P-KIM2016。
+- **P-KIM2016**（validation）：已发表 Ansys 14.5 半模型结果（图 8、图 10 等）。布局、加强圈尺寸与曲线数字化待核对（加强圈材料与 175 °C 贴装温度为文献值，尺寸 Kim 2016 未给，`geometry.stiffener` 标 tbd）。P 系列硅用 Kim 2016 Table 3（中介层 168 GPa / 3.3 ppm，ASIC 169 / 3.3，存储 169 / 2.6，ν = 0.28），即 `SI_KIM2016_*` 卡；`SI`（Chen 2022）只用于 X/PW。文献、借用、chosen、tbd 项全部列在 `series.P-KIM2016.parameters`。数字化前只比趋势；之后开源复现与已发表曲线相差 ≤15%（建议）。P 系列不得借用 EMC 底填卡。B 系列是简化模型，不期望等于 P-KIM2016。

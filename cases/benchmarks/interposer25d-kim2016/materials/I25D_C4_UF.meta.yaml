@@ -19,7 +19,35 @@ viscoelastic:
   poisson_ratio: 0.31
   tensile:
     infinity: 2.430e8
-    terms: []  # 完整 25 项见原 YAML materials.I25D_C4_UF.B2_viscoelastic；此处不手抄
+    # 25 项（Chen 2022 EMC 归一化 Prony 形状按 1-E∞/E0 缩放，status: chosen）。modulus_i = alpha_i × E0，E0 = 8.8348e+09 Pa；
+    # Σalpha_i = 0.972496，E∞ + Σmodulus_i = E0。与 v0.1 原卡 B2_viscoelastic.prony_alpha_tau_s 逐项相同；
+    # 仓库内可复现源：tools/vv/derive_cards.py → prony.I25D_C4_UF
+    terms:
+      - {modulus: 6.607547e+07, tau: 1.0e+10}  # alpha_i = 0.007479
+      - {modulus: 9.495643e+07, tau: 1.0e+09}  # alpha_i = 0.010748
+      - {modulus: 1.088359e+08, tau: 1.0e+06}  # alpha_i = 0.012319
+      - {modulus: 1.051253e+08, tau: 1.0e+05}  # alpha_i = 0.011899
+      - {modulus: 2.134046e+08, tau: 1.0e+04}  # alpha_i = 0.024155
+      - {modulus: 1.950017e+08, tau: 1.0e+03}  # alpha_i = 0.022072
+      - {modulus: 5.098916e+08, tau: 1.0e+02}  # alpha_i = 0.057714
+      - {modulus: 8.737794e+08, tau: 1.0e+01}  # alpha_i = 0.098902
+      - {modulus: 1.138947e+09, tau: 1.0e+00}  # alpha_i = 0.128916
+      - {modulus: 1.201824e+09, tau: 1.0e-01}  # alpha_i = 0.136033
+      - {modulus: 1.002202e+09, tau: 1.0e-02}  # alpha_i = 0.113438
+      - {modulus: 7.255491e+08, tau: 1.0e-03}  # alpha_i = 0.082124
+      - {modulus: 4.968161e+08, tau: 1.0e-04}  # alpha_i = 0.056234
+      - {modulus: 3.255447e+08, tau: 1.0e-05}  # alpha_i = 0.036848
+      - {modulus: 2.380449e+08, tau: 1.0e-06}  # alpha_i = 0.026944
+      - {modulus: 1.787280e+08, tau: 1.0e-07}  # alpha_i = 0.02023
+      - {modulus: 1.619684e+08, tau: 1.0e-08}  # alpha_i = 0.018333
+      - {modulus: 1.264083e+08, tau: 1.0e-09}  # alpha_i = 0.014308
+      - {modulus: 1.506687e+08, tau: 1.0e-10}  # alpha_i = 0.017054
+      - {modulus: 9.681174e+07, tau: 1.0e-11}  # alpha_i = 0.010958
+      - {modulus: 9.533633e+07, tau: 1.0e-12}  # alpha_i = 0.010791
+      - {modulus: 9.802211e+07, tau: 1.0e-13}  # alpha_i = 0.011095
+      - {modulus: 4.150589e+07, tau: 1.0e-14}  # alpha_i = 0.004698
+      - {modulus: 9.439984e+07, tau: 1.0e-15}  # alpha_i = 0.010685
+      - {modulus: 2.519597e+08, tau: 1.0e-16}  # alpha_i = 0.028519
   shift:
     type: WLF
     C1: -2.45104e7
@@ -27,9 +55,26 @@ viscoelastic:
   approximation_notes: ["常泊松比换算为近似；与 K 弹性主模式只在纯剪下一致"]
 provenance:
   source_type: fitted
-  reference: "均质化 derived（Kim 2016 式 1-4，c_s=0.10 chosen）；Prony 形状与 WLF 借自 Chen 2022 EMC（chosen）"
+  reference: "均质化 derived（Kim 2016 式 1-4，c_s=0.10 cited：Kim 2016 p.239「about 10% in C4/underfill layer」）；Prony 形状与 WLF 借自 Chen 2022 EMC（chosen）"
   confidence: low
   notes: >
     X/PW verification 允许 chosen。P 系列禁止使用借自 EMC 的底填 Prony/WLF；
     无文献底填卡时改为灵敏度参数并给范围，不得写入 P 系列冻结参考。
-    完整 Prony 表见原件 fcbga_v0.1.yaml。
+    25 项 Prony 已写入本卡；可复现源 tools/vv/derive_cards.py。灵敏度区间见 p_series_sensitivity。
+p_series_sensitivity:  # V&V 扩展字段（不是 Schema v1 字段）；本节数值不得写入 P 系列冻结参考
+  applies_to: P 系列（validation）
+  rule: P 系列不得把上面借自 Chen 2022 EMC 的 Prony/WLF 当作底填文献值；只能作灵敏度参数，按下列区间报告结果范围
+  E_relaxation_bounds_Pa:
+    unrelaxed_E0: {value: 8.8348e+09, status: derived, source: "Kim 2016 Table 3 (p.238) Underfill (for interposer) 7.9 GPa@25 °C / 0.2 GPa@260 °C + SAC305 c_s=0.10 玻璃态 → Park 均质化（tools/vv/derive_cards.py）"}
+    relaxed_Einf: {value: 2.4300e+08, status: derived, source: "Kim 2016 Table 3 (p.238) Underfill (for interposer) 7.9 GPa@25 °C / 0.2 GPa@260 °C + SAC305 c_s=0.10 橡胶态 260 °C → Park 均质化"}
+    note: 端点算例为无松弛（E(t) ≡ E0）与完全松弛（E(t) ≡ E∞）两档弹性极限，与借用形状（s = 1）一起报告；不声明结构响应必然落在两者之间
+  prony_shape_scale_s:
+    range: [0.0, 1.0]
+    status: chosen
+    meaning: "alpha_i → s·alpha_i（τ_i 不变）；s = 1 为本卡借用形状，s = 0 等价于 E ≡ E0。参数化方式为 V&V 选定，待架构师确认"
+  wlf_log10_aT_slope_per_K:
+    nominal: {value: 0.130802, status: chosen, source: "Chen 2022 EMC 常数 C1/C2 导出（借用）"}
+    range: {value: tbd, status: 待核对, note: "本地文献无底填 WLF 常数（Kim 2016 未做粘弹性，p.239），区间不编造"}
+  reference_temperature_K:
+    nominal: {value: 395.15, status: chosen, note: 取基体 Tg}
+    range: {value: tbd, status: 待核对}

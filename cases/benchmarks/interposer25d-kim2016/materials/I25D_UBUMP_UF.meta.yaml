@@ -1,0 +1,86 @@
+id: I25D_UBUMP_UF
+schema_version: "1"
+unit_system: SI
+model: prony_viscoelastic
+# 微凸点/底填均质层（2.5D，ubump_uf_t_mm = 0.025）。B0/B1 用其中的弹性/CTE；B2 起用 Prony。
+# 数值全部由 tools/vv/derive_cards.py 复现（homogenized.I25D_UBUMP_UF、prony.I25D_UBUMP_UF），与 v0.1 原卡 materials.I25D_UBUMP_UF 一致。
+glass_transition: {T_g: 408.15, method: DMA_tan_delta_peak}  # 135 °C，基体底填 Tg，Kim 2016 Table 3 (p.238)
+elastic_homogenized:  # V&V 扩展字段：B0/B1 均质弹性（Park 面内等效，各向同性取面内值）
+  glassy: {E: 7.9281e+09, nu: 0.3012, status: derived}
+  rubbery: {E: 1.1300e+08, nu: 0.3012, status: derived}
+  nu_note: ν_xz 混合律，作各向同性 ν（chosen 用法）
+thermal_expansion:
+  cte_type: tangent
+  stress_free_temperature: 438.15  # 165 °C，本卡 chosen 统一 T_sf；Kim 2016 p.239 对微凸点/底填层也取 165 °C（底填固化温度）
+  symmetry: isotropic
+  table:
+    temperatures: [298.15, 408.15, 408.15, 533.15]
+    columns: {alpha: [3.08092e-5, 3.08092e-5, 1.272997e-4, 1.272997e-4]}  # derived：30.8092 / 127.2997 ppm/K（面内）
+    interpolation: linear
+    extrapolation: clamp
+viscoelastic:
+  symmetry: isotropic
+  reference_temperature: 408.15
+  volumetric_mode: constant_poisson_from_E
+  poisson_ratio: 0.3012
+  tensile:
+    infinity: 1.1300e+08
+    # 25 项（Chen 2022 EMC 归一化 Prony 形状按 1-E∞/E0 缩放，status: chosen）。modulus_i = alpha_i × E0，E0 = 7.9281e+09 Pa；
+    # Σalpha_i = 0.985747，E∞ + Σmodulus_i = E0。与 v0.1 原卡 B2_viscoelastic.prony_alpha_tau_s 逐项相同；
+    # 仓库内可复现源：tools/vv/derive_cards.py → prony.I25D_UBUMP_UF
+    terms:
+      - {modulus: 6.010293e+07, tau: 1.0e+10}  # alpha_i = 0.007581
+      - {modulus: 8.636872e+07, tau: 1.0e+09}  # alpha_i = 0.010894
+      - {modulus: 9.899818e+07, tau: 1.0e+06}  # alpha_i = 0.012487
+      - {modulus: 9.562081e+07, tau: 1.0e+05}  # alpha_i = 0.012061
+      - {modulus: 1.941116e+08, tau: 1.0e+04}  # alpha_i = 0.024484
+      - {modulus: 1.773754e+08, tau: 1.0e+03}  # alpha_i = 0.022373
+      - {modulus: 4.637938e+08, tau: 1.0e+02}  # alpha_i = 0.0585
+      - {modulus: 7.947920e+08, tau: 1.0e+01}  # alpha_i = 0.10025
+      - {modulus: 1.035989e+09, tau: 1.0e+00}  # alpha_i = 0.130673
+      - {modulus: 1.093174e+09, tau: 1.0e-01}  # alpha_i = 0.137886
+      - {modulus: 9.116047e+08, tau: 1.0e-02}  # alpha_i = 0.114984
+      - {modulus: 6.599588e+08, tau: 1.0e-03}  # alpha_i = 0.083243
+      - {modulus: 4.519096e+08, tau: 1.0e-04}  # alpha_i = 0.057001
+      - {modulus: 2.961145e+08, tau: 1.0e-05}  # alpha_i = 0.03735
+      - {modulus: 2.165243e+08, tau: 1.0e-06}  # alpha_i = 0.027311
+      - {modulus: 1.625736e+08, tau: 1.0e-07}  # alpha_i = 0.020506
+      - {modulus: 1.473279e+08, tau: 1.0e-08}  # alpha_i = 0.018583
+      - {modulus: 1.149812e+08, tau: 1.0e-09}  # alpha_i = 0.014503
+      - {modulus: 1.370451e+08, tau: 1.0e-10}  # alpha_i = 0.017286
+      - {modulus: 8.805741e+07, tau: 1.0e-11}  # alpha_i = 0.011107
+      - {modulus: 8.671756e+07, tau: 1.0e-12}  # alpha_i = 0.010938
+      - {modulus: 8.915941e+07, tau: 1.0e-13}  # alpha_i = 0.011246
+      - {modulus: 3.775361e+07, tau: 1.0e-14}  # alpha_i = 0.004762
+      - {modulus: 8.586132e+07, tau: 1.0e-15}  # alpha_i = 0.01083
+      - {modulus: 2.291855e+08, tau: 1.0e-16}  # alpha_i = 0.028908
+  shift:
+    type: WLF
+    C1: -2.45104e+7
+    C2: -1.87386e+8
+  approximation_notes: ["常泊松比换算为近似；与 K 弹性主模式只在纯剪下一致"]
+provenance:
+  source_type: fitted
+  reference: "均质化 derived（Kim 2016 式 1-4；纤维 Cu 125 GPa/0.34/17 ppm 取自 Chen 2022 Table 7，chosen 简化：微凸点按铜柱；基体 Kim 2016 Table 3 Underfill (for ASIC and memory)；c_s=0.03 chosen，取 Kim 2016 p.239「less than 3% in micro bump/underfill layer」的上限）；Prony 形状与 WLF 借自 Chen 2022 EMC（chosen）"
+  confidence: low
+  notes: >
+    X/PW verification 允许 chosen。P 系列禁止使用借自 EMC 的底填 Prony/WLF；
+    无文献底填卡时改为灵敏度参数并给范围，不得写入 P 系列冻结参考。
+    25 项 Prony 已写入本卡；可复现源 tools/vv/derive_cards.py。灵敏度区间见 p_series_sensitivity。密度 tbd。
+p_series_sensitivity:  # V&V 扩展字段（不是 Schema v1 字段）；本节数值不得写入 P 系列冻结参考
+  applies_to: P 系列（validation）
+  rule: P 系列不得把上面借自 Chen 2022 EMC 的 Prony/WLF 当作底填文献值；只能作灵敏度参数，按下列区间报告结果范围
+  E_relaxation_bounds_Pa:
+    unrelaxed_E0: {value: 7.9281e+09, status: derived, source: "Kim 2016 Table 3 (p.238) Underfill (for ASIC and memory) 7.5 GPa@25 °C / 0.1 GPa@260 °C + Cu c_s=0.03 玻璃态 → Park 均质化（tools/vv/derive_cards.py）"}
+    relaxed_Einf: {value: 1.1300e+08, status: derived, source: "Kim 2016 Table 3 (p.238) Underfill (for ASIC and memory) 7.5 GPa@25 °C / 0.1 GPa@260 °C + Cu c_s=0.03 橡胶态 260 °C → Park 均质化"}
+    note: 端点算例为无松弛（E(t) ≡ E0）与完全松弛（E(t) ≡ E∞）两档弹性极限，与借用形状（s = 1）一起报告；不声明结构响应必然落在两者之间
+  prony_shape_scale_s:
+    range: [0.0, 1.0]
+    status: chosen
+    meaning: "alpha_i → s·alpha_i（τ_i 不变）；s = 1 为本卡借用形状，s = 0 等价于 E ≡ E0。参数化方式为 V&V 选定，待架构师确认"
+  wlf_log10_aT_slope_per_K:
+    nominal: {value: 0.130802, status: chosen, source: "Chen 2022 EMC 常数 C1/C2 导出（借用）"}
+    range: {value: tbd, status: 待核对, note: "本地文献无底填 WLF 常数（Kim 2016 未做粘弹性，p.239），区间不编造"}
+  reference_temperature_K:
+    nominal: {value: 408.15, status: chosen, note: 取基体 Tg}
+    range: {value: tbd, status: 待核对}
