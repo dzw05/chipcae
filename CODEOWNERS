@@ -1,4 +1,5 @@
-# CODEOWNERS — 只有关键节点路径需要 Zhiwei 审批（其余由 AI 交叉审 + CI 门禁）
+# CODEOWNERS — 仅作提醒和评审路由（未启用分支保护，合并只由 CI 门禁 ci-ok 把关）。
+# 下列路径属于 Zhiwei 的关键节点，改动时请在 PR 描述中注明并通知 Zhiwei。
 /docs/adr/                        @dzw05
 /protocol/                        @dzw05
 /cmake/ChipcaeLicensePolicy.cmake @dzw05
