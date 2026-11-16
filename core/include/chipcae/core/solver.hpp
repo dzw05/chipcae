@@ -7,7 +7,10 @@
 #include <string_view>
 
 namespace chipcae {
-namespace io { class Writer; class Reader; }
+namespace io {
+class Writer;
+class Reader;
+} // namespace io
 
 /// Skeleton failure token used by placeholder solvers (PR #5). Prefer ErrorCode
 /// and StepResult::Status for new code.
@@ -53,9 +56,7 @@ public:
     virtual std::string_view name() const { return {}; }
     virtual void configure(const CaseNode&) {}
     virtual void setup(SimulationContext&) {}
-    virtual StepResult advance(const LoadStep&, double, double) {
-        return solve();
-    }
+    virtual StepResult advance(const LoadStep&, double, double) { return solve(); }
     virtual void checkpoint(io::Writer&) const {}
     virtual void restart(io::Reader&) {}
     virtual void on_regrid() {}

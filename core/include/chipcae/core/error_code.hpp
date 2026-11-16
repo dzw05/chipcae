@@ -13,6 +13,7 @@ public:
     constexpr std::string_view name() const noexcept {
         return value_ == INTERNAL ? "INTERNAL" : "NONE";
     }
+
 private:
     Value value_;
 };

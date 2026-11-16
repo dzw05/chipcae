@@ -10,7 +10,8 @@
 
 namespace {
 void expect(bool condition, const char* message) {
-    if (!condition) throw std::runtime_error(message);
+    if (!condition)
+        throw std::runtime_error(message);
 }
 class TestSolver final : public chipcae::Solver {
 public:
@@ -40,7 +41,7 @@ static_assert(chipcae::ErrorCode(chipcae::ErrorCode::INTERNAL).code() == 1);
 static_assert(chipcae::ErrorCode(chipcae::ErrorCode::INTERNAL).name() == "INTERNAL");
 
 #ifdef CHIPCAE_ENABLE_KOKKOS
-template<class ExecutionSpace>
+template <class ExecutionSpace>
 void exercise() {
     using Memory = typename ExecutionSpace::memory_space;
     static_assert(Kokkos::SpaceAccessibility<ExecutionSpace, Memory>::accessible);
@@ -48,8 +49,8 @@ void exercise() {
     chipcae::CvField<Memory> field({"vector", 4, 2}, {0, 1, 4});
     auto raw = field.raw();
     auto offsets = field.block_offset();
-    Kokkos::parallel_for("fill core types", Kokkos::RangePolicy<ExecutionSpace>(0, 4),
-        KOKKOS_LAMBDA(const int cv) {
+    Kokkos::parallel_for(
+        "fill core types", Kokkos::RangePolicy<ExecutionSpace>(0, 4), KOKKOS_LAMBDA(const int cv) {
             line(cv) = cv + 0.5;
             raw(cv, 0) = line(cv);
             raw(cv, 1) = 10.0 + cv + offsets(1);
@@ -105,25 +106,32 @@ void common() {
     expect(empty.raw().extent(0) == 0, "empty field");
     for (const auto& offsets : {std::vector<std::int32_t>{1, 3}, {0, 4, 3}, {0, 2}}) {
         bool rejected = false;
-        try { chipcae::CvField<> invalid({"bad", 3, 1}, offsets); }
-        catch (const std::invalid_argument&) { rejected = true; }
+        try {
+            chipcae::CvField<> invalid({"bad", 3, 1}, offsets);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
         expect(rejected, "invalid offsets rejected");
     }
     bool rejected = false;
-    try { chipcae::CvField<> invalid({"bad", 3, 0}); }
-    catch (const std::invalid_argument&) { rejected = true; }
+    try {
+        chipcae::CvField<> invalid({"bad", 3, 0});
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
     expect(rejected, "zero components rejected");
     TestSolver solver;
     chipcae::LoadStep load;
-    load.t0 = 1; load.t1 = 2;
+    load.t0 = 1;
+    load.t1 = 2;
     load.temperature_curve_id = 7;
     load.shrinkage_increment = 0.01;
     load.activation_mask_id = 3;
     chipcae::Solver& interface = solver;
     const auto result = interface.advance(load, load.t0, load.t1);
     expect(interface.name() == "test" && result.status == chipcae::StepResult::Status::Converged &&
-           result.code.code() == 0 && result.dt_next_hint == 1 &&
-           result.nonlinear_iters == 1 && result.linear_iters == 2 && result.residual == 0,
+               result.code.code() == 0 && result.dt_next_hint == 1 && result.nonlinear_iters == 1 &&
+               result.linear_iters == 2 && result.residual == 0,
            "solver contract");
 }
 } // namespace
@@ -131,7 +139,8 @@ int main(int argc, char** argv) {
 #ifdef CHIPCAE_ENABLE_KOKKOS
     Kokkos::ScopeGuard guard(argc, argv);
 #else
-    (void)argc; (void)argv;
+    (void)argc;
+    (void)argv;
 #endif
     try {
         common();

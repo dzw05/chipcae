@@ -15,6 +15,7 @@ public:
     void allreduce_sum(std::span<double> values) const;
     /// Sum in ascending rank order, then broadcast (fixed process count).
     void deterministic_allreduce_sum(std::span<double> values) const;
+
 private:
     Communicator(int rank, int size) noexcept : rank_(rank), size_(size) {}
     int rank_;

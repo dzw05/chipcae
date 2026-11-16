@@ -16,11 +16,13 @@ namespace {
 bool active() noexcept {
     int initialized = 0, finalized = 0;
     MPI_Initialized(&initialized);
-    if (initialized) MPI_Finalized(&finalized);
+    if (initialized)
+        MPI_Finalized(&finalized);
     return initialized && !finalized;
 }
 void check(int result) {
-    if (result != MPI_SUCCESS) throw std::runtime_error("Communicator collective failed");
+    if (result != MPI_SUCCESS)
+        throw std::runtime_error("Communicator collective failed");
 }
 } // namespace
 #endif
@@ -46,14 +48,16 @@ bool Communicator::gpu_aware() const noexcept {
 
 void Communicator::allreduce_sum(std::span<double> values) const {
 #ifdef CHIPCAE_ENABLE_MPI
-    if (size_ == 1) return;
-    if (!active()) throw std::runtime_error("Inactive communication runtime");
+    if (size_ == 1)
+        return;
+    if (!active())
+        throw std::runtime_error("Inactive communication runtime");
     // Bounded chunks also avoid the legacy collective count limit.
     constexpr std::size_t chunk = 1024;
     for (std::size_t offset = 0; offset < values.size(); offset += chunk) {
         const auto count = static_cast<int>(std::min(chunk, values.size() - offset));
-        check(MPI_Allreduce(MPI_IN_PLACE, values.data() + offset, count,
-                            MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD));
+        check(MPI_Allreduce(
+            MPI_IN_PLACE, values.data() + offset, count, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD));
     }
 #else
     (void)values;
@@ -62,14 +66,22 @@ void Communicator::allreduce_sum(std::span<double> values) const {
 
 void Communicator::deterministic_allreduce_sum(std::span<double> values) const {
 #ifdef CHIPCAE_ENABLE_MPI
-    if (size_ == 1) return;
-    if (!active()) throw std::runtime_error("Inactive communication runtime");
+    if (size_ == 1)
+        return;
+    if (!active())
+        throw std::runtime_error("Inactive communication runtime");
     constexpr std::size_t chunk = 1024;
     std::vector<double> gathered(rank_ == 0 ? chunk * static_cast<std::size_t>(size_) : 0);
     for (std::size_t offset = 0; offset < values.size(); offset += chunk) {
         const auto count = static_cast<int>(std::min(chunk, values.size() - offset));
-        check(MPI_Gather(values.data() + offset, count, MPI_DOUBLE, gathered.data(),
-                         count, MPI_DOUBLE, 0, MPI_COMM_WORLD));
+        check(MPI_Gather(values.data() + offset,
+                         count,
+                         MPI_DOUBLE,
+                         gathered.data(),
+                         count,
+                         MPI_DOUBLE,
+                         0,
+                         MPI_COMM_WORLD));
         if (rank_ == 0) {
             for (int i = 0; i < count; ++i) {
                 double sum = gathered[static_cast<std::size_t>(i)];
