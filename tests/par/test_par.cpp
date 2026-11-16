@@ -4,7 +4,10 @@
 
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstring>
+#include <functional>
+#include <iomanip>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -24,7 +27,7 @@ void halo(int ranks) {
         for (int p = ranks - 1; p >= 0; --p)
             if (p != r)
                 peers.push_back(
-                    {p, {static_cast<std::size_t>(p)}, {static_cast<std::size_t>(ranks + p)}});
+                    {p, {static_cast<std::int32_t>(p)}, {static_cast<std::int32_t>(ranks + p)}});
         plans.emplace_back(std::move(peers));
         par::StagingBuffer<T> host("source", static_cast<std::size_t>(2 * ranks));
         originals.emplace_back(static_cast<std::size_t>(ranks));
@@ -73,25 +76,155 @@ void halo(int ranks) {
     }
 }
 struct TestSolver : Solver {
+    std::string_view name() const override { return "test"; }
     char label;
     std::string& calls;
     int& state;
     int cutbacks = 0;
     bool fail = false;
     TestSolver(char l, std::string& c, int& s) : label(l), calls(c), state(s) {}
-    StepResult solve() override { return {}; }
-    StepResult advance(const LoadStep&, double, double) override {
+    StepResult advance(const LoadStep&) override {
         calls += label;
         ++state;
         StepResult r;
         r.status = fail             ? StepResult::Status::Failed
                    : cutbacks-- > 0 ? StepResult::Status::CutBack
                                     : StepResult::Status::Converged;
-        r.success = r.status == StepResult::Status::Converged;
-        r.code = r.success ? ErrorCode::NONE : ErrorCode::INTERNAL;
+        r.code = r.status == StepResult::Status::Converged ? ErrorCode::NONE : ErrorCode::INTERNAL;
         return r;
     }
 };
+struct FunctionSolver : Solver {
+    std::string_view name() const override { return "function"; }
+    std::function<StepResult(const LoadStep&)> fn;
+    StepResult advance(const LoadStep& sub) override { return fn(sub); }
+};
+StepResult outcome(StepResult::Status status = StepResult::Status::Converged, double hint = 0) {
+    StepResult r;
+    r.status = status;
+    r.code = ErrorCode::NONE;
+    r.dt_next_hint = hint;
+    return r;
+}
+void load_regressions() {
+    FunctionSolver thermal, mechanical;
+    thermal.fn = [](const LoadStep&) { return outcome(); };
+    LoadStep parent;
+    parent.t1 = 1;
+    parent.temperature_t0 = 20;
+    parent.temperature = 120;
+    parent.shrinkage_increment = 0.125;
+    parent.activation_mask_id = 42;
+    const std::array steps{parent};
+    auto elastic = [&](int cuts) {
+        double u = 0, saved = 0, sum = 0;
+        int remaining = cuts;
+        mechanical.fn = [&](const LoadStep& sub) {
+            u += 0.002 * (*sub.temperature - *sub.temperature_t0) + sub.shrinkage_increment;
+            if (remaining-- > 0)
+                return outcome(StepResult::Status::CutBack);
+            sum += sub.shrinkage_increment;
+            return outcome();
+        };
+        coupling::StepLoopPolicy policy;
+        policy.save = [&] { saved = u; };
+        policy.restore = [&] { u = saved; };
+        require(coupling::run_steps(thermal, mechanical, steps, policy).status ==
+                StepResult::Status::Converged);
+        require(std::abs(sum - parent.shrinkage_increment) / parent.shrinkage_increment <= 1e-15);
+        std::cerr << "shrinkage cuts=" << cuts << " sum=" << sum
+                  << " parent=" << parent.shrinkage_increment << '\n';
+        return u;
+    };
+    const double full = elastic(0), cut = elastic(2);
+    const double relative = std::abs(cut - full) / std::max(std::abs(full), 1e-16);
+    require(relative <= 1e-12);
+    std::cerr << "elastic relative difference=" << relative << '\n';
+
+    // Start with a thermal cutback to establish a reduced dt, then force two
+    // mechanical cutbacks on a later interval. Activation must stay at t0.
+    bool first = true;
+    int later_cuts = 2, start_masks = 0, later_masks = 0, start_attempts = 0;
+    thermal.fn = [&](const LoadStep& sub) {
+        if (sub.t0 == parent.t0) {
+            ++start_attempts;
+            if (sub.activation_mask_id == parent.activation_mask_id)
+                ++start_masks;
+        } else if (sub.activation_mask_id)
+            ++later_masks;
+        if (first) {
+            first = false;
+            return outcome(StepResult::Status::CutBack, 0.5);
+        }
+        return outcome();
+    };
+    mechanical.fn = [&](const LoadStep& sub) {
+        if (sub.t0 > parent.t0 && later_cuts-- > 0)
+            return outcome(StepResult::Status::CutBack);
+        return outcome();
+    };
+    coupling::StepLoopPolicy policy;
+    policy.save = [] {};
+    policy.restore = [] {};
+    require(coupling::run_steps(thermal, mechanical, steps, policy).status ==
+            StepResult::Status::Converged);
+    require(start_masks > 0 && start_masks == start_attempts && later_masks == 0 && later_cuts < 0);
+    std::cerr << "activation start masks=" << start_masks << " later masks=" << later_masks << '\n';
+
+    auto curve = parent;
+    curve.temperature_curve_id = 7;
+    int curve_calls = 0;
+    thermal.fn = [&](const LoadStep& sub) {
+        ++curve_calls;
+        require(sub.temperature_curve_id == curve.temperature_curve_id && !sub.temperature &&
+                !sub.temperature_t0);
+        return sub.t1 - sub.t0 > 0.25 ? outcome(StepResult::Status::CutBack, 0.25) : outcome();
+    };
+    mechanical.fn = [](const LoadStep&) { return outcome(); };
+    require(coupling::run_steps(thermal, mechanical, std::span(&curve, 1), policy).status ==
+            StepResult::Status::Converged);
+    require(curve_calls == 5);
+
+    // A single Prony branch: q' + q/tau = E1*kappa, integrated by
+    // backward Euler. The equilibrium branch is E_inf * total strain.
+    constexpr double einf = 2, e1 = 3, tau = 0.7, kappa = 0.125;
+    const double analytic = einf * kappa + e1 * kappa * tau * (1 - std::exp(-1 / tau));
+    auto prony_error = [&](int n) {
+        double q = 0, strain = 0, saved_q = 0, saved_strain = 0;
+        bool initial = true;
+        thermal.fn = [](const LoadStep&) { return outcome(); };
+        mechanical.fn = [&](const LoadStep& sub) {
+            const double dt = sub.t1 - sub.t0;
+            if (initial && dt > 1.0 / n) {
+                initial = false;
+                return outcome(StepResult::Status::CutBack, 1.0 / n);
+            }
+            q = (q + e1 * sub.shrinkage_increment) / (1 + dt / tau);
+            strain += sub.shrinkage_increment;
+            return outcome();
+        };
+        policy.save = [&] {
+            saved_q = q;
+            saved_strain = strain;
+        };
+        policy.restore = [&] {
+            q = saved_q;
+            strain = saved_strain;
+        };
+        require(coupling::run_steps(thermal, mechanical, steps, policy).status ==
+                StepResult::Status::Converged);
+        return std::abs(einf * strain + q - analytic);
+    };
+    const double e8 = prony_error(8), e16 = prony_error(16), ratio = e8 / e16;
+    require(e8 > 0 && e16 > 0 && ratio >= 1.9);
+    std::cerr << "Prony e(8)=" << e8 << " e(16)=" << e16 << " ratio=" << ratio << '\n';
+}
+#if defined(KOKKOS_ENABLE_CUDA) || defined(KOKKOS_ENABLE_HIP)
+static_assert(std::is_same_v<par::StagingSpace, Kokkos::SharedHostPinnedSpace>);
+#else
+static_assert(std::is_same_v<typename par::StagingBuffer<int>::memory_space, HostSpace>);
+#endif
+
 void step_loop() {
     std::string calls;
     int state = 0, saved = 0;
@@ -172,7 +305,10 @@ int main(int argc, char** argv) {
     par::stage_from_host(host, device);
     auto copy = par::stage_to_host(device);
     require(std::memcmp(host.data(), copy.data(), 3 * sizeof(int)) == 0);
+    require(!par::ColumnExtrudePartitioner::uses_metis());
+    std::cerr << std::setprecision(17);
     step_loop();
+    load_regressions();
     std::cout << "par acceptance passed; METIS=" << par::ColumnExtrudePartitioner::uses_metis()
               << '\n';
 }

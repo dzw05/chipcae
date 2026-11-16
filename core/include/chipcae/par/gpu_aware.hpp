@@ -7,9 +7,14 @@
 namespace chipcae::par {
 /// Uses the same runtime capability query as Communicator.
 bool gpu_aware() noexcept;
-/// Portable host staging. This build makes no page-locking guarantee.
+/// GPU backends stage through page-locked host memory.
+#if defined(KOKKOS_ENABLE_CUDA) || defined(KOKKOS_ENABLE_HIP)
+using StagingSpace = Kokkos::SharedHostPinnedSpace;
+#else
+using StagingSpace = HostSpace;
+#endif
 template <class T>
-using StagingBuffer = View1<T, HostSpace>;
+using StagingBuffer = View1<T, StagingSpace>;
 template <class T, class M>
 StagingBuffer<T> stage_to_host(const View1<T, M>& source) {
     StagingBuffer<T> host("halo staging", source.extent(0));

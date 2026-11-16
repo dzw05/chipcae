@@ -2,16 +2,18 @@
 #include "chipcae/par/gpu_aware.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <span>
+#include <stdexcept>
 #include <type_traits>
 #include <vector>
 
 namespace chipcae::par {
 struct HaloPeer {
     int rank;
-    std::vector<std::size_t> send_indices;
-    std::vector<std::size_t> recv_indices;
+    std::vector<std::int32_t> send_indices;
+    std::vector<std::int32_t> recv_indices;
 };
 /// Mesh supplies indices. Peers are sorted by rank; indices retain mesh order.
 /// Each directed message pairs sender send_indices with receiver recv_indices.
@@ -19,26 +21,25 @@ class HaloPlan {
 public:
     explicit HaloPlan(std::vector<HaloPeer> peers);
     const std::vector<HaloPeer>& peers() const noexcept { return peers_; }
-    template <class T>
-    static std::vector<T> pack(const View1<T, HostSpace>& data,
-                               std::span<const std::size_t> indices) {
+    template <class T, class M>
+    static std::vector<T> pack(const View1<T, M>& data, std::span<const std::int32_t> indices) {
         static_assert(std::is_trivially_copyable_v<T>);
         std::vector<T> message(indices.size());
         for (std::size_t i = 0; i < indices.size(); ++i) {
-            if (indices[i] >= data.extent(0))
+            if (indices[i] < 0 || static_cast<std::size_t>(indices[i]) >= data.extent(0))
                 throw std::out_of_range("halo send index");
             std::memcpy(&message[i], &data(indices[i]), sizeof(T));
         }
         return message;
     }
-    template <class T>
-    static void unpack(const View1<T, HostSpace>& data,
-                       std::span<const std::size_t> indices,
+    template <class T, class M>
+    static void unpack(const View1<T, M>& data,
+                       std::span<const std::int32_t> indices,
                        const std::vector<T>& message) {
         if (indices.size() != message.size())
             throw std::invalid_argument("halo count mismatch");
         for (std::size_t i = 0; i < indices.size(); ++i) {
-            if (indices[i] >= data.extent(0))
+            if (indices[i] < 0 || static_cast<std::size_t>(indices[i]) >= data.extent(0))
                 throw std::out_of_range("halo receive index");
             std::memcpy(&data(indices[i]), &message[i], sizeof(T));
         }

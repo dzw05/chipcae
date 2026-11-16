@@ -6,7 +6,7 @@ namespace chipcae::par {
 HaloPlan::HaloPlan(std::vector<HaloPeer> peers) : peers_(std::move(peers)) {
     std::sort(
         peers_.begin(), peers_.end(), [](const auto& a, const auto& b) { return a.rank < b.rank; });
-    std::set<std::size_t> destinations;
+    std::set<std::int32_t> destinations;
     int previous = -1;
     for (const auto& peer : peers_) {
         if (peer.rank < 0 || peer.rank == previous)

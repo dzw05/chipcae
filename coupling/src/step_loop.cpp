@@ -25,12 +25,14 @@ StepResult run_steps(Solver& thermal,
             !std::isfinite(step.t1 - step.t0))
             throw std::invalid_argument("invalid load step interval");
     StepResult result;
-    result.success = true;
-    result.failure_reason = FailureReason::none;
     result.status = StepResult::Status::Converged;
     result.code = ErrorCode::NONE;
     for (const auto& step : steps) {
         double t = step.t0, dt = step.t1 - step.t0;
+        const double span = step.t1 - step.t0;
+        const auto start_temperature = step.temperature_t0 ? step.temperature_t0 : step.temperature;
+        const auto end_temperature = step.temperature ? step.temperature : step.temperature_t0;
+        auto previous_temperature = start_temperature;
         while (t < step.t1) {
             dt = std::min(dt, step.t1 - t);
             if (policy.save)
@@ -39,11 +41,27 @@ StepResult run_steps(Solver& thermal,
             for (;;) {
                 if (t + dt == t)
                     return failure();
-                result = thermal.advance(step, t, t + dt);
+                auto sub = step;
+                sub.t0 = t;
+                sub.t1 = t + dt;
+                sub.shrinkage_increment = step.shrinkage_increment * dt / span;
+                if (t > step.t0)
+                    sub.activation_mask_id.reset();
+                if (step.temperature_curve_id) {
+                    sub.temperature_t0.reset();
+                    sub.temperature.reset();
+                } else if (start_temperature) {
+                    sub.temperature_t0 = previous_temperature;
+                    sub.temperature = *start_temperature + (*end_temperature - *start_temperature) *
+                                                               (sub.t1 - step.t0) / span;
+                }
+                result = thermal.advance(sub);
                 if (result.status == StepResult::Status::Converged)
-                    result = mechanical.advance(step, t, t + dt);
-                if (result.status == StepResult::Status::Converged)
+                    result = mechanical.advance(sub);
+                if (result.status == StepResult::Status::Converged) {
+                    previous_temperature = sub.temperature;
                     break;
+                }
                 if (policy.restore)
                     policy.restore();
                 if (result.status == StepResult::Status::Failed)

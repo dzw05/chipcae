@@ -1,6 +1,8 @@
 #include "chipcae/par/column_extrude_partitioner.hpp"
 
+#include <iostream>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <vector>
 #ifdef CHIPCAE_HAVE_METIS
@@ -15,13 +17,22 @@ bool ColumnExtrudePartitioner::uses_metis() noexcept {
 #endif
 }
 View1<std::int32_t, HostSpace>
-ColumnExtrudePartitioner::partition(std::size_t nx, std::size_t ny, std::size_t nz, int parts) {
+ColumnExtrudePartitioner::partition(std::size_t nx,
+                                    std::size_t ny,
+                                    std::size_t nz,
+                                    int parts,
+                                    std::span<const std::int32_t> column_weights) {
     if (!nx || !ny || !nz || parts < 1 || nx > std::numeric_limits<std::size_t>::max() / ny)
         throw std::invalid_argument("invalid column grid");
     const auto columns = nx * ny;
     if (nz > std::numeric_limits<std::size_t>::max() / columns ||
         static_cast<std::size_t>(parts) > columns)
         throw std::invalid_argument("invalid column partition count or size");
+    if (!column_weights.empty() && column_weights.size() != columns)
+        throw std::invalid_argument("column weights must match nx*ny");
+    for (auto weight : column_weights)
+        if (weight <= 0)
+            throw std::invalid_argument("column weights must be positive");
     std::vector<std::size_t> offsets{0}, neighbors;
     for (std::size_t j = 0; j < ny; ++j)
         for (std::size_t i = 0; i < nx; ++i) {
@@ -45,6 +56,8 @@ ColumnExtrudePartitioner::partition(std::size_t nx, std::size_t ny, std::size_t 
     std::vector<idx_t> xadj(offsets.begin(), offsets.end()),
         adj(neighbors.begin(), neighbors.end());
     std::vector<idx_t> weights(columns, static_cast<idx_t>(nz)), result(columns);
+    if (!column_weights.empty())
+        weights.assign(column_weights.begin(), column_weights.end());
     idx_t n = static_cast<idx_t>(columns), constraints = 1, np = parts, cut = 0;
     idx_t options[METIS_NOPTIONS];
     METIS_SetDefaultOptions(options);
@@ -67,6 +80,13 @@ ColumnExtrudePartitioner::partition(std::size_t nx, std::size_t ny, std::size_t 
     for (std::size_t c = 0; c < columns; ++c)
         labels[c] = static_cast<std::int32_t>(result[c]);
 #else
+    // Weighted serpentine splitting is not supported; callers must use METIS.
+    if (!column_weights.empty())
+        throw std::invalid_argument("column weights require METIS");
+    static std::once_flag warning;
+    std::call_once(warning, [] {
+        std::cerr << "warning: METIS disabled; using serpentine column partition fallback\n";
+    });
     // Deterministic serpentine graph walk. Equal nz weights allow balanced
     // contiguous chunks with at most one column difference between parts.
     const auto base = columns / static_cast<std::size_t>(parts),
