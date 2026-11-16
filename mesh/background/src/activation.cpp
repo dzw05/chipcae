@@ -31,6 +31,26 @@ std::string canonical_interface(std::string a, std::string b) {
     return "interface:" + a + "|" + b;
 }
 
+std::vector<std::string> body_names_for(const HexMeshArrays& m, const std::vector<BodyId>& ids) {
+    std::vector<std::string> names;
+    for (const auto& [name, id] : m.attr_table.bodies)
+        if (std::find(ids.begin(), ids.end(), id) != ids.end())
+            names.push_back(name);
+    return names;
+}
+void record_interface_reports(HexMeshArrays& m, const ActivationResolution& resolved) {
+    for (const auto& report : resolved.interface_reports) {
+        bool replaced = false;
+        for (auto& existing : m.preparation_report)
+            if (existing.name == report.name) {
+                existing = report;
+                replaced = true;
+                break;
+            }
+        if (!replaced)
+            m.preparation_report.push_back(report);
+    }
+}
 void fill_interface_sides(HexMeshArrays::InterfaceReport& report, const HexMeshArrays& m) {
     if (!report.name.starts_with("interface:"))
         return;
@@ -41,9 +61,9 @@ void fill_interface_sides(HexMeshArrays::InterfaceReport& report, const HexMeshA
     auto a = resolve_interface_side(m, rest.substr(0, sep));
     auto b = resolve_interface_side(m, rest.substr(sep + 1));
     if (a)
-        report.side_a_bodies = a.value();
+        report.side_a_bodies = body_names_for(m, a.value());
     if (b)
-        report.side_b_bodies = b.value();
+        report.side_b_bodies = body_names_for(m, b.value());
 }
 Expected<std::vector<BodyId>> resolve_interface_side(const HexMeshArrays& m,
                                                      const std::string& ref) {
@@ -53,14 +73,24 @@ Expected<std::vector<BodyId>> resolve_interface_side(const HexMeshArrays& m,
     if (!name.starts_with("layer:") && !name.starts_with("region:") && !name.starts_with("body:"))
         return Error{ref, "invalid interface side"};
     std::set<BodyId> ids;
-    auto it = m.attr_table.references.find(name);
-    if (it == m.attr_table.references.end())
-        return Error{ref, "unknown interface side"};
-    for (auto a : it->second) {
-        const auto& r = m.attr_table.entries[a - 1];
-        if (!name.starts_with("layer:") || r.region.empty())
-            ids.insert(r.body);
+    auto star = name.find('*');
+    bool matched = false;
+    for (const auto& [key, list] : m.attr_table.references) {
+        bool match = key == name;
+        if (star != std::string::npos)
+            match = key.starts_with(name.substr(0, star)) && key.ends_with(name.substr(star + 1)) &&
+                    key.size() + 1 >= name.size();
+        if (!match)
+            continue;
+        matched = true;
+        for (auto a : list) {
+            const auto& r = m.attr_table.entries[a - 1];
+            if (!key.starts_with("layer:") || r.region.empty())
+                ids.insert(r.body);
+        }
     }
+    if (!matched)
+        return Error{ref, "unknown interface side"};
     if (ids.empty())
         return Error{ref, "empty interface side"};
     return std::vector<BodyId>(ids.begin(), ids.end());
@@ -118,11 +148,16 @@ Expected<ActivationResolution> resolve_volume_ref(const StackModel& s,
                             n.push_back("body:" + name);
                     return n;
                 };
+                HexMeshArrays::InterfaceReport report;
+                report.name = ref;
+                report.side_a_bodies = body_names_for(m, a.value());
+                report.side_b_bodies = body_names_for(m, b.value());
                 for (const auto& an : names(a.value()))
                     for (const auto& bn : names(b.value())) {
-                        auto it = m.face_sets.find(canonical_interface(an, bn));
+                        auto key = canonical_interface(an, bn);
+                        auto it = m.face_sets.find(key);
                         if (cut) {
-                            auto ci = cut->face_sets.find(canonical_interface(an, bn));
+                            auto ci = cut->face_sets.find(key);
                             if (ci != cut->face_sets.end()) {
                                 found = true;
                                 faces.insert(ci->second.begin(), ci->second.end());
@@ -132,9 +167,17 @@ Expected<ActivationResolution> resolve_volume_ref(const StackModel& s,
                             found = true;
                             faces.insert(it->second.begin(), it->second.end());
                         }
+                        for (const auto& existing : m.preparation_report)
+                            if (existing.name == key) {
+                                report.aligned_faces += existing.aligned_faces;
+                                report.cut_faces += existing.cut_faces;
+                                report.aligned_area += existing.aligned_area;
+                                report.cut_area += existing.cut_area;
+                            }
                     }
                 if (!found)
                     return Error{ref, "no shared patches generated"};
+                out.interface_reports.push_back(std::move(report));
             } else {
                 auto it = m.face_sets.find(ref);
                 if (it == m.face_sets.end())
@@ -199,6 +242,21 @@ Expected<ActivationResolution> resolve_volume_ref(const StackModel& s,
 }
 Expected<ActivationResolution> resolve_activation(const StackModel& s,
                                                   const HexMeshArrays& m,
+                                                  const cut::CutLayerArrays* c,
+                                                  const std::vector<std::string>& refs) {
+    return resolve_volume_ref(s, m, c, refs);
+}
+Expected<ActivationResolution> resolve_volume_ref(const StackModel& s,
+                                                  HexMeshArrays& m,
+                                                  const cut::CutLayerArrays* c,
+                                                  const std::vector<std::string>& refs) {
+    auto out = resolve_volume_ref(s, static_cast<const HexMeshArrays&>(m), c, refs);
+    if (out)
+        record_interface_reports(m, out.value());
+    return out;
+}
+Expected<ActivationResolution> resolve_activation(const StackModel& s,
+                                                  HexMeshArrays& m,
                                                   const cut::CutLayerArrays* c,
                                                   const std::vector<std::string>& refs) {
     return resolve_volume_ref(s, m, c, refs);

@@ -9,6 +9,12 @@ Expected<ActivationResolution> resolve_cut_activation(const StackModel& s,
                                                       const std::vector<std::string>& refs) {
     return resolve_activation(s, m, &c, refs);
 }
+Expected<ActivationResolution> resolve_cut_activation(const StackModel& s,
+                                                      HexMeshArrays& m,
+                                                      const CutLayerArrays& c,
+                                                      const std::vector<std::string>& refs) {
+    return resolve_activation(s, m, &c, refs);
+}
 
 Expected<GhostPenaltyCache> GhostPenaltyCache::prepare(const HexMeshArrays& m,
                                                        const CutLayerArrays& c,

@@ -119,6 +119,54 @@ int main() {
             report_ok = true;
         }
     expect(report_ok, "preparation report has mixed body sides");
+    auto mixed_ref = resolve_activation(s, m, nullptr, {"interface:layer:base|body:cap"});
+    expect(bool(mixed_ref), "mixed layer/body interface");
+    bool mixed_listed = false;
+    for (const auto& r : m.preparation_report)
+        if (r.name == "interface:layer:base|body:cap") {
+            expect(r.side_a_bodies == std::vector<std::string>{"base"},
+                   "mixed ref side A body names");
+            expect(r.side_b_bodies == std::vector<std::string>{"cap"},
+                   "mixed ref side B body names");
+            expect(r.aligned_faces > 0 && r.aligned_area > 0 && r.cut_faces == 0,
+                   "mixed ref aligned vs cut counts");
+            mixed_listed = true;
+        }
+    expect(mixed_listed, "user-written mixed interface recorded");
+
+    StackModel soldered;
+    soldered.id = "soldered";
+    soldered.outline.box = {0, 0, 1, 1};
+    Layer substrate;
+    substrate.name = "substrate";
+    substrate.kind = "Explicit";
+    substrate.material = "organic";
+    substrate.thickness = .5;
+    substrate.n_elem_min = 2;
+    substrate.regions = {{"solder_a", "solder", "solder_a", {{.1, .1, .4, .4}, {}}},
+                         {"solder_b", "solder", "solder_b", {{.6, .6, .9, .9}, {}}}};
+    soldered.layers = {substrate};
+    auto solder_opts = o;
+    solder_opts.nx = 8;
+    solder_opts.ny = 8;
+    solder_opts.ranks = 1;
+    auto solder_grid = build_tensor_grid(soldered, solder_opts);
+    expect(bool(solder_grid), "substrate/solder grid");
+    auto& sm = solder_grid.value();
+    auto wildcard =
+        resolve_activation(soldered, sm, nullptr, {"interface:layer:substrate|body:solder_*"});
+    expect(bool(wildcard), "wildcard mixed interface");
+    bool wildcard_listed = false;
+    for (const auto& r : sm.preparation_report)
+        if (r.name == "interface:layer:substrate|body:solder_*") {
+            expect(r.side_a_bodies == std::vector<std::string>{"substrate"},
+                   "wildcard side A is substrate matrix");
+            expect(r.side_b_bodies == std::vector<std::string>{"solder_a", "solder_b"},
+                   "wildcard side B solder bodies");
+            expect(r.aligned_faces > 0 && r.aligned_area > 0, "wildcard shared aligned faces");
+            wildcard_listed = true;
+        }
+    expect(wildcard_listed, "user-written wildcard interface recorded");
     auto overlap = resolve_activation(s, m, nullptr, {"group:overlap"});
     auto layer = resolve_activation(s, m, nullptr, {"layer:base"});
     expect(overlap.value().cells.attributes == layer.value().cells.attributes, "overlap union");

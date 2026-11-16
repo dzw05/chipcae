@@ -84,6 +84,10 @@ Expected<ActivationResolution> resolve_cut_activation(const StackModel&,
                                                       const HexMeshArrays&,
                                                       const CutLayerArrays&,
                                                       const std::vector<std::string>&);
+Expected<ActivationResolution> resolve_cut_activation(const StackModel&,
+                                                      HexMeshArrays&,
+                                                      const CutLayerArrays&,
+                                                      const std::vector<std::string>&);
 struct GhostFaces {
     std::array<std::vector<Index>, 2> elem_gid;
     std::vector<Local> face;     // Legacy MFEM local mesh-face index; not the global identity.

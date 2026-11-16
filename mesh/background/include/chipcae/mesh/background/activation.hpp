@@ -20,6 +20,7 @@ struct FaceSet {
 struct ActivationResolution {
     ActivationSet cells;
     FaceSet faces;
+    std::vector<HexMeshArrays::InterfaceReport> interface_reports;
 };
 // Hash the sorted unique global element IDs, never attribute numbers.
 std::uint64_t mask_hash(std::vector<Index> gids);
@@ -33,6 +34,15 @@ Expected<ActivationResolution> resolve_volume_ref(const StackModel&,
                                                   const std::vector<std::string>&);
 Expected<ActivationResolution> resolve_activation(const StackModel&,
                                                   const HexMeshArrays&,
+                                                  const cut::CutLayerArrays*,
+                                                  const std::vector<std::string>&);
+// Non-const overloads also append interface: reports to preparation_report.
+Expected<ActivationResolution> resolve_volume_ref(const StackModel&,
+                                                  HexMeshArrays&,
+                                                  const cut::CutLayerArrays*,
+                                                  const std::vector<std::string>&);
+Expected<ActivationResolution> resolve_activation(const StackModel&,
+                                                  HexMeshArrays&,
                                                   const cut::CutLayerArrays*,
                                                   const std::vector<std::string>&);
 struct ActivationStep {

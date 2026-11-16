@@ -28,13 +28,16 @@ struct HexMeshArrays {
     bool internal_interfaces = false;
     int order = 1;
     struct InterfaceReport {
-        std::string name;
-        std::vector<BodyId> side_a_bodies, side_b_bodies;
+        std::string name; // user-written reference, or a generated body-pair name
+        std::vector<std::string> side_a_bodies, side_b_bodies; // body names, not BodyIds
         Index aligned_faces = 0, cut_faces = 0;
         Real aligned_area = 0, cut_area = 0;
     };
     std::vector<InterfaceReport> preparation_report;
     AttributeTable attr_table;
+    // Named face groups. Cut-face attributes also appear here (and therefore in
+    // MFEM bdr_attribute_sets) but are not attached to MFEM boundary elements;
+    // solvers must take cut faces from CutLayerArrays.
     std::map<std::string, std::vector<Local>> face_sets;
     std::vector<Local> pending_cut;
     std::vector<SnapReport> snapped;
