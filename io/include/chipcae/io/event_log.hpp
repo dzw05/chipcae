@@ -2,16 +2,34 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
+#include <set>
 #include <string>
 #include <variant>
 #include <vector>
 
 namespace chipcae::io {
 
+struct Plugin {
+    std::string key;
+    std::string version;
+    bool operator==(const Plugin&) const = default;
+};
 struct KernelHello {
     std::string run_id;
     std::uint32_t attempt{};
+    std::vector<std::string> protocols;
     std::string kernel_version;
+    std::string schema_bundle_hash;
+    std::vector<Plugin> plugins;
+    std::uint32_t ranks{};
+    std::uint32_t event_log_format{1};
+    std::vector<std::uint32_t> vtkhdf_version;
+    std::string case_sha256;
+    std::string git_sha;
+    std::string protocol_version;
+    std::vector<std::string> features;
+    bool operator==(const KernelHello&) const = default;
 };
 struct Progress {
     std::uint64_t window{};
@@ -64,10 +82,15 @@ struct Event {
     EventPayload payload;
 };
 
-// File format v1 is append-only: each record is "CAELOG1\0", a little-endian
-// uint32 payload length, then a little-endian record body (seq, wall-time ns,
-// kind byte, and kind-specific fixed-width values/uint32-length-prefixed UTF-8
-// strings). Reader::read_from is inclusive and ignores an incomplete final record.
+// Frozen v1 layout: each record is "CAELOG1\0", le32 body length (max 64 MiB),
+// le32 CRC-32 (reflected polynomial 0xEDB88320, init/final XOR 0xFFFFFFFF,
+// covering the body), then the body: le64 seq, le64 signed wall_ns, uint8 kind
+// equal to the RunEvent oneof field number, then fields in proto field order.
+// Numeric fields are little-endian, strings have le32 byte lengths, repeated
+// fields have le32 element counts; Plugin contains key then version strings.
+// Reads are inclusive by seq and stop at an incomplete or CRC-mismatched tail.
+// The writer flushes without fsync: an accepted MVP tradeoff. A crash may lose
+// flushed but non-durable records; reopening truncates a torn tail.
 class EventLogWriter {
 public:
     explicit EventLogWriter(const std::filesystem::path& path);
@@ -79,16 +102,19 @@ public:
 
 private:
     class Impl;
-    Impl* impl_;
+    std::unique_ptr<Impl> impl_;
 };
 
 class EventLogReader {
 public:
     explicit EventLogReader(std::filesystem::path path);
-    std::vector<Event> read_from(std::uint64_t seq) const;
+    // A cursor is an offset in this log, advanced only past validated records.
+    // Invalid boundaries fall back to zero. Use with increasing seq when polling.
+    std::vector<Event> read_from(std::uint64_t seq, std::uint64_t* next_offset = nullptr) const;
 
 private:
     std::filesystem::path path_;
+    mutable std::set<std::uint64_t> boundaries_{0};
 };
 
 } // namespace chipcae::io
