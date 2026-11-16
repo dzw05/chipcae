@@ -1,0 +1,608 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "chipcae://schemas/material/v1",
+  "title": "chipcae material entry（存储格式，只含 SI）",
+  "type": "object",
+  "required": [
+    "id",
+    "schema_version",
+    "unit_system",
+    "model",
+    "density",
+    "thermal_expansion",
+    "provenance"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+$"
+    },
+    "schema_version": {
+      "const": "1"
+    },
+    "unit_system": {
+      "const": "SI",
+      "description": "Pa, K, s, 1/K, J/mol, kg/m^3, 无量纲为 1；文件中不出现其他单位"
+    },
+    "model": {
+      "enum": [
+        "thermo_elastic",
+        "prony_viscoelastic"
+      ]
+    },
+    "material_frame": {
+      "$ref": "#/$defs/frame"
+    },
+    "density": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "kg/m^3"
+    },
+    "elastic": {
+      "$ref": "#/$defs/elastic"
+    },
+    "thermal_expansion": {
+      "$ref": "#/$defs/thermal_expansion"
+    },
+    "glass_transition": {
+      "type": "object",
+      "required": [
+        "T_g",
+        "method"
+      ],
+      "properties": {
+        "T_g": {
+          "type": "number",
+          "description": "K"
+        },
+        "method": {
+          "enum": [
+            "DMA_tan_delta_peak",
+            "DMA_loss_modulus_peak",
+            "TMA",
+            "DSC"
+          ]
+        }
+      }
+    },
+    "viscoelastic": {
+      "$ref": "#/$defs/viscoelastic"
+    },
+    "chemical_shrinkage": {
+      "$ref": "#/$defs/chemical_shrinkage"
+    },
+    "provenance": {
+      "$ref": "#/$defs/provenance"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "model": {
+            "const": "thermo_elastic"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "elastic"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "model": {
+            "const": "prony_viscoelastic"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "viscoelastic",
+          "glass_transition"
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "temperature_table": {
+      "type": "object",
+      "required": [
+        "temperatures",
+        "columns",
+        "interpolation",
+        "extrapolation"
+      ],
+      "properties": {
+        "temperatures": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 1,
+          "description": "K；elastic 与 bulk_modulus 表严格递增、必须连续（N5：不允许跳变）；thermal_expansion 表允许同一温度出现两次表示 CTE 跳变"
+        },
+        "columns": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        },
+        "interpolation": {
+          "enum": [
+            "linear",
+            "pchip",
+            "constant"
+          ]
+        },
+        "extrapolation": {
+          "enum": [
+            "error",
+            "clamp"
+          ]
+        }
+      }
+    },
+    "elastic": {
+      "type": "object",
+      "required": [
+        "symmetry",
+        "table"
+      ],
+      "properties": {
+        "symmetry": {
+          "enum": [
+            "isotropic",
+            "transversely_isotropic",
+            "orthotropic"
+          ]
+        },
+        "table": {
+          "$ref": "#/$defs/temperature_table",
+          "description": "列名：isotropic E,nu；transversely_isotropic E_p,E_t,nu_p,nu_pt,G_pt；orthotropic E1,E2,E3,nu12,nu13,nu23,G12,G13,G23（Pa）"
+        }
+      }
+    },
+    "thermal_expansion": {
+      "type": "object",
+      "required": [
+        "cte_type",
+        "symmetry",
+        "stress_free_temperature",
+        "table"
+      ],
+      "properties": {
+        "cte_type": {
+          "enum": [
+            "tangent",
+            "secant"
+          ]
+        },
+        "reference_temperature": {
+          "type": "number",
+          "description": "K，割线 CTE 的定义温度"
+        },
+        "stress_free_temperature": {
+          "type": "number",
+          "description": "K"
+        },
+        "symmetry": {
+          "enum": [
+            "isotropic",
+            "transversely_isotropic",
+            "orthotropic"
+          ]
+        },
+        "table": {
+          "$ref": "#/$defs/temperature_table",
+          "description": "列名：alpha | alpha_p,alpha_t | alpha1,alpha2,alpha3（1/K）"
+        }
+      },
+      "if": {
+        "properties": {
+          "cte_type": {
+            "const": "secant"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "reference_temperature"
+        ]
+      }
+    },
+    "viscoelastic": {
+      "type": "object",
+      "required": [
+        "symmetry",
+        "reference_temperature",
+        "volumetric_mode",
+        "shift"
+      ],
+      "properties": {
+        "symmetry": {
+          "enum": [
+            "isotropic",
+            "orthotropic"
+          ],
+          "description": "orthotropic 为 P1 预留，MVP 校验时拒绝"
+        },
+        "reference_temperature": {
+          "type": "number",
+          "description": "K"
+        },
+        "volumetric_mode": {
+          "enum": [
+            "elastic_bulk",
+            "constant_poisson_from_E"
+          ],
+          "description": "必填，无默认（D14）"
+        },
+        "shear": {
+          "$ref": "#/$defs/prony_series"
+        },
+        "bulk_modulus": {
+          "$ref": "#/$defs/temperature_table",
+          "description": "列名 K（Pa），或玻璃态 E_g、nu_g（按 K = E_g/(3(1−2ν_g)) 换算，可按温度插值）"
+        },
+        "tensile": {
+          "$ref": "#/$defs/prony_series"
+        },
+        "poisson_ratio": {
+          "type": "number",
+          "exclusiveMinimum": -1,
+          "exclusiveMaximum": 0.5,
+          "description": "常数；该模式不接受随温度变化的 ν"
+        },
+        "shift": {
+          "$ref": "#/$defs/shift"
+        },
+        "fit": {
+          "$ref": "#/$defs/fit_report"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "volumetric_mode": {
+                "const": "elastic_bulk"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "shear",
+              "bulk_modulus"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "volumetric_mode": {
+                "const": "constant_poisson_from_E"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "tensile",
+              "poisson_ratio"
+            ]
+          }
+        }
+      ]
+    },
+    "prony_series": {
+      "type": "object",
+      "required": [
+        "infinity",
+        "terms"
+      ],
+      "properties": {
+        "infinity": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Pa"
+        },
+        "terms": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "modulus",
+              "tau"
+            ],
+            "properties": {
+              "modulus": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Pa"
+              },
+              "tau": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "description": "s"
+              }
+            }
+          }
+        }
+      }
+    },
+    "shift": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "C1",
+            "C2"
+          ],
+          "properties": {
+            "type": {
+              "const": "WLF"
+            },
+            "C1": {
+              "type": "number"
+            },
+            "C2": {
+              "type": "number",
+              "description": "K"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "activation_energy"
+          ],
+          "properties": {
+            "type": {
+              "const": "Arrhenius"
+            },
+            "activation_energy": {
+              "type": "number",
+              "description": "J/mol"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "temperatures",
+            "log10_aT"
+          ],
+          "properties": {
+            "type": {
+              "const": "table"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "C1",
+            "C2",
+            "activation_energy"
+          ],
+          "properties": {
+            "type": {
+              "const": "piecewise_wlf_arrhenius"
+            },
+            "C1": {
+              "type": "number"
+            },
+            "C2": {
+              "type": "number",
+              "description": "K"
+            },
+            "activation_energy": {
+              "type": "number",
+              "description": "J/mol，用于 T 低于 T_g 的一段"
+            }
+          },
+          "description": "拼接温度取 glass_transition.T_g（唯一来源）"
+        }
+      ]
+    },
+    "chemical_shrinkage": {
+      "type": "object",
+      "required": [
+        "model",
+        "post_gel_shrinkage",
+        "schedule"
+      ],
+      "properties": {
+        "model": {
+          "const": "equivalent_isotropic"
+        },
+        "post_gel_shrinkage": {
+          "type": "object",
+          "required": [
+            "value",
+            "measure"
+          ],
+          "properties": {
+            "value": {
+              "type": "number",
+              "minimum": 0,
+              "exclusiveMaximum": 1
+            },
+            "measure": {
+              "enum": [
+                "volumetric",
+                "linear"
+              ],
+              "description": "必填，无默认"
+            }
+          },
+          "description": "凝胶后有效收缩 s_eff，正值表示收缩（无量纲）；凝胶前收缩不产生应力，由用户在输入前扣除"
+        },
+        "gel_conversion": {
+          "not": {},
+          "description": "P0 禁止出现；P1 完整固化动力学再引入，必填、无默认"
+        },
+        "schedule": {
+          "type": "object",
+          "required": [
+            "cure_step_id"
+          ],
+          "properties": {
+            "cure_step_id": {
+              "type": "string",
+              "description": "施加收缩的固化工艺步（用户指定）"
+            },
+            "profile": {
+              "enum": [
+                "linear_ramp",
+                "table"
+              ],
+              "default": "linear_ramp"
+            },
+            "fractions": {
+              "type": "object",
+              "description": "profile = table 时：步内归一化时间 t_norm → 已施加比例 fraction，单调不减，首 0 尾 1",
+              "required": [
+                "t_norm",
+                "fraction"
+              ],
+              "properties": {
+                "t_norm": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  }
+                },
+                "fraction": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "fit_report": {
+      "type": "object",
+      "properties": {
+        "tool": {
+          "type": "string"
+        },
+        "tool_version": {
+          "type": "string"
+        },
+        "source_form": {
+          "enum": [
+            "master_curve_import",
+            "raw_isotherm_fit"
+          ]
+        },
+        "dma_mode": {
+          "enum": [
+            "tension",
+            "three_point_bending",
+            "single_cantilever",
+            "dual_cantilever",
+            "shear"
+          ]
+        },
+        "measured_quantity": {
+          "enum": [
+            "E",
+            "G"
+          ]
+        },
+        "rms_rel_error_storage": {
+          "type": "number"
+        },
+        "rms_rel_error_loss": {
+          "type": "number"
+        },
+        "valid_temperature_range": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "K"
+        },
+        "valid_reduced_frequency_range": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "Hz"
+        },
+        "input_data_sha256": {
+          "type": "string"
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "required": [
+        "source_type",
+        "confidence"
+      ],
+      "properties": {
+        "source_type": {
+          "enum": [
+            "datasheet",
+            "measurement",
+            "literature",
+            "fitted",
+            "illustrative"
+          ]
+        },
+        "reference": {
+          "type": "string"
+        },
+        "confidence": {
+          "enum": [
+            "high",
+            "medium",
+            "low",
+            "illustrative"
+          ]
+        },
+        "import": {
+          "type": "object",
+          "description": "界面层导入时记录：原文件、原始单位、导入器版本，只用于追溯，不参与计算",
+          "properties": {
+            "original_file": {
+              "type": "string"
+            },
+            "original_units": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "importer_version": {
+              "type": "string"
+            }
+          }
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

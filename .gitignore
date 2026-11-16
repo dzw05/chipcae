@@ -1,6 +1,7 @@
 # Build trees
 /build/
 /build-*/
+/material/build*/
 /cmake-build-*/
 /out/
 /Testing/
