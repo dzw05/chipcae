@@ -23,3 +23,11 @@ add_executable(chipcae_test_event_log protocol/test_event_log.cpp)
 target_link_libraries(chipcae_test_event_log PRIVATE chipcae::io)
 chipcae_set_warnings(chipcae_test_event_log)
 add_test(NAME event_log COMMAND chipcae_test_event_log)
+
+add_executable(chipcae_test_par par/test_par.cpp)
+target_link_libraries(chipcae_test_par PRIVATE chipcae::core chipcae::coupling)
+chipcae_set_warnings(chipcae_test_par)
+add_test(NAME par COMMAND chipcae_test_par)
+set_tests_properties(par PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
+add_test(NAME par_public_headers COMMAND ${CMAKE_COMMAND}
+    -DROOT=${PROJECT_SOURCE_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/par/check_headers.cmake)

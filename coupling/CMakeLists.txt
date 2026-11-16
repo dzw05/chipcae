@@ -15,3 +15,5 @@ chipcae_set_warnings(chipcae_coupling)
 if(CHIPCAE_ENABLE_PRECICE)
     target_sources(chipcae_coupling PRIVATE src/precice_adapter.cpp)
 endif()
+
+target_sources(chipcae_coupling PRIVATE src/step_loop.cpp)
