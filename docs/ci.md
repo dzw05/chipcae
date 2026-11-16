@@ -205,45 +205,50 @@ Billed minutes are the job duration rounded up to the next minute. A skipped job
 
 ### Measured job time
 
-Hosted durations below are filled from the GitHub-hosted runs of this change. Until that table is updated, do not treat the planning total as measured.
+No GitHub-hosted job has run on this branch, so there is no duration to round up. Do not treat the cells below as measurements.
+
+What was queried on 2026-11-16, after merging `main` into the branch (`cbb8b5b`, pull request mergeable and clean):
+
+- `gh run list` for `cursor/k7-ci-perf-gate-1e60` returned no runs. `actions/runs?head_sha=` for `0303604` and `cbb8b5b` returned `total_count: 0`.
+- The commit status is `pending` with an empty status list. The only check suite is the `cursor` app, stuck `queued` since the push, with zero check runs. There are no job logs.
+- Every Actions run currently visible on the repository was triggered by `dzw05`. `actions/runs?actor=cursoragent` is empty. These commits are authored and pushed by `cursoragent`, which did not start Actions. The first push also could not run: the pull request conflicted with `main`, so GitHub had no merge ref.
+- Nothing is `queued`, `waiting`, or `action_required` in Actions.
 
 | Job | Wall time | Billed minutes (ceil) | Cache |
 | --- | --- | --- | --- |
-| `CI / Lint` | pending | pending | pip cache |
-| `CI / Build and test` | pending | pending | cold ccache |
-| `CI / Build and test` | pending | pending | warm ccache |
-| Nightly clang | pending | pending | one-shot hosted run |
-| Nightly CUDA compile | pending | pending | one-shot hosted run |
-| Actions usage | pending | pending | checkout plus a no-token skip |
+| `CI / Lint` | not run | — | — |
+| `CI / Build and test` | not run | — | cold ccache not observed |
+| `CI / Build and test` | not run | — | warm ccache not observed |
+| Nightly clang | not run | — | — |
+| Nightly CUDA compile | not run | — | — |
+| Actions usage | not run | — | — |
+
+A push or workflow re-run by an actor that Actions accepts (the runs above used `dzw05`) is what produces the missing numbers. The one-shot measurement workflow was removed so that a later push does not also compile CUDA on every pull-request update.
 
 ### Assumptions
 
-These are not 30 pull requests a day. That rate was the firehose the budget has to survive only if most events are drafts, docs-only, or cancelled. The planning rate is the billed work of a small team plus coding agents during a normal month:
+Planning rate for the monthly total, once billed minutes exist:
 
-- 22 weekdays.
-- 5 non-draft, non-docs pull-request updates per weekday that compile (110 events). Concurrency cancels about 20% before they finish, so **88 billed builds**.
-- The same 110 events also run lint. Lint is short, so cancellation is ignored and all 110 are billed. Add 1 docs-only pull request per weekday (22 lint-only) and 3 pushes to `main` per week (about 13 lint-only). **145 billed lints**. Drafts are 0.
-- 30 nightly clang runs, 30 nightly CUDA compiles, 30 usage checks.
-- One `run-heavy` notice while Tier B is off (1 minute). Tier B itself stays at 0 hosted minutes.
-
-Warm-cache build minutes are used for the 88 builds, because a typical day hits the cache after the first pull request. Cold-cache is called out separately and is not multiplied by 88.
-
-The arithmetic, once the measured cells exist:
+- 22 workdays in a 30-day month, 8 weekend days.
+- **2 code pull requests per workday.** Each runs Lint and Build and test (4 jobs).
+- **1 push to `main` per workday**, Lint only (1 job).
+- Every calendar day: nightly clang, nightly CUDA compile, and the usage check (3 jobs).
+- That is **8 jobs on a workday** (4 + 1 + 3). Weekend days are the 3 nightly jobs only.
+- Tier B stays off, so it adds 0 hosted minutes. Drafts are not an extra line. The 44 builds use the warm-cache billed minute; the cold-cache build is reported beside it and is not multiplied.
 
 ```
-monthly = 88 * billed(build, warm)
-        + 145 * billed(lint)
+builds = 22 * 2 = 44
+lints  = 22 * 2 + 22 = 66
+nightly jobs = 30 clang + 30 cuda + 30 usage
+
+monthly = 44 * billed(build, warm)
+        + 66 * billed(lint)
         + 30 * billed(clang)
         + 30 * billed(cuda)
         + 30 * billed(usage)
-        + 1
 ```
 
-The result has to stay ≤ 1,500. If a measured cell pushes it over, the extra nightly job is the first thing to gate behind a repository variable; pull-request lint and the single Release build stay.
-
-### What a higher rate costs
-
-Each extra billed build in a month adds one warm build, plus one lint if the event was not already counted. At the planning rate the unused part of the 1,500 minutes is the number of extra full builds that still fit. The usage issue fires at 1,200 account minutes, before the cap.
+The numeric total is **not computed**. There are no billed minutes to multiply, so this document does not claim the sum is under 1,500. The cap remains 1,500. Fill the table from `gh run view --json jobs` and evaluate the formula before treating the budget as checked. The usage issue still fires at 1,200 account minutes.
 
 ## What is intentionally out of this tree
 
