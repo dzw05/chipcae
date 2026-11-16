@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <limits>
 #include <set>
 using namespace chipcae::mesh;
 using k1::expect;
@@ -88,6 +89,18 @@ int main() {
     expect(!check_no_reactivation(s, m, {{{}, {"layer:base"}}, {{"body:die"}, {}}}),
            "alias reactivation");
     expect(mask_hash({1, 2, 1}) == mask_hash({2, 1}), "canonical mask");
+    expect(!resolve_activation(s, m, nullptr, {"*"}), "prefix required");
+    expect(!check_no_reactivation(s, m, {{{"body:die"}, {"region:die"}}}), "same-step conflict");
+    auto metis_options = o;
+    metis_options.use_metis = true;
+    auto metis_grid = build_tensor_grid(s, metis_options);
+    expect(bool(metis_grid), "METIS or SFC fallback");
+    for (std::size_t e = 0; e < metis_grid.value().partitioning.size(); ++e)
+        expect(metis_grid.value().partitioning[e] == metis_grid.value().partitioning[e % columns],
+               "METIS column ownership");
+    auto huge = o;
+    huge.nx = std::numeric_limits<Local>::max();
+    expect(!build_tensor_grid(s, huge), "budget checked before allocation");
     auto duplicate = s;
     duplicate.layers[1].regions = duplicate.layers[0].regions;
     expect(!build_tensor_grid(duplicate, o), "cross-layer duplicate");

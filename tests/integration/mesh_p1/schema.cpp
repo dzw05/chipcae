@@ -56,5 +56,24 @@ int main() {
         expect(!result.error().reason.empty());
         expect(!result.error().path.empty());
     }
+    auto external = std::filesystem::current_path() / "external.bin";
+    {
+        std::ofstream bytes(external);
+        bytes << "abc";
+    }
+    base["external_refs"] = jsoncons::json::parse(
+        R"([{"path":"external.bin","sha256":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}])");
+    {
+        std::ofstream out(path);
+        out << base;
+    }
+    expect(bool(load_stack(path, schema)));
+    {
+        std::ofstream bytes(external);
+        bytes << "abd";
+    }
+    auto mismatch = load_stack(path, schema);
+    expect(!mismatch && mismatch.error().reason == "digest mismatch");
+    std::filesystem::remove(external);
     std::filesystem::remove(path);
 }

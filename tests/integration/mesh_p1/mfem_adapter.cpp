@@ -49,6 +49,23 @@ int main(int argc, char** argv) {
                 expect(t->Jacobian().Det() > 0, "MFEM det J");
             }
         }
+        std::map<std::array<double, 3>, std::size_t> node_map;
+        for (std::size_t n = 0; n < arrays.node_gid.size(); ++n)
+            node_map[{
+                arrays.vertices[3 * n], arrays.vertices[3 * n + 1], arrays.vertices[3 * n + 2]}] =
+                n;
+        std::vector<double> node_presence(arrays.node_gid.size());
+        for (int n = 0; n < local.GetNV(); ++n) {
+            const auto* v = local.GetVertex(n);
+            auto it = node_map.find({v[0], v[1], v[2]});
+            expect(it != node_map.end(), "node roundtrip coordinates");
+            node_presence[it->second] = 1;
+        }
+        comm.allreduce_sum(node_presence);
+        expect(std::count_if(
+                   node_presence.begin(), node_presence.end(), [](double n) { return n > 0; }) ==
+                   static_cast<std::ptrdiff_t>(arrays.node_gid.size()),
+               "global unique vertex count");
         comm.allreduce_sum(counts);
         expect(counts[0] == arrays.attribute.size(), "global element count");
         expect(counts[1] == arrays.bdr_attribute.size(), "global boundary count");
@@ -67,6 +84,13 @@ int main(int argc, char** argv) {
         auto cache = cut::GhostPenaltyCache::prepare(arrays, cut.value(), {active});
         expect(bool(cache), "GP cache");
         expect(bool(ca.value().backfill_gp(cut.value(), cache.value())), "GP backfill");
+        auto local_cut = ca.value().local_cut(cut.value());
+        expect(bool(local_cut), "localized cut arrays");
+        for (auto e : local_cut.value().cut_elem)
+            expect(e >= 0 && e < ca.value().local().GetNE(), "local cut numbering");
+        for (const auto& ls : local_cut.value().level_sets)
+            expect(ls.phi.size() == static_cast<std::size_t>(ca.value().local().GetNV()),
+                   "local-node level sets");
     }
 #ifdef CHIPCAE_ENABLE_MPI
     MPI_Finalize();

@@ -84,7 +84,7 @@ bool contains(const Footprint& f, Real x, Real y) {
 } // namespace
 Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions& o) {
     if (o.nx < 1 || o.ny < 1 || o.ranks < 1 || o.cell_budget < 1 || !(o.snap_tol >= 0) ||
-        !(o.max_ratio >= 1))
+        !(o.max_ratio >= 1) || !std::isfinite(o.snap_tol) || !std::isfinite(o.max_ratio))
         return Error{"grid", "invalid options"};
     const auto& b = s.outline.box;
     if (!(b[2] > b[0] && b[3] > b[1]) || s.layers.empty())
@@ -97,6 +97,19 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
             if (!names.insert(r.name).second)
                 return Error{"regions", "ambiguous cross-layer region name"};
     }
+    if (o.nx > o.cell_budget || o.ny > o.cell_budget || Index(o.nx) > o.cell_budget / o.ny)
+        return Error{"cell_budget",
+                     "requested xy resolution exceeds budget; reduce nx/ny explicitly"};
+    Index minimum_z = 0;
+    for (const auto& l : s.layers) {
+        if (l.n_elem_min < 1 || l.n_elem_min > o.cell_budget - minimum_z)
+            return Error{"cell_budget",
+                         "minimum layer counts exceed budget; revise n_elem_min explicitly"};
+        minimum_z += l.n_elem_min;
+    }
+    if (Index(o.nx) * o.ny > o.cell_budget / minimum_z)
+        return Error{"cell_budget",
+                     "requested xyz resolution exceeds budget; revise nx/ny/n_elem_min explicitly"};
     HexMeshArrays m;
     auto& axes = m.axes;
     for (int a = 0; a < 2; ++a) {
@@ -106,6 +119,16 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
             for (const auto& r : l.regions)
                 for (int side : {0, 2})
                     v.push_back(r.footprint.box[a + side]);
+        for (auto& x : v)
+            if (x != b[a] && x != b[a + 2]) {
+                Real target = std::abs(x - b[a]) < o.snap_tol       ? b[a]
+                              : std::abs(x - b[a + 2]) < o.snap_tol ? b[a + 2]
+                                                                    : x;
+                if (x != target) {
+                    m.snapped.push_back({a == 0 ? 'x' : 'y', x, target, target - x});
+                    x = target;
+                }
+            }
         std::sort(v.begin(), v.end());
         std::vector<Real> snapped;
         for (auto x : v) {
@@ -119,11 +142,32 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
                 snapped.push_back(x);
         }
         v.clear();
-        Local count = a == 0 ? o.nx : o.ny;
+        Local minimum = a == 0 ? o.nx : o.ny;
+        Real spacing = b[a + 2] - b[a];
         for (std::size_t j = 1; j < snapped.size(); ++j)
+            spacing = std::min(spacing, (snapped[j] - snapped[j - 1]) / minimum);
+        if (o.max_ratio > 1)
+            spacing *= std::min(Real(1), o.max_ratio - 1);
+        for (std::size_t j = 1; j < snapped.size(); ++j) {
+            Real proposed = std::ceil((snapped[j] - snapped[j - 1]) / spacing);
+            if (proposed > Real(o.cell_budget) ||
+                proposed > Real(std::numeric_limits<Local>::max()) ||
+                Real(v.size()) + proposed > Real(o.cell_budget))
+                return Error{"cell_budget",
+                             "xy grading refinement exceeds budget; revise feature spacing or "
+                             "nx/ny explicitly"};
+            Local count = std::max(minimum, static_cast<Local>(proposed));
             for (Local k = 0; k < count; ++k)
                 v.push_back(snapped[j - 1] + (snapped[j] - snapped[j - 1]) * k / count);
+        }
         v.push_back(snapped.back());
+        for (std::size_t i = 2; i < v.size(); ++i) {
+            Real left = v[i - 1] - v[i - 2], right = v[i] - v[i - 1];
+            if (std::max(left / right, right / left) >
+                o.max_ratio * (1 + 16 * std::numeric_limits<Real>::epsilon()))
+                return Error{"grid/grading",
+                             "max_ratio=1 requires exactly commensurate feature intervals"};
+        }
     }
     axes[2] = {0};
     std::vector<Local> cell_layer;

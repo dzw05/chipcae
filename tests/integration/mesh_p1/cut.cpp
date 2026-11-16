@@ -78,8 +78,12 @@ int main(int argc, char** argv) {
             for (std::size_t q = 0; q < c.bq_w.size(); ++q)
                 for (int k = 0; k < 3; ++k)
                     closure[k] += c.bq_n[k][q] * c.bq_w[q];
-            for (auto x : closure)
-                expect(std::abs(x) <= 6 * k1::threshold("closure_relative"), "G1 closure");
+            expect(std::sqrt(
+                       std::inner_product(closure.begin(), closure.end(), closure.begin(), 0.0)) <=
+                       6 * k1::threshold("closure_relative"),
+                   "G1 closure norm");
+            if (trial == 1004)
+                expect(!c.small_subs.empty() && v > 0, "small sliver retained and marked");
             for (const auto& x : c.vq_xi)
                 for (auto p : x)
                     expect(p >= 0 && p <= 1, "reference coordinates");

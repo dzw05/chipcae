@@ -21,6 +21,12 @@ Expected<ActivationResolution> resolve_activation(const StackModel& s,
                                                   const cut::CutLayerArrays* cut,
                                                   const std::vector<std::string>& refs) {
     ActivationResolution out;
+    for (const auto& ref : refs) {
+        if (!out.cells.ref.empty())
+            out.cells.ref += ",";
+        out.cells.ref += ref;
+    }
+    out.faces.ref = out.cells.ref;
     std::set<Local> attrs, faces;
     std::vector<std::string> expanded;
     for (const auto& ref : refs) {
@@ -53,6 +59,9 @@ Expected<ActivationResolution> resolve_activation(const StackModel& s,
             faces.insert(it->second.begin(), it->second.end());
             continue;
         }
+        if (!ref.starts_with("layer:") && !ref.starts_with("region:") && !ref.starts_with("body:"))
+            return Error{ref, "unsupported reference prefix"};
+        std::set<Local> matched;
         bool found = false;
         auto star = ref.find('*');
         for (const auto& [name, list] : m.attr_table.references) {
@@ -62,11 +71,12 @@ Expected<ActivationResolution> resolve_activation(const StackModel& s,
                         name.ends_with(ref.substr(star + 1)) && name.size() + 1 >= ref.size();
             if (match) {
                 found = true;
-                attrs.insert(list.begin(), list.end());
+                matched.insert(list.begin(), list.end());
             }
         }
-        if (!found || (star != std::string::npos && attrs.empty()))
+        if (!found || (star != std::string::npos && matched.empty()))
             return Error{ref, "unknown target or empty wildcard"};
+        attrs.insert(matched.begin(), matched.end());
     }
     out.cells.attributes.assign(attrs.begin(), attrs.end());
     out.faces.bdr_attributes.assign(faces.begin(), faces.end());
@@ -108,7 +118,9 @@ Expected<bool> check_no_reactivation(const StackModel& s,
         if (!d)
             return d.error();
         for (auto id : a.value().cells.attributes)
-            if (retired.contains(id))
+            if (retired.contains(id) || std::find(d.value().cells.attributes.begin(),
+                                                  d.value().cells.attributes.end(),
+                                                  id) != d.value().cells.attributes.end())
                 return Error{"steps", "reactivation of retired attribute " + std::to_string(id)};
         retired.insert(d.value().cells.attributes.begin(), d.value().cells.attributes.end());
     }

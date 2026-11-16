@@ -29,23 +29,28 @@ Expected<StackModel> load_stack(const std::filesystem::path& file,
             return Error{"$", "cannot open instance or schema"};
         J j = J::parse(input), s = J::parse(specification);
         auto validator = jsoncons::jsonschema::make_json_schema(s);
-        std::string failure;
+        Error failure;
         validator.validate(j, [&](const jsoncons::jsonschema::validation_message& m) {
-            if (failure.empty())
-                failure = m.instance_location().string() + ": " + m.message();
+            if (failure.reason.empty())
+                failure = Error{"$" + m.instance_location().string(), m.message()};
             return jsoncons::jsonschema::walk_result::advance;
         });
-        if (!failure.empty())
-            return Error{"$", failure};
+        if (!failure.reason.empty())
+            return failure;
         StackModel model;
         model.id = j.at("id").as<std::string>();
         model.outline = footprint(j.at("outline"));
+        if (!(model.outline.box[2] > model.outline.box[0] &&
+              model.outline.box[3] > model.outline.box[1]))
+            return Error{"$/outline/box", "positive rectangle required"};
         model.symmetry = j.at("symmetry").as<std::string>();
         model.package_type = j.at("package_type").as<std::string>();
         std::set<std::string> names, refs;
         auto unique = [&](const std::string& name) { return names.insert(name).second; };
         auto inside = [&](const Footprint& f) {
             const auto& b = model.outline.box;
+            if (!(f.box[2] > f.box[0] && f.box[3] > f.box[1]))
+                return false;
             if (f.box[0] < b[0] || f.box[1] < b[1] || f.box[2] > b[2] || f.box[3] > b[3])
                 return false;
             for (auto p : f.polygon)
