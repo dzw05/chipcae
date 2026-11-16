@@ -28,7 +28,7 @@ service JobManager {
   rpc Release(JobRef) returns (Job);
   rpc List(ListJobsRequest) returns (ListJobsResponse);
   rpc Get(JobRef) returns (Job);
-  rpc Control(ControlRequest) returns (ControlReply);  // 转发到 chipcae.run.v1 Run.Control
+  rpc Control(ControlRequest) returns (ControlReply);  // 经共享文件系统上的控制文件转发给内核，生效结果以 Watch 中的 chipcae.run.v1.ControlAck 为准
 
   // ---- 监控 ----
   rpc Watch(stream WatchClientMessage) returns (stream WatchServerMessage);
@@ -81,10 +81,11 @@ message KernelInstall {
   string kernel_version = 1;                // semver
   string schema_bundle_hash = 2;            // sha256，与界面本地包比对
   repeated PluginInfo plugins = 3;
-  string min_vtkhdf_version = 4;            // "2.9"
+  string min_vtkhdf_version = 4;            // "2.5"（多面体下限）；共享面需 >= 2.9，可选
 }
 message PluginInfo { string key = 1; string version = 2; }
 
+// MVP 单机版只用 LOCAL；SLURM/PBS 供 v1 私有服务器版；不做云 SaaS。
 enum SchedulerType {
   SCHEDULER_TYPE_UNSPECIFIED = 0;
   SCHEDULER_TYPE_LOCAL = 1;
@@ -268,7 +269,7 @@ enum FailureCategory {
 
 message FailureInfo {               // 汇总规则见 3.4 节
   FailureCategory category = 1;
-  string code = 2;                // 取自 protocol/chipcae/errors/v1 错误码表（只增不改），如 "DIVERGENCE.NAN_IN_FIELD"
+  string code = 2;                // protocol/errors.yaml 的 name（UPPER_SNAKE，如 "DIVERGENCE_NAN_IN_FIELD"）
   string message = 3;
   int32  rank = 4;                // -1 = 未知
   string module = 5;              // "fvm.incompressible"、"coupling" ...
@@ -281,7 +282,9 @@ message FailureInfo {               // 汇总规则见 3.4 节
   repeated string diagnostic_files = 12;  // 相对 run 目录，如 diag/rank-3.json
   string recoverable_checkpoint_id = 13;  // manifest 中最后一个已登记的检查点
   bool   exit_event_seen = 14;    // 事件日志中是否有 KernelExit
+  uint32 error_code = 15;         // protocol/errors.yaml 的 code（整数，只增不改）
 }
+
 
 // ============================================================
 // 运行控制（转发到 chipcae.run.v1）

@@ -1,5 +1,6 @@
 # APPEND-ONLY. 已发布条目的 code/name 不得修改或删除；废弃用 deprecated: true。
 # 新条目只能追加在末尾，code 单调递增。CI 会对比 main 分支版本校验。
+# name 使用 UPPER_SNAKE（如 INTERNAL、DIVERGENCE_NAN_IN_FIELD）；code 为整数，只增不改。
 schema_version: 1
 errors:
   - {code: 1, name: INTERNAL, retryable: false, message: "Internal error"}

@@ -51,7 +51,7 @@ def main():
     refs = []
     if args.base:
         refs.append(args.base)
-    for key in ('CHIPCAE_PROTOCOL_BASE', 'GITHUB_BASE_SHA', 'GITHUB_BASE_REF'):
+    for key in ('CHIPCAE_PROTOCOL_BASE', 'GITHUB_BASE_REF'):
         value = os.environ.get(key)
         if value:
             refs.append(value)
@@ -67,6 +67,9 @@ def main():
             baseline = result.stdout
             break
     if baseline is None:
+        if os.environ.get('CHIPCAE_PROTOCOL_BASE') or os.environ.get('CI'):
+            print('Protocol compatibility failed: baseline unavailable')
+            return 1
         print('Warning: protocol baseline unavailable; skipping compatibility check.')
         return 0
     try:

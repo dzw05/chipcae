@@ -22,7 +22,7 @@ message KernelHello {
   repeated Plugin plugins = 6;
   uint32 ranks = 7;
   uint32 event_log_format = 8;        // currently 1
-  repeated uint32 vtkhdf_version = 9; // e.g. [2, 9]
+  repeated uint32 vtkhdf_version = 9; // [2, 5] lower bound for polyhedra; [2, 9] optional shared faces
   string case_sha256 = 10;
   string git_sha = 11;
   string protocol_version = 12;
@@ -134,11 +134,12 @@ message OutputWritten {
 }
 
 message ErrorEvent {
-  string code = 1;
+  string code = 1;     // protocol/errors.yaml name (UPPER_SNAKE)
   string message = 2;
   int32 rank = 3;
   string module = 4;
   uint64 window = 5;
+  uint32 error_code = 6;  // protocol/errors.yaml integer code
 }
 
 message LogEvent {
