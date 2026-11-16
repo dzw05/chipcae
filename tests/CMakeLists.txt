@@ -18,3 +18,8 @@ add_test(NAME core_public_headers
     COMMAND ${CMAKE_COMMAND}
         -DHEADER_DIR=${PROJECT_SOURCE_DIR}/core/include/chipcae/core
         -P ${CMAKE_CURRENT_SOURCE_DIR}/core/check_public_headers.cmake)
+
+add_executable(chipcae_test_event_log protocol/test_event_log.cpp)
+target_link_libraries(chipcae_test_event_log PRIVATE chipcae::io)
+chipcae_set_warnings(chipcae_test_event_log)
+add_test(NAME event_log COMMAND chipcae_test_event_log)

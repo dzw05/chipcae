@@ -2,6 +2,7 @@ add_library(chipcae_io
     src/manifest.cpp
     src/checkpoint.cpp
     src/result_writer.cpp
+    src/event_log.cpp
 )
 add_library(chipcae::io ALIAS chipcae_io)
 

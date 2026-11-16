@@ -124,6 +124,39 @@ message Residual {
   uint32 iteration = 4;
   double norm = 5;
   uint32 flags = 6;
+  string code = 7;       // protocol/errors.yaml name (UPPER_SNAKE)
+  uint32 error_code = 8; // protocol/errors.yaml integer code
+}
+
+// A user-visible diagnostic line; distinct from the legacy LogEvent.
+message LogLine {
+  int32 level = 1;
+  int32 rank = 2;
+  string message = 3;
+  string code = 4;       // protocol/errors.yaml name (UPPER_SNAKE)
+  uint32 error_code = 5; // protocol/errors.yaml integer code
+}
+
+message State {
+  enum Value {
+    STATE_UNSPECIFIED = 0;
+    STARTING = 1;
+    RUNNING = 2;
+    PAUSED = 3;
+    COMPLETED = 4;
+    FAILED = 5;
+  }
+  Value value = 1;
+  uint64 window = 2;
+  double time = 3;
+}
+
+// An output is available to consumers; distinct from OutputWritten.
+message OutputAvailable {
+  uint64 window = 1;
+  double time = 2;
+  string path = 3;
+  string checksum = 4;
 }
 
 // Not the authority for result arrival; the result manifest is.
@@ -162,5 +195,8 @@ message RunEvent {
     ControlAck control_ack = 17;
     ResidualBatch residual_batch = 18;
     KernelExit exit = 19;
+    LogLine log_line = 20;
+    State state = 21;
+    OutputAvailable output_available = 22;
   }
 }
