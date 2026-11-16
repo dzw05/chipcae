@@ -20,3 +20,5 @@ option(CHIPCAE_ENABLE_OCCT "Enable Open CASCADE (OCCT) CAD import" OFF)
 if(CHIPCAE_BUILD_GUI)
     set(CHIPCAE_ENABLE_QT ON CACHE BOOL "Enable Qt6 (implied by CHIPCAE_BUILD_GUI)" FORCE)
 endif()
+
+option(CHIPCAE_ENABLE_MUMPS "Enable MUMPS direct solver (optional; dynamic linking only; default OFF)" OFF)
