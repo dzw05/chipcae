@@ -1,0 +1,10 @@
+elastic variant=0 N=8 L2=0.000181059 H1=0.00480864 orders=0,0 ok
+elastic variant=0 N=16 L2=4.17006e-05 H1=0.00233147 orders=2.11832,1.04439 ok
+elastic variant=0 N=32 L2=9.93558e-06 H1=0.00115788 orders=2.06939,1.00975 ok
+elastic variant=0 N=64 L2=2.44798e-06 H1=0.000579032 orders=2.02101,0.999773 ok
+elastic variant=0 N=128 L2=6.05376e-07 H1=0.000289306 orders=2.01569,1.00105 ok
+elastic variant=1 N=8 L2=0.00014256 H1=0.00474454 orders=0,0 indefinite
+elastic variant=1 N=16 L2=3.74672e-05 H1=0.00434622 orders=1.92787,0.126508 indefinite
+elastic variant=1 N=32 L2=9.59904e-06 H1=0.00209108 orders=1.96466,1.05551 indefinite
+elastic variant=1 N=64 L2=2.38151e-06 H1=0.0006383 orders=2.01101,1.71194 indefinite
+elastic variant=1 N=128 L2=5.9718e-07 H1=0.000289009 orders=1.99564,1.14312 indefinite

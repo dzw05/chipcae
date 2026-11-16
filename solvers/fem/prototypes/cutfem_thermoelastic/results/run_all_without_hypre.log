@@ -1,0 +1,101 @@
+-- Configuring done (0.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: /workspace/chipcae/solvers/fem/prototypes/cutfem_thermoelastic/build
+[1/9] Building CXX object CMakeFiles/cutfem.dir/src/mesh.cpp.o
+[2/9] Building CXX object CMakeFiles/cutfem.dir/src/solvers.cpp.o
+[3/9] Building CXX object CMakeFiles/cutfem.dir/src/cut_layer.cpp.o
+[4/9] Building CXX object CMakeFiles/cutfem_proto.dir/apps/cutfem_proto.cpp.o
+[5/9] Building CXX object CMakeFiles/cutfem.dir/src/assembly.cpp.o
+[6/9] Building CXX object CMakeFiles/cutfem_proto.dir/tests/unit_tests.cpp.o
+[7/9] Building CXX object CMakeFiles/cutfem.dir/src/experiments.cpp.o
+[8/9] Linking CXX static library libcutfem.a
+[9/9] Linking CXX executable cutfem_proto
+PASS plane strain material and engineering shear
+PASS cut area/perimeter, tags, offsets, CV IDs and fitted boundary
+PASS recursive subdivision vs half-plane (degree 4 moments and CutLayer CSR)
+PASS elastic -div(sigma) finite difference max error=5.2072e-12
+PASS thermal linear cut patch max nodal error=3.16414e-15
+PASS elastic linear cut patch max nodal error=2.10942e-15
+PASS banded/PCG agreement, elimination, Lanczos eigenvalues, indefinite detection
+All unit tests passed
+thermal variant=0 N=8 L2=0.00291868 H1=0.0907145 orders=0,0 ok
+thermal variant=0 N=16 L2=0.000662505 H1=0.0443457 orders=2.13931,1.03254 ok
+thermal variant=0 N=32 L2=0.000162367 H1=0.0220473 orders=2.02868,1.00819 ok
+thermal variant=0 N=64 L2=4.03071e-05 H1=0.0110188 orders=2.01015,1.00064 ok
+thermal variant=0 N=128 L2=1.00242e-05 H1=0.0055072 orders=2.00755,1.00058 ok
+thermal variant=1 N=8 L2=0.00350644 H1=0.0907673 orders=0,0 ok
+thermal variant=1 N=16 L2=0.000775219 H1=0.0442943 orders=2.17733,1.03505 ok
+thermal variant=1 N=32 L2=0.000184217 H1=0.0220266 orders=2.0732,1.00787 ok
+thermal variant=1 N=64 L2=4.4885e-05 H1=0.0110137 orders=2.03711,0.99995 ok
+thermal variant=1 N=128 L2=1.10567e-05 H1=0.0055051 orders=2.02131,1.00045 ok
+thermal_bimat variant=0 N=8 L2=0.0025054 H1=0.0913803 orders=0,0 ok
+thermal_bimat variant=0 N=16 L2=0.000581748 H1=0.0446058 orders=2.10657,1.03465 ok
+thermal_bimat variant=0 N=32 L2=0.000140966 H1=0.0221742 orders=2.04505,1.00835 ok
+thermal_bimat variant=0 N=64 L2=3.48995e-05 H1=0.0110837 orders=2.01407,1.00045 ok
+thermal_bimat variant=0 N=128 L2=8.67412e-06 H1=0.00553808 orders=2.00842,1.00098 ok
+elastic variant=0 N=8 L2=0.000181059 H1=0.00480864 orders=0,0 ok
+elastic variant=0 N=16 L2=4.17006e-05 H1=0.00233147 orders=2.11832,1.04439 ok
+elastic variant=0 N=32 L2=9.93558e-06 H1=0.00115788 orders=2.06939,1.00975 ok
+elastic variant=0 N=64 L2=2.44798e-06 H1=0.000579032 orders=2.02101,0.999773 ok
+elastic variant=0 N=128 L2=6.05376e-07 H1=0.000289306 orders=2.01569,1.00105 ok
+elastic variant=1 N=8 L2=0.00014256 H1=0.00474454 orders=0,0 indefinite
+elastic variant=1 N=16 L2=3.74672e-05 H1=0.00434622 orders=1.92787,0.126508 indefinite
+elastic variant=1 N=32 L2=9.59904e-06 H1=0.00209108 orders=1.96466,1.05551 indefinite
+elastic variant=1 N=64 L2=2.38151e-06 H1=0.0006383 orders=2.01101,1.71194 indefinite
+elastic variant=1 N=128 L2=5.9718e-07 H1=0.000289009 orders=1.99564,1.14312 indefinite
+timoshenko example parameters Nt=4 gamma_g=0.01 cut=-1.65038 fitted=-1.65985 ref=-1.74016 T_error=1.94053e-10
+timoshenko example parameters Nt=4 gamma_g=0.1 cut=-1.56223 fitted=-1.65985 ref=-1.74016 T_error=1.03089e-10
+timoshenko example parameters Nt=4 gamma_g=1 cut=-1.03568 fitted=-1.65985 ref=-1.74016 T_error=2.86562e-10
+timoshenko example parameters Nt=8 gamma_g=0.01 cut=-1.71704 fitted=-1.71742 ref=-1.74016 T_error=4.24709e-10
+timoshenko example parameters Nt=8 gamma_g=0.1 cut=-1.70489 fitted=-1.71742 ref=-1.74016 T_error=1.60227e-11
+timoshenko example parameters Nt=8 gamma_g=1 cut=-1.59565 fitted=-1.71742 ref=-1.74016 T_error=4.8826e-10
+timoshenko example parameters Nt=16 gamma_g=0.01 cut=-1.73448 fitted=-1.73442 ref=-1.74016 T_error=3.00205e-09
+timoshenko example parameters Nt=16 gamma_g=0.1 cut=-1.7329 fitted=-1.73442 ref=-1.74016 T_error=3.72861e-09
+timoshenko example parameters Nt=16 gamma_g=1 cut=-1.71788 fitted=-1.73442 ref=-1.74016 T_error=4.41571e-09
+timoshenko example parameters Nt=32 gamma_g=0.01 cut=-1.73875 fitted=-1.73877 ref=-1.74016 T_error=1.07758e-08
+timoshenko example parameters Nt=32 gamma_g=0.1 cut=-1.73854 fitted=-1.73877 ref=-1.74016 T_error=1.14428e-08
+timoshenko example parameters Nt=32 gamma_g=1 cut=-1.73661 fitted=-1.73877 ref=-1.74016 T_error=1.36491e-08
+gp_sweep thermal vf=0.5 gg=0 Jacobi=65 ok CG=68 ok AMG=0 unavailable
+gp_sweep thermal vf=0.5 gg=0.03 Jacobi=64 ok CG=70 ok AMG=0 unavailable
+gp_sweep thermal vf=0.5 gg=0.1 Jacobi=61 ok CG=71 ok AMG=0 unavailable
+gp_sweep thermal vf=0.5 gg=0.3 Jacobi=55 ok CG=74 ok AMG=0 unavailable
+gp_sweep thermal vf=0.1 gg=0 Jacobi=89 ok CG=1568 ok AMG=0 unavailable
+gp_sweep thermal vf=0.1 gg=0.03 Jacobi=61 ok CG=174 ok AMG=0 unavailable
+gp_sweep thermal vf=0.1 gg=0.1 Jacobi=61 ok CG=115 ok AMG=0 unavailable
+gp_sweep thermal vf=0.1 gg=0.3 Jacobi=61 ok CG=97 ok AMG=0 unavailable
+gp_sweep thermal vf=0.01 gg=0 Jacobi=0 indefinite CG=15 indefinite AMG=0 unavailable
+gp_sweep thermal vf=0.01 gg=0.03 Jacobi=2 indefinite CG=19 indefinite AMG=0 unavailable
+gp_sweep thermal vf=0.01 gg=0.1 Jacobi=164 ok CG=527 ok AMG=0 unavailable
+gp_sweep thermal vf=0.01 gg=0.3 Jacobi=61 ok CG=107 ok AMG=0 unavailable
+gp_sweep thermal vf=0.001 gg=0 Jacobi=0 indefinite CG=15 indefinite AMG=0 unavailable
+gp_sweep thermal vf=0.001 gg=0.03 Jacobi=2 indefinite CG=18 indefinite AMG=0 unavailable
+gp_sweep thermal vf=0.001 gg=0.1 Jacobi=13 indefinite CG=41 indefinite AMG=0 unavailable
+gp_sweep thermal vf=0.001 gg=0.3 Jacobi=61 ok CG=109 ok AMG=0 unavailable
+gp_sweep thermal vf=0.0001 gg=0 Jacobi=0 indefinite CG=15 indefinite AMG=0 unavailable
+gp_sweep thermal vf=0.0001 gg=0.03 Jacobi=2 indefinite CG=18 indefinite AMG=0 unavailable
+gp_sweep thermal vf=0.0001 gg=0.1 Jacobi=12 indefinite CG=40 indefinite AMG=0 unavailable
+gp_sweep thermal vf=0.0001 gg=0.3 Jacobi=61 ok CG=108 ok AMG=0 unavailable
+gp_sweep elastic vf=0.5 gg=0 Jacobi=307 ok CG=415 ok AMG=0 unavailable
+gp_sweep elastic vf=0.5 gg=0.03 Jacobi=309 ok CG=400 ok AMG=0 unavailable
+gp_sweep elastic vf=0.5 gg=0.1 Jacobi=318 ok CG=399 ok AMG=0 unavailable
+gp_sweep elastic vf=0.5 gg=0.3 Jacobi=348 ok CG=414 ok AMG=0 unavailable
+gp_sweep elastic vf=0.1 gg=0 Jacobi=304 ok CG=714 ok AMG=0 unavailable
+gp_sweep elastic vf=0.1 gg=0.03 Jacobi=311 ok CG=472 ok AMG=0 unavailable
+gp_sweep elastic vf=0.1 gg=0.1 Jacobi=317 ok CG=432 ok AMG=0 unavailable
+gp_sweep elastic vf=0.1 gg=0.3 Jacobi=349 ok CG=436 ok AMG=0 unavailable
+gp_sweep elastic vf=0.01 gg=0 Jacobi=302 ok CG=1839 ok AMG=0 unavailable
+gp_sweep elastic vf=0.01 gg=0.03 Jacobi=309 ok CG=515 ok AMG=0 unavailable
+gp_sweep elastic vf=0.01 gg=0.1 Jacobi=319 ok CG=453 ok AMG=0 unavailable
+gp_sweep elastic vf=0.01 gg=0.3 Jacobi=356 ok CG=445 ok AMG=0 unavailable
+gp_sweep elastic vf=0.001 gg=0 Jacobi=302 ok CG=1551 ok AMG=0 unavailable
+gp_sweep elastic vf=0.001 gg=0.03 Jacobi=308 ok CG=530 ok AMG=0 unavailable
+gp_sweep elastic vf=0.001 gg=0.1 Jacobi=319 ok CG=455 ok AMG=0 unavailable
+gp_sweep elastic vf=0.001 gg=0.3 Jacobi=356 ok CG=439 ok AMG=0 unavailable
+gp_sweep elastic vf=0.0001 gg=0 Jacobi=302 ok CG=1844 ok AMG=0 unavailable
+gp_sweep elastic vf=0.0001 gg=0.03 Jacobi=308 ok CG=531 ok AMG=0 unavailable
+gp_sweep elastic vf=0.0001 gg=0.1 Jacobi=320 ok CG=455 ok AMG=0 unavailable
+gp_sweep elastic vf=0.0001 gg=0.3 Jacobi=356 ok CG=440 ok AMG=0 unavailable
+Plots and measured summary written to results
+Finest curvature: cut=-1.7385412, fitted=-1.7387691, reference=-1.7401574 1/m
+License policy check passed.
+run_all.sh succeeded (hypre=OFF, elapsed 12s)
