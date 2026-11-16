@@ -1,17 +1,70 @@
 #!/usr/bin/env bash
 # CPU-only, local prefix. Requires cmake, Ninja, C/C++, MPI, curl, tar.
+# The nightly workflow caches this prefix. The cache key is ImageOS, the
+# compiler identity, and the hash of this script (the version pins live here).
+# --verify only checks the stamp and required config files/libs, then exits.
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/../../../.." && pwd)
-prefix=$(realpath -m "${1:-$repo/build-k1-deps/prefix}")
+verify_only=0
+prefix_arg=
+for arg in "$@"; do
+  case "$arg" in
+    --verify) verify_only=1 ;;
+    *) prefix_arg=$arg ;;
+  esac
+done
+prefix=$(realpath -m "${prefix_arg:-$repo/build-k1-deps/prefix}")
 case "$prefix/" in "$repo/"*) ;; *) echo 'Dependency prefix must be inside this worktree' >&2; exit 2;; esac
 work="$repo/build-k1-deps"
+# Cache key includes this script. Stamp only after every dependency installs.
+key=$(sha256sum "$0" | cut -d' ' -f1)
+
+has_lib() {
+  local name=$1 f
+  for f in "$prefix/lib/lib${name}.so" "$prefix/lib/lib${name}.so."* "$prefix/lib/lib${name}.a"; do
+    if [[ -e "$f" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Cheap integrity check used both as a rebuild skip and as the workflow
+# cache-hit gate. On failure the caller should rebuild from scratch.
+verify() {
+  [[ -f "$prefix/.k1-ready" && $(cat "$prefix/.k1-ready") == "$key" ]] || return 1
+  local f
+  for f in \
+    "$prefix/lib/cmake/mfem/MFEMConfig.cmake" \
+    "$prefix/lib/cmake/HYPRE/HYPREConfig.cmake" \
+    "$prefix/cmake/hdf5-config.cmake" \
+    "$prefix/share/cmake/jsoncons/jsonconsConfig.cmake" \
+    "$prefix/include/mfem.hpp" \
+    "$prefix/include/jsoncons/jsoncons.hpp"
+  do
+    [[ -f "$f" ]] || return 1
+  done
+  has_lib metis && has_lib HYPRE && has_lib hdf5 && has_lib mfem
+}
+
+if [[ "$verify_only" == 1 ]]; then
+  if verify; then
+    echo "Dependency prefix at $prefix passed the integrity check."
+    exit 0
+  fi
+  echo "Dependency prefix at $prefix failed the integrity check." >&2
+  exit 1
+fi
+
+if verify; then
+  echo "Dependency prefix at $prefix is already complete."
+  exit 0
+fi
+
 mkdir -p "$work/src" "$prefix"
 export CMAKE_PREFIX_PATH="$prefix${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
 export CC=mpicc CXX=mpicxx
 jobs=${CMAKE_BUILD_PARALLEL_LEVEL:-2}
-# Cache key includes this script. Stamp only after every dependency installs.
-key=$(sha256sum "$0" | cut -d' ' -f1)
-if [[ -f "$prefix/.k1-ready" && $(cat "$prefix/.k1-ready") == "$key" ]]; then exit 0; fi
 fetch() {
   local name=$1 url=$2
   if [[ ! -d "$work/src/$name" ]]; then

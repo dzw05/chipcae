@@ -48,32 +48,95 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build cmake g++ ccache libopenmpi-dev openmpi-bin curl
-      - name: Compiler identity
+      - name: Cache identity
         if: steps.changes.outputs.run == 'true'
-        id: compiler
-        run: echo "id=$(g++ -dumpmachine)-gcc-$(g++ -dumpfullversion)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
+        id: cache-id
+        run: |
+          set -euo pipefail
+          # ImageOS is a runner env var; ${{ env.ImageOS }} is empty at parse time.
+          image_os="${ImageOS:-unknown}"
+          compiler="$(g++ -dumpmachine)-gcc-$(g++ -dumpfullversion)"
+          echo "image_os=$image_os" >> "$GITHUB_OUTPUT"
+          echo "compiler=$compiler" >> "$GITHUB_OUTPUT"
+          echo "Cache identity: image_os=$image_os compiler=$compiler"
+      - name: Restore dependency prefix
         if: steps.changes.outputs.run == 'true'
+        id: dep-cache
+        uses: actions/cache/restore@v4
         with:
-          path: |
-            build-k1-deps/prefix
-            .ccache
-          key: k1-linux-metis5.1.0-hypre3.2.1-hdf51.14.6-jsoncons1.4.0-mfem4.10-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/build_deps_cpu.sh') }}
-      - name: Build dependencies and run mesh tests
+          path: build-k1-deps/prefix
+          key: k1-deps-${{ runner.os }}-${{ steps.cache-id.outputs.image_os }}-${{ steps.cache-id.outputs.compiler }}-${{ hashFiles('tests/integration/mesh_p1/ci/build_deps_cpu.sh') }}
+      - name: Restore ccache
+        if: steps.changes.outputs.run == 'true'
+        id: ccache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: k1-ccache-${{ runner.os }}-${{ steps.cache-id.outputs.image_os }}-${{ steps.cache-id.outputs.compiler }}-${{ hashFiles('tests/integration/mesh_p1/ci/build_deps_cpu.sh') }}
+      - name: Verify dependency prefix
+        if: steps.changes.outputs.run == 'true'
+        id: deps
+        run: |
+          set -euo pipefail
+          hit=false
+          if [[ "${{ steps.dep-cache.outputs.cache-hit }}" == true ]]; then
+            if tests/integration/mesh_p1/ci/build_deps_cpu.sh --verify; then
+              hit=true
+            else
+              echo "Cached prefix failed the integrity check; will rebuild."
+              rm -rf build-k1-deps/prefix
+            fi
+          else
+            echo "Dependency prefix cache miss."
+          fi
+          echo "hit=$hit" >> "$GITHUB_OUTPUT"
+      - name: Build dependencies
+        if: steps.changes.outputs.run == 'true' && steps.deps.outputs.hit != 'true'
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+          CCACHE_MAXSIZE: 1G
+          CMAKE_BUILD_PARALLEL_LEVEL: '2'
+        run: tests/integration/mesh_p1/ci/build_deps_cpu.sh
+      - name: Configure, build and run mesh tests
         if: steps.changes.outputs.run == 'true'
         env:
           CCACHE_DIR: ${{ github.workspace }}/.ccache
+          CCACHE_MAXSIZE: 1G
           CMAKE_BUILD_PARALLEL_LEVEL: '2'
           OMPI_MCA_rmaps_base_oversubscribe: '1'
         run: |
           set -euo pipefail
-          tests/integration/mesh_p1/ci/build_deps_cpu.sh
+          tests/integration/mesh_p1/ci/build_deps_cpu.sh --verify
           cmake -S . -B build-k1-full -G Ninja -DCHIPCAE_WARNINGS_AS_ERRORS=ON \
             -DCMAKE_PREFIX_PATH="$PWD/build-k1-deps/prefix" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCHIPCAE_ENABLE_MPI=ON -DCHIPCAE_ENABLE_MFEM=ON \
             -DCHIPCAE_ENABLE_HYPRE=ON -DCHIPCAE_ENABLE_HDF5=ON -DCHIPCAE_ENABLE_JSONCONS=ON
           cmake --build build-k1-full --parallel 2
           ctest --test-dir build-k1-full -L mesh -LE gpu --output-on-failure --output-junit mesh-results.xml
+      - name: Report cache sizes
+        if: always() && steps.changes.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          {
+            echo "## Mesh full-dependency caches"
+            echo
+            echo "- dependency cache hit: \`${{ steps.dep-cache.outputs.cache-hit || 'false' }}\`"
+            echo "- prefix integrity hit: \`${{ steps.deps.outputs.hit || 'false' }}\`"
+            echo "- ccache hit: \`${{ steps.ccache-restore.outputs.cache-hit || 'false' }}\`"
+            if [[ -d build-k1-deps/prefix ]]; then
+              echo "- prefix size: \`$(du -sh build-k1-deps/prefix | awk '{print $1}')\` (\`$(du -sb build-k1-deps/prefix | awk '{print $1}')\` bytes)"
+            else
+              echo "- prefix size: missing"
+            fi
+            if [[ -d .ccache ]]; then
+              echo "- ccache size: \`$(du -sh .ccache | awk '{print $1}')\` (\`$(du -sb .ccache | awk '{print $1}')\` bytes)"
+              ccache -s || true
+            else
+              echo "- ccache size: missing"
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always() && steps.changes.outputs.run == 'true'
         with:
@@ -89,3 +152,15 @@ jobs:
         with:
           path: .k1-last-success
           key: k1-success-${{ github.ref_name }}-${{ github.run_id }}
+      - name: Save dependency prefix
+        if: success() && steps.changes.outputs.run == 'true' && steps.deps.outputs.hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build-k1-deps/prefix
+          key: k1-deps-${{ runner.os }}-${{ steps.cache-id.outputs.image_os }}-${{ steps.cache-id.outputs.compiler }}-${{ hashFiles('tests/integration/mesh_p1/ci/build_deps_cpu.sh') }}
+      - name: Save ccache
+        if: success() && steps.changes.outputs.run == 'true' && steps.ccache-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: k1-ccache-${{ runner.os }}-${{ steps.cache-id.outputs.image_os }}-${{ steps.cache-id.outputs.compiler }}-${{ hashFiles('tests/integration/mesh_p1/ci/build_deps_cpu.sh') }}
