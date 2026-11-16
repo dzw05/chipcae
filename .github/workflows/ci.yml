@@ -41,6 +41,7 @@ jobs:
     timeout-minutes: 8
     outputs:
       code: ${{ steps.paths.outputs.code }}
+      mesh: ${{ steps.paths.outputs.mesh }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -115,6 +116,7 @@ jobs:
               :
             else
               echo "code=true" >> "$GITHUB_OUTPUT"
+              echo "mesh=true" >> "$GITHUB_OUTPUT"
               echo "could not diff against the base; running the build"
               exit 0
             fi
@@ -122,6 +124,7 @@ jobs:
             before="${{ github.event.before }}"
             if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
               echo "code=true" >> "$GITHUB_OUTPUT"
+              echo "mesh=false" >> "$GITHUB_OUTPUT"
               echo "push has no usable before SHA; running the build"
               exit 0
             fi
@@ -130,13 +133,16 @@ jobs:
             fi
             if ! git diff --name-only "$before".."${{ github.sha }}" > /tmp/chipcae-changed 2>/dev/null; then
               echo "code=true" >> "$GITHUB_OUTPUT"
+              echo "mesh=false" >> "$GITHUB_OUTPUT"
               echo "could not diff against github.event.before; running the build"
               exit 0
             fi
           fi
           code=false
+          mesh=false
           if [ ! -s /tmp/chipcae-changed ]; then
             echo "code=false" >> "$GITHUB_OUTPUT"
+            echo "mesh=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           while IFS= read -r file; do
@@ -152,9 +158,16 @@ jobs:
                 code=true
                 ;;
             esac
+            case "$file" in
+              schema/*|mesh/*|tests/integration/mesh_p1/*)
+                mesh=true
+                ;;
+            esac
           done < /tmp/chipcae-changed
           echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "mesh=$mesh" >> "$GITHUB_OUTPUT"
           echo "non-doc changes: $code"
+          echo "mesh changes: $mesh"
 
   build-test:
     name: Build and test
@@ -310,9 +323,21 @@ jobs:
             build/perf-summary.json
             build/perf-compare.json
 
+  mesh:
+    name: Mesh
+    needs: lint
+    if: >
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      needs.lint.result == 'success' &&
+      needs.lint.outputs.mesh == 'true'
+    uses: ./.github/workflows/mesh.yml
+    permissions:
+      contents: read
+
   ci-ok:
     if: always()
-    needs: [lint, build-test]
+    needs: [lint, build-test, mesh]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -321,4 +346,5 @@ jobs:
         env:
           LINT: ${{ needs.lint.result }}
           BUILD: ${{ needs.build-test.result }}
-        run: test "$LINT" = success && { test "$BUILD" = success || test "$BUILD" = skipped; }
+          MESH: ${{ needs.mesh.result }}
+        run: test "$LINT" = success && { test "$BUILD" = success || test "$BUILD" = skipped; } && { test "$MESH" = success || test "$MESH" = skipped; }
