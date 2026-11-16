@@ -252,7 +252,7 @@ monthly = 44 * 1
 
 ## What is intentionally out of this tree
 
-- No edits under `CMakeLists.txt`, `cmake/`, or `core/`. The Poisson binary is built with `bench/Makefile`.
+- The Poisson binary is built with `bench/Makefile`, not the chipcae CMake build. The branch also merges `main`, which has its own `cmake/` and `core/` changes.
 - FCBGA and 2.5D benchmark specs are not added. A later change will land them.
 - No Ansys project files, APDL, or comparison results.
 - Open-source reference solvers are not dependencies and are not linked.
