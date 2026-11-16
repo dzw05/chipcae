@@ -100,6 +100,44 @@ int main(int argc, char** argv) {
         auto again = build_cut_layer(original, g, options);
         expect(again.value().vq_w == c.vq_w && again.value().bq_w == c.bq_w, "cut replay");
     }
+    {
+        auto stack = k1::stack();
+        auto opts = k1::options();
+        auto source = build_tensor_grid(stack, opts).value();
+        auto layered = source;
+        auto cut = build_cut_layer(layered, {{{0, {1, 1, 0}, .8}}}, options);
+        expect(bool(cut), "layered interface cut");
+        for (auto attr : cut.value().bq_bdr_attr) {
+            expect(attr > 6, "dedicated EB attribute");
+            bool registered = false;
+            for (const auto& [name, list] : layered.face_sets)
+                if (name.starts_with("interface:") && name.ends_with("|void") &&
+                    std::find(list.begin(), list.end(), attr) != list.end())
+                    registered = true;
+            expect(registered, "registered EB face group");
+        }
+        const auto& exposed = layered.face_sets.at("exposed:void");
+        for (const auto& [name, list] : layered.face_sets)
+            if (name.starts_with("interface:"))
+                for (auto a : list)
+                    expect(std::find(exposed.begin(), exposed.end(), a) == exposed.end(),
+                           "exposed and interface attributes disjoint");
+        for (std::size_t n = 0; n < layered.node_gid.size(); ++n) {
+            auto it =
+                std::find(source.node_gid.begin(), source.node_gid.end(), layered.node_gid[n]);
+            expect(it != source.node_gid.end(), "original node GID retained");
+            auto old = static_cast<std::size_t>(it - source.node_gid.begin());
+            for (int d = 0; d < 3; ++d)
+                expect(layered.vertices[3 * n + d] == source.vertices[3 * old + d],
+                       "node GID geometry retained");
+        }
+        auto eb = resolve_cut_activation(stack, layered, cut.value(), {"interface:body:base|void"});
+        auto reversed =
+            resolve_cut_activation(stack, layered, cut.value(), {"interface:void|body:base"});
+        expect(bool(eb) && bool(reversed) && !eb.value().faces.eb_subs.empty() &&
+                   eb.value().faces.bdr_attributes == reversed.value().faces.bdr_attributes,
+               "canonical embedded interface");
+    }
     auto split = o;
     split.nx = 4;
     split.ny = 4;
@@ -113,6 +151,10 @@ int main(int argc, char** argv) {
     auto cache = GhostPenaltyCache::prepare(mesh, c, {{1}, {}});
     expect(bool(cache), "cache prepare");
     auto all = cache.value().lookup({1});
+    auto expected_hash = mask_hash(activated_gids(mesh, {1}));
+    expect(std::find(cache.value().hashes.begin(), cache.value().hashes.end(), expected_hash) !=
+               cache.value().hashes.end(),
+           "cache hashes activated element GIDs");
     expect(bool(all) && bool(cache.value().lookup({})), "two mask hits");
     expect(!cache.value().lookup({999}), "unbudgeted mask");
     std::size_t brute = 0;
@@ -146,6 +188,8 @@ int main(int argc, char** argv) {
     }
     expect(mask_hash({1, 2, 1}) == mask_hash({2, 1}) && mask_hash({1, 2}) != mask_hash({1, 3}),
            "hash unique GID set");
+    auto face_device = to_device<chipcae::HostSpace>(all.value());
+    expect(face_device.face_gid.extent(0) == all.value().face.size(), "GP flat views");
     auto device = to_device<chipcae::HostSpace>(c);
     expect(device.ls_phi.extent(0) == c.level_sets.size() * mesh.node_gid.size(),
            "flat level sets");

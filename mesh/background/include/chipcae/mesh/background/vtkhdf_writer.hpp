@@ -8,9 +8,11 @@ namespace chipcae::mesh {
 struct VtkhdfFiles {
     std::filesystem::path grid, embedded_boundary;
 };
-// stem.rankN.vtkhdf + stem.rankN.eb.vtkhdf; independent per-rank files.
+// Global preparation arrays are replicated. One collective file per step;
+// serial HDF5 uses rank zero. Per-rank output is an explicit debug option.
 Expected<VtkhdfFiles> write_vtkhdf(const std::filesystem::path& stem,
                                    const HexMeshArrays&,
                                    const cut::CutLayerArrays*,
-                                   const Communicator&);
+                                   const Communicator&,
+                                   bool debug_per_rank = false);
 } // namespace chipcae::mesh

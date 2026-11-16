@@ -7,6 +7,7 @@
 #include <mpi.h>
 #endif
 #include <algorithm>
+#include <bit>
 #include <numeric>
 #include <set>
 using namespace chipcae::mesh;
@@ -40,10 +41,12 @@ int main(int argc, char** argv) {
         auto comm = chipcae::Communicator::world();
         auto s = k1::stack();
         auto o = k1::options();
+        o.ranks = comm.size();
         auto m = build_tensor_grid(s, o).value();
         cut::CutOptions co;
         co.snap_phi = k1::threshold("snap_phi");
         co.vf_min = k1::threshold("vf_min");
+        co.keep_void = true;
         auto c = cut::build_cut_layer(m, {{{0, {1, 1, 0}, 1}}}, co);
         expect(bool(c), "cut build");
         auto result = write_vtkhdf("k1-output", m, &c.value(), comm);
@@ -57,25 +60,63 @@ int main(int argc, char** argv) {
             expect(t == 12, "VTK_HEXAHEDRON");
         auto attr = read<Local>(file, "VTKHDF/CellData/attribute", H5T_NATIVE_INT32, {nc});
         expect(attr == m.attribute, "attribute values");
+        std::map<std::string, Local> layers, regions;
+        for (const auto& a : m.attr_table.entries) {
+            if (!layers.contains(a.layer))
+                layers[a.layer] = static_cast<Local>(layers.size() + 1);
+            if (!a.region.empty() && !regions.contains(a.region))
+                regions[a.region] = static_cast<Local>(regions.size() + 1);
+        }
+        std::set<Local> kinds;
         for (auto name : {"layer", "region", "material", "body", "rank", "cell_kind"}) {
             auto path = std::string("VTKHDF/CellData/") + name;
             auto field = read<Local>(file, path.c_str(), H5T_NATIVE_INT32, {nc});
             for (std::size_t e = 0; e < field.size(); ++e) {
                 auto a = m.attr_table.entries[m.attribute[e] - 1];
+                if (std::string(name) == "layer")
+                    expect(field[e] == layers[a.layer], "layer values");
+                if (std::string(name) == "region")
+                    expect(field[e] == (a.region.empty() ? 0 : regions[a.region]), "region values");
+                if (std::string(name) == "rank")
+                    expect(field[e] == m.partitioning[e], "rank values");
+                if (std::string(name) == "cell_kind") {
+                    bool iscut = std::find(c.value().cut_elem.begin(),
+                                           c.value().cut_elem.end(),
+                                           static_cast<Local>(e)) != c.value().cut_elem.end();
+                    bool isvoid = std::find(c.value().void_elem.begin(),
+                                            c.value().void_elem.end(),
+                                            static_cast<Local>(e)) != c.value().void_elem.end();
+                    expect(field[e] == (isvoid ? 2 : iscut ? 1 : 0), "cell kind values");
+                    kinds.insert(field[e]);
+                }
                 if (std::string(name) == "material")
                     expect(field[e] == a.material, "material values");
                 if (std::string(name) == "body")
                     expect(field[e] == a.body, "body values");
             }
         }
+        expect(kinds == std::set<Local>({0, 1, 2}), "regular cut covered kinds");
         auto vf = read<Real>(file, "VTKHDF/CellData/vol_frac", H5T_NATIVE_DOUBLE, {nc});
         for (auto x : vf)
             expect(x >= 0 && x <= 1, "volume fractions");
         auto pts = read<Real>(file, "VTKHDF/Points", H5T_NATIVE_DOUBLE, {nv, 3});
-        expect(!pts.empty(), "points");
+
         auto offsets = read<Index>(file, "VTKHDF/Offsets", H5T_NATIVE_INT64, {nc + 1});
         expect(offsets.back() == static_cast<Index>(8 * nc), "offsets");
-        read<Index>(file, "VTKHDF/Connectivity", H5T_NATIVE_INT64, {8 * nc});
+        auto connectivity = read<Index>(file, "VTKHDF/Connectivity", H5T_NATIVE_INT64, {8 * nc});
+        std::map<Local, Index> numbering;
+        for (std::size_t i = 0; i < m.hex.size(); ++i) {
+            auto n = m.hex[i];
+            if (!numbering.contains(n))
+                numbering[n] = static_cast<Index>(numbering.size());
+            expect(connectivity[i] == numbering[n], "connectivity values");
+            for (int d = 0; d < 3; ++d)
+                expect(std::bit_cast<std::uint64_t>(pts[3 * connectivity[i] + d]) ==
+                           std::bit_cast<std::uint64_t>(m.vertices[3 * n + d]),
+                       "bit identical source points");
+        }
+        for (std::size_t i = 0; i < offsets.size(); ++i)
+            expect(offsets[i] == static_cast<Index>(8 * i), "offset values");
         expect(H5Fclose(file) >= 0, "close grid");
         file = H5Fopen(result.value().embedded_boundary.c_str(), H5F_ACC_RDONLY, H5P_DEFAULT);
         expect(file >= 0, "open EB");
@@ -91,8 +132,13 @@ int main(int argc, char** argv) {
                    k1::threshold("closure_relative"),
                "EB weights");
         expect(H5Fclose(file) >= 0, "close EB");
-        std::filesystem::remove(result.value().grid);
-        std::filesystem::remove(result.value().embedded_boundary);
+#ifdef CHIPCAE_ENABLE_MPI
+        MPI_Barrier(MPI_COMM_WORLD);
+#endif
+        if (comm.rank() == 0) {
+            std::filesystem::remove(result.value().grid);
+            std::filesystem::remove(result.value().embedded_boundary);
+        }
     }
 #ifdef CHIPCAE_ENABLE_MPI
     MPI_Finalize();

@@ -9,6 +9,9 @@
 using namespace chipcae::mesh;
 using k1::expect;
 int main() {
+#ifdef CHIPCAE_ENABLE_KOKKOS
+    Kokkos::ScopeGuard guard;
+#endif
     auto s = k1::stack();
     auto o = k1::options();
     o.nx = 4;

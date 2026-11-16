@@ -47,6 +47,15 @@ Expected<StackModel> load_stack(const std::filesystem::path& file,
         if (model.symmetry != "none")
             return Error{"$/symmetry", "symmetry other than none is not implemented"};
         model.package_type = j.at("package_type").as<std::string>();
+        auto warn_solder = [&](std::string material) {
+            auto original = material;
+            for (auto& c : material)
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (material.find("sac") != std::string::npos ||
+                material.find("solder") != std::string::npos)
+                model.warnings.push_back("solder material name: " + original +
+                                         "; verify equivalent properties");
+        };
         std::set<std::string> names, refs;
         auto unique = [&](const std::string& name) { return names.insert(name).second; };
         auto inside = [&](const Footprint& f) {
@@ -78,6 +87,7 @@ Expected<StackModel> load_stack(const std::filesystem::path& file,
             refs.insert("body:" + v.body);
             if (v.kind == "Homogenized" && !v.material.ends_with("_eq"))
                 return Error{path + "/material", "homogenized material must end with _eq"};
+            warn_solder(v.material);
             if (l.contains("regions"))
                 for (const auto& r : l.at("regions").array_range()) {
                     Inclusion a;
@@ -92,6 +102,7 @@ Expected<StackModel> load_stack(const std::filesystem::path& file,
                     if (v.kind == "Homogenized" && !a.material.ends_with("_eq"))
                         return Error{path + "/regions/" + a.name,
                                      "homogenized material must end with _eq"};
+                    warn_solder(a.material);
                     refs.insert("region:" + a.name);
                     refs.insert("body:" + a.body);
                     v.regions.push_back(a);

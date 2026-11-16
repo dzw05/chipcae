@@ -40,6 +40,7 @@ struct Layer {
 };
 struct StackModel {
     std::string id, unit = "m", symmetry, package_type;
+    std::vector<std::string> warnings;
     Footprint outline;
     std::vector<Layer> layers;
     std::map<std::string, std::vector<std::string>> activation_groups;

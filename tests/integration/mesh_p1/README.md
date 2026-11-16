@@ -33,17 +33,25 @@ cmake --build build-k1-cpu --parallel 2
 timeout 600 ctest --test-dir build-k1-cpu -LE gpu --timeout 60 --output-on-failure
 ```
 
-The dependency prefix is local, versioned by script digest and cached. METIS
-is detected only in background CMake. HDF5 is built parallel because the
+The dependency prefix is local, versioned by script digest and cached.
+`CHIPCAE_K1_USE_METIS` defaults to OFF. HDF5 is built parallel because the
 existing root dependency policy requires it when MPI is enabled.
 
-GPU CI stays disabled. On a provisioned machine, first configure a Ninja
-build using a CUDA-enabled MFEM installation (and Kokkos if desired), then
-run `nightly/run_gpu.sh /absolute/path/to/build`. No new CUDA option is added.
-Without CUDA compilation or a GPU the hook skips. `k1_patch_gpu` also skips
-unless the hook explicitly sets CHIPCAE_RUN_GPU. No machine is provisioned.
+Optional-dependency mesh tests (schema, MFEM, HDF5, MPI) run in the weekday
+nightly workflow `.github/workflows/nightly-mesh-fulldep.yml`, not on every
+PR. `k1_patch` and `k1_cut_mfem` also have 1/2/4-rank MPI cases when MPI is
+on.
 
-待与 P1 对齐项: exact field inventory (original design page unavailable), SI
-units, 0-based numbering, A1 Index/MaterialId/BodyId, outward-body EB normals,
-GP GID-pair-to-local-face handoff timing, preparation-stage replicated arrays
-versus solver-distributed arrays, ActivationSet read-only consumption.
+GPU CI stays disabled on PRs. On a provisioned CUDA machine run
+`nightly/run_gpu.sh /absolute/path/to/cuda-mfem-prefix [BUILD_DIR]`. The
+script configures and builds; it exits 77 when no GPU is present, and it
+does not exit 0 just because a build is missing. `k1_patch_gpu` also skips
+unless the hook sets `CHIPCAE_RUN_GPU`. No machine is provisioned.
+
+Field inventory was checked against design v0.2
+(https://cursor.com/canvas/store-cb1250dc-2b01-44d2-a2e6-225d0cab8b5b/82a66aed-852d-4f73-8340-72bdf38a23b7).
+See `PATCHLOG.md` for must-fix work, K9 §3 rulings, the hypre 3.2.1
+workaround, and remaining deviations. Units are SI; numbering is 0-based;
+index types follow A1 (`Index`/`MaterialId`/`BodyId`). EB normals are
+outward from the body. Preparation-stage arrays are replicated; the
+solver later distributes them. `ActivationSet` is consumed read-only.

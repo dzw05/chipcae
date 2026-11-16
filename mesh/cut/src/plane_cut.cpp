@@ -106,8 +106,11 @@ Local embedded_attribute(const HexMeshArrays& m, BodyId body) {
                 next = std::max(next, a + 1);
     return next + body;
 }
-void register_embedded(HexMeshArrays& m) {
+void register_embedded(HexMeshArrays& m, const CutLayerArrays& c) {
     for (const auto& [name, body] : m.attr_table.bodies) {
+        auto attr_test = embedded_attribute(m, body);
+        if (std::find(c.bq_bdr_attr.begin(), c.bq_bdr_attr.end(), attr_test) == c.bq_bdr_attr.end())
+            continue;
         auto ref = canonical_interface("body:" + name, "void");
         auto attr = embedded_attribute(m, body);
         m.face_sets[ref] = {attr};
@@ -231,6 +234,11 @@ generate(const HexMeshArrays& m, const CutGeometry& g, const CutOptions& o) {
         c.bq_off.push_back(static_cast<Local>(c.bq_w.size()));
         c.exterior_area_vector.push_back(exterior);
     }
+    for (const auto& [name, body] : m.attr_table.bodies) {
+        auto attr = embedded_attribute(m, body);
+        if (std::find(c.bq_bdr_attr.begin(), c.bq_bdr_attr.end(), attr) != c.bq_bdr_attr.end())
+            c.face_sets[canonical_interface("body:" + name, "void")] = {attr};
+    }
     return c;
 }
 } // namespace
@@ -245,7 +253,7 @@ build_cut_layer(HexMeshArrays& mesh, const CutGeometry& g, const CutOptions& o) 
         return result.error();
     auto& c = result.value();
     HexMeshArrays m = mesh;
-    register_embedded(m);
+    register_embedded(m, c);
     std::set<Local> empty(c.void_elem.begin(), c.void_elem.end());
     std::vector<Local> map(m.attribute.size(), -1);
     m.hex.clear();
@@ -388,6 +396,21 @@ build_cut_layer(HexMeshArrays& mesh, const CutGeometry& g, const CutOptions& o) 
         return gp.error();
     c.gp_elem_gid = gp.value().faces.elem_gid;
     c.gp_face = gp.value().faces.face;
+    c.gp_face_gid = gp.value().faces.face_gid;
+    c.gp_face_minus = gp.value().faces.face_minus;
+    c.gp_face_plus = gp.value().faces.face_plus;
+    c.gp_owner_rank = gp.value().faces.owner_rank;
+    for (const auto& [name, list] : c.face_sets) {
+        HexMeshArrays::InterfaceReport report{name};
+        for (std::size_t q = 0; q < c.bq_w.size(); ++q)
+            if (std::find(list.begin(), list.end(), c.bq_bdr_attr[q]) != list.end())
+                report.cut_area += c.bq_w[q];
+        for (std::size_t sub = 0; sub < c.sub_attribute.size(); ++sub)
+            if (c.bq_off[sub + 1] > c.bq_off[sub] &&
+                std::find(list.begin(), list.end(), c.bq_bdr_attr[c.bq_off[sub]]) != list.end())
+                ++report.cut_faces;
+        m.preparation_report.push_back(report);
+    }
     mesh = std::move(m);
     return result;
 }

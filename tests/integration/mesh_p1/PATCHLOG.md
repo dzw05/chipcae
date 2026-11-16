@@ -1,0 +1,127 @@
+# K1 P1 patch log and design deviations
+
+This log covers the must-fix work on the K1 chain (PRs #13–#18) against
+the mesh-team review and the architect / K9 §3 rulings. Field inventory
+was checked against the design page
+https://cursor.com/canvas/store-cb1250dc-2b01-44d2-a2e6-225d0cab8b5b/82a66aed-852d-4f73-8340-72bdf38a23b7
+and the local export `/workspace/specs/mesh-design-v0.2.canvas.txt`.
+
+## Must-fixes
+
+### K1-1
+- Homogenized materials must end with `_eq`. Solder-like names (substring
+  `sac` or `solder`) emit a warning and are not rejected. Examples use
+  `organic_eq`, `SAC305_ball_eq`, and `silicon_eq`.
+- `symmetry` other than `none` is an error at `$/symmetry`, not ignored.
+- Schema negative cases are split: URL and missing sha256 are separate
+  cases; each failure path and reason is asserted. A positive
+  `SAC305_ball_eq` case is included.
+
+### K1-2
+- `node_layer` takes the lower layer at an interface; top-layer nodes stay
+  in range.
+- `node_column` is `int64` (`Index`).
+- Columns are ordered by an in-house 2-D Morton code, then `k` within the
+  column. `elem_gid = column_sfc * nz + k`; node GIDs follow the same
+  rule. No libmorton. A test requires bit-identical GIDs on 1/2/4 ranks.
+- `attr_frame`, `internal_interfaces`, `order`/`nodes`, and
+  `HexMeshDevice`/`upload` are present.
+- `interface:A|B` now resolves each side to a body set and keeps the
+  shared face patches; overlapping or empty patches are errors. This
+  replaces the earlier `bdr_attribute` typo path (M2-5).
+
+### K1-3
+- Embedded-boundary attributes are allocated above existing surface
+  attributes and no longer reuse `BodyId` (no collision with exterior
+  `bdr_attribute`).
+- Faces exposed by deleting void elements use a dedicated attribute
+  (`exposed:void`), not 7, and do not collide with `interface:L0|L1`.
+- Isolated vertices left by void deletion are compacted; remaining nodes
+  keep their original GIDs and coordinates.
+- Level-set storage is a flat `View` with a memory-space template, not a
+  View-of-Views.
+- `void_attribute` defaults to `-1`.
+- Host `CutLayerArrays` / device `CutLayerView` field names stay aligned
+  with the frozen code activation interface (M3-6 activation types are
+  unchanged; the design page is updated by the mesh team).
+
+### K1-4
+- Adapter tests now check a complete unique union of source `elem_gid`
+  values across ranks and compare each local hex to the source
+  coordinates for that GID (not a self-check of the adapter arrays).
+- `create()` rejects out-of-range vertices, non-positive / non-contiguous
+  attributes, and mismatched boundary lengths.
+- Named face sets are installed on `bdr_attribute_sets`.
+
+### K1-5
+- VTKHDF read-back compares `Points`, `Connectivity`, and offsets, and
+  checks cell-data values against the source arrays.
+- Each output step writes one collective file (`stem.vtkhdf` and
+  `stem.eb.vtkhdf`). Parallel HDF5 uses collective MPI-IO; otherwise
+  rank 0 writes the already-replicated preparation arrays. Per-rank
+  files are an explicit `debug_per_rank` option, default off. Tests
+  run at 1/2/4 ranks when MPI is on.
+
+### K1-6
+- MPI patch tests run at 1, 2, and 4 ranks. See the Hypre note below.
+- Optional-dependency jobs (schema / MFEM / HDF5 / MPI) are not run on
+  PRs. They live in `.github/workflows/nightly-mesh-fulldep.yml`: Linux,
+  weekdays, 45-minute timeout, and they run only when `schema/`, `mesh/`,
+  the mesh tests, or the dependency script changed since the last
+  successful run (or when `workflow_dispatch` forces a run). The cache
+  key includes METIS 5.1.0, hypre 3.2.1, HDF5 1.14.6, jsoncons 1.4.0,
+  MFEM 4.10, and the compiler identity.
+- `nightly/run_gpu.sh` now requires a CUDA MFEM prefix, configures and
+  builds, and exits 77 when no GPU is present. A missing build no longer
+  exits 0.
+- This file is the required patch log and deviation list.
+
+## Architect / K9 §3 rulings
+
+- Activation interface is frozen as in the code. `ActivationMask` and
+  `resolve_activation` return element GID pairs. `GhostPenaltyCache`
+  keeps the code field names. The cache hash is over the sorted unique
+  set of activated element GIDs (`mask_hash(activated_gids(...))`).
+- Face groups: no `faceset:body:<id>`. Embedded-boundary groups are
+  `interface:<A>|void`. `void` is reserved; `void|void` is an error;
+  `A|B` and `B|A` name the same group. `faceset:` is only for explicitly
+  named stack face sets.
+- `interface:A|B` sides may be layer, region, or body (not group). Each
+  side is resolved with `resolve_interface_side`: a layer contributes
+  only its base body (no Inclusions); a region contributes that
+  Inclusion's body. Shared patches are reported with aligned vs cut
+  counts and areas. Overlap or an empty patch set is an error.
+- Ghost-penalty faces use an `int64` global face id, `(gid_minus,
+  gid_plus)` with `gid_minus < gid_plus`, local face numbers 0–5 in
+  MFEM Hexahedron order, and owner rank of `gid_minus`. Layout is SoA
+  with flat Views.
+- `layer:X` means only the layer base body on an interface side.
+  In volume references (activation, deactivation, loads), `layer:X`
+  means the whole layer including Inclusions. The two entry points are
+  `resolve_interface_side` and `resolve_volume_ref`; both are tested.
+
+## Thresholds
+
+Values stay in `mesh/background/thresholds/k1.json` and are read by the
+tests. `cell_budget` (50000) was moved there; the C++ default is
+unchanged. `vf_min` is still 1e-8 and was not renamed (awaiting a
+product decision). `partition_imbalance` is 0.25. `snap_tol` and
+`snap_phi` are 1e-14 m absolute.
+
+`CHIPCAE_K1_USE_METIS` defaults to OFF.
+
+## Hypre 3.2.1 + MFEM 4.10 (M6-1)
+
+With this prefix and MPICH, `HYPRE_ERROR_GENERIC` is already set during
+`GetEssentialTrueDofs`, before BoomerAMG setup. The eliminated matrix
+diagonals are finite and positive. For `HYPRE_RELEASE_NUMBER == 30201`
+only, the patch test asserts that no other hypre bits are set, clears
+the generic flag, and uses `IGNORE_HYPRE_ERRORS` on the preconditioner.
+`GetConverged` and the 1e-10 displacement/strain gates remain
+mandatory. A later hypre/MFEM upgrade should drop this workaround.
+
+## G1 evidence
+
+Full-dependency logs are written under `/workspace/tasks/logs/k1-g1-fulldep/`.
+The G1 gate also needs the first green nightly after merge (not done
+here; nothing is merged in this work).

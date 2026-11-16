@@ -15,7 +15,11 @@ struct CutLayerArrays {
     std::vector<Real> vq_w, bq_w;
     std::vector<Local> bq_bdr_attr;
     std::array<std::vector<Index>, 2> gp_elem_gid;
-    std::vector<Local> gp_face;
+    std::vector<Local> gp_face; // Legacy mesh-face index, filled by the adapter.
+    std::vector<Index> gp_face_gid;
+    std::vector<Local> gp_face_minus, gp_face_plus, gp_owner_rank;
+    std::map<std::string, std::vector<Local>> face_sets; // EB quadrature face groups.
+
     Local void_attribute = -1;
     std::vector<Index> cut_elem_gid;
     std::vector<Local> void_elem, small_subs;
@@ -30,7 +34,8 @@ struct CutLayerView {
     View1<Real, MemSpace> sub_volfrac, vq_w, bq_w;
     std::array<View1<Real, MemSpace>, 3> vq_xi, bq_xi, bq_n;
     std::array<View1<Index, MemSpace>, 2> gp_elem_gid;
-    View1<Index, MemSpace> cut_elem_gid;
+    View1<Index, MemSpace> cut_elem_gid, gp_face_gid;
+    View1<Local, MemSpace> gp_face_minus, gp_face_plus, gp_owner_rank;
     Local void_attribute = -1;
 };
 using DeviceCutLayerArrays = CutLayerView<DeviceSpace>;
@@ -49,6 +54,10 @@ CutLayerView<MemSpace> to_device(const CutLayerArrays& c) {
     K1_UPLOAD(bq_w);
     K1_UPLOAD(bq_bdr_attr);
     K1_UPLOAD(gp_face);
+    K1_UPLOAD(gp_face_gid);
+    K1_UPLOAD(gp_face_minus);
+    K1_UPLOAD(gp_face_plus);
+    K1_UPLOAD(gp_owner_rank);
     K1_UPLOAD(cut_elem_gid);
     K1_UPLOAD(void_elem);
     K1_UPLOAD(small_subs);
@@ -82,6 +91,20 @@ struct GhostFaces {
     std::vector<Local> face_minus, face_plus, owner_rank;
     // elem_gid[0/1] are respectively gid_minus/gid_plus (strictly increasing).
 };
+template <class MemSpace>
+struct GhostFacesView {
+    View1<Index, MemSpace> gid_minus, gid_plus, face_gid;
+    View1<Local, MemSpace> face_minus, face_plus, owner_rank;
+};
+template <class MemSpace>
+GhostFacesView<MemSpace> to_device(const GhostFaces& f) {
+    return {upload_vector<Index, MemSpace>(f.elem_gid[0], "gid_minus"),
+            upload_vector<Index, MemSpace>(f.elem_gid[1], "gid_plus"),
+            upload_vector<Index, MemSpace>(f.face_gid, "face_gid"),
+            upload_vector<Local, MemSpace>(f.face_minus, "face_minus"),
+            upload_vector<Local, MemSpace>(f.face_plus, "face_plus"),
+            upload_vector<Local, MemSpace>(f.owner_rank, "owner_rank")};
+}
 class GhostPenaltyCache {
     std::vector<std::vector<Index>> masks_;
     HexMeshArrays mesh_; // Attribute-to-GID resolution for compatibility lookup(mask).

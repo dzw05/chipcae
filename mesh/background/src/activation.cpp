@@ -106,6 +106,13 @@ Expected<ActivationResolution> resolve_volume_ref(const StackModel& s,
                 for (const auto& an : names(a.value()))
                     for (const auto& bn : names(b.value())) {
                         auto it = m.face_sets.find(canonical_interface(an, bn));
+                        if (cut) {
+                            auto ci = cut->face_sets.find(canonical_interface(an, bn));
+                            if (ci != cut->face_sets.end()) {
+                                found = true;
+                                faces.insert(ci->second.begin(), ci->second.end());
+                            }
+                        }
                         if (it != m.face_sets.end()) {
                             found = true;
                             faces.insert(it->second.begin(), it->second.end());

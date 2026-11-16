@@ -25,6 +25,26 @@ int main(int argc, char** argv) {
         auto mesh = build_tensor_grid(s, o);
         expect(bool(mesh), "background");
         auto arrays = mesh.value();
+        for (int bad = 0; bad < 7; ++bad) {
+            auto invalid = arrays;
+            if (bad == 0)
+                invalid.vertices.push_back(0);
+            if (bad == 1)
+                invalid.bdr_quad.pop_back();
+            if (bad == 2)
+                invalid.hex[0] = -1;
+            if (bad == 3)
+                invalid.bdr_quad[0] = static_cast<Local>(arrays.node_gid.size());
+            if (bad == 4)
+                invalid.attribute[0] = 0;
+            if (bad == 5)
+                for (auto& v : invalid.attribute)
+                    ++v;
+            if (bad == 6)
+                invalid.bdr_attribute[0] = 0;
+            auto rejected = MfemAdapter::create(invalid, comm);
+            expect(!rejected && rejected.error().path == "mfem", "invalid adapter input");
+        }
         auto adapter = MfemAdapter::create(arrays, comm);
         expect(bool(adapter), "adapter");
         auto& a = adapter.value();
@@ -37,6 +57,29 @@ int main(int argc, char** argv) {
                    a.elem_gid().size(),
                "local GID bijection");
         expect(a.elem_gid().size() == static_cast<std::size_t>(local.GetNE()), "local GID count");
+        for (const auto& [name, attrs] : arrays.face_sets) {
+            const auto& actual = local.bdr_attribute_sets.GetAttributeSet(name);
+            expect(actual.Size() == static_cast<int>(attrs.size()), "boundary attribute set");
+        }
+        std::vector<double> gid_presence(arrays.elem_gid.size());
+        for (int e = 0; e < local.GetNE(); ++e) {
+            auto gid = a.elem_gid()[e];
+            auto it = std::find(arrays.elem_gid.begin(), arrays.elem_gid.end(), gid);
+            expect(it != arrays.elem_gid.end(), "source GID exists");
+            auto source = static_cast<std::size_t>(it - arrays.elem_gid.begin());
+            mfem::Array<int> vertices;
+            local.GetElementVertices(e, vertices);
+            expect(vertices.Size() == 8, "hex vertices");
+            for (int j = 0; j < 8; ++j)
+                for (int d = 0; d < 3; ++d)
+                    expect(local.GetVertex(vertices[j])[d] ==
+                               arrays.vertices[3 * arrays.hex[8 * source + j] + d],
+                           "per element source coordinates");
+            ++gid_presence[source];
+        }
+        comm.allreduce_sum(gid_presence);
+        for (auto n : gid_presence)
+            expect(n == 1, "complete unique global GID union");
         std::vector<double> counts(arrays.attr_table.entries.size() + 2);
         counts[0] = local.GetNE();
         counts[1] = local.GetNBE();
