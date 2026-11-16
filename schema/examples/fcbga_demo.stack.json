@@ -1,0 +1,63 @@
+{
+  "id": "fcbga_demo",
+  "unit": "m",
+  "outline": {
+    "box": [
+      0,
+      0,
+      0.02,
+      0.02
+    ]
+  },
+  "symmetry": "none",
+  "package_type": "FCBGA",
+  "layers": [
+    {
+      "name": "substrate",
+      "thickness": 0.001,
+      "kind": "Homogenized",
+      "material": "organic",
+      "n_elem_min": 2,
+      "grading": 1
+    },
+    {
+      "name": "bump_eq",
+      "thickness": 0.0001,
+      "kind": "Homogenized",
+      "material": "bump_equivalent",
+      "n_elem_min": 2,
+      "grading": 1
+    },
+    {
+      "name": "die_layer",
+      "thickness": 0.0005,
+      "kind": "Explicit",
+      "material": "underfill",
+      "n_elem_min": 2,
+      "grading": 1,
+      "regions": [
+        {
+          "name": "die",
+          "material": "silicon",
+          "footprint": {
+            "box": [
+              0.005,
+              0.005,
+              0.015,
+              0.015
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "activation_groups": [
+    {
+      "name": "assembly",
+      "members": [
+        "layer:substrate",
+        "body:die"
+      ]
+    }
+  ]
+}
