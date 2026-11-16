@@ -1,0 +1,7 @@
+file(GLOB headers "${ROOT}/core/include/chipcae/par/*.hpp" "${ROOT}/coupling/include/chipcae/coupling/step_loop.hpp")
+foreach(header IN LISTS headers)
+    file(READ "${header}" text)
+    if(text MATCHES "MPI_Comm|mpi\\.h")
+        message(FATAL_ERROR "Public transport leakage: ${header}")
+    endif()
+endforeach()
