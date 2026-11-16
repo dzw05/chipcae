@@ -17,6 +17,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Fetch protocol baseline
+        continue-on-error: true
+        run: git fetch --no-tags --depth=1 origin main
+
+      - name: Protocol compatibility
+        run: python3 cmake/check_protocol_compat.py .
+
       - name: Install toolchain
         run: |
           sudo apt-get update
