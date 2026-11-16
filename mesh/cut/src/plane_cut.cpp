@@ -379,7 +379,8 @@ build_cut_layer(HexMeshArrays& mesh, const CutGeometry& g, const CutOptions& o) 
                 ++next_attr;
                 m.face_sets[name] = {it->second};
                 m.attr_table.boundary_names[it->second] = name;
-                HexMeshArrays::InterfaceReport report{name};
+                HexMeshArrays::InterfaceReport report;
+                report.name = name;
                 fill_interface_sides(report, m);
                 m.preparation_report.push_back(report);
             }
@@ -391,9 +392,9 @@ build_cut_layer(HexMeshArrays& mesh, const CutGeometry& g, const CutOptions& o) 
                 }
         }
     // Retain aligned internal patches only when both adjacent cells survive.
-    for (auto [key, v] : boundary)
-        if (v.second == 2 && original_boundary.contains(key)) {
-            m.bdr_quad.insert(m.bdr_quad.end(), v.first.begin(), v.first.end());
+    for (auto [key, rec] : boundary)
+        if (std::get<1>(rec) == 2 && original_boundary.contains(key)) {
+            m.bdr_quad.insert(m.bdr_quad.end(), std::get<0>(rec).begin(), std::get<0>(rec).end());
             m.bdr_attribute.push_back(original_boundary[key]);
         }
     // Compact vertices transactionally, preserving their original global identities.
@@ -448,7 +449,9 @@ build_cut_layer(HexMeshArrays& mesh, const CutGeometry& g, const CutOptions& o) 
             if (r.name == name)
                 report = &r;
         if (!report) {
-            m.preparation_report.push_back({name});
+            HexMeshArrays::InterfaceReport report;
+            report.name = name;
+            m.preparation_report.push_back(report);
             fill_interface_sides(m.preparation_report.back(), m);
             report = &m.preparation_report.back();
         }
