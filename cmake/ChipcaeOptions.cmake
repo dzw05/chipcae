@@ -16,9 +16,10 @@ option(CHIPCAE_ENABLE_MFEM "Enable MFEM (conditional; requires prototype P1)" OF
 option(CHIPCAE_ENABLE_QT "Enable Qt6 (implied by CHIPCAE_BUILD_GUI)" OFF)
 option(CHIPCAE_ENABLE_VTK "Enable VTK visualization" OFF)
 option(CHIPCAE_ENABLE_OCCT "Enable Open CASCADE (OCCT) CAD import" OFF)
+option(CHIPCAE_ENABLE_MUMPS "Enable MUMPS direct solver (optional; dynamic linking only; default OFF)" OFF)
+option(CHIPCAE_ENABLE_PRECICE "Build the v2 preCICE adapter placeholder" OFF)
+option(CHIPCAE_ENABLE_PARTICLES "Link the reserved particle backend into the kernel" OFF)
 
 if(CHIPCAE_BUILD_GUI)
     set(CHIPCAE_ENABLE_QT ON CACHE BOOL "Enable Qt6 (implied by CHIPCAE_BUILD_GUI)" FORCE)
 endif()
-
-option(CHIPCAE_ENABLE_MUMPS "Enable MUMPS direct solver (optional; dynamic linking only; default OFF)" OFF)

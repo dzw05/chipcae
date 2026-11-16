@@ -1,16 +1,15 @@
 #pragma once
 
+#include "chipcae/core/solver.hpp"
 #include "chipcae/mesh/layered_hex_mesh.hpp"
 
 namespace chipcae::solvers::fem {
 
-enum class SolveStatus { ok, not_implemented };
-
-class ThermalStressSolver {
+class ThermalStressSolver : public Solver {
 public:
     explicit ThermalStressSolver(const mesh::LayeredHexMesh& mesh);
 
-    SolveStatus solve();
+    StepResult solve() override;
     const mesh::LayeredHexMesh& mesh() const noexcept { return mesh_; }
 
 private:

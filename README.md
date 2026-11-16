@@ -32,6 +32,10 @@ ctest --test-dir build --output-on-failure
 | `CHIPCAE_ENABLE_PYTHON` | 构建 Python 绑定 |
 | `CHIPCAE_BUILD_TESTS` | 构建测试 |
 
+Python 绑定使用 nanobind（需要 Python 3.9+ 开发头文件）。
+同时开启 MPI 与 HDF5 时必须使用并行 HDF5，每个输出步集体写一个 VTKHDF 文件。
+`CHIPCAE_ENABLE_PRECICE`（v2 适配器）、`CHIPCAE_ENABLE_PARTICLES`（内核粒子链接）默认 OFF；`CHIPCAE_WARNINGS_AS_ERRORS` 默认 OFF，CI 启用。
+
 ## 仓库结构
 
 | 目录 | 职责 |
@@ -55,7 +59,17 @@ ctest --test-dir build --output-on-failure
 | `tests/` | 单元测试、集成测试、验证测试 |
 | `docs/adr/` | 技术决策记录 |
 | `cmake/` | CMake 模块与许可证策略 |
-| `.github/workflows/` | CI：快速检查，以及云端 MPI/GPU 占位工作流 |
+| `.github/workflows/` | 托管 CI、夜间额外配置，以及默认关闭的 Tier B |
+| `bench/` | 独立性能微基准，不进 CMake |
+| `tools/perf/` | 重复次数、中位数和基线比较 |
+| `tools/consistency/` | CPU / GPU 结果比较 |
+| `docs/ci.md` | 分钟预算、CI 门禁和 Tier B 开关 |
+
+## 持续集成
+
+唯一的硬门禁是汇总作业 **`CI / ci-ok`**（ADR-0006）。lint 必须通过；`CI / Build and test` 在成功或被跳过（推送到 `main`、只改文档的 PR）时都算通过。草稿上 lint 会跳过，`ci-ok` 为失败。不要开启分支保护，也不要把单项检查设为必选。
+
+托管分钟预算、Tier B 开关（`TIER_B_ENABLED`）和性能门槛写在 [docs/ci.md](docs/ci.md)。仓库设置没有在这个改动里动过。
 
 ## 许可
 

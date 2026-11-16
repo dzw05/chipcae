@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "benchmark": "poisson_cg",
+  "kind": "microbenchmark",
+  "runner_label": "ubuntu-latest",
+  "build_config": "gcc-release",
+  "samples": []
+}
