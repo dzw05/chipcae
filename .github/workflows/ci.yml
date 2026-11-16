@@ -5,9 +5,8 @@ name: CI
 # Drafts are skipped. Docs-only pull requests skip the build.
 # Build-and-test can move later by setting the TIER_A_RUNNER repository variable
 # to a single runner label. Leave it unset to stay on ubuntu-latest.
-# The required status check is "CI / Lint". Do not require the build job:
-# it does not run on main or on docs-only pulls, and a skipped required check
-# blocks merging. See docs/ci.md.
+# The only hard merge gate is the aggregate job "CI / ci-ok" (ADR-0006).
+# Branch protection is not enabled and must not be turned on. See docs/ci.md.
 
 on:
   pull_request:
@@ -141,7 +140,6 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-      actions: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -235,3 +233,16 @@ jobs:
             build/junit.xml
             build/perf-summary.json
             build/perf-compare.json
+
+  ci-ok:
+    if: always()
+    needs: [lint, build-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check results
+        env:
+          LINT: ${{ needs.lint.result }}
+          BUILD: ${{ needs.build-test.result }}
+        run: test "$LINT" = success && { test "$BUILD" = success || test "$BUILD" = skipped; }

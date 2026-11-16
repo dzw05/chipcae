@@ -10,8 +10,9 @@ Repository settings (branch protection, variables, secrets) are not changed by t
 
 | Workflow | When | Runner | Blocks a merge? |
 | --- | --- | --- | --- |
-| `CI / Lint` | Non-draft pull request (`opened`, `synchronize`, `ready_for_review`, `reopened`) and push to `main` | Always `ubuntu-latest` | This is the required check |
-| `CI / Build and test` | Non-draft pull request that changes something other than docs | `vars.TIER_A_RUNNER` or `ubuntu-latest` | No. Do not mark it required |
+| `CI / ci-ok` | After `Lint` and `Build and test` (including when the build is skipped) | `ubuntu-latest` | Yes. This is the only hard gate (ADR-0006) |
+| `CI / Lint` | Non-draft pull request (`opened`, `synchronize`, `ready_for_review`, `reopened`) and push to `main` | Always `ubuntu-latest` | No. It is an input to `ci-ok` |
+| `CI / Build and test` | Non-draft pull request that changes something other than docs | `vars.TIER_A_RUNNER` or `ubuntu-latest` | No. Success or skipped both count as passing for `ci-ok` |
 | `Tier B and nightly / Nightly clang build` | 18:00 UTC daily, or manual dispatch | `ubuntu-latest` | No |
 | `Tier B and nightly / Nightly CUDA compile` | Same nightly schedule. `nvcc -c` only, the object is not run | `ubuntu-latest` | No |
 | `Tier B and nightly / Hosted minutes` is a different workflow | See usage alert | `ubuntu-latest` | No |
@@ -25,7 +26,7 @@ Concurrency group `ci-<workflow>-<ref>` uses `cancel-in-progress`. A newer push 
 
 ### Docs-only pulls
 
-`CI / Lint` still runs. `CI / Build and test` is skipped when every changed file is `docs/**`, a `*.md` file, `LICENSE`, or `CODEOWNERS`. A skipped build is why that job must not be a required check: GitHub treats a missing required check as not passed.
+`CI / Lint` still runs. `CI / Build and test` is skipped when every changed file is `docs/**`, a `*.md` file, `LICENSE`, or `CODEOWNERS`. `CI / ci-ok` still passes in that case because a skipped build is treated as success. That is why individual jobs are not required checks: GitHub treats a skipped required check as not passed.
 
 ### Single configuration
 
@@ -33,7 +34,7 @@ The pull-request build is one configuration: GCC, `Release`, no OS matrix. The e
 
 ### Moving the build off GitHub-hosted runners
 
-Set the repository variable `TIER_A_RUNNER` to one runner label. Leave it unset to keep `ubuntu-latest`. The variable is a single label string, not a JSON array. `CI / Lint` stays on `ubuntu-latest` so the required check does not depend on a self-hosted pool.
+Set the repository variable `TIER_A_RUNNER` to one runner label. Leave it unset to keep `ubuntu-latest`. The variable is a single label string, not a JSON array. `CI / Lint` stays on `ubuntu-latest` so the lint input to `ci-ok` does not depend on a self-hosted pool.
 
 Do not point `TIER_A_RUNNER` at a label that has no runner. The build job waits until `timeout-minutes` (15) and then fails.
 
@@ -45,27 +46,13 @@ The build job installs `ccache` and restores `~/.cache/ccache` with `actions/cac
 
 The build job uploads `build/junit.xml` from `ctest --output-junit`, plus the perf summary and compare JSON. Retention is 7 days. The nightly clang job uploads its own JUnit file.
 
-## Required status check
+## Merge gate
 
-In branch protection (or a ruleset) for `main`, mark this check required:
+`main` does not use branch protection. The only hard gate is the aggregate job `CI / ci-ok` in the `CI` workflow (ADR-0006). Do not enable branch protection or a ruleset, and do not mark `CI / Lint` or `CI / Build and test` as required checks.
 
-- `CI / Lint`
+`ci-ok` runs with `if: always()` after `lint` and `build-test`. It passes only when lint is `success` and the build is `success` or `skipped`. It fails when lint is skipped (drafts) or either job fails, including a per-commit iteration or memory-gate failure in the build job. Pushes to `main` and docs-only pulls skip the build, so `ci-ok` still passes if lint passed.
 
-Do not mark required:
-
-- `CI / Build and test`
-- `Tier B and nightly / ...`
-- `Actions usage / Hosted minutes`
-
-`CI / Lint` is the job named `Lint` in the workflow named `CI`. The checks UI shows that pair as `CI / Lint`.
-
-How to set it, without this change doing it for you:
-
-1. Repository **Settings → Branches** (or **Rules → Rulesets**).
-2. Edit the rule for `main`.
-3. Enable **Require status checks to pass**.
-4. Add `CI / Lint`.
-5. Leave `CI / Build and test` off the list.
+A later mesh job (A4) may be added to `ci-ok`'s `needs` the same way, counting `skipped` as passing. Do not give Mesh its own required check.
 
 ## Tier B
 
@@ -163,7 +150,7 @@ Nightly, on Tier B (`--tier b --profile nightly`):
 | Wall time or DOF/s | above 5% | Above 15%, status `block_next_day`. The process still exits 0 |
 | Iteration counts and peak memory | same as per-commit | Exit 1. This fails the Tier B perf job |
 
-`block_next_day` is a hold signal for the **next day's merges**, not a red X on the nightly job. It is written to the job output and to `build/perf-compare.json`. Hosted runs never set it. Branch protection does not read it until someone marks a check that publishes it. Treat a Tier B nightly run whose output `block_next_day` is `true` as a hold: do not merge the following day until the regression is explained or accepted with `perf-baseline-update`.
+`block_next_day` is a hold signal for the **next day's merges**, not a red X on the nightly job. It is written to the job output and to `build/perf-compare.json`. Hosted runs never set it. It is not an automatic merge gate. Treat a Tier B nightly run whose output `block_next_day` is `true` as a hold: do not merge the following day until the regression is explained or accepted with `perf-baseline-update`.
 
 ## CPU / GPU consistency
 
