@@ -11,6 +11,41 @@ from tools.vv.result_summary import ResultSummaryError, main, summarize
 
 
 class Edges(unittest.TestCase):
+    def test_present_fields_on_empty_blocks_are_validated(self):
+        fields = {'PointData/T': 'float64', 'CellData/layer_id': 'int32',
+                  'CellData/material_id': 'int32', 'CellData/cell_kind': 'int32',
+                  'CellData/elem_gid': 'int64'}
+        for name in ('hex', 'cut'):
+            for path, dtype in fields.items():
+                for invalid in ('length', 'dtype'):
+                    with self.subTest(block=name, field=path, invalid=invalid), tempfile.TemporaryDirectory() as tmp:
+                        run = Path(tmp)
+                        step, _ = fixture(run, cut=True)
+                        with h5py.File(step, 'r+') as f:
+                            block = f['VTKHDF/' + name]
+                            for group in ('Points', 'PointData', 'CellData', 'Types'):
+                                del block[group]
+                            block['NumberOfPoints'][...] = 0
+                            block['NumberOfCells'][...] = 0
+                            # Only the empty block has T in the temperature
+                            # cases: validation must precede presence detection.
+                            if path == 'PointData/T':
+                                other = 'cut' if name == 'hex' else 'hex'
+                                del f[f'VTKHDF/{other}/PointData/T']
+                            block[path] = np.zeros(1 if invalid == 'length' else 0,
+                                                   dtype=dtype if invalid == 'length' else 'uint8')
+                        with self.assertRaises(ResultSummaryError) as caught:
+                            summarize(run)
+                        self.assertEqual(caught.exception.code, 14)
+                        self.assertEqual(caught.exception.name, 'INPUT_INVALID')
+                        self.assertIn(f'/VTKHDF/{name}/{path}: expected', str(caught.exception))
+                        err, out = io.StringIO(), io.StringIO()
+                        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+                            self.assertEqual(main([str(run)]), 14)
+                        self.assertEqual(out.getvalue(), '')
+                        self.assertIn(f'result_summary: INPUT_INVALID: /VTKHDF/{name}/{path}: expected', err.getvalue())
+                        self.assertEqual(len(err.getvalue().splitlines()), 1)
+
     def test_empty_leading_block_temperature_alignment(self):
         for empty_t in (False, True):
             with self.subTest(empty_t=empty_t), tempfile.TemporaryDirectory() as tmp:
