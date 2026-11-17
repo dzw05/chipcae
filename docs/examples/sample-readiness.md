@@ -31,8 +31,9 @@ loosening a limit requires evidence for the intended mesh.
 
 Steady conduction requires positive `conductivity` in W/(m K).
 The thermal sample `schema/examples/thermal.case.json` references the same FCBGA
-stack and material library, which lacks conductivity. It is therefore not ready
-for a steady conduction solve, in addition to the single-knot limitation.
+stack and material library. At least one referenced material lacks conductivity,
+so it is not ready for a steady conduction solve, in addition to the single-knot
+limitation.
 
 For O2 guidance, the public command form is
 ```sh
