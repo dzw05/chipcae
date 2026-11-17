@@ -65,6 +65,10 @@ Local Release build (`cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Re
 
 Hosted run [43995538668](https://github.com/dzw05/chipcae/actions/runs/43995538668) passed Lint and Build and test but failed Mesh because the target list omitted `chipcae_test_copper_map`, even though `copper_map_analytic` is registered with CTest's `mesh` label. `.github/workflows/mesh.yml` now builds that target. The matching local mesh workflow configuration builds all five selected tests and passes them. Use `gh run view 43995538668` to inspect the hosted run; invoking `gh run view` non-interactively without a run ID produces the CLI usage error shown in the original report.
 
+### E7 validation (2026-11-17)
+
+Local Release build (`cmake -S . -B build-e7-release -G Ninja -DCMAKE_BUILD_TYPE=Release` and `cmake --build build-e7-release --parallel 4`) succeeded. All 17 tests passed with `ctest --test-dir build-e7-release --output-on-failure`; clang-format 23.1.5 passed its dry-run check. The hosted run [44005172573](https://github.com/dzw05/chipcae/actions/runs/44005172573) passed Lint, Build and test, Mesh tests, and `ci-ok`. The reported `run or job ID required when not running interactively` text is `gh` usage output from running `gh run view` without an ID; it is not a CI failure. To inspect a run non-interactively, include its ID, for example `gh run view 44005172573`.
+
 ## Merge gate
 
 `main` does not use branch protection. The only hard gate is the aggregate job `CI / ci-ok` in the `CI` workflow (ADR-0006). Do not enable branch protection or a ruleset, and do not mark `CI / Lint` or `CI / Build and test` as required checks.
