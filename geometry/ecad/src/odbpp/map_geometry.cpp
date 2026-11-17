@@ -122,15 +122,24 @@ struct Mapper {
                      {std::llround(s.w / 2), std::llround(-s.h / 2)},
                      {std::llround(s.w / 2), std::llround(s.h / 2)},
                      {std::llround(-s.w / 2), std::llround(s.h / 2)}};
-        else {
+        else if (s.kind == "oval") {
+            const double r = std::min(s.w, s.h) / 2;
+            const double offset = (std::max(s.w, s.h) - 2 * r) / 2;
+            // Include both tangency points of each semicircle so the connecting
+            // edges are the capsule's straight sides.
+            for (int end = 0; end < 2; ++end)
+                for (int i = 0; i <= 256; ++i) {
+                    const double a = -pi / 2 + end * pi + pi * i / 256;
+                    const double x = (end == 0 ? offset : -offset) + r * std::cos(a);
+                    const double y = r * std::sin(a);
+                    local.push_back(s.w >= s.h ? Point64{std::llround(x), std::llround(y)}
+                                               : Point64{std::llround(-y), std::llround(x)});
+                }
+        } else {
             const double r = std::min(s.w, s.h) / 2;
             for (int i = 0; i < 256; ++i) {
-                double a = 2 * pi * i / 256, x = r * std::cos(a), y = r * std::sin(a);
-                if (s.kind == "oval") {
-                    x += (x >= 0 ? 1 : -1) * (s.w / 2 - r);
-                    y += (y >= 0 ? 1 : -1) * (s.h / 2 - r);
-                }
-                local.push_back({std::llround(x), std::llround(y)});
+                const double a = 2 * pi * i / 256;
+                local.push_back({std::llround(r * std::cos(a)), std::llround(r * std::sin(a))});
             }
         }
         double a = p.rot_deg * pi / 180;

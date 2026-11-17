@@ -203,6 +203,62 @@ void stackup() {
         require(m.layers[i].material == (i % 2 == 0 ? "copper" : "sio2"), "material");
     }
 }
+void missing_material() {
+    auto j = board();
+    j.attrs.layer["CORE"].erase(".material");
+    rejected(j, {".material", "CORE"});
+    j.attrs.layer["CORE"][".material"] = "";
+    rejected(j, {".material", "CORE"});
+    j.attrs.layer.erase("CORE");
+    rejected(j, {".material", "CORE"});
+}
+void oval_capsules() {
+    for (const auto& [symbol, vertical, circular] : {std::tuple{"oval4000x2000", false, false},
+                                                     std::tuple{"oval2000x4000", true, false},
+                                                     std::tuple{"oval2000x2000", false, true}}) {
+        for (double rotation : {0.0, 90.0, 37.0}) {
+            for (bool mirror : {false, true}) {
+                auto j = board();
+                auto& f = j.features["TOP"];
+                f.surfaces.clear();
+                f.symbols = {{symbol}};
+                OdbPad pad;
+                pad.at = {5, 5};
+                pad.sym = 0;
+                pad.positive = true;
+                pad.rot_deg = rotation;
+                pad.mirror = mirror;
+                f.pads = {pad};
+                const auto m = mapped(j);
+                require(std::abs(area(m) - ((circular ? 0 : 4e6) + std::numbers::pi * 1e6)) <=
+                            ((circular ? 0 : 4e6) + std::numbers::pi * 1e6) * 2e-4,
+                        std::string(symbol) + " rotation " + std::to_string(rotation) + " area " +
+                            std::to_string(area(m)));
+                require(m.layers.front().polygons.size() == 1, "one capsule contour");
+                const auto& points = m.layers.front().polygons.front().points;
+                const double a = rotation * std::numbers::pi / 180;
+                int straight_sides = 0;
+                for (std::size_t i = 0; i < points.size(); ++i) {
+                    const double dx = double(points[i][0]) - 5000;
+                    const double dy = double(points[i][1]) - 5000;
+                    double x = (dx * std::cos(a) + dy * std::sin(a)) * (mirror ? -1 : 1);
+                    double y = -dx * std::sin(a) + dy * std::cos(a);
+                    if (vertical)
+                        std::swap(x, y);
+                    const double offset = circular ? 0 : 1000;
+                    const double distance = std::hypot(std::max(0.0, std::abs(x) - offset), y);
+                    require(std::abs(distance - 1000) <= 1.5, "capsule boundary distance");
+                    const auto& next = points[(i + 1) % points.size()];
+                    if (std::abs(std::hypot(double(next[0] - points[i][0]),
+                                            double(next[1] - points[i][1])) -
+                                 2000) <= 1.5)
+                        ++straight_sides;
+                }
+                require(straight_sides == (circular ? 0 : 2), "capsule straight sides");
+            }
+        }
+    }
+}
 void missing_thickness() {
     rejected(missing(), {"3", "TOP", "CORE", "BOTTOM"});
 }
@@ -426,6 +482,8 @@ int main() {
         {"odbpp_map_negative", negative},
         {"odbpp_map_stackup_kicad", stackup},
         {"odbpp_map_missing_thickness", missing_thickness},
+        {"odbpp_map_missing_material", missing_material},
+        {"odbpp_map_oval_capsules", oval_capsules},
         {"odbpp_map_thickness_override", overrides},
         {"odbpp_map_copper_weight_ignored", weight},
         {"odbpp_map_override_case", override_case},

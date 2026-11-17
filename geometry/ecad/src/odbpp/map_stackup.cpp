@@ -69,6 +69,8 @@ void map_stackup(const OdbJob& j, const MapOptions& options, ImportResult& resul
                     throw std::runtime_error("invalid thickness: " + l.name);
             }
         }
+        if (!copper && layer.material.empty())
+            throw std::runtime_error("missing .material for dielectric layer: " + l.name);
         ThicknessRecord record{l.name, odb, "odb", std::nullopt};
         if (options.overrides)
             for (const auto& [key, value] : *options.overrides) {
