@@ -266,7 +266,8 @@ sys.exit(rc)
                        const QString& suffix = ".xml",
                        ImportKind kind = ImportKind::Ecad,
                        bool directory = false,
-                       bool accept = false) {
+                       bool accept = false,
+                       const QString& materialMap = {}) {
             CaseDocument document;
             require(document.load(FIXTURE_DIR "/fcbga_demo.case.json"), "load baseline");
             const auto before = document.stackJson();
@@ -281,7 +282,8 @@ sys.exit(rc)
             ImportRequest r;
             r.input = input;
             r.output = input + ".stack";
-            r.materialMap = kind == ImportKind::Assembly ? QString{} : map;
+            r.materialMap = materialMap.isEmpty() ? (kind == ImportKind::Assembly ? QString{} : map)
+                                                  : materialMap;
             r.acceptBTier = accept;
             r.polyset = input + ".poly";
             r.report = input + ".report";
@@ -368,7 +370,7 @@ sys.exit(rc)
                               "-o",
                               stage + "/out.stack.json",
                               "--material-map",
-                              map,
+                              r.materialMap,
                               "--polyset",
                               stage + "/out.polyset",
                               "--report",
@@ -442,6 +444,22 @@ sys.exit(rc)
         run("success", ImportOutcome::Accepted, ".arbitrary", ImportKind::Assembly);
         run("success", ImportOutcome::Accepted, ".xml", ImportKind::Ecad, false, true);
         run("success", ImportOutcome::Accepted, ".assembly", ImportKind::Assembly, false, true);
+        // Mapping path validity belongs to the import program, including code 9 recovery.
+        for (const auto& materialMap : {dir.filePath("absent map.json"), dir.path()})
+            run("map-missing",
+                ImportOutcome::Rejected,
+                ".xml",
+                ImportKind::Ecad,
+                false,
+                false,
+                materialMap);
+        run("success",
+            ImportOutcome::Accepted,
+            ".assembly",
+            ImportKind::Assembly,
+            false,
+            false,
+            dir.filePath("ignored assembly map.json"));
         {
             CaseDocument d;
             require(d.load(FIXTURE_DIR "/fcbga_demo.case.json"), "baseline");
@@ -464,15 +482,6 @@ sys.exit(rc)
                   "legacy exact error and unchanged stack");
             if (c.busy())
                 waitFor(c, [&] { c.cancel(); });
-            for (const auto& invalidMap : {dir.filePath("absent map.json"), dir.path()}) {
-                r.materialMap = invalidMap;
-                check(!c.start(r), "non-file material map rejected locally");
-                check(c.error() == "material map must be an existing file" &&
-                          c.outcome() == ImportOutcome::Failed && !c.busy() && c.exitCode() == -1 &&
-                          !c.needsMaterialMapReselect() && d.stackJson() == before &&
-                          !QFile::exists(r.output),
-                      "invalid map does not launch or replace document");
-            }
             for (auto kind : {ImportKind::Ecad, ImportKind::Assembly}) {
                 r.kind = kind;
                 r.materialMap = map;

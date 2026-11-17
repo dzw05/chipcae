@@ -70,10 +70,6 @@ bool ImportController::start(const ImportRequest& request) {
         error_ = "material map required";
         return false;
     }
-    if (request.kind == ImportKind::Ecad && !QFileInfo(request.materialMap).isFile()) {
-        error_ = "material map must be an existing file";
-        return false;
-    }
     if (input.isEmpty() ||
         (request.kind == ImportKind::Ecad ? !ImportSourceDialog::isSupportedImportPath(input)
                                           : !QFileInfo(input).isFile())) {
