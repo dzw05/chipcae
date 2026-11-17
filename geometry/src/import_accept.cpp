@@ -45,7 +45,9 @@ std::optional<AcceptList> read_accept_file(const std::filesystem::path& path,
             return reject("cannot read accept file");
         if (!root.is_object())
             return reject("accept file root must be an object");
-        if (!root.contains("accept") || !root.at("accept").is_array())
+        if (!root.contains("accept"))
+            return reject("accept field is required");
+        if (!root.at("accept").is_array())
             return reject("accept must be an array");
         const auto warn = [&](const std::string& message) {
             if (warnings)
