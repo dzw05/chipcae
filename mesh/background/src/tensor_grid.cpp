@@ -13,6 +13,22 @@
 #include <set>
 #include <stdexcept>
 namespace chipcae::mesh {
+Expected<Real> detail::column_partition_imbalance(
+    const std::vector<std::vector<Local>>& column_ranks, std::size_t nz, int ranks) {
+    if (column_ranks.empty() || column_ranks.back().empty() || nz == 0 || ranks <= 0)
+        return Error{"partition", "invalid column partition dimensions"};
+    std::vector<std::size_t> loads(static_cast<std::size_t>(ranks));
+    for (auto rank : column_ranks.back()) {
+        if (rank < 0 || rank >= ranks)
+            return Error{"partition", "column rank is out of range"};
+        loads[static_cast<std::size_t>(rank)] += nz;
+    }
+    const auto cells = column_ranks.back().size() * nz;
+    const Real imbalance = Real(*std::max_element(loads.begin(), loads.end())) * ranks / cells - 1;
+    if (imbalance > .25)
+        return Error{"partition", "fine-cell partition imbalance exceeds 0.25"};
+    return imbalance;
+}
 namespace {
 Expected<std::vector<Local>> expand_column_partition(HexMeshArrays::GridReport& report,
                                                      std::size_t nx0,
@@ -35,17 +51,15 @@ Expected<std::vector<Local>> expand_column_partition(HexMeshArrays::GridReport& 
         }
         const auto& fine = report.column_ranks.back();
         std::vector<Local> result(fine.size() * nz);
-        std::vector<std::size_t> loads(ranks);
         for (std::size_t d = 0; d < fine.size(); ++d)
             for (std::size_t k = 0; k < nz; ++k) {
                 result[d * nz + k] = fine[d];
-                ++loads[fine[d]];
             }
-        report.partition_imbalance =
-            Real(*std::max_element(loads.begin(), loads.end())) * ranks / result.size() - 1;
+        auto imbalance = detail::column_partition_imbalance(report.column_ranks, nz, ranks);
+        if (!imbalance)
+            return imbalance.error();
+        report.partition_imbalance = imbalance.value();
         // TODO: Count fine-cell weights here when alpha weights are available.
-        if (report.partition_imbalance > .25)
-            return Error{"partition", "fine-cell partition imbalance exceeds 0.25"};
         for (std::size_t l = 1; l < report.column_ranks.size(); ++l) {
             const auto nx = nx0 << l, ny = ny0 << l;
             for (std::size_t j = 0; j < ny; ++j)

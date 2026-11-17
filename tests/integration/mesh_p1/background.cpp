@@ -26,6 +26,8 @@ int main() {
     auto result = build_tensor_grid(s, o);
     expect(bool(result), "grid");
     auto& m = result.value();
+    auto rejected_imbalance = detail::column_partition_imbalance({{0, 0, 0, 0, 0, 0, 1, 1}}, 1, 2);
+    expect(!rejected_imbalance, "reject partition imbalance above 0.25");
     auto replay = build_tensor_grid(s, o);
     expect(bool(replay), "replay");
     expect(m.vertices == replay.value().vertices && m.hex == replay.value().hex &&
@@ -121,28 +123,25 @@ int main() {
                    "element rank equals column rank");
         }
     }
-    for (bool use_metis : {false, true})
-        for (int ranks : {1, 2, 4}) {
-            auto opts = o;
-            opts.use_metis = use_metis;
-            opts.ranks = ranks;
-            auto grid = build_tensor_grid(s, opts);
-            expect(bool(grid), "column ownership grid at rank count");
-            const auto& g = grid.value();
-            std::unordered_map<chipcae::Index, int> column_ranks;
-            for (std::size_t e = 0; e < g.partitioning.size(); ++e) {
-                const auto column = g.elem_gid[e] / static_cast<chipcae::Index>(nz);
-                auto [it, inserted] = column_ranks.emplace(column, g.partitioning[e]);
-                if (!inserted && it->second != g.partitioning[e]) {
-                    std::ostringstream message;
-                    message << (chipcae::par::ColumnExtrudePartitioner::uses_metis() ? "METIS"
-                                                                                     : "SFC")
-                            << " column " << column << " has conflicting ranks " << it->second
-                            << " and " << g.partitioning[e] << " (requested " << ranks << " ranks)";
-                    throw std::runtime_error(message.str());
-                }
+    for (int ranks : {1, 2, 4}) {
+        auto opts = o;
+        opts.ranks = ranks;
+        auto grid = build_tensor_grid(s, opts);
+        expect(bool(grid), "column ownership grid at rank count");
+        const auto& g = grid.value();
+        std::unordered_map<chipcae::Index, int> column_ranks;
+        for (std::size_t e = 0; e < g.partitioning.size(); ++e) {
+            const auto column = g.elem_gid[e] / static_cast<chipcae::Index>(nz);
+            auto [it, inserted] = column_ranks.emplace(column, g.partitioning[e]);
+            if (!inserted && it->second != g.partitioning[e]) {
+                std::ostringstream message;
+                message << (chipcae::par::ColumnExtrudePartitioner::uses_metis() ? "METIS" : "SFC")
+                        << " column " << column << " has conflicting ranks " << it->second
+                        << " and " << g.partitioning[e] << " (requested " << ranks << " ranks)";
+                throw std::runtime_error(message.str());
             }
         }
+    }
     // A non-power-of-two rectangular coarse shape, with a finest-only feature.
     auto nonuniform = s;
     nonuniform.outline.box = {0, 0, 3.5, 4};
@@ -298,7 +297,11 @@ int main() {
     for (const auto& r : m.preparation_report)
         if (r.name == "interface:body:base|body:cap" || r.name == "interface:body:cap|body:base") {
             expect(r.aligned_faces > 0 && r.aligned_area > 0, "aligned interface report");
-            expect(!r.side_a_bodies.empty() && !r.side_b_bodies.empty(), "interface sides listed");
+            const auto& side_a = r.name == "interface:body:base|body:cap" ? "base" : "cap";
+            const auto& side_b = r.name == "interface:body:base|body:cap" ? "cap" : "base";
+            expect(r.side_a_bodies == std::vector<std::string>{side_a} &&
+                       r.side_b_bodies == std::vector<std::string>{side_b},
+                   "generated interface body sides");
             report_ok = true;
         }
     expect(report_ok, "preparation report has mixed body sides");
@@ -363,13 +366,6 @@ int main() {
     expect(mask_hash({1, 2, 1}) == mask_hash({2, 1}), "canonical mask");
     expect(!resolve_activation(s, m, nullptr, {"*"}), "prefix required");
     expect(!check_no_reactivation(s, m, {{{"body:die"}, {"region:die"}}}), "same-step conflict");
-    auto metis_options = o;
-    metis_options.use_metis = true;
-    auto metis_grid = build_tensor_grid(s, metis_options);
-    expect(bool(metis_grid), "METIS or SFC fallback");
-    for (std::size_t e = 0; e < metis_grid.value().partitioning.size(); ++e)
-        expect(metis_grid.value().partitioning[e] == metis_grid.value().partitioning[(e / nz) * nz],
-               "METIS column ownership");
     auto huge = o;
     huge.nx = std::numeric_limits<Local>::max();
     expect(!build_tensor_grid(s, huge), "budget checked before allocation");

@@ -142,6 +142,7 @@ Expected<VtkhdfFiles> write_vtkhdf(const std::filesystem::path& stem,
 #ifdef CHIPCAE_ENABLE_MPI
     // Communicator is a world snapshot and has no native handle, so MPI-IO and
     // the agreement reduction use MPI_COMM_WORLD after checking the snapshot.
+    // All ranks must call this with the same world communicator.
     auto vtkhdf_comm = MPI_COMM_WORLD;
     if (!comm.is_serial()) {
         int wr = 0, ws = 1, ready = 0;
@@ -334,9 +335,30 @@ Expected<VtkhdfFiles> write_vtkhdf(const std::filesystem::path& stem,
 #endif
         return result;
     }
+    bool renamed = true;
     if (debug_per_rank || comm.rank() == 0) {
-        std::filesystem::rename(grid_tmp, paths.grid);
-        std::filesystem::rename(eb_tmp, paths.embedded_boundary);
+        std::error_code ec;
+        std::filesystem::rename(grid_tmp, paths.grid, ec);
+        renamed = !ec;
+        if (renamed) {
+            std::filesystem::rename(eb_tmp, paths.embedded_boundary, ec);
+            renamed = !ec;
+        }
+    }
+    result = agree(renamed);
+    if (!result) {
+        if (debug_per_rank || comm.rank() == 0) {
+            std::error_code ec;
+            std::filesystem::remove(grid_tmp, ec);
+            std::filesystem::remove(eb_tmp, ec);
+            std::filesystem::remove(paths.grid, ec);
+            std::filesystem::remove(paths.embedded_boundary, ec);
+        }
+#ifdef CHIPCAE_ENABLE_MPI
+        if (!debug_per_rank)
+            MPI_Barrier(vtkhdf_comm);
+#endif
+        return result;
     }
 #ifdef CHIPCAE_ENABLE_MPI
     if (!debug_per_rank)
