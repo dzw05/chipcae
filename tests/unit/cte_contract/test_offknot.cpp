@@ -141,6 +141,8 @@ int main(int argc, char** argv) try {
     for (auto probe : {sec, tan}) {
         std::swap(probe.alpha[1], probe.alpha[2]);
         const auto& knots = probe.temperatures;
+        const bool positive_fixture = std::all_of(
+            probe.alpha.begin(), probe.alpha.end(), [](Real alpha) { return alpha > 0; });
         const Real below = knots.front() - (knots[1] - knots.front()) / 2;
         const Real above = knots.back() + (knots.back() - knots[1]) / 2;
         for (Real reference : {below,
@@ -190,11 +192,11 @@ int main(int argc, char** argv) try {
                 verify_derivative(temperature, value);
             }
             auto verify = [&](Real temperature, Real actual) {
-                // These fixture values stay positive under interpolation and extension.
-                // For T != Tref, integral and (T-Tref) have the same sign, so
-                // their quotient is positive; at Tref the limit is alpha(Tref).
-                check(std::isfinite(actual) && actual > 0,
-                      "arbitrary reference secant is finite and positive");
+                check(std::isfinite(actual), "arbitrary reference secant is finite");
+                // Positive nodal alpha stays positive under interpolation and extension.
+                // Preserve this fixture-specific check without imposing it on signed data.
+                if (positive_fixture)
+                    check(actual > 0, "positive fixture secant is positive");
                 if (temperature == reference) {
                     Real limit = probe.alpha.front();
                     if (reference >= knots.back())
@@ -214,8 +216,9 @@ int main(int argc, char** argv) try {
                       "arbitrary reference signed integral");
                 check(near((temperature - reference) * actual, signed_area),
                       "arbitrary reference reconstructed area");
-                check((temperature < reference) == (signed_area < 0),
-                      "arbitrary reference area orientation");
+                if (positive_fixture)
+                    check((temperature < reference) == (signed_area < 0),
+                          "positive fixture area orientation");
             };
             for (std::size_t i = 0; i < knots.size(); ++i)
                 verify(knots[i], converted[i]);
