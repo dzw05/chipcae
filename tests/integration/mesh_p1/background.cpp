@@ -216,6 +216,15 @@ int main() {
     auto invalid_grid = build_tensor_grid(nonuniform, invalid);
     expect(!invalid_grid && invalid_grid.error().path == "HIERARCHY_INVALID",
            "explicit insufficient coarse columns");
+    auto incommensurate_options = padded_options;
+    incommensurate_options.max_ratio = 1;
+    auto incommensurate_explicit = build_tensor_grid(nonuniform, incommensurate_options);
+    expect(!incommensurate_explicit && incommensurate_explicit.error().path == "grid/grading",
+           "incommensurate grading error at explicit levels");
+    incommensurate_options.levels = 0;
+    auto incommensurate_auto = build_tensor_grid(nonuniform, incommensurate_options);
+    expect(!incommensurate_auto && incommensurate_auto.error().path == "grid/grading",
+           "incommensurate grading error at automatic levels");
     // Exercise normal, soft-limit, relaxed and direct selection, and inherited loads.
     for (int ranks : {1, 2, 4}) {
         auto options = k1::options();

@@ -43,6 +43,7 @@ Expected<std::vector<Local>> expand_column_partition(HexMeshArrays::GridReport& 
             }
         report.partition_imbalance =
             Real(*std::max_element(loads.begin(), loads.end())) * ranks / result.size() - 1;
+        // TODO: Count fine-cell weights here when alpha weights are available.
         if (report.partition_imbalance > .25)
             return Error{"partition", "fine-cell partition imbalance exceeds 0.25"};
         for (std::size_t l = 1; l < report.column_ranks.size(); ++l) {
@@ -209,6 +210,15 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
         }
     }
     const auto original = segments;
+    for (const auto& axis : original)
+        for (std::size_t i = 1; i < axis.counts.size(); ++i) {
+            const Real left = (axis.lines[i] - axis.lines[i - 1]) / axis.counts[i - 1];
+            const Real right = (axis.lines[i + 1] - axis.lines[i]) / axis.counts[i];
+            if (std::max(left / right, right / left) >
+                o.max_ratio * (1 + 16 * std::numeric_limits<Real>::epsilon()))
+                return Error{"grid/grading",
+                             "max_ratio=1 requires exactly commensurate feature intervals"};
+        }
     enum class PrepareFailure { None, Budget, MaxRatio };
     auto prepare = [&](int L, std::array<AxisSegments, 2>& candidate) {
         candidate = original;
