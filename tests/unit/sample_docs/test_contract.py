@@ -98,19 +98,20 @@ def check(root):
             case = validate_input(root, case_file, "schema/case-1.0.schema.json")
             inputs = check_case(root, case_file, case)
             for material in inputs["materials"]["materials"]:
-                require(material["model"] == "thermo_elastic", "S2 requires thermoelastic materials")
+                label = f"{case_file}: {case['materials']['ref']}: {material['id']}"
+                require(material["model"] == "thermo_elastic", f"{label}: S2 requires thermoelastic materials")
                 for kind, columns in (("elastic", ("E", "nu")),
                                       ("thermal_expansion", ("alpha",))):
                     model = material[kind]
-                    require(model["symmetry"] == "isotropic", f"S2 requires isotropic {kind}")
+                    require(model["symmetry"] == "isotropic", f"{label}: S2 requires isotropic {kind}")
                     table = model["table"]
                     require(len(table["temperatures"]) == 1,
-                            f"S2 requires single-knot {kind}")
+                            f"{label}: S2 requires single-knot {kind}")
                     for column in columns:
                         values = table["columns"].get(column)
                         require(isinstance(values, list) and len(values) == 1
                                 and type(values[0]) in (int, float) and math.isfinite(values[0]),
-                                f"S2 requires one finite {column} value")
+                                f"{label}: S2 requires one finite {column} value")
 
     required_paths = {
         "apps/chipcae-solve/README.md",

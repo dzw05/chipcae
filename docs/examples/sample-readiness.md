@@ -17,10 +17,10 @@ the containing case file, rather than the shell's working directory.
 O2 requires constant isotropic thermoelastic materials with single-knot E, nu,
 and alpha tables. For `elastic.table` and `thermal_expansion.table`, single-knot
 means that the `temperatures` array has exactly one entry. The checked-in FCBGA
-library has at least one table with two or more temperature knots. These multi-knot temperature
-tables caused the original sample to fail with `INPUT_INVALID/14` because they
-do not meet the single-knot requirement. Schema validity alone does not establish
-support by O2.
+library has at least one table with two or more temperature knots. These
+multi-knot temperature tables caused the original sample to fail with
+`INPUT_INVALID/14` because they do not meet the single-knot requirement. Schema
+validity alone does not establish support by O2.
 
 The later `max_ratio` failure is a separate mesh constraint: it means adjacent
 cell sizes exceed the configured limit.
