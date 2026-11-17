@@ -79,9 +79,7 @@ void checkStagedArguments(const ImportRequest& request, const QStringList& actua
     const auto staging = QFileInfo(actual[outputIndex + 1]).absoluteDir();
     auto staged = request;
     staged.output = staging.filePath("out.stack.json");
-    staged.report = request.report.isEmpty() && request.kind == ImportKind::Ecad
-                        ? QString{}
-                        : staging.filePath("defects.json");
+    staged.report = staging.filePath("defects.json");
     staged.polyset = request.polyset.isEmpty() ? QString{} : staging.filePath("out.polyset");
     check(staging.dirName().startsWith(".chipcae-import-") &&
               actual == ImportControllerTestAccess::arguments(staged),
@@ -939,9 +937,8 @@ sys.exit(rc)
                     wanted << "--accept-b-tier";
                 check(ImportControllerTestAccess::arguments(r) == wanted,
                       "exact caller argv for every optional flag combination");
-                check(args.contains("--report") ==
-                          (!r.report.isEmpty() || kind == ImportKind::Assembly),
-                      "Assembly always requests a private report; Ecad honors export selection");
+                check(args.contains("--report"),
+                      "every import explicitly requests a private report regardless of export");
                 check(QFile::exists(r.output) && (r.report.isEmpty() || QFile::exists(r.report)) &&
                           (r.polyset.isEmpty() || QFile::exists(r.polyset)),
                       "requested optional exports published");

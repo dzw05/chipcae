@@ -112,11 +112,9 @@ bool ImportController::start(const ImportRequest& request) {
     auto stagedRequest = request;
     stagedRequest.output = staged_[0];
     stagedRequest.polyset = polyset.isEmpty() ? QString{} : staged_[1];
-    // ECAD guarantees defects.json beside the staged stack when --report is omitted.
-    // Assembly has no default-path contract, so request a private report explicitly.
-    // destinations_ still controls whether that report is exported to the caller.
-    stagedRequest.report =
-        report.isEmpty() && request.kind == ImportKind::Ecad ? QString{} : staged_[2];
+    // Every import requests a private report explicitly; destinations_ alone
+    // controls whether it is exported to the caller.
+    stagedRequest.report = staged_[2];
     const auto arguments = request.prefix + argumentsFor(stagedRequest);
     cancelled_ = false;
     busy_ = true;

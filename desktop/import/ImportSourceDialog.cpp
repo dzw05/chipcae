@@ -49,9 +49,13 @@ QString ImportSourceDialog::getImportPath(QWidget* parent,
     const auto disclosure = filters.takeLast();
     dialog.setNameFilters(filters);
     auto* layout = qobject_cast<QGridLayout*>(dialog.layout());
+    auto* buttons = dialog.findChild<QDialogButtonBox*>();
+    // QFileDialog's internal widget structure may vary between Qt versions.
+    // Cancel safely if the custom disclosure and directory action cannot be added.
+    if (!layout || !buttons)
+        return {};
     layout->addWidget(new QLabel(disclosure, &dialog), layout->rowCount(), 0, 1, -1);
     dialog.setProxyModel(new SourceModel(&dialog));
-    auto* buttons = dialog.findChild<QDialogButtonBox*>();
     auto* directory = buttons->addButton(QStringLiteral("Select current ODB++ directory"),
                                          QDialogButtonBox::ActionRole);
     QString chosenDirectory;
