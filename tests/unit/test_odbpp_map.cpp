@@ -352,7 +352,9 @@ void missing_material() {
     j.attrs.layer["CORE"][".material"] = "";
     rejected(j, {".material", "CORE"});
     j.attrs.layer.erase("CORE");
-    rejected(j, {".material", "CORE"});
+    std::vector<ThicknessRecord> records;
+    rejected(j, {"missing thickness", "CORE"}, {nullptr, &records});
+    require(records.size() == 4, "missing attrlist still records every layer");
 }
 void oval_capsules() {
     for (const auto& [symbol, vertical, circular] : {std::tuple{"oval4000x2000", false, false},
@@ -411,6 +413,12 @@ void oval_capsules() {
 void missing_thickness() {
     std::vector<ThicknessRecord> records;
     rejected(missing(), {"3", "TOP", "CORE", "BOTTOM"}, {nullptr, &records});
+    require(records.size() == 4, "missing thickness alone records every layer");
+    records.clear();
+    auto j = missing();
+    j.attrs.layer["CORE"].erase(".material");
+    j.attrs.layer["PREPREG"][".material"] = "";
+    rejected(j, {"missing thickness for 3 layer(s): TOP, CORE, BOTTOM"}, {nullptr, &records});
     require(records.size() == 4, "rejected import still records every layer");
     const char* names[] = {"TOP", "CORE", "BOTTOM", "PREPREG"};
     for (std::size_t i = 0; i < records.size(); ++i) {
