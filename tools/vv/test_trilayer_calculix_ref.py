@@ -99,7 +99,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             self.assertTrue(math.isclose(data[field], expected, rel_tol=1e-12, abs_tol=1e-18))
         return w, abs_delta, rel_delta
 
-    def test_rejects_invalid_artifacts(self):
+    def check_rejects_invalid_artifacts(self):
         self.assertTrue(REF.is_file(), f"missing required artifact: {REF}")
         data = json.loads(REF.read_text(encoding="utf-8"))
         reversed_meshes = copy.deepcopy(data)
@@ -123,7 +123,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         for field in data:
             invalid = copy.deepcopy(data)
             del invalid[field]
-            with self.subTest(missing=field), self.assertRaises(AssertionError):
+            with self.assertRaises(AssertionError, msg=f"missing={field}"):
                 self.validate_artifact(invalid)
         variants = []
         for field, values in {
@@ -150,7 +150,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             mesh["n_elem_xyz"][2] = 7
         variants.append(changed_layers)
         for index, invalid in enumerate(variants):
-            with self.subTest(variant=index), self.assertRaises(AssertionError):
+            with self.assertRaises(AssertionError, msg=f"variant={index}"):
                 self.validate_artifact(invalid)
         invalid = copy.deepcopy(data)
         invalid["W_bfp_m"] *= 1.01
@@ -161,6 +161,9 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         self.assertTrue(REF.is_file(), f"missing required artifact: {REF}")
         data = json.loads(REF.read_text(encoding="utf-8"))
         w, abs_delta, rel_delta = self.validate_artifact(data)
+        # Complete rejection checks before publishing a successful validation report.
+        # These checks raise immediately, so failures cannot fall through to reporting.
+        self.check_rejects_invalid_artifacts()
         line = (
             f"W_bfp={w} prototype=4.269532769e-3 abs_delta={abs_delta} "
             f"rel_delta={rel_delta} mesh=fine element=C3D20 "

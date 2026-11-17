@@ -3,6 +3,8 @@
 # Copyright (c) 2026 Zhiwei Duan
 """Manual FRD parser regressions; requires the generator's numpy/scipy environment."""
 import sys
+import io
+from contextlib import redirect_stdout
 import json
 import subprocess
 import tempfile
@@ -49,6 +51,24 @@ class FrdParserTest(unittest.TestCase):
         self.assertTrue(result.stdout.startswith("W_bfp="))
         self.assertEqual(result.stdout,
                          Path("/workspace/tasks/logs/v-ccx-delta.md").read_text())
+
+    def test_failed_rejection_checks_do_not_report(self):
+        from tools.vv.test_trilayer_calculix_ref import TrilayerCalculixRefTest
+
+        for failure in (AssertionError("injected rejection failure"),
+                        RuntimeError("injected rejection error")):
+            with self.subTest(failure=type(failure).__name__):
+                suite = unittest.defaultTestLoader.loadTestsFromTestCase(TrilayerCalculixRefTest)
+                output = io.StringIO()
+                with patch.object(TrilayerCalculixRefTest, "check_rejects_invalid_artifacts",
+                                  side_effect=failure), patch.object(Path, "write_text") as write:
+                    with redirect_stdout(output):
+                        result = unittest.TestResult()
+                        suite.run(result)
+                self.assertFalse(result.wasSuccessful())
+                self.assertEqual(len(result.failures) + len(result.errors), 1)
+                self.assertEqual(output.getvalue(), "")
+                write.assert_not_called()
 
     def test_deck_model_settings(self):
         # Independent checks of the submitted inputs, without trusting write_inp.
