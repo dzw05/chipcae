@@ -114,6 +114,42 @@ int integer(const Json& obj, const char* key, int minimum) {
     return n;
 }
 } // namespace
+InterpolatedProperty
+interpolate_property(const PropertyTable& table, double temperature, const std::string& context) {
+    const auto& t = table.temperatures;
+    const auto& v = table.values;
+    auto fail = [&](const std::string& message) { invalid(context + ": " + message); };
+    if (t.empty() || t.size() != v.size())
+        fail("temperature/value table sizes must match and be nonempty");
+    if (!std::isfinite(temperature))
+        fail("nonfinite requested temperature");
+    for (std::size_t i = 0; i < t.size(); ++i) {
+        if (!std::isfinite(t[i]) || !std::isfinite(v[i]))
+            fail("nonfinite temperature or property value");
+        if (i && t[i] <= t[i - 1])
+            fail("temperatures must be strictly increasing");
+    }
+    if (table.interpolation != "linear" && !(table.interpolation == "constant" && t.size() == 1))
+        fail("unsupported interpolation: " + table.interpolation);
+    if (table.extrapolation != "clamp" && table.extrapolation != "error")
+        fail("unsupported extrapolation: " + table.extrapolation);
+    if (t.size() == 1)
+        return {v.front(), false};
+    if ((temperature < t.front() || temperature > t.back()) && table.extrapolation == "error")
+        fail("requested temperature outside table range");
+    if (temperature < t.front())
+        return {v.front(), true};
+    if (temperature > t.back())
+        return {v.back(), true};
+    auto upper = std::lower_bound(t.begin(), t.end(), temperature);
+    auto i = static_cast<std::size_t>(upper - t.begin());
+    if (*upper == temperature)
+        return {v[i], false};
+    double value = v[i - 1] + (temperature - t[i - 1]) * (v[i] - v[i - 1]) / (t[i] - t[i - 1]);
+    if (!std::isfinite(value))
+        fail("nonfinite interpolated property value");
+    return {value, false};
+}
 RunInputs load_inputs(const std::filesystem::path& case_path,
                       const std::filesystem::path& profile_path,
                       int ranks) {
@@ -347,7 +383,11 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
         auto validator = jsoncons::jsonschema::make_json_schema(material_schema);
         for (const auto& card : library.at("materials").array_range()) {
             validator.validate(card, [&](const auto& error) {
-                invalid("material " + error.instance_location().string() + ": " + error.message());
+                invalid("material " +
+                        (card.contains("id") && card.at("id").is_string()
+                             ? card.at("id").as<std::string>()
+                             : "<unknown>") +
+                        " " + error.instance_location().string() + ": " + error.message());
                 return jsoncons::jsonschema::walk_result::abort;
             });
             if (card.contains("material_frame") ||
@@ -357,21 +397,40 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
                 invalid("O2 requires isotropic thermo_elastic materials");
             Material material;
             material.id = card.at("id").as<std::string>();
-            auto column = [&](const Json& table, const char* name) {
+            auto column = [&](const Json& table, const char* name, double& value, bool& clamped) {
                 const auto& temperatures = table.at("temperatures");
                 const auto& values = table.at("columns").at(name);
-                if (temperatures.size() != values.size() || values.size() != 1)
-                    invalid("O2 requires constant single-temperature material tables");
-                auto v = values.at(0).as<double>();
-                if (!std::isfinite(v))
-                    invalid("nonfinite material property");
-                return v;
+                PropertyTable result;
+                result.interpolation = table.contains("interpolation")
+                                           ? table.at("interpolation").as<std::string>()
+                                           : "linear";
+                result.extrapolation = table.contains("extrapolation")
+                                           ? table.at("extrapolation").as<std::string>()
+                                           : "error";
+                for (const auto& t : temperatures.array_range())
+                    result.temperatures.push_back(t.as<double>());
+                for (const auto& v : values.array_range())
+                    result.values.push_back(v.as<double>());
+                auto evaluated =
+                    interpolate_property(result, out.T_ref, "material " + material.id + "/" + name);
+                value = evaluated.value;
+                clamped = evaluated.clamped;
+                return result;
             };
-            material.E = column(card.at("elastic").at("table"), "E");
-            material.nu = column(card.at("elastic").at("table"), "nu");
-            material.alpha = column(card.at("thermal_expansion").at("table"), "alpha");
-            if (!(material.E > 0 && material.nu > -1 && material.nu < 0.5))
-                invalid("invalid elastic properties");
+            material.E_table =
+                column(card.at("elastic").at("table"), "E", material.E, material.E_clamped);
+            material.nu_table =
+                column(card.at("elastic").at("table"), "nu", material.nu, material.nu_clamped);
+            material.alpha_table = column(card.at("thermal_expansion").at("table"),
+                                          "alpha",
+                                          material.alpha,
+                                          material.alpha_clamped);
+            for (double E : material.E_table.values)
+                if (!(E > 0))
+                    invalid("material " + material.id + "/E: must be positive");
+            for (double nu : material.nu_table.values)
+                if (!(nu > -1 && nu < 0.5))
+                    invalid("material " + material.id + "/nu: must be between -1 and 0.5");
             if (out.thermal)
                 material.k = finite(card, "conductivity", true);
             if (!out.materials.emplace(material.id, material).second)
