@@ -157,6 +157,9 @@ int main(int argc, char** argv) {
         expect(argc == 2, "usage: preview_zalign <chipcae-preview>");
         const fs::path root(CHIPCAE_SOURCE_DIR);
         const auto fixture = root / "schema/examples/fcbga_demo.stack.json";
+        // STK-2 declares k1.json as the shared interface/volume contract
+        // (mesh/background/thresholds/k1.json). Read those keys at runtime;
+        // do not bake a second copy of the numbers into this test.
         const auto thresholds = root / "mesh/background/thresholds/k1.json";
         const double interface_relative = json_number(read_text(thresholds), "interface_relative");
         const double volume_relative = json_number(read_text(thresholds), "volume_relative");
@@ -196,8 +199,9 @@ int main(int argc, char** argv) {
         auto material_id =
             h5_read<std::int32_t>(file, "VTKHDF/CellData/material_id", H5T_NATIVE_INT32);
         expect(layer_id.size() == nc && material_id.size() == nc, "cell field length");
-        // Dataset paths and 1-based IDs are the documented preview VTKHDF contract
-        // in preview/README.md (CellData layer_id/material_id, FieldData names).
+        // Public preview VTKHDF contract, preview/README.md "Cell fields are
+        // layer_id and material_id": CellData layer_id/material_id (int32,
+        // 1-based) and FieldData layer_names/material_names (index i -> ID i+1).
         auto layer_names = h5_strings(file, "VTKHDF/FieldData/layer_names");
         auto material_names = h5_strings(file, "VTKHDF/FieldData/material_names");
         H5Fclose(file);
