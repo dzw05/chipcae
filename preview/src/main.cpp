@@ -20,7 +20,29 @@ namespace {
 std::string quote(const std::string& text) {
     std::string result = "\"";
     constexpr char hex[] = "0123456789abcdef";
-    for (unsigned char c : text) {
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        auto c = static_cast<unsigned char>(text[i]);
+        if (c >= 128) {
+            std::size_t length = c >= 0xc2 && c <= 0xdf   ? 2
+                                 : c >= 0xe0 && c <= 0xef ? 3
+                                 : c >= 0xf0 && c <= 0xf4 ? 4
+                                                          : 0;
+            bool valid = length && i + length <= text.size();
+            for (std::size_t j = 1; valid && j < length; ++j) {
+                auto next = static_cast<unsigned char>(text[i + j]);
+                valid = next >= 0x80 && next <= 0xbf;
+                if (j == 1)
+                    valid = valid && !(c == 0xe0 && next < 0xa0) && !(c == 0xed && next >= 0xa0) &&
+                            !(c == 0xf0 && next < 0x90) && !(c == 0xf4 && next >= 0x90);
+            }
+            if (valid) {
+                result.append(text, i, length);
+                i += length - 1;
+            } else {
+                result += "\\ufffd";
+            }
+            continue;
+        }
         if (c == '"' || c == '\\') {
             result += '\\';
             result += static_cast<char>(c);
@@ -47,10 +69,28 @@ int integer(const std::string& value, bool zero) {
         throw std::runtime_error("invalid integer: " + value);
     return n;
 }
+struct MeshFailure : std::runtime_error {
+    chipcae::mesh::Error error;
+    explicit MeshFailure(const chipcae::mesh::Error& value)
+        : std::runtime_error(value.path + ": " + value.reason), error(value) {}
+};
+int exit_code(const chipcae::mesh::Error& error) {
+    if (error.path == "COLUMN_SPLIT_ACROSS_RANKS")
+        return 3;
+    if (error.path == "HIERARCHY_INVALID")
+        return 4;
+    return chipcae::ErrorCode::INTERNAL;
+}
+bool same_path(const std::filesystem::path& a, const std::filesystem::path& b) {
+    if (std::filesystem::weakly_canonical(a) == std::filesystem::weakly_canonical(b))
+        return true;
+    std::error_code error;
+    return std::filesystem::equivalent(a, b, error);
+}
 template <class T>
 T checked(chipcae::mesh::Expected<T> result) {
     if (!result)
-        throw std::runtime_error(result.error().path + ": " + result.error().reason);
+        throw MeshFailure(result.error());
     return std::move(result.value());
 }
 int run(int argc, char** argv) {
@@ -92,11 +132,11 @@ int run(int argc, char** argv) {
     if (seen.contains("--nx") != seen.contains("--ny"))
         throw std::runtime_error("--nx and --ny must be supplied together");
     auto stem = output;
-    if (stem.extension() == ".vtkhdf")
-        stem.replace_extension();
+    if (stem.extension() == ".vtkhdf" || stem.filename() == ".vtkhdf")
+        stem = stem.parent_path() /
+               stem.filename().string().substr(0, stem.filename().string().size() - 7);
     auto grid_path = std::filesystem::path(stem.string() + ".vtkhdf");
-    if (!surface.empty() && std::filesystem::absolute(surface).lexically_normal() ==
-                                std::filesystem::absolute(grid_path).lexically_normal())
+    if (!surface.empty() && same_path(surface, grid_path))
         throw std::runtime_error("surface and grid paths must differ");
     event("load", 0, "Loading stack 0.2");
     auto stack = checked(load_stack(input, CHIPCAE_PREVIEW_SCHEMA));
@@ -110,23 +150,42 @@ int run(int argc, char** argv) {
             if (layer.copper && layer.copper->polygons)
                 sidecars.insert(input.parent_path() / layer.copper->polygons->file);
     Polyset polygons;
+    std::set<std::string> polygon_names;
     for (const auto& path : sidecars) {
         auto part = checked(read_polyset(path));
         if (polygons.dbu_m != 0 && polygons.dbu_m != part.dbu_m)
             throw std::runtime_error("polysets must use the same database unit");
         polygons.dbu_m = part.dbu_m;
-        for (auto& layer : part.layers)
+        for (auto& layer : part.layers) {
+            if (!polygon_names.insert(layer.name).second)
+                throw std::runtime_error("duplicate polyset layer name: " + layer.name);
             polygons.layers.push_back(std::move(layer));
+        }
     }
     event("mesh", 0.3, "Building tensor grid");
     auto mesh = sidecars.empty() ? checked(build_tensor_grid(stack, options))
                                  : checked(build_tensor_grid(stack, options, polygons));
     event("write", 0.8, "Writing VTKHDF");
     auto files = checked(write_vtkhdf(stem, mesh, nullptr, chipcae::Communicator::world()));
-    if (!surface.empty() &&
-        std::filesystem::absolute(surface).lexically_normal() !=
-            std::filesystem::absolute(files.embedded_boundary).lexically_normal())
-        std::filesystem::rename(files.embedded_boundary, surface);
+    int rank = 0;
+#ifdef CHIPCAE_ENABLE_MPI
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+#endif
+    int rename_failed = 0;
+    if (rank == 0 && !surface.empty()) {
+        try {
+            if (!same_path(surface, files.embedded_boundary))
+                std::filesystem::rename(files.embedded_boundary, surface);
+        } catch (const std::exception& error) {
+            std::cerr << error.what() << '\n';
+            rename_failed = 1;
+        }
+    }
+#ifdef CHIPCAE_ENABLE_MPI
+    MPI_Bcast(&rename_failed, 1, MPI_INT, 0, MPI_COMM_WORLD);
+#endif
+    if (rename_failed)
+        throw std::runtime_error("could not move embedded boundary to requested surface path");
     event("success", 1, files.grid.string());
     return 0;
 }
@@ -155,6 +214,10 @@ int main(int argc, char** argv) {
     int code = 0;
     try {
         code = run(argc, argv);
+    } catch (const MeshFailure& error) {
+        std::cerr << error.what() << '\n';
+        event("error", 1, error.what());
+        code = exit_code(error.error);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         event("error", 1, error.what());

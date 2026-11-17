@@ -1,3 +1,4 @@
+#include "../../../schema/src/sha256.hpp"
 #include "support.hpp"
 
 #include <chrono>
@@ -5,6 +6,7 @@
 #include <hdf5.h>
 #include <iostream>
 #include <jsoncons/json.hpp>
+#include <sys/wait.h>
 using k1::expect;
 namespace fs = std::filesystem;
 std::string shell(const std::string& value) {
@@ -14,7 +16,7 @@ std::string shell(const std::string& value) {
     return out + "'";
 }
 int main(int argc, char** argv) {
-    expect(argc == 2, "preview executable argument");
+    expect(argc == 2 || argc == 4, "preview executable argument");
     auto dir = fs::temp_directory_path() /
                ("chipcae-preview-" +
                 std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -22,11 +24,13 @@ int main(int argc, char** argv) {
     try {
         auto fixture = fs::path(K1_ROOT) / "schema/examples/fcbga_demo.stack.json";
         auto output = dir / "grid";
-        auto invoke = [&](const std::string& args, bool success) {
-            auto command = shell(argv[1]) + " " + args + " >" + shell((dir / "stdout").string()) +
-                           " 2>" + shell((dir / "stderr").string());
+        auto invoke = [&](const std::string& args, int expected_code) {
+            auto prefix = argc == 4 ? shell(argv[2]) + " " + argv[3] + " " : "";
+            auto command = prefix + shell(argv[1]) + " " + args + " >" +
+                           shell((dir / "stdout").string()) + " 2>" +
+                           shell((dir / "stderr").string());
             int code = std::system(command.c_str());
-            expect(success ? code == 0 : code != 0, "CLI exit status");
+            expect(WIFEXITED(code) && WEXITSTATUS(code) == expected_code, "CLI exact exit status");
             std::ifstream stream(dir / "stdout");
             std::string line, last;
             int count = 0;
@@ -38,10 +42,11 @@ int main(int argc, char** argv) {
                 last = event.at("stage").as<std::string>();
                 ++count;
             }
-            expect(count > 0 && last == (success ? "success" : "error"), "terminal JSON event");
+            expect(count > 0 && last == (expected_code == 0 ? "success" : "error"),
+                   "terminal JSON event");
         };
         auto base = shell(fixture.string()) + " --nx 2 --ny 2 --levels 0";
-        invoke(base + " -o " + shell(output.string()), true);
+        invoke(base + " -o " + shell(output.string()), 0);
         auto grid = fs::path(output.string() + ".vtkhdf");
         expect(fs::exists(grid), "grid output exists");
         hid_t file = H5Fopen(grid.c_str(), H5F_ACC_RDONLY, H5P_DEFAULT);
@@ -107,10 +112,60 @@ int main(int argc, char** argv) {
                   << "; layer_id/material_id int32 values and shape verified\n";
         auto exact = dir / "exact.vtkhdf";
         auto surface = dir / "custom.eb.vtkhdf";
-        invoke(base + " -o " + shell(exact.string()) + " --surface " + shell(surface.string()),
-               true);
+        invoke(base + " -o " + shell(exact.string()) + " --surface " + shell(surface.string()), 0);
         expect(fs::exists(exact) && fs::exists(surface) && !fs::exists(exact.string() + ".vtkhdf"),
                "exact output paths");
+        invoke(base + " -o " + shell((dir / "rename-failure").string()) + " --surface " +
+                   shell((dir / "missing/surface.vtkhdf").string()),
+               1);
+        auto dot = dir / ".vtkhdf";
+        invoke(base + " -o " + shell(dot.string()), 0);
+        expect(fs::exists(dot) && !fs::exists(dot.string() + ".vtkhdf"), "leading dot output");
+        auto real = dir / "real";
+        fs::create_directory(real);
+        fs::create_directory_symlink(real, dir / "link");
+        auto alias_grid = real / "alias.vtkhdf";
+        invoke(base + " -o " + shell(alias_grid.string()) + " --surface " +
+                   shell((dir / "link/alias.vtkhdf").string()),
+               1);
+        expect(!fs::exists(alias_grid), "symlink alias rejected before writing");
+        invoke(shell(fixture.string()) + " --levels 32 -o " + shell((dir / "levels").string()), 4);
+#ifdef CHIPCAE_TEST_ECAD
+        std::ifstream copper_in(fs::path(K1_ROOT) / "schema/examples/fcbga_cu.stack.json");
+        auto copper = jsoncons::json::parse(copper_in);
+        copper["layers"].resize(2);
+        copper.erase("activation_groups");
+        copper["external_refs"] = jsoncons::json::array();
+        for (int i = 0; i < 2; ++i) {
+            auto name = i == 0 ? "a.poly" : "b.poly";
+            chipcae::mesh::Polyset part;
+            part.dbu_m = 1e-6;
+            part.layers.push_back({"L1", {0, 4}, {0, 0, 1000 + i, 0, 1000 + i, 1000, 0, 1000}});
+            expect(bool(chipcae::mesh::write_polyset(dir / name, part)), "write sidecar");
+            std::ifstream bytes(dir / name, std::ios::binary);
+            std::string data((std::istreambuf_iterator<char>(bytes)), {});
+            jsoncons::json ref = jsoncons::json::object();
+            ref["path"] = name;
+            ref["sha256"] = chipcae::mesh::sha256(data);
+            copper["external_refs"].push_back(ref);
+            copper["layers"][i]["kind"] = "Patterned";
+            copper["layers"][i].erase("regions");
+            copper["layers"][i]["copper"] = jsoncons::json::parse(
+                R"({"metal":"copper","polygons":{"file":"a.poly","layer":"L1"}})");
+            copper["layers"][i]["copper"]["polygons"]["file"] = name;
+        }
+        auto two = dir / "two.stack.json";
+        std::ofstream(two) << copper;
+        expect(bool(chipcae::mesh::load_stack(two,
+                                              fs::path(K1_ROOT) / "schema/stack-0.2.schema.json")),
+               "valid two-sidecar stack");
+        invoke(shell(two.string()) + " -o " + shell((dir / "two").string()), 1);
+        std::ifstream diagnostic(dir / "stderr");
+        std::string message((std::istreambuf_iterator<char>(diagnostic)), {});
+        expect(message.find("duplicate polyset layer name: L1") != std::string::npos,
+               "reject ambiguous sidecar names");
+        expect(!fs::exists(dir / "two.vtkhdf"), "no ambiguous copper output");
+#endif
         auto bad = dir / "bad";
         for (const auto& args : std::vector<std::string>{
                  base,
@@ -118,14 +173,17 @@ int main(int argc, char** argv) {
                  shell(fixture.string()) + " --nx 2 -o " + shell(bad.string()),
                  base + " --nx 3 -o " + shell(bad.string()),
                  base + " --levels nope -o " + shell(bad.string())}) {
-            invoke(args, false);
+            invoke(args, 1);
             expect(!fs::exists(bad.string() + ".vtkhdf") &&
                        !fs::exists(bad.string() + ".eb.vtkhdf"),
                    "no failed output");
         }
+        invoke(shell((dir / std::string("invalid-\xff.stack.json")).string()) + " -o " +
+                   shell(bad.string()),
+               1);
         auto invalid = dir / "invalid.stack.json";
         std::ofstream(invalid) << "{\"bad\": true}";
-        invoke(shell(invalid.string()) + " -o " + shell(bad.string()), false);
+        invoke(shell(invalid.string()) + " -o " + shell(bad.string()), 1);
         expect(!fs::exists(bad.string() + ".vtkhdf"), "no invalid stack output");
         fs::remove_all(dir);
     } catch (...) {
