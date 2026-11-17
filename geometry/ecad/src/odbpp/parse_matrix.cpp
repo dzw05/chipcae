@@ -46,8 +46,15 @@ bool parse_matrix(const ArchiveReader& reader, OdbJob& job, std::string& error) 
                 return true;
             auto key = trim(std::string_view(line).substr(0, eq)),
                  value = trim(std::string_view(line).substr(eq + 1));
-            if (key == "UNITS")
-                job.units = lower(value) == "inch" ? OdbUnits::inch : OdbUnits::mm;
+            if (key == "UNITS") {
+                auto units = lower(value);
+                if (units != "mm" && units != "inch") {
+                    error = "IMPORT_REJECTED: unsupported matrix units " + value;
+                    valid = false;
+                    return false;
+                }
+                job.units = units == "inch" ? OdbUnits::inch : OdbUnits::mm;
+            }
             if (block == "LAYER") {
                 if (key == "NAME")
                     layer.name = value;
@@ -111,7 +118,8 @@ ImportResult read_odbpp_job(const std::filesystem::path& input, OdbJob& job) {
                 {"IMPORT_UNSUPPORTED_ELEMENT", "selected step " + job.step, 0});
         if (!parse_misc(reader, job, result.error))
             return result;
-        parse_features(reader, job, result);
+        if (!parse_features(reader, job, result))
+            return result;
     } catch (const std::exception& e) {
         result.error = "IMPORT_REJECTED: " + std::string(e.what());
     }

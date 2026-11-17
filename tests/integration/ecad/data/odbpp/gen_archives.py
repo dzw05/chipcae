@@ -83,6 +83,16 @@ def main(root, fixture):
     with zipfile.ZipFile(root / 'zip64.zip', 'w') as archive:
         with archive.open('matrix/matrix', 'w', force_zip64=True) as entry:
             entry.write(b'local zip64 header')
+    encrypted = bytearray((root / 'stored.zip').read_bytes())
+    # Set the encryption flag in every local and central header; payload is never read.
+    for signature, flag_offset in [(b'PK\x03\x04', 6), (b'PK\x01\x02', 8)]:
+        start = 0
+        while (pos := encrypted.find(signature, start)) >= 0:
+            encrypted[pos + flag_offset] |= 1
+            start = pos + 4
+    (root / 'encrypted.zip').write_bytes(encrypted)
+    (root / 'many-small.tgz').write_bytes(gzip.compress(tar_bytes(
+        [('file%d' % i, b'x' * 1024) for i in range(100)])))
     # Exercise pax size overriding the following ordinary header's size.
     out = io.BytesIO()
     with tarfile.open(fileobj=out, mode='w', format=tarfile.PAX_FORMAT) as archive:

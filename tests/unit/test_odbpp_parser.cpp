@@ -554,7 +554,7 @@ int main() {
     });
     test("odbpp_gzip_header_crc", [&] { rejected(temp / "header-crc.tgz", "CRC"); });
     test("odbpp_zip_unsupported", [&] {
-        for (const auto* name : {"unsupported.zip", "zip64.zip"}) {
+        for (const auto* name : {"unsupported.zip", "zip64.zip", "encrypted.zip"}) {
             ArchiveReader reader(temp / name);
             require(reader.open_error().empty(), reader.open_error());
             require(reported(reader.unsupported(), "matrix/matrix"),
@@ -645,7 +645,7 @@ int main() {
     });
     test("odbpp_review_empty_unsupported", [&] {
         auto r = parse_job(temp / "job.tar.Z");
-        require(!r && r.error == "IMPORT_REJECTED: empty input" &&
+        require(!r && r.error == "IMPORT_REJECTED: unsupported .Z compression" &&
                     reported(r.model.report.unsupported, ".Z compression"),
                 "top-level .Z both rejected and reported");
         auto p = temp / "only-links";
@@ -707,6 +707,54 @@ int main() {
                                 error.starts_with("IMPORT_REJECTED: line byte limit"),
                             "archive line overflow rejected before callback: " + error);
             }
+        }
+    });
+    test("odbpp_review_directory_payload_count", [&] {
+        auto p = temp / "directory-count";
+        write(p / "a/b/c/payload", "x");
+        fs::create_directories(p / "empty/nested");
+        ArchiveLimits limits;
+        limits.entry_count = 1;
+        ArchiveReader reader(p, limits);
+        require(reader.open_error().empty(), reader.open_error());
+        std::string out, error;
+        require(reader.read_bytes("a/b/c/payload", out, error) && out == "x", error);
+    });
+    test("odbpp_review_ratio_per_file", [&] {
+        ArchiveLimits limits;
+        limits.ratio = 2;
+        ArchiveReader reader(temp / "many-small.tgz", limits);
+        require(reader.open_error().empty(), reader.open_error());
+        require(reader.entries().size() == 100, "all small entries accepted");
+        for (const auto& entry : reader.entries()) {
+            std::string out, error;
+            require(reader.read_bytes(entry.path, out, error) && out == std::string(1024, 'x'),
+                    error);
+        }
+    });
+    test("odbpp_review_matrix_units", [&] {
+        auto p = temp / "matrix-units";
+        minimal(p);
+        for (const auto* units : {"MIL", "", "unknown"}) {
+            write(p / "matrix/matrix", std::string("UNITS=") + units + "\n");
+            rejected(p, "unsupported matrix units");
+        }
+    });
+    test("odbpp_review_pad_angles_and_whitespace", [&] {
+        auto p = temp / "pad-angles";
+        minimal(p);
+        for (int orientation : {8, 9}) {
+            for (const auto* angle : {"", "bad"}) {
+                write(p / "steps/pcb/layers/top/features",
+                      "$0 r100\nP 0 0 0 P 0 " + std::to_string(orientation) + " " + angle + "\n");
+                rejected(p, "malformed pad angle");
+            }
+            write(p / "steps/pcb/layers/top/features",
+                  "\v\f\t \n$0 r100\nP 0 0 0 P 0 " + std::to_string(orientation) + " 12.5\n");
+            auto j = job(p);
+            const auto& pad = j.features.at("top").pads.at(0);
+            require(pad.rot_deg == 12.5 && pad.mirror == (orientation == 9),
+                    "explicit angle and mirror preserved");
         }
     });
     test("odbpp_streaming_memory", [&] {

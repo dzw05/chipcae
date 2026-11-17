@@ -142,7 +142,8 @@ bool records(const ArchiveReader& reader,
                     p.rot_deg = (orientation % 4) * 90;
                     p.mirror = orientation >= 4;
                 } else if (orientation == 8 || orientation == 9) {
-                    in >> p.rot_deg;
+                    if (!(in >> p.rot_deg))
+                        return fail("malformed pad angle " + path);
                     p.mirror = orientation == 9;
                 } else
                     report("unknown pad orientation");

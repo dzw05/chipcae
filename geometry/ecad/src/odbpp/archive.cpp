@@ -110,7 +110,7 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                     continue;
                 }
                 auto size = dir ? 0 : e.file_size();
-                if (!account(size))
+                if (!dir && !account(size))
                     return;
                 s.entries.push_back({rel, size, dir});
                 s.directory_paths.push_back(e.path());
@@ -128,7 +128,7 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
             if (name.ends_with(".z")) {
                 s.unsupported.push_back(
                     {"IMPORT_UNSUPPORTED_ELEMENT", input.string() + ": .Z compression", 0});
-                fail("empty input");
+                fail("unsupported .Z compression");
                 return;
             }
             if (name.ends_with(".tgz") || name.ends_with(".tar.gz")) {

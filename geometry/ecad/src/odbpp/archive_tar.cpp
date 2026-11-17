@@ -167,7 +167,9 @@ bool index_tar(const std::filesystem::path& path,
                     if (size > limits.total_bytes - total)
                         return fail("total byte limit");
                     total += size;
-                    if (static_cast<double>(total) > static_cast<double>(compressed) * limits.ratio)
+                    // Gzip has one shared compressed stream, without entry sizes.
+                    // Its full size bounds each entry's compressed contribution.
+                    if (static_cast<double>(size) > static_cast<double>(compressed) * limits.ratio)
                         return fail("ratio limit");
                     if (type == '0' || type == 0 || type == '5') {
                         entries.push_back({name, size, type == '5'});
