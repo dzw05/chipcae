@@ -14,6 +14,11 @@
 #include <sstream>
 #include <stdexcept>
 #include <tuple>
+#include <type_traits>
+
+static_assert(std::is_same_v<decltype(chipcae::geometry::ecad::odbpp_detail::map_odb(
+                                 std::declval<const chipcae::geometry::ecad::detail::OdbJob&>())),
+                             chipcae::geometry::Expected<chipcae::geometry::ecad::EcadModel>>);
 
 using namespace chipcae::geometry::ecad;
 using namespace chipcae::geometry::ecad::detail;
@@ -59,8 +64,8 @@ OdbJob board() {
 }
 EcadModel mapped(const OdbJob& j, const MapOptions& options = {}) {
     auto r = map_odb(j, options);
-    require(bool(r), "expected mapping success; got " + r.error);
-    return r.model;
+    require(bool(r), "expected mapping success; got " + (r ? std::string{} : r.error().message));
+    return r.value();
 }
 double area(const EcadModel& m) {
     require(!m.layers.empty(), "missing copper layer");
@@ -78,9 +83,10 @@ double area(const EcadModel& m) {
 void rejected(const OdbJob& j, const std::vector<std::string>& names, const MapOptions& o = {}) {
     auto r = map_odb(j, o);
     require(!r, "expected rejection");
-    require(r.error.find("IMPORT_REJECTED") != std::string::npos, "wrong error code");
+    require(r.error().message.find("IMPORT_REJECTED") != std::string::npos, "wrong error code");
     for (const auto& n : names)
-        require(r.error.find(n) != std::string::npos, "error missing " + n + ": " + r.error);
+        require(r.error().message.find(n) != std::string::npos,
+                "error missing " + n + ": " + r.error().message);
 }
 void equal(const EcadModel& a, const EcadModel& b) {
     require(a.id == b.id && a.dbu_m == b.dbu_m && a.outline.points == b.outline.points,
@@ -181,7 +187,7 @@ void symbol_units() {
     auto mm = board();
     auto& copper = mm.features["TOP"];
     copper.surfaces.clear();
-    copper.symbols = {{"r254"}};
+    copper.symbols = {{"round254"}};
     copper.pads = {{{2.54, 2.54}, 0, true}};
     copper.lines = {{{1.27, 5.08}, {3.81, 5.08}, 0, true}};
     copper.arcs = {{{7.62, 5.08}, {5.08, 7.62}, {5.08, 5.08}, 0, true, false}};
@@ -192,7 +198,7 @@ void symbol_units() {
     drill.end_name = "BOTTOM";
     mm.layers.push_back(drill);
     auto& holes = mm.features["DRILL"];
-    holes.symbols = {{"r508"}, {"r254"}};
+    holes.symbols = {{"round508"}, {"round254"}};
     holes.pads = {{{2.54, 2.54}, 0, true}, {{5.08, 2.54}, 1, true}};
     mm.tools["DRILL"] = {{7, "plated", 0.508}};
     mm.attrs.layer["DRILL"][".plating_thickness"] = "0.0254";
@@ -235,8 +241,8 @@ void symbol_units() {
             convert(a.c);
         }
     }
-    inch.features["TOP"].symbols = {{"r10"}};
-    inch.features["DRILL"].symbols = {{"r20"}, {"r10"}};
+    inch.features["TOP"].symbols = {{"round10"}};
+    inch.features["DRILL"].symbols = {{"round20"}, {"round10"}};
     inch.tools["DRILL"].front().finish_size = 0.02;
     inch.attrs.layer["DRILL"][".plating_thickness"] = "0.001";
     const auto mapped_mm = mapped(mm), mapped_inch = mapped(inch);
@@ -285,9 +291,8 @@ void unavailable_thickness() {
         j.attrs.layer["TOP"][".layer_dielectric"] = text;
         std::vector<ThicknessRecord> records;
         const auto rejected = map_odb(j, {nullptr, &records});
-        require(!rejected.error.empty() &&
-                    rejected.error.find("missing thickness for 1 layer(s): TOP") !=
-                        std::string::npos,
+        require(!rejected && rejected.error().message.find(
+                                 "missing thickness for 1 layer(s): TOP") != std::string::npos,
                 "unavailable thickness participates in aggregate missing report");
         require(records.size() == 4 && records.front().source == "missing" &&
                     records.front().thickness_m == 0,
@@ -304,7 +309,7 @@ void line_width() {
     auto j = board();
     auto& f = j.features["TOP"];
     f.surfaces.clear();
-    f.symbols = {{"r1000"}};
+    f.symbols = {{"round1000"}};
     f.lines.push_back({{1, 1}, {7, 1}, 0, true});
     near(area(mapped(j)), 6e6 + std::numbers::pi * 250000, 1e-3);
 }
@@ -312,14 +317,14 @@ void collapsed_line() {
     auto j = board();
     auto& f = j.features["TOP"];
     f.surfaces.clear();
-    f.symbols = {{"r1000"}};
+    f.symbols = {{"round1000"}};
     f.lines = {{{1, 1}, {1, 1}, 0, true}};
     near(area(mapped(j)), std::numbers::pi * 250000, 1e-3);
 }
 void negative() {
     auto j = board();
     auto& f = j.features["TOP"];
-    f.symbols = {{"r2000"}};
+    f.symbols = {{"round2000"}};
     f.pads.push_back({{4, 4}, 0, false});
     near(area(mapped(j)), 64e6 - std::numbers::pi * 1e6, 1e-3);
 }
@@ -502,14 +507,16 @@ void skip() {
     require(actual == expected, "skip report");
 }
 void unsupported() {
-    auto j = board();
-    auto& f = j.features["TOP"];
-    f.symbols = {{"unknown_symbol"}};
-    f.pads.push_back({{4, 4}, 0, true});
-    auto m = mapped(j);
-    require(m.report.unsupported.size() == 1, "one unknown symbol report");
-    require(m.report.unsupported.front().element == "Symbol:TOP:0", "unknown symbol identity");
-    near(area(m), 64e6, 1e-3);
+    for (const auto* name : {"unknown_symbol", "r1000", "s1000", "R1000", "S1000"}) {
+        auto j = board();
+        auto& f = j.features["TOP"];
+        f.symbols = {{name}};
+        f.pads.push_back({{4, 4}, 0, true});
+        auto m = mapped(j);
+        require(m.report.unsupported.size() == 1, "one unknown symbol report");
+        require(m.report.unsupported.front().element == "Symbol:TOP:0", "unknown symbol identity");
+        near(area(m), 64e6, 1e-3);
+    }
 }
 void stroke_symbols() {
     for (const auto* name : {"oval2000x1000", "rect2000x1000", "round2000x1000"}) {
@@ -568,7 +575,7 @@ void via() {
     j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
     j.tools["DRILL"] = {{1, "plated", 0.6}, {2, "slot", 0.8}};
     auto& f = j.features["DRILL"];
-    f.symbols = {{"r600"}, {"r800"}};
+    f.symbols = {{"round600"}, {"round800"}};
     f.pads = {{{2, 3}, 0, true}, {{6, 7}, 0, true}, {{8, 8}, 1, true}};
     f.lines.push_back({{4, 4}, {5, 4}, 1, true});
     auto m = mapped(j);
@@ -597,7 +604,7 @@ void via_region_initialization() {
     j.layers.push_back(drill);
     j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
     auto& f = j.features["DRILL"];
-    f.symbols = {{"r600"}};
+    f.symbols = {{"round600"}};
     for (bool overlap : {false, true}) {
         f.pads = {{{2, 3}, 0, true}, {{overlap ? 2.2 : 200, 3}, 0, true}};
         if (overlap)
@@ -680,7 +687,7 @@ void via_layer_envelope() {
     j.layers.push_back(drill);
     j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
     auto& f = j.features["DRILL"];
-    f.symbols = {{"r600"}};
+    f.symbols = {{"round600"}};
     // The middle disk connects the first two only transitively.
     const std::array<OdbPad, 3> pads{{{{2, 3}, 0, true}, {{3, 3}, 0, true}, {{2.5, 3}, 0, true}}};
     std::array<int, 3> order{0, 1, 2};
@@ -728,7 +735,7 @@ void via_fraction_invariants() {
     j.layers.push_back(drill);
     j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
     auto& f = j.features["DRILL"];
-    f.symbols = {{"r600"}};
+    f.symbols = {{"round600"}};
     for (double separation : {0.0, 0.2, 0.6, 0.7}) {
         const std::array<OdbPad, 3> pads{
             {{{2, 3}, 0, true}, {{2 + separation, 3}, 0, true}, {{2, 3}, 0, true}}};
@@ -776,7 +783,7 @@ void mixed_tools() {
     j.layers.push_back(drill);
     j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
     auto& f = j.features["DRILL"];
-    f.symbols = {{"r600"}};
+    f.symbols = {{"round600"}};
     f.pads = {{{2, 3}, 0, true}, {{6, 7}, 0, true}};
     // Repeated plated sizes retain the matrix span and symbol diameter.
     j.tools["DRILL"] = {{7, "plated", 0.6}, {9, "PLATED", 0.6}};
@@ -804,19 +811,19 @@ void mixed_tools() {
         near(v.inner_radius_dbu, 275);
     }
     for (const auto* type : {"non-plated", "slot"}) {
-        f.symbols = {{"r600.49"}};
+        f.symbols = {{"round600.49"}};
         j.tools["DRILL"] = {{7, "plated", 0.60049}, {9, type, 0.60051}};
         const auto m = mapped(j);
         require(m.vias.size() == 2 && m.report.unsupported.empty(),
                 "different rounded DBU diameters cannot create classification ambiguity");
         near(m.vias.front().outer_radius_dbu, 300);
-        f.symbols = {{"r600.51"}};
+        f.symbols = {{"round600.51"}};
         j.tools["DRILL"] = {{7, "plated", 0.60051}};
         j.attrs.layer["DRILL"][".plating_thickness"] = "0.0256";
         const auto odd = mapped(j);
         near(odd.vias.front().outer_radius_dbu, 300.5);
         near(odd.vias.front().inner_radius_dbu, 274.9);
-        f.symbols = {{"r600"}};
+        f.symbols = {{"round600"}};
         j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
     }
     for (const auto& type : {"non-plated", "slot"}) {
@@ -832,7 +839,7 @@ void mixed_tools() {
         }
     }
     // Distinct diameters remain unambiguous in the frozen representation.
-    f.symbols.push_back({"r800"});
+    f.symbols.push_back({"round800"});
     f.pads.back().sym = 1;
     j.tools["DRILL"] = {{7, "plated", 0.6}, {9, "non-plated", 0.8}};
     for (int order = 0; order < 2; ++order) {
@@ -854,7 +861,7 @@ void non_plated() {
     drill.end_name = "BOTTOM";
     j.layers.push_back(drill);
     auto& f = j.features["DRILL"];
-    f.symbols = {{"r600"}};
+    f.symbols = {{"round600"}};
     f.pads = {{{2, 3}, 0, true}};
     for (const auto* type : {"NON-PLATED", "non_plated", "NonPlated"}) {
         j.tools["DRILL"] = {{1, type, 0.6}};
@@ -910,8 +917,14 @@ void invalid_contours() {
                 j.features["TOP"].surfaces.front().contours.push_back(c);
             if (profile) {
                 rejected(j, {"degenerate contour"});
-                require(map_odb(j).model.outline.points.empty(),
-                        "invalid profile rejected before populating outline");
+                const auto invalid = map_odb(j);
+                bool model_unavailable = false;
+                try {
+                    (void)invalid.value();
+                } catch (const std::bad_variant_access&) {
+                    model_unavailable = true;
+                }
+                require(model_unavailable, "invalid profile exposes no model value");
             } else
                 equal(mapped(j), mapped(board()));
         }
@@ -1460,9 +1473,9 @@ void boolean_ring_invariants() {
     f.surfaces.push_back({false, {diamond}});
     auto result = map_odb(j);
     require(bool(result), "point contact is represented by separate simple rings");
-    require(result.model.layers.front().polygons.size() == 2,
+    require(result.value().layers.front().polygons.size() == 2,
             "rounded point contact preserves exterior and hole");
-    near(area(result.model), 56e6);
+    near(area(result.value()), 56e6);
 
     // Four individually simple triangles produce a non-simple union when the
     // narrow intersections round to integer DBU. Reject instead of exporting it.
@@ -1530,7 +1543,7 @@ void unknown_drill_tools() {
     l.end_name = "BOTTOM";
     j.layers.push_back(l);
     auto& f = j.features["DRILL"];
-    f.symbols = {{"r600"}};
+    f.symbols = {{"round600"}};
     f.pads = {{{2, 3}, 0, true}};
     j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
     for (const auto* type : {"", "unknown", "laser", "platted"}) {
@@ -1560,7 +1573,7 @@ void via_radii() {
     l.end_name = "BOTTOM";
     j.layers.push_back(l);
     auto& f = j.features["DRILL"];
-    f.symbols = {{"r600"}};
+    f.symbols = {{"round600"}};
     f.pads = {{{2, 3}, 0, true}};
     for (bool with_tool : {false, true}) {
         if (with_tool)
@@ -1584,7 +1597,7 @@ void via_radii() {
                     "invalid annulus reported");
         }
     }
-    f.symbols = {{"r0.5"}};
+    f.symbols = {{"round0.5"}};
     j.attrs.layer["DRILL"][".plating_thickness"] = "0.0001";
     for (double diameter : {0.0, -0.0001}) {
         j.tools["DRILL"] = {{1, "plated", diameter}};
@@ -1603,7 +1616,7 @@ void drill_rejections() {
     l.start_name = "TOP";
     l.end_name = "BOTTOM";
     j.layers.push_back(l);
-    j.features["DRILL"].symbols = {{"r600"}};
+    j.features["DRILL"].symbols = {{"round600"}};
     j.features["DRILL"].pads = {{{2, 3}, 0, true}};
     auto m = mapped(j);
     require(m.vias.empty() && m.report.unsupported.size() == 1 &&

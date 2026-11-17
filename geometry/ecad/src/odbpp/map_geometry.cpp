@@ -105,11 +105,7 @@ struct Mapper {
         auto name = fold_ascii(f.symbols[static_cast<std::size_t>(index)].name);
         Symbol s;
         std::size_t prefix = 0;
-        for (const auto& kind : {std::string("round"),
-                                 std::string("rect"),
-                                 std::string("oval"),
-                                 std::string("r"),
-                                 std::string("s")})
+        for (const auto& kind : {std::string("round"), std::string("rect"), std::string("oval")})
             if (name.starts_with(kind)) {
                 s.kind = kind;
                 prefix = kind.size();
@@ -132,10 +128,6 @@ struct Mapper {
             s.h *= scale / 1000;
             if (!(s.w > 0 && s.h > 0))
                 return {};
-            if (s.kind == "r")
-                s.kind = "round";
-            if (s.kind == "s")
-                s.kind = "rect";
             return s;
         } catch (const std::exception&) {
             return {};
@@ -392,7 +384,7 @@ struct Mapper {
     }
 };
 } // namespace
-ImportResult map_odb(const OdbJob& job, const MapOptions& options) {
+Expected<EcadModel> map_odb(const OdbJob& job, const MapOptions& options) {
     ImportResult result;
     result.model.id = job.step;
     result.model.dbu_m = 1e-6;
@@ -426,8 +418,8 @@ ImportResult map_odb(const OdbJob& job, const MapOptions& options) {
         }
         m.fractions();
     } catch (const std::exception& e) {
-        result.error = "IMPORT_REJECTED: " + std::string(e.what());
+        return ImportThresholdError{"IMPORT_REJECTED: " + std::string(e.what())};
     }
-    return result;
+    return std::move(result.model);
 }
 } // namespace chipcae::geometry::ecad::odbpp_detail

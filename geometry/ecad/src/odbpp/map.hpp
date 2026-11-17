@@ -1,5 +1,6 @@
 #pragma once
 #include "chipcae/geometry/ecad/ipc2581.hpp"
+#include "chipcae/geometry/import_thresholds.hpp"
 #include "odb_job.hpp"
 
 #include <map>
@@ -25,5 +26,5 @@ struct MapOptions {
 std::string fold_ascii(std::string);
 double unit_m(const OdbJob&);
 void map_stackup(const OdbJob&, const MapOptions&, ImportResult&);
-ImportResult map_odb(const OdbJob&, const MapOptions& = {});
+Expected<EcadModel> map_odb(const OdbJob&, const MapOptions& = {});
 } // namespace chipcae::geometry::ecad::odbpp_detail
