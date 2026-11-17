@@ -276,7 +276,8 @@ def _diff(odb, ipc, delta):
     structure_reasons = []
     if len(a) != len(b):
         structure_reasons.append(f'layer count differs: {len(a)} versus {len(b)}')
-    if sa != sb:
+    common = min(len(sa), len(sb))
+    if sa[:common] != sb[:common]:
         structure_reasons.append('copper/dielectric sequence differs')
     layer_reason = '; '.join(structure_reasons) if structure_reasons else (
         'identical' if names_a == names_b else 'layer names differ')

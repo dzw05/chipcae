@@ -76,7 +76,7 @@ def reports(result, out):
     write_report(result, out)
     assert first == [(out / name).read_bytes() for name in ('diff.json', 'diff.md')]
     assert json.loads(first[0]) == result
-    assert first[0].decode().rstrip('\n') == json.dumps(result, indent=2, ensure_ascii=False)
+    assert first[0] == json.dumps(result, indent=2, ensure_ascii=False).encode('utf-8')
     return first[1].decode()
 
 

@@ -7,7 +7,7 @@ import struct
 from pathlib import Path
 import tempfile
 from unittest.mock import patch
-from test_identical import board, save, diff_stacks, entry, number, polyset, write_report, EcadDiffError
+from test_identical import board, save, diff_stacks, entry, number, polyset, write_report, EcadDiffError, DELTA, PERIMETER
 
 
 def main():
@@ -52,6 +52,19 @@ def main():
         result = diff_stacks(save(root / 'a.json', a), save(root / 'b.json', b))
         e = entry(result, 'copper_area', '0:F.Cu|F.Cu')
         assert e['grade'] == 'hard' and e['tol'] > 0
+        # Absent copper retains the other side's perimeter and 100% mismatch.
+        absent, present = board(), board()
+        del absent['layers'][0]['copper']
+        for representation in ('fraction', 'polygons'):
+            if representation == 'polygons':
+                polyset(root, present)
+            pa = save(root / 'absent.json', absent)
+            pb = save(root / 'present.json', present)
+            for left, right in ((pa, pb), (pb, pa)):
+                e = entry(diff_stacks(left, right), 'copper_area', '0:F.Cu|F.Cu')
+                assert e['grade'] == 'hard'
+                number(e['delta'], max(e['odb'], e['ipc']))
+                number(e['tol'], DELTA * PERIMETER)
         data = (b'CCPOLY01' + struct.pack('<dII', 1e-9, 1, 4) + b'F.Cu'
                 + struct.pack('<Iq', 0, 0))
         (root / 'empty.polyset').write_bytes(data)
