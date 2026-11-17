@@ -20,7 +20,9 @@ def acceptance(d):
     error = abs(measured - exact) / exact
     print('MEASURED 派生件（由真实盖板四角倒角，非原始设计）', measured, exact, error)
     assert error <= 1e-9, error
-    assert '派生件（由真实盖板四角倒角，非原始设计）' in (d / 'report.json').read_text()
+    # Provenance token: docs/geometry/assembly-report-0.1.md; decode JSON escapes.
+    report = json.loads((d / 'report.json').read_text())
+    assert '派生件（由真实盖板四角倒角，非原始设计）' in json.dumps(report, ensure_ascii=False)
 
 
 if __name__ == '__main__':

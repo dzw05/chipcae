@@ -42,6 +42,7 @@ def acceptance(d):
     interposer['material_approx'] = True
     model['parts'].append(interposer)
     imported(d, model)
+    # Diagnostic tokens and mapped IDs: docs/geometry/assembly-report-0.1.md.
     report = json.loads((d / 'report.json').read_text())
     text = json.dumps(report, ensure_ascii=False)
     assert '近似材料' in text, report

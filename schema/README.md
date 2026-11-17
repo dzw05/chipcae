@@ -21,6 +21,8 @@
 零件放置可选 attach（`layer:<名称>@top|bottom` 或 `part:<id>@top|bottom`）
 或绝对 STEP frame（`frame: "step"` 与三维 `origin`），两种写法互斥。
 `parts_from_step` 用 body 名映射到 id、material，支持可选布尔 `material_approx`。
+对应的 assembly JSON 导入报告诊断文本契约为
+[assembly-report/0.1](../docs/geometry/assembly-report-0.1.md)。
 
 示例为 `examples/assembly/fcbga_lid_stiffener.assembly.json` 和
 `examples/assembly/package_bulk_parts.assembly.json`，仅引用文件名，不包含 STEP 数据。
