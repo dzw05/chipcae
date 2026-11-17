@@ -56,6 +56,7 @@ struct HexMeshArrays {
     std::map<std::string, std::vector<Local>> face_sets;
     std::vector<Local> pending_cut;
     std::vector<SnapReport> snapped;
+    // Global padded grid axes; x/y interval counts define the dense Morton column count.
     std::array<std::vector<Real>, 3> axes;
 };
 template <class T, class MemSpace>
@@ -77,7 +78,8 @@ struct HexMeshDevice {
     View1<const Local, MemSpace> node_layer, elem_attribute, elem_material;
     View1<const Index, MemSpace> node_column, elem_gid;
     View1<const Real, MemSpace> copper_phi;
-    std::size_t nz = 0;
+    // Global dense Morton columns, including padding and columns without elements.
+    std::size_t nz = 0, column_count = 0;
 };
 template <class MemSpace>
 HexMeshDevice<MemSpace> upload(const HexMeshArrays& m) {
@@ -90,6 +92,9 @@ HexMeshDevice<MemSpace> upload(const HexMeshArrays& m) {
             upload_vector<Index, MemSpace>(m.node_column, "node_column"),
             upload_vector<Index, MemSpace>(m.elem_gid, "elem_gid"),
             upload_vector<Real, MemSpace>(m.copper_phi, "copper_phi"),
-            m.axes[2].empty() ? 0 : m.axes[2].size() - 1};
+            m.axes[2].empty() ? 0 : m.axes[2].size() - 1,
+            m.axes[0].empty() || m.axes[1].empty()
+                ? 0
+                : (m.axes[0].size() - 1) * (m.axes[1].size() - 1)};
 }
 } // namespace chipcae::mesh

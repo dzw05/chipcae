@@ -1,0 +1,1 @@
+{"materials":[{"id":"m","schema_version":"1","unit_system":"SI","model":"thermo_elastic","density":1,"thermal_expansion":{"cte_type":"tangent","symmetry":"isotropic","stress_free_temperature":300,"table":{"temperatures":[250,400],"columns":{"alpha":[0.00001,0.00002]},"interpolation":"linear","extrapolation":"error"}},"provenance":{"source_type":"test","confidence":"low"}}]}

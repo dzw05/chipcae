@@ -25,6 +25,7 @@ add_test(NAME core_public_headers
 
 add_executable(chipcae_test_event_log protocol/test_event_log.cpp)
 target_link_libraries(chipcae_test_event_log PRIVATE chipcae::io)
+target_compile_definitions(chipcae_test_event_log PRIVATE CHIPCAE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 chipcae_set_warnings(chipcae_test_event_log)
 add_test(NAME event_log COMMAND chipcae_test_event_log)
 
@@ -90,8 +91,45 @@ if(CHIPCAE_ENABLE_HDF5)
         endif()
     endif()
 endif()
+add_executable(chipcae_test_control_file protocol/test_control_file.cpp)
+target_link_libraries(chipcae_test_control_file PRIVATE chipcae::io)
+chipcae_set_warnings(chipcae_test_control_file)
+add_test(NAME control_file COMMAND chipcae_test_control_file)
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME case_run_schema_fixtures
+        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/schema/tests/validate_fixtures.py
+                ${PROJECT_SOURCE_DIR})
+    set_tests_properties(case_run_schema_fixtures PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
 add_executable(chipcae_test_repair_policy unit/test_repair_policy.cpp)
 target_link_libraries(chipcae_test_repair_policy PRIVATE chipcae::geometry)
 chipcae_set_warnings(chipcae_test_repair_policy)
 add_test(NAME repair_policy_tiers COMMAND chipcae_test_repair_policy)
 set_tests_properties(repair_policy_tiers PROPERTIES LABELS "mesh;tierA" TIMEOUT 60)
+
+if(CHIPCAE_ENABLE_ECAD)
+    add_executable(chipcae_test_ipc2581 unit/test_ipc2581.cpp)
+    target_link_libraries(chipcae_test_ipc2581 PRIVATE chipcae::geometry_ecad)
+    target_compile_definitions(chipcae_test_ipc2581 PRIVATE CHIPCAE_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+    chipcae_set_warnings(chipcae_test_ipc2581)
+    add_test(NAME ipc2581_stackup COMMAND chipcae_test_ipc2581)
+    add_test(NAME ipc2581_copper_area COMMAND chipcae_test_ipc2581)
+    add_test(NAME ipc2581_unsupported COMMAND chipcae_test_ipc2581)
+    set_tests_properties(ipc2581_stackup ipc2581_copper_area ipc2581_unsupported
+        PROPERTIES LABELS "tierA" TIMEOUT 60)
+
+    add_executable(chipcae_test_material_map unit/test_material_map.cpp)
+    target_link_libraries(chipcae_test_material_map PRIVATE chipcae::geometry_ecad)
+    chipcae_set_warnings(chipcae_test_material_map)
+    add_test(NAME ecad_material_missing COMMAND chipcae_test_material_map)
+    set_tests_properties(ecad_material_missing PROPERTIES LABELS "tierA" TIMEOUT 60)
+
+    add_executable(chipcae_test_ecad_e2e integration/ecad/e2e.cpp)
+    target_link_libraries(chipcae_test_ecad_e2e PRIVATE chipcae::geometry_ecad)
+    chipcae_set_warnings(chipcae_test_ecad_e2e)
+    add_test(NAME ecad_e2e_fcbga COMMAND chipcae_test_ecad_e2e)
+    set_tests_properties(ecad_e2e_fcbga PROPERTIES LABELS "nightly" TIMEOUT 300)
+endif()

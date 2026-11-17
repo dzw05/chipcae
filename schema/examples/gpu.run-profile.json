@@ -1,0 +1,7 @@
+{
+  "schema": "chipcae.run_profile/1.0",
+  "ranks": 2,
+  "backend": "cuda",
+  "gpus": 2,
+  "output_interval": { "steps": 10 }
+}

@@ -65,6 +65,16 @@ Local Release build (`cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Re
 
 Hosted run [43995538668](https://github.com/dzw05/chipcae/actions/runs/43995538668) passed Lint and Build and test but failed Mesh because the target list omitted `chipcae_test_copper_map`, even though `copper_map_analytic` is registered with CTest's `mesh` label. `.github/workflows/mesh.yml` now builds that target. The matching local mesh workflow configuration builds all five selected tests and passes them. Use `gh run view 43995538668` to inspect the hosted run; invoking `gh run view` non-interactively without a run ID produces the CLI usage error shown in the original report.
 
+### E7 validation (2026-11-17)
+
+Local Release build (`cmake -S . -B build-e7-release -G Ninja -DCMAKE_BUILD_TYPE=Release` and `cmake --build build-e7-release --parallel 4`) succeeded. All 17 tests passed with `ctest --test-dir build-e7-release --output-on-failure`; clang-format 23.1.5 passed its dry-run check. The hosted run [44005172573](https://github.com/dzw05/chipcae/actions/runs/44005172573) passed Lint, Build and test, Mesh tests, and `ci-ok`. The reported `run or job ID required when not running interactively` text is `gh` usage output from running `gh run view` without an ID; it is not a CI failure. To inspect a run non-interactively, include its ID, for example `gh run view 44005172573`.
+
+### E9 validation (2026-11-17)
+
+Hosted run [44007926671](https://github.com/dzw05/chipcae/actions/runs/44007926671) passed Lint but failed Build and test. The compile error was `-Werror=unused-but-set-variable` for `accept_b` in `kernel/src/import_main.cpp`: the argument is parsed for both builds but only read when ECAD is enabled. Marking it `[[maybe_unused]]` fixes the ECAD-disabled CI build. The `run or job ID required when not running interactively` text came from invoking `gh run view` without the run ID; it was a separate CLI usage error.
+
+Local Release validation with the hosted CI configuration (`CHIPCAE_WARNINGS_AS_ERRORS=ON`, ECAD and Kokkos disabled) built successfully and passed all 15 registered CTest tests. The E9 ECAD-enabled Release build also succeeded and all 21 tests passed. clang-format 23.1.5 passed its dry-run check.
+
 ## Merge gate
 
 `main` does not use branch protection. The only hard gate is the aggregate job `CI / ci-ok` in the `CI` workflow (ADR-0006). Do not enable branch protection or a ruleset, and do not mark `CI / Lint` or `CI / Build and test` as required checks.
