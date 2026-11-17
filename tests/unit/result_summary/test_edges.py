@@ -51,7 +51,7 @@ class Edges(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)
             _, manifest = fixture(run)
-            values = [0, -2, 3.5, 10**100, True, False]
+            values = [0, -2, 3.5, 10**100]
             manifest['summary'] += [dict(name=f'value_{i}', value=value)
                                     for i, value in enumerate(values)]
             save(run, manifest)
@@ -62,7 +62,7 @@ class Edges(unittest.TestCase):
                 self.assertEqual(main([str(run)]), 0)
             self.assertEqual(json.loads(out.getvalue())['manifest_summary'], expected)
             for index in (0, 1):
-                for value in ('text', None, [1], {'nested': 1},
+                for value in (True, False, 'text', None, [1], {'nested': 1},
                               float('inf'), -float('inf'), float('nan')):
                     with self.subTest(index=index, value=value):
                         manifest['summary'][index]['value'] = value

@@ -203,7 +203,7 @@ def _summarize(run_dir, top_rel_tol):
                  and entry['name'] and 'value' in entry, 'invalid summary entry')
         name, value = entry['name'], entry['value']
         _require(name not in summary, f'summary[{index}].name: duplicate summary name: {name}')
-        _require(isinstance(value, (int, float))
+        _require(not isinstance(value, bool) and isinstance(value, (int, float))
                  and (isinstance(value, int) or np.isfinite(value)),
                  f'summary[{index}].value ({name}): expected finite numeric value')
         summary[name] = value
