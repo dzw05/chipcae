@@ -202,7 +202,7 @@ def w_bfp_from_frd(frd: Path) -> float:
     if not disp:
         raise RuntimeError(f"no DISP records parsed from {frd}")
     rows = []
-    for nid, (ux, uy, uz) in disp.items():
+    for nid, (_ux, _uy, uz) in disp.items():
         if nid not in nodes:
             continue
         x, y, z = nodes[nid]

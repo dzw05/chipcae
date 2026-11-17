@@ -131,6 +131,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
     def test_contract_rejects_invalid_artifacts(self):
         import jsonschema
 
+        self.assertTrue(REF.is_file(), f"missing required artifact: {REF}")
         data = json.loads(REF.read_text(encoding="utf-8"))
         contract = copy.deepcopy(CONTRACT)
         jsonschema.Draft202012Validator.check_schema(contract)
@@ -142,13 +143,13 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         portable = copy.deepcopy(data)
         portable.pop("provenance", None)
         validate_reference(portable, contract)
-        variants = []
         for field in ("host", "calculix_version"):
             metadata = dict(portable, provenance={field: "another environment"})
             validate_reference(metadata, contract)
             for value in (123, ""):
                 validate_reference(dict(portable, provenance={field: value}), contract)
         validate_reference(dict(portable, provenance={"future_metadata": 123}), contract)
+        variants = []
         for field in ("label", "W_bfp_m", "host", "calculix_version"):
             invalid = copy.deepcopy(data)
             del invalid[field]
@@ -190,6 +191,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
                     validate_reference(invalid, contract)
 
     def test_reference_schema_and_report_delta(self):
+        self.assertTrue(REF.is_file(), f"missing required artifact: {REF}")
         with REF.open(encoding="utf-8") as handle:
             data = json.load(handle)
         contract = copy.deepcopy(CONTRACT)
