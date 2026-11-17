@@ -56,8 +56,12 @@ int main(int argc, char** argv) try {
     const Real oriented_integral = -(tan.reference_temperature - below) * tan.alpha.front();
     const Real exterior_secant = oriented_integral / (below - tan.reference_temperature);
     check(secant_to_tangent(sec, below, value) == StatusCode::Ok, "below secant status");
+    check(std::isfinite(value), "below tangent is finite");
     check(near(value, exterior_tangent), "below tangent constant extension");
     check(tangent_to_secant(tan, below, value) == StatusCode::Ok, "below tangent status");
+    check(oriented_integral < 0 && below - tan.reference_temperature < 0,
+          "below reference has negative integral and temperature interval");
+    check(std::isfinite(value) && value > 0, "below secant is finite and positive");
     check(near(value, exterior_secant), "below secant equals oriented integral");
 } catch (const std::exception&) {
     return 1;

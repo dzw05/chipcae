@@ -2,8 +2,8 @@
 
 #include "chipcae/material/cte_convert.hpp"
 
-// Shared with material/tests/core_math.cpp. Keep the original CTE tables and
-// off-knot samples together so both suites consume the same test data.
+// Copied from material/tests/core_math.cpp without modifying that existing test.
+// Keep its original CTE tables and off-knot samples together for the contract tests.
 namespace chipcae::material::test {
 inline const CteTable sec{{250, 300, 350}, {1e-5, 2e-5, 3e-5}, 250};
 inline const CteTable tan{{250, 300, 350}, {1e-5, 3e-5, 5e-5}, 250};

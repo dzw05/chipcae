@@ -40,8 +40,12 @@ int main(int argc, char** argv) try {
             check(out.empty(), "invalid tangent clears vector");
         }
         Real value = std::numeric_limits<Real>::quiet_NaN();
-        check(secant_to_tangent(bad, 325, value) == StatusCode::Failed, "invalid secant scalar");
-        check(tangent_to_secant(bad, 325, value) == StatusCode::Failed, "invalid tangent scalar");
+        check(secant_to_tangent(bad, test::secant_to_tangent_temperature, value) ==
+                  StatusCode::Failed,
+              "invalid secant scalar");
+        check(tangent_to_secant(bad, test::tangent_to_secant_temperature, value) ==
+                  StatusCode::Failed,
+              "invalid tangent scalar");
     };
     reject(CteTable{});
     reject(CteTable{{sec.temperatures.front()}, {sec.alpha.front()}, sec.reference_temperature});
