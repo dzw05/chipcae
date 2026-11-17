@@ -83,7 +83,8 @@ int main(int argc, char** argv) {
         }
     }
     const bool reserved_parse_path =
-        (!input.empty() && !output.empty()) || (!options.assembly.empty() && !output.empty());
+        (!input.empty() && !output.empty()) ||
+        (reserved_argument == "--assembly" && !options.assembly.empty() && !output.empty());
     if (!reserved_argument.empty() && !reserved_parse_path) {
         std::cerr << "unknown argument: " << reserved_argument << '\n';
         return chipcae::importer::CliExit::usage;

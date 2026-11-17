@@ -138,6 +138,14 @@ def run_case(binary, case, generate=False):
             check(result.returncode == 2 and result.stdout == b"" and
                   b"not implemented yet" in result.stderr and
                   b"--assembly" in result.stderr, "assembly output-first: diagnostic differs")
+            # Assembly cannot widen the parse path for an earlier reserved option.
+            for option in ("--accept", "--t-min", "--stack-override"):
+                reference = golden / f"incomplete_{option[2:]}_output"
+                for args in (["-o", "stack.json", option, "xyz"],
+                             ["-o", "stack.json", option, "xyz", "--assembly", "assembly.json"],
+                             [option, "xyz", "--assembly", "assembly.json", "-o", "stack.json"]):
+                    result = invoke(binary, args, directory)
+                    record_or_compare(result, directory, reference, ("stdout", "stderr"), False)
             for value in ("xyz", "1e9999", "1e-5", ""):
                 result = invoke(binary, ["a.xml", "-o", "stack.json", "--t-min", value], directory)
                 check(result.returncode == 2 and b"not implemented yet" in result.stderr and
