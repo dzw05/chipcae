@@ -18,9 +18,9 @@ struct RegionLSOptions {
 // Emit one entry per nonempty source group; phi represents its polygon union.
 // Order groups by layer index, then by the smallest source region index in each
 // group. The group body maps to HexMeshArrays::attr_table.bodies.at(b).
-// To recover sources for output entry k, enumerate these groups in that same
-// order: group k gives li and the complete set of ri (and hence source names).
-// Body identity alone is insufficient: the same body may recur across layers.
+// Returned entries contain body IDs and level-set values only; they carry no
+// layer or source-region metadata. Body identity alone does not identify a
+// source group because the same body may recur across layers.
 std::vector<cut::BodyLevelSet>
 region_level_sets(const StackModel&, const HexMeshArrays&, const RegionLSOptions&);
 } // namespace chipcae::mesh
