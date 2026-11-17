@@ -74,7 +74,7 @@ Python 绑定使用 nanobind（需要 Python 3.9+ 开发头文件）。
 ## 许可
 
 Copyright (c) 2026 Zhiwei Duan
-All rights reserved. Source is published for viewing only; no permission is granted to use, copy, modify, merge, publish, distribute, sublicense, or sell without prior written permission.
+All rights reserved. Source is published for viewing only; no permission is granted to use, copy, modify, merge, publish, distribute, sublicense, or sell without prior written permission. See [LICENSE](LICENSE) for full terms and exceptions.
 
 保留所有权利，源码公开仅供查阅；未经事先书面许可，不得使用、复制、修改、合并、发布、分发、再许可或销售。完整条款及例外（`cases/benchmarks/`：CC BY 4.0；`tools/vv/`、`tests/vv/`：Apache-2.0）见 [LICENSE](LICENSE)。
 
