@@ -265,14 +265,13 @@ def main(root, fixture):
     (root / 'empty').mkdir()
     (root / 'empty.tgz').write_bytes(gzip.compress(tar_bytes([])))
     (root / 'empty.zip').write_bytes(b'')
-    with tarfile.open(root / 'shared-path-types.tgz', 'w:gz') as archive:
-        for kind in [tarfile.LNKTYPE, tarfile.SYMTYPE, tarfile.CHRTYPE,
-                     tarfile.BLKTYPE, tarfile.FIFOTYPE, tarfile.CONTTYPE, tarfile.DIRTYPE]:
-            for regular_first in [False, True]:
-                name = f'shared-{kind.decode()}-{regular_first}'
+    for kind in [tarfile.LNKTYPE, tarfile.SYMTYPE, tarfile.CHRTYPE,
+                 tarfile.BLKTYPE, tarfile.FIFOTYPE, tarfile.CONTTYPE, tarfile.DIRTYPE]:
+        for regular_first in [False, True]:
+            with tarfile.open(root / f'shared-path-{kind.decode()}-{regular_first}.tgz', 'w:gz') as archive:
                 for entry_kind in ([tarfile.REGTYPE, kind] if regular_first
                                    else [kind, tarfile.REGTYPE]):
-                    info = tarfile.TarInfo(name)
+                    info = tarfile.TarInfo('shared' if entry_kind == tarfile.REGTYPE else './shared/')
                     info.type = entry_kind
                     if entry_kind == tarfile.REGTYPE:
                         info.size = 7
@@ -280,6 +279,11 @@ def main(root, fixture):
                     else:
                         info.linkname = 'target' if entry_kind in [tarfile.LNKTYPE, tarfile.SYMTYPE] else ''
                         archive.addfile(info)
+    with tarfile.open(root / 'duplicate-directories.tgz', 'w:gz') as archive:
+        for name in ['shared/', './shared/']:
+            info = tarfile.TarInfo(name)
+            info.type = tarfile.DIRTYPE
+            archive.addfile(info)
 
     with zipfile.ZipFile(root / 'duplicate.zip', 'w') as archive:
         archive.writestr('matrix/matrix', b'a')

@@ -4,6 +4,7 @@
 #include <array>
 #include <coroutine>
 #include <cstring>
+#include <exception>
 #include <miniz.h>
 #include <sstream>
 #include <utility>
@@ -35,6 +36,7 @@ struct Input {
 struct GzipCursor::State {
     struct promise_type {
         std::string_view block;
+        std::exception_ptr exception;
         State get_return_object() {
             return State(std::coroutine_handle<promise_type>::from_promise(*this));
         }
@@ -45,7 +47,7 @@ struct GzipCursor::State {
             return {};
         }
         void return_void() noexcept {}
-        void unhandled_exception() { throw; }
+        void unhandled_exception() noexcept { exception = std::current_exception(); }
     };
     std::coroutine_handle<promise_type> handle;
     ~State() {
@@ -224,6 +226,15 @@ bool GzipCursor::next(std::string_view& block, std::string& error, std::size_t m
     auto h = state_->handle;
     if (!h.done())
         h.resume();
+    if (h.promise().exception) {
+        try {
+            std::rethrow_exception(h.promise().exception);
+        } catch (const std::exception& e) {
+            error_ = std::string("IMPORT_REJECTED: gzip input failure: ") + e.what();
+        } catch (...) {
+            error_ = "IMPORT_REJECTED: gzip input failure";
+        }
+    }
     error = error_;
     if (h.done()) {
         block = {};

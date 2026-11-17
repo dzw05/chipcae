@@ -255,11 +255,6 @@ int main() {
         std::string out, error;
         for (const auto& input : {p, temp / "early-stop.tgz", temp / "early-stop.zip"}) {
             ArchiveReader reader(input, limits);
-            if (input == p) {
-                require(reader.open_error().find("file byte limit") != std::string::npos,
-                        "unread directory payload rejected at open");
-                continue;
-            }
             require(reader.open_error().empty(), reader.open_error());
             require(reader.read_bytes("small", out, error) && out == "ok", error);
             require(reader.for_each_line(
@@ -684,20 +679,32 @@ int main() {
         write(p / "steps/pcb/profile", "OB 0 0 I\nOS 10 0\nOS 10 10\nOS 0 10\nOS 0.000002 0\nOE\n");
         rejected(p, "profile contour not closed");
     });
-    test("odbpp_directory_open_size_limits", [&] {
+    test("odbpp_directory_read_size_limits", [&] {
         const auto p = temp / "directory-open-limits";
         write(p / "irrelevant-a", "123");
         write(p / "irrelevant-b", "456");
         ArchiveLimits limits;
         limits.file_bytes = 2;
-        require(ArchiveReader(p, limits).open_error().find("file byte limit") != std::string::npos,
-                "unused oversized file rejected at open");
+        ArchiveReader file_reader(p, limits);
+        require(file_reader.open_error().empty(), file_reader.open_error());
+        std::string out, error;
+        require(!file_reader.read_bytes("irrelevant-a", out, error) &&
+                    error.find("file byte limit") != std::string::npos,
+                "oversized selected file rejected on read");
         limits.file_bytes = 3;
         limits.total_bytes = 5;
-        require(ArchiveReader(p, limits).open_error().find("total byte limit") != std::string::npos,
-                "unused aggregate rejected at open");
+        ArchiveReader total_reader(p, limits);
+        require(total_reader.open_error().empty(), total_reader.open_error());
+        require(total_reader.read_bytes("irrelevant-a", out, error), error);
+        require(!total_reader.read_bytes("irrelevant-b", out, error) &&
+                    error.find("total byte limit") != std::string::npos,
+                "selected aggregate rejected on read");
         limits.total_bytes = 6;
-        require(ArchiveReader(p, limits).open_error().empty(), "exact directory limits accepted");
+        ArchiveReader exact_reader(p, limits);
+        require(exact_reader.open_error().empty(), exact_reader.open_error());
+        require(exact_reader.read_bytes("irrelevant-a", out, error), error);
+        require(exact_reader.read_bytes("irrelevant-b", out, error),
+                "exact directory limits accepted: " + error);
     });
     test("odbpp_profile_closed", [&] {
         auto j = job(temp / "job");
@@ -858,14 +865,12 @@ int main() {
                 "expected gzip CRC rejection, got " + error);
     });
     test("odbpp_archive_lzw", [&] {
-        auto result = parse_job(temp / "job.tar.Z");
-        if (reported(result.model.report.unsupported, (temp / "job.tar.Z").string()))
-            return;
-        require(bool(result), result.error);
-        std::string decoded, error;
-        require(decode_lzw(bytes(temp / "job.tar.Z"), decoded, error), error);
-        require(decoded == bytes(temp / "job.tar"), "every decoded .Z byte");
-        require(archive(temp / "job.tar.Z") == archive(temp / "job.tgz"), ".Z decoded bytes");
+        const auto dir = temp / "lzw-fallback";
+        write(dir / "payload.Z", bytes(temp / "job.tar.Z"));
+        ArchiveReader reader(dir);
+        require(reader.open_error().empty(), reader.open_error());
+        require(reported(reader.unsupported(), "payload.Z: .Z compression"),
+                "nested .Z fallback reports its path");
     });
     for (const auto* reason : {"total", "file", "entry", "ratio"}) {
         test(std::string("odbpp_archive_limits_") + reason, [&, reason] {
@@ -922,21 +927,18 @@ int main() {
                                    "contiguous: tar contiguous file"})
             require(reported(reader.unsupported(), reason), reason);
     });
-    test("odbpp_tar_regular_duplicate_scope", [&] {
-        ArchiveReader reader(temp / "shared-path-types.tgz");
-        require(reader.open_error().empty(), reader.open_error());
-        std::size_t regular_count = 0;
-        for (const auto& entry : reader.entries()) {
-            if (entry.is_dir)
-                continue;
-            std::string payload;
-            std::string error;
-            require(reader.read_bytes(entry.path, payload, error), error);
-            require(payload == "payload", "regular file sharing a skipped entry path is readable");
-            ++regular_count;
+    test("odbpp_tar_all_entry_duplicates", [&] {
+        for (const auto kind : {'1', '2', '3', '4', '6', '7', '5'}) {
+            for (const auto* order : {"False", "True"}) {
+                ArchiveReader reader(
+                    temp / ("shared-path-" + std::string(1, kind) + "-" + order + ".tgz"));
+                require(reader.open_error() == "IMPORT_REJECTED: duplicate archive entry shared",
+                        reader.open_error());
+            }
         }
-        require(regular_count == 14, "all regular files with shared paths indexed");
-        require(reader.unsupported().size() == 12, "all skipped types reported in both orders");
+        ArchiveReader reader(temp / "duplicate-directories.tgz");
+        require(reader.open_error() == "IMPORT_REJECTED: duplicate archive entry shared",
+                reader.open_error());
     });
     test("odbpp_archive_symlink", [&] {
         ArchiveReader reader(temp / "link.tgz");
@@ -1139,11 +1141,9 @@ int main() {
     });
     test("odbpp_review_empty_unsupported", [&] {
         auto r = parse_job(temp / "job.tar.Z");
-        require(!r &&
-                    r.error == "IMPORT_REJECTED: unsupported .Z compression " +
-                                   (temp / "job.tar.Z").string() &&
-                    reported(r.model.report.unsupported, ".Z compression"),
-                "top-level .Z both rejected and reported");
+        require(!r && r.error == "IMPORT_REJECTED: unsupported archive extension" &&
+                    r.model.report.unsupported.empty(),
+                "top-level .Z is outside the supported archive formats");
         auto p = temp / "only-links";
         fs::create_directories(p);
         std::error_code ec;
@@ -1462,6 +1462,47 @@ int main() {
                         std::string(container) + " " + reason + ": " + error);
             }
         }
+    });
+    test("odbpp_directory_selected_payload_limits", [&] {
+        const auto p = temp / "selected-limits";
+        write(p / "selected", "abc");
+        write(p / "unrelated", std::string(100, 'x'));
+        ArchiveLimits limits;
+        limits.file_bytes = 3;
+        limits.total_bytes = 3;
+        ArchiveReader reader(p, limits);
+        require(reader.open_error().empty(), reader.open_error());
+        std::string out, error;
+        require(reader.read_bytes("selected", out, error) && out == "abc", error);
+        require(!reader.read_bytes("unrelated", out, error) &&
+                    error.starts_with("IMPORT_REJECTED: file byte limit"),
+                error);
+        limits.file_bytes = 100;
+        ArchiveReader total_reader(p, limits);
+        require(total_reader.open_error().empty(), total_reader.open_error());
+        require(total_reader.read_bytes("selected", out, error), error);
+        require(!total_reader.read_bytes("unrelated", out, error) &&
+                    error.starts_with("IMPORT_REJECTED: total byte limit"),
+                error);
+    });
+    test("odbpp_gzip_stream_exception", [&] {
+        std::istringstream input("truncated");
+        input.exceptions(std::ios::failbit | std::ios::badbit);
+        GzipCursor cursor(input);
+        std::string_view block;
+        std::string error;
+        require(!cursor.next(block, error) &&
+                    error.starts_with("IMPORT_REJECTED: gzip input failure"),
+                error);
+        require(!cursor.next(block, error) &&
+                    error.starts_with("IMPORT_REJECTED: gzip input failure"),
+                "failed cursor remains exhausted");
+        std::istringstream stream("truncated");
+        stream.exceptions(std::ios::failbit | std::ios::badbit);
+        require(!stream_gzip(
+                    stream, [](std::string_view) { return true; }, error) &&
+                    error.starts_with("IMPORT_REJECTED: gzip input failure"),
+                error);
     });
     test("odbpp_streaming_memory", [&] {
 #ifdef __linux__

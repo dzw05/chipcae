@@ -163,7 +163,7 @@ bool index_tar(const std::filesystem::path& path,
                 has_pax_size = false;
                 if (!canonical_path(name, error))
                     return false;
-                if ((type == '0' || type == 0) && !seen.insert(name).second)
+                if (!seen.insert(name).second)
                     return fail("duplicate archive entry " + name);
                 if (type == '0' || type == 0 || type == '5') {
                     entries.push_back({name, size, type == '5'});

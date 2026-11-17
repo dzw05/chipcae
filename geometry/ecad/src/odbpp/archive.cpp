@@ -95,7 +95,6 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
             s.directory = true;
             std::error_code ec;
             const auto options = std::filesystem::directory_options::none;
-            std::uint64_t total = 0;
             std::filesystem::recursive_directory_iterator it(input, options, ec), end;
             if (ec) {
                 fail("cannot enumerate input: " + ec.message());
@@ -128,15 +127,6 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                             fail("cannot read file size " + rel + ": " + ec.message());
                             return;
                         } else {
-                            if (size > limits.file_bytes) {
-                                fail("file byte limit " + rel);
-                                return;
-                            }
-                            if (size > limits.total_bytes - total) {
-                                fail("total byte limit " + rel);
-                                return;
-                            }
-                            total += size;
                             s.entries.push_back({rel, size, dir});
                             s.directory_paths.push_back(e.path());
                         }
@@ -164,12 +154,6 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
             }
             if (std::filesystem::file_size(input) == 0) {
                 fail("empty input");
-                return;
-            }
-            if (name.ends_with(".z")) {
-                s.unsupported.push_back(
-                    {"IMPORT_UNSUPPORTED_ELEMENT", input.string() + ": .Z compression", 0});
-                fail("unsupported .Z compression " + input.string());
                 return;
             }
             if (name.ends_with(".tgz") || name.ends_with(".tar.gz")) {
