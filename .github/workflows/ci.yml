@@ -352,11 +352,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      MAMBA_ROOT_PREFIX: ${{ runner.temp }}/desktop-mamba
-      DESKTOP_PREFIX: ${{ runner.temp }}/desktop-sdk
+      # runner.temp is not allowed in job-level env; steps use RUNNER_TEMP / runner.temp.
       CCACHE_DIR: ${{ github.workspace }}/.ccache-desktop
       CCACHE_MAXSIZE: 200M
       QT_QPA_PLATFORM: offscreen
+      MAMBA_ROOT_PREFIX: ${{ github.workspace }}/.desktop-mamba
+      DESKTOP_PREFIX: ${{ github.workspace }}/.desktop-sdk
     steps:
       - name: Checkout
         uses: actions/checkout@v4
