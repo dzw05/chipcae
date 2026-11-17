@@ -18,12 +18,12 @@ class WarpageQoiAnalyticTest(unittest.TestCase):
         self.xs = self.ys = np.linspace(-self.L / 2, self.L / 2, 81)
         self.X, self.Y = np.meshgrid(self.xs, self.ys, indexing="ij")
         self.W = -self.k * (self.X**2 + self.Y**2) / 2 + 1e-3 * self.X - 2e-3 * self.Y + 0.05
-        self.ref = self.k * self.L**2 / 4  # reference value (analytic)
+        self.ref = self.k * self.L**2 / 4  # 参考值 (analytic, not measured)
 
     def _rel(self, got, ref):
         return abs(got / ref - 1.0)
 
-    def _diagonal_kappa(self, X, Y, W):
+    def _diagonal_kappa(self, W):
         # Same sampling as warpage_qoi.py __main__: diagonal (i,i), s = xs * sqrt(2), smax=20 mm.
         wd = np.array([W[i, i] for i in range(len(self.xs))])
         s = self.xs * math.sqrt(2)
@@ -33,7 +33,7 @@ class WarpageQoiAnalyticTest(unittest.TestCase):
         q = qoi_surface(self.X, self.Y, self.W)
         self.assertLessEqual(self._rel(q["W_bfp"], self.ref), 1e-12)
         self.assertLessEqual(self._rel(q["S_cc"], self.ref), 1e-12)
-        kappa = self._diagonal_kappa(self.X, self.Y, self.W)
+        kappa = self._diagonal_kappa(self.W)
         self.assertLessEqual(self._rel(kappa, self.k), 1e-12)
 
     def test_mirror_quarter_reconstruction(self):
@@ -66,7 +66,7 @@ class WarpageQoiAnalyticTest(unittest.TestCase):
         q = qoi_surface(self.X, self.Y, Wg)
         self.assertLessEqual(self._rel(q["W_bfp"], self.ref), 1e-12)
         self.assertLessEqual(self._rel(q["S_cc"], self.ref), 1e-12)
-        kappa = self._diagonal_kappa(self.X, self.Y, Wg)
+        kappa = self._diagonal_kappa(Wg)
         self.assertLessEqual(self._rel(kappa, self.k), 1e-12)
 
 
