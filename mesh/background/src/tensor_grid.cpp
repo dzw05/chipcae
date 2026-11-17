@@ -717,6 +717,7 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
                 return f.polygon.empty() && axes[0][x] < f.box[2] && axes[0][x + 1] > f.box[0] &&
                        axes[1][y] < f.box[3] && axes[1][y + 1] > f.box[1];
             };
+            // Retention is order-independent; ownership below is last-write with box priority.
             bool covered = false, box_owned = false;
             for (const auto& r : layer.regions) {
                 box_owned = box_owned || box_covers(r.footprint);

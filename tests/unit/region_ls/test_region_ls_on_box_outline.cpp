@@ -29,6 +29,36 @@ int main() {
         m.axes[2] = {0, .5, 1};
         auto ls = levels(s, m);
         require(ls.size() == 1, "outline polygon LS");
+        // Exact and roundoff-close outline nodes also stay inside with no user tolerance.
+        HexMeshArrays boundary;
+        boundary.attr_table = m.attr_table;
+        boundary.vertices = {0,
+                             .022,
+                             .5,
+                             .056,
+                             .022,
+                             .5,
+                             .028,
+                             0,
+                             .5,
+                             .028,
+                             .044,
+                             .5,
+                             std::nextafter(.056, 1.),
+                             .022,
+                             .5,
+                             .028,
+                             std::nextafter(.044, 1.),
+                             .5};
+        for (double tolerance : {RegionLSOptions{}.inside_tol_rel, 0.}) {
+            RegionLSOptions options;
+            options.inside_tol_rel = tolerance;
+            const auto values = region_level_sets(s, boundary, options);
+            require(values.size() == 1, "boundary polygon LS");
+            for (auto value : values[0].phi)
+                require(value < 0 && std::abs(value) <= 1e-12,
+                        "outline coincidence independent of user tolerance and grid axes");
+        }
         for (std::size_t n = 0; n < m.node_gid.size(); ++n) {
             double x = m.vertices[3 * n], y = m.vertices[3 * n + 1];
             // Chamfered rectangle is the intersection of eight analytic half planes.
@@ -47,7 +77,7 @@ int main() {
             require(std::abs(ls[0].phi[n] - exact) <= 1e-12, "outline analytic distance");
             if (((x == 0 || x == .056) && y >= .002 && y <= .042) ||
                 ((y == 0 || y == .044) && x >= .002 && x <= .054))
-                require(ls[0].phi[n] <= 0, "coincident edges classified inside");
+                require(ls[0].phi[n] < 0, "coincident edges classified inside");
         }
     });
 }

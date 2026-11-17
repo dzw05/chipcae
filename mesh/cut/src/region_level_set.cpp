@@ -18,6 +18,12 @@ Real distance(Point p, Point a, Point b) {
             : std::clamp(((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / length, Real(0), Real(1));
     return std::hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy);
 }
+Real roundoff_tol(Point p, const Polygon& poly) {
+    Real scale = std::max(std::abs(p[0]), std::abs(p[1]));
+    for (auto v : poly)
+        scale = std::max({scale, std::abs(v[0]), std::abs(v[1])});
+    return 64 * std::numeric_limits<Real>::epsilon() * scale;
+}
 Real phi(Point p, const Polygon& poly) {
     Real d = std::numeric_limits<Real>::infinity();
     bool inside = false;
@@ -28,11 +34,8 @@ Real phi(Point p, const Polygon& poly) {
             p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0])
             inside = !inside;
     }
-    Real scale = std::max(std::abs(p[0]), std::abs(p[1]));
-    for (auto v : poly)
-        scale = std::max({scale, std::abs(v[0]), std::abs(v[1])});
     // Closed polygon boundary, matching tensor-grid containment.
-    if (d <= 64 * std::numeric_limits<Real>::epsilon() * scale)
+    if (d <= roundoff_tol(p, poly))
         return 0;
     return inside ? -d : d;
 }
@@ -74,7 +77,9 @@ std::vector<BodyLevelSet> region_level_sets(const StackModel& stack,
                     continue;
                 const Point p{mesh.vertices[3 * n], mesh.vertices[3 * n + 1]};
                 Real value = phi(p, r.footprint.polygon);
-                const Real tol = options.inside_tol_rel * local_h(mesh, p, p);
+                // Coincidence must survive roundoff even with a zero user tolerance.
+                const Real tol = std::max(options.inside_tol_rel * local_h(mesh, p, p),
+                                          roundoff_tol(p, r.footprint.polygon));
                 if (stack.outline.polygon.empty() &&
                     (std::abs(p[0] - stack.outline.box[0]) <= tol ||
                      std::abs(p[0] - stack.outline.box[2]) <= tol ||
