@@ -29,11 +29,11 @@ output bytes. Tests compare numeric exit codes and the five named artifacts
 (`stack.json`, `stack.polyset`, `defects.json`, `import_report.json`, and
 `import_report.csv`), including whether each artifact exists. There is no sorting,
 JSON parsing, normalization, or comparison of unrelated artifacts. Never format
-the goldens. STEP and ECAD-disabled tests compare only defects and exit 7.
+the goldens. STEP and ECAD-disabled tests compare defects and exit 7; STEP also freezes stdout/stderr.
 
 CTest selects `import_cli_refactor_noop` in ECAD ON builds and
 `import_cli_refactor_noop_ecad_off` in ECAD OFF builds; run both configurations.
-Both register `import_cli_step_unchanged`, `import_cli_reserved_args`, and
+Both register `import_cli_incomplete_reserved_unchanged`, `import_cli_step_unchanged`, `import_cli_reserved_args`, and
 `import_cli_help_unchanged`. All carry the `tierA` and `import_cli` labels.
 
 ```sh
@@ -79,8 +79,23 @@ Duplicate positional input, output, material-map, and accept-b-tier cases compar
 exit status, stdout, stderr, and artifacts with the same main-baseline binary.
 Missing polyset/report/material-map values also compare baseline help bytes.
 The `.chipcae-autotests` marker enables `chipcae_auto_test_subdirs()` discovery
-from tests/CMakeLists.txt; this directory's CMakeLists.txt registers the four tests.
+from tests/CMakeLists.txt; this directory's CMakeLists.txt registers these regression tests.
 
 Empty and truncated XML fixtures also compare exit status, stdout, stderr, and
 all artifact bytes against the same baseline in the `noop` case. Each is copied
 to a relative `input.xml` path so diagnostics do not depend on the checkout path.
+
+Review follow-up: conflict handling deliberately returns exit 2 with empty stdout
+and stderr in both flag orders; tests now freeze that silent-output contract.
+Incomplete supplied-value reserved invocations are registered separately as
+`import_cli_incomplete_reserved_unchanged` and compare exit/stdout/stderr against
+committed main-baseline goldens, rather than hand-written diagnostics. Assembly
+with output remains in the intentional-change tests. Existing boundary assertions
+remain in place so coverage is not reduced.
+
+Additional stdout/stderr goldens for the four boards and STEP, mixed-help goldens,
+and incomplete-reserved goldens were generated with the existing Release binary
+at `/workspace/tasks/istepa-golden-build/kernel/chipcae-import` from the detached
+`1607ad5fde6641a92fb7da7a0a66f456e4ec4adf` baseline source. Reproduce using the
+`noop`, `step`, `help`, and `incomplete_reserved` cases with `--generate`.
+ECAD OFF retains the brief's exact exit-code/defects comparison scope.

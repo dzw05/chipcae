@@ -63,6 +63,7 @@ int main(int argc, char** argv) {
                 help();
                 return chipcae::importer::CliExit::usage;
             }
+            // --t-min consumes a placeholder value; numeric parsing belongs to I-STEP-B.
             if (reserved_argument.empty())
                 reserved_argument = arg;
             if (arg == "--accept")
@@ -88,6 +89,7 @@ int main(int argc, char** argv) {
         return chipcae::importer::CliExit::usage;
     }
     if (accept_b && has_accept) {
+        // The conflict contract is a silent usage failure in either flag order.
         return chipcae::importer::CliExit::usage;
     }
     if (!reserved_argument.empty()) {

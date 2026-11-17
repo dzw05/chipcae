@@ -60,7 +60,7 @@ def run_case(binary, case, generate=False):
                 work.mkdir()
                 result = invoke(binary, [FIXTURES / f"{board}.xml", "-o", "stack.json",
                                          "--material-map", HERE / "material_map.json"], work)
-                record_or_compare(result, work, golden / board, ARTIFACTS, generate)
+                record_or_compare(result, work, golden / board, (*ARTIFACTS, "stdout", "stderr"), generate)
             for name in ("empty_input", "truncated_input"):
                 work = directory / name
                 work.mkdir()
@@ -97,7 +97,9 @@ def run_case(binary, case, generate=False):
             source = FIXTURES / "board_2layer.xml" if case == "ecad_off" else HERE / "input.step"
             result = invoke(binary, [source, "-o", "stack.json"], directory)
             check(result.returncode == 7, f"{case}: expected exit 7, got {result.returncode}")
-            record_or_compare(result, directory, golden / case, ("defects.json",), generate)
+            record_or_compare(result, directory, golden / case,
+                              ("defects.json",) if case == "ecad_off" else
+                              ("defects.json", "stdout", "stderr"), generate)
         elif case == "help":
             for name, args, code in (
                 ("help", ["--help"], 0), ("help_alias", ["-h"], 0),
@@ -114,27 +116,28 @@ def run_case(binary, case, generate=False):
                 check(result.stderr == b"", f"{name}: unexpected stderr {result.stderr!r}")
                 record_or_compare(result, directory, golden / name, ("stdout", "stderr"), generate)
             result = invoke(binary, ["a.xml", "-o", "b", "--help"], directory)
-            check(result.returncode == 2, "mixed help: expected exit 2")
-            check(result.stdout == b"", "mixed help: unexpected stdout")
-            check(result.stderr == b"unknown argument: --help\n", "mixed help: stderr differs")
+            record_or_compare(result, directory, golden / "mixed_help",
+                              ("stdout", "stderr"), generate)
+        elif case == "incomplete_reserved":
+            for option in ("--accept", "--t-min", "--stack-override", "--assembly"):
+                for name, prefix in (("bare", []), ("input", ["a.xml"]),
+                                     ("output", ["-o", "stack.json"])):
+                    if option == "--assembly" and name == "output":
+                        continue  # Intentional diagnostic change, checked in reserved.
+                    result = invoke(binary, [*prefix, option, "xyz"], directory)
+                    record_or_compare(result, directory,
+                                      golden / f"incomplete_{option[2:]}_{name}",
+                                      ("stdout", "stderr"), generate)
         elif case == "reserved":
             check(not generate, "reserved diagnostics are assertions, not baseline goldens")
             failures = []
-            for option in ("--accept", "--t-min", "--stack-override", "--assembly"):
-                for prefix in ([], ["a.xml"], ["-o", "stack.json"]):
-                    result = invoke(binary, [*prefix, option, "xyz"], directory)
-                    check(result.returncode == 2, f"incomplete {option}: exit {result.returncode}")
-                    check(result.stdout == b"", f"incomplete {option}: unexpected stdout")
-                    if option == "--assembly" and prefix == ["-o", "stack.json"]:
-                        check(b"not implemented yet" in result.stderr and
-                              option.encode() in result.stderr,
-                              "assembly with output: reserved diagnostic differs")
-                        continue
-                    check(result.stderr == f"unknown argument: {option}\n".encode(),
-                          f"incomplete {option}: baseline stderr differs: {result.stderr!r}")
             result = invoke(binary, ["--assembly", "assembly.json", "-o", "out.stack.json"], directory)
             check(result.returncode == 2 and b"not implemented yet" in result.stderr and
                   b"--assembly" in result.stderr, "assembly invocation: diagnostic differs")
+            result = invoke(binary, ["-o", "stack.json", "--assembly", "xyz"], directory)
+            check(result.returncode == 2 and result.stdout == b"" and
+                  b"not implemented yet" in result.stderr and
+                  b"--assembly" in result.stderr, "assembly output-first: diagnostic differs")
             for value in ("xyz", "1e9999", "1e-5", ""):
                 result = invoke(binary, ["a.xml", "-o", "stack.json", "--t-min", value], directory)
                 check(result.returncode == 2 and b"not implemented yet" in result.stderr and
@@ -181,6 +184,8 @@ def run_case(binary, case, generate=False):
                 result = invoke(binary, [FIXTURES / "board_2layer.xml", "-o", "stack.json", *flags], directory)
                 if result.returncode != 2:
                     failures.append(f"conflict {flags}: expected exit 2, got {result.returncode}")
+                check(result.stdout == b"" and result.stderr == b"",
+                      f"conflict {flags}: expected silent usage failure")
             check(not failures, "\n".join(failures))
         else:
             raise ValueError(case)
@@ -189,7 +194,7 @@ def run_case(binary, case, generate=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=pathlib.Path)
-    parser.add_argument("case", choices=("noop", "ecad_off", "step", "help", "reserved"))
+    parser.add_argument("case", choices=("noop", "ecad_off", "step", "help", "reserved", "incomplete_reserved"))
     parser.add_argument("--generate", action="store_true")
     args = parser.parse_args()
     run_case(args.binary.resolve(), args.case, args.generate)

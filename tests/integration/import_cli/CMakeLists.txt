@@ -24,3 +24,9 @@ endforeach()
 set_tests_properties(${import_cli_regression} import_cli_step_unchanged
     import_cli_reserved_args import_cli_help_unchanged
     PROPERTIES LABELS "tierA;import_cli" TIMEOUT 60)
+
+add_test(NAME import_cli_incomplete_reserved_unchanged
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/cli_test.py
+            $<TARGET_FILE:chipcae-import> incomplete_reserved)
+set_tests_properties(import_cli_incomplete_reserved_unchanged
+    PROPERTIES LABELS "tierA;import_cli" TIMEOUT 60)

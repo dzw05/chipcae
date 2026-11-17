@@ -9,7 +9,7 @@ here=$(cd -- "$(dirname -- "$0")" && pwd)
 mkdir -p "$here/golden"
 # Reserved diagnostics intentionally differ from baseline: assert them directly,
 # without generating goldens (see README.md).
-for scenario in noop step help; do
+for scenario in noop step help incomplete_reserved; do
     python3 "$here/cli_test.py" "$1" "$scenario" --generate
 done
 python3 "$here/cli_test.py" "$2" ecad_off --generate
