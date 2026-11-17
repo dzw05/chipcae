@@ -80,31 +80,6 @@ def _read_polyset(data):
     return layers
 
 
-def _has_outline(data):
-    """Inspect polyset layer headers without decoding unrelated geometry."""
-    if not data.startswith(b'CCPOLY01'):
-        return False
-    try:
-        count = struct.unpack_from('<I', data, 16)[0]
-        position = 20
-        for _ in range(count):
-            size = struct.unpack_from('<I', data, position)[0]
-            position += 4
-            name = data[position:position + size]
-            position += size
-            if name == b'outline':
-                return True
-            rings = struct.unpack_from('<I', data, position)[0]
-            position += 4
-            points = struct.unpack_from('<q', data, position + rings * 8)[0]
-            if points < 0:
-                return False
-            position += (rings + 1) * 8 + points * 16
-    except (struct.error, OverflowError):
-        return False
-    return False
-
-
 def _geometry(points):
     if not isinstance(points, list) or len(points) < 3:
         _invalid('polygon requires at least three points')
@@ -133,7 +108,7 @@ def _load(path):
         _invalid('invalid outline')
     polysets = {}
 
-    def load_polyset(file, outline_only=False):
+    def load_polyset(file):
         _string(file)
         if Path(file).is_absolute() or '..' in Path(file).parts or '\\' in file or '://' in file:
             _invalid('polyset path must be relative')
@@ -150,8 +125,6 @@ def _load(path):
                 _invalid('invalid SHA-256 digest')
             if hashlib.sha256(data).hexdigest() != digest.lower():
                 raise EcadDiffError(10, 'INPUT_HASH_MISMATCH', 'polyset SHA-256 differs')
-            if outline_only and not _has_outline(data):
-                return
             polysets[file] = _read_polyset(data)
 
     for layer in stack['layers']:
@@ -179,14 +152,14 @@ def _load(path):
         _invalid('invalid external_refs')
     for ref in refs:
         file = _string(ref['path'])
-        load_polyset(file, outline_only=True)
+        load_polyset(file)
     rings = next((p['outline'] for p in polysets.values() if 'outline' in p), None)
-    if rings is not None:
+    if 'polygon' in outline:
+        geometry = _geometry(outline['polygon'])
+    elif rings is not None:
         if len(rings) != 1:
             _invalid('polyset outline must have exactly one ring')
         geometry = _geometry(rings[0])
-    elif 'polygon' in outline:
-        geometry = _geometry(outline['polygon'])
     else:
         box = outline['box']
         if not isinstance(box, list) or len(box) != 4:

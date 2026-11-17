@@ -22,20 +22,35 @@ def main():
             b = board()
             b['external_refs'] = [{'path': sidecar.name,
                                    'sha256': hashlib.sha256(data).hexdigest()}]
-            unrelated = directory / 'metadata.json'
-            unrelated.write_text('{"description": "valid unrelated reference"}')
+            # A second valid sidecar without an outline must also be validated.
+            unrelated = directory / 'unused.polyset'
+            unrelated.write_bytes(b'CCPOLY01' + struct.pack('<dI', 1e-9, 0))
             b['external_refs'].append({'path': unrelated.name,
                                        'sha256': hashlib.sha256(unrelated.read_bytes()).hexdigest()})
             pb = directory / 'b.json'
             # The triangle must override its rectangular box, and also work without a box.
-            for outline in ({'box': [0, 0, 0.01, 0.005]}, {},
-                            {'polygon': [[0, 0], [0.01, 0], [0.01, 0.005], [0, 0.005]]}):
+            for outline in ({'box': [0, 0, 0.01, 0.005]}, {}):
                 b['outline'] = outline
                 result = diff_stacks(pa, save(pb, b))
                 assert result['summary']['hard'] == 0
                 e = entry(result, 'outline')
                 assert e['grade'] == 'info'
                 number(e['ipc']['area'], 0.000025)
+            # An explicit rectangle wins over the sidecar triangle, including for fractions.
+            b['outline'] = board()['outline']
+            b['outline']['polygon'] = [[0, 0], [0.01, 0], [0.01, 0.005], [0, 0.005]]
+            rectangle = save(directory / 'rectangle.json', board())
+            result = diff_stacks(rectangle, save(pb, b))
+            assert result['summary']['hard'] == 0
+            assert result['summary']['discuss'] == 0
+            number(entry(result, 'outline')['ipc']['area'], 0.00005)
+            number(entry(result, 'copper_area', '0:F.Cu|F.Cu')['ipc'], 0.00005)
+            # Even an empty outline layer is ignored when outline.polygon is explicit.
+            empty = (b'CCPOLY01' + struct.pack('<dII', 1e-9, 1, 7) + b'outline'
+                     + struct.pack('<Iq', 0, 0))
+            sidecar.write_bytes(empty)
+            b['external_refs'][0]['sha256'] = hashlib.sha256(empty).hexdigest()
+            assert diff_stacks(rectangle, save(pb, b))['summary']['hard'] == 0
             for case, code in (('hash', 10), ('truncated', 14), ('missing', 12),
                                ('path', 14)):
                 sidecar.write_bytes(data)
