@@ -1,58 +1,39 @@
-#include "chipcae/geometry/assembly.hpp"
-
-#include <iostream>
-#include <stdexcept>
-#include <string_view>
-#include <type_traits>
-#include <utility>
-
-using PlaceResult =
-    decltype(chipcae::geometry::place(std::declval<std::vector<chipcae::geometry::Slab>>(),
-                                      std::declval<const chipcae::geometry::Placement&>(),
-                                      std::declval<const chipcae::geometry::StackModel&>()));
-using MergeResult = decltype(chipcae::geometry::merge_parts(
-    std::declval<chipcae::mesh::StackModel>(),
-    std::declval<const std::vector<chipcae::geometry::PlacedPart>&>(),
-    std::declval<const chipcae::geometry::MergeOptions&>()));
-static_assert(
-    std::is_same_v<PlaceResult, chipcae::geometry::Expected<chipcae::geometry::PlacedPart>>);
-static_assert(
-    std::is_same_v<MergeResult, chipcae::geometry::Expected<chipcae::geometry::MergeResult>>);
-static_assert(std::is_same_v<decltype(std::declval<const PlaceResult&>().error()),
-                             const chipcae::geometry::ImportThresholdError&>);
-static_assert(std::is_same_v<decltype(std::declval<const MergeResult&>().error()),
-                             const chipcae::geometry::ImportThresholdError&>);
-
+#include "assembly_test_support.hpp"
 int main() {
-    int failures = 0;
-    try {
-        (void)chipcae::geometry::place({}, chipcae::geometry::FramePlacement{}, {});
-        std::cerr << "FAIL: (void)chipcae::geometry::place({}, "
-                     "chipcae::geometry::FramePlacement{}, {}); must throw "
-                     "std::logic_error with prefix not implemented: \n";
-        ++failures;
-    } catch (const std::logic_error& error) {
-        if (std::string_view(error.what()).find("not implemented: ") != 0) {
-            std::cerr << "FAIL: wrong exception prefix: " << error.what() << '\n';
-            ++failures;
-        }
-    } catch (...) {
-        std::cerr << "FAIL: expected std::logic_error\n";
-        ++failures;
-    }
-    try {
-        (void)chipcae::geometry::merge_parts({}, {}, {});
-        std::cerr << "FAIL: (void)chipcae::geometry::merge_parts({}, {}, {}); must throw "
-                     "std::logic_error with prefix not implemented: \n";
-        ++failures;
-    } catch (const std::logic_error& error) {
-        if (std::string_view(error.what()).find("not implemented: ") != 0) {
-            std::cerr << "FAIL: wrong exception prefix: " << error.what() << '\n';
-            ++failures;
-        }
-    } catch (...) {
-        std::cerr << "FAIL: expected std::logic_error\n";
-        ++failures;
-    }
-    return failures ? 1 : 0;
+    return run([] {
+        auto b = base();
+        auto r = merge_parts(b, {}, options());
+        check(bool(r), "empty parts succeeds");
+        check(r.value().defects.empty() && r.value().welded_interfaces == 0, "identity metadata");
+        check(r.value().stack.id == b.id && r.value().stack.outline.box == b.outline.box &&
+                  r.value().stack.layers.size() == 1 && r.value().stack.layers[0].name == "Core" &&
+                  r.value().stack.layers[0].thickness == .001,
+              "identity stack");
+        check(!merge_parts({}, {part()}, options()), "empty base invalid");
+        auto p = part();
+        p.slabs.clear();
+        check(!merge_parts(b, {p}, options()), "empty slabs invalid");
+        check(!merge_parts(b, {part(), part()}, options()), "duplicate IDs invalid");
+        check(!place({}, FramePlacement{}, b), "empty source invalid");
+        auto invalid = part();
+        invalid.slabs[0].z1 = invalid.slabs[0].z0;
+        check(!merge_parts(b, {invalid}, options()), "zero thickness rejected");
+        invalid = part();
+        invalid.slabs[0].sections.clear();
+        check(!place(invalid.slabs, FramePlacement{}, b), "empty sections rejected");
+        invalid = part();
+        invalid.slabs[0].sections[0].outer.pts[0][0] = std::numeric_limits<double>::infinity();
+        check(!place(invalid.slabs, FramePlacement{}, b), "nonfinite vertex rejected");
+        check(!place(part().slabs,
+                     FramePlacement{{0, 0, std::numeric_limits<double>::quiet_NaN()}},
+                     b),
+              "nonfinite frame rejected");
+        AttachPlacement a;
+        a.target = "layer:missing";
+        check(!place(part().slabs, a, b), "missing target invalid");
+        a.target = "part:missing";
+        check(!place(part().slabs, a, b), "unresolved part invalid");
+        a.resolved_z = .002;
+        check(bool(place(part().slabs, a, b)), "resolved part target");
+    });
 }
