@@ -126,7 +126,7 @@ void register_embedded(HexMeshArrays& m, const CutLayerArrays& c) {
 }
 Expected<CutLayerArrays>
 generate(const HexMeshArrays& m, const CutGeometry& g, const CutOptions& o) {
-    if (!(o.snap_phi >= 0) || !(o.vf_min >= 0 && o.vf_min < 1))
+    if (!(o.snap_phi >= 0) || !(o.small_sub_vf >= 0 && o.small_sub_vf < 1))
         return Error{"cut/options", "invalid thresholds"};
     CutLayerArrays c;
     std::vector<Plane> planes = g.planes;
@@ -234,7 +234,7 @@ generate(const HexMeshArrays& m, const CutGeometry& g, const CutOptions& o) {
                     exterior = add(exterior, mul(f.normal, area));
             }
         c.sub_volfrac.push_back(volume / jac);
-        if (volume / jac < o.vf_min)
+        if (volume / jac < o.small_sub_vf)
             c.small_subs.push_back(static_cast<Local>(c.sub_attribute.size() - 1));
         c.sub_off.push_back(static_cast<Local>(c.sub_attribute.size()));
         c.vq_off.push_back(static_cast<Local>(c.vq_w.size()));

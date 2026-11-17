@@ -11,7 +11,9 @@ struct CutGeometry {
     std::vector<Plane> planes;
 };
 struct CutOptions {
-    Real snap_phi = 1e-14, vf_min = 1e-8;
+    Real snap_phi = 1e-14, small_sub_vf = 1e-8;
+    // CVs below this sub-volume fraction are recorded in small_subs, without merging;
+    // distinct from the design merge threshold (0.1).
     bool keep_void = false;
 };
 // Transactional mutable overload removes void cells and remaps local indices.

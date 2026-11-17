@@ -102,6 +102,9 @@ and the local export `/workspace/specs/mesh-design-v0.2.canvas.txt`.
 
 ## Thresholds
 
+K1's cut option and threshold are named `small_sub_vf` (value 1e-8); this
+controls reporting small sub-volumes without merging.
+
 Values stay in `mesh/background/thresholds/k1.json` and are read by the
 tests. `cell_budget` (50000) was moved there; the C++ default is
 unchanged. `vf_min` is still 1e-8 and was not renamed (awaiting a
@@ -191,3 +194,8 @@ here; nothing is merged in this work).
 - `k1_public_headers_kokkos` passes `-fopenmp` so the check matches a
   Kokkos build that enabled the OpenMP backend (required once CI
   configures with `CHIPCAE_ENABLE_KOKKOS=ON`).
+
+### K1 small sub-volume threshold rename
+
+- Renamed the cut reporting threshold to `small_sub_vf` (value 1e-8);
+  it records small sub-volumes without merging.

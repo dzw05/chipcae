@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
         auto m = build_tensor_grid(s, o).value();
         cut::CutOptions co;
         co.snap_phi = k1::threshold("snap_phi");
-        co.vf_min = k1::threshold("vf_min");
+        co.small_sub_vf = k1::threshold("small_sub_vf");
         co.keep_void = true;
         auto c = cut::build_cut_layer(m, {{{0, {1, 1, 0}, 1}}}, co);
         expect(bool(c), "cut build");
