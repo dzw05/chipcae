@@ -21,8 +21,10 @@ if not exe:
 try:
     import h5py
     import numpy as np
-except ImportError:
-    print("SKIP: h5py and numpy are required")
+except Exception as error:
+    # Binary dependency failures (for example, an ABI mismatch) can raise
+    # ValueError or OSError rather than ImportError during import.
+    print(f"SKIP: h5py and numpy must be importable: {error}")
     sys.exit(77)
 
 source = Path(sys.argv[1]).resolve()
