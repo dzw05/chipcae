@@ -1,3 +1,6 @@
+#ifdef CHIPCAE_ENABLE_KOKKOS
+#include <Kokkos_Core.hpp>
+#endif
 #include "../../../schema/src/sha256.hpp"
 #include "support.hpp"
 
@@ -16,6 +19,9 @@ std::string shell(const std::string& value) {
     return out + "'";
 }
 int main(int argc, char** argv) {
+#ifdef CHIPCAE_ENABLE_KOKKOS
+    Kokkos::ScopeGuard guard;
+#endif
     expect(argc == 2 || argc == 4, "preview executable argument");
     auto dir = fs::temp_directory_path() /
                ("chipcae-preview-" +
@@ -48,8 +54,8 @@ int main(int argc, char** argv) {
                     expect(params.at("max_ratio").as<double>() ==
                                (args.find("--max-ratio 12.5") != std::string::npos ? 12.5 : 10),
                            "effective max ratio");
-                    expect(params.at("L").as<int>() == 1 &&
-                               params.at("n0").as<std::string>() == "5x5",
+                    expect(params.at("L").as<int>() == (argc == 4 ? 0 : 1) &&
+                               params.at("n0").as<std::string>() == (argc == 4 ? "9x9" : "5x5"),
                            "effective hierarchy");
                 }
                 ++count;
@@ -80,6 +86,7 @@ int main(int argc, char** argv) {
         // The K1 FCBGA fixture has a 10:1 interface cell-height ratio.
         options.max_ratio = 10;
         options.nx = options.ny = 2;
+        options.ranks = argc == 4 ? 2 : 1;
         auto mesh = chipcae::mesh::build_tensor_grid(stack.value(), options);
         expect(bool(mesh), "fixture mesh");
         expect(static_cast<std::size_t>(nc) == mesh.value().attribute.size(), "cell coverage");

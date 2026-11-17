@@ -220,6 +220,7 @@ jobs:
           build_secs=$((SECONDS - start))
           test_start=$SECONDS
           ctest --test-dir build-k1-full -L "mesh|occt" -LE gpu --output-on-failure --output-junit mesh-results.xml
+          ctest --test-dir build-k1-full -R '^mesh_digest_mpi$' --no-tests=error --output-on-failure
           ctest --test-dir build-k1-full -R "^vtkhdf_results_" --no-tests=error --output-on-failure
           echo "build_secs=$build_secs" >> "$GITHUB_OUTPUT"
           echo "test_secs=$((SECONDS - test_start))" >> "$GITHUB_OUTPUT"

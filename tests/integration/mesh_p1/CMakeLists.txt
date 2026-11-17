@@ -133,3 +133,26 @@ if(CHIPCAE_ENABLE_HDF5 AND CHIPCAE_ENABLE_JSONCONS)
   add_test(NAME k1_preview COMMAND k1_preview $<TARGET_FILE:chipcae-preview>)
   set_tests_properties(k1_preview PROPERTIES LABELS "mesh;hdf5;preview" TIMEOUT 60)
 endif()
+
+if(CHIPCAE_ENABLE_HDF5 AND CHIPCAE_ENABLE_JSONCONS)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME mesh_digest_golden COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_digest.py $<TARGET_FILE:chipcae-preview>)
+  set_tests_properties(mesh_digest_golden PROPERTIES LABELS "mesh;tierA;preview" TIMEOUT 120)
+  if(CHIPCAE_ENABLE_MPI)
+    set(_digest_preflags)
+    foreach(flag IN LISTS MPIEXEC_PREFLAGS)
+      list(APPEND _digest_preflags "--preflag=${flag}")
+    endforeach()
+    add_test(NAME mesh_digest_mpi COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/mesh_digest.py $<TARGET_FILE:chipcae-preview>
+      --mpiexec ${MPIEXEC_EXECUTABLE} "--numproc-flag=${MPIEXEC_NUMPROC_FLAG}" ${_digest_preflags})
+    set_tests_properties(mesh_digest_mpi PROPERTIES LABELS "mesh;mpi;preview" TIMEOUT 300 PROCESSORS 3)
+  endif()
+endif()
+
+add_executable(k1_mesh_digest mesh_digest.cpp)
+target_link_libraries(k1_mesh_digest PRIVATE chipcae_mesh_background)
+chipcae_set_warnings(k1_mesh_digest)
+add_test(NAME k1_mesh_digest COMMAND k1_mesh_digest)
+set_tests_properties(k1_mesh_digest PROPERTIES LABELS "mesh;tierA;preview" TIMEOUT 60)

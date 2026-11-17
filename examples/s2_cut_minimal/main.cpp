@@ -6,12 +6,18 @@
 #include <cmath>
 #include <iostream>
 #include <numeric>
+#ifdef CHIPCAE_ENABLE_KOKKOS
+#include <Kokkos_Core.hpp>
+#endif
 #ifdef CHIPCAE_ENABLE_MPI
 #include <mpi.h>
 #endif
 int main(int argc, char** argv) {
 #ifdef CHIPCAE_ENABLE_MPI
     MPI_Init(&argc, &argv);
+#endif
+#ifdef CHIPCAE_ENABLE_KOKKOS
+    Kokkos::initialize(argc, argv);
 #endif
     int rank = 0, ranks = 1, status = 0;
 #ifdef CHIPCAE_ENABLE_MPI
@@ -148,6 +154,9 @@ int main(int argc, char** argv) {
         std::cerr << e.what() << '\n';
         status = 1;
     }
+#ifdef CHIPCAE_ENABLE_KOKKOS
+    Kokkos::finalize();
+#endif
 #ifdef CHIPCAE_ENABLE_MPI
     MPI_Finalize();
 #endif
