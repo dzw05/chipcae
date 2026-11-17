@@ -28,9 +28,10 @@ int main(int argc, char** argv) try {
     const auto& sec = test::sec;
     const auto& tan = test::tan;
     // Differentiate alpha_sec(T) * (T - T_ref). Interior knots use the
-    // right-hand segment; the final node uses the left-hand segment.
+    // right-hand segment by contract; the final node uses the left-hand segment.
     // At T_ref the derivative limit is alpha_sec(T_ref). The canonical fixture
-    // has equal adjacent slopes, so it cannot discriminate knot-side selection.
+    // has equal adjacent slopes: these checks verify node values, while the
+    // unequal-slope probes in test_offknot.cpp discriminate knot-side selection.
     std::vector<Real> tangent_expected;
     for (std::size_t i = 0; i < sec.temperatures.size(); ++i) {
         const std::size_t left = i + 1 < sec.temperatures.size() ? i : i - 1;
