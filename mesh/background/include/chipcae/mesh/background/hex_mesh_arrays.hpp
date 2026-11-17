@@ -36,6 +36,15 @@ struct HexMeshArrays {
         Real aligned_area = 0, cut_area = 0;
     };
     std::vector<InterfaceReport> preparation_report;
+    struct GridReport {
+        Local levels = 1;
+        std::array<std::size_t, 2> padding{};
+        std::vector<Real> max_aspect_ratio; // Coarsest to finest, z unchanged.
+        std::vector<std::array<std::vector<Real>, 2>> level_axes;
+        std::vector<std::vector<Local>> column_ranks; // Dense Morton, coarse to fine.
+        std::vector<std::string> warnings;
+        Real partition_imbalance = 0;
+    } grid_report;
     AttributeTable attr_table;
     // Named face groups. Cut-face attributes also appear here (and therefore in
     // MFEM bdr_attribute_sets) but are not attached to MFEM boundary elements;

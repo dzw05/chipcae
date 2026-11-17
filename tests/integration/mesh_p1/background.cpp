@@ -1,4 +1,5 @@
 #include "chipcae/mesh/background/activation.hpp"
+#include "chipcae/mesh/background/column_hierarchy.hpp"
 #include "chipcae/mesh/background/sfc.hpp"
 #include "chipcae/par/column_extrude_partitioner.hpp"
 #include "support.hpp"
@@ -91,6 +92,18 @@ int main() {
         auto grid = build_tensor_grid(s, opts);
         expect(bool(grid), "partition grid at rank count");
         const auto& g = grid.value();
+        std::vector<std::size_t> measured_loads(ranks);
+        for (auto rank : g.partitioning)
+            ++measured_loads[rank];
+        std::cout << "K1 background np=" << ranks << " cells=" << g.attribute.size() << " loads=";
+        for (auto load : measured_loads)
+            std::cout << load << ',';
+        std::cout << " imbalance="
+                  << double(*std::max_element(measured_loads.begin(), measured_loads.end())) *
+                             ranks / g.attribute.size() -
+                         1
+                  << '\n';
+
         auto structured = chipcae::par::ColumnExtrudePartitioner::partition(nx, ny, nz, ranks);
         std::vector<std::size_t> order(nx * ny);
         std::iota(order.begin(), order.end(), 0);
@@ -130,6 +143,117 @@ int main() {
                 }
             }
         }
+    // A non-power-of-two rectangular coarse shape, with a finest-only feature.
+    auto nonuniform = s;
+    nonuniform.outline.box = {0, 0, 3.5, 4};
+    nonuniform.layers[0].regions[0].footprint.box = {1, 0, 2.5, 4};
+    auto padded_options = k1::options();
+    padded_options.nx = 3;
+    padded_options.ny = 8;
+    padded_options.levels = 2;
+    auto padded = build_tensor_grid(nonuniform, padded_options);
+    expect(bool(padded), "nonuniform padded grid");
+    const auto& pg = padded.value();
+    const auto& report = pg.grid_report;
+    expect(report.padding[0] == 1 && report.padding[1] == 0, "padding counts");
+    expect(report.levels == 2 && report.max_aspect_ratio.size() == 2, "per-level aspect report");
+    expect(std::find(pg.axes[0].begin(), pg.axes[0].end(), 2.5) != pg.axes[0].end(),
+           "finest feature retained");
+    expect(std::find(report.level_axes[0][0].begin(), report.level_axes[0][0].end(), 2.5) ==
+               report.level_axes[0][0].end(),
+           "feature absent from coarse subset");
+    for (int a = 0; a < 2; ++a) {
+        for (std::size_t i = 0; i < report.level_axes[0][a].size(); ++i)
+            expect(report.level_axes[0][a][i] == pg.axes[a][2 * i], "even line subset");
+        for (std::size_t i = 2; i < pg.axes[a].size(); ++i) {
+            auto left = pg.axes[a][i - 1] - pg.axes[a][i - 2];
+            auto right = pg.axes[a][i] - pg.axes[a][i - 1];
+            expect(std::max(left / right, right / left) <= 2 + 1e-12, "padded max ratio");
+        }
+    }
+    for (auto bounds : {std::pair{0., 1.}, std::pair{1., 2.5}, std::pair{2.5, 3.5}}) {
+        double width = 0;
+        for (std::size_t i = 1; i < pg.axes[0].size(); ++i)
+            if (pg.axes[0][i - 1] >= bounds.first && pg.axes[0][i] <= bounds.second) {
+                auto next_width = pg.axes[0][i] - pg.axes[0][i - 1];
+                if (width)
+                    expect(std::abs(next_width - width) < 1e-12, "uniform feature segment");
+                width = next_width;
+            }
+    }
+    for (std::size_t d = 0; d < report.column_ranks[1].size(); ++d)
+        expect(report.column_ranks[1][d] == report.column_ranks[0][d >> 2],
+               "child same rank as parent");
+    const auto px = pg.axes[0].size() - 1, py = pg.axes[1].size() - 1;
+    std::vector<std::size_t> morton_columns(px * py);
+    std::iota(morton_columns.begin(), morton_columns.end(), 0);
+    std::sort(morton_columns.begin(), morton_columns.end(), [&](auto a, auto b) {
+        return morton(a % px, a / px) < morton(b % px, b / px);
+    });
+    for (std::size_t d = 0; d < morton_columns.size(); ++d) {
+        auto c = morton_columns[d];
+        expect(dense_index(px / 2, py / 2, 1, c % px, c / px) == d,
+               "finest dense equals tensor Morton index");
+        for (std::size_t k = 0; k < nz; ++k)
+            expect(pg.elem_gid[d * nz + k] == static_cast<chipcae::Index>(d * nz + k),
+                   "padded GID rule");
+    }
+    std::cout << "padding x=" << report.padding[0] << " y=" << report.padding[1] << " aspect=";
+    for (auto ar : report.max_aspect_ratio)
+        std::cout << ar << ',';
+    std::cout << '\n';
+    auto aspect_options = padded_options;
+    aspect_options.ar_warn = aspect_options.ar_max = report.max_aspect_ratio.back();
+    auto aspect_grid = build_tensor_grid(nonuniform, aspect_options);
+    expect(bool(aspect_grid) && aspect_grid.value().grid_report.warnings.empty(),
+           "coarse aspect ratio does not warn");
+    aspect_options.ar_warn = 1;
+    auto aspect_warning = build_tensor_grid(nonuniform, aspect_options);
+    expect(bool(aspect_warning) && !aspect_warning.value().grid_report.warnings.empty(),
+           "finest aspect warning");
+    auto invalid = padded_options;
+    invalid.levels = 4;
+    auto invalid_grid = build_tensor_grid(nonuniform, invalid);
+    expect(!invalid_grid && invalid_grid.error().path == "HIERARCHY_INVALID",
+           "explicit insufficient coarse columns");
+    // Exercise normal, soft-limit, relaxed and direct selection, and inherited loads.
+    for (int ranks : {1, 2, 4}) {
+        auto options = k1::options();
+        options.nx = options.ny = 8;
+        options.ranks = ranks;
+        auto grid = build_tensor_grid(s, options);
+        expect(bool(grid) && grid.value().grid_report.levels > 1, "automatic multilevel grid");
+        const auto& g = grid.value();
+        std::vector<std::size_t> loads(ranks);
+        for (auto rank : g.partitioning)
+            ++loads[rank];
+        expect(g.grid_report.partition_imbalance <= k1::threshold("partition_imbalance"),
+               "fine-weight imbalance <= 0.25");
+        for (std::size_t l = 1; l < g.grid_report.column_ranks.size(); ++l)
+            for (std::size_t d = 0; d < g.grid_report.column_ranks[l].size(); ++d)
+                expect(g.grid_report.column_ranks[l][d] ==
+                           g.grid_report.column_ranks[l - 1][d >> 2],
+                       "multirank child same rank as parent");
+        options.max_coarse_columns = 1;
+        auto soft = build_tensor_grid(s, options);
+        expect(bool(soft) && soft.value().grid_report.levels == g.grid_report.levels &&
+                   !soft.value().grid_report.warnings.empty(),
+               "soft cap preserves lower bound");
+    }
+    StackModel plain = s;
+    plain.layers[0].regions.clear();
+    plain.activation_groups.clear();
+    auto selection = k1::options();
+    selection.nx = selection.ny = 4;
+    auto relaxed = build_tensor_grid(plain, selection);
+    expect(bool(relaxed) && relaxed.value().grid_report.levels == 1 &&
+               !relaxed.value().grid_report.warnings.empty(),
+           "relaxed minimum");
+    selection.nx = selection.ny = 2;
+    auto direct = build_tensor_grid(plain, selection);
+    expect(bool(direct) && direct.value().grid_report.levels == 1 &&
+               !direct.value().grid_report.warnings.empty(),
+           "direct fallback");
     o.cell_budget = 1;
     expect(!build_tensor_grid(s, o), "budget failure");
     o.cell_budget = 50000;
