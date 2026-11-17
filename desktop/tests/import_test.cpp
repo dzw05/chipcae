@@ -79,7 +79,7 @@ void checkStagedArguments(const ImportRequest& request, const QStringList& actua
     const auto staging = QFileInfo(actual[outputIndex + 1]).absoluteDir();
     auto staged = request;
     staged.output = staging.filePath("out.stack.json");
-    staged.report = staging.filePath("defects.json");
+    staged.report = request.report.isEmpty() ? QString{} : staging.filePath("defects.json");
     staged.polyset = request.polyset.isEmpty() ? QString{} : staging.filePath("out.polyset");
     check(staging.dirName().startsWith(".chipcae-import-") &&
               actual == ImportControllerTestAccess::arguments(staged),
@@ -221,7 +221,7 @@ pathlib.Path(record).write_text(json.dumps(a))
 def value(flag):
     return a[a.index(flag)+1] if flag in a else None
 stack=runpy.run_path(mock)['STACK']
-out=value('-o'); report=value('--report'); poly=value('--polyset')
+out=value('-o'); report=value('--report') or str(pathlib.Path(out).parent/'defects.json'); poly=value('--polyset')
 pathlib.Path(out).write_text(json.dumps({} if mode=='invalid-stack' else stack))
 if poly: pathlib.Path(poly).write_text('polyset')
 if mode=='copy-failure':
@@ -772,12 +772,23 @@ sys.exit(rc)
                   "local missing-map exact state");
             if (c.busy())
                 waitFor(c, [&] { c.cancel(); });
-            check(!c.start(r.input, r.output, {}, {}, "/nonexistent/should-not-launch"),
+            const auto marker = dir.filePath("legacy-child-started");
+            const auto markerScript = dir.filePath("legacy-marker.py");
+            write(markerScript, "import pathlib,sys\npathlib.Path(sys.argv[1]).touch()\n");
+            int legacyFinished = 0;
+            const auto legacyConnection =
+                QObject::connect(&c, &ImportController::finished, [&] { ++legacyFinished; });
+            check(!c.start(r.input, r.output, {}, {}, PYTHON_EXECUTABLE, {markerScript, marker}),
                   "legacy overload rejects without map");
-            check(c.error() == "material map required" && d.stackJson() == before,
-                  "legacy exact error and unchanged stack");
-            if (c.busy())
-                waitFor(c, [&] { c.cancel(); });
+            QEventLoop settle;
+            QTimer::singleShot(100, &settle, &QEventLoop::quit);
+            settle.exec();
+            check(c.error() == "material map required" && !c.busy() &&
+                      c.outcome() == ImportOutcome::Failed && legacyFinished == 0 &&
+                      !QFile::exists(marker) && !QFile::exists(r.output) &&
+                      d.stackJson() == before && !d.isDirty(),
+                  "legacy exact error, idle state, no child or document/output side effects");
+            QObject::disconnect(legacyConnection);
             int localFinished = 0;
             auto localConnection =
                 QObject::connect(&c, &ImportController::finished, [&] { ++localFinished; });
@@ -908,7 +919,8 @@ sys.exit(rc)
                     wanted << "--accept-b-tier";
                 check(ImportControllerTestAccess::arguments(r) == wanted,
                       "exact caller argv for every optional flag combination");
-                check(args.contains("--report"), "internal report always requested");
+                check(args.contains("--report") == !r.report.isEmpty(),
+                      "child report flag matches caller export selection");
                 check(QFile::exists(r.output) && (r.report.isEmpty() || QFile::exists(r.report)) &&
                           (r.polyset.isEmpty() || QFile::exists(r.polyset)),
                       "requested optional exports published");
@@ -1139,10 +1151,31 @@ sys.exit(rc)
             click.start(30);
             check(pick([&] { return MaterialMapMissingDialog::prompt(); }, map, false, true) == map,
                   "missing-map prompt returns selected map");
+            bool parentStayedOpen = false;
+            bool nestedPickerSeen = false;
+            QTimer cancelParent;
+            QObject::connect(&cancelParent, &QTimer::timeout, [&] {
+                for (auto* w : QApplication::topLevelWidgets())
+                    if (auto* d = dynamic_cast<MaterialMapMissingDialog*>(w); d && d->isVisible()) {
+                        if (d->findChild<QFileDialog*>()) {
+                            nestedPickerSeen = true;
+                            continue;
+                        }
+                        if (!nestedPickerSeen)
+                            continue;
+                        parentStayedOpen = true;
+                        cancelParent.stop();
+                        d->findChild<QDialogButtonBox*>()
+                            ->button(QDialogButtonBox::Cancel)
+                            ->click();
+                    }
+            });
+            cancelParent.start(30);
             click.start(30);
             check(
                 pick([&] { return MaterialMapMissingDialog::prompt(); }, {}, true, true).isEmpty(),
-                "missing-map prompt cancelled picker");
+                "missing-map prompt parent cancellation returns empty");
+            check(parentStayedOpen, "cancelled nested picker keeps missing-map prompt open");
         }
     } catch (const std::exception& e) {
         check(false, QString("fixture exception: ") + e.what());

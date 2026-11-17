@@ -112,7 +112,9 @@ bool ImportController::start(const ImportRequest& request) {
     auto stagedRequest = request;
     stagedRequest.output = staged_[0];
     stagedRequest.polyset = polyset.isEmpty() ? QString{} : staged_[1];
-    stagedRequest.report = staged_[2]; // Required for classification, even without export.
+    // Without an export request, the CLI writes defects.json beside the staged
+    // stack. Read that private default report for classification without --report.
+    stagedRequest.report = report.isEmpty() ? QString{} : staged_[2];
     const auto arguments = request.prefix + argumentsFor(stagedRequest);
     cancelled_ = false;
     busy_ = true;
