@@ -47,10 +47,28 @@ volume to that volume, both at 1e-12. Degrees 4/6/8 all meet the requested order
 The robustness test uses direct symmetric dense eigenvalues for its small Q2
 matrices, rather than PETSc/Lanczos. It records unscaled and Jacobi-scaled
 condition numbers, enabled and zero penalty, thermal and elastic systems, 50
-translations and both unit and 1:10 cells. The factor-of-ten acceptance applies
-to Jacobi-scaled matrices, matching the diagonal basis normalization in the
-production direct solver. Raw estimates are recorded separately; no factor-of-ten
-claim is made for the unscaled basis. Zero-penalty numerically nonpositive
+translations, homogeneous/two-material stacks and both unit and 1:10 cells.
+The factor-of-ten acceptance applies independently to unscaled and Jacobi-scaled
+matrices, with the original gamma=0 comparison. The body has fixed width 1 and
+translates through one background-cell period inside a width-1.5 background
+with h_x=h_y=0.5. Two opposed cut planes move together; an integrated-volume
+assertion enforces an unchanged physical domain volume at every position.
+The y=0 face grounds heat and clamps displacement, so the grounding distance
+stays fixed under x translation. The former one-plane scan grew the body from
+width 0.5 to 0.99 while clamping x=0, confounding changing physical length with
+cut-position sensitivity. Mesh-owned cut integration and ghost-face assembly,
+material scales, gamma=0/0.1, all 50 positions and the sub-1e-6 cut check remain.
+On every mesh-provided same-material ghost face, the existing k=1,2 normal
+jump terms are augmented by `gamma * scale / 2` times the integral over both
+background cells of the squared full-gradient jump of their polynomial
+extensions. This symmetric positive-semidefinite term controls tangentially
+varying Q2 sliver modes and vanishes for a common Q2 polynomial. The affine
+axis-aligned tensor-cell mapping extends each polynomial across the full patch;
+no cut-fraction-dependent coefficient or basis scaling is used. The material
+scale remains kappa or 2*mu+lambda. Across material interfaces the original
+flux-weighted thermal and curvature-only elastic terms remain, since extending
+full gradients there would penalize physical flux/thermal-strain jumps.
+Zero-penalty numerically nonpositive
 minimum eigenvalues are reported as infinite condition estimates, rather than
 as finite trustworthy estimates.
 

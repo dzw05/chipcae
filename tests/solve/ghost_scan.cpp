@@ -19,7 +19,7 @@ int main(int argc, char** argv) {
                 for (bool elastic : {false, true})
                     for (int position = 0; position < 50; ++position) {
                         mesh::StackModel s;
-                        s.outline.box = {0, 0, 1, 1};
+                        s.outline.box = {0, 0, 1.5, 1};
                         mesh::Layer l;
                         l.name = "solid";
                         l.material = "solid";
@@ -36,16 +36,22 @@ int main(int argc, char** argv) {
                             s.layers.push_back(l);
                         }
                         mesh::GridOptions o;
-                        o.nx = o.ny = 2;
+                        o.nx = 3;
+                        o.ny = 2;
                         o.levels = 1;
                         o.max_ratio = 100;
                         auto arrays = mesh::build_tensor_grid(s, o).value();
                         double location =
-                            .5 + .5 * (position == 0 ? 1e-8 : static_cast<double>(position) / 50);
+                            .5 * (position == 0 ? 1e-8 : static_cast<double>(position) / 50);
                         mesh::cut::CutOptions co;
                         mesh::cut::CutGeometry geometry;
-                        for (auto [name, body] : arrays.attr_table.bodies)
-                            geometry.planes.push_back({body, {1, 0, 0}, location});
+                        // Translate a fixed-width solid by one background-cell period.
+                        // Moving only one boundary changes the physical operator as
+                        // well as the cut fraction (the old scan doubled its length).
+                        for (auto [name, body] : arrays.attr_table.bodies) {
+                            geometry.planes.push_back({body, {1, 0, 0}, 1 + location});
+                            geometry.planes.push_back({body, {-1, 0, 0}, -location});
+                        }
                         auto cut = mesh::cut::build_cut_layer(arrays, geometry, co).value();
                         if (position == 0 && *std::min_element(cut.sub_volfrac.begin(),
                                                                cut.sub_volfrac.end()) >= 1e-6)
@@ -97,6 +103,11 @@ int main(int argc, char** argv) {
                                     "material-interface ghost faces must be stabilized");
                         }
                         fem::CutRules rules(cut, grid);
+                        double volume = 0;
+                        for (double v : rules.volumes)
+                            volume += v;
+                        if (std::abs(volume - aspect) > 1e-12 * aspect)
+                            throw std::runtime_error("translation must preserve physical volume");
                         H1_FECollection collection(2, 3);
                         FiniteElementSpace space(
                             &grid, &collection, elastic ? 3 : 1, Ordering::byVDIM);
@@ -122,7 +133,9 @@ int main(int argc, char** argv) {
                             form.Finalize(0);
                             Array<int> marker(grid.bdr_attributes.Max());
                             marker = 0;
-                            marker[0] = 1;
+                            // Ground/clamp the y=0 face. Its normal distance to the
+                            // opposite face stays fixed under the x translation.
+                            marker[2] = 1;
                             Array<int> essential;
                             space.GetEssentialTrueDofs(marker, essential);
                             GridFunction u(&space);

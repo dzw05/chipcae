@@ -86,6 +86,48 @@ void GhostPenalty::AssembleFaceMatrix(const mfem::FiniteElement& a,
                 jump[i] = 0;
             jump2[i] = sign * hs(j, diag[axis]) / (hi * hi);
         }
+        // Stabilize the gradient of the polynomial extension throughout the
+        // two-cell patch. Normal traces alone poorly control Q2 modes with
+        // tangential variation on a vanishing sliver. This consistent volume
+        // jump also controls those modes, without adding energy to a global Q2.
+        // At material interfaces retain the flux/curvature jump below: a
+        // physical gradient jump must not be extended across that interface.
+        if (t.Elem1->Attribute == t.Elem2->Attribute) {
+            const auto& depth = mfem::IntRules.Get(mfem::Geometry::SEGMENT, 8);
+            auto ia = t.GetElement1IntPoint(), ib = t.GetElement2IntPoint();
+            auto coordinate = [axis](mfem::IntegrationPoint& p) -> double& {
+                return axis == 0 ? p.x : axis == 1 ? p.y : p.z;
+            };
+            const double direction = coordinate(ia) > .5 ? 1. : -1.;
+            for (int r = 0; r < depth.GetNPoints(); ++r) {
+                const auto& rp = depth.IntPoint(r);
+                double distance = -h1 + (h1 + h2) * rp.x;
+                auto xa = ia, xb = ib;
+                coordinate(xa) += direction * distance / h1;
+                coordinate(xb) += direction * distance / h2;
+                t.Elem1->SetIntPoint(&xa);
+                t.Elem2->SetIntPoint(&xb);
+                a.CalcPhysDShape(*t.Elem1, da);
+                b.CalcPhysDShape(*t.Elem2, db);
+                double weight = gamma_ * scale * ip.weight * area * (h1 + h2) * rp.weight / 2;
+                for (int i = 0; i < n; ++i)
+                    for (int j = 0; j < n; ++j) {
+                        double product = 0;
+                        for (int d = 0; d < 3; ++d) {
+                            double vi = i < na ? da(i, d) : -db(i - na, d);
+                            double vj = j < na ? da(j, d) : -db(j - na, d);
+                            product += vi * vj;
+                        }
+                        for (int c = 0; c < components_; ++c) {
+                            auto index = [&](int k) {
+                                return k < na ? c * na + k : components_ * na + c * nb + k - na;
+                            };
+                            matrix(index(i), index(j)) += weight * product;
+                        }
+                    }
+            }
+            t.SetAllIntPoints(&ip);
+        }
         double w = gamma_ * scale * ip.weight * area;
         // MFEM face vector DOFs: [minus components][plus components].
         for (int c = 0; c < components_; ++c)
