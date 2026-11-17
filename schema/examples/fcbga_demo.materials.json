@@ -215,7 +215,7 @@
         "source_type": "literature",
         "confidence": "medium",
         "reference": "Aurubis Material Datasheet CuOFE, PNA 203, UNS C10100, EN_2024_11, p. 1 (density 8940 kg/m^3, Young modulus 127 GPa, conductivity 394 W/(m K), mean expansion 17.7e-6 1/K at 20-300 C): https://www.aurubis.com/en/dam/jcr%3A7f1f3c64-448e-4b72-bf75-d0559fcea3ca/PNA%20203_CuOFE_C10100-EN-%5BBP%5D.pdf ; eFunda, Properties of Copper Alloy UNS C10100, Mechanical Properties at 25 C (Poisson ratio 0.34): https://www.efunda.com/Materials/alloys/copper/show_copper.cfm?ID=UNS_C10100&Page_Title=UNS+C10100&show_prop=all",
-        "notes": "近似材料：多晶纯铜室温值，用于 PACKAGE_BULK_PARTS 的 lid；未按实际盖板合金和工艺标定 Approximation basis for annealed polycrystalline pure copper: commercial CuOFE/C10100 (Cu >= 99.99%) bulk properties are used as an isotropic polycrystalline proxy, not as single-crystal constants or lid-specific calibration. Aurubis specifies conductivity for the soft condition and lists soft annealing on p. 2; its generic density and modulus and the C10100 Poisson ratio are adopted as room-temperature estimates, not certified annealed-temper measurements. The 20-300 C mean expansion coefficient is approximated as constant tangent CTE; both 250 K and 400 K table points reuse these estimates without claiming measured temperature dependence."
+        "notes": "近似材料：多晶纯铜室温值，用于 PACKAGE_BULK_PARTS 的 lid；未按实际盖板合金和工艺标定"
       },
       "elastic": {
         "symmetry": "isotropic",
