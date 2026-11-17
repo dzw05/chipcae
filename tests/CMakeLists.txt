@@ -190,3 +190,5 @@ add_test(NAME contract_public_headers COMMAND ${CMAKE_COMMAND}
     -DROOT=${PROJECT_SOURCE_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/core/check_public_headers.cmake)
 
 add_subdirectory(contract)
+
+add_subdirectory(integration/import_cli)
