@@ -77,8 +77,8 @@ jobs:
           CCACHE_MAXSIZE: 200M
         run: |
           set -euo pipefail
-          # Build the currently registered Tier A mesh test targets.
-          cmake --build build --target k1_background k1_cut --parallel
+          # Default flags are OFF, so build the registered Tier A mesh tests and import-threshold test.
+          cmake --build build --target k1_background k1_cut chipcae_test_import_thresholds --parallel
           ccache --show-stats
 
       - name: Run mesh tests
