@@ -86,6 +86,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         self.assertIn(type(w), (int, float))
         self.assertGreater(w, 0.0)
         prototype = data["prototype_W_bfp_m"]
+        self.assertEqual(prototype, 4.269532769e-3)
         self.assertGreater(w * prototype, 0.0)
         abs_delta = abs(w - prototype)
         rel_delta = abs_delta / abs(prototype)
@@ -107,10 +108,17 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             mesh["description"] = "mesh metadata"
             mesh["n_elem_z_per_layer"] = [3, 2, 2]
             mesh["n_elem_xyz"][2] = 7
-        extended["prototype_W_bfp_m"] *= 1.001
-        extended["abs_delta_m"] = abs(extended["W_bfp_m"] - extended["prototype_W_bfp_m"])
-        extended["rel_delta"] = extended["abs_delta_m"] / extended["prototype_W_bfp_m"]
         self.validate_artifact(extended)
+        changed_prototype = copy.deepcopy(data)
+        changed_prototype["prototype_W_bfp_m"] *= 1.001
+        changed_prototype["abs_delta_m"] = abs(
+            changed_prototype["W_bfp_m"] - changed_prototype["prototype_W_bfp_m"]
+        )
+        changed_prototype["rel_delta"] = (
+            changed_prototype["abs_delta_m"] / changed_prototype["prototype_W_bfp_m"]
+        )
+        with self.assertRaises(AssertionError):
+            self.validate_artifact(changed_prototype)
         for field in data.keys() - {"SPDX-License-Identifier"}:
             invalid = copy.deepcopy(data)
             del invalid[field]
@@ -146,7 +154,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         data = json.loads(REF.read_text(encoding="utf-8"))
         w, abs_delta, rel_delta = self.validate_artifact(data)
         line = (
-            f"W_bfp={w} prototype={data['prototype_W_bfp_m']} abs_delta={abs_delta} "
+            f"W_bfp={w} prototype=4.269532769e-3 abs_delta={abs_delta} "
             f"rel_delta={rel_delta} mesh=fine element=C3D20 "
             f"ccx={data['calculix_version']}"
         )
