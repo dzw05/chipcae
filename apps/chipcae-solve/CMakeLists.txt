@@ -9,7 +9,10 @@ if(CHIPCAE_ENABLE_JSONCONS)
         set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
         FetchContent_Declare(yaml-cpp URL https://github.com/jbeder/yaml-cpp/archive/refs/tags/0.8.0.tar.gz
             URL_HASH SHA256=fbe74bbdcee21d656715688706da3c8becfd946d92cd44705cc6098bb23b3a16)
+        # yaml-cpp 0.8.0 declares cmake_minimum_required < 3.5, rejected by CMake 4 on CI.
+        set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
         FetchContent_MakeAvailable(yaml-cpp)
+        unset(CMAKE_POLICY_VERSION_MINIMUM)
     endif()
     add_library(chipcae_solve_inputs src/case_loader.cpp src/mesh_setup.cpp)
     target_include_directories(chipcae_solve_inputs PUBLIC include PRIVATE ${PROJECT_SOURCE_DIR}/schema/src)
