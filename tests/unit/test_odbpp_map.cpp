@@ -1628,7 +1628,10 @@ void ipc_arc_equivalence() {
         std::ostringstream xml;
         xml << R"(<IPC-2581><Ecad><CadData><Layer name="TOP" layerFunction="CONDUCTOR"/>
 <Stackup><StackupGroup name="S"><StackupLayer layerOrGroupRef="TOP" thickness="0.035"/>
-</StackupGroup></Stackup><Step name="board"><LayerFeature layerRef="TOP"><Set><)"
+</StackupGroup></Stackup><Step name="board"><Profile><Polygon><PolyBegin x="0" y="0"/>
+<PolyStepSegment x="10" y="0"/><PolyStepSegment x="10" y="10"/>
+<PolyStepSegment x="0" y="10"/>
+</Polygon></Profile><LayerFeature layerRef="TOP"><Set><)"
             << (line ? "Line" : "Arc") << R"( startX=")" << start.x << "\" startY=\"" << start.y
             << "\" endX=\"" << finish.x << "\" endY=\"" << finish.y
             << R"(" centerX="2" centerY="2" clockwise="false"><LineDesc lineWidth="1" lineEnd="ROUND"/>
@@ -1647,6 +1650,9 @@ void ipc_arc_equivalence() {
         require(odb.layers.front().polygons.size() == 1 &&
                     ipc.model.layers.front().polygons.size() == 1,
                 "one stroke from each reader");
+        require(odb.outline.points == ipc.model.outline.points && !odb.outline.points.empty(),
+                "ODB and IPC fixture outlines agree exactly");
+        near(area(odb), area(ipc.model), 1e-12);
         const auto& a = odb.layers.front().polygons.front().points;
         const auto& b = ipc.model.layers.front().polygons.front().points;
         require(a.size() == b.size() &&

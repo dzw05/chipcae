@@ -59,6 +59,8 @@ struct Mapper {
             sweep += 2 * pi;
         const double radius = std::hypot(s.x - c.x, s.y - c.y) * scale;
         // Match IPC arc discretization in MM, including its endpoint Y-span tolerance.
+        // scale converts input units to micrometre dbu; /1000 gives the Y span
+        // in mm. IPC computes tolerance in mm, then *1000 converts it to dbu.
         const double tol =
             std::max(1e-6, 0.01 * std::max(1.0, std::abs(e.y - s.y) * scale / 1000)) * 1000;
         const double step =
