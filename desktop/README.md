@@ -90,3 +90,38 @@ well-known 实现由匹配的 libprotobuf 提供，不重复生成。D11/D12 链
 这是已有基线差异；本次限定只修改 desktop，未改协议或放宽检查。
 CMake 的 VulkanHeaders/ZLIB/PNG/freetype 有可选探测提示，构建和 PNG 渲染测试通过。
 人工交互旋转/缩放不在本次自动验收范围内。
+
+### CaseDocument (D06)
+
+`chipcae::desktop::CaseDocument` keeps the original jsoncons tree (including `x-`
+extensions). `load` resolves case-relative stack/material refs and stack-relative
+external refs, checks supplied SHA-256 hashes and rejects directory traversal,
+including symlink escapes. Failed loads keep the current document intact.
+`validate()` uses the official case/stack schemas plus library ID, layer target,
+and material reference checks. Library entries use string IDs; they are not
+embedded into stack layers. Material property constitutive validation remains
+with the solver's material validator.
+
+`toJson`, `applyJson`, JSON-Pointer `setValue`, `changed`, `dirtyChanged`, and
+`beginEdit`/`editStarted` are the narrow D05/D11 hooks. There is no undo stack.
+`contentHash()` is lowercase SHA-256 of the last successfully loaded/saved case
+bytes; it does not change on edits. `meshOptions()` supplies max_ratio=2,
+cell_budget=50000 and levels=0 without changing the JSON. Saving writes explicit
+max_ratio/cell_budget defaults; nx/ny remain omitted when automatic.
+`finalizeMeshForSubmit()` requires explicit levels >= 1 and does not infer ranks
+or launch preview. Call it before saving a submission snapshot.
+
+Saving atomically replaces the case and writes a uniquely named sibling assets
+folder with stack/material snapshots and copied external refs. Relative case refs
+and existing hashes are updated. This also makes Save As portable without
+modifying source inputs. Previous asset folders are retained; a failed save may
+leave an unreferenced folder, but never partially replaces the original case.
+Run profiles have separate load/apply/save APIs and are never inserted into the
+case or included in its dirty flag/hash. UI camera/selection state is not stored
+in case JSON.
+
+`MeshDigest::fromJson` parses the official integer fields, optional
+`npoints`/`ncells`, and `mesh_sha256`; equality compares all fields. D10 must
+extract these fields and implement file hashing using the schema's exact byte
+ordering. The schemas are copied into the build directory by CMake; packaging
+must relocate these resources and their lookup for an installed application.

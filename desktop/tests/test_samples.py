@@ -195,12 +195,33 @@ class Samples(unittest.TestCase):
         events=[json.loads(x) for x in (run/'mock-events.jsonl').read_text().splitlines()]
         ack=next(e['control_ack'] for e in events if 'control_ack' in e)
         self.assertEqual(ack['cmd_seq'],'23'); self.assertEqual(ack['client_request_id'],'stop-test')
-        self.assertEqual(ack['status'],'APPLIED'); self.assertEqual(ack['effective_step'],1)
+        self.assertEqual(ack['status'],'APPLIED'); self.assertEqual(ack['effective_step'],0)
         self.assertEqual(events[-1]['exit']['reason'],'user_stop')
         for name in ('state','progress','residual','residual_batch','log_line','output_available','exit'):
             self.assertTrue(any(name in e for e in events),name)
+        output=next(e['output_available'] for e in events if 'output_available' in e)
+        progress=next(e['progress'] for e in events if 'progress' in e)
+        manifest=json.loads((run/'manifest.json').read_text())
+        step=next(s for s in manifest['steps'] if s['file']==output['path'])
+        self.assertEqual((output['window'],output['time']),(step['n'],step['time']))
+        self.assertEqual((progress['window'],progress['time']),(step['n'],step['time']))
+        self.assertEqual((ack['effective_step'],ack['effective_time']),(step['n'],step['time']))
         wire,_=M.read_log(run/'events.caelog')
         self.assertTrue(any('output_available' in e for e in wire))
+
+    def test_all_output_pairs_match_manifest(self):
+        run = self.root/'hex_fallback'
+        M.run(run)
+        manifest = json.loads((run/'manifest.json').read_text())
+        steps = {s['file']: s for s in manifest['steps']}
+        events = [json.loads(line) for line in (run/'mock-events.jsonl').read_text().splitlines()]
+        progress = [e['progress'] for e in events if 'progress' in e]
+        outputs = [e['output_available'] for e in events if 'output_available' in e]
+        self.assertEqual(len(outputs), 3)
+        for p, output in zip(progress, outputs):
+            step = steps[output['path']]
+            self.assertEqual((output['window'], output['time']), (step['n'], step['time']))
+            self.assertEqual((p['window'], p['time']), (step['n'], step['time']))
 
     def test_vtk_readback(self):
         # Use the existing read-only VTK environment when system Python lacks vtk.
