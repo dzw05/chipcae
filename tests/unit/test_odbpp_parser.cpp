@@ -1355,6 +1355,21 @@ int main(int argc, char** argv) {
         ArchiveReader reader(p, limits);
         require(reader.open_error().find("entry count limit") != std::string::npos,
                 "directories count against entry cap");
+        // Three payload ancestors, two empty directories and one file are six entries.
+        limits.entry_count = 6;
+        ArchiveReader exact(p, limits);
+        require(exact.open_error().empty(), exact.open_error());
+        require(exact.entries().size() == 6 &&
+                    std::count_if(exact.entries().begin(),
+                                  exact.entries().end(),
+                                  [](const auto& entry) { return entry.is_dir; }) == 5,
+                "exact directory entry boundary includes empty and ancestor directories");
+        std::string out, error;
+        require(exact.read_bytes("a/b/c/payload", out, error) && out == "x", error);
+        limits.entry_count = 5;
+        ArchiveReader over(p, limits);
+        require(over.open_error() == "IMPORT_REJECTED: entry count limit",
+                "one entry beyond directory boundary rejected");
     });
     test("odbpp_review_ratio_per_file", [&] {
         ArchiveLimits limits;
