@@ -16,6 +16,19 @@ from contract import validate_reference
 
 
 class ContractTest(unittest.TestCase):
+    def test_comparison_reports_once(self):
+        directory = Path(__file__).resolve().parent
+        result = subprocess.run(
+            [sys.executable, "-m", "unittest", "tools.vv.test_trilayer_calculix_ref"],
+            cwd=directory.parents[2], capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = result.stdout.splitlines()
+        self.assertEqual(len(lines), 1, result.stdout)
+        self.assertTrue(lines[0].startswith("W_bfp="), result.stdout)
+        log = Path("/workspace/tasks/logs/v-ccx-delta.md")
+        self.assertEqual(log.read_text(encoding="utf-8"), result.stdout)
+
     def test_consumer_entry_points(self):
         directory = Path(__file__).resolve().parent
         original = json.loads((directory / "REFERENCE.json").read_text(encoding="utf-8"))

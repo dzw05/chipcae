@@ -50,8 +50,9 @@ within 1e-12 H, including C3D20 corner and midside nodes. Surface `W_bfp` is
 computed with `tools.vv.warpage_qoi.interp_grid`
 and `qoi_surface` on an 81×81 grid in millimetres, then converted back to metres.
 
-The checked-in [reference.schema.json](reference.schema.json) is the shared
-structural schema. Standard JSON Schema cannot compare instance fields, so schema
+The normative [artifact contract](CONTRACT.md) requires the validator and schema
+to be distributed together with `REFERENCE.json`. The checked-in
+[reference.schema.json](reference.schema.json) is the shared structural schema. Standard JSON Schema cannot compare instance fields, so schema
 validation alone is insufficient. All schema consumers must use the shared
 [contract.py](contract.py) `validate_reference(data)` API (also used by generation)
 or its CLI:
