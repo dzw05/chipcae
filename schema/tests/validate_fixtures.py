@@ -80,6 +80,8 @@ assert assembly["parts"] and assembly["parts"][0]["id"] == "lid", "first assembl
 assert assembly["parts"][0]["material"] == "copper", "lid material must be exactly copper"
 copper_entries = [item for item in library["materials"] if item["id"] == "copper"]
 assert len(copper_entries) == 1, "materials library must contain exactly one copper entry"
+assert material_ids == [item["id"] for item in original_materials] + ["copper"], \
+    "copper must be appended after silicon, preserving the original material order"
 copper = copper_entries[0]
 assert copper["provenance"]["reference"].strip(), "copper must cite a nonempty reference"
 assert copper["provenance"]["source_type"] == "literature"
