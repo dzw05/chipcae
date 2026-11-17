@@ -4,13 +4,15 @@
 shared immutable ownership of the original topology, document, transfer session
 and `ShapeBuild_ReShape` identity history. Public headers contain no OCCT types.
 `Geometry::from_step` owns this result; copying Geometry shares its source.
-`Geometry::empty` has infinite positive distance. STEP signed distance and STL
+`Geometry::empty` retains its placeholder distance of `1`. STEP signed distance and STL
 import explicitly throw until implemented; a STEP report does not imply an SDF.
 Without OCCT, `step_import_available()` is false and import throws runtime_error.
 No protocol error codes were added.
 
 The threshold policy's former `Defect` is now `ThresholdDefect`; its fields and
-assessment behavior are unchanged. `diagnostics.hpp` provides the brief's
+assessment behavior are unchanged. This is a source-incompatible public API change:
+downstream threshold users naming `geometry::Defect` must migrate to
+`geometry::ThresholdDefect`. `diagnostics.hpp` provides the brief's
 `Defect` and includes E3's `Tier`, `Real` and `Index` without OCCT.
 
 ## Source identity and units
@@ -51,9 +53,15 @@ No ShapeFix, sewing, or healing is invoked. `action` stays empty.
 `BRepCheck_Analyzer` reports orientation, duplicate topology, open boundaries,
 nonmanifold connectivity and intersecting wires. Unsupported validity statuses
 fail explicitly rather than returning a clean or falsely classified report.
-`BOPAlgo_ArgumentAnalyzer` checks self-interference and small edges. Exact face
-common areas detect duplicate faces; pairwise solid common volumes also detect
-complete containment. Boolean operations compute temporary inspection results;
+`BOPAlgo_ArgumentAnalyzer` checks self-interference and small edges, and runs
+on a compound of each solid pair to check cross-solid interference. Analyzer
+errors include OCCT diagnostics; unsupported result statuses fail explicitly.
+Only interference contained in a common wire is classified as a wire failure.
+Inter-solid interference is measured with exact common volume; complete
+containment is detected by that volume check as well. Coincident standalone
+faces use exact common area to confirm duplicate faces. Other face/shell
+self-interference and self-interference within one solid fail explicitly
+because the public diagnostic kinds do not represent them. Boolean operations compute temporary inspection results;
 none replaces source geometry.
 
 Measurements, all in metres:
@@ -86,7 +94,7 @@ All STEP fixtures are authored at test runtime using OCCT primitives and writers
 They cover equivalent mm/metre boxes against known SI dimensions, a 20 um seam
 with the exact first ADVANCED_FACE file reference and tau_B location check,
 repeatable IDs, named enclosure/lid/ring paths, clean topology, and contained
-solid overlap. SHA-256 has empty, abc and multiblock known-answer checks.
+and crossing solid overlap, including rejection of wire misclassification. SHA-256 has empty, abc and multiblock known-answer checks.
 The standalone header compiles without OCCT headers or definitions, even in
 an OCCT-enabled build. Its tierA timeout is 60 seconds.
 

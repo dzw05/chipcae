@@ -38,6 +38,7 @@
 #include <cmath>
 #include <functional>
 #include <mutex>
+#include <sstream>
 #include <stdexcept>
 
 namespace chipcae::geometry {
@@ -131,6 +132,28 @@ std::string label_name(const TDF_Label& label) {
     utf8.resize(static_cast<std::size_t>(count));
     return utf8;
 }
+// A failed analyzer must never yield a clean or partial inspection.
+void perform_analysis(BOPAlgo_ArgumentAnalyzer& analyzer) {
+    analyzer.Perform();
+    if (analyzer.HasErrors()) {
+        std::ostringstream diagnostics;
+        analyzer.DumpErrors(diagnostics);
+        throw std::runtime_error("STEP argument analyzer failed: " + diagnostics.str());
+    }
+    for (const auto& failure : analyzer.GetCheckResult())
+        if (failure.GetCheckStatus() != BOPAlgo_SelfIntersect &&
+            failure.GetCheckStatus() != BOPAlgo_TooSmallEdge)
+            throw std::runtime_error("unsupported STEP argument analyzer status: " +
+                                     std::to_string(static_cast<int>(failure.GetCheckStatus())));
+}
+bool contains(const TopoDS_Shape& ancestor, const TopoDS_Shape& shape) {
+    if (ancestor.IsSame(shape))
+        return true;
+    for (TopExp_Explorer it(ancestor, shape.ShapeType()); it.More(); it.Next())
+        if (it.Current().IsSame(shape))
+            return true;
+    return false;
+}
 struct Inspector {
     detail::StepShape& source;
     StepImportResult& result;
@@ -177,6 +200,19 @@ struct Inspector {
             }))
             result.defects.push_back(std::move(d));
     }
+    bool duplicate_faces(const TopoDS_Shape& a, const TopoDS_Shape& b) const {
+        const auto ba = bounds(a), bb = bounds(b);
+        for (std::size_t k = 0; k < 6; ++k)
+            if (std::abs(ba[k] - bb[k]) > options.tolerances.eps_weld)
+                return false;
+        BRepAlgoAPI_Common common(a, b);
+        if (!common.IsDone())
+            throw std::runtime_error("STEP duplicate-face inspection failed");
+        const auto wa = face_width(a), wb = face_width(b);
+        const auto wc = face_width(common.Shape());
+        return wa > 0 && std::abs(wa - wb) <= options.tolerances.eps_weld &&
+               std::abs(wa - wc) <= options.tolerances.eps_weld;
+    }
     void inspect() {
         BRepCheck_Analyzer check(source.shape, true);
         TopTools_IndexedMapOfShape shapes;
@@ -186,33 +222,43 @@ struct Inspector {
             const auto r = check.Result(s);
             if (r.IsNull())
                 continue;
-            const auto report_statuses = [&](const BRepCheck_ListOfStatus& statuses) {
+            const auto report_statuses = [&](const TopoDS_Shape& affected,
+                                             const BRepCheck_ListOfStatus& statuses) {
                 for (BRepCheck_ListIteratorOfListOfStatus it(statuses); it.More(); it.Next()) {
                     switch (it.Value()) {
                     case BRepCheck_NoError:
                         break;
                     case BRepCheck_IntersectingWires:
                     case BRepCheck_SelfIntersectingWire:
-                        add(DefectKind::WireSelfIntersection, s, extent(s), center(s));
+                        add(DefectKind::WireSelfIntersection,
+                            affected,
+                            extent(affected),
+                            center(affected));
                         break;
                     case BRepCheck_RedundantFace:
-                        add(DefectKind::DuplicateFace, s, extent(s), center(s));
+                        add(DefectKind::DuplicateFace,
+                            affected,
+                            extent(affected),
+                            center(affected));
                         break;
                     case BRepCheck_UnorientableShape:
                     case BRepCheck_BadOrientation:
                     case BRepCheck_BadOrientationOfSubshape:
-                        add(DefectKind::FlippedFace, s, extent(s), center(s));
+                        add(DefectKind::FlippedFace, affected, extent(affected), center(affected));
                         break;
                     case BRepCheck_InvalidMultiConnexity:
-                        add(DefectKind::NonManifoldEdge, s, extent(s), center(s));
+                        add(DefectKind::NonManifoldEdge,
+                            affected,
+                            extent(affected),
+                            center(affected));
                         break;
                     case BRepCheck_FreeEdge:
                     case BRepCheck_NotClosed:
-                        add(s.ShapeType() == TopAbs_SHELL ? DefectKind::OpenShell
-                                                          : DefectKind::OpenEdge,
-                            s,
-                            extent(s),
-                            center(s));
+                        add(affected.ShapeType() == TopAbs_SHELL ? DefectKind::OpenShell
+                                                                 : DefectKind::OpenEdge,
+                            affected,
+                            extent(affected),
+                            center(affected));
                         break;
                     default:
                         // Do not silently label an unsupported validity failure as a
@@ -222,9 +268,9 @@ struct Inspector {
                     }
                 }
             };
-            report_statuses(r->Status());
+            report_statuses(s, r->Status());
             for (r->InitContextIterator(); r->MoreShapeInContext(); r->NextShapeInContext())
-                report_statuses(r->StatusOnShape());
+                report_statuses(r->ContextualShape(), r->StatusOnShape());
         }
         for (TopExp_Explorer it(source.shape, TopAbs_SHELL); it.More(); it.Next()) {
             BRepCheck_Shell shell(TopoDS::Shell(it.Current()));
@@ -238,19 +284,75 @@ struct Inspector {
         args.SetShape1(source.shape);
         args.SelfInterMode() = true;
         args.SmallEdgeMode() = true;
-        args.Perform();
+        perform_analysis(args);
         for (const auto& failure : args.GetCheckResult()) {
-            for (const auto& s : failure.GetFaultyShapes1()) {
-                if (s.ShapeType() == TopAbs_VERTEX)
-                    continue;
-                auto kind = failure.GetCheckStatus() == BOPAlgo_TooSmallEdge
-                                ? DefectKind::SmallEdge
-                                : DefectKind::WireSelfIntersection;
-                if (failure.GetCheckStatus() != BOPAlgo_TooSmallEdge &&
-                    failure.GetCheckStatus() != BOPAlgo_SelfIntersect)
-                    continue;
-                add(kind, s, kind == DefectKind::SmallEdge ? length(s) : extent(s), center(s));
+            const auto& faulty = failure.GetFaultyShapes1();
+            if (faulty.IsEmpty())
+                throw std::runtime_error("STEP analyzer returned no faulty topology");
+            if (failure.GetCheckStatus() == BOPAlgo_TooSmallEdge) {
+                for (const auto& s : faulty) {
+                    if (s.ShapeType() != TopAbs_EDGE)
+                        throw std::runtime_error("STEP small-edge analyzer returned a non-edge");
+                    add(DefectKind::SmallEdge, s, length(s), center(s));
+                }
+                continue;
             }
+            // An edge/vertex interference is a wire failure only when all
+            // participants belong to the same wire. Face/solid interference
+            // must not be reported as a wire defect.
+            bool wire_failure = false;
+            for (TopExp_Explorer it(source.shape, TopAbs_WIRE); it.More(); it.Next()) {
+                bool in_wire = true;
+                for (const auto& s : faulty)
+                    in_wire = in_wire && contains(it.Current(), s);
+                if (in_wire) {
+                    add(DefectKind::WireSelfIntersection,
+                        it.Current(),
+                        extent(it.Current()),
+                        center(it.Current()));
+                    wire_failure = true;
+                }
+            }
+            if (wire_failure)
+                continue;
+            bool solid_interference = true;
+            for (const auto& s : faulty) {
+                bool in_solid = false;
+                for (TopExp_Explorer it(source.shape, TopAbs_SOLID); it.More(); it.Next())
+                    in_solid = in_solid || contains(it.Current(), s);
+                solid_interference = solid_interference && in_solid;
+            }
+            if (solid_interference) {
+                // Inter-solid interference is measured below. An interference
+                // entirely inside one solid has no supported diagnostic kind.
+                for (TopExp_Explorer it(source.shape, TopAbs_SOLID); it.More(); it.Next()) {
+                    bool all_inside = true;
+                    for (const auto& s : faulty)
+                        all_inside = all_inside && contains(it.Current(), s);
+                    if (all_inside)
+                        throw std::runtime_error(
+                            "unsupported STEP self-interference within a solid");
+                }
+                continue;
+            }
+            // Coincident standalone faces are a supported face interference.
+            // Confirm geometric equality before using the DuplicateFace kind.
+            bool duplicate = false;
+            for (int i = 1; i <= source.faces.Extent(); ++i)
+                for (int j = i + 1; j <= source.faces.Extent(); ++j) {
+                    const auto& a = source.faces(i);
+                    const auto& b = source.faces(j);
+                    bool covered = true;
+                    for (const auto& s : faulty)
+                        covered = covered && (contains(a, s) || contains(b, s));
+                    if (covered && duplicate_faces(a, b)) {
+                        add(DefectKind::DuplicateFace, a, face_width(a), center(a));
+                        duplicate = true;
+                    }
+                }
+            if (duplicate)
+                continue;
+            throw std::runtime_error("unsupported STEP face/shell self-interference");
         }
         TopTools_IndexedDataMapOfShapeListOfShape edges;
         TopExp::MapShapesAndUniqueAncestors(source.shape, TopAbs_EDGE, TopAbs_FACE, edges);
@@ -322,25 +424,24 @@ struct Inspector {
             for (int j = i + 1; j <= source.faces.Extent(); ++j) {
                 const auto& a = source.faces(i);
                 const auto& b = source.faces(j);
-                const auto ba = bounds(a), bb = bounds(b);
-                bool same_box = true;
-                for (std::size_t k = 0; k < 6; ++k)
-                    same_box = same_box && std::abs(ba[k] - bb[k]) <= options.tolerances.eps_weld;
-                if (!same_box)
-                    continue;
-                BRepAlgoAPI_Common common(a, b);
-                if (!common.IsDone())
-                    throw std::runtime_error("STEP duplicate-face inspection failed");
-                const auto wa = face_width(a), wb = face_width(b);
-                const auto wc = face_width(common.Shape());
-                if (wa > 0 && std::abs(wa - wb) <= options.tolerances.eps_weld &&
-                    std::abs(wa - wc) <= options.tolerances.eps_weld)
-                    add(DefectKind::DuplicateFace, a, wa, center(a));
+                if (duplicate_faces(a, b))
+                    add(DefectKind::DuplicateFace, a, face_width(a), center(a));
             }
         TopTools_IndexedMapOfShape solids;
         TopExp::MapShapes(source.shape, TopAbs_SOLID, solids);
         for (int i = 1; i <= solids.Extent(); ++i)
             for (int j = i + 1; j <= solids.Extent(); ++j) {
+                // Analyze the pair as one argument: SelfInterMode checks
+                // cross-solid interference as well as each solid's topology.
+                BRep_Builder pair_builder;
+                TopoDS_Compound pair;
+                pair_builder.MakeCompound(pair);
+                pair_builder.Add(pair, solids(i));
+                pair_builder.Add(pair, solids(j));
+                BOPAlgo_ArgumentAnalyzer pair_args;
+                pair_args.SetShape1(pair);
+                pair_args.SelfInterMode() = true;
+                perform_analysis(pair_args);
                 // Exact common volume also catches complete containment.
                 BRepAlgoAPI_Common common(solids(i), solids(j));
                 if (!common.IsDone())

@@ -1,6 +1,5 @@
 #include "chipcae/geometry/geometry.hpp"
 
-#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -27,7 +26,7 @@ Geometry Geometry::from_step(const std::filesystem::path& path, const StepImport
 Real Geometry::signed_distance(Real /*x*/, Real /*y*/, Real /*z*/) const {
     if (step_)
         throw std::logic_error("STEP signed-distance evaluation is not implemented");
-    return std::numeric_limits<Real>::infinity();
+    return 1;
 }
 
 } // namespace chipcae::geometry

@@ -163,6 +163,25 @@ void clean(const std::filesystem::path& dir) {
                             return d.kind == DefectKind::SolidOverlap && d.measured > 0;
                         }),
             "contained solid overlap missed");
+    // Crossing faces exercise ArgumentAnalyzer's inter-solid interference.
+    TopoDS_Compound crossing;
+    b.MakeCompound(crossing);
+    b.Add(crossing, BRepPrimAPI_MakeBox(10, 10, 10).Shape());
+    b.Add(crossing, BRepPrimAPI_MakeBox(gp_Pnt(5, 5, 5), 10, 10, 10).Shape());
+    write(crossing, dir / "crossing.step");
+    result = import_step(dir / "crossing.step");
+    require(std::any_of(result.defects.begin(),
+                        result.defects.end(),
+                        [](const Defect& d) {
+                            return d.kind == DefectKind::SolidOverlap &&
+                                   std::abs(d.measured - 0.005) < 1e-12;
+                        }),
+            "crossing solid overlap missing or measured incorrectly");
+    require(
+        std::none_of(result.defects.begin(),
+                     result.defects.end(),
+                     [](const Defect& d) { return d.kind == DefectKind::WireSelfIntersection; }),
+        "solid interference mislabeled as a wire failure");
     TopoDS_Compound duplicate;
     b.MakeCompound(duplicate);
     gp_Pln plane(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
