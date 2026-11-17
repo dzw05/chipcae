@@ -47,11 +47,11 @@ mesh value. The test validator normalizes a copy of the schema with a
 `contains` constraint binding the selected name and top-level value via `const`,
 since JSON Schema cannot directly compare two instance fields. Validation checks
 this relationship and the broad `rel_delta < 0.5` sanity bound. Required `label`
-records the reference status. `host` and `calculix_version` are
-optional informational provenance, outside the stable numerical contract. The
-generator records the host under optional `provenance.host`; legacy top-level
-`host` remains accepted. The version banner remains an optional top-level field
-for compatibility; reports use `ccx=unknown` when it is absent.
+records the reference status. `host` and `calculix_version` belong only under
+optional `provenance`, outside the stable numerical contract. The generator
+records them as `provenance.host` and `provenance.calculix_version`; top-level
+forms are rejected by the v1 schema. Reports use `ccx=unknown` when the optional
+version banner is absent.
 
 Run `python3 -m unittest tools.vv.test_trilayer_calculix_ref` after generation.
 Only passing validation prints the delta report and checks the same single line

@@ -22,14 +22,8 @@
     "schema_version": { "const": "1", "type": "string" },
     "kind": { "const": "REFERENCE", "type": "string" },
     "label": { "type": "string", "minLength": 1 },
-    "host": { "type": "string", "minLength": 1, "description": "Optional legacy execution-host provenance." },
     "W_bfp_m": { "type": "number" },
     "element_type": { "type": "string", "minLength": 1 },
-    "calculix_version": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Free-form ccx banner; informational, not a stable token."
-    },
     "geometry": {
       "type": "object",
       "additionalProperties": false,
@@ -81,6 +75,11 @@
       "additionalProperties": true,
       "properties": {
         "generator": { "type": "string" },
+        "calculix_version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Free-form ccx banner; informational, not a stable token."
+        },
         "host": { "type": "string", "minLength": 1, "description": "Optional execution-host provenance." },
         "label": { "type": "string", "description": "Human-readable prose; not for programmatic comparison." }
       }

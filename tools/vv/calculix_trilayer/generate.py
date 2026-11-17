@@ -268,7 +268,6 @@ def main():
         "label": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解",
         "W_bfp_m": w,
         "element_type": "C3D20",
-        "calculix_version": ver,
         "geometry": {
             "L_m": L,
             "thicknesses_m": THICK,
@@ -284,6 +283,7 @@ def main():
         "rel_delta": rel,
         "provenance": {
             "generator": "tools/vv/calculix_trilayer/generate.py",
+            "calculix_version": ver,
             "host": f"box {platform.system()} {platform.machine()}",
             "label": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解",
         },

@@ -57,18 +57,18 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         reversed_meshes = copy.deepcopy(data)
         reversed_meshes["meshes"].reverse()
         validate_reference(reversed_meshes, contract)
-        # Environment metadata is optional; legacy top-level metadata remains valid.
+        # Environment metadata is optional and belongs only under provenance.
         portable = copy.deepcopy(data)
-        for field in ("host", "calculix_version", "provenance"):
-            portable.pop(field, None)
+        portable.pop("provenance", None)
         validate_reference(portable, contract)
-        legacy = dict(portable, host="another host", calculix_version="another banner")
-        validate_reference(legacy, contract)
         variants = []
         for field in ("host", "calculix_version"):
+            metadata = dict(portable, provenance={field: "another environment"})
+            validate_reference(metadata, contract)
+            variants.append(dict(portable, **{field: "legacy metadata"}))
             for value in (123, ""):
-                invalid = dict(portable, **{field: value})
-                variants.append(invalid)
+                variants.append(dict(portable, provenance={field: value}))
+        validate_reference(dict(portable, provenance={"future_metadata": 123}), contract)
         for field in ("label", "W_bfp_m"):
             invalid = copy.deepcopy(data)
             del invalid[field]
@@ -132,7 +132,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         line = (
             f"W_bfp={w} prototype=4.269532769e-3 abs_delta={abs_delta} "
             f"rel_delta={rel_delta} mesh=fine element=C3D20 "
-            f"ccx={data.get('calculix_version', 'unknown')}"
+            f"ccx={data.get('provenance', {}).get('calculix_version', 'unknown')}"
         )
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory) / "v-ccx-delta.md"
