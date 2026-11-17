@@ -5,3 +5,6 @@ schema_version: 1
 errors:
   - {code: 1, name: INTERNAL, retryable: false, message: "Internal error"}
   - {code: 2, name: NOT_IMPLEMENTED, retryable: false, message: "Feature not implemented"}
+  - {code: 3, name: COLUMN_SPLIT_ACROSS_RANKS, retryable: false, message: "Column spans multiple ranks"}
+  - {code: 4, name: HIERARCHY_INVALID, retryable: false, message: "Column hierarchy is invalid"}
+  - {code: 5, name: VERSION_UNSUPPORTED, retryable: false, message: "Protocol version is unsupported"}
