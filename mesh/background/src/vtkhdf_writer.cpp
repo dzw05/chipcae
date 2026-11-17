@@ -38,6 +38,7 @@ void strings(hid_t parent,
             check(H5Dwrite(set, type, H5S_ALL, H5S_ALL, H5P_DEFAULT, bytes.data()));
     }
 }
+
 void topology(hid_t root,
               const char* name,
               const std::vector<Index>& connectivity,

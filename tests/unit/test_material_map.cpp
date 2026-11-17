@@ -7,7 +7,7 @@
 int main() {
     using namespace chipcae::geometry::ecad;
     EcadModel model;
-    model.layers = {{"core", "FR4"}, {"top", "", "SIGNAL", 0.0, true}};
+    model.layers = {{"core", "FR4", "", 0.0, false, {}}, {"top", "", "SIGNAL", 0.0, true, {}}};
     const auto path = std::filesystem::temp_directory_path() / "chipcae-material-map-test.json";
     {
         std::ofstream out(path);
