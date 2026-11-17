@@ -32,3 +32,5 @@ The script writes `work/{coarse,fine}.*` (not committed) and updates
 and `qoi_surface` on an 81×81 grid in millimetres, then converted back to metres.
 
 The v1 field contract (required keys, types, and which fields are stable) is in `reference.schema.json` (JSON Schema 2020-12).
+
+`provenance` is optional metadata. Ignoring unknown keys under it is a consumer convention, not a JSON Schema-enforced rule.

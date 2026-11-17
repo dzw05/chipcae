@@ -62,7 +62,7 @@
     "rel_delta": { "type": "number" },
     "provenance": {
       "type": "object",
-      "description": "Optional, non-contractual generator metadata. Unknown keys must be ignored by consumers.",
+      "description": "Optional, non-contractual generator metadata. Ignoring unknown keys under provenance is a consumer convention outside schema enforcement; additionalProperties is true so new metadata can be added without a schema bump.",
       "additionalProperties": true,
       "properties": {
         "generator": { "type": "string" },
