@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 
+// Private to chipcae-import; this header is not an installed public API.
 namespace chipcae::importer {
 struct ImportOptions {
     std::filesystem::path input, output, polyset, report, material_map;
@@ -21,6 +22,7 @@ inline constexpr int exit_material_mapping_missing = 9;
 
 int run_ecad(const ImportOptions& options);
 int run_step(const ImportOptions& options);
+// Format-specific help extension points; each returned string supplies its own newlines.
 std::string ecad_help();
 std::string step_help();
 void write_defects(const std::filesystem::path& file,
