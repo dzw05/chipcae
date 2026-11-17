@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Zhiwei Duan
+# tools.vv is the intended V&V Python import surface for this ci-ok test.
 """CLT magnitude gate for the WP-2 trilayer (reference values, not measured).
 
 Compares classical laminate theory (Hsueh, biaxial modulus) against the

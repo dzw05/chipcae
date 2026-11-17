@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Zhiwei Duan
+# tools.vv is the intended Python import surface for these V&V ci-ok tests
+# (from tools.vv.warpage_qoi and tools.vv.derive_cards).
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 add_test(NAME warpage_qoi_analytic
     COMMAND ${Python3_EXECUTABLE} -m unittest tests.vv.test_warpage_qoi -v)

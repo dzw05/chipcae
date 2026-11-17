@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Zhiwei Duan
+# tools.vv is the intended V&V Python import surface for this ci-ok test.
 """PP-1: analytic self-check of tools.vv.warpage_qoi (reference values, not measured)."""
 from __future__ import annotations
 
