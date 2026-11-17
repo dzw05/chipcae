@@ -18,6 +18,7 @@
 #   and tests/<a>/<b>/CMakeLists.txt that calls chipcae_auto_tests( and was not
 #   already added explicitly. New cards therefore create their own subdirectory and
 #   never touch tests/CMakeLists.txt.
+# The helper functions are intentionally defined once for the whole project.
 include_guard(GLOBAL)
 
 function(chipcae_auto_tests)
