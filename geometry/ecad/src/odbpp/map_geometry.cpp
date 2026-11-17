@@ -30,7 +30,7 @@ struct Mapper {
         } else if (sweep <= 0)
             sweep += 2 * pi;
         const double radius = std::hypot(s.x - c.x, s.y - c.y) * scale;
-        // Radius-based IPC-style tolerance in MM, invariant under rotation and units.
+        // Use radius in IPC's MM tolerance formula so rotation cannot change resolution.
         const double tol = std::max(1e-6, 0.01 * std::max(1.0, radius / 1000)) * 1000;
         const double step =
             radius > tol ? 2 * std::acos(std::clamp(1 - tol / radius, -1.0, 1.0)) : std::abs(sweep);
@@ -241,8 +241,16 @@ struct Mapper {
             auto attrs = job.attrs.layer.find(layer.name);
             if (attrs != job.attrs.layer.end()) {
                 auto value = attrs->second.find(".plating_thickness");
-                if (value != attrs->second.end())
-                    plating = std::stod(value->second) * scale;
+                if (value != attrs->second.end()) {
+                    try {
+                        std::size_t used = 0;
+                        plating = std::stod(value->second, &used) * scale;
+                        if (used != value->second.size())
+                            plating = 0;
+                    } catch (const std::exception&) {
+                        plating = 0;
+                    }
+                }
             }
             if (!(plating > 0) || !std::isfinite(plating)) {
                 unsupported("ViaPlatingMissing:" + layer.name);

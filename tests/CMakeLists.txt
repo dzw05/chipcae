@@ -173,10 +173,10 @@ if(CHIPCAE_ENABLE_ECAD)
     endforeach()
     target_compile_definitions(odbpp_e2e PRIVATE CHIPCAE_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
     add_test(NAME odbpp_skeleton_stub COMMAND test_odbpp_parser)
-    add_test(NAME odbpp_map_placeholder COMMAND test_odbpp_map)
+    add_test(NAME odbpp_map COMMAND test_odbpp_map)
     add_test(NAME odbpp_fixture_present COMMAND odbpp_e2e odb)
     add_test(NAME ipc_fixture_present COMMAND odbpp_e2e ipc)
-    set_tests_properties(odbpp_skeleton_stub odbpp_map_placeholder odbpp_fixture_present ipc_fixture_present
+    set_tests_properties(odbpp_skeleton_stub odbpp_map odbpp_fixture_present ipc_fixture_present
         PROPERTIES LABELS "tierA" TIMEOUT 60)
 
     add_executable(chipcae_test_ipc2581_e11 unit/test_ipc2581_e11.cpp)

@@ -58,7 +58,7 @@ void map_stackup(const OdbJob& j, const MapOptions& options, ImportResult& resul
         auto attrs = j.attrs.layer.find(l.name);
         if (attrs != j.attrs.layer.end()) {
             auto material = attrs->second.find(".material");
-            if (material != attrs->second.end())
+            if (material != attrs->second.end() && !material->second.empty())
                 layer.material = material->second;
             auto thickness = attrs->second.find(".layer_dielectric");
             if (thickness != attrs->second.end()) {

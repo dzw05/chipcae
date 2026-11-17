@@ -346,7 +346,7 @@ void via() {
     j.tools["DRILL"] = {{1, "plated", 0.6}, {2, "slot", 0.8}};
     auto& f = j.features["DRILL"];
     f.symbols = {{"r600"}, {"r800"}};
-    f.pads = {{{2, 3}, 0, true}, {{6, 7}, 0, true}};
+    f.pads = {{{2, 3}, 0, true}, {{6, 7}, 0, true}, {{8, 8}, 1, true}};
     f.lines.push_back({{4, 4}, {5, 4}, 1, true});
     auto m = mapped(j);
     require(m.vias.size() == 2, "two circular holes");
@@ -362,7 +362,7 @@ void via() {
     for (const auto& u : m.report.unsupported)
         slot_reported = slot_reported || u.element.find("slot") != std::string::npos ||
                         u.element.find("Slot") != std::string::npos;
-    require(slot_reported, "slot unsupported");
+    require(slot_reported && m.report.unsupported.size() == 2, "line and tool slot unsupported");
     require(!m.via_fractions.empty(), "via rasterization initialized");
 }
 void duplicate_geometry() {
@@ -397,7 +397,7 @@ void holes_and_profile() {
             "profile hole report");
     require(m.outline.points.size() == 4, "profile outer contour");
 }
-// Independently construct IPC's quarter-arc discretization (MM, radius = y span).
+// Independently construct the radius-based quarter-arc discretization in MM.
 // Compare exact offset vertices, including joins, rather than an analytic area bound.
 void check_arc_stroke(const OdbJob& j, bool rectangular) {
     using namespace Clipper2Lib;
@@ -473,6 +473,8 @@ void pads_and_arcs() {
             "rotated mirrored rectangle");
     f.pads = {{{2, 2}, 1, true}};
     near(area(mapped(j)), 1e6 + std::numbers::pi * 250000, 1e-3);
+    f.pads = {{{2, 2}, 2, true}};
+    near(area(mapped(j)), std::numbers::pi * 250000, 1e-3);
     f.pads.clear();
     f.arcs = {{{4, 2}, {2, 4}, {2, 2}, 2, true, false}};
     check_arc_stroke(j, false);
@@ -661,6 +663,13 @@ void drill_rejections() {
     require(m.vias.empty() && m.report.unsupported.size() == 1 &&
                 m.report.unsupported.front().element == "ViaPlatingMissing:DRILL",
             "no default plating");
+    for (const auto* text : {"invalid", "0.025junk", "nan", ""}) {
+        j.attrs.layer["DRILL"][".plating_thickness"] = text;
+        m = mapped(j);
+        require(m.vias.empty() && m.report.unsupported.size() == 1 &&
+                    m.report.unsupported.front().element == "ViaPlatingMissing:DRILL",
+                "malformed plating reported");
+    }
     j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
     j.layers.back().end_name.clear();
     m = mapped(j);
