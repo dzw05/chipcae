@@ -7,9 +7,8 @@ import sys
 
 try:
     import jsonschema
-    from referencing import Registry, Resource
 except ImportError:
-    print("SKIP: jsonschema and referencing are required")
+    print("SKIP: jsonschema is required")
     sys.exit(77)
 
 root = Path(sys.argv[1]).resolve()
@@ -30,16 +29,34 @@ schemas = {
     "profile": "schema/run-profile-1.0.schema.json",
     "materials": "material/schema/material-library.v1.schema.json",
 }
-registry = Registry()
+try:
+    from referencing import Registry, Resource
+except ImportError:
+    Registry = None
+
+registry = Registry() if Registry is not None else None
+schema_store = {}
 for path in [*schemas.values(), "material/schema/material.v1.schema.json",
              "schema/parameters.schema.json"]:
     schema = read(root / path)
-    registry = registry.with_resource(schema["$id"], Resource.from_contents(schema))
+    if registry is None:
+        # RefResolver uses urllib's URL joining, which cannot resolve fragment
+        # references against the custom chipcae scheme. Map only schema URIs
+        # to an HTTPS namespace; all documents still resolve from the local store.
+        schema = json.loads(json.dumps(schema).replace("chipcae://", "https://chipcae.invalid/"))
+    schema_store[schema["$id"]] = schema
+    if registry is not None:
+        registry = registry.with_resource(schema["$id"], Resource.from_contents(schema))
 inputs = {}
 for name, path in schemas.items():
     inputs[name] = read(example / (name + ".json"))
     schema = read(root / path)
-    jsonschema.validators.validator_for(schema)(schema, registry=registry).validate(inputs[name])
+    if registry is not None:
+        resolution = {"registry": registry}
+    else:
+        schema = json.loads(json.dumps(schema).replace("chipcae://", "https://chipcae.invalid/"))
+        resolution = {"resolver": jsonschema.RefResolver.from_schema(schema, store=schema_store)}
+    jsonschema.validators.validator_for(schema)(schema, **resolution).validate(inputs[name])
 
 expected_stack = read(root / "schema/examples/fcbga_demo.stack.json")
 expected_stack["id"] = "demo_gate"

@@ -64,7 +64,7 @@ with tempfile.TemporaryDirectory(prefix="demogate-") as tmp:
         detail = f"command={command!r}\nexit={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         if rejected:
             print("case-sensitive target observation:", detail, flush=True)
-            assert result.returncode != 0, detail
+            assert result.returncode == 14, detail
             return
         assert result.returncode == 0, detail
         out = work / name
@@ -108,8 +108,14 @@ with tempfile.TemporaryDirectory(prefix="demogate-") as tmp:
     assert isinstance(mesh_hash, str) and len(mesh_hash) == 64
     revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=source,
                               capture_output=True, text=True, check=True).stdout.strip()
+    implementation = subprocess.run(
+        ["git", "log", "-1", "--format=%H", "--", "examples/demo_gate"], cwd=source,
+        capture_output=True, text=True, check=True).stdout.strip()
+    dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=normal"],
+                           cwd=source, capture_output=True, text=True, check=True).stdout.strip()
     print("实测", datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(),
           "machine", platform.node(), "commit", revision,
+          "example_implementation_commit", implementation, "working_tree_dirty", bool(dirty),
           "counts", {n: {"cells": len(b["Types"]), "points": len(b["Points"])}
                      for n, b in blocks.items()},
           "T_max", float(temperatures.max()), "warpage_pv", pv,
