@@ -255,6 +255,11 @@ int main() {
         std::string out, error;
         for (const auto& input : {p, temp / "early-stop.tgz", temp / "early-stop.zip"}) {
             ArchiveReader reader(input, limits);
+            if (input == p) {
+                require(reader.open_error().find("file byte limit") != std::string::npos,
+                        "unread directory payload rejected at open");
+                continue;
+            }
             require(reader.open_error().empty(), reader.open_error());
             require(reader.read_bytes("small", out, error) && out == "ok", error);
             require(reader.for_each_line(
@@ -587,6 +592,32 @@ int main() {
             require(j.layers[i].name == names[i] && j.layers[i].type == types[i] &&
                         j.layers[i].row == int(i + 1),
                     "four-layer order/type");
+    });
+    test("odbpp_review_tolerant_closure", [&] {
+        const auto p = temp / "tolerant-closure";
+        minimal(p);
+        for (const auto* end : {"0.0000005 0.0000005", "-0.0000005 -0.0000005"}) {
+            write(p / "steps/pcb/profile",
+                  std::string("OB 0 0 I\nOS 10 0\nOS 10 10\nOS 0 10\nOS ") + end + "\nOE\n");
+            require(bool(parse_job(p)), "closure within per-axis tolerance accepted");
+        }
+        write(p / "steps/pcb/profile", "OB 0 0 I\nOS 10 0\nOS 10 10\nOS 0 10\nOS 0.000002 0\nOE\n");
+        rejected(p, "profile contour not closed");
+    });
+    test("odbpp_directory_open_size_limits", [&] {
+        const auto p = temp / "directory-open-limits";
+        write(p / "irrelevant-a", "123");
+        write(p / "irrelevant-b", "456");
+        ArchiveLimits limits;
+        limits.file_bytes = 2;
+        require(ArchiveReader(p, limits).open_error().find("file byte limit") != std::string::npos,
+                "unused oversized file rejected at open");
+        limits.file_bytes = 3;
+        limits.total_bytes = 5;
+        require(ArchiveReader(p, limits).open_error().find("total byte limit") != std::string::npos,
+                "unused aggregate rejected at open");
+        limits.total_bytes = 6;
+        require(ArchiveReader(p, limits).open_error().empty(), "exact directory limits accepted");
     });
     test("odbpp_profile_closed", [&] {
         auto j = job(temp / "job");
@@ -1183,16 +1214,16 @@ int main() {
                 _exit(2);
             ArchiveReader reader(p);
             std::string out, error;
-            const bool ok = reader.open_error().empty() &&
-                            reported(reader.unsupported(), "blocked: cannot read directory") &&
-                            reader.read_bytes("matrix/matrix", out, error) && !out.empty();
+            const bool ok =
+                reader.open_error().starts_with("IMPORT_REJECTED: cannot read directory") &&
+                !reader.read_bytes("matrix/matrix", out, error) && error == reader.open_error();
             _exit(ok ? 0 : 1);
         }
         int status = 0;
         const auto waited = waitpid(child, &status, 0);
         fs::permissions(p / "blocked", fs::perms::owner_all);
         require(waited == child && WIFEXITED(status) && WEXITSTATUS(status) == 0,
-                "unreadable subtree reported while unrelated payload remains readable");
+                "unreadable subtree rejects the input");
 #endif
     });
     test("odbpp_review_gzip_flags_and_final_buffer", [&] {

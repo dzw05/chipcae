@@ -94,7 +94,8 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
         if (std::filesystem::is_directory(input)) {
             s.directory = true;
             std::error_code ec;
-            const auto options = std::filesystem::directory_options::skip_permission_denied;
+            const auto options = std::filesystem::directory_options::none;
+            std::uint64_t total = 0;
             std::filesystem::recursive_directory_iterator it(input, options, ec), end;
             if (ec) {
                 fail("cannot enumerate input: " + ec.message());
@@ -112,8 +113,8 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                 };
                 const auto status = e.symlink_status(ec);
                 if (ec) {
-                    report("cannot inspect directory entry: " + ec.message());
-                    it.disable_recursion_pending();
+                    fail("cannot inspect directory entry " + rel + ": " + ec.message());
+                    return;
                 } else if (std::filesystem::is_symlink(status)) {
                     report("directory input symlink unsupported");
                     it.disable_recursion_pending();
@@ -123,25 +124,37 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                         report("unsupported directory entry type");
                     } else {
                         const auto size = dir ? 0 : e.file_size(ec);
-                        if (ec)
-                            report("cannot read file size: " + ec.message());
-                        else {
+                        if (ec) {
+                            fail("cannot read file size " + rel + ": " + ec.message());
+                            return;
+                        } else {
+                            if (size > limits.file_bytes) {
+                                fail("file byte limit " + rel);
+                                return;
+                            }
+                            if (size > limits.total_bytes - total) {
+                                fail("total byte limit " + rel);
+                                return;
+                            }
+                            total += size;
                             s.entries.push_back({rel, size, dir});
                             s.directory_paths.push_back(e.path());
                         }
                         if (dir) {
                             std::filesystem::directory_iterator probe(e.path(), ec);
                             if (ec) {
-                                report("cannot read directory: " + ec.message());
-                                it.disable_recursion_pending();
+                                fail("cannot read directory " + rel + ": " + ec.message());
+                                return;
                             }
                         }
                     }
                 }
                 ec.clear();
                 it.increment(ec);
-                if (ec)
-                    report("cannot traverse directory: " + ec.message());
+                if (ec) {
+                    fail("cannot traverse directory " + rel + ": " + ec.message());
+                    return;
+                }
             }
         } else {
             auto name = lower(input.filename().string());

@@ -198,6 +198,10 @@ bool valid_ring(const OdbContour& contour) {
                 const auto same = [](OdbPoint a, OdbPoint b) {
                     return std::hypot(a.x - b.x, a.y - b.y) <= 1e-12;
                 };
+                // Consecutive edges, including the synthetic closure, share a vertex.
+                if ((j == i + 1 && same(p, ring[i].b)) ||
+                    (i == 0 && j + 1 == ring.size() && same(p, ring[i].a)))
+                    continue;
                 // ODB exports use retraced bridges to join boundary loops. Shared
                 // vertices and collinear bridges are valid; transverse crossings are not.
                 if (same(p, ring[i].a) || same(p, ring[i].b) || same(p, ring[j].a) ||
