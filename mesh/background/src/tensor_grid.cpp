@@ -560,21 +560,26 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
         std::clog << "warning: " << warning << '\n';
     auto nx = axes[0].size() - 1, ny = axes[1].size() - 1, nz = axes[2].size() - 1;
     // Validate cut geometry before any cell ownership or attribute emission.
-    std::vector<const Inclusion*> polygons;
+    struct LayerPolygon {
+        const Inclusion* region;
+        std::size_t layer;
+    };
+    std::vector<LayerPolygon> polygons;
     for (const auto& layer : s.layers)
         for (const auto& r : layer.regions)
             if (!r.footprint.polygon.empty()) {
                 if (!layer.material.empty())
                     return Error{"CUT_UNSUPPORTED", r.name + ": polygon in material layer"};
-                polygons.push_back(&r);
+                polygons.push_back({&r, static_cast<std::size_t>(&layer - s.layers.data())});
             }
-    std::stable_sort(
-        polygons.begin(), polygons.end(), [](auto a, auto b) { return a->name < b->name; });
+    std::stable_sort(polygons.begin(), polygons.end(), [](auto a, auto b) {
+        return a.region->name < b.region->name;
+    });
     for (std::size_t i = 0; i < polygons.size(); ++i) {
-        const auto& r = *polygons[i];
+        const auto& r = *polygons[i].region;
         for (std::size_t j = i + 1; j < polygons.size(); ++j) {
-            const auto& other = *polygons[j];
-            if (body(r) != body(other) &&
+            const auto& other = *polygons[j].region;
+            if (polygons[i].layer == polygons[j].layer && body(r) != body(other) &&
                 gap(r.footprint.polygon, other.footprint.polygon) +
                         tolerance(r.footprint.polygon, other.footprint.polygon) <
                     2 * band_h(m, r.footprint.polygon, other.footprint.polygon))

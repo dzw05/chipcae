@@ -43,7 +43,10 @@ int main() {
                 upper.regions = {b};
                 s.layers[0].regions = {a};
                 s.layers.push_back(upper);
-                check(s, gap == .375, "a", "b");
+                check(s, false, "a", "b");
+                // Even coincident different-body polygons are independent across layers.
+                s.layers[1].regions[0].footprint = a.footprint;
+                check(s, false, "a", "b");
                 s.layers[1].regions[0].body = a.body;
                 check(s, false, "a", "b");
             }
