@@ -26,8 +26,9 @@ static_assert(std::is_same_v<decltype(std::declval<const MergeResult&>().error()
 int main() {
     int failures = 0;
     try {
-        (void)chipcae::geometry::place({}, {}, {});
-        std::cerr << "FAIL: (void)chipcae::geometry::place({}, {}, {}); must throw "
+        (void)chipcae::geometry::place({}, chipcae::geometry::FramePlacement{}, {});
+        std::cerr << "FAIL: (void)chipcae::geometry::place({}, "
+                     "chipcae::geometry::FramePlacement{}, {}); must throw "
                      "std::logic_error with prefix not implemented: \n";
         ++failures;
     } catch (const std::logic_error& error) {

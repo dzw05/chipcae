@@ -24,6 +24,7 @@ static_assert(std::is_same_v<decltype(chipcae::mesh::BodyLevelSet{chipcae::BodyI
 
 [[maybe_unused]] static void check_two_members(chipcae::mesh::BodyLevelSet& x) {
     auto& [b, p] = x;
+    // decltype on an unparenthesized structured binding yields its referenced member type.
     static_assert(std::is_same_v<decltype(b), chipcae::BodyId>);
     static_assert(std::is_same_v<decltype(p), std::vector<chipcae::Real>>);
 }
