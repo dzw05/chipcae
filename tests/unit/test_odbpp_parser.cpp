@@ -527,6 +527,17 @@ int main(int argc, char** argv) {
         fs::remove(dir / "matrix/matrix");
         rejected(dir, "missing file matrix/matrix");
     });
+    test("odbpp_tar_empty_member_ratio_budget", [&] {
+        ArchiveReader reader(temp / "empty-members.tgz");
+        require(reader.open_error().empty(), reader.open_error());
+        require(reader.entries().size() == 2, "empty and nonempty tar members indexed");
+        require(reader.entries()[0].compressed_size == 0, "empty member needs no budget");
+        require(reader.entries()[1].compressed_size > 0, "nonempty member has positive budget");
+        std::string out, error;
+        require(reader.read_bytes("empty", out, error) && out.empty(), "empty member accepted");
+        require(reader.read_bytes("payload", out, error) && out == "valid payload",
+                "nonempty member after empty member accepted: " + error);
+    });
     test("odbpp_gzip_live_output_limit", [&] {
         std::istringstream input(bytes(temp / "boundary-32745.gz"));
         GzipCursor cursor(input);

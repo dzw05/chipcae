@@ -67,6 +67,8 @@ def main(root, fixture):
     with zipfile.ZipFile(root / 'early-stop.zip', 'w', compression=zipfile.ZIP_STORED) as archive:
         for path, data in stop_files:
             archive.writestr(path, data)
+    (root / 'empty-members.tgz').write_bytes(gzip.compress(tar_bytes(
+        [('empty', b''), ('payload', b'valid payload')])))
     files = [(p.relative_to(fixture).as_posix(), p.read_bytes()) for p in sorted(fixture.rglob('*')) if p.is_file()]
     for path, data in files:
         destination = root / 'job' / path

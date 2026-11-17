@@ -21,7 +21,11 @@ else()
     message(FATAL_ERROR "ECAD requires miniz::miniz or miniz target")
 endif()
 get_target_property(_chipcae_miniz_type ${_chipcae_miniz_target} TYPE)
-if(NOT _chipcae_miniz_type STREQUAL "STATIC_LIBRARY")
+# Config packages may wrap their static archive in an interface target or use
+# UNKNOWN_LIBRARY for an imported archive. Trust that package's link interface;
+# the FetchContent fallback explicitly builds static miniz.
+if(_chipcae_miniz_type STREQUAL "SHARED_LIBRARY" OR
+   _chipcae_miniz_type STREQUAL "MODULE_LIBRARY")
     message(FATAL_ERROR "ECAD requires a static miniz library")
 endif()
 target_link_libraries(chipcae_geometry_ecad PRIVATE ${_chipcae_miniz_target})
