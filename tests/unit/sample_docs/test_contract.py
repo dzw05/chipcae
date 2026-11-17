@@ -14,8 +14,20 @@ def require(condition, message):
 
 
 def validate_input(root, path, schema_path):
-    import jsonschema
-    from referencing import Registry, Resource
+    # Keep full schema checks; report missing/incompatible dependencies explicitly.
+    try:
+        from importlib.metadata import version
+        import jsonschema
+        from referencing import Registry, Resource
+        for package, expected in (("jsonschema", "4.26.0"), ("referencing", "0.37.0")):
+            require(version(package) == expected,
+                    f"{package}=={expected} required; install with "
+                    "python3 -m pip install -r tests/unit/sample_docs/requirements.txt")
+    except ImportError as error:
+        raise AssertionError(
+            "schema validation dependencies unavailable; install with "
+            "python3 -m pip install -r tests/unit/sample_docs/requirements.txt"
+        ) from error
 
     require(path.is_file(), f"missing command input or reference: {path}")
     document = json.loads(path.read_text(encoding="utf-8"))
@@ -30,6 +42,27 @@ def validate_input(root, path, schema_path):
     require(not errors, f"{path}: " + "; ".join(
         f"{error.json_path}: {error.message}" for error in errors))
     return document
+
+
+def check_case(root, case_file, case):
+    inputs = {}
+    for kind, schema in (
+        ("stack", "schema/stack-0.2.schema.json"),
+        ("materials", "material/schema/material-library.v1.schema.json"),
+    ):
+        target = case_file.parent / case[kind]["ref"]
+        inputs[kind] = validate_input(root, target, schema)
+    materials = inputs["materials"]["materials"]
+    label = f"{case_file}: {case['materials']['ref']}"
+    require(isinstance(materials, list) and materials, f"{label}: empty materials")
+    ids = [material["id"] for material in materials]
+    require(len(ids) == len(set(ids)), f"{label}: duplicate material IDs")
+    for layer in inputs["stack"]["layers"]:
+        for entity in [layer] + layer.get("regions", []):
+            require(entity["material"] in ids,
+                    f"{case_file}: {case['stack']['ref']}: "
+                    f"unknown material {entity['material']} in {entity['name']}")
+    return inputs
 
 
 def check(root):
@@ -51,19 +84,19 @@ def check(root):
     candidates = [argv for argv in commands if "examples/s2_solve/case.json" in argv]
     require(candidates and all(argv == s2 for argv in candidates),
             f"S2 command must equal {s2!r}; found {candidates!r}")
+    o2 = ["chipcae-solve", "--case", "case.json",
+          "--profile", "profile.json", "--out", "run_dir"]
+    require(o2 in commands, f"missing O2 command template: {o2!r}")
     for argv in commands:
         if argv[0] == "chipcae-solve":
             require(len(argv) == 7 and argv[1::2] == ["--case", "--profile", "--out"],
                     f"solver command must use the public three-flag signature: {argv!r}")
+            if argv == o2:
+                continue
             validate_input(root, root / argv[4], "schema/run-profile-1.0.schema.json")
             case_file = root / argv[2]
             case = validate_input(root, case_file, "schema/case-1.0.schema.json")
-            inputs = {}
-            for kind, schema in (
-                ("stack", "schema/stack-0.2.schema.json"),
-                ("materials", "material/schema/material-library.v1.schema.json"),
-            ):
-                inputs[kind] = validate_input(root, case_file.parent / case[kind]["ref"], schema)
+            inputs = check_case(root, case_file, case)
             for material in inputs["materials"]["materials"]:
                 require(material["model"] == "thermo_elastic", "S2 requires thermoelastic materials")
                 for kind, columns in (("elastic", ("E", "nu")),
@@ -78,11 +111,6 @@ def check(root):
                         require(isinstance(values, list) and len(values) == 1
                                 and type(values[0]) in (int, float) and math.isfinite(values[0]),
                                 f"S2 requires one finite {column} value")
-            ids = [material["id"] for material in inputs["materials"]["materials"]]
-            require(len(ids) == len(set(ids)), "duplicate material IDs")
-            for layer in inputs["stack"]["layers"]:
-                require(layer["material"] in ids,
-                        f"unknown layer material: {layer['material']}")
 
     required_paths = {
         "apps/chipcae-solve/README.md",
@@ -92,10 +120,22 @@ def check(root):
         "examples/s2_solve/case.json", "examples/s2_solve/profile.json",
         "examples/s2_solve/stack.json", "examples/s2_solve/materials.json",
     }
-    for case_path in ("schema/examples/fcbga_demo.case.json", "examples/s2_solve/case.json"):
+    for case_path in ("schema/examples/fcbga_demo.case.json",
+                      "schema/examples/thermal.case.json", "examples/s2_solve/case.json"):
         case_file = root / case_path
         require(case_file.is_file(), f"missing case: {case_path}")
-        case = json.loads(case_file.read_text(encoding="utf-8"))
+        case = validate_input(root, case_file, "schema/case-1.0.schema.json")
+        inputs = check_case(root, case_file, case)
+        if case_path == "schema/examples/thermal.case.json":
+            fcbga = root / "schema/examples/fcbga_demo.case.json"
+            original = json.loads(fcbga.read_text(encoding="utf-8"))
+            for kind in ("stack", "materials"):
+                require(case[kind]["ref"] == original[kind]["ref"],
+                        f"{case_file}: {kind} must reference the same FCBGA input")
+            for material in inputs["materials"]["materials"]:
+                require("conductivity" not in material,
+                        f"{case_file}: {case['materials']['ref']}: "
+                        f"{material['id']} now supplies conductivity; revisit thermal limitation")
         for kind in ("stack", "materials"):
             ref = case[kind]["ref"]
             target = case_file.parent / ref
@@ -111,14 +151,15 @@ def check(root):
 
     library = json.loads((root / "schema/examples/fcbga_demo.materials.json").read_text())
     materials = library.get("materials")
-    require(isinstance(materials, list) and materials, "FCBGA materials must be a nonempty list")
+    require(isinstance(materials, list) and materials,
+            "schema/examples/fcbga_demo.materials.json: materials must be a nonempty list")
     multi_knot = []
     for material in materials:
         for kind in ("elastic", "thermal_expansion"):
             temperatures = material[kind]["table"]["temperatures"]
             require(isinstance(temperatures, list), f"{material['id']}.{kind}: temperatures must be a list")
-            single_knot = len(temperatures) == 1
-            if not single_knot and len(temperatures) >= 2:
+            require(temperatures, f"FCBGA {material['id']}.{kind}: empty temperatures")
+            if len(temperatures) >= 2:
                 multi_knot.append((material["id"], kind))
     require(multi_knot, "cited FCBGA library must contain at least one multi-knot table")
 
@@ -150,5 +191,5 @@ def check(root):
 if __name__ == "__main__":
     try:
         check(Path(sys.argv[1]).resolve())
-    except (AssertionError, KeyError, ValueError, OSError, IndexError) as error:
+    except (AssertionError, KeyError, ValueError, OSError, IndexError, TypeError) as error:
         sys.exit(f"sampledocs contract: {error}")

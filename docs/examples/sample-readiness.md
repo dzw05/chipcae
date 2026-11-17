@@ -17,7 +17,7 @@ the containing case file, rather than the shell's working directory.
 O2 requires constant isotropic thermoelastic materials with single-knot E, nu,
 and alpha tables. For `elastic.table` and `thermal_expansion.table`, single-knot
 means that the `temperatures` array has exactly one entry. The checked-in FCBGA
-library has two temperature knots in these tables. These multi-knot temperature
+library has at least one table with two or more temperature knots. These multi-knot temperature
 tables caused the original sample to fail with `INPUT_INVALID/14` because they
 do not meet the single-knot requirement. Schema validity alone does not establish
 support by O2.
@@ -34,8 +34,11 @@ stack and material library, which lacks conductivity. It is therefore not ready
 for a steady conduction solve, in addition to the single-knot limitation.
 
 For O2 guidance, the public command form is
-`chipcae-solve --case case.json --profile profile.json --out run_dir`, with
-case and profile replaced by suitable inputs. This is an interface description,
+```sh
+chipcae-solve --case case.json --profile profile.json --out run_dir
+```
+
+with case and profile replaced by suitable inputs. This is an interface description,
 not a claim that the shipped FCBGA case is ready to run.
 
 ## S2 cut demonstration
