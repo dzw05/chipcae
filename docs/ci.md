@@ -217,6 +217,8 @@ Billed minutes are the job duration rounded up to the next minute. A skipped job
 
 Both workflows succeeded. Times are UTC, from `gh run view --json jobs` on 2026-11-16.
 
+E5 CI run [43994466980](https://github.com/dzw05/chipcae/actions/runs/43994466980) exposed a GCC `-Werror=missing-field-initializers` failure in `geometry/src/import_thresholds.cpp`: the `Defect` aggregate initializer did not include the fields added by E5. The initializer now supplies all fields. Local Release validation with warnings as errors passed; hosted CI has not been rerun because this fix is being committed without a push.
+
 - CI: run [43899064936](https://github.com/dzw05/chipcae/actions/runs/43899064936), head `cbb8b5b`.
 - Measure hosted nightly: run [43899065127](https://github.com/dzw05/chipcae/actions/runs/43899065127), same head. That workflow has since been removed so later pull requests do not compile CUDA.
 

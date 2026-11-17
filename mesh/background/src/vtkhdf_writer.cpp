@@ -1,9 +1,11 @@
 #include "chipcae/mesh/background/vtkhdf_writer.hpp"
 
+#include "chipcae/geometry/import_report.hpp"
+#include "chipcae/io/detail/hdf5.hpp"
 #include "chipcae/mesh/cut/cut_layer.hpp"
 
 #include <algorithm>
-#include "chipcae/io/detail/hdf5.hpp"
+#include <filesystem>
 #include <numeric>
 #include <set>
 #include <stdexcept>
@@ -32,6 +34,52 @@ void topology(hid_t root,
     dataset(g, "Offsets", offsets, ctx);
 }
 } // namespace
+Expected<std::filesystem::path>
+write_defect_points_vtkhdf(const std::filesystem::path& path,
+                           const std::vector<geometry::Defect>& defects,
+                           const std::vector<std::array<Real, 3>>& points) {
+    if (defects.size() != points.size())
+        return Error{"vtkhdf", "defect and point counts differ"};
+    try {
+        ErrorSilencer hush;
+        H5 file(H5Fcreate(path.string().c_str(), H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT),
+                H5Fclose);
+        header(file, "UnstructuredGrid");
+        H5 piece(H5Gcreate2(file, "VTKHDF", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT), H5Gclose);
+        std::vector<Real> coords;
+        std::vector<Index> hashes, kinds;
+        std::vector<unsigned char> tiers;
+        coords.reserve(points.size() * 3);
+        hashes.reserve(points.size());
+        kinds.reserve(points.size());
+        tiers.reserve(points.size());
+        for (std::size_t i = 0; i < points.size(); ++i) {
+            coords.insert(coords.end(), points[i].begin(), points[i].end());
+            const auto id = geometry::defect_id(defects[i]);
+            std::uint64_t hash = 1469598103934665603ULL;
+            for (unsigned char c : id) {
+                hash ^= c;
+                hash *= 1099511628211ULL;
+            }
+            hashes.push_back(static_cast<Index>(hash));
+            std::uint64_t kind_hash = 1469598103934665603ULL;
+            for (unsigned char c : defects[i].kind) {
+                kind_hash ^= c;
+                kind_hash *= 1099511628211ULL;
+            }
+            kinds.push_back(static_cast<Index>(kind_hash));
+            tiers.push_back(static_cast<unsigned char>(defects[i].tier));
+        }
+        WriterContext ctx;
+        dataset(piece, "Points", coords, ctx, 3);
+        dataset(piece, "defect_id_hash", hashes, ctx);
+        dataset(piece, "tier", tiers, ctx);
+        dataset(piece, "kind", kinds, ctx);
+        return path;
+    } catch (const std::exception& e) {
+        return Error{"vtkhdf", e.what()};
+    }
+}
 Expected<VtkhdfFiles> write_vtkhdf(const std::filesystem::path& stem,
                                    const HexMeshArrays& m,
                                    const cut::CutLayerArrays* cut,

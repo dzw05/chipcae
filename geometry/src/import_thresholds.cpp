@@ -56,7 +56,12 @@ assess_import(const ImportScales& s, const ThresholdFile& t, bool confirmed) {
                                        DefectReason::TOLERANCE_RANGE_UNSUPPORTED,
                                        dimension,
                                        size,
-                                       "merge into an adjacent layer or use an equivalent layer"}};
+                                       "merge into an adjacent layer or use an equivalent layer",
+                                       {},
+                                       {},
+                                       {},
+                                       {},
+                                       false}};
     if (confirmed) {
         assessment.confirmation_required = false;
         assessment.tolerances.eps_weld = 1e-8;
