@@ -39,6 +39,12 @@ struct ImportResult {
     explicit operator bool() const noexcept { return error.empty(); }
 };
 
+// Loads a JSON object mapping ECAD material names to material library IDs and
+// applies it to every layer. Missing entries are reported as MATERIAL_MAPPING_MISSING.
+bool apply_material_map(EcadModel& model,
+                        const std::filesystem::path& file,
+                        std::string* error = nullptr);
+
 // Parses IPC-2581 with Expat's streaming interface; XML content is never retained as a tree.
 ImportResult read_ipc2581(const std::filesystem::path& file);
 // Emits stack/0.2 JSON and its binary polyset sidecar.
