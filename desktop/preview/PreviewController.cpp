@@ -193,7 +193,10 @@ void PreviewController::complete(int code, QProcess::ExitStatus status) {
                 companion.clear();
         }
         if (!companion.isEmpty()) {
-            if (!surfaceSession_.open(companion))
+            // Pass a non-existent sidecar so a sibling volume manifest.json is not
+            // discovered and loadStep(0) cannot substitute a different file.
+            const QString noManifest = companion + ".ignore-manifest.json";
+            if (!surfaceSession_.open(companion, noManifest))
                 throw std::runtime_error(surfaceSession_.error().toStdString());
             surfaceMesh_ = surfaceSession_.loadStep(0);
             if (!surfaceMesh_)
