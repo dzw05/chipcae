@@ -107,7 +107,7 @@ def main(root):
             document['parts'][0]['placement']['attach'] = target
             if errors(document, validator):
                 failures.append(f'valid layer attachment {target!r} rejected')
-        for target in ('layer:@top', 'layer:Cu@inner', 'layer:Cu@inner@side',
+        for target in ('layer:@top', 'layer:@bottom', 'layer:Cu@inner', 'layer:Cu@inner@side',
                        'part:bad@id@top'):
             document = copy.deepcopy(positive)
             document['parts'][0]['placement']['attach'] = target

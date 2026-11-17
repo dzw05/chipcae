@@ -42,7 +42,7 @@ struct MergeOptions {
 // Hole-bridge fragments use deterministic fragment order within each section.
 // Appended regions have body == PlacedPart::id and name <id>#<slab>#<section>.
 // Copies across split layers and hole-bridge fragments share source identity;
-// use (layer, body, name) to recover provenance, rather than vector position.
+// use (layer_index, body, name) to recover provenance, rather than vector position.
 struct MergeResult {
     StackModel stack;
     std::vector<Defect> defects;
