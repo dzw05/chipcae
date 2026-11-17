@@ -14,6 +14,7 @@ class Errors(unittest.TestCase):
                  'missing_unit', 'missing_layers', 'missing_outline', 'bad_outline',
                  'empty_outline', 'polygon_outside_box', 'bad_box', 'bad_polygon', 'missing_refs',
                  'bad_refs', 'bad_ref', 'missing_ref_path', 'missing_ref_hash',
+                 'bad_ref_path', 'empty_ref_path', 'bad_ref_hash',
                  'output_staging', 'report_staging']
         for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
@@ -76,11 +77,16 @@ class Errors(unittest.TestCase):
                     stack['outline']['polygon'] = [[0, 0], [.03, 0], [0, .02]]
                 if case == 'bad_box': stack['outline'] = {'box': [0, 1]}
                 if case == 'bad_polygon': stack['outline'] = {'polygon': [None]}
-                if case in ('bad_refs', 'bad_ref', 'missing_ref_path', 'missing_ref_hash'):
+                if case in ('bad_refs', 'bad_ref', 'missing_ref_path', 'missing_ref_hash',
+                            'bad_ref_path', 'empty_ref_path', 'bad_ref_hash'):
                     if case == 'bad_refs': stack['external_refs'] = {}
                     if case == 'bad_ref': stack['external_refs'] = [None]
                     if case == 'missing_ref_path': stack['external_refs'][0].pop('path')
                     if case == 'missing_ref_hash': stack['external_refs'][0].pop('sha256')
+                    if case in ('missing_ref_path', 'missing_ref_hash'): code = 12
+                    if case == 'bad_ref_path': stack['external_refs'][0]['path'] = None
+                    if case == 'empty_ref_path': stack['external_refs'][0]['path'] = ''
+                    if case == 'bad_ref_hash': stack['external_refs'][0]['sha256'] = None
                 source, output = root / 'input.json', root / 'output.json'
                 source.write_text(json.dumps(stack))
                 if case == 'empty_json': source.write_text('')

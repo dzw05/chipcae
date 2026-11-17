@@ -72,7 +72,9 @@ def _homogenize(stack, stack_dir):
     for ref in references:
         if not isinstance(ref, dict):
             raise invalid('invalid reference entry')
-        path, digest = required(ref, 'path'), required(ref, 'sha256')
+        if 'path' not in ref or 'sha256' not in ref:
+            raise StackPrepError(12, 'INPUT_REFERENCE_MISSING', 'missing reference path or sha256')
+        path, digest = ref['path'], ref['sha256']
         if not isinstance(path, str) or not path or not isinstance(digest, str):
             raise invalid('invalid reference path or hash')
         if path in refs and refs[path] != digest:
