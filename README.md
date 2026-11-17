@@ -76,7 +76,9 @@ Python 绑定使用 nanobind（需要 Python 3.9+ 开发头文件）。
 Copyright (c) 2026 Zhiwei Duan
 All rights reserved. Source is published for viewing only; no permission is granted to use, copy, modify, merge, publish, distribute, sublicense, or sell without prior written permission. Terms and exceptions: [LICENSE](LICENSE).
 
-保留所有权利，源码公开仅供查阅；未经事先书面许可，不得使用、复制、修改、合并、发布、分发、再许可或销售。条款及例外见 [LICENSE](LICENSE)。
+保留所有权利，源码公开仅供查阅；未经事先书面许可，不得使用、复制、修改、合并、发布、分发、再许可或销售。条款见 [LICENSE](LICENSE)。
+
+例外 / Exceptions: `cases/benchmarks/` — CC BY 4.0（见 / see [LICENSE](cases/benchmarks/LICENSE)、[NOTICE](cases/benchmarks/NOTICE)）；`tools/vv/`、`tests/vv/` — Apache-2.0（见 / see 各自许可 / respective licenses: [tools/vv/LICENSE](tools/vv/LICENSE)、[tests/vv/LICENSE](tests/vv/LICENSE)）。
 
 O2 求解器当前限制：每个 MPI rank 均在 `PETSC_COMM_SELF` 上对全局串行网格执行完整求解。
 不同 `np` 的结果一致仅验证重复求解及输出一致性，不证明分布式求解正确；总内存随 `np` 增长。
