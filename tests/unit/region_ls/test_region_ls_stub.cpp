@@ -3,6 +3,9 @@
 #include <iostream>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
+
+static_assert(std::is_empty_v<chipcae::mesh::BodyLevelSet>);
 
 int main() {
     int failures = 0;

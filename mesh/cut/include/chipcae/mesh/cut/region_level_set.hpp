@@ -1,6 +1,5 @@
 #pragma once
 #include "chipcae/mesh/background/hex_mesh_arrays.hpp"
-#include "chipcae/mesh/cut/cut_layer.hpp"
 #include "chipcae/schema/stack.hpp"
 
 #include <vector>
@@ -9,8 +8,7 @@ namespace chipcae::mesh {
 struct RegionLSOptions {
     Real inside_tol_rel = 1e-12;
 };
-// Reuse the cut pipeline's level-set representation.
-using BodyLevelSet = cut::BodyLevelSet;
+struct BodyLevelSet {};
 // Define effective_body(r) as r.body when nonempty, otherwise r.name (exact,
 // case-sensitive strings). For each layer index li and effective body b, the
 // source group is every region index ri in stack.layers[li].regions for which
@@ -19,10 +17,10 @@ using BodyLevelSet = cut::BodyLevelSet;
 // fallback that equals another region's explicit body. Box-only regions do not.
 // Emit one entry per nonempty source group; phi represents its polygon union.
 // Order groups by layer index, then by the smallest source region index in each
-// group. Its body is HexMeshArrays::attr_table.bodies.at(b).
+// group. The group body maps to HexMeshArrays::attr_table.bodies.at(b).
 // To recover sources for output entry k, enumerate these groups in that same
 // order: group k gives li and the complete set of ri (and hence source names).
-// Do not match BodyLevelSet::body alone: the same body may recur across layers.
+// Body identity alone is insufficient: the same body may recur across layers.
 std::vector<BodyLevelSet>
 region_level_sets(const StackModel&, const HexMeshArrays&, const RegionLSOptions&);
 } // namespace chipcae::mesh
