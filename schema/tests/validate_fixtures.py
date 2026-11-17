@@ -60,6 +60,13 @@ for property_name, column, lower, upper in (
 assert copper["thermal_expansion"]["cte_type"] == "tangent"
 assert copper["thermal_expansion"]["stress_free_temperature"] == 298.15
 
+assembly = json.loads((examples / "assembly/package_bulk_parts.assembly.json").read_text(encoding="utf-8"))
+lid_parts = [part for part in assembly["parts"] if part["id"] == "lid"]
+assert len(lid_parts) == 1, "package bulk parts assembly must contain exactly one lid"
+lid_material = lid_parts[0]["material"]
+assert lid_material == "copper", "package bulk parts lid material must be exactly copper"
+assert lid_material in known_material_ids, "MATERIAL_MAPPING_MISSING: lid material is absent from library"
+
 for invalid_library in (root / "material/schema/examples/negative-library-missing-schema.json",
                         root / "material/schema/examples/negative-library-invalid-material.json"):
     try:
