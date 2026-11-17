@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Zhiwei Duan
 """chipcae 公开翘曲基准：共享 QoI 后处理参考实现 (v0.1)
 
 各求解器都只导出"表面节点坐标 + 位移"，然后由本脚本计算 QoI，

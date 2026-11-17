@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Zhiwei Duan
 """PW 系列半解析参考：固化回归值（来自 tools/vv/pw_reference.py）。"""
 import math
 import sys

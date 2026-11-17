@@ -20,3 +20,7 @@
 
 - X / PW：verification，约定同 FCBGA 卡。PW 冻结值同一套测试 `tests/vv/test_pw_reference.py`。
 - **P-KIM2016**（validation）：已发表 Ansys 14.5 半模型结果（图 8、图 10 等）。布局、加强圈尺寸与曲线数字化待核对（加强圈材料与 175 °C 贴装温度为文献值，尺寸 Kim 2016 未给，`geometry.stiffener` 标 tbd）。P 系列硅用 Kim 2016 Table 3（中介层 168 GPa / 3.3 ppm，ASIC 169 / 3.3，存储 169 / 2.6，ν = 0.28），即 `SI_KIM2016_*` 卡；`SI`（Chen 2022）只用于 X/PW。均质层按 Kim 2016 Table 3 组分重推（式 (1)–(4)，`tools/vv/derive_cards.py`）：微凸点/底填层用卡 `I25D_UBUMP_UF_KIM2016`（Cu 125 GPa / ν 0.3 / 16.5 ppm，φ = 0.03 为「less than 3%」的上限）；C4/底填层（SnAg ν 0.4 / 21.5 ppm，φ = 0.10）的 SnAg E(T) 转引 Lau 1996、单位未注明，核对前 **tbd**，不进冻结卡。Voigt 横观各向同性只作备选卡，Halpin–Tsai 不作默认。Prony 缩放 s 灵敏度同 FCBGA 卡（三端点 s = 1、s = 0、E ≡ E∞，`tools/vv/prony_scale.py`）。文献、借用、chosen、tbd 项全部列在 `series.P-KIM2016.parameters`。数字化前只比趋势；之后开源复现与已发表曲线相差 ≤15%（建议）。P 系列不得借用 EMC 底填卡。B 系列是简化模型，不期望等于 P-KIM2016。
+
+## 许可
+
+本算例数据按 CC BY 4.0 发布，署名与第三方文献说明见 [../NOTICE](../NOTICE)，全文见 [../LICENSE](../LICENSE)。使用文献参数时请同时引用原文献。

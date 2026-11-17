@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Zhiwei Duan
 """四分之一模型结构化 hex20 网格的单元数估计（嵌套加密：n_Lk = 2^(k-1) * n_L1）。"""
 import math, json
 

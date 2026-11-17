@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Zhiwei Duan
 """P 系列 Prony 形状缩放系数 s 的灵敏度卡生成器（V&V，加载前离线生成）。
 
 约定（连续介质求解器组 2026-11 核定）：

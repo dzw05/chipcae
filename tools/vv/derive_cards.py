@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Zhiwei Duan
 """chipcae 公开翘曲基准：派生量计算脚本 (v0.1)
 
 只做确定性计算，不引入新的物理数据：

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Zhiwei Duan
 """Prony 形状缩放 s 的不变量（tools/vv/prony_scale.py）。"""
 import importlib
 import math

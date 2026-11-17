@@ -74,3 +74,5 @@ Python 绑定使用 nanobind（需要 Python 3.9+ 开发头文件）。
 ## 许可
 
 Proprietary, all rights reserved。见 [LICENSE](LICENSE)。
+
+例外：公开基准算例数据 `cases/benchmarks/` 按 CC BY 4.0 发布（见 [cases/benchmarks/LICENSE](cases/benchmarks/LICENSE) 与 [NOTICE](cases/benchmarks/NOTICE)）；V&V 脚本与测试 `tools/vv/`、`tests/vv/` 按 Apache-2.0 发布（见各目录 LICENSE）。

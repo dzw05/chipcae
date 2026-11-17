@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Zhiwei Duan
 """PW 系列（分段移位跨 Tg）的半解析参考解：两端固定的单轴杆（单元级 SC-PW）。
 本构：1D 广义 Maxwell（Prony），时温等效 ξ = ∫ dt / a_T(T)。机械应变 ε_m = -ε_th(T)（杆长被固定）。
 对每个增量用"约化时间内应变率恒定"的精确指数积分；逐级加密直到收敛（报告收敛差）。

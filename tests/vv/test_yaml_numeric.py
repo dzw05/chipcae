@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Zhiwei Duan
 """YAML 数值字段类型检查。
 
 YAML 1.1（PyYAML）把不带符号的指数（如 3.10e10、2.430e8）读成字符串；卡面必须写成 3.10e+10。
