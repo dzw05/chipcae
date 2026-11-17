@@ -30,9 +30,21 @@ inline double heat_source_density(const Load& load, double volume) {
                              load.target);
     return load.total_power ? load.source / volume : load.source;
 }
+struct PropertyTable {
+    std::vector<double> temperatures, values;
+};
+struct InterpolatedProperty {
+    double value;
+    bool clamped;
+};
+// Validates the table before evaluating; context names the material/property in errors.
+InterpolatedProperty interpolate_property(const PropertyTable&,
+                                          double temperature,
+                                          const std::string& context = "material property");
 struct Material {
     std::string id;
     double E = 0, nu = 0, alpha = 0, k = 0;
+    PropertyTable E_table, nu_table, alpha_table;
 };
 struct RunInputs {
     std::map<std::string, Material> materials;
