@@ -87,8 +87,8 @@ int main(int argc, char** argv) try {
                 reject(bad);
             }
             bad = fixture;
-            // All four public overloads consume Tref exclusively through this
-            // field; reject() checks both vectors and both scalar signatures.
+            // A nonfinite table reference temperature is invalid for all four
+            // overloads; reject() checks both vectors and both scalar signatures.
             // The scalar Real argument below is query T, not a separate Tref.
             bad.reference_temperature = nonfinite;
             reject(bad);
