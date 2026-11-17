@@ -1,3 +1,5 @@
+#include "DesktopConfig.hpp"
+
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
@@ -8,8 +10,6 @@
 #include <QTemporaryDir>
 #include <iostream>
 #include <stdexcept>
-#if __has_include("DesktopConfig.hpp")
-#include "DesktopConfig.hpp"
 using namespace chipcae::desktop;
 void check(bool ok, const char* message) {
     if (!ok)
@@ -127,6 +127,35 @@ void tests() {
     rejected(args, env);
     env.insert("CHIPCAE_SOLVE_SOURCE", "real");
     check(DesktopConfig::load(args, env).launcherConfig().mpi == "custom-mpi", "mpi override");
+    for (const auto& key : {QString("CHIPCAE_IMPORT"), QString("CHIPCAE_PREVIEW")}) {
+        env = QProcessEnvironment();
+        env.insert(key, "python3");
+        rejected(args, env);
+        env.insert(key + "_SOURCE", "mock");
+        auto overridden = DesktopConfig::load(args, env);
+        check((key == "CHIPCAE_IMPORT" ? overridden.importEntry() : overridden.previewEntry())
+                      .program == "python3",
+              "entry override");
+    }
+    env = QProcessEnvironment();
+    bad = mock;
+    entries = bad["entrypoints"].toObject();
+    s = entries["preview"].toObject();
+    s["source"] = "real";
+    entries["preview"] = s;
+    bad["entrypoints"] = entries;
+    rejected({"desktop", "--config", save("prefix-mismatch", bad)}, env);
+    for (const auto& field : {QString("source"), QString("program"), QString("prefix")}) {
+        bad = real;
+        entries = bad["entrypoints"].toObject();
+        s = entries["import"].toObject();
+        s.remove(field);
+        entries["import"] = s;
+        bad["entrypoints"] = entries;
+        rejected({"desktop", "--config", save("required-" + field, bad)}, env);
+    }
+    env.insert("CHIPCAE_DESKTOP_CONFIG", dir.filePath("missing-env-file"));
+    rejected(args, env);
     QFile contract(CONFIG_CONTRACT);
     check(contract.open(QIODevice::ReadOnly), "contract exists");
     auto text = contract.readAll();
@@ -142,15 +171,10 @@ void tests() {
                       "run_root"})
         check(text.contains(word), "contract covers rules");
 }
-#endif
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     try {
-#if __has_include("DesktopConfig.hpp")
         tests();
-#else
-        throw std::runtime_error("DesktopConfig runtime configuration is not implemented");
-#endif
     } catch (const std::exception& ex) {
         std::cerr << ex.what() << '\n';
         return 1;
