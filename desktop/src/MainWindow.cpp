@@ -1,6 +1,6 @@
 #include "MainWindow.hpp"
 
-#include "CaseOutline.hpp"
+#include "CaseTreeView.hpp"
 
 #include <QDockWidget>
 #include <QFileDialog>
@@ -47,21 +47,31 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     auto* dock = new QDockWidget("Case (schema example)", this);
     auto* split = new QSplitter(dock);
     auto* form = new chipcae::desktop::SchemaForm(split);
-    auto* outline = new chipcae::desktop::CaseOutline(form, split);
+    auto* model = new chipcae::desktop::CaseTreeModel(&document_, split);
+    const QString repository = CHIPCAE_REPOSITORY;
+    auto* outline = new chipcae::desktop::CaseTreeView(model, form, repository + "/schema", split);
     split->insertWidget(0, outline);
+    dock->setWindowTitle("Case");
     dock->setWidget(split);
     addDockWidget(Qt::LeftDockWidgetArea, dock);
-    const QString repository = CHIPCAE_REPOSITORY;
-    try {
-        outline->setCaseDocument(chipcae::desktop::SchemaForm::caseSchemaPath(repository),
-                                 chipcae::desktop::SchemaValidator::read(
-                                     repository + "/schema/examples/fcbga_demo.case.json"));
-        outline->setStackDocument(repository + "/schema/stack-0.2.schema.json",
-                                  chipcae::desktop::SchemaValidator::read(
-                                      repository + "/schema/examples/fcbga_demo.stack.json"));
-    } catch (const std::exception& error) {
-        dock->setToolTip(QString::fromUtf8(error.what()));
-    }
-    setWindowTitle("ChipCAE Desktop");
+    auto* edits = menuBar()->addMenu(tr("Case"));
+    edits->addAction(tr("Apply properties"), outline, [outline] { outline->commitEdit(); });
+    edits->addAction(tr("Cancel properties"), outline, [outline] { outline->cancelEdit(); });
+    edits->addAction(tr("Uniform temperature"), model, [model] { model->setThermalMode(false); });
+    edits->addAction(tr("Thermal"), model, [model] { model->setThermalMode(true); });
+    edits->addAction(tr("Add convection load (zmax)"), model, [model] {
+        model->addLoad(chipcae::desktop::Json::parse(
+            R"({"type":"convection","target":"face:zmax","h":2,"T_inf":298.15})"));
+    });
+    edits->addAction(
+        tr("Add fixed face (zmin)"), model, [model] { model->addFixedFace("face:zmin"); });
+    edits->addAction(tr("Remove selected"), outline, [outline, model] {
+        model->remove(
+            outline->currentIndex().data(chipcae::desktop::CaseTreeModel::IdentityRole).toString());
+    });
+    connect(&document_, &chipcae::desktop::CaseDocument::dirtyChanged, this, [this](bool dirty) {
+        setWindowModified(dirty);
+    });
+    setWindowTitle("ChipCAE Desktop[*]");
     resize(960, 640);
 }
