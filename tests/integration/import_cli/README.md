@@ -82,7 +82,9 @@ Duplicate positional input, output, material-map, and accept-b-tier cases compar
 exit status, stdout, stderr, and artifacts with the same main-baseline binary.
 Missing polyset/report/material-map values also compare baseline help bytes.
 The `.chipcae-autotests` marker enables `chipcae_auto_test_subdirs()` discovery
-from tests/CMakeLists.txt; this directory's CMakeLists.txt registers these regression tests.
+from tests/CMakeLists.txt; an appended guarded registration also explicitly adds
+this directory when it has not been discovered. This directory's CMakeLists.txt
+registers these regression tests exactly once.
 
 Empty and truncated XML fixtures also compare exit status, stdout, stderr, and
 all artifact bytes against the same baseline in the `noop` case. Each is copied

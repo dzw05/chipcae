@@ -215,3 +215,10 @@ add_subdirectory(vv)
 
 # Keep this the last line: auto-adds test subdirectories that call chipcae_auto_tests().
 chipcae_auto_test_subdirs()
+
+# Explicit registration required by the import CLI split brief. Auto-discovery may
+# already have added this directory through its .chipcae-autotests marker.
+get_property(import_cli_registered_dirs DIRECTORY PROPERTY SUBDIRECTORIES)
+if(NOT "${CMAKE_CURRENT_SOURCE_DIR}/integration/import_cli" IN_LIST import_cli_registered_dirs)
+    add_subdirectory(integration/import_cli)
+endif()
