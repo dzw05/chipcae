@@ -271,8 +271,8 @@ def _diff(odb, ipc, delta):
     names_a = [l['name'] for l in a]
     names_b = [l['name'] for l in b]
     same_structure = len(a) == len(b) and sa == sb
-    # Count missing positions plus copper/dielectric mismatches at aligned positions.
-    structure_delta = abs(len(a) - len(b)) + sum(x != y for x, y in zip(sa, sb))
+    # Delta measures layer count; sequence differences independently determine grade.
+    structure_delta = abs(len(a) - len(b))
     structure_reasons = []
     if len(a) != len(b):
         structure_reasons.append(f'layer count differs: {len(a)} versus {len(b)}')
@@ -379,6 +379,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--delta-m', default=DEFAULT_DELTA_M)
     args = parser.parse_args(argv)
     try:
+        if Path(args.o).is_file():
+            _invalid('output path is an existing ordinary file')
         try:
             delta = float(args.delta_m)
         except ValueError:

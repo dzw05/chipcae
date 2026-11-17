@@ -35,7 +35,8 @@ def main():
                     'empty', 'root', 'missing_unit', 'missing_layers', 'missing_outline',
                     'bad_layers', 'bad_outline', 'bad_layer', 'missing_thickness',
                     'missing_material', 'bad_copper', 'missing_metal', 'bad_polygons',
-                    'missing_polygon_file', 'bad_ref')],
+                    'missing_polygon_file', 'bad_ref', 'missing_representation',
+                    'both_representations')],
                 ('unit', 14, 'INPUT_INVALID'),
                 ('utf8', 14, 'INPUT_INVALID'),
                 ('output_file', 14, 'INPUT_INVALID')):
@@ -140,6 +141,11 @@ def main():
             if case in ('bad_polygons', 'missing_polygon_file'):
                 b['layers'][0]['copper'] = {
                     'metal': 'mat.cu', 'polygons': [] if case == 'bad_polygons' else {}}
+            if case == 'missing_representation':
+                del b['layers'][0]['copper']['fraction']
+            if case == 'both_representations':
+                b['layers'][0]['copper']['polygons'] = {
+                    'file': 'missing.polyset', 'layer': 'F.Cu'}
             if case == 'bad_ref':
                 b['external_refs'] = [None]
             if case != 'missing_stack':
@@ -169,6 +175,23 @@ def main():
             assert not (out / 'diff.md').exists()
             if case == 'output_file':
                 assert out.read_text(encoding='utf-8') == 'existing file'
+                # Output validation precedes missing, malformed and hash-invalid inputs.
+                for bad_input in (folder / 'missing.json', path):
+                    for contents in (b'', b'not JSON'):
+                        path.write_bytes(contents)
+                        command[command.index('--ipc') + 1] = str(bad_input)
+                        proc = subprocess.run(command, capture_output=True, text=True)
+                        assert proc.returncode == 14, proc.stderr
+                        assert proc.stderr.startswith('ecad_diff: INPUT_INVALID: '), proc.stderr
+                        assert 'output' in proc.stderr, proc.stderr
+                        assert len(proc.stderr.splitlines()) == 1, proc.stderr
+                        assert out.read_text(encoding='utf-8') == 'existing file'
+                polyset(folder, b)
+                b['external_refs'][0]['sha256'] = '0' * 64
+                save(path, b)
+                command[command.index('--ipc') + 1] = str(path)
+                proc = subprocess.run(command, capture_output=True, text=True)
+                assert proc.returncode == 14 and 'output' in proc.stderr, proc.stderr
             else:
                 assert not out.exists()
 

@@ -56,7 +56,15 @@ def main():
         save(pb, b)
         for left, right in ((pa, pb), (pb, pa)):
             e = entry(diff_stacks(left, right), 'layers')
-            assert e['grade'] == 'hard' and e['delta'] == 2
+            assert e['grade'] == 'hard' and e['delta'] == 0
+            assert 'copper/dielectric sequence differs' in e['tol_derivation']
+        # Count delta stays independent of simultaneous sequence mismatches.
+        b['layers'].append(dict(name='extra', thickness=1e-4, material='mat.fr4'))
+        save(pb, b)
+        for left, right in ((pa, pb), (pb, pa)):
+            e = entry(diff_stacks(left, right), 'layers')
+            assert e['grade'] == 'hard' and e['delta'] == 1
+            assert 'layer count differs' in e['tol_derivation']
             assert 'copper/dielectric sequence differs' in e['tol_derivation']
         # Every aligned layer gets a copper row, including zero-area mismatches.
         for left_copper, right_copper, grade in ((False, False, 'info'),
