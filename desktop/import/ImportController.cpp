@@ -160,10 +160,9 @@ bool ImportController::restartAccepted() {
         return false;
     auto request = request_;
     request.acceptBTier = true;
+    emit userConfirmed();
     const bool started = start(request);
-    if (started) {
-        emit userConfirmed();
-    } else {
+    if (!started) {
         emit defectsReady();
         emit finished(false);
     }

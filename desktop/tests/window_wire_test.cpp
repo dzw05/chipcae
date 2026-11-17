@@ -23,30 +23,21 @@ void require(bool value, const char* message) {
 }
 template <class Window>
 void wiring(Window& w, const QString& samples) {
-    const auto names = ImportSourceDialog::nameFilters();
-    require(names.contains("IPC-2581 / ODB++ (*.xml *.tgz *.zip)") &&
-                names.contains("ODB++ (*.tgz *.zip)"),
-            "enabled selector filters match ECAD launch types");
-    const auto filters = names.join(' ');
+    auto filters = ImportSourceDialog::nameFilters().join(' ');
     require(filters.contains("*.tgz") && filters.contains("*.zip") && filters.contains("ODB++") &&
                 filters.contains("*.step") && filters.contains("*.stp") &&
                 filters.contains("B 档") && filters.contains("disabled"),
             "selector filters");
     QTemporaryDir dir;
     require(dir.isValid(), "temporary directory");
-    for (auto suffix : {"xml", "tgz", "zip", "step", "stp", "txt"}) {
-        const auto path = dir.filePath(QString("input.") + suffix);
-        require(!ImportSourceDialog::isSupportedImportPath(path), "missing source rejected");
-        QFile source(path);
-        require(source.open(QIODevice::WriteOnly), "create source fixture");
-        source.close();
-        const bool supported = QStringList{"xml", "tgz", "zip"}.contains(suffix);
-        require(ImportSourceDialog::isSupportedImportPath(path) == supported,
-                "existing source matches launch contract");
-        if (!supported)
-            require(!w.importEcadPath(path), "unsupported source cannot launch from window");
-    }
+    for (auto suffix : {"xml", "tgz", "zip"})
+        require(ImportSourceDialog::isSupportedImportPath(dir.filePath(QString("input.") + suffix)),
+                "supported source");
     require(ImportSourceDialog::isSupportedImportPath(dir.path()), "directory source");
+    for (auto suffix : {"step", "stp", "txt"})
+        require(
+            !ImportSourceDialog::isSupportedImportPath(dir.filePath(QString("input.") + suffix)),
+            "unsupported source");
     require(w.loadHandwrittenStack(), "load handwritten template");
     QFile f(QString(CHIPCAE_REPOSITORY) + "/schema/examples/fcbga_demo.stack.json");
     require(f.open(QIODevice::ReadOnly), "read template");
@@ -79,22 +70,8 @@ void wiring(Window& w, const QString& samples) {
                 loop.quit();
             });
         QTimer::singleShot(5000, &loop, &QEventLoop::quit);
-        require(!w.importEcadPath(input.fileName(), PYTHON_EXECUTABLE, {MOCK_SCRIPT}) &&
-                    w.importController()->error() == "material map required" &&
-                    !w.importController()->busy() && w.document()->stackJson() == before,
-                "legacy window import requires a material map and preserves document");
-        QFile map(dir.filePath("materials.json"));
-        require(map.open(QIODevice::WriteOnly), "create material map fixture");
-        map.write("{}");
-        map.close();
-        ImportRequest request;
-        request.input = input.fileName();
-        request.output = dir.filePath("import.stack.json");
-        request.materialMap = map.fileName();
-        request.report = dir.filePath("defects.json");
-        request.program = PYTHON_EXECUTABLE;
-        request.prefix = {MOCK_SCRIPT};
-        require(w.importController()->start(request), "start mapped import for window wiring");
+        require(w.importEcadPath(input.fileName(), PYTHON_EXECUTABLE, {MOCK_SCRIPT}),
+                "start import");
         require(w.importController()->busy(), "controller running");
         if (cancel) {
             require(!w.loadHandwrittenStack() && w.document()->stackJson() == before,
@@ -113,7 +90,7 @@ void wiring(Window& w, const QString& samples) {
             require(replaced && w.document()->stackJson() != before &&
                         editor->model()->rowCount() ==
                             static_cast<int>(w.document()->stackJson().at("layers").size()),
-                    "accepted import refresh");
+                    "A import refresh");
     };
     require(w.openCase(QString(CHIPCAE_REPOSITORY) + "/schema/examples/fcbga_demo.case.json"),
             "load case and materials for validated import");

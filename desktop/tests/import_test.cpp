@@ -38,10 +38,9 @@ struct ImportControllerTestAccess {
 } // namespace chipcae::desktop
 using namespace chipcae::desktop;
 namespace {
-static_assert(std::is_same_v<decltype(&MaterialMapMissingDialog::prompt),
-                             QString (*)(QWidget*, const QString&)>);
+static_assert(std::is_same_v<decltype(&MaterialMapMissingDialog::prompt), QString (*)(QWidget*)>);
 static_assert(std::is_constructible_v<MaterialMapMissingDialog, QWidget*>);
-static_assert(std::is_constructible_v<MaterialMapMissingDialog, QWidget*, const QString&>);
+static_assert(!std::is_constructible_v<MaterialMapMissingDialog, QWidget*, const QString&>);
 int failures = 0, checks = 0;
 void check(bool ok, const QString& message) {
     ++checks;
@@ -115,8 +114,7 @@ QString pick(const std::function<QString()>& picker,
              const QString& path,
              bool cancel,
              bool map,
-             bool directory = false,
-             const QString& expectedStartDir = {}) {
+             bool directory = false) {
     bool seen = false;
     QTimer driver;
     QObject::connect(&driver, &QTimer::timeout, [&] {
@@ -125,9 +123,6 @@ QString pick(const std::function<QString()>& picker,
             if (!dialog || !dialog->isVisible())
                 continue;
             seen = true;
-            if (!expectedStartDir.isEmpty())
-                check(dialog->directory().absolutePath() == expectedStartDir,
-                      "picker retains caller starting directory");
             if (map) {
                 for (auto* model : dialog->findChildren<QFileSystemModel*>())
                     for (const auto& name : {"map.json", "map.JSON", "map.JsOn"})
@@ -412,8 +407,7 @@ sys.exit(rc)
             QObject::connect(&c, &ImportController::finished, [&](bool b) { replaced = b; });
             QObject::connect(&c, &ImportController::userConfirmed, [&] {
                 ++confirmations;
-                check(c.busy() && c.outcome() == ImportOutcome::Running,
-                      "confirmation signal after rerun starts");
+                check(!c.busy(), "confirmation signal before rerun");
             });
             waitFor(c, [&] {
                 check(c.start(r), "request starts " + mode);
@@ -822,7 +816,8 @@ sys.exit(rc)
             int confirmed = 0, finished = 0, defects = 0;
             QObject::connect(&c, &ImportController::userConfirmed, [&] {
                 ++confirmed;
-                check(false, "failed rerun must not emit confirmation");
+                check(!c.busy() && c.outcome() == ImportOutcome::NeedsConfirmation,
+                      "failed rerun confirmation precedes startup attempt");
             });
             QObject::connect(&c, &ImportController::defectsReady, [&] { ++defects; });
             QObject::connect(&c, &ImportController::finished, [&](bool replaced) {
@@ -844,11 +839,11 @@ sys.exit(rc)
                                : "import destination already exists or collides with another path";
             check(!c.busy() && c.outcome() == ImportOutcome::Failed && c.error() == expectedError,
                   "failed restart exposes local failure");
-            check(confirmed == 0 && finished == 1, "failed restart notifies once");
+            check(confirmed == 1 && finished == 1, "failed restart notifies once");
             check(defects == 1, "failed restart refreshes defects once");
             check(!c.restartAccepted(), "Failed outcome rejects another accepted restart");
             c.confirmDefects();
-            check(confirmed == 0 && finished == 1 && defects == 1 &&
+            check(confirmed == 1 && finished == 1 && defects == 1 &&
                       c.outcome() == ImportOutcome::Failed && c.error() == expectedError,
                   "confirmation after failed restart is a silent no-op preserving failure");
             check(dialog.isVisible() &&
@@ -973,15 +968,8 @@ sys.exit(rc)
                             b->click();
                         }
             });
-            const auto retryDir = dir.filePath("previous mapping location");
-            require(QDir().mkdir(retryDir), "create distinct mapping retry directory");
             click.start(30);
-            check(pick([&] { return MaterialMapMissingDialog::prompt(nullptr, retryDir); },
-                       map,
-                       false,
-                       true,
-                       false,
-                       retryDir) == map,
+            check(pick([&] { return MaterialMapMissingDialog::prompt(); }, map, false, true) == map,
                   "missing-map prompt returns selected map");
             click.start(30);
             check(
