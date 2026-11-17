@@ -44,11 +44,11 @@ int main(int argc, char** argv) try {
     Real value = std::numeric_limits<Real>::quiet_NaN();
     check(secant_to_tangent(sec, test::secant_to_tangent_temperature, value) == StatusCode::Ok,
           "325 secant status");
-    check(near(value, tangent_expected), "325 tangent definition (4e-5 /K)");
+    check(near(value, tangent_expected), "canonical off-knot tangent definition");
     value = std::numeric_limits<Real>::quiet_NaN();
     check(tangent_to_secant(tan, test::tangent_to_secant_temperature, value) == StatusCode::Ok,
           "325 tangent status");
-    check(near(value, secant_expected), "325 secant definition (2.5e-5 /K)");
+    check(near(value, secant_expected), "canonical off-knot secant definition");
     const Real below = 225;
     const Real exterior_tangent = sec.alpha.front(); // Constant extension: slope zero.
     // Reverse integration orientation gives a negative area and denominator.

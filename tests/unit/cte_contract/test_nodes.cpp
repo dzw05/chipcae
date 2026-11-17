@@ -40,14 +40,18 @@ int main(int argc, char** argv) try {
                                    (sec.temperatures[i] - sec.reference_temperature) * slope);
     }
     // Exact trapezoid areas divided by distance from T_ref; limit at T_ref.
-    const Real first_area =
-        (tan.temperatures[1] - tan.temperatures[0]) * (tan.alpha[0] + tan.alpha[1]) / 2;
-    const std::vector<Real> secant_expected{
-        tan.alpha[0],
-        first_area / (tan.temperatures[1] - tan.reference_temperature),
-        (first_area +
-         (tan.temperatures[2] - tan.temperatures[1]) * (tan.alpha[1] + tan.alpha[2]) / 2) /
-            (tan.temperatures[2] - tan.reference_temperature)};
+    std::vector<Real> secant_expected;
+    Real area = 0;
+    // The canonical tangent table starts at T_ref.
+    check(tan.reference_temperature == tan.temperatures.front(),
+          "canonical reference at first knot");
+    for (std::size_t i = 0; i < tan.temperatures.size(); ++i) {
+        if (i > 0)
+            area += (tan.temperatures[i] - tan.temperatures[i - 1]) *
+                    (tan.alpha[i - 1] + tan.alpha[i]) / 2;
+        secant_expected.push_back(
+            i == 0 ? tan.alpha[i] : area / (tan.temperatures[i] - tan.reference_temperature));
+    }
     std::vector<Real> tangent, secant;
     check(secant_to_tangent(sec, tangent) == StatusCode::Ok, "secant vector status");
     check(tangent_to_secant(tan, secant) == StatusCode::Ok, "tangent vector status");
@@ -55,7 +59,6 @@ int main(int argc, char** argv) try {
           "exact vector dimensions");
     for (std::size_t i = 0; i < sec.temperatures.size(); ++i) {
         check(near(tangent[i], tangent_expected[i]), "ordered tangent node");
-        check(near(secant[i], secant_expected[i]), "ordered secant node");
         Real value = std::numeric_limits<Real>::quiet_NaN();
         check(secant_to_tangent(sec, sec.temperatures[i], value) == StatusCode::Ok,
               "secant scalar node status");
@@ -64,7 +67,10 @@ int main(int argc, char** argv) try {
                   value == first_tangent,
               "repeat secant scalar exactly");
         check(near(value, tangent_expected[i]), "tangent scalar node definition");
-        value = std::numeric_limits<Real>::quiet_NaN();
+    }
+    for (std::size_t i = 0; i < tan.temperatures.size(); ++i) {
+        check(near(secant[i], secant_expected[i]), "ordered secant node");
+        Real value = std::numeric_limits<Real>::quiet_NaN();
         check(tangent_to_secant(tan, tan.temperatures[i], value) == StatusCode::Ok,
               "tangent scalar node status");
         const Real first_secant = value;
