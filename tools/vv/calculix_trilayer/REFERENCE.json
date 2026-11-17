@@ -1,0 +1,66 @@
+{
+  "kind": "REFERENCE",
+  "label": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解",
+  "element_type": "C3D20",
+  "calculix_version": "This is Version 2.23",
+  "host": "box Linux x86_64 (Asia/Shanghai)",
+  "geometry": {
+    "L_m": 1.0,
+    "thicknesses_m": [
+      0.05,
+      0.01,
+      0.04
+    ],
+    "E_Pa": [
+      25000000000.0,
+      3000000000.0,
+      130000000000.0
+    ],
+    "nu": [
+      0.2,
+      0.35,
+      0.28
+    ],
+    "alpha_1_per_K": [
+      1.5e-05,
+      5e-05,
+      2.6e-06
+    ],
+    "dT_K": -100.0
+  },
+  "meshes": [
+    {
+      "name": "coarse",
+      "n_elem_xyz": [
+        8,
+        8,
+        6
+      ],
+      "n_elem_z_per_layer": [
+        2,
+        2,
+        2
+      ],
+      "W_bfp_m": 0.004271023422273522
+    },
+    {
+      "name": "fine",
+      "n_elem_xyz": [
+        16,
+        16,
+        6
+      ],
+      "n_elem_z_per_layer": [
+        2,
+        2,
+        2
+      ],
+      "W_bfp_m": 0.004274306997289974
+    }
+  ],
+  "selected_mesh": "fine",
+  "W_bfp_m": 0.004274306997289974,
+  "prototype_W_bfp_m": 0.004269532769,
+  "abs_delta_m": 4.774228289973655e-06,
+  "rel_delta": 0.0011182086069553374
+}
