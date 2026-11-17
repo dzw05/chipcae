@@ -2,6 +2,7 @@ add_library(chipcae_geometry
     src/geometry.cpp
     src/import_thresholds.cpp
     src/import_report.cpp
+    src/import_accept.cpp
     src/repair_policy.cpp
 )
 add_library(chipcae::geometry ALIAS chipcae_geometry)
@@ -23,3 +24,7 @@ if(CHIPCAE_ENABLE_OCCT)
 else()
     target_sources(chipcae_geometry PRIVATE src/step_import_unavailable.cpp)
 endif()
+
+# Expose the configured feature state to the existing acceptance test executable.
+target_compile_definitions(chipcae_geometry INTERFACE
+    CHIPCAE_ACCEPT_TEST_JSONCONS=$<BOOL:${CHIPCAE_ENABLE_JSONCONS}>)

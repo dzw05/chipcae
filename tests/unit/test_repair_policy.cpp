@@ -1,8 +1,12 @@
+#include "chipcae/geometry/import_accept.hpp"
 #include "chipcae/geometry/import_report.hpp"
 
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <stdexcept>
 
 using namespace chipcae::geometry;
 static void check(bool ok, const char* text) {
@@ -11,6 +15,186 @@ static void check(bool ok, const char* text) {
         std::exit(1);
     }
 }
+
+#if CHIPCAE_ACCEPT_TEST_JSONCONS
+namespace {
+void require(bool ok, const char* message) {
+    if (!ok)
+        throw std::runtime_error(message);
+}
+struct AcceptFixture {
+    std::filesystem::path dir;
+    AcceptFixture() {
+        const auto seed = std::chrono::steady_clock::now().time_since_epoch().count();
+        for (unsigned i = 0; i < 100; ++i) {
+            dir = std::filesystem::temp_directory_path() /
+                  ("chipcae-accept-" + std::to_string(seed) + "-" + std::to_string(i));
+            if (std::filesystem::create_directory(dir))
+                return;
+        }
+        throw std::runtime_error("cannot create isolated accept fixture");
+    }
+    ~AcceptFixture() {
+        std::error_code error;
+        std::filesystem::remove_all(dir, error);
+    }
+    std::filesystem::path write(const std::string& contents) const {
+        const auto path = dir / "import.accept.json";
+        std::ofstream out(path);
+        out << contents;
+        out.close();
+        require(bool(out), "fixture write failed");
+        return path;
+    }
+};
+void accept_file_roundtrip() {
+    AcceptFixture f;
+    const auto path = f.write(
+        R"({"accept":[{"defect_id":"first","note":"one"},{"defect_id":"second","note":"two"},{"defect_id":"third","note":"three"}]})");
+    std::string error;
+    const auto list = read_accept_file(path, &error);
+    require(list.has_value(), "roundtrip: valid file must load");
+    require(list->source == path, "roundtrip: source path");
+    require(list->entries.size() == 3, "roundtrip: three entries");
+    const std::vector<std::string> ids{"first", "second", "third"};
+    const std::vector<std::string> notes{"one", "two", "three"};
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+        require(list->entries[i].defect_id == ids[i], "roundtrip: ordered exact id");
+        require(list->entries[i].note == notes[i], "roundtrip: ordered exact note");
+    }
+    require(accepted_ids(*list) == ids, "roundtrip: ordered extracted ids");
+}
+void accept_file_covers_b() {
+    AcceptFixture f;
+    std::vector<Defect> defects;
+    std::string entries;
+    for (int i = 0; i < 10; ++i) {
+        Defect d;
+        d.tier = Tier::B;
+        d.defect_id = "b-" + std::to_string(i);
+        defects.push_back(d);
+        if (i)
+            entries += ',';
+        entries += "{\"defect_id\":\"" + defect_id(d) + "\"}";
+    }
+    std::string error;
+    auto list = read_accept_file(f.write("{\"accept\":[" + entries + "]}"), &error);
+    require(list.has_value(), "covers_b: valid file must load");
+    const auto ids = accepted_ids(*list);
+    require(ids.size() == 10, "covers_b: ten ids");
+    require(apply_repair_policy(defects, ids).result == ImportResult::Success,
+            "covers_b: all ten accepted");
+    entries.erase(entries.rfind(','));
+    list = read_accept_file(f.write("{\"accept\":[" + entries + "]}"), &error);
+    require(list.has_value(), "covers_b: nine-id file must load");
+    const auto result = apply_repair_policy(defects, accepted_ids(*list));
+    require(result.result == ImportResult::ConfirmationRequired, "covers_b: uncovered B");
+    require(result.defects.back().defect_id == "b-9" &&
+                !result.defects.back().rejection_reason.empty(),
+            "covers_b: uncovered defect rejection reason");
+}
+void accept_file_unknown_id() {
+    AcceptFixture f;
+    std::string error;
+    std::vector<std::string> warnings;
+    const auto list = read_accept_file(
+        f.write(R"({"accept":[{"defect_id":"nonexistent-id"}]})"), &error, &warnings);
+    require(list.has_value(), "unknown_id: file must load");
+    require(warnings.empty(), "unknown_id: reader cannot classify unknown ids");
+    const auto result = apply_repair_policy({}, accepted_ids(*list));
+    require(result.result == ImportResult::Success, "unknown_id: success");
+    require(result.warnings.size() == 1, "unknown_id: exactly one policy warning");
+    require(result.warnings[0].find("nonexistent-id") != std::string::npos,
+            "unknown_id: warning contains input id");
+}
+void malformed(const std::string& contents) {
+    AcceptFixture f;
+    std::string error;
+    const auto list = read_accept_file(f.write(contents), &error);
+    require(!list, "malformed: must reject");
+    require(error.starts_with("IMPORT_REJECTED: "), "malformed: required error prefix");
+}
+void accept_file_default_path() {
+    AcceptFixture f;
+    const auto path = f.write(R"({"accept":[]})");
+    require(default_accept_file(f.dir / "board.step") == path, "default_path: sibling path");
+    std::filesystem::remove(path);
+    require(default_accept_file(f.dir / "board.step").empty(), "default_path: absent is empty");
+}
+void accept_file_duplicate() {
+    AcceptFixture f;
+    std::string error;
+    std::vector<std::string> warnings;
+    const auto list = read_accept_file(
+        f.write(
+            R"({"accept":[{"defect_id":"id","note":"first"},{"defect_id":"id","note":"second"}]})"),
+        &error,
+        &warnings);
+    require(list.has_value(), "duplicate: file must load");
+    require(list->entries.size() == 1, "duplicate: retain one entry");
+    require(list->entries[0].note == "first", "duplicate: retain first occurrence");
+    require(warnings.size() == 1, "duplicate: exactly one warning");
+}
+void accept_file_boundaries() {
+    AcceptFixture f;
+    std::string error;
+    auto list = read_accept_file(f.write(R"({"accept":[]})"), &error);
+    require(list.has_value() && list->entries.empty(), "boundaries: empty array valid");
+    require(accepted_ids(*list).empty(), "boundaries: no extracted ids");
+    list = read_accept_file(
+        f.write(
+            R"({"accept":[{"defect_id":"ID"},{"defect_id":"id","note":""},{"defect_id":" id "}]})"),
+        &error);
+    require(list.has_value() && list->entries.size() == 3,
+            "boundaries: case and whitespace distinct");
+    require(accepted_ids(*list) == std::vector<std::string>{"ID", "id", " id "},
+            "boundaries: exact bytes preserved");
+    for (const auto& entry : list->entries)
+        require(entry.note.empty(), "boundaries: omitted and empty notes");
+    std::vector<std::string> warnings;
+    list = read_accept_file(
+        f.write(R"({"extra":true,"accept":[{"defect_id":"id","extra":1}]})"), &error, &warnings);
+    require(list.has_value(), "boundaries: unknown keys allowed");
+    require(warnings.size() == 2, "boundaries: warning per unknown key occurrence");
+}
+bool run_accept_tests() {
+    unsigned failures = 0;
+    const auto run = [&](const std::string& name, const auto& test) {
+        try {
+            test();
+        } catch (const std::exception& error) {
+            ++failures;
+            std::cerr << name << ": " << error.what() << '\n';
+        }
+    };
+    run("accept_file_roundtrip", accept_file_roundtrip);
+    run("accept_file_covers_b", accept_file_covers_b);
+    run("accept_file_unknown_id", accept_file_unknown_id);
+    run("accept_file_default_path", accept_file_default_path);
+    run("accept_file_duplicate", accept_file_duplicate);
+    run("accept_file_boundaries", accept_file_boundaries);
+    const std::vector<std::string> invalid{"not JSON",
+                                           R"({"accept":{}})",
+                                           R"({"accept":[{"defect_id":""}]})",
+                                           R"({"accept":[{"defect_id":123}]})",
+                                           "",
+                                           "[]",
+                                           "{}",
+                                           R"({"accept":[{}]})",
+                                           R"({"accept":[1]})",
+                                           R"({"accept":[{"defect_id":"id","note":1}]})"};
+    for (std::size_t i = 0; i < invalid.size(); ++i)
+        run("accept_file_malformed[" + std::to_string(i) + "]", [&] { malformed(invalid[i]); });
+    run("accept_file_missing", [] {
+        AcceptFixture f;
+        std::string error;
+        require(!read_accept_file(f.dir / "missing.json", &error), "missing: must reject");
+        require(error.starts_with("IMPORT_REJECTED: "), "missing: required error prefix");
+    });
+    return failures == 0;
+}
+} // namespace
+#endif
 
 int main() {
     std::vector<Defect> ds;
@@ -49,4 +233,9 @@ int main() {
               std::filesystem::file_size(dir / "import_report.csv") > 0,
           "reports present");
     std::filesystem::remove_all(dir);
+#if CHIPCAE_ACCEPT_TEST_JSONCONS
+    return run_accept_tests() ? 0 : 1;
+#else
+    std::cout << "accept-file tests skipped because jsoncons is disabled\n";
+#endif
 }
