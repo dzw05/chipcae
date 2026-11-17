@@ -1,5 +1,7 @@
 #include "CaseDocument.hpp"
 
+#include "SchemaValidator.hpp"
+
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -32,13 +34,21 @@ void write(const QString& path, const Json& value) {
     if (!file.open(QIODevice::WriteOnly) || file.write(text) != text.size() || !file.commit())
         throw std::runtime_error(file.errorString().toStdString());
 }
+struct LocatedError : std::runtime_error {
+    QString pointer;
+    QString source;
+    LocatedError(const char* message, QString path, QString document)
+        : std::runtime_error(message), pointer(std::move(path)), source(std::move(document)) {}
+};
 void libraryCheck(const Json& value) {
     if (value.at("schema") != "chipcae.material_library/1" || !value.at("materials").is_array())
         throw std::runtime_error("Invalid material library container");
     std::set<std::string> ids;
-    for (const auto& item : value.at("materials").array_range()) {
+    for (size_t i = 0; i < value.at("materials").size(); ++i) {
+        const auto& item = value.at("materials").at(i);
         if (!ids.insert(item.at("id").as<std::string>()).second)
-            throw std::runtime_error("MATERIAL_ID_DUPLICATE");
+            throw LocatedError(
+                "MATERIAL_ID_DUPLICATE", QString("/materials/%1/id").arg(i), "materials");
     }
 }
 Json reference(const Json& ref, const QDir& dir, bool parse = true) {
@@ -60,10 +70,13 @@ Json reference(const Json& ref, const QDir& dir, bool parse = true) {
 }
 DocumentError exceptionError(const std::exception& e) {
     QString message = QString::fromUtf8(e.what());
+    const auto* located = dynamic_cast<const LocatedError*>(&e);
     return {message == "MATERIAL_ID_DUPLICATE" || message == "INPUT_HASH_MISMATCH"
                 ? message
                 : "DOCUMENT_ERROR",
-            message};
+            message,
+            located ? located->pointer : QString(),
+            located ? located->source : QString("case")};
 }
 } // namespace
 MeshDigest MeshDigest::fromJson(const Json& v) {
@@ -156,6 +169,12 @@ void CaseDocument::applyJson(const Json& value) {
     stack_ = std::move(stack);
     markDirty();
 }
+void CaseDocument::applyStackJson(const Json& value) {
+    if (stack_ != value) {
+        stack_ = value;
+        markDirty();
+    }
+}
 void CaseDocument::setValue(const std::string& pointer, const Json& value) {
     auto copy = data_;
     jsoncons::jsonpointer::replace(copy, pointer, value);
@@ -192,13 +211,19 @@ void CaseDocument::setMeshOptions(const MeshOptions& o) {
 DocumentErrors CaseDocument::validate() const {
     DocumentErrors result;
     try {
-        static const auto validator = jsoncons::jsonschema::make_json_schema(
-            read(QStringLiteral(CHIPCAE_SCHEMA_DIR "/case-1.0.schema.json")),
-            [](const jsoncons::uri&) -> Json {
-                return read(QStringLiteral(CHIPCAE_SCHEMA_DIR "/parameters.schema.json"));
-            });
-        if (!validator.is_valid(data_))
-            result.push_back({"CASE_SCHEMA_INVALID", "case.v1 schema validation failed"});
+        static const SchemaValidator validator(
+            QStringLiteral(CHIPCAE_SCHEMA_DIR "/case-1.0.schema.json"));
+        for (const auto& error : validator.validate(data_))
+            result.push_back({"CASE_SCHEMA_INVALID", error.message, error.path});
+        if (!stack_.empty()) {
+            static const SchemaValidator stackValidator(
+                QStringLiteral(CHIPCAE_SCHEMA_DIR "/stack-0.2.schema.json"));
+            for (const auto& error : stackValidator.validate(stack_))
+                result.push_back({"STACK_SCHEMA_INVALID", error.message, error.path, "stack"});
+        }
+        // Schema errors already identify malformed fields; semantic traversal needs valid shapes.
+        if (!result.empty())
+            return result;
         if (!path_.isEmpty()) {
             const auto root = QFileInfo(path_).absoluteDir();
             reference(data_.at("stack"), root);
@@ -212,46 +237,49 @@ DocumentErrors CaseDocument::validate() const {
             }
         }
         std::set<std::string> stableIds;
-        auto checkIds = [&](auto&& self, const Json& node) -> void {
+        auto checkIds = [&](auto&& self, const Json& node, const std::string& pointer) -> void {
             if (node.is_object()) {
-                if (node.contains("id") &&
+                if (node.contains("id") && node.at("id").is_string() &&
                     !stableIds.insert(node.at("id").as<std::string>()).second)
-                    result.push_back({"CASE_ID_DUPLICATE", "Duplicate case item id"});
+                    result.push_back({"CASE_ID_DUPLICATE",
+                                      "Duplicate case item id",
+                                      QString::fromStdString(pointer + "/id")});
                 for (const auto& member : node.object_range())
                     if (member.key().substr(0, 2) != "x-")
-                        self(self, member.value());
+                        self(self, member.value(), pointer + "/" + member.key());
             } else if (node.is_array())
-                for (const auto& child : node.array_range())
-                    self(self, child);
+                for (size_t i = 0; i < node.size(); ++i)
+                    self(self, node.at(i), pointer + "/" + std::to_string(i));
         };
         if (data_.contains("loads"))
-            checkIds(checkIds, data_.at("loads"));
+            checkIds(checkIds, data_.at("loads"), "/loads");
         if (data_.contains("constraints"))
-            checkIds(checkIds, data_.at("constraints"));
+            checkIds(checkIds, data_.at("constraints"), "/constraints");
         if (!stack_.empty()) {
-            static const auto stackValidator = jsoncons::jsonschema::make_json_schema(
-                read(QStringLiteral(CHIPCAE_SCHEMA_DIR "/stack-0.2.schema.json")));
-            if (!stackValidator.is_valid(stack_))
-                result.push_back({"STACK_SCHEMA_INVALID", "stack0.2 validation failed"});
             std::set<std::string> layers;
-            for (const auto& layer : stack_.at("layers").array_range())
-                if (!layers.insert(layer.at("name").as<std::string>()).second)
-                    result.push_back({"LAYER_NAME_DUPLICATE", "Duplicate stack layer name"});
-            auto targets = [&](auto&& self, const Json& node) -> void {
+            for (size_t i = 0; i < stack_.at("layers").size(); ++i)
+                if (!layers.insert(stack_.at("layers").at(i).at("name").as<std::string>()).second)
+                    result.push_back({"LAYER_NAME_DUPLICATE",
+                                      "Duplicate stack layer name",
+                                      QString("/layers/%1/name").arg(i),
+                                      "stack"});
+            auto targets = [&](auto&& self, const Json& node, const std::string& pointer) -> void {
                 if (node.is_object()) {
                     if (node.contains("target")) {
                         const auto target = node.at("target").as<std::string>();
                         if (target.starts_with("layer:") && !layers.contains(target.substr(6)))
-                            result.push_back({"TARGET_LAYER_INVALID", "Unknown target layer"});
+                            result.push_back({"TARGET_LAYER_INVALID",
+                                              "Unknown target layer",
+                                              QString::fromStdString(pointer + "/target")});
                     }
                     for (const auto& member : node.object_range())
                         if (member.key().substr(0, 2) != "x-")
-                            self(self, member.value());
+                            self(self, member.value(), pointer + "/" + member.key());
                 } else if (node.is_array())
-                    for (const auto& child : node.array_range())
-                        self(self, child);
+                    for (size_t i = 0; i < node.size(); ++i)
+                        self(self, node.at(i), pointer + "/" + std::to_string(i));
             };
-            targets(targets, data_);
+            targets(targets, data_, "");
         }
         if (!materials_.empty())
             libraryCheck(materials_);
@@ -259,15 +287,23 @@ DocumentErrors CaseDocument::validate() const {
             std::set<std::string> ids;
             for (const auto& m : materials_.at("materials").array_range())
                 ids.insert(m.at("id").as<std::string>());
-            for (const auto& layer : stack_.at("layers").array_range()) {
+            for (size_t i = 0; i < stack_.at("layers").size(); ++i) {
+                const auto& layer = stack_.at("layers").at(i);
                 if (layer.contains("material") &&
                     !ids.contains(layer.at("material").as<std::string>()))
-                    result.push_back({"MATERIAL_REFERENCE_INVALID", "Unknown layer material id"});
+                    result.push_back({"MATERIAL_REFERENCE_INVALID",
+                                      "Unknown layer material id",
+                                      QString("/layers/%1/material").arg(i),
+                                      "stack"});
                 if (layer.contains("regions"))
-                    for (const auto& region : layer.at("regions").array_range())
-                        if (!ids.contains(region.at("material").as<std::string>()))
+                    for (size_t j = 0; j < layer.at("regions").size(); ++j)
+                        if (!ids.contains(
+                                layer.at("regions").at(j).at("material").as<std::string>()))
                             result.push_back(
-                                {"MATERIAL_REFERENCE_INVALID", "Unknown region material id"});
+                                {"MATERIAL_REFERENCE_INVALID",
+                                 "Unknown region material id",
+                                 QString("/layers/%1/regions/%2/material").arg(i).arg(j),
+                                 "stack"});
             }
         }
     } catch (const std::exception& e) {
@@ -378,8 +414,9 @@ bool CaseDocument::finalizeMeshForSubmit() {
     try {
         auto o = meshOptions();
         if (o.levels < 1)
-            errors_.push_back(
-                {"MESH_LEVELS_REQUIRED", "GUI submission requires explicit levels >= 1"});
+            errors_.push_back({"MESH_LEVELS_REQUIRED",
+                               "GUI submission requires explicit levels >= 1",
+                               "/mesh/levels"});
         if (!errors_.empty())
             return false;
         setMeshOptions(o);
@@ -424,10 +461,13 @@ bool CaseDocument::saveMaterialLibrary(const QString& path) {
 }
 bool CaseDocument::applyRunProfile(const Json& value) {
     try {
-        static const auto validator = jsoncons::jsonschema::make_json_schema(
-            read(QStringLiteral(CHIPCAE_SCHEMA_DIR "/run-profile-1.0.schema.json")));
-        if (!validator.is_valid(value))
-            throw std::runtime_error("Invalid run profile");
+        static const SchemaValidator validator(
+            QStringLiteral(CHIPCAE_SCHEMA_DIR "/run-profile-1.0.schema.json"));
+        errors_.clear();
+        for (const auto& error : validator.validate(value))
+            errors_.push_back({"DOCUMENT_ERROR", error.message, error.path, "run-profile"});
+        if (!errors_.empty())
+            return false;
         profile_ = value;
         errors_.clear();
         return true;
@@ -473,10 +513,10 @@ bool CaseDocument::renameLayer(const std::string& oldName, const std::string& ne
     auto update = [&](auto&& self, Json& node) -> void {
         if (node.is_string() && node == "layer:" + oldName)
             node = "layer:" + newName;
-        else if (node.is_array())
+        else if (node.is_array()) {
             for (auto& child : node.array_range())
                 self(self, child);
-        else if (node.is_object())
+        } else if (node.is_object())
             for (auto& member : node.object_range())
                 if (member.key().substr(0, 2) != "x-")
                     self(self, member.value());

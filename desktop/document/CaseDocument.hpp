@@ -10,6 +10,8 @@ using Json = jsoncons::json;
 struct DocumentError {
     QString code;
     QString message;
+    QString pointer;
+    QString source = "case";
 };
 using DocumentErrors = std::vector<DocumentError>;
 struct MeshOptions {
@@ -43,6 +45,8 @@ public:
     // JSON Pointer mutation and grouping hook for D05 / D11; no undo stack.
     void setValue(const std::string& pointer, const Json& value);
     void beginEdit();
+    void applyStackJson(const Json& value);
+    Json submitSnapshot() const { return data_; }
     MeshOptions meshOptions() const;
     void setMeshOptions(const MeshOptions& options);
     bool finalizeMeshForSubmit();

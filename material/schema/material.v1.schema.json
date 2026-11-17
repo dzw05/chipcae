@@ -84,6 +84,11 @@
         "type": "string"
       },
       "description": "Optional process-id registry used to validate cure binding"
+    },
+    "conductivity": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Isotropic thermal conductivity in W/(m K); required by steady conduction."
     }
   },
   "allOf": [

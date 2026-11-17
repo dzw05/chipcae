@@ -1,4 +1,5 @@
 #pragma once
+#include "chipcae/material/copper_laminate.hpp"
 #include "chipcae/material/thermo_elastic.hpp"
 
 namespace chipcae::material {
@@ -24,7 +25,7 @@ public:
                                              StateRef next,
                                              PointOutput& out) const noexcept {
         out = {};
-        const Real f = in.point_param, m = 1 - f;
+        const Real f = in.point_param;
         if (!(f >= 0 && f <= 1))
             return ThermoElastic<MS>::finish(out, StatusCode::Failed);
         // Exact isotropic limits, including rotation and thermal-zero overrides.
@@ -48,16 +49,9 @@ public:
         code = copper_.isotropic_properties(in, Ec, nc);
         if (code != StatusCode::Ok)
             return ThermoElastic<MS>::finish(out, code);
-        const Real Gm = Em / (2 * (1 + nm)), Gc = Ec / (2 * (1 + nc));
-        const Real E = f * Ec + m * Em, n = f * nc + m * nm;
-        const Real G = E / (2 * (1 + n)), Gz = 1 / (f / Gc + m / Gm);
-        const Real p[9] = {E, E, 1 / (f / Ec + m / Em), n, n, n, G, Gz, Gz};
+        Real p[9]{};
         Vec6 th{};
-        const Real Mm = Em / (1 - nm), Mc = Ec / (1 - nc);
-        th[0] = th[1] =
-            (f * Mc * b.thermal_strain[0] + m * Mm * a.thermal_strain[0]) / (f * Mc + m * Mm);
-        th[2] = f * (b.thermal_strain[0] - 2 * nc / (1 - nc) * (th[0] - b.thermal_strain[0])) +
-                m * (a.thermal_strain[0] - 2 * nm / (1 - nm) * (th[0] - a.thermal_strain[0]));
+        copper_laminate(Em, nm, Ec, nc, a.thermal_strain[0], b.thermal_strain[0], f, p, th.data());
         return ThermoElastic<MS>::response(ctx, in, ElasticSymmetry::Orthotropic, p, th, out);
     }
 
