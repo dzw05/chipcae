@@ -147,6 +147,40 @@ int main(int argc, char** argv) try {
             check(tangent_to_secant(probe, converted) == StatusCode::Ok &&
                       converted.size() == knots.size(),
                   "arbitrary reference vector status and size");
+            std::vector<Real> derivatives;
+            check(secant_to_tangent(probe, derivatives) == StatusCode::Ok &&
+                      derivatives.size() == knots.size(),
+                  "arbitrary reference derivative vector status and size");
+            auto verify_derivative = [&](Real temperature, Real actual) {
+                Real expected =
+                    temperature < knots.front() ? probe.alpha.front() : probe.alpha.back();
+                if (temperature >= knots.front() && temperature <= knots.back()) {
+                    // Differentiate the linear segment times (T - Tref).
+                    // Interior knots select the right segment; the last selects the left.
+                    for (std::size_t i = 0; i + 1 < knots.size(); ++i) {
+                        if (temperature < knots[i] ||
+                            (temperature >= knots[i + 1] && i + 2 < knots.size()))
+                            continue;
+                        const Real slope =
+                            (probe.alpha[i + 1] - probe.alpha[i]) / (knots[i + 1] - knots[i]);
+                        const Real alpha = probe.alpha[i] + (temperature - knots[i]) * slope;
+                        expected = alpha + (temperature - reference) * slope;
+                        break;
+                    }
+                }
+                check(near(actual, expected), "arbitrary reference derivative definition");
+            };
+            for (std::size_t i = 0; i < knots.size(); ++i) {
+                verify_derivative(knots[i], derivatives[i]);
+                check(secant_to_tangent(probe, knots[i], value) == StatusCode::Ok,
+                      "arbitrary reference derivative scalar node status");
+                verify_derivative(knots[i], value);
+            }
+            for (Real temperature : {below, (knots[0] + knots[1]) / 2, sample, above, reference}) {
+                check(secant_to_tangent(probe, temperature, value) == StatusCode::Ok,
+                      "arbitrary reference derivative scalar status");
+                verify_derivative(temperature, value);
+            }
             auto verify = [&](Real temperature, Real actual) {
                 if (temperature == reference) {
                     Real limit = probe.alpha.front();
