@@ -6,7 +6,10 @@
 #include <type_traits>
 #include <utility>
 
-using PlaceResult = decltype(chipcae::geometry::place({}, {}, {}));
+using PlaceResult =
+    decltype(chipcae::geometry::place(std::declval<std::vector<chipcae::geometry::Slab>>(),
+                                      std::declval<const chipcae::geometry::Placement&>(),
+                                      std::declval<const chipcae::geometry::StackModel&>()));
 using MergeResult = decltype(chipcae::geometry::merge_parts({}, {}, {}));
 static_assert(
     std::is_same_v<PlaceResult, chipcae::geometry::Expected<chipcae::geometry::PlacedPart>>);

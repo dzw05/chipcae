@@ -66,7 +66,7 @@ def main(root):
             return None
         try:
             document = json.loads(path.read_text())
-        except (ValueError, OSError) as error:
+        except (json.JSONDecodeError, OSError) as error:
             failures.append(f'{name}: cannot read acceptance fixture: {error}')
             return None
         found = errors(document, validator)
