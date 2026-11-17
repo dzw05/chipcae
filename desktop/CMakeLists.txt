@@ -35,7 +35,9 @@ if(CHIPCAE_BUILD_TESTS)
         set_tests_properties(desktop_${test}_smoke PROPERTIES TIMEOUT 30)
     endforeach()
     set_tests_properties(desktop_window_smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-    set_tests_properties(desktop_render_smoke PROPERTIES ENVIRONMENT "VTK_DEFAULT_OPENGL_WINDOW=vtkEGLRenderWindow;DISPLAY=")
+    # DISPLAY and VTK_DEFAULT_OPENGL_WINDOW are left to the caller: local Mesa EGL
+    # (no DISPLAY) or CI Xvfb + vtkXOpenGLRenderWindow. Forcing DISPLAY= here would
+    # hide the Xvfb display and regress the GitHub runner.
 endif()
 
 add_library(chipcae_desktop_results io/ResultSession.cpp io/ResultSession.hpp
@@ -53,6 +55,7 @@ if(CHIPCAE_BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/result_fixtures.py ${CMAKE_CURRENT_BINARY_DIR}/result-samples)
     set_tests_properties(desktop_result_fixtures PROPERTIES FIXTURES_SETUP result_samples)
     add_test(NAME desktop_result_io COMMAND desktop_result_io ${CMAKE_CURRENT_BINARY_DIR}/result-samples)
+    # Do not force DISPLAY= (same CI EGL pitfall as desktop_render_smoke).
     set_tests_properties(desktop_result_io PROPERTIES FIXTURES_REQUIRED result_samples
-        TIMEOUT 90 ENVIRONMENT "VTK_DEFAULT_OPENGL_WINDOW=vtkEGLRenderWindow;DISPLAY=")
+        TIMEOUT 90)
 endif()

@@ -49,6 +49,13 @@ struct Parser {
         const double v = std::strtod(s, &end);
         return end && *end == '\0' && std::isfinite(v) ? v : fallback;
     }
+    std::uint64_t line_number() const {
+#if XML_MAJOR_VERSION > 2 || (XML_MAJOR_VERSION == 2 && XML_MINOR_VERSION >= 10)
+        return XML_GetCurrentLineNumber64(parser);
+#else
+        return static_cast<std::uint64_t>(XML_GetCurrentLineNumber(parser));
+#endif
+    }
     void start(const char* raw, const XML_Char** a) {
         const auto name = local(raw);
         path.push_back(name);
@@ -170,10 +177,7 @@ struct Parser {
                    name != "HistoryRecord" && name != "LogisticHeader" && name != "Bom" &&
                    name != "Line" && name != "Arc" && name != "LineDesc" && name != "LineDescRef" &&
                    name != "CadHeader") {
-            model.report.unsupported.push_back(
-                {"IMPORT_UNSUPPORTED_ELEMENT",
-                 name,
-                 static_cast<std::uint64_t>(XML_GetCurrentLineNumber(parser))});
+            model.report.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT", name, line_number()});
         }
     }
     void end(const char* raw) {
