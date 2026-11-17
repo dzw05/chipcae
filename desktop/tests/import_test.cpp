@@ -214,8 +214,10 @@ if mode=='confirm' and '--accept-b-tier' in a: code,rc='OK',0
 if report and mode not in ('missing6','missing0'):
     payload={'code':code,'message':'fixture message','defects':[] if code=='OK' else [{'code':'MOCK_GAP'}]}
     if mode=='grade-conflict': payload['grade']='C'
+    if mode=='confirm': payload['grade']='B'
     if mode.startswith('bad-'):
         payload['code']='MATERIAL_MAPPING_MISSING'; payload['grade']='B'; rc=9
+        if mode=='bad-code-type': payload['code']=9
         if mode=='bad-message-missing': del payload['message']
         if mode=='bad-message-type': payload['message']=123
         if mode=='bad-defects-missing': del payload['defects']
@@ -342,6 +344,83 @@ sys.exit(rc)
                       controller.reportCode() == "OK" && controller.exitCode() == 0 &&
                       document.stackJson() != before && QFile::exists(request.output),
                   "shipped mock accepts and publishes confirmed rerun");
+        }
+        // A valid previous report must never supply fields for a malformed later one.
+        for (const auto& malformed : {"bad-code-type",
+                                      "bad-message-missing",
+                                      "bad-message-type",
+                                      "bad-defects-missing",
+                                      "bad-defects-type",
+                                      "corrupt"}) {
+            CaseDocument document;
+            require(document.load(FIXTURE_DIR "/fcbga_demo.case.json"), "report reset baseline");
+            const auto before = document.stackJson();
+            ImportController controller(document);
+            ImportRequest request;
+            request.input = dir.filePath(QString("report reset ") + malformed + ".xml");
+            write(request.input, "fixture");
+            request.output = request.input + ".stack";
+            request.materialMap = map;
+            request.program = PYTHON_EXECUTABLE;
+            const auto record = request.input + ".argv";
+            request.prefix = {script, MOCK_SCRIPT, record, "confirm"};
+            waitFor(controller, [&] { check(controller.start(request), "start valid report"); });
+            require(controller.reportCode() == "IMPORT_CONFIRMATION_REQUIRED" &&
+                        controller.grade() == "B",
+                    "previous valid report fields");
+            request.prefix = {script, MOCK_SCRIPT, record, malformed};
+            waitFor(controller,
+                    [&] { check(controller.start(request), "start malformed report"); });
+            check(controller.outcome() == ImportOutcome::Failed &&
+                      controller.reportCode().isEmpty() && controller.grade().isEmpty() &&
+                      !controller.needsMaterialMapReselect() && document.stackJson() == before &&
+                      !QFile::exists(request.output),
+                  "malformed subsequent report clears fields and preserves document");
+        }
+        // External files arriving after preflight remain untouched when publication rolls back.
+        for (int scenario = 0; scenario < 6; ++scenario) {
+            const int externalIndex = scenario % 3;
+            const bool duringCopy = scenario >= 3;
+            CaseDocument document;
+            require(document.load(FIXTURE_DIR "/fcbga_demo.case.json"),
+                    "late destination baseline");
+            const auto before = document.stackJson();
+            ImportController controller(document);
+            ImportRequest request;
+            request.input = dir.filePath(QString("late destination %1.xml").arg(scenario));
+            write(request.input, "fixture");
+            request.output = request.input + ".stack";
+            request.polyset = request.input + ".poly";
+            request.report = request.input + ".report";
+            request.materialMap = map;
+            request.program = PYTHON_EXECUTABLE;
+            request.prefix = {script, MOCK_SCRIPT, request.input + ".record.argv", "success"};
+            const QStringList destinations{request.output, request.polyset, request.report};
+            int copies = 0;
+            ImportControllerTestAccess::setCopy(
+                controller, [&](const QString& source, const QString& destination) {
+                    if (duringCopy && copies == externalIndex)
+                        write(destinations[externalIndex], "externally owned data");
+                    ++copies;
+                    // Deliberately destructive copy: the controller must keep externally
+                    // owned paths away from the publication operation altogether.
+                    QFile::remove(destination);
+                    return QFile::copy(source, destination);
+                });
+            waitFor(controller, [&] {
+                check(controller.start(request), "late destination passes initial preflight");
+                if (!duringCopy)
+                    write(destinations[externalIndex], "externally owned data");
+            });
+            check(controller.outcome() == ImportOutcome::Failed &&
+                      controller.error() == "Cannot publish import outputs" &&
+                      copies == externalIndex + (duringCopy ? 1 : 0) &&
+                      document.stackJson() == before && !document.isDirty(),
+                  "late collision stops publication and preserves document");
+            for (int i = 0; i < destinations.size(); ++i)
+                check(i == externalIndex ? read(destinations[i]) == "externally owned data"
+                                         : !QFile::exists(destinations[i]),
+                      "rollback removes only outputs owned by this run");
         }
         int serial = 0;
         auto run = [&](const QString& mode,

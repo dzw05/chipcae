@@ -181,18 +181,21 @@ void ImportController::complete(int code, QProcess::ExitStatus status) {
     exitCode_ = code;
     exitStatus_ = status;
     report_ = readFile(staged_[2]);
+    reportCode_.clear();
+    grade_.clear();
     bool validReport = false;
     try {
         auto parsed = Json::parse(report_.toStdString());
+        if (!parsed.is_object() || !parsed.at("code").is_string() ||
+            !parsed.at("message").is_string() || !parsed.at("defects").is_array())
+            throw std::runtime_error("Invalid import report structure");
         const auto reportCode = QString::fromStdString(parsed.at("code").as<std::string>());
         QString grade;
         if (parsed.contains("grade") && parsed.at("grade").is_string())
             grade = QString::fromStdString(parsed.at("grade").as<std::string>());
-        validReport = parsed.at("message").is_string() && parsed.at("defects").is_array();
-        if (validReport) {
-            reportCode_ = reportCode;
-            grade_ = grade;
-        }
+        reportCode_ = reportCode;
+        grade_ = grade;
+        validReport = true;
     } catch (const std::exception&) {
     }
     outcome_ = ImportOutcome::Failed;
@@ -221,13 +224,21 @@ void ImportController::complete(int code, QProcess::ExitStatus status) {
                     continue;
                 const QFileInfo destination(destinations_[i]);
                 const bool existed = destination.exists() || destination.isSymLink();
-                if (!copyOutput_(staged_[i], destinations_[i])) {
-                    // A failed copy may have created a partial destination. Preserve
-                    // paths that appeared since preflight, but remove our own partial file.
-                    if (!existed)
-                        QFile::remove(destinations_[i]);
+                // Preflight cannot reserve paths while the importer runs. Never
+                // publish over a destination that has since appeared externally.
+                if (existed)
                     throw std::runtime_error("Cannot publish import outputs");
-                }
+                // Copy into an owned directory on the destination filesystem. A
+                // failed copy can only leave private partial data; the final rename
+                // refuses an external destination even if it appears during copying.
+                QTemporaryDir publication(
+                    destination.absoluteDir().filePath(".chipcae-import-publish-XXXXXX"));
+                if (!publication.isValid())
+                    throw std::runtime_error("Cannot publish import outputs");
+                const auto pending = publication.filePath("output");
+                if (!copyOutput_(staged_[i], pending) || !QFile::rename(pending, destinations_[i]))
+                    throw std::runtime_error("Cannot publish import outputs");
+                // Only a successful no-overwrite rename establishes ownership.
                 published << destinations_[i];
             }
             replaced = document_.replaceImportedStack(stack);
