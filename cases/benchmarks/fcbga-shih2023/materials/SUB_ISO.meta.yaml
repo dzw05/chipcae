@@ -1,0 +1,25 @@
+id: SUB_ISO
+schema_version: "1"
+unit_system: SI
+model: thermo_elastic
+elastic:
+  symmetry: isotropic
+  table:
+    temperatures: [298.15, 423.15, 453.15, 518.15]
+    columns: {E: [3.10e+10, 2.50e+10, 1.95e+10, 1.45e+10], nu: [0.3, 0.3, 0.3, 0.3]}
+    interpolation: linear
+    extrapolation: clamp
+thermal_expansion:
+  cte_type: tangent
+  stress_free_temperature: 423.15
+  symmetry: isotropic
+  table:
+    temperatures: [298.15]
+    columns: {alpha: [1.6e-5]}
+    interpolation: linear
+    extrapolation: clamp
+provenance:
+  source_type: literature
+  reference: "Kim Y. et al., Microelectron. Reliab. 65:234-242 (2016), Table 3（DMA 储能模量当弹性模量；CTE 为 DIC）"
+  confidence: medium
+  notes: "cited，借用到 FCBGA。密度 tbd。"

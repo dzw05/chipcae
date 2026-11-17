@@ -5,3 +5,9 @@ Proprietary, all rights reserved.
 This software and its source code are confidential and proprietary.
 No part of this software may be used, copied, modified, distributed,
 or disclosed except as expressly authorized in writing by the copyright holder.
+
+Exceptions: the following directories are licensed separately, as stated
+in the LICENSE file inside each of them, and the restrictions above do not
+apply to their contents:
+- cases/benchmarks/ : Creative Commons Attribution 4.0 International (CC BY 4.0), see cases/benchmarks/LICENSE and cases/benchmarks/NOTICE
+- tools/vv/ and tests/vv/ : Apache License, Version 2.0, see tools/vv/LICENSE and tests/vv/LICENSE

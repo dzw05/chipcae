@@ -1,0 +1,110 @@
+# V&V 规范格式 v0.1（不是求解器算例 schema）
+format: vv-benchmark-yaml
+format_version: "0.1"
+id: fcbga-shih2023
+legacy_id: WV-PKG-FCBGA
+version: "0.1"
+title: chipcae 公开封装翘曲基准：FCBGA（Shih 2023 集 A）
+status: draft
+date: "2026-11-16"
+timezone: Asia/Shanghai
+unit_system_note: "本文件显式给出单位；材料卡 SI 见 materials/"
+purpose:
+  X_PW: verification   # 允许 chosen
+  P: validation        # 仅文献参数；chosen/tbd 须在报告中列出
+notes:
+  - 尚未在任何求解器中运行
+  - 求解器默认跑全模型
+references:
+  Shih2023: {citation: "Shih M.-K. et al., Materials 16(12):4291 (2023)", doi: "10.3390/ma16124291"}
+  Kim2016: {citation: "Kim Y. et al., Microelectron. Reliab. 65:234-242 (2016)", doi: "10.1016/j.microrel.2016.07.153"}
+  Chen2022: {citation: "Chen C. et al., Materials 15(5):1683 (2022)", doi: "10.3390/ma15051683"}
+  Hsueh2006: {citation: "Hsueh, Luttrell & Cui, J. Micromech. Microeng. 16:2509-2515 (2006) eq. (4b)", doi: "10.1088/0960-1317/16/11/036"}
+  FinotSuresh1996: {citation: "Finot & Suresh, J. Mech. Phys. Solids 44:683-721 (1996)", doi: "10.1016/0022-5096(96)84548-0"}
+geometry:
+  parameter_set: A
+  symmetry:
+    literature_biaxial: false
+    quarter_allowed: "仅 NLGEOM 关闭的小变形外部对照"
+    nlgeom_on: full_model
+    solver_default: full_model
+    full_model_variant_required: true
+    source: chosen
+    note: 几何关于 x=0、y=0 镜像，但分叉检查要求 NLGEOM 开时用全模型
+  substrate_LxW_mm: {value: [40.0, 40.0], unit: mm, source: literature, cite: Shih2023}
+  substrate_t_mm: {value: 1.2, unit: mm, source: literature, cite: Shih2023}
+  die_LxW_mm: {value: [15.5, 15.5], unit: mm, source: literature, cite: Shih2023}
+  die_t_mm: {value: 0.78, unit: mm, source: literature, cite: Shih2023}
+  bump_uf_layer_t_mm: {value: 0.025, unit: mm, source: literature, cite: Shih2023, note: "原文 underfill thickness 25 µm，解释为凸点支撑高度"}
+  bump_uf_footprint: {value: die, source: chosen}
+  die_position: {value: centered, source: chosen}
+mesh:
+  type: cut_cell
+  background: tensor_product_cartesian
+  z_alignment: layer_interfaces
+  cut_features: [solder_balls, fillets, chamfers]
+  unit: mm
+  L1: {h_inplane_mm: 0.8, n_through_thickness_per_layer: 2, source: chosen}
+  L2: {h_inplane_mm: 0.4, n_through_thickness_per_layer: 4, source: chosen}
+  L3: {h_inplane_mm: 0.2, n_through_thickness_per_layer: 8, source: chosen}
+  variants:
+    F-ALIGNED:
+      description: 默认，无圆角或圆角特征边落在网格面上；z 向仍对齐层界面
+    F-UNALIGNED:
+      description: 底填侧面圆角（默认）或 45° 斜边不与背景网格面对齐
+      fillet_radius_mm: {value: 0.05, unit: mm, source: chosen, note: "选定几何，不是测量值"}
+      qoi: [W_bfp, S_cc, kappa, sigma_die_center]
+      compare_to: F-ALIGNED
+      same_geometry_vs_bodyfitted: "沿用 B0 容差（建议）"
+      aligned_vs_unaligned_tolerance: {status: tbd, rationale: "两套几何不是同一问题，属敏感性；待首次网格收敛后定。建议先报告差值，全局翘曲相对差大于 2% 记为需讨论，不作 hard fail。"}
+tiers:
+  B0: {nlgeom: off, elasticity: linear_isothermal, model: quarter_or_full, note: "外部对照可用四分之一；求解器默认全模型"}
+  B1: {nlgeom: off, elasticity: temperature_dependent}
+  B2: {nlgeom: off, viscoelastic: prony_single_WLF}
+  B3: {nlgeom: on, model: full_only}
+  B4: {nlgeom: on, cure_shrinkage: simplified, model: full_only}
+  B3a: {nlgeom: on, elasticity: linear_isothermal, model: full_only}
+  B4a: {nlgeom: off, cure_shrinkage: simplified}
+series:
+  X:
+    type: verification
+    settings: {shift: single_WLF, variants: [X-OFF, X-ON]}
+    chosen_allowed: true
+  PW:
+    type: verification
+    reference: tools/vv/pw_reference.py
+    frozen_MPa: {single_WLF: [16.32000, 16.24540], piecewise_k2_0.05: [10.44021, 9.35481]}
+    chosen_allowed: true
+  P-SHIH2023:
+    type: validation
+    literature_only: true
+    published_FE_max_warpage_um: {value: 128, unit: um, source: literature, cite: "Shih2023 p.9（FE 预测最大翘曲 128 µm / 5.04 mil；shadow moiré 实测约 122 µm / 4.8 mil，二者相差 <5%）"}
+    reproduction_claim: {status: not_allowed_yet, note: "P-SHIH2023 的基板与底填参数为借用；Shih 2023 Fig.12 数字化之前，结果不算对 128 µm 翘曲的复现"}
+    emc_borrowed_underfill_forbidden: true
+    figure12_ET_digitized: {status: tbd}
+    parameters:  # P 系列只用文献参数；chosen / tbd / 借用项全部列出
+      literature:
+        geometry: {substrate: [40, 40, 1.2], die: [15.5, 15.5, 0.78], underfill_t_um: 25, unit: mm, cite: "Shih2023 Table 1 (p.4)"}
+        die: {card: SI_SHIH2023, E_GPa: 131, CTE_ppm_per_K: 2.8, nu: 0.30, cite: "Shih2023 Table 3 (p.8)", note: "materials/SI 为 Chen 2022 Table 7（ν = 0.28），仅 X/PW"}
+        substrate_Shih: {E: "Shih2023 Fig.12（未数字化，tbd）", CTE_ppm_per_K: {xy: 23.46, z: [52.65, 156.4]}, Tg_C: 156, nu: 0.30, cite: "Shih2023 Table 3 (p.8)"}
+        underfill_Shih: {E: "Shih2023 Fig.12（含 Underfill+Solder bump 等效材料曲线，未数字化，tbd）", CTE_ppm_per_K: [32, 110], Tg_C: 70, nu: 0.30, cite: "Shih2023 Table 3 (p.8)"}
+      borrowed:
+        - {card: SUB_ISO, from: "Kim2016 Table 3 (p.238) 基板", status: borrowed, note: "不是 Shih 2023 基板；Shih 2023 Fig.12 数字化后应替换"}
+        - {card: FCBGA_BUMP_UF.viscoelastic, from: "Chen 2022 EMC Prony/WLF", status: borrowed_sensitivity_only, note: "区间见 materials/FCBGA_BUMP_UF.meta.yaml p_series_sensitivity；s 灵敏度报告 s = 1、s = 0（E ≡ E0）、E ≡ E∞ 三端点（tools/vv/prony_scale.py）"}
+        - {card: FCBGA_BUMP_UF.elastic_endpoints, from: "Kim2016 Table 3 底填 + SAC305 均质化", status: borrowed, note: "P-SHIH2023 不按 Kim 组分重推；改用 Shih2023 Fig.12「Equivalent material (Underfill+Solder bump)」曲线数字化（tbd）"}
+      verification_only_not_for_P: [SI, FCBGA_BUMP_UF]   # 均质层基体取 Kim 2016 底填（借用），不是 Shih 2023 底填
+      chosen: [bump_uf_footprint, die_position, T_end_C]
+      tbd: [figure12_ET_digitized, substrate_Shih.E, underfill_Shih.E, equivalent_bump_uf_layer_ET]
+loads:
+  T_sf_C: {value: 150, unit: degC, source: literature, cite: Shih2023}
+  T_end_C: {value: 25, unit: degC, source: chosen}
+cpu_gpu_consistency:
+  warpage_disp_rel: 1.0e-6
+  stress_rel_of_max: 1.0e-6
+  linear_relative_residual: 1.0e-12
+  newton_tolerance: 1.0e-10
+  any_exceedance_blocks: true
+  note: 小算例可用直接法
+tolerances_vs_reference:
+  class: suggested
+  B0_warpage_rel: 0.01

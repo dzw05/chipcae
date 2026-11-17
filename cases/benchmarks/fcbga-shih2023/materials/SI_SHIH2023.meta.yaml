@@ -1,0 +1,28 @@
+id: SI_SHIH2023
+schema_version: "1"
+unit_system: SI
+model: thermo_elastic
+# 芯片（Die）。仅供 P-SHIH2023（validation）使用；X/PW verification 仍用 SI（Chen 2022 Table 7，ν = 0.28）。
+material_frame: global
+elastic:
+  symmetry: isotropic
+  table:
+    temperatures: [298.15]
+    columns: {E: [1.31e+11], nu: [0.30]}  # Shih 2023 Table 3 (p.8)「Die」：E = 131 GPa，ν = 0.30；Table 3 未给温度相关性
+    interpolation: linear
+    extrapolation: clamp
+thermal_expansion:
+  cte_type: tangent
+  stress_free_temperature: 423.15  # 150 °C：Shih 2023 p.9「stress-free temperature at 150 °C to room temperature」
+  symmetry: isotropic
+  table:
+    temperatures: [298.15]
+    columns: {alpha: [2.8e-6]}  # Shih 2023 Table 3 (p.8)：CTE = 2.8 ppm/°C
+    interpolation: linear
+    extrapolation: clamp
+provenance:
+  source_type: literature
+  reference: "Shih M.-K. et al., Materials 16(12):4291 (2023), Table 3 (p.8)「Die」"
+  confidence: medium
+  notes: "cited。硅本为立方各向异性，此处按原文各向同性。密度未在 Shih 2023 Table 3 给出，source: tbd（本卡不写密度）。"
+vv_usage: {series: [P-SHIH2023], p_series_allowed: true}  # V&V 扩展字段

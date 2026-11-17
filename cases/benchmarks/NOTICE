@@ -1,0 +1,18 @@
+chipcae 公开翘曲基准算例库（cases/benchmarks/）
+Copyright (c) 2026 Zhiwei Duan.
+
+本目录下的数据（算例定义 YAML、材料卡、CSV、README 与说明文档）按
+Creative Commons Attribution 4.0 International（CC BY 4.0）发布，全文见同目录 LICENSE，
+https://creativecommons.org/licenses/by/4.0/ 。
+
+建议署名：chipcae V&V benchmark library, (c) 2026 Zhiwei Duan, CC BY 4.0, https://github.com/dzw05/chipcae
+
+第三方文献：
+- 材料参数与几何尺寸摘自或推导自已发表文献（Shih 2023；Kim/Park 2016；以及卡内 cite 字段列出的来源），
+  出处逐项标在卡面 cite 字段和 benchmark.yaml 的 parameters 清单中。使用这些数值时请同时引用原文献。
+- 本目录不包含第三方论文全文、图片或图表扫描件；refs/ 只列文献信息。
+  日后加入的文献曲线数字化数据会单独标注来源，CC BY 4.0 只覆盖 chipcae 自己的贡献部分。
+- 本目录不包含 Ansys 或其他商业软件的计算结果；与商业软件的对比只引用文献中已发表的结果。
+
+脚本 tools/vv/ 与测试 tests/vv/ 按 Apache License 2.0 发布，见各自目录的 LICENSE。
+仓库其余部分仍为 Proprietary, all rights reserved（见仓库根目录 LICENSE）。
