@@ -1,9 +1,11 @@
 #pragma once
 #include "chipcae/geometry/ecad/ipc2581.hpp"
+#include "odb_job.hpp"
 
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <istream>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -42,4 +44,37 @@ public:
                        const std::function<bool(std::string_view)>& cb,
                        std::string& err) const; // cb 返回 false 时停止
 };
+
+bool decode_gzip(std::string_view, std::string&, std::string&);
+bool decode_lzw(std::string_view, std::string&, std::string&);
+std::string lower(std::string);
+using ByteSink = std::function<bool(std::string_view)>;
+class GzipCursor {
+    struct State;
+    std::string error_;
+    std::uint64_t consumed_ = 0;
+    std::size_t output_limit_ = 32768;
+    std::unique_ptr<State> state_;
+
+public:
+    explicit GzipCursor(std::istream&);
+    ~GzipCursor();
+    bool next(std::string_view&, std::string&, std::size_t max_output = 32768);
+    std::uint64_t consumed_bytes() const { return consumed_; }
+};
+bool stream_gzip(std::istream&, const ByteSink&, std::string&);
+bool index_tar(const std::filesystem::path&,
+               const ArchiveLimits&,
+               std::vector<ArchiveEntry>&,
+               std::vector<std::uint64_t>&,
+               std::vector<UnsupportedElement>&,
+               std::string&);
+bool canonical_path(std::string&, std::string&);
+
+ImportResult read_odbpp_job(const std::filesystem::path&, OdbJob&);
+bool parse_matrix(const ArchiveReader&, OdbJob&, std::string&);
+bool parse_misc(const ArchiveReader&, OdbJob&, std::string&);
+bool parse_features(const ArchiveReader&, OdbJob&, ImportResult&);
+std::string layer_directory(const ArchiveReader&, const OdbJob&, const std::string&);
+std::string trim(std::string_view);
 } // namespace chipcae::geometry::ecad::detail
