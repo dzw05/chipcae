@@ -8,9 +8,6 @@
 #include <vector>
 namespace chipcae::geometry::ecad::odbpp_detail {
 using detail::OdbJob;
-// The repository result already owns EcadModel and its import diagnostic.
-template <class T>
-using Expected = ImportResult;
 using ThicknessOverrides = std::map<std::string, double>;
 struct ThicknessRecord {
     std::string layer;
@@ -28,5 +25,5 @@ struct MapOptions {
 std::string fold_ascii(std::string);
 double unit_m(const OdbJob&);
 void map_stackup(const OdbJob&, const MapOptions&, ImportResult&);
-Expected<EcadModel> map_odb(const OdbJob&, const MapOptions& = {});
+ImportResult map_odb(const OdbJob&, const MapOptions& = {});
 } // namespace chipcae::geometry::ecad::odbpp_detail

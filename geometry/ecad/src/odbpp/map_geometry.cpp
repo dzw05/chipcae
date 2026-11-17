@@ -282,55 +282,29 @@ struct Mapper {
     }
     void fractions() {
         for (std::size_t i = 0; i < model.layers.size(); ++i) {
+            ViaFraction cell;
+            cell.layer = i;
+            bool found = false;
             for (const auto& v : model.vias) {
                 if (std::find(v.dielectric_layers.begin(), v.dielectric_layers.end(), i) ==
                     v.dielectric_layers.end())
                     continue;
-                ViaFraction cell;
-                cell.layer = i;
                 for (std::size_t axis = 0; axis < 2; ++axis) {
-                    cell.lower[axis] = v.position[axis] - v.outer_radius_dbu;
-                    cell.upper[axis] = v.position[axis] + v.outer_radius_dbu;
+                    const double lo = v.position[axis] - v.outer_radius_dbu,
+                                 hi = v.position[axis] + v.outer_radius_dbu;
+                    cell.lower[axis] = found ? std::min(cell.lower[axis], lo) : lo;
+                    cell.upper[axis] = found ? std::max(cell.upper[axis], hi) : hi;
                 }
-                // Subtract previously emitted rectangles: every cell stays inside
-                // one via's bounds, and overlapping via bounds are counted only once.
-                std::vector<ViaFraction> pieces{cell};
-                for (const auto& prior : model.via_fractions) {
-                    if (prior.layer != i)
-                        continue;
-                    std::vector<ViaFraction> remaining;
-                    for (auto piece : pieces) {
-                        const double x0 = std::max(piece.lower[0], prior.lower[0]);
-                        const double x1 = std::min(piece.upper[0], prior.upper[0]);
-                        const double y0 = std::max(piece.lower[1], prior.lower[1]);
-                        const double y1 = std::min(piece.upper[1], prior.upper[1]);
-                        if (x0 >= x1 || y0 >= y1) {
-                            remaining.push_back(piece);
-                            continue;
-                        }
-                        auto append = [&](double lo_x, double lo_y, double hi_x, double hi_y) {
-                            if (lo_x < hi_x && lo_y < hi_y) {
-                                auto part = piece;
-                                part.lower = {lo_x, lo_y};
-                                part.upper = {hi_x, hi_y};
-                                remaining.push_back(part);
-                            }
-                        };
-                        append(piece.lower[0], piece.lower[1], x0, piece.upper[1]);
-                        append(x1, piece.lower[1], piece.upper[0], piece.upper[1]);
-                        append(x0, piece.lower[1], x1, y0);
-                        append(x0, y1, x1, piece.upper[1]);
-                    }
-                    pieces = std::move(remaining);
-                }
-                model.via_fractions.insert(model.via_fractions.end(), pieces.begin(), pieces.end());
+                found = true;
             }
+            if (found)
+                model.via_fractions.push_back(cell);
         }
         rasterize_vias(model, model.via_fractions);
     }
 };
 } // namespace
-Expected<EcadModel> map_odb(const OdbJob& job, const MapOptions& options) {
+ImportResult map_odb(const OdbJob& job, const MapOptions& options) {
     ImportResult result;
     result.model.id = job.step;
     result.model.dbu_m = 1e-6;
