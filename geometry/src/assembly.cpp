@@ -512,13 +512,6 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
     for (size_t i = 0; i < base.layers.size(); ++i)
         if (split_counts[i] == 1)
             used_names.insert(base.layers[i].name);
-    auto unique_name = [&](std::string name) {
-        std::string original = name;
-        size_t suffix = 0;
-        while (!used_names.insert(name).second)
-            name = original + "#" + std::to_string(suffix++);
-        return name;
-    };
     std::map<std::string, std::vector<std::string>> layer_pieces, region_pieces;
     std::map<std::string, size_t> layer_order;
     for (size_t o = 0; o < base.layers.size(); ++o) {
@@ -585,7 +578,9 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
                 r.name += suffix;
             }
         } else {
-            l.name = unique_name("assembly#" + std::to_string(i - 1));
+            l.name = "assembly#" + std::to_string(i - 1);
+            if (base_names.count(l.name) || !used_names.insert(l.name).second)
+                return invalid("split name collides with " + l.name);
             l.kind = "Explicit";
         }
         l.thickness = hi - lo;
@@ -639,7 +634,7 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
                         region.name += "#" + std::to_string(index);
                     Real a = area(polygon(region.footprint));
                     Real inside = intersection(region.footprint, base.outline);
-                    if (a - inside > std::numeric_limits<Real>::epsilon() * a * 64)
+                    if (a - inside > 0)
                         result.defects.push_back(diagnostic(Tier::C,
                                                             DefectReason::PART_OUTSIDE_OUTLINE,
                                                             region.name + "/outside",

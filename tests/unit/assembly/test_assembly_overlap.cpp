@@ -22,6 +22,12 @@ int main() {
               "same material no overlap defect");
         a.slabs[0].sections = {rect(.019, .019)};
         check(defect(merge(base(), {a}), DefectReason::PART_OUTSIDE_OUTLINE), "outside outline");
+        auto slight = part("slight");
+        slight.slabs[0].sections = {rect(0, 0, 1, 1)};
+        auto almost_inside = base();
+        almost_inside.outline.box = {0, 0, std::nextafter(1.0, 0.0), 1};
+        check(defect(merge(almost_inside, {slight}), DefectReason::PART_OUTSIDE_OUTLINE),
+              "positive outside area below the former epsilon threshold is reported");
         // A bounding-box intersection alone must not count as polygon overlap.
         auto concave = part("concave");
         concave.slabs[0].sections = {{Ring{{{.002, .002},
