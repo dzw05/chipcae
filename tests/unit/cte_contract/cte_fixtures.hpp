@@ -6,7 +6,8 @@
 
 namespace chipcae::material::test {
 // Reuse the illustrative tables and 325 K expectations from material/tests/core_math.cpp.
-// Keep these literals identical to that read-only source; no conversion implementation is copied.
+// Manually keep these literals synchronized with that read-only source; no implementation is
+// copied.
 inline const CteTable sec{{250, 300, 350}, {1e-5, 2e-5, 3e-5}, 250};
 inline const CteTable tan{{250, 300, 350}, {1e-5, 3e-5, 5e-5}, 250};
 inline constexpr Real secant_to_tangent_temperature = 325.;
