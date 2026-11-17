@@ -67,6 +67,26 @@ def main(root, fixture):
         (root / (name + '.tgz')).write_bytes(gzip.compress(tar_bytes([('matrix/matrix', b'UNITS=MM\n'), (legal, b'same bytes')], fmt)))
     for fmt, name in [(tarfile.GNU_FORMAT, 'gnu-long'), (tarfile.PAX_FORMAT, 'pax-long')]:
         (root / (name + '.tgz')).write_bytes(gzip.compress(tar_bytes(format_files, fmt)))
+    shutil.copyfile(root / 'job.zip', root / 'JOB.ZIP')
+    with zipfile.ZipFile(root / 'unsupported.zip', 'w', compression=zipfile.ZIP_BZIP2) as archive:
+        archive.writestr('matrix/matrix', b'unsupported method')
+    with zipfile.ZipFile(root / 'zip64.zip', 'w') as archive:
+        with archive.open('matrix/matrix', 'w', force_zip64=True) as entry:
+            entry.write(b'local zip64 header')
+    # Exercise pax size overriding the following ordinary header's size.
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode='w', format=tarfile.PAX_FORMAT) as archive:
+        info = tarfile.TarInfo('original')
+        info.size = 4
+        info.pax_headers = {'path': 'matrix/matrix', 'size': '4', 'ignored': 'value'}
+        archive.addfile(info, io.BytesIO(b'pax!'))
+    data = bytearray(out.getvalue())
+    # The ordinary header follows the pax header and its single data block.
+    data[1024 + 124:1024 + 136] = b'00000000001\0'
+    data[1024 + 148:1024 + 156] = b'        '
+    checksum = sum(data[1024:1536])
+    data[1024 + 148:1024 + 156] = ('%06o\0 ' % checksum).encode()
+    (root / 'pax-size.tgz').write_bytes(gzip.compress(data))
     cut = len(tar) // 2
     multi = gzip_member(tar[:cut]) + gzip_member(tar[cut:])
     (root / 'multi.tgz').write_bytes(multi)
@@ -74,6 +94,11 @@ def main(root, fixture):
     bad[-8] ^= 1
     (root / 'crc.tgz').write_bytes(bad)
     (root / 'job.tar.Z').write_bytes(lzw_literals(tar))
+    bad_header = bytearray(multi)
+    # Header ends after the optional strings and two header-CRC bytes.
+    header_end = multi.index(b'acceptance\0') + len(b'acceptance\0')
+    bad_header[header_end] ^= 1
+    (root / 'header-crc.tgz').write_bytes(bad_header)
     (root / 'duplicate.tgz').write_bytes(gzip.compress(tar_bytes([('matrix/matrix', b'a'), ('./matrix/matrix', b'b')])))
     for name, path in [('absolute', '/matrix/matrix'), ('drive', 'C:/matrix/matrix'), ('traversal', '../matrix/matrix')]:
         (root / (name + '.tgz')).write_bytes(gzip.compress(tar_bytes([(path, b'x')])))

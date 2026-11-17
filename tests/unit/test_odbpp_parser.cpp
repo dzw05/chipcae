@@ -373,7 +373,7 @@ int main() {
     });
     test("odbpp_tgz_zip_dir_equal", [&] {
         auto expected = Snapshot().take(job(temp / "job"));
-        for (const auto* name : {"job.tgz", "job.zip", "stored.zip", "JOB.TAR.GZ"})
+        for (const auto* name : {"job.tgz", "job.zip", "stored.zip", "JOB.TAR.GZ", "JOB.ZIP"})
             require(Snapshot().take(job(temp / name)) == expected,
                     std::string("all frozen fields: ") + name);
     });
@@ -543,6 +543,74 @@ int main() {
                 rejected(p, "profile contour not closed");
         });
     }
+    test("odbpp_pax_size", [&] {
+        const auto files = archive(temp / "pax-size.tgz");
+        require(files.size() == 1 && files.at("matrix/matrix") == "pax!",
+                "pax path and size override");
+    });
+    test("odbpp_gzip_header_crc", [&] { rejected(temp / "header-crc.tgz", "CRC"); });
+    test("odbpp_zip_unsupported", [&] {
+        for (const auto* name : {"unsupported.zip", "zip64.zip"}) {
+            ArchiveReader reader(temp / name);
+            require(reader.open_error().empty(), reader.open_error());
+            require(reported(reader.unsupported(), "matrix/matrix"),
+                    std::string(name) + " diagnostic");
+        }
+    });
+    test("odbpp_step_selection", [&] {
+        auto p = temp / "step-selection";
+        minimal(p);
+        fs::rename(p / "steps/pcb", p / "steps/first");
+        auto r = read_odbpp(p);
+        require(bool(r) && reported(r.model.report.unsupported, "selected step first"),
+                "fallback step report");
+        require(job(p).step == "first", "first discovered step");
+        minimal(p);
+        require(job(p).step == "pcb", "prefer pcb over other steps");
+    });
+    test("odbpp_units_symbols_records", [&] {
+        auto p = temp / "record-diagnostics";
+        minimal(p);
+        write(p / "steps/pcb/layers/top/features",
+              "UNITS=INCH\n$0 vendor_shape\nT text\nB barcode\nP 0 0 7 P 0 0\n");
+        const auto r = read_odbpp(p);
+        require(bool(r), r.error);
+        const auto& u = r.model.report.unsupported;
+        require(reported(u, "features: unit mismatch", 1) &&
+                    reported(u, "unknown symbol vendor_shape", 2) && reported(u, "record T", 3) &&
+                    reported(u, "record B", 4) && reported(u, "unknown symbol 7", 5),
+                "diagnostic file and exact line for each unsupported element");
+    });
+    test("odbpp_directory_symlink", [&] {
+        auto p = temp / "directory-links";
+        minimal(p);
+        std::error_code ec;
+        fs::create_directory_symlink(temp / "job", p / "external", ec);
+        if (ec)
+            return; // Platforms without symlink privileges still exercise tar links.
+        ArchiveReader reader(p);
+        require(reader.open_error().empty(), reader.open_error());
+        require(reported(reader.unsupported(), "external"), "directory symlink reported");
+        require(std::none_of(reader.entries().begin(),
+                             reader.entries().end(),
+                             [](const auto& e) { return e.path.starts_with("external"); }),
+                "directory traversal does not follow symlink");
+    });
+    test("odbpp_symbol_order_and_nested_Z", [&] {
+        auto p = temp / "symbol-order";
+        minimal(p);
+        write(p / "steps/pcb/layers/top/features", "$3 r100\n$1 oval100x200\n");
+        write(p / "steps/pcb/layers/top/tools.Z", "unsupported compressed file");
+        auto j = job(p);
+        const auto& symbols = j.features.at("top").symbols;
+        require(symbols.size() == 2 && symbols[0].name == "r100" &&
+                    symbols[1].name == "oval100x200",
+                "symbol definition appearance order");
+        const auto r = read_odbpp(p);
+        require(reported(r.model.report.unsupported, "tools.Z"), "nested .Z fallback source path");
+        require(reported(r.model.report.unsupported, "nonsequential symbol index 3", 1),
+                "unrepresentable symbol index reported");
+    });
     test("odbpp_streaming_memory", [&] {
 #ifdef __linux__
         const auto p = temp / "stream";
@@ -564,6 +632,9 @@ int main() {
         const auto elapsed = std::chrono::steady_clock::now() - start;
         require(getrusage(RUSAGE_SELF, &after) == 0, "getrusage after");
         require(bool(result), result.error);
+        std::cout << "MEASURE odbpp_streaming_memory RSS_delta_KiB="
+                  << after.ru_maxrss - before.ru_maxrss
+                  << " elapsed_s=" << std::chrono::duration<double>(elapsed).count() << '\n';
         require(after.ru_maxrss - before.ru_maxrss < 64 * 1024, "RSS delta must be <64 MiB");
         require(elapsed < std::chrono::seconds(60), "streaming wall clock must be <60s");
 #else
