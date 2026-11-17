@@ -1,4 +1,5 @@
 #include "../../geometry/src/diagnostic_id.hpp"
+#include "../../geometry/src/step_inspection.hpp"
 #include "chipcae/geometry/geometry.hpp"
 
 #include <BRepAlgoAPI_Cut.hxx>
@@ -12,6 +13,7 @@
 #include <Interface_Static.hxx>
 #include <STEPCAFControl_Writer.hxx>
 #include <STEPControl_Writer.hxx>
+#include <Standard_Failure.hxx>
 #include <StepData_StepModel.hxx>
 #include <TDataStd_Name.hxx>
 #include <TDocStd_Document.hxx>
@@ -52,6 +54,27 @@ void write(const TopoDS_Shape& shape, const std::filesystem::path& path, const c
 }
 StepImportOptions options() {
     return {compute_tolerances(ImportScales{1.0, 0.001, 0.001, 0}, ThresholdFile{}).value()};
+}
+void incomplete_inspection(const std::filesystem::path& dir) {
+    const auto path = dir / "incomplete.step";
+    write(BRepPrimAPI_MakeBox(20, 30, 40).Shape(), path);
+    for (bool occt : {false, true}) {
+        const auto result = detail::import_step_with_inspection(path, options(), [occt] {
+            if (occt)
+                throw Standard_Failure("injected inspection failure");
+            throw std::runtime_error("injected inspection failure");
+        });
+        require(result.source != nullptr, "incomplete inspection lost source");
+        require(std::any_of(result.defects.begin(),
+                            result.defects.end(),
+                            [](const auto& d) {
+                                return d.kind == StepDefectKind::InvalidGeometry &&
+                                       d.tier == Tier::C &&
+                                       d.status ==
+                                           "InspectionIncomplete: injected inspection failure";
+                            }),
+                "interrupted inspection must report C-tier InspectionIncomplete");
+    }
 }
 void units(const std::filesystem::path& dir) {
     const auto box = BRepPrimAPI_MakeBox(gp_Pnt(3, 5, 7), 20, 30, 40).Shape();
@@ -354,9 +377,10 @@ int main(int argc, char** argv) {
                 "SHA-256 multiblock vector");
         auto dir = std::filesystem::current_path() / (std::string("step-fixture-") + argv[1]);
         std::filesystem::create_directories(dir);
-        if (std::string(argv[1]) == "units")
+        if (std::string(argv[1]) == "units") {
             units(dir);
-        else if (std::string(argv[1]) == "gap")
+            incomplete_inspection(dir);
+        } else if (std::string(argv[1]) == "gap")
             gap(dir);
         else if (std::string(argv[1]) == "regressions")
             regressions(dir);

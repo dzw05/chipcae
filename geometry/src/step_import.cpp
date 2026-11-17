@@ -1,6 +1,7 @@
 #include "chipcae/geometry/step_import.hpp"
 
 #include "diagnostic_id.hpp"
+#include "step_inspection.hpp"
 #include "step_options.hpp"
 
 #include <BOPAlgo_ArgumentAnalyzer.hxx>
@@ -390,6 +391,8 @@ struct Inspector {
             d.tier = Tier::C;
             break;
         }
+        if (d.status.starts_with("InspectionIncomplete"))
+            d.tier = Tier::C;
         if (kind == StepDefectKind::DuplicateFace)
             duplicate_reported.insert(face);
         d.defect_id = detail::diagnostic_id(d, options.tolerances.eps_weld);
@@ -506,7 +509,7 @@ struct Inspector {
                     extent(body),
                     center(body),
                     0,
-                    "ArgumentAnalyzer failure");
+                    "InspectionIncomplete: ArgumentAnalyzer failure");
             for (const auto& failure : args.GetCheckResult()) {
                 const auto& faulty = failure.GetFaultyShapes1();
                 if (failure.GetCheckStatus() == BOPAlgo_TooSmallEdge) {
@@ -664,8 +667,10 @@ struct Inspector {
 bool step_import_available() noexcept {
     return true;
 }
-StepImportResult import_step(const std::filesystem::path& path,
-                             const StepImportOptions& options) try {
+StepImportResult
+detail::import_step_with_inspection(const std::filesystem::path& path,
+                                    const StepImportOptions& options,
+                                    const std::function<void()>& before_inspection) try {
     const auto& t = options.tolerances;
     detail::validate_step_options(path, options);
     // OCCT's exchange configuration uses process-global state.
@@ -786,6 +791,8 @@ StepImportResult import_step(const std::filesystem::path& path,
                           tolerance_scan.Tolerance(shape, 1),
                           center(shape));
         }
+        if (before_inspection)
+            before_inspection();
         inspector.inspect();
     } catch (const Standard_Failure& failure) {
         inspector.add(StepDefectKind::InvalidGeometry,
@@ -793,19 +800,22 @@ StepImportResult import_step(const std::filesystem::path& path,
                       0,
                       center(source->shape),
                       0,
-                      failure.GetMessageString());
+                      std::string("InspectionIncomplete: ") + failure.GetMessageString());
     } catch (const std::runtime_error& failure) {
         inspector.add(StepDefectKind::InvalidGeometry,
                       source->shape,
                       0,
                       center(source->shape),
                       0,
-                      failure.what());
+                      std::string("InspectionIncomplete: ") + failure.what());
     }
     result.source = std::move(source);
     return result;
 } catch (const Standard_Failure& failure) {
     throw std::runtime_error(std::string("OCCT STEP inspection failed: ") +
                              failure.GetMessageString());
+}
+StepImportResult import_step(const std::filesystem::path& path, const StepImportOptions& options) {
+    return detail::import_step_with_inspection(path, options, {});
 }
 } // namespace chipcae::geometry
