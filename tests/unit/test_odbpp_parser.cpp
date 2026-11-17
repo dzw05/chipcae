@@ -18,6 +18,7 @@
 #include <tuple>
 #ifdef __linux__
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -205,6 +206,7 @@ void measure_streaming_memory(const fs::path& p) {
 #endif
 } // namespace
 int main(int argc, char** argv) {
+    std::cout << std::unitbuf;
 #ifdef __linux__
     if (argc == 3 && std::string_view(argv[1]) == "--streaming-memory") {
         try {
@@ -1175,6 +1177,67 @@ int main(int argc, char** argv) {
                 rejected(p, "profile contour not closed");
         });
     }
+    test("odbpp_pax_nonregular_size", [&] {
+        for (const auto* kind : {"directory", "symlink", "device"}) {
+            ArchiveReader reader(temp / (std::string("pax-") + kind + ".tgz"));
+            require(reader.open_error().empty(), reader.open_error());
+            std::string out, error;
+            require(reader.read_bytes("following", out, error) && out == "ok",
+                    "PAX size does not shift following entry: " + error);
+            if (std::string_view(kind) == "directory")
+                require(reader.entries().front().path == "annotated" &&
+                            reader.entries().front().is_dir && reader.entries().front().size == 0,
+                        "PAX path applies to directory, size does not");
+            else
+                require(reported(reader.unsupported(), "annotated: tar"),
+                        "PAX path applies to unsupported member");
+            require(!reported(reader.unsupported(), "following"), "PAX metadata cleared");
+        }
+    });
+    test("odbpp_zip64_per_entry", [&] {
+        ArchiveReader reader(temp / "mixed-zip64.zip");
+        require(reader.open_error().empty(), reader.open_error());
+        require(reader.unsupported().size() == 2 &&
+                    reported(reader.unsupported(), "central-zip64: zip64") &&
+                    reported(reader.unsupported(), "local-zip64: zip64"),
+                "ZIP64 diagnostics belong only to affected entries");
+        std::string out, error;
+        require(reader.read_bytes("matrix/matrix", out, error) &&
+                    out == bytes(fixture / "matrix/matrix"),
+                "ordinary member readable: " + error);
+        require(bool(parse_job(temp / "mixed-zip64.zip")), "mixed ZIP64 job imports");
+        require(archive(temp / "zip64-container.zip") == archive(temp / "stored.zip"),
+                "ZIP64 container retains all ordinary entries");
+    });
+    test("odbpp_tar_exact_ratio_boundary", [&] {
+        ArchiveLimits limits;
+        limits.ratio = 1;
+        ArchiveReader reader(temp / "ratio-exact.tgz", limits);
+        require(reader.open_error().empty(), reader.open_error());
+        require(reader.entries().front().compressed_size == 1024,
+                "stored deflate payload has an exact 1024-byte compressed span");
+        std::string out, error;
+        require(reader.read_bytes("payload", out, error) && out.size() == 1024,
+                "stored payload accepted at exact 1:1 ratio: " + error);
+    });
+    test("odbpp_gzip_isize_wrap", [&] {
+        std::ifstream input(temp / "isize-wrap.gz", std::ios::binary);
+        GzipCursor cursor(input, UINT64_MAX);
+        std::uint64_t size = 0;
+        std::string_view block;
+        std::string error;
+        while (cursor.next(block, error)) {
+            const bool final = size + block.size() == (std::uint64_t{1} << 32) + 1;
+            require(std::all_of(block.begin(),
+                                block.end() - (final ? 1 : 0),
+                                [](char c) { return c == 0; }) &&
+                        (!final || block.back() == 'x'),
+                    "wrapped member content");
+            size += block.size();
+        }
+        require(error.empty() && size == (std::uint64_t{1} << 32) + 1,
+                "ISIZE checked modulo 2^32: " + error);
+    });
     test("odbpp_pax_size", [&] {
         const auto files = archive(temp / "pax-size.tgz");
         require(files.size() == 1 && files.at("matrix/matrix") == "pax!",
@@ -1231,9 +1294,8 @@ int main(int argc, char** argv) {
             if (ec)
                 return; // Platforms without symlink privileges still exercise tar links.
             ArchiveReader reader(p);
-            require(reader.open_error().empty(), reader.open_error());
-            require(reported(reader.unsupported(), "link: directory input symlink unsupported"),
-                    "directory symlink reported");
+            require(reader.open_error() == "IMPORT_REJECTED: directory input symlink link",
+                    "all directory symlinks rejected: " + reader.open_error());
             require(std::none_of(reader.entries().begin(),
                                  reader.entries().end(),
                                  [](const auto& e) {
@@ -1241,8 +1303,10 @@ int main(int argc, char** argv) {
                                  }),
                     "symlink never traversed or indexed");
             std::string output, error;
-            require(reader.read_bytes("matrix/matrix", output, error), error);
-            require(bool(parse_job(p)), "unrelated symlink permits import");
+            require(!reader.read_bytes("matrix/matrix", output, error) &&
+                        error == reader.open_error(),
+                    "symlink prevents reads");
+            rejected(p, "directory input symlink link");
         }
     });
     test("odbpp_symbol_order_and_nested_Z", [&] {
@@ -1298,7 +1362,7 @@ int main(int argc, char** argv) {
         std::error_code ec;
         fs::create_symlink(temp / "job.tar.Z", p / "link", ec);
         if (!ec)
-            rejected(p, "empty input");
+            rejected(p, "directory input symlink link");
     });
     test("odbpp_review_runtime_limits", [&] {
         for (bool lines : {false, true}) {
@@ -1468,19 +1532,18 @@ int main(int argc, char** argv) {
         }
     });
     test("odbpp_directory_unsupported_count", [&] {
+#ifdef __linux__
         auto p = temp / "unsupported-count-dir";
         fs::create_directories(p);
-        for (int i = 0; i < 3; ++i) {
-            std::error_code ec;
-            fs::create_symlink(p / "missing", p / ("link" + std::to_string(i)), ec);
-            if (ec)
-                return;
-        }
+        for (int i = 0; i < 3; ++i)
+            require(mkfifo((p / ("fifo" + std::to_string(i))).c_str(), 0600) == 0,
+                    "create unsupported FIFO");
         ArchiveLimits limits;
         limits.entry_count = 2;
         ArchiveReader reader(p, limits);
         require(reader.open_error() == "IMPORT_REJECTED: entry count limit",
                 "unsupported directory nodes count like tar and ZIP members");
+#endif
     });
     test("odbpp_zip_payload_accounting", [&] {
         ArchiveLimits limits;

@@ -181,6 +181,38 @@ def main(root, fixture):
     with zipfile.ZipFile(root / 'zip64.zip', 'w') as archive:
         with archive.open('matrix/matrix', 'w', force_zip64=True) as entry:
             entry.write(b'local zip64 header')
+    # One ZIP64 entry must not hide ordinary files in the same archive.
+    with zipfile.ZipFile(root / 'mixed-zip64.zip', 'w') as archive:
+        for name, data in files:
+            archive.writestr(name, data)
+        info = zipfile.ZipInfo('central-zip64')
+        info.extra = struct.pack('<HHQ', 1, 8, 1)
+        archive.writestr(info, b'x')
+        with archive.open('local-zip64', 'w', force_zip64=True) as entry:
+            entry.write(b'x')
+    data = bytearray((root / 'mixed-zip64.zip').read_bytes())
+    with zipfile.ZipFile(root / 'mixed-zip64.zip') as archive:
+        offset = archive.getinfo('central-zip64').header_offset
+    name_size = struct.unpack_from('<H', data, offset + 26)[0]
+    # Make its local extra an unrelated field, leaving ZIP64 only in central.
+    struct.pack_into('<H', data, offset + 30 + name_size, 0xcafe)
+    pos = data.find(b'PK\x01\x02')
+    while data[pos:pos + 4] == b'PK\x01\x02':
+        name_size, extra_size, comment_size = struct.unpack_from('<HHH', data, pos + 28)
+        if data[pos + 46:pos + 46 + name_size] == b'central-zip64':
+            struct.pack_into('<I', data, pos + 24, 0xffffffff)
+        pos += 46 + name_size + extra_size + comment_size
+    (root / 'mixed-zip64.zip').write_bytes(data)
+    # A ZIP64 end record alone does not require ZIP64 for any member.
+    data = bytearray((root / 'stored.zip').read_bytes())
+    end = len(data) - 22
+    count = struct.unpack_from('<H', data, end + 10)[0]
+    central_size, central_offset = struct.unpack_from('<II', data, end + 12)
+    end64 = struct.pack('<IQHHIIQQQQ', 0x06064b50, 44, 45, 45, 0, 0,
+                        count, count, central_size, central_offset)
+    locator = struct.pack('<IIQI', 0x07064b50, 0, end, 1)
+    data[end:end] = end64 + locator
+    (root / 'zip64-container.zip').write_bytes(data)
     encrypted = bytearray((root / 'stored.zip').read_bytes())
     # Set the encryption flag in every local and central header; payload is never read.
     for signature, flag_offset in [(b'PK\x03\x04', 6), (b'PK\x01\x02', 8)]:
@@ -212,6 +244,29 @@ def main(root, fixture):
     checksum = sum(data[1024:1536])
     data[1024 + 148:1024 + 156] = ('%06o\0 ' % checksum).encode()
     (root / 'pax-size.tgz').write_bytes(gzip.compress(data))
+    # PAX metadata is consumed even by a nonregular following entry.
+    for kind, typeflag in [('directory', tarfile.DIRTYPE), ('symlink', tarfile.SYMTYPE),
+                           ('device', tarfile.CHRTYPE)]:
+        out = io.BytesIO()
+        with tarfile.open(fileobj=out, mode='w', format=tarfile.PAX_FORMAT) as archive:
+            info = tarfile.TarInfo('original')
+            info.type = typeflag
+            info.linkname = 'outside'
+            info.pax_headers = {'path': 'annotated', 'size': '1234'}
+            archive.addfile(info)
+            following = tarfile.TarInfo('following')
+            following.size = 2
+            archive.addfile(following, io.BytesIO(b'ok'))
+        (root / ('pax-' + kind + '.tgz')).write_bytes(gzip.compress(out.getvalue()))
+    # Stored deflate has exactly one input byte per payload byte.
+    (root / 'ratio-exact.tgz').write_bytes(gzip.compress(
+        tar_bytes([('payload', bytes(range(256)) * 4)]), compresslevel=0))
+    # Validate the modulo-2^32 trailer without allocating the decoded member.
+    with gzip.open(root / 'isize-wrap.gz', 'wb', compresslevel=1) as archive:
+        chunk = bytes(1024 * 1024)
+        for _ in range(4096):
+            archive.write(chunk)
+        archive.write(b'x')
     # Stored deflate crosses the 32 KiB input boundary, including exact EOF alignment.
     for size in [0, 32745, 32746, 65513]:
         (root / ('boundary-%d.gz' % size)).write_bytes(gzip.compress(b'x' * size, compresslevel=0))

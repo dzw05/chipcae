@@ -99,13 +99,13 @@ bool index_tar(const std::filesystem::path& path,
                 position += n;
                 remain -= n;
                 if (!remain) {
-                    // The final output request uses one-byte compressed input spans.
-                    // Exclude that last byte: it may already describe the next block
-                    // or symbol. This conservative budget cannot credit later framing.
+                    // Charge the compressed input span consumed between the
+                    // indexed payload boundaries. tinfl returns unused whole
+                    // lookahead bytes to its input, so subtracting another byte
+                    // undercounts stored deflate payloads at exact ratio limits.
                     const auto consumed = cursor.consumed_bytes() - entry_compressed_start;
-                    const auto compressed = consumed ? consumed - 1 : 0;
                     if (regular_payload)
-                        entries.back().compressed_size = std::max<std::uint64_t>(1, compressed);
+                        entries.back().compressed_size = std::max<std::uint64_t>(1, consumed);
                     if (!metadata())
                         return false;
                 }
@@ -157,7 +157,7 @@ bool index_tar(const std::filesystem::path& path,
                     name = long_name;
                 if (!pax_path.empty())
                     name = pax_path;
-                if (has_pax_size)
+                if (has_pax_size && (type == '0' || type == 0))
                     size = pax_size;
                 long_name.clear();
                 pax_path.clear();

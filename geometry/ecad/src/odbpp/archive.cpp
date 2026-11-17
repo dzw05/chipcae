@@ -109,8 +109,8 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                     fail("cannot inspect directory entry " + rel + ": " + ec.message());
                     return;
                 } else if (std::filesystem::is_symlink(status)) {
-                    report("directory input symlink unsupported");
-                    it.disable_recursion_pending();
+                    fail("directory input symlink " + rel);
+                    return;
                 } else {
                     const bool dir = std::filesystem::is_directory(status);
                     if (!dir && !std::filesystem::is_regular_file(status)) {
@@ -163,16 +163,12 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                     fail("entry count limit");
                     return;
                 }
-                const bool zip64 = mz_zip_is_zip64(&s.zip) != 0;
                 std::ifstream local(input, std::ios::binary);
                 if (!local) {
                     fail("cannot open zip local headers");
                     return;
                 }
                 const auto archive_size = std::filesystem::file_size(input);
-                if (zip64)
-                    s.unsupported.push_back(
-                        {"IMPORT_UNSUPPORTED_ELEMENT", input.string() + ": zip64", 0});
                 std::set<std::string> seen;
                 for (mz_uint i = 0; i < mz_zip_reader_get_num_files(&s.zip); ++i) {
                     if (!count_entry())
@@ -215,34 +211,75 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                     auto u16 = [&](std::size_t offset) {
                         return static_cast<unsigned>(header[offset]) + 256U * header[offset + 1];
                     };
-                    auto name_size = u16(26), extra_size = u16(28);
-                    if (name_size + extra_size > archive_size - st.m_local_header_ofs - 30) {
-                        fail("truncated zip extra field");
+                    // Inspect both headers per entry; the archive-wide ZIP64 marker
+                    // does not make ordinary members unsupported.
+                    bool entry_zip64 = false;
+                    auto extra_fields =
+                        [&](std::uint64_t offset, unsigned name_size, unsigned extra_size) {
+                            if (offset > archive_size ||
+                                name_size + extra_size > archive_size - offset) {
+                                fail("truncated zip extra field");
+                                return false;
+                            }
+                            local.clear();
+                            local.seekg(static_cast<std::streamoff>(offset + name_size));
+                            std::string extra(extra_size, '\0');
+                            local.read(extra.data(), extra_size);
+                            if (!local) {
+                                fail("cannot read zip extra field");
+                                return false;
+                            }
+                            for (std::size_t pos = 0; pos < extra.size();) {
+                                if (extra.size() - pos < 4) {
+                                    fail("invalid zip extra field");
+                                    return false;
+                                }
+                                auto word = [&](std::size_t off) {
+                                    return static_cast<unsigned char>(extra[off]) +
+                                           256U * static_cast<unsigned char>(extra[off + 1]);
+                                };
+                                auto id = word(pos), size = word(pos + 2);
+                                if (size > extra.size() - pos - 4) {
+                                    fail("invalid zip extra field");
+                                    return false;
+                                }
+                                entry_zip64 = entry_zip64 || id == 1;
+                                pos += 4 + size;
+                            }
+                            return true;
+                        };
+                    auto sentinel = [](const auto& bytes, std::size_t pos) {
+                        return std::all_of(bytes.begin() + pos,
+                                           bytes.begin() + pos + 4,
+                                           [](unsigned char c) { return c == 255; });
+                    };
+                    entry_zip64 = sentinel(header, 18) || sentinel(header, 22);
+                    if (!extra_fields(st.m_local_header_ofs + 30, u16(26), u16(28)))
+                        return;
+                    const auto central_offset =
+                        s.zip.m_central_directory_file_ofs + st.m_central_dir_ofs;
+                    if (archive_size < 46 || central_offset > archive_size - 46) {
+                        fail("truncated zip central header");
                         return;
                     }
-                    local.seekg(static_cast<std::streamoff>(name_size), std::ios::cur);
-                    std::string extra(extra_size, '\0');
-                    local.read(extra.data(), extra_size);
-                    bool local_zip64 = false;
-                    for (std::size_t pos = 0; pos < extra.size();) {
-                        if (extra.size() - pos < 4) {
-                            fail("invalid zip extra field");
-                            return;
-                        }
-                        auto word = [&](std::size_t off) {
-                            return static_cast<unsigned char>(extra[off]) +
-                                   256U * static_cast<unsigned char>(extra[off + 1]);
-                        };
-                        auto id = word(pos), size = word(pos + 2);
-                        if (size > extra.size() - pos - 4) {
-                            fail("invalid zip extra field");
-                            return;
-                        }
-                        if (id == 1)
-                            local_zip64 = true;
-                        pos += 4 + size;
+                    std::array<unsigned char, 46> central{};
+                    local.clear();
+                    local.seekg(static_cast<std::streamoff>(central_offset));
+                    local.read(reinterpret_cast<char*>(central.data()), central.size());
+                    if (!local || central[0] != 'P' || central[1] != 'K' || central[2] != 1 ||
+                        central[3] != 2) {
+                        fail("invalid zip central header");
+                        return;
                     }
-                    bool supported = !zip64 && !local_zip64 && !st.m_is_encrypted &&
+                    entry_zip64 = entry_zip64 || sentinel(central, 20) || sentinel(central, 24) ||
+                                  sentinel(central, 42) ||
+                                  (central[34] == 255 && central[35] == 255);
+                    auto central_word = [&](std::size_t off) {
+                        return static_cast<unsigned>(central[off]) + 256U * central[off + 1];
+                    };
+                    if (!extra_fields(central_offset + 46, central_word(28), central_word(30)))
+                        return;
+                    bool supported = !entry_zip64 && !st.m_is_encrypted &&
                                      (st.m_method == 0 || st.m_method == 8);
                     if (supported && !st.m_is_directory) {
                         if (st.m_comp_size == 0 && st.m_uncomp_size != 0) {
@@ -250,10 +287,10 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                             return;
                         }
                     }
-                    const std::string reason = zip64 || local_zip64 ? "zip64"
-                                               : st.m_is_encrypted  ? "zip encryption"
-                                               : supported          ? ""
-                                                                    : "zip compression method";
+                    const std::string reason = entry_zip64         ? "zip64"
+                                               : st.m_is_encrypted ? "zip encryption"
+                                               : supported         ? ""
+                                                                   : "zip compression method";
                     if (!supported)
                         s.unsupported.push_back(
                             {"IMPORT_UNSUPPORTED_ELEMENT", rel + ": " + reason, 0});

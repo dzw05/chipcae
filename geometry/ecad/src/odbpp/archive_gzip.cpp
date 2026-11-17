@@ -216,7 +216,7 @@ struct GzipCursor::State {
                 fail("CRC mismatch");
                 co_return;
             }
-            if (expected_size != size) {
+            if (expected_size != (size & 0xffffffffu)) {
                 fail("ISIZE mismatch");
                 co_return;
             }
