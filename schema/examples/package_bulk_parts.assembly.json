@@ -1,0 +1,42 @@
+{
+  "schema": "chipcae.assembly/0.1",
+  "board": {
+    "path": "board.xml",
+    "format": "ipc2581",
+    "material_map": "map.json"
+  },
+  "materials": "lib.materials.json",
+  "parts": [
+    {
+      "id": "lid",
+      "step": "PACKAGE_BULK_PARTS.step",
+      "body": "PACKAGE_BULK_PARTS/lid",
+      "material": "copper",
+      "material_approx": true,
+      "placement": {
+        "frame": "step",
+        "origin": [
+          0,
+          0,
+          0
+        ]
+      }
+    }
+  ],
+  "parts_from_step": {
+    "step": "PACKAGE_BULK_PARTS.step",
+    "frame": "step",
+    "origin": [
+      0,
+      0,
+      0
+    ],
+    "bodies": {
+      "PACKAGE_BULK_PARTS/HOST_SILICON_BULK": {
+        "id": "host_si",
+        "material": "silicon",
+        "material_approx": true
+      }
+    }
+  }
+}

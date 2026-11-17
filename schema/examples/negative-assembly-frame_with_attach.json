@@ -1,0 +1,29 @@
+{
+  "schema": "chipcae.assembly/0.1",
+  "board": {
+    "path": "board.xml",
+    "format": "ipc2581",
+    "material_map": "map.json"
+  },
+  "materials": "lib.materials.json",
+  "parts": [
+    {
+      "id": "lid",
+      "step": "lid.step",
+      "material": "CuW",
+      "placement": {
+        "frame": "step",
+        "attach": "layer:substrate@top"
+      }
+    },
+    {
+      "id": "stiffener",
+      "step": "stiffener.step",
+      "material": "copper",
+      "placement": {
+        "attach": "layer:substrate@top",
+        "gap": 0
+      }
+    }
+  ]
+}
