@@ -1585,6 +1585,18 @@ int main(int argc, char** argv) {
                     error.starts_with("IMPORT_REJECTED: total byte limit"),
                 error);
     });
+    test("odbpp_tar_selected_content_total", [&] {
+        ArchiveLimits limits;
+        limits.total_bytes = 3;
+        limits.file_bytes = 3;
+        ArchiveReader reader(temp / "large-irrelevant.tgz", limits);
+        require(reader.open_error().empty(), reader.open_error());
+        std::string out, error;
+        require(reader.read_bytes("matrix/matrix", out, error) && out == "abc", error);
+        require(!reader.read_bytes("steps/pcb/profile", out, error) &&
+                    error.starts_with("IMPORT_REJECTED: total byte limit"),
+                error);
+    });
     test("odbpp_gzip_stream_exception", [&] {
         std::istringstream input("truncated");
         input.exceptions(std::ios::failbit | std::ios::badbit);

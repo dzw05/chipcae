@@ -81,7 +81,8 @@ bool index_tar(const std::filesystem::path& path,
         extension.clear();
         return true;
     };
-    GzipCursor cursor(input);
+    // Tar framing and skipped payloads are transport bytes, not extracted content.
+    GzipCursor cursor(input, UINT64_MAX);
     std::uint64_t entry_compressed_start = 0;
     bool regular_payload = false;
     auto consume = [&](std::string_view block) {

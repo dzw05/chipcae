@@ -405,7 +405,7 @@ ArchiveReader::ReadStatus ArchiveReader::stream_bytes(const std::string& rel,
         s.tar_input.close();
         s.tar_input.clear();
         s.tar_input.open(s.input, std::ios::binary);
-        s.tar_cursor = std::make_unique<GzipCursor>(s.tar_input);
+        s.tar_cursor = std::make_unique<GzipCursor>(s.tar_input, UINT64_MAX);
         s.tar_position = 0;
         s.tar_block = {};
     }

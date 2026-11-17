@@ -314,6 +314,15 @@ def main(root, fixture):
                struct.pack('<II', zlib.crc32(framed), len(framed)))
     assert gzip.decompress(wrapped) == framed
     (root / 'ratio-empty-blocks.tgz').write_bytes(wrapped)
+    # Cross the standalone gzip output cap without allocating the tar in memory.
+    with gzip.open(root / 'large-irrelevant.tgz', 'wb', compresslevel=1) as archive:
+        info = tarfile.TarInfo('irrelevant')
+        info.size = 2 * 1024 * 1024 * 1024
+        archive.write(info.tobuf())
+        chunk = bytes(1024 * 1024)
+        for _ in range(2048):
+            archive.write(chunk)
+        archive.write(tar_bytes([('matrix/matrix', b'abc'), ('steps/pcb/profile', b'd')]))
     corrupt = root / 'corrupt'
     corrupt.mkdir()
     for name in ['truncated.tgz', 'bad-crc.zip', 'missing-matrix.tgz', 'missing-profile.tgz',
