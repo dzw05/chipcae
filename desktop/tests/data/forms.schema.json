@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "x-hidden": {},
+    "x-visible": {
+      "type": "string",
+      "x-chipcae-visible": true
+    },
+    "nested": {
+      "$ref": "forms-value.schema.json"
+    },
+    "byId": {
+      "$ref": "urn:chipcae:desktop:forms-test"
+    }
+  },
+  "required": [
+    "nested"
+  ]
+}
