@@ -1,4 +1,23 @@
-"""Compare imported ECAD stacks using the frozen IMP-X tolerances."""
+"""Compare imported ECAD stacks using the frozen IMP-X tolerances.
+
+Compatibility contract for SCHEMA:
+The public symbols are SCHEMA, DEFAULT_DELTA_M, EcadDiffError (code/name),
+diff_stacks, write_report, and main, with the signatures defined below. CLI
+flags, successful-comparison exit status 0, protocol error codes/names, and
+one-line ``ecad_diff: <NAME>: <reason>`` diagnostics are stable. Diagnostic
+reason text may gain context; callers should use codes/names, not parse it.
+
+The JSON field structure, entry/key ordering, null source locations, grading
+semantics and tolerance boundaries are stable for this SCHEMA, including
+positional layer comparisons even when copper/dielectric sequences differ.
+JSON uses indent=2 and ensure_ascii=False. Markdown retains the input/delta
+line, summary table and hard/discuss detail table; explanatory wording and
+Markdown presentation may evolve. Both reports are deterministic for identical
+inputs within a tool version. tol_derivation is explanatory text except for
+specified sentinel reasons (identical, layer names differ, and not compared).
+Incompatible JSON or comparison-semantic changes require a new SCHEMA;
+private helpers and other diagnostic prose have no compatibility guarantee.
+"""
 import argparse
 import hashlib
 import json
@@ -23,11 +42,11 @@ def _invalid(message):
     raise EcadDiffError(14, 'INPUT_INVALID', message)
 
 
-def _bytes(path):
+def _bytes(path, context):
     try:
         return Path(path).read_bytes()
     except OSError as exc:
-        raise EcadDiffError(12, 'INPUT_REFERENCE_MISSING', str(exc)) from exc
+        raise EcadDiffError(12, 'INPUT_REFERENCE_MISSING', f'{context}: {path}: {exc}') from exc
 
 
 def _number(value, positive=False):
@@ -64,7 +83,10 @@ def _read_polyset(data):
     _number(dbu, True)
     layers = {}
     for _ in range(count):
-        name = take(unpack('<I')[0]).decode('utf-8')
+        try:
+            name = take(unpack('<I')[0]).decode('utf-8')
+        except UnicodeDecodeError:
+            _invalid('invalid polyset utf-8')
         if name in layers:
             _invalid('duplicate polyset layer name')
         rings = unpack('<I')[0]
@@ -101,9 +123,9 @@ def _geometry(points):
 
 def _load(path):
     try:
-        stack = json.loads(_bytes(path))
-    except UnicodeDecodeError as exc:
-        _invalid(str(exc))
+        stack = json.loads(_bytes(path, 'cannot read stack'))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        _invalid(f'invalid stack JSON: {path}: {exc}')
     if not isinstance(stack, dict):
         _invalid('stack must be an object')
     if stack.get('unit') != 'm' or not isinstance(stack.get('layers'), list):
@@ -155,7 +177,7 @@ def _load(path):
                 raise EcadDiffError(12, 'INPUT_REFERENCE_MISSING', str(exc)) from exc
             if not polyset_path.is_relative_to(stack_directory):
                 _invalid('polyset path must remain within the stack directory')
-            data = _bytes(polyset_path)
+            data = _bytes(polyset_path, 'cannot read polyset')
             actual_digest = hashlib.sha256(data).hexdigest()
             for ref in matching_refs:
                 digest = _string(ref['sha256'])

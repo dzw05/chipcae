@@ -15,6 +15,7 @@ def main():
         good = save(directory / 'good.json', board())
         for case, code, name in (
                 ('missing_stack', 12, 'INPUT_REFERENCE_MISSING'),
+                ('directory_stack', 12, 'INPUT_REFERENCE_MISSING'),
                 ('missing_polyset', 12, 'INPUT_REFERENCE_MISSING'),
                 ('symlink_file', 14, 'INPUT_INVALID'),
                 ('symlink_directory', 14, 'INPUT_INVALID'),
@@ -26,7 +27,7 @@ def main():
                 *[(case, 14, 'INPUT_INVALID') for case in (
                     'used_magic', 'used_truncated', 'used_dbu',
                     'used_offsets', 'used_negative', 'used_terminal',
-                    'used_zero_terminal', 'used_trailing', 'used_duplicate')],
+                    'used_zero_terminal', 'used_trailing', 'used_duplicate', 'used_utf8')],
                 ('delta', 14, 'INPUT_INVALID'),
                 ('derived_nonfinite', 14, 'INPUT_INVALID'),
                 ('copper_nonfinite', 14, 'INPUT_INVALID'),
@@ -98,6 +99,8 @@ def main():
                 layer = (struct.pack('<I', 4) + b'F.Cu' + struct.pack('<Iqq', 1, 0, 3)
                          + struct.pack('<qqqqqq', 0, 0, 1, 0, 0, 1))
                 malformed = {
+                    'used_utf8': (b'CCPOLY01' + struct.pack('<dI', 1e-9, 1)
+                                  + layer.replace(b'F.Cu', b'F.\xffu')),
                     'used_magic': b'BADMAGIC' + header[8:],
                     'used_truncated': header[:-1],
                     'used_dbu': b'CCPOLY01' + struct.pack('<dI', 0, 0),
@@ -149,6 +152,9 @@ def main():
                 b['external_refs'] = [None]
             if case != 'missing_stack':
                 save(path, b)
+            if case == 'directory_stack':
+                path.unlink()
+                path.mkdir()
             if case == 'empty':
                 path.write_bytes(b'')
             if case == 'utf8':
@@ -161,6 +167,12 @@ def main():
                 write_report(result, out)
             except EcadDiffError as exc:
                 assert exc.code == code and exc.name == name, (case, exc)
+                if case == 'used_utf8':
+                    assert str(exc) == 'invalid polyset utf-8'
+                if case in ('missing_stack', 'directory_stack'):
+                    assert f'cannot read stack: {path}:' in str(exc)
+                if case == 'missing_polyset':
+                    assert f'cannot read polyset: {p}:' in str(exc)
             else:
                 raise AssertionError(f'{case}: API accepted invalid input')
             command = [sys.executable, str(ROOT / 'tools/vv/ecad_diff.py'),
@@ -170,6 +182,12 @@ def main():
             assert proc.returncode == code, (case, proc.stderr)
             assert len(proc.stderr.splitlines()) == 1, proc.stderr
             assert proc.stderr.startswith(f'ecad_diff: {name}: '), proc.stderr
+            if case in ('missing_stack', 'directory_stack'):
+                assert f'cannot read stack: {path}:' in proc.stderr
+            if case == 'missing_polyset':
+                assert f'cannot read polyset: {p}:' in proc.stderr
+            if case == 'used_utf8':
+                assert proc.stderr == 'ecad_diff: INPUT_INVALID: invalid polyset utf-8\n'
             assert not (out / 'diff.json').exists()
             assert not (out / 'diff.md').exists()
             if case == 'output_file':

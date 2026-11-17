@@ -70,7 +70,7 @@ def main():
             assert e['grade'] == 'hard' and e['delta'] == 1
             assert 'layer count differs' in e['tol_derivation']
             assert 'copper/dielectric sequence differs' in e['tol_derivation']
-        # Every aligned layer gets a copper row, including zero-area mismatches.
+        # Every aligned layer gets a copper row, including kind mismatches with zero area on both sides.
         for left_copper, right_copper, grade in ((False, False, 'info'),
                                                  (True, False, 'info'),
                                                  (False, True, 'info'),
