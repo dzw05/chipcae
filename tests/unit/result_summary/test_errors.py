@@ -30,7 +30,7 @@ class Errors(unittest.TestCase):
     def test_hdf5_failures(self):
         for stage, target, code, name in (
                 ('open', 'h5py.File', 12, 'INPUT_REFERENCE_MISSING'),
-                ('read', '_read', 12, 'INPUT_REFERENCE_MISSING')):
+                ('read', '_read', 14, 'INPUT_INVALID')):
             for error_type in (OSError, RuntimeError, EOFError):
                 with self.subTest(stage=stage, error=error_type), tempfile.TemporaryDirectory() as tmp:
                     run = Path(tmp)
@@ -143,6 +143,29 @@ class Errors(unittest.TestCase):
                             self.assertEqual(main([str(run)]), 0 if invalid == 'valid' else 14)
                         if invalid != 'valid':
                             self.assertIn(f'{block}/Types: expected', err.getvalue())
+
+    def test_cell_type_values(self):
+        for block, expected in (('hex', 12), ('cut', 42)):
+            for value in (0, 10, 12, 42, 255):
+                with self.subTest(block=block, value=value), tempfile.TemporaryDirectory() as tmp:
+                    run = Path(tmp)
+                    step, _ = fixture(run, cut=True)
+                    with h5py.File(step, 'r+') as f:
+                        # Keep one valid entry to detect mixed valid/invalid types.
+                        f[f'VTKHDF/{block}/Types'][1] = value
+                    if value == expected:
+                        self.assertEqual(summarize(run)['blocks'][block]['cells'], 2)
+                        continue
+                    with self.assertRaises(ResultSummaryError) as caught:
+                        summarize(run)
+                    self.assertEqual(caught.exception.code, 14)
+                    self.assertEqual(caught.exception.name, 'INPUT_INVALID')
+                    err, out = io.StringIO(), io.StringIO()
+                    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+                        self.assertEqual(main([str(run)]), 14)
+                    self.assertEqual(out.getvalue(), '')
+                    self.assertEqual(err.getvalue(),
+                                     f'result_summary: INPUT_INVALID: /VTKHDF/{block}/Types: expected cell type {expected}\n')
 
     def test_name_table_dtype(self):
         for block in ('hex', 'cut'):

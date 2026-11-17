@@ -90,7 +90,7 @@ def _partitions(block, cells_path='NumberOfCells'):
 
 
 def _version(block):
-    _require(isinstance(block, h5py.Group), "expected VTKHDF group")
+    _require(isinstance(block, h5py.Group), f"{block.name}: expected VTKHDF group")
     _require(np.array_equal(block.attrs.get('Version'), [2, 8]),
              f"{block.name}: expected Version [2, 8]")
 
@@ -125,6 +125,9 @@ def _read(root):
                                        'int64' if field == 'elem_gid' else 'int32')
         types = (_array(block, 'Types', (c,), 'uint8')
                  if c or 'Types' in block else np.array([], dtype='uint8'))
+        expected_type = 12 if name == 'hex' else 42
+        _require(np.all(types == expected_type),
+                 f'{block.name}/Types: expected cell type {expected_type}')
         if name == 'hex':
             counts = _counts(fields.get('cell_kind', np.array([], dtype='int32')))
             blocks[name] = dict(points=n, cells=c, cell_kind_counts=counts)
@@ -213,7 +216,7 @@ def _summarize(run_dir, top_rel_tol):
                      '/VTKHDF: required group missing or invalid')
             blocks, data, names = _read(f['VTKHDF'])
     except (OSError, RuntimeError, EOFError) as exc:
-        raise ResultSummaryError(12, 'INPUT_REFERENCE_MISSING', str(exc)) from exc
+        raise ResultSummaryError(14, 'INPUT_INVALID', str(exc)) from exc
     points = np.concatenate([d[0] for d in data])
     u = np.concatenate([d[1] for d in data])
     top = np.array([], dtype=int)

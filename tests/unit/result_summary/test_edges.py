@@ -377,7 +377,7 @@ class Edges(unittest.TestCase):
                     self.assertIn('"temperature": null', out.getvalue())
 
     def test_structural_errors(self):
-        for case in ('corrupt', 'U_components', 'negative_counts', 'cut_types', 'root_version'):
+        for case in ('corrupt', 'U_components', 'negative_counts', 'cut_types', 'cut_types_length', 'root_version'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
                 run = Path(tmp)
                 step, _ = fixture(run, cut=True)
@@ -390,9 +390,10 @@ class Edges(unittest.TestCase):
                             f['VTKHDF/hex/PointData/U'] = np.zeros((11, 2))
                         elif case == 'negative_counts':
                             f['VTKHDF/hex/NumberOfPoints'][0] = -1
-                        elif case == 'cut_types':
+                        elif case in ('cut_types', 'cut_types_length'):
                             del f['VTKHDF/cut/Types']
-                            f['VTKHDF/cut/Types'] = np.array([42], dtype='uint8')
+                            values = [42, 12] if case == 'cut_types' else [42]
+                            f['VTKHDF/cut/Types'] = np.array(values, dtype='uint8')
                         else:
                             f['VTKHDF'].attrs['Version'] = [2, 7]
                 with self.assertRaises(ResultSummaryError) as caught:

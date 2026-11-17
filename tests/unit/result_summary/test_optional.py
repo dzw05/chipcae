@@ -53,6 +53,9 @@ class Optional(unittest.TestCase):
                     self.assertIsNone(r['warpage']['rel_diff'])
                 elif case == 'two_points':
                     self.assertEqual(r['warpage']['n_top_points'], 2)
+                    self.assertEqual(r['temperature']['top_min'], 304.)
+                    self.assertEqual(r['temperature']['top_max'], 306.)
+                    self.assertEqual(r['temperature']['top_mean'], 305.)
                     self.assertIsNone(r['warpage']['w_bfp_m'])
                     self.assertIsNone(r['warpage']['rel_diff'])
                 elif case == 'names':
