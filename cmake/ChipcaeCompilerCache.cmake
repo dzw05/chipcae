@@ -1,0 +1,10 @@
+# Optional compiler cache; preserve each caller-provided launcher independently.
+find_program(CHIPCAE_CCACHE_EXECUTABLE NAMES ccache)
+if(CHIPCAE_CCACHE_EXECUTABLE)
+    foreach(_chipcae_language IN ITEMS C CXX)
+        if("${CMAKE_${_chipcae_language}_COMPILER_LAUNCHER}" STREQUAL "")
+            set(CMAKE_${_chipcae_language}_COMPILER_LAUNCHER "${CHIPCAE_CCACHE_EXECUTABLE}")
+        endif()
+    endforeach()
+    unset(_chipcae_language)
+endif()

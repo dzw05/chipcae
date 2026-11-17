@@ -83,6 +83,12 @@ class Acceptance(unittest.TestCase):
                          ['custom-c', 'sccache'])
 
     def test_shim_ccache_env(self):
+        self.check_cache_env(['cmake'])
+
+    def test_slot_ccache_env(self):
+        self.check_cache_env(['/bin/bash', '/workspace/tasks/slot.sh', 'cmake'])
+
+    def check_cache_env(self, entry):
         # Recorder replaces only the downstream tool, never the mandatory wrapper.
         recorder = self.bin / 'cmake'
         recorder.unlink()
@@ -95,10 +101,11 @@ class Acceptance(unittest.TestCase):
                 self.fake_ccache()
             for preset in ({}, {'CCACHE_DIR': '/caller/cache', LAUNCHERS[0]: 'custom-c'},
                            {LAUNCHERS[1]: 'sccache'},
-                           {'CCACHE_DIR': '/caller/cache', **dict.fromkeys(LAUNCHERS, 'custom')}):
+                           {'CCACHE_DIR': '/caller/cache', **dict.fromkeys(LAUNCHERS, 'custom')},
+                           dict.fromkeys(('CCACHE_DIR', *LAUNCHERS), '')):
                 with self.subTest(ccache=present, preset=preset):
                     env = self.env | preset
-                    result = subprocess.run(['cmake', '--build', 'original build', '--parallel', '2'],
+                    result = subprocess.run([*entry, '--build', 'original build', '--parallel', '2'],
                                             env=env, text=True, capture_output=True)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     recorded = json.loads(result.stdout)
