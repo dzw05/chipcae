@@ -190,7 +190,7 @@ int main(int argc, char** argv) {
         const auto map = dir.filePath("material map.JSON");
         write(map, "not parsed by desktop");
         const auto script = dir.filePath("record contract.py");
-        // Independent CLI fixture isolates controller assertions from the legacy mock parser.
+        // Recording fixture covers argv and deliberately malformed protocol responses.
         write(script, R"PY(import json,pathlib,runpy,sys,time
 mock,record,mode=sys.argv[1:4]
 a=sys.argv[4:]
@@ -229,88 +229,119 @@ sys.exit(rc)
         if (!widgets) {
             int mockSerial = 0;
             // Test the shipped mock directly, including its exact input-body mode convention.
-            for (const auto& mode : {"success",
-                                     "confirm",
-                                     "b",
-                                     "reject",
-                                     "c",
-                                     "map-missing",
-                                     "code-mismatch",
-                                     "missing",
-                                     "corrupt",
-                                     "invalid",
-                                     "hang",
-                                     "unknown\nreject",
-                                     "confirm\nsuccess"}) {
-                const QString m = mode;
-                const auto tag = m.section('\n', 0, 0);
-                auto input = dir.filePath(QString("mock %1 ").arg(++mockSerial) + tag + ".xml");
-                auto output = input + ".stack", report = input + ".report";
-                write(input, m.toUtf8());
-                QProcess p;
-                p.start(PYTHON_EXECUTABLE,
-                        {MOCK_SCRIPT,
-                         input,
-                         "-o",
-                         output,
-                         "--material-map",
-                         map,
-                         "--polyset",
-                         output + ".poly",
-                         "--report",
-                         report,
-                         "--accept-b-tier"});
-                require(p.waitForStarted(), "launch Python mock");
-                if (m == "hang") {
-                    check(!p.waitForFinished(200), "mock hang is cancellable and does not exit");
-                    p.kill();
-                    p.waitForFinished();
-                    continue;
-                }
-                require(p.waitForFinished(3000), "mock completion");
-                const bool confirm = tag == "confirm" || tag == "b";
-                const bool reject = m == "reject" || m == "c" || m == "invalid";
-                int expected = confirm                              ? 6
-                               : reject                             ? 7
-                               : m == "map-missing"                 ? 9
-                               : (m == "missing" || m == "corrupt") ? 1
-                                                                    : 0;
-                check(p.exitCode() == expected, "mock exit " + m + ": " + p.readAllStandardError());
-                if (m == "missing") {
-                    check(!QFile::exists(report), "mock missing omits report");
-                    continue;
-                }
-                check(QFile::exists(report), "mock writes report " + m);
-                bool parsed = false;
-                try {
-                    auto j = Json::parse(read(report).toStdString());
-                    parsed = true;
-                    const QString code = confirm ? "IMPORT_CONFIRMATION_REQUIRED"
-                                         : reject || m == "code-mismatch" ? "IMPORT_REJECTED"
-                                         : m == "map-missing" ? "MATERIAL_MAPPING_MISSING"
-                                                              : "OK";
-                    check(j.contains("code") &&
-                              j.at("code").as<std::string>() == code.toStdString(),
-                          "mock report code " + m);
-                    check(j.contains("message") && j.at("message").is_string() &&
-                              j.contains("defects") && j.at("defects").is_array(),
-                          "mock report shape " + m);
-                    if (code == "OK")
-                        check(j.contains("defects") && j.at("defects").empty(),
-                              "mock success empty defects");
-                    if (confirm || reject)
-                        check(j.contains("defects") && !j.at("defects").empty(),
-                              "mock defects " + m);
-                } catch (const std::exception&) {
-                }
-                check(parsed == (m != "corrupt"), "mock JSON presence " + m);
-                if (m == "invalid" && QFile::exists(output)) {
-                    CaseDocument d;
-                    require(d.load(FIXTURE_DIR "/fcbga_demo.case.json"), "baseline");
-                    check(!d.checkImportedStack(Json::parse(read(output).toStdString())),
-                          "mock invalid stack");
+            for (bool acceptBTier : {false, true}) {
+                for (const auto& mode : {"success",
+                                         "confirm",
+                                         "b",
+                                         "reject",
+                                         "c",
+                                         "map-missing",
+                                         "code-mismatch",
+                                         "missing",
+                                         "corrupt",
+                                         "invalid",
+                                         "hang",
+                                         "unknown\nreject",
+                                         "confirm\nsuccess"}) {
+                    const QString m = mode;
+                    const auto tag = m.section('\n', 0, 0);
+                    auto input = dir.filePath(QString("mock %1 ").arg(++mockSerial) + tag + ".xml");
+                    auto output = input + ".stack", report = input + ".report";
+                    write(input, m.toUtf8());
+                    QProcess p;
+                    QStringList arguments{MOCK_SCRIPT,
+                                          input,
+                                          "-o",
+                                          output,
+                                          "--material-map",
+                                          map,
+                                          "--polyset",
+                                          output + ".poly",
+                                          "--report",
+                                          report};
+                    if (acceptBTier)
+                        arguments << "--accept-b-tier";
+                    p.start(PYTHON_EXECUTABLE, arguments);
+                    require(p.waitForStarted(), "launch Python mock");
+                    if (m == "hang") {
+                        check(!p.waitForFinished(200),
+                              "mock hang is cancellable and does not exit");
+                        p.kill();
+                        p.waitForFinished();
+                        continue;
+                    }
+                    require(p.waitForFinished(3000), "mock completion");
+                    const bool confirm = (tag == "confirm" || tag == "b") && !acceptBTier;
+                    const bool reject = m == "reject" || m == "c" || m == "invalid";
+                    int expected = confirm                              ? 6
+                                   : reject                             ? 7
+                                   : m == "map-missing"                 ? 9
+                                   : (m == "missing" || m == "corrupt") ? 1
+                                                                        : 0;
+                    check(p.exitCode() == expected,
+                          "mock exit " + m + ": " + p.readAllStandardError());
+                    if (m == "missing") {
+                        check(!QFile::exists(report), "mock missing omits report");
+                        continue;
+                    }
+                    check(QFile::exists(report), "mock writes report " + m);
+                    bool parsed = false;
+                    try {
+                        auto j = Json::parse(read(report).toStdString());
+                        parsed = true;
+                        const QString code = confirm ? "IMPORT_CONFIRMATION_REQUIRED"
+                                             : reject || m == "code-mismatch" ? "IMPORT_REJECTED"
+                                             : m == "map-missing" ? "MATERIAL_MAPPING_MISSING"
+                                                                  : "OK";
+                        check(j.contains("code") &&
+                                  j.at("code").as<std::string>() == code.toStdString(),
+                              "mock report code " + m);
+                        check(j.contains("message") && j.at("message").is_string() &&
+                                  j.contains("defects") && j.at("defects").is_array(),
+                              "mock report shape " + m);
+                        if (code == "OK")
+                            check(j.contains("defects") && j.at("defects").empty(),
+                                  "mock success empty defects");
+                        if (confirm || reject)
+                            check(j.contains("defects") && !j.at("defects").empty(),
+                                  "mock defects " + m);
+                    } catch (const std::exception&) {
+                    }
+                    check(parsed == (m != "corrupt"), "mock JSON presence " + m);
+                    if (m == "invalid" && QFile::exists(output)) {
+                        CaseDocument d;
+                        require(d.load(FIXTURE_DIR "/fcbga_demo.case.json"), "baseline");
+                        check(!d.checkImportedStack(Json::parse(read(output).toStdString())),
+                              "mock invalid stack");
+                    }
                 }
             }
+        }
+        // Exercise the shipped mock through the controller, including publication on rerun.
+        for (const auto& mode : {"confirm", "b"}) {
+            CaseDocument document;
+            require(document.load(FIXTURE_DIR "/fcbga_demo.case.json"), "mock rerun baseline");
+            const auto before = document.stackJson();
+            ImportController controller(document);
+            ImportRequest request;
+            request.input = dir.filePath(QString("shipped ") + mode + ".xml");
+            request.output = request.input + ".stack.json";
+            request.report = request.input + ".report.json";
+            request.materialMap = map;
+            request.program = PYTHON_EXECUTABLE;
+            request.prefix = {MOCK_SCRIPT};
+            write(request.input, mode);
+            waitFor(controller,
+                    [&] { check(controller.start(request), "start shipped B-tier mock"); });
+            check(controller.outcome() == ImportOutcome::NeedsConfirmation &&
+                      document.stackJson() == before && !QFile::exists(request.output),
+                  "shipped mock requires confirmation without publication");
+            waitFor(controller,
+                    [&] { check(controller.restartAccepted(), "restart shipped mock"); });
+            check(controller.outcome() == ImportOutcome::Accepted &&
+                      controller.reportCode() == "OK" && controller.exitCode() == 0 &&
+                      document.stackJson() != before && QFile::exists(request.output),
+                  "shipped mock accepts and publishes confirmed rerun");
         }
         int serial = 0;
         auto run = [&](const QString& mode,
