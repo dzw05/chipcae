@@ -233,21 +233,18 @@ def w_bfp_from_frd(frd: Path, expected_top) -> float:
     nodes, disp = parse_frd(frd)
     if not disp:
         raise RuntimeError(f"no DISP records parsed from {frd}")
-    rows = []
-    for nid, (_ux, _uy, uz) in disp.items():
-        if nid not in nodes:
-            continue
-        x, y, z = nodes[nid]
-        # top surface only (generator requested NSET=TOP, but keep the geometric filter)
-        if z < H - 1e-12 * H:
-            continue
-        rows.append((x * 1000.0, y * 1000.0, uz * 1000.0))  # mm
-    selected = {nid for nid in disp if nid in nodes and nodes[nid][2] >= H - 1e-12 * H}
-    if selected != expected_top or len(rows) != len(expected_top):
+    selected = set(disp)
+    geometric_top = {nid for nid, xyz in nodes.items() if xyz[2] >= H - 1e-12 * H}
+    if selected != expected_top or not expected_top <= geometric_top:
         raise RuntimeError(
-            f"{frd}: expected {len(expected_top)} C3D20 top nodes, got {len(rows)}; "
+            f"{frd}: expected {len(expected_top)} C3D20 top nodes, got {len(selected)}; "
             f"missing={sorted(expected_top - selected)}, extra={sorted(selected - expected_top)}"
         )
+    rows = []
+    for nid in sorted(expected_top):
+        x, y, _z = nodes[nid]
+        uz = disp[nid][2]
+        rows.append((x * 1000.0, y * 1000.0, uz * 1000.0))  # mm
     P = np.array(rows, dtype=float)
     # P for interp_grid is x,y,z,ux,uy,uz — z unused, ux uy unused
     Pall = np.column_stack([P[:, 0], P[:, 1], np.zeros(len(P)), np.zeros(len(P)), np.zeros(len(P)), P[:, 2]])
@@ -307,7 +304,6 @@ def main():
     rel = abs_delta / PROTOTYPE
     ver = ccx_version()
     payload = {
-        "SPDX-License-Identifier": "Apache-2.0",
         "host": f"{platform.node()} {platform.system()} {platform.machine()}",
         "kind": "REFERENCE",
         "label": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解",

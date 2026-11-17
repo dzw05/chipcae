@@ -28,10 +28,11 @@ class TrilayerCalculixRefTest(unittest.TestCase):
                     "abs_delta_m", "rel_delta", "calculix_version",
                     "host"}
         self.assertIsInstance(data, dict)
-        self.assertTrue(required <= data.keys(), f"missing required fields: {required - data.keys()}")
+        self.assertEqual(required, data.keys(), "unexpected or missing top-level fields")
         for field in ("calculix_version", "host"):
             self.assertIsInstance(data[field], str)
             self.assertTrue(data[field].strip())
+        self.assertRegex(data["calculix_version"], r"\AThis is Version [0-9]+\.[0-9]+(?:\.[0-9]+)?\Z")
         for field in ("W_bfp_m", "prototype_W_bfp_m", "abs_delta_m", "rel_delta"):
             self.assertIn(type(data[field]), (int, float))
             self.assertTrue(math.isfinite(data[field]))
@@ -80,6 +81,9 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         for axis in (0, 1):
             self.assertEqual(fine["n_elem_xyz"][axis], 2 * coarse["n_elem_xyz"][axis])
         self.assertEqual(fine["n_elem_z_per_layer"], coarse["n_elem_z_per_layer"])
+        for name, n in (("coarse", 8), ("fine", 16)):
+            self.assertEqual(meshes[name]["n_elem_xyz"], [n, n, 6])
+            self.assertEqual(meshes[name]["n_elem_z_per_layer"], [2, 2, 2])
         selected = meshes[data["selected_mesh"]]
         w = data["W_bfp_m"]
         self.assertEqual(w, selected["W_bfp_m"])
@@ -102,12 +106,9 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         reversed_meshes["meshes"].reverse()
         self.validate_artifact(reversed_meshes)
         extended = copy.deepcopy(data)
-        extended.pop("SPDX-License-Identifier", None)
         extended["geometry"]["description"] = "model metadata"
         for mesh in extended["meshes"]:
             mesh["description"] = "mesh metadata"
-            mesh["n_elem_z_per_layer"] = [3, 2, 2]
-            mesh["n_elem_xyz"][2] = 7
         self.validate_artifact(extended)
         changed_prototype = copy.deepcopy(data)
         changed_prototype["prototype_W_bfp_m"] *= 1.001
@@ -119,7 +120,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         )
         with self.assertRaises(AssertionError):
             self.validate_artifact(changed_prototype)
-        for field in data.keys() - {"SPDX-License-Identifier"}:
+        for field in data:
             invalid = copy.deepcopy(data)
             del invalid[field]
             with self.subTest(missing=field), self.assertRaises(AssertionError):
@@ -139,8 +140,15 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             invalid = copy.deepcopy(data)
             invalid["meshes"] = [dict(data["meshes"][0], name=name) for name in names]
             variants.append(invalid)
-        for field in ("unknown_field", "provenance"):
-            self.validate_artifact(dict(data, **{field: "additional metadata"}))
+        for value in ("unknown", "This is Version", "This is Version 2.23\nextra"):
+            variants.append(dict(data, calculix_version=value))
+        for field in ("unknown_field", "provenance", "SPDX-License-Identifier"):
+            variants.append(dict(data, **{field: "additional metadata"}))
+        changed_layers = copy.deepcopy(data)
+        for mesh in changed_layers["meshes"]:
+            mesh["n_elem_z_per_layer"] = [3, 2, 2]
+            mesh["n_elem_xyz"][2] = 7
+        variants.append(changed_layers)
         for index, invalid in enumerate(variants):
             with self.subTest(variant=index), self.assertRaises(AssertionError):
                 self.validate_artifact(invalid)

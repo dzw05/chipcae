@@ -43,7 +43,7 @@ Only nodes referenced by C3D20 elements are emitted, with compact IDs used by
 NALL and the temperature cards. The coarse/fine meshes contain 2061/7565 nodes;
 their TOP sets contain exactly 225/833 connected corner and edge-midpoint nodes.
 The FRD reader requires the exact expected top-node IDs before interpolation,
-so missing or extra top displacements cannot silently change the result.
+and rejects every extra displacement record, including non-top or unknown IDs.
 The ASCII `.frd` parser reads coordinates from the `2C`
 block and displacements from the `-4 DISP` block, using fixed-width `-1`
 node records until each `-3` terminator. Node IDs join coordinates and
@@ -54,8 +54,8 @@ and `qoi_surface` on an 81×81 grid in millimetres, then converted back to metre
 
 The comparison test reads only `REFERENCE.json` and checks the required fields,
 model, refinement, and delta arithmetic. The runtime version and generating
-host are recorded in `calculix_version` and `host`. JSON SPDX metadata records
-the Apache-2.0 license and is preserved by generation.
+host are recorded in `calculix_version` and `host`. The JSON uses exactly the
+fixed top-level keys from the brief; source and deck headers record Apache-2.0.
 
 The ASCII FRD layout used by CalculiX 2.23 is `(1X,I2,I10,3E12.5)`:
 columns 2–3 contain the record marker, 4–13 the node ID, and 14–49
@@ -66,7 +66,9 @@ space, so whitespace splitting is unsuitable. This same layout applies to
 `python tools/vv/calculix_trilayer/check_frd_parser.py`; these manual-only checks
 are not collected by unittest discovery. They cover both blocks,
 adjacent negative fields, exponent signs, node IDs, block termination, variable
-header spacing, connected mesh nodes, and missing/extra top displacements.
+header spacing, connected mesh nodes, and missing/extra displacements. Independent
+deck checks verify the 3-2-1 corner mapping, material and temperature cards, C3D20
+connectivity, and mesh counts against the JSON. The CI comparison remains JSON-only.
 
 Recorded W_bfp: coarse 0.004271023422273522 m; fine (selected)
 0.004274306997289974 m. Reproducible input decks are committed as `coarse.inp` and `fine.inp`;
