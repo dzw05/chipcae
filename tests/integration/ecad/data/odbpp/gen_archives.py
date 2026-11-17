@@ -259,6 +259,23 @@ def main(root, fixture):
             following.size = 2
             archive.addfile(following, io.BytesIO(b'ok'))
         (root / ('pax-' + kind + '.tgz')).write_bytes(gzip.compress(out.getvalue()))
+    # Materialize the same directory members in all three input modes.
+    parity = root / 'count-parity'
+    (parity / 'a/b/c').mkdir(parents=True)
+    (parity / 'empty/nested').mkdir(parents=True)
+    (parity / 'a/b/c/payload').write_bytes(b'x')
+    with tarfile.open(root / 'count-parity.tgz', 'w:gz', format=tarfile.USTAR_FORMAT) as tar_archive, \
+            zipfile.ZipFile(root / 'count-parity.zip', 'w') as zip_archive:
+        for path in sorted(parity.rglob('*')):
+            name = path.relative_to(parity).as_posix()
+            tar_archive.add(path, arcname=name, recursive=False)
+            zip_archive.write(path, arcname=name)
+    for alias, label in [('a//b', 'slashes'), ('./a/b', 'dot'), ('a\\b', 'backslash')]:
+        members = [(alias, b'a'), ('a/b', b'b')]
+        (root / ('normalized-' + label + '.tgz')).write_bytes(gzip.compress(tar_bytes(members)))
+        with zipfile.ZipFile(root / ('normalized-' + label + '.zip'), 'w') as archive:
+            for name, data in members:
+                archive.writestr(name, data)
     # Stored deflate has exactly one input byte per payload byte.
     (root / 'ratio-exact.tgz').write_bytes(gzip.compress(
         tar_bytes([('payload', bytes(range(256)) * 4)]), compresslevel=0))

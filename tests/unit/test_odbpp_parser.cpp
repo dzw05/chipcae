@@ -16,6 +16,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <tuple>
+#include <type_traits>
 #ifdef __linux__
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -27,6 +28,9 @@ namespace fs = std::filesystem;
 using namespace chipcae::geometry::ecad;
 using namespace chipcae::geometry::ecad::detail;
 namespace {
+// Coroutine references remain valid because the cursor cannot change address.
+static_assert(!std::is_move_constructible_v<GzipCursor>);
+static_assert(!std::is_copy_constructible_v<GzipCursor>);
 void require(bool value, const std::string& message) {
     if (!value)
         throw std::runtime_error(message);
@@ -1439,6 +1443,50 @@ int main(int argc, char** argv) {
                                 error.starts_with("IMPORT_REJECTED: line byte limit"),
                             "archive line overflow rejected before callback: " + error);
             }
+        }
+    });
+    test("odbpp_review_directory_archive_count_parity", [&] {
+        for (const auto* name : {"count-parity", "count-parity.tgz", "count-parity.zip"}) {
+            ArchiveLimits limits;
+            limits.entry_count = 6;
+            ArchiveReader exact(temp / name, limits);
+            require(exact.open_error().empty(), exact.open_error());
+            require(exact.entries().size() == 6, "identical materialized entry count");
+            std::string out, error;
+            require(exact.read_bytes("a/b/c/payload", out, error) && out == "x", error);
+            limits.entry_count = 5;
+            ArchiveReader over(temp / name, limits);
+            require(over.open_error() == "IMPORT_REJECTED: entry count limit",
+                    "same count boundary across input modes");
+        }
+    });
+    test("odbpp_review_normalized_duplicate_identity", [&] {
+        for (const auto* alias : {"slashes", "dot", "backslash"}) {
+            for (const auto* extension : {".tgz", ".zip"}) {
+                ArchiveReader reader(temp / (std::string("normalized-") + alias + extension));
+                require(reader.open_error() == "IMPORT_REJECTED: duplicate archive entry a/b",
+                        "brief requires normalized duplicate rejection: " + reader.open_error());
+            }
+        }
+    });
+    test("odbpp_review_stale_error_before_early_stop", [&] {
+        auto p = temp / "stale-error";
+        write(p / "small", "stop\ntail\n");
+        for (const auto& input : {p, temp / "early-stop.tgz", temp / "early-stop.zip"}) {
+            ArchiveReader reader(input);
+            std::string out, error;
+            require(!reader.read_bytes("missing", out, error) && !error.empty(),
+                    "seed error from previous read");
+            std::size_t calls = 0;
+            require(reader.for_each_line(
+                        "small",
+                        [&](auto) {
+                            ++calls;
+                            return false;
+                        },
+                        error) &&
+                        calls == 1 && error.empty(),
+                    "benign consumer stop clears stale read error: " + error);
         }
     });
     test("odbpp_review_directory_payload_count", [&] {
