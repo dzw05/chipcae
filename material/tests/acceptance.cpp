@@ -827,11 +827,11 @@ void t19() {
 }
 // E1 antiderivatives from the independently supplied formula reference.
 Real primitive_A(Real T, Real B) {
-    return T * std::exp(-B / T) + B * std::expint(-B / T);
+    return T * std::exp(-B / T) + B * detail::expint(-B / T);
 }
 Real primitive_W(Real T, Real c, Real B) {
     Real u = T + c;
-    return u * std::exp(-B / u) + B * std::expint(-B / u);
+    return u * std::exp(-B / u) + B * detail::expint(-B / u);
 }
 Real analytic_xi(Real a, Real b, Real dt, const ShiftParams& p) {
     if (a > b)

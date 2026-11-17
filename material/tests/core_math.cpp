@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 using namespace chipcae::material;
 void check(bool pass, const char* name) {
     if (!pass) {
@@ -96,6 +97,17 @@ int main(int argc, char** argv) {
     check(shift.reduced_time_reference(280, 340, 2, reference) == StatusCode::Ok &&
               near(dxi, reference, 1e-10),
           "shift E1 reference");
+    for (Real invalid_dt : {-1.,
+                            std::numeric_limits<Real>::infinity(),
+                            -std::numeric_limits<Real>::infinity(),
+                            std::numeric_limits<Real>::quiet_NaN()}) {
+        check(shift.reduced_time_reference(280, 340, invalid_dt, val) == StatusCode::Failed,
+              "reference rejects negative or non-finite dt");
+    }
+    check(shift.reduced_time_reference(320, 320, 2, val) == StatusCode::Ok && near(val, 2.),
+          "reference equal endpoints at reference temperature");
+    check(shift.reduced_time_reference(280, 340, 0, val) == StatusCode::Ok && val == 0,
+          "reference zero dt");
     shift.reduced_time_increment(340, 280, 2, val);
     check(near(val, dxi), "shift direction symmetry");
     sp.T_ref = 280;

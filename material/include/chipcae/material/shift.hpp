@@ -6,10 +6,80 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <utility>
 #include <vector>
 
 namespace chipcae::material {
+
+namespace detail {
+// Host-only real Ei. Formula sources: NIST DLMF 6.6.1--2 (convergent
+// power series) and 6.9.1 (E1 continued fraction), independently evaluated here.
+// https://dlmf.nist.gov/6.6 https://dlmf.nist.gov/6.9
+// Ei(-z) = -E1(z), z > 0. Zero is the negative-infinite logarithmic pole.
+inline Real expint(Real x) {
+#if defined(__cpp_lib_math_special_functions) && __cpp_lib_math_special_functions >= 201603L &&    \
+    !defined(CHIPCAE_MATERIAL_FORCE_EXPINT_FALLBACK)
+    return std::expint(x);
+#else
+    constexpr Real gamma = 0.5772156649015328606;
+    constexpr Real eps = std::numeric_limits<Real>::epsilon();
+    if (std::isnan(x))
+        return x;
+    if (x == 0)
+        return -std::numeric_limits<Real>::infinity();
+    if (std::isinf(x))
+        return x > 0 ? x : -Real(0);
+    if (x < -1) {
+        // Modified Lentz evaluation of z + 1/(1 + 1/(z + 2/(1 + ...))).
+        const Real z = -x;
+        const Real tiny = std::numeric_limits<Real>::min() / eps;
+        Real f = z, c = f, d = 0;
+        for (int n = 1; n <= 10000; ++n) {
+            const Real a = (n + 1) / 2;
+            const Real b = n % 2 ? 1 : z;
+            d = b + a * d;
+            if (std::abs(d) < tiny)
+                d = tiny;
+            c = b + a / c;
+            if (std::abs(c) < tiny)
+                c = tiny;
+            d = 1 / d;
+            const Real delta = c * d;
+            f *= delta;
+            if (std::abs(delta - 1) <= eps)
+                break;
+        }
+        return -std::exp(-z) / f;
+    }
+    if (x <= 50) {
+        // For negative x this is the small-z E1 series with its sign reversed.
+        Real term = x, sum = x;
+        for (int n = 2; n <= 10000; ++n) {
+            term *= x / n;
+            const Real add = term / n;
+            sum += add;
+            if (std::abs(add) <= eps * std::abs(sum))
+                break;
+        }
+        return gamma + std::log(std::abs(x)) + sum;
+    }
+    // Large positive Ei asymptotic expansion (DLMF 6.12.2). At x > 50,
+    // optimal truncation is below double precision; scale before exponentiation.
+    Real term = 1, sum = 1;
+    for (int n = 1; n <= 10000; ++n) {
+        const Real next = term * (n / x);
+        if (next >= term)
+            break;
+        sum += next;
+        term = next;
+        if (term <= eps * sum)
+            break;
+    }
+    return std::exp(x - std::log(x)) * sum;
+#endif
+}
+} // namespace detail
 
 // CODATA 2018 气体常数 [J/(mol·K)]
 inline constexpr Real kGasConstant = 8.314462618;
@@ -133,7 +203,7 @@ public:
             }
             if (B == 0)
                 return std::exp(A) * u;
-            return std::exp(A) * (u * std::exp(-B / u) + B * std::expint(-B / u));
+            return std::exp(A) * (u * std::exp(-B / u) + B * detail::expint(-B / u));
         };
         Real mid = type_ == ShiftType::PiecewiseWlfArrhenius ? std::clamp(tg_, lo, hi) : lo;
         if (type_ == ShiftType::Arrhenius)

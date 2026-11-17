@@ -195,3 +195,12 @@ if(CHIPCAE_MATERIAL_ENABLE_TESTS)
     set_tests_properties(material_cu_mix_numpy PROPERTIES LABELS tierA
         ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
 endif()
+
+if(CHIPCAE_MATERIAL_ENABLE_TESTS)
+    foreach(variant IN ITEMS material_expint material_expint_fallback)
+        add_executable(${variant} tests/expint.cpp)
+        target_link_libraries(${variant} PRIVATE chipcae_material)
+        add_test(NAME ${variant} COMMAND ${variant})
+    endforeach()
+    target_compile_definitions(material_expint_fallback PRIVATE CHIPCAE_MATERIAL_FORCE_EXPINT_FALLBACK=1)
+endif()
