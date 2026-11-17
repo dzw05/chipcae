@@ -122,6 +122,53 @@ int main(int argc, char** argv) {
             check_poly(*edge.value().polyhedra, options.snap_phi);
         }
     }
+    {
+        // Make the bottom ring have zero signed area with distinct vertices;
+        // discarding it leaves the clipped shell open.
+        auto broken = original;
+        broken.vertices[3 * broken.hex[3]] = 2;
+        broken.vertices[3 * broken.hex[3] + 1] = 1;
+        auto rejected = build_cut_layer(broken, {{{0, {0, 0, 1}, .5}}}, options);
+        expect(!rejected && rejected.error().path == "cut/polyhedron",
+               "open polyhedron rejected during generation");
+        const auto& reason = rejected.error().reason;
+        expect(reason.find("elem_gid=" + std::to_string(original.elem_gid[0])) !=
+                       std::string::npos &&
+                   reason.find("rings=") != std::string::npos &&
+                   reason.find("signed_volume=") != std::string::npos &&
+                   reason.find("closed=false") != std::string::npos,
+               "polyhedron error identifies cell and topology diagnostics");
+    }
+    {
+        auto split = o;
+        split.nx = 4;
+        split.ny = 4;
+        const auto mesh = build_tensor_grid(s, split).value();
+        auto high = options;
+        high.quad_degree = 6;
+        auto result = build_cut_layer(mesh, {{{0, {1, 1, .3}, 1.1}}}, high);
+        expect(bool(result), "degree six with polyhedron export");
+        const auto& c = result.value();
+        const auto& p = *c.polyhedra;
+        expect(!c.sub_volfrac.empty() && p.volume.size() == c.sub_volfrac.size(),
+               "degree six exports every subcell");
+        for (std::size_t sub = 0; sub < c.sub_volfrac.size(); ++sub) {
+            auto e = c.cut_elem[sub];
+            double jac = 1;
+            for (int d = 0; d < 3; ++d)
+                jac *= mesh.vertices[3 * mesh.hex[8 * e + 6] + d] -
+                       mesh.vertices[3 * mesh.hex[8 * e] + d];
+            double weight = std::accumulate(
+                c.vq_w.begin() + c.vq_off[sub], c.vq_w.begin() + c.vq_off[sub + 1], 0.0);
+            expect(p.parent_elem_gid[sub] == c.cut_elem_gid[sub],
+                   "degree six matching polyhedron parent");
+            expect(std::abs(p.volume[sub] - jac * weight) <= 1e-12 * jac * weight,
+                   "degree six polyhedron/quadrature relative agreement");
+            expect(std::abs(p.volume[sub] - jac * c.sub_volfrac[sub]) <=
+                       1e-12 * jac * c.sub_volfrac[sub],
+                   "degree six polyhedron/subcell relative agreement");
+        }
+    }
     std::mt19937_64 rng(20261116);
     std::uniform_real_distribution<double> uniform(.2, 1);
     std::size_t cut_count = 0;

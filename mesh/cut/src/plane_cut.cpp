@@ -5,8 +5,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iomanip>
 #include <limits>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <tuple>
 namespace chipcae::mesh::cut {
@@ -404,7 +406,15 @@ generate(const HexMeshArrays& m, const CutGeometry& g, const CutOptions& o) {
                 auto reverse = edges.find({edge.second, edge.first});
                 closed &= count == 1 && reverse != edges.end() && reverse->second == 1;
             }
-            if (rings.size() >= 4 && signed_volume > 0 && closed) {
+            if (!(rings.size() >= 4 && signed_volume > 0 && closed)) {
+                std::ostringstream reason;
+                reason << std::setprecision(std::numeric_limits<Real>::max_digits10)
+                       << "elem_gid=" << m.elem_gid[e] << " rings=" << rings.size()
+                       << " signed_volume=" << signed_volume << " closed=" << std::boolalpha
+                       << closed;
+                return Error{"cut/polyhedron", reason.str()};
+            }
+            {
                 auto& out = *c.polyhedra;
                 std::vector<Index> remap(points.size(), -1);
                 for (const auto& ring : rings) {
