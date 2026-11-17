@@ -46,8 +46,11 @@ to ignore them.
 The v1 contract is specific to this WP-2 artifact: it requires exactly one coarse
 and one fine mesh and selects fine. Additional mesh names or a different selected
 resolution require a new contract version.
-Mesh array order is immaterial. Top-level `W_bfp_m` must equal the selected
-mesh value. The test validator normalizes a copy of the schema with a
+Mesh array order is immaterial. Equality of top-level `W_bfp_m` and the selected
+mesh value is a validator-only producer check, outside the published schema
+contract. Raw schema consumers do not get this guarantee; use
+`validate_reference` from `tools/vv/test_trilayer_calculix_ref.py` to check it.
+The test validator normalizes a copy of the schema with a
 `contains` constraint binding the selected name and top-level value via `const`,
 since JSON Schema cannot directly compare two instance fields. Validation checks
 this relationship and the broad `rel_delta < 0.5` sanity bound. Required `label`
@@ -62,6 +65,7 @@ by `generate.py`; rerun the generator to recreate them. Scipy is used indirectly
 by the shared `interp_grid` function for linear interpolation.
 
 Run `python3 -m unittest tools.vv.test_trilayer_calculix_ref` after generation.
+The validator requires `jsonschema`, which the lint workflow installs.
 Only passing validation prints the delta report and checks the same single line
 in a temporary report file, which is removed when the test completes. External
 callers can capture stdout to retain the report; generation does not write it.

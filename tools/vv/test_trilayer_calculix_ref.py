@@ -24,7 +24,7 @@ PROTOTYPE = 4.269532769e-3
 
 
 def validate_reference(data, contract):
-    """Bind the selected value with standard JSON Schema const/contains.
+    """Add the validator-only selected-value check with const/contains.
 
     JSON Schema cannot reference another instance field directly, so normalize
     the contract with the artifact's top-level value before validating it.
@@ -90,6 +90,9 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         selected = next(m for m in invalid["meshes"]
                         if m["name"] == invalid["selected_mesh"])
         selected["W_bfp_m"] *= 1.01
+        # Equality is outside the published structural schema contract.
+        jsonschema.Draft202012Validator(contract).validate(invalid)
+        # Full producer validation must still reject the mismatched value.
         variants.append(invalid)
         for index, invalid in enumerate(variants):
             with self.subTest(variant=index):

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://chipcae.local/tools/vv/calculix_trilayer/reference.schema.json",
   "title": "WP-2 trilayer CalculiX REFERENCE artifact",
-  "description": "WP-2 v1 contract with exactly coarse and fine meshes and fine selection. Full validation requires normalizing a copy with the selected name and top-level W_bfp_m as a const/contains constraint; the raw schema alone cannot enforce equality between instance fields.",
+  "description": "WP-2 v1 structural contract with exactly coarse and fine meshes and fine selection. Equality of top-level W_bfp_m and the selected mesh value is a validator-only producer check, outside this schema contract. Raw schema validation does not enforce equality between instance fields.",
   "type": "object",
   "additionalProperties": false,
   "required": [
