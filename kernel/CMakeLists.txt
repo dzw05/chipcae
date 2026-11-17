@@ -49,7 +49,6 @@ chipcae_assert_no_vtk(chipcae-kernel)
 
 add_executable(chipcae-import
     src/import_main.cpp
-    src/import_cli_contract.hpp
     src/import_common.hpp
     src/import_common.cpp
     src/import_ecad.cpp

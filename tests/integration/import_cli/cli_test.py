@@ -67,6 +67,10 @@ def run_case(binary, case, generate=False):
                 ("custom_paths", ["--polyset", "custom.polyset", "--report", "custom.json"],
                  (*ARTIFACTS, "custom.polyset", "custom.json")),
                 ("missing_material_map", [], ARTIFACTS),
+                ("duplicate_input", ["b.xml"], ARTIFACTS),
+                ("duplicate_output", ["-o", "other.json", "-o", "stack.json"], ARTIFACTS),
+                ("duplicate_material_map", ["--material-map", HERE / "material_map.json"], ARTIFACTS),
+                ("duplicate_accept_b_tier", ["--accept-b-tier", "--accept-b-tier"], ARTIFACTS),
             )
             for name, flags, artifacts in variants:
                 work = directory / name
@@ -93,6 +97,9 @@ def run_case(binary, case, generate=False):
                 ("missing_input", ["-o", "stack.json"], 2),
                 ("missing_output", [FIXTURES / "board_2layer.xml"], 2),
                 ("missing_out_value", [FIXTURES / "board_2layer.xml", "-o"], 2),
+                *((f"missing_{option[2:].replace('-', '_')}_value",
+                   ["a.xml", "-o", "stack.json", option], 2)
+                  for option in ("--polyset", "--report", "--material-map")),
             ):
                 result = invoke(binary, args, directory)
                 check(result.returncode == code, f"{name}: exit {result.returncode}")
@@ -102,17 +109,18 @@ def run_case(binary, case, generate=False):
             check(result.returncode == 2, "mixed help: expected exit 2")
             check(result.stdout == b"", "mixed help: unexpected stdout")
             check(result.stderr == b"unknown argument: --help\n", "mixed help: stderr differs")
-            if not generate:
-                for option in ("--accept", "--t-min", "--stack-override", "--assembly"):
-                    for prefix in ([], ["a.xml"], ["-o", "stack.json"]):
-                        result = invoke(binary, [*prefix, option, "xyz"], directory)
-                        check(result.returncode == 2, f"{option}: missing required argument exit")
-                        check(result.stdout == (golden / "help" / "stdout").read_bytes(),
-                              f"{option}: missing required argument help differs")
-                        check(result.stderr == b"", f"{option}: missing required argument stderr")
         elif case == "reserved":
             check(not generate, "reserved diagnostics are assertions, not baseline goldens")
             failures = []
+            for option in ("--accept", "--t-min", "--stack-override", "--assembly"):
+                for prefix in ([], ["a.xml"], ["-o", "stack.json"]):
+                    result = invoke(binary, [*prefix, option, "xyz"], directory)
+                    check(result.returncode == 2 and b"not implemented yet" in result.stderr and
+                          option.encode() in result.stderr,
+                          f"{option}: reserved diagnostic differs: {result.stderr!r}")
+            result = invoke(binary, ["--assembly", "assembly.json", "-o", "out.stack.json"], directory)
+            check(result.returncode == 2 and b"not implemented yet" in result.stderr and
+                  b"--assembly" in result.stderr, "assembly invocation: diagnostic differs")
             for value in ("xyz", "1e9999", "1e-5", ""):
                 result = invoke(binary, ["a.xml", "-o", "stack.json", "--t-min", value], directory)
                 check(result.returncode == 2 and b"not implemented yet" in result.stderr and
@@ -132,7 +140,7 @@ def run_case(binary, case, generate=False):
                                ["a.xml", "-o", "stack.json", "--accept-b-tier"]):
                     result = invoke(binary, [*prefix, option], directory)
                     check(result.returncode == 2, f"missing {option}: exit {result.returncode}")
-                    if prefix and not (option == "--accept" and "--accept-b-tier" in prefix):
+                    if prefix:
                         check(b"not implemented yet" in result.stderr and
                               option.encode() in result.stderr,
                               f"missing {option}: reserved diagnostic differs: {result.stderr!r}")

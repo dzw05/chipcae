@@ -1,4 +1,3 @@
-#include "import_cli_contract.hpp"
 #include "import_common.hpp"
 
 #include <iostream>

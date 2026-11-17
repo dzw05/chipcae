@@ -6,6 +6,13 @@
 
 // Private to chipcae-import; this header is not an installed public API.
 namespace chipcae::importer {
+struct CliExit {
+    static constexpr int success = 0;
+    static constexpr int usage = 2;
+    static constexpr int import_rejected = 7;
+    static constexpr int material_mapping_missing = 9;
+};
+
 struct ImportOptions {
     std::filesystem::path input, output, polyset, report, material_map;
     bool accept_b_tier = false;

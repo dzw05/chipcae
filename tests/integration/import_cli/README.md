@@ -48,8 +48,9 @@ option on a valid input/output parse path, the test requires exit 2 and stderr
 containing both `not implemented yet` and the option name. It also covers
 `--t-min` placeholder values using the same substring contract. Conflicts in
 both flag orders require exit 2 only. Missing reserved values on valid parse
-paths require the same diagnostic substrings, except for the accept conflict.
-Missing input/output paths retain their separate exit-code checks. Help paths
+paths require the same diagnostic substrings, including a missing accept value
+after accept-b-tier. Successfully parsed reserved options require these diagnostics
+even without input/output, including the planned assembly invocation. Help paths
 are checked separately by the `help` case against the baseline help bytes.
 
 Historically, before implementation the four reserved diagnostic assertions
@@ -69,3 +70,9 @@ baseline SHA, configured with ECAD ON, tests OFF, and Release, then built with
 and `help` cases with `--generate` to reproduce them. The measured toolchain was
 GNU C++ 14.2.0 on Linux. Byte-exact floating-point text can depend on the compiler
 and standard library; goldens intentionally remain byte comparisons.
+
+Duplicate positional input, output, material-map, and accept-b-tier cases compare
+exit status, stdout, stderr, and artifacts with the same main-baseline binary.
+Missing polyset/report/material-map values also compare baseline help bytes.
+The `.chipcae-autotests` marker enables `chipcae_auto_test_subdirs()` discovery
+from tests/CMakeLists.txt; this directory's CMakeLists.txt registers the four tests.
