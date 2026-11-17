@@ -3,7 +3,6 @@
 #include "diagnostic_id.hpp"
 #include "step_inspection.hpp"
 #include "step_options.hpp"
-#include "step_shape.hpp"
 
 #include <BOPAlgo_ArgumentAnalyzer.hxx>
 #include <BRepAdaptor_Curve.hxx>
@@ -734,7 +733,6 @@ detail::import_step_with_inspection(const std::filesystem::path& path,
         } else {
             result.body_names.push_back(path_name);
             auto shape = tool->GetShape(definition).Moved(location);
-            source->bodies.emplace(path_name, shape);
             for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
                 const auto index = source->faces.FindIndex(it.Current());
                 if (index)

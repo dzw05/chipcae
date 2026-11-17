@@ -2,12 +2,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
 
 #ifdef CHIPCAE_ENABLE_OCCT
-#include "step_shape.hpp"
+#include "step_inspection.hpp"
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
@@ -19,11 +20,15 @@
 #include <GCPnts_QuasiUniformDeflection.hxx>
 #include <GProp_GProps.hxx>
 #include <ShapeBuild_ReShape.hxx>
+#include <TDF_LabelSequence.hxx>
+#include <TDataStd_Name.hxx>
 #include <TDocStd_Document.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
+#include <XCAFDoc_DocumentTool.hxx>
+#include <XCAFDoc_ShapeTool.hxx>
 #include <XSControl_WorkSession.hxx>
 #include <gp_Pln.hxx>
 #endif
@@ -38,6 +43,52 @@ SliceResult reject(DefectReason reason, const char* details) {
     return {{}, {d}};
 }
 #ifdef CHIPCAE_ENABLE_OCCT
+// Retrieve the named occurrence from the retained source document, using the
+// same paths and accumulated reference locations as the importer.
+TopoDS_Shape body_shape(const detail::StepShape& source, std::string_view body) {
+    if (source.document.IsNull()) {
+        BRep_Builder builder;
+        TopoDS_Compound shape;
+        builder.MakeCompound(shape);
+        bool found = false;
+        for (int i = 1; i <= source.faces.Extent(); ++i)
+            if (static_cast<std::size_t>(i) <= source.names.size() && source.names[i - 1] == body) {
+                builder.Add(shape, source.faces(i));
+                found = true;
+            }
+        return found ? TopoDS_Shape(shape) : TopoDS_Shape{};
+    }
+    auto tool = XCAFDoc_DocumentTool::ShapeTool(source.document->Main());
+    TopoDS_Shape result;
+    std::function<void(TDF_Label, std::string, TopLoc_Location)> visit;
+    visit = [&](TDF_Label label, std::string prefix, TopLoc_Location parent) {
+        Handle(TDataStd_Name) name;
+        std::string text = "unnamed";
+        if (label.FindAttribute(TDataStd_Name::GetID(), name)) {
+            text.resize(static_cast<std::size_t>(name->Get().LengthOfCString()) + 1);
+            char* ptr = text.data();
+            text.resize(static_cast<std::size_t>(name->Get().ToUTF8CString(ptr)));
+        }
+        auto path = prefix.empty() ? text : prefix + "/" + text;
+        auto definition = label;
+        auto location = parent;
+        if (tool->IsReference(label)) {
+            tool->GetReferredShape(label, definition);
+            location = parent * tool->GetLocation(label);
+        }
+        TDF_LabelSequence children;
+        if (tool->GetComponents(definition, children)) {
+            for (int i = 1; i <= children.Length(); ++i)
+                visit(children(i), path, location);
+        } else if (path == body)
+            result = tool->GetShape(definition).Moved(location);
+    };
+    TDF_LabelSequence roots;
+    tool->GetFreeShapes(roots);
+    for (int i = 1; i <= roots.Length(); ++i)
+        visit(roots(i), "", TopLoc_Location());
+    return result;
+}
 using Point = std::array<Real, 2>;
 Real distance(Point a, Point b) {
     return std::hypot(a[0] - b[0], a[1] - b[1]);
@@ -114,6 +165,23 @@ Polylines section_edges(const TopoDS_Shape& shape, Real z, Real chord) {
 }
 std::vector<Ring> contours(const TopoDS_Shape& shape, Real z, Real chord, Real eps) {
     auto edges = section_edges(shape, z, chord);
+    // Each endpoint must have exactly one partner, including closed curves.
+    // Validate before consuming edges so early closure cannot hide a branch.
+    for (std::size_t i = 0; i < edges.size(); ++i) {
+        if (edges[i].size() < 2)
+            throw std::runtime_error("degenerate section edge");
+        for (int end = 0; end < 2; ++end) {
+            const auto p = end ? edges[i].back() : edges[i].front();
+            std::size_t matches = 0;
+            for (std::size_t j = 0; j < edges.size(); ++j)
+                for (int other = 0; other < 2; ++other)
+                    if ((i != j || end != other) &&
+                        distance(p, other ? edges[j].back() : edges[j].front()) <= eps)
+                        ++matches;
+            if (matches != 1)
+                throw std::runtime_error("invalid section vertex degree");
+        }
+    }
     std::vector<Ring> rings;
     while (!edges.empty()) {
         Ring r{std::move(edges.back())};
@@ -191,14 +259,13 @@ Real deviation(const Polylines& a, const Polylines& b) {
         }
     return maximum;
 }
-bool equal(const std::vector<SlabSection>& a, const std::vector<SlabSection>& b) {
-    // Imported STEP coordinates may differ by up to a nanometre.
-    auto ring = [](const Ring& x, const Ring& y) {
+bool equal(const std::vector<SlabSection>& a, const std::vector<SlabSection>& b, Real tolerance) {
+    auto ring = [tolerance](const Ring& x, const Ring& y) {
         if (x.pts.size() != y.pts.size())
             return false;
         for (std::size_t i = 0; i < x.pts.size(); ++i)
-            if (std::abs(x.pts[i][0] - y.pts[i][0]) > 1e-9 ||
-                std::abs(x.pts[i][1] - y.pts[i][1]) > 1e-9)
+            if (std::abs(x.pts[i][0] - y.pts[i][0]) > tolerance ||
+                std::abs(x.pts[i][1] - y.pts[i][1]) > tolerance)
                 return false;
         return true;
     };
@@ -229,10 +296,10 @@ slice_prismatic(const StepImportResult& input, std::string_view body, const Slic
     if (!input.source)
         return reject(DefectReason::PART_NOT_PRISMATIC, "empty shape");
     try {
-        const auto found = input.source->bodies.find(body);
-        if (found == input.source->bodies.end() || found->second.IsNull())
+        const auto shape = body_shape(*input.source, body);
+        if (shape.IsNull())
             return reject(DefectReason::PART_NOT_PRISMATIC, "empty shape");
-        const auto& shape = found->second;
+        const Real merge_tolerance = input.source->session.IsNull() ? 1e-12 : 1e-9;
         if (!std::isfinite(options.chord_tol) || options.chord_tol <= 0 ||
             !std::isfinite(options.tau_a) || !std::isfinite(options.tau_b) || options.tau_a < 0 ||
             options.tau_b < options.tau_a)
@@ -304,7 +371,7 @@ slice_prismatic(const StepImportResult& input, std::string_view body, const Slic
             volume_error += perimeter * slab_delta * (high - low);
             auto cross = sections(std::move(center));
             if (!result.slabs.empty() && result.slabs.back().z1 == low &&
-                equal(result.slabs.back().sections, cross))
+                equal(result.slabs.back().sections, cross, merge_tolerance))
                 result.slabs.back().z1 = high;
             else
                 result.slabs.push_back({low, high, std::move(cross)});

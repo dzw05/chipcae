@@ -1,4 +1,5 @@
 #pragma once
+#include "../../../geometry/src/step_inspection.hpp"
 #include "slice_test.hpp"
 
 #include <BRepAdaptor_Curve.hxx>
@@ -51,6 +52,11 @@ inline StepImportResult fixture(const TopoDS_Shape& shape) {
     require(writer.Write(path.string().c_str()) == IFSelect_RetDone, "fixture write");
     auto result = import_step(path, {compute_tolerances({0.04, 0.0005, 0.001, 0}, {}).value()});
     require(result.source && result.body_names.size() == 1, "fixture imports one named body");
+    // Generated fixtures use synthetic comparison precision even after the
+    // STEP round trip. Retain the document/topology, but no real-file session.
+    auto source = std::make_shared<detail::StepShape>(*result.source);
+    source->session.Nullify();
+    result.source = source;
     return result;
 }
 inline SliceResult slice(const StepImportResult& input) {
