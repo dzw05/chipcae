@@ -5,12 +5,15 @@ materials:
   ref: fcbga_demo.materials.json
 mesh:
   type: aligned_cartesian_cut
+  nx: 2
+  ny: 2
+  max_ratio: 10
+  levels: 1
   cut:
     stabilization: ghost_penalty
 physics:
   - id: mech
     solver: fem.solid
-    temp_from: thermal
 loads:
   - type: uniform_temperature
     T_ref: 298.15

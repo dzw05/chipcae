@@ -16,7 +16,7 @@ with tempfile.TemporaryDirectory() as temp:
         shutil.copyfile(examples / f'fcbga_demo.{name}.json', root / f'fcbga_demo.{name}.json')
     case_path = root / 'fcbga_demo.case.json'
     case = json.loads(case_path.read_text())
-    case['mesh'].update(nx=2, ny=2)
+    case['mesh'].update(nx=3, ny=3)
     case_path.write_text(json.dumps(case))
     profile = root / 'profile.json'
     profile.write_text(json.dumps({'schema': 'chipcae.run_profile/1.0',
@@ -33,7 +33,7 @@ with tempfile.TemporaryDirectory() as temp:
     assert summary['warpage_pv'] > 1e-9, summary
     print('demo warpage_pv=', summary['warpage_pv'], flush=True)
 
-    # Independent reference: collapse each table to its linear value at T_ref.
+    # Consistency check: collapse each table to its linear value at T_ref.
     material_path = root / 'fcbga_demo.materials.json'
     library = json.loads(material_path.read_text())
     reference = case['loads'][0]['T_ref']

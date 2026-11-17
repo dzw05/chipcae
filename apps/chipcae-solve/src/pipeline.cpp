@@ -393,23 +393,20 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
         temperature = inputs.T_ref;
         displacement = 0.0;
         // Freeze constitutive properties at the reference temperature for this one-way solve.
-        auto materials = inputs.materials;
-        for (auto& [id, material] : materials) {
-            auto evaluate = [&](const PropertyTable& table, const char* property) {
-                auto result =
-                    interpolate_property(table, inputs.T_ref, "material " + id + "/" + property);
-                if (result.clamped)
+        const auto& materials = inputs.materials;
+        for (const auto& [id, material] : materials) {
+            auto warn = [&](bool clamped, const char* property) {
+                if (clamped)
                     emit(io::LogLine{2,
                                      0,
                                      "material " + id + "/" + property +
                                          ": T_ref outside table range; clamped to nearest endpoint",
                                      "",
                                      0});
-                return result.value;
             };
-            material.E = evaluate(material.E_table, "E");
-            material.nu = evaluate(material.nu_table, "nu");
-            material.alpha = evaluate(material.alpha_table, "alpha");
+            warn(material.E_clamped, "E");
+            warn(material.nu_clamped, "nu");
+            warn(material.alpha_clamped, "alpha");
         }
         const std::size_t na = arrays.attr_table.entries.size();
         std::vector<Constitutive> mixtures;
@@ -426,6 +423,9 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             lambda[a] = m.E * m.nu / ((1 + m.nu) * (1 - 2 * m.nu));
             mu[a] = m.E / (2 * (1 + m.nu));
             stress[a] = (3 * lambda[a] + 2 * mu[a]) * m.alpha;
+            if (!std::isfinite(lambda[a]) || !std::isfinite(mu[a]) || !std::isfinite(stress[a]))
+                throw InputError(ErrorCode::INPUT_INVALID,
+                                 "material " + id + ": nonfinite constitutive coefficient");
             conductivities.push_back({m.k, m.k, m.k});
             auto layer =
                 std::find_if(inputs.stack.layers.begin(),

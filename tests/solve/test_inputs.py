@@ -95,7 +95,27 @@ with tempfile.TemporaryDirectory() as tmp:
             for prop in properties:
                 tab['columns'][prop] *= 2
             (root / 'material.json').write_text(json.dumps(bad))
-            run(case, profile, 14, 'strictly increasing')
+            run(case, profile, 14, f'material organic_eq/{properties[0]}: temperatures must be strictly increasing')
+    (root / 'material.json').write_text(json.dumps(library))
+    # Schema-valid unsupported modes must fail before the solve.
+    for section, properties in (('elastic', ('E', 'nu')),
+                                ('thermal_expansion', ('alpha',))):
+        for mode in ('pchip', 'constant'):
+            bad = copy.deepcopy(library)
+            tab = bad['materials'][0][section]['table']
+            tab['temperatures'] = [250, 325, 500]
+            tab['interpolation'] = mode
+            for prop in properties:
+                tab['columns'][prop] *= 3
+            (root / 'material.json').write_text(json.dumps(bad))
+            run(case, profile, 14, f'material organic_eq/{properties[0]}: unsupported interpolation')
+    bad = copy.deepcopy(library)
+    tab = bad['materials'][0]['elastic']['table']
+    tab.update(temperatures=[325, 500], interpolation='linear', extrapolation='error')
+    for prop in ('E', 'nu'):
+        tab['columns'][prop] *= 2
+    (root / 'material.json').write_text(json.dumps(bad))
+    run(case, profile, 14, 'material organic_eq/E: requested temperature outside table range')
     (root / 'material.json').write_text(json.dumps(library))
     # Every integer converted to int is tested on both signed/unsigned overflow paths.
     for value in (4294967297, 2**63-1, 2**64-1, -2**63, 1.5, '1', True):

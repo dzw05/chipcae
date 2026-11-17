@@ -129,8 +129,14 @@ interpolate_property(const PropertyTable& table, double temperature, const std::
         if (i && t[i] <= t[i - 1])
             fail("temperatures must be strictly increasing");
     }
+    if (table.interpolation != "linear" && !(table.interpolation == "constant" && t.size() == 1))
+        fail("unsupported interpolation: " + table.interpolation);
+    if (table.extrapolation != "clamp" && table.extrapolation != "error")
+        fail("unsupported extrapolation: " + table.extrapolation);
     if (t.size() == 1)
         return {v.front(), false};
+    if ((temperature < t.front() || temperature > t.back()) && table.extrapolation == "error")
+        fail("requested temperature outside table range");
     if (temperature < t.front())
         return {v.front(), true};
     if (temperature > t.back())
@@ -139,7 +145,10 @@ interpolate_property(const PropertyTable& table, double temperature, const std::
     auto i = static_cast<std::size_t>(upper - t.begin());
     if (*upper == temperature)
         return {v[i], false};
-    return {v[i - 1] + (temperature - t[i - 1]) * (v[i] - v[i - 1]) / (t[i] - t[i - 1]), false};
+    double value = v[i - 1] + (temperature - t[i - 1]) * (v[i] - v[i - 1]) / (t[i] - t[i - 1]);
+    if (!std::isfinite(value))
+        fail("nonfinite interpolated property value");
+    return {value, false};
 }
 RunInputs load_inputs(const std::filesystem::path& case_path,
                       const std::filesystem::path& profile_path,
@@ -388,21 +397,34 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
                 invalid("O2 requires isotropic thermo_elastic materials");
             Material material;
             material.id = card.at("id").as<std::string>();
-            auto column = [&](const Json& table, const char* name) {
+            auto column = [&](const Json& table, const char* name, double& value, bool& clamped) {
                 const auto& temperatures = table.at("temperatures");
                 const auto& values = table.at("columns").at(name);
                 PropertyTable result;
+                result.interpolation = table.contains("interpolation")
+                                           ? table.at("interpolation").as<std::string>()
+                                           : "linear";
+                result.extrapolation = table.contains("extrapolation")
+                                           ? table.at("extrapolation").as<std::string>()
+                                           : "error";
                 for (const auto& t : temperatures.array_range())
                     result.temperatures.push_back(t.as<double>());
                 for (const auto& v : values.array_range())
                     result.values.push_back(v.as<double>());
-                (void)interpolate_property(
-                    result, out.T_ref, "material " + material.id + "/" + name);
+                auto evaluated =
+                    interpolate_property(result, out.T_ref, "material " + material.id + "/" + name);
+                value = evaluated.value;
+                clamped = evaluated.clamped;
                 return result;
             };
-            material.E_table = column(card.at("elastic").at("table"), "E");
-            material.nu_table = column(card.at("elastic").at("table"), "nu");
-            material.alpha_table = column(card.at("thermal_expansion").at("table"), "alpha");
+            material.E_table =
+                column(card.at("elastic").at("table"), "E", material.E, material.E_clamped);
+            material.nu_table =
+                column(card.at("elastic").at("table"), "nu", material.nu, material.nu_clamped);
+            material.alpha_table = column(card.at("thermal_expansion").at("table"),
+                                          "alpha",
+                                          material.alpha,
+                                          material.alpha_clamped);
             for (double E : material.E_table.values)
                 if (!(E > 0))
                     invalid("material " + material.id + "/E: must be positive");

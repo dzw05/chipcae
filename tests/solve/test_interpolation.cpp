@@ -20,16 +20,38 @@ int main() {
         auto result = interpolate_property(table, temperature);
         check(std::abs(result.value - value) <= 1e-12 && result.clamped == clamped);
     }
+    PropertyTable nonuniform{{250, 300, 450, 700}, {10, 30, 15, 50}};
+    check(interpolate_property(nonuniform, 375).value == 22.5);
+    for (const auto& mode : {"pchip", "constant"}) {
+        auto unsupported = nonuniform;
+        unsupported.interpolation = mode;
+        try {
+            (void)interpolate_property(unsupported, 375);
+            check(false);
+        } catch (const InputError& error) {
+            check(error.code == chipcae::ErrorCode::INPUT_INVALID);
+        }
+    }
+    PropertyTable constant{{300}, {17}, "constant", "clamp"};
+    check(interpolate_property(constant, 200).value == 17);
+    nonuniform.extrapolation = "error";
+    try {
+        (void)interpolate_property(nonuniform, 200);
+        check(false);
+    } catch (const InputError& error) {
+        check(error.code == chipcae::ErrorCode::INPUT_INVALID);
+    }
     for (double t : {0., 300., 1000.}) {
         auto result = interpolate_property({{300}, {17}}, t);
         check(result.value == 17 && !result.clamped);
     }
     for (auto bad : {PropertyTable{{250, 250}, {10, 40}}, PropertyTable{{400, 250}, {10, 40}}}) {
         try {
-            (void)interpolate_property(bad, 300);
+            (void)interpolate_property(bad, 300, "material demo/E");
             check(false);
         } catch (const InputError& error) {
             check(error.code == chipcae::ErrorCode::INPUT_INVALID);
+            check(std::string(error.what()).find("material demo/E") != std::string::npos);
             check(std::string(error.what()).find("strictly increasing") != std::string::npos);
         }
     }
