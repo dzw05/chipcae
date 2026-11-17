@@ -7,7 +7,7 @@
       "unit_system": "SI",
       "density": 1000,
       "conductivity": 3.1,
-      "x-conductivity-source": "含过孔的高密度 FC-PBGA 有机基板，取等效厚度方向值，见 ECTC 2005 [doi:10.1109/ectc.2005.1442026](https://doi.org/10.1109/ectc.2005.1442026)：k_zz 随芯层过孔增加从 0.6 升到 3.1。",
+      "x-conductivity-source": "含过孔的高密度 FC-PBGA 有机基板，取等效厚度方向值，见 ECTC 2005 [doi:10.1109/ectc.2005.1442026](https://doi.org/10.1109/ectc.2005.1442026)。",
       "model": "thermo_elastic",
       "provenance": {
         "source_type": "illustrative",
@@ -60,7 +60,7 @@
       "unit_system": "SI",
       "density": 1000,
       "conductivity": 58,
-      "x-conductivity-source": "SAC305 体材料的导热系数，数据手册给的是 58 W/(m·K)：[TME/Cynel SAC305 TDS](https://www.tme.com/Document/be9dc599936f5899f2f2308663aa8b3c/SAC305_EN.pdf)、[Solder Connection 合金表](https://www.solderconnection.com/wp-content/uploads/2023/03/Solder-Alloy-Technical-Specifications.pdf)。",
+      "x-conductivity-source": "SAC305 体材料的导热系数，见 [TME/Cynel SAC305 TDS](https://www.tme.com/Document/be9dc599936f5899f2f2308663aa8b3c/SAC305_EN.pdf)、[Solder Connection 合金表](https://www.solderconnection.com/wp-content/uploads/2023/03/Solder-Alloy-Technical-Specifications.pdf)。",
       "model": "thermo_elastic",
       "provenance": {
         "source_type": "illustrative",

@@ -54,20 +54,28 @@ area = sum(a[0] * b[1] - b[0] * a[1]
            for a, b in zip(actual_polygon, actual_polygon[1:] + actual_polygon[:1])) / 2
 assert math.isclose(area, 3.92e-4, rel_tol=1e-12, abs_tol=0), area
 
-# Source prose may be phrased as one sentence; require the specified citation
-# per card, then strip only the two permitted additions before deep comparison.
-citations = {
-    "organic_eq": "https://doi.org/10.1109/ectc.2005.1442026",
-    "sac305_ball_eq": "https://www.tme.com/Document/be9dc599936f5899f2f2308663aa8b3c/SAC305_EN.pdf",
-    "underfill": "https://exdron.com/Exdron-Pdf/COOLTHERM-ME-531-SYR-30CC-EFD-DATASHEET.pdf",
-    "silicon": "Glassbrenner & Slack",
+# Freeze the complete source text, including citations. Only conductivity and
+# x-conductivity-source may be added to each template card.
+sources = {
+    "organic_eq": (
+        "含过孔的高密度 FC-PBGA 有机基板，取等效厚度方向值，见 ECTC 2005 [doi:10.1109/ectc.2005.1442026](https://doi.org/10.1109/ectc.2005.1442026)。"
+    ),
+    "sac305_ball_eq": (
+        "SAC305 体材料的导热系数，见 [TME/Cynel SAC305 TDS](https://www.tme.com/Document/be9dc599936f5899f2f2308663aa8b3c/SAC305_EN.pdf)、[Solder Connection 合金表](https://www.solderconnection.com/wp-content/uploads/2023/03/Solder-Alloy-Technical-Specifications.pdf)。"
+    ),
+    "underfill": (
+        "硅微粉填充的环氧底填，取典型值，见 [CoolTherm ME-531 TDS](https://exdron.com/Exdron-Pdf/COOLTHERM-ME-531-SYR-30CC-EFD-DATASHEET.pdf)（0.5 W/mK）。"
+    ),
+    "silicon": (
+        "单晶硅 300 K 下的导热系数，见 Glassbrenner & Slack, *Phys. Rev.* 134, A1058 (1964)。"
+    ),
 }
 materials = copy.deepcopy(inputs["materials"])
 for card in materials["materials"]:
     ident = card["id"]
     assert card.pop("conductivity") == conductivity[ident], ident
     source = card.pop("x-conductivity-source")
-    assert isinstance(source, str) and citations[ident] in source, (ident, source)
+    assert source == sources[ident], (ident, source)
 assert materials == read(root / "schema/examples/fcbga_demo.materials.json")
 
 assert inputs["profile"] == {
