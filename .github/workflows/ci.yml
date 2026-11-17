@@ -343,6 +343,9 @@ jobs:
             build/perf-summary.json
             build/perf-compare.json
 
+      - name: Install acceptance
+        run: ctest --test-dir build -L install --output-on-failure
+
   mesh:
     name: Mesh
     needs: lint

@@ -1,4 +1,5 @@
 #include "chipcae/core/error_code.hpp"
+#include "chipcae/core/version.hpp"
 
 #include <iostream>
 #include <map>
@@ -40,6 +41,11 @@ int main(int argc, char** argv) {
         if (mpi.rank == 0)
             std::cout << "Usage: chipcae-solve --case <case.json> --profile <run_profile.json> "
                          "--out <run_dir> [--cut-output hex]\n";
+        return 0;
+    }
+    if (argc == 2 && std::string(argv[1]) == "--version") {
+        if (mpi.rank == 0)
+            std::cout << "chipcae-solve " << chipcae::version_string() << '\n';
         return 0;
     }
     std::map<std::string, std::string> args;
