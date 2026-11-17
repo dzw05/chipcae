@@ -102,8 +102,11 @@ QString pick(const std::function<QString()>& picker,
                     for (const auto& name : {"map.json", "map.JSON", "map.JsOn"})
                         check(QDir::match(model->nameFilters(), name),
                               "map filter exposes " + QString(name));
-                check(dialog->nameFilters() == QStringList{"JSON (*.[jJ][sS][oO][nN])"},
-                      "exact map filter");
+                check(
+                    dialog->nameFilters() ==
+                        QStringList{"JSON (*.json *.jsoN *.jsOn *.jsON *.jSon *.jSoN *.jSOn *.jSON "
+                                    "*.Json *.JsoN *.JsOn *.JsON *.JSon *.JSoN *.JSOn *.JSON)"},
+                    "exact map filter");
             }
             driver.stop();
             if (cancel) {
@@ -119,7 +122,15 @@ QString pick(const std::function<QString()>& picker,
             } else {
                 // Allow the filesystem model to populate, then enter the filename
                 // and use the same accept path as a user pressing Open.
-                QTimer::singleShot(100, dialog, [dialog, path] {
+                QTimer::singleShot(100, dialog, [dialog, path, map] {
+                    if (map && QFileInfo(path).isFile() &&
+                        QFileInfo(path).suffix().compare("json", Qt::CaseInsensitive) == 0) {
+                        for (auto* model : dialog->findChildren<QFileSystemModel*>()) {
+                            const auto index = model->index(path);
+                            check(index.isValid() && (model->flags(index) & Qt::ItemIsEnabled),
+                                  "JSON case variant enabled in actual picker model");
+                        }
+                    }
                     auto* edit = dialog->findChild<QLineEdit*>("fileNameEdit");
                     require(edit, "file picker filename field");
                     edit->setText(path);
@@ -669,6 +680,32 @@ sys.exit(rc)
                        false,
                        true) == dir.path(),
                   "ODB directory returned unchanged");
+            for (const auto& suffix : {"json",
+                                       "jsoN",
+                                       "jsOn",
+                                       "jsON",
+                                       "jSon",
+                                       "jSoN",
+                                       "jSOn",
+                                       "jSON",
+                                       "Json",
+                                       "JsoN",
+                                       "JsOn",
+                                       "JsON",
+                                       "JSon",
+                                       "JSoN",
+                                       "JSOn",
+                                       "JSON"}) {
+                const auto path = dir.filePath("case variant." + QString(suffix));
+                write(path, "{}");
+                check(
+                    pick(
+                        [&] { return ImportSourceDialog::getMaterialMapPath(nullptr, dir.path()); },
+                        path,
+                        false,
+                        true) == path,
+                    "map picker accepts literal case variant " + QString(suffix));
+            }
             for (const auto& path : {map,
                                      dir.filePath("picker.json"),
                                      dir.filePath("picker.txt"),

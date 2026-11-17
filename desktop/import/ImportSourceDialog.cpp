@@ -62,7 +62,9 @@ QString ImportSourceDialog::getMaterialMapPath(QWidget* parent, const QString& s
     QFileDialog dialog(parent, QStringLiteral("选择材料映射"), startDir);
     dialog.setOption(QFileDialog::DontUseNativeDialog);
     dialog.setFileMode(QFileDialog::ExistingFile);
-    dialog.setNameFilters({"JSON (*.[jJ][sS][oO][nN])"});
+    // Use literal suffixes: file-dialog glob backends need not support character classes.
+    dialog.setNameFilters({"JSON (*.json *.jsoN *.jsOn *.jsON *.jSon *.jSoN *.jSOn *.jSON "
+                           "*.Json *.JsoN *.JsOn *.JsON *.JSon *.JSoN *.JSOn *.JSON)"});
     if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty())
         return {};
     const auto path = dialog.selectedFiles().first();
