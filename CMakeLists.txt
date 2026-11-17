@@ -62,4 +62,5 @@ endif()
 
 if(CHIPCAE_BUILD_TESTS)
     add_subdirectory(tests)
+    add_subdirectory(tests/vv)
 endif()
