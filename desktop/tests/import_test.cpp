@@ -1040,11 +1040,12 @@ sys.exit(rc)
                                : "import destination already exists or collides with another path";
             check(!c.busy() && c.outcome() == ImportOutcome::Failed && c.error() == expectedError,
                   "failed restart exposes local failure");
-            check(confirmed == 1 && finished == 1, "failed restart notifies once");
+            check(confirmed == 1 && finished == 0,
+                  "failed restart confirms intent without a process completion signal");
             check(defects == 1, "failed restart refreshes defects once");
             check(!c.restartAccepted(), "Failed outcome rejects another accepted restart");
             c.confirmDefects();
-            check(confirmed == 1 && finished == 1 && defects == 1 &&
+            check(confirmed == 1 && finished == 0 && defects == 1 &&
                       c.outcome() == ImportOutcome::Failed && c.error() == expectedError,
                   "confirmation after failed restart is a silent no-op preserving failure");
             check(dialog.isVisible() &&

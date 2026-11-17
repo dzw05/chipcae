@@ -166,10 +166,9 @@ bool ImportController::restartAccepted() {
     request.acceptBTier = true;
     emit userConfirmed();
     const bool started = start(request);
-    if (!started) {
+    // Refresh the dialog on local rejection; finished belongs to process completion.
+    if (!started)
         emit defectsReady();
-        emit finished(false);
-    }
     return started;
 }
 void ImportController::confirmDefects() {
