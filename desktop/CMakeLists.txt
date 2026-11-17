@@ -190,3 +190,12 @@ if(CHIPCAE_BUILD_TESTS)
     set_tests_properties(desktop_monitor desktop_monitor_broker_lifetime desktop_monitor_invalid_manifest
         PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
 endif()
+
+if(CHIPCAE_BUILD_TESTS)
+    add_executable(desktop_config tests/config_test.cpp)
+    target_include_directories(desktop_config PRIVATE config)
+    target_link_libraries(desktop_config PRIVATE Qt6::Core)
+    target_compile_definitions(desktop_config PRIVATE
+        CONFIG_CONTRACT="${CMAKE_CURRENT_SOURCE_DIR}/contracts/desktop-config.md")
+    add_test(NAME desktop_config COMMAND desktop_config)
+endif()
