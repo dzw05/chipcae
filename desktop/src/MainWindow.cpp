@@ -1,13 +1,21 @@
 #include "MainWindow.hpp"
 
 #include "CaseTreeView.hpp"
+#include "ResidualChart.hpp"
 #include "StackEditor.hpp"
 
 #include <QDockWidget>
+#include <QElapsedTimer>
 #include <QFileDialog>
+#include <QFileInfo>
+#include <QLabel>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPlainTextEdit>
+#include <QPushButton>
 #include <QSplitter>
+#include <QTimer>
+#include <QVBoxLayout>
 #include <QVTKOpenGLNativeWidget.h>
 #include <vtkActor.h>
 #include <vtkConeSource.h>
@@ -30,6 +38,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         const auto path = QFileDialog::getSaveFileName(this, tr("Save case"), {}, "JSON (*.json)");
         if (!path.isEmpty())
             report(saveCase(path));
+    });
+    menu->addAction(tr("Monitor run (explicit legacy CAELOG1)"), this, [this] {
+        auto path = QFileDialog::getOpenFileName(this, tr("Select legacy CAELOG1 event log"));
+        if (!path.isEmpty())
+            monitorRun(QFileInfo(path).absolutePath(),
+                       chipcae::desktop::EventFormat::LegacyCaelog1,
+                       nullptr,
+                       {},
+                       QFileInfo(path).fileName());
     });
     auto* view = new QVTKOpenGLNativeWidget(this);
     vtkNew<vtkGenericOpenGLRenderWindow> window;
@@ -79,4 +96,65 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("ChipCAE Desktop[*]");
 
     resize(960, 640);
+}
+
+void MainWindow::monitorRun(const QString& directory,
+                            chipcae::desktop::EventFormat format,
+                            chipcae::desktop::LocalJobService* broker,
+                            const QString& runId,
+                            const QString& eventFile) {
+    auto model = std::make_shared<chipcae::desktop::RunMonitor>(directory, format, eventFile);
+    auto* dock = new QDockWidget("Run monitor: " + directory, this);
+    auto* panel = new QWidget(dock);
+    auto* layout = new QVBoxLayout(panel);
+    auto* status = new QLabel(panel);
+    auto* chart = new chipcae::desktop::ResidualChart(panel);
+    auto* logs = new QPlainTextEdit(panel);
+    logs->setReadOnly(true);
+    auto* stop = new QPushButton("STOP", panel);
+    stop->setEnabled(broker && !runId.isEmpty());
+    layout->addWidget(status);
+    layout->addWidget(chart);
+    layout->addWidget(logs);
+    layout->addWidget(stop);
+    auto elapsed = std::make_shared<QElapsedTimer>();
+    connect(stop, &QPushButton::clicked, panel, [model, broker, runId, elapsed] {
+        model->stop(*broker, runId);
+        elapsed->start();
+    });
+    auto* timer = new QTimer(panel);
+    connect(timer, &QTimer::timeout, panel, [model, status, chart, logs, elapsed, broker, runId] {
+        model->poll();
+        if (broker) {
+            chipcae::desktop::jobs::JobRef ref;
+            ref.set_run_id(runId.toStdString());
+            try {
+                auto job = broker->Get(ref);
+                if (job.state() == chipcae::desktop::jobs::JOB_STATE_COMPLETED ||
+                    job.state() == chipcae::desktop::jobs::JOB_STATE_FAILED)
+                    model->processExited(job.native().exit_status_raw());
+            } catch (const std::exception&) {
+            }
+        }
+        if (elapsed->isValid())
+            model->checkTimeout(elapsed->elapsed());
+        auto text = QString("%4 | %1 | %2% | STOP %3")
+                        .arg(model->state)
+                        .arg(model->progress.fraction * 100)
+                        .arg(model->stopStatus)
+                        .arg(model->format == chipcae::desktop::EventFormat::LegacyCaelog1
+                                 ? "Legacy CAELOG1"
+                                 : "CCEVLOG (unsupported)");
+        if (model->ack)
+            text += QString(" step=%1 time=%2")
+                        .arg(model->ack->effective_step)
+                        .arg(model->ack->effective_time);
+        status->setText(text);
+        logs->setPlainText((model->logs + model->diagnostics).join('\n'));
+        if (chart->samples().size() != model->residuals.size())
+            chart->setSamples(model->residuals);
+    });
+    timer->start(250);
+    dock->setWidget(panel);
+    addDockWidget(Qt::BottomDockWidgetArea, dock);
 }

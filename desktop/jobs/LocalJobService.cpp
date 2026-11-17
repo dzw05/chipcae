@@ -338,6 +338,7 @@ jobs::ControlReply LocalJobService::Control(const jobs::ControlRequest& request)
         return reply;
     }
     QJsonObject command;
+    command["issuedAt"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
     command["cmd_seq"] = QString::number(r.cmdSeq + 1);
     command["client_request_id"] = QString::fromStdString(request.client_request_id());
     auto action = QString::fromStdString(jobs::ControlAction_Name(request.action()));
