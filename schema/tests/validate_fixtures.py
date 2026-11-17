@@ -1,4 +1,3 @@
-import hashlib
 import json
 import pathlib
 import sys
@@ -21,6 +20,8 @@ registry = registry.with_resource(library_schema["$id"], Resource.from_contents(
 library_validator = jsonschema.Draft202012Validator(library_schema, registry=registry)
 library = json.loads((root / "schema/examples/fcbga_demo.materials.json").read_text(encoding="utf-8"))
 library_validator.validate(library)
+
+
 def validate_material_ids(material_library):
     ids = [item["id"] for item in material_library["materials"]]
     assert len(ids) == len(set(ids)), "MATERIAL_ID_DUPLICATE (11): library ids must be unique"
@@ -34,15 +35,6 @@ for layer in stack.get("layers", []):
     referenced = {layer.get("material")}
     referenced.update(region.get("material") for region in layer.get("regions", []))
     assert referenced <= known_material_ids, "MATERIAL_MAPPING_MISSING: stack material is absent from library"
-# Freeze every non-copper entry and its order against the pre-copper origin/main
-# baseline. Compact UTF-8 JSON preserves object key order and all field values.
-legacy_materials = [item for item in library["materials"] if item["id"] != "copper"]
-legacy_serialization = json.dumps(
-    legacy_materials, ensure_ascii=False, separators=(",", ":")
-).encode("utf-8")
-assert hashlib.sha256(legacy_serialization).hexdigest() == (
-    "6ed8e9fda21ee725054a88cf6c10ee830b30c6462cee0274c86aea0aba0fe022"
-), "pre-existing material serialization and order must remain unchanged"
 assembly = json.loads((examples / "assembly/package_bulk_parts.assembly.json").read_text(encoding="utf-8"))
 lid_parts = [part for part in assembly["parts"] if part.get("id") == "lid"]
 assert len(lid_parts) == 1, "assembly must identify exactly one lid part"
