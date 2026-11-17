@@ -1,4 +1,4 @@
-"""Run-profile backend/GPU pairing acceptance tests for a CPU build."""
+"""Run-profile backend/GPU pairing acceptance tests; cuda_unavailable requires a CPU build."""
 import json
 from pathlib import Path
 import subprocess

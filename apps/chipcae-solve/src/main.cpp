@@ -64,13 +64,13 @@ int main(int argc, char** argv) {
     try {
         auto inputs =
             chipcae::solve::load_inputs(args.at("--case"), args.at("--profile"), mpi.size);
-#ifdef MFEM_USE_CUDA
+#if defined(MFEM_USE_CUDA) && defined(CHIPCAE_SOLVE_MFEM)
         // MFEM device state is process-global; keep it alive through solve::run below.
         // Device selection alone does not guarantee CUDA support in downstream solver operators.
         std::unique_ptr<mfem::Device> device;
 #endif
         if (inputs.backend == "cuda") {
-#ifndef MFEM_USE_CUDA
+#if !defined(MFEM_USE_CUDA) || !defined(CHIPCAE_SOLVE_MFEM)
             return fail(chipcae::ErrorCode::NOT_IMPLEMENTED,
                         "chipcae-solve built without CUDA-enabled MFEM");
 #else

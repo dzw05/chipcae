@@ -110,3 +110,14 @@ Otherwise it exits with NOT_IMPLEMENTED (2) and
 `chipcae-solve built without CUDA-enabled MFEM`. Invalid backend/GPU-count
 pairings exit with INPUT_INVALID (14). Device selection keeps the existing
 solve path; it does not promise GPU execution or acceleration.
+
+The CUDA-enabled MFEM branch is compile-only in scope and **unverified (未实测)**:
+it has not been compiled or runtime-tested on this box, and current CI does not
+compile it. `cuda-kokkos-core-compile` covers Kokkos and core only; a
+`cuda-solve-compile` job is outside this task. Selecting the global MFEM device
+may expose host/device memory incompatibilities in the existing PETSc solve path.
+
+The amended X1 brief permits the additive public `RunInputs::backend` string
+member (default `"cpu"`) in `include/chipcae/solve/case_loader.hpp`. This changes
+the struct layout/ABI and requires consumers to rebuild; function signatures
+and solver/kernel interfaces are unchanged.
