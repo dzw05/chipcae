@@ -158,7 +158,7 @@ pathlib.Path(record).write_text(json.dumps(a))
 def value(flag):
     return a[a.index(flag)+1] if flag in a else None
 stack=runpy.run_path(mock)['STACK']
-out=value('-o'); report=value('--report'); poly=value('--polyset')
+out=value('-o'); report=value('--report') or str(pathlib.Path(out).parent/'defects.json'); poly=value('--polyset')
 pathlib.Path(out).write_text(json.dumps({} if mode=='invalid-stack' else stack))
 if poly: pathlib.Path(poly).write_text('polyset')
 if mode=='copy-failure': pathlib.Path(record[:-5]+'.poly').mkdir()
@@ -519,33 +519,80 @@ sys.exit(rc)
                 }
             }
         }
+        for (const auto kind : {ImportKind::Ecad, ImportKind::Assembly}) {
+            for (int options = 0; options < 8; ++options) {
+                CaseDocument d;
+                require(d.load(FIXTURE_DIR "/fcbga_demo.case.json"), "optional export baseline");
+                ImportController c(d);
+                ImportRequest r;
+                r.kind = kind;
+                r.input = dir.filePath(QString("optional %1.xml").arg(++serial));
+                write(r.input, "fixture");
+                r.output = r.input + ".stack";
+                r.materialMap = map;
+                if (options & 1)
+                    r.report = r.input + ".report";
+                if (options & 2)
+                    r.polyset = r.input + ".poly";
+                r.acceptBTier = options & 4;
+                r.program = PYTHON_EXECUTABLE;
+                const auto record = r.input + ".argv";
+                r.prefix = {script, MOCK_SCRIPT, record, "map-missing"};
+                waitFor(c, [&] { check(c.start(r), "start optional recovery"); });
+                check(c.outcome() == ImportOutcome::Rejected && c.needsMaterialMapReselect(),
+                      "optional report preserves material-map recovery");
+                r.prefix = {script, MOCK_SCRIPT, record, "success"};
+                waitFor(c, [&] {
+                    check(c.start(r), "start optional exports");
+                    check(!c.needsMaterialMapReselect(), "new run clears map missing state");
+                });
+                check(c.outcome() == ImportOutcome::Accepted && !c.needsMaterialMapReselect(),
+                      "optional exports accept and reset recovery state");
+                const auto args = recorded(record);
+                const auto stage = QFileInfo(args.at(args.indexOf("-o") + 1)).absolutePath();
+                QStringList wanted;
+                if (kind == ImportKind::Assembly)
+                    wanted = {"--assembly", r.input, "-o", stage + "/out.stack.json"};
+                else
+                    wanted = {r.input, "-o", stage + "/out.stack.json", "--material-map", map};
+                if (kind == ImportKind::Assembly && !r.report.isEmpty())
+                    wanted << "--report" << stage + "/defects.json";
+                if (!r.polyset.isEmpty())
+                    wanted << "--polyset" << stage + "/out.polyset";
+                if (kind == ImportKind::Ecad && !r.report.isEmpty())
+                    wanted << "--report" << stage + "/defects.json";
+                if (r.acceptBTier)
+                    wanted << "--accept-b-tier";
+                check(args == wanted, "exact argv for every optional flag combination");
+                check(QFile::exists(r.output) && (r.report.isEmpty() || QFile::exists(r.report)) &&
+                          (r.polyset.isEmpty() || QFile::exists(r.polyset)),
+                      "requested optional exports published");
+                check(!QDir(stage).exists(), "optional staging removed");
+                check(!QFile::exists(dir.filePath("defects.json")) &&
+                          !QFile::exists(dir.filePath("out.polyset")),
+                      "unrequested exports remain unpublished");
+            }
+        }
         {
             CaseDocument d;
-            require(d.load(FIXTURE_DIR "/fcbga_demo.case.json"), "optional export baseline");
+            require(d.load(FIXTURE_DIR "/fcbga_demo.case.json"), "staging failure baseline");
+            const auto before = d.stackJson();
             ImportController c(d);
             ImportRequest r;
-            r.input = dir.filePath("internal report.xml");
-            write(r.input, "success");
-            r.output = dir.filePath("internal report.stack");
+            r.input = dir.filePath("staging failure.xml");
+            write(r.input, "fixture");
             r.materialMap = map;
+            r.output = dir.filePath("absent parent/output.stack");
             r.program = PYTHON_EXECUTABLE;
-            r.prefix = {script, MOCK_SCRIPT, r.input + ".argv", "map-missing"};
-            waitFor(c, [&] { check(c.start(r), "map missing starts without exports"); });
-            check(c.needsMaterialMapReselect(), "completed map missing sets reselection");
-            r.prefix = {script, MOCK_SCRIPT, r.input + ".argv", "success"};
-            waitFor(c, [&] {
-                check(c.start(r), "start without optional exports");
-                check(!c.needsMaterialMapReselect(), "new run clears map missing state");
-            });
-            check(c.outcome() == ImportOutcome::Accepted && QFile::exists(r.output),
-                  "internal report supports acceptance without exports");
-            const auto args = recorded(r.input + ".argv");
-            const auto stage = QFileInfo(args[args.indexOf("-o") + 1]).absolutePath();
-            check(!args.contains("--polyset") && !QDir(stage).exists(),
-                  "no optional polyset and internal staging removed");
-            check(!QFile::exists(dir.filePath("defects.json")) &&
-                      !QFile::exists(dir.filePath("out.polyset")),
-                  "unrequested exports remain unpublished");
+            const auto record = r.input + ".argv";
+            r.prefix = {script, MOCK_SCRIPT, record, "success"};
+            check(!c.start(r) && c.outcome() == ImportOutcome::Failed && !c.busy(),
+                  "staging failure refuses launch");
+            check(c.error() == "import staging directory creation failed",
+                  "staging failure has deterministic error");
+            check(!QFile::exists(record) && !QFile::exists(r.output) && d.stackJson() == before &&
+                      !c.needsMaterialMapReselect(),
+                  "staging failure preserves document without launching");
         }
         if (widgets) {
             auto filters = ImportSourceDialog::nameFilters();

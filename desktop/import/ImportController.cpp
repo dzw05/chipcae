@@ -96,8 +96,10 @@ bool ImportController::start(const ImportRequest& request) {
     }
     staging_ = std::make_unique<QTemporaryDir>(
         QFileInfo(output).absoluteDir().filePath(".chipcae-import-XXXXXX"));
-    if (!staging_->isValid())
+    if (!staging_->isValid()) {
+        error_ = "import staging directory creation failed";
         return false;
+    }
     destinations_ = {output, polyset, report};
     staged_ = {staging_->filePath("out.stack.json"),
                staging_->filePath("out.polyset"),
@@ -105,14 +107,16 @@ bool ImportController::start(const ImportRequest& request) {
     QStringList arguments = request.prefix;
     if (request.kind == ImportKind::Assembly) {
         arguments << "--assembly" << input << "-o" << staged_[0];
-        arguments << "--report" << staged_[2];
+        if (!report.isEmpty())
+            arguments << "--report" << staged_[2];
         if (!polyset.isEmpty())
             arguments << "--polyset" << staged_[1];
     } else {
         arguments << input << "-o" << staged_[0] << "--material-map" << request.materialMap;
         if (!polyset.isEmpty())
             arguments << "--polyset" << staged_[1];
-        arguments << "--report" << staged_[2];
+        if (!report.isEmpty())
+            arguments << "--report" << staged_[2];
     }
     if (request.acceptBTier)
         arguments << "--accept-b-tier";
