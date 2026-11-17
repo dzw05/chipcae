@@ -75,7 +75,8 @@ def main(root, fixture):
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(data)
     for label, required in [('irrelevant-Z', None), ('matrix-Z', 'matrix/matrix'),
-                            ('profile-Z', 'steps/pcb/profile')]:
+                            ('profile-Z', 'steps/pcb/profile'),
+                            ('tools-Z', 'steps/pcb/layers/drill_plated_f.cu-b.cu/tools')]:
         members = [(path + '.Z' if path == required else path,
                     lzw_literals(data) if path == required else data) for path, data in files]
         if required is None:
@@ -168,8 +169,8 @@ def main(root, fixture):
         destination.write_bytes(data)
     long_path = '/'.join(['directory' * 10] * 3) + '/features'
     format_files = [('matrix/matrix', b'UNITS=MM\n'), (long_path, b'long path payload\0\xff')]
-    # Ustar permits at most 155 prefix + 100 basename bytes. A longer complete path
-    # cannot be represented; use its maximum legal split, and GNU/pax for >255.
+    # Ustar permits 155 prefix + separator + 100 basename bytes: 256 total.
+    # Compare that >255-byte path across all formats, then longer GNU/pax paths.
     legal = 'p' * 155 + '/' + 'f' * 100
     for fmt, name in [(tarfile.USTAR_FORMAT, 'ustar'), (tarfile.GNU_FORMAT, 'gnu'), (tarfile.PAX_FORMAT, 'pax')]:
         (root / (name + '.tgz')).write_bytes(gzip.compress(tar_bytes([('matrix/matrix', b'UNITS=MM\n'), (legal, b'same bytes')], fmt)))

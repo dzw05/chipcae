@@ -952,7 +952,9 @@ int main(int argc, char** argv) {
     test("odbpp_archive_tar_formats", [&] {
         const auto expected = archive(temp / "ustar.tgz");
         require(expected.size() == 2, "regular files only");
-        require(expected.contains(std::string(155, 'p') + "/" + std::string(100, 'f')),
+        const auto common_long_path = std::string(155, 'p') + "/" + std::string(100, 'f');
+        require(common_long_path.size() > 255, "common tar fixture path exceeds 255 bytes");
+        require(expected.contains(common_long_path),
                 "maximum ustar prefix and basename represented across all three formats");
         require(expected == archive(temp / "gnu.tgz") && expected == archive(temp / "pax.tgz"),
                 "ustar/GNU/pax bytes");
@@ -962,6 +964,22 @@ int main(int argc, char** argv) {
                             long_files.end(),
                             [](const auto& item) { return item.first.size() > 255; }),
                 "path beyond ustar representable length");
+    });
+    test("odbpp_tools_Z_report_across_containers", [&] {
+        for (const auto* extension : {".tgz", ".zip"}) {
+            const auto result = parse_job(temp / (std::string("tools-Z") + extension));
+            require(bool(result), "optional tools.Z permits import: " + result.error);
+            const auto& reports = result.model.report.unsupported;
+            require(std::any_of(reports.begin(),
+                                reports.end(),
+                                [](const auto& report) {
+                                    return report.element ==
+                                               "steps/pcb/layers/drill_plated_f.cu-b.cu/tools.Z: "
+                                               ".Z compression" &&
+                                           report.line == 0;
+                                }),
+                    "tools.Z archive diagnostic reaches import report with source location");
+        }
     });
     test("odbpp_archive_gzip_multimember", [&] {
         std::string decoded, error;
