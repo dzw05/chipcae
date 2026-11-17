@@ -58,7 +58,16 @@ mesh::Expected<bool> write_stack(const mesh::StackModel& model, const std::files
                     c["polygons"]["file"] = p.file;
                     c["polygons"]["layer"] = p.layer;
                     if (seen.insert(p.file).second) {
-                        std::ifstream in(path.parent_path() / p.file, std::ios::binary);
+                        const auto relative = std::filesystem::path(p.file);
+                        const auto root = std::filesystem::weakly_canonical(
+                            path.parent_path().empty() ? "." : path.parent_path());
+                        const auto resolved = std::filesystem::weakly_canonical(root / relative);
+                        const auto rel = resolved.lexically_relative(root);
+                        if (relative.is_absolute() || rel.empty() || *rel.begin() == "..")
+                            return mesh::Error{
+                                "$/external_refs/path",
+                                "INPUT_INVALID: sidecar path escapes output directory"};
+                        std::ifstream in(resolved, std::ios::binary);
                         if (!in)
                             return mesh::Error{"$/external_refs",
                                                "INPUT_INVALID: missing sidecar " + p.file};

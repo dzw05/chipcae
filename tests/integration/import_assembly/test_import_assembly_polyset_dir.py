@@ -1,4 +1,5 @@
 import tempfile
+from pathlib import Path
 from assembly_test_support import Assembly, check, require
 
 require('ECAD')
@@ -14,3 +15,8 @@ with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as othe
                for r in stack['external_refs'])
     assert all(layer['copper']['polygons']['file'] == expected.name
                for layer in stack['layers'] if 'copper' in layer)
+
+    # A report in another directory does not change the sidecar directory rule.
+    a.report = Path(other) / 'defects.json'
+    check(a.run(), 0)
+    check(a.run('--polyset', other + '/wrong.polyset'), 14)

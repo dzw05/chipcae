@@ -174,11 +174,14 @@ int run_assembly(const ImportOptions& options) {
         } catch (const std::exception& e) {
             return fail(14,
                         "INPUT_INVALID",
-                        "assembly=" + options.assembly.string() + "; json_path=$: " + e.what());
+                        "INPUT_INVALID: assembly=" + options.assembly.string() +
+                            "; json_path=$: " + e.what());
         }
         for (auto key : {"schema", "board", "parts"})
             if (!doc.contains(key))
-                return fail(14, "INPUT_INVALID", std::string("json_path=$/") + key + ": required");
+                return fail(14,
+                            "INPUT_INVALID",
+                            std::string("INPUT_INVALID: json_path=$/") + key + ": required");
         std::ifstream spec(assembly_root() / "schema/assembly-0.1.schema.json");
         auto validator = jsoncons::jsonschema::make_json_schema(J::parse(spec));
         std::string invalid;
@@ -416,13 +419,16 @@ int run_assembly(const ImportOptions& options) {
                 approx["label"] = "近似材料";
                 parts["material_approx"].push_back(approx);
             }
+            if (!p.contains("body") && step.body_names.size() > 1)
+                throw std::runtime_error("IMPORT_REJECTED: body is required for multi-body STEP");
+            const auto body = p.get_value_or<std::string>(
+                "body", step.body_names.empty() ? "" : step.body_names.front());
+            if (!names.contains(body))
+                throw std::runtime_error("IMPORT_REJECTED: unknown body name " + body);
             SliceResult sliced;
             try {
                 sliced = slice_prismatic(
-                    step,
-                    p.get_value_or<std::string>(
-                        "body", step.body_names.empty() ? "" : step.body_names.front()),
-                    {tol.value().tau_A, tol.value().tau_A, tol.value().tau_B});
+                    step, body, {tol.value().tau_A, tol.value().tau_A, tol.value().tau_B});
             } catch (const std::logic_error& e) {
                 if (std::string(e.what()) != "not implemented: slice_prismatic")
                     throw;

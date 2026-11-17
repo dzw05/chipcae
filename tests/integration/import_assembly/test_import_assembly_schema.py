@@ -21,6 +21,7 @@ with tempfile.TemporaryDirectory() as tmp:
         result = a.run()
         check(result, 14)
         assert 'json_path' in result.stderr, result.stderr
+        assert a.defects()['message'].startswith('INPUT_INVALID:'), a.defects()
         if text == '{broken':
             assert str(a.root / 'assembly.json') in a.defects()['message']
     (a.root / 'assembly.json').unlink()

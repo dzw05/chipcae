@@ -90,8 +90,26 @@ int main() {
         require(bool(chipcae::importer::write_stack(model, output)), "second write failed");
         require(first == sp4_test::bytes(output), "serialization must be deterministic");
         require(before == sp4_test::bytes(dir / "copper.polyset"), "writer modified sidecar");
+        // Reject references outside the output root before creating an output file.
+        const auto rejected = dir / "rejected.json";
+        for (const auto& file :
+             {std::string("../outside.polyset"), (dir / "copper.polyset").string()}) {
+            auto invalid = model;
+            invalid.layers[0].copper->polygons->file = file;
+            require(!chipcae::importer::write_stack(invalid, rejected),
+                    "invalid sidecar reference must be rejected");
+            require(!std::filesystem::exists(rejected), "invalid reference created output");
+        }
+        std::filesystem::create_symlink(dir.parent_path(), dir / "escape");
+        auto invalid = model;
+        invalid.layers[0].copper->polygons->file = "escape/outside.polyset";
+        require(!chipcae::importer::write_stack(invalid, rejected), "reject symlink escape");
+        require(!std::filesystem::exists(rejected), "symlink escape created output");
         std::filesystem::remove(dir / "copper.polyset");
         require(!chipcae::importer::write_stack(model, output), "missing sidecar must be an error");
+        require(first == sp4_test::bytes(output), "missing sidecar changed existing output");
+        require(!chipcae::importer::write_stack(model, rejected), "missing sidecar must fail");
+        require(!std::filesystem::exists(rejected), "missing sidecar created output");
 #else
         require(false, "roundtrip test requires jsoncons headers");
 #endif
