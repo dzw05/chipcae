@@ -1,4 +1,4 @@
-add_library(chipcae_geometry_ecad src/odbpp/read_odbpp.cpp src/odbpp/archive.cpp src/odbpp/parse_matrix.cpp src/odbpp/parse_misc.cpp src/odbpp/parse_features.cpp src/odbpp/map_geometry.cpp src/odbpp/map_stackup.cpp src/ipc2581_reader.cpp src/via_fraction.cpp src/ecad_model.cpp src/material_map.cpp)
+add_library(chipcae_geometry_ecad src/odbpp/read_odbpp.cpp src/odbpp/archive.cpp src/odbpp/archive_tar.cpp src/odbpp/archive_gzip.cpp src/odbpp/archive_lzw.cpp src/odbpp/parse_matrix.cpp src/odbpp/parse_misc.cpp src/odbpp/parse_features.cpp src/odbpp/map_geometry.cpp src/odbpp/map_stackup.cpp src/ipc2581_reader.cpp src/via_fraction.cpp src/ecad_model.cpp src/material_map.cpp)
 add_library(chipcae::geometry_ecad ALIAS chipcae_geometry_ecad)
 target_include_directories(chipcae_geometry_ecad PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/schema/include)
 target_link_libraries(chipcae_geometry_ecad PUBLIC chipcae::geometry)
@@ -12,3 +12,22 @@ endif()
 target_link_libraries(chipcae_geometry_ecad PRIVATE Clipper2)
 target_compile_definitions(chipcae_geometry_ecad PRIVATE CHIPCAE_ENABLE_ECAD=1)
 chipcae_set_warnings(chipcae_geometry_ecad)
+
+if(TARGET miniz::miniz)
+    set(_chipcae_miniz_target miniz::miniz)
+elseif(TARGET miniz)
+    set(_chipcae_miniz_target miniz)
+else()
+    message(FATAL_ERROR "ECAD requires miniz::miniz or miniz target")
+endif()
+get_target_property(_chipcae_miniz_type ${_chipcae_miniz_target} TYPE)
+# Config packages may wrap their static archive in an interface target or use
+# UNKNOWN_LIBRARY for an imported archive. Trust that package's link interface;
+# the FetchContent fallback explicitly builds static miniz.
+if(_chipcae_miniz_type STREQUAL "SHARED_LIBRARY" OR
+   _chipcae_miniz_type STREQUAL "MODULE_LIBRARY")
+    message(FATAL_ERROR "ECAD requires a static miniz library")
+endif()
+target_link_libraries(chipcae_geometry_ecad PRIVATE ${_chipcae_miniz_target})
+unset(_chipcae_miniz_target)
+unset(_chipcae_miniz_type)
