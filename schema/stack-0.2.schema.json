@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:chipcae:stack:0.2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "unit",
+    "outline",
+    "layers",
+    "symmetry",
+    "package_type"
+  ],
+  "$defs": {
+    "footprint": {
+      "type": "object",
+      "required": [
+        "box"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "box": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "polygon": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        }
+      }
+    },
+    "copper": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metal"
+      ],
+      "properties": {
+        "metal": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "polygons": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file",
+            "layer"
+          ],
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "layer": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "fraction"
+          ]
+        },
+        {
+          "required": [
+            "polygons"
+          ]
+        }
+      ]
+    }
+  },
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "unit": {
+      "const": "m"
+    },
+    "outline": {
+      "$ref": "#/$defs/footprint"
+    },
+    "layers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "thickness",
+          "kind",
+          "n_elem_min",
+          "grading"
+        ],
+        "additionalProperties": false,
+        "anyOf": [
+          {
+            "required": [
+              "material"
+            ]
+          },
+          {
+            "required": [
+              "regions"
+            ]
+          }
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "body": {
+            "type": "string",
+            "minLength": 1
+          },
+          "thickness": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "kind": {
+            "enum": [
+              "Homogenized",
+              "Explicit",
+              "Patterned"
+            ]
+          },
+          "material": {
+            "type": "string",
+            "minLength": 1
+          },
+          "regions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "material",
+                "footprint"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "material": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "body": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "footprint": {
+                  "$ref": "#/$defs/footprint"
+                }
+              }
+            },
+            "minItems": 1
+          },
+          "n_elem_min": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "grading": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "copper": {
+            "$ref": "#/$defs/copper"
+          }
+        }
+      },
+      "minItems": 1
+    },
+    "symmetry": {
+      "type": "string",
+      "enum": [
+        "none",
+        "half_x",
+        "half_y",
+        "quarter"
+      ]
+    },
+    "package_type": {
+      "type": "string"
+    },
+    "activation_groups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "members"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "members": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "pattern": "^(layer:|region:|body:|interface:[^|]+\\|).+"
+            }
+          }
+        }
+      }
+    },
+    "external_refs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^(?!.*://)(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(^|/)\\.\\.(/|$)).+"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          }
+        }
+      }
+    }
+  }
+}
