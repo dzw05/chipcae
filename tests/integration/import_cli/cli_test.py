@@ -24,10 +24,13 @@ def check(condition, message):
 
 
 def record_or_compare(result, directory, reference, artifacts, generate):
+    (directory / "stdout").write_bytes(result.stdout)
+    (directory / "stderr").write_bytes(result.stderr)
     if generate:
         reference.mkdir(parents=True, exist_ok=True)
         (reference / "exit_code").write_text(f"{result.returncode}\n")
     else:
+        check((reference / "exit_code").is_file(), f"missing golden: {reference / 'exit_code'}")
         expected = int((reference / "exit_code").read_text())
         check(result.returncode == expected,
               f"{reference.name}: exit {result.returncode}, expected {expected}; "
@@ -58,19 +61,47 @@ def run_case(binary, case, generate=False):
                 result = invoke(binary, [FIXTURES / f"{board}.xml", "-o", "stack.json",
                                          "--material-map", HERE / "material_map.json"], work)
                 record_or_compare(result, work, golden / board, ARTIFACTS, generate)
+            variants = (
+                ("accept_b_tier", ["--accept-b-tier"], ARTIFACTS),
+                ("out_alias", [], ARTIFACTS),
+                ("custom_paths", ["--polyset", "custom.polyset", "--report", "custom.json"],
+                 (*ARTIFACTS, "custom.polyset", "custom.json")),
+                ("missing_material_map", [], ARTIFACTS),
+            )
+            for name, flags, artifacts in variants:
+                work = directory / name
+                work.mkdir()
+                args = [FIXTURES / "board_2layer.xml",
+                        "--out" if name == "out_alias" else "-o", "stack.json"]
+                if name != "missing_material_map":
+                    args += ["--material-map", HERE / "material_map.json"]
+                result = invoke(binary, [*args, *flags], work)
+                record_or_compare(result, work, golden / name,
+                                  (*artifacts, "stdout", "stderr"), generate)
+                if name == "accept_b_tier":
+                    check(b'"b_tier_accepted":"all"' in (work / "import_report.json").read_bytes(),
+                          "accept_b_tier: expected accepted report")
         elif case in ("ecad_off", "step"):
             source = FIXTURES / "board_2layer.xml" if case == "ecad_off" else HERE / "input.step"
             result = invoke(binary, [source, "-o", "stack.json"], directory)
             check(result.returncode == 7, f"{case}: expected exit 7, got {result.returncode}")
             record_or_compare(result, directory, golden / case, ("defects.json",), generate)
         elif case == "help":
-            result = invoke(binary, ["--help"], directory)
-            check(result.returncode == 0, f"help: exit {result.returncode}")
-            check(result.stderr == b"", f"help: unexpected stderr {result.stderr!r}")
-            if generate:
-                (golden / "help.stdout").write_bytes(result.stdout)
-            else:
-                check(result.stdout == (golden / "help.stdout").read_bytes(), "help: stdout bytes differ")
+            for name, args, code in (
+                ("help", ["--help"], 0), ("help_alias", ["-h"], 0),
+                ("missing_both", [], 2),
+                ("missing_input", ["-o", "stack.json"], 2),
+                ("missing_output", [FIXTURES / "board_2layer.xml"], 2),
+                ("missing_out_value", [FIXTURES / "board_2layer.xml", "-o"], 2),
+            ):
+                result = invoke(binary, args, directory)
+                check(result.returncode == code, f"{name}: exit {result.returncode}")
+                check(result.stderr == b"", f"{name}: unexpected stderr {result.stderr!r}")
+                record_or_compare(result, directory, golden / name, ("stdout", "stderr"), generate)
+            result = invoke(binary, ["a.xml", "-o", "b", "--help"], directory)
+            check(result.returncode == 2, "mixed help: expected exit 2")
+            check(result.stdout == b"", "mixed help: unexpected stdout")
+            check(result.stderr == b"unknown argument: --help\n", "mixed help: stderr differs")
         elif case == "reserved":
             failures = []
             for option, value in (("--accept", "x"), ("--t-min", "1e-5"),

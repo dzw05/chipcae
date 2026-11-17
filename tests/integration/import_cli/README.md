@@ -11,8 +11,8 @@ placeholders with local paths):
 ```sh
 cmake -S . -B <build-on-dir> -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_ENABLE_ECAD=ON -DCHIPCAE_BUILD_TESTS=ON
 cmake -S . -B <build-off-dir> -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_ENABLE_ECAD=OFF -DCHIPCAE_BUILD_TESTS=ON
-cmake --build <build-on-dir> -j3
-cmake --build <build-off-dir> -j3
+cmake --build <build-on-dir> -j2
+cmake --build <build-off-dir> -j2
 tests/integration/import_cli/gen_golden.sh <build-on-dir>/kernel/chipcae-import <build-off-dir>/kernel/chipcae-import
 ```
 
@@ -47,3 +47,17 @@ rather than `not implemented yet`. The reserved test collects all four failures
 and checks each option name and exit 2. It also checks conflict exit 2 in both
 flag orders, without requiring particular conflict text. These are deliberate
 failing assertions, not tests marked `WILL_FAIL` or skipped.
+
+Review regression coverage also compares the positive `--accept-b-tier` case,
+`--out`, explicit `--polyset`/`--report` paths, and missing material-map output
+against baseline goldens. The existing report format represents B-tier acceptance
+as `"b_tier_accepted":"all"`. Help goldens cover `-h`, missing input/output,
+and a missing `-o` value; mixed `a.xml -o b --help` must report an unknown argument.
+Each new case compares stdout and stderr as well as exit status and artifacts.
+
+The additional goldens were generated from a clean detached worktree at the same
+baseline SHA, configured with ECAD ON, tests OFF, and Release, then built with
+`cmake --build <baseline-build-dir> --target chipcae-import -j2`. Run the `noop`
+and `help` cases with `--generate` to reproduce them. The measured toolchain was
+GNU C++ 14.2.0 on Linux. Byte-exact floating-point text can depend on the compiler
+and standard library; goldens intentionally remain byte comparisons.
