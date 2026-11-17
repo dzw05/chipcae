@@ -10,6 +10,7 @@
 #include <vector>
 
 using namespace chipcae::material;
+using chipcae::material::test::near;
 
 namespace {
 void check(bool pass, const char* name) {
@@ -18,10 +19,7 @@ void check(bool pass, const char* name) {
         throw std::runtime_error(name);
     }
 }
-bool near(Real actual, Real expected) {
-    return std::isfinite(actual) &&
-           std::abs(actual - expected) <= (expected == 0 ? 1e-18 : 1e-12 * std::abs(expected));
-}
+
 } // namespace
 
 int main(int argc, char** argv) try {

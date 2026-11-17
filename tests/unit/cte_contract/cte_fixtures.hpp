@@ -2,7 +2,15 @@
 
 #include "chipcae/material/cte_convert.hpp"
 
+#include <cmath>
+
 namespace chipcae::material::test {
+inline bool near(Real actual, Real expected) {
+    const Real scale = std::abs(expected);
+    return std::isfinite(actual) &&
+           std::abs(actual - expected) <= (scale <= 1e-18 ? 1e-18 : 1e-12 * scale);
+}
+
 // Canonical CTE tables and off-knot samples copied unchanged from material/tests/core_math.cpp for
 // contract tests.
 inline const CteTable sec{{250, 300, 350}, {1e-5, 2e-5, 3e-5}, 250};

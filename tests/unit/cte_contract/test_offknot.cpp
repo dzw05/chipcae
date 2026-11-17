@@ -2,12 +2,12 @@
 #include "cte_fixtures.hpp"
 
 #include <cmath>
-#include <cstddef>
 #include <cstdio>
 #include <limits>
 #include <stdexcept>
 
 using namespace chipcae::material;
+using chipcae::material::test::near;
 
 namespace {
 void check(bool pass, const char* name) {
@@ -16,10 +16,7 @@ void check(bool pass, const char* name) {
         throw std::runtime_error(name);
     }
 }
-bool near(Real actual, Real expected) {
-    return std::isfinite(actual) &&
-           std::abs(actual - expected) <= (expected == 0 ? 1e-18 : 1e-12 * std::abs(expected));
-}
+
 } // namespace
 
 int main(int argc, char** argv) try {
@@ -27,6 +24,7 @@ int main(int argc, char** argv) try {
     const auto& sec = test::sec;
     const auto& tan = test::tan;
     // Expectations and sample temperatures are the existing core_math checks.
+    // Equal adjacent fixture slopes also prevent discriminating off-knot segment selection.
     const Real sample = test::secant_to_tangent_temperature;
     const Real slope = (sec.alpha[2] - sec.alpha[1]) / (sec.temperatures[2] - sec.temperatures[1]);
     const Real tangent_expected = sec.alpha[1] + (sample - sec.temperatures[1]) * slope +
