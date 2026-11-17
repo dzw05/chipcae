@@ -1627,6 +1627,12 @@ int main(int argc, char** argv) {
         limits.file_bytes = 3;
         ArchiveReader reader(temp / "large-irrelevant.tgz", limits);
         require(reader.open_error().empty(), reader.open_error());
+        const auto& entries = reader.entries();
+        require(entries.size() == 3 && entries[0].path == "irrelevant" &&
+                    entries[0].size == ArchiveLimits{}.total_bytes &&
+                    entries[1].path == "matrix/matrix" && entries[1].size == 3 &&
+                    entries[2].path == "steps/pcb/profile" && entries[2].size == 1,
+                "index traverses the full oversized transport and retains entry metadata");
         std::string out, error;
         require(reader.read_bytes("matrix/matrix", out, error) && out == "abc", error);
         require(!reader.read_bytes("steps/pcb/profile", out, error) &&
