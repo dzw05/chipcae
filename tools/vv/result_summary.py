@@ -34,8 +34,12 @@ def _require(condition, message):
 
 
 def _count(block, path):
-    values = block[path][...]
-    _require(values.ndim == 1 and values.dtype.kind in 'iu'
+    source = block[path]
+    _require(isinstance(source, h5py.Dataset)
+             and source.dtype.newbyteorder('=') == np.dtype('int64'),
+             f"{block.name}/{path}: expected int64 partition counts")
+    values = source[...]
+    _require(values.ndim == 1
              and np.all(values >= 0), f"{block.name}/{path}: invalid partition counts")
     return sum(int(v) for v in values)
 
@@ -74,8 +78,7 @@ def _read(root):
         c = _count(block, 'NumberOfCells')
         _require(block['NumberOfPoints'].shape == block['NumberOfCells'].shape,
                  f"{name}: partition count mismatch")
-        points = (_array(block, 'Points', (n, 3), 'float64')
-                  if n or 'Points' in block else np.empty((0, 3)))
+        points = _array(block, 'Points', (n, 3), 'float64')
         u = (_array(block, 'PointData/U', (n, 3), 'float64')
              if n or 'PointData/U' in block else np.empty((0, 3)))
         t = (_array(block, 'PointData/T', (n,), 'float64')
@@ -99,8 +102,12 @@ def _read(root):
         blocks['eb_surface'] = dict(points=0, polygons=0)
     else:
         _version(eb)
-        blocks['eb_surface'] = dict(points=_count(eb, 'NumberOfPoints'),
-                                    polygons=_count(eb, 'Polygons/NumberOfCells'))
+        n = _count(eb, 'NumberOfPoints')
+        c = _count(eb, 'Polygons/NumberOfCells')
+        _require(eb['NumberOfPoints'].shape == eb['Polygons/NumberOfCells'].shape,
+                 'eb_surface: partition count mismatch')
+        _array(eb, 'Points', (n, 3), 'float64')
+        blocks['eb_surface'] = dict(points=n, polygons=c)
     names = []
     for field in ('layer_names', 'material_names'):
         path = 'FieldData/' + field

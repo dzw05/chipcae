@@ -55,6 +55,7 @@ def fixture(run, cut=False, two=False):
                 b.create_dataset('FieldData/'+field, data=names, dtype=h5py.string_dtype())
         eb = root.create_group('eb_surface')
         eb.attrs['Version'] = [2, 8]
+        eb['Points'] = np.zeros((7, 3), dtype='float64')
         eb['NumberOfPoints'] = np.array([3, 4], dtype='int64')
         eb['Polygons/NumberOfCells'] = np.array([1, 2], dtype='int64')
     manifest = {'schema_version': 'chipcae.results/1.0', 'steps': [{'n': 0, 'file': 'out/step-0.vtkhdf'}],

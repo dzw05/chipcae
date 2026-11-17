@@ -11,6 +11,56 @@ from tools.vv.result_summary import ResultSummaryError, main, summarize
 
 
 class Edges(unittest.TestCase):
+    def test_partition_count_dtypes(self):
+        paths = ('hex/NumberOfPoints', 'hex/NumberOfCells',
+                 'cut/NumberOfPoints', 'cut/NumberOfCells',
+                 'eb_surface/NumberOfPoints', 'eb_surface/Polygons/NumberOfCells')
+        for path in paths:
+            for dtype in ('int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32',
+                          'uint64', 'float64', 'int64', '>i8'):
+                with self.subTest(path=path, dtype=dtype), tempfile.TemporaryDirectory() as tmp:
+                    run = Path(tmp)
+                    step, _ = fixture(run)
+                    with h5py.File(step, 'r+') as f:
+                        key = 'VTKHDF/' + path
+                        values = f[key][...].astype(dtype)
+                        del f[key]
+                        f[key] = values
+                    if np.dtype(dtype).newbyteorder('=') == np.dtype('int64'):
+                        self.assertEqual(summarize(run)['blocks']['hex']['points'], 11)
+                    else:
+                        err = io.StringIO()
+                        with contextlib.redirect_stderr(err):
+                            self.assertEqual(main([str(run)]), 14)
+                        self.assertIn(f'/{key}: expected int64 partition counts', err.getvalue())
+
+    def test_required_geometry(self):
+        for name in ('hex', 'cut', 'eb_surface'):
+            for empty in (False, True):
+                for invalid in ('missing', 'length', 'dtype', 'partitions'):
+                    with self.subTest(block=name, empty=empty, invalid=invalid), tempfile.TemporaryDirectory() as tmp:
+                        run = Path(tmp)
+                        step, _ = fixture(run, cut=True)
+                        with h5py.File(step, 'r+') as f:
+                            block = f['VTKHDF/' + name]
+                            cells = 'Polygons/NumberOfCells' if name == 'eb_surface' else 'NumberOfCells'
+                            if empty:
+                                block['NumberOfPoints'][...] = 0
+                                block[cells][...] = 0
+                            n = int(block['NumberOfPoints'][...].sum())
+                            del block['Points']
+                            if invalid != 'missing':
+                                block['Points'] = np.zeros((n + (invalid == 'length'), 3),
+                                                           dtype='float32' if invalid == 'dtype' else 'float64')
+                            if invalid == 'partitions':
+                                del block[cells]
+                                block[cells] = np.zeros(1, dtype='int64')
+                        with self.assertRaises(ResultSummaryError) as caught:
+                            summarize(run)
+                        self.assertEqual(caught.exception.code, 14)
+                        expected = 'partition count mismatch' if invalid == 'partitions' else '/Points:'
+                        self.assertIn(expected, str(caught.exception))
+
     def test_present_fields_on_empty_blocks_are_validated(self):
         fields = {'PointData/T': 'float64', 'CellData/layer_id': 'int32',
                   'CellData/material_id': 'int32', 'CellData/cell_kind': 'int32',
@@ -25,6 +75,7 @@ class Edges(unittest.TestCase):
                             block = f['VTKHDF/' + name]
                             for group in ('Points', 'PointData', 'CellData', 'Types'):
                                 del block[group]
+                            block['Points'] = np.empty((0, 3), dtype='float64')
                             block['NumberOfPoints'][...] = 0
                             block['NumberOfCells'][...] = 0
                             # Only the empty block has T in the temperature
@@ -55,6 +106,7 @@ class Edges(unittest.TestCase):
                     block = f['VTKHDF/hex']
                     for path in ('Points', 'PointData', 'CellData', 'Types'):
                         del block[path]
+                    block['Points'] = np.empty((0, 3), dtype='float64')
                     block['NumberOfPoints'][...] = 0
                     block['NumberOfCells'][...] = 0
                     if empty_t:
@@ -181,6 +233,7 @@ class Edges(unittest.TestCase):
                 b = f['VTKHDF/hex']
                 for path in ('Points', 'PointData', 'CellData', 'Types'):
                     del b[path]
+                b['Points'] = np.empty((0, 3), dtype='float64')
                 b['NumberOfPoints'][...] = 0
                 b['NumberOfCells'][...] = 0
             result = summarize(run)
@@ -199,6 +252,7 @@ class Edges(unittest.TestCase):
                             block = f['VTKHDF/hex']
                             for path in ('Points', 'PointData', 'CellData', 'Types'):
                                 del block[path]
+                            block['Points'] = np.empty((0, 3), dtype='float64')
                             block['NumberOfPoints'][...] = 0
                             block['NumberOfCells'][...] = 0
                         else:
