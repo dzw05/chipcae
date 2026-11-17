@@ -1,7 +1,8 @@
 #include "chipcae/geometry/import_accept.hpp"
 
 #include <fstream>
-#include <unordered_set>
+#include <set>
+#include <utility>
 
 #if CHIPCAE_ACCEPT_JSONCONS
 #include <jsoncons/json.hpp>
@@ -47,7 +48,7 @@ std::optional<AcceptList> read_accept_file(const std::filesystem::path& path,
         if (!root.is_object())
             return reject("accept file root must be an object");
         if (!root.contains("accept"))
-            return reject("accept field is required");
+            return reject("accept file field 'accept' is required");
         if (!root.at("accept").is_array())
             return reject("accept must be an array");
         const auto warn = [&](const std::string& message) {
@@ -58,7 +59,7 @@ std::optional<AcceptList> read_accept_file(const std::filesystem::path& path,
             if (member.key() != "accept")
                 warn("unknown accept file key: " + std::string(member.key()));
         AcceptList list{path, {}};
-        std::unordered_set<std::string> seen;
+        std::set<std::pair<std::string, std::string>> seen;
         for (const auto& entry : root.at("accept").array_range()) {
             if (!entry.is_object())
                 return reject("accept entry must be an object");
@@ -72,12 +73,12 @@ std::optional<AcceptList> read_accept_file(const std::filesystem::path& path,
             for (const auto& member : entry.object_range())
                 if (member.key() != "defect_id" && member.key() != "note")
                     warn("unknown accept entry key: " + std::string(member.key()));
-            if (!seen.insert(id).second) {
-                warn("duplicate defect_id: " + id);
+            auto note = entry.contains("note") ? entry.at("note").as<std::string>() : "";
+            if (!seen.emplace(id, note).second) {
+                warn("duplicate accept entry for defect_id: " + id);
                 continue;
             }
-            list.entries.push_back(
-                {std::move(id), entry.contains("note") ? entry.at("note").as<std::string>() : ""});
+            list.entries.push_back({std::move(id), std::move(note)});
         }
         return list;
     } catch (const std::exception& exception) {

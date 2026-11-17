@@ -14,6 +14,7 @@ struct AcceptList {
     std::vector<AcceptEntry> entries;
 };
 std::filesystem::path default_accept_file(const std::filesystem::path& input);
+// Duplicate entries compare defect_id and note byte for byte; the first is retained.
 std::optional<AcceptList> read_accept_file(const std::filesystem::path& path,
                                            std::string* error,
                                            std::vector<std::string>* warnings = nullptr);

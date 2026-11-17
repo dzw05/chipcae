@@ -51,6 +51,13 @@ struct AcceptFixture {
         return path;
     }
 };
+void accept_file_default_path() {
+    AcceptFixture f;
+    const auto path = f.write(R"({"accept":[]})");
+    require(default_accept_file(f.dir / "board.step") == path, "default_path: sibling path");
+    std::filesystem::remove(path);
+    require(default_accept_file(f.dir / "board.step").empty(), "default_path: absent is empty");
+}
 #if CHIPCAE_ACCEPT_JSONCONS
 void accept_file_roundtrip() {
     AcceptFixture f;
@@ -144,20 +151,13 @@ void malformed(const std::string& contents) {
         require(error == "IMPORT_REJECTED: accept file is empty",
                 "empty file: explicit rejection required");
 }
-void accept_file_default_path() {
-    AcceptFixture f;
-    const auto path = f.write(R"({"accept":[]})");
-    require(default_accept_file(f.dir / "board.step") == path, "default_path: sibling path");
-    std::filesystem::remove(path);
-    require(default_accept_file(f.dir / "board.step").empty(), "default_path: absent is empty");
-}
 void accept_file_duplicate() {
     AcceptFixture f;
     std::string error;
     std::vector<std::string> warnings;
     const auto list = read_accept_file(
         f.write(
-            R"({"accept":[{"defect_id":"duplicate-example-42","note":"first"},{"defect_id":"duplicate-example-42","note":"second"}]})"),
+            R"({"accept":[{"defect_id":"duplicate-example-42","note":"first"},{"defect_id":"duplicate-example-42","note":"first"}]})"),
         &error,
         &warnings);
     require(list.has_value(), "duplicate: file must load");
@@ -166,6 +166,24 @@ void accept_file_duplicate() {
     require(warnings.size() == 1, "duplicate: exactly one warning");
     require(warnings[0].find("duplicate-example-42") != std::string::npos,
             "duplicate: warning contains input id");
+}
+void accept_file_distinct_notes() {
+    AcceptFixture f;
+    std::string error;
+    std::vector<std::string> warnings;
+    const auto list = read_accept_file(
+        f.write(
+            R"({"accept":[{"defect_id":"id","note":"first"},{"defect_id":"id","note":"second"},{"defect_id":"id","note":"First"},{"defect_id":"id","note":"first "}]})"),
+        &error,
+        &warnings);
+    require(list.has_value(), "distinct_notes: file must load");
+    require(list->entries.size() == 4, "distinct_notes: preserve different note bytes");
+    const std::vector<std::string> notes{"first", "second", "First", "first "};
+    for (std::size_t i = 0; i < notes.size(); ++i) {
+        require(list->entries[i].defect_id == "id", "distinct_notes: preserve id");
+        require(list->entries[i].note == notes[i], "distinct_notes: preserve note order");
+    }
+    require(warnings.empty(), "distinct_notes: no duplicate warning");
 }
 void accept_file_boundaries() {
     AcceptFixture f;
@@ -205,6 +223,7 @@ bool run_accept_tests() {
     run("accept_file_unknown_id", accept_file_unknown_id);
     run("accept_file_default_path", accept_file_default_path);
     run("accept_file_duplicate", accept_file_duplicate);
+    run("accept_file_distinct_notes", accept_file_distinct_notes);
     run("accept_file_boundaries", accept_file_boundaries);
     run("accept_file_malformed_missing_accept", [] { malformed(R"({"foo":1})"); });
     const std::vector<std::string> invalid{"not JSON",
@@ -270,6 +289,7 @@ int main() {
 #if CHIPCAE_ACCEPT_JSONCONS
     return run_accept_tests() ? 0 : 1;
 #else
+    accept_file_default_path();
     AcceptFixture fixture;
     std::string error = "previous error";
     check(!read_accept_file(fixture.dir / "missing.json", &error), "missing file absent result");
@@ -278,6 +298,7 @@ int main() {
           "existing file requires jsoncons");
     check(error == "IMPORT_REJECTED: accept file requires a jsoncons build",
           "disabled jsoncons error");
-    std::cout << "accept-file tests skipped because jsoncons is disabled\n";
+    std::cout << "accept-file parser tests skipped because jsoncons is disabled; path and file "
+                 "availability tested\n";
 #endif
 }
