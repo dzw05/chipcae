@@ -20,7 +20,7 @@ def invalid(message):
 
 def required(obj, key):
     if key not in obj:
-        raise StackPrepError(12, 'INPUT_REFERENCE_MISSING', f'missing input field: {key}')
+        raise invalid(f'missing input field: {key}')
     return obj[key]
 
 
@@ -61,18 +61,18 @@ def _homogenize(stack, stack_dir):
     result.pop('external_refs', None)
     converted = [layer for layer in result['layers']
                  if 'polygons' in layer.get('copper', {})]
-    if not converted:
-        return result, []
     refs = {}
-    references = required(stack, 'external_refs')
+    if 'external_refs' not in stack:
+        raise StackPrepError(12, 'INPUT_REFERENCE_MISSING', 'missing external_refs')
+    references = stack['external_refs']
     if not isinstance(references, list):
-        raise StackPrepError(12, 'INPUT_REFERENCE_MISSING', 'external_refs must be an array')
+        raise invalid('external_refs must be an array')
     for ref in references:
         if not isinstance(ref, dict):
-            raise StackPrepError(12, 'INPUT_REFERENCE_MISSING', 'invalid reference entry')
+            raise invalid('invalid reference entry')
         path, digest = required(ref, 'path'), required(ref, 'sha256')
         if not isinstance(path, str) or not path or not isinstance(digest, str):
-            raise StackPrepError(12, 'INPUT_REFERENCE_MISSING', 'invalid reference path or hash')
+            raise invalid('invalid reference path or hash')
         if path in refs and refs[path] != digest:
             raise StackPrepError(10, 'INPUT_HASH_MISMATCH', 'conflicting reference hashes')
         refs[path] = digest
@@ -192,7 +192,7 @@ def main(argv: list[str] | None = None) -> int:
     except SystemExit as exc:
         return 0 if exc.code == 0 else 14
     except OSError as exc:
-        error = StackPrepError(12, 'INPUT_REFERENCE_MISSING', str(exc))
+        error = invalid(str(exc))
     except StackPrepError as exc:
         error = exc
     message = ' '.join(str(error).splitlines())

@@ -13,7 +13,9 @@ class Errors(unittest.TestCase):
                  'zero_outline', 'empty_json', 'invalid_json',
                  'missing_unit', 'missing_layers', 'missing_outline', 'bad_outline',
                  'empty_outline', 'polygon_outside_box', 'bad_box', 'bad_polygon', 'missing_refs',
-                 'bad_refs', 'bad_ref', 'missing_ref_path', 'missing_ref_hash']
+                 'bad_refs', 'bad_ref', 'missing_ref_path', 'missing_ref_hash',
+                 'no_copper_missing_refs', 'no_copper_zero_box', 'no_copper_zero_polygon',
+                 'output_staging', 'report_staging']
         for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
@@ -21,11 +23,11 @@ class Errors(unittest.TestCase):
                 code = 14
                 if case == 'magic': data = b'BADMAGIC' + data[8:]
                 if case == 'offsets':
-                    data = polyset([('F.Cu', (RECT,))])
-                    # All offsets fit the four-point payload; only their order is invalid.
-                    data = data[:32] + struct.pack('<qqq', 0, 4, 3) + data[48:]
-                    # ring_count follows the four-byte F.Cu name.
-                    data = data[:28] + struct.pack('<I', 2) + data[32:]
+                    data = polyset([('F.Cu', (RECT, RECT))])
+                    offsets_start = 20 + 4 + len('F.Cu'.encode('utf-8')) + 4
+                    # Keep the valid two-ring layout; corrupt only the final offset.
+                    data = (data[:offsets_start + 16] + struct.pack('<q', 3) +
+                            data[offsets_start + 24:])
                 if case == 'negative_offset': data = data[:40] + struct.pack('<q', -1) + data[48:]
                 if case == 'oversized_offset': data = data[:40] + struct.pack('<q', 10000) + data[48:]
                 if case == 'first_offset': data = data[:32] + struct.pack('<q', 1) + data[40:]
@@ -66,7 +68,7 @@ class Errors(unittest.TestCase):
                 if case == 'zero_outline': stack['outline']['box'] = [0, 0, 0, 0]
                 if case in ('missing_unit', 'missing_layers', 'missing_outline', 'missing_refs'):
                     stack.pop({'missing_refs': 'external_refs'}.get(case, case.removeprefix('missing_')))
-                    code = 12
+                    if case == 'missing_refs': code = 12
                 if case == 'bad_outline': stack['outline'] = []
                 if case == 'empty_outline': stack['outline'] = {}
                 if case == 'polygon_outside_box':
@@ -78,7 +80,13 @@ class Errors(unittest.TestCase):
                     if case == 'bad_ref': stack['external_refs'] = [None]
                     if case == 'missing_ref_path': stack['external_refs'][0].pop('path')
                     if case == 'missing_ref_hash': stack['external_refs'][0].pop('sha256')
-                    code = 12
+                if case.startswith('no_copper_'):
+                    stack['layers'] = []
+                    if case == 'no_copper_missing_refs':
+                        stack.pop('external_refs')
+                        code = 12
+                    if case == 'no_copper_zero_box': stack['outline']['box'] = [0, 0, 0, 0]
+                    if case == 'no_copper_zero_polygon': stack['outline']['polygon'] = [[0, 0], [1e-3, 0], [2e-3, 0]]
                 source, output = root / 'input.json', root / 'output.json'
                 source.write_text(json.dumps(stack))
                 if case == 'empty_json': source.write_text('')
@@ -86,10 +94,14 @@ class Errors(unittest.TestCase):
                 if case == 'missing_stack': source.unlink()
                 before = source.read_bytes() if source.exists() else None
                 if case == 'same_path': output = source
-                result = subprocess.run([sys.executable, str(SOURCE / 'tools/stack/copper_fraction.py'), str(source), '-o', str(output)], capture_output=True, text=True, cwd=root, timeout=5)
+                extra = []
+                if case == 'output_staging': output = root / 'absent' / 'output.json'
+                if case == 'report_staging': extra = ['--report', str(root / 'absent' / 'report.json')]
+                result = subprocess.run([sys.executable, str(SOURCE / 'tools/stack/copper_fraction.py'), str(source), '-o', str(output)] + extra, capture_output=True, text=True, cwd=root, timeout=5)
                 self.assertEqual(result.returncode, code, result.stderr)
                 self.assertIn('copper_fraction: ' + names[code] + ':', result.stderr)
                 self.assertEqual(len(result.stderr.splitlines()), 1)
+                if case == 'offsets': self.assertIn('ring offsets must be monotonic', result.stderr)
                 if case == 'same_path':
                     self.assertEqual(source.read_bytes(), before)
                 else:
