@@ -28,3 +28,9 @@ endif()
 # Expose the configured feature state to the existing acceptance test executable.
 target_compile_definitions(chipcae_geometry INTERFACE
     CHIPCAE_ACCEPT_TEST_JSONCONS=$<BOOL:${CHIPCAE_ENABLE_JSONCONS}>)
+
+if(CHIPCAE_ENABLE_JSONCONS)
+    target_link_libraries(chipcae_geometry PRIVATE jsoncons)
+    set_source_files_properties(src/import_accept.cpp PROPERTIES
+        COMPILE_DEFINITIONS CHIPCAE_ACCEPT_JSONCONS=1)
+endif()

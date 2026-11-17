@@ -16,7 +16,6 @@ static void check(bool ok, const char* text) {
     }
 }
 
-#if CHIPCAE_ACCEPT_TEST_JSONCONS
 namespace {
 void require(bool ok, const char* message) {
     if (!ok)
@@ -47,6 +46,7 @@ struct AcceptFixture {
         return path;
     }
 };
+#if CHIPCAE_ACCEPT_TEST_JSONCONS
 void accept_file_roundtrip() {
     AcceptFixture f;
     const auto path = f.write(
@@ -193,8 +193,8 @@ bool run_accept_tests() {
     });
     return failures == 0;
 }
-} // namespace
 #endif
+} // namespace
 
 int main() {
     std::vector<Defect> ds;
@@ -236,6 +236,14 @@ int main() {
 #if CHIPCAE_ACCEPT_TEST_JSONCONS
     return run_accept_tests() ? 0 : 1;
 #else
+    AcceptFixture fixture;
+    std::string error;
+    check(!read_accept_file(fixture.dir / "missing.json", &error), "missing file rejected");
+    check(error.starts_with("IMPORT_REJECTED: "), "missing file error prefix");
+    check(!read_accept_file(fixture.write(R"({"accept":[]})"), &error),
+          "existing file requires jsoncons");
+    check(error == "IMPORT_REJECTED: accept file requires a jsoncons build",
+          "disabled jsoncons error");
     std::cout << "accept-file tests skipped because jsoncons is disabled\n";
 #endif
 }
