@@ -1,6 +1,7 @@
 #include "chipcae/material/cte_convert.hpp"
 #include "cte_fixtures.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -50,8 +51,9 @@ int main(int argc, char** argv) try {
     std::vector<Real> tangent, secant;
     check(secant_to_tangent(sec, tangent) == StatusCode::Ok, "secant vector status");
     check(tangent_to_secant(tan, secant) == StatusCode::Ok, "tangent vector status");
-    check(tangent.size() == 3 && secant.size() == 3, "exact vector dimensions");
-    for (std::size_t i = 0; i < 3; ++i) {
+    check(tangent.size() == sec.temperatures.size() && secant.size() == tan.temperatures.size(),
+          "exact vector dimensions");
+    for (std::size_t i = 0; i < sec.temperatures.size(); ++i) {
         check(near(tangent[i], tangent_expected[i]), "ordered tangent node");
         check(near(secant[i], secant_expected[i]), "ordered secant node");
         Real value = std::numeric_limits<Real>::quiet_NaN();
@@ -70,6 +72,52 @@ int main(int argc, char** argv) try {
                   value == first_secant,
               "repeat tangent scalar exactly");
         check(near(value, secant_expected[i]), "secant scalar node definition");
+    }
+    // Keep the canonical knots/alpha values, moving only Tref to an existing
+    // interior knot. Iterate the input sequence to check vector output order.
+    for (auto fixture : {sec, tan}) {
+        const std::size_t reference = fixture.temperatures.size() / 2;
+        fixture.reference_temperature = fixture.temperatures[reference];
+        std::vector<Real> derivative, integral;
+        check(secant_to_tangent(fixture, derivative) == StatusCode::Ok,
+              "interior reference tangent vector status");
+        check(tangent_to_secant(fixture, integral) == StatusCode::Ok,
+              "interior reference secant vector status");
+        check(derivative.size() == fixture.temperatures.size() &&
+                  integral.size() == fixture.temperatures.size(),
+              "interior reference exact dimensions");
+        std::size_t index = 0;
+        for (Real temperature : fixture.temperatures) {
+            const std::size_t left = index + 1 < fixture.temperatures.size() ? index : index - 1;
+            const Real slope = (fixture.alpha[left + 1] - fixture.alpha[left]) /
+                               (fixture.temperatures[left + 1] - fixture.temperatures[left]);
+            const Real expected_derivative =
+                fixture.alpha[index] + (temperature - fixture.reference_temperature) * slope;
+            Real area = 0;
+            for (std::size_t segment = std::min(index, reference);
+                 segment < std::max(index, reference);
+                 ++segment)
+                area += (fixture.temperatures[segment + 1] - fixture.temperatures[segment]) *
+                        (fixture.alpha[segment] + fixture.alpha[segment + 1]) / 2;
+            if (index < reference)
+                area = -area;
+            const Real expected_integral =
+                index == reference ? fixture.alpha[index]
+                                   : area / (temperature - fixture.reference_temperature);
+            check(near(derivative[index], expected_derivative), "input knot order derivative");
+            check(near(integral[index], expected_integral), "input knot order integral");
+            Real scalar = std::numeric_limits<Real>::quiet_NaN();
+            check(secant_to_tangent(fixture, temperature, scalar) == StatusCode::Ok &&
+                      near(scalar, expected_derivative),
+                  "interior reference scalar derivative");
+            check(tangent_to_secant(fixture, temperature, scalar) == StatusCode::Ok &&
+                      near(scalar, expected_integral),
+                  "interior reference scalar integral");
+            ++index;
+        }
+        check(near(derivative[reference], fixture.alpha[reference]) &&
+                  near(integral[reference], fixture.alpha[reference]),
+              "interior reference node limits");
     }
     auto repeated = tangent;
     check(secant_to_tangent(sec, repeated) == StatusCode::Ok && repeated == tangent,

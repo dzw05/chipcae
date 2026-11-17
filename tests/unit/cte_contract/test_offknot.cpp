@@ -6,7 +6,6 @@
 #include <cstdio>
 #include <limits>
 #include <stdexcept>
-#include <vector>
 
 using namespace chipcae::material;
 
