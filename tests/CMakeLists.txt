@@ -55,6 +55,7 @@ if(CHIPCAE_ENABLE_MPI)
     set_tests_properties(par_mpi_2 par_mpi_4 PROPERTIES LABELS "mpi;par")
 endif()
 add_subdirectory(integration/mesh_p1)
+add_subdirectory(integration/step_import)
 
 if(CHIPCAE_ENABLE_ECAD)
     add_executable(chipcae_test_copper_map unit/test_copper_map.cpp)
