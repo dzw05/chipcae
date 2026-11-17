@@ -8,10 +8,13 @@ include(cmake/Dependencies.cmake)
 include(cmake/ProtocolGeneration.cmake)
 chipcae_generate_protocol()
 add_library(chipcae_desktop_ui src/MainWindow.cpp src/MainWindow.hpp
-    workers/PreviewWorker.cpp workers/PreviewWorker.hpp)
-target_include_directories(chipcae_desktop_ui PUBLIC src workers)
+    workers/PreviewWorker.cpp workers/PreviewWorker.hpp
+    forms/SchemaValidator.cpp forms/SchemaValidator.hpp
+    forms/SchemaForm.cpp forms/SchemaForm.hpp forms/CaseOutline.cpp forms/CaseOutline.hpp)
+target_include_directories(chipcae_desktop_ui PUBLIC src workers forms)
 target_link_libraries(chipcae_desktop_ui PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets
-    Qt6::OpenGLWidgets ${VTK_LIBRARIES})
+    Qt6::OpenGLWidgets ${VTK_LIBRARIES} jsoncons::jsoncons)
+target_compile_definitions(chipcae_desktop_ui PRIVATE CHIPCAE_REPOSITORY="${CMAKE_CURRENT_SOURCE_DIR}/..")
 add_executable(chipcae-desktop src/main.cpp)
 target_link_libraries(chipcae-desktop PRIVATE chipcae_desktop_ui chipcae_desktop_protocol)
 vtk_module_autoinit(TARGETS chipcae_desktop_ui chipcae-desktop MODULES ${VTK_LIBRARIES})
@@ -58,4 +61,9 @@ if(CHIPCAE_BUILD_TESTS)
     # Do not force DISPLAY= (same CI EGL pitfall as desktop_render_smoke).
     set_tests_properties(desktop_result_io PROPERTIES FIXTURES_REQUIRED result_samples
         TIMEOUT 90)
+    add_executable(desktop_forms_test tests/forms_test.cpp)
+    target_link_libraries(desktop_forms_test PRIVATE chipcae_desktop_ui)
+    target_compile_definitions(desktop_forms_test PRIVATE CHIPCAE_REPOSITORY="${CMAKE_CURRENT_SOURCE_DIR}/..")
+    add_test(NAME desktop_forms COMMAND desktop_forms_test)
+    set_tests_properties(desktop_forms PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endif()
