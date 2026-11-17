@@ -28,3 +28,20 @@ with tempfile.TemporaryDirectory() as tmp:
     assert [d['defect_id'] for d in a.import_report()['defects']] == [
         'z_parent/occt_unavailable', 'z_child/occt_unavailable',
         'a_independent/occt_unavailable', 'm_independent/occt_unavailable']
+
+    # Mapped STEP bodies each expand into a part even without OCCT.
+    a.document['parts'] = []
+    a.document['parts_from_step'] = {
+        'step': 'lid.step', 'frame': 'step', 'origin': [0, 0, 0],
+        'bodies': {'BodyA': {'id': 'mapped_a', 'material': 'copper'},
+                   'BodyB': {'id': 'mapped_b', 'material': 'copper'}}}
+    a.save()
+    for args in ((), ('--accept-b-tier',)):
+        check(a.run(*args), 7)
+        assert a.defects()['code'] == 'IMPORT_REJECTED'
+        defects = a.import_report()['defects']
+        assert len(defects) == 2, defects
+        assert {(d['tier'], d['reason'], d['defect_id']) for d in defects} == {
+            ('C', 8, 'mapped_a/occt_unavailable'),
+            ('C', 8, 'mapped_b/occt_unavailable')}, defects
+        assert not a.output.exists()

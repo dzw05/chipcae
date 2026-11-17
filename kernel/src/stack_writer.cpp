@@ -86,6 +86,7 @@ mesh::Expected<bool> write_stack(const mesh::StackModel& model, const std::files
         }
         std::ofstream out(path);
         out << j << '\n';
+        out.flush();
         if (!out)
             return mesh::Error{"$", "INPUT_INVALID: cannot write stack"};
         return true;

@@ -172,7 +172,9 @@ int run_assembly(const ImportOptions& options) {
                 throw std::runtime_error("cannot open assembly");
             doc = J::parse(in);
         } catch (const std::exception& e) {
-            return fail(14, "INPUT_INVALID", std::string("json_path=$: ") + e.what());
+            return fail(14,
+                        "INPUT_INVALID",
+                        "assembly=" + options.assembly.string() + "; json_path=$: " + e.what());
         }
         for (auto key : {"schema", "board", "parts"})
             if (!doc.contains(key))
@@ -549,10 +551,12 @@ int run_assembly(const ImportOptions& options) {
             return fail(7, "IMPORT_REJECTED", "IMPORT_REJECTED: C-tier defects");
         if (policy.result == ImportResult::ConfirmationRequired)
             return fail(6, "IMPORT_CONFIRMATION_REQUIRED", "IMPORT_CONFIRMATION_REQUIRED");
-        reports("OK", "");
+        Cleanup output_cleanup{options.output};
         auto written = write_stack(merged, options.output);
         if (!written)
             return fail(14, "INPUT_INVALID", written.error().reason);
+        reports("OK", "");
+        output_cleanup.p.clear();
         return 0;
 #endif
     } catch (const std::exception& e) {
