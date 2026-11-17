@@ -152,6 +152,7 @@ struct Mapper {
     }
     Paths64 widen(const Path64& p, const Symbol& s) const {
         ClipperOffset offset;
+        // Match IPC: a collapsed ROUND line is a disk with tighter tolerance.
         if (p.size() == 2 && p.front() == p.back())
             offset.ArcTolerance(0.01);
         offset.AddPath(p,
@@ -325,6 +326,8 @@ struct Mapper {
                 continue;
             }
             double plating = 0;
+            // OdbAttrs::layer represents layers/<name>/attrlist; tools/hits
+            // have no attribute storage in the frozen OdbJob contract.
             auto attrs = job.attrs.layer.find(layer.name);
             if (attrs != job.attrs.layer.end()) {
                 auto value = attrs->second.find(".plating_thickness");

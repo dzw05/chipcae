@@ -294,9 +294,9 @@ void unavailable_thickness() {
                 "unavailable ODB thickness records missing provenance");
         ThicknessOverrides overrides{{"TOP", 35e-6}};
         records.clear();
-        const auto m = mapped(j, {&overrides, &records, "thickness.csv"});
+        const auto m = mapped(j, {&overrides, &records});
         near(m.layers.front().thickness_m, 35e-6);
-        require(records.front().source == "override:thickness.csv" && !records.front().odb_value_m,
+        require(records.front().source == "override" && !records.front().odb_value_m,
                 "override fills unavailable ODB thickness without conflict");
     }
 }
@@ -307,6 +307,14 @@ void line_width() {
     f.symbols = {{"r1000"}};
     f.lines.push_back({{1, 1}, {7, 1}, 0, true});
     near(area(mapped(j)), 6e6 + std::numbers::pi * 250000, 1e-3);
+}
+void collapsed_line() {
+    auto j = board();
+    auto& f = j.features["TOP"];
+    f.surfaces.clear();
+    f.symbols = {{"r1000"}};
+    f.lines = {{{1, 1}, {1, 1}, 0, true}};
+    near(area(mapped(j)), std::numbers::pi * 250000, 1e-3);
 }
 void negative() {
     auto j = board();
@@ -414,14 +422,14 @@ void overrides() {
     ThicknessOverrides o = {
         {"TOP", 35e-6}, {"CORE", 800e-6}, {"BOTTOM", 35e-6}, {"PREPREG", 300e-6}};
     std::vector<ThicknessRecord> records;
-    auto m = mapped(missing(), {&o, &records, "thickness.csv"});
+    auto m = mapped(missing(), {&o, &records});
     require(records.size() == 4, "one record per layer");
     for (std::size_t i = 0; i < records.size(); ++i) {
         const auto& r = records[i];
         require(r.layer == m.layers[i].name, "record layer");
         near(r.thickness_m, o.at(r.layer));
         near(m.layers[i].thickness_m, r.thickness_m);
-        require(r.source == "override:thickness.csv", "exact override filename provenance");
+        require(r.source == "override", "exact internal override provenance");
         if (i == 3)
             require(r.odb_value_m && std::abs(*r.odb_value_m - 200e-6) <= 1e-12,
                     "conflict retains original ODB thickness");
@@ -434,12 +442,12 @@ void override_provenance() {
     for (double value : {70e-6, 35e-6 * (1 + 2e-9), 35e-6 * (1 + 0.5e-9), 35e-6}) {
         ThicknessOverrides o{{"TOP", value}};
         std::vector<ThicknessRecord> records;
-        const auto m = mapped(j, {&o, &records, "thickness.csv"});
+        const auto m = mapped(j, {&o, &records});
         const bool conflict = std::abs(value - 35e-6) > 1e-9 * 35e-6;
         near(m.layers.front().thickness_m, conflict ? value : 35e-6, 1e-12);
         near(records.front().thickness_m, m.layers.front().thickness_m, 1e-12);
-        require(records.front().source == (conflict ? "override:thickness.csv" : "odb"),
-                "override conflict threshold and filename provenance");
+        require(records.front().source == (conflict ? "override" : "odb"),
+                "override conflict threshold and provenance");
         require(records.front().odb_value_m.has_value() == conflict,
                 "only conflicts record original ODB thickness");
         if (conflict)
@@ -451,10 +459,10 @@ void override_provenance() {
                          std::numeric_limits<double>::infinity(),
                          std::numeric_limits<double>::quiet_NaN()}) {
         ThicknessOverrides o{{"TOP", value}};
-        rejected(j, {"invalid override thickness", "TOP"}, {&o, nullptr, "thickness.csv"});
+        rejected(j, {"invalid override thickness", "TOP"}, {&o, nullptr});
     }
     ThicknessOverrides o{{"TOP", 70e-6}};
-    rejected(j, {"missing override filename", "TOP"}, {&o, nullptr});
+    near(mapped(j, {&o, nullptr}).layers.front().thickness_m, 70e-6);
 }
 
 void weight() {
@@ -464,15 +472,14 @@ void weight() {
     rejected(j, {"TOP"});
     ThicknessOverrides o = {{"TOP", 35e-6}};
     std::vector<ThicknessRecord> records;
-    mapped(j, {&o, &records, "thickness.csv"});
+    mapped(j, {&o, &records});
     j.attrs.layer["TOP"][".layer_dielectric"] = "-0.01";
-    near(mapped(j, {&o, nullptr, "thickness.csv"}).layers.front().thickness_m, 35e-6);
-    require(records.size() == 4 && records[0].source == "override:thickness.csv",
-            "weight override source");
+    near(mapped(j, {&o, nullptr}).layers.front().thickness_m, 35e-6);
+    require(records.size() == 4 && records[0].source == "override", "weight override source");
 }
 void override_case() {
     ThicknessOverrides o = {{"top", 35e-6}, {"core", 800e-6}, {"bottom", 35e-6}, {"unused", 1e-3}};
-    auto m = mapped(missing(), {&o, nullptr, "thickness.csv"});
+    auto m = mapped(missing(), {&o, nullptr});
     near(m.layers[0].thickness_m, 35e-6);
 }
 void skip() {
@@ -874,7 +881,7 @@ void duplicate_layer() {
 }
 void collision() {
     ThicknessOverrides o = {{"top", 35e-6}, {"TOP", 36e-6}};
-    rejected(board(), {"top", "TOP"}, {&o, nullptr, "thickness.csv"});
+    rejected(board(), {"top", "TOP"}, {&o, nullptr});
 }
 void invalid_contours() {
     auto j = board();
@@ -1397,16 +1404,16 @@ void boundaries() {
     equal(mapped(board()), mapped(j));
     ThicknessOverrides o = {{"top", 70e-6}};
     std::vector<ThicknessRecord> records;
-    const auto m = mapped(j, {&o, &records, "thickness.csv"});
+    const auto m = mapped(j, {&o, &records});
     near(m.layers.front().thickness_m, 70e-6);
     near(records.front().thickness_m, 70e-6);
-    require(records.front().source == "override:thickness.csv" && records.front().odb_value_m &&
+    require(records.front().source == "override" && records.front().odb_value_m &&
                 std::abs(*records.front().odb_value_m - 35e-6) <= 1e-12,
             "case-insensitive conflict preserves provenance");
     o["top"] = -1;
-    rejected(j, {"top"}, {&o, nullptr, "thickness.csv"});
+    rejected(j, {"top"}, {&o, nullptr});
     j.attrs.layer["TOP"][".layer_dielectric"] = "0";
-    rejected(j, {"top"}, {&o, nullptr, "thickness.csv"});
+    rejected(j, {"top"}, {&o, nullptr});
 }
 void degenerate_copper() {
     auto j = board();
@@ -1602,6 +1609,19 @@ void drill_rejections() {
                     m.report.unsupported.front().element == "ViaPlatingMissing:DRILL",
                 "malformed plating reported");
     }
+    // The frozen OdbAttrs contract stores layers/<name>/attrlist by layer name.
+    j.attrs.job[".plating_thickness"] = "0.2";
+    j.attrs.layer["TOP"][".plating_thickness"] = "0.1";
+    j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
+    m = mapped(j);
+    require(m.vias.size() == 1 && m.report.unsupported.empty(),
+            "drill layer attrlist supplies plating independently of job/copper attrs");
+    near(m.vias.front().inner_radius_dbu, 275);
+    j.attrs.layer["DRILL"].erase(".plating_thickness");
+    m = mapped(j);
+    require(m.vias.empty() && m.report.unsupported.size() == 1 &&
+                m.report.unsupported.front().element == "ViaPlatingMissing:DRILL",
+            "unrelated attrlists cannot supply drill plating");
     j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
     j.layers.back().end_name.clear();
     m = mapped(j);
@@ -1616,6 +1636,7 @@ int main() {
         {"odbpp_map_symbol_units", symbol_units},
         {"odbpp_map_unavailable_thickness", unavailable_thickness},
         {"odbpp_map_line_width", line_width},
+        {"odbpp_map_collapsed_line", collapsed_line},
         {"odbpp_map_negative", negative},
         {"odbpp_map_stackup_kicad", stackup},
         {"odbpp_map_missing_thickness", missing_thickness},
