@@ -778,6 +778,25 @@ sys.exit(rc)
                   "legacy exact error and unchanged stack");
             if (c.busy())
                 waitFor(c, [&] { c.cancel(); });
+            int localFinished = 0;
+            auto localConnection =
+                QObject::connect(&c, &ImportController::finished, [&] { ++localFinished; });
+            for (int emptyPaths = 0; emptyPaths < 16; ++emptyPaths) {
+                auto emptyMap = r;
+                if (emptyPaths & 1)
+                    emptyMap.input.clear();
+                if (emptyPaths & 2)
+                    emptyMap.output.clear();
+                if (!(emptyPaths & 4))
+                    emptyMap.polyset = r.output;
+                if (!(emptyPaths & 8))
+                    emptyMap.report = r.output;
+                check(!c.start(emptyMap) && !c.busy() && c.error() == "material map required" &&
+                          c.outcome() == ImportOutcome::Failed && localFinished == 0 &&
+                          !c.needsMaterialMapReselect() && d.stackJson() == before,
+                      "empty map takes precedence over empty or colliding request paths");
+            }
+            QObject::disconnect(localConnection);
             r.materialMap = map;
             for (const auto& destination : {r.input, map, dir.path()}) {
                 auto collision = r;
@@ -944,11 +963,18 @@ sys.exit(rc)
             waitFor(c, [&] { check(c.start(r), "start failed-restart fixture"); });
             require(c.outcome() == ImportOutcome::NeedsConfirmation, "B-tier fixture");
             const auto firstArgs = read(record);
+            const auto confirmationReport = c.reportBytes();
+            const auto confirmationCode = c.reportCode();
+            const auto confirmationGrade = c.grade();
             int confirmed = 0, finished = 0, defects = 0;
             QObject::connect(&c, &ImportController::userConfirmed, [&] {
                 ++confirmed;
                 check(!c.busy() && c.outcome() == ImportOutcome::NeedsConfirmation,
                       "failed rerun confirmation precedes startup attempt");
+                check(!confirmationReport.isEmpty() && c.reportBytes() == confirmationReport &&
+                          c.reportCode() == confirmationCode && c.grade() == confirmationGrade &&
+                          c.exitCode() == 6,
+                      "confirmation observers retain the complete prior B-tier report");
             });
             QObject::connect(&c, &ImportController::defectsReady, [&] { ++defects; });
             QObject::connect(&c, &ImportController::finished, [&](bool replaced) {
