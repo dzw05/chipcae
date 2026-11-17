@@ -21,6 +21,12 @@ int main() {
             invalid_input(merge_parts(b, {part()}, options()), "part id collides with lid");
         }
         b = base();
+        b.layers[0].name = "assembly";
+        auto split = merge(b, {part("below", -.001, .0005)}, .002);
+        check(split.stack.layers[1].name == "assembly#0" &&
+                  split.stack.layers[2].name == "assembly#1",
+              "new layer names reserve exact split layer names");
+        b = base();
         b.activation_groups["lid"] = {"layer:lid"};
         b.layers[0].copper = CopperSpec{"lid", .2, {}};
         check(bool(merge_parts(b, {part()}, options())),

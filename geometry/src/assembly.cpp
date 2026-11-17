@@ -7,7 +7,6 @@
 #include <set>
 #include <sstream>
 
-// SP0 contract stub; SP3 supplies the implementation.
 namespace chipcae::geometry {
 namespace {
 using Point = std::array<Real, 2>;
@@ -68,22 +67,57 @@ Footprint footprint(const Polygon& p, bool box_only) {
         f.polygon = p;
     return f;
 }
-bool rectangle(const Polygon& p) {
-    if (p.size() != 4)
-        return false;
-    for (size_t i = 0; i < 4; ++i) {
-        Point a = p[i], b = p[(i + 1) % 4];
-        if (a == b || (a[0] != b[0] && a[1] != b[1]))
+Polygon normalize(Polygon p) {
+    p.erase(std::unique(p.begin(), p.end()), p.end());
+    if (p.size() > 1 && p.front() == p.back())
+        p.pop_back();
+    bool changed = true;
+    while (changed && p.size() >= 3) {
+        changed = false;
+        for (size_t i = 0; i < p.size(); ++i) {
+            Point a = p[(i + p.size() - 1) % p.size()], b = p[i], c = p[(i + 1) % p.size()];
+            Real scale =
+                std::hypot(b[0] - a[0], b[1] - a[1]) * std::hypot(c[0] - b[0], c[1] - b[1]);
+            if (std::abs(cross(a, b, c)) <= 1e-14 * scale) {
+                p.erase(p.begin() + i);
+                changed = true;
+                break;
+            }
+        }
+    }
+    Real signed_area = 0;
+    for (size_t i = 1; i + 1 < p.size(); ++i)
+        signed_area += cross(p[0], p[i], p[i + 1]);
+    if (signed_area < 0)
+        std::reverse(p.begin(), p.end());
+    if (!p.empty())
+        std::rotate(p.begin(), std::min_element(p.begin(), p.end()), p.end());
+    return p;
+}
+bool rectilinear(const Polygon& p) {
+    for (size_t i = 0; i < p.size(); ++i) {
+        auto a = p[i], b = p[(i + 1) % p.size()];
+        if (a[0] != b[0] && a[1] != b[1])
             return false;
     }
     return true;
 }
+bool same_polygon(const Polygon& a, const Polygon& b) {
+    if (a.size() != b.size())
+        return false;
+    for (size_t shift = 0; shift < b.size(); ++shift) {
+        bool equal = true;
+        for (size_t i = 0; i < a.size(); ++i)
+            for (size_t j = 0; j < 2; ++j)
+                equal = equal && std::abs(a[i][j] - b[(i + shift) % b.size()][j]) <= 1e-12;
+        if (equal)
+            return true;
+    }
+    return false;
+}
 
-// Horizontal cuts include every hole's leftmost/lowest vertex. On that line
-// the left bridge ends at the nearest outer edge; extending the cuts through
-// the section avoids doubled bridge edges (weakly simple polygons). Between
-// consecutive vertex heights the even/odd fill consists of convex trapezoids.
-// Their interiors are disjoint, so areas and intersections can be summed.
+// Area queries partition a footprint into horizontal convex trapezoids.
+// This helper never constructs output regions or bridges holes.
 std::vector<Polygon> fragments(const SlabSection& section) {
     std::vector<const Ring*> rings{&section.outer};
     std::vector<const Ring*> holes;
@@ -127,12 +161,60 @@ std::vector<Polygon> fragments(const SlabSection& section) {
     }
     return out;
 }
-std::vector<Footprint> footprints(const SlabSection& s) {
-    if (s.holes.empty())
-        return {footprint(s.outer.pts, rectangle(s.outer.pts))};
+std::vector<Footprint> footprints(const SlabSection& section, Polygon& prior, std::string& reason) {
+    std::vector<Polygon> rings{normalize(section.outer.pts)};
+    for (const auto& h : section.holes)
+        rings.push_back(normalize(h.pts));
+    bool ortho = std::all_of(rings.begin(), rings.end(), rectilinear);
+    if (!ortho) {
+        if (rings.size() > 1) {
+            reason = "holed non-rectilinear section";
+            return {};
+        }
+        const auto& p = rings.front();
+        for (size_t i = 0; i < p.size(); ++i)
+            if (cross(p[i], p[(i + 1) % p.size()], p[(i + 2) % p.size()]) <= 0) {
+                reason = "non-convex section";
+                return {};
+            }
+        if (!prior.empty() && !same_polygon(prior, p)) {
+            reason = "multiple distinct cut sections";
+            return {};
+        }
+        prior = p;
+        return {footprint(p, false)};
+    }
+    std::vector<Real> xs;
+    for (const auto& r : rings)
+        for (auto p : r)
+            xs.push_back(p[0]);
+    std::sort(xs.begin(), xs.end());
+    xs.erase(std::unique(xs.begin(), xs.end()), xs.end());
     std::vector<Footprint> out;
-    for (const auto& p : fragments(s))
-        out.push_back(footprint(p, false));
+    for (size_t k = 1; k < xs.size(); ++k) {
+        Real x0 = xs[k - 1], x1 = xs[k], mid = x0 + (x1 - x0) / 2;
+        std::vector<Real> ys;
+        for (const auto& r : rings)
+            for (size_t i = 0; i < r.size(); ++i) {
+                auto a = r[i], b = r[(i + 1) % r.size()];
+                if ((a[0] > mid) != (b[0] > mid))
+                    ys.push_back(a[1]);
+            }
+        std::sort(ys.begin(), ys.end());
+        for (size_t i = 1; i < ys.size(); i += 2) {
+            auto found = std::find_if(out.begin(), out.end(), [&](const auto& f) {
+                return f.box[2] == x0 && f.box[1] == ys[i - 1] && f.box[3] == ys[i];
+            });
+            if (found != out.end())
+                found->box[2] = x1;
+            else {
+                Footprint f;
+                f.box = {x0, ys[i - 1], x1, ys[i]};
+                out.push_back(f);
+            }
+        }
+    }
+    std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) { return a.box < b.box; });
     return out;
 }
 Real convex_intersection(Polygon subject, const Polygon& clip) {
@@ -202,12 +284,18 @@ place(std::vector<Slab> local, const Placement& placement, const StackModel& bas
         dz = frame->origin[2];
     } else {
         const auto& attach = std::get<AttachPlacement>(placement);
-        if (!std::isfinite(attach.gap) || attach.gap < 0 ||
-            (attach.bond && (!std::isfinite(attach.bond->thickness) ||
-                             attach.bond->thickness <= 0 || attach.bond->thickness != attach.gap)))
-            return invalid("bond requires a positive thickness equal to gap");
+        if (attach.bond && (!std::isfinite(attach.bond->thickness) || attach.bond->thickness <= 0))
+            return invalid("bond thickness must be > 0");
+        if (attach.bond && attach.bond->thickness != attach.gap)
+            return invalid("bond gap != thickness");
+        if (!std::isfinite(attach.gap) || attach.gap < 0)
+            return invalid("invalid attachment gap");
+        if (attach.target.rfind("part:", 0) == 0 && !attach.resolved_z)
+            return invalid("part attach requires resolved_z");
         Real face = 0;
-        if (attach.target.rfind("layer:", 0) == 0) {
+        if (attach.resolved_z) {
+            face = *attach.resolved_z;
+        } else if (attach.target.rfind("layer:", 0) == 0) {
             bool found = false;
             for (const auto& layer : base.layers) {
                 if (!std::isfinite(layer.thickness) || layer.thickness <= 0)
@@ -258,8 +346,6 @@ place(std::vector<Slab> local, const Placement& placement, const StackModel& bas
     }
     if (!valid_slabs(local))
         return invalid("placement overflow or collapsed geometry");
-    if (!valid_slabs(local))
-        return invalid("placement overflows or collapses geometry");
     return PlacedPart{"", "", std::move(local)};
 }
 
@@ -268,12 +354,10 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
     if (base.layers.empty())
         return invalid("base has no layers");
     MergeResult result{base, {}, 0};
-    if (parts.empty())
-        return result;
     if (!std::isfinite(options.t_min) || !std::isfinite(options.eps_weld) ||
-        !std::isfinite(options.tau_a) || options.eps_weld <= 0 ||
-        options.t_min < options.eps_weld || options.tau_a < 0)
-        return invalid("invalid merge tolerances");
+        !std::isfinite(options.tau_a) || options.eps_weld <= 0 || options.t_min <= 0 ||
+        options.tau_a <= 0)
+        return invalid("invalid MergeOptions");
     std::set<std::string> ids, layer_names;
     std::vector<Real> boundaries{0};
     for (const auto& l : base.layers) {
@@ -281,9 +365,28 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
             return invalid("invalid base layer thickness or duplicate name");
         boundaries.push_back(boundaries.back() + l.thickness);
     }
-    for (const auto& p : parts)
-        if (p.id.empty() || !ids.insert(p.id).second || !valid_slabs(p.slabs))
-            return invalid("empty slabs, invalid geometry or duplicate part id");
+    std::set<std::string> base_names, reserved;
+    for (const auto& l : base.layers) {
+        base_names.insert(l.name);
+        reserved.insert(l.name);
+        reserved.insert(l.body.empty() ? l.name : l.body);
+        for (const auto& r : l.regions) {
+            base_names.insert(r.name);
+            reserved.insert(r.name);
+            reserved.insert(r.body.empty() ? r.name : r.body);
+        }
+    }
+    for (const auto& p : parts) {
+        if (!ids.insert(p.id).second)
+            return invalid("duplicate part id " + p.id);
+        if (p.id.empty() || !valid_slabs(p.slabs))
+            return invalid("empty slabs or invalid geometry");
+        for (const auto& name : {p.id, p.id + ".bond"})
+            if (reserved.count(name))
+                return invalid("part id collides with " + name);
+    }
+    if (parts.empty())
+        return result;
     std::set<Real> interfaces(boundaries.begin(), boundaries.end());
     // Establish all ordinary candidate interfaces in sorted order, independent
     // of part precedence. Base interfaces always have priority over new ones.
@@ -315,24 +418,31 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
     for (const auto& p : parts) {
         std::vector<Source> slabs;
         size_t thin_index = 0;
+        Polygon prior_polygon;
         bool bond = p.id.size() >= 5 && p.id.compare(p.id.size() - 5, 5, ".bond") == 0;
         for (const auto& s : p.slabs) {
             Real lo = aligned(s.z0), hi = aligned(s.z1);
             // Preserve per-source provenance for each retained interval before
             // alignment, including thin pieces created by a base boundary.
             std::vector<Real> cuts{s.z0};
+            // Layer sums and literal slab endpoints can differ by one ulp.
+            // Do not turn that arithmetic roundoff into a provenance interval.
+            auto coincident = [](Real a, Real b) {
+                return std::abs(a - b) <= 4 * std::numeric_limits<Real>::epsilon() *
+                                              std::max(std::abs(a), std::abs(b));
+            };
             for (Real z : original_interfaces)
-                if (z > s.z0 && z < s.z1)
+                if (z > s.z0 && z < s.z1 && !coincident(z, s.z0) && !coincident(z, s.z1) &&
+                    !coincident(z, cuts.back()))
                     cuts.push_back(z);
             cuts.push_back(s.z1);
-            const size_t previous_thin_index = thin_index;
             auto report_thin = [&](Real before, Real after) {
                 std::ostringstream details;
                 details << std::setprecision(17) << "original thickness " << before
                         << "; resulting thickness " << after;
                 result.defects.push_back(diagnostic(Tier::B,
                                                     DefectReason::THIN_LAYER_MERGED,
-                                                    p.id + "/thin#" + std::to_string(thin_index++),
+                                                    p.id + "/thin#" + std::to_string(thin_index),
                                                     before,
                                                     details.str()));
             };
@@ -342,18 +452,30 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
                     Real after = std::max(Real(0), aligned(cuts[i]) - aligned(cuts[i - 1]));
                     report_thin(t, after);
                 }
+                ++thin_index;
             }
-            // A boundary just outside a source can also change its thickness;
-            // no internal cut represents that thin displacement. Numerical
-            // welding alone remains silent, but larger changes need provenance.
-            if (previous_thin_index == thin_index && (std::abs(lo - s.z0) >= options.eps_weld ||
-                                                      std::abs(hi - s.z1) >= options.eps_weld))
-                report_thin(s.z1 - s.z0, std::max(Real(0), hi - lo));
             Source source{lo, hi, {}};
+            std::string reason;
+            Polygon candidate_polygon = prior_polygon;
             for (const auto& section : s.sections) {
-                auto fs = footprints(section);
+                auto fs = footprints(section, candidate_polygon, reason);
                 source.regions.insert(source.regions.end(), fs.begin(), fs.end());
+                if (!reason.empty())
+                    break;
             }
+            if (!reason.empty()) {
+                source.regions.clear();
+                result.defects.push_back(
+                    diagnostic(Tier::C,
+                               DefectReason::PART_NOT_PRISMATIC,
+                               p.id + "/cut_unsupported#" + std::to_string(slabs.size()),
+                               0,
+                               "cut_unsupported: " + reason));
+            } else
+                prior_polygon = std::move(candidate_polygon);
+            std::stable_sort(source.regions.begin(),
+                             source.regions.end(),
+                             [](const auto& a, const auto& b) { return a.box < b.box; });
             slabs.push_back(std::move(source));
         }
         sources.push_back(std::move(slabs));
@@ -397,14 +519,71 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
             name = original + "#" + std::to_string(suffix++);
         return name;
     };
+    std::map<std::string, std::vector<std::string>> layer_pieces, region_pieces;
+    std::map<std::string, size_t> layer_order;
+    for (size_t o = 0; o < base.layers.size(); ++o) {
+        const auto& l = base.layers[o];
+        layer_order[l.name] = o;
+        for (size_t k = 0; k < split_counts[o]; ++k) {
+            auto suffix = split_counts[o] > 1 ? "#" + std::to_string(k) : "";
+            for (const auto& name : {l.name + suffix})
+                if (!suffix.empty() && base_names.count(name))
+                    return invalid("split name collides with " + name);
+            layer_pieces[l.name].push_back(l.name + suffix);
+            used_names.insert(l.name + suffix);
+            for (const auto& r : l.regions) {
+                if (!suffix.empty() && base_names.count(r.name + suffix))
+                    return invalid("split name collides with " + r.name + suffix);
+                region_pieces[r.name].push_back(r.name + suffix);
+            }
+        }
+    }
+    for (auto& [group, refs] : result.stack.activation_groups) {
+        std::vector<std::string> rewritten;
+        for (auto ref : refs) {
+            bool expanded = false;
+            for (const auto& prefix : {std::string("layer:"), std::string("region:")}) {
+                auto& pieces = prefix == "layer:" ? layer_pieces : region_pieces;
+                if (ref.starts_with(prefix) && pieces.count(ref.substr(prefix.size()))) {
+                    for (const auto& name : pieces.at(ref.substr(prefix.size())))
+                        rewritten.push_back(prefix + name);
+                    expanded = true;
+                    break;
+                }
+            }
+            if (expanded)
+                continue;
+            if (ref.starts_with("interface:")) {
+                auto sep = ref.find('|');
+                if (sep != std::string::npos) {
+                    auto a = ref.substr(10, sep - 10), b = ref.substr(sep + 1);
+                    if (layer_order.count(a) && layer_order.count(b) &&
+                        (layer_order[a] + 1 == layer_order[b] ||
+                         layer_order[b] + 1 == layer_order[a])) {
+                        bool below = layer_order[a] < layer_order[b];
+                        ref = "interface:" +
+                              (below ? layer_pieces[a].back() : layer_pieces[a].front()) + "|" +
+                              (below ? layer_pieces[b].front() : layer_pieces[b].back());
+                    }
+                }
+            }
+            rewritten.push_back(ref);
+        }
+        refs = std::move(rewritten);
+    }
     for (size_t i = 1; i < zs.size(); ++i) {
         Real lo = zs[i - 1], hi = zs[i];
         size_t o = owner(lo + (hi - lo) / 2);
         Layer l;
         if (o < base.layers.size()) {
             l = base.layers[o];
-            if (split_counts[o] > 1)
-                l.name = unique_name(l.name + "#" + std::to_string(split_indices[o]++));
+            l.body = l.body.empty() ? l.name : l.body;
+            auto suffix = split_counts[o] > 1 ? "#" + std::to_string(split_indices[o]++) : "";
+            l.name += suffix;
+            for (auto& r : l.regions) {
+                r.body = r.body.empty() ? r.name : r.body;
+                r.name += suffix;
+            }
         } else {
             l.name = unique_name("assembly#" + std::to_string(i - 1));
             l.kind = "Explicit";
@@ -449,6 +628,15 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
                                      parts[p].material,
                                      parts[p].id,
                                      src.regions[f]};
+                    size_t count = 0, index = 0;
+                    for (size_t j = 1; j < zs.size(); ++j)
+                        if (src.lo < zs[j] && src.hi > zs[j - 1] && src.lo < src.hi) {
+                            if (j < i)
+                                ++index;
+                            ++count;
+                        }
+                    if (count > 1)
+                        region.name += "#" + std::to_string(index);
                     Real a = area(polygon(region.footprint));
                     Real inside = intersection(region.footprint, base.outline);
                     if (a - inside > std::numeric_limits<Real>::epsilon() * a * 64)
