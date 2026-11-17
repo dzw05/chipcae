@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
         require(cu.open(QIODevice::ReadOnly), "copper fallback read");
         auto stack = Json::parse(cu.readAll().toStdString());
         auto library = doc.materialLibrary();
-        for (const char* id : {"substrate_resin", "SAC305_ball_eq", "copper"}) {
+        for (const char* id : {"substrate_resin", "SAC305_ball_eq"}) {
             auto material = library.at("materials").at(0);
             material["id"] = id;
             library["materials"].push_back(material);
