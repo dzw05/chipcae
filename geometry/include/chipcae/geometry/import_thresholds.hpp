@@ -45,7 +45,41 @@ struct ImportThresholdError {
 };
 
 enum class Tier : std::uint8_t { Weld, A, B, C };
-enum class DefectReason : std::uint8_t { TOLERANCE_RANGE_UNSUPPORTED };
+enum class DefectReason : std::uint8_t {
+    TOLERANCE_RANGE_UNSUPPORTED,
+    THIN_LAYER_MERGED,
+    PART_UNMAPPED,
+    PART_NOT_PRISMATIC,
+    PART_TILTED,
+    PART_OVERLAP,
+    PART_OUTSIDE_OUTLINE,
+    PART_ATTACH_INVALID,
+    OCCT_UNAVAILABLE
+};
+
+inline const char* to_string(DefectReason r) noexcept {
+    switch (r) {
+    case DefectReason::TOLERANCE_RANGE_UNSUPPORTED:
+        return "TOLERANCE_RANGE_UNSUPPORTED";
+    case DefectReason::THIN_LAYER_MERGED:
+        return "THIN_LAYER_MERGED";
+    case DefectReason::PART_UNMAPPED:
+        return "PART_UNMAPPED";
+    case DefectReason::PART_NOT_PRISMATIC:
+        return "PART_NOT_PRISMATIC";
+    case DefectReason::PART_TILTED:
+        return "PART_TILTED";
+    case DefectReason::PART_OVERLAP:
+        return "PART_OVERLAP";
+    case DefectReason::PART_OUTSIDE_OUTLINE:
+        return "PART_OUTSIDE_OUTLINE";
+    case DefectReason::PART_ATTACH_INVALID:
+        return "PART_ATTACH_INVALID";
+    case DefectReason::OCCT_UNAVAILABLE:
+        return "OCCT_UNAVAILABLE";
+    }
+    return "";
+}
 
 struct Defect {
     Tier tier = Tier::B;
@@ -58,6 +92,7 @@ struct Defect {
     std::string action;
     std::string rejection_reason;
     bool material_ambiguous = false;
+    std::string details{};
 };
 
 struct ImportAssessment {
