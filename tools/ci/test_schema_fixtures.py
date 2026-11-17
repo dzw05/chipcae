@@ -20,10 +20,11 @@ class SchemaFixturesTest(unittest.TestCase):
             text=True,
         )
         output = f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        dependency_output = output.lower()
         missing_dependency = result.returncode == 77 or (
-            any(name in output.lower() for name in ("jsonschema", "referencing"))
+            any(name in dependency_output for name in ("jsonschema", "referencing"))
             and any(
-                marker in output.lower()
+                marker in dependency_output
                 for marker in ("no module named", "cannot import", "required", "missing")
             )
         )
