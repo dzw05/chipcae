@@ -61,6 +61,14 @@ def run_case(binary, case, generate=False):
                 result = invoke(binary, [FIXTURES / f"{board}.xml", "-o", "stack.json",
                                          "--material-map", HERE / "material_map.json"], work)
                 record_or_compare(result, work, golden / board, ARTIFACTS, generate)
+            for name in ("empty_input", "truncated_input"):
+                work = directory / name
+                work.mkdir()
+                shutil.copyfile(HERE / f"{name}.xml", work / "input.xml")
+                result = invoke(binary, ["input.xml", "-o", "stack.json",
+                                         "--material-map", HERE / "material_map.json"], work)
+                record_or_compare(result, work, golden / name,
+                                  (*ARTIFACTS, "stdout", "stderr"), generate)
             variants = (
                 ("accept_b_tier", ["--accept-b-tier"], ARTIFACTS),
                 ("out_alias", [], ARTIFACTS),

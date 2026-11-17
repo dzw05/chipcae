@@ -76,3 +76,7 @@ exit status, stdout, stderr, and artifacts with the same main-baseline binary.
 Missing polyset/report/material-map values also compare baseline help bytes.
 The `.chipcae-autotests` marker enables `chipcae_auto_test_subdirs()` discovery
 from tests/CMakeLists.txt; this directory's CMakeLists.txt registers the four tests.
+
+Empty and truncated XML fixtures also compare exit status, stdout, stderr, and
+all artifact bytes against the same baseline in the `noop` case. Each is copied
+to a relative `input.xml` path so diagnostics do not depend on the checkout path.
