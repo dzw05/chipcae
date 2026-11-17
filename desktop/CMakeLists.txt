@@ -8,10 +8,13 @@ include(cmake/Dependencies.cmake)
 include(cmake/ProtocolGeneration.cmake)
 chipcae_generate_protocol()
 add_library(chipcae_desktop_ui src/MainWindow.cpp src/MainWindow.hpp
-    workers/PreviewWorker.cpp workers/PreviewWorker.hpp)
-target_include_directories(chipcae_desktop_ui PUBLIC src workers)
+    workers/PreviewWorker.cpp workers/PreviewWorker.hpp
+    forms/SchemaValidator.cpp forms/SchemaValidator.hpp
+    forms/SchemaForm.cpp forms/SchemaForm.hpp forms/CaseOutline.cpp forms/CaseOutline.hpp)
+target_include_directories(chipcae_desktop_ui PUBLIC src workers forms)
 target_link_libraries(chipcae_desktop_ui PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets
-    Qt6::OpenGLWidgets ${VTK_LIBRARIES})
+    Qt6::OpenGLWidgets ${VTK_LIBRARIES} jsoncons::jsoncons)
+target_compile_definitions(chipcae_desktop_ui PRIVATE CHIPCAE_REPOSITORY="${CMAKE_CURRENT_SOURCE_DIR}/..")
 add_executable(chipcae-desktop src/main.cpp)
 target_link_libraries(chipcae-desktop PRIVATE chipcae_desktop_ui chipcae_desktop_protocol)
 vtk_module_autoinit(TARGETS chipcae_desktop_ui chipcae-desktop MODULES ${VTK_LIBRARIES})
@@ -38,4 +41,29 @@ if(CHIPCAE_BUILD_TESTS)
     # DISPLAY and VTK_DEFAULT_OPENGL_WINDOW are left to the caller: local Mesa EGL
     # (no DISPLAY) or CI Xvfb + vtkXOpenGLRenderWindow. Forcing DISPLAY= here would
     # hide the Xvfb display and regress the GitHub runner.
+endif()
+
+add_library(chipcae_desktop_results io/ResultSession.cpp io/ResultSession.hpp
+    ../io/src/event_log.cpp)
+target_include_directories(chipcae_desktop_results PUBLIC io ../io/include)
+target_link_libraries(chipcae_desktop_results PUBLIC Qt6::Core VTK::CommonDataModel
+    VTK::IOHDF PRIVATE VTK::hdf5)
+if(CHIPCAE_BUILD_TESTS)
+    add_executable(desktop_result_io tests/result_io_test.cpp)
+    target_link_libraries(desktop_result_io PRIVATE chipcae_desktop_results
+        VTK::RenderingOpenGL2 VTK::RenderingCore)
+    vtk_module_autoinit(TARGETS desktop_result_io MODULES VTK::RenderingOpenGL2)
+    find_program(CHIPCAE_FIXTURE_PYTHON NAMES python3 python HINTS "${CMAKE_PREFIX_PATH}/bin" REQUIRED)
+    add_test(NAME desktop_result_fixtures COMMAND ${CHIPCAE_FIXTURE_PYTHON}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/result_fixtures.py ${CMAKE_CURRENT_BINARY_DIR}/result-samples)
+    set_tests_properties(desktop_result_fixtures PROPERTIES FIXTURES_SETUP result_samples)
+    add_test(NAME desktop_result_io COMMAND desktop_result_io ${CMAKE_CURRENT_BINARY_DIR}/result-samples)
+    # Do not force DISPLAY= (same CI EGL pitfall as desktop_render_smoke).
+    set_tests_properties(desktop_result_io PROPERTIES FIXTURES_REQUIRED result_samples
+        TIMEOUT 90)
+    add_executable(desktop_forms_test tests/forms_test.cpp)
+    target_link_libraries(desktop_forms_test PRIVATE chipcae_desktop_ui)
+    target_compile_definitions(desktop_forms_test PRIVATE CHIPCAE_REPOSITORY="${CMAKE_CURRENT_SOURCE_DIR}/..")
+    add_test(NAME desktop_forms COMMAND desktop_forms_test)
+    set_tests_properties(desktop_forms PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endif()
