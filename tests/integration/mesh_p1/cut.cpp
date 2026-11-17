@@ -2,6 +2,7 @@
 #include "support.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <iostream>
 #include <numeric>
 #include <random>
@@ -211,6 +212,59 @@ int main(int argc, char** argv) {
         quadratic += tetra.value().vq_w[q] * std::pow(tetra.value().vq_xi[0][q], 2);
     expect(std::abs(quadratic - 1.0 / 60) <= k1::threshold("cut_volume_relative") / 60,
            "degree two tetra exactness");
+    auto factorial = [](int n) {
+        double x = 1;
+        for (int i = 2; i <= n; ++i)
+            x *= i;
+        return x;
+    };
+    for (int degree : {2, 4, 6, 8}) {
+        auto high = options;
+        high.quad_degree = degree;
+        auto cut = build_cut_layer(original, {{{0, {1, 1, 1}, 1}}}, high);
+        expect(bool(cut), "higher degree cut");
+        for (int a = 0; a <= degree; ++a)
+            for (int b = 0; b + a <= degree; ++b)
+                for (int d = 0; d + a + b <= degree; ++d) {
+                    double vol = 0, surf = 0;
+                    for (std::size_t q = 0; q < cut.value().vq_w.size(); ++q)
+                        vol += cut.value().vq_w[q] * std::pow(cut.value().vq_xi[0][q], a) *
+                               std::pow(cut.value().vq_xi[1][q], b) *
+                               std::pow(cut.value().vq_xi[2][q], d);
+                    for (std::size_t q = 0; q < cut.value().bq_w.size(); ++q)
+                        surf += cut.value().bq_w[q] * std::pow(cut.value().bq_xi[0][q], a) *
+                                std::pow(cut.value().bq_xi[1][q], b) *
+                                std::pow(cut.value().bq_xi[2][q], d);
+                    double ev =
+                        factorial(a) * factorial(b) * factorial(d) / factorial(a + b + d + 3);
+                    double es = std::sqrt(3.) * factorial(a) * factorial(b) * factorial(d) /
+                                factorial(a + b + d + 2);
+                    expect(std::abs(vol - ev) <= 1e-12 * ev, "volume polynomial exactness");
+                    expect(std::abs(surf - es) <= 1e-12 * es, "interface polynomial exactness");
+                }
+    }
+    auto default_cut = build_cut_layer(original, {{{0, {1, 1, 1}, 1}}}, CutOptions{});
+    auto explicit_2 = CutOptions{};
+    explicit_2.quad_degree = 2;
+    auto legacy_path = build_cut_layer(original, {{{0, {1, 1, 1}, 1}}}, explicit_2);
+    for (int k = 0; k < 3; ++k)
+        for (std::size_t q = 0; q < default_cut.value().vq_xi[k].size(); ++q)
+            expect(std::bit_cast<std::uint64_t>(default_cut.value().vq_xi[k][q]) ==
+                       std::bit_cast<std::uint64_t>(legacy_path.value().vq_xi[k][q]),
+                   "default point bits");
+    for (std::size_t q = 0; q < default_cut.value().vq_w.size(); ++q)
+        expect(std::bit_cast<std::uint64_t>(default_cut.value().vq_w[q]) ==
+                   std::bit_cast<std::uint64_t>(legacy_path.value().vq_w[q]),
+               "default weight bits");
+    for (int k = 0; k < 3; ++k)
+        for (std::size_t q = 0; q < default_cut.value().bq_xi[k].size(); ++q)
+            expect(std::bit_cast<std::uint64_t>(default_cut.value().bq_xi[k][q]) ==
+                       std::bit_cast<std::uint64_t>(legacy_path.value().bq_xi[k][q]),
+                   "default boundary point bits");
+    for (std::size_t q = 0; q < default_cut.value().bq_w.size(); ++q)
+        expect(std::bit_cast<std::uint64_t>(default_cut.value().bq_w[q]) ==
+                   std::bit_cast<std::uint64_t>(legacy_path.value().bq_w[q]),
+               "default boundary weight bits");
     auto retained = build_tensor_grid(s, split).value();
     options.keep_void = true;
     auto kept = build_cut_layer(retained, {{{0, {1, 1, 0}, 1}}}, options);
