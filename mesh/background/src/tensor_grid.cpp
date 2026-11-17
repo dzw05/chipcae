@@ -1,37 +1,115 @@
 #include "chipcae/mesh/background/tensor_grid.hpp"
 
 #include "chipcae/mesh/background/activation.hpp"
+#include "chipcae/mesh/background/column_hierarchy.hpp"
 #include "chipcae/mesh/background/sfc.hpp"
 #include "chipcae/par/column_extrude_partitioner.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 #include <limits>
 #include <numeric>
 #include <set>
 #include <stdexcept>
 namespace chipcae::mesh {
 namespace {
-Expected<std::vector<Local>>
-expand_column_partition(std::size_t nx, std::size_t ny, std::size_t nz, int ranks) {
-    if (!nx || !ny || !nz || ranks < 1)
-        return Error{"partition", "positive dimensions required"};
+Expected<std::vector<Local>> expand_column_partition(HexMeshArrays::GridReport& report,
+                                                     std::size_t nx0,
+                                                     std::size_t ny0,
+                                                     std::size_t nz,
+                                                     int ranks,
+                                                     std::span<const std::int32_t> weights = {}) {
     try {
-        auto structured = par::ColumnExtrudePartitioner::partition(nx, ny, nz, ranks);
-        const auto columns = nx * ny;
-        std::vector<std::size_t> order(columns);
-        std::iota(order.begin(), order.end(), 0);
-        std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
-            return morton(a % nx, a / nx) < morton(b % nx, b / nx);
-        });
-        std::vector<Local> result(columns * nz);
-        for (std::size_t mi = 0; mi < columns; ++mi)
-            for (std::size_t k = 0; k < nz; ++k)
-                result[mi * nz + k] = structured(k * columns + order[mi]);
+        const auto L = report.levels - 1;
+        auto structured = par::ColumnExtrudePartitioner::partition(nx0, ny0, nz, ranks, weights);
+        auto& coarse = report.column_ranks.emplace_back(nx0 * ny0);
+        for (std::size_t j = 0; j < ny0; ++j)
+            for (std::size_t i = 0; i < nx0; ++i)
+                coarse[level0_dense(nx0, ny0, i, j)] = structured(j * nx0 + i);
+        for (int l = 1; l <= L; ++l) {
+            const auto parent = report.column_ranks.back();
+            auto& child = report.column_ranks.emplace_back(parent.size() * 4);
+            for (std::size_t d = 0; d < child.size(); ++d)
+                child[d] = parent[d >> 2];
+        }
+        const auto& fine = report.column_ranks.back();
+        std::vector<Local> result(fine.size() * nz);
+        std::vector<std::size_t> loads(ranks);
+        for (std::size_t d = 0; d < fine.size(); ++d)
+            for (std::size_t k = 0; k < nz; ++k) {
+                result[d * nz + k] = fine[d];
+                ++loads[fine[d]];
+            }
+        report.partition_imbalance =
+            Real(*std::max_element(loads.begin(), loads.end())) * ranks / result.size() - 1;
+        // TODO: Count fine-cell weights here when alpha weights are available.
+        if (report.partition_imbalance > .25)
+            return Error{"partition", "fine-cell partition imbalance exceeds 0.25"};
+        for (std::size_t l = 1; l < report.column_ranks.size(); ++l) {
+            const auto nx = nx0 << l, ny = ny0 << l;
+            for (std::size_t j = 0; j < ny; ++j)
+                for (std::size_t i = 0; i < nx; ++i) {
+                    const auto child = dense_index(nx0, ny0, l, i, j);
+                    const auto parent = dense_index(nx0, ny0, l - 1, i >> 1, j >> 1);
+                    if (report.column_ranks[l][child] != report.column_ranks[l - 1][parent])
+                        return Error{"HIERARCHY_INVALID", "child and parent ranks differ"};
+                }
+        }
+        for (std::size_t d = 0; d < fine.size(); ++d)
+            for (std::size_t k = 1; k < nz; ++k)
+                if (result[d * nz + k] != result[d * nz])
+                    return Error{"COLUMN_SPLIT_ACROSS_RANKS", "column crosses ranks"};
         return result;
     } catch (const std::exception& e) {
         return Error{"partition", e.what()};
     }
+}
+struct AxisSegments {
+    std::vector<Real> lines;
+    std::vector<std::size_t> counts;
+};
+bool pad_axis(AxisSegments& axis, std::size_t divisor, Real ratio) {
+    auto total = std::accumulate(axis.counts.begin(), axis.counts.end(), std::size_t{0});
+    auto width = [&](std::size_t i) {
+        return (axis.lines[i + 1] - axis.lines[i]) / axis.counts[i];
+    };
+    while (total % divisor) {
+        std::size_t largest = 0;
+        for (std::size_t i = 1; i < axis.counts.size(); ++i)
+            if (width(i) > width(largest))
+                largest = i;
+        bool accepted = false;
+        // Try the largest physical cells first, then its neighboring segments.
+        for (std::size_t distance = 0; distance <= 1 && !accepted; ++distance)
+            for (int direction : {-1, 1}) {
+                if (distance == 0 && direction == 1)
+                    continue;
+                auto candidate = static_cast<std::ptrdiff_t>(largest) +
+                                 direction * static_cast<std::ptrdiff_t>(distance);
+                if (candidate < 0 || static_cast<std::size_t>(candidate) >= axis.counts.size())
+                    continue;
+                ++axis.counts[candidate];
+                bool valid = true;
+                for (std::size_t i = 1; i < axis.counts.size(); ++i)
+                    if (std::max(width(i) / width(i - 1), width(i - 1) / width(i)) >
+                        ratio * (1 + 16 * std::numeric_limits<Real>::epsilon()))
+                        valid = false;
+                if (valid) {
+                    accepted = true;
+                    break;
+                }
+                --axis.counts[candidate];
+            }
+        if (!accepted)
+            return false;
+        ++total;
+    }
+    for (std::size_t i = 1; i < axis.counts.size(); ++i)
+        if (std::max(width(i) / width(i - 1), width(i - 1) / width(i)) >
+            ratio * (1 + 16 * std::numeric_limits<Real>::epsilon()))
+            return false;
+    return true;
 }
 bool contains(const Footprint& f, Real x, Real y) {
     if (x < f.box[0] || y < f.box[1] || x > f.box[2] || y > f.box[3])
@@ -77,7 +155,10 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
     if (Index(o.nx) * o.ny > o.cell_budget / minimum_z)
         return Error{"cell_budget",
                      "requested xyz resolution exceeds budget; revise nx/ny/n_elem_min explicitly"};
+    if (o.levels < 0 || o.levels > 31 || o.max_coarse_columns < 0)
+        return Error{"HIERARCHY_INVALID", "invalid hierarchy options"};
     HexMeshArrays m;
+    std::array<AxisSegments, 2> segments;
     auto& axes = m.axes;
     for (int a = 0; a < 2; ++a) {
         auto& v = axes[a];
@@ -108,6 +189,7 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
             } else if (snapped.empty() || x != snapped.back())
                 snapped.push_back(x);
         }
+        segments[a].lines = snapped;
         v.clear();
         Local minimum = a == 0 ? o.nx : o.ny;
         Real spacing = b[a + 2] - b[a];
@@ -124,18 +206,97 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
                              "xy grading refinement exceeds budget; revise feature spacing or "
                              "nx/ny explicitly"};
             Local count = std::max(minimum, static_cast<Local>(proposed));
-            for (Local k = 0; k < count; ++k)
-                v.push_back(snapped[j - 1] + (snapped[j] - snapped[j - 1]) * k / count);
+            segments[a].counts.push_back(count);
         }
-        v.push_back(snapped.back());
-        for (std::size_t i = 2; i < v.size(); ++i) {
-            Real left = v[i - 1] - v[i - 2], right = v[i] - v[i - 1];
+    }
+    const auto original = segments;
+    for (const auto& axis : original)
+        for (std::size_t i = 1; i < axis.counts.size(); ++i) {
+            const Real left = (axis.lines[i] - axis.lines[i - 1]) / axis.counts[i - 1];
+            const Real right = (axis.lines[i + 1] - axis.lines[i]) / axis.counts[i];
             if (std::max(left / right, right / left) >
                 o.max_ratio * (1 + 16 * std::numeric_limits<Real>::epsilon()))
                 return Error{"grid/grading",
                              "max_ratio=1 requires exactly commensurate feature intervals"};
         }
+    enum class PrepareFailure { None, Budget, MaxRatio };
+    auto prepare = [&](int L, std::array<AxisSegments, 2>& candidate) {
+        candidate = original;
+        const auto divisor = std::size_t{1} << L;
+        for (auto& axis : candidate) {
+            const auto n = std::accumulate(axis.counts.begin(), axis.counts.end(), std::size_t{0});
+            const auto padded = ((n + divisor - 1) / divisor) * divisor;
+            if (padded > static_cast<std::size_t>(o.cell_budget) ||
+                padded >= static_cast<std::size_t>(std::numeric_limits<Local>::max()))
+                return PrepareFailure::Budget;
+            if (!pad_axis(axis, divisor, o.max_ratio))
+                return PrepareFailure::MaxRatio;
+        }
+        return PrepareFailure::None;
+    };
+    auto count = [](const AxisSegments& axis) {
+        return std::accumulate(axis.counts.begin(), axis.counts.end(), std::size_t{0});
+    };
+    int L = o.levels ? o.levels - 1 : 0;
+    if (!o.levels) {
+        int preferred = -1, normal = -1, relaxed = -1;
+        for (int l = 0; l < 31; ++l) {
+            const auto divisor = std::size_t{1} << l;
+            const auto possible_columns = ((count(original[0]) + divisor - 1) / divisor) *
+                                          ((count(original[1]) + divisor - 1) / divisor);
+            if (possible_columns < 16u * o.ranks)
+                break;
+            std::array<AxisSegments, 2> candidate;
+            if (prepare(l, candidate) != PrepareFailure::None)
+                continue;
+            const auto nc = (count(candidate[0]) / divisor) * (count(candidate[1]) / divisor);
+            if (nc >= 16u * o.ranks)
+                relaxed = l;
+            if (nc >= 64u * o.ranks) {
+                normal = l;
+                if (!o.max_coarse_columns || nc <= static_cast<std::size_t>(o.max_coarse_columns))
+                    preferred = l;
+            }
+        }
+        if (preferred >= 0)
+            L = preferred;
+        else if (normal >= 0) {
+            L = normal;
+            m.grid_report.warnings.push_back("coarse column soft limit exceeded");
+        } else if (relaxed >= 0) {
+            L = relaxed;
+            m.grid_report.warnings.push_back("coarse columns below 64*np; using 16*np minimum");
+        } else
+            m.grid_report.warnings.push_back("levels=1: direct solve fallback");
     }
+    const auto prepare_failure = prepare(L, segments);
+    if (prepare_failure == PrepareFailure::Budget)
+        return Error{"cell_budget", "divisibility padding exceeds cell budget"};
+    if (prepare_failure == PrepareFailure::MaxRatio)
+        return Error{"HIERARCHY_INVALID", "divisibility padding violates max_ratio"};
+    const auto divisor = std::size_t{1} << L;
+    const auto nx0 = count(segments[0]) / divisor, ny0 = count(segments[1]) / divisor;
+    if (o.levels && nx0 * ny0 < 16u * o.ranks)
+        return Error{"HIERARCHY_INVALID", "coarsest columns below 16*np"};
+    m.grid_report.levels = L + 1;
+    for (int a = 0; a < 2; ++a) {
+        auto& v = axes[a];
+        m.grid_report.padding[a] = count(segments[a]) - count(original[a]);
+        if (count(segments[a]) > static_cast<std::size_t>(o.cell_budget) ||
+            count(segments[a]) >= static_cast<std::size_t>(std::numeric_limits<Local>::max()))
+            return Error{"cell_budget", "hierarchy padding exceeds capacity"};
+        for (std::size_t j = 0; j < segments[a].counts.size(); ++j)
+            for (std::size_t k = 0; k < segments[a].counts[j]; ++k)
+                v.push_back(segments[a].lines[j] +
+                            (segments[a].lines[j + 1] - segments[a].lines[j]) * k /
+                                segments[a].counts[j]);
+        v.push_back(segments[a].lines.back());
+    }
+    std::clog << "run_config levels=" << L + 1 << " n0=" << nx0 << 'x' << ny0
+              << " part=" << (par::ColumnExtrudePartitioner::uses_metis() ? "metis" : "serpentine")
+              << " np=" << o.ranks << " coarse=" << nx0 * ny0 << '\n';
+    for (const auto& warning : m.grid_report.warnings)
+        std::clog << "warning: " << warning << '\n';
     axes[2] = {0};
     std::vector<Local> cell_layer;
     Real z = 0, last_dz = 0;
@@ -290,7 +451,45 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
     for (auto& a : m.attribute)
         a = remap[a];
     m.attr_table = std::move(compact);
-    auto part = expand_column_partition(nx, ny, nz, o.ranks);
+    for (int l = 0; l <= L; ++l) {
+        auto& level_axes = m.grid_report.level_axes.emplace_back();
+        std::array<Real, 3> smallest, largest{};
+        smallest.fill(std::numeric_limits<Real>::max());
+        for (int a = 0; a < 3; ++a) {
+            const auto step = a == 2 ? 1u : std::size_t{1} << (L - l);
+            for (std::size_t i = 0; i < axes[a].size(); i += step) {
+                if (a < 2)
+                    level_axes[a].push_back(axes[a][i]);
+                if (i) {
+                    const auto width = axes[a][i] - axes[a][i - step];
+                    smallest[a] = std::min(smallest[a], width);
+                    largest[a] = std::max(largest[a], width);
+                }
+            }
+        }
+        Real aspect = 1;
+        for (int a = 0; a < 3; ++a)
+            for (int b = 0; b < 3; ++b)
+                if (a != b)
+                    aspect = std::max(aspect, largest[a] / smallest[b]);
+        m.grid_report.max_aspect_ratio.push_back(aspect);
+    }
+    for (auto threshold : {o.ar_warn, o.ar_max})
+        if (m.grid_report.max_aspect_ratio.back() > threshold) {
+            m.grid_report.warnings.push_back("finest aspect ratio exceeds " +
+                                             std::to_string(threshold));
+            std::clog << "warning: " << m.grid_report.warnings.back() << '\n';
+        }
+    // Uncut coarse columns all carry 4^L*nz fine cells. Equal scaling is
+    // omitted for the unweighted fallback; the weights span supports future alpha weights.
+    std::vector<std::int32_t> weights;
+    if (par::ColumnExtrudePartitioner::uses_metis()) {
+        const auto weight = divisor * divisor * nz;
+        if (weight > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
+            return Error{"HIERARCHY_INVALID", "coarse column weight exceeds int32"};
+        weights.assign(nx0 * ny0, static_cast<std::int32_t>(weight));
+    }
+    auto part = expand_column_partition(m.grid_report, nx0, ny0, nz, o.ranks, weights);
     if (!part)
         return part.error();
     m.partitioning = std::move(part.value());
