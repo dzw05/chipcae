@@ -10,6 +10,7 @@
 #include <functional>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <numbers>
 #include <sstream>
 #include <stdexcept>
@@ -64,11 +65,12 @@ bool reported(const std::vector<UnsupportedElement>& reports,
                report.element.find(name) != std::string::npos && (!line || report.line == line);
     });
 }
-// Length-delimited, round-trip double serialization visits every frozen field, preserving
-// vector order and map keys. This avoids adding equality operators to the frozen model.
+// Visit every frozen field, preserving vector order and map keys. Compare doubles
+// directly with ==, including its signed-zero and NaN semantics.
 struct Snapshot {
     std::ostringstream out;
-    Snapshot() { out.precision(17); }
+    std::vector<double> doubles;
+    void add(double x) { doubles.push_back(x); }
     void add(const std::string& s) { out << s.size() << ':' << s << ';'; }
     template <class T>
     void add(const T& x) {
@@ -150,7 +152,7 @@ struct Snapshot {
             add(v);
         }
     }
-    std::string take(const OdbJob& j) {
+    std::pair<std::string, std::vector<double>> take(const OdbJob& j) {
         add(static_cast<int>(j.units));
         add(j.step);
         add(j.layers);
@@ -159,7 +161,7 @@ struct Snapshot {
         add(j.profile.contours);
         add(j.features);
         add(j.tools);
-        return out.str();
+        return {out.str(), std::move(doubles)};
     }
 };
 std::map<std::string, std::string> archive(const fs::path& path) {
@@ -829,6 +831,18 @@ int main() {
                     error) &&
                     seen == 1,
                 "callback early stop");
+    });
+    test("odbpp_snapshot_double_equality", [&] {
+        OdbJob a, b;
+        a.profile.contours.push_back({});
+        b.profile.contours.push_back({});
+        b.profile.contours[0].start.x = -0.0;
+        require(Snapshot().take(a) == Snapshot().take(b), "signed zeros compare equal");
+        b.profile.contours[0].start.x = std::nextafter(0.0, 1.0);
+        require(Snapshot().take(a) != Snapshot().take(b), "distinct doubles compare unequal");
+        a.profile.contours[0].start.x = std::numeric_limits<double>::quiet_NaN();
+        b = a;
+        require(Snapshot().take(a) != Snapshot().take(b), "NaN compares unequal to itself");
     });
     test("odbpp_tgz_zip_dir_equal", [&] {
         auto expected = Snapshot().take(job(temp / "job"));
