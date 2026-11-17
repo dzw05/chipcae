@@ -5,8 +5,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iomanip>
 #include <limits>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <tuple>
 namespace chipcae::mesh::cut {
@@ -236,6 +238,14 @@ generate(const HexMeshArrays& m, const CutGeometry& g, const CutOptions& o) {
         (o.quad_degree != 2 && o.quad_degree != 4 && o.quad_degree != 6 && o.quad_degree != 8))
         return Error{"cut/options", "invalid thresholds"};
     CutLayerArrays c;
+    if (o.export_polyhedra)
+        c.polyhedra.emplace();
+    // Match the preview writer's stable, one-based layer-name order.
+    std::map<std::string, Local> output_layers;
+    if (o.export_polyhedra)
+        for (const auto& attr : m.attr_table.entries)
+            if (!output_layers.contains(attr.layer))
+                output_layers[attr.layer] = static_cast<Local>(output_layers.size() + 1);
     std::vector<SimplexPoint> v_rule;
     std::vector<TriPoint> b_rule;
     if (o.quad_degree != 2) {
@@ -377,6 +387,85 @@ generate(const HexMeshArrays& m, const CutGeometry& g, const CutOptions& o) {
                 } else
                     exterior = add(exterior, mul(f.normal, area));
             }
+        if (c.polyhedra) {
+            // Physical snap, independent of the normalized signed-distance test.
+            Real snap = std::max(o.snap_phi,
+                                 32 * std::numeric_limits<Real>::epsilon() *
+                                     std::max({size[0], size[1], size[2]}));
+            std::vector<V> points;
+            std::vector<std::vector<Index>> rings;
+            for (const auto& f : faces) {
+                std::vector<Index> ring;
+                for (auto p : f.p) {
+                    auto it = std::find_if(
+                        points.begin(), points.end(), [&](V q) { return norm(sub(p, q)) <= snap; });
+                    Index id = it - points.begin();
+                    if (it == points.end())
+                        points.push_back(p);
+                    if (std::find(ring.begin(), ring.end(), id) == ring.end())
+                        ring.push_back(id);
+                }
+                V area{};
+                for (std::size_t j = 1; j + 1 < ring.size(); ++j)
+                    area = add(area,
+                               cross(sub(points[ring[j]], points[ring[0]]),
+                                     sub(points[ring[j + 1]], points[ring[0]])));
+                if (ring.size() >= 3 && norm(area) / 2 >= snap * snap)
+                    rings.push_back(std::move(ring));
+            }
+            Real signed_volume = 0;
+            for (const auto& ring : rings)
+                for (std::size_t j = 1; j + 1 < ring.size(); ++j)
+                    signed_volume +=
+                        dot(sub(points[ring[0]], center),
+                            cross(sub(points[ring[j]], center), sub(points[ring[j + 1]], center))) /
+                        6;
+            std::map<std::pair<Index, Index>, int> edges;
+            for (const auto& ring : rings)
+                for (std::size_t j = 0; j < ring.size(); ++j)
+                    ++edges[{ring[j], ring[(j + 1) % ring.size()]}];
+            bool closed = true;
+            for (const auto& [edge, count] : edges) {
+                auto reverse = edges.find({edge.second, edge.first});
+                closed &= count == 1 && reverse != edges.end() && reverse->second == 1;
+            }
+            if (!(rings.size() >= 4 && signed_volume > 0 && closed)) {
+                std::ostringstream reason;
+                reason << std::setprecision(std::numeric_limits<Real>::max_digits10)
+                       << "elem_gid=" << m.elem_gid[e] << " rings=" << rings.size()
+                       << " signed_volume=" << signed_volume << " closed=" << std::boolalpha
+                       << closed;
+                return Error{"cut/polyhedron", reason.str()};
+            }
+            {
+                auto& out = *c.polyhedra;
+                std::vector<Index> remap(points.size(), -1);
+                for (const auto& ring : rings) {
+                    for (auto id : ring) {
+                        if (remap[id] < 0) {
+                            remap[id] = out.points.size() / 3;
+                            auto ref = xi(points[id]);
+                            out.points.insert(
+                                out.points.end(), points[id].begin(), points[id].end());
+                            out.point_xi.insert(out.point_xi.end(), ref.begin(), ref.end());
+                            out.point_parent_elem.push_back(static_cast<Local>(e));
+                        }
+                        out.face_conn.push_back(remap[id]);
+                    }
+                    out.poly_faces.push_back(out.face_off.size() - 1);
+                    out.face_off.push_back(out.face_conn.size());
+                }
+                out.poly_off.push_back(out.poly_faces.size());
+                const auto& attr = m.attr_table.entries[m.attribute[e] - 1];
+                out.layer_id.push_back(output_layers.at(attr.layer));
+                out.material_id.push_back(attr.material);
+                out.body.push_back(body);
+                out.cell_kind.push_back(1);
+                out.parent_elem_gid.push_back(m.elem_gid[e]);
+                out.volume.push_back(signed_volume);
+                out.volfrac_ref.push_back(volume / jac);
+            }
+        }
         c.sub_volfrac.push_back(volume / jac);
         if (volume / jac < o.small_sub_vf)
             c.small_subs.push_back(static_cast<Local>(c.sub_attribute.size() - 1));
@@ -426,6 +515,9 @@ build_cut_layer(HexMeshArrays& mesh, const CutGeometry& g, const CutOptions& o) 
             m.elem_gid.push_back(mesh.elem_gid[e]);
             m.partitioning.push_back(mesh.partitioning[e]);
         }
+    if (c.polyhedra)
+        for (auto& e : c.polyhedra->point_parent_elem)
+            e = map[e];
     for (auto& e : c.cut_elem)
         e = map[e];
     if (o.keep_void) {

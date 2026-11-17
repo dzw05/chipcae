@@ -1,12 +1,25 @@
 #pragma once
 #include "chipcae/core/memory_space.hpp"
 #include "chipcae/mesh/background/activation.hpp"
+
+#include <optional>
 namespace chipcae::mesh::cut {
 struct BodyLevelSet {
     BodyId body{};
     std::vector<Real> phi;
 };
+// Host output: point IDs are local to this output; faces are copied per cell.
+// Offsets include an initial zero. Retained voids have no solid polyhedron.
+struct CutPolyhedra {
+    std::vector<Real> points, point_xi;
+    std::vector<Local> point_parent_elem;
+    std::vector<Index> face_conn, face_off{0}, poly_faces, poly_off{0};
+    std::vector<Index> parent_elem_gid;
+    std::vector<Local> body, layer_id, material_id, cell_kind;
+    std::vector<Real> volume, volfrac_ref;
+};
 struct CutLayerArrays {
+    std::optional<CutPolyhedra> polyhedra;
     std::vector<BodyLevelSet> level_sets;
     std::vector<Local> cut_elem, sub_off{0}, sub_attribute;
     std::vector<Real> sub_volfrac;
