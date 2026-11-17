@@ -211,7 +211,7 @@ def _summarize(run_dir, top_rel_tol):
                      '/VTKHDF: required group missing or invalid')
             blocks, data, names = _read(f['VTKHDF'])
     except (OSError, RuntimeError, EOFError) as exc:
-        raise ResultSummaryError(14, 'INPUT_INVALID', str(exc)) from exc
+        raise ResultSummaryError(12, 'INPUT_REFERENCE_MISSING', str(exc)) from exc
     points = np.concatenate([d[0] for d in data])
     u = np.concatenate([d[1] for d in data])
     top = np.array([], dtype=int)

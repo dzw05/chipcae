@@ -14,7 +14,7 @@ class Errors(unittest.TestCase):
     def test_hdf5_failures(self):
         for stage, target, code, name in (
                 ('open', 'h5py.File', 12, 'INPUT_REFERENCE_MISSING'),
-                ('read', '_read', 14, 'INPUT_INVALID')):
+                ('read', '_read', 12, 'INPUT_REFERENCE_MISSING')):
             for error_type in (OSError, RuntimeError, EOFError):
                 with self.subTest(stage=stage, error=error_type), tempfile.TemporaryDirectory() as tmp:
                     run = Path(tmp)
