@@ -11,6 +11,48 @@ from tools.vv.result_summary import ResultSummaryError, main, summarize
 
 
 class Edges(unittest.TestCase):
+    def test_duplicate_temperature_correspondence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run, cut=True)
+            with h5py.File(step, 'r+') as f:
+                # The duplicate precedes later top points and the cut block.
+                f['VTKHDF/hex/PointData/T'][6] = 5000.
+            result = summarize(run)
+            self.assertEqual(result['temperature']['max'], 5000.)
+            self.assertEqual(result['temperature']['top_min'], 301.)
+            self.assertEqual(result['temperature']['top_max'], 999.)
+            self.assertAlmostEqual(result['temperature']['top_mean'], 374.4)
+            self.assertEqual(result['warpage']['n_top_points'], 10)
+
+    def test_required_groups(self):
+        for group in ('VTKHDF', 'VTKHDF/hex', 'VTKHDF/cut'):
+            for replacement in (False, True):
+                with self.subTest(group=group, replacement=replacement), tempfile.TemporaryDirectory() as tmp:
+                    run = Path(tmp)
+                    step, _ = fixture(run)
+                    with h5py.File(step, 'r+') as f:
+                        del f[group]
+                        if replacement:
+                            f[group] = 1
+                    err = io.StringIO()
+                    with contextlib.redirect_stderr(err):
+                        self.assertEqual(main([str(run)]), 14)
+                    self.assertIn('/' + group + ': required group missing or invalid', err.getvalue())
+                    self.assertEqual(len(err.getvalue().splitlines()), 1)
+
+    def test_fixture_cell_counts(self):
+        for cut in (False, True):
+            with tempfile.TemporaryDirectory() as tmp:
+                step, _ = fixture(Path(tmp), cut=cut)
+                with h5py.File(step, 'r') as f:
+                    for name in ('hex', 'cut'):
+                        block = f['VTKHDF/' + name]
+                        count = int(block['NumberOfCells'][...].sum())
+                        self.assertEqual(block['Types'].shape, (count,))
+                        for field in block['CellData'].values():
+                            self.assertEqual(field.shape, (count,))
+
     def test_partial_temperature(self):
         for missing in ('hex', 'cut'):
             with self.subTest(missing=missing), tempfile.TemporaryDirectory() as tmp:
@@ -79,7 +121,7 @@ class Edges(unittest.TestCase):
                             f['VTKHDF'].attrs['Version'] = [2, 7]
                 with self.assertRaises(ResultSummaryError) as caught:
                     summarize(run)
-                self.assertEqual(caught.exception.code, 14)
+                self.assertEqual(caught.exception.code, 12 if case == 'corrupt' else 14)
 
 
 if __name__ == '__main__':

@@ -65,6 +65,8 @@ def _read(root):
     _version(root)
     blocks, data = {}, []
     for name in ('hex', 'cut'):
+        _require(name in root and isinstance(root[name], h5py.Group),
+                 f'{root.name}/{name}: required group missing or invalid')
         block = root[name]
         _version(block)
         n = _count(block, 'NumberOfPoints')
@@ -117,7 +119,10 @@ def _summarize(run_dir, top_rel_tol):
         content = (run_dir / 'manifest.json').read_text(encoding='utf-8')
     except OSError as exc:
         raise ResultSummaryError(12, 'INPUT_REFERENCE_MISSING', str(exc)) from exc
-    manifest = json.loads(content)
+    try:
+        manifest = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ResultSummaryError(14, 'INPUT_INVALID', f'manifest.json: {exc}') from exc
     _require(isinstance(manifest, dict) and manifest.get('schema_version') == 'chipcae.results/1.0',
              'expected manifest schema chipcae.results/1.0')
     steps = manifest.get('steps')
@@ -144,13 +149,13 @@ def _summarize(run_dir, top_rel_tol):
     path = Path(step_file)
     if not path.is_absolute():
         path = run_dir / path
-    # Probe access separately: a readable file with malformed HDF5 is invalid.
     try:
-        with path.open('rb'):
-            pass
+        step = h5py.File(path, 'r')
     except OSError as exc:
         raise ResultSummaryError(12, 'INPUT_REFERENCE_MISSING', str(exc)) from exc
-    with h5py.File(path, 'r') as f:
+    with step as f:
+        _require('VTKHDF' in f and isinstance(f['VTKHDF'], h5py.Group),
+                 '/VTKHDF: required group missing or invalid')
         blocks, data, names = _read(f['VTKHDF'])
     points = np.concatenate([d[0] for d in data])
     u = np.concatenate([d[1] for d in data])
@@ -170,8 +175,9 @@ def _summarize(run_dir, top_rel_tol):
         all_t = np.concatenate(available)
         _require(all(d[2] is not None for d in data if len(d[0])),
                  "partial T coverage: temperature required for every nonempty block")
-        t = np.concatenate(available)
-        tt = t[top]
+        # Keep temperatures paired with the original point indices selected
+        # above; duplicate coordinates retain their first stored value.
+        tt = all_t[top]
         temperature = dict(min=float(all_t.min()), max=float(all_t.max()),
                            top_min=float(tt.min()) if len(tt) else None,
                            top_max=float(tt.max()) if len(tt) else None,

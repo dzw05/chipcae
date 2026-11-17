@@ -17,7 +17,7 @@ class Errors(unittest.TestCase):
         self.assertEqual(error.name, 'INPUT_INVALID')
 
     def test_invalid_inputs(self):
-        cases = ['manifest_missing', 'step_missing', 'schema', 'hex_missing', 'version', 'T_length', 'elem_dtype', 'U_missing', 'kind_missing', 'duplicate', 'unit', 'empty_manifest']
+        cases = ['manifest_missing', 'step_missing', 'schema', 'hex_missing', 'version', 'T_length', 'elem_dtype', 'U_missing', 'kind_missing', 'duplicate', 'unit', 'empty_manifest', 'malformed_manifest']
         for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
                 run = Path(tmp)
@@ -27,6 +27,8 @@ class Errors(unittest.TestCase):
                     (run/'manifest.json').unlink()
                 elif case == 'step_missing':
                     step.unlink()
+                elif case == 'malformed_manifest':
+                    (run/'manifest.json').write_text('{\n bad JSON')
                 elif case == 'empty_manifest':
                     (run/'manifest.json').write_text('')
                 elif case in ('schema', 'duplicate', 'unit'):

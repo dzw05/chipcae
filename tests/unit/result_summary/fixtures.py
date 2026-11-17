@@ -43,13 +43,14 @@ def fixture(run, cut=False, two=False):
             b['Points'] = p.astype('float64')
             b['NumberOfPoints'] = np.array(pc, dtype='int64')
             b['NumberOfCells'] = np.array(cc, dtype='int64')
-            b['Types'] = np.full(sum(cc), 12 if name == 'hex' else 42, dtype='uint8')
+            cell_count = int(b['NumberOfCells'][...].sum())
+            b['Types'] = np.full(cell_count, 12 if name == 'hex' else 42, dtype='uint8')
             b['PointData/T'] = np.where(p[:, 2] == 0., 300., 305. + p[:, 0] + 3*p[:, 1]) if name == 'hex' else np.array([999., 100.])[:len(p)]
             u = np.zeros((len(p), 3), dtype='float64')
             u[:, 2] = .125 + .25*p[:, 0] - .5*p[:, 1] - .0625*(p[:, 0]**2+p[:, 1]**2)
             b['PointData/U'] = u
             for field in ('layer_id', 'material_id', 'cell_kind', 'elem_gid'):
-                b['CellData/'+field] = np.array([1, 0][:sum(cc)], dtype='int64' if field == 'elem_gid' else 'int32')
+                b['CellData/'+field] = np.asarray(1 - np.arange(cell_count) % 2, dtype='int64' if field == 'elem_gid' else 'int32')
             for field, names in [('layer_names', LAYERS), ('material_names', MATERIALS)]:
                 b.create_dataset('FieldData/'+field, data=names, dtype=h5py.string_dtype())
         eb = root.create_group('eb_surface')
