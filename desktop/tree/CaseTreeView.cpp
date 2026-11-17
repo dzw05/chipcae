@@ -33,11 +33,23 @@ bool CaseTreeView::commitEdit() {
     if (live != base_)
         return false;
     auto value = form_->document();
-    if (source_ == "case")
-        tree_->document()->applyJson(value);
-    else
-        tree_->document()->applyStackJson(value);
-    return true;
+    auto* document = tree_->document();
+    if (source_ == "case") {
+        document->applyJson(value);
+        return document->toJson() == value;
+    }
+    const auto oldStack = document->stackJson();
+    if (oldStack.contains("layers") && value.contains("layers") &&
+        oldStack.at("layers").size() == value.at("layers").size()) {
+        for (std::size_t i = 0; i < oldStack.at("layers").size(); ++i) {
+            const auto oldName = oldStack.at("layers").at(i).at("name").as<std::string>();
+            const auto newName = value.at("layers").at(i).at("name").as<std::string>();
+            if (oldName != newName && !document->renameLayer(oldName, newName))
+                return false;
+        }
+    }
+    document->applyStackJson(value);
+    return document->stackJson() == value;
 }
 void CaseTreeView::cancelEdit() {
     bind(currentIndex());
