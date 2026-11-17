@@ -22,6 +22,9 @@
 #include <iostream>
 #include <stdexcept>
 #include <type_traits>
+#ifdef Q_OS_UNIX
+#include <sys/stat.h>
+#endif
 namespace chipcae::desktop {
 struct ImportControllerTestAccess {
     static void setCopy(ImportController& controller,
@@ -304,7 +307,8 @@ sys.exit(rc)
                        ImportKind kind = ImportKind::Ecad,
                        bool directory = false,
                        bool accept = false,
-                       const QString& materialMap = {}) {
+                       const QString& materialMap = {},
+                       const QString& auxiliaryDir = {}) {
             CaseDocument document;
             require(document.load(FIXTURE_DIR "/fcbga_demo.case.json"), "load baseline");
             const auto before = document.stackJson();
@@ -324,6 +328,10 @@ sys.exit(rc)
             r.acceptBTier = accept;
             r.polyset = input + ".poly";
             r.report = input + ".report";
+            if (!auxiliaryDir.isEmpty()) {
+                r.polyset = QDir(auxiliaryDir).filePath(QFileInfo(r.polyset).fileName());
+                r.report = QDir(auxiliaryDir).filePath(QFileInfo(r.report).fileName());
+            }
             r.program =
                 mode == "launch-failure" ? "/nonexistent/chipcae-import" : PYTHON_EXECUTABLE;
             r.prefix = {script, MOCK_SCRIPT, record, mode};
@@ -374,11 +382,10 @@ sys.exit(rc)
             if (mode == "success" || mode == "grade-conflict")
                 check(c.grade() == (mode == "grade-conflict" ? "C" : ""),
                       "optional grade for display only");
-            check(c.needsMaterialMapReselect() == (mode == "map-missing" || mode == "crash-map"),
-                  "reselection " + mode);
+            check(c.needsMaterialMapReselect() == (mode == "map-missing"), "reselection " + mode);
             if (mode == "crash-map")
                 check(c.exitCode() == 9 && c.exitStatus() == QProcess::CrashExit,
-                      "crash fixture exercises recovery independent of exit status");
+                      "crash fixture distinguishes signal 9 from normal protocol exit 9");
             if (mode == "mismatch" || mode == "missing6")
                 check(c.error().contains("exit/report mismatch"),
                       "paired exit/report error " + mode);
@@ -515,6 +522,35 @@ sys.exit(rc)
                                  {"lower", ImportOutcome::Failed},
                                  {"grade-conflict", ImportOutcome::Accepted}})
             run(pair.first, pair.second);
+#ifdef Q_OS_UNIX
+        {
+            QTemporaryDir auxiliary("/dev/shm/chipcae-import-XXXXXX");
+            struct stat localDevice{}, remoteDevice{};
+            if (auxiliary.isValid() && ::stat(QFile::encodeName(dir.path()), &localDevice) == 0 &&
+                ::stat(QFile::encodeName(auxiliary.path()), &remoteDevice) == 0 &&
+                localDevice.st_dev != remoteDevice.st_dev) {
+                run("success",
+                    ImportOutcome::Accepted,
+                    ".xml",
+                    ImportKind::Ecad,
+                    false,
+                    false,
+                    {},
+                    auxiliary.path());
+                run("map-missing",
+                    ImportOutcome::Rejected,
+                    ".xml",
+                    ImportKind::Ecad,
+                    false,
+                    false,
+                    {},
+                    auxiliary.path());
+                std::cout << "Cross-device collection exercised on distinct filesystem devices\n";
+            } else {
+                std::cout << "SKIP: no writable second filesystem for cross-device collection\n";
+            }
+        }
+#endif
         for (const auto& suffix : {".TGZ", ".Zip"})
             run("success", ImportOutcome::Accepted, suffix);
         run("success", ImportOutcome::Accepted, " ODB directory", ImportKind::Ecad, true);

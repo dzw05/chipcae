@@ -160,7 +160,8 @@ void ImportController::confirmDefects() {
     restartAccepted();
 }
 bool ImportController::needsMaterialMapReselect() const {
-    return exitCode_ == 9 && reportCode_ == "MATERIAL_MAPPING_MISSING";
+    return !busy_ && exitStatus_ == QProcess::NormalExit && exitCode_ == 9 &&
+           reportCode_ == "MATERIAL_MAPPING_MISSING";
 }
 void ImportController::complete(int code, QProcess::ExitStatus status) {
     if (!busy_)
