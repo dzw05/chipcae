@@ -122,12 +122,10 @@ int main() {
                 auto [it, inserted] = column_ranks.emplace(column, g.partitioning[e]);
                 if (!inserted && it->second != g.partitioning[e]) {
                     std::ostringstream message;
-                    message << (chipcae::par::ColumnExtrudePartitioner::uses_metis()
-                                    ? "METIS"
-                                    : "SFC")
-                            << " column " << column
-                            << " has conflicting ranks " << it->second << " and "
-                            << g.partitioning[e] << " (requested " << ranks << " ranks)";
+                    message << (chipcae::par::ColumnExtrudePartitioner::uses_metis() ? "METIS"
+                                                                                     : "SFC")
+                            << " column " << column << " has conflicting ranks " << it->second
+                            << " and " << g.partitioning[e] << " (requested " << ranks << " ranks)";
                     throw std::runtime_error(message.str());
                 }
             }
