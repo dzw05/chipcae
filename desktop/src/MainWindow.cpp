@@ -1,6 +1,7 @@
 #include "MainWindow.hpp"
 
 #include "CaseOutline.hpp"
+#include "StackEditor.hpp"
 
 #include <QDockWidget>
 #include <QFileDialog>
@@ -62,6 +63,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     } catch (const std::exception& error) {
         dock->setToolTip(QString::fromUtf8(error.what()));
     }
+    auto* stackDock = new QDockWidget(tr("Stack"), this);
+    stackDock->setWidget(new chipcae::desktop::StackEditor(document(), stackDock));
+    addDockWidget(Qt::RightDockWidgetArea, stackDock);
     setWindowTitle("ChipCAE Desktop");
     resize(960, 640);
 }

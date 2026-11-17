@@ -62,6 +62,8 @@ StackEditor::StackEditor(CaseDocument* document, QWidget* parent)
     connect(revert, &QPushButton::clicked, this, &StackEditor::revertEdit);
     connect(model_, &LayerModel::editRejected, hint_, &QLabel::setText);
     connect(document_, &CaseDocument::changed, this, [this] {
+        if (!document_->isDirty() && document_->toJson() != savedCase_)
+            beginEdit();
         if (observedStack_ != document_->stackJson()) {
             observedStack_ = document_->stackJson();
             stale_ = true;
