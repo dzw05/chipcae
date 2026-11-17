@@ -72,9 +72,25 @@
           "minimum": 1,
           "default": 2
         },
+        "nx": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Initial in-plane columns; omitted values are selected automatically from the stack."
+        },
+        "ny": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Initial in-plane columns; omitted values are selected automatically from the stack."
+        },
+        "max_ratio": {
+          "type": "number",
+          "exclusiveMinimum": 1,
+          "default": 2
+        },
         "cell_budget": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "default": 50000
         },
         "levels": {
           "type": "integer",

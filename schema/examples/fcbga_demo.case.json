@@ -8,6 +8,10 @@
   },
   "mesh": {
     "type": "aligned_cartesian_cut",
+    "nx": 2,
+    "ny": 2,
+    "max_ratio": 2.5,
+    "levels": 1,
     "cut": {
       "stabilization": "ghost_penalty"
     }
