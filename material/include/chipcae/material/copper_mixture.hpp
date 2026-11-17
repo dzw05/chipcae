@@ -50,11 +50,14 @@ public:
             return ThermoElastic<MS>::finish(out, code);
         const Real Gm = Em / (2 * (1 + nm)), Gc = Ec / (2 * (1 + nc));
         const Real E = f * Ec + m * Em, n = f * nc + m * nm;
-        const Real G = f * Gc + m * Gm, Gz = 1 / (f / Gc + m / Gm);
+        const Real G = E / (2 * (1 + n)), Gz = 1 / (f / Gc + m / Gm);
         const Real p[9] = {E, E, 1 / (f / Ec + m / Em), n, n, n, G, Gz, Gz};
         Vec6 th{};
-        th[0] = th[1] = (f * Ec * b.thermal_strain[0] + m * Em * a.thermal_strain[0]) / E;
-        th[2] = f * (1 + nc) * b.thermal_strain[0] + m * (1 + nm) * a.thermal_strain[0] - n * th[0];
+        const Real Mm = Em / (1 - nm), Mc = Ec / (1 - nc);
+        th[0] = th[1] =
+            (f * Mc * b.thermal_strain[0] + m * Mm * a.thermal_strain[0]) / (f * Mc + m * Mm);
+        th[2] = f * (b.thermal_strain[0] - 2 * nc / (1 - nc) * (th[0] - b.thermal_strain[0])) +
+                m * (a.thermal_strain[0] - 2 * nm / (1 - nm) * (th[0] - a.thermal_strain[0]));
         return ThermoElastic<MS>::response(ctx, in, ElasticSymmetry::Orthotropic, p, th, out);
     }
 

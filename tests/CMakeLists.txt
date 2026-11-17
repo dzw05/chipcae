@@ -25,6 +25,7 @@ add_test(NAME core_public_headers
 
 add_executable(chipcae_test_event_log protocol/test_event_log.cpp)
 target_link_libraries(chipcae_test_event_log PRIVATE chipcae::io)
+target_compile_definitions(chipcae_test_event_log PRIVATE CHIPCAE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 chipcae_set_warnings(chipcae_test_event_log)
 add_test(NAME event_log COMMAND chipcae_test_event_log)
 
@@ -69,6 +70,27 @@ chipcae_set_warnings(chipcae_test_import_thresholds)
 add_test(NAME import_thresholds COMMAND chipcae_test_import_thresholds)
 set_tests_properties(import_thresholds PROPERTIES LABELS "mesh;tierA" TIMEOUT 60)
 
+if(CHIPCAE_ENABLE_HDF5)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME vtkhdf_results_serial COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_vtkhdf_results.py $<TARGET_FILE:chipcae_write_results>
+        ${PROJECT_SOURCE_DIR}/tools/samples/s1.stack.json 1)
+    set_tests_properties(vtkhdf_results_serial PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+    if(CHIPCAE_ENABLE_MPI)
+        include(CheckCXXSymbolExists)
+        set(CMAKE_REQUIRED_LIBRARIES HDF5::HDF5)
+        check_cxx_symbol_exists(H5_HAVE_PARALLEL "H5pubconf.h" CHIPCAE_RESULTS_PARALLEL_HDF5)
+        unset(CMAKE_REQUIRED_LIBRARIES)
+        add_test(NAME vtkhdf_results_mpi_2 COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_vtkhdf_results.py $<TARGET_FILE:chipcae_write_results>
+            ${PROJECT_SOURCE_DIR}/tools/samples/s1.stack.json 2 ${MPIEXEC_EXECUTABLE})
+        set_tests_properties(vtkhdf_results_mpi_2 PROPERTIES LABELS "mpi;io" TIMEOUT 180 SKIP_RETURN_CODE 77)
+        if(CHIPCAE_RESULTS_PARALLEL_HDF5)
+            set_tests_properties(vtkhdf_results_mpi_2 PROPERTIES
+                ENVIRONMENT "CHIPCAE_RESULTS_TEST_PARALLEL=1")
+        endif()
+    endif()
+endif()
 add_executable(chipcae_test_control_file protocol/test_control_file.cpp)
 target_link_libraries(chipcae_test_control_file PRIVATE chipcae::io)
 chipcae_set_warnings(chipcae_test_control_file)

@@ -1,0 +1,10 @@
+{
+  "schema": "chipcae.case/1.0",
+  "stack": {"ref": "fcbga_demo.stack.json"},
+  "materials": {"ref": "fcbga_demo.materials.json"},
+  "mesh": {"type": "aligned_cartesian_cut", "max_ratio": 1, "cut": {"stabilization": "ghost_penalty"}},
+  "physics": [{"id": "mech", "solver": "fem.solid"}],
+  "loads": [],
+  "constraints": {"rigid": "3-2-1"},
+  "output": {"format": "vtkhdf", "warpage": {"standard": "JESD22-B112", "remove_rigid": "best_fit_plane"}}
+}

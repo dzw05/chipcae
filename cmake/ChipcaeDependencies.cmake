@@ -15,9 +15,6 @@ endif()
 
 if(CHIPCAE_ENABLE_HDF5)
     find_package(HDF5 REQUIRED COMPONENTS C)
-    if(CHIPCAE_ENABLE_MPI AND NOT HDF5_IS_PARALLEL)
-        message(FATAL_ERROR "MPI output requires parallel HDF5: one collective VTKHDF file per output step")
-    endif()
 endif()
 
 if(CHIPCAE_ENABLE_HYPRE)
