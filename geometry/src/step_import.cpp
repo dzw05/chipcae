@@ -172,14 +172,14 @@ struct Inspector {
                     return i;
         return 0;
     }
-    void add(DefectKind kind,
+    void add(StepDefectKind kind,
              const TopoDS_Shape& shape,
              Real measured,
              std::array<Real, 3> where,
              Index face = 0) {
         if (!face)
             face = face_of(shape);
-        Defect d;
+        StepDefect d;
         d.kind = kind;
         d.measured = measured;
         d.where = where;
@@ -195,7 +195,7 @@ struct Inspector {
         }
         d.tier = classify(measured, options.tolerances);
         d.defect_id = detail::diagnostic_id(d, options.tolerances.eps_weld);
-        if (std::none_of(result.defects.begin(), result.defects.end(), [&](const Defect& old) {
+        if (std::none_of(result.defects.begin(), result.defects.end(), [&](const StepDefect& old) {
                 return old.defect_id == d.defect_id;
             }))
             result.defects.push_back(std::move(d));
@@ -230,13 +230,13 @@ struct Inspector {
                         break;
                     case BRepCheck_IntersectingWires:
                     case BRepCheck_SelfIntersectingWire:
-                        add(DefectKind::WireSelfIntersection,
+                        add(StepDefectKind::WireSelfIntersection,
                             affected,
                             extent(affected),
                             center(affected));
                         break;
                     case BRepCheck_RedundantFace:
-                        add(DefectKind::DuplicateFace,
+                        add(StepDefectKind::DuplicateFace,
                             affected,
                             extent(affected),
                             center(affected));
@@ -244,18 +244,21 @@ struct Inspector {
                     case BRepCheck_UnorientableShape:
                     case BRepCheck_BadOrientation:
                     case BRepCheck_BadOrientationOfSubshape:
-                        add(DefectKind::FlippedFace, affected, extent(affected), center(affected));
+                        add(StepDefectKind::FlippedFace,
+                            affected,
+                            extent(affected),
+                            center(affected));
                         break;
                     case BRepCheck_InvalidMultiConnexity:
-                        add(DefectKind::NonManifoldEdge,
+                        add(StepDefectKind::NonManifoldEdge,
                             affected,
                             extent(affected),
                             center(affected));
                         break;
                     case BRepCheck_FreeEdge:
                     case BRepCheck_NotClosed:
-                        add(affected.ShapeType() == TopAbs_SHELL ? DefectKind::OpenShell
-                                                                 : DefectKind::OpenEdge,
+                        add(affected.ShapeType() == TopAbs_SHELL ? StepDefectKind::OpenShell
+                                                                 : StepDefectKind::OpenEdge,
                             affected,
                             extent(affected),
                             center(affected));
@@ -275,7 +278,7 @@ struct Inspector {
         for (TopExp_Explorer it(source.shape, TopAbs_SHELL); it.More(); it.Next()) {
             BRepCheck_Shell shell(TopoDS::Shell(it.Current()));
             if (shell.Closed() != BRepCheck_NoError)
-                add(DefectKind::OpenShell,
+                add(StepDefectKind::OpenShell,
                     it.Current(),
                     extent(it.Current()),
                     center(it.Current()));
@@ -293,7 +296,7 @@ struct Inspector {
                 for (const auto& s : faulty) {
                     if (s.ShapeType() != TopAbs_EDGE)
                         throw std::runtime_error("STEP small-edge analyzer returned a non-edge");
-                    add(DefectKind::SmallEdge, s, length(s), center(s));
+                    add(StepDefectKind::SmallEdge, s, length(s), center(s));
                 }
                 continue;
             }
@@ -306,7 +309,7 @@ struct Inspector {
                 for (const auto& s : faulty)
                     in_wire = in_wire && contains(it.Current(), s);
                 if (in_wire) {
-                    add(DefectKind::WireSelfIntersection,
+                    add(StepDefectKind::WireSelfIntersection,
                         it.Current(),
                         extent(it.Current()),
                         center(it.Current()));
@@ -346,7 +349,7 @@ struct Inspector {
                     for (const auto& s : faulty)
                         covered = covered && (contains(a, s) || contains(b, s));
                     if (covered && duplicate_faces(a, b)) {
-                        add(DefectKind::DuplicateFace, a, face_width(a), center(a));
+                        add(StepDefectKind::DuplicateFace, a, face_width(a), center(a));
                         duplicate = true;
                     }
                 }
@@ -363,14 +366,14 @@ struct Inspector {
                 continue;
             const auto& faces = edges.FindFromIndex(i);
             if (faces.Extent() > 2)
-                add(DefectKind::NonManifoldEdge, e, length(e), center(e));
+                add(StepDefectKind::NonManifoldEdge, e, length(e), center(e));
             if (faces.Extent() == 1 &&
                 !BRep_Tool::IsClosed(TopoDS::Edge(e), TopoDS::Face(faces.First()))) {
                 boundary.push_back(i);
-                add(DefectKind::OpenEdge, e, length(e), center(e));
+                add(StepDefectKind::OpenEdge, e, length(e), center(e));
             }
             if (length(e) < options.tolerances.eps_weld)
-                add(DefectKind::SmallEdge, e, length(e), center(e));
+                add(StepDefectKind::SmallEdge, e, length(e), center(e));
         }
         // Nearby free boundaries on different faces are candidate gaps. Locate at
         // the midpoint of closest points, measured as their exact separation.
@@ -404,7 +407,7 @@ struct Inspector {
                 std::array<Real, 3> where{(midpoint.X() + opposite.X()) / 2,
                                           (midpoint.Y() + opposite.Y()) / 2,
                                           (midpoint.Z() + opposite.Z()) / 2};
-                add(DefectKind::Gap,
+                add(StepDefectKind::Gap,
                     edges.FindKey(a),
                     local.Value(),
                     where,
@@ -414,18 +417,18 @@ struct Inspector {
             const auto& f = source.faces(i);
             const auto width = face_width(f);
             if (width < options.tolerances.eps_weld)
-                add(DefectKind::SmallFace, f, width, center(f));
+                add(StepDefectKind::SmallFace, f, width, center(f));
             const auto perimeter = length(f);
             if (perimeter > 0 && width > 0 &&
                 width * width / perimeter < options.tolerances.eps_weld)
-                add(DefectKind::SliverFace, f, width * width / perimeter, center(f));
+                add(StepDefectKind::SliverFace, f, width * width / perimeter, center(f));
         }
         for (int i = 1; i <= source.faces.Extent(); ++i)
             for (int j = i + 1; j <= source.faces.Extent(); ++j) {
                 const auto& a = source.faces(i);
                 const auto& b = source.faces(j);
                 if (duplicate_faces(a, b))
-                    add(DefectKind::DuplicateFace, a, face_width(a), center(a));
+                    add(StepDefectKind::DuplicateFace, a, face_width(a), center(a));
             }
         TopTools_IndexedMapOfShape solids;
         TopExp::MapShapes(source.shape, TopAbs_SOLID, solids);
@@ -449,7 +452,7 @@ struct Inspector {
                 GProp_GProps volume;
                 BRepGProp::VolumeProperties(common.Shape(), volume);
                 if (volume.Mass() > 0)
-                    add(DefectKind::SolidOverlap,
+                    add(StepDefectKind::SolidOverlap,
                         solids(i),
                         std::cbrt(volume.Mass()),
                         center(common.Shape()));

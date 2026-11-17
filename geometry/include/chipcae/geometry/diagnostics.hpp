@@ -8,7 +8,7 @@
 #include <string>
 
 namespace chipcae::geometry {
-enum class DefectKind : std::uint16_t {
+enum class StepDefectKind : std::uint16_t {
     Gap,
     OpenEdge,
     DuplicateFace,
@@ -23,9 +23,9 @@ enum class DefectKind : std::uint16_t {
     NearLayerInterface,
     UnitSuspect
 };
-struct Defect {
+struct StepDefect {
     std::string defect_id;
-    DefectKind kind{};
+    StepDefectKind kind{};
     Tier tier = Tier::C;
     Real measured = 0;
     std::string step_entity;

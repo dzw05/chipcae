@@ -83,13 +83,14 @@ void gap(const std::filesystem::path& dir) {
     b.Add(pair, BRepBuilderAPI_MakeFace(plane, 10.02, 20, 0, 10).Face());
     write(pair, dir / "gap.step");
     auto result = import_step(dir / "gap.step");
-    const auto found = std::find_if(result.defects.begin(),
-                                    result.defects.end(),
-                                    [](const Defect& d) { return d.kind == DefectKind::Gap; });
+    const auto found =
+        std::find_if(result.defects.begin(), result.defects.end(), [](const StepDefect& d) {
+            return d.kind == StepDefectKind::Gap;
+        });
     require(found != result.defects.end(), "gap not detected");
     require(std::count_if(result.defects.begin(),
                           result.defects.end(),
-                          [](const Defect& d) { return d.kind == DefectKind::Gap; }) == 1,
+                          [](const StepDefect& d) { return d.kind == StepDefectKind::Gap; }) == 1,
             "expected exactly one gap");
     require(!found->body_name.empty(), "gap body name missing");
     require(found->defect_id.size() == 16, "wrong ID length");
@@ -111,9 +112,10 @@ void gap(const std::filesystem::path& dir) {
     require(found->face_index == 1, "unstable face index");
     require(found->action.empty(), "detection performed repair");
     const auto again = import_step(dir / "gap.step");
-    const auto repeated = std::find_if(again.defects.begin(),
-                                       again.defects.end(),
-                                       [](const Defect& d) { return d.kind == DefectKind::Gap; });
+    const auto repeated =
+        std::find_if(again.defects.begin(), again.defects.end(), [](const StepDefect& d) {
+            return d.kind == StepDefectKind::Gap;
+        });
     require(repeated != again.defects.end() && repeated->defect_id == found->defect_id,
             "unstable defect ID");
 }
@@ -159,8 +161,8 @@ void clean(const std::filesystem::path& dir) {
     result = import_step(dir / "overlap.step");
     require(std::any_of(result.defects.begin(),
                         result.defects.end(),
-                        [](const Defect& d) {
-                            return d.kind == DefectKind::SolidOverlap && d.measured > 0;
+                        [](const StepDefect& d) {
+                            return d.kind == StepDefectKind::SolidOverlap && d.measured > 0;
                         }),
             "contained solid overlap missed");
     // Crossing faces exercise ArgumentAnalyzer's inter-solid interference.
@@ -172,16 +174,16 @@ void clean(const std::filesystem::path& dir) {
     result = import_step(dir / "crossing.step");
     require(std::any_of(result.defects.begin(),
                         result.defects.end(),
-                        [](const Defect& d) {
-                            return d.kind == DefectKind::SolidOverlap &&
+                        [](const StepDefect& d) {
+                            return d.kind == StepDefectKind::SolidOverlap &&
                                    std::abs(d.measured - 0.005) < 1e-12;
                         }),
             "crossing solid overlap missing or measured incorrectly");
-    require(
-        std::none_of(result.defects.begin(),
-                     result.defects.end(),
-                     [](const Defect& d) { return d.kind == DefectKind::WireSelfIntersection; }),
-        "solid interference mislabeled as a wire failure");
+    require(std::none_of(
+                result.defects.begin(),
+                result.defects.end(),
+                [](const StepDefect& d) { return d.kind == StepDefectKind::WireSelfIntersection; }),
+            "solid interference mislabeled as a wire failure");
     TopoDS_Compound duplicate;
     b.MakeCompound(duplicate);
     gp_Pln plane(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
@@ -189,10 +191,11 @@ void clean(const std::filesystem::path& dir) {
     b.Add(duplicate, BRepBuilderAPI_MakeFace(plane, 0, 10, 0, 10).Face());
     write(duplicate, dir / "duplicate.step");
     result = import_step(dir / "duplicate.step");
-    require(std::any_of(result.defects.begin(),
-                        result.defects.end(),
-                        [](const Defect& d) { return d.kind == DefectKind::DuplicateFace; }),
-            "duplicate faces missed");
+    require(
+        std::any_of(result.defects.begin(),
+                    result.defects.end(),
+                    [](const StepDefect& d) { return d.kind == StepDefectKind::DuplicateFace; }),
+        "duplicate faces missed");
 }
 } // namespace
 int main(int argc, char** argv) {

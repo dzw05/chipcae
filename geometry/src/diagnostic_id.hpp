@@ -79,7 +79,7 @@ inline std::string sha256_prefix(const std::string& input) {
     out << std::hex << std::setfill('0') << std::setw(8) << h[0] << std::setw(8) << h[1];
     return out.str();
 }
-inline std::string diagnostic_id(const Defect& d, Real eps) {
+inline std::string diagnostic_id(const StepDefect& d, Real eps) {
     std::ostringstream key;
     key.imbue(std::locale::classic());
     key << static_cast<std::uint16_t>(d.kind) << '|' << d.step_entity << '|' << d.face_index;

@@ -17,7 +17,7 @@ struct StepShape;
 }
 struct StepImportResult {
     std::array<Real, 6> bbox{}; // xmin,ymin,zmin,xmax,ymax,zmax, in metres
-    std::vector<Defect> defects;
+    std::vector<StepDefect> defects;
     std::vector<std::string> body_names;
     // Immutable ownership of the original topology and its source history for E5.
     // No OCCT types cross the public header boundary.
