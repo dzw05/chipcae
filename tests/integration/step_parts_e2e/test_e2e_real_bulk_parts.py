@@ -41,14 +41,23 @@ def acceptance(d):
     interposer['placement']['origin'] = [0, -.044, .000020002]
     interposer['material_approx'] = True
     model['parts'].append(interposer)
-    imported(d, model)
+    stack = imported(d, model)
     # Diagnostic tokens and mapped IDs: docs/geometry/assembly-report-0.1.md.
     report = json.loads((d / 'report.json').read_text())
     text = json.dumps(report, ensure_ascii=False)
     assert '近似材料' in text, report
-    for ident in ('host_si', 'ihp_adh', 'tim', 'lid', 'interposer_approx'):
+    expected = {v['id']: v['material']
+                for v in model['parts_from_step']['bodies'].values()}
+    expected[interposer['id']] = interposer['material']
+    # Assembly v1.0.2 §4: imported part IDs survive as region.body.
+    # Diagnostic mentions and duplicate materials cannot prove body coverage.
+    regions = [r for layer in stack['layers'] for r in layer.get('regions', [])]
+    for ident, material in expected.items():
         assert ident in text, ident
-    solve(d, 'real-bulk', materials=[v['material'] for v in model['parts_from_step']['bodies'].values()])
+        matches = [r for r in regions if r.get('body') == ident]
+        assert matches, f'missing imported body {ident}'
+        assert all(r['material'] == material for r in matches), (ident, matches)
+    solve(d, 'real-bulk', materials=set(expected.values()))
 
 
 if __name__ == '__main__':

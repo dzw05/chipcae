@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'tests/contract'))
 from output_contract import validate_manifest, validate_output
 sys.path.insert(0, str(ROOT / 'tools/samples/step_parts'))
-from make_parts import (box, write_step, prism, prepare, dump, box_parts,
+from make_parts import (box, write_step, prepare, dump, box_parts,
                         rounded_parts, cylinder, chamfer_lid)
 
 
@@ -101,7 +101,7 @@ def solve(directory, label, n=28, stack='stack.json', materials=()):
 
 
 def volume(path, material):
-    """Read cut volumes plus exact axis-aligned hex volumes, filtered by material."""
+    """Read SI volumes under docs/geometry/vtkhdf-volume-reader-0.1.md."""
     import h5py
     import numpy as np
     total = 0.

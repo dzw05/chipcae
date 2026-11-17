@@ -30,3 +30,9 @@
 重复 part id（指向后出现的 id）及 bond/gap：无 bond 时 gap 可省略或非负；
 有 bond 时 gap 可省略，否则必须与 thickness 按解析后的数值完全相等，不使用容差。
 缺少 jsonschema 或 referencing 时测试退出 77（SKIP）。
+
+## Solver volume readback
+
+The SP7 VTKHDF volume reader uses the versioned
+[volume-reader/0.1 contract](../docs/geometry/vtkhdf-volume-reader-0.1.md)
+in addition to the manifest/C1 output contract.
