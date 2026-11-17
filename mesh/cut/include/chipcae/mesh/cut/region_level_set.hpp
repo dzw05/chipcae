@@ -6,6 +6,9 @@
 #include <vector>
 
 namespace chipcae::mesh {
+// API compatibility alias: reuse the cut pipeline representation.
+using BodyLevelSet = cut::BodyLevelSet;
+
 struct RegionLSOptions {
     Real inside_tol_rel = 1e-12;
 };
@@ -21,6 +24,6 @@ struct RegionLSOptions {
 // Returned entries contain body IDs and level-set values only; they carry no
 // layer or source-region metadata. Body identity alone does not identify a
 // source group because the same body may recur across layers.
-std::vector<cut::BodyLevelSet>
+std::vector<BodyLevelSet>
 region_level_sets(const StackModel&, const HexMeshArrays&, const RegionLSOptions&);
 } // namespace chipcae::mesh

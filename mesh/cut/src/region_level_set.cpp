@@ -2,7 +2,7 @@
 
 #include <stdexcept>
 namespace chipcae::mesh {
-std::vector<cut::BodyLevelSet>
+std::vector<BodyLevelSet>
 region_level_sets(const StackModel&, const HexMeshArrays&, const RegionLSOptions&) {
     throw std::logic_error("not implemented: region_level_sets");
 }

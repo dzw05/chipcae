@@ -6,7 +6,8 @@
 #include <type_traits>
 
 static_assert(std::is_same_v<decltype(chipcae::mesh::region_level_sets({}, {}, {})),
-                             decltype(chipcae::mesh::cut::CutLayerArrays{}.level_sets)>);
+                             std::vector<chipcae::mesh::BodyLevelSet>>);
+static_assert(std::is_same_v<chipcae::mesh::BodyLevelSet, chipcae::mesh::cut::BodyLevelSet>);
 
 static_assert(chipcae::mesh::RegionLSOptions{}.inside_tol_rel == 1e-12);
 
