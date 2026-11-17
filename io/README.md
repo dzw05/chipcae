@@ -16,12 +16,53 @@ count is the communicator size and stays fixed across steps. Never share a run
 directory between concurrent writers. Existing finalized runs are rejected.
 
 Each `<run>/out/step-<n>.vtkhdf` is a PartitionedDataSetCollection with Version
-`[2,9]`, four indexed blocks and Assembly soft links in contract order: hex,
-cut_poly, embedded_boundary, particles. The hex block is UnstructuredGrid; the
-reserved cut block is an empty UnstructuredGrid and the last two are empty
-PolyData. Nonempty reserved block inputs are rejected. Polyhedron face arrays
-remain a documented TODO pending mesh/geometry agreement, including the shared
-face `-(n+1)` convention.
+`[2,8]`, four indexed blocks in order: `hex`, `cut`, `eb_surface`, `particles`.
+Assembly has `volume` → hex/cut, `boundary` → eb_surface and `lagrangian` →
+particles soft links. Hex and cut are UnstructuredGrid; the last two are empty
+PolyData placeholders (nonempty inputs are rejected).
+
+`ResultsStep::cut` accepts rank-local points, connectivity/offsets, face_conn /
+face_off and poly_faces / poly_off. All offsets start at zero and include the
+terminal offset. Connectivity lists the unique points of each cell. Faces are
+copied per cell, with outward winding and nonnegative face IDs. Types are 42;
+all face arrays and the three face counts are int64. Empty partitions retain
+all datasets, including offsets `[0]` and zero-length CellData.
+Cut metadata layer_id/material_id/cell_kind is int32, elem_gid is int64 and
+volume is float64. T and U are optional on cut, with the same names and types
+as hex and a matching schema across nonempty ranks. Invalid lengths fail
+collectively before writing. A geometry-only cut block omits both point fields.
+
+The caller partitions the preparation mesh and builds rank-local point IDs.
+`CutOptions::export_polyhedra` enables host `CutPolyhedra`; the solver evaluates
+fields using each point's `point_parent_elem` and interleaved reference
+`point_xi`. The mutable kernel overload remaps parent local IDs after removal.
+Layer IDs are one-based first-occurrence order of layer names in the source
+attribute table; material IDs come directly from the parent attribute record.
+Retained voids have no clipped solid and do not export an empty polyhedron.
+`ResultsStep::cut_as_hex` writes the caller-supplied parent hexes, retaining
+cell_kind=1, and leaves cut empty. Otherwise all kind-1 parent cells are removed
+from hex. Hex points are retained to preserve supplied field indexing.
+
+This extends PR #35's writer; S2 must use `io::ResultsWriter`. The separate
+`mesh/background/vtkhdf_writer.*` API remains a mesh preview writer.
+
+`CutPolyhedra` host interface (no device-view changes):
+
+| Fields | Type / layout |
+|---|---|
+| points, point_xi | Real, interleaved xyz |
+| point_parent_elem | Local, source parent local element per point |
+| face_conn, face_off | Index, local point rings and CSR offsets |
+| poly_faces, poly_off | Index, local face IDs and CSR offsets |
+| parent_elem_gid | Index, parent global identity per cell |
+| body, layer_id, material_id, cell_kind | Local (int32), per cell |
+| volume, volfrac_ref | Real, signed-divergence volume and existing sub_volfrac |
+
+Vertex canonicalization is local to each cell, using Euclidean distance with
+physical snap `max(snap_phi, 32*epsilon*max(cell dimensions))`. Faces smaller
+than snap squared are discarded; fewer than four faces or nonpositive signed
+volume is not exported. Existing quadrature and sub_volfrac remain unchanged.
+Point IDs never refer to the background node array. Faces are never shared.
 
 Coordinates, T and U are float64 SI arrays. U has three interleaved components;
 the solver supplies the exact eight Q2 vertex values (edge/face/interior DOFs
@@ -51,8 +92,7 @@ best-fit plane removed; it cannot be reconstructed faithfully from this vertex
 output. sigma_vm is reserved in the manifest and absent from step data.
 
 Specification: https://docs.vtk.org/en/latest/vtk_file_formats/vtkhdf_file_format/vtkhdf_specifications.html
-The contract's 2.9 minimum is ahead of the public specification's stated 2.8;
-confirm the desktop reader baseline before enabling future polyhedron features.
+The P1 contract is fixed to 2.8 and does not use negative shared-face references.
 
 ### Generate S1 (binary output stays outside git)
 

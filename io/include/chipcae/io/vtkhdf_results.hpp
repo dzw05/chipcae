@@ -9,17 +9,20 @@ namespace chipcae::io {
 // Coordinates and U are interleaved xyz; connectivity uses rank-local point IDs.
 // The caller samples Q2 at the eight exact vertex nodes, without interpolation.
 struct ResultsPartition {
-    std::vector<double> points, T, U;
+    std::vector<double> points, T, U, volume;
+    // Cut topology, all rank-local. Offsets include initial zero and terminal size.
+    // Each cell lists its unique points and references its own outward face rings.
+    std::vector<Index> connectivity, offsets{0}, face_conn, face_off{0}, poly_faces, poly_off{0};
     std::vector<Index> hex, elem_gid; // elem_gid optional: dense Morton column * global nz + k
     std::vector<std::int32_t> layer_id, material_id, cell_kind;
 };
 struct ResultsStep {
     ResultsPartition hex;
-    // Reserved interfaces: nonempty blocks are rejected until geometry is agreed.
-    ResultsPartition cut_poly, embedded_boundary, particles;
-    // TODO: VTK_POLYHEDRON FaceConnectivity/FaceOffsets and
-    // PolyhedronToFaces/PolyhedronOffsets; shared face -(n+1) convention
-    // awaits mesh/geometry confirmation. Do not emit invented face arrays.
+    // T/U optional on cut, schema must match across ranks with cut points.
+    // elem_gid, metadata and volume are required per cut cell.
+    ResultsPartition cut, embedded_boundary, particles;
+    // Caller supplies the parent hex representation in hex for fallback.
+    bool cut_as_hex = false;
 };
 class ResultsWriter {
 public:

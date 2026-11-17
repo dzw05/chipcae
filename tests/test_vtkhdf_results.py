@@ -44,7 +44,7 @@ class ResultsTest(unittest.TestCase):
                             conn = list(range(cell*8, cell*8+8))
                             expected_conn.extend(conn)
                             expected_gid.append(rank*100+cell)
-                            lines.append(' '.join(map(str, conn+[rank, cell, cell%3, rank*100+cell])))
+                            lines.append(' '.join(map(str, conn+[rank, cell, 2*(cell%2), rank*100+cell])))
                         lines.append('0.001 0.002')
                         pathlib.Path(str(prefix)+f'.{rank}').write_text('\n'.join(lines)+'\n')
                         offsets.extend(range(0, cells*8+1, 8))
@@ -108,10 +108,10 @@ class ResultsTest(unittest.TestCase):
             with h5py.File(run/m['steps'][0]['file']) as f:
                 root=f['VTKHDF']
                 self.assertEqual(root.attrs['Type'].decode().rstrip('\0'), 'PartitionedDataSetCollection')
-                self.assertGreaterEqual(tuple(root.attrs['Version']), (2,9))
-                self.assertEqual(len(root['Assembly']),4)
-                self.assertEqual(list(root['Assembly']),['hex','cut_poly','embedded_boundary','particles'])
-                self.assertIsInstance(root['Assembly'].get('hex', getlink=True),h5py.SoftLink)
+                self.assertEqual(tuple(root.attrs['Version']), (2,8))
+                self.assertEqual(list(root['Assembly']),['volume','boundary','lagrangian'])
+                self.assertEqual(list(root['Assembly/volume']),['hex','cut'])
+                self.assertIsInstance(root['Assembly/volume'].get('hex', getlink=True),h5py.SoftLink)
                 g=root['hex']
                 np.testing.assert_array_equal(g['NumberOfPoints'], [8]+[0]*(ranks-1))
                 np.testing.assert_array_equal(g['NumberOfCells'], [1]+[0]*(ranks-1))
@@ -130,9 +130,9 @@ class ResultsTest(unittest.TestCase):
                     self.assertEqual(g['CellData/'+name].dtype,np.dtype('int32'))
                     self.assertEqual(g['CellData/'+name].shape,(1,))
                 self.assertNotIn('sigma_vm',g['CellData'])
-                for name in ['cut_poly','embedded_boundary','particles']:
+                for name in ['cut','eb_surface','particles']:
                     self.assertEqual(root[name]['Points'].shape,(0,3))
-                    self.assertEqual(root[name].attrs['Index'], ['hex','cut_poly','embedded_boundary','particles'].index(name))
+                    self.assertEqual(root[name].attrs['Index'], ['hex','cut','eb_surface','particles'].index(name))
                     self.assertEqual(len(root[name]['NumberOfPoints']),ranks)
             try:
                 import vtk

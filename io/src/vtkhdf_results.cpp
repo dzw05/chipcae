@@ -1,11 +1,13 @@
 #include "chipcae/io/vtkhdf_results.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <set>
 #include <stdexcept>
 #ifdef CHIPCAE_ENABLE_HDF5
 #include "chipcae/io/detail/hdf5.hpp"
@@ -73,7 +75,10 @@ std::string quoted(const std::string& s) {
 }
 [[maybe_unused]] bool empty(const ResultsPartition& p) {
     return p.points.empty() && p.hex.empty() && p.T.empty() && p.U.empty() && p.layer_id.empty() &&
-           p.material_id.empty() && p.cell_kind.empty() && p.elem_gid.empty();
+           p.material_id.empty() && p.cell_kind.empty() && p.elem_gid.empty() && p.volume.empty() &&
+           p.connectivity.empty() && p.face_conn.empty() && p.poly_faces.empty() &&
+           p.offsets == std::vector<Index>{0} && p.face_off == std::vector<Index>{0} &&
+           p.poly_off == std::vector<Index>{0};
 }
 #ifdef CHIPCAE_ENABLE_HDF5
 using namespace chipcae::hdf_detail;
@@ -270,13 +275,122 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
         agree(lo == hi && tlo == thi);
     }
 #endif
-    const auto& p = local.hex;
+    ResultsPartition p;
+    phase([&] { p = local.hex; });
+    const auto input_cells = p.hex.size() / 8;
+    agree(p.hex.size() % 8 == 0 && p.points.size() % 3 == 0 && p.T.size() == p.points.size() / 3 &&
+          p.U.size() == p.points.size() && p.layer_id.size() == input_cells &&
+          p.material_id.size() == input_cells && p.cell_kind.size() == input_cells &&
+          (p.elem_gid.empty() || p.elem_gid.size() == input_cells));
+    bool input_ids = true;
+    for (auto id : p.hex)
+        input_ids &= id >= 0 && static_cast<std::size_t>(id) < p.points.size() / 3;
+    agree(input_ids);
+    bool matched = true;
+    if (!local.cut_as_hex) {
+        // Never silently lose a cut parent when geometric export was skipped.
+        for (std::size_t i = 0; i < input_cells; ++i)
+            if (p.cell_kind[i] == 1)
+                matched &= p.elem_gid.size() == input_cells &&
+                           std::find(local.cut.elem_gid.begin(),
+                                     local.cut.elem_gid.end(),
+                                     p.elem_gid[i]) != local.cut.elem_gid.end();
+    }
+    agree(matched);
+    phase([&] {
+        if (!local.cut_as_hex) {
+            ResultsPartition filtered = p;
+            filtered.hex.clear();
+            filtered.elem_gid.clear();
+            filtered.layer_id.clear();
+            filtered.material_id.clear();
+            filtered.cell_kind.clear();
+            for (std::size_t i = 0; i < p.hex.size() / 8; ++i) {
+                if (p.cell_kind[i] == 1)
+                    continue;
+                filtered.hex.insert(
+                    filtered.hex.end(), p.hex.begin() + 8 * i, p.hex.begin() + 8 * i + 8);
+                if (i < p.elem_gid.size())
+                    filtered.elem_gid.push_back(p.elem_gid[i]);
+                if (i < p.layer_id.size())
+                    filtered.layer_id.push_back(p.layer_id[i]);
+                if (i < p.material_id.size())
+                    filtered.material_id.push_back(p.material_id[i]);
+                if (i < p.cell_kind.size())
+                    filtered.cell_kind.push_back(p.cell_kind[i]);
+            }
+            p = std::move(filtered);
+        }
+    });
+    ResultsPartition no_cut;
+    const auto& cut = local.cut_as_hex ? no_cut : local.cut;
+    auto cn = cut.poly_off.size() ? cut.poly_off.size() - 1 : 0;
+    auto offsets_valid = [](const auto& off, std::size_t count) {
+        return !off.empty() && off.front() == 0 && off.back() == static_cast<Index>(count) &&
+               std::is_sorted(off.begin(), off.end());
+    };
+    bool cv = cut.points.size() % 3 == 0 && offsets_valid(cut.offsets, cut.connectivity.size()) &&
+              cut.offsets.size() == cn + 1 && offsets_valid(cut.face_off, cut.face_conn.size()) &&
+              offsets_valid(cut.poly_off, cut.poly_faces.size()) && cut.elem_gid.size() == cn &&
+              cut.layer_id.size() == cn && cut.material_id.size() == cn &&
+              cut.cell_kind.size() == cn && cut.volume.size() == cn &&
+              (cut.T.empty() || cut.T.size() == cut.points.size() / 3) &&
+              (cut.U.empty() || cut.U.size() == cut.points.size());
+    if (cv) {
+        for (std::size_t i = 0; i < cn; ++i)
+            cv &= cut.poly_off[i + 1] - cut.poly_off[i] >= 4 &&
+                  cut.offsets[i + 1] - cut.offsets[i] >= 4;
+        for (std::size_t i = 1; i < cut.face_off.size(); ++i)
+            cv &= cut.face_off[i] - cut.face_off[i - 1] >= 3;
+    }
+    for (auto id : cut.connectivity)
+        cv &= id >= 0 && static_cast<std::size_t>(id) < cut.points.size() / 3;
+    for (auto id : cut.face_conn)
+        cv &= id >= 0 && static_cast<std::size_t>(id) < cut.points.size() / 3;
+    for (auto id : cut.poly_faces)
+        cv &= id >= 0 && static_cast<std::size_t>(id) + 1 < cut.face_off.size();
+    phase([&] {
+        if (cv) {
+            for (std::size_t i = 0; i < cn; ++i) {
+                std::set<Index> vertices(cut.connectivity.begin() + cut.offsets[i],
+                                         cut.connectivity.begin() + cut.offsets[i + 1]);
+                cv &= vertices.size() ==
+                      static_cast<std::size_t>(cut.offsets[i + 1] - cut.offsets[i]);
+                std::set<std::set<Index>> faces;
+                for (auto j = cut.poly_off[i]; j < cut.poly_off[i + 1]; ++j) {
+                    auto f = cut.poly_faces[j];
+                    std::set<Index> ring;
+                    for (auto k = cut.face_off[f]; k < cut.face_off[f + 1]; ++k) {
+                        cv &= vertices.contains(cut.face_conn[k]);
+                        cv &= ring.insert(cut.face_conn[k]).second;
+                    }
+                    cv &= faces.insert(std::move(ring)).second;
+                }
+            }
+        }
+    });
+    for (auto v : cut.volume)
+        cv &= std::isfinite(v) && v > 0;
+    for (auto kind : cut.cell_kind)
+        cv &= kind == 1 || kind == 2;
+    int fields = (!cut.T.empty() ? 1 : 0) | (!cut.U.empty() ? 2 : 0);
+    int schema = fields;
+    int fallback = local.cut_as_hex, fallback_max = fallback, fallback_min = fallback;
+#ifdef CHIPCAE_ENABLE_MPI
+    if (size_ > 1) {
+        MPI_Allreduce(&fields, &schema, 1, MPI_INT, MPI_BOR, MPI_COMM_WORLD);
+        MPI_Allreduce(&fallback, &fallback_min, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+        MPI_Allreduce(&fallback, &fallback_max, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+    }
+#endif
+    cv &= cut.points.empty() || fields == schema;
+    agree(cv && fallback_min == fallback_max);
     auto np = p.points.size() / 3, nc = p.hex.size() / 8;
     bool valid = n >= 0 && std::isfinite(time) && p.points.size() % 3 == 0 &&
                  p.hex.size() % 8 == 0 && p.T.size() == np && p.U.size() == 3 * np &&
                  p.layer_id.size() == nc && p.material_id.size() == nc &&
                  p.cell_kind.size() == nc && (p.elem_gid.empty() || p.elem_gid.size() == nc) &&
-                 empty(local.cut_poly) && empty(local.embedded_boundary) && empty(local.particles);
+                 empty(local.embedded_boundary) && empty(local.particles);
     for (auto id : p.hex)
         valid = valid && id >= 0 && static_cast<std::size_t>(id) < np;
     for (auto kind : p.cell_kind)
@@ -344,16 +458,14 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
             root = hcall(parallel, rank_, "H5Gcreate2", [&] {
                 return H5Gcreate2(file, "VTKHDF", H5P_DEFAULT, gcpl, H5P_DEFAULT);
             });
-            results_header(root, "PartitionedDataSetCollection", 2, 9, parallel, rank_);
+            results_header(root, "PartitionedDataSetCollection", 2, 8, parallel, rank_);
             assembly = hcall(parallel, rank_, "H5Gcreate2", [&] {
                 return H5Gcreate2(root, "Assembly", H5P_DEFAULT, gcpl, H5P_DEFAULT);
             });
             if (root < 0 || assembly < 0)
                 throw std::runtime_error("create root groups");
         });
-        const char* names[] = {"hex", "cut_poly", "embedded_boundary", "particles"};
-        const char* paths[] = {
-            "/VTKHDF/hex", "/VTKHDF/cut_poly", "/VTKHDF/embedded_boundary", "/VTKHDF/particles"};
+        const char* names[] = {"hex", "cut", "eb_surface", "particles"};
         for (int block = 0; block < 4; ++block) {
             hid_t g = -1;
             metadata([&] {
@@ -361,7 +473,7 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                     return H5Gcreate2(root, names[block], H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
                 });
                 results_header(
-                    g, block >= 2 ? "PolyData" : "UnstructuredGrid", 2, 9, parallel, rank_);
+                    g, block >= 2 ? "PolyData" : "UnstructuredGrid", 2, 8, parallel, rank_);
                 H5 scalar(
                     hcall(parallel, rank_, "H5Screate", [&] { return H5Screate(H5S_SCALAR); }),
                     H5Sclose);
@@ -379,13 +491,36 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                     return H5Awrite(index, H5T_NATIVE_INT64, &block_index);
                 }));
 
+                const char* category = block < 2    ? "volume"
+                                       : block == 2 ? "boundary"
+                                                    : "lagrangian";
+                if (hcall(parallel, rank_, "H5Lexists", [&] {
+                        return H5Lexists(assembly, category, H5P_DEFAULT);
+                    }) == 0) {
+                    H5 subgroup(hcall(parallel,
+                                      rank_,
+                                      "H5Gcreate2",
+                                      [&] {
+                                          return H5Gcreate2(
+                                              assembly, category, H5P_DEFAULT, gcpl, H5P_DEFAULT);
+                                      }),
+                                H5Gclose);
+                }
+                H5 subgroup(hcall(parallel,
+                                  rank_,
+                                  "H5Gopen2",
+                                  [&] { return H5Gopen2(assembly, category, H5P_DEFAULT); }),
+                            H5Gclose);
                 check(hcall(parallel, rank_, "H5Lcreate_soft", [&] {
-                    return H5Lcreate_soft(
-                        paths[block], assembly, names[block], H5P_DEFAULT, H5P_DEFAULT);
+                    return H5Lcreate_soft((std::string("/VTKHDF/") + names[block]).c_str(),
+                                          subgroup,
+                                          names[block],
+                                          H5P_DEFAULT,
+                                          H5P_DEFAULT);
                 }));
             });
             ResultsPartition none;
-            const auto& q = block == 0 ? p : none;
+            const auto& q = block == 0 ? p : block == 1 ? cut : none;
             auto emit = [&]<class T>(hid_t target,
                                      const char* name,
                                      const std::vector<T>& v,
@@ -411,11 +546,41 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                 emit(target, "Connectivity", conn);
                 emit(target, "Offsets", off);
             };
+            auto emit_prepared = [&](hid_t target, const char* name, auto prepare) {
+                decltype(prepare()) values;
+                phase([&] { values = prepare(); });
+                emit(target, name, values);
+            };
             if (block < 2) {
-                topology(g, q.hex, 8);
-                std::vector<unsigned char> types;
-                phase([&] { types.assign(q.hex.size() / 8, 12); });
-                emit(g, "Types", types);
+                if (block == 0) {
+                    topology(g, q.hex, 8);
+                    emit_prepared(g, "Types", [&] {
+                        return std::vector<unsigned char>(q.hex.size() / 8, 12);
+                    });
+                } else {
+                    emit_prepared(g, "NumberOfCells", [&] {
+                        return std::vector<Index>{static_cast<Index>(cn)};
+                    });
+                    emit_prepared(g, "NumberOfConnectivityIds", [&] {
+                        return std::vector<Index>{static_cast<Index>(q.connectivity.size())};
+                    });
+                    emit(g, "Connectivity", q.connectivity);
+                    emit(g, "Offsets", q.offsets);
+                    emit_prepared(g, "Types", [&] { return std::vector<unsigned char>(cn, 42); });
+                    emit(g, "FaceConnectivity", q.face_conn);
+                    emit(g, "FaceOffsets", q.face_off);
+                    emit(g, "PolyhedronToFaces", q.poly_faces);
+                    emit(g, "PolyhedronOffsets", q.poly_off);
+                    emit_prepared(g, "NumberOfFaces", [&] {
+                        return std::vector<Index>{static_cast<Index>(q.face_off.size() - 1)};
+                    });
+                    emit_prepared(g, "NumberOfFaceConnectivityIds", [&] {
+                        return std::vector<Index>{static_cast<Index>(q.face_conn.size())};
+                    });
+                    emit_prepared(g, "NumberOfPolyhedronToFaceIds", [&] {
+                        return std::vector<Index>{static_cast<Index>(q.poly_faces.size())};
+                    });
+                }
             } else
                 for (auto name : {"Vertices", "Lines", "Polygons", "Strips"}) {
                     hid_t t = -1;
@@ -430,7 +595,7 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                     if (t >= 0)
                         check(hcall(parallel, rank_, "H5Gclose", [&] { return H5Gclose(t); }));
                 }
-            if (block == 0) {
+            if (block < 2) {
                 hid_t pd = -1, cd = -1;
                 metadata([&] {
                     pd = hcall(parallel, rank_, "H5Gcreate2", [&] {
@@ -442,17 +607,41 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                     if (pd < 0 || cd < 0)
                         throw std::runtime_error("create fields");
                 });
-                emit(pd, "T", p.T);
-                emit(pd, "U", p.U, 3);
-                emit(cd, "layer_id", p.layer_id);
-                emit(cd, "material_id", p.material_id);
-                emit(cd, "cell_kind", p.cell_kind);
-                if (gid_any)
-                    emit(cd, "elem_gid", p.elem_gid);
+                if (block == 0 || (schema & 1))
+                    emit(pd, "T", q.T);
+                if (block == 0 || (schema & 2))
+                    emit(pd, "U", q.U, 3);
+                emit(cd, "layer_id", q.layer_id);
+                emit(cd, "material_id", q.material_id);
+                emit(cd, "cell_kind", q.cell_kind);
+                if (gid_any || block == 1)
+                    emit(cd, "elem_gid", q.elem_gid);
+                if (block == 1)
+                    emit(cd, "volume", q.volume);
                 if (pd >= 0) {
                     check(hcall(parallel, rank_, "H5Gclose", [&] { return H5Gclose(pd); }));
                     check(hcall(parallel, rank_, "H5Gclose", [&] { return H5Gclose(cd); }));
                 }
+            }
+            if (block >= 2) {
+                metadata([&] {
+                    H5 pd(hcall(parallel,
+                                rank_,
+                                "H5Gcreate2",
+                                [&] {
+                                    return H5Gcreate2(
+                                        g, "PointData", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+                                }),
+                          H5Gclose);
+                    H5 cd(hcall(parallel,
+                                rank_,
+                                "H5Gcreate2",
+                                [&] {
+                                    return H5Gcreate2(
+                                        g, "CellData", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+                                }),
+                          H5Gclose);
+                });
             }
             if (g >= 0)
                 check(hcall(parallel, rank_, "H5Gclose", [&] { return H5Gclose(g); }));
@@ -520,18 +709,23 @@ void ResultsWriter::finalize() {
                     << '}';
             }
             out << "],\n\"fields\":[{\"name\":\"T\",\"location\":\"point\",\"components\":1,"
-                   "\"unit\":\"K\"},{\"name\":\"U\",\"location\":\"point\",\"components\":3,"
-                   "\"unit\":\"m\"}";
+                   "\"unit\":\"K\",\"dtype\":\"float64\"},{\"name\":\"U\",\"location\":\"point\","
+                   "\"components\":3,"
+                   "\"unit\":\"m\",\"dtype\":\"float64\"}";
             for (auto name : {"layer_id", "material_id", "cell_kind"})
                 out << ",{\"name\":" << quoted(name)
-                    << ",\"location\":\"cell\",\"components\":1,\"unit\":\"1\"}";
-            if (gids_)
-                out << ",{\"name\":\"elem_gid\",\"location\":\"cell\",\"components\":1,\"unit\":"
-                       "\"1\"}";
+                    << ",\"location\":\"cell\",\"components\":1,\"unit\":\"1\",\"dtype\":"
+                       "\"int32\"}";
+            // Cut always carries its parent GID, including empty templates.
+            out << ",{\"name\":\"elem_gid\",\"location\":\"cell\",\"components\":1,\"unit\":"
+                   "\"1\",\"dtype\":\"int64\"}";
+            out << ",{\"name\":\"volume\",\"location\":\"cell\",\"components\":1,\"unit\":\"m3\","
+                   "\"dtype\":\"float64\"}";
             out << ",{\"name\":\"sigma_vm\",\"location\":\"cell\",\"components\":1,\"unit\":\"Pa\","
-                   "\"reserved\":true}],\n\"blocks\":[{\"index\":0,\"name\":\"hex\",\"kind\":"
-                   "\"UnstructuredGrid\"},{\"index\":1,\"name\":\"cut_poly\",\"kind\":\"VTK_"
-                   "POLYHEDRON\"},{\"index\":2,\"name\":\"embedded_boundary\",\"kind\":"
+                   "\"dtype\":\"float64\",\"reserved\":true}],\n\"blocks\":[{\"index\":0,\"name\":"
+                   "\"hex\",\"kind\":"
+                   "\"UnstructuredGrid\"},{\"index\":1,\"name\":\"cut\",\"kind\":\"VTK_"
+                   "POLYHEDRON\"},{\"index\":2,\"name\":\"eb_surface\",\"kind\":"
                    "\"PolyData\"},{\"index\":3,\"name\":\"particles\",\"kind\":\"PolyData\"}],"
                    "\n\"summary\":[";
             first = true;

@@ -138,6 +138,18 @@ if(NOT CHIPCAE_ENABLE_OCCT)
     set_tests_properties(step_import_disabled PROPERTIES LABELS "tierA" TIMEOUT 60)
 endif()
 
+if(CHIPCAE_ENABLE_HDF5)
+    add_test(NAME cut_results_serial COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_cut_results.py $<TARGET_FILE:s2_cut_minimal>
+        ${PROJECT_SOURCE_DIR}/examples/s2_cut_minimal/stackup.json 1)
+    set_tests_properties(cut_results_serial PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
+    if(CHIPCAE_ENABLE_MPI)
+        add_test(NAME cut_results_mpi_2 COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_cut_results.py $<TARGET_FILE:s2_cut_minimal>
+            ${PROJECT_SOURCE_DIR}/examples/s2_cut_minimal/stackup.json 2 ${MPIEXEC_EXECUTABLE})
+        set_tests_properties(cut_results_mpi_2 PROPERTIES LABELS "mpi;io" TIMEOUT 60 PROCESSORS 2 SKIP_RETURN_CODE 77)
+    endif()
+endif()
 if(CHIPCAE_ENABLE_ECAD)
     add_executable(chipcae_test_ipc2581 unit/test_ipc2581.cpp)
     target_link_libraries(chipcae_test_ipc2581 PRIVATE chipcae::geometry_ecad)
