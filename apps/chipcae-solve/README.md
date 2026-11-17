@@ -111,10 +111,12 @@ Otherwise it exits with NOT_IMPLEMENTED (2) and
 pairings exit with INPUT_INVALID (14). Device selection keeps the existing
 solve path; it does not promise GPU execution or acceleration.
 
-The CUDA-enabled MFEM branch is compile-only in scope and **unverified (未实测)**:
-it has not been compiled or runtime-tested on this box, and current CI does not
-compile it. `cuda-kokkos-core-compile` covers Kokkos and core only; a
-`cuda-solve-compile` job is outside this task. Selecting the global MFEM device
+The CUDA-enabled MFEM branch has a compile-only acceptance requirement; this
+requirement has **not been verified (未实测)**. The branch has not been compiled
+or runtime-tested on this box, and current CI does not compile it. No successful
+CUDA-enabled MFEM compilation or GPU execution is claimed.
+`cuda-kokkos-core-compile` covers Kokkos and core only; a `cuda-solve-compile`
+job is outside this task. Selecting the global MFEM device
 may expose host/device memory incompatibilities in the existing PETSc solve path.
 
 The amended X1 brief permits the additive public `RunInputs::backend` string
