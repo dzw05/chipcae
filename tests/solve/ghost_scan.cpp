@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <set>
 using namespace chipcae;
 using namespace mfem;
 int main(int argc, char** argv) {
@@ -131,29 +132,39 @@ int main(int argc, char** argv) {
                                 new fem::GhostPenalty(arrays, cut, scale, gamma, elastic ? 3 : 1));
                             form.Assemble();
                             form.Finalize(0);
+                            GridFunction u(&space);
+                            u = 0.;
                             Array<int> marker(grid.bdr_attributes.Max());
                             marker = 0;
-                            // Ground/clamp the y=0 face. Its normal distance to the
-                            // opposite face stays fixed under the x translation.
                             marker[2] = 1;
                             Array<int> essential;
                             space.GetEssentialTrueDofs(marker, essential);
-                            GridFunction u(&space);
-                            u = 0.;
-                            LinearForm rhs(&space);
-                            rhs = 0.;
-                            OperatorPtr op;
-                            Vector X, B;
-                            form.FormLinearSystem(essential, u, rhs, op, X, B);
-                            auto& a = *op.As<SparseMatrix>();
-                            DenseMatrix dense;
-                            a.ToDenseMatrix(dense);
-                            out << layered << ' ' << aspect << ' ' << elastic << ' ' << position
-                                << ' ' << gamma << ' ' << a.Height() << '\n';
-                            for (int i = 0; i < a.Height(); ++i) {
-                                for (int j = 0; j < a.Height(); ++j)
-                                    out << dense(i, j) << ' ';
-                                out << '\n';
+                            std::set<int> cut_dofs;
+                            for (int e : cut.cut_elem) {
+                                Array<int> dofs;
+                                space.GetElementVDofs(e, dofs);
+                                for (int dof : dofs)
+                                    cut_dofs.insert(dof < 0 ? -1 - dof : dof);
+                            }
+                            for (int variant = 0; variant < 3; ++variant) {
+                                DenseMatrix dense;
+                                form.SpMat().ToDenseMatrix(dense);
+                                if (variant != 0)
+                                    for (int dof : essential) {
+                                        if (variant == 2 && cut_dofs.contains(dof))
+                                            continue;
+                                        for (int j = 0; j < dense.Height(); ++j)
+                                            dense(dof, j) = dense(j, dof) = 0.;
+                                        dense(dof, dof) = 1.;
+                                    }
+                                out << layered << ' ' << aspect << ' ' << elastic << ' ' << position
+                                    << ' ' << gamma << ' ' << variant << ' ' << dense.Height()
+                                    << '\n';
+                                for (int i = 0; i < dense.Height(); ++i) {
+                                    for (int j = 0; j < dense.Height(); ++j)
+                                        out << dense(i, j) << ' ';
+                                    out << '\n';
+                                }
                             }
                             // Consistency: derivative jumps of a global Q2 polynomial vanish.
                             BilinearForm gp(&space);
