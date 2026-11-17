@@ -1,10 +1,10 @@
-Copyright (c) 2026 Zhiwei Duan.
+Copyright (c) 2026 Zhiwei Duan. All rights reserved.
 
-Proprietary, all rights reserved.
+Source is published for viewing only; no permission is granted to use, copy,
+modify, merge, publish, distribute, sublicense, or sell without prior written
+permission from the copyright holder.
 
-This software and its source code are confidential and proprietary.
-No part of this software may be used, copied, modified, distributed,
-or disclosed except as expressly authorized in writing by the copyright holder.
+保留所有权利。源码公开仅供查阅；未经著作权人事先书面许可，不得使用、复制、修改、合并、发布、分发、再许可或销售本软件及其源码。
 
 Exceptions: the following directories are licensed separately, as stated
 in the LICENSE file inside each of them, and the restrictions above do not

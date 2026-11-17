@@ -2,7 +2,7 @@
 
 面向芯片与电子行业的多物理场仿真软件。旗舰场景是封装翘曲，产品路线是热-力一体化。
 
-本仓库是单一大仓库：求解内核、桌面界面和通信协议放在一起。软件以私有闭源方式开发，不得引入 GPL 依赖。
+本仓库是单一大仓库：求解内核、桌面界面和通信协议放在一起。软件源码公开仅供查阅，不得引入 GPL 依赖。
 
 ## 当前状态
 
@@ -73,7 +73,13 @@ Python 绑定使用 nanobind（需要 Python 3.9+ 开发头文件）。
 
 ## 许可
 
-Proprietary, all rights reserved。见 [LICENSE](LICENSE)。
+Copyright (c) 2026 Zhiwei Duan. All rights reserved.
+
+Source is published for viewing only; no permission is granted to use, copy,
+modify, merge, publish, distribute, sublicense, or sell without prior written
+permission from the copyright holder.
+
+保留所有权利。源码公开仅供查阅；未经著作权人事先书面许可，不得使用、复制、修改、合并、发布、分发、再许可或销售本软件及其源码。见 [LICENSE](LICENSE)。
 
 例外：公开基准算例数据 `cases/benchmarks/` 按 CC BY 4.0 发布（见 [cases/benchmarks/LICENSE](cases/benchmarks/LICENSE) 与 [NOTICE](cases/benchmarks/NOTICE)）；V&V 脚本与测试 `tools/vv/`、`tests/vv/` 按 Apache-2.0 发布（见各目录 LICENSE）。
 
