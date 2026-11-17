@@ -20,6 +20,24 @@ void check(bool pass, const char* name) {
     }
 }
 
+// Primitive anchored at the first knot, using analytic linear-segment areas.
+// Subtracting two primitives gives the signed integral for any reference.
+Real primitive(const CteTable& table, Real temperature) {
+    const auto& knots = table.temperatures;
+    if (temperature < knots.front())
+        return (temperature - knots.front()) * table.alpha.front();
+    Real area = 0;
+    for (std::size_t i = 0; i + 1 < knots.size(); ++i) {
+        const Real width = knots[i + 1] - knots[i];
+        const Real distance = std::clamp(temperature - knots[i], Real{0}, width);
+        area += table.alpha[i] * distance +
+                (table.alpha[i + 1] - table.alpha[i]) * distance * distance / (2 * width);
+    }
+    if (temperature > knots.back())
+        area += (temperature - knots.back()) * table.alpha.back();
+    return area;
+}
+
 } // namespace
 
 int main(int argc, char** argv) try {
@@ -109,6 +127,57 @@ int main(int argc, char** argv) try {
             if (left == 1)
                 check(!near(expected_integral, (integral[left] + integral[left + 1]) / 2),
                       "integral probe distinguishes node resampling");
+        }
+    }
+    // Move Tref independently of the first knot. Include references in both
+    // segments and beyond either endpoint, with queries on both sides of Tref.
+    for (auto probe : {sec, tan}) {
+        std::swap(probe.alpha[1], probe.alpha[2]);
+        const auto& knots = probe.temperatures;
+        const Real below = knots.front() - (knots[1] - knots.front()) / 2;
+        const Real above = knots.back() + (knots.back() - knots[1]) / 2;
+        for (Real reference : {below,
+                               knots.front(),
+                               (knots[0] + knots[1]) / 2,
+                               inverse_sample,
+                               knots.back(),
+                               above}) {
+            probe.reference_temperature = reference;
+            std::vector<Real> converted;
+            check(tangent_to_secant(probe, converted) == StatusCode::Ok &&
+                      converted.size() == knots.size(),
+                  "arbitrary reference vector status and size");
+            auto verify = [&](Real temperature, Real actual) {
+                if (temperature == reference) {
+                    Real limit = probe.alpha.front();
+                    if (reference >= knots.back())
+                        limit = probe.alpha.back();
+                    else if (reference > knots.front()) {
+                        const std::size_t i = reference < knots[1] ? 0 : 1;
+                        limit = probe.alpha[i] + (reference - knots[i]) *
+                                                     (probe.alpha[i + 1] - probe.alpha[i]) /
+                                                     (knots[i + 1] - knots[i]);
+                    }
+                    check(near(actual, limit), "arbitrary reference limit");
+                    return;
+                }
+                const Real signed_area =
+                    primitive(probe, temperature) - primitive(probe, reference);
+                check(near(actual, signed_area / (temperature - reference)),
+                      "arbitrary reference signed integral");
+                check(near((temperature - reference) * actual, signed_area),
+                      "arbitrary reference reconstructed area");
+                check((temperature < reference) == (signed_area < 0),
+                      "arbitrary reference area orientation");
+            };
+            for (std::size_t i = 0; i < knots.size(); ++i)
+                verify(knots[i], converted[i]);
+            for (Real temperature :
+                 {below, (knots[0] + knots[1]) / 2, inverse_sample, above, reference}) {
+                check(tangent_to_secant(probe, temperature, value) == StatusCode::Ok,
+                      "arbitrary reference scalar status");
+                verify(temperature, value);
+            }
         }
     }
     // Extrapolation probe; expectations use endpoint constant extension, not a new CTE datum.
