@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[3]
+# This repo-local script imports the shared QoI implementation from the checkout.
 sys.path.insert(0, str(REPO))
 from tools.vv.warpage_qoi import interp_grid, qoi_surface  # noqa: E402
 

@@ -39,9 +39,13 @@ and `qoi_surface` on an 81×81 grid in millimetres, then converted back to metre
 The v1 field contract (required keys, types, and which fields are stable) is in `reference.schema.json` (JSON Schema 2020-12).
 
 `provenance` is optional metadata and permits unknown keys within that object;
-unknown top-level keys are rejected.
+unknown top-level keys are rejected. Ignoring unknown provenance keys is a
+consumer convention; the schema permits those keys but cannot require consumers
+to ignore them.
 
-The v1 contract requires exactly one coarse and one fine mesh and selects fine.
+The v1 contract is specific to this WP-2 artifact: it requires exactly one coarse
+and one fine mesh and selects fine. Additional mesh names or a different selected
+resolution require a new contract version.
 Mesh array order is immaterial. Top-level `W_bfp_m` must equal the selected
 mesh value. The test validator normalizes a copy of the schema with a
 `contains` constraint binding the selected name and top-level value via `const`,
