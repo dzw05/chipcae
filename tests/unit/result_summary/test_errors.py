@@ -16,6 +16,34 @@ class Errors(unittest.TestCase):
         self.assertEqual(error.code, 14)
         self.assertEqual(error.name, 'INPUT_INVALID')
 
+    def test_conflicting_name_tables(self):
+        for field in ('layer_names', 'material_names'):
+            for cut in (False, True):
+                for change in ('value', 'order', 'length', 'empty'):
+                    with self.subTest(field=field, cut=cut, change=change), tempfile.TemporaryDirectory() as tmp:
+                        run = Path(tmp)
+                        step, _ = fixture(run, cut=cut)
+                        with h5py.File(step, 'r+') as f:
+                            path = 'VTKHDF/cut/FieldData/' + field
+                            names = f[path].asstr()[...].tolist()
+                            if change == 'value':
+                                names[0] = 'conflicting name'
+                            elif change == 'order':
+                                names.reverse()
+                            elif change == 'length':
+                                names.append('extra name')
+                            else:
+                                names = []
+                            del f[path]
+                            f.create_dataset(path, data=names, dtype=h5py.string_dtype())
+                        err = io.StringIO()
+                        with contextlib.redirect_stderr(err):
+                            self.assertEqual(main([str(run)]), 14)
+                        self.assertTrue(err.getvalue().startswith('result_summary: INPUT_INVALID:'))
+                        self.assertIn(field, err.getvalue())
+                        self.assertIn('conflicting', err.getvalue())
+                        self.assertEqual(len(err.getvalue().splitlines()), 1)
+
     def test_invalid_inputs(self):
         cases = ['manifest_missing', 'step_missing', 'schema', 'hex_missing', 'version', 'T_length', 'elem_dtype', 'U_missing', 'kind_missing', 'duplicate', 'unit', 'empty_manifest', 'malformed_manifest']
         for case in cases:

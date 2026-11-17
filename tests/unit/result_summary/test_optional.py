@@ -3,11 +3,22 @@
 import tempfile
 import unittest
 from pathlib import Path
-from fixtures import fixture, fixed_keys, save, h5py
+from fixtures import fixture, fixed_keys, save, h5py, LAYERS, MATERIALS
 from tools.vv.result_summary import summarize
 
 
 class Optional(unittest.TestCase):
+    def test_single_name_table(self):
+        for block in ('hex', 'cut'):
+            with self.subTest(block=block), tempfile.TemporaryDirectory() as tmp:
+                run = Path(tmp)
+                step, _ = fixture(run)
+                with h5py.File(step, 'r+') as f:
+                    del f['VTKHDF/' + block + '/FieldData']
+                result = summarize(run)
+                self.assertEqual(result['layer_names'], LAYERS)
+                self.assertEqual(result['material_names'], MATERIALS)
+
     def test_optional_fields(self):
         for case in ('T', 'eb_surface', 'warpage_pv', 'two_points', 'names', 'mesh', 'zero_pv', 'absolute_step'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:

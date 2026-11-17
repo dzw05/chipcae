@@ -104,12 +104,17 @@ def _read(root):
     for field in ('layer_names', 'material_names'):
         path = 'FieldData/' + field
         # The writer repeats these global tables in each block.
-        source = next((root[b][path] for b in ('hex', 'cut') if path in root[b]), None)
-        if source is None:
-            names.append([])
-        else:
-            _require(source.ndim == 1, f"{path}: expected a string vector")
-            names.append(source.asstr()[...].tolist())
+        table = None
+        for block in ('hex', 'cut'):
+            if path not in root[block]:
+                continue
+            source = root[block][path]
+            _require(source.ndim == 1, f"{source.name}: expected a string vector")
+            current = source.asstr()[...].tolist()
+            _require(table is None or current == table,
+                     f"{source.name}: conflicting {field} tables in hex and cut")
+            table = current
+        names.append(table if table is not None else [])
     return blocks, data, names
 
 
