@@ -31,7 +31,7 @@ struct FramePlacement {
 using Placement = std::variant<AttachPlacement, FramePlacement>;
 struct PlacedPart {
     std::string id, material;
-    std::vector<Slab> slabs;
+    std::vector<Slab> slabs; // Global coordinates with the placement transform already applied.
 };
 Expected<PlacedPart> place(std::vector<Slab> local, const Placement&, const StackModel& base);
 struct MergeOptions {

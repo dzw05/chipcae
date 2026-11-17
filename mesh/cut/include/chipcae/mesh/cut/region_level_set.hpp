@@ -1,13 +1,12 @@
 #pragma once
 #include "chipcae/mesh/background/hex_mesh_arrays.hpp"
-#include "chipcae/mesh/cut/cut_layer.hpp"
 #include "chipcae/schema/stack.hpp"
 
 #include <vector>
 
 namespace chipcae::mesh {
-// API compatibility alias: reuse the cut pipeline representation.
-using BodyLevelSet = cut::BodyLevelSet;
+// Contract placeholder; representation is reserved for the implementation step.
+struct BodyLevelSet {};
 
 struct RegionLSOptions {
     Real inside_tol_rel = 1e-12;
