@@ -27,7 +27,8 @@ def check_case(case_file, case):
         ref = reference.get("ref")
         require(isinstance(ref, str) and ref, f"{case_file}: invalid {kind} ref")
         require(not Path(ref).is_absolute(), f"{case_file}: {kind} ref must be relative: {ref}")
-        inputs[kind] = read_object(case_file.parent / ref)
+        inputs[f"{kind}_path"] = (case_file.parent / ref).resolve()
+        inputs[kind] = read_object(inputs[f"{kind}_path"])
     materials = inputs["materials"].get("materials")
     label = f"{case_file}: {case['materials']['ref']}"
     require(isinstance(materials, list) and materials, f"{label}: empty materials")
@@ -46,6 +47,10 @@ def check_case(case_file, case):
             identifier = entity.get("material")
             if isinstance(identifier, str):
                 referenced.add(identifier)
+    material_ids = {material["id"] for material in materials
+                    if isinstance(material.get("id"), str)}
+    require(referenced <= material_ids,
+            f"{label}: missing referenced material ids: {sorted(referenced - material_ids)!r}")
     inputs["referenced_materials"] = referenced
     return inputs
 
@@ -82,7 +87,8 @@ def check(root):
             profile = read_object(profile_file)
             require(profile.get("schema") == "chipcae.run_profile/1.0",
                     f"{profile_file}: expected run-profile schema")
-            require(profile.get("backend") in ("cpu", "cuda"),
+            profile_schema = read_object(root / "schema/run-profile-1.0.schema.json")
+            require(profile.get("backend") in profile_schema["properties"]["backend"]["enum"],
                     f"{profile_file}: invalid backend")
             for key, minimum in (("ranks", 1), ("gpus", 0)):
                 require(type(profile.get(key)) is int and profile[key] >= minimum,
@@ -146,11 +152,15 @@ def check(root):
             "cited FCBGA stack must reference at least one multi-knot table; "
             f"referenced material ids: {sorted(referenced)!r}")
     thermal = case_inputs["schema/examples/thermal.case.json"]
-    if thermal["stack"] == case_inputs["schema/examples/fcbga_demo.case.json"]["stack"]:
-        require(any(identifier in thermal["referenced_materials"]
-                    for identifier, _ in multi_knot),
-                "shared thermal stack must reference a multi-knot FCBGA table; "
-                f"material ids: {sorted(thermal['referenced_materials'])!r}")
+    fcbga = case_inputs["schema/examples/fcbga_demo.case.json"]
+    for kind in ("stack", "materials"):
+        require(thermal[f"{kind}_path"] == fcbga[f"{kind}_path"],
+                f"thermal sample must reference the same FCBGA {kind}: "
+                f"{thermal[f'{kind}_path']} != {fcbga[f'{kind}_path']}")
+    require(any(identifier in thermal["referenced_materials"]
+                for identifier, _ in multi_knot),
+            "shared thermal stack must reference a multi-knot FCBGA table; "
+            f"material ids: {sorted(thermal['referenced_materials'])!r}")
 
     # Concept checks allow alternative wording and do not prescribe whole sentences.
     prose = re.sub(r"\s+", " ", text.lower())
