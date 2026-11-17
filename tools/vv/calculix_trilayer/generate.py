@@ -5,8 +5,10 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import platform
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -196,15 +198,22 @@ def parse_frd(path: Path):
     """Read ASCII FRD (1X,I2,I10,3E12.5) nodes and DISP; see check_frd_parser.py."""
     nodes = {}  # nid -> (x,y,z)
     disp = {}
-    text = path.read_text(errors="replace")
+    text = path.read_text(encoding="ascii")
     mode = None
     for line in text.splitlines():
         key = line.lstrip()
         if key.startswith("-1") and mode in {"coords", "disp"}:
+            if not re.fullmatch(r" -1[ 0-9]{10}(?:[ -][0-9]\.[0-9]{5}E[+-][0-9]{2}){3}", line):
+                raise ValueError(f"{path}: unsupported ASCII FRD record: {line!r}")
             nid = int(line[3:13])
+            target = nodes if mode == "coords" else disp
+            if nid <= 0 or nid in target:
+                raise ValueError(f"{path}: invalid or duplicate {mode} node {nid}")
             a = float(line[13:25])
             b = float(line[25:37])
             c = float(line[37:49])
+            if not all(math.isfinite(value) for value in (a, b, c)):
+                raise ValueError(f"{path}: nonfinite FRD values")
             if mode == "coords":
                 nodes[nid] = (a, b, c)
             else:
@@ -215,6 +224,8 @@ def parse_frd(path: Path):
             mode = "coords"
         elif key.startswith("-4") and "DISP" in line:
             mode = "disp"
+    if mode is not None or not nodes or not disp:
+        raise ValueError(f"{path}: incomplete coordinate/DISP blocks")
     return nodes, disp
 
 
@@ -285,6 +296,10 @@ def main():
     here = Path(__file__).resolve().parent
     work = here / "work"
     work.mkdir(exist_ok=True)
+    if (len(Z_PER_LAYER) != 3 or any(type(n) is not int or n < 2 for n in Z_PER_LAYER)
+            or any(MESHES["fine"][axis] != 2 * MESHES["coarse"][axis]
+                   for axis in ("nx", "ny")) or T1 - T0 != DT):
+        raise ValueError("inconsistent coarse/fine model configuration")
     results = [run_mesh(work, name) for name in ("coarse", "fine")]
     selected = next(r for r in results if r["name"] == "fine")
     w = selected["W_bfp_m"]
@@ -296,8 +311,11 @@ def main():
         "label": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解",
         "W_bfp_m": w,
         "element_type": "C3D20",
-        "calculix_version": ver,
-        "host": f"{platform.node()} {platform.system()} {platform.machine()}",
+        "provenance": {
+            "version": 1,
+            "calculix_version": ver,
+            "host": f"{platform.node()} {platform.system()} {platform.machine()}",
+        },
         "geometry": {
             "L_m": L,
             "thicknesses_m": THICK,
@@ -312,6 +330,8 @@ def main():
         "abs_delta_m": abs_delta,
         "rel_delta": rel,
     }
+    from tools.vv.calculix_trilayer.contract import validate_reference
+    validate_reference(payload)
     out = here / "REFERENCE.json"
     out.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
 

@@ -50,25 +50,19 @@ computed with `tools.vv.warpage_qoi.interp_grid`
 and `qoi_surface` on an 81×81 grid in millimetres, then converted back to metres.
 
 The checked-in [reference.schema.json](reference.schema.json) is the shared
-machine-readable source of truth for the artifact format. The
-[contract.py](contract.py) validator loads it and adds the cross-field selected-value
-check; `tools/vv/test_trilayer_calculix_ref.py` imports that shared validator and
-checks the model parameters and delta arithmetic. Generation does not validate
-the payload.
-The v1 contract is specific to this WP-2 coarse/fine refinement workflow, not a
-schema for arbitrary CalculiX studies. It requires exactly one coarse and one
-fine mesh, fine selection, and equality with the fine mesh value.
-The top-level `host` and `calculix_version` strings are optional provenance
-metadata and must be nonempty when present. Without a runtime version, the
-delta report uses `ccx=unknown`. The label must exactly include the brief's
-reference designation and both disclaimers. The fixed key set excludes `artifact_version`, `provenance`,
-and other extensions.
-Regeneration records the local host and runtime version, so those strings can
-differ between environments even when the model and results agree.
+machine-readable format for generation. The [contract.py](contract.py) validator
+adds the selected-value check before generation writes the artifact.
+The comparison test reads only `REFERENCE.json`, using explicit required-field,
+model, refinement, and arithmetic checks without importing the schema or generator.
+Required environment strings live in `provenance`, whose `version` is 1.
+This versioned metadata object keeps host-specific values outside the top-level
+result contract. Both host and runtime version must be nonempty; reports use
+the recorded runtime version.
 
 The ASCII FRD layout used by CalculiX 2.23 is `(1X,I2,I10,3E12.5)`:
 columns 2–3 contain the record marker, 4–13 the node ID, and 14–49
-three 12-character real fields. Adjacent negative fields need no separating
+three 12-character real fields. Unsupported numeric layouts, duplicate IDs,
+and incomplete coordinate/displacement blocks fail explicitly. Adjacent negative fields need no separating
 space, so whitespace splitting is unsuitable. This same layout applies to
 `2C` coordinates and `DISP` values. Run the parser regression checks with
 `python tools/vv/calculix_trilayer/check_frd_parser.py`; these manual-only checks
@@ -82,8 +76,8 @@ rerun `generate.py` to recreate them. Scipy is used indirectly
 by the shared `interp_grid` function for linear interpolation.
 
 Run `python3 -m unittest tools.vv.test_trilayer_calculix_ref` after generation.
-The validator requires `jsonschema`, which the lint workflow installs.
+Generation validation requires `jsonschema`; the comparison test uses only the standard library.
 Only passing validation prints the single delta report in the brief's fixed
 field order. The prototype is the 参考值（原型计算值） described above.
-External callers can capture stdout to `/workspace/tasks/logs/v-ccx-delta.md`;
-generation does not write it.
+The passing comparison test also overwrites `/workspace/tasks/logs/v-ccx-delta.md`
+with exactly that single report line.

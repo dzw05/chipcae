@@ -9,10 +9,28 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from tools.vv.calculix_trilayer.generate import build_mesh, parse_frd, top_node_count, w_bfp_from_frd  # noqa: E402
+from tools.vv.calculix_trilayer.generate import build_mesh, parse_frd, top_node_count, w_bfp_from_frd, write_inp  # noqa: E402
 
 
 class FrdParserTest(unittest.TestCase):
+    def test_checked_in_decks_match_generator(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for name, n in (("coarse", 8), ("fine", 16)):
+                path = Path(directory) / f"{name}.inp"
+                write_inp(path, name, n, n)
+                self.assertEqual(path.read_bytes(),
+                                 Path(__file__).with_name(f"{name}.inp").read_bytes())
+
+    def test_unsupported_and_incomplete_records_fail(self):
+        valid = " -1         1 0.00000E+00 1.00000E+00 1.00000E-01"
+        for record in (valid + " extra", valid.replace("E+00", "D+00"),
+                       valid[:40], valid + "\n" + valid):
+            with self.subTest(record=record), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "bad.frd"
+                path.write_text("  2C\n" + record + "\n -3\n", encoding="ascii")
+                with self.assertRaises(ValueError):
+                    parse_frd(path)
+
     def test_mesh_has_only_connected_nodes(self):
         for nx, expected in ((8, 225), (16, 833)):
             with self.subTest(nx=nx):

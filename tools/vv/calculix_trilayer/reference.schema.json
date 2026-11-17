@@ -15,7 +15,8 @@
     "selected_mesh",
     "prototype_W_bfp_m",
     "abs_delta_m",
-    "rel_delta"
+    "rel_delta",
+    "provenance"
   ],
   "properties": {
     "kind": {
@@ -32,14 +33,6 @@
     "element_type": {
       "type": "string",
       "const": "C3D20"
-    },
-    "host": {
-      "type": "string",
-      "minLength": 1
-    },
-    "calculix_version": {
-      "type": "string",
-      "minLength": 1
     },
     "geometry": {
       "type": "object",
@@ -178,6 +171,29 @@
     },
     "rel_delta": {
       "type": "number"
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "host",
+        "calculix_version"
+      ],
+      "properties": {
+        "version": {
+          "const": 1,
+          "type": "integer"
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1
+        },
+        "calculix_version": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
     }
   }
 }
