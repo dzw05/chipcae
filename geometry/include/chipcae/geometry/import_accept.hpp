@@ -16,6 +16,7 @@ struct AcceptList {
 std::filesystem::path default_accept_file(const std::filesystem::path& input);
 // Deduplicate by exact-byte, case-sensitive defect_id only, without trimming.
 // Retain the first entry, including its note.
+// Append warnings for duplicate IDs and unknown keys when warnings is provided.
 std::optional<AcceptList> read_accept_file(const std::filesystem::path& path,
                                            std::string* error,
                                            std::vector<std::string>* warnings = nullptr);

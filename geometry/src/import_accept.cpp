@@ -50,7 +50,7 @@ std::optional<AcceptList> read_accept_file(const std::filesystem::path& path,
         if (!root.contains("accept"))
             return reject("accept file field 'accept' is required");
         if (!root.at("accept").is_array())
-            return reject("accept must be an array");
+            return reject("accept file field 'accept' must be an array");
         const auto warn = [&](const std::string& message) {
             if (warnings)
                 warnings->push_back(message);

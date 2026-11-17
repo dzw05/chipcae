@@ -157,7 +157,7 @@ void accept_file_duplicate() {
     std::vector<std::string> warnings;
     const auto list = read_accept_file(
         f.write(
-            R"({"accept":[{"defect_id":"duplicate-example-42","note":"first"},{"defect_id":"duplicate-example-42","note":"first"}]})"),
+            R"({"accept":[{"defect_id":"duplicate-example-42","note":"first"},{"defect_id":"duplicate-example-42","note":"later"}]})"),
         &error,
         &warnings);
     require(list.has_value(), "duplicate: file must load");
@@ -201,8 +201,10 @@ void accept_file_boundaries() {
             "boundaries: case and whitespace distinct");
     require(accepted_ids(*list) == std::vector<std::string>{"ID", "id", " id "},
             "boundaries: exact bytes preserved");
-    for (const auto& entry : list->entries)
-        require(entry.note.empty(), "boundaries: omitted and empty notes");
+    require(list->entries[0].note.empty(), "boundaries: retain first ID entry with omitted note");
+    require(list->entries[1].note.empty(),
+            "boundaries: preserve id entry with explicit empty note");
+    require(list->entries[2].note.empty(), "boundaries: preserve spaced id with omitted note");
     require(warnings.size() == 1, "boundaries: exact id duplicate warns once");
     require(warnings[0].find("ID") != std::string::npos,
             "boundaries: duplicate warning contains exact id");
@@ -231,6 +233,7 @@ bool run_accept_tests() {
     run("accept_file_distinct_notes", accept_file_distinct_notes);
     run("accept_file_boundaries", accept_file_boundaries);
     run("accept_file_malformed_missing_accept", [] { malformed(R"({"foo":1})"); });
+    run("accept_file_malformed_missing_defect_id", [] { malformed(R"({"accept":[{}]})"); });
     const std::vector<std::string> invalid{"not JSON",
                                            R"({"accept":{}})",
                                            R"({"accept":[{"defect_id":""}]})",
@@ -238,7 +241,6 @@ bool run_accept_tests() {
                                            "",
                                            "[]",
                                            "{}",
-                                           R"({"accept":[{}]})",
                                            R"({"accept":[1]})",
                                            R"({"accept":[{"defect_id":"id","note":1}]})"};
     for (std::size_t i = 0; i < invalid.size(); ++i)
