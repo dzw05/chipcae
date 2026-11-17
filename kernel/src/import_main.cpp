@@ -82,9 +82,12 @@ int main(int argc, char** argv) {
             return chipcae::importer::CliExit::usage;
         }
     }
-    const bool reserved_parse_path =
-        (!input.empty() && !output.empty()) ||
-        (reserved_argument == "--assembly" && !options.assembly.empty() && !output.empty());
+    const bool normal_parse_path = !input.empty() && !output.empty();
+    const bool assembly_parse_path = !options.assembly.empty() && !output.empty();
+    // Without an input, only the planned assembly invocation has a reserved diagnostic.
+    if (!normal_parse_path && assembly_parse_path)
+        reserved_argument = "--assembly";
+    const bool reserved_parse_path = normal_parse_path || assembly_parse_path;
     if (!reserved_argument.empty() && !reserved_parse_path) {
         std::cerr << "unknown argument: " << reserved_argument << '\n';
         return chipcae::importer::CliExit::usage;

@@ -54,10 +54,11 @@ argument exactly like existing valued options, even when it resembles a flag.
 Incomplete input/output invocations with supplied reserved values retain the
 baseline unknown-argument response.
 The planned `--assembly assembly.json -o out.stack.json` invocation is the explicit
-exception and requires the reserved diagnostic in either option order. A later
-`--assembly` does not grant that exception to an earlier reserved option: without
-input, the earlier option still receives its baseline unknown-argument response. Help paths
-are checked separately by the `help` case against the baseline help bytes.
+exception and requires the reserved diagnostic in either option order.
+`--assembly` determines the intentional diagnostic when output is present and input
+is absent, including mixed reserved options in either order.
+Output-only reserved invocations without assembly retain their baseline unknown-argument
+response. Help paths are checked separately by the `help` case against the baseline help bytes.
 
 Historically, before implementation the four reserved diagnostic assertions
 failed because baseline stderr said `unknown argument`. The current test checks
