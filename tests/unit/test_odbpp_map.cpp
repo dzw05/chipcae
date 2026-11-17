@@ -444,13 +444,23 @@ void overrides() {
 }
 void override_provenance() {
     auto j = board();
-    for (double value : {70e-6, 35e-6 * (1 + 2e-9), 35e-6 * (1 + 0.5e-9), 35e-6}) {
+    const double odb = mapped(j).layers.front().thickness_m;
+    for (double value : {2 * odb,
+                         odb * (1 + 2e-9),
+                         odb * (1 - 2e-9),
+                         odb * (1 + 0.5e-9),
+                         odb * (1 - 0.5e-9),
+                         odb}) {
         ThicknessOverrides o{{"TOP", value}};
         std::vector<ThicknessRecord> records;
         const auto m = mapped(j, {&o, &records});
-        const bool conflict = std::abs(value - 35e-6) > 1e-9 * 35e-6;
-        near(m.layers.front().thickness_m, conflict ? value : 35e-6, 1e-12);
-        near(records.front().thickness_m, m.layers.front().thickness_m, 1e-12);
+        const bool conflict = std::abs(value - odb) > 1e-9 * odb;
+        // Exact selection matters here: an absolute tolerance of 1e-12 would
+        // also accept the wrong source value on either side of the threshold.
+        require(m.layers.front().thickness_m == (conflict ? value : odb),
+                "exact override selection around conflict threshold");
+        require(records.front().thickness_m == m.layers.front().thickness_m,
+                "record preserves selected thickness exactly");
         require(records.front().source == (conflict ? "override" : "odb"),
                 "override conflict threshold and provenance");
         require(records.front().odb_value_m.has_value() == conflict,
@@ -507,7 +517,19 @@ void skip() {
     require(actual == expected, "skip report");
 }
 void unsupported() {
-    for (const auto* name : {"unknown_symbol", "r1000", "s1000", "R1000", "S1000"}) {
+    for (const auto* name : {"unknown_symbol",
+                             "r1000",
+                             "s1000",
+                             "R1000",
+                             "S1000",
+                             "roundfoo",
+                             "roundfoo1000",
+                             "rectfoo1000x2000",
+                             "ovalfoo1000x2000",
+                             "ROUNDfoo1000",
+                             "round1000foo",
+                             "rect1000x2000foo",
+                             "oval1000x2000foo"}) {
         auto j = board();
         auto& f = j.features["TOP"];
         f.symbols = {{name}};
