@@ -107,8 +107,8 @@ controls reporting small sub-volumes without merging.
 
 Values stay in `mesh/background/thresholds/k1.json` and are read by the
 tests. `cell_budget` (50000) was moved there; the C++ default is
-unchanged. `vf_min` is still 1e-8 and was not renamed (awaiting a
-product decision). `partition_imbalance` is 0.25. `snap_tol` and
+unchanged. `vf_min` was renamed to `small_sub_vf`, value still 1e-8
+(Zhiwei, 2026-11-17). `partition_imbalance` is 0.25. `snap_tol` and
 `snap_phi` are 1e-14 m absolute.
 
 K1 no longer has a separate METIS option; partitioning uses
