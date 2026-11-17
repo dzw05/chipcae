@@ -145,8 +145,13 @@ int main(int argc, char** argv) try {
     // CteTable has no directional kind: for the supplied alpha(T), the oracles
     // differentiate alpha(T)*(T-Tref) or integrate alpha(T) from Tref to T.
     // Neither direction assumes the two fixtures are companion functions.
-    for (auto probe : {sec, tan}) {
-        std::swap(probe.alpha[1], probe.alpha[2]);
+    auto reordered_sec = sec;
+    auto reordered_tan = tan;
+    std::swap(reordered_sec.alpha[1], reordered_sec.alpha[2]);
+    std::swap(reordered_tan.alpha[1], reordered_tan.alpha[2]);
+    // First verify the unmodified published fixtures. Reordered tables add
+    // unequal-slope coverage without replacing the required canonical cases.
+    for (auto probe : {sec, tan, reordered_sec, reordered_tan}) {
         const auto& knots = probe.temperatures;
         const bool positive_fixture = std::all_of(
             probe.alpha.begin(), probe.alpha.end(), [](Real alpha) { return alpha > 0; });

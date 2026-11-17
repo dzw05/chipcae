@@ -2,7 +2,6 @@
 #include "cte_fixtures.hpp"
 
 #include <Kokkos_Core.hpp>
-#include <algorithm>
 #include <cstddef>
 #include <cstdio>
 #include <limits>
