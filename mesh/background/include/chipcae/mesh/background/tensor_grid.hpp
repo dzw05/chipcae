@@ -24,4 +24,5 @@ Expected<Real> column_partition_imbalance(const std::vector<std::vector<Local>>&
                                           int ranks);
 } // namespace detail
 Expected<HexMeshArrays> build_tensor_grid(const StackModel&, const GridOptions&);
+Expected<HexMeshArrays> build_tensor_grid(const StackModel&, const GridOptions&, const Polyset&);
 } // namespace chipcae::mesh
