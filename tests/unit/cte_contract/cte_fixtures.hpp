@@ -6,7 +6,8 @@
 
 namespace chipcae::material::test {
 // Mirror the existing tables and 325 K expectations in read-only
-// material/tests/core_math.cpp; keep these fixture numbers synchronized manually.
+// material/tests/core_math.cpp at brief baseline fe27d00 (CTE merge b037e62);
+// keep these fixture numbers synchronized manually.
 inline const CteTable sec{{250, 300, 350}, {1e-5, 2e-5, 3e-5}, 250};
 inline const CteTable tan{{250, 300, 350}, {1e-5, 3e-5, 5e-5}, 250};
 inline constexpr Real secant_to_tangent_temperature = 325.;
