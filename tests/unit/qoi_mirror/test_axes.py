@@ -30,6 +30,11 @@ class AxesTest(unittest.TestCase):
         self.assertEqual(len(np.unique(actual[:, :3], axis=0)), len(actual))
         self.assertLessEqual(np.max(np.abs(actual[:, :3] - expected[:, :3])), 1e-12)
         self.assertLessEqual(np.max(np.abs(actual[:, 3:] - expected[:, 3:])), 1e-12)
+        for column, component in enumerate(("ux", "uy", "uz"), start=3):
+            with self.subTest(component=component):
+                self.assertLessEqual(
+                    np.max(np.abs(actual[:, column] - expected[:, column])), 1e-12
+                )
         values = {tuple(row[:3]): row[3:] for row in actual}
         for (x, y, z), u in values.items():
             across_x = values[(-x, y, z)]

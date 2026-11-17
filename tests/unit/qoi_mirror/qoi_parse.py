@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Zhiwei Duan
-"""Analytic fixture constants and pure reference helper copied from test_warpage_qoi."""
+"""Analytic fixture constants and relative-error helper from test_warpage_qoi.
+
+The coordinate sorting helper below is local to the mirror acceptance tests.
+"""
 import numpy as np
 
 k = 1.2e-3
