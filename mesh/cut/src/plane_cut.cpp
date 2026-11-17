@@ -3,12 +3,104 @@
 #include "chipcae/mesh/background/activation.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
 #include <set>
+#include <stdexcept>
 #include <tuple>
 namespace chipcae::mesh::cut {
 namespace {
 using V = std::array<Real, 3>;
+struct SimplexPoint {
+    std::array<Real, 4> l;
+    Real w;
+};
+// Jacobi P_n^(alpha,0) on [-1,1], with its derivative.
+std::pair<Real, Real> jacobi(int n, int alpha, Real x) {
+    Real p = 1, dp = 0, q = 0, dq = 0;
+    for (int k = 1; k <= n; ++k) {
+        Real t, dt;
+        if (k == 1) {
+            t = (alpha + (alpha + 2) * x) / 2;
+            dt = Real(alpha + 2) / 2;
+        } else {
+            Real h = 2 * k + alpha;
+            Real a = (h - 1) * (h * (h - 2) * x + alpha * alpha);
+            Real da = (h - 1) * h * (h - 2);
+            Real b = 2 * (k + alpha - 1) * (k - 1) * h;
+            Real c = 2 * k * (k + alpha) * (h - 2);
+            t = (a * p - b * q) / c;
+            dt = (da * p + a * dp - b * dq) / c;
+        }
+        q = p;
+        dq = dp;
+        p = t;
+        dp = dt;
+    }
+    return {p, dp};
+}
+// Shifted Gauss-Jacobi: integrates (1-u)^alpha on [0,1]. alpha=0 is Legendre.
+std::vector<std::pair<Real, Real>> gauss01(int n, int alpha = 0) {
+    std::vector<Real> bounds{-1};
+    if (n > 1)
+        for (auto [u, w] : gauss01(n - 1, alpha))
+            bounds.push_back(2 * u - 1);
+    bounds.push_back(1);
+    std::vector<std::pair<Real, Real>> out;
+    for (int i = 0; i < n; ++i) {
+        Real lo = bounds[i], hi = bounds[i + 1], x = (lo + hi) / 2;
+        Real plo = jacobi(n, alpha, lo).first;
+        bool converged = false;
+        for (int iteration = 0; iteration < 100; ++iteration) {
+            auto [p, dp] = jacobi(n, alpha, x);
+            Real dx = p / dp;
+            if (std::abs(dx) <=
+                4 * std::numeric_limits<Real>::epsilon() * std::max(Real(1), std::abs(x))) {
+                x -= dx;
+                converged = true;
+                break;
+            }
+            if ((p > 0) == (plo > 0)) {
+                lo = x;
+                plo = p;
+            } else
+                hi = x;
+            Real next = x - dx;
+            x = next > lo && next < hi ? next : (lo + hi) / 2;
+        }
+        if (!converged)
+            throw std::runtime_error("Gauss-Jacobi root did not converge in 100 iterations");
+        auto [p, dp] = jacobi(n, alpha, x);
+        // The Jacobi normalization constant cancels the shift's 2^(alpha+1).
+        out.push_back({(x + 1) / 2, 1 / ((1 - x * x) * dp * dp)});
+    }
+    return out;
+}
+std::vector<SimplexPoint> tetra_rule(int degree) {
+    int n = degree / 2 + 1;
+    auto gu = gauss01(n, 2), gv = gauss01(n, 1), gz = gauss01(n);
+    std::vector<SimplexPoint> out;
+    for (auto [u, wu] : gu)
+        for (auto [v, wv] : gv)
+            for (auto [z, wz] : gz)
+                out.push_back({{(1 - u) * (1 - v) * (1 - z), u, (1 - u) * v, (1 - u) * (1 - v) * z},
+                               wu * wv * wz});
+    return out;
+}
+struct TriPoint {
+    std::array<Real, 3> l;
+    Real w;
+};
+std::vector<TriPoint> triangle_rule(int degree) {
+    int n = degree / 2 + 1;
+    auto gu = gauss01(n, 1), gv = gauss01(n);
+    std::vector<TriPoint> out;
+    for (auto [u, wu] : gu)
+        for (auto [v, wv] : gv)
+            out.push_back({{(1 - u) * (1 - v), u, (1 - u) * v}, wu * wv});
+    return out;
+}
 using Polygon = std::vector<V>;
 V add(V a, V b) {
     for (int i = 0; i < 3; ++i)
@@ -126,9 +218,13 @@ void register_embedded(HexMeshArrays& m, const CutLayerArrays& c) {
 }
 Expected<CutLayerArrays>
 generate(const HexMeshArrays& m, const CutGeometry& g, const CutOptions& o) {
-    if (!(o.snap_phi >= 0) || !(o.small_sub_vf >= 0 && o.small_sub_vf < 1))
+    if (!(o.snap_phi >= 0) || !(o.small_sub_vf >= 0 && o.small_sub_vf < 1) ||
+        (o.quad_degree != 2 && o.quad_degree != 4 && o.quad_degree != 6 && o.quad_degree != 8))
         return Error{"cut/options", "invalid thresholds"};
     CutLayerArrays c;
+    const auto v_rule =
+        o.quad_degree == 2 ? std::vector<SimplexPoint>{} : tetra_rule(o.quad_degree);
+    const auto b_rule = o.quad_degree == 2 ? std::vector<TriPoint>{} : triangle_rule(o.quad_degree);
     std::vector<Plane> planes = g.planes;
     for (auto& p : planes) {
         Real length = norm(p.n);
@@ -205,31 +301,56 @@ generate(const HexMeshArrays& m, const CutGeometry& g, const CutOptions& o) {
                 Real area = norm(cross(sub(b, a), sub(d, a))) / 2;
                 Real vol = std::abs(dot(sub(a, center), cross(sub(b, center), sub(d, center)))) / 6;
                 volume += vol;
-                constexpr Real high = .58541019662496845446, low = .13819660112501051518;
                 std::array<V, 4> tet{center, a, b, d};
-                for (int q = 0; q < 4; ++q) {
-                    V point{};
-                    for (int k = 0; k < 4; ++k)
-                        point = add(point, mul(tet[k], q == k ? high : low));
-                    point = xi(point);
-                    for (int k = 0; k < 3; ++k)
-                        c.vq_xi[k].push_back(point[k]);
-                    c.vq_w.push_back(vol / (4 * jac));
-                }
-                if (f.embedded) {
-                    for (int q = 0; q < 3; ++q) {
-                        V point = xi(add(mul(add(a, add(b, d)), Real(1) / 6),
-                                         mul(q == 0   ? a
-                                             : q == 1 ? b
-                                                      : d,
-                                             Real(1) / 2)));
-                        for (int k = 0; k < 3; ++k) {
-                            c.bq_xi[k].push_back(point[k]);
-                            c.bq_n[k].push_back(f.normal[k]);
-                        }
-                        c.bq_w.push_back(area / 3);
-                        c.bq_bdr_attr.push_back(body);
+                if (o.quad_degree == 2) {
+                    constexpr Real high = .58541019662496845446, low = .13819660112501051518;
+                    for (int q = 0; q < 4; ++q) {
+                        V point{};
+                        for (int k = 0; k < 4; ++k)
+                            point = add(point, mul(tet[k], q == k ? high : low));
+                        point = xi(point);
+                        for (int k = 0; k < 3; ++k)
+                            c.vq_xi[k].push_back(point[k]);
+                        c.vq_w.push_back(vol / (4 * jac));
                     }
+                } else
+                    for (const auto& q : v_rule) {
+                        V point{};
+                        for (int k = 0; k < 4; ++k)
+                            point = add(point, mul(tet[k], q.l[k]));
+                        point = xi(point);
+                        for (int k = 0; k < 3; ++k)
+                            c.vq_xi[k].push_back(point[k]);
+                        c.vq_w.push_back(vol * q.w * 6 / jac);
+                    }
+                if (f.embedded) {
+                    if (o.quad_degree == 2)
+                        for (int q = 0; q < 3; ++q) {
+                            V point = xi(add(mul(add(a, add(b, d)), Real(1) / 6),
+                                             mul(q == 0   ? a
+                                                 : q == 1 ? b
+                                                          : d,
+                                                 Real(1) / 2)));
+                            for (int k = 0; k < 3; ++k) {
+                                c.bq_xi[k].push_back(point[k]);
+                                c.bq_n[k].push_back(f.normal[k]);
+                            }
+                            c.bq_w.push_back(area / 3);
+                            c.bq_bdr_attr.push_back(body);
+                        }
+                    else
+                        for (const auto& q : b_rule) {
+                            V point{};
+                            for (int k = 0; k < 3; ++k)
+                                point = add(point, mul(std::array<V, 3>{a, b, d}[k], q.l[k]));
+                            point = xi(point);
+                            for (int k = 0; k < 3; ++k) {
+                                c.bq_xi[k].push_back(point[k]);
+                                c.bq_n[k].push_back(f.normal[k]);
+                            }
+                            c.bq_w.push_back(area * q.w * 2);
+                            c.bq_bdr_attr.push_back(body);
+                        }
                 } else
                     exterior = add(exterior, mul(f.normal, area));
             }
