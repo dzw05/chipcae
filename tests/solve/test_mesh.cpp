@@ -1,8 +1,17 @@
 #include "chipcae/solve/case_loader.hpp"
 
+#ifdef CHIPCAE_ENABLE_KOKKOS
+#include <Kokkos_Core.hpp>
+#endif
+
 #include <iostream>
 #include <set>
 int main() {
+#ifdef CHIPCAE_ENABLE_KOKKOS
+    // Initialize every enabled execution space before building meshes, and keep
+    // it alive until all mesh-owned Views have been destroyed.
+    Kokkos::ScopeGuard guard;
+#endif
     chipcae::solve::Load power;
     power.target = "layer:empty";
     power.total_power = true;

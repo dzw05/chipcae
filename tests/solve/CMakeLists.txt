@@ -11,6 +11,8 @@ if(TARGET chipcae_solve_inputs)
     target_link_libraries(chipcae_test_solve_mesh PRIVATE chipcae_solve_inputs)
     chipcae_set_warnings(chipcae_test_solve_mesh)
     add_test(NAME solve_mesh COMMAND chipcae_test_solve_mesh)
+    set_tests_properties(solve_mesh PROPERTIES
+        ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
 endif()
 if(_solve_backend)
     add_test(NAME solve_pipeline COMMAND ${Python3_EXECUTABLE}
