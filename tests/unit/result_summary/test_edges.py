@@ -1,27 +1,46 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Zhiwei Duan
 """Additional coverage for structural validation and documented edge policies."""
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
 from fixtures import fixture, h5py, np
-from tools.vv.result_summary import ResultSummaryError, summarize
+from tools.vv.result_summary import ResultSummaryError, main, summarize
 
 
 class Edges(unittest.TestCase):
-    def test_partial_temperature_and_byte_order(self):
+    def test_partial_temperature(self):
+        for missing in ('hex', 'cut'):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as tmp:
+                run = Path(tmp)
+                step, _ = fixture(run, cut=True)
+                with h5py.File(step, 'r+') as f:
+                    del f[f'VTKHDF/{missing}/PointData/T']
+                with self.assertRaises(ResultSummaryError) as caught:
+                    summarize(run)
+                self.assertEqual(caught.exception.code, 14)
+                self.assertEqual(caught.exception.name, 'INPUT_INVALID')
+                err = io.StringIO()
+                out = io.StringIO()
+                with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+                    self.assertEqual(main([str(run)]), 14)
+                self.assertEqual(out.getvalue(), '')
+                self.assertIn('INPUT_INVALID: partial T coverage', err.getvalue())
+
+    def test_byte_order(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)
             step, _ = fixture(run, cut=True)
             with h5py.File(step, 'r+') as f:
-                del f['VTKHDF/cut/PointData/T']
                 block = f['VTKHDF/hex']
                 u = block['PointData/U'][...].astype('>f8')
                 del block['PointData/U']
                 block['PointData/U'] = u
             result = summarize(run)
-            self.assertEqual(result['temperature']['min'], 300.)
-            self.assertEqual(result['temperature']['top_mean'], 305.)
+            self.assertEqual(result['temperature']['min'], 100.)
+            self.assertAlmostEqual(result['temperature']['top_mean'], 374.4)
             self.assertEqual(result['warpage']['n_top_points'], 10)
 
     def test_empty_geometry(self):

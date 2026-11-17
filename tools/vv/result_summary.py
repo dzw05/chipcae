@@ -3,8 +3,8 @@
 # Copyright (c) 2026 Zhiwei Duan
 """Validate and summarize the first step of a chipcae results directory.
 
-Duplicate coordinates use the first stored displacement/temperature. Partial
-T coverage is allowed: statistics include available temperatures only. Numeric
+Duplicate coordinates use the first stored displacement/temperature. Temperature
+fields must cover all nonempty blocks or be absent from all of them. Numeric
 field types accept either byte order, retaining the required kind and width.
 """
 import argparse
@@ -168,10 +168,10 @@ def _summarize(run_dir, top_rel_tol):
     available = [d[2] for d in data if d[2] is not None and len(d[2])]
     if available:
         all_t = np.concatenate(available)
-        # NaN marks missing coverage and is never included in statistics.
-        t = np.concatenate([d[2] if d[2] is not None else np.full(len(d[0]), np.nan) for d in data])
+        _require(all(d[2] is not None for d in data if len(d[0])),
+                 "partial T coverage: temperature required for every nonempty block")
+        t = np.concatenate(available)
         tt = t[top]
-        tt = tt[np.isfinite(tt)]
         temperature = dict(min=float(all_t.min()), max=float(all_t.max()),
                            top_min=float(tt.min()) if len(tt) else None,
                            top_max=float(tt.max()) if len(tt) else None,
