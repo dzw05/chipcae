@@ -1,3 +1,4 @@
+#include "EventTailer.hpp"
 #include "LocalJobService.hpp"
 #include "ProfileMapper.hpp"
 
@@ -35,6 +36,36 @@ jobs::Job wait(LocalJobService& service, const jobs::Job& job) {
 } // namespace
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
+    // The test executable also acts as a solver, using the production event writer.
+    if (app.arguments().contains("--out")) {
+        auto args = app.arguments();
+        auto out = args.at(args.indexOf("--out") + 1);
+        auto profile =
+            QJsonDocument::fromJson(readJobFile(args.at(args.indexOf("--profile") + 1))).object();
+        auto mode = profile["x-fixture"].toString();
+        auto file = out + "/" + profile["x-events-file"].toString("events.bin");
+        if (mode != "missing") {
+            {
+                chipcae::io::EventLogWriter writer(file.toStdString());
+                writer.append({1, 0, chipcae::io::KernelHello{}});
+                if (mode != "no-exit")
+                    writer.append({2,
+                                   0,
+                                   chipcae::io::KernelExit{
+                                       mode == "failed-exit" ? 7 : 0,
+                                       2,
+                                       profile["x-reason"].toString("end_reached").toStdString()}});
+            }
+            if (mode == "torn" || mode == "invalid") {
+                auto bytes = readJobFile(file);
+                bytes += mode == "torn" ? QByteArray("CAE") : bytes;
+                if (mode == "invalid")
+                    bytes[bytes.size() - 1] ^= 1;
+                writeJobFile(file, bytes);
+            }
+        }
+        return mode == "abnormal" ? 9 : 0;
+    }
     try {
         QTemporaryDir temp;
         check(temp.isValid(), "temp directory");
@@ -203,7 +234,39 @@ int main(int argc, char** argv) {
                           .category() == jobs::FAILURE_CATEGORY_MPI,
                   "MPI failure category");
         }
-        std::cout << "local launcher mock checks passed\n";
+        profile["launcher"] = "direct";
+        config.mock = false;
+        config.solver = QCoreApplication::applicationFilePath();
+        for (const auto& mode :
+             {"success", "missing", "torn", "invalid", "failed-exit", "no-exit", "abnormal"}) {
+            config.runRoot = temp.filePath(QString("real-") + mode);
+            profile["x-fixture"] = mode;
+            saveProfile();
+            LocalJobService service(config);
+            request.set_client_request_id(uuid());
+            auto done = wait(service, service.Submit(request, casePath, profilePath));
+            if (QString(mode) == "success") {
+                check(done.state() == jobs::JOB_STATE_COMPLETED &&
+                          done.completion() == jobs::COMPLETION_KIND_END_REACHED,
+                      "real KernelExit must complete job");
+                EventTailer tailer(QString::fromStdString(done.result_dir()) + "/events.bin",
+                                   EventFormat::LegacyCaelog1);
+                auto decoded = tailer.poll();
+                check(decoded.diagnostic.isEmpty() && decoded.events.size() == 2 &&
+                          std::get<chipcae::io::KernelExit>(decoded.events.back().payload)
+                                  .exit_code == 0,
+                      "launcher and monitor share successful KernelExit bytes");
+            } else {
+                check(done.state() == jobs::JOB_STATE_FAILED &&
+                          done.completion() == jobs::COMPLETION_KIND_UNSPECIFIED,
+                      "invalid/missing KernelExit must fail");
+                check(done.failure().category() == (QString(mode) == "abnormal"
+                                                        ? jobs::FAILURE_CATEGORY_INTERNAL
+                                                        : jobs::FAILURE_CATEGORY_JOB_MANAGER),
+                      "event failure differs from abnormal process exit");
+            }
+        }
+        std::cout << "local launcher mock and real checks passed\n";
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;
