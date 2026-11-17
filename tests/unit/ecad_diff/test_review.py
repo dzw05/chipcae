@@ -13,8 +13,9 @@ from test_identical import board, save, diff_stacks, entry, number, polyset, wri
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        # A no-outline sidecar still requires a valid reference digest.
-        data = b'CCPOLY01' + struct.pack('<dI', 1e-9, 0)
+        # A copper sidecar still requires a valid reference digest.
+        data = (b'CCPOLY01' + struct.pack('<dII', 1e-9, 1, 4) + b'F.Cu'
+                + struct.pack('<Iq', 0, 0))
         (root / 'unused.polyset').write_bytes(data)
         for digest, code in ((None, 14), ('invalid', 14), ('0' * 64, 10)):
             unused = board()
@@ -22,13 +23,15 @@ def main():
             if digest is not None:
                 ref['sha256'] = digest
             unused['external_refs'] = [ref]
+            unused['layers'][0]['copper'] = {'metal': 'mat.cu',
+                'polygons': {'file': 'unused.polyset', 'layer': 'F.Cu'}}
             path = save(root / 'unused.json', unused)
             try:
                 diff_stacks(path, path)
             except EcadDiffError as exc:
                 assert exc.code == code, (digest, exc)
             else:
-                raise AssertionError('accepted invalid unused reference digest')
+                raise AssertionError('accepted invalid copper reference digest')
         # The propagated fraction area-error coefficient exceeds the polygon perimeter.
         fraction, polygon = board(), board()
         fraction['outline']['box'] = [0, 0, 0.1, 0.0005]

@@ -25,7 +25,8 @@ def main():
             assert entry(r, 'layers')['grade'] == 'hard'
             assert entry(r, 'layers')['tol_derivation'] == (
                 f'layer count differs: {len(a["layers"]) if left == pa else len(b["layers"])} '
-                f'versus {len(b["layers"]) if left == pa else len(a["layers"])}')
+                f'versus {len(b["layers"]) if left == pa else len(a["layers"])}; '
+                'copper/dielectric sequence differs')
             assert entry(r, 'layers')['delta'] == 1
             e = entry(r, 'thickness', key)
             assert e['grade'] == 'hard' and e[missing] is None
@@ -41,7 +42,7 @@ def main():
         for left, right in ((pc, pd), (pd, pc)):
             e = entry(diff_stacks(left, right), 'layers')
             assert e['grade'] == 'hard' and e['delta'] == 1
-            assert 'copper/dielectric sequence differs' not in e['tol_derivation']
+            assert 'copper/dielectric sequence differs' in e['tol_derivation']
         # A completed comparison exits zero even with hard differences.
         out = directory / 'cli'
         proc = subprocess.run([sys.executable, str(ROOT / 'tools/vv/ecad_diff.py'),

@@ -18,16 +18,15 @@ def main():
                 ('missing_polyset', 12, 'INPUT_REFERENCE_MISSING'),
                 ('symlink_file', 14, 'INPUT_INVALID'),
                 ('symlink_directory', 14, 'INPUT_INVALID'),
-                ('symlink_unused', 14, 'INPUT_INVALID'),
                 ('hash', 10, 'INPUT_HASH_MISMATCH'),
                 ('duplicate_hash', 10, 'INPUT_HASH_MISMATCH'),
                 ('duplicate_digest', 14, 'INPUT_INVALID'),
                 ('relative_nonfinite', 14, 'INPUT_INVALID'),
                 ('trailing', 14, 'INPUT_INVALID'),
                 *[(case, 14, 'INPUT_INVALID') for case in (
-                    'unused_magic', 'unused_truncated', 'unused_dbu',
-                    'unused_offsets', 'unused_negative', 'unused_terminal',
-                    'unused_zero_terminal', 'unused_trailing', 'unused_duplicate')],
+                    'used_magic', 'used_truncated', 'used_dbu',
+                    'used_offsets', 'used_negative', 'used_terminal',
+                    'used_zero_terminal', 'used_trailing', 'used_duplicate')],
                 ('delta', 14, 'INPUT_INVALID'),
                 ('derived_nonfinite', 14, 'INPUT_INVALID'),
                 ('copper_nonfinite', 14, 'INPUT_INVALID'),
@@ -94,32 +93,32 @@ def main():
                     reference = target.name
                 b['external_refs'][0]['path'] = reference
                 b['layers'][0]['copper']['polygons']['file'] = reference
-                if case == 'symlink_unused':
-                    b['layers'][0]['copper'] = {'metal': 'mat.cu', 'fraction': 1.0}
-            if case.startswith('unused_'):
+            if case.startswith('used_'):
                 header = b'CCPOLY01' + struct.pack('<dI', 1e-9, 0)
                 layer = (struct.pack('<I', 4) + b'F.Cu' + struct.pack('<Iqq', 1, 0, 3)
                          + struct.pack('<qqqqqq', 0, 0, 1, 0, 0, 1))
                 malformed = {
-                    'unused_magic': b'BADMAGIC' + header[8:],
-                    'unused_truncated': header[:-1],
-                    'unused_dbu': b'CCPOLY01' + struct.pack('<dI', 0, 0),
-                    'unused_offsets': (b'CCPOLY01' + struct.pack('<dI', 1e-9, 1)
+                    'used_magic': b'BADMAGIC' + header[8:],
+                    'used_truncated': header[:-1],
+                    'used_dbu': b'CCPOLY01' + struct.pack('<dI', 0, 0),
+                    'used_offsets': (b'CCPOLY01' + struct.pack('<dI', 1e-9, 1)
                                        + layer[:12] + struct.pack('<qq', 0, 2)
                                        + struct.pack('<qqqq', 0, 0, 1, 0)),
-                    'unused_negative': (b'CCPOLY01' + struct.pack('<dI', 1e-9, 1)
+                    'used_negative': (b'CCPOLY01' + struct.pack('<dI', 1e-9, 1)
                                         + layer[:12] + struct.pack('<qq', 0, -3)),
-                    'unused_terminal': (b'CCPOLY01' + struct.pack('<dI', 1e-9, 1)
+                    'used_terminal': (b'CCPOLY01' + struct.pack('<dI', 1e-9, 1)
                                         + layer[:12] + struct.pack('<qq', 0, 4)),
-                    'unused_zero_terminal': (b'CCPOLY01' + struct.pack('<dI', 1e-9, 1)
+                    'used_zero_terminal': (b'CCPOLY01' + struct.pack('<dI', 1e-9, 1)
                                              + layer[:8] + struct.pack('<Iq', 0, -1)),
-                    'unused_trailing': header + b'x',
-                    'unused_duplicate': (b'CCPOLY01' + struct.pack('<dI', 1e-9, 2)
+                    'used_trailing': header + b'x',
+                    'used_duplicate': (b'CCPOLY01' + struct.pack('<dI', 1e-9, 2)
                                          + layer + layer),
                 }[case]
                 (folder / 'unused.polyset').write_bytes(malformed)
                 b['external_refs'] = [{'path': 'unused.polyset',
                                        'sha256': hashlib.sha256(malformed).hexdigest()}]
+                b['layers'][0]['copper'] = {'metal': 'mat.cu',
+                    'polygons': {'file': 'unused.polyset', 'layer': 'F.Cu'}}
             if case == 'unit':
                 b['unit'] = 'mm'
             if case == 'root':
@@ -194,6 +193,27 @@ def main():
                 assert proc.returncode == 14 and 'output' in proc.stderr, proc.stderr
             else:
                 assert not out.exists()
+
+        for kind in ('missing', 'malformed', 'symlink', 'hash'):
+            folder = directory / ('unrelated_' + kind)
+            folder.mkdir()
+            b = board()
+            unrelated = folder / 'unused.polyset'
+            if kind == 'symlink':
+                unrelated.symlink_to(good)
+            elif kind != 'missing':
+                unrelated.write_bytes(b'not a polyset')
+            b['external_refs'] = [{'path': unrelated.name, 'sha256': '0' * 64}]
+            path = save(folder / 'stack.json', b)
+            result = diff_stacks(good, path)
+            assert result['summary']['hard'] == result['summary']['discuss'] == 0
+            out = folder / 'reports'
+            proc = subprocess.run(
+                [sys.executable, str(ROOT / 'tools/vv/ecad_diff.py'),
+                 '--odb', str(good), '--ipc', str(path), '-o', str(out)],
+                capture_output=True, text=True)
+            assert proc.returncode == 0, (kind, proc.stderr)
+            assert (out / 'diff.json').exists() and (out / 'diff.md').exists()
 
         for kind in ('file', 'directory', 'dangling'):
             target = directory / ('output_target_' + kind)

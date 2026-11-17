@@ -22,7 +22,7 @@ def main():
             b = board()
             b['external_refs'] = [{'path': sidecar.name,
                                    'sha256': hashlib.sha256(data).hexdigest()}]
-            # A second valid sidecar without an outline must also be validated.
+            # An unrelated sidecar does not affect outline discovery.
             unrelated = directory / 'unused.polyset'
             unrelated.write_bytes(b'CCPOLY01' + struct.pack('<dI', 1e-9, 0))
             b['external_refs'].append({'path': unrelated.name,
@@ -80,6 +80,8 @@ def main():
             sidecar.write_bytes(empty)
             b['external_refs'][0]['sha256'] = hashlib.sha256(empty).hexdigest()
             assert diff_stacks(rectangle, save(pb, b))['summary']['hard'] == 0
+            b['layers'][0]['copper'] = {'metal': 'mat.cu',
+                'polygons': {'file': sidecar.name, 'layer': 'outline'}}
             for case, code in (('hash', 10), ('truncated', 14), ('missing', 12),
                                ('path', 14)):
                 sidecar.write_bytes(data)
@@ -94,6 +96,7 @@ def main():
                     sidecar.unlink()
                 else:
                     b['external_refs'][0]['path'] = f'../{filename}'
+                    b['layers'][0]['copper']['polygons']['file'] = f'../{filename}'
                 try:
                     diff_stacks(pa, save(pb, b))
                 except EcadDiffError as exc:

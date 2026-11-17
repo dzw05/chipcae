@@ -135,7 +135,6 @@ def _load(path):
         if not isinstance(ref, dict):
             _invalid('external reference must be an object')
         _string(ref.get('path'))
-        _string(ref.get('sha256'))
     polysets = {}
 
     def load_polyset(file):
@@ -186,15 +185,26 @@ def _load(path):
         load_polyset(file)
         if polygons['layer'] not in polysets[file]:
             _invalid('copper polygon layer missing')
-    refs = stack.get('external_refs', [])
-    if not isinstance(refs, list):
-        _invalid('invalid external_refs')
-    for ref in refs:
-        file = _string(ref['path'])
-        load_polyset(file)
     if 'polygon' in outline:
         geometry = _geometry(outline['polygon'])
     else:
+        # Outline-only sidecars have no explicit file field in stack/0.2.
+        # Discover usable outline layers without requiring unrelated files.
+        for ref in refs:
+            file = ref['path']
+            if file in polysets:
+                continue
+            try:
+                stack_directory = Path(path).parent.resolve()
+                candidate_path = (stack_directory / file).resolve()
+                if not candidate_path.is_relative_to(stack_directory):
+                    continue
+                candidate = _read_polyset(_bytes(candidate_path))
+            except (EcadDiffError, UnicodeDecodeError, struct.error, OverflowError, ValueError,
+                    OSError, RuntimeError):
+                continue
+            if 'outline' in candidate:
+                load_polyset(file)
         candidates = [p['outline'] for p in polysets.values() if 'outline' in p]
         if len(candidates) > 1:
             _invalid('multiple polysets supply an outline')
@@ -276,8 +286,7 @@ def _diff(odb, ipc, delta):
     structure_reasons = []
     if len(a) != len(b):
         structure_reasons.append(f'layer count differs: {len(a)} versus {len(b)}')
-    common = min(len(sa), len(sb))
-    if sa[:common] != sb[:common]:
+    if sa != sb:
         structure_reasons.append('copper/dielectric sequence differs')
     layer_reason = '; '.join(structure_reasons) if structure_reasons else (
         'identical' if names_a == names_b else 'layer names differ')
