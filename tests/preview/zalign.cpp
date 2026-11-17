@@ -198,6 +198,8 @@ int main(int argc, char** argv) {
         auto material_id =
             h5_read<std::int32_t>(file, "VTKHDF/CellData/material_id", H5T_NATIVE_INT32);
         expect(layer_id.size() == nc && material_id.size() == nc, "cell field length");
+        // Dataset paths and 1-based IDs are the documented preview VTKHDF contract
+        // in preview/README.md (CellData layer_id/material_id, FieldData names).
         auto layer_names = h5_strings(file, "VTKHDF/FieldData/layer_names");
         auto material_names = h5_strings(file, "VTKHDF/FieldData/material_names");
         H5Fclose(file);
