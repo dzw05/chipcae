@@ -1,4 +1,5 @@
-#include "../../geometry/ecad/src/odbpp/archive.hpp"
+#include "../../geometry/ecad/src/odbpp/archive_internal.hpp"
+#include "../../geometry/ecad/src/odbpp/parser.hpp"
 
 #include <algorithm>
 #include <array>
@@ -330,7 +331,8 @@ int main(int argc, char** argv) {
     test("odbpp_review_all_entry_counts", [&] {
         ArchiveLimits limits;
         limits.entry_count = 2;
-        for (const auto* name : {"dirs-only.zip", "unsupported-count.zip"}) {
+        for (const auto* name :
+             {"dirs-only.zip", "unsupported-count.zip", "unsupported-count.tgz"}) {
             ArchiveReader reader(temp / name, limits);
             require(reader.open_error().find("entry count limit") != std::string::npos,
                     std::string(name) + " entry count bounded");
@@ -1451,6 +1453,34 @@ int main(int argc, char** argv) {
                         error == "IMPORT_REJECTED: gzip truncated trailer",
                     "missing trailer byte remains rejected: " + error);
         }
+    });
+    test("odbpp_zip_directory_names", [&] {
+        ArchiveReader valid(temp / "directories.zip");
+        require(valid.open_error().empty(), valid.open_error());
+        require(valid.entries().front().path == "steps/pcb" && valid.entries().front().is_dir,
+                "normalization preserves ZIP directory type");
+        std::string out, error;
+        require(valid.read_bytes("payload", out, error) && out == "x", error);
+        for (const auto* name : {"duplicate-dirs.zip", "file-dir-collision.zip"}) {
+            ArchiveReader duplicate(temp / name);
+            require(duplicate.open_error() == "IMPORT_REJECTED: duplicate archive entry steps",
+                    duplicate.open_error());
+        }
+    });
+    test("odbpp_directory_unsupported_count", [&] {
+        auto p = temp / "unsupported-count-dir";
+        fs::create_directories(p);
+        for (int i = 0; i < 3; ++i) {
+            std::error_code ec;
+            fs::create_symlink(p / "missing", p / ("link" + std::to_string(i)), ec);
+            if (ec)
+                return;
+        }
+        ArchiveLimits limits;
+        limits.entry_count = 2;
+        ArchiveReader reader(p, limits);
+        require(reader.open_error() == "IMPORT_REJECTED: entry count limit",
+                "unsupported directory nodes count like tar and ZIP members");
     });
     test("odbpp_zip_payload_accounting", [&] {
         ArchiveLimits limits;

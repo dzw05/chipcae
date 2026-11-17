@@ -1,7 +1,14 @@
-#include "archive.hpp"
+#include "parser.hpp"
 
 #include <algorithm>
 namespace chipcae::geometry::ecad::detail {
+std::string trim(std::string_view s) {
+    auto first = s.find_first_not_of(" \t\r\n");
+    if (first == std::string_view::npos)
+        return {};
+    return std::string(s.substr(first, s.find_last_not_of(" \t\r\n") - first + 1));
+}
+
 // Preserve matrix names in the model and prefer literal directory spelling.
 // Exporters may use uppercase matrix names with lowercase on-disk paths.
 std::string

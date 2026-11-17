@@ -287,6 +287,18 @@ def main(root, fixture):
             info.type = tarfile.DIRTYPE
             archive.addfile(info)
 
+    for names, output in [(['steps/', './steps/'], 'duplicate-dirs.zip'),
+                          (['steps/', 'steps'], 'file-dir-collision.zip')]:
+        with zipfile.ZipFile(root / output, 'w') as archive:
+            for name in names:
+                archive.writestr(name, b'')
+    with tarfile.open(root / 'unsupported-count.tgz', 'w:gz') as archive:
+        for i in range(3):
+            info = tarfile.TarInfo('link%d' % i)
+            info.type = tarfile.SYMTYPE
+            info.linkname = 'missing'
+            archive.addfile(info)
+
     with zipfile.ZipFile(root / 'duplicate.zip', 'w') as archive:
         archive.writestr('matrix/matrix', b'a')
         archive.writestr('./matrix/matrix', b'b')

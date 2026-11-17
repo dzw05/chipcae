@@ -1,4 +1,4 @@
-#include "archive.hpp"
+#include "archive_internal.hpp"
 
 #include <algorithm>
 #include <array>
@@ -12,12 +12,6 @@ std::string lower(std::string s) {
         if (c >= 'A' && c <= 'Z')
             c = static_cast<char>(c - 'A' + 'a');
     return s;
-}
-std::string trim(std::string_view s) {
-    auto first = s.find_first_not_of(" \t\r\n");
-    if (first == std::string_view::npos)
-        return {};
-    return std::string(s.substr(first, s.find_last_not_of(" \t\r\n") - first + 1));
 }
 bool canonical_path(std::string& path, std::string& error) {
     std::replace(path.begin(), path.end(), '\\', '/');
@@ -171,6 +165,10 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                 }
                 const bool zip64 = mz_zip_is_zip64(&s.zip) != 0;
                 std::ifstream local(input, std::ios::binary);
+                if (!local) {
+                    fail("cannot open zip local headers");
+                    return;
+                }
                 const auto archive_size = std::filesystem::file_size(input);
                 if (zip64)
                     s.unsupported.push_back(
@@ -205,6 +203,7 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                         fail("truncated zip local header");
                         return;
                     }
+                    local.clear();
                     local.seekg(static_cast<std::streamoff>(st.m_local_header_ofs));
                     std::array<unsigned char, 30> header{};
                     local.read(reinterpret_cast<char*>(header.data()), header.size());
