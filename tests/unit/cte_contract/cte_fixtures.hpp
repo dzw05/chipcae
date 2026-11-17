@@ -13,7 +13,9 @@ inline bool near(Real actual, Real expected) {
 }
 
 // Match the local sec/tan CteTable fixtures and 325 K checks in
-// material/tests/core_math.cpp (PR #9).
+// material/tests/core_math.cpp (PR #9). Those fixtures are local to main(), so
+// they cannot be included here. Keep these copies and the 325 K expectations
+// synchronized with that test; the brief limits edits to this suite directory.
 inline const CteTable sec{{250, 300, 350}, {1e-5, 2e-5, 3e-5}, 250};
 inline const CteTable tan{{250, 300, 350}, {1e-5, 3e-5, 5e-5}, 250};
 inline constexpr Real tangent_to_secant_temperature = 325.;
