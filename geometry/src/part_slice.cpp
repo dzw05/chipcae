@@ -16,7 +16,6 @@
 #include <Bnd_Box.hxx>
 #include <GCPnts_QuasiUniformDeflection.hxx>
 #include <GProp_GProps.hxx>
-#include <GProp_PrincipalProps.hxx>
 #include <ShapeBuild_ReShape.hxx>
 #include <TDocStd_Document.hxx>
 #include <TopExp_Explorer.hxx>
@@ -80,7 +79,26 @@ bool inside(Point p, const Ring& r) {
 }
 using Polylines = std::vector<std::vector<Point>>;
 Polylines section_edges(const TopoDS_Shape& shape, Real z, Real chord) {
-    BRepAlgoAPI_Section section(shape, gp_Pln(gp_Pnt(0, 0, z), gp_Dir(0, 0, 1)), false);
+    // OCCT's intersection tolerance can otherwise include a nearby horizontal
+    // cap or a wall ending at a neighbouring slab boundary.
+    BRep_Builder builder;
+    TopoDS_Compound crossing;
+    builder.MakeCompound(crossing);
+    for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
+        auto face = TopoDS::Face(it.Current());
+        BRepAdaptor_Surface surface(face);
+        if (surface.GetType() == GeomAbs_Plane &&
+            std::abs(surface.Plane().Axis().Direction().Z()) >= 1 - 1e-9 &&
+            surface.Plane().Location().Z() != z)
+            continue;
+        Bnd_Box bounds;
+        BRepBndLib::AddOptimal(face, bounds, false, false);
+        Real x0, y0, z0, x1, y1, z1;
+        bounds.Get(x0, y0, z0, x1, y1, z1);
+        if (z >= z0 && z <= z1)
+            builder.Add(crossing, face);
+    }
+    BRepAlgoAPI_Section section(crossing, gp_Pln(gp_Pnt(0, 0, z), gp_Dir(0, 0, 1)), false);
     section.Build();
     if (!section.IsDone())
         throw std::runtime_error("section failed");
@@ -172,8 +190,7 @@ Real point_segment(Point p, Point a, Point b) {
     return distance(p, {a[0] + t * dx, a[1] + t * dy});
 }
 // Directed distance from sampled contour vertices to the other contour's
-// segments. Keeping faces separate prevents a nearby unrelated side wall from
-// hiding a deviation. Reverse the comparison for symmetric Hausdorff distance.
+// segments. Reverse the comparison for symmetric Hausdorff distance.
 Real deviation(const Polylines& a, const Polylines& b) {
     Real maximum = 0;
     for (const auto& r : a)
@@ -251,34 +268,28 @@ slice_prismatic(const StepImportResult& input, std::string_view body, const Slic
         Real eps = tol.value().eps_weld;
         std::vector<Real> planes{z0, z1};
         bool horizontal = false;
+        Real largest_area = 0, largest_cosine = 0;
         for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
             auto face = TopoDS::Face(it.Current());
             BRepAdaptor_Surface s(face);
             if (s.GetType() != GeomAbs_Plane)
                 continue;
             Real cosine = std::abs(s.Plane().Axis().Direction().Z());
+            GProp_GProps properties;
+            BRepGProp::SurfaceProperties(face, properties);
+            if (properties.Mass() > largest_area) {
+                largest_area = properties.Mass();
+                largest_cosine = cosine;
+            }
             if (cosine >= 1 - 1e-9) {
                 horizontal = true;
                 planes.push_back(s.Plane().Location().Z());
             }
         }
-        if (!horizontal) {
-            GProp_GProps mass;
-            BRepGProp::VolumeProperties(shape, mass);
-            if (std::abs(mass.Mass()) > 0) {
-                const auto axes = mass.PrincipalProperties();
-                // The extrusion direction is the principal inertia axis nearest
-                // z; this treats thin plates and tall columns consistently.
-                Real axis_cos = 0;
-                for (const auto& axis : {axes.FirstAxisOfInertia(),
-                                         axes.SecondAxisOfInertia(),
-                                         axes.ThirdAxisOfInertia()})
-                    if (axis.Magnitude() > 0)
-                        axis_cos = std::max(axis_cos, std::abs(axis.Z()) / axis.Magnitude());
-                if (std::acos(std::clamp(axis_cos, Real(0), Real(1))) > options.tau_a / height)
-                    return reject(DefectReason::PART_TILTED, "principal axis tilted from z");
-            }
-        }
+        if (!horizontal && largest_area > 0 &&
+            std::acos(std::clamp(largest_cosine, Real(0), Real(1))) >
+                std::atan(options.tau_a / height))
+            return reject(DefectReason::PART_TILTED, "largest planar face normal tilted from z");
         std::sort(planes.begin(), planes.end());
         planes.erase(
             std::unique(planes.begin(), planes.end(), [&](Real a, Real b) { return b - a <= eps; }),
@@ -292,33 +303,15 @@ slice_prismatic(const StepImportResult& input, std::string_view body, const Slic
             if (center.empty())
                 continue;
             Real slab_delta = 0;
-            for (TopExp_Explorer side(shape, TopAbs_FACE); side.More(); side.Next()) {
-                auto face = TopoDS::Face(side.Current());
-                BRepAdaptor_Surface surface(face);
-                if (surface.GetType() == GeomAbs_Plane &&
-                    std::abs(surface.Plane().Axis().Direction().Z()) >= 1 - 1e-9)
-                    continue;
-                Bnd_Box face_box;
-                BRepBndLib::AddOptimal(face, face_box, false, false);
-                Real fx0, fy0, fz0, fx1, fy1, fz1;
-                face_box.Get(fx0, fy0, fz0, fx1, fy1, fz1);
-                Real bottom = std::max(low, fz0), top = std::min(high, fz1);
-                if (top - bottom <= eps)
-                    continue;
-                auto reference = section_edges(face, (bottom + top) / 2, options.chord_tol);
-                if (reference.empty())
-                    return reject(DefectReason::PART_NOT_PRISMATIC, "empty side section");
-                // Stay inside the interval: sectioning at a boundary also picks
-                // up horizontal trim edges under OCCT's intersection tolerance.
-                for (Real fraction : {0.001, 0.25, 0.75, 0.999}) {
-                    auto sample =
-                        section_edges(face, bottom + (top - bottom) * fraction, options.chord_tol);
-                    if (sample.empty())
-                        return reject(DefectReason::PART_NOT_PRISMATIC,
-                                      "empty sampled side section");
-                    slab_delta = std::max(
-                        {slab_delta, deviation(sample, reference), deviation(reference, sample)});
-                }
+            auto reference = section_edges(shape, mid, options.chord_tol);
+            for (Real z : {low + options.tau_a, high - options.tau_a}) {
+                if (high - low < 3 * options.tau_a)
+                    break;
+                auto sample = section_edges(shape, z, options.chord_tol);
+                if (sample.empty())
+                    return reject(DefectReason::PART_NOT_PRISMATIC, "empty sampled section");
+                slab_delta = std::max(
+                    {slab_delta, deviation(sample, reference), deviation(reference, sample)});
             }
             delta = std::max(delta, slab_delta);
             Real perimeter = 0;
@@ -344,7 +337,7 @@ slice_prismatic(const StepImportResult& input, std::string_view body, const Slic
             d.size = delta;
             std::ostringstream report;
             report.precision(17);
-            report << "maximum sampled side Hausdorff distance; estimated volume error (m^3): "
+            report << "maximum section Hausdorff distance; estimated volume error (m^3): "
                    << volume_error;
             d.details = report.str();
             result.defects.push_back(d);

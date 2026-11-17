@@ -12,5 +12,13 @@ int main() {
             found |= d.tier == Tier::C && d.reason == DefectReason::PART_TILTED;
         require(found, "five degree tilt C PART_TILTED");
         same(r, slice(input));
+        tr.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)), 0.001);
+        const auto column = fixture(
+            BRepBuilderAPI_Transform(BRepPrimAPI_MakeBox(1, 1, 40).Shape(), tr, true).Shape());
+        auto column_options = options();
+        column_options.tau_a = column_options.tau_b = 0.0001;
+        const auto tilted = slice_prismatic(column, column.body_names[0], column_options);
+        require(tilted.defects.size() == 1 && tilted.defects[0].reason == DefectReason::PART_TILTED,
+                "largest planar face normal controls tilt even with inertia axis near z");
     });
 }
