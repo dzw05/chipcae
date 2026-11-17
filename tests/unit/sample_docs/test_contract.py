@@ -26,6 +26,7 @@ def check_case(case_file, case):
         require(isinstance(reference, dict), f"{case_file}: missing {kind} reference")
         ref = reference.get("ref")
         require(isinstance(ref, str) and ref, f"{case_file}: invalid {kind} ref")
+        require(not Path(ref).is_absolute(), f"{case_file}: {kind} ref must be relative: {ref}")
         inputs[kind] = read_object(case_file.parent / ref)
     materials = inputs["materials"].get("materials")
     label = f"{case_file}: {case['materials']['ref']}"
@@ -78,7 +79,14 @@ def check(root):
             if argv == o2:
                 continue
             profile_file = root / argv[4]
-            read_object(profile_file)
+            profile = read_object(profile_file)
+            require(profile.get("schema") == "chipcae.run_profile/1.0",
+                    f"{profile_file}: expected run-profile schema")
+            require(profile.get("backend") in ("cpu", "cuda"),
+                    f"{profile_file}: invalid backend")
+            for key, minimum in (("ranks", 1), ("gpus", 0)):
+                require(type(profile.get(key)) is int and profile[key] >= minimum,
+                        f"{profile_file}: {key} must be an integer >= {minimum}")
             case_file = root / argv[2]
             check_case(case_file, read_object(case_file))
 
@@ -88,12 +96,14 @@ def check(root):
         "schema/examples/thermal.case.json",
         "examples/s2_solve/case.json", "examples/s2_solve/profile.json",
     }
+    case_inputs = {}
     for case_path in ("schema/examples/fcbga_demo.case.json",
                       "schema/examples/thermal.case.json", "examples/s2_solve/case.json"):
         case_file = root / case_path
         require(case_file.is_file(), f"missing case: {case_path}")
         case = read_object(case_file)
         inputs = check_case(case_file, case)
+        case_inputs[case_path] = inputs
         if case_path == "schema/examples/thermal.case.json":
             require(inputs["referenced_materials"],
                     f"{case_file}: no referenced thermal materials found")
@@ -118,8 +128,9 @@ def check(root):
     require(isinstance(materials, list) and materials,
             "schema/examples/fcbga_demo.materials.json: materials must be a nonempty list")
     multi_knot = []
+    referenced = case_inputs["schema/examples/fcbga_demo.case.json"]["referenced_materials"]
     for material in materials:
-        if not isinstance(material, dict):
+        if not isinstance(material, dict) or material.get("id") not in referenced:
             continue
         for kind in ("elastic", "thermal_expansion"):
             model = material.get(kind)
@@ -131,7 +142,15 @@ def check(root):
             temperatures = table.get("temperatures")
             if isinstance(temperatures, list) and len(temperatures) >= 2:
                 multi_knot.append((material.get("id"), kind))
-    require(multi_knot, "cited FCBGA library must contain at least one multi-knot table")
+    require(multi_knot,
+            "cited FCBGA stack must reference at least one multi-knot table; "
+            f"referenced material ids: {sorted(referenced)!r}")
+    thermal = case_inputs["schema/examples/thermal.case.json"]
+    if thermal["stack"] == case_inputs["schema/examples/fcbga_demo.case.json"]["stack"]:
+        require(any(identifier in thermal["referenced_materials"]
+                    for identifier, _ in multi_knot),
+                "shared thermal stack must reference a multi-knot FCBGA table; "
+                f"material ids: {sorted(thermal['referenced_materials'])!r}")
 
     # Concept checks allow alternative wording and do not prescribe whole sentences.
     prose = re.sub(r"\s+", " ", text.lower())
@@ -142,7 +161,10 @@ def check(root):
         "single-knot temperature requirement": r"(?:single[- ](?:knot|temperature)|单温|单节点)",
         "E/nu/alpha tables": r"\be\b.{0,80}\bnu\b.{0,80}\balpha\b",
         "adjacent-size max_ratio meaning": r"(?:adjacent|相邻).{0,100}(?:size|尺寸).{0,120}(?:limit|exceed|限制|超过|max_ratio)",
-        "max_ratio": r"max_ratio",
+        "max_ratio after temperature correction": r"(?:after|corrected|修正).{0,120}max_ratio",
+        "no general max_ratio recommendation": r"(?:neither|not|no|不).{0,60}(?:recommend|推荐).{0,60}(?:general|通用).{0,60}max_ratio",
+        "mesh evidence for loosening limits": r"(?:loosen|放宽).{0,100}(?:evidence|依据)",
+        "uncut does not replace cut acceptance": r"uncut.{0,100}(?:does not|cannot|不).{0,80}(?:replace|替代).{0,80}cut[- ]cell",
         "positive conductivity": r"(?:positive.{0,50}conductivity|conductivity.{0,50}(?:positive|正))",
         "thermal sample lacks conductivity": r"(?:lack|missing|缺).{0,100}conductivity|conductivity.{0,100}(?:lack|missing|缺)",
         "steady conduction limitation": r"thermal(?:\.case\.json| sample).{0,240}(?:not ready|cannot solve|not solvable|不能求解|未就绪)",
