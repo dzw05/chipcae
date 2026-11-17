@@ -87,6 +87,9 @@ bool parse_matrix(const ArchiveReader& reader, OdbJob& job, std::string& error) 
         error = "IMPORT_REJECTED: unterminated matrix block";
         return false;
     }
+    std::stable_sort(job.layers.begin(),
+                     job.layers.end(),
+                     [](const OdbLayer& a, const OdbLayer& b) { return a.row < b.row; });
     return true;
 }
 

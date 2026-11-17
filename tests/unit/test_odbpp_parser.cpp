@@ -650,6 +650,30 @@ int main() {
                         j.layers[i].row == int(i + 1),
                     "four-layer order/type");
     });
+    test("odbpp_matrix_shuffled_rows", [&] {
+        const auto p = temp / "shuffled-rows";
+        minimal(p);
+        write(p / "matrix/matrix",
+              "UNITS=MM\nLAYER {\nROW=4\nNAME=bottom\nTYPE=SIGNAL\n}\n"
+              "LAYER {\nROW=2\nNAME=core\nTYPE=DIELECTRIC\n}\n"
+              "LAYER {\nROW=1\nNAME=top\nTYPE=SIGNAL\n}\n"
+              "LAYER {\nROW=3\nNAME=plane\nTYPE=POWER_GROUND\n}\n");
+        const auto j = job(p);
+        const std::array<std::string, 4> names{"top", "core", "plane", "bottom"};
+        const std::array<std::string, 4> types{"signal", "dielectric", "power_ground", "signal"};
+        require(j.layers.size() == names.size(), "four shuffled layers");
+        for (std::size_t i = 0; i < names.size(); ++i)
+            require(j.layers[i].name == names[i] && j.layers[i].type == types[i] &&
+                        j.layers[i].row == int(i + 1),
+                    "shuffled matrix row order/type");
+        write(p / "matrix/matrix",
+              "LAYER {\nROW=2\nNAME=last\n}\nLAYER {\nNAME=first\n}\n"
+              "LAYER {\nROW=0\nNAME=second\n}\n");
+        const auto tied = job(p);
+        require(tied.layers.size() == 3 && tied.layers[0].name == "first" &&
+                    tied.layers[1].name == "second" && tied.layers[2].name == "last",
+                "equal and default rows preserve block order");
+    });
     test("odbpp_review_tolerant_closure", [&] {
         const auto p = temp / "tolerant-closure";
         minimal(p);
