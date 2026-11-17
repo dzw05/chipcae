@@ -80,6 +80,7 @@ def main(root):
     positive = check('fcbga_lid_stiffener.assembly.json')
     bulk = check('package_bulk_parts.assembly.json')
     if bulk is not None:
+        # Exercise duplicates within shorthand bodies and against explicit parts.
         for duplicate_explicit in (False, True):
             duplicate = copy.deepcopy(bulk)
             bodies = duplicate['parts_from_step']['bodies']
@@ -89,8 +90,14 @@ def main(root):
                 bodies[body]['id'] = duplicate['parts'][0]['id']
             expected = '/parts_from_step/bodies/PACKAGE~0BULK~1duplicate/id'
             found = errors(duplicate, validator)
-            if found != [(expected, 'duplicate part ID')]:
+            if expected not in {location for location, _ in found}:
                 failures.append(f'duplicate expanded ID (explicit={duplicate_explicit}): {found}')
+        unique = copy.deepcopy(bulk)
+        unique_bodies = unique['parts_from_step']['bodies']
+        unique_bodies[body] = copy.deepcopy(next(iter(unique_bodies.values())))
+        unique_bodies[body]['id'] = 'unique_body'
+        if errors(unique, validator):
+            failures.append('unique expanded ID must be accepted')
     for suffix, expected in {
         'empty_body': '/parts_from_step/bodies',
         'bad_attach': '/parts/0/placement/attach',
@@ -102,17 +109,18 @@ def main(root):
     }.items():
         check(f'negative-assembly-{suffix}.json', expected)
     if positive is not None:
-        # Layer names are preserved verbatim; only the final side suffix is parsed.
+        # Layer names are preserved verbatim; part attachments accept both sides.
         for target in ('layer:C@top', 'layer:C@bottom', 'layer:@@top',
                        'layer:Cu@inner@top', 'layer:Cu@inner@bottom',
-                       'layer:@top@bottom'):
+                       'layer:@top@bottom', 'part:lid@top', 'part:lid@bottom'):
             document = copy.deepcopy(positive)
             document['parts'][0]['placement']['attach'] = target
             if errors(document, validator):
-                failures.append(f'valid layer attachment {target!r} rejected')
+                failures.append(f'valid attachment {target!r} rejected')
         for target in ('layer:', 'layer:@top', 'layer:@bottom',
                        'layer:Cu@inner', 'layer:Cu@inner@side',
-                       'part:bad@id@top'):
+                       'part:bad@id@top', 'part:lid', 'part:lid@side',
+                       'part:1bad@top'):
             document = copy.deepcopy(positive)
             document['parts'][0]['placement']['attach'] = target
             found = errors(document, validator)

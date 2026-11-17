@@ -24,7 +24,7 @@
 
 示例为 `examples/assembly/fcbga_lid_stiffener.assembly.json` 和
 `examples/assembly/package_bulk_parts.assembly.json`，仅引用文件名，不包含 STEP 数据。
-`tests/contract/validate_assembly.py` 校验正例及六个负例，并在结构校验后检查
+`tests/contract/validate_assembly.py` 校验正例及七个负例，并在结构校验后检查
 重复 part id（指向后出现的 id）及 bond/gap：无 bond 时 gap 可省略或非负；
 有 bond 时 gap 可省略，否则必须与 thickness 按解析后的数值完全相等，不使用容差。
 缺少 jsonschema 或 referencing 时测试退出 77（SKIP）。

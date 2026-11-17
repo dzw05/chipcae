@@ -34,6 +34,8 @@ struct RegionLSOptions {
 // Emit one entry per nonempty source group; phi represents its polygon union.
 // Order groups by layer index, then by the smallest source region index in each
 // group. The group body maps to HexMeshArrays::attr_table.bodies.at(b).
+// If any group body is absent from that table, throw std::out_of_range; no
+// partial result is returned.
 // Each entry carries its source layer index; (layer_index, body) identifies the group.
 std::vector<BodyLevelSet>
 region_level_sets(const StackModel&, const HexMeshArrays&, const RegionLSOptions&);
