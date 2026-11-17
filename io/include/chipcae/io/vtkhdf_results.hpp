@@ -28,9 +28,13 @@ class ResultsWriter {
 public:
     // Collective on MPI_COMM_WORLD when MPI is initialized. Partition count is
     // fixed for the lifetime of the writer. stackup is a chipcae.stack 0.2 JSON.
-    ResultsWriter(std::filesystem::path run, const std::filesystem::path& stackup);
+    ResultsWriter(std::filesystem::path run,
+                  const std::filesystem::path& stackup,
+                  std::vector<std::string> layer_names = {},
+                  std::vector<std::string> material_names = {});
     void write_step(int n, double time, const ResultsStep& local);
-    void add_summary(std::string name, double value, std::string unit, int step);
+    void add_summary(
+        std::string name, double value, std::string unit, int step, std::string method = {});
     void finalize();
 
 private:
@@ -44,8 +48,10 @@ private:
         double value;
         std::string unit;
         int step;
+        std::string method;
     };
     std::filesystem::path run_;
+    std::vector<std::string> layer_names_, material_names_;
     std::vector<Step> steps_;
     std::vector<Summary> summary_;
     int rank_ = 0, size_ = 1;
