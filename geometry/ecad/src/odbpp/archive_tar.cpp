@@ -143,7 +143,7 @@ bool index_tar(const std::filesystem::path& path,
                     return fail("entry count limit");
                 type = header[156];
                 std::string name = field(std::string_view(header).substr(0, 100));
-                if (header.compare(257, 5, "ustar") == 0) {
+                if (header.compare(257, 5, "ustar") == 0 && header[262] == '\0') {
                     auto prefix = field(std::string_view(header).substr(345, 155));
                     if (!prefix.empty())
                         name = prefix + "/" + name;

@@ -46,10 +46,35 @@ def lzw_literals(data):
 
 
 
+def valid_contours(data):
+    # The raw KiCad export contains repeated contour points. Keep the raw input
+    # for rejection tests; generated valid jobs retain the same nonzero edges.
+    result = []
+    point = None
+    for line in data.splitlines(keepends=True):
+        fields = line.split()
+        if fields and fields[0] == b'OB':
+            point = tuple(map(float, fields[1:3]))
+        elif fields and fields[0] in (b'OS', b'OC'):
+            end = tuple(map(float, fields[1:3]))
+            if fields[0] == b'OS' and point == end:
+                continue
+            point = end
+        elif fields and fields[0] == b'OE':
+            point = None
+        result.append(line)
+    return b''.join(result)
+
+
 def main(root, fixture):
     root.mkdir(parents=True, exist_ok=True)
     files = [(p.relative_to(fixture).as_posix(), p.read_bytes()) for p in sorted(fixture.rglob('*')) if p.is_file()]
-    shutil.copytree(fixture, root / 'job')
+    files = [(path, valid_contours(data) if path.endswith(('/profile', '/features')) else data)
+             for path, data in files]
+    for path, data in files:
+        destination = root / 'job' / path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
     tar = tar_bytes(files)
     (root / 'job.tar').write_bytes(tar)
     (root / 'job.tgz').write_bytes(gzip.compress(tar))
@@ -58,6 +83,29 @@ def main(root, fixture):
         with zipfile.ZipFile(root / name, 'w', compression=method) as archive:
             for path, data in files:
                 archive.writestr(path, data)
+    for optional in ['features', 'tools']:
+        with zipfile.ZipFile(root / ('optional-' + optional + '.zip'), 'w') as archive:
+            for path, data in files:
+                if path != 'steps/pcb/layers/f.cu/' + optional:
+                    archive.writestr(path, data)
+            archive.writestr('steps/pcb/layers/f.cu/' + optional, b'unsupported',
+                             compress_type=zipfile.ZIP_BZIP2)
+    with zipfile.ZipFile(root / 'required-profile.zip', 'w') as archive:
+        for path, data in files:
+            archive.writestr(path, data, compress_type=(zipfile.ZIP_BZIP2
+                             if path == 'steps/pcb/profile' else zipfile.ZIP_STORED))
+    with zipfile.ZipFile(root / 'dirs-only.zip', 'w') as archive:
+        for i in range(3):
+            archive.writestr('dir%d/' % i, b'')
+    with zipfile.ZipFile(root / 'unsupported-count.zip', 'w', compression=zipfile.ZIP_BZIP2) as archive:
+        for i in range(3):
+            archive.writestr('file%d' % i, b'x')
+    oldgnu = bytearray(tar_bytes([('matrix/matrix', b'oldgnu')], tarfile.GNU_FORMAT))
+    oldgnu[345:357] = b'00000000001\0'
+    oldgnu[357:369] = b'00000000002\0'
+    oldgnu[148:156] = b' ' * 8
+    oldgnu[148:156] = ('%06o\0 ' % sum(oldgnu[:512])).encode()
+    (root / 'oldgnu-times.tgz').write_bytes(gzip.compress(oldgnu))
     # Stored deflate blocks keep these line-limit fixtures below the ratio limit.
     for suffix, payload in [('boundary', b'#' * (1024 * 1024)),
                             ('overflow', b'#' * (1024 * 1024 + 1)),
@@ -148,7 +196,7 @@ def main(root, fixture):
         archive.addfile(info)
     (root / 'limits.tgz').write_bytes(gzip.compress(tar_bytes([('matrix/matrix', b'x' * 8192), ('steps/pcb/profile', b'y' * 8192)])))
     unknown = root / 'unknown'
-    shutil.copytree(fixture, unknown)
+    shutil.copytree(root / 'job', unknown)
     (unknown / 'steps/pcb/layers/f.cu/features').write_text('UNITS=MM\n$0 r100\nQ unknown\n')
     (root / 'empty').mkdir()
     (root / 'empty.tgz').write_bytes(gzip.compress(tar_bytes([])))

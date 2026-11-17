@@ -211,6 +211,100 @@ int main() {
             std::cerr << "FAIL " << name << ": " << e.what() << '\n';
         }
     };
+    test("odbpp_review_all_entry_counts", [&] {
+        ArchiveLimits limits;
+        limits.entry_count = 2;
+        for (const auto* name : {"dirs-only.zip", "unsupported-count.zip"}) {
+            ArchiveReader reader(temp / name, limits);
+            require(reader.open_error().find("entry count limit") != std::string::npos,
+                    std::string(name) + " entry count bounded");
+        }
+        auto p = temp / "only-directories";
+        fs::create_directories(p / "a/b/c");
+        ArchiveReader reader(p, limits);
+        require(reader.open_error().find("entry count limit") != std::string::npos,
+                "directory-only tree bounded");
+    });
+    test("odbpp_review_optional_zip_encoding", [&] {
+        for (const auto* name : {"optional-features.zip", "optional-tools.zip"}) {
+            OdbJob parsed;
+            const auto result = read_odbpp_job(temp / name, parsed);
+            require(bool(result), result.error);
+            require(parsed.features.at("IN1.CU").surfaces.size() == 1, "other layers retained");
+            require(reported(result.model.report.unsupported, "steps/pcb/layers/f.cu/"),
+                    "optional unsupported encoding reported");
+        }
+    });
+    test("odbpp_review_required_zip_encoding", [&] {
+        for (const auto* name : {"unsupported.zip", "encrypted.zip", "zip64.zip"})
+            rejected(temp / name, "unsupported");
+        rejected(temp / "zip64.zip", "zip64");
+        rejected(temp / "required-profile.zip", "unsupported");
+    });
+    test("odbpp_review_gzip_zero_padding", [&] {
+        auto data = bytes(temp / "boundary-32745.gz");
+        data.append(40000, '\0');
+        std::string out, error;
+        require(decode_gzip(data, out, error) && out == std::string(32745, 'x'), error);
+        data.back() = 'x';
+        require(!decode_gzip(data, out, error), "nonzero tail rejected");
+    });
+    test("odbpp_review_oldgnu_times", [&] {
+        ArchiveReader reader(temp / "oldgnu-times.tgz");
+        require(reader.open_error().empty(), reader.open_error());
+        std::string out, error;
+        require(reader.read_bytes("matrix/matrix", out, error) && out == "oldgnu", error);
+    });
+    test("odbpp_raw_duplicate_points_rejected", [&] { rejected(fixture, "segment"); });
+    test("odbpp_review_contour_geometry", [&] {
+        auto p = temp / "bad-geometry";
+        for (bool feature : {false, true}) {
+            for (const auto* records : {"OB 0 0 I\nOE\n",
+                                        "OB 0 0 I\nOS 1 0\nOS 0 0\nOE\n",
+                                        "OB 0 0 I\nOS 1 0\nOS 1 1\nOS 0 1\nOE\n",
+                                        "OB 0 0 I\nOS 0 0\nOE\n",
+                                        "OB 0 0 I\nOC 1 0 0 0 Y\nOE\n",
+                                        "OB 0 0 I\nOC 2 0 0 1 Y\nOE\n",
+                                        "OB nan 0 I\nOS 1 0\nOE\n",
+                                        "OB 0 0 I\nOC 1 0 inf 0 Y\nOE\n",
+                                        "OB 0 0 I\nOS 1e309 0\nOE\n"}) {
+                fs::remove_all(p);
+                minimal(p);
+                write(p / (feature ? "steps/pcb/layers/top/features" : "steps/pcb/profile"),
+                      "S P 0\n" + std::string(records) + "SE\n");
+                rejected(p, "");
+            }
+        }
+        for (const auto* record :
+             {"L 0 0 0 0 0 P", "L 0 0 inf 1 0 P", "A 0 0 2 0 0 1 0 P 0 Y", "P nan 0 0 P 0 0"}) {
+            fs::remove_all(p);
+            minimal(p);
+            write(p / "steps/pcb/layers/top/features", std::string(record) + "\n");
+            rejected(p, "");
+        }
+        for (bool feature : {false, true}) {
+            fs::remove_all(p);
+            minimal(p);
+            write(p / (feature ? "steps/pcb/layers/top/features" : "steps/pcb/profile"),
+                  "S P 0\nOB 1 0 I\nOC -1 0 0 0 Y\nOC 1 0 0 0 Y\nOE\nSE\n");
+            require(bool(parse_job(p)), "two semicircles form valid contour");
+        }
+    });
+    test("odbpp_review_tar_forward_cursor", [&] {
+        const auto path = temp / "forward.tgz";
+        fs::copy_file(temp / "many-small.tgz", path);
+        ArchiveReader reader(path);
+        std::string out, error;
+        require(reader.read_bytes("file0", out, error), error);
+#ifdef __linux__
+        // The retained descriptor must serve forward reads without reopening the path.
+        fs::remove(path);
+#endif
+        for (int i = 1; i < 100; ++i)
+            require(reader.read_bytes("file" + std::to_string(i), out, error) &&
+                        out == std::string(1024, 'x'),
+                    error);
+    });
     test("odbpp_matrix_order", [&] {
         auto j = job(temp / "job");
         // 实测: 31 blocks in matrix order; KiCad copper table F.Cu/In1.Cu/In2.Cu/B.Cu.
@@ -716,9 +810,8 @@ int main() {
         ArchiveLimits limits;
         limits.entry_count = 1;
         ArchiveReader reader(p, limits);
-        require(reader.open_error().empty(), reader.open_error());
-        std::string out, error;
-        require(reader.read_bytes("a/b/c/payload", out, error) && out == "x", error);
+        require(reader.open_error().find("entry count limit") != std::string::npos,
+                "directories count against entry cap");
     });
     test("odbpp_review_ratio_per_file", [&] {
         ArchiveLimits limits;
@@ -776,15 +869,16 @@ int main() {
                                  "ratio-encrypted.zip",
                                  "directories.zip"}) {
             limits.ratio = std::string(name) == "directories.zip" ? 200 : 0.00001;
+            // Encrypted job has many entries; isolate payload budgets from the entry cap.
+            limits.entry_count = std::string(name) == "directories.zip" ? 1 : 200000;
             ArchiveReader reader(temp / name, limits);
-            require(reader.open_error().empty(), std::string(name) + ": " + reader.open_error());
             if (std::string(name) == "directories.zip") {
-                require(reader.entries().size() == 2 && reader.entries()[0].is_dir,
-                        "directory remains listed");
-                std::string payload, error;
-                require(reader.read_bytes("payload", payload, error) && payload == "x", error);
-            } else
+                require(reader.open_error().find("entry count limit") != std::string::npos,
+                        "zip directories count against entry cap");
+            } else {
+                require(reader.open_error().empty(), reader.open_error());
                 require(reported(reader.unsupported(), "matrix/matrix"), "unsupported retained");
+            }
         }
     });
     test("odbpp_malformed_numeric_fields", [&] {

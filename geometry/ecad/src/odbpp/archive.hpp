@@ -19,9 +19,10 @@ struct ArchiveLimits;
 class ArchiveReader {
     struct State;
     std::shared_ptr<State> state_;
-    bool stream_bytes(const std::string&,
-                      const std::function<bool(std::string_view)>&,
-                      std::string&) const;
+    enum class ReadStatus { success, unsupported, error };
+    ReadStatus stream_bytes(const std::string&,
+                            const std::function<bool(std::string_view)>&,
+                            std::string&) const;
 
 public:
     explicit ArchiveReader(const std::filesystem::path& input); // 目录、.tgz/.tar.gz、.zip
@@ -29,6 +30,7 @@ public:
     const std::vector<chipcae::geometry::ecad::UnsupportedElement>& unsupported() const;
     const std::string& open_error() const; // 空串表示成功，否则以 "IMPORT_REJECTED:" 开头
     const std::vector<ArchiveEntry>& entries() const; // ODB++ 内的相对路径，按出现顺序
+    bool is_supported(const std::string& rel) const;
     bool read_bytes(const std::string& rel, std::string& out, std::string& err) const;
     bool for_each_line(const std::string& rel,
                        const std::function<bool(std::string_view)>& cb,
@@ -52,6 +54,16 @@ ImportResult read_odbpp_job(const std::filesystem::path&, OdbJob&);
 
 namespace chipcae::geometry::ecad::detail {
 using ByteSink = std::function<bool(std::string_view)>;
+class GzipCursor {
+    struct State;
+    std::string error_;
+    std::unique_ptr<State> state_;
+
+public:
+    explicit GzipCursor(std::istream&);
+    ~GzipCursor();
+    bool next(std::string_view&, std::string&);
+};
 bool stream_gzip(std::istream&, const ByteSink&, std::string&);
 bool index_tar(const std::filesystem::path&,
                const ArchiveLimits&,

@@ -30,7 +30,7 @@ bool parse_misc(const ArchiveReader& reader, OdbJob& job, std::string& error) {
             error);
     };
     for (const auto& e : reader.entries()) {
-        if (e.is_dir)
+        if (e.is_dir || !reader.is_supported(e.path))
             continue;
         if (e.path == "misc/attrlist" && !attrs(e.path, job.attrs.job))
             return false;

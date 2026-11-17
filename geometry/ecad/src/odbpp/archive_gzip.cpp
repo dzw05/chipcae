@@ -1,8 +1,10 @@
 #include "archive.hpp"
 
 #include <array>
+#include <coroutine>
 #include <miniz.h>
 #include <sstream>
+#include <utility>
 
 namespace chipcae::geometry::ecad::detail {
 namespace {
@@ -22,112 +24,200 @@ struct Input {
     int get() { return fill() ? bytes[pos++] : -1; }
 };
 } // namespace
-bool stream_gzip(std::istream& stream, const ByteSink& sink, std::string& error) {
-    Input input{stream};
-    auto fail = [&](const char* reason) {
-        error = std::string("IMPORT_REJECTED: gzip ") + reason;
-        return false;
+struct GzipCursor::State {
+    struct promise_type {
+        std::string_view block;
+        State get_return_object() {
+            return State(std::coroutine_handle<promise_type>::from_promise(*this));
+        }
+        std::suspend_always initial_suspend() noexcept { return {}; }
+        std::suspend_always final_suspend() noexcept { return {}; }
+        std::suspend_always yield_value(std::string_view value) noexcept {
+            block = value;
+            return {};
+        }
+        void return_void() noexcept {}
+        void unhandled_exception() { throw; }
     };
-    bool member = false;
-    while (input.fill()) {
-        member = true;
-        mz_ulong header_crc = MZ_CRC32_INIT;
-        auto header = [&]() {
-            int v = input.get();
-            if (v >= 0) {
-                auto b = static_cast<unsigned char>(v);
-                header_crc = mz_crc32(header_crc, &b, 1);
-            }
-            return v;
-        };
-        if (header() != 31 || header() != 139 || header() != 8)
-            return fail("invalid header");
-        int flags = header();
-        if (flags < 0)
-            return fail("truncated header");
-        if (flags & 0xe0)
-            return fail("reserved flags");
-        for (int i = 0; i < 6; ++i)
-            if (header() < 0)
-                return fail("truncated header");
-        if (flags & 4) {
-            int a = header(), b = header();
-            if (a < 0 || b < 0)
-                return fail("truncated extra");
-            for (int n = a + 256 * b; n; --n)
-                if (header() < 0)
-                    return fail("truncated extra");
-        }
-        for (int flag : {8, 16})
-            if (flags & flag) {
-                int c;
-                do {
-                    c = header();
-                    if (c < 0)
-                        return fail("truncated string");
-                } while (c);
-            }
-        if (flags & 2) {
-            int a = input.get(), b = input.get();
-            if (a < 0 || b < 0)
-                return fail("truncated header CRC");
-            if ((header_crc & 65535) != static_cast<unsigned>(a + b * 256))
-                return fail("header CRC mismatch");
-        }
-        tinfl_decompressor inflater;
-        tinfl_init(&inflater);
-        std::array<mz_uint8, TINFL_LZ_DICT_SIZE> output{};
-        std::size_t offset = 0;
-        mz_ulong crc = MZ_CRC32_INIT;
-        std::uint32_t size = 0;
-        for (;;) {
-            if (!input.fill())
-                return fail("truncated deflate");
-            std::size_t n = input.end - input.pos, count = output.size() - offset;
-            auto status =
-                tinfl_decompress(&inflater,
-                                 input.bytes.data() + input.pos,
-                                 &n,
-                                 output.data(),
-                                 output.data() + offset,
-                                 &count,
-                                 stream.eof() || stream.peek() == std::char_traits<char>::eof()
-                                     ? 0
-                                     : TINFL_FLAG_HAS_MORE_INPUT);
-            input.pos += n;
-            crc = mz_crc32(crc, output.data() + offset, count);
-            size += static_cast<std::uint32_t>(count);
-            if (count && !sink({reinterpret_cast<char*>(output.data() + offset), count}))
-                return false;
-            offset = (offset + count) % output.size();
-            if (status == TINFL_STATUS_DONE)
-                break;
-            if (status == TINFL_STATUS_FAILED_CANNOT_MAKE_PROGRESS)
-                return fail("truncated deflate");
-            if (status < 0)
-                return fail("invalid deflate");
-            if (!n && !count)
-                return fail("truncated deflate");
-        }
-        auto word = [&]() -> std::uint64_t {
-            std::uint64_t v = 0;
-            for (unsigned i = 0; i < 4; ++i) {
-                int c = input.get();
-                if (c < 0)
-                    return UINT64_MAX;
-                v |= static_cast<std::uint64_t>(c) << (i * 8);
-            }
-            return v;
-        };
-        auto expected_crc = word(), expected_size = word();
-        if (expected_crc == UINT64_MAX || expected_size == UINT64_MAX)
-            return fail("truncated trailer");
-        if (expected_crc != crc)
-            return fail("CRC mismatch");
-        if (expected_size != size)
-            return fail("ISIZE mismatch");
+    std::coroutine_handle<promise_type> handle;
+    ~State() {
+        if (handle)
+            handle.destroy();
     }
-    return member || fail("empty input");
+    State(State&& other) noexcept : handle(std::exchange(other.handle, {})) {}
+    explicit State(std::coroutine_handle<promise_type> h) : handle(h) {}
+    static State decode(std::istream& stream, std::string& error) {
+        Input input{stream};
+        auto fail = [&](const char* reason) {
+            error = std::string("IMPORT_REJECTED: gzip ") + reason;
+            return false;
+        };
+        bool member = false;
+        while (input.fill()) {
+            if (member && input.bytes[input.pos] == 0) {
+                while (input.fill())
+                    if (input.get() != 0) {
+                        fail("invalid padding");
+                        co_return;
+                    }
+                co_return;
+            }
+            member = true;
+            mz_ulong header_crc = MZ_CRC32_INIT;
+            auto header = [&]() {
+                int v = input.get();
+                if (v >= 0) {
+                    auto b = static_cast<unsigned char>(v);
+                    header_crc = mz_crc32(header_crc, &b, 1);
+                }
+                return v;
+            };
+            if (header() != 31 || header() != 139 || header() != 8) {
+                fail("invalid header");
+                co_return;
+            }
+            int flags = header();
+            if (flags < 0) {
+                fail("truncated header");
+                co_return;
+            }
+            if (flags & 0xe0) {
+                fail("reserved flags");
+                co_return;
+            }
+            for (int i = 0; i < 6; ++i)
+                if (header() < 0) {
+                    fail("truncated header");
+                    co_return;
+                }
+            if (flags & 4) {
+                int a = header(), b = header();
+                if (a < 0 || b < 0) {
+                    fail("truncated extra");
+                    co_return;
+                }
+                for (int n = a + 256 * b; n; --n)
+                    if (header() < 0) {
+                        fail("truncated extra");
+                        co_return;
+                    }
+            }
+            for (int flag : {8, 16})
+                if (flags & flag) {
+                    int c;
+                    do {
+                        c = header();
+                        if (c < 0) {
+                            fail("truncated string");
+                            co_return;
+                        }
+                    } while (c);
+                }
+            if (flags & 2) {
+                int a = input.get(), b = input.get();
+                if (a < 0 || b < 0) {
+                    fail("truncated header CRC");
+                    co_return;
+                }
+                if ((header_crc & 65535) != static_cast<unsigned>(a + b * 256)) {
+                    fail("header CRC mismatch");
+                    co_return;
+                }
+            }
+            tinfl_decompressor inflater;
+            tinfl_init(&inflater);
+            std::array<mz_uint8, TINFL_LZ_DICT_SIZE> output{};
+            std::size_t offset = 0;
+            mz_ulong crc = MZ_CRC32_INIT;
+            std::uint32_t size = 0;
+            for (;;) {
+                if (!input.fill()) {
+                    fail("truncated deflate");
+                    co_return;
+                }
+                std::size_t n = input.end - input.pos, count = output.size() - offset;
+                auto status =
+                    tinfl_decompress(&inflater,
+                                     input.bytes.data() + input.pos,
+                                     &n,
+                                     output.data(),
+                                     output.data() + offset,
+                                     &count,
+                                     stream.eof() || stream.peek() == std::char_traits<char>::eof()
+                                         ? 0
+                                         : TINFL_FLAG_HAS_MORE_INPUT);
+                input.pos += n;
+                crc = mz_crc32(crc, output.data() + offset, count);
+                size += static_cast<std::uint32_t>(count);
+                if (count)
+                    co_yield std::string_view{reinterpret_cast<char*>(output.data() + offset),
+                                              count};
+                offset = (offset + count) % output.size();
+                if (status == TINFL_STATUS_DONE)
+                    break;
+                if (status == TINFL_STATUS_FAILED_CANNOT_MAKE_PROGRESS) {
+                    fail("truncated deflate");
+                    co_return;
+                }
+                if (status < 0) {
+                    fail("invalid deflate");
+                    co_return;
+                }
+                if (!n && !count) {
+                    fail("truncated deflate");
+                    co_return;
+                }
+            }
+            auto word = [&]() -> std::uint64_t {
+                std::uint64_t v = 0;
+                for (unsigned i = 0; i < 4; ++i) {
+                    int c = input.get();
+                    if (c < 0)
+                        return UINT64_MAX;
+                    v |= static_cast<std::uint64_t>(c) << (i * 8);
+                }
+                return v;
+            };
+            auto expected_crc = word(), expected_size = word();
+            if (expected_crc == UINT64_MAX || expected_size == UINT64_MAX) {
+                fail("truncated trailer");
+                co_return;
+            }
+            if (expected_crc != crc) {
+                fail("CRC mismatch");
+                co_return;
+            }
+            if (expected_size != size) {
+                fail("ISIZE mismatch");
+                co_return;
+            }
+        }
+        if (!member)
+            fail("empty input");
+    }
+};
+GzipCursor::GzipCursor(std::istream& stream)
+    : state_(std::make_unique<State>(State::decode(stream, error_))) {}
+GzipCursor::~GzipCursor() = default;
+bool GzipCursor::next(std::string_view& block, std::string& error) {
+    auto h = state_->handle;
+    if (!h.done())
+        h.resume();
+    error = error_;
+    if (h.done()) {
+        block = {};
+        return false;
+    }
+    block = h.promise().block;
+    return true;
+}
+bool stream_gzip(std::istream& stream, const ByteSink& sink, std::string& error) {
+    GzipCursor cursor(stream);
+    std::string_view block;
+    while (cursor.next(block, error))
+        if (!sink(block))
+            return false;
+    return error.empty();
 }
 bool decode_gzip(std::string_view input, std::string& output, std::string& error) {
     output.clear();

@@ -1,6 +1,7 @@
 #include "archive.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <set>
@@ -18,6 +19,21 @@ bool exists(const ArchiveReader& reader, const std::string& path) {
     return std::any_of(reader.entries().begin(), reader.entries().end(), [&](const auto& e) {
         return e.path == path && !e.is_dir;
     });
+}
+bool finite(OdbPoint p) {
+    return std::isfinite(p.x) && std::isfinite(p.y);
+}
+bool distinct(OdbPoint a, OdbPoint b) {
+    return a.x != b.x || a.y != b.y;
+}
+bool arc_geometry(OdbPoint start, OdbPoint end, OdbPoint center) {
+    if (!finite(start) || !finite(end) || !finite(center) || !distinct(start, end))
+        return false;
+    const double r = std::hypot(start.x - center.x, start.y - center.y);
+    const double q = std::hypot(end.x - center.x, end.y - center.y);
+    // Relative tolerance accommodates decimal roundoff without accepting a zero radius.
+    return std::isfinite(r) && std::isfinite(q) && r > 0 && q > 0 &&
+           std::abs(r - q) <= 1e-9 * std::max(r, q);
 }
 // Coordinates stay in job units in the frozen intermediate model.
 bool records(const ArchiveReader& reader,
@@ -105,6 +121,8 @@ bool records(const ArchiveReader& reader,
                 char kind = 'I';
                 if (!(in >> c.start.x >> c.start.y >> kind))
                     return fail("malformed contour " + path);
+                if (!finite(c.start))
+                    return fail("non-finite contour " + path);
                 c.is_hole = kind == 'H';
                 auto& contours = features ? (surface ? surface->contours : job.profile.contours)
                                           : job.profile.contours;
@@ -125,18 +143,26 @@ bool records(const ArchiveReader& reader,
                     s.is_arc = true;
                     s.cw = cw == 'Y';
                 }
+                const auto start =
+                    contour->segs.empty() ? contour->start : contour->segs.back().end;
+                if (!finite(s.end) || !distinct(start, s.end) ||
+                    (s.is_arc && !arc_geometry(start, s.end, s.center)))
+                    return fail("degenerate or non-finite segment/arc " + path);
                 contour->segs.push_back(s);
             } else if (tag == "OE") {
                 if (!contour)
                     return fail("contour end without start " + path);
-                if (!features) {
-                    auto end = contour->segs.empty() ? contour->start : contour->segs.back().end;
-                    double scale = job.units == OdbUnits::mm ? 0.001 : 0.0254;
-                    if (contour->segs.empty() || !std::isfinite(end.x) || !std::isfinite(end.y) ||
-                        std::abs(end.x - contour->start.x) * scale > 1e-9 ||
-                        std::abs(end.y - contour->start.y) * scale > 1e-9)
-                        return fail("profile contour not closed");
-                }
+                auto end = contour->segs.empty() ? contour->start : contour->segs.back().end;
+                double scale = job.units == OdbUnits::mm ? 0.001 : 0.0254;
+                if (contour->segs.empty() || std::abs(end.x - contour->start.x) * scale > 1e-9 ||
+                    std::abs(end.y - contour->start.y) * scale > 1e-9)
+                    return fail(features ? "feature contour not closed"
+                                         : "profile contour not closed");
+                const bool has_arc = std::any_of(contour->segs.begin(),
+                                                 contour->segs.end(),
+                                                 [](const auto& seg) { return seg.is_arc; });
+                if (contour->segs.size() < (has_arc ? 2U : 3U))
+                    return fail("insufficient contour segments " + path);
                 contour = nullptr;
             } else if (tag == "SE") {
                 surface = nullptr;
@@ -146,6 +172,8 @@ bool records(const ArchiveReader& reader,
                 int dcode = 0, orientation = 0;
                 if (!(in >> p.at.x >> p.at.y >> p.sym >> polarity >> dcode >> orientation))
                     return fail("malformed pad " + path);
+                if (!finite(p.at) || !std::isfinite(p.rot_deg))
+                    return fail("non-finite pad " + path);
                 p.positive = polarity == 'P';
                 if (orientation >= 0 && orientation <= 7) {
                     p.rot_deg = (orientation % 4) * 90;
@@ -156,6 +184,8 @@ bool records(const ArchiveReader& reader,
                     p.mirror = orientation == 9;
                 } else
                     report("unknown pad orientation");
+                if (!std::isfinite(p.rot_deg))
+                    return fail("non-finite pad angle " + path);
                 symbol(p.sym);
                 features->pads.push_back(p);
             } else if (tag == "L" && features) {
@@ -163,6 +193,8 @@ bool records(const ArchiveReader& reader,
                 char polarity = 'P';
                 if (!(in >> l.s.x >> l.s.y >> l.e.x >> l.e.y >> l.sym >> polarity))
                     return fail("malformed line " + path);
+                if (!finite(l.s) || !finite(l.e) || !distinct(l.s, l.e))
+                    return fail("degenerate or non-finite line " + path);
                 l.positive = polarity == 'P';
                 symbol(l.sym);
                 features->lines.push_back(l);
@@ -173,6 +205,8 @@ bool records(const ArchiveReader& reader,
                 if (!(in >> a.s.x >> a.s.y >> a.e.x >> a.e.y >> a.c.x >> a.c.y >> a.sym >>
                       polarity >> dcode >> cw))
                     return fail("malformed arc " + path);
+                if (!arc_geometry(a.s, a.e, a.c))
+                    return fail("invalid arc geometry " + path);
                 a.positive = polarity == 'P';
                 a.cw = cw == 'Y';
                 symbol(a.sym);
@@ -200,10 +234,10 @@ bool parse_features(const ArchiveReader& reader, OdbJob& job, ImportResult& resu
         return false;
     for (const auto& layer : job.layers) {
         auto base = layer_directory(reader, job, layer.name);
-        if (exists(reader, base + "features") &&
+        if (reader.is_supported(base + "features") && exists(reader, base + "features") &&
             !records(reader, base + "features", job, &job.features[layer.name], result))
             return false;
-        if (!exists(reader, base + "tools"))
+        if (!reader.is_supported(base + "tools") || !exists(reader, base + "tools"))
             continue;
         auto& tools = job.tools[layer.name];
         OdbTool tool;

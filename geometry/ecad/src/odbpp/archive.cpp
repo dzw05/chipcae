@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <fstream>
 #include <miniz.h>
 #include <set>
@@ -60,8 +59,13 @@ struct ArchiveReader::State {
     std::vector<std::filesystem::path> directory_paths;
     std::vector<mz_uint> zip_indices;
     std::vector<bool> zip_supported;
+    std::vector<std::string> zip_reasons;
     std::vector<UnsupportedElement> unsupported;
     mz_zip_archive zip{};
+    std::ifstream tar_input;
+    std::unique_ptr<GzipCursor> tar_cursor;
+    std::string_view tar_block;
+    std::uint64_t tar_position = 0;
     bool zipped = false, directory = false;
     ~State() {
         if (zipped)
@@ -79,10 +83,6 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
     try {
         std::uint64_t total = 0, count = 0;
         auto account = [&](std::uint64_t size) {
-            if (++count > limits.entry_count) {
-                fail("entry count limit");
-                return false;
-            }
             if (size > limits.file_bytes) {
                 fail("file byte limit");
                 return false;
@@ -94,9 +94,17 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
             total += size;
             return true;
         };
+        auto count_entry = [&]() {
+            if (++count <= limits.entry_count)
+                return true;
+            fail("entry count limit");
+            return false;
+        };
         if (std::filesystem::is_directory(input)) {
             s.directory = true;
             for (const auto& e : std::filesystem::recursive_directory_iterator(input)) {
+                if (!count_entry())
+                    return;
                 auto rel = e.path().lexically_relative(input).generic_string();
                 if (!canonical_path(rel, s.error))
                     return;
@@ -140,6 +148,10 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                     return;
                 }
                 s.zipped = true;
+                if (mz_zip_reader_get_num_files(&s.zip) > limits.entry_count) {
+                    fail("entry count limit");
+                    return;
+                }
                 const bool zip64 = mz_zip_is_zip64(&s.zip) != 0;
                 std::ifstream local(input, std::ios::binary);
                 const auto archive_size = std::filesystem::file_size(input);
@@ -148,6 +160,8 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                         {"IMPORT_UNSUPPORTED_ELEMENT", input.string() + ": zip64", 0});
                 std::set<std::string> seen;
                 for (mz_uint i = 0; i < mz_zip_reader_get_num_files(&s.zip); ++i) {
+                    if (!count_entry())
+                        return;
                     mz_zip_archive_file_stat st{};
                     if (!mz_zip_reader_file_stat(&s.zip, i, &st)) {
                         fail("invalid zip entry");
@@ -223,10 +237,14 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                             return;
                         }
                     }
+                    const std::string reason = zip64 || local_zip64 ? "zip64"
+                                               : st.m_is_encrypted  ? "zip encryption"
+                                               : supported          ? ""
+                                                                    : "zip compression method";
                     if (!supported)
-                        s.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT",
-                                                 rel + ": zip compression/encryption/zip64",
-                                                 0});
+                        s.unsupported.push_back(
+                            {"IMPORT_UNSUPPORTED_ELEMENT", rel + ": " + reason, 0});
+                    s.zip_reasons.push_back(reason);
                     s.entries.push_back({rel, st.m_uncomp_size, st.m_is_directory != 0});
                     s.zip_indices.push_back(i);
                     s.zip_supported.push_back(supported);
@@ -266,23 +284,29 @@ struct ZipSink {
     }
 };
 } // namespace
-// Enforce limits against delivered bytes as well as archive metadata. Repeated reads
-// count each entry's largest observed size once toward the archive total.
-bool ArchiveReader::stream_bytes(const std::string& rel,
-                                 const ByteSink& consume,
-                                 std::string& error) const {
+bool ArchiveReader::is_supported(const std::string& rel) const {
+    const auto& s = *state_;
+    for (std::size_t i = 0; i < s.entries.size(); ++i)
+        if (s.entries[i].path == rel)
+            return !s.zipped || s.zip_supported[i];
+    return true;
+}
+// Enforce delivered-byte limits too; repeated reads charge each entry only once.
+ArchiveReader::ReadStatus ArchiveReader::stream_bytes(const std::string& rel,
+                                                      const ByteSink& consume,
+                                                      std::string& error) const {
     auto& s = *state_;
     error.clear();
     if (!s.error.empty()) {
         error = s.error;
-        return false;
+        return ReadStatus::error;
     }
     auto it = std::find_if(s.entries.begin(), s.entries.end(), [&](const auto& e) {
         return e.path == rel && !e.is_dir;
     });
     if (it == s.entries.end()) {
         error = "IMPORT_REJECTED: missing file " + rel;
-        return false;
+        return ReadStatus::error;
     }
     auto index = static_cast<std::size_t>(it - s.entries.begin());
     s.actual_sizes.resize(s.entries.size());
@@ -306,52 +330,60 @@ bool ArchiveReader::stream_bytes(const std::string& rel,
         std::ifstream in(s.directory_paths[index], std::ios::binary);
         if (!in) {
             error = "IMPORT_REJECTED: cannot read " + rel;
-            return false;
+            return ReadStatus::error;
         }
         std::array<char, 32768> buffer{};
         while (in) {
             in.read(buffer.data(), buffer.size());
             if (!sink({buffer.data(), static_cast<std::size_t>(in.gcount())}))
-                return false;
+                return ReadStatus::error;
         }
         if (in.bad()) {
             error = "IMPORT_REJECTED: read failure " + rel;
-            return false;
+            return ReadStatus::error;
         }
-        return true;
+        return ReadStatus::success;
     }
     if (s.zipped) {
         if (!s.zip_supported[index]) {
-            error = "IMPORT_REJECTED: required file uses unsupported zip encoding " + rel;
-            return false;
+            error = "IMPORT_REJECTED: required file uses unsupported " + s.zip_reasons[index] +
+                    " " + rel;
+            return ReadStatus::unsupported;
         }
         ZipSink adapter{sink};
         if (mz_zip_reader_extract_to_callback(
                 &s.zip, s.zip_indices[index], ZipSink::write, &adapter, 0))
-            return true;
+            return ReadStatus::success;
         if (error.empty())
             error = "IMPORT_REJECTED: zip CRC or corrupt payload " + rel;
-        return false;
+        return ReadStatus::error;
     }
-    std::ifstream in(s.input, std::ios::binary);
-    std::uint64_t pos = 0, start = s.offsets[index], end = start + it->size;
-    std::string codec_error;
-    bool ok = stream_gzip(
-        in,
-        [&](std::string_view b) {
-            auto finish = pos + b.size();
-            if (pos < end && finish > start &&
-                !sink(b.substr(
-                    static_cast<std::size_t>(std::max(pos, start) - pos),
-                    static_cast<std::size_t>(std::min(finish, end) - std::max(pos, start)))))
-                return false;
-            pos = finish;
-            return true;
-        },
-        codec_error);
-    if (!ok && error.empty())
-        error = codec_error;
-    return ok;
+    const auto start = s.offsets[index], end = start + it->size;
+    if (!s.tar_cursor || start < s.tar_position) {
+        s.tar_cursor.reset();
+        s.tar_input.close();
+        s.tar_input.clear();
+        s.tar_input.open(s.input, std::ios::binary);
+        s.tar_cursor = std::make_unique<GzipCursor>(s.tar_input);
+        s.tar_position = 0;
+        s.tar_block = {};
+    }
+    while (s.tar_position < end) {
+        if (s.tar_block.empty() && !s.tar_cursor->next(s.tar_block, error)) {
+            if (error.empty())
+                error = "IMPORT_REJECTED: truncated tar payload " + rel;
+            return ReadStatus::error;
+        }
+        const auto finish = std::min<std::uint64_t>(s.tar_position + s.tar_block.size(), end);
+        const auto length = static_cast<std::size_t>(finish - s.tar_position);
+        const auto skip =
+            static_cast<std::size_t>(std::min(finish, start) - std::min(s.tar_position, start));
+        if (length > skip && !sink(s.tar_block.substr(skip, length - skip)))
+            return ReadStatus::error;
+        s.tar_block.remove_prefix(length);
+        s.tar_position = finish;
+    }
+    return ReadStatus::success;
 }
 bool ArchiveReader::for_each_line(const std::string& rel,
                                   const std::function<bool(std::string_view)>& cb,
@@ -359,7 +391,7 @@ bool ArchiveReader::for_each_line(const std::string& rel,
     constexpr std::size_t max_line_bytes = 1024 * 1024;
     std::string pending;
     bool stopped = false;
-    const bool ok = stream_bytes(
+    const auto status = stream_bytes(
         rel,
         [&](std::string_view block) {
             if (stopped)
@@ -389,18 +421,18 @@ bool ArchiveReader::for_each_line(const std::string& rel,
             return true;
         },
         error);
-    if (ok && !stopped && !pending.empty())
+    if (status == ReadStatus::success && !stopped && !pending.empty())
         cb(pending);
-    return ok;
+    return status == ReadStatus::success;
 }
 bool ArchiveReader::read_bytes(const std::string& rel, std::string& out, std::string& error) const {
     out.clear();
     return stream_bytes(
-        rel,
-        [&](std::string_view b) {
-            out.append(b);
-            return true;
-        },
-        error);
+               rel,
+               [&](std::string_view b) {
+                   out.append(b);
+                   return true;
+               },
+               error) == ReadStatus::success;
 }
 } // namespace chipcae::geometry::ecad::detail
