@@ -49,8 +49,9 @@ containing both `not implemented yet` and the option name. It also covers
 `--t-min` placeholder values using the same substring contract. Conflicts in
 both flag orders require exit 2 only. Missing reserved values on valid parse
 paths require the same diagnostic substrings, including a missing accept value
-after accept-b-tier. Successfully parsed reserved options require these diagnostics
-even without input/output, including the planned assembly invocation. Help paths
+after accept-b-tier. Incomplete input/output invocations retain the baseline unknown-argument response.
+The planned `--assembly assembly.json -o out.stack.json` invocation is the explicit
+exception and requires the reserved diagnostic. Help paths
 are checked separately by the `help` case against the baseline help bytes.
 
 Historically, before implementation the four reserved diagnostic assertions

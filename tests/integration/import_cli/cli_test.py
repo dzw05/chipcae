@@ -123,9 +123,15 @@ def run_case(binary, case, generate=False):
             for option in ("--accept", "--t-min", "--stack-override", "--assembly"):
                 for prefix in ([], ["a.xml"], ["-o", "stack.json"]):
                     result = invoke(binary, [*prefix, option, "xyz"], directory)
-                    check(result.returncode == 2 and b"not implemented yet" in result.stderr and
-                          option.encode() in result.stderr,
-                          f"{option}: reserved diagnostic differs: {result.stderr!r}")
+                    check(result.returncode == 2, f"incomplete {option}: exit {result.returncode}")
+                    check(result.stdout == b"", f"incomplete {option}: unexpected stdout")
+                    if option == "--assembly" and prefix == ["-o", "stack.json"]:
+                        check(b"not implemented yet" in result.stderr and
+                              option.encode() in result.stderr,
+                              "assembly with output: reserved diagnostic differs")
+                        continue
+                    check(result.stderr == f"unknown argument: {option}\n".encode(),
+                          f"incomplete {option}: baseline stderr differs: {result.stderr!r}")
             result = invoke(binary, ["--assembly", "assembly.json", "-o", "out.stack.json"], directory)
             check(result.returncode == 2 and b"not implemented yet" in result.stderr and
                   b"--assembly" in result.stderr, "assembly invocation: diagnostic differs")

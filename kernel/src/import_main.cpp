@@ -6,6 +6,7 @@ using namespace chipcae::importer;
 
 namespace {
 void help() {
+    // Empty format-specific help keeps the baseline output byte-identical.
     std::cout << "usage: chipcae-import <in.step|in.xml> -o <out.stack.json> "
                  "[--polyset <out.polyset>] [--report <defects.json>] [--material-map m.json] "
                  "[--accept-b-tier]\n"
@@ -84,6 +85,12 @@ int main(int argc, char** argv) {
             std::cerr << "unknown argument: " << arg << '\n';
             return CliExit::usage;
         }
+    }
+    const bool reserved_parse_path =
+        (!input.empty() && !output.empty()) || (!options.assembly.empty() && !output.empty());
+    if (!reserved_argument.empty() && !reserved_parse_path) {
+        std::cerr << "unknown argument: " << reserved_argument << '\n';
+        return CliExit::usage;
     }
     if (accept_b && has_accept) {
         std::cerr << "conflicting arguments: --accept-b-tier and --accept\n";
