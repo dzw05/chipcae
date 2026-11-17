@@ -55,7 +55,7 @@ def lzw_literals(data):
 
 def main(root, fixture):
     root.mkdir(parents=True, exist_ok=True)
-    for name, members in [('selected', [('small', b'ok'), ('irrelevant', b'x' * (1024 * 1024))]),
+    for name, members in [('selected', [('small', b'ok'), ('irrelevant', b'stop\n' + b'x' * (1024 * 1024))]),
                           ('nested-Z', [('payload.Z', b'compressed bytes')])]:
         (root / (name + '.tgz')).write_bytes(gzip.compress(tar_bytes(members)))
         with zipfile.ZipFile(root / (name + '.zip'), 'w', compression=zipfile.ZIP_DEFLATED) as archive:

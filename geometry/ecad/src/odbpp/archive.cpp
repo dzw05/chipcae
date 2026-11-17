@@ -346,14 +346,14 @@ ArchiveReader::ReadStatus ArchiveReader::stream_bytes(const std::string& rel,
             "IMPORT_REJECTED: required file uses unsupported " + std::string(reason) + " " + rel;
         return ReadStatus::unsupported;
     }
-    if (!s.directory &&
-        static_cast<double>(it->size) > static_cast<double>(it->compressed_size) * s.limits.ratio) {
-        error = "IMPORT_REJECTED: ratio limit " + rel;
-        return ReadStatus::error;
-    }
     s.actual_sizes.resize(s.entries.size());
     std::uint64_t delivered = 0;
     ByteSink sink = [&](std::string_view b) {
+        if (!s.directory && static_cast<double>(delivered + b.size()) >
+                                static_cast<double>(it->compressed_size) * s.limits.ratio) {
+            error = "IMPORT_REJECTED: ratio limit " + rel;
+            return false;
+        }
         if (b.size() > s.limits.file_bytes - delivered) {
             error = "IMPORT_REJECTED: file byte limit " + rel;
             return false;

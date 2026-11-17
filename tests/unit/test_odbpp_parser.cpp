@@ -184,8 +184,38 @@ void minimal(const fs::path& root) {
     write(root / "steps/pcb/profile",
           "UNITS=MM\nS P 0\nOB 0 0 I\nOS 1 0\nOS 1 1\nOS 0 1\nOS 0 0\nOE\nSE\n");
 }
+#ifdef __linux__
+void measure_streaming_memory(const fs::path& p) {
+    rusage before{}, after{};
+    require(getrusage(RUSAGE_SELF, &before) == 0, "getrusage before");
+    const auto start = std::chrono::steady_clock::now();
+    auto result = parse_job(p);
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    require(getrusage(RUSAGE_SELF, &after) == 0, "getrusage after");
+    require(bool(result), result.error);
+    std::cout << "MEASURE odbpp_streaming_memory RSS_delta_KiB="
+              << after.ru_maxrss - before.ru_maxrss
+              << " elapsed_s=" << std::chrono::duration<double>(elapsed).count() << '\n';
+    require(after.ru_maxrss - before.ru_maxrss < 64 * 1024, "RSS delta must be <64 MiB");
+    // Also bound the fresh process peak so a pre-import high-water mark cannot mask growth.
+    require(after.ru_maxrss < 64 * 1024, "fresh-process RSS peak must be <64 MiB");
+    require(elapsed < std::chrono::seconds(60), "streaming wall clock must be <60s");
+}
+#endif
 } // namespace
-int main() {
+int main(int argc, char** argv) {
+#ifdef __linux__
+    if (argc == 3 && std::string_view(argv[1]) == "--streaming-memory") {
+        try {
+            measure_streaming_memory(argv[2]);
+            return 0;
+        } catch (const std::exception& e) {
+            std::cerr << "FAIL odbpp_streaming_memory: " << e.what() << '\n';
+            return 1;
+        }
+    }
+#endif
+
     const auto source = fs::path(__FILE__).parent_path().parent_path().parent_path();
     const auto fixture = source / "tests/integration/ecad/data/odbpp/kicad4l";
     const auto temp =
@@ -384,7 +414,11 @@ int main() {
             require(reader.open_error().empty(), reader.open_error());
             std::string out, error;
             require(reader.read_bytes("small", out, error) && out == "ok", error);
-            require(!reader.read_bytes("irrelevant", out, error) &&
+            ArchiveReader ratio_reader(temp / name);
+            require(ratio_reader.for_each_line(
+                        "irrelevant", [](std::string_view) { return false; }, error),
+                    "early stop before ratio limit: " + error);
+            require(!ratio_reader.read_bytes("irrelevant", out, error) &&
                         error.find("ratio limit") != std::string::npos,
                     "ratio enforced when payload requested");
         }
@@ -1552,18 +1586,22 @@ int main() {
                 out << "# streaming feature comment 0123456789012345678901234567890123456789\n";
             require(out.good(), "large fixture write");
         }
-        rusage before{}, after{};
-        require(getrusage(RUSAGE_SELF, &before) == 0, "getrusage before");
-        const auto start = std::chrono::steady_clock::now();
-        auto result = parse_job(p);
-        const auto elapsed = std::chrono::steady_clock::now() - start;
-        require(getrusage(RUSAGE_SELF, &after) == 0, "getrusage after");
-        require(bool(result), result.error);
-        std::cout << "MEASURE odbpp_streaming_memory RSS_delta_KiB="
-                  << after.ru_maxrss - before.ru_maxrss
-                  << " elapsed_s=" << std::chrono::duration<double>(elapsed).count() << '\n';
-        require(after.ru_maxrss - before.ru_maxrss < 64 * 1024, "RSS delta must be <64 MiB");
-        require(elapsed < std::chrono::seconds(60), "streaming wall clock must be <60s");
+        std::cout.flush();
+        std::cerr.flush();
+        const auto child = fork();
+        require(child >= 0, "fork memory measurement");
+        if (child == 0) {
+            execl("/proc/self/exe",
+                  "test_odbpp_parser",
+                  "--streaming-memory",
+                  p.c_str(),
+                  static_cast<char*>(nullptr));
+            _exit(127);
+        }
+        int status = 0;
+        require(waitpid(child, &status, 0) == child, "wait for memory measurement");
+        require(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                "fresh-process streaming memory measurement failed");
 #else
         std::cout << "SKIP odbpp_streaming_memory: Linux ru_maxrss required\n";
 #endif
