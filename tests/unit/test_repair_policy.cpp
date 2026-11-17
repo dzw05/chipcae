@@ -53,10 +53,19 @@ struct AcceptFixture {
 };
 void accept_file_default_path() {
     AcceptFixture f;
-    const auto path = f.write(R"({"accept":[]})");
-    require(default_accept_file(f.dir / "board.step") == path, "default_path: sibling path");
-    std::filesystem::remove(path);
-    require(default_accept_file(f.dir / "board.step").empty(), "default_path: absent is empty");
+    const auto parent = f.dir / "x" / "y";
+    std::filesystem::create_directories(parent);
+    const auto input = parent / "board.step";
+    const auto expected = parent / "import.accept.json";
+    require(default_accept_file(input).empty(), "default_path: fresh absent file is empty");
+    require(!std::filesystem::exists(expected), "default_path: lookup creates no file");
+    std::ofstream out(expected);
+    out << R"({"accept":[]})";
+    out.close();
+    require(bool(out), "default_path: fixture write failed");
+    require(default_accept_file(input) == expected, "default_path: exact sibling path");
+    std::filesystem::remove(expected);
+    require(default_accept_file(input).empty(), "default_path: removed file is empty");
 }
 #if CHIPCAE_ACCEPT_JSONCONS
 void accept_file_roundtrip() {
@@ -232,8 +241,33 @@ bool run_accept_tests() {
     run("accept_file_duplicate", accept_file_duplicate);
     run("accept_file_distinct_notes", accept_file_distinct_notes);
     run("accept_file_boundaries", accept_file_boundaries);
-    run("accept_file_malformed_missing_accept", [] { malformed(R"({"foo":1})"); });
-    run("accept_file_malformed_missing_defect_id", [] { malformed(R"({"accept":[{}]})"); });
+    run("accept_file_malformed_missing_accept", [] {
+        AcceptFixture f;
+        std::string error;
+        require(!read_accept_file(f.write(R"({"foo":1})"), &error), "missing_accept: must reject");
+        require(error == "IMPORT_REJECTED: accept file field 'accept' is required",
+                "missing_accept: required field diagnostic");
+    });
+    run("accept_file_malformed_missing_defect_id", [] {
+        AcceptFixture f;
+        std::string error;
+        require(!read_accept_file(f.write(R"({"accept":[{}]})"), &error),
+                "missing_defect_id: must reject");
+        require(error == "IMPORT_REJECTED: defect_id must be a nonempty string",
+                "missing_defect_id: required field diagnostic");
+    });
+    run("accept_file_inspection_error", [] {
+        AcceptFixture f;
+        const auto path = f.dir / "loop";
+        std::filesystem::create_symlink("loop", path);
+        std::error_code inspection_error;
+        require(!std::filesystem::exists(path, inspection_error) && bool(inspection_error),
+                "inspection_error: fixture must fail inspection");
+        std::string error;
+        require(!read_accept_file(path, &error), "inspection_error: cannot load symlink loop");
+        require(error == "IMPORT_REJECTED: cannot open accept file",
+                "inspection_error: report open failure");
+    });
     const std::vector<std::string> invalid{"not JSON",
                                            R"({"accept":{}})",
                                            R"({"accept":[{"defect_id":""}]})",
