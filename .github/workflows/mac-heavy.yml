@@ -33,7 +33,7 @@ jobs:
   build-test:
     name: Mac build and test
     if: github.repository == 'dzw05/chipcae'
-    runs-on: [self-hosted, macOS, arm64, mac-heavy]
+    runs-on: [self-hosted, macOS, ARM64, mac-heavy]
     timeout-minutes: 90
     defaults:
       run:
@@ -46,12 +46,22 @@ jobs:
         run: |
           set -euo pipefail
           env_prefix="$HOME/chipcae-ci/env"
-          test -x "$env_prefix/bin/cmake" || { echo "missing $env_prefix; see docs on the Mac runner"; exit 1; }
+          test -x "$env_prefix/bin/cmake" || { echo "missing $env_prefix; install the micromamba env first"; exit 1; }
+          # conda-forge clangxx_osx-arm64 ships prefixed compilers
+          # (arm64-apple-darwin20.0.0-clang++), not unprefixed clang/clang++.
+          if [ -x "$env_prefix/bin/clang++" ]; then
+            cc="$env_prefix/bin/clang"
+            cxx="$env_prefix/bin/clang++"
+          else
+            cc=$(ls "$env_prefix"/bin/*-clang)
+            cxx=$(ls "$env_prefix"/bin/*-clang++)
+          fi
+          test -x "$cc" && test -x "$cxx"
           {
             echo "CONDA_PREFIX=$env_prefix"
             echo "CMAKE_PREFIX_PATH=$env_prefix"
-            echo "CC=$env_prefix/bin/clang"
-            echo "CXX=$env_prefix/bin/clang++"
+            echo "CC=$cc"
+            echo "CXX=$cxx"
             echo "CCACHE_DIR=$HOME/chipcae-ci/ccache"
             echo "CCACHE_MAXSIZE=2G"
           } >> "$GITHUB_ENV"
