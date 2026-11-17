@@ -59,7 +59,7 @@ std::optional<AcceptList> read_accept_file(const std::filesystem::path& path,
             if (member.key() != "accept")
                 warn("unknown accept file key: " + std::string(member.key()));
         AcceptList list{path, {}};
-        std::set<std::pair<std::string, std::string>> seen;
+        std::set<std::string> seen;
         for (const auto& entry : root.at("accept").array_range()) {
             if (!entry.is_object())
                 return reject("accept entry must be an object");
@@ -74,7 +74,7 @@ std::optional<AcceptList> read_accept_file(const std::filesystem::path& path,
                 if (member.key() != "defect_id" && member.key() != "note")
                     warn("unknown accept entry key: " + std::string(member.key()));
             auto note = entry.contains("note") ? entry.at("note").as<std::string>() : "";
-            if (!seen.emplace(id, note).second) {
+            if (!seen.emplace(id).second) {
                 warn("duplicate accept entry for defect_id: " + id);
                 continue;
             }

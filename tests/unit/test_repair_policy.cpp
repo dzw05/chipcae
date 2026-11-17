@@ -177,13 +177,13 @@ void accept_file_distinct_notes() {
         &error,
         &warnings);
     require(list.has_value(), "distinct_notes: file must load");
-    require(list->entries.size() == 4, "distinct_notes: preserve different note bytes");
-    const std::vector<std::string> notes{"first", "second", "First", "first "};
-    for (std::size_t i = 0; i < notes.size(); ++i) {
-        require(list->entries[i].defect_id == "id", "distinct_notes: preserve id");
-        require(list->entries[i].note == notes[i], "distinct_notes: preserve note order");
-    }
-    require(warnings.empty(), "distinct_notes: no duplicate warning");
+    require(list->entries.size() == 1, "distinct_notes: deduplicate by id only");
+    require(list->entries[0].defect_id == "id", "distinct_notes: preserve id");
+    require(list->entries[0].note == "first", "distinct_notes: retain first note");
+    require(warnings.size() == 3, "distinct_notes: one warning per skipped duplicate");
+    for (const auto& warning : warnings)
+        require(warning.find("id") != std::string::npos,
+                "distinct_notes: warning contains input id");
 }
 void accept_file_boundaries() {
     AcceptFixture f;
@@ -191,17 +191,22 @@ void accept_file_boundaries() {
     auto list = read_accept_file(f.write(R"({"accept":[]})"), &error);
     require(list.has_value() && list->entries.empty(), "boundaries: empty array valid");
     require(accepted_ids(*list).empty(), "boundaries: no extracted ids");
+    std::vector<std::string> warnings;
     list = read_accept_file(
         f.write(
-            R"({"accept":[{"defect_id":"ID"},{"defect_id":"id","note":""},{"defect_id":" id "}]})"),
-        &error);
+            R"({"accept":[{"defect_id":"ID"},{"defect_id":"id","note":""},{"defect_id":" id "},{"defect_id":"ID","note":"later"}]})"),
+        &error,
+        &warnings);
     require(list.has_value() && list->entries.size() == 3,
             "boundaries: case and whitespace distinct");
     require(accepted_ids(*list) == std::vector<std::string>{"ID", "id", " id "},
             "boundaries: exact bytes preserved");
     for (const auto& entry : list->entries)
         require(entry.note.empty(), "boundaries: omitted and empty notes");
-    std::vector<std::string> warnings;
+    require(warnings.size() == 1, "boundaries: exact id duplicate warns once");
+    require(warnings[0].find("ID") != std::string::npos,
+            "boundaries: duplicate warning contains exact id");
+    warnings.clear();
     list = read_accept_file(
         f.write(R"({"extra":true,"accept":[{"defect_id":"id","extra":1}]})"), &error, &warnings);
     require(list.has_value(), "boundaries: unknown keys allowed");
