@@ -68,3 +68,15 @@ target_link_libraries(chipcae_test_import_thresholds PRIVATE chipcae::geometry)
 chipcae_set_warnings(chipcae_test_import_thresholds)
 add_test(NAME import_thresholds COMMAND chipcae_test_import_thresholds)
 set_tests_properties(import_thresholds PROPERTIES LABELS "mesh;tierA" TIMEOUT 60)
+
+add_executable(chipcae_test_control_file protocol/test_control_file.cpp)
+target_link_libraries(chipcae_test_control_file PRIVATE chipcae::io)
+chipcae_set_warnings(chipcae_test_control_file)
+add_test(NAME control_file COMMAND chipcae_test_control_file)
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME case_run_schema_fixtures
+        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/schema/tests/validate_fixtures.py
+                ${PROJECT_SOURCE_DIR})
+endif()

@@ -18,3 +18,5 @@ if(CHIPCAE_ENABLE_HDF5)
     target_link_libraries(chipcae_io PUBLIC HDF5::HDF5)
     target_compile_definitions(chipcae_io PUBLIC CHIPCAE_ENABLE_HDF5=1)
 endif()
+
+target_sources(chipcae_io PRIVATE src/control_file.cpp)

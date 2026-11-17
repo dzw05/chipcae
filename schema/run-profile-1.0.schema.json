@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:chipcae:run-profile:1.0",
+  "title": "chipcae.run_profile/1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "patternProperties": {
+    "^x-": {}
+  },
+  "required": [
+    "schema",
+    "ranks",
+    "backend",
+    "gpus"
+  ],
+  "properties": {
+    "schema": {
+      "const": "chipcae.run_profile/1.0"
+    },
+    "ranks": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "backend": {
+      "enum": [
+        "cpu",
+        "cuda"
+      ]
+    },
+    "gpus": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "threads_per_rank": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "output_interval": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "steps": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false,
+          "patternProperties": {
+            "^x-": {}
+          },
+          "required": [
+            "steps"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "time": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "patternProperties": {
+            "^x-": {}
+          },
+          "required": [
+            "time"
+          ]
+        }
+      ]
+    }
+  }
+}
