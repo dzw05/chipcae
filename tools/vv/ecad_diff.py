@@ -151,8 +151,7 @@ def _load(path):
         _invalid('invalid external_refs')
     for ref in refs:
         file = _string(ref['path'])
-        if file.endswith('.polyset'):
-            load_polyset(file)
+        load_polyset(file)
     if 'polygon' in outline:
         geometry = _geometry(outline['polygon'])
     else:
