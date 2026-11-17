@@ -10,6 +10,7 @@
 #include <vector>
 
 namespace chipcae::geometry {
+using mesh::StackModel;
 enum class AttachSide { top, bottom };
 struct Bond {
     std::string material;
@@ -32,8 +33,7 @@ struct PlacedPart {
     std::string id, material;
     std::vector<Slab> slabs;
 };
-mesh::Expected<PlacedPart>
-place(std::vector<Slab> local, const Placement&, const mesh::StackModel& base);
+Expected<PlacedPart> place(std::vector<Slab> local, const Placement&, const StackModel& base);
 struct MergeOptions {
     Real t_min, eps_weld, tau_a;
 };
@@ -44,10 +44,10 @@ struct MergeOptions {
 // Copies across split layers and hole-bridge fragments share source identity;
 // use (layer, body, name) to recover provenance, rather than vector position.
 struct MergeResult {
-    mesh::StackModel stack;
+    StackModel stack;
     std::vector<Defect> defects;
     std::int64_t welded_interfaces = 0;
 };
-mesh::Expected<MergeResult>
-merge_parts(mesh::StackModel base, const std::vector<PlacedPart>&, const MergeOptions&);
+Expected<MergeResult>
+merge_parts(StackModel base, const std::vector<PlacedPart>&, const MergeOptions&);
 } // namespace chipcae::geometry

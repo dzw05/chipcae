@@ -5,13 +5,14 @@
 #include <string_view>
 #include <type_traits>
 
-static_assert(std::is_same_v<chipcae::mesh::BodyLevelSet, chipcae::mesh::cut::BodyLevelSet>);
+static_assert(std::is_same_v<decltype(chipcae::mesh::cut::region_level_sets({}, {}, {})),
+                             decltype(chipcae::mesh::cut::CutLayerArrays{}.level_sets)>);
 
 int main() {
     int failures = 0;
     try {
-        (void)chipcae::mesh::region_level_sets({}, {}, {});
-        std::cerr << "FAIL: (void)chipcae::mesh::region_level_sets({}, {}, {}); must throw "
+        (void)chipcae::mesh::cut::region_level_sets({}, {}, {});
+        std::cerr << "FAIL: (void)chipcae::mesh::cut::region_level_sets({}, {}, {}); must throw "
                      "std::logic_error with prefix not implemented: \n";
         ++failures;
     } catch (const std::logic_error& error) {

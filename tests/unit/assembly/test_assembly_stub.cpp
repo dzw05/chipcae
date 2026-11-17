@@ -8,12 +8,14 @@
 
 using PlaceResult = decltype(chipcae::geometry::place({}, {}, {}));
 using MergeResult = decltype(chipcae::geometry::merge_parts({}, {}, {}));
-static_assert(std::is_same_v<PlaceResult, chipcae::mesh::Expected<chipcae::geometry::PlacedPart>>);
-static_assert(std::is_same_v<MergeResult, chipcae::mesh::Expected<chipcae::geometry::MergeResult>>);
+static_assert(
+    std::is_same_v<PlaceResult, chipcae::geometry::Expected<chipcae::geometry::PlacedPart>>);
+static_assert(
+    std::is_same_v<MergeResult, chipcae::geometry::Expected<chipcae::geometry::MergeResult>>);
 static_assert(std::is_same_v<decltype(std::declval<const PlaceResult&>().error()),
-                             const chipcae::mesh::Error&>);
+                             const chipcae::geometry::ImportThresholdError&>);
 static_assert(std::is_same_v<decltype(std::declval<const MergeResult&>().error()),
-                             const chipcae::mesh::Error&>);
+                             const chipcae::geometry::ImportThresholdError&>);
 
 int main() {
     int failures = 0;

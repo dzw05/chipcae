@@ -29,14 +29,20 @@ def errors(document, validator):
     if result:
         return result
     seen = set()
-    for index, part in enumerate(document['parts']):
+    def check_id(part, path):
         if part['id'] in seen:
-            result.append((f'/parts/{index}/id', 'duplicate part ID'))
+            result.append((pointer(path), 'duplicate part ID'))
         seen.add(part['id'])
+
+    # Explicit parts precede the shorthand expansion, regardless of key order.
+    for index, part in enumerate(document['parts']):
+        check_id(part, ['parts', index, 'id'])
         placement = part['placement']
         if 'bond' in placement and 'gap' in placement:
             if placement['gap'] != placement['bond']['thickness']:
                 result.append((f'/parts/{index}/placement/gap', 'gap differs from bond thickness'))
+    for body, part in document.get('parts_from_step', {}).get('bodies', {}).items():
+        check_id(part, ['parts_from_step', 'bodies', body, 'id'])
     return result
 
 
@@ -71,7 +77,19 @@ def main(root):
         return document
 
     positive = check('fcbga_lid_stiffener.assembly.json')
-    check('package_bulk_parts.assembly.json')
+    bulk = check('package_bulk_parts.assembly.json')
+    if bulk is not None:
+        for duplicate_explicit in (False, True):
+            duplicate = copy.deepcopy(bulk)
+            bodies = duplicate['parts_from_step']['bodies']
+            body = 'PACKAGE~BULK/duplicate'
+            bodies[body] = copy.deepcopy(next(iter(bodies.values())))
+            if duplicate_explicit:
+                bodies[body]['id'] = duplicate['parts'][0]['id']
+            expected = '/parts_from_step/bodies/PACKAGE~0BULK~1duplicate/id'
+            found = errors(duplicate, validator)
+            if found != [(expected, 'duplicate part ID')]:
+                failures.append(f'duplicate expanded ID (explicit={duplicate_explicit}): {found}')
     for suffix, expected in {
         'bad_attach': '/parts/0/placement/attach',
         'dup_id': '/parts/1/id',

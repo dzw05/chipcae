@@ -5,11 +5,10 @@
 
 #include <vector>
 
-namespace chipcae::mesh {
+namespace chipcae::mesh::cut {
 struct RegionLSOptions {
     Real inside_tol_rel = 1e-12;
 };
-using BodyLevelSet = cut::BodyLevelSet;
 // Define effective_body(r) as r.body when nonempty, otherwise r.name (exact,
 // case-sensitive strings). For each layer index li and effective body b, the
 // source group is every region index ri in stack.layers[li].regions for which
@@ -24,4 +23,4 @@ using BodyLevelSet = cut::BodyLevelSet;
 // Body identity alone is insufficient: the same body may recur across layers.
 std::vector<BodyLevelSet>
 region_level_sets(const StackModel&, const HexMeshArrays&, const RegionLSOptions&);
-} // namespace chipcae::mesh
+} // namespace chipcae::mesh::cut
