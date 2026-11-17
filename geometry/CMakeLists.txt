@@ -25,15 +25,10 @@ else()
     target_sources(chipcae_geometry PRIVATE src/step_import_unavailable.cpp)
 endif()
 
-# The test target is created later by the top-level tests subdirectory.
-if(CHIPCAE_BUILD_TESTS)
-    cmake_language(DEFER DIRECTORY "${PROJECT_SOURCE_DIR}" CALL
-        target_compile_definitions chipcae_test_repair_policy PRIVATE
-        CHIPCAE_ACCEPT_TEST_JSONCONS=$<BOOL:${CHIPCAE_ENABLE_JSONCONS}>)
-endif()
+# Consumers (including repair-policy tests) inherit the parser availability flag.
+target_compile_definitions(chipcae_geometry PUBLIC
+    CHIPCAE_ACCEPT_JSONCONS=$<BOOL:${CHIPCAE_ENABLE_JSONCONS}>)
 
 if(CHIPCAE_ENABLE_JSONCONS)
     target_link_libraries(chipcae_geometry PRIVATE jsoncons)
-    set_source_files_properties(src/import_accept.cpp PROPERTIES
-        COMPILE_DEFINITIONS CHIPCAE_ACCEPT_JSONCONS=1)
 endif()

@@ -3,7 +3,7 @@
 #include <fstream>
 #include <unordered_set>
 
-#ifdef CHIPCAE_ACCEPT_JSONCONS
+#if CHIPCAE_ACCEPT_JSONCONS
 #include <jsoncons/json.hpp>
 #endif
 
@@ -28,9 +28,10 @@ std::optional<AcceptList> read_accept_file(const std::filesystem::path& path,
     if (!std::filesystem::exists(path, inspection_error)) {
         if (inspection_error)
             return reject("cannot inspect accept file: " + inspection_error.message());
+        // An absent file is normal; inspection failures above carry a fatal error.
         return std::nullopt;
     }
-#ifdef CHIPCAE_ACCEPT_JSONCONS
+#if CHIPCAE_ACCEPT_JSONCONS
     try {
         std::ifstream input(path, std::ios::binary);
         if (!input)

@@ -9,6 +9,10 @@
 #include <iostream>
 #include <stdexcept>
 
+#ifndef CHIPCAE_ACCEPT_JSONCONS
+#error "geometry target must expose jsoncons availability"
+#endif
+
 using namespace chipcae::geometry;
 static void check(bool ok, const char* text) {
     if (!ok) {
@@ -47,7 +51,7 @@ struct AcceptFixture {
         return path;
     }
 };
-#if CHIPCAE_ACCEPT_TEST_JSONCONS
+#if CHIPCAE_ACCEPT_JSONCONS
 void accept_file_roundtrip() {
     AcceptFixture f;
     const auto path = f.write(
@@ -88,13 +92,16 @@ void accept_file_covers_b() {
     entries.erase(entries.rfind(','));
     list = read_accept_file(f.write("{\"accept\":[" + entries + "]}"), &error);
     require(list.has_value(), "covers_b: nine-id file must load");
-    const auto result = apply_repair_policy(defects, accepted_ids(*list));
+    const auto partial_ids = accepted_ids(*list);
+    const auto result = apply_repair_policy(defects, partial_ids);
     require(result.result == ImportResult::ConfirmationRequired, "covers_b: uncovered B");
-    const auto uncovered = std::find_if(result.defects.begin(),
-                                        result.defects.end(),
-                                        [](const Defect& d) { return d.defect_id == "b-9"; });
-    require(uncovered != result.defects.end() && !uncovered->rejection_reason.empty(),
-            "covers_b: uncovered defect rejection reason");
+    const auto rejected = [](const Defect& d) { return !d.rejection_reason.empty(); };
+    require(std::count_if(result.defects.begin(), result.defects.end(), rejected) == 1,
+            "covers_b: exactly one rejected defect");
+    const auto uncovered = std::find_if(result.defects.begin(), result.defects.end(), rejected);
+    require(std::find(partial_ids.begin(), partial_ids.end(), defect_id(*uncovered)) ==
+                partial_ids.end(),
+            "covers_b: rejected canonical id is absent from accepted ids");
 }
 void accept_file_unknown_id() {
     AcceptFixture f;
@@ -133,13 +140,15 @@ void accept_file_duplicate() {
     std::vector<std::string> warnings;
     const auto list = read_accept_file(
         f.write(
-            R"({"accept":[{"defect_id":"id","note":"first"},{"defect_id":"id","note":"second"}]})"),
+            R"({"accept":[{"defect_id":"duplicate-example-42","note":"first"},{"defect_id":"duplicate-example-42","note":"second"}]})"),
         &error,
         &warnings);
     require(list.has_value(), "duplicate: file must load");
     require(list->entries.size() == 1, "duplicate: retain one entry");
     require(list->entries[0].note == "first", "duplicate: retain first occurrence");
     require(warnings.size() == 1, "duplicate: exactly one warning");
+    require(warnings[0].find("duplicate-example-42") != std::string::npos,
+            "duplicate: warning contains input id");
 }
 void accept_file_boundaries() {
     AcceptFixture f;
@@ -179,6 +188,7 @@ bool run_accept_tests() {
     run("accept_file_default_path", accept_file_default_path);
     run("accept_file_duplicate", accept_file_duplicate);
     run("accept_file_boundaries", accept_file_boundaries);
+    run("accept_file_malformed_missing_accept", [] { malformed(R"({"foo":1})"); });
     const std::vector<std::string> invalid{"not JSON",
                                            R"({"accept":{}})",
                                            R"({"accept":[{"defect_id":""}]})",
@@ -239,7 +249,7 @@ int main() {
               std::filesystem::file_size(dir / "import_report.csv") > 0,
           "reports present");
     std::filesystem::remove_all(dir);
-#if CHIPCAE_ACCEPT_TEST_JSONCONS
+#if CHIPCAE_ACCEPT_JSONCONS
     return run_accept_tests() ? 0 : 1;
 #else
     AcceptFixture fixture;
