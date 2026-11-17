@@ -98,4 +98,16 @@ if(CHIPCAE_ENABLE_ECAD)
     add_test(NAME ipc2581_unsupported COMMAND chipcae_test_ipc2581)
     set_tests_properties(ipc2581_stackup ipc2581_copper_area ipc2581_unsupported
         PROPERTIES LABELS "tierA" TIMEOUT 60)
+
+    add_executable(chipcae_test_material_map unit/test_material_map.cpp)
+    target_link_libraries(chipcae_test_material_map PRIVATE chipcae::geometry_ecad)
+    chipcae_set_warnings(chipcae_test_material_map)
+    add_test(NAME ecad_material_missing COMMAND chipcae_test_material_map)
+    set_tests_properties(ecad_material_missing PROPERTIES LABELS "tierA" TIMEOUT 60)
+
+    add_executable(chipcae_test_ecad_e2e integration/ecad/e2e.cpp)
+    target_link_libraries(chipcae_test_ecad_e2e PRIVATE chipcae::geometry_ecad)
+    chipcae_set_warnings(chipcae_test_ecad_e2e)
+    add_test(NAME ecad_e2e_fcbga COMMAND chipcae_test_ecad_e2e)
+    set_tests_properties(ecad_e2e_fcbga PROPERTIES LABELS "nightly" TIMEOUT 300)
 endif()
