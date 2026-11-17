@@ -13,6 +13,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFileSystemModel>
+#include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QProcess>
@@ -131,10 +132,15 @@ QString pick(const std::function<QString()>& picker,
                               "map filter exposes " + QString(name));
                 check(dialog->nameFilters() == QStringList{"JSON (*.json)"}, "exact map filter");
             }
-            if (!map && QStringList{"step", "stp"}.contains(QFileInfo(path).suffix().toLower())) {
-                for (const auto& filter : dialog->nameFilters())
-                    if (filter.contains("B 档"))
-                        dialog->selectNameFilter(filter);
+            if (!map) {
+                check(!dialog->nameFilters().join(' ').contains("*.step") &&
+                          !dialog->nameFilters().join(' ').contains("*.stp"),
+                      "STEP disclosure is absent from selectable filters");
+                bool disclosed = false;
+                for (auto* label : dialog->findChildren<QLabel*>())
+                    disclosed |=
+                        label->text().contains("B 档") && label->text().contains("(*.step *.stp)");
+                check(disclosed, "disabled STEP disclosure remains visible");
             }
             driver.stop();
             if (cancel) {
@@ -230,7 +236,7 @@ code,rc={'confirm':('IMPORT_CONFIRMATION_REQUIRED',6),'reject':('IMPORT_REJECTED
 if mode=='confirm' and '--accept-b-tier' in a: code,rc='OK',0
 if report and mode not in ('missing6','missing0'):
     payload={'code':code,'message':'fixture message','defects':[] if code=='OK' else [{'code':'MOCK_GAP'}]}
-    if mode=='grade-conflict': payload['grade']='C'
+    if mode in ('grade-conflict','crash-map','cancel-report'): payload['grade']='C'
     if mode=='confirm': payload['grade']='B'
     if mode.startswith('bad-'):
         payload['code']='MATERIAL_MAPPING_MISSING'; payload['grade']='B'; rc=9
@@ -240,6 +246,8 @@ if report and mode not in ('missing6','missing0'):
         if mode=='bad-defects-missing': del payload['defects']
         if mode=='bad-defects-type': payload['defects']={}
     pathlib.Path(report).write_text('{' if mode=='corrupt' else json.dumps(payload))
+if mode=='cancel-report':
+    while True: time.sleep(1)
 if mode=='crash-map':
     import os,signal
     os.kill(os.getpid(),signal.SIGKILL)
@@ -510,7 +518,7 @@ sys.exit(rc)
                 check(c.outcome() == ImportOutcome::Running, "Running outcome " + mode);
                 check(!c.start(r), "busy rejects duplicate");
                 check(!c.restartAccepted(), "busy rejects restart");
-                if (mode == "hang")
+                if (mode == "hang" || mode == "cancel-report")
                     QTimer::singleShot(150, &c, [&] {
                         check(!QFile::exists(r.output) && !QFile::exists(r.polyset) &&
                                   !QFile::exists(r.report),
@@ -529,13 +537,17 @@ sys.exit(rc)
                                      ? "MATERIAL_MAPPING_MISSING"
                                  : mode == "lower" ? "ok"
                                                    : "OK";
-            if (mode != "hang" && mode != "launch-failure" && mode != "missing6" &&
-                !mode.startsWith("bad-") && mode != "corrupt")
+            if (mode != "hang" && mode != "crash-map" && mode != "cancel-report" &&
+                mode != "launch-failure" && mode != "missing6" && !mode.startsWith("bad-") &&
+                mode != "corrupt")
                 check(c.reportCode() == code, "raw report code " + mode);
             if (mode == "success" || mode == "grade-conflict")
                 check(c.grade() == (mode == "grade-conflict" ? "C" : ""),
                       "optional grade for display only");
             check(c.needsMaterialMapReselect() == (mode == "map-missing"), "reselection " + mode);
+            if (mode == "crash-map" || mode == "cancel-report")
+                check(c.reportCode().isEmpty() && c.grade().isEmpty() && !c.reportBytes().isEmpty(),
+                      "abnormal run retains diagnostics without result fields");
             if (mode == "crash-map")
                 check(c.exitCode() == 9 && c.exitStatus() == QProcess::CrashExit,
                       "crash fixture distinguishes signal 9 from normal protocol exit 9");
@@ -661,6 +673,7 @@ sys.exit(rc)
             }
         };
         for (const auto& pair : {std::pair{"success", ImportOutcome::Accepted},
+                                 {"cancel-report", ImportOutcome::Failed},
                                  {"confirm", ImportOutcome::NeedsConfirmation},
                                  {"reject", ImportOutcome::Rejected},
                                  {"map-missing", ImportOutcome::Rejected},
@@ -839,6 +852,10 @@ sys.exit(rc)
                 waitFor(c, [&] { check(c.start(r), "start optional recovery"); });
                 check(c.outcome() == ImportOutcome::Rejected && c.needsMaterialMapReselect(),
                       "code 9 recovery is independent of report export");
+                check(!c.start(r.input, r.output) && c.error() == "material map required" &&
+                          c.reportCode().isEmpty() && c.exitCode() == -1 &&
+                          !c.needsMaterialMapReselect(),
+                      "local legacy rejection invalidates prior code 9 result");
                 for (const auto& invalidReport : {"missing0", "corrupt", "mismatch"}) {
                     r.prefix = {script, MOCK_SCRIPT, record, invalidReport};
                     waitFor(c, [&] { check(c.start(r), "start invalid optional report"); });

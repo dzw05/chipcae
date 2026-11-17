@@ -4,6 +4,8 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFileSystemModel>
+#include <QGridLayout>
+#include <QLabel>
 #include <QPushButton>
 #include <QSortFilterProxyModel>
 namespace chipcae::desktop {
@@ -43,7 +45,11 @@ QString ImportSourceDialog::getImportPath(QWidget* parent,
         parent, caption.isEmpty() ? QStringLiteral("Import ECAD") : caption, startDir);
     dialog.setOption(QFileDialog::DontUseNativeDialog);
     dialog.setFileMode(QFileDialog::ExistingFile);
-    dialog.setNameFilters(nameFilters());
+    auto filters = nameFilters();
+    const auto disclosure = filters.takeLast();
+    dialog.setNameFilters(filters);
+    auto* layout = qobject_cast<QGridLayout*>(dialog.layout());
+    layout->addWidget(new QLabel(disclosure, &dialog), layout->rowCount(), 0, 1, -1);
     dialog.setProxyModel(new SourceModel(&dialog));
     auto* buttons = dialog.findChild<QDialogButtonBox*>();
     auto* directory = buttons->addButton(QStringLiteral("Select current ODB++ directory"),

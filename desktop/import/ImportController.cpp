@@ -198,6 +198,10 @@ void ImportController::complete(int code, QProcess::ExitStatus status) {
         validReport = true;
     } catch (const std::exception&) {
     }
+    if (cancelled_ || status != QProcess::NormalExit) {
+        reportCode_.clear();
+        grade_.clear();
+    }
     outcome_ = ImportOutcome::Failed;
     if (!cancelled_ && status == QProcess::NormalExit) {
         if (code == 0 && validReport && reportCode_ == "OK")
