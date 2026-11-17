@@ -33,11 +33,8 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             self.assertIn(key, data, f"missing required field {key}")
         self.assertNotIn("host", data)
         self.assertNotIn("label", data)
-        try:
-            import jsonschema
-            jsonschema.Draft202012Validator(contract).validate(data)
-        except ImportError:
-            pass
+        import jsonschema
+        jsonschema.Draft202012Validator(contract).validate(data)
         self.assertEqual(data["schema_version"], "1")
         self.assertEqual(data["kind"], "REFERENCE")
         self.assertEqual(data["element_type"], "C3D20")

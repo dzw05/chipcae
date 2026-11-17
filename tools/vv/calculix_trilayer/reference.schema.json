@@ -62,7 +62,8 @@
     "rel_delta": { "type": "number" },
     "provenance": {
       "type": "object",
-      "description": "Optional, non-contractual generator metadata.",
+      "description": "Optional, non-contractual generator metadata. Unknown keys must be ignored by consumers.",
+      "additionalProperties": true,
       "properties": {
         "generator": { "type": "string" },
         "label": { "type": "string", "description": "Human-readable prose; not for programmatic comparison." }
