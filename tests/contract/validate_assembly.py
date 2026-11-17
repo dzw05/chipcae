@@ -92,6 +92,7 @@ def main(root):
             if found != [(expected, 'duplicate part ID')]:
                 failures.append(f'duplicate expanded ID (explicit={duplicate_explicit}): {found}')
     for suffix, expected in {
+        'empty_body': '/parts_from_step/bodies',
         'bad_attach': '/parts/0/placement/attach',
         'dup_id': '/parts/1/id',
         'bond_gap_mismatch': '/parts/0/placement/gap',

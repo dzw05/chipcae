@@ -10,7 +10,10 @@ using PlaceResult =
     decltype(chipcae::geometry::place(std::declval<std::vector<chipcae::geometry::Slab>>(),
                                       std::declval<const chipcae::geometry::Placement&>(),
                                       std::declval<const chipcae::geometry::StackModel&>()));
-using MergeResult = decltype(chipcae::geometry::merge_parts({}, {}, {}));
+using MergeResult = decltype(chipcae::geometry::merge_parts(
+    std::declval<chipcae::mesh::StackModel>(),
+    std::declval<const std::vector<chipcae::geometry::PlacedPart>&>(),
+    std::declval<const chipcae::geometry::MergeOptions&>()));
 static_assert(
     std::is_same_v<PlaceResult, chipcae::geometry::Expected<chipcae::geometry::PlacedPart>>);
 static_assert(

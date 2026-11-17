@@ -2,6 +2,8 @@
 #include "chipcae/mesh/background/hex_mesh_arrays.hpp"
 #include "chipcae/schema/stack.hpp"
 
+#include <cstddef>
+#include <optional>
 #include <vector>
 
 namespace chipcae::mesh::cut {
@@ -10,6 +12,10 @@ struct BodyLevelSet {
     // One value per background mesh vertex, in HexMeshArrays::vertices order
     // (phi[i] corresponds to vertices[3*i .. 3*i+2]); negative inside the union.
     std::vector<Real> phi;
+    // Source StackModel layer index for region_level_sets entries. Together with
+    // body, identifies the source group even after entries are reordered/filtered.
+    // Unset for level sets produced without a source stack layer.
+    std::optional<std::size_t> layer_index;
 };
 } // namespace chipcae::mesh::cut
 
@@ -28,8 +34,7 @@ struct RegionLSOptions {
 // Emit one entry per nonempty source group; phi represents its polygon union.
 // Order groups by layer index, then by the smallest source region index in each
 // group. The group body maps to HexMeshArrays::attr_table.bodies.at(b).
-// Entries carry body IDs and samples, without layer or source-region metadata.
-// A body ID alone does not distinguish source groups across layers.
+// Each entry carries its source layer index; (layer_index, body) identifies the group.
 std::vector<BodyLevelSet>
 region_level_sets(const StackModel&, const HexMeshArrays&, const RegionLSOptions&);
 } // namespace chipcae::mesh

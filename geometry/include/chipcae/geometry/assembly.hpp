@@ -37,12 +37,7 @@ Expected<PlacedPart> place(std::vector<Slab> local, const Placement&, const Stac
 struct MergeOptions {
     Real t_min, eps_weld, tau_a;
 };
-// Layers follow increasing z. Copied base regions retain their input order;
-// appended regions follow input part order, then zero-based slab/section order.
-// Hole-bridge fragments use deterministic fragment order within each section.
 // Appended regions have body == PlacedPart::id and name <id>#<slab>#<section>.
-// Copies across split layers and hole-bridge fragments share source identity;
-// use (layer_index, body, name) to recover provenance, rather than vector position.
 struct MergeResult {
     StackModel stack;
     std::vector<Defect> defects;
