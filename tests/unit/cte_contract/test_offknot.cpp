@@ -1,5 +1,5 @@
+#include "../../support/cte_fixtures.hpp"
 #include "chipcae/material/cte_convert.hpp"
-#include "cte_fixtures.hpp"
 
 #include <cmath>
 #include <cstddef>
@@ -49,6 +49,7 @@ int main(int argc, char** argv) try {
     check(tangent_to_secant(tan, test::tangent_to_secant_temperature, value) == StatusCode::Ok,
           "325 tangent status");
     check(near(value, secant_expected), "canonical off-knot secant definition");
+    // Extrapolation probe; expectations use endpoint constant extension, not a new CTE datum.
     const Real below = 225;
     const Real exterior_tangent = sec.alpha.front(); // Constant extension: slope zero.
     // Reverse integration orientation gives a negative area and denominator.

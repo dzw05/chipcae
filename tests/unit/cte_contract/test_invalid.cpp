@@ -1,5 +1,5 @@
+#include "../../support/cte_fixtures.hpp"
 #include "chipcae/material/cte_convert.hpp"
-#include "cte_fixtures.hpp"
 
 #include <cstddef>
 #include <cstdio>
@@ -58,6 +58,12 @@ int main(int argc, char** argv) try {
         reject(bad);
         bad = fixture;
         bad.alpha.push_back(fixture.alpha.back());
+        reject(bad);
+        bad = fixture;
+        bad.temperatures.pop_back();
+        reject(bad);
+        bad = fixture;
+        bad.temperatures.push_back(fixture.temperatures.back());
         reject(bad);
         bad = fixture;
         bad.temperatures[1] = bad.temperatures[0];

@@ -1,5 +1,5 @@
+#include "../../support/cte_fixtures.hpp"
 #include "chipcae/material/cte_convert.hpp"
-#include "cte_fixtures.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -99,17 +99,18 @@ int main(int argc, char** argv) try {
                                (fixture.temperatures[left + 1] - fixture.temperatures[left]);
             const Real expected_derivative =
                 fixture.alpha[index] + (temperature - fixture.reference_temperature) * slope;
-            Real area = 0;
+            Real reference_area = 0;
             for (std::size_t segment = std::min(index, reference);
                  segment < std::max(index, reference);
                  ++segment)
-                area += (fixture.temperatures[segment + 1] - fixture.temperatures[segment]) *
-                        (fixture.alpha[segment] + fixture.alpha[segment + 1]) / 2;
+                reference_area +=
+                    (fixture.temperatures[segment + 1] - fixture.temperatures[segment]) *
+                    (fixture.alpha[segment] + fixture.alpha[segment + 1]) / 2;
             if (index < reference)
-                area = -area;
+                reference_area = -reference_area;
             const Real expected_integral =
                 index == reference ? fixture.alpha[index]
-                                   : area / (temperature - fixture.reference_temperature);
+                                   : reference_area / (temperature - fixture.reference_temperature);
             check(near(derivative[index], expected_derivative), "input knot order derivative");
             check(near(integral[index], expected_integral), "input knot order integral");
             Real scalar = std::numeric_limits<Real>::quiet_NaN();

@@ -1,7 +1,7 @@
+#include "../../tests/support/cte_fixtures.hpp"
 #include "chipcae/material/cte_convert.hpp"
 #include "chipcae/material/prony_viscoelastic.hpp"
 #include "chipcae/material/schema.hpp"
-#include "cte_fixtures.hpp"
 
 #include <cmath>
 #include <cstdio>
