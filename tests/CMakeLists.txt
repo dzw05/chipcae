@@ -211,8 +211,10 @@ add_test(NAME contract_public_headers COMMAND ${CMAKE_COMMAND}
     -DROOT=${PROJECT_SOURCE_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/core/check_public_headers.cmake)
 
 add_subdirectory(contract)
-add_subdirectory(integration/import_cli)
 add_subdirectory(vv)
 
 # Keep this the last line: auto-adds test subdirectories that call chipcae_auto_tests().
 chipcae_auto_test_subdirs()
+
+# Explicit registration for the import CLI golden regression suite.
+add_subdirectory(integration/import_cli)

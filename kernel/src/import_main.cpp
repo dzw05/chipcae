@@ -66,8 +66,10 @@ int main(int argc, char** argv) {
             if (arg == "--accept")
                 has_accept = true;
             std::filesystem::path value;
-            if (!next(value))
-                break;
+            if (!next(value)) {
+                std::cerr << "unknown argument: " << arg << '\n';
+                return CliExit::usage;
+            }
             if (arg == "--accept") {
                 options.accept_file = value;
             } else if (arg == "--stack-override") {

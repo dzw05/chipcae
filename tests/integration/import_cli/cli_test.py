@@ -113,6 +113,14 @@ def run_case(binary, case, generate=False):
                 if b"not implemented yet" not in result.stderr or option.encode() not in result.stderr:
                     failures.append(f"{option}: expected stderr containing 'not implemented yet' "
                                     f"and '{option}'; actual={result.stderr!r}")
+            for option in ("--accept", "--t-min", "--stack-override", "--assembly"):
+                for prefix in ([], ["a.xml", "-o", "stack.json"],
+                               ["a.xml", "-o", "stack.json", "--accept-b-tier"]):
+                    result = invoke(binary, [*prefix, option], directory)
+                    check(result.returncode == 2, f"missing {option}: exit {result.returncode}")
+                    check(result.stdout == b"", f"missing {option}: unexpected stdout")
+                    check(result.stderr == f"unknown argument: {option}\n".encode(),
+                          f"missing {option}: stderr differs: {result.stderr!r}")
             for flags in (("--accept-b-tier", "--accept", "x"),
                           ("--accept", "x", "--accept-b-tier")):
                 result = invoke(binary, [FIXTURES / "board_2layer.xml", "-o", "stack.json", *flags], directory)
