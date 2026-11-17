@@ -3,6 +3,7 @@
 #include "chipcae/solvers/fem/cut_fem.hpp"
 
 #include <cmath>
+#include <iomanip>
 #include <iostream>
 #include <map>
 #include <numeric>
@@ -322,10 +323,13 @@ std::array<double, 2> solve(Domain& d, bool elastic) {
 int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
     try {
+        std::cout << std::setprecision(17);
         for (bool sphere : {false, true})
             for (int degree : {4, 6, 8}) {
                 std::array<std::array<double, 2>, 2> sy{}, sxy{};
                 double sx = 0, sxx = 0;
+                std::array<std::array<double, 2>, 2> previous{};
+                int previous_n = 0;
                 double previous_volume_error = 1, previous_area_error = 1;
                 for (int n : {5, 7, 9, 13}) {
                     double x = std::log(static_cast<double>(n));
@@ -351,6 +355,17 @@ int main(int argc, char** argv) {
                               << " volume_error=" << ve << " area_error=" << ae << std::endl;
                     for (int physics = 0; physics < 2; ++physics) {
                         auto error = solve(d, physics == 1);
+                        if (previous_n)
+                            std::cout << "LEVEL_ORDER " << (sphere ? "sphere" : "rotated-box")
+                                      << " degree=" << degree << " n=" << n
+                                      << " physics=" << (physics ? "elastic" : "heat") << " L2="
+                                      << std::log(previous[physics][0] / error[0]) /
+                                             std::log(double(n) / previous_n)
+                                      << " H1="
+                                      << std::log(previous[physics][1] / error[1]) /
+                                             std::log(double(n) / previous_n)
+                                      << std::endl;
+                        previous[physics] = error;
                         for (int norm = 0; norm < 2; ++norm) {
                             double y = std::log(error[norm]);
                             sy[physics][norm] += y;
@@ -360,6 +375,7 @@ int main(int argc, char** argv) {
                                   << " n=" << n << " physics=" << (physics ? "elastic" : "heat")
                                   << " L2=" << error[0] << " H1=" << error[1] << std::endl;
                     }
+                    previous_n = n;
                 }
                 for (int physics = 0; physics < 2; ++physics) {
                     double l2 = -(4 * sxy[physics][0] - sx * sy[physics][0]) / (4 * sxx - sx * sx);

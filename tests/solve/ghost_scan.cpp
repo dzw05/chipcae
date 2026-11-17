@@ -153,9 +153,11 @@ int main(int argc, char** argv) {
                                     for (int dof : essential) {
                                         if (variant == 2 && cut_dofs.contains(dof))
                                             continue;
+                                        // Match BilinearForm's default DIAG_KEEP policy.
+                                        const double diagonal = dense(dof, dof);
                                         for (int j = 0; j < dense.Height(); ++j)
                                             dense(dof, j) = dense(j, dof) = 0.;
-                                        dense(dof, dof) = 1.;
+                                        dense(dof, dof) = diagonal;
                                     }
                                 out << layered << ' ' << aspect << ' ' << elastic << ' ' << position
                                     << ' ' << gamma << ' ' << variant << ' ' << dense.Height()

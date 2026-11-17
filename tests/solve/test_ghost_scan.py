@@ -20,7 +20,9 @@ with tempfile.TemporaryDirectory() as tmp:
                     diag = np.sqrt(np.diag(matrix))
                     matrix = matrix / (diag[:, None] * diag[None, :])
                 eigen = np.linalg.eigvalsh(matrix)
-                kernel = (6 if elastic else 1) if variant == 0 else 0
+                # Excluding cut-supported DOFs leaves only the central vertical
+                # line clamped: elasticity retains rotation about that line.
+                kernel = (6 if elastic else 1) if variant == 0 else (1 if variant == 2 and elastic else 0)
                 if kernel:
                     # Roundoff relative to the operator norm; also verify that
                     # the next eigenvalue is separated from this numerical kernel.

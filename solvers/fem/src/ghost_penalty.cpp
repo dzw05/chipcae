@@ -26,6 +26,24 @@ GhostPenalty::GhostPenalty(const mesh::HexMeshArrays& m,
                            double gamma,
                            int components)
     : scale_(scale), gamma_(gamma), components_(components) {
+    // faces_ stores local element numbers. Cross-rank ghost faces are unsupported:
+    // cut assembly uses PETSC_COMM_SELF. Use GID lookup before GMG/distributed use.
+    constexpr int reference[8][3] = {
+        {0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}, {0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1}};
+    for (std::size_t e = 0; e < m.elem_gid.size(); ++e) {
+        auto origin = m.hex[8 * e];
+        double h[3];
+        for (int d = 0; d < 3; ++d) {
+            h[d] = m.vertices[3 * m.hex[8 * e + 6] + d] - m.vertices[3 * origin + d];
+            if (!(h[d] > 0))
+                throw std::runtime_error("GhostPenalty requires positive reference orientation");
+        }
+        for (int v = 0; v < 8; ++v)
+            for (int d = 0; d < 3; ++d)
+                if (std::abs(m.vertices[3 * m.hex[8 * e + v] + d] - m.vertices[3 * origin + d] -
+                             reference[v][d] * h[d]) > 1e-12 * h[d])
+                    throw std::runtime_error("GhostPenalty requires affine axis-aligned cells");
+    }
     std::map<Index, int> local;
     for (std::size_t e = 0; e < m.elem_gid.size(); ++e)
         local[m.elem_gid[e]] = e;

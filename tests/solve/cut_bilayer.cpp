@@ -2,6 +2,7 @@
 #include "chipcae/solvers/fem/cut_fem.hpp"
 
 #include <cmath>
+#include <iomanip>
 #include <iostream>
 #include <map>
 #include <set>
@@ -42,7 +43,7 @@ struct Wedge {
     std::array<std::array<double, 2>, 3> xy;
     double lo, hi;
 };
-std::pair<double, double> compare(solve::RunInputs inputs, int n) {
+std::pair<double, double> compare(solve::RunInputs inputs, int n, int layer = -1) {
     inputs.grid.nx = inputs.grid.ny = n;
     inputs.grid.levels = 1;
     std::optional<mesh::cut::CutLayerArrays> clipped;
@@ -126,11 +127,17 @@ std::pair<double, double> compare(solve::RunInputs inputs, int n) {
         }
     }
     fitted.FinalizeMesh();
+    double sample_z = arrays.axes[2].back();
+    if (layer >= 0) {
+        sample_z = arrays.axes[2].front();
+        for (int i = 0; i <= layer; ++i)
+            sample_z += inputs.stack.layers[i].thickness;
+    }
     std::vector<Sample> samples;
     H1_FECollection collection(2, 3);
     for (int e = 0; e < background.GetNE(); ++e) {
         auto* t = background.GetElementTransformation(e);
-        if (arrays.vertices[3 * arrays.hex[8 * e + 6] + 2] != arrays.axes[2].back())
+        if (arrays.vertices[3 * arrays.hex[8 * e + 6] + 2] != sample_z)
             continue;
         const auto& r = collection.FiniteElementForGeometry(Geometry::CUBE)->GetNodes();
         for (int q = 0; q < r.GetNPoints(); ++q) {
@@ -286,7 +293,9 @@ std::pair<double, double> compare(solve::RunInputs inputs, int n) {
         }
         pv[model] = hi - lo;
     }
-    std::cout << "bilayer n=" << n << " PV_cut=" << pv[0] << " PV_fitted=" << pv[1]
+    std::cout << "bilayer n=" << n
+              << " layer=" << (layer < 0 ? int(inputs.stack.layers.size()) - 1 : layer)
+              << " PV_cut=" << pv[0] << " PV_fitted=" << pv[1]
               << " relative=" << std::abs(pv[0] / pv[1] - 1) << std::endl;
     return {pv[0], pv[1]};
 }
@@ -297,8 +306,29 @@ int main(int argc, char** argv) {
         auto inputs = solve::load_inputs(std::filesystem::path(argv[1]) / "case.json",
                                          std::filesystem::path(argv[1]) / "profile.json",
                                          1);
+        std::cout << std::setprecision(17);
+        if (argc > 2 && std::string(argv[2]) == "--gamma-scan") {
+            double reference = 0;
+            for (double gamma : {.01, .1, 1.}) {
+                inputs.ghost_penalty = gamma;
+                auto [pv, fitted] = compare(inputs, 12);
+                if (gamma == .01)
+                    reference = pv;
+                double change = std::abs(pv / reference - 1);
+                std::cout << "GAMMA n=12 gamma=" << gamma << " PV=" << pv
+                          << " T_max=300 relative_to_0.01=" << change << std::endl;
+                if (gamma == .1 && change > .005)
+                    throw std::runtime_error("gamma PV sensitivity exceeds 0.5%");
+            }
+            return MPI_Finalize();
+        }
         double coarse = 0, fine = 0;
         for (int n : {6, 8, 12, 16}) {
+            for (int layer = 0; layer + 1 < int(inputs.stack.layers.size()); ++layer) {
+                auto [layer_cut, layer_fitted] = compare(inputs, n, layer);
+                if (std::abs(layer_cut / layer_fitted - 1) > .01)
+                    throw std::runtime_error("bilayer layer PV reference error exceeds 1%");
+            }
             auto [cut, fitted] = compare(inputs, n);
             double error = std::abs(cut / fitted - 1);
             if (n == 6)

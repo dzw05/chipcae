@@ -81,3 +81,8 @@ if(_solve_backend)
         ${CMAKE_CURRENT_SOURCE_DIR}/test_demo.py $<TARGET_FILE:chipcae-solve> ${PROJECT_SOURCE_DIR})
     set_tests_properties(solve_demo PROPERTIES TIMEOUT 600)
 endif()
+
+if(TARGET chipcae_cut_bilayer)
+    add_test(NAME solve_cut_bilayer_gamma COMMAND chipcae_cut_bilayer ${PROJECT_SOURCE_DIR}/examples/s2_solve --gamma-scan)
+    set_tests_properties(solve_cut_bilayer_gamma PROPERTIES TIMEOUT 1200 LABELS "cut;numerical")
+endif()

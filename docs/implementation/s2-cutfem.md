@@ -96,3 +96,29 @@ convection: a constant 350 K solution missed the 1e-8 K check by 1.54e-8 K.
 The thermal system now solves for `T - T_ref`, including shifted essential and
 convection data, then restores absolute T before mechanics/output. The same
 check measures 2.21e-9 K error; layered conduction is within 1.82e-12 K.
+
+Ghost faces store **local element numbers**. Cross-rank ghost faces are not
+supported. The cut solve is serial-only (`PETSC_COMM_SELF`); GID lookup is
+required before GMG or distributed use. The constructor checks positive,
+consistent reference orientation and affine axis-aligned hexahedra.
+
+The translated body has no physical x=0 face. We retain y=0 as a fixed physical
+face with invariant clamp distance, and measure a second y=0 constraint set
+excluding every DOF supported on a cut cell. Acceptance is decided by the
+natural-boundary nonzero spectrum (one constant or six rigid modes removed),
+independently for raw and Jacobi-scaled matrices, with the unchanged 10x bound.
+The restricted y=0 variant on this 3x2x2 scan fixes only one vertical line;
+elasticity retains rotation about that line. Its full condition number is
+infinite. We additionally report its nonzero spectrum after verifying and
+excluding this one remaining rigid mode; this does not replace the decisive
+natural-boundary test or the original fully clamped test.
+
+Signoff measurements on the merged release build retain the volume coefficient:
+the natural-boundary condition-number variation is at most 5.09671 across the
+50 positions (both spectra must satisfy 10). At bilayer n=12, changing gamma
+from 0.01 to 0.1 changes PV by 0.0458007%; the n=8 S2 application example
+changes by 0.0154750%, both below the unchanged 0.5% regression bound. The
+example prescribes uniform 300 K, so T_max is 300 K at all three gamma values.
+Bilayer output now includes each layer's top-surface PV against the fitted
+reference; manufactured output includes successive-level orders as well as
+the original regression-fit order assertions.
