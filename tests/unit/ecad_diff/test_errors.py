@@ -194,26 +194,65 @@ def main():
             else:
                 assert not out.exists()
 
-        for kind in ('missing', 'malformed', 'symlink', 'hash'):
-            folder = directory / ('unrelated_' + kind)
+        # Without an explicit polygon, every reference is consulted for outline
+        # discovery and must pass the same validation as copper sidecars.
+        for kind, code, name in (
+                ('missing', 12, 'INPUT_REFERENCE_MISSING'),
+                ('malformed', 14, 'INPUT_INVALID'),
+                ('symlink', 14, 'INPUT_INVALID'),
+                ('directory_symlink', 14, 'INPUT_INVALID'),
+                ('hash', 10, 'INPUT_HASH_MISMATCH'),
+                ('valid', 0, None)):
+            folder = directory / ('discovery_' + kind)
             folder.mkdir()
             b = board()
-            unrelated = folder / 'unused.polyset'
-            if kind == 'symlink':
-                unrelated.symlink_to(good)
-            elif kind != 'missing':
-                unrelated.write_bytes(b'not a polyset')
-            b['external_refs'] = [{'path': unrelated.name, 'sha256': '0' * 64}]
+            fixture = board()
+            sidecar = polyset(folder, fixture)
+            data = sidecar.read_bytes()
+            reference = sidecar.name
+            digest = hashlib.sha256(data).hexdigest()
+            if kind == 'missing':
+                sidecar.unlink()
+            elif kind == 'malformed':
+                sidecar.write_bytes(b'not a polyset')
+                digest = hashlib.sha256(sidecar.read_bytes()).hexdigest()
+            elif kind in ('symlink', 'directory_symlink'):
+                outside = directory / (kind + '_discovery_outside')
+                outside.mkdir()
+                target = polyset(outside, board())
+                sidecar.unlink()
+                if kind == 'symlink':
+                    sidecar.symlink_to(target)
+                else:
+                    (folder / 'linked').symlink_to(outside, target_is_directory=True)
+                    reference = 'linked/' + target.name
+            elif kind == 'hash':
+                digest = '0' * 64
+            b['external_refs'] = [{'path': reference, 'sha256': digest}]
             path = save(folder / 'stack.json', b)
+            out = folder / 'reports'
+            try:
+                result = diff_stacks(good, path)
+            except EcadDiffError as exc:
+                assert code and (exc.code, exc.name) == (code, name), (kind, exc)
+            else:
+                assert code == 0, (kind, result)
+                assert result['summary']['hard'] == result['summary']['discuss'] == 0
+            command = [sys.executable, str(ROOT / 'tools/vv/ecad_diff.py'),
+                       '--odb', str(good), '--ipc', str(path), '-o', str(out)]
+            proc = subprocess.run(command, capture_output=True, text=True)
+            assert proc.returncode == code, (kind, proc.stderr)
+            if code:
+                assert len(proc.stderr.splitlines()) == 1, proc.stderr
+                assert proc.stderr.startswith(f'ecad_diff: {name}: '), proc.stderr
+                assert not out.exists()
+            else:
+                assert (out / 'diff.json').exists() and (out / 'diff.md').exists()
+            # An explicit outline does not consult unrelated references.
+            b['outline']['polygon'] = [[0, 0], [0.01, 0], [0.01, 0.005], [0, 0.005]]
+            save(path, b)
             result = diff_stacks(good, path)
             assert result['summary']['hard'] == result['summary']['discuss'] == 0
-            out = folder / 'reports'
-            proc = subprocess.run(
-                [sys.executable, str(ROOT / 'tools/vv/ecad_diff.py'),
-                 '--odb', str(good), '--ipc', str(path), '-o', str(out)],
-                capture_output=True, text=True)
-            assert proc.returncode == 0, (kind, proc.stderr)
-            assert (out / 'diff.json').exists() and (out / 'diff.md').exists()
 
         for kind in ('file', 'directory', 'dangling'):
             target = directory / ('output_target_' + kind)

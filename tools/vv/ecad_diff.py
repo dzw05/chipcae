@@ -189,22 +189,9 @@ def _load(path):
         geometry = _geometry(outline['polygon'])
     else:
         # Outline-only sidecars have no explicit file field in stack/0.2.
-        # Discover usable outline layers without requiring unrelated files.
+        # Validate each consulted reference before inspecting its layers.
         for ref in refs:
-            file = ref['path']
-            if file in polysets:
-                continue
-            try:
-                stack_directory = Path(path).parent.resolve()
-                candidate_path = (stack_directory / file).resolve()
-                if not candidate_path.is_relative_to(stack_directory):
-                    continue
-                candidate = _read_polyset(_bytes(candidate_path))
-            except (EcadDiffError, UnicodeDecodeError, struct.error, OverflowError, ValueError,
-                    OSError, RuntimeError):
-                continue
-            if 'outline' in candidate:
-                load_polyset(file)
+            load_polyset(ref['path'])
         candidates = [p['outline'] for p in polysets.values() if 'outline' in p]
         if len(candidates) > 1:
             _invalid('multiple polysets supply an outline')
