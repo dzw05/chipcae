@@ -4,17 +4,16 @@ Golden source: `1607ad5fde6641a92fb7da7a0a66f456e4ec4adf`, the 11/17
 `origin/main` revision identified in the brief. The test-first branch HEAD was
 exactly this revision when the Release binaries were built; only tests and their
 registration had been added, and no production sources were changed.
-`origin/main` had since advanced to `91eafaa152f6d0dc7b46a2411b627ab98a730a3e`;
-the goldens deliberately use the specified `1607ad5` baseline.
 
-Actual generation commands, run from the repository root:
+Generation commands, run from the repository root (replace the build-directory
+placeholders with local paths):
 
 ```sh
-cmake -S . -B /workspace/tasks/build-istepa-on -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_ENABLE_ECAD=ON -DCHIPCAE_BUILD_TESTS=ON
-cmake -S . -B /workspace/tasks/build-istepa-off -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_ENABLE_ECAD=OFF -DCHIPCAE_BUILD_TESTS=ON
-cmake --build /workspace/tasks/build-istepa-on -j3
-cmake --build /workspace/tasks/build-istepa-off -j3
-tests/integration/import_cli/gen_golden.sh /workspace/tasks/build-istepa-on/kernel/chipcae-import /workspace/tasks/build-istepa-off/kernel/chipcae-import
+cmake -S . -B <build-on-dir> -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_ENABLE_ECAD=ON -DCHIPCAE_BUILD_TESTS=ON
+cmake -S . -B <build-off-dir> -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_ENABLE_ECAD=OFF -DCHIPCAE_BUILD_TESTS=ON
+cmake --build <build-on-dir> -j3
+cmake --build <build-off-dir> -j3
+tests/integration/import_cli/gen_golden.sh <build-on-dir>/kernel/chipcae-import <build-off-dir>/kernel/chipcae-import
 ```
 
 To regenerate later, build that source revision in a separate worktree and pass
@@ -38,8 +37,8 @@ Both register `import_cli_step_unchanged`, `import_cli_reserved_args`, and
 `import_cli_help_unchanged`. All carry the `tierA` and `import_cli` labels.
 
 ```sh
-ctest --test-dir /workspace/tasks/build-istepa-on --output-on-failure
-ctest --test-dir /workspace/tasks/build-istepa-off --output-on-failure
+ctest --test-dir <build-on-dir> --output-on-failure
+ctest --test-dir <build-off-dir> --output-on-failure
 ```
 
 Before implementation, all regression guards must pass. Only the four reserved

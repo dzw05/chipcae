@@ -14,12 +14,6 @@ struct ImportOptions {
     std::filesystem::path stack_override, assembly;
 };
 
-inline constexpr int exit_success = 0;
-inline constexpr int exit_usage = 2;
-inline constexpr int exit_io = 6;
-inline constexpr int exit_import_rejected = 7;
-inline constexpr int exit_material_mapping_missing = 9;
-
 int run_ecad(const ImportOptions& options);
 int run_step(const ImportOptions& options);
 // Format-specific help extension points; each returned string supplies its own newlines.
