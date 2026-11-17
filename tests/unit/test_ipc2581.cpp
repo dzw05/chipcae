@@ -385,6 +385,37 @@ static bool geometry_acceptance() {
         }
         reports(m, {});
     });
+    run("ipc_inline_priority_and_zero_width", [&] {
+        auto m =
+            geometry_xml(geometry_line(1, "<LineDesc lineWidth='0.4'/><LineDescRef id='W'/>") +
+                             geometry_line(3, "<LineDescRef id='W'/><LineDesc lineWidth='0'/>") +
+                             geometry_line(5, "<LineDesc/>"),
+                         "<LineDesc id='W' lineWidth='0.2'/>");
+        area(m, round_area(10, .4));
+        reports(m, {"LineWidthMissing:F.Cu"});
+    });
+    run("ipc_round_coincident_endpoints", [&] {
+        auto m = geometry_xml("<Line startX='1' startY='1' endX='1' endY='1'>"
+                              "<LineDesc lineWidth='0.4' lineEnd='round'/></Line>");
+        area(m, round_area(0, .4));
+        reports(m, {});
+    });
+    run("ipc_linedesc_forward_reference", [&] {
+        auto m = geometry_xml(geometry_line(1, "<LineDescRef id='LATER'/>") +
+                              geometry_line(3, "<LineDesc id='LATER' lineWidth='0.4'/>"));
+        area(m, 2 * round_area(10, .4));
+        reports(m, {});
+    });
+    run("ipc_report_first_problem_order", [&] {
+        auto m = geometry_xml(geometry_line(1, "") + "<VendorExtension/>" + geometry_line(3, "") +
+                              geometry_line(5, "<LineDescRef id='NOPE'/>"));
+        reports(m, {"LineWidthMissing:F.Cu", "VendorExtension", "LineDescMissing:NOPE"});
+        check(m.report.unsupported.size() == 3 &&
+                  m.report.unsupported[0].element == "LineWidthMissing:F.Cu" &&
+                  m.report.unsupported[1].element == "VendorExtension" &&
+                  m.report.unsupported[2].element == "LineDescMissing:NOPE",
+              "deferred reports retain first-problem order");
+    });
     run("ipc_line_width_missing", [&] {
         auto m = geometry_xml(geometry_line(1, "") + geometry_line(3, "") +
                               geometry_line(5, "<LineDesc id='valid' lineWidth='0.4'/>"));
