@@ -11,6 +11,8 @@
     "label",
     "W_bfp_m",
     "element_type",
+    "host",
+    "calculix_version",
     "geometry",
     "meshes",
     "selected_mesh",
@@ -23,7 +25,9 @@
     "kind": { "const": "REFERENCE", "type": "string" },
     "label": { "type": "string", "minLength": 1 },
     "W_bfp_m": { "type": "number" },
-    "element_type": { "type": "string", "minLength": 1 },
+    "element_type": { "type": "string", "const": "C3D20" },
+    "host": { "type": "string", "minLength": 1 },
+    "calculix_version": { "type": "string", "minLength": 1 },
     "geometry": {
       "type": "object",
       "additionalProperties": false,
@@ -71,18 +75,8 @@
     "rel_delta": { "type": "number" },
     "provenance": {
       "type": "object",
-      "description": "Optional, non-contractual generator metadata. Ignoring unknown keys under provenance is a consumer convention outside schema enforcement; additionalProperties is true so new metadata can be added without a schema bump.",
-      "additionalProperties": true,
-      "properties": {
-        "generator": { "type": "string" },
-        "calculix_version": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Free-form ccx banner; informational, not a stable token."
-        },
-        "host": { "type": "string", "minLength": 1, "description": "Optional execution-host provenance." },
-        "label": { "type": "string", "description": "Human-readable prose; not for programmatic comparison." }
-      }
+      "description": "Optional, non-contractual generator metadata; arbitrary keys and values are permitted.",
+      "additionalProperties": true
     }
   }
 }

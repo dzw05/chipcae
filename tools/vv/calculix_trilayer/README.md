@@ -3,7 +3,7 @@
 Independent open-source reference for the 1 m × 1 m trilayer warpage case.
 Results in `REFERENCE.json` (`schema_version` 1) are **REFERENCE values** (not measured data, not
 an analytical solution). They may be compared with the early MFEM+MUMPS
-prototype `W_bfp = 4.269532769e-3` m. Validation applies only the broad `rel_delta < 0.5` sanity bound; the V&V
+prototype 参考值（原型计算值） `W_bfp = 4.269532769e-3` m. Validation applies only the broad `rel_delta < 0.5` sanity bound; the V&V
 specialist chooses the comparison acceptance criterion later.
 
 ## Model
@@ -16,7 +16,7 @@ specialist chooses the comparison acceptance criterion later.
 - Boundary conditions: 3-2-1 on the z = 0 corners, as in
   `apps/chipcae-solve/README.md` (xmin/ymin fix ux,uy,uz; xmax/ymin fix uy,uz;
   xmin/ymax fix uz).
-- Solver: conda-forge package `calculix=2.23`; the `ccx -v` runtime
+- Solver environment: `/workspace/tools/calculix-env`; conda-forge package `calculix=2.23`; the `ccx -v` runtime
   version string is `This is Version 2.23`.
 
 ## Regenerating
@@ -51,11 +51,15 @@ mesh value. The test validator normalizes a copy of the schema with a
 `contains` constraint binding the selected name and top-level value via `const`,
 since JSON Schema cannot directly compare two instance fields. Validation checks
 this relationship and the broad `rel_delta < 0.5` sanity bound. Required `label`
-records the reference status. `host` and `calculix_version` belong only under
-optional `provenance`, outside the stable numerical contract. The generator
-records them as `provenance.host` and `provenance.calculix_version`; top-level
-forms are rejected by the v1 schema. Reports use `ccx=unknown` when the optional
-version banner is absent.
+records the reference status. The brief requires top-level `host` and
+`calculix_version` strings. Optional `provenance` accepts arbitrary keys and
+values and does not replace those required fields. Reports use the required
+top-level version banner and preserve the brief's exact single-line format.
+
+Recorded W_bfp: coarse 0.004271023422273522 m; fine (selected)
+0.004274306997289974 m. Reproducible input decks are generated in `work/`
+by `generate.py`; rerun the generator to recreate them. Scipy is used indirectly
+by the shared `interp_grid` function for linear interpolation.
 
 Run `python3 -m unittest tools.vv.test_trilayer_calculix_ref` after generation.
 Only passing validation prints the delta report and checks the same single line

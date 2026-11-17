@@ -62,10 +62,10 @@
   "rel_delta": 0.0011182086069553374,
   "provenance": {
     "generator": "tools/vv/calculix_trilayer/generate.py",
-    "label": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解",
-    "host": "box Linux x86_64",
-    "calculix_version": "This is Version 2.23"
+    "label": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解"
   },
   "label": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解",
-  "W_bfp_m": 0.004274306997289974
+  "W_bfp_m": 0.004274306997289974,
+  "host": "box Linux x86_64",
+  "calculix_version": "This is Version 2.23"
 }
