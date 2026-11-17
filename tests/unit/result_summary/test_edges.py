@@ -100,6 +100,35 @@ class Edges(unittest.TestCase):
             self.assertEqual(result['warpage']['n_top_points'], 0)
             self.assertIsNone(result['warpage']['w_bfp_m'])
 
+    def test_empty_temperature_datasets(self):
+        for empty_geometry in (False, True):
+            for temperature_blocks in (('cut',), ('hex', 'cut')) if empty_geometry else (('cut',),):
+                with self.subTest(empty_geometry=empty_geometry, temperature_blocks=temperature_blocks), tempfile.TemporaryDirectory() as tmp:
+                    run = Path(tmp)
+                    step, _ = fixture(run)
+                    with h5py.File(step, 'r+') as f:
+                        if empty_geometry:
+                            block = f['VTKHDF/hex']
+                            for path in ('Points', 'PointData', 'CellData', 'Types'):
+                                del block[path]
+                            block['NumberOfPoints'][...] = 0
+                            block['NumberOfCells'][...] = 0
+                        else:
+                            del f['VTKHDF/hex/PointData/T']
+                        for name in ('hex', 'cut'):
+                            block = f['VTKHDF/' + name]
+                            if 'PointData/T' in block:
+                                del block['PointData/T']
+                            if name in temperature_blocks:
+                                block['PointData/T'] = np.empty(0, dtype='float64')
+                    result = summarize(run)
+                    self.assertIsNone(result['temperature'])
+                    self.assertEqual(result['warpage']['n_top_points'], 0 if empty_geometry else 9)
+                    out = io.StringIO()
+                    with contextlib.redirect_stdout(out):
+                        self.assertEqual(main([str(run)]), 0)
+                    self.assertIn('"temperature": null', out.getvalue())
+
     def test_structural_errors(self):
         for case in ('corrupt', 'U_components', 'negative_counts', 'cut_types', 'root_version'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:

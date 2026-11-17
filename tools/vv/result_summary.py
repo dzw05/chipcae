@@ -170,11 +170,12 @@ def _summarize(run_dir, top_rel_tol):
         _, residual = best_fit_plane(points[top, 0], points[top, 1], u[top, 2])
         w = float(np.ptp(residual))
     temperature = None
+    # Empty datasets contain no temperature samples, even when geometry exists.
     available = [d[2] for d in data if d[2] is not None and len(d[2])]
     if available:
-        all_t = np.concatenate(available)
         _require(all(d[2] is not None for d in data if len(d[0])),
                  "partial T coverage: temperature required for every nonempty block")
+        all_t = np.concatenate(available)
         # Keep temperatures paired with the original point indices selected
         # above; duplicate coordinates retain their first stored value.
         tt = all_t[top]
