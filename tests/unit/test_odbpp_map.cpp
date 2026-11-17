@@ -1,5 +1,6 @@
 #include "map.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <iostream>
@@ -205,8 +206,7 @@ void stackup() {
 void missing_thickness() {
     rejected(missing(), {"3", "TOP", "CORE", "BOTTOM"});
 }
-// Acceptance requires an exact filename source. The frozen MapOptions currently
-// cannot carry this filename; keep this contract gap visible until resolved.
+// The frozen options use the private mapper convention thickness.json for provenance.
 void overrides() {
     ThicknessOverrides o = {
         {"TOP", 35e-6}, {"CORE", 800e-6}, {"BOTTOM", 35e-6}, {"PREPREG", 300e-6}};
@@ -314,6 +314,110 @@ void collision() {
     ThicknessOverrides o = {{"top", 35e-6}, {"TOP", 36e-6}};
     rejected(board(), {"top", "TOP"}, {&o, nullptr});
 }
+void holes_and_profile() {
+    auto j = board();
+    auto hole = square(2);
+    hole.is_hole = true;
+    hole.start = {2, 2};
+    for (auto& seg : hole.segs) {
+        seg.end.x += 2;
+        seg.end.y += 2;
+    }
+    j.features["TOP"].surfaces.front().contours.push_back(hole);
+    j.profile.contours.push_back(hole);
+    auto m = mapped(j);
+    near(area(m), 60e6, 1e-6);
+    require(m.report.unsupported.size() == 1 &&
+                m.report.unsupported.front().element == "ProfileHole",
+            "profile hole report");
+    require(m.outline.points.size() == 4, "profile outer contour");
+}
+void pads_and_arcs() {
+    auto j = board();
+    auto& f = j.features["TOP"];
+    f.surfaces.clear();
+    f.symbols = {{"ReCt2000x1000"}, {"OvAl2000x1000"}, {"ROUND1000"}};
+    f.pads = {{{2, 2}, 0, true, 90, true}};
+    auto m = mapped(j);
+    near(area(m), 2e6);
+    std::int64_t xmin = 100000, xmax = -100000, ymin = 100000, ymax = -100000;
+    for (const auto& polygon : m.layers[0].polygons)
+        for (const auto& p : polygon.points) {
+            xmin = std::min(xmin, p[0]);
+            xmax = std::max(xmax, p[0]);
+            ymin = std::min(ymin, p[1]);
+            ymax = std::max(ymax, p[1]);
+        }
+    require(xmin == 1500 && xmax == 2500 && ymin == 1000 && ymax == 3000,
+            "rotated mirrored rectangle");
+    f.pads = {{{2, 2}, 1, true}};
+    near(area(mapped(j)), 1e6 + std::numbers::pi * 250000, 1e-3);
+    f.pads.clear();
+    f.arcs = {{{4, 2}, {2, 4}, {2, 2}, 2, true, false}};
+    // IPC's source arc tolerance permits chord error; test a quarter annulus plus round caps.
+    near(area(mapped(j)), std::numbers::pi * 1e6 + std::numbers::pi * 250000, 0.02);
+    auto inch = j;
+    inch.units = OdbUnits::inch;
+    for (auto& [name, attrs] : inch.attrs.layer)
+        attrs[".layer_dielectric"] = name == "TOP" || name == "BOTTOM" ? "0.0013779527559055118"
+                                     : name == "CORE"                  ? "0.031496062992125984"
+                                                                       : "0.007874015748031496";
+    for (auto& c : inch.profile.contours) {
+        c.start.x /= 25.4;
+        c.start.y /= 25.4;
+        for (auto& seg : c.segs) {
+            seg.end.x /= 25.4;
+            seg.end.y /= 25.4;
+        }
+    }
+    auto& arc = inch.features["TOP"].arcs.front();
+    for (auto* p : {&arc.s, &arc.e, &arc.c}) {
+        p->x /= 25.4;
+        p->y /= 25.4;
+    }
+    inch.features["TOP"].symbols[2].name = "round39.37007874015748";
+    equal(mapped(j), mapped(inch));
+}
+void boundaries() {
+    rejected(OdbJob{}, {"empty"});
+    auto j = board();
+    std::reverse(j.layers.begin(), j.layers.end());
+    for (auto& l : j.layers) {
+        if (l.type == "signal")
+            l.type = "SIGNAL";
+        if (l.type == "dielectric")
+            l.type = "DIELECTRIC";
+    }
+    equal(mapped(board()), mapped(j));
+    ThicknessOverrides o = {{"top", 35e-6 * (1 + 1e-10)}};
+    std::vector<ThicknessRecord> records;
+    mapped(j, {&o, &records});
+    require(records.front().source == "odb" && !records.front().odb_value_m,
+            "matching override retains ODB");
+    o["top"] = -1;
+    rejected(j, {"top"}, {&o, nullptr});
+}
+void drill_rejections() {
+    auto j = board();
+    OdbLayer l;
+    l.name = "DRILL";
+    l.type = "DRILL";
+    l.start_name = "TOP";
+    l.end_name = "BOTTOM";
+    j.layers.push_back(l);
+    j.features["DRILL"].symbols = {{"r600"}};
+    j.features["DRILL"].pads = {{{2, 3}, 0, true}};
+    auto m = mapped(j);
+    require(m.vias.empty() && m.report.unsupported.size() == 1 &&
+                m.report.unsupported.front().element == "ViaPlatingMissing:DRILL",
+            "no default plating");
+    j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
+    j.layers.back().end_name.clear();
+    m = mapped(j);
+    require(m.vias.empty() && m.report.unsupported.size() == 1 &&
+                m.report.unsupported.front().element == "ViaSpan:DRILL",
+            "no default span");
+}
 } // namespace
 int main() {
     const std::pair<const char*, std::function<void()>> tests[] = {
@@ -330,7 +434,11 @@ int main() {
         {"odbpp_map_via", via},
         {"odbpp_map_duplicate_geometry", duplicate_geometry},
         {"odbpp_map_duplicate_layer", duplicate_layer},
-        {"odbpp_map_override_collision", collision}};
+        {"odbpp_map_override_collision", collision},
+        {"odbpp_map_holes_profile", holes_and_profile},
+        {"odbpp_map_pads_arcs", pads_and_arcs},
+        {"odbpp_map_boundaries", boundaries},
+        {"odbpp_map_drill_rejections", drill_rejections}};
     int failures = 0;
     for (const auto& [name, test] : tests) {
         try {

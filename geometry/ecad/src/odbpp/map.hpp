@@ -8,7 +8,7 @@
 #include <vector>
 namespace chipcae::geometry::ecad::odbpp_detail {
 using detail::OdbJob;
-// Compile-only bridge until the prerequisite supplies the Expected abstraction.
+// The repository result already owns EcadModel and its import diagnostic.
 template <class T>
 using Expected = ImportResult;
 using ThicknessOverrides = std::map<std::string, double>;
@@ -22,5 +22,9 @@ struct MapOptions {
     const ThicknessOverrides* overrides = nullptr;
     std::vector<ThicknessRecord>* records = nullptr;
 };
+// Shared private implementation helpers; no public API additions.
+std::string fold_ascii(std::string);
+double unit_m(const OdbJob&);
+void map_stackup(const OdbJob&, const MapOptions&, ImportResult&);
 Expected<EcadModel> map_odb(const OdbJob&, const MapOptions& = {});
 } // namespace chipcae::geometry::ecad::odbpp_detail
