@@ -131,6 +131,8 @@ int main(int argc, char** argv) try {
     }
     // Move Tref independently of the first knot. Include references in both
     // segments and beyond either endpoint, with queries on both sides of Tref.
+    // Each numeric table is interpreted independently in each conversion direction;
+    // derivative and integral expectations use that direction's definition.
     for (auto probe : {sec, tan}) {
         std::swap(probe.alpha[1], probe.alpha[2]);
         const auto& knots = probe.temperatures;
@@ -182,6 +184,9 @@ int main(int argc, char** argv) try {
                 verify_derivative(temperature, value);
             }
             auto verify = [&](Real temperature, Real actual) {
+                // Both fixtures remain positive under interpolation and extension.
+                check(std::isfinite(actual) && actual > 0,
+                      "arbitrary reference secant is finite and positive");
                 if (temperature == reference) {
                     Real limit = probe.alpha.front();
                     if (reference >= knots.back())
