@@ -43,7 +43,18 @@ Do not point `TIER_A_RUNNER` at a label that has no runner. The build job waits 
 
 ### Compiler cache
 
-The build job installs `ccache` and restores `~/.cache/ccache` with `actions/cache`. The key is `ccache-gcc-release-` plus a hash of the C++ sources and CMake files. CMake is configured with `-DCMAKE_CXX_COMPILER_LAUNCHER=ccache`. There is no CMake file change for this; the flag is on the workflow command line.
+The Linux build jobs install `ccache` and use `${{ github.workspace }}/.ccache` as `CCACHE_DIR`, restored with `actions/cache`. This applies to `ci.yml`, `mesh.yml`, `nightly-mesh-fulldep.yml`, `nightly-mpi.yml`, and `nightly-mpi-gpu.yml`. The main Release key starts with `ccache-gcc-release-`; full-dependency mesh uses `ccache-k1-fulldep-` and `CCACHE_MAXSIZE=500M`. Keep each job's existing compiler/configuration keys isolated. Explicit `-DCMAKE_C_COMPILER_LAUNCHER=ccache` and `-DCMAKE_CXX_COMPILER_LAUNCHER=ccache` settings take precedence over automatic detection.
+
+For local builds, install `ccache` on PATH and keep `/workspace/tasks/shim` first on PATH. The shim and `/workspace/tasks/slot.sh` default `CCACHE_DIR` to `/workspace/.ccache` and export missing C/C++ launcher environment variables as `ccache`. Supplied environment values are preserved. Slot limits remain three slots, `-j3`, nice 10, with nested commands using `CHIPCAE_SLOT_HELD`. Configure a new build directory to initialize CMake launchers from the environment. The CMake module independently finds ccache and fills empty C/C++ launchers; without ccache, configuration and tool execution proceed normally.
+
+```sh
+export PATH=/workspace/tasks/shim:$PATH
+cmake -S . -B build-local-cache -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build-local-cache
+CCACHE_DIR=/workspace/.ccache ccache --show-stats
+```
+
+The Mac self-hosted runner convention from the pending PR #64 draft is `CCACHE_DIR=$HOME/chipcae-ci/ccache` with `CCACHE_MAXSIZE=2G`. This documents the convention; the draft workflow is unchanged.
 
 ### Nightly mesh full-dependency cache
 
