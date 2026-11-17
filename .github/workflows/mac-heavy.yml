@@ -1,0 +1,140 @@
+name: Mac heavy
+
+# Heavy build-and-test on Zhiwei's self-hosted Mac (label mac-heavy).
+# Informational only: not part of ci-ok and not a required check.
+# No pull_request trigger on purpose, so fork PRs can never run code on this
+# machine. Runs on manual dispatch and on pushes to feat/s2-* and feat/o3-*.
+# Toolchain comes from the user-local conda-forge env at ~/chipcae-ci/env
+# (micromamba, no sudo). Kokkos 4.7.01 (Serial+OpenMP) is built once from
+# source and cached under ~/chipcae-ci/deps, matching the hosted CI pin.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "feat/s2-*"
+      - "feat/o3-*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-heavy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  KOKKOS_VERSION: "4.7.01"
+  CMAKE_BUILD_PARALLEL_LEVEL: "6"
+  CTEST_PARALLEL_LEVEL: "6"
+  OMP_NUM_THREADS: "1"
+  OMP_PROC_BIND: "false"
+
+jobs:
+  build-test:
+    name: Mac build and test
+    if: github.repository == 'dzw05/chipcae'
+    runs-on: [self-hosted, macOS, ARM64, mac-heavy]
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Activate toolchain
+        run: |
+          set -euo pipefail
+          env_prefix="$HOME/chipcae-ci/env"
+          test -x "$env_prefix/bin/cmake" || { echo "missing $env_prefix; install the micromamba env first"; exit 1; }
+          # conda-forge clangxx_osx-arm64 ships prefixed compilers
+          # (arm64-apple-darwin20.0.0-clang++), not unprefixed clang/clang++.
+          if [ -x "$env_prefix/bin/clang++" ]; then
+            cc="$env_prefix/bin/clang"
+            cxx="$env_prefix/bin/clang++"
+          else
+            cc=$(ls "$env_prefix"/bin/*-clang)
+            cxx=$(ls "$env_prefix"/bin/*-clang++)
+          fi
+          test -x "$cc" && test -x "$cxx"
+          {
+            echo "CONDA_PREFIX=$env_prefix"
+            echo "CMAKE_PREFIX_PATH=$env_prefix"
+            echo "CC=$cc"
+            echo "CXX=$cxx"
+            echo "CCACHE_DIR=$HOME/chipcae-ci/ccache"
+            echo "CCACHE_MAXSIZE=2G"
+          } >> "$GITHUB_ENV"
+          echo "$env_prefix/bin" >> "$GITHUB_PATH"
+
+      - name: Toolchain versions
+        run: |
+          set -euo pipefail
+          cmake --version | head -1
+          ninja --version
+          clang++ --version | head -1
+          mpicxx --showme:version 2>/dev/null || true
+          sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize
+
+      - name: Build Kokkos (cached)
+        run: |
+          set -euo pipefail
+          prefix="$HOME/chipcae-ci/deps/kokkos-${KOKKOS_VERSION}-openmp-Release"
+          if [ -f "$prefix/lib/cmake/Kokkos/KokkosConfig.cmake" ]; then
+            echo "Kokkos cache hit: $prefix"
+          else
+            src="$RUNNER_TEMP/kokkos-src"; build="$RUNNER_TEMP/kokkos-build"
+            rm -rf "$src" "$build"; mkdir -p "$src"
+            curl -fsSL "https://github.com/kokkos/kokkos/archive/refs/tags/${KOKKOS_VERSION}.tar.gz" \
+              | tar -xz -C "$src" --strip-components=1
+            cmake -S "$src" -B "$build" -G Ninja \
+              -DCMAKE_INSTALL_PREFIX="$prefix" \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_CXX_STANDARD=20 \
+              -DKokkos_ENABLE_SERIAL=ON \
+              -DKokkos_ENABLE_OPENMP=ON \
+              -DKokkos_ENABLE_CUDA=OFF \
+              -DKokkos_ENABLE_TESTS=OFF \
+              -DKokkos_ENABLE_EXAMPLES=OFF \
+              -DBUILD_SHARED_LIBS=OFF
+            cmake --build "$build"
+            cmake --install "$build"
+          fi
+          echo "KOKKOS_PREFIX=$prefix" >> "$GITHUB_ENV"
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          ccache --zero-stats || true
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DKokkos_ROOT="$KOKKOS_PREFIX" \
+            -DCHIPCAE_REQUIRE_KOKKOS=ON \
+            -DCHIPCAE_ENABLE_KOKKOS=ON \
+            -DCHIPCAE_MATERIAL_ENABLE_PYTHON=OFF
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          cmake --build build --parallel 6
+          echo "build seconds: $(( $(date +%s) - start ))"
+          ccache --show-stats || true
+
+      - name: Test
+        timeout-minutes: 45
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          ctest --test-dir build --output-on-failure -j 6 --timeout 900 \
+            --output-junit "$PWD/build/junit.xml"
+          echo "test seconds: $(( $(date +%s) - start ))"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-heavy-results-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: build/junit.xml
