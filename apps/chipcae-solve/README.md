@@ -1,69 +1,104 @@
-# O2 uncut solver
+# Q2 thermal stress solver
 
-`chipcae-solve --case case.json --profile run_profile.json --out run_dir`
+`chipcae-solve --case case.json --profile profile.json --out run_dir [--cut-output hex]`
 
-The numerical build requires JSONcons, yaml-cpp, MPI, HDF5 and MFEM built with
-PETSc. Enable `CHIPCAE_ENABLE_JSONCONS`, `CHIPCAE_ENABLE_MPI`,
-`CHIPCAE_ENABLE_HDF5` and `CHIPCAE_ENABLE_MFEM`, and set the corresponding package
-paths. yaml-cpp 0.8.0 (MIT) is fetched if no installed package is found. With
-CMake 4, configure with `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` for yaml-cpp.
-Bare builds retain `--help` and report an unavailable numerical backend.
+Build with JSONcons, yaml-cpp, MPI, HDF5 and PETSc-enabled MFEM. Enable
+`CHIPCAE_ENABLE_JSONCONS`, `CHIPCAE_ENABLE_MPI`, `CHIPCAE_ENABLE_HDF5` and
+`CHIPCAE_ENABLE_MFEM`. Copper mixtures use the material library's shared laminate helper;
+material-point comparison tests additionally use Kokkos (`Kokkos_DIR`). yaml-cpp 0.8.0 is fetched when unavailable; CMake 4
+needs `-DCMAKE_POLICY_VERSION_MINIMUM=3.5`. Bare builds retain input validation
+and `--help`, and report an unavailable numerical backend.
 
-JSON and YAML cases resolve relative file references against their containing
-file. Optional SHA-256 checks precede parsing. Materials use the B1 container
-`{schema: "chipcae.material_library/1", materials: [material.v1 cards...]}`;
-IDs must be unique, and all layer, region and copper material names must map.
-O2 supports constant, isotropic thermoelastic cards with single-knot E, nu and
-alpha tables. Unsupported constitutive models are rejected explicitly. Steady
-conduction also requires positive scalar `conductivity` in W/(m K) on each card.
-The material schema defines this optional scalar property; the conduction
-loader requires it. Copper fractions use M1's orthotropic laminate
-rules and arithmetic in-plane / harmonic normal conductivity. Polygon copper
-maps and geometries requiring cuts report CUT_UNSUPPORTED; aligned boxes work.
+JSON/YAML cases resolve references relative to their containing file. Optional
+SHA-256 checks precede parsing. The material library container is
+`{schema: "chipcae.material_library/1", materials: [material.v1 cards...]}`.
+Cards must be constant isotropic thermoelastic materials with single-knot E,
+nu and alpha tables; steady conduction also requires positive `conductivity`
+in W/(m K). Layer and aligned region materials remain distinct. Copper fractions
+call the material module's shared M7 law also used by `CopperMixture`; conductivity is arithmetic in
+plane and harmonic through thickness. Polygon copper maps and internal material
+cuts are rejected.
 
-The executable builds the uncut tensor grid, assembles FP64 H1 Q2 conduction
-and thermal elasticity, and solves with PETSc's built-in sequential sparse LU
-plus residual-checked iterative refinement. Each MPI rank solves a redundant
-global system, appropriate for demonstration meshes; this does not provide
-scalable distributed assembly. Result cells follow the unsplit Morton column
-ownership. `column_gmg` emits a warning and falls back to this direct solver.
-3-2-1 fixes xyz at the bottom xmin/ymin corner, yz at xmax/ymin and z at
-xmin/ymax. Fixed face constraints are also supported.
+A stack outline may be a convex polygon extruded through every layer, with or
+without a repeated closing vertex. Vertices must lie inside `outline.box`.
+When the inline polygon is absent, a hash-checked `external_refs` polyset may
+supply one ring in its `outline` layer. Clockwise and counterclockwise rings work.
+The solver constructs the complete bounding grid, clips it with mesh-owned plane
+half-spaces, removes exterior cells and their exclusive DOFs, and preserves
+surviving element/node GIDs. Layer interfaces remain aligned with z faces.
+Non-convex outlines, holes, general curved solids and internal material cuts
+are unsupported. A sphere in numerical tests is an explicitly faceted convex
+plane approximation, refined together with the background mesh.
 
-Results use O1's VTKHDF writer with 8-node linear hexes. T and U are explicitly
-interpolated from Q2 into nodal Q1 spaces on the same mesh. This preserves vertex
-values but discards quadratic variation within each cell; it is a lower-order
-visualization, not the full Q2 field. Selected fields are honored; summaries use
-all Q2 nodes. `warpage_pv` removes the least-squares
-plane from top-surface Q2 displacement samples. The manifest includes T_max,
-U_mag_max, warpage_pv and the global mesh hash, independent of MPI size.
-`events.bin` contains CAELOG1 state, progress, residual, warning, output,
-control acknowledgement and exit records. Complete `control.jsonl` lines are
-checked after each physics field; STOP acknowledges the last completed stage
-and exits with reason `user_stop`. Partial lines wait, malformed lines warn,
-old sequences are ignored and unsupported actions are rejected.
+For example, `mesh.cut` accepts:
 
-`solve_inputs` checks CLI, JSON/YAML, references, material schemas/mappings,
-integer bounds and profiles. `solve_mesh` checks the 128-cell/two-owner grid.
-With the numerical backend, `solve_pipeline` exercises Timoshenko curvature,
-the three-layer prototype reference, fixed-temperature/convection/source
-conduction, np=1/2 consistency, field selection and STOP, using independent
-h5py/numpy readback. Select a Python interpreter containing these packages via
-`Python3_EXECUTABLE`. Existing O1 tests provide additional VTK reader checks.
+```json
+{"stabilization":"ghost_penalty", "quad_degree":6, "gamma_g":0.1}
+```
 
-The kernel publishes `mesh: {nx0, ny0, L, padded_cells, nz, mesh_sha256}` in
-`manifest.json` immediately after mesh generation and before solving. STOP
-retains this manifest with an empty steps array. The SHA-256 covers background
-hexes only: int64 LE `[nx0, ny0, L, nz, node_count, element_count]`, then float64
-LE xyz in global node order, then int64 LE global connectivity in elem_gid order.
-`case.mesh` nx/ny/max_ratio/levels/cell_budget feed GridOptions; levels=0 selects
-levels automatically using the profile ranks. The pipeline tests np=1/2 equality
-and reconstructs the digest independently from VTKHDF data.
+Quadrature degrees 2, 4, 6 and 8 are supported; the default is 6. All cut volume,
+embedded and clipped Cartesian face integration rules come from the mesh module.
+FEM checks positive integrated volume and agreement with polyhedron volume to
+relative tolerance 1e-12. Ghost stabilization includes first and second normal
+derivative jumps with `h_perp` and `h_perp^3`, scaled by thermal conductivity or
+normal elastic stiffness (`2 mu + lambda` for isotropic material). Setting
+`gamma_g` to zero disables stabilization and can produce singular small-cut
+systems. Across thermal material interfaces the jumps are conductivity weighted;
+across elastic material interfaces curvature is extended without penalizing the
+physical piecewise affine strain jump.
 
-Preview digest comparison (`solve_preview_mesh_digest`) is explicitly skipped
-pending **PR #43**, which has not merged into main. The PR dependency is preview
-exposing its digest for the same stack and grid parameters; enable the comparison
-when that API lands.
+Heat is solved before elasticity, with T evaluated in the same H1 Q2 space.
+Embedded boundaries support natural insulation, traction-free mechanics and
+convection. Embedded fixed temperature/displacement fail explicitly with
+CUT_UNSUPPORTED: Nitsche is not implemented. Cartesian fixed temperatures,
+convection, volumetric heat sources and fixed face/layer displacements retain
+the O2 behavior. Total power is divided by the actual cut target-layer volume;
+a zero-volume target fails. Rigid 3-2-1 constraints use three non-collinear
+vertices of fully interior regular cells and validate exactly six constrained
+DOFs. A domain without suitable regular cells fails explicitly.
 
-After merging main, protocol code 11 remains MATERIAL_ID_DUPLICATE. O2 uses
-INPUT_REFERENCE_MISSING=12, CUT_UNSUPPORTED=13, INPUT_INVALID=14.
+The FP64 CPU backend uses PETSc sequential sparse LU with exact row preallocation
+and residual-checked iterative refinement. Symmetric diagonal basis normalization
+is applied before factorization; residual acceptance uses the original system. Events include assembly and LU solve
+times. Every MPI rank solves the complete global problem on PETSC_COMM_SELF;
+np agreement verifies reproducibility and output ownership, **not distributed
+solver scalability**. Memory grows with rank count. Each serial interior ghost
+face contributes once to each independent global solve; mesh ownership metadata
+is preserved for a future distributed backend. `column_gmg` warns and uses LU.
+
+Results use the existing VTKHDF 2.8 writer. Blocks, in order, are `hex`, `cut`,
+`eb_surface`, `particles`. Regular cells are hexes; cut cells are polyhedra with
+per-cell outward face rings. Mesh-owned triangles define the EB surface,
+independently of quadrature degree. T/U on cut and EB vertices use parent-cell
+Q2 interpolation. `--cut-output hex` writes active background hexes with
+`cell_kind=1` for cuts and keeps EB triangles. This changes output only.
+
+Warpage PV uses top-domain Q2 nodes and mesh cut-top quadrature samples after
+least-squares plane removal; the summary's `method` records this choice.
+`T_max`, `U_mag_max` and the global mesh digest are also reported. The digest
+uses the surviving background mesh, ordered by GID, with the same O2 byte
+contract. Selected fields, CAELOG1 events and STOP handling remain supported.
+
+Run the packaged two-material cut-corner example:
+
+```sh
+chipcae-solve --case examples/s2_solve/case.json \
+  --profile examples/s2_solve/profile.json --out run-s2
+```
+
+CTest keeps the O2 pipeline checks, adds cut CLI/VTKHDFReader and np=1/2 checks,
+manufactured heat/elasticity convergence at four mesh sizes and degrees 4/6/8,
+geometry closure/divergence-volume checks, and 50-position thermal/mechanical
+spectral scans at aspect ratios 1 and 1:10. The small spectral tests use dense
+symmetric eigenvalues, both unscaled and Jacobi-scaled, instead of a Lanczos
+estimate. The tenfold variation bound applies to the Jacobi-scaled system used
+by the direct solver; raw estimates are reported separately. Pure natural manufactured solutions are compared modulo their
+constant/rigid nullspaces. The bilayer test compares against an uncut conforming
+Q2 wedge mesh of the same polygonal domain; intermediate PV errors may be
+non-monotone, while finest error must improve on coarsest and stay below 1%.
+A cut-bilayer center-curvature check uses Timoshenko's reference.
+
+The solver/preview mesh digest comparison runs at np=1/2 after the O2 merge. GPU
+acceptance remains outside this CPU implementation. Protocol codes remain
+MATERIAL_ID_DUPLICATE=11, INPUT_REFERENCE_MISSING=12, CUT_UNSUPPORTED=13 and
+INPUT_INVALID=14.

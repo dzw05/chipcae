@@ -2,6 +2,9 @@
 #include "chipcae/io/vtkhdf_results.hpp"
 #include "chipcae/solve/case_loader.hpp"
 #include "chipcae/solve/mixture.hpp"
+#include "chipcae/solvers/fem/cut_fem.hpp"
+#include "cut_convection.hpp"
+#include "cut_output.hpp"
 #include "sha256.hpp"
 
 #include <algorithm>
@@ -36,6 +39,7 @@ struct Direct {
     KSP ksp = nullptr;
     std::uint32_t iterations = 0;
     double assembly_seconds = 0, factor_seconds = 0;
+    Vector scaled_rhs, scaled_solution;
     ~Direct() {
         KSPDestroy(&ksp);
         VecDestroy(&rhs);
@@ -49,14 +53,34 @@ struct Direct {
         std::vector<PetscInt> rows(a.GetI(), a.GetI() + n + 1);
         std::vector<PetscInt> columns(a.GetJ(), a.GetJ() + a.GetI()[n]);
         std::vector<PetscScalar> values(a.GetData(), a.GetData() + a.GetI()[n]);
+        Vector diagonal(n);
+        for (int i = 0; i < n; ++i) {
+            double value = 0;
+            for (int j = a.GetI()[i]; j < a.GetI()[i + 1]; ++j)
+                if (a.GetJ()[j] == i)
+                    value = a.GetData()[j];
+            if (!(value > 0) || !std::isfinite(value))
+                throw std::runtime_error("nonpositive system diagonal");
+            diagonal[i] = std::sqrt(value);
+        }
+        // Symmetric basis normalization: solve D^-1 A D^-1 y = D^-1 b,
+        // recover x = D^-1 y. Residual acceptance remains in physical units.
+        for (int i = 0; i < n; ++i)
+            for (int j = a.GetI()[i]; j < a.GetI()[i + 1]; ++j)
+                values[j] /= diagonal[i] * diagonal[a.GetJ()[j]];
         check(MatCreateSeqAIJ(PETSC_COMM_SELF, n, n, 0, nullptr, &mat));
         check(MatSeqAIJSetPreallocationCSR(mat, rows.data(), columns.data(), values.data()));
         assembly_seconds =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
-        check(VecCreateSeqWithArray(PETSC_COMM_SELF, 1, n, b.GetData(), &rhs));
+        scaled_rhs = b;
+        scaled_solution.SetSize(n);
+        scaled_solution = 0.;
+        for (int i = 0; i < n; ++i)
+            scaled_rhs[i] /= diagonal[i];
+        check(VecCreateSeqWithArray(PETSC_COMM_SELF, 1, n, scaled_rhs.GetData(), &rhs));
         x.SetSize(n);
         x = 0.0;
-        check(VecCreateSeqWithArray(PETSC_COMM_SELF, 1, n, x.GetData(), &solution));
+        check(VecCreateSeqWithArray(PETSC_COMM_SELF, 1, n, scaled_solution.GetData(), &solution));
         check(KSPCreate(PETSC_COMM_SELF, &ksp));
         check(KSPSetOperators(ksp, mat, mat));
         check(KSPSetType(ksp, KSPPREONLY));
@@ -73,6 +97,8 @@ struct Direct {
         check(KSPGetConvergedReason(ksp, &reason));
         if (reason < 0)
             throw std::runtime_error("PETSc LU failed");
+        for (int i = 0; i < n; ++i)
+            x[i] = scaled_solution[i] / diagonal[i];
         Vector residual(n), correction(n);
         double relative = 0;
         // Reuse LU for iterative refinement, checking the actual unpreconditioned residual.
@@ -84,6 +110,8 @@ struct Direct {
             relative = residual.Norml2() / std::max(b.Norml2(), 1.0);
             if (relative <= options.rtol)
                 return relative;
+            for (int j = 0; j < n; ++j)
+                residual[j] /= diagonal[j];
             Vec r, d;
             check(VecCreateSeqWithArray(PETSC_COMM_SELF, 1, n, residual.GetData(), &r));
             check(VecCreateSeqWithArray(PETSC_COMM_SELF, 1, n, correction.GetData(), &d));
@@ -91,7 +119,8 @@ struct Direct {
             VecDestroy(&r);
             VecDestroy(&d);
             check(code);
-            x += correction;
+            for (int j = 0; j < n; ++j)
+                x[j] += correction[j] / diagonal[j];
         }
         throw std::runtime_error("LU refinement failed residual tolerance: " +
                                  std::to_string(relative));
@@ -109,7 +138,8 @@ public:
         DenseMatrix gradient(nd, 3);
         v.SetSize(nd * 3);
         v = 0.0;
-        const auto& rule = IntRules.Get(el.GetGeomType(), 2 * el.GetOrder() + 1);
+        const auto& rule =
+            IntRule ? *IntRule : IntRules.Get(el.GetGeomType(), 2 * el.GetOrder() + 1);
         for (int q = 0; q < rule.GetNPoints(); ++q) {
             const auto& ip = rule.IntPoint(q);
             t.SetIntPoint(&ip);
@@ -134,7 +164,8 @@ public:
         a = 0.0;
         DenseMatrix d(nd, 3), B(6, 3 * nd), CB(6, 3 * nd), local(3 * nd);
         const auto& C = materials.at(t.Attribute - 1).C;
-        const auto& rule = IntRules.Get(el.GetGeomType(), 2 * el.GetOrder() + 1);
+        const auto& rule =
+            IntRule ? *IntRule : IntRules.Get(el.GetGeomType(), 2 * el.GetOrder() + 1);
         for (int q = 0; q < rule.GetNPoints(); ++q) {
             const auto& ip = rule.IntPoint(q);
             t.SetIntPoint(&ip);
@@ -178,7 +209,8 @@ public:
         for (int a = 0; a < 3; ++a)
             for (int b = 0; b < 3; ++b)
                 stress[a] += m.C(a, b) * m.alpha[b];
-        const auto& rule = IntRules.Get(el.GetGeomType(), 2 * el.GetOrder() + 1);
+        const auto& rule =
+            IntRule ? *IntRule : IntRules.Get(el.GetGeomType(), 2 * el.GetOrder() + 1);
         for (int q = 0; q < rule.GetNPoints(); ++q) {
             const auto& ip = rule.IntPoint(q);
             t.SetIntPoint(&ip);
@@ -315,8 +347,15 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
     };
     state(io::State::Value::starting);
     try {
-        auto arrays = build_mesh(inputs);
-        io::ResultsWriter writer(output, inputs.stack_path, {}, {}, inputs.fields);
+        std::optional<mesh::cut::CutLayerArrays> clipped;
+        auto arrays = build_mesh(inputs, &clipped);
+        std::vector<std::string> layer_names, material_names(arrays.attr_table.materials.size());
+        for (const auto& layer : inputs.stack.layers)
+            layer_names.push_back(layer.name);
+        for (const auto& [name, id] : arrays.attr_table.materials)
+            material_names.at(id - 1) = name;
+        io::ResultsWriter writer(
+            output, inputs.stack_path, layer_names, material_names, inputs.fields);
         io::ResultsWriter::MeshSummary summary{};
         summary.nx0 = arrays.grid_report.level_axes.front()[0].size() - 1;
         summary.ny0 = arrays.grid_report.level_axes.front()[1].size() - 1;
@@ -386,6 +425,15 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                 arrays.bdr_attribute[b]);
         }
         mesh.SetAttributes();
+        std::unique_ptr<fem::CutRules> cut_rules;
+        if (clipped)
+            cut_rules = std::make_unique<fem::CutRules>(*clipped, mesh);
+        auto bilinear = [&](BilinearFormIntegrator* k) -> BilinearFormIntegrator* {
+            return cut_rules ? new fem::CutBilinear(*cut_rules, k) : k;
+        };
+        auto linear = [&](LinearFormIntegrator* k) -> LinearFormIntegrator* {
+            return cut_rules ? new fem::CutLinear(*cut_rules, k) : k;
+        };
         H1_FECollection collection(2, 3);
         FiniteElementSpace scalar(&mesh, &collection),
             vector(&mesh, &collection, 3, Ordering::byVDIM);
@@ -452,6 +500,7 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                          GridFunction& field,
                          Array<int>& essential,
                          const std::string& name) {
+            auto assembly_start = std::chrono::steady_clock::now();
             form.Assemble();
             rhs.Assemble();
             form.Finalize(0);
@@ -461,13 +510,20 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             auto* matrix = op.As<SparseMatrix>();
             if (!matrix)
                 throw std::runtime_error("expected serial sparse matrix");
+            auto solve_start = std::chrono::steady_clock::now();
             Direct direct;
             double residual = direct.solve(*matrix, b, x, inputs.linear);
+            auto solve_end = std::chrono::steady_clock::now();
             emit(io::LogLine{
                 1,
                 rank,
-                name + " PETSc CSR assembly_seconds=" + std::to_string(direct.assembly_seconds) +
-                    " factor_seconds=" + std::to_string(direct.factor_seconds),
+                name + " assembly_seconds=" +
+                    std::to_string(
+                        std::chrono::duration<double>(solve_start - assembly_start).count()) +
+                    " PETSc_CSR_seconds=" + std::to_string(direct.assembly_seconds) +
+                    " factor_seconds=" + std::to_string(direct.factor_seconds) +
+                    " LU_solve_seconds=" +
+                    std::to_string(std::chrono::duration<double>(solve_end - solve_start).count()),
                 "",
                 0});
             form.RecoverFEMSolution(x, rhs, field);
@@ -476,21 +532,34 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             emit(io::Progress{window, 0, 0, name == "T" ? 0.5 : 1.0, name + " complete"});
         };
         if (inputs.thermal) {
+            // Solve for T - T_ref to avoid cancellation between absolute
+            // temperatures in thin-domain diffusion/convection systems.
+            temperature = 0.0;
             ConductivityCoefficient k(conductivities);
             BilinearForm form(&scalar);
-            form.AddDomainIntegrator(new DiffusionIntegrator(k));
+            form.AddDomainIntegrator(bilinear(new DiffusionIntegrator(k)));
+            if (clipped)
+                form.AddInteriorFaceIntegrator(
+                    new fem::GhostPenalty(arrays, *clipped, conductivities, inputs.ghost_penalty));
             LinearForm rhs(&scalar);
             Array<int> essential, all(mesh.bdr_attributes.Max());
             all = 0;
             std::vector<std::unique_ptr<ConstantCoefficient>> coefficients;
             std::vector<std::unique_ptr<Array<int>>> markers;
+            std::vector<std::unique_ptr<CutSurfaceRule>> surface_rules;
+            std::set<int> cut_boundary_cells;
+            if (clipped)
+                cut_boundary_cells.insert(clipped->cut_elem.begin(), clipped->cut_elem.end());
             for (const auto& load : inputs.loads) {
                 if (load.type == "heat_source") {
                     double volume = 0;
                     for (int e = 0; e < mesh.GetNE(); ++e)
                         if (arrays.attr_table.entries[arrays.attribute[e] - 1].layer ==
                             load.target.substr(6))
-                            volume += mesh.GetElementVolume(e);
+                            volume += cut_rules ? cut_rules->volumes[e] : mesh.GetElementVolume(e);
+                    if (load.total_power && !(volume > 0))
+                        throw InputError(ErrorCode::INPUT_INVALID,
+                                         "heat_source target has zero volume");
                     const double density = heat_source_density(load, volume);
                     for (std::size_t a = 0; a < na; ++a)
                         if (arrays.attr_table.entries[a].layer == load.target.substr(6))
@@ -502,38 +571,53 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                             Array<int> dofs;
                             scalar.GetElementDofs(e, dofs);
                             for (int d : dofs) {
-                                temperature[d] = load.T;
+                                temperature[d] = load.T - inputs.T_ref;
                                 essential.Append(d);
                             }
                         }
                 } else {
+                    if (clipped && load.type == "convection") {
+                        surface_rules.push_back(
+                            std::make_unique<CutSurfaceRule>(arrays, *clipped, load.target));
+                        form.AddDomainIntegrator(new CutSurfaceMass(*surface_rules.back(), load.h));
+                        rhs.AddDomainIntegrator(new CutSurfaceLoad(
+                            *surface_rules.back(), load.h * (load.T_inf - inputs.T_ref)));
+                        if (load.target == "boundary:embedded")
+                            continue;
+                    }
+                    if (load.target == "boundary:embedded")
+                        throw InputError(ErrorCode::INPUT_INVALID,
+                                         "embedded boundary target requires a cut outline");
                     markers.push_back(std::make_unique<Array<int>>(
                         boundary(arrays, mesh, load.target, all.Size())));
                     auto& marker = *markers.back();
                     if (load.type == "fixed_temperature") {
-                        ConstantCoefficient value(load.T);
+                        ConstantCoefficient value(load.T - inputs.T_ref);
                         temperature.ProjectBdrCoefficient(value, marker);
                         for (int i = 0; i < all.Size(); ++i)
                             all[i] |= marker[i];
                     } else if (load.type == "convection") {
                         coefficients.push_back(std::make_unique<ConstantCoefficient>(load.h));
-                        form.AddBoundaryIntegrator(new MassIntegrator(*coefficients.back()),
-                                                   marker);
-                        coefficients.push_back(
-                            std::make_unique<ConstantCoefficient>(load.h * load.T_inf));
-                        rhs.AddBoundaryIntegrator(new BoundaryLFIntegrator(*coefficients.back()),
-                                                  marker);
+                        form.AddBoundaryIntegrator(
+                            new RegularBoundaryMass(*coefficients.back(), mesh, cut_boundary_cells),
+                            marker);
+                        coefficients.push_back(std::make_unique<ConstantCoefficient>(
+                            load.h * (load.T_inf - inputs.T_ref)));
+                        rhs.AddBoundaryIntegrator(
+                            new RegularBoundaryLoad(*coefficients.back(), mesh, cut_boundary_cells),
+                            marker);
                     }
                 }
             }
             AttributeCoefficient q(source);
-            rhs.AddDomainIntegrator(new DomainLFIntegrator(q));
+            rhs.AddDomainIntegrator(linear(new DomainLFIntegrator(q)));
             Array<int> boundary_dofs;
             scalar.GetEssentialTrueDofs(all, boundary_dofs);
             essential.Append(boundary_dofs);
             essential.Sort();
             essential.Unique();
             solve(form, rhs, temperature, essential, "T");
+            temperature += inputs.T_ref;
             if (stop())
                 return 0;
         } else
@@ -543,59 +627,66 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
         AttributeCoefficient l(lambda), m(mu), s(stress, &temperature, inputs.T_ref);
         BilinearForm form(&vector);
         if (has_copper)
-            form.AddDomainIntegrator(new MixtureElasticity(mixtures));
+            form.AddDomainIntegrator(bilinear(new MixtureElasticity(mixtures)));
         else
-            form.AddDomainIntegrator(new ElasticityIntegrator(l, m));
+            form.AddDomainIntegrator(bilinear(new ElasticityIntegrator(l, m)));
         LinearForm rhs(&vector);
         if (has_copper)
-            rhs.AddDomainIntegrator(new MixtureForce(mixtures, temperature, inputs.T_ref));
+            rhs.AddDomainIntegrator(linear(new MixtureForce(mixtures, temperature, inputs.T_ref)));
         else
-            rhs.AddDomainIntegrator(new ThermalForce(s));
+            rhs.AddDomainIntegrator(linear(new ThermalForce(s)));
+        std::vector<std::array<double, 3>> mechanical_scale(na);
+        for (std::size_t a = 0; a < na; ++a)
+            mechanical_scale[a] = {mixtures[a].C(0, 0), mixtures[a].C(1, 1), mixtures[a].C(2, 2)};
+        if (clipped)
+            form.AddInteriorFaceIntegrator(
+                new fem::GhostPenalty(arrays, *clipped, mechanical_scale, inputs.ghost_penalty, 3));
         Array<int> essential;
         if (inputs.fixed.empty()) {
-            // Only vertices incident to real cells can anchor rigid modes (padding is empty).
-            std::set<int> active;
-            for (int e = 0; e < mesh.GetNE(); ++e) {
-                Array<int> vertices;
-                mesh.GetElementVertices(e, vertices);
-                for (int v : vertices)
-                    active.insert(v);
-            }
-            int a = -1, b = -1, c = -1;
-            for (int v : active) {
-                const auto* p = mesh.GetVertex(v);
-                if (a < 0 ||
-                    std::tie(p[2], p[1], p[0]) <
-                        std::tie(mesh.GetVertex(a)[2], mesh.GetVertex(a)[1], mesh.GetVertex(a)[0]))
-                    a = v;
-            }
-            if (a >= 0) {
-                const auto* origin = mesh.GetVertex(a);
-                for (int v : active) {
-                    const auto* p = mesh.GetVertex(v);
-                    if (p[2] == origin[2] && p[1] == origin[1] && p[0] > origin[0] &&
-                        (b < 0 || p[0] > mesh.GetVertex(b)[0]))
-                        b = v;
-                    if (p[2] == origin[2] && p[1] > origin[1] &&
-                        (c < 0 || p[1] > mesh.GetVertex(c)[1]))
-                        c = v;
+            std::set<int> candidates;
+            std::set<int> cut_cells;
+            if (clipped)
+                cut_cells.insert(clipped->cut_elem.begin(), clipped->cut_elem.end());
+            for (int e = 0; e < mesh.GetNE(); ++e)
+                if (!cut_cells.contains(e)) {
+                    Array<int> vertices;
+                    mesh.GetElementVertices(e, vertices);
+                    for (int v : vertices)
+                        candidates.insert(v);
                 }
+            // Choose three axis-aligned, non-collinear interior regular-cell
+            // vertices on one z plane, matching the constrained components.
+            int anchor = -1, along_x = -1, along_y = -1;
+            for (int a : candidates) {
+                const double* p = mesh.GetVertex(a);
+                for (int b : candidates) {
+                    const double* q = mesh.GetVertex(b);
+                    if (q[2] == p[2] && q[1] == p[1] && q[0] > p[0])
+                        along_x = b;
+                    if (q[2] == p[2] && q[0] == p[0] && q[1] > p[1])
+                        along_y = b;
+                }
+                if (along_x >= 0 && along_y >= 0) {
+                    anchor = a;
+                    break;
+                }
+                along_x = along_y = -1;
             }
-            for (auto [vertex, count] : {std::pair{a, 3}, {b, 2}, {c, 1}}) {
-                if (vertex < 0)
-                    throw InputError(
-                        ErrorCode::INPUT_INVALID,
-                        "3-2-1 constraint error: cannot select three noncollinear active vertices");
+            if (anchor < 0)
+                throw InputError(ErrorCode::INPUT_INVALID,
+                                 "3-2-1 requires three non-collinear vertices of fully interior "
+                                 "regular cells (six DOFs)");
+            for (auto [v, count] :
+                 {std::pair{anchor, 3}, std::pair{along_x, 2}, std::pair{along_y, 1}}) {
                 Array<int> dofs;
-                vector.GetVertexVDofs(vertex, dofs);
-                for (int component = 3 - count; component < 3; ++component)
-                    essential.Append(dofs[component]);
+                vector.GetVertexVDofs(v, dofs);
+                for (int c = 3 - count; c < 3; ++c)
+                    essential.Append(dofs[c]);
             }
             essential.Sort();
             essential.Unique();
             if (essential.Size() != 6)
-                throw InputError(ErrorCode::INPUT_INVALID,
-                                 "3-2-1 constraint error: expected exactly 6 constrained DOFs");
+                throw InputError(ErrorCode::INPUT_INVALID, "3-2-1 must constrain exactly six DOFs");
             emit(io::LogLine{1, rank, "3-2-1 constrained_dofs=6 (3+2+1)", "", 0});
         } else {
             Array<int> all(mesh.bdr_attributes.Max());
@@ -635,9 +726,38 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
         int nd = scalar.GetNDofs();
         double tmax = -std::numeric_limits<double>::infinity(), umax = 0;
         std::vector<std::array<double, 3>> top;
+        auto in_domain = [&](double x, double y, double z) {
+            if (!clipped)
+                return true;
+            // Convex extruded outline; nodal maxima and PV exclude extension nodes.
+            const auto& ring = inputs.stack.outline.polygon;
+            double sign = 0;
+            for (std::size_t j = 0; j < ring.size(); ++j) {
+                auto a = ring[j], b = ring[(j + 1) % ring.size()];
+                double v = (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]);
+                if (std::abs(v) < 1e-14)
+                    continue;
+                if (sign * v < 0)
+                    return false;
+                sign = v;
+            }
+            (void)z;
+            return true;
+        };
+        auto add_top = [&](double x, double y, double w) {
+            top.push_back({x, y, w});
+            double phi[3] = {1, x, y};
+            for (int a = 0; a < 3; ++a) {
+                fit_rhs[a] += phi[a] * w;
+                for (int b = 0; b < 3; ++b)
+                    normal(a, b) += phi[a] * phi[b];
+            }
+        };
         for (int i = 0; i < nd; ++i) {
             double x = coordinates[vector.DofToVDof(i, 0)], y = coordinates[vector.DofToVDof(i, 1)],
                    z = coordinates[vector.DofToVDof(i, 2)];
+            if (!in_domain(x, y, z))
+                continue;
             tmax = std::max(tmax, temperature[i]);
             double mag = 0;
             for (int c = 0; c < 3; ++c)
@@ -645,15 +765,29 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             umax = std::max(umax, std::sqrt(mag));
             if (std::abs(z - arrays.axes[2].back()) < 1e-13) {
                 double w = displacement[vector.DofToVDof(i, 2)];
-                top.push_back({x, y, w});
-                double phi[3] = {1, x, y};
-                for (int a = 0; a < 3; ++a) {
-                    fit_rhs[a] += phi[a] * w;
-                    for (int b = 0; b < 3; ++b)
-                        normal(a, b) += phi[a] * phi[b];
-                }
+                add_top(x, y, w);
             }
         }
+        if (clipped)
+            for (std::size_t s = 0; s < clipped->cut_elem.size(); ++s) {
+                int e = clipped->cut_elem[s];
+                auto* t = mesh.GetElementTransformation(e);
+                for (int q = clipped->sq_off[s]; q < clipped->sq_off[s + 1]; ++q) {
+                    if (clipped->sq_side[q] != 5)
+                        continue;
+                    IntegrationPoint ip;
+                    ip.Set3(clipped->sq_xi[0][q], clipped->sq_xi[1][q], clipped->sq_xi[2][q]);
+                    Vector x(3), u(3);
+                    t->Transform(ip, x);
+                    if (std::abs(x[2] - arrays.axes[2].back()) > 1e-13)
+                        continue;
+                    displacement.GetVectorValue(e, ip, u);
+                    add_top(x[0], x[1], u[2]);
+                }
+            }
+        if (top.size() < 3)
+            throw InputError(ErrorCode::INPUT_INVALID,
+                             "insufficient top-domain samples for plane removal");
         Vector plane(3);
         DenseMatrixInverse inverse(normal);
         inverse.Mult(fit_rhs, plane);
@@ -663,19 +797,18 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             lo = std::min(lo, w);
             hi = std::max(hi, w);
         }
-        // The O1 writer stores linear hexes. Explicitly interpolate the Q2
-        // solution into Q1; summaries above retain the full Q2 nodal field.
-        H1_FECollection output_collection(1, 3);
-        FiniteElementSpace output_scalar(&mesh, &output_collection),
-            output_vector(&mesh, &output_collection, 3, Ordering::byVDIM);
-        GridFunction output_temperature(&output_scalar), output_displacement(&output_vector);
-        output_temperature.ProjectGridFunction(temperature);
-        output_displacement.ProjectGridFunction(displacement);
         io::ResultsStep result;
+        result.cut_as_hex = inputs.cut_as_hex;
+        if (clipped)
+            append_cut_output(result, arrays, *clipped, temperature, displacement, rank);
+        std::set<int> cut_elements;
+        if (clipped)
+            cut_elements.insert(clipped->cut_elem.begin(), clipped->cut_elem.end());
         auto& part = result.hex;
         std::map<int, Index> local_nodes;
         for (std::size_t e = 0; e < arrays.elem_gid.size(); ++e)
-            if (arrays.partitioning[e] == rank) {
+            if (arrays.partitioning[e] == rank &&
+                (inputs.cut_as_hex || !cut_elements.contains(e))) {
                 for (int j = 0; j < 8; ++j) {
                     int v = arrays.hex[8 * e + j];
                     auto [it, inserted] =
@@ -683,27 +816,33 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                     part.hex.push_back(it->second);
                     if (inserted) {
                         Array<int> dofs;
-                        output_scalar.GetVertexDofs(v, dofs);
+                        scalar.GetVertexDofs(v, dofs);
                         int d = dofs[0];
                         const auto* point = mesh.GetVertex(v);
                         part.points.insert(part.points.end(), point, point + 3);
-                        part.T.push_back(output_temperature[d]);
+                        part.T.push_back(temperature[d]);
                         for (int c = 0; c < 3; ++c)
-                            part.U.push_back(output_displacement[output_vector.DofToVDof(d, c)]);
+                            part.U.push_back(displacement[vector.DofToVDof(d, c)]);
                     }
                 }
                 part.elem_gid.push_back(arrays.elem_gid[e]);
-                part.cell_kind.push_back(0);
+                part.cell_kind.push_back(cut_elements.contains(e) ? 1 : 0);
                 auto& record = arrays.attr_table.entries[arrays.attribute[e] - 1];
                 part.material_id.push_back(record.material);
                 auto it =
                     std::find_if(inputs.stack.layers.begin(),
                                  inputs.stack.layers.end(),
                                  [&](const auto& layer) { return layer.name == record.layer; });
-                part.layer_id.push_back(static_cast<int>(it - inputs.stack.layers.begin()));
+                part.layer_id.push_back(static_cast<int>(it - inputs.stack.layers.begin()) + 1);
             }
         writer.write_step(0, 0, result);
-        writer.add_summary("warpage_pv", hi - lo, "m", 0);
+        writer.add_summary(
+            "warpage_pv",
+            hi - lo,
+            "m",
+            0,
+            clipped ? "Q2 top-domain nodes and mesh cut-top quadrature; least-squares plane removal"
+                    : "Q2 top nodes; least-squares plane removal");
         writer.add_summary("T_max", tmax, "K", 0);
         writer.add_summary("U_mag_max", umax, "m", 0);
         writer.finalize();

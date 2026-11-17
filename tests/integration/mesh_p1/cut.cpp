@@ -500,9 +500,9 @@ int main(int argc, char** argv) {
                     }
         }
     }
-    auto explicit_2 = CutOptions{};
-    explicit_2.quad_degree = 2;
-    auto legacy_path = build_cut_layer(original, {{{0, {1, 1, 1}, 1}}}, explicit_2);
+    auto explicit_6 = CutOptions{};
+    explicit_6.quad_degree = 6;
+    auto legacy_path = build_cut_layer(original, {{{0, {1, 1, 1}, 1}}}, explicit_6);
     for (int k = 0; k < 3; ++k)
         for (std::size_t q = 0; q < default_cut.value().vq_xi[k].size(); ++q)
             expect(std::bit_cast<std::uint64_t>(default_cut.value().vq_xi[k][q]) ==

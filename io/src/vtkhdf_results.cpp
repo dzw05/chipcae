@@ -450,7 +450,7 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                  p.hex.size() % 8 == 0 && p.T.size() == np && p.U.size() == 3 * np &&
                  p.layer_id.size() == nc && p.material_id.size() == nc &&
                  p.cell_kind.size() == nc && (p.elem_gid.empty() || p.elem_gid.size() == nc) &&
-                 empty(local.embedded_boundary) && empty(local.particles);
+                 empty(local.particles);
     for (auto id : p.hex)
         valid = valid && id >= 0 && static_cast<std::size_t>(id) < np;
     for (auto kind : p.cell_kind)
@@ -487,6 +487,18 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
 #endif
     agree(!gid_any || ((nc == 0 || !p.elem_gid.empty()) && (cn == 0 || !cut.elem_gid.empty())));
     agree(steps_.empty() || gids_ == (gid_any != 0));
+    const auto& eb = local.embedded_boundary;
+    bool eb_valid =
+        eb.face_conn.empty() && eb.hex.empty() && eb.poly_faces.empty() &&
+        eb.face_off == std::vector<Index>{0} && eb.poly_off == std::vector<Index>{0} &&
+        eb.offsets == std::vector<Index>{0} && eb.points.size() % 3 == 0 &&
+        eb.connectivity.size() % 3 == 0 && eb.T.size() == eb.points.size() / 3 &&
+        eb.U.size() == eb.points.size() && eb.elem_gid.size() == eb.connectivity.size() / 3 &&
+        eb.layer_id.size() == eb.elem_gid.size() && eb.material_id.size() == eb.elem_gid.size() &&
+        eb.cell_kind.size() == eb.elem_gid.size();
+    for (auto v : eb.connectivity)
+        eb_valid &= v >= 0 && static_cast<std::size_t>(v) < eb.points.size() / 3;
+    agree(eb_valid);
     bool parallel = false;
 #if defined(H5_HAVE_PARALLEL) && defined(CHIPCAE_ENABLE_MPI)
     parallel = size_ > 1 && !std::getenv("CHIPCAE_RESULTS_SERIAL");
@@ -602,7 +614,10 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                 }));
             });
             ResultsPartition none;
-            const auto& q = block == 0 ? p : block == 1 ? cut : none;
+            const auto& q = block == 0   ? p
+                            : block == 1 ? cut
+                            : block == 2 ? local.embedded_boundary
+                                         : none;
             auto emit = [&]<class T>(hid_t target,
                                      const char* name,
                                      const std::vector<T>& v,
@@ -673,7 +688,10 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                         if (t < 0)
                             throw std::runtime_error("create topology");
                     });
-                    topology(t, {}, 1);
+                    if (block == 2 && std::string(name) == "Polygons")
+                        topology(t, q.connectivity, 3);
+                    else
+                        topology(t, {}, 1);
                     if (t >= 0)
                         check(hcall(parallel, rank_, "H5Gclose", [&] { return H5Gclose(t); }));
                 }

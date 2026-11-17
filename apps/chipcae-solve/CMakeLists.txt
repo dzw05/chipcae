@@ -19,7 +19,7 @@ if(CHIPCAE_ENABLE_JSONCONS)
     target_compile_definitions(chipcae_solve_inputs PRIVATE
         CHIPCAE_MATERIAL_SCHEMA="${PROJECT_SOURCE_DIR}/material/schema/material.v1.schema.json"
         CHIPCAE_STACK_SCHEMA="${PROJECT_SOURCE_DIR}/schema/stack-0.2.schema.json")
-    target_link_libraries(chipcae_solve_inputs PUBLIC chipcae_stack chipcae_mesh_background jsoncons yaml-cpp::yaml-cpp)
+    target_link_libraries(chipcae_solve_inputs PUBLIC chipcae_stack chipcae_mesh_background chipcae_mesh_cut jsoncons yaml-cpp::yaml-cpp)
     chipcae_set_warnings(chipcae_solve_inputs)
     target_link_libraries(chipcae-solve PRIVATE chipcae_solve_inputs)
     target_compile_definitions(chipcae-solve PRIVATE CHIPCAE_SOLVE_INPUTS=1)
@@ -30,7 +30,7 @@ if(CHIPCAE_ENABLE_JSONCONS AND CHIPCAE_ENABLE_MFEM AND CHIPCAE_ENABLE_MPI AND CH
         message(FATAL_ERROR "chipcae-solve requires MFEM built with PETSc support")
     endif()
     target_sources(chipcae-solve PRIVATE src/pipeline.cpp)
-    target_link_libraries(chipcae-solve PRIVATE mfem chipcae::io)
+    target_link_libraries(chipcae-solve PRIVATE mfem chipcae::io chipcae::fem)
     target_include_directories(chipcae-solve PRIVATE ${PROJECT_SOURCE_DIR}/schema/src ${PROJECT_SOURCE_DIR}/material/include)
     target_compile_definitions(chipcae-solve PRIVATE CHIPCAE_SOLVE_BACKEND=1)
 endif()

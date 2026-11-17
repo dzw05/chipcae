@@ -486,6 +486,7 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
         }
     std::vector<std::vector<Local>> attrs;
     for (const auto& l : s.layers) {
+        m.attr_table.layers[l.name] = static_cast<Local>(m.attr_table.layers.size() + 1);
         std::vector<Local> row;
         auto add = [&](std::string region, std::string material, std::string body) {
             auto& t = m.attr_table;
@@ -555,6 +556,7 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
         m.face_sets["faceset:" + std::to_string(a)] = {a};
     // Compact away tuple records that have no cells, retaining exact inverse maps.
     AttributeTable compact;
+    compact.layers = m.attr_table.layers;
     compact.materials = m.attr_table.materials;
     compact.bodies = m.attr_table.bodies;
     std::vector<Local> remap(m.attr_table.entries.size() + 1);

@@ -10,6 +10,7 @@ struct LauncherConfig {
     QString mpi = "mpirun";
     bool cudaAvailable = false;
     bool mock = false;
+    QString eventsFile;
 };
 struct LaunchCommand {
     QString program;

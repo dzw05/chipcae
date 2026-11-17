@@ -8,6 +8,7 @@ struct AttributeRecord {
     BodyId body{};
 };
 struct AttributeTable {
+    std::map<std::string, Local> layers;
     std::vector<AttributeRecord> entries;
     std::map<std::string, std::vector<Local>> references;
     std::map<std::string, MaterialId> materials;

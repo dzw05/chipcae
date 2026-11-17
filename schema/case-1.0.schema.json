@@ -102,6 +102,21 @@
           "properties": {
             "stabilization": {
               "const": "ghost_penalty"
+            },
+            "quad_degree": {
+              "type": "integer",
+              "enum": [
+                2,
+                4,
+                6,
+                8
+              ],
+              "default": 6
+            },
+            "gamma_g": {
+              "type": "number",
+              "minimum": 0,
+              "default": 0.1
             }
           },
           "additionalProperties": false,

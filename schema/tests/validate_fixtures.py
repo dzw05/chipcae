@@ -47,6 +47,7 @@ for schema_file, valid, invalid_prefix in [
     validator.validate(instance)
     if schema_file.name == "case-1.0.schema.json":
         validator.validate(json.loads((examples / "thermal.case.json").read_text(encoding="utf-8")))
+        validator.validate(json.loads((root / "examples/s2_solve/case.json").read_text()))
         def semantic_check(case):
             stack_path = (examples / case["stack"]["ref"]).resolve()
             stack = json.loads(stack_path.read_text(encoding="utf-8"))

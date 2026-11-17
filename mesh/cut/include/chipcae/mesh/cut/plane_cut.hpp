@@ -12,7 +12,7 @@ struct CutGeometry {
 };
 struct CutOptions {
     Real snap_phi = 1e-14, small_sub_vf = 1e-8;
-    int quad_degree = 2;
+    int quad_degree = 6;
     // CVs below this sub-volume fraction are recorded in small_subs, without merging;
     // distinct from the design merge threshold (0.1).
     bool keep_void = false;
