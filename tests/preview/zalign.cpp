@@ -164,6 +164,8 @@ int main(int argc, char** argv) {
         auto ncells_v = h5_read<std::int64_t>(file, "VTKHDF/NumberOfCells", H5T_NATIVE_INT64);
         expect(ncells_v.size() == 1, "NumberOfCells scalar");
         const auto nc = static_cast<std::size_t>(ncells_v[0]);
+        // Public STK-2 v1 cardinalities: tests/preview/README.md, for this
+        // fixture with --nx 4 --ny 4 --levels 1 (cells, not point planes).
         expect(nc == 17 * 17 * 6, "17x17x6 cells");
         auto points = h5_read<double>(file, "VTKHDF/Points", H5T_NATIVE_DOUBLE);
         expect(points.size() % 3 == 0, "points xyz");
