@@ -25,7 +25,7 @@ QStringList ImportSourceDialog::nameFilters() {
     return {"IPC-2581 / ODB++ (*.xml *.tgz *.zip)",
             "IPC-2581 (*.xml)",
             "ODB++ (*.tgz *.zip)",
-            "STEP B 档 (disabled) (*.step *.stp)"};
+            "STEP B 档 (disabled: unavailable for ECAD import) (*.step *.stp)"};
 }
 bool ImportSourceDialog::isSupportedImportPath(const QString& path) {
     if (path.isEmpty())
