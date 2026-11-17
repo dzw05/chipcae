@@ -1,0 +1,1 @@
+usage: chipcae-import <in.step|in.xml> -o <out.stack.json> [--polyset <out.polyset>] [--report <defects.json>] [--material-map m.json] [--accept-b-tier]

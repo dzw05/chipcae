@@ -236,5 +236,8 @@ add_test(NAME part_headers_no_mpi_cut COMMAND cmake
     -P ${CMAKE_CURRENT_SOURCE_DIR}/core/check_public_headers.cmake)
 add_subdirectory(vv)
 
+# Explicit registration required by the import CLI brief; the auto-scan skips added dirs.
+add_subdirectory(integration/import_cli)
+
 # Keep this the last line: auto-adds test subdirectories that call chipcae_auto_tests().
 chipcae_auto_test_subdirs()
