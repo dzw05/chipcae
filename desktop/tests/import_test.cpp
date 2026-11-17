@@ -813,8 +813,13 @@ sys.exit(rc)
             waitFor(c, [&] { check(c.start(r), "start failed-restart fixture"); });
             require(c.outcome() == ImportOutcome::NeedsConfirmation, "B-tier fixture");
             const auto firstArgs = read(record);
-            int confirmed = 0, finished = 0;
-            QObject::connect(&c, &ImportController::userConfirmed, [&] { ++confirmed; });
+            int confirmed = 0, finished = 0, defects = 0;
+            QObject::connect(&c, &ImportController::userConfirmed, [&] {
+                ++confirmed;
+                check(!c.busy() && c.outcome() == ImportOutcome::NeedsConfirmation,
+                      "failed rerun confirmation precedes startup attempt");
+            });
+            QObject::connect(&c, &ImportController::defectsReady, [&] { ++defects; });
             QObject::connect(&c, &ImportController::finished, [&](bool replaced) {
                 ++finished;
                 check(!replaced, "failed restart completion does not replace");
@@ -835,6 +840,12 @@ sys.exit(rc)
             check(!c.busy() && c.outcome() == ImportOutcome::Failed && c.error() == expectedError,
                   "failed restart exposes local failure");
             check(confirmed == 1 && finished == 1, "failed restart notifies once");
+            check(defects == 1, "failed restart refreshes defects once");
+            check(!c.restartAccepted(), "Failed outcome rejects another accepted restart");
+            c.confirmDefects();
+            check(confirmed == 1 && finished == 1 && defects == 1 &&
+                      c.outcome() == ImportOutcome::Failed && c.error() == expectedError,
+                  "confirmation after failed restart is a silent no-op preserving failure");
             check(dialog.isVisible() &&
                       dialog.findChild<QPlainTextEdit*>()->toPlainText().contains(c.error()),
                   "failed restart dialog displays new error");
