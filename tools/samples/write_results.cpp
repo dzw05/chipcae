@@ -67,30 +67,30 @@ int main(int argc, char** argv) {
             p.elem_gid = {0};
         }
         if (cut_fixture && rank == 0) {
-            step.cut_poly = p;
-            auto& c = step.cut_poly;
+            step.cut = p;
+            auto& c = step.cut;
             c.connectivity = c.hex;
             c.hex.clear();
             c.offsets = {0, 8};
-            c.face_connectivity = {0, 3, 2, 1, 4, 5, 6, 7, 0, 1, 5, 4,
-                                   1, 2, 6, 5, 2, 3, 7, 6, 3, 0, 4, 7};
-            c.face_offsets = {0, 4, 8, 12, 16, 20, 24};
-            c.polyhedron_to_faces = {0, 1, 2, 3, 4, 5};
-            c.polyhedron_offsets = {0, 6};
+            c.face_conn = {0, 3, 2, 1, 4, 5, 6, 7, 0, 1, 5, 4, 1, 2, 6, 5, 2, 3, 7, 6, 3, 0, 4, 7};
+            c.face_off = {0, 4, 8, 12, 16, 20, 24};
+            c.poly_faces = {0, 1, 2, 3, 4, 5};
+            c.poly_off = {0, 6};
             c.cell_kind = {1};
+            c.volume = {1.0};
         }
         if (cut_fixture) {
             for (int fault = 0; fault < 4; ++fault) {
                 auto bad = step;
                 if (rank == 0) {
                     if (fault == 0)
-                        bad.cut_poly.polyhedron_to_faces[0] = -1;
+                        bad.cut.poly_faces[0] = -1;
                     if (fault == 1)
-                        bad.cut_poly.face_offsets.back()++;
+                        bad.cut.face_off.back()++;
                     if (fault == 2)
-                        bad.cut_poly.connectivity[0] = 8;
+                        bad.cut.connectivity[0] = 8;
                     if (fault == 3)
-                        bad.cut_poly.polyhedron_offsets.clear();
+                        bad.cut.poly_off.clear();
                 }
                 bool rejected = false;
                 try {

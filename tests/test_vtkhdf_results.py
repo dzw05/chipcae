@@ -44,7 +44,7 @@ class ResultsTest(unittest.TestCase):
                             conn = list(range(cell*8, cell*8+8))
                             expected_conn.extend(conn)
                             expected_gid.append(rank*100+cell)
-                            lines.append(' '.join(map(str, conn+[rank, cell, cell%3, rank*100+cell])))
+                            lines.append(' '.join(map(str, conn+[rank, cell, 2*(cell%2), rank*100+cell])))
                         lines.append('0.001 0.002')
                         pathlib.Path(str(prefix)+f'.{rank}').write_text('\n'.join(lines)+'\n')
                         offsets.extend(range(0, cells*8+1, 8))

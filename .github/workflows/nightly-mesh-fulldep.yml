@@ -51,7 +51,7 @@ jobs:
           if [[ "$FORCE" != true && "$REBUILD_DEPS" != true && -f .k1-last-success ]]; then
             previous=$(cat .k1-last-success)
             if git cat-file -e "$previous^{commit}" 2>/dev/null; then
-              if [[ -z $(git diff --name-only "$previous" HEAD -- schema/ mesh/ core/ io/ tools/samples/ CMakeLists.txt cmake/ tests/ .github/workflows/nightly-mesh-fulldep.yml) ]]; then
+              if [[ -z $(git diff --name-only "$previous" HEAD -- schema/ mesh/ core/ geometry/ io/ tools/samples/ CMakeLists.txt cmake/ tests/ .github/workflows/nightly-mesh-fulldep.yml) ]]; then
                 run=false
               fi
             fi
@@ -97,7 +97,7 @@ jobs:
           path: build-k1-deps/prefix
           key: k1-deps-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/deps.lock', 'tests/integration/mesh_p1/ci/build_deps_cpu.sh') }}
 
-      - name: Install build tools and MPI
+      - name: Install build tools, MPI and shared OCCT
         if: steps.changes.outputs.run == 'true'
         run: |
           set -euo pipefail
@@ -105,6 +105,16 @@ jobs:
           sudo apt-get install -y ninja-build cmake g++ ccache libopenmpi-dev openmpi-bin curl python3-h5py python3-numpy
           # shellcheck source=tests/integration/mesh_p1/ci/deps.lock
           source tests/integration/mesh_p1/ci/deps.lock
+          occt_pins=()
+          for package in $SYSTEM_OCCT_PACKAGES; do
+            occt_pins+=("$package=$SYSTEM_OCCT_VERSION")
+          done
+          sudo apt-get install -y "${occt_pins[@]}"
+          for package in $SYSTEM_OCCT_PACKAGES; do
+            observed=$(dpkg-query -W -f='${Version}' "$package")
+            [[ "$observed" == "$SYSTEM_OCCT_VERSION" ]] || exit 1
+            echo "System OCCT: $package $observed"
+          done
           actual=$(dpkg-query -W -f='${Version}' "$SYSTEM_MPI_PACKAGE")
           if [[ "$actual" != "$SYSTEM_MPI_VERSION" ]]; then
             echo "System MPI mismatch: $SYSTEM_MPI_PACKAGE is $actual, deps.lock pins $SYSTEM_MPI_VERSION." >&2
@@ -203,13 +213,13 @@ jobs:
             -DCMAKE_PREFIX_PATH="$PWD/build-k1-deps/prefix" \
             -DCHIPCAE_ENABLE_MPI=ON -DCHIPCAE_ENABLE_MFEM=ON \
             -DCHIPCAE_ENABLE_HYPRE=ON -DCHIPCAE_ENABLE_HDF5=ON -DCHIPCAE_ENABLE_JSONCONS=ON \
-            -DCHIPCAE_ENABLE_ECAD=ON -DPython3_EXECUTABLE=/usr/bin/python3 \
+            -DCHIPCAE_ENABLE_ECAD=ON -DCHIPCAE_ENABLE_OCCT=ON -DPython3_EXECUTABLE=/usr/bin/python3 \
             -DCMAKE_DISABLE_FIND_PACKAGE_Clipper2=TRUE \
             -DCMAKE_DISABLE_FIND_PACKAGE_EXPAT=TRUE
           cmake --build build-k1-full --parallel 2
           build_secs=$((SECONDS - start))
           test_start=$SECONDS
-          ctest --test-dir build-k1-full -L mesh -LE gpu --output-on-failure --output-junit mesh-results.xml
+          ctest --test-dir build-k1-full -L "mesh|occt" -LE gpu --output-on-failure --output-junit mesh-results.xml
           ctest --test-dir build-k1-full -R "^vtkhdf_results_" --no-tests=error --output-on-failure
           echo "build_secs=$build_secs" >> "$GITHUB_OUTPUT"
           echo "test_secs=$((SECONDS - test_start))" >> "$GITHUB_OUTPUT"
