@@ -78,19 +78,18 @@ int main(int argc, char** argv) try {
         check(tangent_to_secant(probe, integral) == StatusCode::Ok &&
                   integral.size() == probe.temperatures.size(),
               "unequal-slope integral vector");
-        Real area = 0;
         for (std::size_t i = 0; i < probe.temperatures.size(); ++i) {
             const std::size_t left = i + 1 < probe.temperatures.size() ? i : i - 1;
             const Real slope = (probe.alpha[left + 1] - probe.alpha[left]) /
                                (probe.temperatures[left + 1] - probe.temperatures[left]);
             const Real expected_derivative =
                 probe.alpha[i] + (probe.temperatures[i] - probe.reference_temperature) * slope;
-            if (i > 0)
-                area += (probe.temperatures[i] - probe.temperatures[i - 1]) *
-                        (probe.alpha[i - 1] + probe.alpha[i]) / 2;
-            const Real expected_integral =
-                i == 0 ? probe.alpha[0]
-                       : area / (probe.temperatures[i] - probe.reference_temperature);
+            const Real temperature = probe.temperatures[i];
+            const Real expected_integral = temperature == probe.reference_temperature
+                                               ? probe.alpha[i]
+                                               : (primitive(probe, temperature) -
+                                                  primitive(probe, probe.reference_temperature)) /
+                                                     (temperature - probe.reference_temperature);
             check(near(derivative[i], expected_derivative), "unequal-slope ordered derivative");
             check(near(integral[i], expected_integral), "unequal-slope ordered integral");
             check(secant_to_tangent(probe, probe.temperatures[i], value) == StatusCode::Ok &&
@@ -107,13 +106,11 @@ int main(int argc, char** argv) try {
             const Real expected_derivative =
                 alpha + (temperature - probe.reference_temperature) *
                             (probe.alpha[left + 1] - probe.alpha[left]) / width;
-            Real preceding_area = 0;
-            for (std::size_t segment = 0; segment < left; ++segment)
-                preceding_area += (probe.temperatures[segment + 1] - probe.temperatures[segment]) *
-                                  (probe.alpha[segment] + probe.alpha[segment + 1]) / 2;
-            const Real expected_integral =
-                (preceding_area + width / 2 * (probe.alpha[left] + alpha) / 2) /
-                (temperature - probe.reference_temperature);
+            const Real expected_integral = temperature == probe.reference_temperature
+                                               ? alpha
+                                               : (primitive(probe, temperature) -
+                                                  primitive(probe, probe.reference_temperature)) /
+                                                     (temperature - probe.reference_temperature);
             check(secant_to_tangent(probe, temperature, value) == StatusCode::Ok &&
                       near(value, expected_derivative),
                   "unequal-slope exact off-knot derivative");
