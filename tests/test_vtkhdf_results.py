@@ -77,9 +77,54 @@ class ResultsTest(unittest.TestCase):
                                      CHIPCAE_RESULTS_FAIL_RANK=str(target))
                     result = subprocess.run(self.command(run), env=fault_env, timeout=25,
                                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    if sys.argv[5].upper() not in ('ON','TRUE','YES','1'):
+                        self.assertEqual(result.returncode, 0)
+                        self.assertTrue((run/'manifest.json').exists())
+                        continue
                     self.assertNotEqual(result.returncode, 0)
                     self.assertFalse((run/'out/step-0.vtkhdf').exists())
                     self.assertFalse((run/'manifest.json').exists())
+
+    def test_cut(self):
+        import h5py
+        import numpy as np
+        from collections import Counter
+        with tempfile.TemporaryDirectory() as tmp:
+            run=pathlib.Path(tmp)/'cut'
+            subprocess.run(self.command(run,'cut'),check=True,timeout=25)
+            with h5py.File(run/'out/step-0.vtkhdf') as f:
+                g=f['VTKHDF/cut']; points=g['Points'][:]
+                conn=g['FaceConnectivity'][:]; offsets=g['FaceOffsets'][:7]
+                np.testing.assert_array_equal(g['Types'],[42])
+                np.testing.assert_array_equal(g['PolyhedronToFaces'],range(6))
+                self.assertEqual(offsets[-1],len(conn))
+                self.assertEqual(g['Offsets'][1],len(g['Connectivity']))
+                self.assertEqual(g['PolyhedronOffsets'][1],len(g['PolyhedronToFaces']))
+                edges=Counter(); volume=0
+                for a,b in zip(offsets[:-1],offsets[1:]):
+                    ids=conn[a:b]; face=points[ids]
+                    normal=np.cross(face[1]-face[0],face[2]-face[0])
+                    self.assertGreater(np.dot(normal,face.mean(axis=0)-points.mean(axis=0)),0)
+                    for x,y in zip(ids,np.roll(ids,-1)): edges[x,y]+=1
+                    for i in range(1,len(face)-1):
+                        volume+=np.dot(face[0],np.cross(face[i],face[i+1]))/6
+                self.assertTrue(all(edges[y,x]==n for (x,y),n in edges.items()))
+                self.assertGreater(volume,0)
+                self.assertAlmostEqual(volume,1.,delta=1e-12)
+            try:
+                import vtk
+            except ImportError:
+                return
+            reader=vtk.vtkHDFReader(); reader.SetUseCache(False); reader.SetFileName(str(run/'out/step-0.vtkhdf')); reader.UpdateInformation(); reader.GetFieldDataArraySelection().EnableArray('layer_names'); reader.GetFieldDataArraySelection().EnableArray('material_names'); reader.Update()
+            cell=reader.GetOutputDataObject(0).GetPartition(1,0).GetCell(0)
+            self.assertEqual(cell.GetNumberOfFaces(),6)
+            volume=0
+            for i in range(6):
+                face=cell.GetFace(i)
+                self.assertEqual(face.GetNumberOfPoints(),4)
+                xyz=[np.array(face.GetPoints().GetPoint(j)) for j in range(4)]
+                for j in (1,2): volume+=np.dot(xyz[0],np.cross(xyz[j],xyz[j+1]))/6
+            self.assertAlmostEqual(volume,1.,delta=1e-12)
 
     def test_roundtrip(self):
         try:
@@ -99,6 +144,11 @@ class ResultsTest(unittest.TestCase):
             self.assertEqual(m['schema_version'], 'chipcae.results/1.0')
             self.assertEqual(m['units'], 'SI')
             self.assertEqual(len(m['blocks']), 4)
+            self.assertEqual(m['partitions'], {'per_step':[ranks,ranks], 'solver_fixed_per_run':True})
+            for field in m['fields']:
+                self.assertEqual(field['dtype'], 'int64' if field['name']=='elem_gid' else
+                                 'int32' if field['name'] in ('layer_id','material_id','cell_kind') else 'float64')
+            self.assertEqual(m['summary'][0]['method'], 'top surface (z=max) Q2 nodes; least-squares plane w=a+bx+cy removed; PV=max-min residual')
             self.assertEqual([s['n'] for s in m['steps']], [0,1])
             self.assertEqual(len(m['summary']),6)
             self.assertEqual(next(s['value'] for s in m['summary'] if s['name']=='warpage_pv'),0.001)
@@ -108,10 +158,15 @@ class ResultsTest(unittest.TestCase):
             with h5py.File(run/m['steps'][0]['file']) as f:
                 root=f['VTKHDF']
                 self.assertEqual(root.attrs['Type'].decode().rstrip('\0'), 'PartitionedDataSetCollection')
-                self.assertGreaterEqual(tuple(root.attrs['Version']), (2,9))
-                self.assertEqual(len(root['Assembly']),4)
-                self.assertEqual(list(root['Assembly']),['hex','cut_poly','embedded_boundary','particles'])
-                self.assertIsInstance(root['Assembly'].get('hex', getlink=True),h5py.SoftLink)
+                self.assertEqual(root.attrs.get_id('Type').dtype.kind, 'S')
+                self.assertEqual(tuple(root.attrs['Version']), (2,8))
+                self.assertEqual(len(root['Assembly']),3)
+                self.assertEqual(list(root['Assembly']),['volume','boundary','lagrangian'])
+                for path,block in [('volume/hex','hex'),('volume/cut','cut'),
+                                   ('boundary/eb_surface','eb_surface'),('lagrangian/particles','particles')]:
+                    link=root['Assembly'].get(path,getlink=True)
+                    self.assertIsInstance(link,h5py.SoftLink)
+                    self.assertEqual(link.path,'/VTKHDF/'+block)
                 g=root['hex']
                 np.testing.assert_array_equal(g['NumberOfPoints'], [8]+[0]*(ranks-1))
                 np.testing.assert_array_equal(g['NumberOfCells'], [1]+[0]*(ranks-1))
@@ -130,23 +185,86 @@ class ResultsTest(unittest.TestCase):
                     self.assertEqual(g['CellData/'+name].dtype,np.dtype('int32'))
                     self.assertEqual(g['CellData/'+name].shape,(1,))
                 self.assertNotIn('sigma_vm',g['CellData'])
-                for name in ['cut_poly','embedded_boundary','particles']:
-                    self.assertEqual(root[name]['Points'].shape,(0,3))
-                    self.assertEqual(root[name].attrs['Index'], ['hex','cut_poly','embedded_boundary','particles'].index(name))
+                for name in ['cut','eb_surface','particles']:
+                    b=root[name]
+                    self.assertEqual(tuple(b.attrs['Version']), (2,8))
+                    self.assertEqual(b['Points'].shape,(0,3))
+                    self.assertEqual(b['Points'].dtype,np.dtype('float64'))
+                    def check_topology_dtype(path,dataset):
+                        if isinstance(dataset,h5py.Dataset) and not path.startswith(('FieldData/','PointData/','CellData/')):
+                            dtype='float64' if path=='Points' else 'uint8' if path=='Types' else 'int64'
+                            self.assertEqual(dataset.dtype,np.dtype(dtype),path)
+                    b.visititems(check_topology_dtype)
+                    np.testing.assert_array_equal(b['NumberOfPoints'], [0]*ranks)
+                    self.assertEqual(b['PointData/U'].shape,(0,3))
+                    for field, dtype in [('PointData/T','float64'), ('PointData/U','float64'),
+                                         ('CellData/layer_id','int32'), ('CellData/material_id','int32'),
+                                         ('CellData/cell_kind','int32'), ('CellData/elem_gid','int64')]:
+                        self.assertEqual(b[field].dtype,np.dtype(dtype))
+                        self.assertEqual(len(b[field]),0)
+                    for t in ([b] if name=='cut' else [b[k] for k in ('Vertices','Lines','Polygons','Strips')]):
+                        for count in ('NumberOfCells','NumberOfConnectivityIds'):
+                            np.testing.assert_array_equal(t[count], [0]*ranks)
+                        np.testing.assert_array_equal(t['Offsets'], [0]*ranks)
+                        self.assertEqual(t['Connectivity'].dtype,np.dtype('int64'))
+                        self.assertEqual(len(t['Connectivity']),0)
+                    if name=='cut':
+                        self.assertEqual(b['Types'].dtype,np.dtype('uint8'))
+                        self.assertEqual(len(b['Types']),0)
+                        for k in ('FaceOffsets','PolyhedronOffsets'):
+                            np.testing.assert_array_equal(b[k],[0]*ranks)
+                        for k in ('FaceConnectivity','PolyhedronToFaces'):
+                            self.assertEqual(b[k].shape,(0,))
+                        for k in ('NumberOfFaces','NumberOfFaceConnectivityIds','NumberOfPolyhedronToFaceIds'):
+                            np.testing.assert_array_equal(b[k],[0]*ranks)
+                    self.assertEqual(b['FieldData/layer_names'].asstr()[:].tolist(), ['substrate','die_attach','Si'])
+                    self.assertEqual(root[name].attrs['Index'], ['hex','cut','eb_surface','particles'].index(name))
                     self.assertEqual(len(root[name]['NumberOfPoints']),ranks)
             try:
                 import vtk
             except ImportError:
                 print('VTK readback: SKIP (vtk unavailable)')
             else:
-                reader=vtk.vtkHDFReader(); reader.SetFileName(str(run/'out/step-0.vtkhdf'));reader.Update()
+                reader=vtk.vtkHDFReader(); reader.SetUseCache(False); reader.SetFileName(str(run/'out/step-0.vtkhdf')); reader.UpdateInformation(); reader.GetFieldDataArraySelection().EnableArray('layer_names'); reader.GetFieldDataArraySelection().EnableArray('material_names');reader.Update()
                 output=reader.GetOutputDataObject(0)
                 self.assertIsNotNone(output)
                 self.assertEqual(output.GetNumberOfPartitionedDataSets(),4)
                 self.assertEqual(output.GetPartition(0,0).GetNumberOfPoints(),8)
                 grid=output.GetPartition(0,0)
                 self.assertEqual({grid.GetPointData().GetArrayName(i) for i in range(grid.GetPointData().GetNumberOfArrays())}, {'T','U'})
-                print('VTK readback: 4 blocks, 8 points')
+                for i,name in enumerate(('hex','cut','eb_surface','particles')):
+                    self.assertEqual(output.GetMetaData(i).Get(vtk.vtkCompositeDataSet.NAME()),name)
+                    self.assertEqual(output.GetPartitionedDataSet(i).GetNumberOfPartitions(),ranks)
+                    grid=output.GetPartition(i,0)
+                    self.assertEqual(grid.GetClassName(),'vtkUnstructuredGrid' if i<2 else 'vtkPolyData')
+                    self.assertEqual(grid.GetFieldData().GetAbstractArray('layer_names').GetValue(0),'substrate')
+                    if i:
+                        self.assertEqual(grid.GetNumberOfPoints(),0)
+                        self.assertEqual(grid.GetNumberOfCells(),0)
+                        self.assertEqual(grid.GetPointData().GetArray('U').GetNumberOfComponents(),3)
+                        self.assertEqual(grid.GetPointData().GetArray('U').GetNumberOfTuples(),0)
+                        for k in ('layer_id','material_id','cell_kind','elem_gid'):
+                            self.assertEqual(grid.GetCellData().GetArray(k).GetNumberOfTuples(),0)
+                from vtk.util.numpy_support import vtk_to_numpy
+                for block in range(4):
+                    for rank in range(ranks):
+                        grid=output.GetPartition(block,rank)
+                        for name,dtype in [('T','float64'),('U','float64')]:
+                            array=grid.GetPointData().GetArray(name)
+                            self.assertEqual(vtk_to_numpy(array).dtype,np.dtype(dtype))
+                            self.assertEqual(array.GetNumberOfTuples(),grid.GetNumberOfPoints())
+                        for name,dtype in [('layer_id','int32'),('material_id','int32'),
+                                           ('cell_kind','int32'),('elem_gid','int64')]:
+                            array=grid.GetCellData().GetArray(name)
+                            self.assertEqual(vtk_to_numpy(array).dtype,np.dtype(dtype))
+                            self.assertEqual(array.GetNumberOfTuples(),grid.GetNumberOfCells())
+                assembly=output.GetDataAssembly()
+                # Reader represents soft-link leaves as dataset IDs on their parent.
+                for name, ids in [('volume',(0,1)),('boundary',(2,)),('lagrangian',(3,))]:
+                    node=assembly.GetFirstNodeByPath('/assembly/'+name)
+                    self.assertGreaterEqual(node,0)
+                    self.assertEqual(tuple(assembly.GetDataSetIndices(node)),ids)
+                print('VTK readback: 4 blocks, 8 points, complete empty fields and names')
 
 if __name__=='__main__':
     try:

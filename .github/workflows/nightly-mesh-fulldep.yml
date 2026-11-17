@@ -197,7 +197,7 @@ jobs:
         run: |
           set -euo pipefail
           start=$SECONDS
-          cmake -S . -B build-k1-full -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_WARNINGS_AS_ERRORS=ON \
+          cmake -S . -B build-k1-full -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_WARNINGS_AS_ERRORS=ON -DCHIPCAE_RESULTS_FAULT_INJECTION=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_PREFIX_PATH="$PWD/build-k1-deps/prefix" \
