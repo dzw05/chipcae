@@ -1,6 +1,7 @@
 #include "LocalJobService.hpp"
 
 #include "CaseDocument.hpp"
+#include "EventTailer.hpp"
 #include "ProfileMapper.hpp"
 
 #include <QDateTime>
@@ -262,6 +263,26 @@ jobs::Job LocalJobService::Submit(const jobs::SubmitRequest& request,
                             auto exit = event.value("exit").toObject();
                             exitSeen = exit.value("exit_code").toInt(-1) == 0;
                             reason = exit.value("reason").toString();
+                        }
+                    }
+                } else {
+                    const auto name = config_.eventsFile.isEmpty()
+                                          ? (config_.mock ? QStringLiteral("events.caelog")
+                                                          : QStringLiteral("events.bin"))
+                                          : config_.eventsFile;
+                    const auto file = path(r.job, name);
+                    EventTailer tailer(file, EventFormat::LegacyCaelog1);
+                    const auto decoded = tailer.poll();
+                    // A live monitor tolerates an incomplete final record. Once the
+                    // process has exited, every byte must belong to a valid record.
+                    const QFileInfo info(file);
+                    if (info.exists() && decoded.diagnostic.isEmpty() &&
+                        decoded.offset == static_cast<quint64>(info.size())) {
+                        for (const auto& event : decoded.events) {
+                            if (const auto* exit = std::get_if<io::KernelExit>(&event.payload)) {
+                                exitSeen = exit->exit_code == 0;
+                                reason = QString::fromStdString(exit->reason);
+                            }
                         }
                     }
                 }

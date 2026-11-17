@@ -266,6 +266,39 @@ int main(int argc, char** argv) {
                       "event failure differs from abnormal process exit");
             }
         }
+        for (bool mock : {false, true}) {
+            for (const auto& name : {"", "custom events.bin"}) {
+                for (const auto& reason : {"end_reached", "user_stop", "checkpoint_and_stop"}) {
+                    config.mock = mock;
+                    config.eventsFile = name;
+                    config.runRoot =
+                        temp.filePath(QString("events-%1-%2-%3").arg(mock).arg(name).arg(reason));
+                    profile["x-fixture"] = "success";
+                    profile["x-events-file"] =
+                        QString(name).isEmpty() ? (mock ? "events.caelog" : "events.bin") : name;
+                    profile["x-reason"] = reason;
+                    saveProfile();
+                    LocalJobService service(config);
+                    request.set_client_request_id(uuid());
+                    auto done = wait(service, service.Submit(request, casePath, profilePath));
+                    auto expected = QString(reason) == "user_stop" ? jobs::COMPLETION_KIND_USER_STOP
+                                    : QString(reason) == "checkpoint_and_stop"
+                                        ? jobs::COMPLETION_KIND_STOP_AFTER_CHECKPOINT
+                                        : jobs::COMPLETION_KIND_END_REACHED;
+                    check(done.state() == jobs::JOB_STATE_COMPLETED &&
+                              done.completion() == expected && !done.has_failure(),
+                          "event filename defaults/override and completion reason");
+                    EventTailer tailer(QString::fromStdString(done.result_dir()) + "/" +
+                                           profile["x-events-file"].toString(),
+                                       EventFormat::LegacyCaelog1);
+                    auto decoded = tailer.poll();
+                    check(decoded.events.size() == 2 &&
+                              std::get<chipcae::io::KernelExit>(decoded.events.back().payload)
+                                      .reason == reason,
+                          "monitor and launcher agree on completion reason");
+                }
+            }
+        }
         std::cout << "local launcher mock and real checks passed\n";
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
