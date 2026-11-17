@@ -215,6 +215,3 @@ add_subdirectory(vv)
 
 # Keep this the last line: auto-adds test subdirectories that call chipcae_auto_tests().
 chipcae_auto_test_subdirs()
-
-# Explicit registration for the import CLI golden regression suite.
-add_subdirectory(integration/import_cli)

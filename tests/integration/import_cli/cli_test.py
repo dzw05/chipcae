@@ -104,6 +104,18 @@ def run_case(binary, case, generate=False):
             check(result.stderr == b"unknown argument: --help\n", "mixed help: stderr differs")
         elif case == "reserved":
             failures = []
+            for option in ("--accept", "--t-min", "--stack-override", "--assembly"):
+                for prefix in ([], ["a.xml"], ["-o", "stack.json"]):
+                    result = invoke(binary, [*prefix, option, "xyz"], directory)
+                    check(result.returncode == 2, f"{option}: missing required argument exit")
+                    check(result.stdout == (golden / "help" / "stdout").read_bytes(),
+                          f"{option}: missing required argument help differs")
+                    check(result.stderr == b"", f"{option}: missing required argument stderr")
+            for value in ("xyz", "1e9999", "1e-5", ""):
+                result = invoke(binary, ["a.xml", "-o", "stack.json", "--t-min", value], directory)
+                check(result.returncode == 2 and result.stdout == b"" and
+                      result.stderr == b"not implemented yet: --t-min\n",
+                      f"--t-min {value!r}: reserved diagnostic differs")
             for option, value in (("--accept", "x"), ("--t-min", "1e-5"),
                                   ("--stack-override", "x"), ("--assembly", "x")):
                 result = invoke(binary, [FIXTURES / "board_2layer.xml", "-o", "stack.json",

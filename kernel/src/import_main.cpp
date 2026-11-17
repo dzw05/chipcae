@@ -1,7 +1,6 @@
 #include "import_cli_contract.hpp"
 #include "import_common.hpp"
 
-#include <exception>
 #include <iostream>
 
 using namespace chipcae::importer;
@@ -76,12 +75,6 @@ int main(int argc, char** argv) {
                 options.stack_override = value;
             } else if (arg == "--assembly") {
                 options.assembly = value;
-            } else {
-                try {
-                    options.t_min = std::stod(value.string());
-                } catch (const std::exception&) {
-                    // The reserved-option diagnostic is emitted after conflict checking.
-                }
             }
         } else if (!arg.empty() && arg[0] != '-' && input.empty()) {
             input = arg;
@@ -90,16 +83,16 @@ int main(int argc, char** argv) {
             return CliExit::usage;
         }
     }
+    if (input.empty() || output.empty()) {
+        help();
+        return CliExit::usage;
+    }
     if (accept_b && has_accept) {
         std::cerr << "conflicting arguments: --accept-b-tier and --accept\n";
         return CliExit::usage;
     }
     if (!reserved_argument.empty()) {
         std::cerr << "not implemented yet: " << reserved_argument << '\n';
-        return CliExit::usage;
-    }
-    if (input.empty() || output.empty()) {
-        help();
         return CliExit::usage;
     }
     derive_output_paths(options);
