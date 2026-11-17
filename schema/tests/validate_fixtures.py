@@ -1,3 +1,4 @@
+import hashlib
 import json
 import pathlib
 import sys
@@ -29,6 +30,16 @@ for layer in stack.get("layers", []):
     referenced = {layer.get("material")}
     referenced.update(region.get("material") for region in layer.get("regions", []))
     assert referenced <= known_material_ids, "MATERIAL_MAPPING_MISSING: stack material is absent from library"
+# Preserve the four pre-copper origin/main entries, including their order and
+# object key order, using their compact UTF-8 JSON serialization.
+legacy_materials = [item for item in library["materials"] if item["id"] != "copper"]
+legacy_serialization = json.dumps(
+    legacy_materials, ensure_ascii=False, separators=(",", ":")
+).encode("utf-8")
+assert hashlib.sha256(legacy_serialization).hexdigest() == (
+    "6ed8e9fda21ee725054a88cf6c10ee830b30c6462cee0274c86aea0aba0fe022"
+), "pre-existing material serialization and order must remain unchanged"
+
 copper_entries = [item for item in library["materials"] if item["id"] == "copper"]
 assert len(copper_entries) == 1, "materials library must contain exactly one copper entry"
 copper = copper_entries[0]
