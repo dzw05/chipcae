@@ -1,3 +1,4 @@
+#include "../../tests/unit/cte_contract/cte_fixtures.hpp"
 #include "chipcae/material/cte_convert.hpp"
 #include "chipcae/material/prony_viscoelastic.hpp"
 #include "chipcae/material/schema.hpp"
@@ -36,17 +37,19 @@ int main(int argc, char** argv) {
     Real left = th[0];
     thermal.evaluate(300 + 1e-7, th);
     check(std::abs(th[0] - left) < 7e-12, "CTE continuous at jump");
-    CteTable sec{{250, 300, 350}, {1e-5, 2e-5, 3e-5}, 250};
+    const auto& sec = test::sec;
     std::vector<Real> converted;
     check(secant_to_tangent(sec, converted) == StatusCode::Ok && near(converted[1], 3e-5),
           "secant derivative conversion");
-    CteTable tan{{250, 300, 350}, {1e-5, 3e-5, 5e-5}, 250};
+    const auto& tan = test::tan;
     check(tangent_to_secant(tan, converted) == StatusCode::Ok && near(converted[1], 2e-5),
           "tangent integral conversion");
     Real exact;
-    check(tangent_to_secant(tan, 325., exact) == StatusCode::Ok && near(exact, 2.5e-5),
+    check(tangent_to_secant(tan, test::tangent_to_secant_temperature, exact) == StatusCode::Ok &&
+              near(exact, test::tangent_to_secant_expected),
           "off-knot exact inverse CTE conversion");
-    check(secant_to_tangent(sec, 325., exact) == StatusCode::Ok && near(exact, 4e-5),
+    check(secant_to_tangent(sec, test::secant_to_tangent_temperature, exact) == StatusCode::Ok &&
+              near(exact, test::secant_to_tangent_expected),
           "off-knot exact CTE derivative");
     ThermoElastic<Kokkos::HostSpace> elastic(
         ElasticSymmetry::Isotropic, TemperatureTable({250, 400}, {{2e9, 1e9}, {0.25, 0.25}}));
