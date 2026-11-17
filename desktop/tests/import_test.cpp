@@ -79,7 +79,9 @@ void checkStagedArguments(const ImportRequest& request, const QStringList& actua
     const auto staging = QFileInfo(actual[outputIndex + 1]).absoluteDir();
     auto staged = request;
     staged.output = staging.filePath("out.stack.json");
-    staged.report = request.report.isEmpty() ? QString{} : staging.filePath("defects.json");
+    staged.report = request.report.isEmpty() && request.kind == ImportKind::Ecad
+                        ? QString{}
+                        : staging.filePath("defects.json");
     staged.polyset = request.polyset.isEmpty() ? QString{} : staging.filePath("out.polyset");
     check(staging.dirName().startsWith(".chipcae-import-") &&
               actual == ImportControllerTestAccess::arguments(staged),
@@ -116,7 +118,8 @@ QString pick(const std::function<QString()>& picker,
              const QString& path,
              bool cancel,
              bool map,
-             bool directory = false) {
+             bool directory = false,
+             const std::function<void()>& beforeCancel = {}) {
     bool seen = false;
     QTimer driver;
     QObject::connect(&driver, &QTimer::timeout, [&] {
@@ -144,6 +147,8 @@ QString pick(const std::function<QString()>& picker,
             }
             driver.stop();
             if (cancel) {
+                if (beforeCancel)
+                    beforeCancel();
                 dialog->reject();
             } else if (directory) {
                 dialog->setDirectory(path);
@@ -210,6 +215,19 @@ int main(int argc, char** argv) {
     try {
         QTemporaryDir dir(QDir::tempPath() + "/import contract spaces-XXXXXX");
         require(dir.isValid(), "temporary directory");
+        {
+            CaseDocument document;
+            require(document.load(FIXTURE_DIR "/fcbga_demo.case.json"),
+                    "atomic replacement baseline");
+            const auto before = document.stackJson();
+            int changes = 0, dirtyChanges = 0;
+            QObject::connect(&document, &CaseDocument::changed, [&] { ++changes; });
+            QObject::connect(&document, &CaseDocument::dirtyChanged, [&] { ++dirtyChanges; });
+            check(!document.replaceImportedStack(Json::object()) &&
+                      document.stackJson() == before && !document.isDirty() && changes == 0 &&
+                      dirtyChanges == 0,
+                  "failed document replacement preserves stack, dirty state and notifications");
+        }
         const auto map = dir.filePath("material map.JSON");
         write(map, "not parsed by desktop");
         const auto script = dir.filePath("record contract.py");
@@ -224,6 +242,8 @@ stack=runpy.run_path(mock)['STACK']
 out=value('-o'); report=value('--report') or str(pathlib.Path(out).parent/'defects.json'); poly=value('--polyset')
 pathlib.Path(out).write_text(json.dumps({} if mode=='invalid-stack' else stack))
 if poly: pathlib.Path(poly).write_text('polyset')
+# Assembly has no contracted default report path.
+if '--assembly' in a and '--report' not in a: sys.exit(0)
 if mode=='copy-failure':
     pathlib.Path(poly).unlink()
     pathlib.Path(poly).mkdir()
@@ -919,8 +939,9 @@ sys.exit(rc)
                     wanted << "--accept-b-tier";
                 check(ImportControllerTestAccess::arguments(r) == wanted,
                       "exact caller argv for every optional flag combination");
-                check(args.contains("--report") == !r.report.isEmpty(),
-                      "child report flag matches caller export selection");
+                check(args.contains("--report") ==
+                          (!r.report.isEmpty() || kind == ImportKind::Assembly),
+                      "Assembly always requests a private report; Ecad honors export selection");
                 check(QFile::exists(r.output) && (r.report.isEmpty() || QFile::exists(r.report)) &&
                           (r.polyset.isEmpty() || QFile::exists(r.polyset)),
                       "requested optional exports published");
@@ -1157,10 +1178,8 @@ sys.exit(rc)
             QObject::connect(&cancelParent, &QTimer::timeout, [&] {
                 for (auto* w : QApplication::topLevelWidgets())
                     if (auto* d = dynamic_cast<MaterialMapMissingDialog*>(w); d && d->isVisible()) {
-                        if (d->findChild<QFileDialog*>()) {
-                            nestedPickerSeen = true;
+                        if (d->findChild<QFileDialog*>())
                             continue;
-                        }
                         if (!nestedPickerSeen)
                             continue;
                         parentStayedOpen = true;
@@ -1172,9 +1191,14 @@ sys.exit(rc)
             });
             cancelParent.start(30);
             click.start(30);
-            check(
-                pick([&] { return MaterialMapMissingDialog::prompt(); }, {}, true, true).isEmpty(),
-                "missing-map prompt parent cancellation returns empty");
+            check(pick([&] { return MaterialMapMissingDialog::prompt(); },
+                       {},
+                       true,
+                       true,
+                       false,
+                       [&] { nestedPickerSeen = true; })
+                      .isEmpty(),
+                  "missing-map prompt parent cancellation returns empty");
             check(parentStayedOpen, "cancelled nested picker keeps missing-map prompt open");
         }
     } catch (const std::exception& e) {
