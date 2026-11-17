@@ -135,28 +135,32 @@ def run(path, windows=3, delay=0.):
         emit('state',dict(value=1,window=0,time=0.))
         emit('state',dict(value=2,window=0,time=0.))
         stopped = False
-        for n in range(1,windows+1):
-            if delay: time.sleep(delay)
-            emit('progress',dict(window=n,time=n*.5,dt=.5,fraction=n/windows,message='mock'))
-            emit('residual',dict(solver='mechanics',field='U',window=n,iteration=1,norm=1e-5,flags=1))
-            emit('residual_batch',dict(window=n,time=n*.5,points=[dict(solver='mechanics',field='U',iteration=2,norm=1e-8,flags=2,linear_iterations=2,window_iterations=2)],dropped_intermediate=0))
-            emit('log_line',dict(level=1,rank=0,message='mock window complete'))
-            # Advertise only a registered, complete result if there is one.
+        for index in range(windows):
+            n = index + 1
+            result_step = None
             manifest = path/'manifest.json'
             if manifest.exists():
                 m = json.loads(manifest.read_text())
-                for s in m['steps']:
-                    if s['n'] == n-1 and s.get('complete',True):
-                        emit('output_available',dict(window=n,time=s['time'],path=s['file'],checksum=s['checksum']))
+                result_step = next((s for s in m['steps'] if s['n'] == index and s.get('complete',True)), None)
+            window = result_step['n'] if result_step else n
+            result_time = result_step['time'] if result_step else n*.5
+            if delay: time.sleep(delay)
+            emit('progress',dict(window=window,time=result_time,dt=.5,fraction=n/windows,message='mock'))
+            emit('residual',dict(solver='mechanics',field='U',window=window,iteration=1,norm=1e-5,flags=1))
+            emit('residual_batch',dict(window=window,time=result_time,points=[dict(solver='mechanics',field='U',iteration=2,norm=1e-8,flags=2,linear_iterations=2,window_iterations=2)],dropped_intermediate=0))
+            emit('log_line',dict(level=1,rank=0,message='mock window complete'))
+            # Advertise the same manifest step used by progress and acknowledgements.
+            if result_step:
+                emit('output_available',dict(window=window,time=result_time,path=result_step['file'],checksum=result_step['checksum']))
             for c in controls.poll():
                 applied = c['action'] == 'STOP'
                 emit('control_ack',dict(cmd_seq=str(c['cmd_seq']),client_request_id=c['client_request_id'],
-                     status='APPLIED' if applied else 'REJECTED',effective_step=n,effective_time=n*.5,
+                     status='APPLIED' if applied else 'REJECTED',effective_step=window,effective_time=result_time,
                      message='mock boundary STOP' if applied else 'mock supports STOP only'))
                 stopped |= applied
             if stopped: break
-        emit('state',dict(value=4,window=n,time=n*.5))
-        emit('exit',dict(exit_code=0,last_completed_window=n,reason='user_stop' if stopped else 'end_reached'))
+        emit('state',dict(value=4,window=window,time=result_time))
+        emit('exit',dict(exit_code=0,last_completed_window=window,reason='user_stop' if stopped else 'end_reached'))
 
 
 def fixtures(path):
