@@ -17,6 +17,9 @@ def main():
                 ('missing_stack', 12, 'INPUT_REFERENCE_MISSING'),
                 ('missing_polyset', 12, 'INPUT_REFERENCE_MISSING'),
                 ('hash', 10, 'INPUT_HASH_MISMATCH'),
+                ('duplicate_hash', 10, 'INPUT_HASH_MISMATCH'),
+                ('duplicate_digest', 14, 'INPUT_INVALID'),
+                ('relative_nonfinite', 14, 'INPUT_INVALID'),
                 ('trailing', 14, 'INPUT_INVALID'),
                 *[(case, 14, 'INPUT_INVALID') for case in (
                     'unused_magic', 'unused_truncated', 'unused_dbu',
@@ -43,6 +46,17 @@ def main():
                 # Finite inputs can overflow δ × P without invalid geometry.
                 delta = 1e308
                 b['outline']['box'] = [0, 0, 1, 1]
+            if case == 'relative_nonfinite':
+                # A finite clockwise ring area divided by the other side's tiny
+                # positive area overflows only the derived relative difference.
+                data = (b'CCPOLY01' + struct.pack('<dII', 5e153, 1, 4) + b'F.Cu'
+                        + struct.pack('<Iqq', 1, 0, 4)
+                        + struct.pack('<qqqqqqqq', 0, 0, 0, 1, 1, 1, 1, 0))
+                (folder / 'huge.polyset').write_bytes(data)
+                b['external_refs'] = [{'path': 'huge.polyset',
+                                       'sha256': hashlib.sha256(data).hexdigest()}]
+                b['layers'][0]['copper'] = {'metal': 'mat.cu',
+                    'polygons': {'file': 'huge.polyset', 'layer': 'F.Cu'}}
             if case == 'copper_nonfinite':
                 # Each finite ring has area 2.5e307; eight rings overflow the sum.
                 data = (b'CCPOLY01' + struct.pack('<dII', 5e153, 1, 4) + b'F.Cu'
@@ -53,10 +67,15 @@ def main():
                                        'sha256': hashlib.sha256(data).hexdigest()}]
                 b['layers'][0]['copper'] = {'metal': 'mat.cu',
                     'polygons': {'file': 'huge.polyset', 'layer': 'F.Cu'}}
-            if case in ('missing_polyset', 'hash', 'trailing'):
+            if case in ('missing_polyset', 'hash', 'trailing',
+                        'duplicate_hash', 'duplicate_digest'):
                 p = polyset(folder, b, trailing=b'x' if case == 'trailing' else b'')
                 if case == 'missing_polyset':
                     p.unlink()
+                if case in ('duplicate_hash', 'duplicate_digest'):
+                    ref = dict(b['external_refs'][0])
+                    ref['sha256'] = '0' * 64 if case == 'duplicate_hash' else 'invalid'
+                    b['external_refs'].append(ref)
                 if case == 'hash':
                     b['external_refs'][0]['sha256'] = '0' * 64
             if case.startswith('unused_'):

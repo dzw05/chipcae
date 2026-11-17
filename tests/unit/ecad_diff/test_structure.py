@@ -95,6 +95,8 @@ def main():
                          '0:F.Cu|F.Cu')['grade'] == 'hard'
         b = copy.deepcopy(a)
         polyset(directory, b)
+        # Repeated valid references to the same polyset remain allowed.
+        b['external_refs'].append(dict(b['external_refs'][0]))
         e = entry(diff_stacks(pa, save(pb, b)), 'copper_area', '0:F.Cu|F.Cu')
         assert e['grade'] == 'info'
         number(e['odb'], AREA)

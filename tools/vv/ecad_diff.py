@@ -146,15 +146,17 @@ def _load(path):
             refs = stack.get('external_refs', [])
             if not isinstance(refs, list):
                 _invalid('invalid external_refs')
-            ref = next((r for r in refs if r['path'] == file), None)
-            if ref is None:
+            matching_refs = [r for r in refs if r['path'] == file]
+            if not matching_refs:
                 raise EcadDiffError(12, 'INPUT_REFERENCE_MISSING', 'polyset absent from external_refs')
             data = _bytes(Path(path).parent / file)
-            digest = _string(ref['sha256'])
-            if len(digest) != 64 or any(c not in '0123456789abcdefABCDEF' for c in digest):
-                _invalid('invalid SHA-256 digest')
-            if hashlib.sha256(data).hexdigest() != digest.lower():
-                raise EcadDiffError(10, 'INPUT_HASH_MISMATCH', 'polyset SHA-256 differs')
+            actual_digest = hashlib.sha256(data).hexdigest()
+            for ref in matching_refs:
+                digest = _string(ref['sha256'])
+                if len(digest) != 64 or any(c not in '0123456789abcdefABCDEF' for c in digest):
+                    _invalid('invalid SHA-256 digest')
+                if actual_digest != digest.lower():
+                    raise EcadDiffError(10, 'INPUT_HASH_MISMATCH', 'polyset SHA-256 differs')
             polysets[file] = _read_polyset(data)
 
     for layer in stack['layers']:
@@ -290,14 +292,14 @@ def _diff(odb, ipc, delta):
         ax, px = ca[i] or (0, 0)
         ay, py = cb[i] or (0, 0)
         d, p = abs(ax - ay), max(px, py)
-        relative = d / max(ax, ay) if max(ax, ay) else 0
+        relative = _number(d / max(ax, ay) if max(ax, ay) else 0)
         grade = ('hard' if relative > 0.01 else
                  'discuss' if d > delta * p else 'info')
         add('copper_area', key, ax, ay, d, delta * p,
             f'δ = {delta}; P_layer = {p} (maximum area-error coefficient: polygon total ring '
             'perimeter or fraction × P_outline; fixed fraction propagates '
             'outline area tolerance, no copper perimeter inferred); '
-            'absolute ring areas summed; relative difference uses larger area, zero versus nonzero is 100%', grade)
+            'signed ring areas summed; relative difference uses larger area, zero versus nonzero is 100%', grade)
     thickness('total_thickness', 'stack', math.fsum(l['thickness'] for l in a),
               math.fsum(l['thickness'] for l in b))
     p = max(ga['perimeter'], gb['perimeter'])
