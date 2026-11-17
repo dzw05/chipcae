@@ -2,11 +2,17 @@
 #include "chipcae/mesh/background/hex_mesh_arrays.hpp"
 #include "chipcae/schema/stack.hpp"
 
+#include <cstddef>
 #include <vector>
 
 namespace chipcae::mesh {
-// Contract placeholder; representation is reserved for the implementation step.
-struct BodyLevelSet {};
+struct BodyLevelSet {
+    std::size_t layer_index = 0; // Index into the input StackModel::layers.
+    BodyId body{};               // ID from HexMeshArrays::attr_table.bodies.
+    // One value per background mesh vertex, in HexMeshArrays::vertices order
+    // (phi[i] corresponds to vertices[3*i .. 3*i+2]); negative inside the union.
+    std::vector<Real> phi;
+};
 
 struct RegionLSOptions {
     Real inside_tol_rel = 1e-12;
@@ -20,9 +26,8 @@ struct RegionLSOptions {
 // Emit one entry per nonempty source group; phi represents its polygon union.
 // Order groups by layer index, then by the smallest source region index in each
 // group. The group body maps to HexMeshArrays::attr_table.bodies.at(b).
-// Returned entries contain body IDs and level-set values only; they carry no
-// layer or source-region metadata. Body identity alone does not identify a
-// source group because the same body may recur across layers.
+// Each entry identifies its source group by (layer_index, body), including when
+// the same body recurs across layers. phi samples the source group polygon union.
 std::vector<BodyLevelSet>
 region_level_sets(const StackModel&, const HexMeshArrays&, const RegionLSOptions&);
 } // namespace chipcae::mesh
