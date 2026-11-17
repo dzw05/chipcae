@@ -1,6 +1,7 @@
 """Read-only documentation acceptance; never starts a numerical solver."""
 
 import json
+import math
 from pathlib import Path
 import re
 import shlex
@@ -10,6 +11,25 @@ import sys
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
+
+
+def validate_input(root, path, schema_path):
+    import jsonschema
+    from referencing import Registry, Resource
+
+    require(path.is_file(), f"missing command input or reference: {path}")
+    document = json.loads(path.read_text(encoding="utf-8"))
+    registry = Registry()
+    for source in list((root / "schema").glob("*.schema.json")) + list(
+            (root / "material/schema").glob("*.schema.json")):
+        schema = json.loads(source.read_text(encoding="utf-8"))
+        registry = registry.with_resource(schema["$id"], Resource.from_contents(schema))
+    schema = json.loads((root / schema_path).read_text(encoding="utf-8"))
+    validator = jsonschema.validators.validator_for(schema)(schema, registry=registry)
+    errors = list(validator.iter_errors(document))
+    require(not errors, f"{path}: " + "; ".join(
+        f"{error.json_path}: {error.message}" for error in errors))
+    return document
 
 
 def check(root):
@@ -35,8 +55,34 @@ def check(root):
         if argv[0] == "chipcae-solve":
             require(len(argv) == 7 and argv[1::2] == ["--case", "--profile", "--out"],
                     f"solver command must use the public three-flag signature: {argv!r}")
-            for path in (argv[2], argv[4]):
-                require((root / path).is_file(), f"missing command input: {path}")
+            validate_input(root, root / argv[4], "schema/run-profile-1.0.schema.json")
+            case_file = root / argv[2]
+            case = validate_input(root, case_file, "schema/case-1.0.schema.json")
+            inputs = {}
+            for kind, schema in (
+                ("stack", "schema/stack-0.2.schema.json"),
+                ("materials", "material/schema/material-library.v1.schema.json"),
+            ):
+                inputs[kind] = validate_input(root, case_file.parent / case[kind]["ref"], schema)
+            for material in inputs["materials"]["materials"]:
+                require(material["model"] == "thermo_elastic", "S2 requires thermoelastic materials")
+                for kind, columns in (("elastic", ("E", "nu")),
+                                      ("thermal_expansion", ("alpha",))):
+                    model = material[kind]
+                    require(model["symmetry"] == "isotropic", f"S2 requires isotropic {kind}")
+                    table = model["table"]
+                    require(len(table["temperatures"]) == 1,
+                            f"S2 requires single-knot {kind}")
+                    for column in columns:
+                        values = table["columns"].get(column)
+                        require(isinstance(values, list) and len(values) == 1
+                                and type(values[0]) in (int, float) and math.isfinite(values[0]),
+                                f"S2 requires one finite {column} value")
+            ids = [material["id"] for material in inputs["materials"]["materials"]]
+            require(len(ids) == len(set(ids)), "duplicate material IDs")
+            for layer in inputs["stack"]["layers"]:
+                require(layer["material"] in ids,
+                        f"unknown layer material: {layer['material']}")
 
     required_paths = {
         "apps/chipcae-solve/README.md",
@@ -89,8 +135,7 @@ def check(root):
         "positive conductivity": r"(?:positive.{0,50}conductivity|conductivity.{0,50}(?:positive|正))",
         "thermal sample lacks conductivity": r"(?:lack|missing|缺).{0,100}conductivity|conductivity.{0,100}(?:lack|missing|缺)",
         "steady conduction limitation": r"(?:steady|稳态).{0,180}(?:not ready|cannot|not solv|缺|不能|未就绪|requires)",
-        "original FCBGA temperature-table failure": r"(?:original|as[- ]is|as checked in|原样).{0,220}(?:multi[- ]knot|two.{0,15}knot|temperature tables|温度表)",
-        "historical INPUT_INVALID/14": r"input_invalid.{0,30}\b14\b",
+        "checked-in FCBGA temperature-table limitation": r"(?:checked-in|original|as[- ]is|as checked in|原样).{0,220}(?:multi[- ]knot|two.{0,15}knot|temperature tables|温度表)",
         "S2 dependencies": r"jsoncons.{0,160}(?:mpi|hdf5|mfem)",
         "local resource requirement": r"(?:local|本地).{0,100}(?:resource|资源)",
         "fresh exclusive output": r"(?:fresh|new|新).{0,100}(?:exclusive|独占)|(?:exclusive|独占).{0,100}(?:fresh|new|新)",

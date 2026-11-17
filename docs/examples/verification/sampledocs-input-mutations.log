@@ -1,0 +1,8 @@
+PASS rejected profile.json: /tmp/tmpxqa2cghx/examples/s2_solve/profile.json: $.ranks: 0 is less than the minimum of 1
+PASS rejected case.json: missing command input or reference: /tmp/tmpxqa2cghx/examples/s2_solve/absent.json
+PASS rejected case.json: missing command input or reference: /tmp/tmpxqa2cghx/examples/s2_solve/absent.json
+PASS rejected stack.json: /tmp/tmpxqa2cghx/examples/s2_solve/stack.json: $.layers: [] should be non-empty
+PASS rejected stack.json: unknown layer material: absent
+PASS rejected materials.json: S2 requires one finite E value
+PASS rejected materials.json: S2 requires single-knot thermal_expansion
+PASS restored fixtures

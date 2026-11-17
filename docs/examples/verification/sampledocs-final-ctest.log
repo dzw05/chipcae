@@ -1,0 +1,105 @@
+Internal ctest changing into directory: /workspace/tasks/build-sampledocs-deps-release
+Test project /workspace/tasks/build-sampledocs-deps-release
+      Start  1: preview_zalign
+      Start  2: core
+ 1/42 Test  #2: core .............................   Passed    0.00 sec
+      Start  3: mesh
+ 2/42 Test  #3: mesh .............................   Passed    0.00 sec
+      Start  4: core_types
+ 3/42 Test  #4: core_types .......................   Passed    0.00 sec
+      Start  5: column_hierarchy
+ 4/42 Test  #5: column_hierarchy .................   Passed    0.33 sec
+      Start  6: core_public_headers
+ 5/42 Test  #6: core_public_headers ..............   Passed    0.00 sec
+      Start  7: event_log
+ 6/42 Test  #7: event_log ........................   Passed    0.17 sec
+      Start  8: par
+ 7/42 Test  #8: par ..............................   Passed    0.00 sec
+      Start  9: par_public_headers
+ 8/42 Test  #9: par_public_headers ...............   Passed    0.00 sec
+      Start 10: import_thresholds
+ 9/42 Test #10: import_thresholds ................   Passed    0.00 sec
+      Start 11: vtkhdf_results_serial
+10/42 Test  #1: preview_zalign ...................   Passed    0.85 sec
+      Start 12: control_file
+11/42 Test #12: control_file .....................   Passed    0.00 sec
+      Start 13: case_run_schema_fixtures
+12/42 Test #13: case_run_schema_fixtures .........   Passed    0.10 sec
+      Start 14: contract_schemas
+13/42 Test #14: contract_schemas .................   Passed    0.32 sec
+      Start 15: contract_error_codes
+14/42 Test #15: contract_error_codes .............   Passed    0.05 sec
+      Start 16: repair_policy_tiers
+15/42 Test #16: repair_policy_tiers ..............   Passed    0.00 sec
+      Start 17: diagnostics_header_standalone
+16/42 Test #17: diagnostics_header_standalone ....   Passed    0.00 sec
+      Start 18: step_import_disabled
+17/42 Test #18: step_import_disabled .............   Passed    0.00 sec
+      Start 19: cut_results_serial
+18/42 Test #19: cut_results_serial ...............***Skipped   0.11 sec
+      Start 20: contract_public_headers
+19/42 Test #20: contract_public_headers ..........   Passed    0.01 sec
+      Start 21: k1_public_headers
+20/42 Test #11: vtkhdf_results_serial ............   Passed    4.49 sec
+      Start 22: k1_schema
+21/42 Test #22: k1_schema ........................   Passed    0.03 sec
+      Start 23: k1_background
+22/42 Test #23: k1_background ....................   Passed    0.10 sec
+      Start 24: k1_cut
+23/42 Test #24: k1_cut ...........................   Passed    0.12 sec
+      Start 27: k1_preview
+24/42 Test #21: k1_public_headers ................   Passed    7.42 sec
+      Start 28: mesh_digest_golden
+25/42 Test #28: mesh_digest_golden ...............   Passed    0.86 sec
+      Start 29: k1_mesh_digest
+26/42 Test #29: k1_mesh_digest ...................   Passed    0.00 sec
+      Start 30: solve_inputs
+27/42 Test #30: solve_inputs .....................   Passed    0.28 sec
+      Start 31: solve_interpolation
+28/42 Test #31: solve_interpolation ..............   Passed    0.00 sec
+      Start 32: solve_mesh
+29/42 Test #32: solve_mesh .......................   Passed    0.00 sec
+      Start 33: contract_output_desktop
+30/42 Test #33: contract_output_desktop ..........   Passed    0.19 sec
+      Start 34: contract_output_solver
+31/42 Test #34: contract_output_solver ...........***Skipped   0.09 sec
+      Start 35: warpage_qoi_analytic
+32/42 Test #35: warpage_qoi_analytic .............   Passed    0.10 sec
+      Start 36: trilayer_clt_magnitude
+33/42 Test #36: trilayer_clt_magnitude ...........   Passed    0.04 sec
+      Start 37: autoglob_cpp
+34/42 Test #37: autoglob_cpp .....................   Passed    0.00 sec
+      Start 38: autoglob_py
+35/42 Test #38: autoglob_py ......................   Passed    0.02 sec
+      Start 42: sampledocs_contract
+36/42 Test #42: sampledocs_contract ..............   Passed    0.08 sec
+37/42 Test #27: k1_preview .......................   Passed    7.42 sec
+      Start 25: k1_vtkhdf
+38/42 Test #25: k1_vtkhdf ........................   Passed    0.42 sec
+      Start 26: k1_results_validation
+39/42 Test #26: k1_results_validation ............   Passed    0.42 sec
+      Start 39: install_smoke
+40/42 Test #39: install_smoke ....................***Skipped   0.47 sec
+      Start 40: install_relocate
+41/42 Test #40: install_relocate .................   Passed    0.47 sec
+      Start 41: cpack_tgz
+42/42 Test #41: cpack_tgz ........................***Skipped   0.66 sec
+
+100% tests passed, 0 tests failed out of 42
+
+Label Time Summary:
+autoglob    =   0.02 sec*proc (2 tests)
+contract    =   0.28 sec*proc (2 tests)
+hdf5        =   7.83 sec*proc (2 tests)
+install     =   1.60 sec*proc (3 tests)
+mesh        =  16.37 sec*proc (10 tests)
+preview     =   8.28 sec*proc (3 tests)
+tierA       =   8.64 sec*proc (13 tests)
+
+Total Test time (real) =  15.10 sec
+
+The following tests did not run:
+	 19 - cut_results_serial (Skipped)
+	 34 - contract_output_solver (Skipped)
+	 39 - install_smoke (Skipped)
+	 41 - cpack_tgz (Skipped)
