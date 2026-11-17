@@ -28,6 +28,12 @@ Real phi(Point p, const Polygon& poly) {
             p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0])
             inside = !inside;
     }
+    Real scale = std::max(std::abs(p[0]), std::abs(p[1]));
+    for (auto v : poly)
+        scale = std::max({scale, std::abs(v[0]), std::abs(v[1])});
+    // Closed polygon boundary, matching tensor-grid containment.
+    if (d <= 64 * std::numeric_limits<Real>::epsilon() * scale)
+        return 0;
     return inside ? -d : d;
 }
 // Use the local grid spacing to clamp roundoff at coincident box boundaries.
@@ -68,10 +74,13 @@ std::vector<BodyLevelSet> region_level_sets(const StackModel& stack,
                     continue;
                 const Point p{mesh.vertices[3 * n], mesh.vertices[3 * n + 1]};
                 Real value = phi(p, r.footprint.polygon);
+                const Real tol = options.inside_tol_rel * local_h(mesh, p, p);
                 if (stack.outline.polygon.empty() &&
-                    (p[0] == stack.outline.box[0] || p[0] == stack.outline.box[2] ||
-                     p[1] == stack.outline.box[1] || p[1] == stack.outline.box[3]) &&
-                    std::abs(value) <= options.inside_tol_rel * local_h(mesh, p, p))
+                    (std::abs(p[0] - stack.outline.box[0]) <= tol ||
+                     std::abs(p[0] - stack.outline.box[2]) <= tol ||
+                     std::abs(p[1] - stack.outline.box[1]) <= tol ||
+                     std::abs(p[1] - stack.outline.box[3]) <= tol) &&
+                    std::abs(value) <= tol)
                     value = -std::max(std::abs(value), std::numeric_limits<Real>::min());
                 ls.phi[n] = std::min(ls.phi[n], value);
             }

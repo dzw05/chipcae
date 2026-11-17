@@ -49,7 +49,7 @@ struct HexMeshArrays {
         std::vector<std::vector<Local>> column_ranks; // Dense Morton, coarse to fine.
         std::vector<std::string> warnings;
         Real partition_imbalance = 0;
-        std::int64_t void_cells = 0; // Omitted cells in layers without material.
+        std::int64_t void_cells = 0; // 没有 material 的层里不生成的单元数
     } grid_report;
     AttributeTable attr_table;
     // Named face groups. Cut-face attributes also appear here (and therefore in
