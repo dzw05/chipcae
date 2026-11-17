@@ -135,22 +135,25 @@ def main(root):
                 found = errors(document, validator)
                 if '/parts/0/placement/attach' not in {location for location, _ in found}:
                     failures.append(f'multiline attachment {target!r} accepted: {found}')
-        # Every path reference must reject blank paths and scan beyond LF for unsafe segments.
-        for path in (('board', 'path'), ('board', 'material_map'),
-                     ('materials',), ('parts', 0, 'step'), ('parts_from_step', 'step')):
-            for unsafe in ('', ' ', '\t', '\n', ' \r\n\t', '\u2003',
-                           'ok\n/../outside', 'ok\n\\outside', 'ok\nhttps://outside'):
-                document = copy.deepcopy(positive)
-                document['parts_from_step'] = {
-                    'step': 'bulk.step', 'frame': 'step', 'origin': [0, 0, 0], 'bodies': {}
-                }
-                parent = document
-                for key in path[:-1]:
-                    parent = parent[key]
-                parent[path[-1]] = unsafe
-                found = errors(document, validator)
-                if pointer(path) not in {location for location, _ in found}:
-                    failures.append(f'unsafe path {unsafe!r} at {pointer(path)} accepted: {found}')
+        # Exercise both published shapes without replacing existing shorthand data.
+        for fixture in (positive, bulk):
+            if fixture is None:
+                continue
+            for path in (('board', 'path'), ('board', 'material_map'),
+                         ('materials',), ('parts', 0, 'step'), ('parts_from_step', 'step')):
+                for unsafe in ('', ' ', '\t', '\n', ' \r\n\t', '\u2003',
+                               'ok\n/../outside', 'ok\n\\outside', 'ok\nhttps://outside'):
+                    document = copy.deepcopy(fixture)
+                    document.setdefault('parts_from_step', {
+                        'step': 'bulk.step', 'frame': 'step', 'origin': [0, 0, 0], 'bodies': {}
+                    })
+                    parent = document
+                    for key in path[:-1]:
+                        parent = parent[key]
+                    parent[path[-1]] = unsafe
+                    found = errors(document, validator)
+                    if pointer(path) not in {location for location, _ in found}:
+                        failures.append(f'unsafe path {unsafe!r} at {pointer(path)} accepted: {found}')
         empty = copy.deepcopy(positive)
         empty['parts'] = []
         if errors(empty, validator):
