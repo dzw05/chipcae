@@ -773,9 +773,27 @@ sys.exit(rc)
                 r.materialMap = map;
                 for (const auto& input : {QString{},
                                           dir.filePath("absent.xml"),
+                                          dir.filePath("absent.TGZ"),
+                                          dir.filePath("absent.ZIP"),
+                                          dir.filePath("absent assembly.json"),
                                           kind == ImportKind::Ecad ? map : dir.path()}) {
                     r.input = input;
+                    int finished = 0, defects = 0;
+                    const auto finishedConnection =
+                        QObject::connect(&c, &ImportController::finished, [&] { ++finished; });
+                    const auto defectsConnection =
+                        QObject::connect(&c, &ImportController::defectsReady, [&] { ++defects; });
                     check(!c.start(r), "invalid input rejected before launching");
+                    check(c.error() == "unsupported import input" &&
+                              c.outcome() == ImportOutcome::Failed && !c.busy() &&
+                              c.exitCode() == -1 && c.reportCode().isEmpty() &&
+                              !c.needsMaterialMapReselect(),
+                          "invalid input has synchronous validation failure state");
+                    check(finished == 0 && defects == 0,
+                          "invalid input does not reach process completion");
+                    QObject::disconnect(finishedConnection);
+                    QObject::disconnect(defectsConnection);
+                    check(!QFileInfo::exists(r.output), "invalid input publishes no output");
                     if (c.busy())
                         waitFor(c, [&] { c.cancel(); });
                     check(d.stackJson() == before, "invalid input preserves document");
