@@ -2,7 +2,7 @@ name: CI
 
 # Hosted Tier A. Linux only.
 # Pull requests run lint plus one Release build. Pushes to main also run the
-# build when they change code. Docs-only pushes are ignored.
+# build when they change code. Docs-only pushes skip builds via lint outputs.
 # Draft pull requests run lint (and ci-ok); build-test waits until the PR is marked ready.
 # Docs-only pull requests skip the build.
 # Build-and-test can move later by setting the TIER_A_RUNNER repository variable
@@ -15,11 +15,6 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "**/*.md"
-      - "LICENSE"
-      - "CODEOWNERS"
 
 # Kokkos install pin (4.x). The only place this version is set for CI.
 # "4.7.01" is the GitHub tag for the 4.7.1 release (CMake reports 4.7.1).
@@ -42,6 +37,7 @@ jobs:
     outputs:
       code: ${{ steps.paths.outputs.code }}
       mesh: ${{ steps.paths.outputs.mesh }}
+      desktop: ${{ steps.paths.outputs.desktop }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -115,6 +111,7 @@ jobs:
             elif git diff --name-only "$base" HEAD > /tmp/chipcae-changed 2>/dev/null; then
               :
             else
+              echo "desktop=true" >> "$GITHUB_OUTPUT"
               echo "code=true" >> "$GITHUB_OUTPUT"
               echo "mesh=true" >> "$GITHUB_OUTPUT"
               echo "could not diff against the base; running the build"
@@ -123,6 +120,7 @@ jobs:
           else
             before="${{ github.event.before }}"
             if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
+              echo "desktop=true" >> "$GITHUB_OUTPUT"
               echo "code=true" >> "$GITHUB_OUTPUT"
               echo "mesh=false" >> "$GITHUB_OUTPUT"
               echo "push has no usable before SHA; running the build"
@@ -132,6 +130,7 @@ jobs:
               git fetch --no-tags --depth=1 origin "$before" || true
             fi
             if ! git diff --name-only "$before".."${{ github.sha }}" > /tmp/chipcae-changed 2>/dev/null; then
+              echo "desktop=true" >> "$GITHUB_OUTPUT"
               echo "code=true" >> "$GITHUB_OUTPUT"
               echo "mesh=false" >> "$GITHUB_OUTPUT"
               echo "could not diff against github.event.before; running the build"
@@ -140,7 +139,9 @@ jobs:
           fi
           code=false
           mesh=false
+          desktop=false
           if [ ! -s /tmp/chipcae-changed ]; then
+            echo "desktop=false" >> "$GITHUB_OUTPUT"
             echo "code=false" >> "$GITHUB_OUTPUT"
             echo "mesh=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -163,9 +164,15 @@ jobs:
                 mesh=true
                 ;;
             esac
+            case "$file" in
+              desktop/*|schema/*|material/schema/*|protocol/*|.github/workflows/ci.yml)
+                desktop=true
+                ;;
+            esac
           done < /tmp/chipcae-changed
           echo "code=$code" >> "$GITHUB_OUTPUT"
           echo "mesh=$mesh" >> "$GITHUB_OUTPUT"
+          echo "desktop=$desktop" >> "$GITHUB_OUTPUT"
           echo "non-doc changes: $code"
           echo "mesh changes: $mesh"
 
@@ -335,9 +342,124 @@ jobs:
     permissions:
       contents: read
 
+  desktop:
+    name: Desktop
+    needs: lint
+    if: |
+      (github.event_name == 'push' || github.event.pull_request.draft == false) &&
+      needs.lint.result == 'success' &&
+      needs.lint.outputs.desktop == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MAMBA_ROOT_PREFIX: ${{ runner.temp }}/desktop-mamba
+      DESKTOP_PREFIX: ${{ runner.temp }}/desktop-sdk
+      CCACHE_DIR: ${{ github.workspace }}/.ccache-desktop
+      CCACHE_MAXSIZE: 200M
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Desktop source and cache identity
+        id: sdk
+        run: |
+          set -euo pipefail
+          mkdir -p build-desktop/logs
+          exec > >(tee build-desktop/logs/sdk-identity.log) 2>&1
+          lock=desktop/env/desktop-linux.lock.yml
+          digest=missing-lock
+          if [ -f "$lock" ]; then digest=$(sha256sum "$lock" | cut -d ' ' -f1); fi
+          echo "key=desktop-v1-${RUNNER_OS}-${ImageOS:-unknown}-gcc$(g++ -dumpfullversion)-Qt6-VTK9.7-$digest" >> "$GITHUB_OUTPUT"
+          if [ ! -f desktop/CMakeLists.txt ]; then
+            echo "D01 desktop/CMakeLists.txt has not landed; temporarily skipping the desktop build."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "present=true" >> "$GITHUB_OUTPUT"
+          test -s "$lock" || { echo "ERROR: D01 SDK lock is missing or empty: $lock"; exit 1; }
+
+      # The lock hash covers the SDK compiler ABI and exact Qt/VTK builds.
+      # Cache the extracted prefix first, with packages available for repair.
+      - name: Cache desktop SDK
+        if: steps.sdk.outputs.present == 'true'
+        id: desktop-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.DESKTOP_PREFIX }}
+            ${{ env.MAMBA_ROOT_PREFIX }}/pkgs
+          key: ${{ steps.sdk.outputs.key }}
+
+      - name: Cache desktop compiler outputs
+        if: steps.sdk.outputs.present == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.sdk.outputs.key }}-ccache-${{ github.sha }}
+          restore-keys: |
+            ${{ steps.sdk.outputs.key }}-ccache-
+
+      - name: Install locked prebuilt SDK
+        if: steps.sdk.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          exec > >(tee build-desktop/logs/sdk-install.log) 2>&1
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ccache
+          mkdir -p "$RUNNER_TEMP/desktop-bin"
+          curl --fail --location --retry 3 https://micro.mamba.pm/api/micromamba/linux-64/2.0.5 \
+            -o "$RUNNER_TEMP/desktop-micromamba.tar.bz2"
+          tar -xjf "$RUNNER_TEMP/desktop-micromamba.tar.bz2" -C "$RUNNER_TEMP/desktop-bin" bin/micromamba
+          echo "$RUNNER_TEMP/desktop-bin/bin" >> "$GITHUB_PATH"
+          if [ ! -f "$DESKTOP_PREFIX/conda-meta/history" ]; then
+            "$RUNNER_TEMP/desktop-bin/bin/micromamba" create --yes --prefix "$DESKTOP_PREFIX" \
+              --file desktop/env/desktop-linux.lock.yml
+          fi
+          "$RUNNER_TEMP/desktop-bin/bin/micromamba" list --prefix "$DESKTOP_PREFIX"
+
+      - name: Configure and build desktop
+        if: steps.sdk.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          exec > >(tee build-desktop/logs/configure-build.log) 2>&1
+          micromamba run -p "$DESKTOP_PREFIX" cmake -S desktop -B build-desktop -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+            -DCMAKE_PREFIX_PATH="$DESKTOP_PREFIX" -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          micromamba run -p "$DESKTOP_PREFIX" cmake --build build-desktop --parallel 2
+          ccache --show-stats
+
+      - name: Desktop tests and EGL capture
+        if: steps.sdk.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          exec > >(tee build-desktop/logs/ctest.log) 2>&1
+          micromamba run -p "$DESKTOP_PREFIX" ctest --test-dir build-desktop \
+            --no-tests=error --output-on-failure -E 'desktop_.*(render|capture|chart)' \
+            --output-junit "$PWD/build-desktop/junit-desktop.xml"
+          micromamba run -p "$DESKTOP_PREFIX" env -u DISPLAY \
+            VTK_DEFAULT_OPENGL_WINDOW=vtkEGLRenderWindow \
+            ctest --test-dir build-desktop --no-tests=error --output-on-failure \
+            -R 'desktop_.*(render|capture|chart)' --output-junit "$PWD/build-desktop/junit-render.xml"
+
+      - name: Upload desktop results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-results-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            build-desktop/junit*.xml
+            build-desktop/**/*.png
+            build-desktop/logs/
+            build-desktop/CMakeCache.txt
+            build-desktop/CMakeFiles/CMakeConfigureLog.yaml
+            build-desktop/Testing/Temporary/
+
   ci-ok:
     if: always()
-    needs: [lint, build-test, mesh]
+    needs: [lint, build-test, mesh, desktop]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -347,4 +469,5 @@ jobs:
           LINT: ${{ needs.lint.result }}
           BUILD: ${{ needs.build-test.result }}
           MESH: ${{ needs.mesh.result }}
-        run: test "$LINT" = success && { test "$BUILD" = success || test "$BUILD" = skipped; } && { test "$MESH" = success || test "$MESH" = skipped; }
+          DESKTOP: ${{ needs.desktop.result }}
+        run: test "$LINT" = success && { test "$BUILD" = success || test "$BUILD" = skipped; } && { test "$MESH" = success || test "$MESH" = skipped; } && { test "$DESKTOP" = success || test "$DESKTOP" = skipped; }
