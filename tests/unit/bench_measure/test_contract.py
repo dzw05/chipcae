@@ -13,7 +13,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
 from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -56,6 +55,9 @@ class SyntheticRunner:
         rc, status = outcome
         # CTest stdout/stderr are inherited; result status comes from a report.
         report = Path(argv[argv.index("--output-junit") + 1])
+        if status == "malformed":
+            report.write_text("<testsuite>", encoding="utf-8")
+            return subprocess.CompletedProcess(argv, rc, None, None)
         suite = ET.Element("testsuite", name="synthetic", tests="0" if status == "empty" else "1")
         if status != "empty":
             name = argv[argv.index("-R") + 1][1:-1]
@@ -97,10 +99,10 @@ class Contract(unittest.TestCase):
     def payload(self):
         return json.loads(self.out.read_text(encoding="utf-8"))
 
-    def check_payload(self, data, repeat, passed):
+    def check_payload(self, data, repeat, passed, kind="实测"):
         self.assertEqual(set(data), {"schema_version", "kind", "test", "repeat", "runs", "all_passed", "error"})
         self.assertEqual(data["schema_version"], 1)
-        self.assertEqual(data["kind"], "实测")
+        self.assertEqual(data["kind"], kind)
         self.assertEqual(data["test"], "solve_mesh")
         self.assertEqual(data["repeat"], repeat)
         self.assertIs(data["all_passed"], passed)
@@ -197,27 +199,18 @@ class Contract(unittest.TestCase):
                 self.assertIn(type(error).__name__, run["error"])
                 self.assertIn(str(error), run["error"])
 
-    def test_unexpected_report_errors_are_recorded(self):
-        for error in (RuntimeError("synthetic report failure"), ValueError()):
-            with self.subTest(error=error):
-                self.out.unlink(missing_ok=True)
-                with patch.object(self.tool, "report_status", side_effect=error):
-                    rc, _ = self.invoke()
-                self.assertEqual(rc, 1)
-                data = self.payload()
-                self.check_payload(data, 1, False)
-                run = data["runs"][0]
-                self.assertEqual(run["status"], "failed")
-                self.assertIn(type(error).__name__, run["error"])
-                self.assertEqual(run["wall_seconds"], 0.25)
-
-    def test_failed_report_without_details_gets_error(self):
-        with patch.object(self.tool, "report_status", return_value=("failed", "")):
-            rc, _ = self.invoke()
+    def test_malformed_report_errors_are_recorded(self):
+        rc, runner = self.invoke(SyntheticRunner(outcomes=[(0, "malformed")]))
         self.assertEqual(rc, 1)
-        run = self.payload()["runs"][0]
+        data = self.payload()
+        self.check_payload(data, 1, False)
+        self.assertEqual(len(data["runs"]), 1)
+        run = data["runs"][0]
         self.assertEqual(run["status"], "failed")
-        self.assertTrue(run["error"])
+        self.assertEqual(run["returncode"], 0)
+        self.assertIn("ParseError", run["error"])
+        self.assertEqual(run["wall_seconds"], 0.25)
+        self.assertEqual(runner.events, ["discovery", "clock", "run", "clock"])
 
     def test_empty_execution_results_cannot_pass(self):
         rc, _ = self.invoke(SyntheticRunner(outcomes=[(0, "empty")]))
@@ -238,12 +231,18 @@ class Contract(unittest.TestCase):
                 self.assertEqual(runner.calls, [])
                 self.assertFalse(self.out.exists())
 
-    def test_empty_build_dir_cannot_succeed(self):
-        rc, runner = self.invoke(build="", ticks=())
-        self.assertNotEqual(rc, 0)
-        self.assertEqual(runner.calls, [])
-        if self.out.exists():
-            self.assertIs(self.payload()["all_passed"], False)
+    def test_empty_build_dir_is_unmeasured(self):
+        for build in ("", "   "):
+            with self.subTest(build=build):
+                self.out.unlink(missing_ok=True)
+                rc, runner = self.invoke(build=build, ticks=())
+                self.assertEqual(rc, 1)
+                self.assertEqual(runner.calls, [])
+                self.assertEqual(runner.events, [])
+                data = self.payload()
+                self.check_payload(data, 1, False, kind="未测量")
+                self.assertEqual(data["runs"], [])
+                self.assertEqual(data["error"], "build directory must not be empty")
 
     def test_existing_output_is_preserved_without_launch(self):
         self.out.write_bytes(b"synthetic existing output\n")

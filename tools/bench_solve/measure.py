@@ -18,8 +18,8 @@ def parse_arguments(argv):
     parser.add_argument('--repeat', type=int, choices=range(1, 4), default=1)
     parser.add_argument('--out', required=True)
     args = parser.parse_args(argv)
-    if not args.build_dir.strip() or not args.out.strip():
-        parser.error('build directory and output path must not be empty')
+    if not args.out.strip():
+        parser.error('output path must not be empty')
     return args
 
 
@@ -86,8 +86,6 @@ def run_once(build, test, index, report, runner, clock):
     if run['returncode'] != 0:
         run['status'] = 'failed'
         run['error'] = f"CTest exited with {run['returncode']}"
-    if run['status'] == 'failed' and not run['error']:
-        run['error'] = 'run failed without report details'
     return run
 
 
@@ -112,7 +110,8 @@ def main(argv=None, *, runner=subprocess.run, clock=time.monotonic):
     # Exclusive creation also prevents a competing invocation from overwriting data.
     try:
         with Path(args.out).open('x', encoding='utf-8') as output:
-            error = check_registration(args.build_dir, args.test, runner)
+            error = (check_registration(args.build_dir, args.test, runner)
+                     if args.build_dir.strip() else 'build directory must not be empty')
             runs = []
             if not error:
                 with tempfile.TemporaryDirectory(prefix='bench-solve-') as temp:
