@@ -11,6 +11,31 @@ from tools.vv.result_summary import ResultSummaryError, main, summarize
 
 
 class Edges(unittest.TestCase):
+    def test_empty_leading_block_temperature_alignment(self):
+        for empty_t in (False, True):
+            with self.subTest(empty_t=empty_t), tempfile.TemporaryDirectory() as tmp:
+                run = Path(tmp)
+                step, _ = fixture(run, cut=True)
+                with h5py.File(step, 'r+') as f:
+                    block = f['VTKHDF/hex']
+                    for path in ('Points', 'PointData', 'CellData', 'Types'):
+                        del block[path]
+                    block['NumberOfPoints'][...] = 0
+                    block['NumberOfCells'][...] = 0
+                    if empty_t:
+                        block['PointData/T'] = np.empty(0, dtype='float64')
+                    # Put the top point second so top indices differ from
+                    # indices into the subset of top temperatures.
+                    cut = f['VTKHDF/cut']
+                    cut['Points'][...] = [[0., 0., 0.], [2., 0., 1.]]
+                    cut['PointData/T'][...] = [100., 999.]
+                result = summarize(run)
+                self.assertEqual(result['blocks']['hex']['points'], 0)
+                self.assertEqual(result['blocks']['cut']['points'], 2)
+                self.assertEqual(result['warpage']['n_top_points'], 1)
+                self.assertEqual(result['temperature'], dict(
+                    min=100., max=999., top_min=999., top_max=999., top_mean=999.))
+
     def test_duplicate_temperature_correspondence(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)
