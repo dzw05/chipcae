@@ -5,6 +5,7 @@
 #   MFEM (conditional), Qt6, VTK, OCCT, nanobind, METIS, Zoltan,
 #   Kokkos Kernels, ArborX.
 #   MUMPS (CeCILL-C): optional direct solver, dynamic linking only, default OFF.
+#   Clipper2 (BSL-1.0), EXPAT (MIT): optional ECAD import, default OFF.
 #
 # Excluded:
 #   ParMETIS (non-commercial only), libigl (contains GPL modules).

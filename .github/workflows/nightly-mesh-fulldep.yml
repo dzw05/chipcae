@@ -202,7 +202,10 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_PREFIX_PATH="$PWD/build-k1-deps/prefix" \
             -DCHIPCAE_ENABLE_MPI=ON -DCHIPCAE_ENABLE_MFEM=ON \
-            -DCHIPCAE_ENABLE_HYPRE=ON -DCHIPCAE_ENABLE_HDF5=ON -DCHIPCAE_ENABLE_JSONCONS=ON
+            -DCHIPCAE_ENABLE_HYPRE=ON -DCHIPCAE_ENABLE_HDF5=ON -DCHIPCAE_ENABLE_JSONCONS=ON \
+            -DCHIPCAE_ENABLE_ECAD=ON \
+            -DCMAKE_DISABLE_FIND_PACKAGE_Clipper2=TRUE \
+            -DCMAKE_DISABLE_FIND_PACKAGE_EXPAT=TRUE
           cmake --build build-k1-full --parallel 2
           build_secs=$((SECONDS - start))
           test_start=$SECONDS

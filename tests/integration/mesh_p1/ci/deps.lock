@@ -9,6 +9,10 @@ HDF5_TAG=hdf5_1.14.6
 HDF5_URL=https://github.com/HDFGroup/hdf5/archive/refs/tags/hdf5_1.14.6.tar.gz
 JSONCONS_VERSION=1.4.0
 JSONCONS_URL=https://github.com/danielaparker/jsoncons/archive/refs/tags/v1.4.0.tar.gz
+CLIPPER2_VERSION=2.0.1
+CLIPPER2_URL=https://github.com/PolyClipping/Clipper2/archive/refs/tags/Clipper2_2.0.1.tar.gz
+EXPAT_VERSION=2.10.0
+EXPAT_URL=https://github.com/libexpat/libexpat/archive/refs/tags/R_2_10_0.tar.gz
 MFEM_VERSION=4.10
 MFEM_URL=https://github.com/mfem/mfem/archive/refs/tags/v4.10.tar.gz
 # System MPI (apt). Bump this when the ubuntu-24.04 OpenMPI package changes, so the cache key changes.
