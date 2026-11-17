@@ -66,7 +66,10 @@ int main(int argc, char** argv) {
                 has_accept = true;
             std::filesystem::path value;
             if (!next(value)) {
-                std::cerr << "unknown argument: " << arg << '\n';
+                if (!input.empty() && !output.empty())
+                    std::cerr << "not implemented yet: " << arg << '\n';
+                else
+                    std::cerr << "unknown argument: " << arg << '\n';
                 return CliExit::usage;
             }
             if (arg == "--accept") {

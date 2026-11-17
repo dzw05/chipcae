@@ -132,6 +132,10 @@ def run_case(binary, case, generate=False):
                                ["a.xml", "-o", "stack.json", "--accept-b-tier"]):
                     result = invoke(binary, [*prefix, option], directory)
                     check(result.returncode == 2, f"missing {option}: exit {result.returncode}")
+                    if prefix and not (option == "--accept" and "--accept-b-tier" in prefix):
+                        check(b"not implemented yet" in result.stderr and
+                              option.encode() in result.stderr,
+                              f"missing {option}: reserved diagnostic differs: {result.stderr!r}")
             for flags in (("--accept-b-tier", "--accept", "x"),
                           ("--accept", "x", "--accept-b-tier")):
                 result = invoke(binary, [FIXTURES / "board_2layer.xml", "-o", "stack.json", *flags], directory)

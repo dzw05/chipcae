@@ -47,7 +47,9 @@ no baseline goldens and are never passed to the generator. For each reserved
 option on a valid input/output parse path, the test requires exit 2 and stderr
 containing both `not implemented yet` and the option name. It also covers
 `--t-min` placeholder values using the same substring contract. Conflicts in
-both flag orders and missing reserved values require exit 2 only. Help paths
+both flag orders require exit 2 only. Missing reserved values on valid parse
+paths require the same diagnostic substrings, except for the accept conflict.
+Missing input/output paths retain their separate exit-code checks. Help paths
 are checked separately by the `help` case against the baseline help bytes.
 
 Historically, before implementation the four reserved diagnostic assertions
