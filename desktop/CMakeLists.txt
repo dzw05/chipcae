@@ -92,3 +92,27 @@ if(CHIPCAE_BUILD_TESTS)
     add_test(NAME desktop_stack COMMAND desktop_stack)
     set_tests_properties(desktop_stack PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endif()
+
+add_library(chipcae_desktop_viewer viewer/ResultView.cpp viewer/ResultView.hpp
+    viewer/ResultControls.cpp viewer/ResultControls.hpp)
+target_include_directories(chipcae_desktop_viewer PUBLIC viewer)
+target_link_libraries(chipcae_desktop_viewer PUBLIC chipcae_desktop_results Qt6::Widgets
+    Qt6::OpenGLWidgets ${VTK_LIBRARIES} VTK::FiltersExtraction VTK::FiltersGeneral
+    VTK::RenderingAnnotation)
+vtk_module_autoinit(TARGETS chipcae_desktop_viewer MODULES ${VTK_LIBRARIES})
+if(CHIPCAE_BUILD_TESTS)
+    foreach(test viewer viewer_capture)
+        add_executable(desktop_${test} tests/${test}_test.cpp)
+        target_link_libraries(desktop_${test} PRIVATE chipcae_desktop_viewer)
+        vtk_module_autoinit(TARGETS desktop_${test} MODULES ${VTK_LIBRARIES})
+        if(test STREQUAL "viewer_capture")
+            set(test_name desktop_capture)
+        else()
+            set(test_name desktop_viewer)
+        endif()
+        add_test(NAME ${test_name} COMMAND desktop_${test} ${CMAKE_CURRENT_BINARY_DIR}/result-samples
+            ${CMAKE_CURRENT_BINARY_DIR})
+        set_tests_properties(${test_name} PROPERTIES FIXTURES_REQUIRED result_samples
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
+    endforeach()
+endif()

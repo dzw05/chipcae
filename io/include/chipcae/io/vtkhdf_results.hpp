@@ -2,6 +2,7 @@
 #include "chipcae/core/types.hpp"
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -28,10 +29,17 @@ class ResultsWriter {
 public:
     // Collective on MPI_COMM_WORLD when MPI is initialized. Partition count is
     // fixed for the lifetime of the writer. stackup is a chipcae.stack 0.2 JSON.
+    struct MeshSummary {
+        std::int64_t nx0, ny0, L, padded_cells, nz;
+        std::string mesh_sha256;
+    };
     ResultsWriter(std::filesystem::path run,
                   const std::filesystem::path& stackup,
                   std::vector<std::string> layer_names = {},
-                  std::vector<std::string> material_names = {});
+                  std::vector<std::string> material_names = {},
+                  std::vector<std::string> fields = {
+                      "T", "U", "layer_id", "material_id", "cell_kind", "elem_gid", "volume"});
+    void set_mesh(MeshSummary mesh);
     void write_step(int n, double time, const ResultsStep& local);
     void add_summary(
         std::string name, double value, std::string unit, int step, std::string method = {});
@@ -56,5 +64,9 @@ private:
     std::vector<Summary> summary_;
     int rank_ = 0, size_ = 1;
     bool gids_ = false;
+    bool cut_fields_ = false;
+    std::vector<std::string> fields_;
+    bool selected(const std::string& name) const;
+    std::optional<MeshSummary> mesh_;
 };
 } // namespace chipcae::io

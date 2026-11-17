@@ -5,6 +5,7 @@
 
 int main() {
     chipcae::mesh::HexMeshArrays mesh;
+    mesh.grid_report.levels = 1;
     mesh.grid_report.level_axes.push_back({{{0, 1}, {0, 1}}});
     mesh.axes[2] = {0, 1};
     mesh.elem_gid = {0};

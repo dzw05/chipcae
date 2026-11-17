@@ -76,3 +76,7 @@ Python 绑定使用 nanobind（需要 Python 3.9+ 开发头文件）。
 Proprietary, all rights reserved。见 [LICENSE](LICENSE)。
 
 例外：公开基准算例数据 `cases/benchmarks/` 按 CC BY 4.0 发布（见 [cases/benchmarks/LICENSE](cases/benchmarks/LICENSE) 与 [NOTICE](cases/benchmarks/NOTICE)）；V&V 脚本与测试 `tools/vv/`、`tests/vv/` 按 Apache-2.0 发布（见各目录 LICENSE）。
+
+O2 求解器当前限制：每个 MPI rank 均在 `PETSC_COMM_SELF` 上对全局串行网格执行完整求解。
+不同 `np` 的结果一致仅验证重复求解及输出一致性，不证明分布式求解正确；总内存随 `np` 增长。
+分布式求解将随 GMG 落地。
