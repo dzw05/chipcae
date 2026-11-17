@@ -922,6 +922,22 @@ int main() {
                                    "contiguous: tar contiguous file"})
             require(reported(reader.unsupported(), reason), reason);
     });
+    test("odbpp_tar_regular_duplicate_scope", [&] {
+        ArchiveReader reader(temp / "shared-path-types.tgz");
+        require(reader.open_error().empty(), reader.open_error());
+        std::size_t regular_count = 0;
+        for (const auto& entry : reader.entries()) {
+            if (entry.is_dir)
+                continue;
+            std::string payload;
+            std::string error;
+            require(reader.read_bytes(entry.path, payload, error), error);
+            require(payload == "payload", "regular file sharing a skipped entry path is readable");
+            ++regular_count;
+        }
+        require(regular_count == 14, "all regular files with shared paths indexed");
+        require(reader.unsupported().size() == 12, "all skipped types reported in both orders");
+    });
     test("odbpp_archive_symlink", [&] {
         ArchiveReader reader(temp / "link.tgz");
         require(reader.open_error().empty(), reader.open_error());
@@ -1123,7 +1139,9 @@ int main() {
     });
     test("odbpp_review_empty_unsupported", [&] {
         auto r = parse_job(temp / "job.tar.Z");
-        require(!r && r.error == "IMPORT_REJECTED: unsupported .Z compression" &&
+        require(!r &&
+                    r.error == "IMPORT_REJECTED: unsupported .Z compression " +
+                                   (temp / "job.tar.Z").string() &&
                     reported(r.model.report.unsupported, ".Z compression"),
                 "top-level .Z both rejected and reported");
         auto p = temp / "only-links";

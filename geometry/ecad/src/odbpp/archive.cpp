@@ -169,7 +169,7 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
             if (name.ends_with(".z")) {
                 s.unsupported.push_back(
                     {"IMPORT_UNSUPPORTED_ELEMENT", input.string() + ": .Z compression", 0});
-                fail("unsupported .Z compression");
+                fail("unsupported .Z compression " + input.string());
                 return;
             }
             if (name.ends_with(".tgz") || name.ends_with(".tar.gz")) {

@@ -265,6 +265,22 @@ def main(root, fixture):
     (root / 'empty').mkdir()
     (root / 'empty.tgz').write_bytes(gzip.compress(tar_bytes([])))
     (root / 'empty.zip').write_bytes(b'')
+    with tarfile.open(root / 'shared-path-types.tgz', 'w:gz') as archive:
+        for kind in [tarfile.LNKTYPE, tarfile.SYMTYPE, tarfile.CHRTYPE,
+                     tarfile.BLKTYPE, tarfile.FIFOTYPE, tarfile.CONTTYPE, tarfile.DIRTYPE]:
+            for regular_first in [False, True]:
+                name = f'shared-{kind.decode()}-{regular_first}'
+                for entry_kind in ([tarfile.REGTYPE, kind] if regular_first
+                                   else [kind, tarfile.REGTYPE]):
+                    info = tarfile.TarInfo(name)
+                    info.type = entry_kind
+                    if entry_kind == tarfile.REGTYPE:
+                        info.size = 7
+                        archive.addfile(info, io.BytesIO(b'payload'))
+                    else:
+                        info.linkname = 'target' if entry_kind in [tarfile.LNKTYPE, tarfile.SYMTYPE] else ''
+                        archive.addfile(info)
+
     with zipfile.ZipFile(root / 'duplicate.zip', 'w') as archive:
         archive.writestr('matrix/matrix', b'a')
         archive.writestr('./matrix/matrix', b'b')
