@@ -113,7 +113,13 @@ def build_mesh(nx, ny):
 
 def write_inp(path: Path, name: str, nx, ny):
     coords, elements, nz = build_mesh(nx, ny)
-    lines = ["*HEADING", f" chipcae WP-2 trilayer {name} C3D20 REFERENCE (not measured)", "*NODE"]
+    lines = [
+        "** SPDX-License-Identifier: Apache-2.0",
+        "** Copyright (c) 2026 Zhiwei Duan",
+        "*HEADING",
+        f" chipcae WP-2 trilayer {name} C3D20 REFERENCE (not measured)",
+        "*NODE",
+    ]
     for nid in sorted(coords):
         x, y, z = coords[nid]
         lines.append(f"{nid}, {x:.12g}, {y:.12g}, {z:.12g}")
@@ -231,7 +237,11 @@ def ccx_version() -> str:
 def run_mesh(workdir: Path, name: str):
     nx, ny = MESHES[name]["nx"], MESHES[name]["ny"]
     inp = workdir / f"{name}.inp"
-    write_inp(inp, name, nx, ny)
+    deck = Path(__file__).resolve().parent / f"{name}.inp"
+    write_inp(deck, name, nx, ny)
+    inp.write_bytes(deck.read_bytes())
+    # Require fresh output even if a solver exits successfully without writing FRD.
+    (workdir / f"{name}.frd").unlink(missing_ok=True)
     # ccx expects the jobname without extension, and CWD = workdir
     job = name
     r = subprocess.run([CCX, job], cwd=workdir, capture_output=True, text=True)
@@ -268,7 +278,7 @@ def main():
         "W_bfp_m": w,
         "element_type": "C3D20",
         "calculix_version": ver,
-        "host": f"box {platform.system()} {platform.machine()}",
+        "host": f"{platform.node()} {platform.system()} {platform.machine()}",
         "geometry": {
             "L_m": L,
             "thicknesses_m": THICK,

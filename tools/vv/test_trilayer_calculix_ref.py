@@ -112,6 +112,13 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         for field in ("host", "calculix_version"):
             self.assertIsInstance(data[field], str)
             self.assertTrue(data[field].strip())
+        geometry = data["geometry"]
+        self.assertEqual(geometry["L_m"], 1.0)
+        self.assertEqual(geometry["thicknesses_m"], [0.05, 0.01, 0.04])
+        self.assertEqual(geometry["E_Pa"], [2.5e10, 3e9, 1.3e11])
+        self.assertEqual(geometry["nu"], [0.2, 0.35, 0.28])
+        self.assertEqual(geometry["alpha_1_per_K"], [15e-6, 50e-6, 2.6e-6])
+        self.assertEqual(geometry["dT_K"], -100.0)
         self.assertAlmostEqual(data["prototype_W_bfp_m"], PROTOTYPE, places=12)
         names = [m["name"] for m in data["meshes"]]
         self.assertCountEqual(names, ["coarse", "fine"])

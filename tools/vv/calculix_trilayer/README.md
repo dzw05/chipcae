@@ -31,8 +31,11 @@ Requires numpy, scipy (used by the shared interpolation routine), jsonschema, an
 python tools/vv/calculix_trilayer/generate.py
 ```
 
-The script writes `work/{coarse,fine}.*` (not committed) and updates
-`REFERENCE.json`. The ASCII `.frd` parser reads coordinates from the `2C`
+The deterministic input decks [coarse.inp](coarse.inp) and [fine.inp](fine.inp)
+are committed alongside the generator. The script regenerates these decks,
+copies them into ignored `work/` for solving, and updates `REFERENCE.json`.
+Solver outputs stay in `work/`; stale FRD results are deleted before each run.
+The ASCII `.frd` parser reads coordinates from the `2C`
 block and displacements from the `-4 DISP` block, using fixed-width `-1`
 node records until each `-3` terminator. Node IDs join coordinates and
 displacements. Top-surface selection uses undeformed z at H = 0.10 m
@@ -58,8 +61,8 @@ are not collected by unittest discovery. They cover both blocks,
 adjacent negative fields, exponent signs, node IDs, and block termination.
 
 Recorded W_bfp: coarse 0.004271023422273522 m; fine (selected)
-0.004274306997289974 m. Reproducible input decks are generated in `work/`
-by `generate.py`; rerun the generator to recreate them. Scipy is used indirectly
+0.004274306997289974 m. Reproducible input decks are committed as `coarse.inp` and `fine.inp`;
+rerun `generate.py` to recreate them. Scipy is used indirectly
 by the shared `interp_grid` function for linear interpolation.
 
 Run `python3 -m unittest tools.vv.test_trilayer_calculix_ref` after generation.
