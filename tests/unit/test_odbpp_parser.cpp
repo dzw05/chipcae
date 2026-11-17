@@ -957,6 +957,42 @@ int main(int argc, char** argv) {
                 "member bytes including optional headers");
         rejected(temp / "corrupt/crc.tgz", "CRC");
     });
+    test("odbpp_gzip_validation_before_early_line_stop", [&] {
+        const auto valid = bytes(temp / "job.tgz");
+        require(valid.size() > 8, "gzip fixture has trailer");
+        for (const auto& reason :
+             {std::string("CRC"), std::string("ISIZE"), std::string("truncated trailer")}) {
+            auto corrupt = valid;
+            if (reason == "truncated trailer")
+                corrupt.pop_back();
+            else
+                corrupt[corrupt.size() - (reason == "CRC" ? 8 : 4)] ^= 1;
+            // A later member starts after the first tar's two end blocks.
+            for (bool later_member : {false, true}) {
+                const auto path = temp / "trailer-validation.tgz";
+                write(path, (later_member ? valid : std::string{}) + corrupt);
+                ArchiveReader reader(path);
+                require(reader.open_error().find(reason) != std::string::npos,
+                        "index validates every gzip trailer: " + reader.open_error());
+                std::size_t callbacks = 0;
+                std::string error;
+                require(!reader.for_each_line(
+                            "matrix/matrix",
+                            [&](auto) {
+                                ++callbacks;
+                                return false;
+                            },
+                            error) &&
+                            callbacks == 0 && error == reader.open_error(),
+                        "early line stop cannot hide corrupt trailer: " + error);
+            }
+        }
+        std::istringstream input(valid);
+        std::string error;
+        require(!stream_gzip(
+                    input, [](auto) { return false; }, error),
+                "standalone gzip cancellation never reports success");
+    });
     test("odbpp_archive_gzip_bad_crc", [&] {
         std::string decoded, error;
         const bool ok = decode_gzip(bytes(temp / "corrupt/crc.tgz"), decoded, error);
