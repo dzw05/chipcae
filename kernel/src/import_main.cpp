@@ -2,24 +2,22 @@
 
 #include <iostream>
 
-using namespace chipcae::importer;
-
 namespace {
 void help() {
     // Empty format-specific help keeps the baseline output byte-identical.
     std::cout << "usage: chipcae-import <in.step|in.xml> -o <out.stack.json> "
                  "[--polyset <out.polyset>] [--report <defects.json>] [--material-map m.json] "
                  "[--accept-b-tier]\n"
-              << ecad_help() << step_help();
+              << chipcae::importer::ecad_help() << chipcae::importer::step_help();
 }
 } // namespace
 
 int main(int argc, char** argv) {
     if (argc == 2 && (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h")) {
         help();
-        return CliExit::success;
+        return chipcae::importer::CliExit::success;
     }
-    ImportOptions options;
+    chipcae::importer::ImportOptions options;
     auto& input = options.input;
     auto& output = options.output;
     auto& polyset = options.polyset;
@@ -39,22 +37,22 @@ int main(int argc, char** argv) {
         if (arg == "-o" || arg == "--out") {
             if (!next(output)) {
                 help();
-                return CliExit::usage;
+                return chipcae::importer::CliExit::usage;
             }
         } else if (arg == "--polyset") {
             if (!next(polyset)) {
                 help();
-                return CliExit::usage;
+                return chipcae::importer::CliExit::usage;
             }
         } else if (arg == "--report") {
             if (!next(report)) {
                 help();
-                return CliExit::usage;
+                return chipcae::importer::CliExit::usage;
             }
         } else if (arg == "--material-map") {
             if (!next(material_map)) {
                 help();
-                return CliExit::usage;
+                return chipcae::importer::CliExit::usage;
             }
         } else if (arg == "--accept-b-tier") {
             accept_b = true;
@@ -63,7 +61,7 @@ int main(int argc, char** argv) {
             std::filesystem::path value;
             if (!next(value)) {
                 help();
-                return CliExit::usage;
+                return chipcae::importer::CliExit::usage;
             }
             if (reserved_argument.empty())
                 reserved_argument = arg;
@@ -80,30 +78,29 @@ int main(int argc, char** argv) {
             input = arg;
         } else {
             std::cerr << "unknown argument: " << arg << '\n';
-            return CliExit::usage;
+            return chipcae::importer::CliExit::usage;
         }
     }
     const bool reserved_parse_path =
         (!input.empty() && !output.empty()) || (!options.assembly.empty() && !output.empty());
     if (!reserved_argument.empty() && !reserved_parse_path) {
         std::cerr << "unknown argument: " << reserved_argument << '\n';
-        return CliExit::usage;
+        return chipcae::importer::CliExit::usage;
     }
     if (accept_b && has_accept) {
-        std::cerr << "conflicting arguments: --accept-b-tier and --accept\n";
-        return CliExit::usage;
+        return chipcae::importer::CliExit::usage;
     }
     if (!reserved_argument.empty()) {
         std::cerr << "not implemented yet: " << reserved_argument << '\n';
-        return CliExit::usage;
+        return chipcae::importer::CliExit::usage;
     }
     if (input.empty() || output.empty()) {
         help();
-        return CliExit::usage;
+        return chipcae::importer::CliExit::usage;
     }
-    derive_output_paths(options);
+    chipcae::importer::derive_output_paths(options);
     const auto ext = input.extension().string();
     if (ext == ".step" || ext == ".stp")
-        return run_step(options);
-    return run_ecad(options);
+        return chipcae::importer::run_step(options);
+    return chipcae::importer::run_ecad(options);
 }
