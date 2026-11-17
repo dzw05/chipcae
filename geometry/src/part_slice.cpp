@@ -268,28 +268,6 @@ slice_prismatic(const StepImportResult& input, std::string_view body, const Slic
                 planes.push_back(s.Plane().Location().Z());
             }
         }
-        // A sheared prism can have horizontal caps. Its nonhorizontal straight
-        // edges still share the extrusion direction; drafted walls do not.
-        bool have_direction = false, parallel = true;
-        gp_Dir direction(0, 0, 1);
-        for (TopExp_Explorer it(shape, TopAbs_EDGE); it.More(); it.Next()) {
-            BRepAdaptor_Curve curve(TopoDS::Edge(it.Current()));
-            if (curve.GetType() != GeomAbs_Line)
-                continue;
-            const auto candidate = curve.Line().Direction();
-            if (std::abs(candidate.Z()) <= 1e-9)
-                continue;
-            if (!have_direction) {
-                direction = candidate;
-                have_direction = true;
-            } else if (!direction.IsParallel(candidate, 1e-9)) {
-                parallel = false;
-            }
-        }
-        if (have_direction && parallel &&
-            std::acos(std::clamp(std::abs(direction.Z()), Real(0), Real(1))) >
-                std::atan(options.tau_a / height))
-            return reject(DefectReason::PART_TILTED, "prismatic direction tilted from z");
         if (!horizontal && largest_area > 0 &&
             std::acos(std::clamp(largest_cosine, Real(0), Real(1))) >
                 std::atan(options.tau_a / height))
