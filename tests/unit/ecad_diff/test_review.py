@@ -65,7 +65,7 @@ def main():
         b['layers'][0]['copper']['fraction'] = 0
         both_empty = diff_stacks(save(root / 'a.json', a), save(root / 'b.json', b))
         e = entry(both_empty, 'copper_area', '0:F.Cu|F.Cu')
-        assert e['grade'] == 'info' and e['tol'] > 0
+        assert e['grade'] == 'info' and e['tol'] == 0
         out = root / 'reports'
         for existing in (False, True):
             if existing:

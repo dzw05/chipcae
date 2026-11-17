@@ -92,8 +92,7 @@ def main():
         expected = [('layers', 'stack')]
         for i, name in enumerate(('F.Cu', 'core', 'B.Cu')):
             expected.extend((item, f'{i}:{name}|{name}') for item in
-                            (('thickness', 'material') if i == 1 else
-                             ('thickness', 'material', 'copper_area')))
+                            ('thickness', 'material', 'copper_area'))
         expected.extend((item, key) for item, key in
                         [('total_thickness', 'stack'), ('outline', 'outline'),
                          ('vias', 'stack'), ('components', 'stack')])
@@ -110,7 +109,7 @@ def main():
             if e['item'] in ('thickness', 'total_thickness'):
                 tolerance(e, DELTA)
             if e['item'] in ('outline', 'copper_area'):
-                tolerance(e, DELTA, PERIMETER)
+                tolerance(e, DELTA, 0 if e['key'] == '1:core|core' else PERIMETER)
         md = reports(result, directory / 'reports')
         assert str(path) in md.splitlines()[0]
         rows = [[cell.strip() for cell in line.strip().strip('|').split('|')]

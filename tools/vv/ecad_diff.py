@@ -233,7 +233,8 @@ def _diff(odb, ipc, delta):
 
     def thickness(item, key, x, y):
         d = abs(x - y)
-        add(item, key, x, y, d, delta, reason, 'hard' if d > delta else 'info')
+        # Compare endpoints so subtraction cancellation cannot move equality above δ.
+        add(item, key, x, y, d, delta, reason, 'hard' if max(x, y) > min(x, y) + delta else 'info')
 
     sa = ['copper' in layer for layer in a]
     sb = ['copper' in layer for layer in b]
@@ -256,18 +257,16 @@ def _diff(odb, ipc, delta):
         my = dict(material=y['material'], metal=y.get('copper', {}).get('metal'))
         add('material', key, mx, my, 0 if mx == my else 1, None,
             f'δ = {delta}; exact material and copper metal identity', 'info' if mx == my else 'hard')
-        if ca[i] is not None or cb[i] is not None:
-            ax, px = ca[i] or (0, 0)
-            ay, py = cb[i] or (0, 0)
-            d, p = abs(ax - ay), max(px, py)
-            if p == 0:
-                p = max(4 * math.sqrt(max(ax, ay)), delta)
-            relative = d / max(ax, ay) if max(ax, ay) else 0
-            grade = 'hard' if relative > 0.01 else 'discuss' if d > delta * p else 'info'
-            add('copper_area', key, ax, ay, d, delta * p,
-                f'δ = {delta}; P_layer = {p} (total copper ring perimeter; '
-                'fractions use scaled outline; empty fallback 4√area or δ); '
-                'absolute ring areas summed; relative difference uses larger area, zero versus nonzero is 100%', grade)
+        ax, px = ca[i] or (0, 0)
+        ay, py = cb[i] or (0, 0)
+        d, p = abs(ax - ay), max(px, py)
+        relative = d / max(ax, ay) if max(ax, ay) else 0
+        grade = ('hard' if sa[i] != sb[i] or relative > 0.01 else
+                 'discuss' if d > delta * p else 'info')
+        add('copper_area', key, ax, ay, d, delta * p,
+            f'δ = {delta}; P_layer = {p} (total copper ring perimeter; '
+            'fractions use scaled outline); copper/dielectric mismatch is hard; '
+            'absolute ring areas summed; relative difference uses larger area, zero versus nonzero is 100%', grade)
     thickness('total_thickness', 'stack', math.fsum(l['thickness'] for l in a),
               math.fsum(l['thickness'] for l in b))
     p = max(ga['perimeter'], gb['perimeter'])
@@ -298,7 +297,7 @@ def write_report(result: dict, out_dir: Path) -> None:
                   '| --- | --- | --- | --- | --- | --- | --- |'])
     details = [e for e in result['entries'] if e['grade'] != 'info']
     for e in details:
-        lines.append('| ' + ' | '.join(str(e[k]).replace('\n', ' ') for k in
+        lines.append('| ' + ' | '.join(str(e[k]).replace('\n', ' ').replace('|', r'\|') for k in
                                       ('item', 'key', 'odb', 'ipc', 'delta', 'tol', 'grade')) + ' |')
     if not details:
         lines.append('| 无 | | | | | | |')

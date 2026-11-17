@@ -3,6 +3,7 @@ import copy
 from pathlib import Path
 import tempfile
 import json
+import re
 import subprocess
 import sys
 from test_identical import AREA, ROOT, board, diff_stacks, entry, number, polyset, reports, save
@@ -45,11 +46,36 @@ def main():
         assert result['summary']['hard'] > 0
         md = reports(result, out)
         details = md.splitlines()
-        assert any('3:|extra' in line and 'hard' in line for line in details), md
+        assert any(r'3:\|extra' in line and 'hard' in line for line in details), md
         assert not any('not compared:' in line for line in details), md
         b = copy.deepcopy(a)
         b['layers'][0], b['layers'][1] = b['layers'][1], b['layers'][0]
         assert entry(diff_stacks(pa, save(pb, b)), 'layers')['grade'] == 'hard'
+        # Every aligned layer gets a copper row, including zero-area mismatches.
+        for left_copper, right_copper, grade in ((False, False, 'info'),
+                                                 (True, False, 'hard'),
+                                                 (False, True, 'hard'),
+                                                 (True, True, 'info')):
+            left, right = board(), board()
+            for stack, present in ((left, left_copper), (right, right_copper)):
+                if present:
+                    stack['layers'][0]['copper']['fraction'] = 0
+                else:
+                    del stack['layers'][0]['copper']
+            r = diff_stacks(save(directory / 'left.json', left),
+                            save(directory / 'right.json', right))
+            e = entry(r, 'copper_area', '0:F.Cu|F.Cu')
+            assert e['grade'] == grade and e['tol'] == 0
+            assert e['odb'] == e['ipc'] == e['delta'] == 0
+            assert 'P_layer = 0' in e['tol_derivation']
+        # Pipes in keys and nested material values remain within Markdown cells.
+        b = copy.deepcopy(a)
+        b['layers'][0]['material'] = 'mat|FR4'
+        md = reports(diff_stacks(pa, save(pb, b)), out)
+        assert r'0:F.Cu\|F.Cu' in md and r'mat\|FR4' in md
+        for row in md.splitlines():
+            if row.startswith('|') and 'hard' in row and 'mat' in row:
+                assert len(re.split(r'(?<!\\)\|', row)) == 9, row
         for field in ('material', 'metal'):
             b = copy.deepcopy(a)
             if field == 'metal':

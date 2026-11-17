@@ -1,5 +1,6 @@
 """Thresholds are inclusive; binary-exact inputs isolate the equality boundary."""
 import copy
+import math
 from pathlib import Path
 import tempfile
 from test_identical import (AREA, DELTA, PERIMETER, board, diff_stacks, entry,
@@ -29,6 +30,16 @@ def main():
                 total = entry(r, 'total_thickness')
                 assert total['grade'] == grade
                 tolerance(total, delta)
+        # The next representable thickness beyond the boundary must still fail.
+        a = board()
+        pa = save(directory / 'a.json', a)
+        b = copy.deepcopy(a)
+        b['layers'][1]['thickness'] = math.nextafter(
+            a['layers'][1]['thickness'] + DELTA, math.inf)
+        for left, right in ((pa, save(directory / 'b.json', b)),
+                            (directory / 'b.json', pa)):
+            assert entry(diff_stacks(left, right), 'thickness',
+                         '1:core|core')['grade'] == 'hard'
         for polygon, grade in (([[0, 0], [0.01 + 2 * DELTA, 0],
                                   [0.01, 0.005], [0, 0.005]], 'hard'),
                                 ([[0, 0], [0.005, 0], [0.01, 0],
