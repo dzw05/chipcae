@@ -1,0 +1,8 @@
+{
+  "version": [2, 8],
+  "blocks": ["hex", "cut", "eb_surface", "particles"],
+  "partitions": 3,
+  "cut_volume": 0.625,
+  "summary": {"warpage_pv": 0.0015, "T_max": 199.15, "U_mag_max": 0.0030083217912982647},
+  "temporal_offsets": {"PartOffsets": [0,2,4], "PointOffsets": [0,24,48], "CellOffsets": [0,4,8], "ConnectivityIdOffsets": [0,32,64], "FaceConnectivityOffsets": [0,96,192], "FaceOffsetsOffsets": [0,24,48], "PolyhedronToFaceIdOffsets": [0,24,48]}
+}
