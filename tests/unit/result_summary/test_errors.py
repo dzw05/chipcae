@@ -11,6 +11,22 @@ from tools.vv.result_summary import ResultSummaryError, main, summarize
 
 
 class Errors(unittest.TestCase):
+    def test_manifest_invalid_utf8(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            (run / 'manifest.json').write_bytes(b'{"schema_version": "\xff"}')
+            with self.assertRaises(ResultSummaryError) as caught:
+                summarize(run)
+            self.assertEqual(caught.exception.code, 14)
+            self.assertEqual(caught.exception.name, 'INPUT_INVALID')
+            self.assertEqual(str(caught.exception), 'manifest.json: invalid UTF-8')
+            err, out = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+                self.assertEqual(main([str(run)]), 14)
+            self.assertEqual(out.getvalue(), '')
+            self.assertEqual(err.getvalue(),
+                             'result_summary: INPUT_INVALID: manifest.json: invalid UTF-8\n')
+
     def test_hdf5_failures(self):
         for stage, target, code, name in (
                 ('open', 'h5py.File', 12, 'INPUT_REFERENCE_MISSING'),

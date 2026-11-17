@@ -167,6 +167,8 @@ def _summarize(run_dir, top_rel_tol):
     _require(np.isfinite(top_rel_tol) and top_rel_tol >= 0, 'top_rel_tol must be finite and nonnegative')
     try:
         content = (run_dir / 'manifest.json').read_text(encoding='utf-8')
+    except UnicodeDecodeError as exc:
+        raise ResultSummaryError(14, 'INPUT_INVALID', 'manifest.json: invalid UTF-8') from exc
     except OSError as exc:
         raise ResultSummaryError(12, 'INPUT_REFERENCE_MISSING', str(exc)) from exc
     try:
@@ -219,6 +221,7 @@ def _summarize(run_dir, top_rel_tol):
         z = points[:, 2]
         indices = np.flatnonzero(z >= z.max() - top_rel_tol * (z.max() - z.min()))
         _, first = np.unique(points[indices], axis=0, return_index=True)
+        # Reuse the first stored indices for both coordinates and their U/T.
         top = indices[np.sort(first)]
     w = None
     if len(top) >= 3:

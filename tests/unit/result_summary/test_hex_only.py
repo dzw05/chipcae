@@ -3,11 +3,25 @@
 import tempfile
 import unittest
 from pathlib import Path
-from fixtures import fixture, fixed_keys, LAYERS, MATERIALS
+from fixtures import fixture, fixed_keys, h5py, LAYERS, MATERIALS
 from tools.vv.result_summary import SCHEMA, summarize
 
 
 class HexOnly(unittest.TestCase):
+    def test_duplicate_displacement_keeps_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run)
+            with h5py.File(step, 'r+') as f:
+                block = f['VTKHDF/hex']
+                self.assertEqual(block['Points'][5].tolist(), block['Points'][6].tolist())
+                # The second partition repeats the center with a conflicting U.
+                block['PointData/U'][6] = [100., 200., 300.]
+            result = summarize(run)
+            self.assertEqual(result['warpage']['n_top_points'], 9)
+            self.assertAlmostEqual(result['warpage']['w_bfp_m'], .125, delta=.125e-12)
+            self.assertAlmostEqual(result['warpage']['rel_diff'], .25, delta=.25e-12)
+
     def test_partitioned_hex(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)
