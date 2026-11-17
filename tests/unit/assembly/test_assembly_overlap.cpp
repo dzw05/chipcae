@@ -18,8 +18,12 @@ int main() {
             check(selected == (reverse ? a.material : b.material), "later covering region wins");
         }
         b.material = a.material;
-        check(!defect(merge(base(), {a, b}), DefectReason::PART_OVERLAP),
-              "same material no overlap defect");
+        for (bool reverse : {false, true})
+            check(defect(merge(base(),
+                               reverse ? std::vector<PlacedPart>{b, a}
+                                       : std::vector<PlacedPart>{a, b}),
+                         DefectReason::PART_OVERLAP),
+                  "same material overlap between distinct parts");
         a.slabs[0].sections = {rect(.019, .019)};
         check(defect(merge(base(), {a}), DefectReason::PART_OUTSIDE_OUTLINE), "outside outline");
         auto slight = part("slight");
@@ -61,6 +65,10 @@ int main() {
         check(
             defect(merge(seeded, {part("inside", .0005, .001)}, .001), DefectReason::PART_OVERLAP),
             "base inclusion overlap detected");
+        seeded.layers[0].regions[0].material = "metal";
+        check(
+            defect(merge(seeded, {part("inside", .0005, .001)}, .001), DefectReason::PART_OVERLAP),
+            "same material base inclusion overlap detected");
         auto tiny = part("tiny");
         tiny.material = "different";
         tiny.slabs[0].sections = {rect(.002, .002, 1e-9, 1e-9)};

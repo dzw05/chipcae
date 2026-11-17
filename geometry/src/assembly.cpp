@@ -590,15 +590,13 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
                 if (src.lo >= hi || src.hi <= lo || src.lo >= src.hi)
                     continue;
                 // Sum fragment intersections before applying the area threshold:
-                // splitting a ring must not hide a material overlap.
+                // splitting a ring must not hide a geometric overlap.
                 struct Overlap {
                     std::string body, material, name;
                     Real area = 0;
                 };
                 std::vector<Overlap> overlaps;
                 for (const auto& previous : l.regions) {
-                    if (previous.material == parts[p].material)
-                        continue;
                     auto found = std::find_if(overlaps.begin(), overlaps.end(), [&](const auto& x) {
                         return x.body == previous.body && x.material == previous.material;
                     });
