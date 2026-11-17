@@ -187,3 +187,11 @@ if(CHIPCAE_MATERIAL_ENABLE_TESTS)
     set_tests_properties(material_cu_mix_cuda PROPERTIES LABELS nightly TIMEOUT 60
         ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false" SKIP_REGULAR_EXPRESSION "SKIP:")
 endif()
+
+if(CHIPCAE_MATERIAL_ENABLE_TESTS)
+    add_test(NAME material_cu_mix_numpy
+        COMMAND ${K3_TEST_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/tests/laminate_reference.py
+                $<TARGET_FILE:material_copper_mixture>)
+    set_tests_properties(material_cu_mix_numpy PROPERTIES LABELS tierA
+        ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
+endif()
