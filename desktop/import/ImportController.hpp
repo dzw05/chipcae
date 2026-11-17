@@ -6,6 +6,16 @@
 #include <memory>
 
 namespace chipcae::desktop {
+// D09b test-first compile surface; behavior intentionally remains unimplemented.
+enum class ImportKind { Ecad, Assembly };
+enum class ImportOutcome { None, Running, Accepted, NeedsConfirmation, Rejected, Failed };
+struct ImportRequest {
+    QString input, output, materialMap, polyset, report;
+    bool acceptBTier = false;
+    ImportKind kind = ImportKind::Ecad;
+    QString program = "chipcae-import";
+    QStringList prefix;
+};
 // Reports currently use {"grade":"A|B|C", "defects":[...]}; raw bytes are retained.
 class ImportController : public QObject {
     Q_OBJECT
@@ -19,6 +29,14 @@ public:
                const QString& report = {},
                const QString& program = "chipcae-import",
                const QStringList& prefix = {});
+    // Test-first stubs: preserve the existing implementation until the implementation pass.
+    bool start(const ImportRequest& r) {
+        return start(r.input, r.output, r.polyset, r.report, r.program, r.prefix);
+    }
+    ImportOutcome outcome() const { return ImportOutcome::None; }
+    QString reportCode() const { return {}; }
+    bool restartAccepted() { return false; }
+    bool needsMaterialMapReselect() const { return false; }
     void cancel();
     bool busy() const { return busy_; }
     int exitCode() const { return exitCode_; }
