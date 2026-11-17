@@ -16,7 +16,9 @@
     "prototype_W_bfp_m",
     "abs_delta_m",
     "rel_delta",
-    "calculix_version"
+    "calculix_version",
+    "artifact_version",
+    "host"
   ],
   "properties": {
     "kind": {
@@ -173,6 +175,15 @@
       "type": "number"
     },
     "calculix_version": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "artifact_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "host": {
       "type": "string",
       "minLength": 1,
       "pattern": "\\S"

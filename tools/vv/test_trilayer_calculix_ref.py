@@ -26,11 +26,15 @@ class TrilayerCalculixRefTest(unittest.TestCase):
     def validate_artifact(self, data):
         required = {"kind", "label", "W_bfp_m", "element_type", "geometry",
                     "meshes", "selected_mesh", "prototype_W_bfp_m",
-                    "abs_delta_m", "rel_delta", "calculix_version"}
+                    "abs_delta_m", "rel_delta", "calculix_version",
+                    "artifact_version", "host"}
         self.assertIsInstance(data, dict)
         self.assertEqual(set(data), required)
-        self.assertIsInstance(data["calculix_version"], str)
-        self.assertTrue(data["calculix_version"].strip())
+        self.assertIs(type(data["artifact_version"]), int)
+        self.assertEqual(data["artifact_version"], 1)
+        for field in ("calculix_version", "host"):
+            self.assertIsInstance(data[field], str)
+            self.assertTrue(data[field].strip())
         for field in ("W_bfp_m", "prototype_W_bfp_m", "abs_delta_m", "rel_delta"):
             self.assertIn(type(data[field]), (int, float))
             self.assertTrue(math.isfinite(data[field]))
@@ -106,16 +110,18 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             "label": (123, "参考值（原型计算值）", "不是实测，不是解析解"),
             "W_bfp_m": ("invalid", True, float("nan")),
             "selected_mesh": ("", "unknown", "coarse"),
+            "artifact_version": (0, 2, "1", 1.0, True, None),
         }.items():
             variants.extend(dict(data, **{field: value}) for value in values)
         for value in (123, "", "   ", None, True):
-            variants.append(dict(data, calculix_version=value))
+            for field in ("calculix_version", "host"):
+                variants.append(dict(data, **{field: value}))
         for names in (("coarse", "coarse"), ("fine", "fine"),
                       ("coarse", "unknown"), ("coarse", "fine", "fine")):
             invalid = copy.deepcopy(data)
             invalid["meshes"] = [dict(data["meshes"][0], name=name) for name in names]
             variants.append(invalid)
-        for field in ("artifact_version", "host", "provenance"):
+        for field in ("unknown_field", "provenance"):
             variants.append(dict(data, **{field: "unexpected"}))
         for index, invalid in enumerate(variants):
             with self.subTest(variant=index), self.assertRaises(AssertionError):

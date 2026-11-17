@@ -61,5 +61,7 @@
   "selected_mesh": "fine",
   "prototype_W_bfp_m": 0.004269532769,
   "abs_delta_m": 4.774228289973655e-06,
-  "rel_delta": 0.0011182086069553374
+  "rel_delta": 0.0011182086069553374,
+  "artifact_version": 1,
+  "host": "box Linux x86_64"
 }

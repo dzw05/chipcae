@@ -5,6 +5,8 @@ import copy
 import json
 from pathlib import Path
 
+ARTIFACT_VERSION = 1
+
 CONTRACT = json.loads(Path(__file__).with_name("reference.schema.json").read_text(encoding="utf-8"))
 
 
@@ -17,6 +19,9 @@ def validate_reference(data, contract=CONTRACT):
     import jsonschema
 
     normalized = copy.deepcopy(contract)
+    normalized["properties"]["artifact_version"] = {
+        "type": "integer", "const": ARTIFACT_VERSION,
+    }
     normalized["properties"]["meshes"]["allOf"].append({
         "contains": {
             "properties": {

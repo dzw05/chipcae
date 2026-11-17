@@ -55,9 +55,11 @@ adds the selected-value check before generation writes the artifact.
 The comparison test reads only `REFERENCE.json`, using explicit required-field,
 model, refinement, and arithmetic checks without importing the schema or generator.
 The runtime version is recorded in the top-level `calculix_version` string and
-must be nonempty; reports use that recorded version. Host metadata is omitted
-from the canonical artifact and schema so regeneration cannot introduce
-machine-specific provenance. There is no `provenance` wrapper.
+must be nonempty; reports use that recorded version. The required integer
+`artifact_version` is `1`; the schema, generation validator, and independent
+reader reject missing or unsupported versions. The required nonempty `host`
+string records the generating machine and operating system (the checked-in
+reference was generated on box Linux x86_64). There is no `provenance` wrapper.
 
 The ASCII FRD layout used by CalculiX 2.23 is `(1X,I2,I10,3E12.5)`:
 columns 2–3 contain the record marker, 4–13 the node ID, and 14–49

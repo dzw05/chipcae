@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -305,7 +306,11 @@ def main():
     abs_delta = abs(w - PROTOTYPE)
     rel = abs_delta / PROTOTYPE
     ver = ccx_version()
+    from tools.vv.calculix_trilayer.contract import ARTIFACT_VERSION, validate_reference
+
     payload = {
+        "artifact_version": ARTIFACT_VERSION,
+        "host": f"{platform.node()} {platform.system()} {platform.machine()}",
         "kind": "REFERENCE",
         "label": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解",
         "W_bfp_m": w,
@@ -325,7 +330,6 @@ def main():
         "abs_delta_m": abs_delta,
         "rel_delta": rel,
     }
-    from tools.vv.calculix_trilayer.contract import validate_reference
     validate_reference(payload)
     out = here / "REFERENCE.json"
     out.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
