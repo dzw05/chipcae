@@ -7,7 +7,11 @@ format. `Ccevlog` is an unsupported placeholder, including CRC32C and segmented
 `MainWindow::monitorRun` attaches a directory, format and optional D11 broker/run
 ID. The File menu opens an explicitly labelled legacy log in read-only monitoring
 mode; the STOP button becomes available when a caller supplies the broker.
-The caller must keep that broker alive while the window is attached.
+The monitor guards the optional broker with a non-owning `QPointer`. If the broker
+is destroyed before the dock, STOP becomes a safe no-op without starting its
+timeout clock, and broker status queries are skipped. The timer continues polling
+files and refreshing the monitor. Broker calls remain on the owning Qt thread;
+status-query exceptions are shown as de-duplicated diagnostics.
 
 The tailer persists a byte cursor and sequence watermark. On inode replacement or
 observed truncation it restarts at zero, filtering sequences already delivered.
