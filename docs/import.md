@@ -1,0 +1,32 @@
+# Assembly import
+
+```
+chipcae-import --assembly assembly.json -o out.stack.json \
+  [--polyset out.stack.polyset] [--report defects.json] \
+  [--accept accept.json | --accept-b-tier]
+```
+
+Assembly input uses `chipcae.assembly/0.1`. Board, material map and STEP paths
+are resolved relative to the assembly file. IPC-2581 and ODB++ use the public
+ECAD readers. The output retains copper polygons for later copper-fraction
+conversion. The polyset must share the output directory; its default name is
+obtained by replacing the output's final extension with `.polyset`.
+
+Reports (`import_report.json`, `import_report.csv`, and the selected defects
+file) are written before confirmation. Unconfirmed B-tier defects return 6
+without writing the stack; C-tier defects return 7 even with acceptance.
+Acceptance files contain `{"accept":[{"defect_id":"part/defect","note":"..."}]}`.
+Unknown IDs produce warnings. Explicit `--accept` conflicts with
+`--accept-b-tier` (exit 2). With neither option, `import.accept.json` beside the
+assembly is used if present. Accept-all skips that default file entirely.
+
+Part ID `void` is reserved (exit 14). Geometry threshold error prefixes map
+through `protocol/errors.yaml`; unknown prefixes return INTERNAL (1).
+STEP parts require an OCCT-enabled build; otherwise each part produces a
+C-tier `OCCT_UNAVAILABLE` diagnostic. JSON support and ECAD support must be
+configured for assembly imports.
+
+This checkout still contains the SP0 throwing implementations of slicing,
+placement and merge. Assembly currently treats those exact placeholder errors
+as empty results, as permitted by the SP4 brief; it cannot produce part regions
+or real slicing/merge diagnostics until SP2/SP3 land. All other errors propagate.

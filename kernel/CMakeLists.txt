@@ -52,6 +52,8 @@ add_executable(chipcae-import
     src/import_common.hpp
     src/import_common.cpp
     src/import_ecad.cpp
+    src/import_assembly.cpp
+    src/stack_writer.cpp
     src/import_step.cpp
     src/stack_override.hpp
     src/stack_override.cpp
@@ -62,3 +64,9 @@ if(CHIPCAE_ENABLE_ECAD)
     target_compile_definitions(chipcae-import PRIVATE CHIPCAE_ENABLE_ECAD=1)
 endif()
 chipcae_set_warnings(chipcae-import)
+
+target_compile_definitions(chipcae-import PRIVATE CHIPCAE_ASSEMBLY_CLI=1)
+if(CHIPCAE_ENABLE_JSONCONS)
+    target_compile_definitions(chipcae-import PRIVATE CHIPCAE_ENABLE_JSONCONS=1)
+    target_link_libraries(chipcae-import PRIVATE chipcae_stack jsoncons)
+endif()

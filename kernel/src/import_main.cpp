@@ -64,7 +64,8 @@ int main(int argc, char** argv) {
                 return chipcae::importer::CliExit::usage;
             }
             // --t-min consumes a placeholder value; numeric parsing belongs to I-STEP-B.
-            if (reserved_argument.empty())
+            if (reserved_argument.empty() && arg != "--assembly" &&
+                !(arg == "--accept" && !options.assembly.empty()))
                 reserved_argument = arg;
             if (arg == "--accept")
                 has_accept = true;
@@ -84,9 +85,11 @@ int main(int argc, char** argv) {
     }
     const bool normal_parse_path = !input.empty() && !output.empty();
     const bool assembly_parse_path = !options.assembly.empty() && !output.empty();
-    // Without an input, only the planned assembly invocation has a reserved diagnostic.
-    if (!normal_parse_path && assembly_parse_path)
+    // Preserve diagnostics for incomplete assembly invocations.
+    if (!normal_parse_path && !assembly_parse_path && !options.assembly.empty())
         reserved_argument = "--assembly";
+    if (assembly_parse_path && reserved_argument == "--accept")
+        reserved_argument.clear();
     const bool reserved_parse_path = normal_parse_path || assembly_parse_path;
     if (!reserved_argument.empty() && !reserved_parse_path) {
         std::cerr << "unknown argument: " << reserved_argument << '\n';
@@ -100,11 +103,13 @@ int main(int argc, char** argv) {
         std::cerr << "not implemented yet: " << reserved_argument << '\n';
         return chipcae::importer::CliExit::usage;
     }
-    if (input.empty() || output.empty()) {
+    if ((input.empty() && options.assembly.empty()) || output.empty()) {
         help();
         return chipcae::importer::CliExit::usage;
     }
     chipcae::importer::derive_output_paths(options);
+    if (!options.assembly.empty())
+        return chipcae::importer::run_assembly(options);
     const auto ext = input.extension().string();
     if (ext == ".step" || ext == ".stp")
         return chipcae::importer::run_step(options);

@@ -8,17 +8,8 @@
 #include <string>
 
 // The importer is an executable, not a linkable library. Compile its private writer
-// into this test TU. The fallback is test-local and deliberately returns an error.
-#if __has_include("../../../kernel/src/stack_writer.cpp")
+// into this test TU, so these assertions always exercise the implementation.
 #include "../../../kernel/src/stack_writer.cpp"
-#else
-namespace chipcae::importer {
-inline chipcae::mesh::Expected<bool> write_stack(const chipcae::mesh::StackModel&,
-                                                 const std::filesystem::path&) {
-    return chipcae::mesh::Error{"$", "SP4 write_stack is not implemented"};
-}
-} // namespace chipcae::importer
-#endif
 
 #if __has_include(<jsoncons/json.hpp>)
 #include "../../../schema/src/stack.cpp"
