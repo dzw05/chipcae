@@ -25,6 +25,7 @@ add_test(NAME core_public_headers
 
 add_executable(chipcae_test_event_log protocol/test_event_log.cpp)
 target_link_libraries(chipcae_test_event_log PRIVATE chipcae::io)
+target_compile_definitions(chipcae_test_event_log PRIVATE CHIPCAE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 chipcae_set_warnings(chipcae_test_event_log)
 add_test(NAME event_log COMMAND chipcae_test_event_log)
 

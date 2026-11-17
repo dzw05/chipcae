@@ -152,6 +152,36 @@ Bytes encode(const Event& e) {
                 put(b, x.time);
                 put_string(b, x.path);
                 put_string(b, x.checksum);
+            } else if constexpr (std::is_same_v<T, ControlAck>) {
+                put(b, std::uint8_t{17});
+                put(b, x.cmd_seq);
+                put_string(b, x.client_request_id);
+                put(b, x.status);
+                put(b, x.effective_step);
+                put_string(b, x.message);
+                put(b, x.effective_time);
+            } else if constexpr (std::is_same_v<T, ResidualBatch>) {
+                put(b, std::uint8_t{18});
+                put(b, x.window);
+                put(b, x.time);
+                if (x.points.size() > kMaxRecordBytes / 32)
+                    throw std::length_error("residual batch too large");
+                put(b, static_cast<std::uint32_t>(x.points.size()));
+                for (const auto& point : x.points) {
+                    put_string(b, point.solver);
+                    put_string(b, point.field);
+                    put(b, point.iteration);
+                    put(b, point.norm);
+                    put(b, point.flags);
+                    put(b, point.linear_iterations);
+                    put(b, point.window_iterations);
+                }
+                put(b, x.dropped_intermediate);
+            } else if constexpr (std::is_same_v<T, KernelExit>) {
+                put(b, std::uint8_t{19});
+                put(b, x.exit_code);
+                put(b, x.last_completed_window);
+                put_string(b, x.reason);
             }
         },
         e.payload);
@@ -231,6 +261,48 @@ Event decode(const Bytes& b) {
         x.time = get<double>(b, p);
         x.path = get_string(b, p);
         x.checksum = get_string(b, p);
+        e.payload = std::move(x);
+        break;
+    }
+    case 17: {
+        ControlAck x;
+        x.cmd_seq = get<std::uint64_t>(b, p);
+        x.client_request_id = get_string(b, p);
+        x.status = get<std::uint32_t>(b, p);
+        x.effective_step = get<std::uint64_t>(b, p);
+        x.message = get_string(b, p);
+        x.effective_time = get<double>(b, p);
+        e.payload = std::move(x);
+        break;
+    }
+    case 18: {
+        ResidualBatch x;
+        x.window = get<std::uint64_t>(b, p);
+        x.time = get<double>(b, p);
+        const auto count = get<std::uint32_t>(b, p);
+        if (count > (b.size() - p) / 28)
+            throw std::runtime_error("truncated residual batch");
+        x.points.reserve(count);
+        for (std::uint32_t i = 0; i < count; ++i) {
+            ResidualBatchPoint point;
+            point.solver = get_string(b, p);
+            point.field = get_string(b, p);
+            point.iteration = get<std::uint32_t>(b, p);
+            point.norm = get<double>(b, p);
+            point.flags = get<std::uint32_t>(b, p);
+            point.linear_iterations = get<std::uint32_t>(b, p);
+            point.window_iterations = get<std::uint32_t>(b, p);
+            x.points.push_back(std::move(point));
+        }
+        x.dropped_intermediate = get<std::uint32_t>(b, p);
+        e.payload = std::move(x);
+        break;
+    }
+    case 19: {
+        KernelExit x;
+        x.exit_code = get<std::int32_t>(b, p);
+        x.last_completed_window = get<std::uint64_t>(b, p);
+        x.reason = get_string(b, p);
         e.payload = std::move(x);
         break;
     }

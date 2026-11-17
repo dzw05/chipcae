@@ -1,0 +1,15 @@
+{
+  "event_log_format": 1,
+  "valid_events": [
+    {"seq": 1, "wall_time_unix_ns": 1700000000000000001, "type": "State", "value": "RUNNING", "window": 4, "time": 0.5},
+    {"seq": 2, "wall_time_unix_ns": 1700000000000000002, "type": "Progress", "window": 4, "time": 0.5, "dt": 0.125, "fraction": 0.5, "message": "halfway"},
+    {"seq": 3, "wall_time_unix_ns": 1700000000000000003, "type": "ResidualBatch", "window": 4, "time": 0.5, "points": [{"solver": "fem.solid", "field": "U", "iteration": 3, "norm": 1e-8, "flags": 2, "linear_iterations": 8, "window_iterations": 3}], "dropped_intermediate": 1},
+    {"seq": 4, "wall_time_unix_ns": 1700000000000000004, "type": "LogLine", "level": 2, "rank": 0, "message": "golden log", "code": "INTERNAL", "error_code": 1},
+    {"seq": 5, "wall_time_unix_ns": 1700000000000000005, "type": "ControlAck", "cmd_seq": 9, "client_request_id": "request-9", "status": "APPLIED", "effective_step": 4, "message": "applied", "effective_time": 0.5},
+    {"seq": 6, "wall_time_unix_ns": 1700000000000000006, "type": "KernelExit", "exit_code": 0, "last_completed_window": 4, "reason": "end_reached"}
+  ],
+  "tail": [
+    {"type": "KernelExit", "seq": 7, "crc": "invalid", "expected": "reader stops before this record"},
+    {"type": "partial_record", "bytes": "CAE", "expected": "reader stops at incomplete magic"}
+  ]
+}
