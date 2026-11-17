@@ -976,10 +976,21 @@ sys.exit(rc)
                           c.exitCode() == 6,
                       "confirmation observers retain the complete prior B-tier report");
             });
-            QObject::connect(&c, &ImportController::defectsReady, [&] { ++defects; });
+            const auto checkFailedRestartReport = [&] {
+                check(c.outcome() == ImportOutcome::Failed && !c.busy() && !c.error().isEmpty() &&
+                          c.reportBytes().isEmpty() && c.reportCode().isEmpty() &&
+                          c.grade().isEmpty() && c.exitCode() == -1 &&
+                          !c.needsMaterialMapReselect(),
+                      "failed restart observers see failure without stale confirmation report");
+            };
+            QObject::connect(&c, &ImportController::defectsReady, [&] {
+                ++defects;
+                checkFailedRestartReport();
+            });
             QObject::connect(&c, &ImportController::finished, [&](bool replaced) {
                 ++finished;
                 check(!replaced, "failed restart completion does not replace");
+                checkFailedRestartReport();
             });
             if (failure == 1)
                 QFile::remove(r.input);
