@@ -18,11 +18,13 @@ if(_solve_backend)
     set_tests_properties(solve_pipeline PROPERTIES TIMEOUT 600)
 endif()
 
-# Preview PR #43 has not landed: keep the cross-tool contract visible in CTest.
+# Compare the public solver and preview canonical mesh contracts at np=1 and np=2.
 if(_solve_backend)
     add_test(NAME solve_preview_mesh_digest COMMAND ${Python3_EXECUTABLE}
-        ${CMAKE_CURRENT_SOURCE_DIR}/test_preview_digest.py)
-    set_tests_properties(solve_preview_mesh_digest PROPERTIES SKIP_RETURN_CODE 77)
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_preview_digest.py
+        $<TARGET_FILE:chipcae-solve> $<TARGET_FILE:chipcae-preview>
+        ${MPIEXEC_EXECUTABLE})
+    set_tests_properties(solve_preview_mesh_digest PROPERTIES TIMEOUT 600)
 endif()
 
 if(_solve_backend AND TARGET chipcae_material)

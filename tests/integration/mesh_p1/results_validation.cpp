@@ -48,7 +48,7 @@ int main(int argc, char** argv) {
         // Selection applies to physical fields; cut topology metadata stays required.
         auto selected_run = run / "selected";
         ResultsWriter selected_writer(
-            selected_run, std::string(K1_ROOT) + "/tools/samples/s1.stack.json", {"U"});
+            selected_run, std::string(K1_ROOT) + "/tools/samples/s1.stack.json", {}, {}, {"U"});
         auto selected_step = step;
         selected_step.cut.T.assign(8, 300);
         selected_step.cut.U.assign(24, 0);

@@ -17,12 +17,21 @@ int main(int argc, char** argv) {
     int status = 0;
     try {
         if (argc < 3)
-            throw std::runtime_error("usage: write_results RUN STACKUP [EXPORT_PREFIX]");
-        chipcae::io::ResultsWriter writer(argv[1], argv[2]);
+            throw std::runtime_error("usage: write_results RUN STACKUP [EXPORT_PREFIX [s1]]");
+        const bool cut_fixture = argc == 4 && std::string(argv[3]) == "cut";
+        chipcae::io::ResultsWriter writer(
+            argv[1],
+            argv[2],
+            argc == 3 || cut_fixture || (argc == 5 && std::string(argv[4]) == "s1")
+                ? std::vector<std::string>{"substrate", "die_attach", "Si"}
+                : std::vector<std::string>{},
+            argc == 3 || cut_fixture || (argc == 5 && std::string(argv[4]) == "s1")
+                ? std::vector<std::string>{"substrate", "die_attach", "Si"}
+                : std::vector<std::string>{});
         chipcae::io::ResultsStep step;
         auto& p = step.hex;
         double pv = 0.001, umax = 0.002;
-        if (argc == 4) {
+        if (argc >= 4 && !cut_fixture) {
             std::ifstream in(std::string(argv[3]) + "." + std::to_string(rank));
             in.exceptions(std::ios::failbit | std::ios::badbit);
             std::size_t nv, nc;
@@ -57,8 +66,49 @@ int main(int argc, char** argv) {
             p.cell_kind = {0};
             p.elem_gid = {0};
         }
+        if (cut_fixture && rank == 0) {
+            step.cut = p;
+            auto& c = step.cut;
+            c.connectivity = c.hex;
+            c.hex.clear();
+            c.offsets = {0, 8};
+            c.face_conn = {0, 3, 2, 1, 4, 5, 6, 7, 0, 1, 5, 4, 1, 2, 6, 5, 2, 3, 7, 6, 3, 0, 4, 7};
+            c.face_off = {0, 4, 8, 12, 16, 20, 24};
+            c.poly_faces = {0, 1, 2, 3, 4, 5};
+            c.poly_off = {0, 6};
+            c.cell_kind = {1};
+            c.volume = {1.0};
+        }
+        if (cut_fixture) {
+            for (int fault = 0; fault < 4; ++fault) {
+                auto bad = step;
+                if (rank == 0) {
+                    if (fault == 0)
+                        bad.cut.poly_faces[0] = -1;
+                    if (fault == 1)
+                        bad.cut.face_off.back()++;
+                    if (fault == 2)
+                        bad.cut.connectivity[0] = 8;
+                    if (fault == 3)
+                        bad.cut.poly_off.clear();
+                }
+                bool rejected = false;
+                try {
+                    writer.write_step(99, 1, bad);
+                } catch (const std::exception&) {
+                    rejected = true;
+                }
+                if (!rejected)
+                    throw std::runtime_error("invalid cut input accepted");
+            }
+        }
         writer.write_step(0, 0, step);
-        writer.add_summary("warpage_pv", pv, "m", 0);
+        writer.add_summary("warpage_pv",
+                           pv,
+                           "m",
+                           0,
+                           "top surface (z=max) Q2 nodes; least-squares plane w=a+bx+cy removed; "
+                           "PV=max-min residual");
         writer.add_summary("T_max", 193.15, "K", 0);
         writer.add_summary("U_mag_max", umax, "m", 0);
         writer.finalize();
@@ -90,7 +140,12 @@ int main(int argc, char** argv) {
                 if (text.find("step-1.vtkhdf") != std::string::npos)
                     throw std::runtime_error("failed finalize replaced manifest");
             }
-            writer.add_summary("warpage_pv", pv, "m", 1);
+            writer.add_summary("warpage_pv",
+                               pv,
+                               "m",
+                               1,
+                               "top surface (z=max) Q2 nodes; least-squares plane w=a+bx+cy "
+                               "removed; PV=max-min residual");
             writer.add_summary("T_max", 193.15, "K", 1);
             writer.add_summary("U_mag_max", umax, "m", 1);
             writer.finalize();

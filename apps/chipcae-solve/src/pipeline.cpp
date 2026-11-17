@@ -316,11 +316,12 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
     state(io::State::Value::starting);
     try {
         auto arrays = build_mesh(inputs);
-        io::ResultsWriter writer(output, inputs.stack_path, inputs.fields);
+        io::ResultsWriter writer(output, inputs.stack_path, {}, {}, inputs.fields);
         io::ResultsWriter::MeshSummary summary{};
         summary.nx0 = arrays.grid_report.level_axes.front()[0].size() - 1;
         summary.ny0 = arrays.grid_report.level_axes.front()[1].size() - 1;
-        summary.L = arrays.grid_report.levels;
+        // The digest contract uses the finest level index, not the level count.
+        summary.L = arrays.grid_report.levels - 1;
         summary.nz = arrays.axes[2].size() - 1;
         const auto nx = arrays.axes[0].size() - 1, ny = arrays.axes[1].size() - 1;
         summary.padded_cells = (nx * ny - (nx - arrays.grid_report.padding[0]) *

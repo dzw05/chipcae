@@ -43,11 +43,15 @@ std::pair<Real, Real> jacobi(int n, int alpha, Real x) {
     return {p, dp};
 }
 // Shifted Gauss-Jacobi: integrates (1-u)^alpha on [0,1]. alpha=0 is Legendre.
-std::vector<std::pair<Real, Real>> gauss01(int n, int alpha = 0) {
+Expected<std::vector<std::pair<Real, Real>>> gauss01(int n, int alpha = 0) {
     std::vector<Real> bounds{-1};
-    if (n > 1)
-        for (auto [u, w] : gauss01(n - 1, alpha))
+    if (n > 1) {
+        auto inner = gauss01(n - 1, alpha);
+        if (!inner)
+            return inner.error();
+        for (auto [u, w] : inner.value())
             bounds.push_back(2 * u - 1);
+    }
     bounds.push_back(1);
     std::vector<std::pair<Real, Real>> out;
     for (int i = 0; i < n; ++i) {
@@ -72,20 +76,26 @@ std::vector<std::pair<Real, Real>> gauss01(int n, int alpha = 0) {
             x = next > lo && next < hi ? next : (lo + hi) / 2;
         }
         if (!converged)
-            throw std::runtime_error("Gauss-Jacobi root did not converge in 100 iterations");
+            return Error{"cut/quadrature", "Gauss-Jacobi root did not converge in 100 iterations"};
         auto [p, dp] = jacobi(n, alpha, x);
         // The Jacobi normalization constant cancels the shift's 2^(alpha+1).
         out.push_back({(x + 1) / 2, 1 / ((1 - x * x) * dp * dp)});
     }
     return out;
 }
-std::vector<SimplexPoint> tetra_rule(int degree) {
+Expected<std::vector<SimplexPoint>> tetra_rule(int degree) {
     int n = degree / 2 + 1;
     auto gu = gauss01(n, 2), gv = gauss01(n, 1), gz = gauss01(n);
+    if (!gu)
+        return gu.error();
+    if (!gv)
+        return gv.error();
+    if (!gz)
+        return gz.error();
     std::vector<SimplexPoint> out;
-    for (auto [u, wu] : gu)
-        for (auto [v, wv] : gv)
-            for (auto [z, wz] : gz)
+    for (auto [u, wu] : gu.value())
+        for (auto [v, wv] : gv.value())
+            for (auto [z, wz] : gz.value())
                 out.push_back({{(1 - u) * (1 - v) * (1 - z), u, (1 - u) * v, (1 - u) * (1 - v) * z},
                                wu * wv * wz});
     return out;
@@ -94,12 +104,16 @@ struct TriPoint {
     std::array<Real, 3> l;
     Real w;
 };
-std::vector<TriPoint> triangle_rule(int degree) {
+Expected<std::vector<TriPoint>> triangle_rule(int degree) {
     int n = degree / 2 + 1;
     auto gu = gauss01(n, 1), gv = gauss01(n);
+    if (!gu)
+        return gu.error();
+    if (!gv)
+        return gv.error();
     std::vector<TriPoint> out;
-    for (auto [u, wu] : gu)
-        for (auto [v, wv] : gv)
+    for (auto [u, wu] : gu.value())
+        for (auto [v, wv] : gv.value())
             out.push_back({{(1 - u) * (1 - v), u, (1 - u) * v}, wu * wv});
     return out;
 }
@@ -232,9 +246,18 @@ generate(const HexMeshArrays& m, const CutGeometry& g, const CutOptions& o) {
         for (const auto& attr : m.attr_table.entries)
             if (!output_layers.contains(attr.layer))
                 output_layers[attr.layer] = static_cast<Local>(output_layers.size() + 1);
-    const auto v_rule =
-        o.quad_degree == 2 ? std::vector<SimplexPoint>{} : tetra_rule(o.quad_degree);
-    const auto b_rule = o.quad_degree == 2 ? std::vector<TriPoint>{} : triangle_rule(o.quad_degree);
+    std::vector<SimplexPoint> v_rule;
+    std::vector<TriPoint> b_rule;
+    if (o.quad_degree != 2) {
+        auto volume_rule = tetra_rule(o.quad_degree);
+        if (!volume_rule)
+            return volume_rule.error();
+        v_rule = std::move(volume_rule.value());
+        auto boundary_rule = triangle_rule(o.quad_degree);
+        if (!boundary_rule)
+            return boundary_rule.error();
+        b_rule = std::move(boundary_rule.value());
+    }
     std::vector<Plane> planes = g.planes;
     for (auto& p : planes) {
         Real length = norm(p.n);

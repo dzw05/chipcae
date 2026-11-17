@@ -42,9 +42,15 @@ void phase(F action) {
     agree(ok);
 }
 [[maybe_unused]] bool injected(const char* point, int rank) {
+#ifdef CHIPCAE_RESULTS_FAULT_INJECTION
     const char* requested = std::getenv("CHIPCAE_RESULTS_FAIL");
     const char* target = std::getenv("CHIPCAE_RESULTS_FAIL_RANK");
     return requested && target && std::strcmp(requested, point) == 0 && std::atoi(target) == rank;
+#else
+    (void)point;
+    (void)rank;
+    return false;
+#endif
 }
 #ifdef CHIPCAE_ENABLE_HDF5
 // Inject a reported failure only after all participants have entered the HDF5
@@ -82,6 +88,20 @@ std::string quoted(const std::string& s) {
 }
 #ifdef CHIPCAE_ENABLE_HDF5
 using namespace chipcae::hdf_detail;
+// VTK 9.7 reads variable-length ASCII string datasets as vtkStringArray.
+// Write these in a serial metadata pass after all MPI file handles close.
+void strings(hid_t parent, const char* name, const std::vector<std::string>& values) {
+    H5 type(H5Tcopy(H5T_C_S1), H5Tclose);
+    check(H5Tset_size(type, H5T_VARIABLE));
+    hsize_t count = values.size();
+    H5 space(H5Screate_simple(1, &count, nullptr), H5Sclose);
+    H5 set(H5Dcreate2(parent, name, type, space, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT), H5Dclose);
+    std::vector<const char*> pointers;
+    for (const auto& value : values)
+        pointers.push_back(value.c_str());
+    if (!pointers.empty())
+        check(H5Dwrite(set, type, H5S_ALL, H5S_ALL, H5P_DEFAULT, pointers.data()));
+}
 void results_header(hid_t root, const char* type, int major, int minor, bool parallel, int rank) {
     hsize_t two = 2;
     H5 vs(
@@ -243,14 +263,40 @@ void ResultsWriter::set_mesh(MeshSummary mesh) {
 }
 ResultsWriter::ResultsWriter(std::filesystem::path run,
                              const std::filesystem::path& stackup,
+                             std::vector<std::string> layer_names,
+                             std::vector<std::string> material_names,
                              std::vector<std::string> fields)
-    : run_(std::move(run)), fields_(std::move(fields)) {
+    : run_(std::move(run)), layer_names_(std::move(layer_names)),
+      material_names_(std::move(material_names)), fields_(std::move(fields)) {
 #ifdef CHIPCAE_ENABLE_MPI
     int initialized = 0;
     MPI_Initialized(&initialized);
     if (initialized) {
         MPI_Comm_rank(MPI_COMM_WORLD, &rank_);
         MPI_Comm_size(MPI_COMM_WORLD, &size_);
+    }
+#endif
+    phase([&] {
+        for (const auto* names : {&layer_names_, &material_names_})
+            for (const auto& name : *names) {
+                quoted(name);
+                if (name.find('\0') != std::string::npos)
+                    throw std::invalid_argument("NUL in name");
+            }
+    });
+#ifdef CHIPCAE_ENABLE_MPI
+    if (size_ > 1) {
+        for (const auto* names : {&layer_names_, &material_names_}) {
+            std::string encoded;
+            for (const auto& name : *names)
+                encoded += quoted(name) + ",";
+            std::string reference = encoded;
+            int length = static_cast<int>(reference.size());
+            MPI_Bcast(&length, 1, MPI_INT, 0, MPI_COMM_WORLD);
+            phase([&] { reference.resize(static_cast<std::size_t>(length)); });
+            MPI_Bcast(reference.data(), length, MPI_CHAR, 0, MPI_COMM_WORLD);
+            agree(reference == encoded);
+        }
     }
 #endif
     bool ok = true;
@@ -385,11 +431,14 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
     int fields = (!cut.T.empty() ? 1 : 0) | (!cut.U.empty() ? 2 : 0);
     int schema = fields;
     int cut_present = cn != 0, cut_any = cut_present;
+    int cut_points_any = !cut.points.empty();
     int fallback = local.cut_as_hex, fallback_max = fallback, fallback_min = fallback;
 #ifdef CHIPCAE_ENABLE_MPI
     if (size_ > 1) {
         MPI_Allreduce(&cut_present, &cut_any, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
         MPI_Allreduce(&fields, &schema, 1, MPI_INT, MPI_BOR, MPI_COMM_WORLD);
+        int cut_points = cut_points_any;
+        MPI_Allreduce(&cut_points, &cut_points_any, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
         MPI_Allreduce(&fallback, &fallback_min, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
         MPI_Allreduce(&fallback, &fallback_max, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
     }
@@ -406,15 +455,37 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
         valid = valid && id >= 0 && static_cast<std::size_t>(id) < np;
     for (auto kind : p.cell_kind)
         valid = valid && kind >= 0 && kind <= 2;
+    valid = valid && p.connectivity.empty() && p.offsets == std::vector<Index>{0} &&
+            p.face_conn.empty() && p.face_off == std::vector<Index>{0} && p.poly_faces.empty() &&
+            p.poly_off == std::vector<Index>{0};
+    valid = valid && cut.hex.empty();
+    std::vector<int> owners;
+    phase([&] { owners.resize(cut.face_off.size() - 1, 0); });
+    for (auto id : cut.poly_faces)
+        valid = valid && ++owners[static_cast<std::size_t>(id)] == 1;
+    for (auto count : owners)
+        valid = valid && count == 1;
+    for (const auto* q : {static_cast<const ResultsPartition*>(&p), &cut}) {
+        for (auto id : q->layer_id)
+            valid = valid && id >= 0 &&
+                    (layer_names_.empty() ||
+                     (id > 0 && static_cast<std::size_t>(id) <= layer_names_.size()));
+        for (auto id : q->material_id)
+            valid = valid && id >= 0 &&
+                    (material_names_.empty() ||
+                     (id > 0 && static_cast<std::size_t>(id) <= material_names_.size()));
+        for (auto kind : q->cell_kind)
+            valid = valid && kind >= 0 && kind <= 2;
+    }
     for (auto& s : steps_)
         valid = valid && s.n != n;
     agree(valid);
-    int gid_present = !p.elem_gid.empty(), gid_any = gid_present;
+    int gid_present = !p.elem_gid.empty() || !cut.elem_gid.empty(), gid_any = gid_present;
 #ifdef CHIPCAE_ENABLE_MPI
     if (size_ > 1)
         MPI_Allreduce(&gid_present, &gid_any, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
 #endif
-    agree(!gid_any || nc == 0 || gid_present);
+    agree(!gid_any || ((nc == 0 || !p.elem_gid.empty()) && (cn == 0 || !cut.elem_gid.empty())));
     agree(steps_.empty() || gids_ == (gid_any != 0));
     bool parallel = false;
 #if defined(H5_HAVE_PARALLEL) && defined(CHIPCAE_ENABLE_MPI)
@@ -606,7 +677,7 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                     if (t >= 0)
                         check(hcall(parallel, rank_, "H5Gclose", [&] { return H5Gclose(t); }));
                 }
-            if (block < 2) {
+            {
                 hid_t pd = -1, cd = -1;
                 metadata([&] {
                     pd = hcall(parallel, rank_, "H5Gcreate2", [&] {
@@ -618,9 +689,9 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                     if (pd < 0 || cd < 0)
                         throw std::runtime_error("create fields");
                 });
-                if (selected("T") && (block == 0 || (schema & 1)))
+                if (selected("T") && (block != 1 || cut_points_any == 0 || (schema & 1)))
                     emit(pd, "T", q.T);
-                if (selected("U") && (block == 0 || (schema & 2)))
+                if (selected("U") && (block != 1 || cut_points_any == 0 || (schema & 2)))
                     emit(pd, "U", q.U, 3);
                 if (selected("layer_id") || block == 1)
                     emit(cd, "layer_id", q.layer_id);
@@ -636,26 +707,6 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                     check(hcall(parallel, rank_, "H5Gclose", [&] { return H5Gclose(pd); }));
                     check(hcall(parallel, rank_, "H5Gclose", [&] { return H5Gclose(cd); }));
                 }
-            }
-            if (block >= 2) {
-                metadata([&] {
-                    H5 pd(hcall(parallel,
-                                rank_,
-                                "H5Gcreate2",
-                                [&] {
-                                    return H5Gcreate2(
-                                        g, "PointData", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-                                }),
-                          H5Gclose);
-                    H5 cd(hcall(parallel,
-                                rank_,
-                                "H5Gcreate2",
-                                [&] {
-                                    return H5Gcreate2(
-                                        g, "CellData", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-                                }),
-                          H5Gclose);
-                });
             }
             if (g >= 0)
                 check(hcall(parallel, rank_, "H5Gclose", [&] { return H5Gclose(g); }));
@@ -679,6 +730,20 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
     agree(ok);
     if (rank_ == 0)
         try {
+            {
+                H5 metadata_file(H5Fopen(tmp.c_str(), H5F_ACC_RDWR, H5P_DEFAULT), H5Fclose);
+                for (auto name : {"hex", "cut", "eb_surface", "particles"}) {
+                    std::string path = std::string("/VTKHDF/") + name + "/FieldData";
+                    H5 fd(H5Gcreate2(
+                              metadata_file, path.c_str(), H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT),
+                          H5Gclose);
+                    strings(fd, "layer_names", layer_names_);
+                    strings(fd, "material_names", material_names_);
+                }
+                check(H5Fflush(metadata_file, H5F_SCOPE_GLOBAL));
+                check(H5Fclose(metadata_file));
+                metadata_file.id = -1;
+            }
             std::filesystem::rename(tmp, run_ / filename);
         } catch (...) {
             ok = false;
@@ -689,12 +754,14 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
     steps_.push_back({n, time, std::move(filename)});
 #endif
 }
-void ResultsWriter::add_summary(std::string name, double value, std::string unit, int step) {
+void ResultsWriter::add_summary(
+    std::string name, double value, std::string unit, int step, std::string method) {
     if (!std::isfinite(value))
         throw std::invalid_argument("nonfinite summary");
     quoted(name);
     quoted(unit);
-    summary_.push_back({std::move(name), value, std::move(unit), step});
+    quoted(method);
+    summary_.push_back({std::move(name), value, std::move(unit), step, std::move(method)});
 }
 void ResultsWriter::finalize() {
     bool ok = true;
@@ -723,7 +790,10 @@ void ResultsWriter::finalize() {
                 out << "{\"n\":" << s.n << ",\"time\":" << s.time << ",\"file\":" << quoted(s.file)
                     << '}';
             }
-            out << "],\n\"fields\":[";
+            out << "],\n\"partitions\":{\"per_step\":[";
+            for (std::size_t i = 0; i < steps_.size(); ++i)
+                out << (i ? "," : "") << size_;
+            out << "],\"solver_fixed_per_run\":true},\n\"fields\":[";
             bool first_field = true;
             auto manifest_fields = fields_;
             // Required cut metadata survives physical-field selection.
@@ -757,8 +827,8 @@ void ResultsWriter::finalize() {
             out << "{\"name\":\"sigma_vm\",\"location\":\"cell\",\"components\":1,\"unit\":\"Pa\","
                    "\"dtype\":\"float64\",\"reserved\":true}],\n\"blocks\":[{\"index\":0,\"name\":"
                    "\"hex\",\"kind\":"
-                   "\"UnstructuredGrid\"},{\"index\":1,\"name\":\"cut\",\"kind\":\"VTK_"
-                   "POLYHEDRON\"},{\"index\":2,\"name\":\"eb_surface\",\"kind\":"
+                   "\"UnstructuredGrid\"},{\"index\":1,\"name\":\"cut\",\"kind\":"
+                   "\"UnstructuredGrid\"},{\"index\":2,\"name\":\"eb_surface\",\"kind\":"
                    "\"PolyData\"},{\"index\":3,\"name\":\"particles\",\"kind\":\"PolyData\"}],"
                    "\n\"summary\":[";
             first = true;
@@ -767,7 +837,10 @@ void ResultsWriter::finalize() {
                     out << ',';
                 first = false;
                 out << "{\"name\":" << quoted(s.name) << ",\"value\":" << s.value
-                    << ",\"unit\":" << quoted(s.unit) << ",\"step\":" << s.step << '}';
+                    << ",\"unit\":" << quoted(s.unit) << ",\"step\":" << s.step;
+                if (!s.method.empty())
+                    out << ",\"method\":" << quoted(s.method);
+                out << '}';
             }
             out << "]";
             if (mesh_) {

@@ -196,10 +196,21 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            g++ cmake ninja-build ccache python3-yaml python3-numpy python3-scipy
+            g++ cmake ninja-build ccache python3-yaml python3-numpy python3-scipy libhdf5-dev
           ccache --version
           g++ --version
           cmake --version
+
+      - name: Install jsoncons for preview golden hashes
+        run: |
+          set -euo pipefail
+          source tests/integration/mesh_p1/ci/deps.lock
+          curl -fsSL "$JSONCONS_URL" -o "$RUNNER_TEMP/jsoncons.tar.gz"
+          mkdir -p "$RUNNER_TEMP/jsoncons"
+          tar -xzf "$RUNNER_TEMP/jsoncons.tar.gz" -C "$RUNNER_TEMP/jsoncons" --strip-components=1
+          cmake -S "$RUNNER_TEMP/jsoncons" -B "$RUNNER_TEMP/jsoncons-build" \
+            -DJSONCONS_BUILD_TESTS=OFF -DCMAKE_INSTALL_PREFIX="$HOME/deps/jsoncons"
+          cmake --install "$RUNNER_TEMP/jsoncons-build"
 
       - name: Kokkos cache identity
         id: kokkos-key
@@ -264,7 +275,9 @@ jobs:
             -DKokkos_ROOT="$HOME/deps/kokkos" \
             -DCHIPCAE_REQUIRE_KOKKOS=ON \
             -DCHIPCAE_ENABLE_KOKKOS=ON \
-            -DCHIPCAE_MATERIAL_ENABLE_PYTHON=OFF
+            -DCHIPCAE_MATERIAL_ENABLE_PYTHON=OFF \
+            -DCHIPCAE_ENABLE_HDF5=ON -DCHIPCAE_ENABLE_JSONCONS=ON \
+            -Djsoncons_ROOT="$HOME/deps/jsoncons"
 
       - name: Build
         env:
