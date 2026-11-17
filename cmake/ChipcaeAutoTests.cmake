@@ -55,6 +55,13 @@ function(chipcae_auto_tests)
         endif()
         string(REGEX REPLACE "^test_" "" _name "${_stem}")
         set(_name "${AT_PREFIX}${_name}")
+        # CTest names are global: fail fast instead of a silent clash.
+        get_property(_owner GLOBAL PROPERTY CHIPCAE_AUTOTEST_OWNER_${_name})
+        if(TEST ${_name} OR _owner)
+            message(FATAL_ERROR "chipcae_auto_tests: test name '${_name}' from ${_src} is already "
+                                "registered${_owner}; pass PREFIX <area>_ in ${CMAKE_CURRENT_SOURCE_DIR}")
+        endif()
+        set_property(GLOBAL PROPERTY CHIPCAE_AUTOTEST_OWNER_${_name} " by ${_src}")
         if(_ext STREQUAL ".cpp")
             set(_exe "chipcae_autotest_${_slug}_${_name}")
             add_executable(${_exe} "${_src}")
@@ -85,6 +92,9 @@ endfunction()
 function(chipcae_auto_test_subdirs)
     # SUBDIRECTORIES lists the absolute *source* dirs already added (CMake docs).
     get_property(_added DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY SUBDIRECTORIES)
+    # Defensive: also accept binary-dir spellings by mapping them back to source paths.
+    string(REPLACE "${PROJECT_BINARY_DIR}" "${PROJECT_SOURCE_DIR}" _added_src "${_added}")
+    list(APPEND _added ${_added_src})
     file(GLOB _lists CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/*/CMakeLists.txt"
         "${CMAKE_CURRENT_SOURCE_DIR}/*/*/CMakeLists.txt")
