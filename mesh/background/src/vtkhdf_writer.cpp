@@ -65,7 +65,7 @@ template <class T>
 void dataset(hid_t parent,
              const char* name,
              const std::vector<T>& data,
-             const WriterContext& ctx,
+             [[maybe_unused]] const WriterContext& ctx,
              hsize_t components = 1) {
     hsize_t dims[2] = {data.size() / components, components};
     H5 space(H5Screate_simple(components == 1 ? 1 : 2, dims, nullptr), H5Sclose);

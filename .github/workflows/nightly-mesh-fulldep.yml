@@ -197,7 +197,7 @@ jobs:
         run: |
           set -euo pipefail
           start=$SECONDS
-          cmake -S . -B build-k1-full -G Ninja -DCHIPCAE_WARNINGS_AS_ERRORS=ON \
+          cmake -S . -B build-k1-full -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_WARNINGS_AS_ERRORS=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_PREFIX_PATH="$PWD/build-k1-deps/prefix" \
@@ -210,6 +210,7 @@ jobs:
           build_secs=$((SECONDS - start))
           test_start=$SECONDS
           ctest --test-dir build-k1-full -L mesh -LE gpu --output-on-failure --output-junit mesh-results.xml
+          ctest --test-dir build-k1-full -R '^mesh_digest_mpi$' --no-tests=error --output-on-failure
           echo "build_secs=$build_secs" >> "$GITHUB_OUTPUT"
           echo "test_secs=$((SECONDS - test_start))" >> "$GITHUB_OUTPUT"
           echo "Project build ${build_secs}s, ctest $((SECONDS - test_start))s"

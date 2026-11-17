@@ -9,7 +9,7 @@
 namespace k1 {
 // MPI tests must initialize hypre before the first HypreParMatrix is built
 // (mfem/mfem#4943). Production solvers should call the same pair.
-inline void init_runtime(int& argc, char** argv) {
+inline void init_runtime([[maybe_unused]] int& argc, [[maybe_unused]] char** argv) {
 #ifdef CHIPCAE_ENABLE_MPI
     MPI_Init(&argc, &argv);
 #endif

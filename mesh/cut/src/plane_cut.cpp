@@ -45,7 +45,8 @@ Expected<std::vector<std::pair<Real, Real>>> gauss01(int n, int alpha = 0) {
     std::vector<Real> bounds{-1};
     if (n > 1) {
         auto inner = gauss01(n - 1, alpha);
-        if (!inner) return inner.error();
+        if (!inner)
+            return inner.error();
         for (auto [u, w] : inner.value())
             bounds.push_back(2 * u - 1);
     }
@@ -83,9 +84,12 @@ Expected<std::vector<std::pair<Real, Real>>> gauss01(int n, int alpha = 0) {
 Expected<std::vector<SimplexPoint>> tetra_rule(int degree) {
     int n = degree / 2 + 1;
     auto gu = gauss01(n, 2), gv = gauss01(n, 1), gz = gauss01(n);
-    if (!gu) return gu.error();
-    if (!gv) return gv.error();
-    if (!gz) return gz.error();
+    if (!gu)
+        return gu.error();
+    if (!gv)
+        return gv.error();
+    if (!gz)
+        return gz.error();
     std::vector<SimplexPoint> out;
     for (auto [u, wu] : gu.value())
         for (auto [v, wv] : gv.value())
@@ -101,8 +105,10 @@ struct TriPoint {
 Expected<std::vector<TriPoint>> triangle_rule(int degree) {
     int n = degree / 2 + 1;
     auto gu = gauss01(n, 1), gv = gauss01(n);
-    if (!gu) return gu.error();
-    if (!gv) return gv.error();
+    if (!gu)
+        return gu.error();
+    if (!gv)
+        return gv.error();
     std::vector<TriPoint> out;
     for (auto [u, wu] : gu.value())
         for (auto [v, wv] : gv.value())
@@ -234,10 +240,12 @@ generate(const HexMeshArrays& m, const CutGeometry& g, const CutOptions& o) {
     std::vector<TriPoint> b_rule;
     if (o.quad_degree != 2) {
         auto volume_rule = tetra_rule(o.quad_degree);
-        if (!volume_rule) return volume_rule.error();
+        if (!volume_rule)
+            return volume_rule.error();
         v_rule = std::move(volume_rule.value());
         auto boundary_rule = triangle_rule(o.quad_degree);
-        if (!boundary_rule) return boundary_rule.error();
+        if (!boundary_rule)
+            return boundary_rule.error();
         b_rule = std::move(boundary_rule.value());
     }
     std::vector<Plane> planes = g.planes;

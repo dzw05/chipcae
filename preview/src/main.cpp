@@ -1,8 +1,15 @@
+#ifdef CHIPCAE_ENABLE_KOKKOS
+#include <Kokkos_Core.hpp>
+#endif
 #include "chipcae/core/error_code.hpp"
 #include "chipcae/core/version.hpp"
 
+#include <algorithm>
+#include <array>
+#include <bit>
 #include <charconv>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
@@ -10,16 +17,12 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <algorithm>
-#include <array>
-#include <bit>
-#include <cstdint>
 #include <vector>
 
 #ifdef CHIPCAE_PREVIEW_ENABLED
+#include "../../schema/src/sha256.hpp"
 #include "chipcae/mesh/background/tensor_grid.hpp"
 #include "chipcae/mesh/background/vtkhdf_writer.hpp"
-#include "../../schema/src/sha256.hpp"
 #ifdef CHIPCAE_ENABLE_MPI
 #include <mpi.h>
 #endif
@@ -74,9 +77,11 @@ void event(const std::string& stage, double progress, const std::string& message
     if (rank != 0 && stage != "error")
         return;
 #endif
-    if (stage == "success" && message.size() >= 2 && message.front() == '{' && message.back() == '}')
+    if (stage == "success" && message.size() >= 2 && message.front() == '{' &&
+        message.back() == '}')
         std::cout << "{\"stage\":" << quote(stage) << ",\"progress\":" << progress << ','
-                  << message.substr(1, message.size() - 2) << ",\"message\":" << quote(message) << "}\n"
+                  << message.substr(1, message.size() - 2) << ",\"message\":" << quote(message)
+                  << "}\n"
                   << std::flush;
     else
         std::cout << "{\"stage\":" << quote(stage) << ",\"progress\":" << progress
@@ -109,17 +114,31 @@ MeshDigest digest(const chipcae::mesh::HexMeshArrays& mesh) {
     for (auto v : {nx0, ny0, static_cast<std::size_t>(report.levels - 1), nz, nodes, cells})
         append_i64(bytes, static_cast<std::int64_t>(v));
     std::vector<std::size_t> order(nodes);
-    for (std::size_t i = 0; i < nodes; ++i) order[i] = i;
-    std::sort(order.begin(), order.end(), [&](auto a, auto b) { return mesh.node_gid[a] < mesh.node_gid[b]; });
+    for (std::size_t i = 0; i < nodes; ++i)
+        order[i] = i;
+    std::sort(order.begin(), order.end(), [&](auto a, auto b) {
+        return mesh.node_gid[a] < mesh.node_gid[b];
+    });
     for (auto i : order)
-        for (int d = 0; d < 3; ++d) append_f64(bytes, mesh.vertices[3 * i + d]);
+        for (int d = 0; d < 3; ++d)
+            append_f64(bytes, mesh.vertices[3 * i + d]);
     order.resize(cells);
-    for (std::size_t i = 0; i < cells; ++i) order[i] = i;
-    std::sort(order.begin(), order.end(), [&](auto a, auto b) { return mesh.elem_gid[a] < mesh.elem_gid[b]; });
+    for (std::size_t i = 0; i < cells; ++i)
+        order[i] = i;
+    std::sort(order.begin(), order.end(), [&](auto a, auto b) {
+        return mesh.elem_gid[a] < mesh.elem_gid[b];
+    });
     for (auto i : order)
-        for (int n = 0; n < 8; ++n) append_i64(bytes, mesh.hex[8 * i + n]);
-    return {nx0, ny0, static_cast<std::size_t>(report.levels - 1), nz, nodes, cells,
-            report.padding[0] + report.padding[1], chipcae::mesh::sha256(bytes)};
+        for (int n = 0; n < 8; ++n)
+            append_i64(bytes, mesh.hex[8 * i + n]);
+    return {nx0,
+            ny0,
+            static_cast<std::size_t>(report.levels - 1),
+            nz,
+            nodes,
+            cells,
+            report.padding[0] + report.padding[1],
+            chipcae::mesh::sha256(bytes)};
 }
 #endif
 #ifdef CHIPCAE_PREVIEW_ENABLED
@@ -265,8 +284,7 @@ int run(int argc, char** argv) {
     const auto summary = digest(mesh);
     std::ostringstream effective;
     effective << std::setprecision(17) << "{\"grid\":" << quote(files.grid.string())
-              << ",\"max_ratio\":" << options.max_ratio
-              << ",\"n0\":"
+              << ",\"max_ratio\":" << options.max_ratio << ",\"n0\":"
               << quote(std::to_string(coarse[0].size() - 1) + "x" +
                        std::to_string(coarse[1].size() - 1))
               << ",\"nx0\":" << summary.nx0 << ",\"ny0\":" << summary.ny0
@@ -301,6 +319,9 @@ int main(int argc, char** argv) {
 #endif
     int code = 0;
     try {
+#ifdef CHIPCAE_ENABLE_KOKKOS
+        Kokkos::ScopeGuard guard;
+#endif
         code = run(argc, argv);
     } catch (const MeshFailure& error) {
         std::cerr << error.what() << '\n';

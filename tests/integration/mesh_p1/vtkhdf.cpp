@@ -1,3 +1,6 @@
+#ifdef CHIPCAE_ENABLE_KOKKOS
+#include <Kokkos_Core.hpp>
+#endif
 #include "chipcae/mesh/background/vtkhdf_writer.hpp"
 #include "chipcae/mesh/cut/plane_cut.hpp"
 #include "runtime.hpp"
@@ -42,6 +45,9 @@ int main(int argc, char** argv) {
     (void)argv;
 #endif
     {
+#ifdef CHIPCAE_ENABLE_KOKKOS
+        Kokkos::ScopeGuard guard;
+#endif
         auto comm = chipcae::Communicator::world();
         auto s = k1::stack();
         auto o = k1::options();
