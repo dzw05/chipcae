@@ -1,0 +1,67 @@
+{
+  "id": "fcbga_cu",
+  "unit": "m",
+  "outline": {
+    "box": [
+      0,
+      0,
+      0.02,
+      0.02
+    ]
+  },
+  "symmetry": "none",
+  "package_type": "FCBGA",
+  "layers": [
+    {
+      "name": "top_copper",
+      "thickness": 3.5e-05,
+      "kind": "Patterned",
+      "material": "substrate_resin",
+      "copper": {
+        "metal": "copper",
+        "fraction": 0.32
+      },
+      "n_elem_min": 1,
+      "grading": 1
+    },
+    {
+      "name": "bump_eq",
+      "thickness": 0.0001,
+      "kind": "Homogenized",
+      "material": "SAC305_ball_eq",
+      "n_elem_min": 2,
+      "grading": 1
+    },
+    {
+      "name": "die_layer",
+      "thickness": 0.0005,
+      "kind": "Explicit",
+      "material": "underfill",
+      "n_elem_min": 2,
+      "grading": 1,
+      "regions": [
+        {
+          "name": "die",
+          "material": "silicon",
+          "footprint": {
+            "box": [
+              0.005,
+              0.005,
+              0.015,
+              0.015
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "activation_groups": [
+    {
+      "name": "assembly",
+      "members": [
+        "layer:top_copper",
+        "body:die"
+      ]
+    }
+  ]
+}

@@ -4,6 +4,7 @@
 #include <array>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -32,11 +33,20 @@ struct Inclusion {
     std::string name, material, body;
     Footprint footprint;
 };
+struct CopperPolygons {
+    std::string file, layer;
+};
+struct CopperSpec {
+    std::string metal;
+    std::optional<Real> fraction;
+    std::optional<CopperPolygons> polygons;
+};
 struct Layer {
     std::string name, kind, material, body;
     Real thickness = 0, grading = 1;
     Local n_elem_min = 1;
     std::vector<Inclusion> regions;
+    std::optional<CopperSpec> copper;
 };
 struct StackModel {
     std::string id, unit = "m", symmetry, package_type;
@@ -47,4 +57,17 @@ struct StackModel {
 };
 Expected<StackModel> load_stack(const std::filesystem::path& instance,
                                 const std::filesystem::path& schema);
+
+struct PolysetLayer {
+    std::string name;
+    // Offsets index points. The final offset is the number of points; each point has x,y.
+    std::vector<std::int64_t> ring_offsets;
+    std::vector<std::int64_t> coordinates;
+};
+struct Polyset {
+    double dbu_m = 0;
+    std::vector<PolysetLayer> layers;
+};
+Expected<Polyset> read_polyset(const std::filesystem::path& file);
+Expected<bool> write_polyset(const std::filesystem::path& file, const Polyset& polyset);
 } // namespace chipcae::mesh
