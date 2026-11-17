@@ -271,7 +271,6 @@ def main():
     rel = abs_delta / PROTOTYPE
     ver = ccx_version()
     payload = {
-        "artifact_version": 1,
         "kind": "REFERENCE",
         "label": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解",
         "W_bfp_m": w,
@@ -291,10 +290,6 @@ def main():
         "prototype_W_bfp_m": PROTOTYPE,
         "abs_delta_m": abs_delta,
         "rel_delta": rel,
-        "provenance": {
-            "generator": "tools/vv/calculix_trilayer/generate.py",
-            "label": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解",
-        },
     }
     out = here / "REFERENCE.json"
     out.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")

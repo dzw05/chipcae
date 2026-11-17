@@ -48,11 +48,11 @@ Artifact format and comparison checks live exclusively in
 The v1 contract is specific to this WP-2 coarse/fine refinement workflow, not a
 schema for arbitrary CalculiX studies. It requires exactly one coarse and one
 fine mesh, fine selection, and equality with the fine mesh value.
-`artifact_version` (when present, integer 1), `provenance`, and the top-level
-`host` and `calculix_version` provenance strings are optional. Thus the brief's
-object without version or provenance extensions is accepted. Present environment
-strings must be nonempty; arbitrary nested provenance remains informational.
-Regeneration records the local host and runtime version, so those metadata can
+The top-level `host` and `calculix_version` strings are required and must be
+nonempty. The label must exactly include the brief's reference designation and
+both disclaimers. The fixed key set excludes `artifact_version`, `provenance`,
+and other extensions.
+Regeneration records the local host and runtime version, so those strings can
 differ between environments even when the model and results agree.
 
 The ASCII FRD layout used by CalculiX 2.23 is `(1X,I2,I10,3E12.5)`:
@@ -71,7 +71,7 @@ by the shared `interp_grid` function for linear interpolation.
 
 Run `python3 -m unittest tools.vv.test_trilayer_calculix_ref` after generation.
 The validator requires `jsonschema`, which the lint workflow installs.
-Only passing validation prints the single delta report, with the prototype labeled
-参考值（原型计算值）. External callers can capture stdout to retain the report;
-generation does not write it. If optional runtime metadata is absent, the report
-uses `ccx=unrecorded`.
+Only passing validation prints the single delta report in the brief's fixed
+field order. The prototype is the 参考值（原型计算值） described above.
+External callers can capture stdout to `/workspace/tasks/logs/v-ccx-delta.md`;
+generation does not write it.

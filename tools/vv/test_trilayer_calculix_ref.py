@@ -25,6 +25,8 @@ CONTRACT = json.loads(r'''
   "additionalProperties": false,
   "required": [
     "kind",
+    "host",
+    "calculix_version",
     "label",
     "W_bfp_m",
     "element_type",
@@ -36,9 +38,8 @@ CONTRACT = json.loads(r'''
     "rel_delta"
   ],
   "properties": {
-    "artifact_version": { "type": "integer", "const": 1 },
     "kind": { "const": "REFERENCE", "type": "string" },
-    "label": { "type": "string", "minLength": 1 },
+    "label": { "type": "string", "const": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解" },
     "W_bfp_m": { "type": "number" },
     "element_type": { "type": "string", "const": "C3D20" },
     "host": { "type": "string", "minLength": 1 },
@@ -87,12 +88,7 @@ CONTRACT = json.loads(r'''
     "selected_mesh": { "type": "string", "const": "fine" },
     "prototype_W_bfp_m": { "type": "number" },
     "abs_delta_m": { "type": "number" },
-    "rel_delta": { "type": "number" },
-    "provenance": {
-      "type": "object",
-      "description": "Optional, non-contractual generator metadata; arbitrary keys and values are permitted.",
-      "additionalProperties": true
-    }
+    "rel_delta": { "type": "number" }
   }
 }
 ''')
@@ -139,22 +135,11 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         reversed_meshes = copy.deepcopy(data)
         reversed_meshes["meshes"].reverse()
         validate_reference(reversed_meshes, contract)
-        # Version and environment strings are optional provenance, not payload requirements.
-        portable = copy.deepcopy(data)
-        portable.pop("provenance", None)
-        validate_reference(portable, contract)
-        for field in ("host", "calculix_version"):
-            metadata = dict(portable, provenance={field: "another environment"})
-            validate_reference(metadata, contract)
-            for value in (123, ""):
-                validate_reference(dict(portable, provenance={field: value}), contract)
-        validate_reference(dict(portable, provenance={"future_metadata": 123}), contract)
         variants = []
-        unversioned = copy.deepcopy(data)
-        del unversioned["artifact_version"]
-        validate_reference(unversioned)
-        for version in (0, 2, "1", None, True):
-            variants.append(dict(data, artifact_version=version))
+        for field in ("artifact_version", "provenance"):
+            variants.append(dict(data, **{field: 1 if field == "artifact_version" else {}}))
+        for label in ("参考值（原型计算值）", "不是实测，不是解析解"):
+            variants.append(dict(data, label=label))
         for field in ("label", "W_bfp_m"):
             invalid = copy.deepcopy(data)
             del invalid[field]
@@ -165,23 +150,16 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         for field in ("host", "calculix_version"):
             for value in (123, "", None, True):
                 variants.append(dict(data, **{field: value}))
-            # Environment metadata may be omitted or moved into provenance.
             invalid = copy.deepcopy(data)
-            value = invalid.pop(field)
-            invalid.setdefault("provenance", {})[field] = value
-            validate_reference(invalid)
-        provenance_only = copy.deepcopy(data)
+            del invalid[field]
+            variants.append(invalid)
+            moved = copy.deepcopy(invalid)
+            moved["provenance"] = {field: data[field]}
+            variants.append(moved)
+        portable = copy.deepcopy(data)
         for field in ("host", "calculix_version"):
-            provenance_only.setdefault("provenance", {})[field] = provenance_only.pop(field)
-        validate_reference(provenance_only)
-        spec_shaped = copy.deepcopy(data)
-        for field in ("artifact_version", "provenance"):
-            spec_shaped.pop(field, None)
-        validate_reference(spec_shaped)
-        portable = copy.deepcopy(spec_shaped)
-        for field in ("host", "calculix_version"):
-            portable.pop(field, None)
-        validate_reference(portable)
+            del portable[field]
+        variants.append(portable)
         for name in ("", "unknown", "coarse"):
             invalid = copy.deepcopy(data)
             invalid["selected_mesh"] = name
@@ -219,11 +197,13 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         self.assertEqual(data["element_type"], "C3D20")
         self.assertEqual(data["selected_mesh"], "fine")
         self.assertIsInstance(data["label"], str)
-        self.assertIn("参考值（原型计算值）", data["label"])
+        self.assertEqual(
+            data["label"],
+            "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解",
+        )
         for field in ("host", "calculix_version"):
-            if field in data:
-                self.assertIsInstance(data[field], str)
-                self.assertTrue(data[field].strip())
+            self.assertIsInstance(data[field], str)
+            self.assertTrue(data[field].strip())
         geometry = data["geometry"]
         self.assertEqual(geometry["L_m"], 1.0)
         self.assertEqual(geometry["thicknesses_m"], [0.05, 0.01, 0.04])
@@ -239,6 +219,8 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             self.assertEqual(len(mesh["n_elem_xyz"]), 3)
             self.assertEqual(mesh["n_elem_xyz"][2], sum(mesh["n_elem_z_per_layer"]))
             self.assertIsInstance(mesh["W_bfp_m"], float)
+            self.assertTrue(math.isfinite(mesh["W_bfp_m"]))
+            self.assertGreater(mesh["W_bfp_m"], 0.0)
         meshes = {m["name"]: m for m in data["meshes"]}
         coarse, fine = meshes["coarse"], meshes["fine"]
         for axis in (0, 1):
@@ -255,9 +237,9 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         for field, expected in (("abs_delta_m", abs_delta), ("rel_delta", rel_delta)):
             self.assertTrue(math.isclose(data[field], expected, rel_tol=1e-12, abs_tol=1e-18))
         line = (
-            f"W_bfp={w} prototype=4.269532769e-3（参考值（原型计算值）） abs_delta={abs_delta} "
+            f"W_bfp={w} prototype=4.269532769e-3 abs_delta={abs_delta} "
             f"rel_delta={rel_delta} mesh=fine element=C3D20 "
-            f"ccx={data.get('calculix_version', 'unrecorded')}"
+            f"ccx={data['calculix_version']}"
         )
         print(line)
 
