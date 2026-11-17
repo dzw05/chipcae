@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<IPC-2581 revision="C"><MysteryA/><Ecad><CadData><Layer name="Cu" layerFunction="SIGNAL" side="INTERNAL" polarity="POSITIVE"/><Stackup><MysteryB/><StackupGroup name="S"><StackupLayer layerOrGroupRef="Cu" thickness="0.035" tolPlus="0" tolMinus="0" sequence="0"/></StackupGroup></Stackup><MysteryC/><Step name="u"><Profile><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="1" y="0"/><PolyStepSegment x="0" y="1"/></Polygon></Profile></Step></CadData></Ecad></IPC-2581>

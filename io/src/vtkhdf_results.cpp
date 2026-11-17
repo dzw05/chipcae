@@ -2,10 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <limits>
-#include <memory>
 #include <stdexcept>
 #ifdef CHIPCAE_ENABLE_HDF5
 #include "chipcae/io/detail/hdf5.hpp"
@@ -28,6 +29,36 @@ void agree(bool ok) {
     if (!ok)
         throw std::runtime_error("results collective operation failed");
 }
+// Every rank reaches the same boundary before advancing to the next collective.
+template <class F>
+void phase(F action) {
+    bool ok = true;
+    try {
+        action();
+    } catch (...) {
+        ok = false;
+    }
+    agree(ok);
+}
+[[maybe_unused]] bool injected(const char* point, int rank) {
+    const char* requested = std::getenv("CHIPCAE_RESULTS_FAIL");
+    const char* target = std::getenv("CHIPCAE_RESULTS_FAIL_RANK");
+    return requested && target && std::strcmp(requested, point) == 0 && std::atoi(target) == rank;
+}
+#ifdef CHIPCAE_ENABLE_HDF5
+// Inject a reported failure only after all participants have entered the HDF5
+// call. Local preparation failures are caught at phase boundaries instead.
+template <class F>
+auto hcall(bool parallel, int rank, const char* name, F action) {
+    auto result = action();
+    bool ok = result >= 0 && !injected(name, rank);
+    if (parallel)
+        agree(ok);
+    else if (!ok)
+        throw std::runtime_error("results HDF5 operation failed");
+    return result;
+}
+#endif
 std::string quoted(const std::string& s) {
     std::string out = "\"";
     for (unsigned char c : s) {
@@ -47,6 +78,34 @@ std::string quoted(const std::string& s) {
 }
 #ifdef CHIPCAE_ENABLE_HDF5
 using namespace chipcae::hdf_detail;
+void results_header(hid_t root, const char* type, int major, int minor, bool parallel, int rank) {
+    hsize_t two = 2;
+    H5 vs(
+        hcall(
+            parallel, rank, "H5Screate_simple", [&] { return H5Screate_simple(1, &two, nullptr); }),
+        H5Sclose);
+    H5 v(hcall(parallel,
+               rank,
+               "H5Acreate2",
+               [&] {
+                   return H5Acreate2(root, "Version", H5T_NATIVE_INT, vs, H5P_DEFAULT, H5P_DEFAULT);
+               }),
+         H5Aclose);
+    int version[2] = {major, minor};
+    check(hcall(parallel, rank, "H5Awrite", [&] { return H5Awrite(v, H5T_NATIVE_INT, version); }));
+    H5 ts(hcall(parallel, rank, "H5Tcopy", [&] { return H5Tcopy(H5T_C_S1); }), H5Tclose);
+    check(hcall(
+        parallel, rank, "H5Tset_size", [&] { return H5Tset_size(ts, std::strlen(type) + 1); }));
+    check(
+        hcall(parallel, rank, "H5Tset_strpad", [&] { return H5Tset_strpad(ts, H5T_STR_NULLPAD); }));
+    H5 scalar(hcall(parallel, rank, "H5Screate", [&] { return H5Screate(H5S_SCALAR); }), H5Sclose);
+    H5 a(hcall(parallel,
+               rank,
+               "H5Acreate2",
+               [&] { return H5Acreate2(root, "Type", ts, scalar, H5P_DEFAULT, H5P_DEFAULT); }),
+         H5Aclose);
+    check(hcall(parallel, rank, "H5Awrite", [&] { return H5Awrite(a, ts, type); }));
+}
 // Same checked HDF5 handles, types and headers as the background mesh writer.
 // Each rank owns one contiguous partition. Empty ranks select none, but still
 // participate in every collective H5Dwrite.
@@ -58,8 +117,11 @@ void distributed(hid_t group,
                  int size,
                  bool parallel,
                  hsize_t components = 1) {
-    std::vector<int> counts(static_cast<std::size_t>(size)),
-        offsets(static_cast<std::size_t>(size));
+    std::vector<int> counts, offsets;
+    phase([&] {
+        counts.resize(static_cast<std::size_t>(size));
+        offsets.resize(static_cast<std::size_t>(size));
+    });
     agree(local.size() <= static_cast<std::size_t>(std::numeric_limits<int>::max() / sizeof(T) /
                                                    static_cast<unsigned>(size)));
     int count = static_cast<int>(local.size());
@@ -74,7 +136,14 @@ void distributed(hid_t group,
         total += counts[i];
     }
     if (!parallel) {
-        std::vector<T> gathered(rank == 0 ? static_cast<std::size_t>(total) : 0);
+        std::vector<T> gathered;
+        phase([&] {
+            if (injected("gather_alloc", rank))
+                throw std::bad_alloc();
+            gathered.resize(rank == 0 ? static_cast<std::size_t>(total) : 0);
+            if (size == 1)
+                gathered = local;
+        });
 #ifdef CHIPCAE_ENABLE_MPI
         if (size > 1)
             MPI_Gatherv(
@@ -95,9 +164,8 @@ void distributed(hid_t group,
                 MPI_BYTE,
                 0,
                 MPI_COMM_WORLD);
-        else
+
 #endif
-            gathered = local;
         bool ok = true;
         if (rank == 0)
             try {
@@ -109,29 +177,65 @@ void distributed(hid_t group,
         return;
     }
     hsize_t dims[2] = {static_cast<hsize_t>(total) / components, components};
-    H5 space(H5Screate_simple(components == 1 ? 1 : 2, dims, nullptr), H5Sclose);
-    H5 set(H5Dcreate2(group, name, native<T>(), space, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT),
+    H5 space(hcall(parallel,
+                   rank,
+                   "H5Screate_simple",
+                   [&] { return H5Screate_simple(components == 1 ? 1 : 2, dims, nullptr); }),
+             H5Sclose);
+    H5 set(hcall(parallel,
+                 rank,
+                 "H5Dcreate2",
+                 [&] {
+                     return H5Dcreate2(
+                         group, name, native<T>(), space, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+                 }),
            H5Dclose);
     hsize_t md[2] = {std::max(hsize_t(1), static_cast<hsize_t>(count) / components), components};
-    H5 memory(H5Screate_simple(components == 1 ? 1 : 2, md, nullptr), H5Sclose);
-    if (!count) {
-        check(H5Sselect_none(space));
-        check(H5Sselect_none(memory));
-    } else {
-        hsize_t start[2] = {static_cast<hsize_t>(offsets[rank]) / components, 0},
-                extent[2] = {static_cast<hsize_t>(count) / components, components};
-        check(H5Sselect_hyperslab(space, H5S_SELECT_SET, start, nullptr, extent, nullptr));
-    }
-    H5 transfer(H5Pcreate(H5P_DATASET_XFER), H5Pclose);
+    H5 memory(hcall(parallel,
+                    rank,
+                    "H5Screate_simple",
+                    [&] { return H5Screate_simple(components == 1 ? 1 : 2, md, nullptr); }),
+              H5Sclose);
+    phase([&] {
+        if (injected("dataset_setup", rank))
+            throw std::bad_alloc();
+        if (!count) {
+            check(hcall(false, rank, "H5Sselect_none", [&] { return H5Sselect_none(space); }));
+            check(hcall(false, rank, "H5Sselect_none", [&] { return H5Sselect_none(memory); }));
+        } else {
+            hsize_t start[2] = {static_cast<hsize_t>(offsets[rank]) / components, 0},
+                    extent[2] = {static_cast<hsize_t>(count) / components, components};
+            check(hcall(false, rank, "H5Sselect_hyperslab", [&] {
+                return H5Sselect_hyperslab(space, H5S_SELECT_SET, start, nullptr, extent, nullptr);
+            }));
+        }
+    });
+    H5 transfer(hcall(parallel, rank, "H5Pcreate", [&] { return H5Pcreate(H5P_DATASET_XFER); }),
+                H5Pclose);
 #if defined(H5_HAVE_PARALLEL) && defined(CHIPCAE_ENABLE_MPI)
-    check(H5Pset_dxpl_mpio(transfer, H5FD_MPIO_COLLECTIVE));
+    check(hcall(parallel, rank, "H5Pset_dxpl_mpio", [&] {
+        return H5Pset_dxpl_mpio(transfer, H5FD_MPIO_COLLECTIVE);
+    }));
 #endif
-    check(H5Dwrite(set, native<T>(), memory, space, transfer, local.data()));
+    check(hcall(parallel, rank, "H5Dwrite", [&] {
+        return H5Dwrite(set, native<T>(), memory, space, transfer, local.data());
+    }));
+    check(hcall(parallel, rank, "H5Dclose", [&] {
+        auto status = H5Dclose(set);
+        if (status >= 0)
+            set.id = -1;
+        return status;
+    }));
+    set.id = -1;
 }
 #endif
 } // namespace
 bool ResultsWriter::selected(const std::string& name) const {
     return std::find(fields_.begin(), fields_.end(), name) != fields_.end();
+}
+void ResultsWriter::set_mesh(MeshSummary mesh) {
+    mesh_ = std::move(mesh);
+    finalize(); // Publish before any physical solve, with no steps yet.
 }
 ResultsWriter::ResultsWriter(std::filesystem::path run,
                              const std::filesystem::path& stackup,
@@ -199,21 +303,36 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
     agree(steps_.empty() || gids_ == (gid_any != 0));
     bool parallel = false;
 #if defined(H5_HAVE_PARALLEL) && defined(CHIPCAE_ENABLE_MPI)
-    parallel = size_ > 1;
+    parallel = size_ > 1 && !std::getenv("CHIPCAE_RESULTS_SERIAL");
 #endif
-    auto filename = "out/step-" + std::to_string(n) + ".vtkhdf";
-    auto tmp = run_ / (filename + ".tmp");
+    std::string filename;
+    std::filesystem::path tmp;
+    phase([&] {
+        filename = "out/step-" + std::to_string(n) + ".vtkhdf";
+        tmp = run_ / (filename + ".tmp");
+        steps_.reserve(steps_.size() + 1);
+    });
     bool ok = true;
+    H5 file_guard(H5P_DEFAULT, H5Fclose);
+    file_guard.id = -1;
     try {
-        H5 access(H5Pcreate(H5P_FILE_ACCESS), H5Pclose);
-        check(H5Pset_fclose_degree(access, H5F_CLOSE_STRONG));
-        std::unique_ptr<H5> file_guard;
+        H5 access(hcall(true, rank_, "H5Pcreate", [&] { return H5Pcreate(H5P_FILE_ACCESS); }),
+                  H5Pclose);
+        check(hcall(true, rank_, "H5Pset_fclose_degree", [&] {
+            return H5Pset_fclose_degree(access, H5F_CLOSE_STRONG);
+        }));
+
 #if defined(H5_HAVE_PARALLEL) && defined(CHIPCAE_ENABLE_MPI)
         if (parallel)
-            check(H5Pset_fapl_mpio(access, MPI_COMM_WORLD, MPI_INFO_NULL));
+            check(hcall(true, rank_, "H5Pset_fapl_mpio", [&] {
+                return H5Pset_fapl_mpio(access, MPI_COMM_WORLD, MPI_INFO_NULL);
+            }));
 #endif
-        H5 gcpl(H5Pcreate(H5P_GROUP_CREATE), H5Pclose);
-        check(H5Pset_link_creation_order(gcpl, H5P_CRT_ORDER_TRACKED | H5P_CRT_ORDER_INDEXED));
+        H5 gcpl(hcall(true, rank_, "H5Pcreate", [&] { return H5Pcreate(H5P_GROUP_CREATE); }),
+                H5Pclose);
+        check(hcall(true, rank_, "H5Pset_link_creation_order", [&] {
+            return H5Pset_link_creation_order(gcpl, H5P_CRT_ORDER_TRACKED | H5P_CRT_ORDER_INDEXED);
+        }));
         hid_t file = -1, root = -1, assembly = -1;
         auto metadata = [&](auto action) {
             bool success = true;
@@ -226,33 +345,54 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
             agree(success);
         };
         metadata([&] {
-            file = H5Fcreate(tmp.c_str(), H5F_ACC_TRUNC, H5P_DEFAULT, access);
+            file = hcall(parallel, rank_, "H5Fcreate", [&] {
+                return H5Fcreate(tmp.c_str(), H5F_ACC_TRUNC, H5P_DEFAULT, access);
+            });
             if (file < 0)
                 throw std::runtime_error("create results file");
-            file_guard = std::make_unique<H5>(file, H5Fclose);
-            root = H5Gcreate2(file, "VTKHDF", H5P_DEFAULT, gcpl, H5P_DEFAULT);
-            header(root, "PartitionedDataSetCollection", 2, 9);
-            assembly = H5Gcreate2(root, "Assembly", H5P_DEFAULT, gcpl, H5P_DEFAULT);
+            file_guard.id = file;
+            root = hcall(parallel, rank_, "H5Gcreate2", [&] {
+                return H5Gcreate2(file, "VTKHDF", H5P_DEFAULT, gcpl, H5P_DEFAULT);
+            });
+            results_header(root, "PartitionedDataSetCollection", 2, 9, parallel, rank_);
+            assembly = hcall(parallel, rank_, "H5Gcreate2", [&] {
+                return H5Gcreate2(root, "Assembly", H5P_DEFAULT, gcpl, H5P_DEFAULT);
+            });
             if (root < 0 || assembly < 0)
                 throw std::runtime_error("create root groups");
         });
         const char* names[] = {"hex", "cut_poly", "embedded_boundary", "particles"};
+        const char* paths[] = {
+            "/VTKHDF/hex", "/VTKHDF/cut_poly", "/VTKHDF/embedded_boundary", "/VTKHDF/particles"};
         for (int block = 0; block < 4; ++block) {
             hid_t g = -1;
             metadata([&] {
-                g = H5Gcreate2(root, names[block], H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-                header(g, block >= 2 ? "PolyData" : "UnstructuredGrid", 2, 9);
-                H5 scalar(H5Screate(H5S_SCALAR), H5Sclose);
-                H5 index(H5Acreate2(g, "Index", H5T_NATIVE_INT64, scalar, H5P_DEFAULT, H5P_DEFAULT),
-                         H5Aclose);
+                g = hcall(parallel, rank_, "H5Gcreate2", [&] {
+                    return H5Gcreate2(root, names[block], H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+                });
+                results_header(
+                    g, block >= 2 ? "PolyData" : "UnstructuredGrid", 2, 9, parallel, rank_);
+                H5 scalar(
+                    hcall(parallel, rank_, "H5Screate", [&] { return H5Screate(H5S_SCALAR); }),
+                    H5Sclose);
+                H5 index(
+                    hcall(parallel,
+                          rank_,
+                          "H5Acreate2",
+                          [&] {
+                              return H5Acreate2(
+                                  g, "Index", H5T_NATIVE_INT64, scalar, H5P_DEFAULT, H5P_DEFAULT);
+                          }),
+                    H5Aclose);
                 Index block_index = block;
-                check(H5Awrite(index, H5T_NATIVE_INT64, &block_index));
+                check(hcall(parallel, rank_, "H5Awrite", [&] {
+                    return H5Awrite(index, H5T_NATIVE_INT64, &block_index);
+                }));
 
-                check(H5Lcreate_soft((std::string("/VTKHDF/") + names[block]).c_str(),
-                                     assembly,
-                                     names[block],
-                                     H5P_DEFAULT,
-                                     H5P_DEFAULT));
+                check(hcall(parallel, rank_, "H5Lcreate_soft", [&] {
+                    return H5Lcreate_soft(
+                        paths[block], assembly, names[block], H5P_DEFAULT, H5P_DEFAULT);
+                }));
             });
             ResultsPartition none;
             const auto& q = block == 0 ? p : none;
@@ -262,40 +402,53 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                                      hsize_t c = 1) {
                 distributed(target, name, v, rank_, size_, parallel, c);
             };
-            emit(g, "NumberOfPoints", std::vector<Index>{static_cast<Index>(q.points.size() / 3)});
+            std::vector<Index> point_counts;
+            phase([&] { point_counts = {static_cast<Index>(q.points.size() / 3)}; });
+            emit(g, "NumberOfPoints", point_counts);
             emit(g, "Points", q.points, 3);
             auto topology = [&](hid_t target, const std::vector<Index>& conn, int stride) {
                 Index cells = static_cast<Index>(conn.size()) / stride;
-                emit(target, "NumberOfCells", std::vector<Index>{cells});
-                emit(target,
-                     "NumberOfConnectivityIds",
-                     std::vector<Index>{static_cast<Index>(conn.size())});
+                std::vector<Index> cell_counts, connectivity_counts, off;
+                phase([&] {
+                    cell_counts = {cells};
+                    connectivity_counts = {static_cast<Index>(conn.size())};
+                    off.resize(static_cast<std::size_t>(cells + 1));
+                    for (Index i = 0; i <= cells; ++i)
+                        off[static_cast<std::size_t>(i)] = i * stride;
+                });
+                emit(target, "NumberOfCells", cell_counts);
+                emit(target, "NumberOfConnectivityIds", connectivity_counts);
                 emit(target, "Connectivity", conn);
-                std::vector<Index> off(static_cast<std::size_t>(cells + 1));
-                for (Index i = 0; i <= cells; ++i)
-                    off[static_cast<std::size_t>(i)] = i * stride;
                 emit(target, "Offsets", off);
             };
             if (block < 2) {
                 topology(g, q.hex, 8);
-                emit(g, "Types", std::vector<unsigned char>(q.hex.size() / 8, 12));
+                std::vector<unsigned char> types;
+                phase([&] { types.assign(q.hex.size() / 8, 12); });
+                emit(g, "Types", types);
             } else
                 for (auto name : {"Vertices", "Lines", "Polygons", "Strips"}) {
                     hid_t t = -1;
                     metadata([&] {
-                        t = H5Gcreate2(g, name, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+                        t = hcall(parallel, rank_, "H5Gcreate2", [&] {
+                            return H5Gcreate2(g, name, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+                        });
                         if (t < 0)
                             throw std::runtime_error("create topology");
                     });
                     topology(t, {}, 1);
                     if (t >= 0)
-                        check(H5Gclose(t));
+                        check(hcall(parallel, rank_, "H5Gclose", [&] { return H5Gclose(t); }));
                 }
             if (block == 0) {
                 hid_t pd = -1, cd = -1;
                 metadata([&] {
-                    pd = H5Gcreate2(g, "PointData", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-                    cd = H5Gcreate2(g, "CellData", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+                    pd = hcall(parallel, rank_, "H5Gcreate2", [&] {
+                        return H5Gcreate2(g, "PointData", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+                    });
+                    cd = hcall(parallel, rank_, "H5Gcreate2", [&] {
+                        return H5Gcreate2(g, "CellData", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+                    });
                     if (pd < 0 || cd < 0)
                         throw std::runtime_error("create fields");
                 });
@@ -312,20 +465,25 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                 if (gid_any && selected("elem_gid"))
                     emit(cd, "elem_gid", p.elem_gid);
                 if (pd >= 0) {
-                    check(H5Gclose(pd));
-                    check(H5Gclose(cd));
+                    check(hcall(parallel, rank_, "H5Gclose", [&] { return H5Gclose(pd); }));
+                    check(hcall(parallel, rank_, "H5Gclose", [&] { return H5Gclose(cd); }));
                 }
             }
             if (g >= 0)
-                check(H5Gclose(g));
+                check(hcall(parallel, rank_, "H5Gclose", [&] { return H5Gclose(g); }));
         }
         if (file >= 0) {
-            check(H5Gclose(assembly));
-            check(H5Gclose(root));
-            check(H5Fflush(file, H5F_SCOPE_GLOBAL));
-            check(H5Fclose(file));
-            file_guard->id = -1;
-            file_guard.reset();
+            check(hcall(parallel, rank_, "H5Gclose", [&] { return H5Gclose(assembly); }));
+            check(hcall(parallel, rank_, "H5Gclose", [&] { return H5Gclose(root); }));
+            check(hcall(
+                parallel, rank_, "H5Fflush", [&] { return H5Fflush(file, H5F_SCOPE_GLOBAL); }));
+            check(hcall(parallel, rank_, "H5Fclose", [&] {
+                auto status = H5Fclose(file);
+                if (status >= 0)
+                    file_guard.id = -1;
+                return status;
+            }));
+            file_guard.id = -1;
         }
     } catch (...) {
         ok = false;
@@ -339,7 +497,7 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
         }
     agree(ok);
     gids_ = gid_any != 0;
-    steps_.push_back({n, time, filename});
+    steps_.push_back({n, time, std::move(filename)});
 #endif
 }
 void ResultsWriter::add_summary(std::string name, double value, std::string unit, int step) {
@@ -408,7 +566,14 @@ void ResultsWriter::finalize() {
                 out << "{\"name\":" << quoted(s.name) << ",\"value\":" << s.value
                     << ",\"unit\":" << quoted(s.unit) << ",\"step\":" << s.step << '}';
             }
-            out << "]\n}\n";
+            out << "]";
+            if (mesh_) {
+                const auto& m = *mesh_;
+                out << ",\n\"mesh\":{\"nx0\":" << m.nx0 << ",\"ny0\":" << m.ny0 << ",\"L\":" << m.L
+                    << ",\"padded_cells\":" << m.padded_cells << ",\"nz\":" << m.nz
+                    << ",\"mesh_sha256\":" << quoted(m.mesh_sha256) << '}';
+            }
+            out << "\n}\n";
             out.close();
             std::filesystem::rename(tmp, run_ / "manifest.json");
         } catch (...) {

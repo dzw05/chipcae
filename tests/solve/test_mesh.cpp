@@ -29,5 +29,11 @@ int main() {
         if (mesh.elem_gid[e] != static_cast<chipcae::Index>(e))
             return 3;
     }
+    inputs.grid.levels = 0;
+    auto automatic = chipcae::solve::build_mesh(inputs);
+    if (!automatic.grid_report.auto_selected || automatic.grid_report.levels < 1 ||
+        automatic.grid_report.level_axes.size() !=
+            static_cast<std::size_t>(automatic.grid_report.levels))
+        return 5;
     std::cout << "uncut elements=" << mesh.elem_gid.size() << " nz=" << nz << '\n';
 }

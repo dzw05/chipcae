@@ -1,5 +1,6 @@
 """Numerical acceptance through the public CLI and independent VTKHDF readback."""
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -94,6 +95,33 @@ with tempfile.TemporaryDirectory() as tmp:
             gids = g['CellData/elem_gid'][:] if 'elem_gid' in g['CellData'] else None
             assert g['Connectivity'].size == len(layers) * c['mesh']['nx'] * c['mesh']['ny'] * 8
             if gids is not None:
+                # Reconstruct global numbering independently from partition-local VTK data.
+                axes = [sorted(set(points[:, d])) for d in range(3)]
+                def morton(x, y):
+                    return sum(((x >> b) & 1) << (2*b) | ((y >> b) & 1) << (2*b+1)
+                               for b in range(32))
+                columns = sorted(((x, y) for x in range(len(axes[0]))
+                                  for y in range(len(axes[1]))), key=lambda xy: morton(*xy))
+                ordered = [(axes[0][x], axes[1][y], z) for x, y in columns for z in axes[2]]
+                node_ids = {p: i for i, p in enumerate(ordered)}
+                global_ids = [node_ids[tuple(p)] for p in points]
+                conn = g['Connectivity'][:].reshape(-1, 8)
+                canonical = []
+                start_node = start_cell = 0
+                for npart, ncell in zip(g['NumberOfPoints'][:], g['NumberOfCells'][:]):
+                    for e in range(int(ncell)):
+                        canonical.append((int(gids[start_cell+e]),
+                            [global_ids[start_node+int(v)] for v in conn[start_cell+e]]))
+                    start_node += int(npart)
+                    start_cell += int(ncell)
+                meta = manifest['mesh']
+                raw = struct.pack('<6q', meta['nx0'], meta['ny0'], meta['L'], meta['nz'],
+                                  len(ordered), len(canonical))
+                raw += np.asarray(ordered, dtype='<f8').tobytes()
+                raw += np.asarray([row for _, row in sorted(canonical)], dtype='<i8').tobytes()
+                assert meta['mesh_sha256'] == hashlib.sha256(raw).hexdigest()
+
+            if gids is not None:
                 assert sorted(gids.tolist()) == list(range(len(layers) * c['mesh']['nx'] * c['mesh']['ny']))
         return manifest, summary, points, T, U, ev
 
@@ -158,12 +186,13 @@ with tempfile.TemporaryDirectory() as tmp:
     # STOP is read after T, before U/output. Ignore malformed/duplicate/partial lines.
     control = 'bad JSON\n' + json.dumps({'cmd_seq':'1','action':'STOP'}) + '\n' + json.dumps({'cmd_seq':'2','action':'STOP'})
     out, ev = run('stop',thermal,layers,materials,2,control)
-    assert not (out/'manifest.json').exists()
+    early = json.loads((out/'manifest.json').read_text())
+    assert early['steps'] == [] and len(early['mesh']['mesh_sha256']) == 64
     assert sum(kind==11 for kind,_ in ev)==1
     assert sum(kind==17 for kind,_ in ev)==1
     assert b'user_stop' in ev[-1][1]
     ack = next(payload for kind,payload in ev if kind == 17)
-    assert struct.unpack_from('<Q', ack, 13)[0] == 1
+    assert struct.unpack_from('<Q', ack, 16)[0] == 1
     control = json.dumps({'cmdSeq':'1','action':'PAUSE'})+'\n'+json.dumps({'cmd_seq':'1','action':'STOP'})+'\n'+json.dumps({'cmd_seq':'2','action':'STOP'})
     out, ev = run('control-partial-duplicate',thermal,layers,materials,control=control)
     assert (out/'manifest.json').exists()

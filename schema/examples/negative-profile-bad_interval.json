@@ -1,0 +1,11 @@
+{
+  "schema": "chipcae.run_profile/1.0",
+  "ranks": 4,
+  "backend": "cpu",
+  "gpus": 0,
+  "threads_per_rank": 2,
+  "output_interval": {
+    "steps": 1,
+    "time": 2
+  }
+}

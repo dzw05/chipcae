@@ -375,7 +375,7 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
             if (out.thermal)
                 material.k = finite(card, "conductivity", true);
             if (!out.materials.emplace(material.id, material).second)
-                invalid("duplicate material id");
+                throw InputError(ErrorCode::MATERIAL_ID_DUPLICATE, "duplicate material id");
         }
         auto mapped = [&](const std::string& id) {
             if (!out.materials.contains(id))

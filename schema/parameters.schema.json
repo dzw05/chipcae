@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://chipcae.local/schema/parameters.schema.json",
   "title": "chipcae parameters",
-  "description": "Minimal linear solver parameters; pending parameter declaration export.",
+  "description": "待参数声明导出替换。",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -10,23 +10,9 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "rtol": {
-          "type": "number",
-          "exclusiveMinimum": 0,
-          "default": 1e-08
-        },
-        "max_iter": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 500
-        },
-        "preconditioner": {
-          "enum": [
-            "column_gmg",
-            "direct"
-          ],
-          "default": "column_gmg"
-        }
+        "rtol": { "type": "number", "exclusiveMinimum": 0, "default": 1e-8 },
+        "max_iter": { "type": "integer", "minimum": 1, "default": 500 },
+        "preconditioner": { "enum": ["column_gmg", "direct"], "default": "column_gmg" }
       }
     }
   }

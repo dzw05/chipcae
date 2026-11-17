@@ -20,7 +20,8 @@ public:
         IMPORT_UNSUPPORTED_ELEMENT = 8,
         MATERIAL_MAPPING_MISSING = 9,
         INPUT_HASH_MISMATCH = 10,
-        INPUT_INVALID = 11,
+        MATERIAL_ID_DUPLICATE = 11,
+        INPUT_INVALID = 14,
         INPUT_REFERENCE_MISSING = 12,
         CUT_UNSUPPORTED = 13
     };
@@ -50,6 +51,8 @@ public:
             return "MATERIAL_MAPPING_MISSING";
         case INPUT_HASH_MISMATCH:
             return "INPUT_HASH_MISMATCH";
+        case MATERIAL_ID_DUPLICATE:
+            return "MATERIAL_ID_DUPLICATE";
         case INPUT_INVALID:
             return "INPUT_INVALID";
         case INPUT_REFERENCE_MISSING:

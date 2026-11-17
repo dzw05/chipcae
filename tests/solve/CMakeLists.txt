@@ -17,3 +17,10 @@ if(_solve_backend)
         ${CMAKE_CURRENT_SOURCE_DIR}/test_pipeline.py $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE})
     set_tests_properties(solve_pipeline PROPERTIES TIMEOUT 600)
 endif()
+
+# Preview PR #43 has not landed: keep the cross-tool contract visible in CTest.
+if(_solve_backend)
+    add_test(NAME solve_preview_mesh_digest COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_preview_digest.py)
+    set_tests_properties(solve_preview_mesh_digest PROPERTIES SKIP_RETURN_CODE 77)
+endif()

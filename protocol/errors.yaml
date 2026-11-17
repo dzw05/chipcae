@@ -13,6 +13,7 @@ errors:
   - {code: 8, name: IMPORT_UNSUPPORTED_ELEMENT, retryable: false, message: "Import contains an unsupported element"}
   - {code: 9, name: MATERIAL_MAPPING_MISSING, retryable: false, message: "Material mapping is missing"}
   - {code: 10, name: INPUT_HASH_MISMATCH, retryable: false, message: "Referenced file hash mismatch"}
-  - {code: 11, name: INPUT_INVALID, retryable: false, message: "Invalid run input"}
+  - {code: 11, name: MATERIAL_ID_DUPLICATE, retryable: false, message: "Material library contains duplicate ids"}
   - {code: 12, name: INPUT_REFERENCE_MISSING, retryable: false, message: "Input reference is missing or unreadable"}
   - {code: 13, name: CUT_UNSUPPORTED, retryable: false, message: "cut not supported in O2"}
+  - {code: 14, name: INPUT_INVALID, retryable: false, message: "Invalid run input"}

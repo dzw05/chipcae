@@ -60,7 +60,7 @@ with tempfile.TemporaryDirectory() as tmp:
     (root / 'stack.json').write_text(json.dumps(stack) + '\n')
     run(altered, profile, 10, 'hash mismatch')
     invalid = dict(profile, ranks=2)
-    run(case, invalid, 11, 'profile')
+    run(case, invalid, 14, 'profile')
     cut = copy.deepcopy(stack)
     cut['layers'][0]['kind'] = 'Explicit'
     cut['layers'][0]['regions'] = [{'name': 'die', 'material': 'organic_eq',
@@ -83,43 +83,44 @@ with tempfile.TemporaryDirectory() as tmp:
             invalid['constraints'] = {'fixed': [{'target': 'layer:missing'}]}
         else:
             invalid['solver'] = {'linear': {'rtol': 0}}
-        run(invalid, profile, 11)
+        run(invalid, profile, 14)
     # Every integer converted to int is tested on both signed/unsigned overflow paths.
     for value in (4294967297, 2**63-1, 2**64-1, -2**63, 1.5, '1', True):
         for field in ('ranks', 'gpus', 'threads_per_rank'):
-            run(case, dict(profile, **{field: value}), 11)
+            run(case, dict(profile, **{field: value}), 14)
         for field in ('nx', 'ny', 'levels', 'cell_budget', 'min_elems_per_layer'):
             invalid = copy.deepcopy(case)
             invalid['mesh'][field] = value
-            run(invalid, profile, 11)
+            run(invalid, profile, 14)
         invalid = copy.deepcopy(case)
         invalid['solver'] = {'linear': {'max_iter': value}}
-        run(invalid, profile, 11)
-        run(case, dict(profile, output_interval={'steps': value}), 11)
+        run(invalid, profile, 14)
+        run(case, dict(profile, output_interval={'steps': value}), 14)
     for args in ('bad', [1], {}, [True]):
-        run(case, dict(profile, mpi_args=args), 11)
+        run(case, dict(profile, mpi_args=args), 14)
     for interval in ('bad', {}, {'steps': 1, 'time': 2}, {'steps': 0},
                      {'time': 0}, {'time': '2'}, {'time': True}, {'other': 2}):
-        run(case, dict(profile, output_interval=interval), 11)
+        run(case, dict(profile, output_interval=interval), 14)
     for field in ('stack', 'materials'):
         invalid = copy.deepcopy(case)
         invalid[field]['ref'] = str(root / ('stack.json' if field == 'stack' else 'material.json'))
-        run(invalid, profile, 11, 'relative')
+        run(invalid, profile, 14, 'relative')
     stack_ref = copy.deepcopy(stack)
     stack_ref['external_refs'] = [{'path': str(root / 'material.json'), 'sha256': '0'*64}]
     (root / 'stack.json').write_text(json.dumps(stack_ref))
-    run(case, profile, 11, 'relative')
+    run(case, profile, 14, 'relative')
     (root / 'stack.json').write_text(json.dumps(stack))
-    for bad_material in ({}, dict(library, materials=[]), dict(library, materials=[{}, material]),
-                         dict(library, materials=[material, material])):
+    for bad_material in ({}, dict(library, materials=[]), dict(library, materials=[{}, material])):
         (root / 'material.json').write_text(json.dumps(bad_material))
-        run(case, profile, 11)
+        run(case, profile, 14)
+    (root / 'material.json').write_text(json.dumps(dict(library, materials=[material, material])))
+    run(case, profile, 11, 'duplicate material id')
     for field in ('id', 'schema_version', 'unit_system', 'model', 'density', 'elastic',
                   'thermal_expansion', 'provenance'):
         bad = copy.deepcopy(library)
         del bad['materials'][0][field]
         (root / 'material.json').write_text(json.dumps(bad))
-        run(case, profile, 11)
+        run(case, profile, 14)
     bad = copy.deepcopy(library)
     bad['materials'][0]['id'] = 'missing'
     (root / 'material.json').write_text(json.dumps(bad))
@@ -151,6 +152,6 @@ output: {format: vtkhdf}
             assert result.returncode == 0, result.stderr
     for args in ([], ['--case'], ['--help', 'extra'], ['--wat', 'value'],
                  ['--case', 'a', '--case', 'b', '--out', 'c']):
-        assert subprocess.run([exe, *args], capture_output=True).returncode == 11
+        assert subprocess.run([exe, *args], capture_output=True).returncode == 14
     assert subprocess.run([exe, '--help'], capture_output=True).returncode == 0
 print(f'Input and CLI assertions passed; wall_seconds={time.perf_counter() - start:.6f}')

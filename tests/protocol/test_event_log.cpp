@@ -1,8 +1,8 @@
 #include "chipcae/io/event_log.hpp"
 
 #include <array>
-#include <chrono>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -327,15 +327,93 @@ void regression_tests(const std::filesystem::path& path) {
     }
     std::filesystem::remove(path);
 }
+std::vector<Event> golden_events() {
+    Event state{1, 1700000000000000001LL, State{State::Value::running, 4, 0.5}};
+    Event progress{2, 1700000000000000002LL, Progress{4, 0.5, 0.125, 0.5, "halfway"}};
+    ResidualBatch batch;
+    batch.window = 4;
+    batch.time = 0.5;
+    batch.points.push_back({"fem.solid", "U", 3, 1e-8, 2, 8, 3});
+    batch.dropped_intermediate = 1;
+    Event residual_batch{3, 1700000000000000003LL, batch};
+    Event log{4, 1700000000000000004LL, LogLine{2, 0, "golden log", "INTERNAL", 1}};
+    Event ack{5, 1700000000000000005LL, ControlAck{9, "request-9", 1, 4, "applied", 0.5}};
+    Event exit{6, 1700000000000000006LL, KernelExit{0, 4, "end_reached"}};
+    return {state, progress, residual_batch, log, ack, exit};
+}
+void verify_golden_fixture() {
+    const auto path =
+        std::filesystem::path(CHIPCAE_SOURCE_DIR) / "tests/protocol/fixtures/event_log_v1.bin";
+    auto bytes = load(path);
+    expect(bytes.size() > 16, "golden fixture exists");
+    const auto decoded = EventLogReader(path).read_from(0);
+    const auto expected = golden_events();
+    expect(decoded.size() == expected.size(), "golden fixture valid prefix count");
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        expect(decoded[i].seq == expected[i].seq &&
+                   decoded[i].wall_time_unix_ns == expected[i].wall_time_unix_ns,
+               "golden fixture event metadata");
+        expect(decoded[i].payload.index() == expected[i].payload.index(),
+               "golden fixture payload kind");
+        if (auto value = std::get_if<State>(&expected[i].payload)) {
+            const auto& actual = std::get<State>(decoded[i].payload);
+            expect(actual.value == value->value && actual.window == value->window &&
+                       actual.time == value->time,
+                   "golden state");
+        } else if (auto value = std::get_if<Progress>(&expected[i].payload)) {
+            const auto& actual = std::get<Progress>(decoded[i].payload);
+            expect(actual.window == value->window && actual.time == value->time &&
+                       actual.dt == value->dt && actual.fraction == value->fraction &&
+                       actual.message == value->message,
+                   "golden progress");
+        } else if (auto value = std::get_if<ResidualBatch>(&expected[i].payload)) {
+            expect(std::get<ResidualBatch>(decoded[i].payload) == *value, "golden residual batch");
+        } else if (auto value = std::get_if<LogLine>(&expected[i].payload)) {
+            const auto& actual = std::get<LogLine>(decoded[i].payload);
+            expect(actual.level == value->level && actual.rank == value->rank &&
+                       actual.message == value->message && actual.code == value->code &&
+                       actual.error_code == value->error_code,
+                   "golden log line");
+        } else if (auto value = std::get_if<ControlAck>(&expected[i].payload)) {
+            expect(std::get<ControlAck>(decoded[i].payload) == *value, "golden control ack");
+        } else if (auto value = std::get_if<KernelExit>(&expected[i].payload)) {
+            expect(std::get<KernelExit>(decoded[i].payload) == *value, "golden kernel exit");
+        }
+    }
+    std::ifstream json(std::filesystem::path(CHIPCAE_SOURCE_DIR) /
+                       "tests/protocol/fixtures/event_log_v1.json");
+    const std::string expectation((std::istreambuf_iterator<char>(json)), {});
+    expect(expectation.find("ResidualBatch") != std::string::npos &&
+               expectation.find("ControlAck") != std::string::npos &&
+               expectation.find("KernelExit") != std::string::npos,
+           "golden JSON expectation contains payload types");
+}
 } // namespace
-int main() {
+int main(int argc, char** argv) {
     try {
-        const auto directory =
-            std::filesystem::temp_directory_path() /
-            ("chipcae-event-log-test-" +
-             std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-        std::filesystem::create_directory(directory);
-        const auto path = directory / "events.bin";
+        if (argc == 3 && std::string_view(argv[1]) == "--write-golden") {
+            const std::filesystem::path path(argv[2]);
+            std::filesystem::create_directories(path.parent_path());
+            std::filesystem::remove(path);
+            {
+                EventLogWriter writer(path);
+                for (const auto& event : golden_events())
+                    writer.append(event);
+                writer.append(Event{7, 1700000000000000007LL, KernelExit{0, 5, "discarded_crc"}});
+            }
+            auto bytes = load(path);
+            // The last complete record has a deliberately invalid CRC. The trailing partial magic
+            // independently records the torn-tail framing expected of the v1 reader.
+            bytes.at(bytes.size() - 8) ^= 1;
+            bytes.push_back(static_cast<unsigned char>('C'));
+            bytes.push_back(static_cast<unsigned char>('A'));
+            bytes.push_back(static_cast<unsigned char>('E'));
+            save(path, bytes);
+            return 0;
+        }
+        verify_golden_fixture();
+        const auto path = std::filesystem::temp_directory_path() / "chipcae-event-log-test.bin";
+        std::filesystem::remove(path);
         {
             EventLogWriter writer(path);
             for (std::uint64_t i = 1; i <= 1000; ++i)
@@ -363,22 +441,6 @@ int main() {
         expect(reader.read_from(1001).size() == 1, "reopen append");
         std::filesystem::remove(path);
         regression_tests(path);
-        {
-            EventLogWriter writer(path);
-            writer.append({1, 123, ControlAck{7, "request", 1, 2, "STOP applied", 0.25}});
-            writer.append({2, 124, KernelExit{0, 2, "user_stop"}});
-        }
-        const auto control = EventLogReader(path).read_from(1);
-        expect(control.size() == 2, "control events round trip");
-        const auto ack = std::get<ControlAck>(control[0].payload);
-        expect(ack.cmd_seq == 7 && ack.client_request_id == "request" && ack.status == 1 &&
-                   ack.effective_step == 2 && ack.message == "STOP applied" &&
-                   ack.effective_time == 0.25,
-               "control ack mismatch");
-        const auto exit = std::get<KernelExit>(control[1].payload);
-        expect(exit.exit_code == 0 && exit.last_completed_window == 2 && exit.reason == "user_stop",
-               "exit mismatch");
-        std::filesystem::remove_all(directory);
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;

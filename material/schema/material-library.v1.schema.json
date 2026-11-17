@@ -1,25 +1,17 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "chipcae://schemas/material-library/v1",
+  "title": "chipcae material library/1",
   "type": "object",
-  "required": [
-    "schema",
-    "materials"
-  ],
-  "additionalProperties": false,
-  "patternProperties": {
-    "^x-": {}
-  },
+  "required": ["schema", "materials"],
   "properties": {
-    "schema": {
-      "const": "chipcae.material_library/1"
-    },
+    "schema": {"const": "chipcae.material_library/1"},
     "materials": {
       "type": "array",
       "minItems": 1,
-      "items": {
-        "$ref": "chipcae://schemas/material/v1"
-      }
+      "items": {"$ref": "chipcae://schemas/material/v1"}
     }
-  }
+  },
+  "patternProperties": {"^x-": {}},
+  "additionalProperties": false
 }

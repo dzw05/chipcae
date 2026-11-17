@@ -12,6 +12,7 @@
 #include <limits>
 #include <memory>
 #include <mfem.hpp>
+#include <numeric>
 #include <petscksp.h>
 #include <set>
 
@@ -335,6 +336,47 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
     state(io::State::Value::starting);
     try {
         auto arrays = build_mesh(inputs);
+        io::ResultsWriter writer(output, inputs.stack_path, inputs.fields);
+        io::ResultsWriter::MeshSummary summary{};
+        summary.nx0 = arrays.grid_report.level_axes.front()[0].size() - 1;
+        summary.ny0 = arrays.grid_report.level_axes.front()[1].size() - 1;
+        summary.L = arrays.grid_report.levels;
+        summary.nz = arrays.axes[2].size() - 1;
+        const auto nx = arrays.axes[0].size() - 1, ny = arrays.axes[1].size() - 1;
+        summary.padded_cells = (nx * ny - (nx - arrays.grid_report.padding[0]) *
+                                              (ny - arrays.grid_report.padding[1])) *
+                               summary.nz;
+        // Each rank has the same global background arrays; hash in canonical GID order.
+        std::string raw;
+        auto append = [&](std::uint64_t bits) {
+            for (int i = 0; i < 8; ++i)
+                raw.push_back(static_cast<char>((bits >> (8 * i)) & 255));
+        };
+        for (auto value : {summary.nx0,
+                           summary.ny0,
+                           summary.L,
+                           summary.nz,
+                           static_cast<std::int64_t>(arrays.node_gid.size()),
+                           static_cast<std::int64_t>(arrays.elem_gid.size())})
+            append(static_cast<std::uint64_t>(value));
+        std::vector<std::size_t> nodes(arrays.node_gid.size()), elements(arrays.elem_gid.size());
+        std::iota(nodes.begin(), nodes.end(), 0);
+        std::iota(elements.begin(), elements.end(), 0);
+        std::sort(nodes.begin(), nodes.end(), [&](auto a, auto b) {
+            return arrays.node_gid[a] < arrays.node_gid[b];
+        });
+        std::sort(elements.begin(), elements.end(), [&](auto a, auto b) {
+            return arrays.elem_gid[a] < arrays.elem_gid[b];
+        });
+        for (auto node : nodes)
+            for (int c = 0; c < 3; ++c)
+                append(std::bit_cast<std::uint64_t>(arrays.vertices[3 * node + c]));
+        for (auto element : elements)
+            for (int c = 0; c < 8; ++c)
+                append(static_cast<std::uint64_t>(arrays.node_gid[arrays.hex[8 * element + c]]));
+        summary.mesh_sha256 = mesh::sha256(raw);
+        writer.set_mesh(std::move(summary));
+
         // Demo-scale redundant LU: every rank assembles the same global Q2 problem;
         // output ownership still follows the unsplit Morton column partition.
         Mesh mesh(arrays.vertices.data(),
@@ -616,38 +658,11 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                                  [&](const auto& layer) { return layer.name == record.layer; });
                 part.layer_id.push_back(static_cast<int>(it - inputs.stack.layers.begin()));
             }
-        io::ResultsWriter writer(output, inputs.stack_path, inputs.fields);
         writer.write_step(0, 0, result);
         writer.add_summary("warpage_pv", hi - lo, "m", 0);
         writer.add_summary("T_max", tmax, "K", 0);
         writer.add_summary("U_mag_max", umax, "m", 0);
         writer.finalize();
-        if (rank == 0) {
-            auto manifest = Json::parse(file_bytes(output / "manifest.json"));
-            Json summary;
-            summary["nx0"] = arrays.grid_report.level_axes.front()[0].size() - 1;
-            summary["ny0"] = arrays.grid_report.level_axes.front()[1].size() - 1;
-            summary["L"] = arrays.grid_report.levels;
-            auto nx = arrays.axes[0].size() - 1, ny = arrays.axes[1].size() - 1;
-            summary["padded_cells"] = (nx * ny - (nx - arrays.grid_report.padding[0]) *
-                                                     (ny - arrays.grid_report.padding[1])) *
-                                      (arrays.axes[2].size() - 1);
-            summary["nz"] = arrays.axes[2].size() - 1;
-            std::string raw;
-            auto append = [&](std::uint64_t bits) {
-                for (int i = 0; i < 8; ++i)
-                    raw.push_back(static_cast<char>((bits >> (8 * i)) & 255));
-            };
-            for (double value : arrays.vertices)
-                append(std::bit_cast<std::uint64_t>(value));
-            for (auto value : arrays.hex)
-                append(static_cast<std::uint64_t>(value));
-            summary["mesh_sha256"] = mesh::sha256(raw);
-            manifest["mesh"] = summary;
-            std::ofstream out(output / "manifest.json");
-            out << manifest;
-            out.close();
-        }
         emit(io::OutputAvailable{window,
                                  0,
                                  "out/step-0.vtkhdf",

@@ -47,3 +47,20 @@ the three-layer prototype reference, fixed-temperature/convection/source
 conduction, np=1/2 consistency, field selection and STOP, using independent
 h5py/numpy readback. Select a Python interpreter containing these packages via
 `Python3_EXECUTABLE`. Existing O1 tests provide additional VTK reader checks.
+
+The kernel publishes `mesh: {nx0, ny0, L, padded_cells, nz, mesh_sha256}` in
+`manifest.json` immediately after mesh generation and before solving. STOP
+retains this manifest with an empty steps array. The SHA-256 covers background
+hexes only: int64 LE `[nx0, ny0, L, nz, node_count, element_count]`, then float64
+LE xyz in global node order, then int64 LE global connectivity in elem_gid order.
+`case.mesh` nx/ny/max_ratio/levels/cell_budget feed GridOptions; levels=0 selects
+levels automatically using the profile ranks. The pipeline tests np=1/2 equality
+and reconstructs the digest independently from VTKHDF data.
+
+Preview digest comparison (`solve_preview_mesh_digest`) is explicitly skipped
+pending **PR #43**, which has not merged into main. The PR dependency is preview
+exposing its digest for the same stack and grid parameters; enable the comparison
+when that API lands.
+
+After merging main, protocol code 11 remains MATERIAL_ID_DUPLICATE. O2 uses
+INPUT_REFERENCE_MISSING=12, CUT_UNSUPPORTED=13, INPUT_INVALID=14.
