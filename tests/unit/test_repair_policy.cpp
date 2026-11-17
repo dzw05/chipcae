@@ -69,6 +69,23 @@ void accept_file_roundtrip() {
     }
     require(accepted_ids(*list) == ids, "roundtrip: ordered extracted ids");
 }
+void accept_file_omitted_note() {
+    AcceptFixture f;
+    std::string error;
+    const auto list = read_accept_file(
+        f.write(
+            R"({"accept":[{"defect_id":"first","note":"one"},{"defect_id":"second"},{"defect_id":"third","note":"three"}]})"),
+        &error);
+    require(list.has_value(), "omitted_note: valid file must load");
+    require(list->entries.size() == 3, "omitted_note: three entries");
+    const std::vector<std::string> ids{"first", "second", "third"};
+    const std::vector<std::string> notes{"one", "", "three"};
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+        require(list->entries[i].defect_id == ids[i], "omitted_note: ordered exact id");
+        require(list->entries[i].note == notes[i], "omitted_note: ordered exact note");
+    }
+    require(accepted_ids(*list) == ids, "omitted_note: ordered extracted ids");
+}
 void accept_file_covers_b() {
     AcceptFixture f;
     std::vector<Defect> defects;
@@ -183,6 +200,7 @@ bool run_accept_tests() {
         }
     };
     run("accept_file_roundtrip", accept_file_roundtrip);
+    run("accept_file_omitted_note", accept_file_omitted_note);
     run("accept_file_covers_b", accept_file_covers_b);
     run("accept_file_unknown_id", accept_file_unknown_id);
     run("accept_file_default_path", accept_file_default_path);
