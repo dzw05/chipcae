@@ -411,6 +411,83 @@ void via_ipc_initialization() {
                  1e-6);
     }
 }
+void via_fraction_invariants() {
+    auto j = board();
+    OdbLayer drill;
+    drill.name = "DRILL";
+    drill.type = "drill";
+    drill.start_name = "TOP";
+    drill.end_name = "BOTTOM";
+    j.layers.push_back(drill);
+    j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
+    auto& f = j.features["DRILL"];
+    f.symbols = {{"r600"}};
+    for (double separation : {0.0, 0.2, 0.6}) {
+        const std::array<OdbPad, 3> pads{
+            {{{2, 3}, 0, true}, {{2 + separation, 3}, 0, true}, {{2, 3}, 0, true}}};
+        std::array<int, 3> order{0, 1, 2};
+        std::vector<ViaFraction> reference;
+        do {
+            f.pads.clear();
+            for (int index : order)
+                f.pads.push_back(pads[index]);
+            const auto m = mapped(j);
+            auto cells = m.via_fractions;
+            auto key = [](const ViaFraction& c) { return std::tie(c.layer, c.lower, c.upper); };
+            std::sort(cells.begin(), cells.end(), [&](const auto& a, const auto& b) {
+                return key(a) < key(b);
+            });
+            require(!cells.empty(), "fraction cells present");
+            for (std::size_t i = 0; i < cells.size(); ++i) {
+                const auto& c = cells[i];
+                for (std::size_t axis = 0; axis < 2; ++axis)
+                    require(std::isfinite(c.lower[axis]) && std::isfinite(c.upper[axis]) &&
+                                c.lower[axis] < c.upper[axis],
+                            "finite strict fraction bounds");
+                require(std::isfinite(c.fraction) && c.fraction > 0 && c.fraction <= 1,
+                        "finite fraction coverage");
+                require(i == 0 || key(cells[i - 1]) != key(c), "no duplicate cells");
+            }
+            if (reference.empty())
+                reference = cells;
+            require(cells.size() == reference.size(), "permutation cell count");
+            for (std::size_t i = 0; i < cells.size(); ++i) {
+                require(key(cells[i]) == key(reference[i]) &&
+                            cells[i].via_count == reference[i].via_count,
+                        "permutation normalized bounds and via count");
+                near(cells[i].fraction, reference[i].fraction, 1e-12);
+            }
+        } while (std::next_permutation(order.begin(), order.end()));
+    }
+}
+void mixed_tools() {
+    auto j = board();
+    OdbLayer drill;
+    drill.name = "DRILL";
+    drill.type = "drill";
+    drill.start_name = "TOP";
+    drill.end_name = "BOTTOM";
+    j.layers.push_back(drill);
+    j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
+    auto& f = j.features["DRILL"];
+    f.symbols = {{"r600"}};
+    f.pads = {{{2, 3}, 0, true, 0, false, 7}, {{6, 7}, 0, true, 0, false, 9}};
+    j.tools["DRILL"] = {{7, "plated", 0.6}, {9, "non-plated", 0.6}};
+    for (int order = 0; order < 2; ++order) {
+        const auto m = mapped(j);
+        require(m.vias.size() == 1 &&
+                    m.vias.front().position == std::array<int64_t, 2>{2000, 3000} &&
+                    m.report.unsupported.empty(),
+                "exact tool identity classifies equal diameter holes");
+        near(m.vias.front().inner_radius_dbu, 275);
+        std::reverse(j.tools["DRILL"].begin(), j.tools["DRILL"].end());
+    }
+    f.pads.front().tool_num = -1;
+    const auto m = mapped(j);
+    require(m.vias.empty() && m.report.unsupported.size() == 1 &&
+                m.report.unsupported.front().element == "ViaToolAmbiguous:DRILL",
+            "unlinked ambiguous hole is reported instead of guessed");
+}
 void non_plated() {
     auto j = board();
     OdbLayer drill;
@@ -1054,6 +1131,8 @@ int main() {
         {"odbpp_map_via", via},
         {"odbpp_map_via_ipc_initialization", via_ipc_initialization},
         {"odbpp_map_non_plated", non_plated},
+        {"odbpp_map_mixed_tools", mixed_tools},
+        {"odbpp_map_via_fraction_invariants", via_fraction_invariants},
         {"odbpp_map_duplicate_geometry", duplicate_geometry},
         {"odbpp_map_duplicate_layer", duplicate_layer},
         {"odbpp_map_override_collision", collision},

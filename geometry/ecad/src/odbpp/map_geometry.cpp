@@ -214,12 +214,20 @@ struct Mapper {
             auto s = symbol(f, p.sym);
             const OdbTool* tool = nullptr;
             auto tools = job.tools.find(layer.name);
+            bool ambiguous = false;
             if (tools != job.tools.end())
                 for (const auto& t : tools->second)
-                    if (std::abs(t.finish_size * scale - s.w) < 1) {
+                    if (p.tool_num >= 0 ? t.num == p.tool_num
+                                        : std::abs(t.finish_size * scale - s.w) < 1) {
+                        ambiguous = tool != nullptr;
+                        if (ambiguous)
+                            break;
                         tool = &t;
-                        break;
                     }
+            if (ambiguous || (p.tool_num >= 0 && !tool)) {
+                unsupported("ViaToolAmbiguous:" + layer.name);
+                continue;
+            }
             if (s.kind != "round" || (tool && fold_ascii(tool->type) == "slot")) {
                 unsupported("Slot:" + layer.name);
                 continue;
@@ -300,7 +308,8 @@ struct Mapper {
             if (found)
                 model.via_fractions.push_back(cell);
         }
-        rasterize_vias(model, model.via_fractions);
+        if (!rasterize_vias(model, model.via_fractions))
+            throw std::runtime_error("invalid via fraction bounds");
     }
 };
 } // namespace
