@@ -39,6 +39,9 @@ struct HexMeshArrays {
     std::vector<InterfaceReport> preparation_report;
     struct GridReport {
         Local levels = 1;
+        int rule = 0; // 1/2/3 for auto selection; 0 for explicit levels.
+        std::size_t N_L = 0;
+        bool auto_selected = false;
         std::array<std::size_t, 2> padding{};
         std::vector<Real> max_aspect_ratio; // Coarsest to finest, z unchanged.
         std::vector<std::array<std::vector<Real>, 2>> level_axes;

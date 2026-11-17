@@ -13,6 +13,61 @@
 
 int main() {
     using namespace chipcae::mesh;
+    auto require = [](bool ok) {
+        if (!ok)
+            throw std::runtime_error("level selection assertion failed");
+    };
+    struct Case {
+        std::vector<LevelCandidate> candidates;
+        std::size_t cap;
+        int rule, L;
+        std::size_t C, N;
+    };
+    const std::vector<Case> cases{
+        {{{3, 8, 8, 0, true}, {1, 8, 8, 0, false}, {2, 8, 8, 0, true}}, 50000, 1, 2, 64, 11271},
+        {{{1, 12, 12, 0, true}, {3, 8, 8, 0, true}, {2, 10, 10, 0, true}}, 1, 2, 3, 64, 11271},
+        {{{0, 8, 8, 0, true}, {1, 4, 4, 0, true}, {2, 8, 8, 0, false}}, 50000, 3, 0, 64, 11271}};
+    for (const auto& test : cases) {
+        auto c = select_levels(test.candidates, 6, 3, test.cap);
+        require(c.rule == test.rule && c.L == test.L && c.C_L == test.C && c.N_L == test.N);
+        require(!c.warnings.empty());
+        if (c.rule == 1)
+            require(c.warnings[0].find("64*np") != std::string::npos);
+        if (c.rule == 2)
+            for (auto token : {"L=3", "C_L=64", "N_L=11271", "n_cap=1"})
+                require(c.warnings[0].find(token) != std::string::npos);
+        if (c.rule == 3)
+            require(c.warnings[0].find("direct solve") != std::string::npos);
+    }
+    for (int n : {8, 16, 32}) {
+        std::vector<LevelCandidate> candidates;
+        for (int L = 0; L <= 3; ++L)
+            candidates.push_back({L, std::size_t(n >> L), std::size_t(n >> L), 0, true});
+        auto c = select_levels(candidates, 3 * n / 8, 3);
+        require(c.L == (n == 8 ? 0 : n == 16 ? 1 : 2));
+        require(candidates[c.L].nx0 == 8 && candidates[c.L].ny0 == 8);
+        require(c.N_L == std::size_t(n == 8 ? 6069 : n == 16 ? 11271 : 21675));
+        require(select_levels(std::span(&candidates[c.L], 1), 3 * n / 8, 3, 50000, 1).N_L ==
+                c.N_L / 3);
+    }
+    for (int parameter = 0; parameter < 3; ++parameter) {
+        bool threw = false;
+        try {
+            (void)select_levels({},
+                                1,
+                                parameter == 0 ? 0 : 1,
+                                50000,
+                                parameter == 1 ? -1 : 3,
+                                parameter == 2 ? 0 : 2);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        require(threw);
+    }
+    const std::vector<LevelCandidate> overflow{
+        {1, std::numeric_limits<std::size_t>::max(), 2, 0, true}, {2, 8, 8, 0, true}};
+    require(select_levels(overflow, 6, 3).L == 2);
+    require(select_levels(overflow, std::numeric_limits<std::size_t>::max(), 3).rule == 3);
     constexpr auto max_coordinate = std::numeric_limits<std::uint32_t>::max();
     if (morton2d(0, 0) != morton(0, 0) ||
         morton2d(max_coordinate, max_coordinate) != morton(max_coordinate, max_coordinate)) {
