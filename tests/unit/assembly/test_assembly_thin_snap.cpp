@@ -40,5 +40,21 @@ int main() {
                 }
                 near(z, .001);
             }
+        auto displaced = part("shifted", .001 + 5e-6, .002);
+        auto d = merge(base(), {displaced});
+        check(d.defects.size() == 1 && d.defects[0].reason == DefectReason::THIN_LAYER_MERGED &&
+                  d.defects[0].defect_id == "shifted/thin#0",
+              "nonnumerical boundary displacement preserves source provenance");
+        auto spanning = part("spanning", 0, .002);
+        auto sliver = part("sliver", .0005, .000505);
+        auto mixed = merge(base(), {spanning, sliver});
+        bool spanning_thin = false;
+        for (const auto& defect : mixed.defects)
+            spanning_thin = spanning_thin || (defect.reason == DefectReason::THIN_LAYER_MERGED &&
+                                              defect.defect_id == "spanning/thin#0");
+        check(spanning_thin, "thin split retains each source's provenance");
+        auto remote = merge(base(), {part("remote", .002, .002005)}, .001);
+        check(remote.stack.layers.size() == 1 && remote.stack.layers[0].regions.empty(),
+              "eliminated remote source cannot extend stack with phantom void");
     });
 }

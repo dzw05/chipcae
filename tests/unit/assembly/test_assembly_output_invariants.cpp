@@ -27,5 +27,16 @@ int main() {
         }
         for (auto& r : rs)
             check(r.footprint.polygon.empty(), "box rectangles");
+        auto collision_base = base();
+        auto collision_layer = collision_base.layers[0];
+        collision_layer.name = "Core#0";
+        collision_base.layers.push_back(collision_layer);
+        auto collision = merge(collision_base, {part("split", .0005, .001)}, .002);
+        check(collision.stack.layers.back().name == "Core#0", "unchanged names reserved");
+        auto below = merge(base(), {part("below", -.001, 0)}, .002);
+        check(below.stack.layers.front().material.empty() &&
+                  below.stack.layers.front().kind == "Explicit" &&
+                  below.stack.layers.front().regions[0].body == "below",
+              "new layer below stack uses explicit void semantics");
     });
 }
