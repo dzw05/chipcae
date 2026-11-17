@@ -419,30 +419,30 @@ void overrides() {
     for (std::size_t i = 0; i < records.size(); ++i) {
         const auto& r = records[i];
         require(r.layer == m.layers[i].name, "record layer");
-        near(r.thickness_m, o.at(r.layer));
+        near(r.thickness_m, i == 3 ? 200e-6 : o.at(r.layer));
         near(m.layers[i].thickness_m, r.thickness_m);
-        require(r.source == "override", "override source and override precedence");
-        require(r.odb_value_m.has_value() == (i == 3), "conflict provenance only");
+        require(r.source == (i == 3 ? "odb" : "override"), "ODB-first thickness source");
+        require(!r.odb_value_m, "ODB-first mapping emits no conflict provenance");
     }
-    require(records[3].odb_value_m.has_value() &&
-                std::abs(*records[3].odb_value_m - 200e-6) <= 1e-12,
-            "original ODB thickness");
 }
 void override_provenance() {
     auto j = board();
-    ThicknessOverrides o{{"TOP", 70e-6}};
-    std::vector<ThicknessRecord> records;
-    const auto m = mapped(j, {&o, &records});
-    near(m.layers.front().thickness_m, 70e-6);
-    require(records.front().source == "override" && records.front().odb_value_m.has_value() &&
-                std::abs(*records.front().odb_value_m - 35e-6) <= 1e-12,
-            "deferred filename provenance and original ODB value");
-    // The specified relative conflict threshold preserves ODB provenance for near equality.
-    o["TOP"] = 35e-6 * (1 + 0.5e-9);
-    records.clear();
-    mapped(j, {&o, &records});
-    require(records.front().source == "odb" && !records.front().odb_value_m,
-            "subthreshold override difference is not a conflict");
+    // Positive ODB thickness wins regardless of override difference or validity.
+    for (double value : {70e-6,
+                         35e-6 * (1 + 0.5e-9),
+                         35e-6,
+                         0.0,
+                         -1.0,
+                         std::numeric_limits<double>::infinity(),
+                         std::numeric_limits<double>::quiet_NaN()}) {
+        ThicknessOverrides o{{"TOP", value}};
+        std::vector<ThicknessRecord> records;
+        const auto m = mapped(j, {&o, &records});
+        near(m.layers.front().thickness_m, 35e-6);
+        near(records.front().thickness_m, 35e-6);
+        require(records.front().source == "odb" && !records.front().odb_value_m,
+                "positive ODB ignores override and retains ODB provenance");
+    }
 }
 
 void weight() {
@@ -1297,11 +1297,13 @@ void boundaries() {
     ThicknessOverrides o = {{"top", 70e-6}};
     std::vector<ThicknessRecord> records;
     const auto m = mapped(j, {&o, &records});
-    near(m.layers.front().thickness_m, 70e-6);
-    near(records.front().thickness_m, 70e-6);
-    require(records.front().source == "override" && records.front().odb_value_m == 35e-6,
-            "conflicting override applies and records original value");
+    near(m.layers.front().thickness_m, 35e-6);
+    near(records.front().thickness_m, 35e-6);
+    require(records.front().source == "odb" && !records.front().odb_value_m,
+            "positive ODB wins even with case-insensitive override match");
     o["top"] = -1;
+    near(mapped(j, {&o, nullptr}).layers.front().thickness_m, 35e-6);
+    j.attrs.layer["TOP"][".layer_dielectric"] = "0";
     rejected(j, {"top"}, {&o, nullptr});
 }
 void degenerate_copper() {

@@ -14,7 +14,7 @@ struct ThicknessRecord {
     double thickness_m = 0;
     // "odb", "override", or "missing"; E-ODB-3 adds filename provenance.
     std::string source;
-    // Original positive ODB value when a conflicting override was applied.
+    // Reserved for caller provenance; mapping leaves this unset (positive ODB wins).
     std::optional<double> odb_value_m;
 };
 struct MapOptions {
