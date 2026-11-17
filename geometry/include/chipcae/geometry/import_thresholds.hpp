@@ -53,6 +53,11 @@ struct Defect {
     std::string dimension;
     Real size;
     std::string suggestion;
+    std::string defect_id;
+    std::string kind;
+    std::string action;
+    std::string rejection_reason;
+    bool material_ambiguous = false;
 };
 
 struct ImportAssessment {
