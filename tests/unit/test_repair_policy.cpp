@@ -113,6 +113,9 @@ void malformed(const std::string& contents) {
     const auto list = read_accept_file(f.write(contents), &error);
     require(!list, "malformed: must reject");
     require(error.starts_with("IMPORT_REJECTED: "), "malformed: required error prefix");
+    if (contents.empty())
+        require(error == "IMPORT_REJECTED: accept file is empty",
+                "empty file: explicit rejection required");
 }
 void accept_file_default_path() {
     AcceptFixture f;

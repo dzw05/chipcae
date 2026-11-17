@@ -31,6 +31,11 @@ std::optional<AcceptList> read_accept_file(const std::filesystem::path& path,
         std::ifstream input(path, std::ios::binary);
         if (!input)
             return reject("cannot open accept file");
+        if (input.peek() == std::ifstream::traits_type::eof()) {
+            if (input.bad())
+                return reject("cannot read accept file");
+            return reject("accept file is empty");
+        }
         const auto root = jsoncons::json::parse(input);
         if (input.bad())
             return reject("cannot read accept file");
