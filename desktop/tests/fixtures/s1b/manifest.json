@@ -1,0 +1,8 @@
+{
+"schema_version":"chipcae.results/1.0","units":"SI","stackup":"stackup.json",
+"steps":[{"n":0,"time":0,"file":"out/step-0.vtkhdf"}],
+"partitions":{"per_step":[2],"solver_fixed_per_run":true},
+"fields":[{"name":"T","location":"point","components":1,"unit":"K","dtype":"float64"},{"name":"U","location":"point","components":3,"unit":"m","dtype":"float64"},{"name":"layer_id","location":"cell","components":1,"unit":"1","dtype":"int32"},{"name":"material_id","location":"cell","components":1,"unit":"1","dtype":"int32"},{"name":"cell_kind","location":"cell","components":1,"unit":"1","dtype":"int32"},{"name":"elem_gid","location":"cell","components":1,"unit":"1","dtype":"int64"},{"name":"sigma_vm","location":"cell","components":1,"unit":"Pa","dtype":"float64","reserved":true}],
+"blocks":[{"index":0,"name":"hex","kind":"UnstructuredGrid"},{"index":1,"name":"cut","kind":"UnstructuredGrid"},{"index":2,"name":"eb_surface","kind":"PolyData"},{"index":3,"name":"particles","kind":"PolyData"}],
+"summary":[{"name":"warpage_pv","value":0.0042695327696795939,"unit":"m","step":0,"method":"top surface (z=max) Q2 nodes; least-squares plane w=a+bx+cy removed; PV=max-min residual"},{"name":"T_max","value":193.15000000000001,"unit":"K","step":0},{"name":"U_mag_max","value":0.0044508214553564216,"unit":"m","step":0}]
+}
