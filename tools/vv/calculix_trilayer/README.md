@@ -1,7 +1,7 @@
 # WP-2 trilayer CalculiX reference
 
 Independent open-source reference for the 1 m × 1 m trilayer warpage case.
-Results in `REFERENCE.json` (`schema_version` 1) are **REFERENCE values** (not measured data, not
+Results in `REFERENCE.json` are **REFERENCE values** (not measured data, not
 an analytical solution). They may be compared with the early MFEM+MUMPS
 prototype 参考值（原型计算值） `W_bfp = 4.269532769e-3` m. Validation applies only the broad `rel_delta < 0.5` sanity bound; the V&V
 specialist chooses the comparison acceptance criterion later.
@@ -36,28 +36,18 @@ within 1e-12 H, including C3D20 corner and midside nodes. Surface `W_bfp` is
 computed with `tools.vv.warpage_qoi.interp_grid`
 and `qoi_surface` on an 81×81 grid in millimetres, then converted back to metres.
 
-The v1 field contract (required keys, types, and which fields are stable) is in `reference.schema.json` (JSON Schema 2020-12).
+Structural validation is inline in `tools/vv/test_trilayer_calculix_ref.py`;
+`REFERENCE.json` is its only required artifact. It checks required fields,
+coarse/fine mesh names, fine selection, and equality with the fine mesh value.
+Optional `provenance` metadata cannot replace required top-level environment strings.
 
-`provenance` is optional metadata and permits unknown keys within that object;
-unknown top-level keys are rejected. Ignoring unknown provenance keys is a
-consumer convention; the schema permits those keys but cannot require consumers
-to ignore them.
-
-The v1 contract is specific to this WP-2 artifact: it requires exactly one coarse
-and one fine mesh and selects fine. Additional mesh names or a different selected
-resolution require a new contract version.
-Mesh array order is immaterial. Equality of top-level `W_bfp_m` and the selected
-mesh value is a validator-only producer check, outside the published schema
-contract. Raw schema consumers do not get this guarantee; use
-`validate_reference` from `tools/vv/test_trilayer_calculix_ref.py` to check it.
-The test validator normalizes a copy of the schema with a
-`contains` constraint binding the selected name and top-level value via `const`,
-since JSON Schema cannot directly compare two instance fields. Validation checks
-this relationship and the broad `rel_delta < 0.5` sanity bound. Required `label`
-records the reference status. The brief requires top-level `host` and
-`calculix_version` strings. Optional `provenance` accepts arbitrary keys and
-values and does not replace those required fields. Reports use the required
-top-level version banner and preserve the brief's exact single-line format.
+The ASCII FRD layout used by CalculiX 2.23 is `(1X,I2,I10,3E12.5)`:
+columns 2–3 contain the record marker, 4–13 the node ID, and 14–49
+three 12-character real fields. Adjacent negative fields need no separating
+space, so whitespace splitting is unsuitable. This same layout applies to
+`2C` coordinates and `DISP` values. Run the parser regression checks with
+`python tools/vv/calculix_trilayer/check_frd_parser.py`; they cover both blocks,
+adjacent negative fields, exponent signs, node IDs, and block termination.
 
 Recorded W_bfp: coarse 0.004271023422273522 m; fine (selected)
 0.004274306997289974 m. Reproducible input decks are generated in `work/`

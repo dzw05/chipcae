@@ -19,7 +19,88 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 DIR = ROOT / "tools/vv/calculix_trilayer"
 REF = DIR / "REFERENCE.json"
-CONTRACT = DIR / "reference.schema.json"
+# Inline checks keep REFERENCE.json as the only required artifact.
+CONTRACT = json.loads(r'''
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WP-2 trilayer CalculiX REFERENCE artifact",
+  "description": "WP-2 structural checks with exactly coarse and fine meshes and fine selection. Equality of top-level W_bfp_m and the selected mesh value is a validator-only producer check, checked by the validator below. Raw schema validation does not enforce equality between instance fields.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "label",
+    "W_bfp_m",
+    "element_type",
+    "host",
+    "calculix_version",
+    "geometry",
+    "meshes",
+    "selected_mesh",
+    "prototype_W_bfp_m",
+    "abs_delta_m",
+    "rel_delta"
+  ],
+  "properties": {
+    "kind": { "const": "REFERENCE", "type": "string" },
+    "label": { "type": "string", "minLength": 1 },
+    "W_bfp_m": { "type": "number" },
+    "element_type": { "type": "string", "const": "C3D20" },
+    "host": { "type": "string", "minLength": 1 },
+    "calculix_version": { "type": "string", "minLength": 1 },
+    "geometry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["L_m", "thicknesses_m", "E_Pa", "nu", "alpha_1_per_K", "dT_K"],
+      "properties": {
+        "L_m": { "type": "number" },
+        "thicknesses_m": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } },
+        "E_Pa": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } },
+        "nu": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } },
+        "alpha_1_per_K": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } },
+        "dT_K": { "type": "number" }
+      }
+    },
+    "meshes": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "allOf": [
+        {
+          "contains": { "properties": { "name": { "const": "coarse" } }, "required": ["name"] },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": { "properties": { "name": { "const": "fine" } }, "required": ["name"] },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "n_elem_xyz", "n_elem_z_per_layer", "W_bfp_m"],
+        "properties": {
+          "name": { "type": "string", "enum": ["coarse", "fine"] },
+          "n_elem_xyz": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "integer" } },
+          "n_elem_z_per_layer": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "integer" } },
+          "W_bfp_m": { "type": "number" }
+        }
+      }
+    },
+    "selected_mesh": { "type": "string", "const": "fine" },
+    "prototype_W_bfp_m": { "type": "number" },
+    "abs_delta_m": { "type": "number" },
+    "rel_delta": { "type": "number" },
+    "provenance": {
+      "type": "object",
+      "description": "Optional, non-contractual generator metadata; arbitrary keys and values are permitted.",
+      "additionalProperties": true
+    }
+  }
+}
+''')
 PROTOTYPE = 4.269532769e-3
 
 
@@ -51,7 +132,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         import jsonschema
 
         data = json.loads(REF.read_text(encoding="utf-8"))
-        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        contract = copy.deepcopy(CONTRACT)
         jsonschema.Draft202012Validator.check_schema(contract)
         validate_reference(data, contract)
         reversed_meshes = copy.deepcopy(data)
@@ -99,7 +180,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         selected = next(m for m in invalid["meshes"]
                         if m["name"] == invalid["selected_mesh"])
         selected["W_bfp_m"] *= 1.01
-        # Equality is outside the published structural schema contract.
+        # Structural checks alone cannot compare instance fields.
         jsonschema.Draft202012Validator(contract).validate(invalid)
         # Full producer validation must still reject the mismatched value.
         variants.append(invalid)
@@ -111,15 +192,13 @@ class TrilayerCalculixRefTest(unittest.TestCase):
     def test_reference_schema_and_report_delta(self):
         with REF.open(encoding="utf-8") as handle:
             data = json.load(handle)
-        with CONTRACT.open(encoding="utf-8") as handle:
-            contract = json.load(handle)
+        contract = copy.deepcopy(CONTRACT)
         self.assertEqual(contract.get("$schema"), "https://json-schema.org/draft/2020-12/schema")
         self.assertIn("required", contract)
         self.assertIn("properties", contract)
         for key in contract["required"]:
             self.assertIn(key, data, f"missing required field {key}")
         validate_reference(data, contract)
-        self.assertEqual(data["schema_version"], "1")
         self.assertEqual(data["kind"], "REFERENCE")
         self.assertEqual(data["element_type"], "C3D20")
         self.assertEqual(data["selected_mesh"], "fine")

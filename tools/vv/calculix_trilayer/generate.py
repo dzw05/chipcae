@@ -41,7 +41,7 @@ def node_id(i, j, k, nx, ny, nz):
 
     There are (2*nx+1, 2*ny+1, 2*nz+1) nodes.
     """
-    mx, my, mz = 2 * nx + 1, 2 * ny + 1, 2 * nz + 1
+    mx, my = 2 * nx + 1, 2 * ny + 1
     return 1 + i + mx * (j + my * k)
 
 
@@ -73,7 +73,7 @@ def build_mesh(nx, ny):
     eid = 1
     z_elem = 0
     for li, nze in enumerate(Z_PER_LAYER):
-        for ke in range(nze):
+        for _ in range(nze):
             k0 = 2 * z_elem  # corner node k index
             for je in range(ny):
                 for ie in range(nx):
@@ -172,7 +172,7 @@ def write_inp(path: Path, name: str, nx, ny):
 
 
 def parse_frd(path: Path):
-    """Parse nodal displacements from a CalculiX ASCII .frd file (100/1xx records)."""
+    """Read ASCII FRD (1X,I2,I10,3E12.5) nodes and DISP; see check_frd_parser.py."""
     nodes = {}  # nid -> (x,y,z)
     disp = {}
     text = path.read_text(errors="replace")
@@ -261,7 +261,6 @@ def main():
     rel = abs_delta / PROTOTYPE
     ver = ccx_version()
     payload = {
-        "schema_version": "1",
         "kind": "REFERENCE",
         "label": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解",
         "W_bfp_m": w,
