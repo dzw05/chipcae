@@ -1,4 +1,5 @@
 #include "ImportController.hpp"
+#include "ImportSourceDialog.hpp"
 #include "MainWindow.hpp"
 #include "ResultControls.hpp"
 #include "ResultView.hpp"
@@ -15,10 +16,6 @@
 #include <QVTKOpenGLNativeWidget.h>
 #include <iostream>
 #include <stdexcept>
-#if __has_include("ImportSourceDialog.hpp")
-#include "ImportSourceDialog.hpp"
-#define HAS_SELECTOR
-#endif
 using namespace chipcae::desktop;
 void require(bool value, const char* message) {
     if (!value)
@@ -26,7 +23,6 @@ void require(bool value, const char* message) {
 }
 template <class Window>
 void wiring(Window& w, const QString& samples) {
-#ifdef HAS_SELECTOR
     auto filters = ImportSourceDialog::nameFilters().join(' ');
     require(filters.contains("*.tgz") && filters.contains("*.zip") && filters.contains("ODB++") &&
                 filters.contains("*.step") && filters.contains("*.stp") &&
@@ -54,6 +50,11 @@ void wiring(Window& w, const QString& samples) {
             "stack refresh");
     require(editor->model()->flags(editor->model()->index(0, 0)) & Qt::ItemIsEditable,
             "stack editable");
+    require(editor->model()->setData(editor->model()->index(0, 0), "edited_substrate"),
+            "stack editor accepts edits");
+    require(w.document()->stackJson().at("layers")[0].at("name").template as<std::string>() ==
+                "edited_substrate",
+            "stack edit reaches document");
     auto run = [&](const QByteArray& mode, bool cancel) {
         QFile input(dir.filePath("fixture.xml"));
         require(input.open(QIODevice::WriteOnly | QIODevice::Truncate), "write input");
@@ -85,6 +86,8 @@ void wiring(Window& w, const QString& samples) {
                             static_cast<int>(w.document()->stackJson().at("layers").size()),
                     "A import refresh");
     };
+    require(w.openCase(QString(CHIPCAE_REPOSITORY) + "/schema/examples/fcbga_demo.case.json"),
+            "load case and materials for validated import");
     run("hang", true);
     run("success", false);
     require(w.openResultsPath(samples + "/default/manifest.json"), "open results");
@@ -95,11 +98,10 @@ void wiring(Window& w, const QString& samples) {
     auto summary = w.resultSession()->summary().first().toObject();
     require(!w.resultView()->summary(summary["name"].toString()).contains("unavailable"),
             "summary readable");
+    require(w.openResultsPath(samples + "/hex_only/manifest.json"), "open uncut results again");
+    require(w.resultView()->error().isEmpty(), "uncut result view");
     require(!w.openResultsPath(samples + "/missing/manifest.json"), "invalid results rejected");
     require(w.centralWidget() == w.resultView(), "preserve results on failure");
-#else
-    require(false, "missing public import selector and window hooks");
-#endif
 }
 int main(int argc, char** argv) {
     QSurfaceFormat::setDefaultFormat(QVTKOpenGLNativeWidget::defaultFormat());

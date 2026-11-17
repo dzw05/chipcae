@@ -20,6 +20,7 @@ target_compile_definitions(chipcae_document PRIVATE
     CHIPCAE_SCHEMA_DIR="${CMAKE_CURRENT_BINARY_DIR}/document-schema")
 add_library(chipcae_desktop_ui src/MainWindow.cpp src/MainWindow.hpp
     import/ImportController.cpp import/ImportController.hpp
+    import/ImportSourceDialog.cpp import/ImportSourceDialog.hpp
     import/DefectsDialog.cpp import/DefectsDialog.hpp
     workers/PreviewWorker.cpp workers/PreviewWorker.hpp
     stack/StackEditor.cpp stack/StackEditor.hpp stack/LayerModel.cpp stack/LayerModel.hpp
@@ -203,3 +204,5 @@ if(CHIPCAE_BUILD_TESTS)
     set_tests_properties(desktop_window_wire PROPERTIES FIXTURES_REQUIRED result_samples
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 90)
 endif()
+
+target_link_libraries(chipcae_desktop_ui PUBLIC chipcae_desktop_viewer)

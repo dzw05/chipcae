@@ -1,11 +1,17 @@
 #include "MainWindow.hpp"
 
 #include "CaseTreeView.hpp"
+#include "DefectsDialog.hpp"
+#include "ImportController.hpp"
+#include "ImportSourceDialog.hpp"
 #include "ResidualChart.hpp"
+#include "ResultControls.hpp"
+#include "ResultView.hpp"
 #include "StackEditor.hpp"
 
 #include <QDockWidget>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QLabel>
@@ -15,6 +21,7 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QSplitter>
+#include <QStatusBar>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QVTKOpenGLNativeWidget.h>
@@ -49,6 +56,67 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                        {},
                        QFileInfo(path).fileName());
     });
+    menu->addAction(tr("Import ECAD…"), this, [this] {
+        const auto path = chipcae::desktop::ImportSourceDialog::getImportPath(this);
+        if (!path.isEmpty() && !importEcadPath(path))
+            statusBar()->showMessage(tr("Cannot start import"));
+    });
+    menu->addAction(tr("Open Results…"), this, [this] {
+        const auto path =
+            QFileDialog::getOpenFileName(this, tr("Open Results"), {}, "Manifest (*.json)");
+        if (!path.isEmpty() && !openResultsPath(path))
+            QMessageBox::warning(
+                this, tr("Open Results"), tr("Cannot open result manifest or first step"));
+    });
+    menu->addAction(tr("Load handwritten stack template"), this, [this] {
+        if (!loadHandwrittenStack())
+            QMessageBox::warning(this, tr("Stack"), tr("Cannot load handwritten stack template"));
+    });
+    importer_ = new chipcae::desktop::ImportController(document_, this);
+    auto* defects = new chipcae::desktop::DefectsDialog(*importer_, this);
+    connect(importer_, &chipcae::desktop::ImportController::defectsReady, defects, &QDialog::open);
+    auto* importDock = new QDockWidget(tr("Import log"), this);
+    auto* importLog = new QPlainTextEdit(importDock);
+    importLog->setReadOnly(true);
+    importDock->setWidget(importLog);
+    addDockWidget(Qt::BottomDockWidgetArea, importDock);
+    importDock->hide();
+    auto* cancel = new QPushButton(tr("Cancel import"), this);
+    statusBar()->addPermanentWidget(cancel);
+    cancel->hide();
+    connect(cancel, &QPushButton::clicked, this, &MainWindow::cancelImport);
+    auto* logTimer = new QTimer(this);
+    auto logged = std::make_shared<qsizetype>(0);
+    auto appendLog = [this, importLog, logged] {
+        const auto bytes = importer_->stderrText();
+        if (bytes.size() > *logged) {
+            importLog->moveCursor(QTextCursor::End);
+            importLog->insertPlainText(QString::fromUtf8(bytes.mid(*logged)));
+            *logged = bytes.size();
+        }
+    };
+    connect(logTimer, &QTimer::timeout, this, appendLog);
+    connect(importer_,
+            &chipcae::desktop::ImportController::finished,
+            this,
+            [this, cancel, logTimer, appendLog](bool replaced) {
+                appendLog();
+                logTimer->stop();
+                cancel->hide();
+                statusBar()->showMessage(replaced ? tr("Import complete") : tr("Import ended"));
+            });
+    connect(importer_, &chipcae::desktop::ImportController::userConfirmed, this, [this] {
+        statusBar()->showMessage(tr("Defects acknowledged"));
+    });
+    logTimer->setInterval(100);
+    beginImportUi_ = [this, cancel, logTimer, importDock, importLog, logged] {
+        *logged = 0;
+        importLog->clear();
+        importDock->show();
+        cancel->show();
+        statusBar()->showMessage(tr("导入中"));
+        logTimer->start();
+    };
     auto* view = new QVTKOpenGLNativeWidget(this);
     vtkNew<vtkGenericOpenGLRenderWindow> window;
     view->setRenderWindow(window);
@@ -168,4 +236,65 @@ void MainWindow::monitorRun(const QString& directory,
     timer->start(250);
     dock->setWidget(panel);
     addDockWidget(Qt::BottomDockWidgetArea, dock);
+}
+
+MainWindow::~MainWindow() {
+    // Controls capture their session, and the importer references the document.
+    delete resultDock_;
+    delete takeCentralWidget();
+    delete importer_;
+}
+
+bool MainWindow::importEcadPath(const QString& input,
+                                const QString& program,
+                                const QStringList& prefix) {
+    if (importer_->busy() || !chipcae::desktop::ImportSourceDialog::isSupportedImportPath(input))
+        return false;
+    auto output = std::make_unique<QTemporaryDir>();
+    if (!output->isValid())
+        return false;
+    const auto path = output->filePath("import.stack.json");
+    importOutput_ = std::move(output);
+    beginImportUi_();
+    return importer_->start(input,
+                            path,
+                            importOutput_->filePath("import.polyset"),
+                            importOutput_->filePath("defects.json"),
+                            program,
+                            prefix);
+}
+void MainWindow::cancelImport() {
+    importer_->cancel();
+}
+
+bool MainWindow::loadHandwrittenStack(const QString& path) {
+    QFile file(path.isEmpty()
+                   ? QString(CHIPCAE_REPOSITORY) + "/schema/examples/fcbga_demo.stack.json"
+                   : path);
+    if (!file.open(QIODevice::ReadOnly))
+        return false;
+    try {
+        return document_.setStackJson(chipcae::desktop::Json::parse(file.readAll().toStdString()));
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool MainWindow::openResultsPath(const QString& manifestPath) {
+    auto session = std::make_unique<chipcae::desktop::ResultSession>();
+    if (!session->open(manifestPath) || session->steps().isEmpty())
+        return false;
+    auto view = std::make_unique<chipcae::desktop::ResultView>();
+    if (!view->loadStep(*session, session->steps().first().toObject()["n"].toInteger()))
+        return false;
+    delete resultDock_;
+    delete takeCentralWidget();
+    session_ = std::move(session);
+    resultView_ = view.release();
+    setCentralWidget(resultView_);
+    resultDock_ = new QDockWidget(tr("Result controls"), this);
+    resultDock_->setWidget(
+        new chipcae::desktop::ResultControls(*resultView_, *session_, resultDock_));
+    addDockWidget(Qt::RightDockWidgetArea, resultDock_);
+    return true;
 }
