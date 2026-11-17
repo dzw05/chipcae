@@ -13,7 +13,14 @@ std::string fold_ascii(std::string s) {
     return s;
 }
 double unit_m(const OdbJob& j) {
-    return j.units == detail::OdbUnits::inch ? 0.0254 : 0.001;
+    switch (j.units) {
+    case detail::OdbUnits::inch:
+        return 0.0254;
+    case detail::OdbUnits::mm:
+        return 0.001;
+    default:
+        throw std::runtime_error("unsupported ODB units");
+    }
 }
 void map_stackup(const OdbJob& j, const MapOptions& options, ImportResult& result) {
     if (j.layers.empty())

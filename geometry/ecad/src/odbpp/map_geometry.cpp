@@ -270,6 +270,8 @@ struct Mapper {
             unsupported("Slot:" + layer.name);
         }
         for (const auto& p : f.pads) {
+            if (!p.positive)
+                continue;
             auto s = symbol(f, p.sym);
             if (s.kind.empty()) {
                 unsupported("Symbol:" + layer.name + ":" + std::to_string(p.sym));
@@ -389,8 +391,9 @@ Expected<EcadModel> map_odb(const OdbJob& job, const MapOptions& options) {
     result.model.id = job.step;
     result.model.dbu_m = 1e-6;
     try {
+        const auto units_m = unit_m(job);
         map_stackup(job, options, result);
-        Mapper m{job, result.model, unit_m(job) / result.model.dbu_m};
+        Mapper m{job, result.model, units_m / result.model.dbu_m};
         bool exterior = false;
         for (const auto& c : job.profile.contours) {
             if (c.is_hole)

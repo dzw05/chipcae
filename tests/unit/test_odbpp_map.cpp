@@ -184,6 +184,11 @@ void units() {
             for (auto& c : s.contours)
                 scale(c);
     equal(mapped(mm), mapped(inch));
+    for (int value : {-1, 2, 127}) {
+        auto invalid = mm;
+        invalid.units = static_cast<OdbUnits>(value);
+        rejected(invalid, {"unsupported ODB units"});
+    }
 }
 void symbol_units() {
     auto mm = board();
@@ -832,6 +837,17 @@ void via() {
         slot_reported = slot_reported || u.element == "Slot:DRILL";
     require(slot_reported && m.report.unsupported.size() == 2, "line and tool slot unsupported");
     require(!m.via_fractions.empty(), "via rasterization initialized");
+    // Negative drill pads must be ignored before symbol or tool interpretation.
+    f.pads.push_back({{100, 100}, 0, false});
+    f.pads.push_back({{100, 100}, 1, false});
+    f.pads.push_back({{100, 100}, 99, false});
+    equal(m, mapped(j));
+    f.lines.clear();
+    std::erase_if(f.pads, [](const auto& p) { return p.positive; });
+    const auto negative_only = mapped(j);
+    require(negative_only.vias.empty() && negative_only.via_fractions.empty() &&
+                negative_only.report.unsupported.empty(),
+            "negative-only drills produce no vias, fraction cells, or diagnostics");
 }
 void via_region_initialization() {
     auto j = board();
