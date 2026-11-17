@@ -5,14 +5,18 @@
 #include <cstddef>
 #include <vector>
 
-namespace chipcae::mesh {
+namespace chipcae::mesh::cut {
 struct BodyLevelSet {
-    std::size_t layer_index = 0; // Index into the input StackModel::layers.
-    BodyId body{};               // ID from HexMeshArrays::attr_table.bodies.
+    BodyId body{}; // ID from HexMeshArrays::attr_table.bodies.
     // One value per background mesh vertex, in HexMeshArrays::vertices order
     // (phi[i] corresponds to vertices[3*i .. 3*i+2]); negative inside the union.
     std::vector<Real> phi;
+    std::size_t layer_index = 0; // Index into the input StackModel::layers.
 };
+} // namespace chipcae::mesh::cut
+
+namespace chipcae::mesh {
+using cut::BodyLevelSet;
 
 struct RegionLSOptions {
     Real inside_tol_rel = 1e-12;

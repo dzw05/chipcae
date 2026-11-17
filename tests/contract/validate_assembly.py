@@ -29,6 +29,7 @@ def errors(document, validator):
     if result:
         return result
     seen = set()
+
     def check_id(part, path):
         if part['id'] in seen:
             result.append((pointer(path), 'duplicate part ID'))
