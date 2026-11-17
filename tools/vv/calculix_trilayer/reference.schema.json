@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chipcae.local/tools/vv/calculix_trilayer/reference.schema.json",
+  "title": "WP-2 trilayer CalculiX REFERENCE artifact",
+  "description": "Stable contract for REFERENCE.json. Human-readable prose lives under provenance, not at the top level.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "element_type",
+    "calculix_version",
+    "geometry",
+    "meshes",
+    "selected_mesh",
+    "W_bfp_m",
+    "prototype_W_bfp_m",
+    "abs_delta_m",
+    "rel_delta"
+  ],
+  "properties": {
+    "schema_version": { "const": "1", "type": "string" },
+    "kind": { "const": "REFERENCE", "type": "string" },
+    "element_type": { "const": "C3D20", "type": "string" },
+    "calculix_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Free-form ccx banner; informational, not a stable token."
+    },
+    "geometry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["L_m", "thicknesses_m", "E_Pa", "nu", "alpha_1_per_K", "dT_K"],
+      "properties": {
+        "L_m": { "type": "number" },
+        "thicknesses_m": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } },
+        "E_Pa": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } },
+        "nu": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } },
+        "alpha_1_per_K": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } },
+        "dT_K": { "type": "number" }
+      }
+    },
+    "meshes": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "n_elem_xyz", "n_elem_z_per_layer", "W_bfp_m"],
+        "properties": {
+          "name": { "type": "string" },
+          "n_elem_xyz": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "integer" } },
+          "n_elem_z_per_layer": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "integer" } },
+          "W_bfp_m": { "type": "number" }
+        }
+      }
+    },
+    "selected_mesh": { "const": "fine", "type": "string" },
+    "W_bfp_m": { "type": "number" },
+    "prototype_W_bfp_m": { "type": "number" },
+    "abs_delta_m": { "type": "number" },
+    "rel_delta": { "type": "number" },
+    "provenance": {
+      "type": "object",
+      "description": "Optional, non-contractual generator metadata.",
+      "properties": {
+        "generator": { "type": "string" },
+        "label": { "type": "string", "description": "Human-readable prose; not for programmatic comparison." }
+      }
+    }
+  }
+}

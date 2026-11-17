@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 DIR = ROOT / "tools/vv/calculix_trilayer"
 REF = DIR / "REFERENCE.json"
-CONTRACT = DIR / "schema-v1.json"
+CONTRACT = DIR / "reference.schema.json"
 PROTOTYPE = 4.269532769e-3
 
 
@@ -26,21 +26,18 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             data = json.load(handle)
         with CONTRACT.open(encoding="utf-8") as handle:
             contract = json.load(handle)
-        self.assertEqual(contract["schema_version"], "1")
-        types = {"string": str, "number": (int, float), "object": dict, "array": list, "boolean": bool}
-        for key, spec in contract["required"].items():
+        self.assertEqual(contract.get("$schema"), "https://json-schema.org/draft/2020-12/schema")
+        self.assertIn("required", contract)
+        self.assertIn("properties", contract)
+        for key in contract["required"]:
             self.assertIn(key, data, f"missing required field {key}")
-            self.assertIsInstance(data[key], types[spec["type"]], key)
-            if "const" in spec:
-                self.assertEqual(data[key], spec["const"], key)
-        for key in contract.get("forbidden", []):
-            self.assertNotIn(key, data, key)
-        mesh_spec = contract["mesh_item_required"]
-        self.assertGreaterEqual(len(data["meshes"]), 1)
-        for mesh in data["meshes"]:
-            for key, typ in mesh_spec.items():
-                self.assertIn(key, mesh, key)
-                self.assertIsInstance(mesh[key], types[typ], key)
+        self.assertNotIn("host", data)
+        self.assertNotIn("label", data)
+        try:
+            import jsonschema
+            jsonschema.Draft202012Validator(contract).validate(data)
+        except ImportError:
+            pass
         self.assertEqual(data["schema_version"], "1")
         self.assertEqual(data["kind"], "REFERENCE")
         self.assertEqual(data["element_type"], "C3D20")

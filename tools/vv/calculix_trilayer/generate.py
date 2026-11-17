@@ -264,7 +264,6 @@ def main():
     payload = {
         "schema_version": "1",
         "kind": "REFERENCE",
-        "label": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解",
         "element_type": "C3D20",
         "calculix_version": ver,
         "geometry": {
@@ -283,6 +282,7 @@ def main():
         "rel_delta": rel,
         "provenance": {
             "generator": "tools/vv/calculix_trilayer/generate.py",
+            "label": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解",
         },
     }
     out = here / "REFERENCE.json"
