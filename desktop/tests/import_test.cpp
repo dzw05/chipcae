@@ -83,7 +83,8 @@ QString pick(const std::function<QString()>& picker,
              const QString& path,
              bool cancel,
              bool map,
-             bool directory = false) {
+             bool directory = false,
+             const QString& expectedDirectory = {}) {
     bool seen = false;
     QTimer driver;
     QObject::connect(&driver, &QTimer::timeout, [&] {
@@ -92,6 +93,9 @@ QString pick(const std::function<QString()>& picker,
             if (!dialog || !dialog->isVisible())
                 continue;
             seen = true;
+            if (!expectedDirectory.isEmpty())
+                check(dialog->directory().absolutePath() == expectedDirectory,
+                      "picker preserves prior location");
             if (map)
                 check(dialog->nameFilters() == QStringList{"JSON (*.json)"}, "exact map filter");
             driver.stop();
@@ -443,6 +447,15 @@ sys.exit(rc)
                   "legacy exact error and unchanged stack");
             if (c.busy())
                 waitFor(c, [&] { c.cancel(); });
+            for (const auto& invalidMap : {dir.filePath("absent map.json"), dir.path()}) {
+                r.materialMap = invalidMap;
+                check(!c.start(r), "non-file material map rejected locally");
+                check(c.error() == "material map must be an existing file" &&
+                          c.outcome() == ImportOutcome::Failed && !c.busy() && c.exitCode() == -1 &&
+                          !c.needsMaterialMapReselect() && d.stackJson() == before &&
+                          !QFile::exists(r.output),
+                      "invalid map does not launch or replace document");
+            }
             for (auto kind : {ImportKind::Ecad, ImportKind::Assembly}) {
                 r.kind = kind;
                 r.materialMap = map;
@@ -571,7 +584,16 @@ sys.exit(rc)
                         }
             });
             click.start(30);
-            check(pick([&] { return MaterialMapMissingDialog::prompt(); }, map, false, true) == map,
+            check(pick(
+                      [&] {
+                          return MaterialMapMissingDialog::prompt(
+                              nullptr, dir.filePath("old missing map.json"));
+                      },
+                      map,
+                      false,
+                      true,
+                      false,
+                      dir.path()) == map,
                   "missing-map prompt returns selected map");
             click.start(30);
             check(
