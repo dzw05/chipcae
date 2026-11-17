@@ -138,19 +138,23 @@ struct GzipCursor::State {
                     fail("truncated deflate");
                     co_return;
                 }
-                std::size_t n = input.end - input.pos,
+                // Near a caller's output boundary, expose only one compressed byte.
+                // Otherwise tinfl can parse arbitrarily many empty deflate blocks
+                // after filling the output span before it returns to us.
+                std::size_t n = std::min<std::size_t>(input.end - input.pos,
+                                                      output_limit <= 258 ? 1 : 32768),
                             count = std::min(output.size() - offset, output_limit);
-                auto status = tinfl_decompress(
-                    &inflater,
-                    input.bytes.data() + input.pos,
-                    &n,
-                    output.data(),
-                    output.data() + offset,
-                    &count,
-                    TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF |
-                        (stream.eof() || stream.peek() == std::char_traits<char>::eof()
-                             ? 0
-                             : TINFL_FLAG_HAS_MORE_INPUT));
+                const bool more_input =
+                    input.pos + n < input.end ||
+                    (!stream.eof() && stream.peek() != std::char_traits<char>::eof());
+                auto status = tinfl_decompress(&inflater,
+                                               input.bytes.data() + input.pos,
+                                               &n,
+                                               output.data(),
+                                               output.data() + offset,
+                                               &count,
+                                               TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF |
+                                                   (more_input ? TINFL_FLAG_HAS_MORE_INPUT : 0));
                 input.pos += n;
                 consumed += n;
                 crc = mz_crc32(crc, output.data() + offset, count);

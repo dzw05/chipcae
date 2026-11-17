@@ -98,9 +98,11 @@ bool index_tar(const std::filesystem::path& path,
                 position += n;
                 remain -= n;
                 if (!remain) {
-                    // Output requests stop at payload boundaries, so unrelated entries
-                    // cannot contribute compressed bytes to this entry's budget.
-                    const auto compressed = cursor.consumed_bytes() - entry_compressed_start;
+                    // The final output request uses one-byte compressed input spans.
+                    // Exclude that last byte: it may already describe the next block
+                    // or symbol. This conservative budget cannot credit later framing.
+                    const auto consumed = cursor.consumed_bytes() - entry_compressed_start;
+                    const auto compressed = consumed ? consumed - 1 : 0;
                     if (regular_payload)
                         entries.back().compressed_size = std::max<std::uint64_t>(1, compressed);
                     if (!metadata())
@@ -206,7 +208,10 @@ bool index_tar(const std::filesystem::path& path,
     };
     std::string_view block;
     for (;;) {
-        const auto request = remain ? remain : padding ? padding : 512 - header.size();
+        // A deflate match emits at most 258 bytes. Reserve that much output
+        // for one-byte input spans so no bulk call can reach the payload end.
+        const auto payload_request = remain > 258 ? remain - 258 : remain;
+        const auto request = remain ? payload_request : padding ? padding : 512 - header.size();
         if (!cursor.next(
                 block, error, static_cast<std::size_t>(std::min<std::uint64_t>(32768, request))))
             break;

@@ -282,6 +282,18 @@ def main(root, fixture):
         members.insert(0 if order == 'before' else 1, ('noise', noise))
         (root / ('ratio-padded-' + order + '.tgz')).write_bytes(
             gzip.compress(tar_bytes(members)))
+    # Empty deflate blocks after a payload must not subsidize its ratio budget.
+    payload = b'x' * 65536
+    framed = tar_bytes([('bomb', payload), ('neighbor', b'neighbor')])
+    boundary = 512 + len(payload)
+    compressor = zlib.compressobj(wbits=-15)
+    raw = compressor.compress(framed[:boundary]) + compressor.flush(zlib.Z_FULL_FLUSH)
+    raw += b'\x00\x00\x00\xff\xff' * 4096
+    raw += compressor.compress(framed[boundary:]) + compressor.flush()
+    wrapped = (b'\x1f\x8b\x08\x00' + b'\x00' * 6 + raw +
+               struct.pack('<II', zlib.crc32(framed), len(framed)))
+    assert gzip.decompress(wrapped) == framed
+    (root / 'ratio-empty-blocks.tgz').write_bytes(wrapped)
     corrupt = root / 'corrupt'
     corrupt.mkdir()
     for name in ['truncated.tgz', 'bad-crc.zip', 'missing-matrix.tgz', 'missing-profile.tgz',

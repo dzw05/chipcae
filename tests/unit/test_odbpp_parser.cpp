@@ -292,6 +292,15 @@ int main() {
                     "requested entry ratio cannot be diluted by neighbors");
         }
     });
+    test("odbpp_ratio_deflate_boundary_headers", [&] {
+        ArchiveReader reader(temp / "ratio-empty-blocks.tgz");
+        require(reader.open_error().empty(), reader.open_error());
+        std::string out, error;
+        require(reader.read_bytes("neighbor", out, error) && out == "neighbor", error);
+        require(!reader.read_bytes("bomb", out, error) &&
+                    error.find("ratio limit") != std::string::npos,
+                "deflate framing after payload cannot subsidize its ratio");
+    });
     test("odbpp_review_all_entry_counts", [&] {
         ArchiveLimits limits;
         limits.entry_count = 2;
