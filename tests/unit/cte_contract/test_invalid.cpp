@@ -1,5 +1,5 @@
-#include "../../../material/tests/cte_fixtures.hpp"
 #include "chipcae/material/cte_convert.hpp"
+#include "cte_fixtures.hpp"
 
 #include <cstdio>
 #include <cstdlib>
