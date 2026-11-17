@@ -16,7 +16,7 @@ endif()
 if(CHIPCAE_ENABLE_HDF5)
   add_library(chipcae_mesh_vtkhdf src/vtkhdf_writer.cpp)
   target_include_directories(chipcae_mesh_vtkhdf PUBLIC include PRIVATE ${HDF5_INCLUDE_DIRS})
-  target_link_libraries(chipcae_mesh_vtkhdf PUBLIC chipcae_mesh_cut ${HDF5_LIBRARIES})
+  target_link_libraries(chipcae_mesh_vtkhdf PUBLIC chipcae_mesh_cut chipcae::geometry ${HDF5_LIBRARIES})
   chipcae_set_warnings(chipcae_mesh_vtkhdf)
 endif()
 

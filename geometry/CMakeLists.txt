@@ -1,6 +1,8 @@
 add_library(chipcae_geometry
     src/geometry.cpp
     src/import_thresholds.cpp
+    src/import_report.cpp
+    src/repair_policy.cpp
 )
 add_library(chipcae::geometry ALIAS chipcae_geometry)
 
