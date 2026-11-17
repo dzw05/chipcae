@@ -12,6 +12,15 @@ int main() {
             found |= d.tier == Tier::C && d.reason == DefectReason::PART_TILTED;
         require(found, "five degree tilt C PART_TILTED");
         same(r, slice(input));
+        const auto sheared =
+            fixture(BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(square(0, 0)).Face(),
+                                          gp_Vec(0.05, 0, 0.5))
+                        .Shape());
+        const auto shear_result = slice(sheared);
+        require(shear_result.defects.size() == 1 &&
+                    shear_result.defects[0].reason == DefectReason::PART_TILTED &&
+                    tier(shear_result) == Tier::C,
+                "tilted extrusion with horizontal caps is PART_TILTED");
         tr.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)), 0.001);
         const auto column = fixture(
             BRepBuilderAPI_Transform(BRepPrimAPI_MakeBox(1, 1, 40).Shape(), tr, true).Shape());

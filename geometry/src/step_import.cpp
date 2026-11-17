@@ -3,6 +3,7 @@
 #include "diagnostic_id.hpp"
 #include "step_inspection.hpp"
 #include "step_options.hpp"
+#include "step_shape.hpp"
 
 #include <BOPAlgo_ArgumentAnalyzer.hxx>
 #include <BRepAdaptor_Curve.hxx>
@@ -50,17 +51,6 @@
 #include <unordered_set>
 
 namespace chipcae::geometry {
-namespace detail {
-struct StepShape {
-    TopoDS_Shape shape;
-    TopTools_IndexedMapOfShape faces;
-    Handle(ShapeBuild_ReShape) history = new ShapeBuild_ReShape;
-    Handle(TDocStd_Document) document;
-    Handle(XSControl_WorkSession) session;
-    std::vector<std::string> entities;
-    std::vector<std::string> names;
-};
-} // namespace detail
 namespace {
 // OCCT 7.6 normally calls ShapeFix internally during STEP transfer. Override
 // its documented exchange algorithm hook so detection sees the unhealed BRep.
@@ -744,6 +734,7 @@ detail::import_step_with_inspection(const std::filesystem::path& path,
         } else {
             result.body_names.push_back(path_name);
             auto shape = tool->GetShape(definition).Moved(location);
+            source->bodies.emplace(path_name, shape);
             for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
                 const auto index = source->faces.FindIndex(it.Current());
                 if (index)

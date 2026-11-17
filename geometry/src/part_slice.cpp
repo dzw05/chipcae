@@ -7,6 +7,8 @@
 #include <stdexcept>
 
 #ifdef CHIPCAE_ENABLE_OCCT
+#include "step_shape.hpp"
+
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Section.hxx>
@@ -24,20 +26,6 @@
 #include <TopoDS_Compound.hxx>
 #include <XSControl_WorkSession.hxx>
 #include <gp_Pln.hxx>
-
-namespace chipcae::geometry::detail {
-// The importer owns this private representation. Keep this definition identical
-// to step_import.cpp until the internal representation can move to a header.
-struct StepShape {
-    TopoDS_Shape shape;
-    TopTools_IndexedMapOfShape faces;
-    Handle(ShapeBuild_ReShape) history = new ShapeBuild_ReShape;
-    Handle(TDocStd_Document) document;
-    Handle(XSControl_WorkSession) session;
-    std::vector<std::string> entities;
-    std::vector<std::string> names;
-};
-} // namespace chipcae::geometry::detail
 #endif
 
 namespace chipcae::geometry {
@@ -204,12 +192,13 @@ Real deviation(const Polylines& a, const Polylines& b) {
     return maximum;
 }
 bool equal(const std::vector<SlabSection>& a, const std::vector<SlabSection>& b) {
+    // Imported STEP coordinates may differ by up to a nanometre.
     auto ring = [](const Ring& x, const Ring& y) {
         if (x.pts.size() != y.pts.size())
             return false;
         for (std::size_t i = 0; i < x.pts.size(); ++i)
-            if (std::abs(x.pts[i][0] - y.pts[i][0]) > 1e-12 ||
-                std::abs(x.pts[i][1] - y.pts[i][1]) > 1e-12)
+            if (std::abs(x.pts[i][0] - y.pts[i][0]) > 1e-9 ||
+                std::abs(x.pts[i][1] - y.pts[i][1]) > 1e-9)
                 return false;
         return true;
     };
@@ -240,17 +229,10 @@ slice_prismatic(const StepImportResult& input, std::string_view body, const Slic
     if (!input.source)
         return reject(DefectReason::PART_NOT_PRISMATIC, "empty shape");
     try {
-        BRep_Builder builder;
-        TopoDS_Compound shape;
-        builder.MakeCompound(shape);
-        int count = 0;
-        for (int i = 1; i <= input.source->faces.Extent(); ++i)
-            if (input.source->names.at(i - 1) == body) {
-                builder.Add(shape, input.source->faces(i));
-                ++count;
-            }
-        if (!count)
+        const auto found = input.source->bodies.find(body);
+        if (found == input.source->bodies.end() || found->second.IsNull())
             return reject(DefectReason::PART_NOT_PRISMATIC, "empty shape");
+        const auto& shape = found->second;
         if (!std::isfinite(options.chord_tol) || options.chord_tol <= 0 ||
             !std::isfinite(options.tau_a) || !std::isfinite(options.tau_b) || options.tau_a < 0 ||
             options.tau_b < options.tau_a)
@@ -286,6 +268,28 @@ slice_prismatic(const StepImportResult& input, std::string_view body, const Slic
                 planes.push_back(s.Plane().Location().Z());
             }
         }
+        // A sheared prism can have horizontal caps. Its nonhorizontal straight
+        // edges still share the extrusion direction; drafted walls do not.
+        bool have_direction = false, parallel = true;
+        gp_Dir direction(0, 0, 1);
+        for (TopExp_Explorer it(shape, TopAbs_EDGE); it.More(); it.Next()) {
+            BRepAdaptor_Curve curve(TopoDS::Edge(it.Current()));
+            if (curve.GetType() != GeomAbs_Line)
+                continue;
+            const auto candidate = curve.Line().Direction();
+            if (std::abs(candidate.Z()) <= 1e-9)
+                continue;
+            if (!have_direction) {
+                direction = candidate;
+                have_direction = true;
+            } else if (!direction.IsParallel(candidate, 1e-9)) {
+                parallel = false;
+            }
+        }
+        if (have_direction && parallel &&
+            std::acos(std::clamp(std::abs(direction.Z()), Real(0), Real(1))) >
+                std::atan(options.tau_a / height))
+            return reject(DefectReason::PART_TILTED, "prismatic direction tilted from z");
         if (!horizontal && largest_area > 0 &&
             std::acos(std::clamp(largest_cosine, Real(0), Real(1))) >
                 std::atan(options.tau_a / height))
