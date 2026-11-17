@@ -45,6 +45,35 @@ def main():
             assert result['summary']['discuss'] == 0
             number(entry(result, 'outline')['ipc']['area'], 0.00005)
             number(entry(result, 'copper_area', '0:F.Cu|F.Cu')['ipc'], 0.00005)
+            # Multiple distinct outline sources are ambiguous in either reference order.
+            # Repeated references to one file still represent a single source.
+            sidecar.write_bytes(data)
+            second = directory / 'second.polyset'
+            second.write_bytes(data.replace(struct.pack('<q', 10000000),
+                                            struct.pack('<q', 8000000)))
+            first_ref = dict(b['external_refs'][0])
+            second_ref = {'path': second.name,
+                          'sha256': hashlib.sha256(second.read_bytes()).hexdigest()}
+            for refs in ([first_ref, second_ref], [second_ref, first_ref]):
+                b['external_refs'] = refs
+                b['outline'] = rectangle_outline = board()['outline']
+                for left, right in ((pa, pb), (pb, pa)):
+                    save(pb, b)
+                    try:
+                        diff_stacks(left, right)
+                    except EcadDiffError as exc:
+                        assert exc.code == 14 and exc.name == 'INPUT_INVALID'
+                    else:
+                        raise AssertionError('accepted ambiguous outline sources')
+                rectangle_outline['polygon'] = [[0, 0], [0.01, 0],
+                                                 [0.01, 0.005], [0, 0.005]]
+                assert diff_stacks(rectangle, save(pb, b))['summary']['hard'] == 0
+            b['external_refs'] = [first_ref, dict(first_ref)]
+            b['outline'] = {}
+            assert diff_stacks(pa, save(pb, b))['summary']['hard'] == 0
+            b['external_refs'] = [first_ref]
+            b['outline'] = board()['outline']
+            b['outline']['polygon'] = [[0, 0], [0.01, 0], [0.01, 0.005], [0, 0.005]]
             # Even an empty outline layer is ignored when outline.polygon is explicit.
             empty = (b'CCPOLY01' + struct.pack('<dII', 1e-9, 1, 7) + b'outline'
                      + struct.pack('<Iq', 0, 0))

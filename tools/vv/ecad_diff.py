@@ -100,7 +100,10 @@ def _geometry(points):
 
 
 def _load(path):
-    stack = json.loads(_bytes(path))
+    try:
+        stack = json.loads(_bytes(path))
+    except UnicodeDecodeError as exc:
+        _invalid(str(exc))
     if stack['unit'] != 'm' or not isinstance(stack['layers'], list):
         _invalid('expected meter units and a layer array')
     outline = stack['outline']
@@ -153,21 +156,19 @@ def _load(path):
     for ref in refs:
         file = _string(ref['path'])
         load_polyset(file)
-    rings = next((p['outline'] for p in polysets.values() if 'outline' in p), None)
     if 'polygon' in outline:
         geometry = _geometry(outline['polygon'])
-    elif rings is not None:
-        if len(rings) != 1:
-            _invalid('polyset outline must have exactly one ring')
-        geometry = _geometry(rings[0])
     else:
-        box = outline['box']
-        if not isinstance(box, list) or len(box) != 4:
-            _invalid('invalid outline box')
-        x, y, xx, yy = [_number(v) for v in box]
-        if xx <= x or yy <= y:
-            _invalid('invalid outline box bounds')
-        geometry = _geometry([[x, y], [xx, y], [xx, yy], [x, yy]])
+        candidates = [p['outline'] for p in polysets.values() if 'outline' in p]
+        if len(candidates) > 1:
+            _invalid('multiple polysets supply an outline')
+        if candidates:
+            rings = candidates[0]
+            if len(rings) != 1:
+                _invalid('polyset outline must have exactly one ring')
+            geometry = _geometry(rings[0])
+        else:
+            geometry = _box_geometry(outline['box'])
     copper_values = []
     for layer in stack['layers']:
         copper = layer.get('copper')
@@ -182,6 +183,15 @@ def _load(path):
             copper_values.append((math.fsum(g['area'] for g in gs),
                                   math.fsum(g['perimeter'] for g in gs)))
     return stack['layers'], geometry, copper_values
+
+
+def _box_geometry(box):
+    if not isinstance(box, list) or len(box) != 4:
+        _invalid('invalid outline box')
+    x, y, xx, yy = [_number(v) for v in box]
+    if xx <= x or yy <= y:
+        _invalid('invalid outline box bounds')
+    return _geometry([[x, y], [xx, y], [xx, yy], [x, yy]])
 
 
 def diff_stacks(odb_stack: Path, ipc_stack: Path, delta_m: float = DEFAULT_DELTA_M) -> dict:
@@ -214,7 +224,9 @@ def _diff(odb, ipc, delta):
     names_a = [l['name'] for l in a]
     names_b = [l['name'] for l in b]
     same_structure = len(a) == len(b) and sa == sb
-    add('layers', 'stack', names_a, names_b, abs(len(a) - len(b)),
+    # Count missing positions plus copper/dielectric mismatches at aligned positions.
+    structure_delta = abs(len(a) - len(b)) + sum(x != y for x, y in zip(sa, sb))
+    add('layers', 'stack', names_a, names_b, structure_delta,
         None, 'identical' if names_a == names_b else 'layer names differ',
         'info' if same_structure else 'hard')
     for i in range(max(len(a), len(b))):

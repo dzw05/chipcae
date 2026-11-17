@@ -23,6 +23,7 @@ def main():
                     'unused_offsets', 'unused_trailing', 'unused_duplicate')],
                 ('delta', 14, 'INPUT_INVALID'),
                 ('unit', 14, 'INPUT_INVALID'),
+                ('utf8', 14, 'INPUT_INVALID'),
                 ('output_file', 14, 'INPUT_INVALID')):
             folder = directory / case
             folder.mkdir()
@@ -58,6 +59,8 @@ def main():
                 b['unit'] = 'mm'
             if case != 'missing_stack':
                 save(path, b)
+            if case == 'utf8':
+                path.write_bytes(b'{"unit": "m", "bad": "\xff"}')
             if case == 'output_file':
                 out.write_text('existing file', encoding='utf-8')
             try:
@@ -76,6 +79,10 @@ def main():
             assert proc.stderr.startswith(f'ecad_diff: {name}: '), proc.stderr
             assert not (out / 'diff.json').exists()
             assert not (out / 'diff.md').exists()
+            if case == 'output_file':
+                assert out.read_text(encoding='utf-8') == 'existing file'
+            else:
+                assert not out.exists()
 
 
 if __name__ == '__main__':

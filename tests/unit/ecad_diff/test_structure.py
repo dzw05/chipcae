@@ -50,7 +50,10 @@ def main():
         assert not any('not compared:' in line for line in details), md
         b = copy.deepcopy(a)
         b['layers'][0], b['layers'][1] = b['layers'][1], b['layers'][0]
-        assert entry(diff_stacks(pa, save(pb, b)), 'layers')['grade'] == 'hard'
+        save(pb, b)
+        for left, right in ((pa, pb), (pb, pa)):
+            e = entry(diff_stacks(left, right), 'layers')
+            assert e['grade'] == 'hard' and e['delta'] == 2
         # Every aligned layer gets a copper row, including zero-area mismatches.
         for left_copper, right_copper, grade in ((False, False, 'info'),
                                                  (True, False, 'hard'),
