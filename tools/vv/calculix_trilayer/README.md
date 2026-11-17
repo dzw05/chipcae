@@ -3,8 +3,8 @@
 Independent open-source reference for the 1 m × 1 m trilayer warpage case.
 Results in `REFERENCE.json` (`schema_version` 1) are **REFERENCE values** (not measured data, not
 an analytical solution). They may be compared with the early MFEM+MUMPS
-prototype `W_bfp = 4.269532769e-3` m. This directory does **not** set a
-pass/fail gate; the V&V specialist chooses the comparison criterion later.
+prototype `W_bfp = 4.269532769e-3` m. Validation applies only the broad `rel_delta < 0.5` sanity bound; the V&V
+specialist chooses the comparison acceptance criterion later.
 
 ## Model
 
@@ -35,7 +35,11 @@ The v1 field contract (required keys, types, and which fields are stable) is in 
 
 `provenance` is optional metadata. Ignoring unknown keys under it is a consumer convention, not a JSON Schema-enforced rule.
 
-The contract accepts non-empty `element_type` and `selected_mesh` strings; the
-current producer and its regression checks require C3D20 and fine. The selected
-reference value is the `W_bfp_m` in the mesh named by `selected_mesh`. There is no
-duplicate top-level `W_bfp_m`; consumers compute deltas from that mesh value.
+The v1 contract requires exactly one coarse and one fine mesh and selects fine.
+Top-level `W_bfp_m` must equal the selected mesh value; validation checks this
+and the broad `rel_delta < 0.5` sanity bound. Required `label` and `host` fields
+record the reference status and execution host.
+
+Run `python3 -m unittest tools.vv.test_trilayer_calculix_ref` after generation.
+Only passing validation prints the delta report and writes the same single line
+to `/workspace/tasks/logs/v-ccx-delta.md`; generation does not write that log.

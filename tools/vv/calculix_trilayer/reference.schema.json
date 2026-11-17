@@ -2,12 +2,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://chipcae.local/tools/vv/calculix_trilayer/reference.schema.json",
   "title": "WP-2 trilayer CalculiX REFERENCE artifact",
-  "description": "Stable contract for REFERENCE.json. Human-readable prose lives under provenance, not at the top level.",
+  "description": "Stable v1 contract for the independent CalculiX reference.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version",
     "kind",
+    "label",
+    "host",
+    "W_bfp_m",
     "element_type",
     "calculix_version",
     "geometry",
@@ -20,6 +23,9 @@
   "properties": {
     "schema_version": { "const": "1", "type": "string" },
     "kind": { "const": "REFERENCE", "type": "string" },
+    "label": { "type": "string", "minLength": 1 },
+    "host": { "type": "string", "minLength": 1 },
+    "W_bfp_m": { "type": "number" },
     "element_type": { "type": "string", "minLength": 1 },
     "calculix_version": {
       "type": "string",
@@ -42,19 +48,32 @@
     "meshes": {
       "type": "array",
       "minItems": 2,
+      "maxItems": 2,
+      "allOf": [
+        {
+          "contains": { "properties": { "name": { "const": "coarse" } }, "required": ["name"] },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": { "properties": { "name": { "const": "fine" } }, "required": ["name"] },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ],
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": ["name", "n_elem_xyz", "n_elem_z_per_layer", "W_bfp_m"],
         "properties": {
-          "name": { "type": "string" },
+          "name": { "type": "string", "enum": ["coarse", "fine"] },
           "n_elem_xyz": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "integer" } },
           "n_elem_z_per_layer": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "integer" } },
           "W_bfp_m": { "type": "number" }
         }
       }
     },
-    "selected_mesh": { "type": "string", "minLength": 1 },
+    "selected_mesh": { "type": "string", "const": "fine" },
     "prototype_W_bfp_m": { "type": "number" },
     "abs_delta_m": { "type": "number" },
     "rel_delta": { "type": "number" },

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import subprocess
 import sys
 from pathlib import Path
@@ -264,6 +265,9 @@ def main():
     payload = {
         "schema_version": "1",
         "kind": "REFERENCE",
+        "label": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解",
+        "host": f"box {platform.system()} {platform.machine()}",
+        "W_bfp_m": w,
         "element_type": "C3D20",
         "calculix_version": ver,
         "geometry": {
@@ -286,14 +290,6 @@ def main():
     }
     out = here / "REFERENCE.json"
     out.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
-    line = (
-        f"W_bfp={w} prototype=4.269532769e-3 abs_delta={abs_delta} rel_delta={rel} "
-        f"mesh=fine element=C3D20 ccx={ver}"
-    )
-    print(line)
-    log = Path("/workspace/tasks/logs/v-ccx-delta.md")
-    log.parent.mkdir(parents=True, exist_ok=True)
-    log.write_text(line + "\n")
 
 
 if __name__ == "__main__":
