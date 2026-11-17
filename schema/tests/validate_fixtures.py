@@ -76,8 +76,9 @@ assert [json.dumps(item) for item in library["materials"] if item["id"] != "copp
     json.dumps(item) for item in original_materials
 ], "pre-existing serialized material entries must remain unchanged"
 assembly = json.loads((examples / "assembly/package_bulk_parts.assembly.json").read_text(encoding="utf-8"))
-assert assembly["parts"] and assembly["parts"][0]["id"] == "lid", "first assembly part must be lid"
-assert assembly["parts"][0]["material"] == "copper", "lid material must be exactly copper"
+lid_parts = [part for part in assembly["parts"] if part["id"] == "lid"]
+assert len(lid_parts) == 1, "assembly must contain exactly one lid part"
+assert lid_parts[0]["material"] == "copper", "lid material must be exactly copper"
 copper_entries = [item for item in library["materials"] if item["id"] == "copper"]
 assert len(copper_entries) == 1, "materials library must contain exactly one copper entry"
 assert material_ids == [item["id"] for item in original_materials] + ["copper"], \
