@@ -1,5 +1,7 @@
 """Layer alignment, material identity and equivalent copper representations."""
 import copy
+import hashlib
+import struct
 from pathlib import Path
 import tempfile
 import json
@@ -98,6 +100,38 @@ def main():
         number(e['odb'], AREA)
         number(e['ipc'], AREA)
         number(e['delta'], 0)
+        # CCW exteriors and CW holes contribute signed areas, across all rings.
+        exterior = [(0, 0), (4000000, 0), (4000000, 4000000), (0, 4000000)]
+        hole = [(1000000, 1000000), (1000000, 3000000),
+                (3000000, 3000000), (3000000, 1000000)]
+        island = [(6000000, 0), (8000000, 0), (8000000, 2000000), (6000000, 2000000)]
+        rings = [exterior, hole, island]
+        data = (b'CCPOLY01' + struct.pack('<dII', 1e-9, 1, 4) + b'F.Cu'
+                + struct.pack('<Iqqqq', 3, 0, 4, 8, 12)
+                + b''.join(struct.pack('<qq', *point) for ring in rings for point in ring))
+        sidecar = directory / 'holes.polyset'
+        sidecar.write_bytes(data)
+        b = board()
+        b['external_refs'] = [{'path': sidecar.name, 'sha256': hashlib.sha256(data).hexdigest()}]
+        b['layers'][0]['copper'] = {'metal': 'mat.cu',
+                                  'polygons': {'file': sidecar.name, 'layer': 'F.Cu'}}
+        a = board()
+        a['layers'][0]['copper']['fraction'] = 16e-6 / AREA
+        # Outline winding must not change either outline or fraction copper area.
+        for polygon in ([[0, 0], [0.01, 0], [0.01, 0.005], [0, 0.005]],
+                        [[0, 0.005], [0.01, 0.005], [0.01, 0], [0, 0]]):
+            a['outline']['polygon'] = polygon
+            for left, right in ((save(pa, a), save(pb, b)), (pb, pa)):
+                result = diff_stacks(left, right)
+                e = entry(result, 'copper_area', '0:F.Cu|F.Cu')
+                assert e['grade'] == 'info'
+                number(e['odb'], 16e-6)
+                number(e['ipc'], 16e-6)
+                number(e['delta'], 0)
+                outline = entry(result, 'outline')
+                assert outline['grade'] == 'info'
+                number(outline['odb']['area'], AREA)
+                number(outline['ipc']['area'], AREA)
 
 
 if __name__ == '__main__':

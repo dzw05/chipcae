@@ -88,8 +88,8 @@ def _geometry(points):
             _invalid('invalid polygon coordinate')
         for coordinate in point:
             _number(coordinate)
-    area = abs(math.fsum(a[0] * b[1] - b[0] * a[1]
-                         for a, b in zip(points, points[1:] + points[:1]))) / 2
+    area = math.fsum(a[0] * b[1] - b[0] * a[1]
+                     for a, b in zip(points, points[1:] + points[:1])) / 2
     perimeter = math.fsum(math.hypot(a[0] - b[0], a[1] - b[1])
                           for a, b in zip(points, points[1:] + points[:1]))
     box = [min(p[0] for p in points), min(p[1] for p in points),
@@ -196,6 +196,8 @@ def _load(path):
             geometry = _geometry(rings[0])
         else:
             geometry = _box_geometry(outline['box'])
+    # Outline area is independent of winding; copper rings retain their signs.
+    geometry['area'] = abs(geometry['area'])
     copper_values = []
     for layer in stack['layers']:
         copper = layer.get('copper')
