@@ -111,6 +111,10 @@ def _homogenize(stack, stack_dir):
         ring = tuple(tuple(point) for point in outline['polygon'])
         if len(ring) < 3 or any(len(p) != 2 or not all(math.isfinite(v) for v in p) for p in ring):
             raise invalid('invalid outline polygon')
+        if 'box' in outline:
+            x0, y0, x1, y1 = outline['box']
+            if any(not (x0 <= x <= x1 and y0 <= y <= y1) for x, y in ring):
+                raise invalid('outline polygon outside outline box')
         area = abs(ring_area_m2(ring, 1.0))
     elif outline_ring is not None:
         ring, dbu = outline_ring

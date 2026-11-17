@@ -8,11 +8,11 @@ class Errors(unittest.TestCase):
         names = {10: 'INPUT_HASH_MISMATCH', 12: 'INPUT_REFERENCE_MISSING', 13: 'CUT_UNSUPPORTED', 14: 'INPUT_INVALID'}
         cases = ['missing_stack', 'missing_sidecar', 'missing_reference', 'hash', 'conflicting_hash',
                  'magic', 'offsets', 'negative_offset', 'oversized_offset', 'short_ring', 'trailing', 'truncated', 'empty_sidecar', 'utf8',
-                 'zero_dbu', 'nan_dbu', 'first_offset', 'case', 'missing_layer', 'duplicates',
+                 'zero_dbu', 'nan_dbu', 'first_offset', 'empty_first_offset', 'case', 'missing_layer', 'duplicates',
                  'too_large', 'negative', 'unit', 'same_path', 'two_outlines', 'zero_outlines',
                  'zero_outline', 'empty_json', 'invalid_json',
                  'missing_unit', 'missing_layers', 'missing_outline', 'bad_outline',
-                 'empty_outline', 'bad_box', 'bad_polygon', 'missing_refs',
+                 'empty_outline', 'polygon_outside_box', 'bad_box', 'bad_polygon', 'missing_refs',
                  'bad_refs', 'bad_ref', 'missing_ref_path', 'missing_ref_hash']
         for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
@@ -29,6 +29,9 @@ class Errors(unittest.TestCase):
                 if case == 'negative_offset': data = data[:40] + struct.pack('<q', -1) + data[48:]
                 if case == 'oversized_offset': data = data[:40] + struct.pack('<q', 10000) + data[48:]
                 if case == 'first_offset': data = data[:32] + struct.pack('<q', 1) + data[40:]
+                if case == 'empty_first_offset':
+                    data = polyset([('Empty', ())])
+                    data = data[:-8] + struct.pack('<q', 1) + struct.pack('<qq', 0, 0)
                 if case == 'short_ring': data = polyset([('F.Cu', (((0, 0), (1, 1)),))])
                 if case == 'trailing': data += b'x'
                 if case == 'truncated': data = data[:-1]
@@ -66,6 +69,8 @@ class Errors(unittest.TestCase):
                     code = 12
                 if case == 'bad_outline': stack['outline'] = []
                 if case == 'empty_outline': stack['outline'] = {}
+                if case == 'polygon_outside_box':
+                    stack['outline']['polygon'] = [[0, 0], [.03, 0], [0, .02]]
                 if case == 'bad_box': stack['outline'] = {'box': [0, 1]}
                 if case == 'bad_polygon': stack['outline'] = {'polygon': [None]}
                 if case in ('bad_refs', 'bad_ref', 'missing_ref_path', 'missing_ref_hash'):

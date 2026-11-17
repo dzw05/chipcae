@@ -59,8 +59,12 @@ def read_polyset(path: Path) -> Polyset:
             offsets = unpack('<' + str(ring_count + 1) + 'q')
             if any(offset < 0 or offset > (len(data) - position) // 16 for offset in offsets):
                 raise ValueError('ring offset outside coordinate payload')
-            if offsets[0] != 0 or any(b - a < 3 for a, b in zip(offsets, offsets[1:])):
-                raise ValueError('invalid ring offsets or short ring')
+            if offsets[0] != 0:
+                raise ValueError('first ring offset must be zero')
+            if any(b < a for a, b in zip(offsets, offsets[1:])):
+                raise ValueError('ring offsets must be monotonic')
+            if any(b - a < 3 for a, b in zip(offsets, offsets[1:])):
+                raise ValueError('short ring')
             coordinates = take(offsets[-1] * 16)
             points = tuple(struct.iter_unpack('<qq', coordinates))
             rings = tuple(points[a:b] for a, b in zip(offsets, offsets[1:]))

@@ -17,6 +17,7 @@ def main():
         assert result['outline']['polygon'] == [[x * 1e-6, y * 1e-6] for x, y in points]
         assert math.isclose(report[0]['outline_area_m2'], 3.92e-4, rel_tol=1e-12)
         assert math.isclose(report[0]['fraction'], 1.6e-5 / 3.92e-4, rel_tol=1e-12)
+        stack['outline']['box'] = [0, 0, .02, .02]
         stack['outline']['polygon'] = [[0, 0], [0, .02], [.02, .02], [.02, 0]]
         result, report = homogenize_copper(stack, root)
         assert_key_order(result['outline'], stack['outline'])

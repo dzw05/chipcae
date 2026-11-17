@@ -83,7 +83,7 @@ def main():
             assert np.all(hexes['CellData/cell_kind'][:] == 0)
             z = hexes['Points'][:, 2]
             resistance = np.zeros_like(z)
-            bottom = 0.0
+            bottom = float(np.min(z))
             for thickness, k in layers:
                 resistance += np.clip(z - bottom, 0, thickness) / k
                 bottom += thickness
