@@ -83,8 +83,7 @@ QString pick(const std::function<QString()>& picker,
              const QString& path,
              bool cancel,
              bool map,
-             bool directory = false,
-             const QString& expectedDirectory = {}) {
+             bool directory = false) {
     bool seen = false;
     QTimer driver;
     QObject::connect(&driver, &QTimer::timeout, [&] {
@@ -93,9 +92,6 @@ QString pick(const std::function<QString()>& picker,
             if (!dialog || !dialog->isVisible())
                 continue;
             seen = true;
-            if (!expectedDirectory.isEmpty())
-                check(dialog->directory().absolutePath() == expectedDirectory,
-                      "picker preserves prior location");
             if (map)
                 check(dialog->nameFilters() == QStringList{"JSON (*.json)"}, "exact map filter");
             driver.stop();
@@ -323,7 +319,8 @@ sys.exit(rc)
             if (mode == "corrupt")
                 check(c.reportBytes() == "{", "retain malformed raw report");
             if (expected == ImportOutcome::Accepted) {
-                check(replaced, "accepted replaces document");
+                check(replaced && document.isDirty(),
+                      "accepted replaces document and marks it dirty");
                 check(QFile::exists(r.output) && QFile::exists(r.polyset) &&
                           QFile::exists(r.report),
                       "accepted publishes all outputs");
@@ -403,6 +400,22 @@ sys.exit(rc)
                       "no-op confirmation outside NeedsConfirmation");
                 if (auto* b = button(dialog, "确认并继续"))
                     check(!b->isEnabled(), "nonconfirmation cannot continue");
+            }
+            if (expected == ImportOutcome::Accepted || mode == "confirm") {
+                check(document.isDirty(), "accepted import leaves document dirty");
+                const auto imported = document.stackJson();
+                const auto saved = r.output + ".case.json";
+                check(document.save(saved), "save imported document");
+                CaseDocument reloaded;
+                check(reloaded.load(saved) && reloaded.stackJson() == imported,
+                      "imported stack survives case round trip");
+                const auto outputBytes = read(r.output);
+                const auto polysetBytes = read(r.polyset);
+                const auto reportBytes = read(r.report);
+                check(!c.start(r) && !c.busy(), "reject existing outputs before launching");
+                check(document.stackJson() == imported && read(r.output) == outputBytes &&
+                          read(r.polyset) == polysetBytes && read(r.report) == reportBytes,
+                      "existing output rejection preserves document and published files");
             }
         };
         for (const auto& pair : {std::pair{"success", ImportOutcome::Accepted},
@@ -584,16 +597,7 @@ sys.exit(rc)
                         }
             });
             click.start(30);
-            check(pick(
-                      [&] {
-                          return MaterialMapMissingDialog::prompt(
-                              nullptr, dir.filePath("old missing map.json"));
-                      },
-                      map,
-                      false,
-                      true,
-                      false,
-                      dir.path()) == map,
+            check(pick([&] { return MaterialMapMissingDialog::prompt(); }, map, false, true) == map,
                   "missing-map prompt returns selected map");
             click.start(30);
             check(
