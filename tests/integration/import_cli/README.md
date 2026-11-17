@@ -81,8 +81,10 @@ and standard library; goldens intentionally remain byte comparisons.
 Duplicate positional input, output, material-map, and accept-b-tier cases compare
 exit status, stdout, stderr, and artifacts with the same main-baseline binary.
 Missing polyset/report/material-map values also compare baseline help bytes.
-An appended `add_subdirectory(integration/import_cli)` in `tests/CMakeLists.txt`
-registers these tests, as required by the brief.
+An explicit `add_subdirectory(integration/import_cli)` in `tests/CMakeLists.txt`
+registers these tests before the auto-scan, as permitted by the review follow-up.
+The auto-scan skips explicitly added directories, preventing duplicate inclusion
+even if an auto-discovery marker is added later.
 
 Empty and truncated XML fixtures also compare exit status, stdout, stderr, and
 all artifact bytes against the same baseline in the `noop` case. Each is copied
