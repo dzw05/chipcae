@@ -249,6 +249,10 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                     bool supported = !zip64 && !local_zip64 && !st.m_is_encrypted &&
                                      (st.m_method == 0 || st.m_method == 8);
                     if (supported && !st.m_is_directory) {
+                        if (st.m_comp_size == 0 && st.m_uncomp_size != 0) {
+                            fail("corrupt zip entry: zero compressed size " + rel);
+                            return;
+                        }
                         if (static_cast<double>(st.m_uncomp_size) >
                             static_cast<double>(st.m_comp_size) * limits.ratio) {
                             fail("ratio limit");

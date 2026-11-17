@@ -35,7 +35,7 @@ bool index_tar(const std::filesystem::path& path,
                std::string& error) {
     std::ifstream input(path, std::ios::binary);
     std::string header, extension, long_name, pax_path;
-    std::uint64_t remain = 0, padding = 0, position = 0, payload = 0, count = 0, pax_size = 0;
+    std::uint64_t remain = 0, padding = 0, position = 0, count = 0, pax_size = 0;
     bool has_pax_size = false, done = false;
     char type = 0;
     int zeroes = 0;
@@ -84,13 +84,9 @@ bool index_tar(const std::filesystem::path& path,
     GzipCursor cursor(input);
     std::uint64_t entry_compressed_start = 0, entry_size = 0;
     auto consume = [&](std::string_view block) {
-        // Tar padding and headers are not file payload. Bound framing separately so
-        // empty archives still reach the empty-input check and endless padding stops.
-        const auto framing = std::min<std::uint64_t>(limits.entry_count, 200000) * 2048 + 10240;
-        if (position > UINT64_MAX - block.size() ||
-            (position + block.size() - payload > limits.total_bytes &&
-             position + block.size() - payload - limits.total_bytes > framing))
-            return fail("total byte limit (tar framing)");
+        // Every decompressed byte counts, including skipped payload and tar framing.
+        if (position > limits.total_bytes || block.size() > limits.total_bytes - position)
+            return fail("total byte limit");
         while (!block.empty()) {
             if (done) {
                 position += block.size();
@@ -103,7 +99,6 @@ bool index_tar(const std::filesystem::path& path,
                 block.remove_prefix(n);
                 position += n;
                 remain -= n;
-                payload += n;
                 if (!remain) {
                     // Output requests stop at payload boundaries, so unrelated entries
                     // cannot contribute compressed bytes to this entry's budget.

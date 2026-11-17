@@ -65,14 +65,6 @@ struct GzipCursor::State {
         };
         bool member = false;
         while (input.fill()) {
-            if (member && input.bytes[input.pos] == 0) {
-                while (input.fill())
-                    if (input.get() != 0) {
-                        fail("invalid padding");
-                        co_return;
-                    }
-                co_return;
-            }
             member = true;
             mz_ulong header_crc = MZ_CRC32_INIT;
             auto header = [&]() {

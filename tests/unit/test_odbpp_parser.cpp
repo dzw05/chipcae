@@ -255,6 +255,11 @@ int main() {
         std::string out, error;
         for (const auto& input : {p, temp / "early-stop.tgz", temp / "early-stop.zip"}) {
             ArchiveReader reader(input, limits);
+            if (input.extension() == ".tgz") {
+                require(reader.open_error().find("total byte limit") != std::string::npos,
+                        "tar indexing charges unread decompressed payload");
+                continue;
+            }
             require(reader.open_error().empty(), reader.open_error());
             require(reader.read_bytes("small", out, error) && out == "ok", error);
             require(reader.for_each_line(
@@ -269,6 +274,11 @@ int main() {
             limits.file_bytes = 1;
             limits.total_bytes = 1;
             ArchiveReader archive_reader(temp / name, limits);
+            if (std::string(name) == "limits.tgz") {
+                require(archive_reader.open_error().find("total byte limit") != std::string::npos,
+                        "tar indexing enforces total limit before reads");
+                continue;
+            }
             require(archive_reader.open_error().empty(), archive_reader.open_error());
             require(!archive_reader.read_bytes(archive_reader.entries().front().path, out, error),
                     "archive payload limit enforced on read");
@@ -313,9 +323,38 @@ int main() {
         auto data = bytes(temp / "boundary-32745.gz");
         data.append(40000, '\0');
         std::string out, error;
-        require(decode_gzip(data, out, error) && out == std::string(32745, 'x'), error);
+        require(!decode_gzip(data, out, error) &&
+                    error.starts_with("IMPORT_REJECTED: gzip invalid header"),
+                "zero tail must be parsed as a member header");
         data.back() = 'x';
         require(!decode_gzip(data, out, error), "nonzero tail rejected");
+    });
+    test("odbpp_zero_compressed_zip_entry", [&] {
+        for (const auto* method : {"stored", "deflate"}) {
+            ArchiveReader reader(temp / (std::string("zero-compressed-") + method + ".zip"));
+            require(reader.open_error().starts_with("IMPORT_REJECTED:") &&
+                        reader.open_error().find("ratio") == std::string::npos,
+                    "zero compressed size is corruption, not a ratio violation");
+        }
+        ArchiveReader empty(temp / "empty-entry.zip");
+        std::string out, error;
+        require(empty.open_error().empty(), empty.open_error());
+        require(empty.read_bytes("payload", out, error) && out.empty(), error);
+    });
+    test("odbpp_tar_total_includes_framing", [&] {
+        ArchiveLimits limits;
+        const auto size = bytes(temp / "job.tar").size();
+        limits.total_bytes = size;
+        ArchiveReader exact(temp / "job.tgz", limits);
+        require(exact.open_error().empty(), exact.open_error());
+        limits.total_bytes = size - 1;
+        ArchiveReader over(temp / "job.tgz", limits);
+        require(over.open_error().find("total byte limit") != std::string::npos,
+                "tar framing counts at exact total boundary");
+        limits.total_bytes = 1023;
+        ArchiveReader framing(temp / "framing-only.tgz", limits);
+        require(framing.open_error().find("total byte limit") != std::string::npos,
+                "even an empty tar charges its end blocks");
     });
     test("odbpp_gzip_live_output_limit", [&] {
         std::istringstream input(bytes(temp / "boundary-32745.gz"));

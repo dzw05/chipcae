@@ -73,6 +73,18 @@ def main(root, fixture):
         with zipfile.ZipFile(root / name, 'w', compression=method) as archive:
             for path, data in files:
                 archive.writestr(path, data)
+    for method, label in [(zipfile.ZIP_STORED, 'stored'), (zipfile.ZIP_DEFLATED, 'deflate')]:
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, 'w', compression=method) as archive:
+            archive.writestr('payload', b'nonempty')
+        corrupt = bytearray(out.getvalue())
+        central = corrupt.index(b'PK\x01\x02')
+        struct.pack_into('<I', corrupt, 18, 0)
+        struct.pack_into('<I', corrupt, central + 20, 0)
+        (root / ('zero-compressed-' + label + '.zip')).write_bytes(corrupt)
+    with zipfile.ZipFile(root / 'empty-entry.zip', 'w') as archive:
+        archive.writestr('payload', b'')
+    (root / 'framing-only.tgz').write_bytes(gzip.compress(tar_bytes([])))
     for optional in ['features', 'tools']:
         with zipfile.ZipFile(root / ('optional-' + optional + '.zip'), 'w') as archive:
             for path, data in files:
