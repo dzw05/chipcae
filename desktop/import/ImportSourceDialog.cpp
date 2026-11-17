@@ -22,10 +22,7 @@ public:
 };
 } // namespace
 QStringList ImportSourceDialog::nameFilters() {
-    return {"IPC-2581 / ODB++ (*.xml *.tgz *.zip)",
-            "IPC-2581 (*.xml)",
-            "ODB++ (*.tgz *.zip)",
-            "STEP B 档 (disabled: unavailable for ECAD import) (*.step *.stp)"};
+    return {"IPC-2581 / ODB++ (*.xml *.tgz *.zip)", "IPC-2581 (*.xml)", "ODB++ (*.tgz *.zip)"};
 }
 bool ImportSourceDialog::isSupportedImportPath(const QString& path) {
     if (path.isEmpty())

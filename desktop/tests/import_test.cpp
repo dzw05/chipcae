@@ -419,6 +419,9 @@ sys.exit(rc)
                 const auto polysetBytes = read(r.polyset);
                 const auto reportBytes = read(r.report);
                 check(!c.start(r) && !c.busy(), "reject existing outputs before launching");
+                check(c.error() ==
+                          "import destination already exists or collides with another path",
+                      "existing destination has deterministic error");
                 check(document.stackJson() == imported && read(r.output) == outputBytes &&
                           read(r.polyset) == polysetBytes && read(r.report) == reportBytes,
                       "existing output rejection preserves document and published files");
@@ -482,6 +485,26 @@ sys.exit(rc)
                   "legacy exact error and unchanged stack");
             if (c.busy())
                 waitFor(c, [&] { c.cancel(); });
+            r.materialMap = map;
+            for (const auto& destination : {r.input, map, dir.path()}) {
+                auto collision = r;
+                collision.output = destination;
+                check(!c.start(collision) && !c.busy() &&
+                          c.error() ==
+                              "import destination already exists or collides with another path",
+                      "input, map and existing-directory collisions have deterministic errors");
+            }
+            for (bool duplicateReport : {false, true}) {
+                auto collision = r;
+                if (duplicateReport)
+                    collision.report = collision.output;
+                else
+                    collision.polyset = collision.output;
+                check(!c.start(collision) && !c.busy() &&
+                          c.error() ==
+                              "import destination already exists or collides with another path",
+                      "duplicate destinations have deterministic errors");
+            }
             for (auto kind : {ImportKind::Ecad, ImportKind::Assembly}) {
                 r.kind = kind;
                 r.materialMap = map;
@@ -529,11 +552,9 @@ sys.exit(rc)
             check(filters.contains("IPC-2581 / ODB++ (*.xml *.tgz *.zip)") &&
                       filters.contains("ODB++ (*.tgz *.zip)"),
                   "ECAD and ODB filters");
-            bool tier = false;
-            for (const auto& f : filters)
-                if (f.contains("*.step") || f.contains("*.stp"))
-                    tier = f.contains("B 档") && f.contains("*.step") && f.contains("*.stp");
-            check(tier, "STEP filter labeled B 档");
+            for (const auto& filter : filters)
+                check(!filter.contains("*.step") && !filter.contains("*.stp"),
+                      "unsupported STEP formats absent from chooser");
             for (const auto& suffix : {"xml",
                                        "XML",
                                        "tgz",

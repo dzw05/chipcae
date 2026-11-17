@@ -27,12 +27,9 @@ void wiring(Window& w, const QString& samples) {
     require(filters.contains("IPC-2581 / ODB++ (*.xml *.tgz *.zip)") &&
                 filters.contains("ODB++ (*.tgz *.zip)"),
             "enabled selector filters match ECAD launch types");
-    bool disabledStep = false;
     for (const auto& filter : filters)
-        if (filter.contains("*.step") || filter.contains("*.stp"))
-            disabledStep = filter.contains("*.step") && filter.contains("*.stp") &&
-                           filter.contains("B 档") && filter.contains("disabled");
-    require(disabledStep, "STEP is displayed as disabled");
+        require(!filter.contains("*.step") && !filter.contains("*.stp"),
+                "unsupported STEP formats absent from chooser");
     QTemporaryDir dir;
     require(dir.isValid(), "temporary directory");
     for (auto suffix : {"xml", "tgz", "zip", "step", "stp", "txt"}) {

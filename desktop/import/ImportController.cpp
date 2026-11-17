@@ -88,8 +88,10 @@ bool ImportController::start(const ImportRequest& request) {
         if (QFileInfo::exists(path) || paths.contains(absolute) ||
             absolute == QFileInfo(input).absoluteFilePath() ||
             (!request.materialMap.isEmpty() &&
-             absolute == QFileInfo(request.materialMap).absoluteFilePath()))
+             absolute == QFileInfo(request.materialMap).absoluteFilePath())) {
+            error_ = "import destination already exists or collides with another path";
             return false;
+        }
         paths.insert(absolute);
     }
     staging_ = std::make_unique<QTemporaryDir>(
@@ -114,7 +116,6 @@ bool ImportController::start(const ImportRequest& request) {
     }
     if (request.acceptBTier)
         arguments << "--accept-b-tier";
-    request_ = request;
     cancelled_ = false;
     busy_ = true;
     outcome_ = ImportOutcome::Running;
@@ -125,6 +126,7 @@ bool ImportController::start(const ImportRequest& request) {
         staging_.reset();
         return false;
     }
+    request_ = request;
     return true;
 }
 
