@@ -3,6 +3,9 @@
 #include "chipcae/mesh/background/tensor_grid.hpp"
 #include "chipcae/mesh/cut/region_level_set.hpp"
 
+#ifdef CHIPCAE_ENABLE_KOKKOS
+#include <Kokkos_Core.hpp>
+#endif
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -18,6 +21,9 @@ inline void require(bool ok, const char* message) {
 template <class F>
 int run(F f) {
     try {
+#ifdef CHIPCAE_ENABLE_KOKKOS
+        Kokkos::ScopeGuard guard;
+#endif
         f();
         return 0;
     } catch (const std::exception& e) {
