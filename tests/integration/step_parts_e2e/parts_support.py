@@ -15,14 +15,13 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'tests/contract'))
 from output_contract import validate_manifest, validate_output
+sys.path.insert(0, str(ROOT / 'tools/samples/step_parts'))
+from make_parts import (box, write_step, prism, prepare, dump, box_parts,
+                        rounded_parts, cylinder, chamfer_lid)
 
 
 class DependencyMissing(AssertionError):
     pass
-
-
-def dump(path, value):
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2))
 
 
 def cli(name):
@@ -56,55 +55,6 @@ def occt():
         sys.exit(77)
 
 
-def box(x, y, z, dx, dy, dz):
-    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
-    from OCP.gp import gp_Pnt
-    return BRepPrimAPI_MakeBox(gp_Pnt(x, y, z), dx, dy, dz).Shape()
-
-
-def write_step(path, shape):
-    from OCP.STEPControl import STEPControl_Writer, STEPControl_AsIs
-    from OCP.IFSelect import IFSelect_RetDone
-    writer = STEPControl_Writer()
-    assert writer.Transfer(shape, STEPControl_AsIs) == IFSelect_RetDone
-    assert writer.Write(str(path)) == IFSelect_RetDone
-
-
-def prism(points, z, height):
-    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakePolygon, BRepBuilderAPI_MakeFace
-    from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
-    from OCP.gp import gp_Pnt, gp_Vec
-    wire = BRepBuilderAPI_MakePolygon()
-    for x, y in points:
-        wire.Add(gp_Pnt(x, y, z))
-    wire.Close()
-    return BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(wire.Wire()).Face(), gp_Vec(0, 0, height)).Shape()
-
-
-def prepare(directory):
-    # Original synthetic IPC, SI geometry below corresponds to its mm dimensions.
-    (directory / 'board.xml').write_text('''<IPC-2581 revision="C"><Ecad><CadData>
-<Layer name="base" layerFunction="DIELECTRIC"/>
-<Stackup><StackupGroup name="S"><StackupLayer layerOrGroupRef="base"
- thickness="0.5" sequence="0" matDes="Si"/></StackupGroup></Stackup>
-<Step name="sp7"><Profile><Polygon><PolyBegin x="0" y="0"/>
-<PolyStepSegment x="56" y="0"/><PolyStepSegment x="56" y="44"/>
-<PolyStepSegment x="0" y="44"/></Polygon></Profile></Step>
-</CadData></Ecad></IPC-2581>''')
-    dump(directory / 'map.json', {'Si': 'silicon'})
-    library = json.loads((ROOT / 'schema/examples/fcbga_demo.materials.json').read_text())
-    # Reuse published cards, freezing temperature tables as test_cut_pipeline does.
-    for card in library['materials']:
-        for section in ('elastic', 'thermal_expansion'):
-            table = card[section]['table']
-            table['temperatures'] = table['temperatures'][:1]
-            table['columns'] = {k: v[:1] for k, v in table['columns'].items()}
-            table.update(interpolation='constant', extrapolation='clamp')
-    dump(directory / 'materials.json', library)
-    dump(directory / 'profile.json', {'schema': 'chipcae.run_profile/1.0', 'ranks': 1, 'backend': 'cpu', 'gpus': 0})
-    return {m['id'] for m in library['materials']}
-
-
 def assembly(parts):
     return {'schema': 'chipcae.assembly/0.1',
             'board': {'path': 'board.xml', 'format': 'ipc2581', 'material_map': 'map.json'},
@@ -129,7 +79,7 @@ def solve(directory, label, n=28, stack='stack.json', materials=()):
     case['stack']['ref'] = stack
     case['materials']['ref'] = 'materials.json'
     case['mesh'].update(nx=n, ny=round(n * 44 / 56), levels=1, min_elems_per_layer=1, max_ratio=100)
-    case['output']['fields'] = ['T', 'U', 'layer_id', 'material_id', 'cell_kind', 'elem_gid', 'volume']
+    case['output']['fields'] = ['T', 'U', 'layer_id', 'material_id', 'cell_kind', 'elem_gid']
     dump(directory / 'case.json', case)
     run('preview', [directory / stack, '-o', directory / (label + '.vtkhdf'),
                     '--nx', n, '--ny', round(n * 44 / 56), '--max-ratio', 100])

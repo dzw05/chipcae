@@ -3,12 +3,9 @@ from parts_support import *
 
 
 def acceptance(d):
-    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
     ids = prepare(d)
     lid_material = 'copper' if 'copper' in ids else 'silicon'
-    write_step(d / 'lid.step', box(6, 6, 1, 44, 32, .5))
-    ring = BRepAlgoAPI_Cut(box(6, 6, 0, 44, 32, 1), box(10, 10, 0, 36, 24, 1)).Shape()
-    write_step(d / 'stiffener.step', ring)
+    box_parts(d)
     imported(d, assembly([part('lid', lid_material), part('stiffener', 'underfill')]))
     baseline = json.loads((ROOT / 'tools/samples/step_parts/box_parts_regions.stack.json').read_text())
     baseline['layers'][-1]['regions'][0]['material'] = lid_material

@@ -7,11 +7,8 @@ from parts_support import *
 
 
 def acceptance(d):
-    from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder
-    from OCP.gp import gp_Ax2, gp_Pnt, gp_Dir
     prepare(d)
-    write_step(d / 'cylinder.step', BRepPrimAPI_MakeCylinder(
-        gp_Ax2(gp_Pnt(28, 22, 0), gp_Dir(0, 0, 1)), 10, 1).Shape())
+    cylinder(d)
     imported(d, assembly([part('cylinder', 'underfill')]))
     exact = math.pi * .010**2 * .001
     hs, errors = [], []
