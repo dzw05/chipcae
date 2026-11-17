@@ -868,20 +868,29 @@ int main() {
                 "diagnostic file and exact line for each unsupported element");
     });
     test("odbpp_directory_symlink", [&] {
-        auto p = temp / "directory-links";
-        minimal(p);
-        std::error_code ec;
-        fs::create_directory_symlink(temp / "job", p / "external", ec);
-        if (ec)
-            return; // Platforms without symlink privileges still exercise tar links.
-        ArchiveReader reader(p);
-        require(reader.open_error().empty(), reader.open_error());
-        require(reported(reader.unsupported(), "external: directory input symlink unsupported"),
-                "directory symlink reported");
-        require(std::none_of(reader.entries().begin(),
-                             reader.entries().end(),
-                             [](const auto& e) { return e.path.starts_with("external"); }),
-                "directory traversal does not follow symlink");
+        for (const auto* kind : {"external-directory", "external-file", "internal", "dangling"}) {
+            auto p = temp / (std::string("directory-links-") + kind);
+            minimal(p);
+            std::error_code ec;
+            const auto link = p / "link";
+            if (std::string_view(kind) == "external-directory")
+                fs::create_directory_symlink(temp / "job", link, ec);
+            else if (std::string_view(kind) == "external-file")
+                fs::create_symlink(temp / "job/matrix/matrix", link, ec);
+            else if (std::string_view(kind) == "internal")
+                fs::create_symlink(p / "matrix/matrix", link, ec);
+            else
+                fs::create_symlink(p / "missing", link, ec);
+            if (ec)
+                return; // Platforms without symlink privileges still exercise tar links.
+            ArchiveReader reader(p);
+            require(reader.open_error() == "IMPORT_REJECTED: directory input symlink link",
+                    "directory symlink rejected: " + reader.open_error());
+            std::string output, error;
+            require(!reader.read_bytes("matrix/matrix", output, error) &&
+                        error == reader.open_error(),
+                    "rejected directory cannot deliver payload");
+        }
     });
     test("odbpp_symbol_order_and_nested_Z", [&] {
         auto p = temp / "symbol-order";
@@ -936,7 +945,7 @@ int main() {
         std::error_code ec;
         fs::create_symlink(temp / "job.tar.Z", p / "link", ec);
         if (!ec)
-            rejected(p, "empty input");
+            rejected(p, "directory input symlink link");
     });
     test("odbpp_review_runtime_limits", [&] {
         for (bool lines : {false, true}) {

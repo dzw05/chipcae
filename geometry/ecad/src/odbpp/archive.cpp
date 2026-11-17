@@ -115,8 +115,8 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                     report("cannot inspect directory entry: " + ec.message());
                     it.disable_recursion_pending();
                 } else if (std::filesystem::is_symlink(status)) {
-                    report("directory input symlink unsupported");
-                    it.disable_recursion_pending();
+                    fail("directory input symlink " + rel);
+                    return;
                 } else {
                     const bool dir = std::filesystem::is_directory(status);
                     if (!dir && !std::filesystem::is_regular_file(status)) {
