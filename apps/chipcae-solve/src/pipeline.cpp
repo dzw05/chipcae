@@ -644,6 +644,14 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             lo = std::min(lo, w);
             hi = std::max(hi, w);
         }
+        // The O1 writer stores linear hexes. Explicitly interpolate the Q2
+        // solution into Q1; summaries above retain the full Q2 nodal field.
+        H1_FECollection output_collection(1, 3);
+        FiniteElementSpace output_scalar(&mesh, &output_collection),
+            output_vector(&mesh, &output_collection, 3, Ordering::byVDIM);
+        GridFunction output_temperature(&output_scalar), output_displacement(&output_vector);
+        output_temperature.ProjectGridFunction(temperature);
+        output_displacement.ProjectGridFunction(displacement);
         io::ResultsStep result;
         auto& part = result.hex;
         std::map<int, Index> local_nodes;
@@ -656,13 +664,13 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                     part.hex.push_back(it->second);
                     if (inserted) {
                         Array<int> dofs;
-                        scalar.GetVertexDofs(v, dofs);
+                        output_scalar.GetVertexDofs(v, dofs);
                         int d = dofs[0];
                         const auto* point = mesh.GetVertex(v);
                         part.points.insert(part.points.end(), point, point + 3);
-                        part.T.push_back(temperature[d]);
+                        part.T.push_back(output_temperature[d]);
                         for (int c = 0; c < 3; ++c)
-                            part.U.push_back(displacement[vector.DofToVDof(d, c)]);
+                            part.U.push_back(output_displacement[output_vector.DofToVDof(d, c)]);
                     }
                 }
                 part.elem_gid.push_back(arrays.elem_gid[e]);

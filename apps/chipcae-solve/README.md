@@ -30,8 +30,11 @@ ownership. `column_gmg` emits a warning and falls back to this direct solver.
 3-2-1 fixes xyz at the bottom xmin/ymin corner, yz at xmax/ymin and z at
 xmin/ymax. Fixed face constraints are also supported.
 
-Results use O1's VTKHDF writer, sampled at exact Q2 vertex nodes. Selected fields
-are honored; summaries use all Q2 nodes. `warpage_pv` removes the least-squares
+Results use O1's VTKHDF writer with 8-node linear hexes. T and U are explicitly
+interpolated from Q2 into nodal Q1 spaces on the same mesh. This preserves vertex
+values but discards quadratic variation within each cell; it is a lower-order
+visualization, not the full Q2 field. Selected fields are honored; summaries use
+all Q2 nodes. `warpage_pv` removes the least-squares
 plane from top-surface Q2 displacement samples. The manifest includes T_max,
 U_mag_max, warpage_pv and the global mesh hash, independent of MPI size.
 `events.bin` contains CAELOG1 state, progress, residual, warning, output,
