@@ -190,3 +190,16 @@ if(CHIPCAE_BUILD_TESTS)
     set_tests_properties(desktop_monitor desktop_monitor_broker_lifetime desktop_monitor_invalid_manifest
         PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
 endif()
+
+if(CHIPCAE_BUILD_TESTS)
+    add_executable(desktop_window_wire tests/window_wire_test.cpp)
+    target_link_libraries(desktop_window_wire PRIVATE chipcae_desktop_ui chipcae_desktop_viewer chipcae_desktop_results)
+    target_compile_definitions(desktop_window_wire PRIVATE
+        CHIPCAE_REPOSITORY="${CMAKE_CURRENT_SOURCE_DIR}/.."
+        PYTHON_EXECUTABLE="${CHIPCAE_IMPORT_PYTHON}"
+        MOCK_SCRIPT="${CMAKE_CURRENT_SOURCE_DIR}/tools/mock_import.py")
+    vtk_module_autoinit(TARGETS desktop_window_wire MODULES ${VTK_LIBRARIES})
+    add_test(NAME desktop_window_wire COMMAND desktop_window_wire ${CMAKE_CURRENT_BINARY_DIR}/result-samples)
+    set_tests_properties(desktop_window_wire PROPERTIES FIXTURES_REQUIRED result_samples
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 90)
+endif()
