@@ -14,7 +14,6 @@ class Errors(unittest.TestCase):
                  'missing_unit', 'missing_layers', 'missing_outline', 'bad_outline',
                  'empty_outline', 'polygon_outside_box', 'bad_box', 'bad_polygon', 'missing_refs',
                  'bad_refs', 'bad_ref', 'missing_ref_path', 'missing_ref_hash',
-                 'no_copper_missing_refs', 'no_copper_zero_box', 'no_copper_zero_polygon',
                  'output_staging', 'report_staging']
         for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
@@ -80,13 +79,6 @@ class Errors(unittest.TestCase):
                     if case == 'bad_ref': stack['external_refs'] = [None]
                     if case == 'missing_ref_path': stack['external_refs'][0].pop('path')
                     if case == 'missing_ref_hash': stack['external_refs'][0].pop('sha256')
-                if case.startswith('no_copper_'):
-                    stack['layers'] = []
-                    if case == 'no_copper_missing_refs':
-                        stack.pop('external_refs')
-                        code = 12
-                    if case == 'no_copper_zero_box': stack['outline']['box'] = [0, 0, 0, 0]
-                    if case == 'no_copper_zero_polygon': stack['outline']['polygon'] = [[0, 0], [1e-3, 0], [2e-3, 0]]
                 source, output = root / 'input.json', root / 'output.json'
                 source.write_text(json.dumps(stack))
                 if case == 'empty_json': source.write_text('')

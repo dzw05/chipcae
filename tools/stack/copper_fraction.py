@@ -42,8 +42,14 @@ def _homogenize(stack, stack_dir):
            ('copper' in layer and not isinstance(layer['copper'], dict))
            for layer in stack['layers']):
         raise invalid('invalid stack layer or copper object')
+    result = copy.deepcopy(stack)
+    result.pop('external_refs', None)
+    converted = [layer for layer in result['layers']
+                 if 'polygons' in layer.get('copper', {})]
+    if not converted:
+        return result, []
     outline = required(stack, 'outline')
-    if not isinstance(outline, dict) or not any(k in outline for k in ('box', 'polygon')):
+    if not isinstance(outline, dict):
         raise invalid('outline must be an object containing box or polygon')
     if 'box' in outline:
         box = outline['box']
@@ -57,10 +63,6 @@ def _homogenize(stack, stack_dir):
                     any(type(v) not in (int, float) or not math.isfinite(v) for v in p)
                     for p in polygon)):
             raise invalid('invalid outline polygon')
-    result = copy.deepcopy(stack)
-    result.pop('external_refs', None)
-    converted = [layer for layer in result['layers']
-                 if 'polygons' in layer.get('copper', {})]
     refs = {}
     if 'external_refs' not in stack:
         raise StackPrepError(12, 'INPUT_REFERENCE_MISSING', 'missing external_refs')
@@ -116,7 +118,7 @@ def _homogenize(stack, stack_dir):
             if any(not (x0 <= x <= x1 and y0 <= y <= y1) for x, y in ring):
                 raise invalid('outline polygon outside outline box')
         area = abs(ring_area_m2(ring, 1.0))
-    elif outline_ring is not None:
+    elif 'box' not in outline and outline_ring is not None:
         ring, dbu = outline_ring
         area = abs(ring_area_m2(ring, dbu))
         outline['polygon'] = [[x * dbu, y * dbu] for x, y in ring]

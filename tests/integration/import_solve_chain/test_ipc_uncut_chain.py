@@ -43,6 +43,12 @@ def main():
         for name, expected in [('F.Cu', .12), ('B.Cu', .24)]:
             assert name in fractions, ('importer layer discrepancy', fractions)
             assert math.isclose(fractions[name], expected, rel_tol=1e-12), ('importer geometry discrepancy', fractions)
+        stack = json.loads((root / 'solve.stack.json').read_text())
+        # tensor_grid.cpp accumulates stack layers from z=0 in array order.
+        # Lock that physical order to the fixture's IPC StackupLayer sequence.
+        assert [layer['name'] for layer in stack['layers']] == ['F.Cu', 'Core', 'B.Cu']
+        for layer, thickness in zip(stack['layers'], [0.000035, 0.0016, 0.000035], strict=True):
+            assert math.isclose(layer['thickness'], thickness, rel_tol=1e-12)
         materials = []
         for name, E, nu, alpha, k in [('mat.cu', 110e9, .34, 17e-6, 390), ('mat.fr4', 25e9, .3, 1e-5, .3)]:
             def table(columns):
@@ -64,7 +70,6 @@ def main():
         summary = {entry['name']: entry['value'] for entry in manifest['summary']}
         for key in ('warpage_pv', 'U_mag_max', 'T_max'):
             assert math.isfinite(summary[key]), (key, summary)
-        stack = json.loads((root / 'solve.stack.json').read_text())
         conductivity = {'mat.cu': 390, 'mat.fr4': .3}
         layers = []
         for layer in stack['layers']:
@@ -82,6 +87,8 @@ def main():
             assert count > 0
             assert np.all(hexes['CellData/cell_kind'][:] == 0)
             z = hexes['Points'][:, 2]
+            assert math.isclose(float(np.min(z)), 0.0, abs_tol=1e-15)
+            assert math.isclose(float(np.max(z)), sum(t for t, _ in layers), rel_tol=1e-12)
             resistance = np.zeros_like(z)
             bottom = float(np.min(z))
             for thickness, k in layers:

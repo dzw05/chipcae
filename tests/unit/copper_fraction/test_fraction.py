@@ -112,10 +112,27 @@ def check(root):
     duplicate['external_refs'] *= 2
     assert homogenize_copper(duplicate, root) == (output, report)
     for layers in ([], [stack['layers'][2], stack['layers'][3]]):
-        plain = dict(stack, layers=layers)
-        converted, entries = homogenize_copper(plain, root)
-        assert_key_order(converted, {k: v for k, v in plain.items() if k != 'external_refs'})
-        assert entries == []
+        for outline in (None, {}, {'box': [0, 0, 0, 0]},
+                        {'polygon': [[0, 0], [.001, 0], [.002, 0]]}):
+            for references in (None, [], [{'invalid': True}]):
+                plain = dict(stack, layers=layers)
+                if outline is None:
+                    plain.pop('outline')
+                else:
+                    plain['outline'] = outline
+                if references is None:
+                    plain.pop('external_refs')
+                else:
+                    plain['external_refs'] = references
+                before_plain = copy.deepcopy(plain)
+                converted, entries = homogenize_copper(plain, root)
+                expected = {k: v for k, v in plain.items() if k != 'external_refs'}
+                assert_key_order(converted, expected)
+                assert_key_order(plain, before_plain)
+                assert entries == []
+                path, rp = cli(root, plain, 'passthrough')
+                assert_key_order(json.loads(path.read_text()), expected)
+                assert json.loads(rp.read_text())['layers'] == []
     # Tolerance is applied to signed fractions before clamping.
     for width, expected in [(1.0 + 5e-13, 1.0), (-5e-13, 0.0)]:
         boundary = fixture(root, polyset([('F.Cu', (((0, 0), (1, 0), (1, 1), (0, 1)),))], 1.0))
