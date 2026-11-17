@@ -20,10 +20,21 @@ def main():
                                           (pb, pa, '3:extra|', 'ipc')):
             r = diff_stacks(left, right)
             assert entry(r, 'layers')['grade'] == 'hard'
+            assert entry(r, 'layers')['delta'] == 1
             e = entry(r, 'thickness', key)
             assert e['grade'] == 'hard' and e[missing] is None
             assert e['delta'] is None and e['tol'] is None
             number(e['ipc' if missing == 'odb' else 'odb'], 1e-4)
+        # Count differences remain hard even when neither stack has copper.
+        dielectric = copy.deepcopy(a)
+        for layer in dielectric['layers']:
+            layer.pop('copper', None)
+        pc = save(directory / 'dielectric.json', dielectric)
+        dielectric['layers'].append(dict(name='extra', thickness=1e-4, material='mat.fr4'))
+        pd = save(directory / 'dielectric-extra.json', dielectric)
+        for left, right in ((pc, pd), (pd, pc)):
+            e = entry(diff_stacks(left, right), 'layers')
+            assert e['grade'] == 'hard' and e['delta'] == 1
         # A completed comparison exits zero even with hard differences.
         out = directory / 'cli'
         proc = subprocess.run([sys.executable, str(ROOT / 'tools/vv/ecad_diff.py'),

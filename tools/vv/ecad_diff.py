@@ -106,6 +106,26 @@ def _load(path):
     if not isinstance(outline, dict):
         _invalid('invalid outline')
     polysets = {}
+
+    def load_polyset(file):
+        _string(file)
+        if Path(file).is_absolute() or '..' in Path(file).parts or '\\' in file or '://' in file:
+            _invalid('polyset path must be relative')
+        if file not in polysets:
+            refs = stack.get('external_refs', [])
+            if not isinstance(refs, list):
+                _invalid('invalid external_refs')
+            ref = next((r for r in refs if r['path'] == file), None)
+            if ref is None:
+                raise EcadDiffError(12, 'INPUT_REFERENCE_MISSING', 'polyset absent from external_refs')
+            data = _bytes(Path(path).parent / file)
+            digest = _string(ref['sha256'])
+            if len(digest) != 64 or any(c not in '0123456789abcdefABCDEF' for c in digest):
+                _invalid('invalid SHA-256 digest')
+            if hashlib.sha256(data).hexdigest() != digest.lower():
+                raise EcadDiffError(10, 'INPUT_HASH_MISMATCH', 'polyset SHA-256 differs')
+            polysets[file] = _read_polyset(data)
+
     for layer in stack['layers']:
         _string(layer['name'])
         _number(layer['thickness'], True)
@@ -123,24 +143,16 @@ def _load(path):
         polygons = copper['polygons']
         file = _string(polygons['file'])
         _string(polygons['layer'])
-        if Path(file).is_absolute() or '..' in Path(file).parts or '\\' in file or '://' in file:
-            _invalid('polyset path must be relative')
-        if file not in polysets:
-            refs = stack.get('external_refs', [])
-            if not isinstance(refs, list):
-                _invalid('invalid external_refs')
-            ref = next((r for r in refs if r['path'] == file), None)
-            if ref is None:
-                raise EcadDiffError(12, 'INPUT_REFERENCE_MISSING', 'polyset absent from external_refs')
-            data = _bytes(Path(path).parent / file)
-            digest = _string(ref['sha256'])
-            if len(digest) != 64 or any(c not in '0123456789abcdefABCDEF' for c in digest):
-                _invalid('invalid SHA-256 digest')
-            if hashlib.sha256(data).hexdigest() != digest.lower():
-                raise EcadDiffError(10, 'INPUT_HASH_MISMATCH', 'polyset SHA-256 differs')
-            polysets[file] = _read_polyset(data)
+        load_polyset(file)
         if polygons['layer'] not in polysets[file]:
             _invalid('copper polygon layer missing')
+    refs = stack.get('external_refs', [])
+    if not isinstance(refs, list):
+        _invalid('invalid external_refs')
+    for ref in refs:
+        file = _string(ref['path'])
+        if file.endswith('.polyset'):
+            load_polyset(file)
     if 'polygon' in outline:
         geometry = _geometry(outline['polygon'])
     else:
@@ -200,9 +212,10 @@ def _diff(odb, ipc, delta):
     sb = ['copper' in layer for layer in b]
     names_a = [l['name'] for l in a]
     names_b = [l['name'] for l in b]
-    add('layers', 'stack', names_a, names_b, 0 if sa == sb else abs(len(a) - len(b)),
+    same_structure = len(a) == len(b) and sa == sb
+    add('layers', 'stack', names_a, names_b, abs(len(a) - len(b)),
         None, 'identical' if names_a == names_b else 'layer names differ',
-        'info' if sa == sb else 'hard')
+        'info' if same_structure else 'hard')
     for i in range(max(len(a), len(b))):
         x = a[i] if i < len(a) else None
         y = b[i] if i < len(b) else None
