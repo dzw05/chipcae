@@ -16,6 +16,10 @@ class Command(Contract):
                 runner = SyntheticRunner()
                 rc, _ = self.invoke(runner, extra=("--test", test))
                 self.assertEqual(rc, 0)
+                data = self.payload()
+                self.check_payload(data, 1, True, test=test)
+                self.assertEqual(len(data["runs"]), 1)
+                self.assertEqual(data["runs"][0]["status"], "passed")
                 self.assertEqual(len(runner.calls), 2)
                 discovery, execution = runner.calls
                 for argv, kwargs in runner.calls:

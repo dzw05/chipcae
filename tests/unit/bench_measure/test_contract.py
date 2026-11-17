@@ -99,11 +99,11 @@ class Contract(unittest.TestCase):
     def payload(self):
         return json.loads(self.out.read_text(encoding="utf-8"))
 
-    def check_payload(self, data, repeat, passed, kind="实测"):
+    def check_payload(self, data, repeat, passed, kind="实测", test="solve_mesh"):
         self.assertEqual(set(data), {"schema_version", "kind", "test", "repeat", "runs", "all_passed", "error"})
         self.assertEqual(data["schema_version"], 1)
         self.assertEqual(data["kind"], kind)
-        self.assertEqual(data["test"], "solve_mesh")
+        self.assertEqual(data["test"], test)
         self.assertEqual(data["repeat"], repeat)
         self.assertIs(data["all_passed"], passed)
         self.assertIsInstance(data["error"], str)
@@ -130,7 +130,8 @@ class Contract(unittest.TestCase):
 
     def test_failure_and_skip(self):
         for outcome, expected in [((8, "failed"), "failed"), ((8, "passed"), "failed"),
-                                  ((0, "failed"), "failed"), ((0, "skipped"), "skipped")]:
+                                  ((0, "failed"), "failed"), ((0, "skipped"), "skipped"),
+                                  ((8, "skipped"), "skipped")]:
             with self.subTest(outcome=outcome):
                 self.out.unlink(missing_ok=True)
                 rc, _ = self.invoke(SyntheticRunner(outcomes=[outcome]))

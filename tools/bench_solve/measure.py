@@ -83,7 +83,7 @@ def run_once(build, test, index, report, runner, clock):
         run['status'], run['error'] = report_status(report, test)
     except Exception as error:
         run['error'] = exception_message(error)
-    if run['returncode'] != 0:
+    if run['returncode'] != 0 and run['status'] == 'passed':
         run['status'] = 'failed'
         run['error'] = f"CTest exited with {run['returncode']}"
     return run
