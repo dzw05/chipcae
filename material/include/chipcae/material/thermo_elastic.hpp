@@ -42,6 +42,33 @@ public:
             if (code != StatusCode::Ok)
                 return finish(out, code);
         }
+        Vec6 th;
+        auto code = in.override_T_sf ? thermal_.evaluate(in.T_np1, in.T_sf, th)
+                                     : thermal_.evaluate(in.T_np1, th);
+        if (code != StatusCode::Ok)
+            return finish(out, code);
+        return response(ctx, in, symmetry_, p, th, out);
+    }
+    // Device-side constituent access preserves each thermal convention and zero override.
+    KOKKOS_INLINE_FUNCTION StatusCode isotropic_properties(const PointInput& in,
+                                                           Real& E,
+                                                           Real& nu) const noexcept {
+        E = 1e9;
+        nu = .3;
+        if (constants_.columns == 0)
+            return StatusCode::Ok;
+        auto code = constants_.evaluate(0, in.T_np1, E);
+        return code == StatusCode::Ok ? constants_.evaluate(1, in.T_np1, nu) : code;
+    }
+    bool isotropic() const noexcept {
+        return symmetry_ == ElasticSymmetry::Isotropic && thermal_.isotropic();
+    }
+    KOKKOS_INLINE_FUNCTION static StatusCode response(const StepContext& ctx,
+                                                      const PointInput& in,
+                                                      ElasticSymmetry symmetry_,
+                                                      const Real* p,
+                                                      Vec6 th,
+                                                      PointOutput& out) noexcept {
         Real E[3], nu[3], G[3];
         if (symmetry_ == ElasticSymmetry::Isotropic) {
             for (int i = 0; i < 3; ++i) {
@@ -106,11 +133,6 @@ public:
             for (int i = 0; i < 6; ++i)
                 C[i * 6 + col] = x[i];
         }
-        Vec6 th;
-        auto code = in.override_T_sf ? thermal_.evaluate(in.T_np1, in.T_sf, th)
-                                     : thermal_.evaluate(in.T_np1, th);
-        if (code != StatusCode::Ok)
-            return finish(out, code);
         if (in.R) {
             auto Q = mandel_rotation_matrix(*in.R);
             th = mat6_vec(mat6_transpose(Q), th);
