@@ -54,8 +54,9 @@ and `qoi_surface` on an 81×81 grid in millimetres, then converted back to metre
 
 The comparison test reads only `REFERENCE.json` and checks the required fields,
 model, refinement, and delta arithmetic. The runtime version and generating
-host are recorded in `calculix_version` and `host`. The JSON uses exactly the
-fixed top-level keys from the brief; source and deck headers record Apache-2.0.
+host are recorded in `calculix_version` and `host`. The JSON preserves all
+required top-level keys from the brief and records Apache-2.0 in its first
+`SPDX-License-Identifier` property. Source and deck headers also record Apache-2.0.
 
 The ASCII FRD layout used by CalculiX 2.23 is `(1X,I2,I10,3E12.5)`:
 columns 2–3 contain the record marker, 4–13 the node ID, and 14–49
