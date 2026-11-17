@@ -2,6 +2,7 @@
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QDir>
 #include <QFile>
 #include <QTemporaryDir>
 #include <iostream>
@@ -97,6 +98,90 @@ int main(int argc, char** argv) {
         require(meshDigest == MeshDigest::fromJson(digestJson), "digest equality");
         meshDigest.L = 2;
         require(!(meshDigest == MeshDigest::fromJson(digestJson)), "digest difference");
+
+        QTemporaryDir extra;
+        CaseDocument regionDoc;
+        require(regionDoc.load(QStringLiteral(DOCUMENT_FIXTURE_DIR "/fcbga_demo.case.json")),
+                "load fixture for extra cases");
+        require(regionDoc.save(extra.filePath("base.json")), "stage portable case");
+        auto regionStack = regionDoc.stackJson();
+        bool cleared = false;
+        for (auto& layer : regionStack.at("layers").array_range()) {
+            if (layer.contains("regions")) {
+                layer.erase("material");
+                cleared = true;
+            }
+        }
+        require(cleared, "demo stack has a region layer");
+        QFile regionFile(extra.filePath("region.stack.json"));
+        require(regionFile.open(QIODevice::WriteOnly), "write region stack");
+        const auto regionBytes = QByteArray::fromStdString(regionStack.to_string());
+        regionFile.write(regionBytes);
+        regionFile.close();
+        auto regionCase = regionDoc.toJson();
+        regionCase["stack"]["ref"] = "region.stack.json";
+        regionCase["stack"]["sha256"] =
+            QCryptographicHash::hash(regionBytes, QCryptographicHash::Sha256).toHex().toStdString();
+        regionDoc.applyJson(regionCase);
+        require(regionDoc.validate().empty(), "region-only layer validates");
+        require(regionDoc.save(extra.filePath("region.json")), "save region-only layer case");
+        CaseDocument regionReload;
+        require(regionReload.load(extra.filePath("region.json")), "reload region-only layer case");
+
+        auto altStack = regionReload.stackJson();
+        altStack["layers"][0]["name"] = "alt_substrate";
+        QFile altFile(extra.filePath("alt.stack.json"));
+        require(altFile.open(QIODevice::WriteOnly), "write alt stack");
+        const auto altBytes = QByteArray::fromStdString(altStack.to_string());
+        altFile.write(altBytes);
+        altFile.close();
+        auto altCase = regionReload.toJson();
+        altCase["stack"]["ref"] = "alt.stack.json";
+        altCase["stack"]["sha256"] =
+            QCryptographicHash::hash(altBytes, QCryptographicHash::Sha256).toHex().toStdString();
+        regionReload.applyJson(altCase);
+        require(regionReload.stackJson()["layers"][0]["name"] == "alt_substrate",
+                "applyJson refreshes cached stack");
+        require(regionReload.save(extra.filePath("alt.json")), "save after ref change");
+        CaseDocument altReload;
+        require(altReload.load(extra.filePath("alt.json")), "reload after ref change");
+        require(altReload.stackJson()["layers"][0]["name"] == "alt_substrate",
+                "saved snapshot follows the new stack ref");
+
+        QDir src(extra.filePath("collision-src"));
+        require(src.mkpath("."), "collision source dir");
+        QFile dummy(src.filePath("stack.json"));
+        require(dummy.open(QIODevice::WriteOnly), "write dummy external stack.json");
+        dummy.write("payload-not-a-stack");
+        dummy.close();
+        const auto dummyHash =
+            QCryptographicHash::hash(QByteArray("payload-not-a-stack"), QCryptographicHash::Sha256)
+                .toHex()
+                .toStdString();
+        auto collisionStack = altReload.stackJson();
+        collisionStack["external_refs"] = Json::array();
+        Json ext = Json::object();
+        ext["path"] = "stack.json";
+        ext["sha256"] = dummyHash;
+        collisionStack["external_refs"].push_back(ext);
+        QFile collisionFile(src.filePath("model.stack.json"));
+        require(collisionFile.open(QIODevice::WriteOnly), "write colliding stack");
+        const auto collisionBytes = QByteArray::fromStdString(collisionStack.to_string());
+        collisionFile.write(collisionBytes);
+        collisionFile.close();
+        auto collisionCase = altReload.toJson();
+        collisionCase["stack"]["ref"] = "collision-src/model.stack.json";
+        collisionCase["stack"]["sha256"] =
+            QCryptographicHash::hash(collisionBytes, QCryptographicHash::Sha256)
+                .toHex()
+                .toStdString();
+        altReload.applyJson(collisionCase);
+        require(altReload.save(extra.filePath("collision.json")),
+                "save with stack.json asset collision");
+        CaseDocument collisionReload;
+        require(collisionReload.load(extra.filePath("collision.json")),
+                "reload after stack.json asset collision");
+
         std::cout << "CaseDocument tests passed\n";
         return 0;
     } catch (const std::exception& e) {

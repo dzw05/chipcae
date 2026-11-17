@@ -102,10 +102,42 @@ void CaseDocument::beginEdit() {
     emit editStarted();
 }
 void CaseDocument::applyJson(const Json& value) {
-    if (data_ != value) {
-        data_ = value;
-        markDirty();
+    if (data_ == value)
+        return;
+    Json materials = materials_;
+    Json stack = stack_;
+    const bool refsChanged =
+        (value.contains("stack") &&
+         (!data_.contains("stack") || value.at("stack") != data_.at("stack"))) ||
+        (value.contains("materials") &&
+         (!data_.contains("materials") || value.at("materials") != data_.at("materials")));
+    if (refsChanged) {
+        try {
+            if (path_.isEmpty())
+                throw std::runtime_error("Cannot change case references before load");
+            const auto dir = QFileInfo(path_).absoluteDir();
+            if (value.contains("materials")) {
+                materials = reference(value.at("materials"), dir);
+                libraryCheck(materials);
+            }
+            if (value.contains("stack")) {
+                stack = reference(value.at("stack"), dir);
+                if (stack.contains("external_refs")) {
+                    const auto stackPath = dir.filePath(
+                        QString::fromStdString(value.at("stack").at("ref").as<std::string>()));
+                    for (const auto& ref : stack.at("external_refs").array_range())
+                        reference(ref, QFileInfo(stackPath).absoluteDir(), false);
+                }
+            }
+        } catch (const std::exception& e) {
+            errors_ = {exceptionError(e)};
+            return;
+        }
     }
+    data_ = value;
+    materials_ = std::move(materials);
+    stack_ = std::move(stack);
+    markDirty();
 }
 void CaseDocument::setValue(const std::string& pointer, const Json& value) {
     auto copy = data_;
@@ -211,7 +243,8 @@ DocumentErrors CaseDocument::validate() const {
             for (const auto& m : materials_.at("materials").array_range())
                 ids.insert(m.at("id").as<std::string>());
             for (const auto& layer : stack_.at("layers").array_range()) {
-                if (!ids.contains(layer.at("material").as<std::string>()))
+                if (layer.contains("material") &&
+                    !ids.contains(layer.at("material").as<std::string>()))
                     result.push_back({"MATERIAL_REFERENCE_INVALID", "Unknown layer material id"});
                 if (layer.contains("regions"))
                     for (const auto& region : layer.at("regions").array_range())
@@ -285,10 +318,21 @@ bool CaseDocument::save(const QString& path) {
                         throw std::runtime_error("Cannot copy stack external reference");
                 }
             }
-            write(assetDir.filePath("stack.json"), stack_);
-            write(assetDir.filePath("materials.json"), materials_);
+            auto uniqueName = [&](const QString& preferred) {
+                QString name = preferred;
+                int n = 0;
+                while (assetDir.exists(name))
+                    name = QStringLiteral("case-%1-%2").arg(++n).arg(preferred);
+                return name;
+            };
+            const auto stackName = uniqueName(QStringLiteral("stack.json"));
+            const auto materialsName = uniqueName(QStringLiteral("materials.json"));
+            write(assetDir.filePath(stackName), stack_);
+            write(assetDir.filePath(materialsName), materials_);
+            const QString names[] = {stackName, materialsName};
+            int i = 0;
             for (const auto* key : {"stack", "materials"}) {
-                const auto name = QString::fromLatin1(key) + ".json";
+                const auto& name = names[i++];
                 copy[key]["ref"] = (bundle + '/' + name).toStdString();
                 if (copy[key].contains("sha256"))
                     copy[key]["sha256"] = digest(bytes(assetDir.filePath(name))).toStdString();
