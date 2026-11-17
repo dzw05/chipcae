@@ -35,5 +35,7 @@ if(CHIPCAE_BUILD_TESTS)
         set_tests_properties(desktop_${test}_smoke PROPERTIES TIMEOUT 30)
     endforeach()
     set_tests_properties(desktop_window_smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-    set_tests_properties(desktop_render_smoke PROPERTIES ENVIRONMENT "VTK_DEFAULT_OPENGL_WINDOW=vtkEGLRenderWindow;DISPLAY=")
+    # DISPLAY and VTK_DEFAULT_OPENGL_WINDOW are left to the caller: local Mesa EGL
+    # (no DISPLAY) or CI Xvfb + vtkXOpenGLRenderWindow. Forcing DISPLAY= here would
+    # hide the Xvfb display and regress the GitHub runner.
 endif()

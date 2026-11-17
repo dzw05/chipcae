@@ -10,18 +10,23 @@ export PATH="$CMAKE_PREFIX_PATH/bin:$PATH"
 cmake -S desktop -B build-desktop -G Ninja -DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH"
 cmake --build build-desktop --parallel 2
 QT_QPA_PLATFORM=offscreen ctest --test-dir build-desktop --no-tests=error --output-on-failure
+# 有 Mesa EGL ICD 时（本机常见）：无 DISPLAY 的离屏 EGL
 env -u DISPLAY QT_QPA_PLATFORM=offscreen VTK_DEFAULT_OPENGL_WINDOW=vtkEGLRenderWindow \
   ctest --test-dir build-desktop --no-tests=error -R 'desktop_.*(window|render|capture|chart)' --output-on-failure
-QT_QPA_PLATFORM=offscreen ctest --test-dir build-desktop --no-tests=error --output-on-failure \
-  -R 'desktop_(window|render)_smoke'
+# GitHub ubuntu-latest 无 /dev/dri，vtkEGLRenderWindow 无法初始化设备。
+# Desktop job 用 Xvfb + Mesa llvmpipe + vtkXOpenGLRenderWindow 做真实软件渲染，不算 skip。
+xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 VTK_DEFAULT_OPENGL_WINDOW=vtkXOpenGLRenderWindow \
+  ctest --test-dir build-desktop --no-tests=error --output-on-failure -R desktop_render_smoke
 # 真正嵌入 Qt OpenGL：在 X11 桌面运行，或用 Xvfb/Mesa
 QT_QPA_PLATFORM=xcb xvfb-run -a build-desktop/desktop_window_smoke --present
 build-desktop/chipcae-desktop
 ```
 
 Qt offscreen 测试只构造真实 MainWindow/QVTK 控件并运行事件循环，不显示控件；
-它不证明 Qt OpenGL 可用。独立 render 测试显式使用 vtkEGLRenderWindow，
-渲染几何并重读 `desktop-render.png`，检查 320×240 和非恒定像素；GL 失败不跳过。
+它不证明 Qt OpenGL 可用。独立 render 测试按 `VTK_DEFAULT_OPENGL_WINDOW`
+选择 `vtkEGLRenderWindow`（默认，无 DISPLAY）或 `vtkXOpenGLRenderWindow`
+（CI / Xvfb），渲染几何并重读 `desktop-render.png`，检查 320×240 和非恒定像素。
+先查 SupportsOpenGL 再 Render，避免 EGL 初始化失败后段错误；GL 失败不跳过。
 `--present` 为额外 X11 嵌入冒烟；手工旋转/缩放仍需有交互桌面的人复核。
 
 ## SDK 锁与探测
