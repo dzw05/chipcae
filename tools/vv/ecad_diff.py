@@ -145,13 +145,13 @@ def _load(path):
             if ref is None:
                 raise EcadDiffError(12, 'INPUT_REFERENCE_MISSING', 'polyset absent from external_refs')
             data = _bytes(Path(path).parent / file)
-            if outline_only and not _has_outline(data):
-                return
             digest = _string(ref['sha256'])
             if len(digest) != 64 or any(c not in '0123456789abcdefABCDEF' for c in digest):
                 _invalid('invalid SHA-256 digest')
             if hashlib.sha256(data).hexdigest() != digest.lower():
                 raise EcadDiffError(10, 'INPUT_HASH_MISMATCH', 'polyset SHA-256 differs')
+            if outline_only and not _has_outline(data):
+                return
             polysets[file] = _read_polyset(data)
 
     for layer in stack['layers']:
@@ -259,13 +259,6 @@ def _diff(odb, ipc, delta):
         if ca[i] is not None or cb[i] is not None:
             ax, px = ca[i] or (0, 0)
             ay, py = cb[i] or (0, 0)
-            # A fraction carries no boundary; use the corresponding explicit copper rings.
-            fx = 'fraction' in x.get('copper', {})
-            fy = 'fraction' in y.get('copper', {})
-            if fx and not fy and py > 0:
-                px = py
-            if fy and not fx and px > 0:
-                py = px
             d, p = abs(ax - ay), max(px, py)
             if p == 0:
                 p = max(4 * math.sqrt(max(ax, ay)), delta)
@@ -273,7 +266,7 @@ def _diff(odb, ipc, delta):
             grade = 'hard' if relative > 0.01 else 'discuss' if d > delta * p else 'info'
             add('copper_area', key, ax, ay, d, delta * p,
                 f'δ = {delta}; P_layer = {p} (total copper ring perimeter; '
-                'fractions use paired rings or scaled outline; empty fallback 4√area or δ); '
+                'fractions use scaled outline; empty fallback 4√area or δ); '
                 'absolute ring areas summed; relative difference uses larger area, zero versus nonzero is 100%', grade)
     thickness('total_thickness', 'stack', math.fsum(l['thickness'] for l in a),
               math.fsum(l['thickness'] for l in b))
