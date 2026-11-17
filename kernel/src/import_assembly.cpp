@@ -330,15 +330,14 @@ int run_assembly(const ImportOptions& options) {
             d.details = message;
             defects.push_back(d);
         };
-        std::map<std::string, J> pending;
-        for (const auto& p : all_parts)
-            pending.emplace(p["id"].as<std::string>(), p);
+        auto pending = all_parts;
         std::vector<J> ordered;
         std::set<std::string> done;
         while (!pending.empty()) {
             bool progress = false;
             for (auto it = pending.begin(); it != pending.end();) {
-                const auto& v = it->second["placement"];
+                const auto id = (*it)["id"].as<std::string>();
+                const auto& v = (*it)["placement"];
                 if (v.contains("attach")) {
                     auto ref = v["attach"].as<std::string>();
                     auto target = ref.substr(0, ref.rfind('@'));
@@ -347,14 +346,16 @@ int run_assembly(const ImportOptions& options) {
                         if (std::none_of(base.layers.begin(),
                                          base.layers.end(),
                                          [&](const mesh::Layer& l) { return l.name == name; })) {
-                            attachment_defect(it->first, "missing attach target " + target);
+                            attachment_defect(id, "missing attach target " + target);
                             return fail(7,
                                         "IMPORT_REJECTED",
                                         "IMPORT_REJECTED: missing attach target " + target);
                         }
                     } else if (!done.contains(target.substr(5))) {
-                        if (!pending.contains(target.substr(5))) {
-                            attachment_defect(it->first, "missing attach target " + target);
+                        if (std::none_of(pending.begin(), pending.end(), [&](const J& part) {
+                                return part["id"].as<std::string>() == target.substr(5);
+                            })) {
+                            attachment_defect(id, "missing attach target " + target);
                             return fail(7,
                                         "IMPORT_REJECTED",
                                         "IMPORT_REJECTED: missing attach target " + target);
@@ -363,13 +364,16 @@ int run_assembly(const ImportOptions& options) {
                         continue;
                     }
                 }
-                done.insert(it->first);
-                ordered.push_back(it->second);
-                it = pending.erase(it);
+                done.insert(id);
+                ordered.push_back(*it);
+                pending.erase(it);
                 progress = true;
+                // Reconsider earlier parts as soon as their dependency is ready.
+                break;
             }
             if (!progress) {
-                attachment_defect(pending.begin()->first, "cyclic part attachments");
+                attachment_defect(pending.front()["id"].as<std::string>(),
+                                  "cyclic part attachments");
                 return fail(7, "IMPORT_REJECTED", "IMPORT_REJECTED: cyclic part attachments");
             }
         }
