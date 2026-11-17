@@ -19,12 +19,14 @@ target_link_libraries(chipcae_document PUBLIC Qt6::Core jsoncons::jsoncons)
 target_compile_definitions(chipcae_document PRIVATE
     CHIPCAE_SCHEMA_DIR="${CMAKE_CURRENT_BINARY_DIR}/document-schema")
 add_library(chipcae_desktop_ui src/MainWindow.cpp src/MainWindow.hpp
+    import/ImportController.cpp import/ImportController.hpp
+    import/DefectsDialog.cpp import/DefectsDialog.hpp
     workers/PreviewWorker.cpp workers/PreviewWorker.hpp
     stack/StackEditor.cpp stack/StackEditor.hpp stack/LayerModel.cpp stack/LayerModel.hpp
     tree/CaseTreeModel.cpp tree/CaseTreeModel.hpp
     tree/CaseTreeView.cpp tree/CaseTreeView.hpp
     forms/SchemaForm.cpp forms/SchemaForm.hpp forms/CaseOutline.cpp forms/CaseOutline.hpp)
-target_include_directories(chipcae_desktop_ui PUBLIC src workers forms stack tree)
+target_include_directories(chipcae_desktop_ui PUBLIC src workers forms import stack tree)
 target_link_libraries(chipcae_desktop_ui PUBLIC chipcae_document Qt6::Core Qt6::Gui Qt6::Widgets
     Qt6::OpenGLWidgets ${VTK_LIBRARIES} jsoncons::jsoncons)
 target_compile_definitions(chipcae_desktop_ui PRIVATE CHIPCAE_REPOSITORY="${CMAKE_CURRENT_SOURCE_DIR}/..")
@@ -84,6 +86,20 @@ if(CHIPCAE_BUILD_TESTS)
     target_compile_definitions(desktop_forms_test PRIVATE CHIPCAE_REPOSITORY="${CMAKE_CURRENT_SOURCE_DIR}/..")
     add_test(NAME desktop_forms COMMAND desktop_forms_test)
     set_tests_properties(desktop_forms PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+endif()
+
+if(CHIPCAE_BUILD_TESTS)
+    find_program(CHIPCAE_IMPORT_PYTHON NAMES python python3 REQUIRED)
+    add_executable(desktop_import_test tests/import_test.cpp)
+    target_link_libraries(desktop_import_test PRIVATE chipcae_desktop_ui)
+    target_compile_definitions(desktop_import_test PRIVATE
+        FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../schema/examples"
+        MOCK_SCRIPT="${CMAKE_CURRENT_SOURCE_DIR}/tools/mock_import.py"
+        PYTHON_EXECUTABLE="${CHIPCAE_IMPORT_PYTHON}")
+    add_test(NAME desktop_import COMMAND desktop_import_test)
+    add_test(NAME desktop_import_dialog COMMAND desktop_import_test --dialog)
+    set_tests_properties(desktop_import desktop_import_dialog PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endif()
 
 add_library(chipcae_local_jobs jobs/JobTypes.cpp jobs/JobTypes.hpp
