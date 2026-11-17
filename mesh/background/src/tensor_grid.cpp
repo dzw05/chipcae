@@ -536,29 +536,28 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
         std::clog << "warning: " << warning << '\n';
     auto nx = axes[0].size() - 1, ny = axes[1].size() - 1, nz = axes[2].size() - 1;
     // Validate cut geometry before any cell ownership or attribute emission.
-    for (const auto& layer : s.layers) {
-        std::vector<const Inclusion*> polygons;
+    std::vector<const Inclusion*> polygons;
+    for (const auto& layer : s.layers)
         for (const auto& r : layer.regions)
-            if (!r.footprint.polygon.empty())
+            if (!r.footprint.polygon.empty()) {
+                if (!layer.material.empty())
+                    return Error{"CUT_UNSUPPORTED", r.name + ": polygon in material layer"};
                 polygons.push_back(&r);
-        std::sort(
-            polygons.begin(), polygons.end(), [](auto a, auto b) { return a->name < b->name; });
-        for (std::size_t i = 0; i < polygons.size(); ++i) {
-            const auto& r = *polygons[i];
-            if (!layer.material.empty())
-                return Error{"CUT_UNSUPPORTED", r.name + ": polygon in material layer"};
-            for (std::size_t j = i + 1; j < polygons.size(); ++j) {
-                const auto& other = *polygons[j];
-                if (body(r) != body(other) &&
-                    gap(r.footprint.polygon, other.footprint.polygon) <
-                        2 * band_h(m, r.footprint.polygon, other.footprint.polygon))
-                    return Error{"CUT_UNSUPPORTED", r.name + " " + other.name + ": spacing < 2h"};
             }
-            if (!s.outline.polygon.empty() &&
-                gap(r.footprint.polygon, s.outline.polygon, false) <
-                    2 * band_h(m, r.footprint.polygon, s.outline.polygon))
-                return Error{"CUT_UNSUPPORTED", r.name + " outline: spacing < 2h"};
+    std::stable_sort(
+        polygons.begin(), polygons.end(), [](auto a, auto b) { return a->name < b->name; });
+    for (std::size_t i = 0; i < polygons.size(); ++i) {
+        const auto& r = *polygons[i];
+        for (std::size_t j = i + 1; j < polygons.size(); ++j) {
+            const auto& other = *polygons[j];
+            if (body(r) != body(other) &&
+                gap(r.footprint.polygon, other.footprint.polygon) <
+                    2 * band_h(m, r.footprint.polygon, other.footprint.polygon))
+                return Error{"CUT_UNSUPPORTED", r.name + " " + other.name + ": spacing < 2h"};
         }
+        if (!s.outline.polygon.empty() && gap(r.footprint.polygon, s.outline.polygon, false) <
+                                              2 * band_h(m, r.footprint.polygon, s.outline.polygon))
+            return Error{"CUT_UNSUPPORTED", r.name + " outline: spacing < 2h"};
     }
     m.copper_layer_of_layer.assign(s.layers.size(), -1);
     std::size_t copper_layers = 0;
@@ -670,12 +669,9 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
             const auto& layer = s.layers[cell_layer[k]];
             bool covered = false;
             for (const auto& r : layer.regions)
-                covered = covered ||
-                          contains(r.footprint,
-                                   (axes[0][x] + axes[0][x + 1]) / 2,
-                                   (axes[1][y] + axes[1][y + 1]) / 2) ||
-                          polygon_crosses(
-                              r.footprint, axes[0][x], axes[1][y], axes[0][x + 1], axes[1][y + 1]);
+                covered = covered || contains(r.footprint,
+                                              (axes[0][x] + axes[0][x + 1]) / 2,
+                                              (axes[1][y] + axes[1][y + 1]) / 2);
             if (layer.material.empty() && !covered) {
                 ++m.grid_report.void_cells;
                 continue;

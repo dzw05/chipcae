@@ -5,8 +5,9 @@ int main() {
         auto check = [](StackModel s, bool reject, const char* first, const char* second) {
             // Conservative polygon bounds keep a uniform h=8/32 independent of the gap.
             // Polygon vertices, rather than these bounds, define its geometry.
-            for (auto& r : s.layers[0].regions)
-                r.footprint.box = s.outline.box;
+            for (auto& layer : s.layers)
+                for (auto& r : layer.regions)
+                    r.footprint.box = s.outline.box;
             GridOptions o;
             o.nx = o.ny = 32;
             o.levels = 1;
@@ -37,6 +38,14 @@ int main() {
                 b.material = same_material ? a.material : "other";
                 s.layers[0].regions = {a, b};
                 check(s, gap == .375, "a", "b");
+                auto upper = s.layers[0];
+                upper.name = "upper";
+                upper.regions = {b};
+                s.layers[0].regions = {a};
+                s.layers.push_back(upper);
+                check(s, gap == .375, "a", "b");
+                s.layers[1].regions[0].body = a.body;
+                check(s, false, "a", "b");
             }
         auto s = stack();
         s.outline.polygon = {{0, 0}, {8, 0}, {8, 8}, {0, 8}};

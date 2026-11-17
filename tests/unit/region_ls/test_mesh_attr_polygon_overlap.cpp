@@ -20,8 +20,14 @@ int main() {
         for (std::size_t j = 0; j + 1 < m.axes[1].size(); ++j)
             for (std::size_t i = 0; i + 1 < m.axes[0].size(); ++i)
                 if (m.axes[0][i + 1] > 2 && m.axes[1][j + 1] > 2 &&
-                    3 * std::max(2., m.axes[0][i]) + 4 * std::max(2., m.axes[1][j]) < 26)
-                    ++expected_columns;
+                    3 * std::max(2., m.axes[0][i]) + 4 * std::max(2., m.axes[1][j]) < 26) {
+                    const auto cx = (m.axes[0][i] + m.axes[0][i + 1]) / 2;
+                    const auto cy = (m.axes[1][j] + m.axes[1][j + 1]) / 2;
+                    if (3 * cx + 4 * cy <= 26)
+                        ++expected_columns;
+                    else
+                        ++outside_centers;
+                }
         for (std::size_t e = 0; e < m.elem_gid.size(); ++e) {
             auto c = center(m, e);
             double xmin = 8, ymin = 8, xmax = 0, ymax = 0;
@@ -47,10 +53,11 @@ int main() {
             require(std::count(m.pending_cut.begin(), m.pending_cut.end(), static_cast<Local>(e)) ==
                         1,
                     "every positive-area polygon cell pending exactly once");
-            if (3 * c[0] + 4 * c[1] > 26)
-                ++outside_centers;
+            require(3 * c[0] + 4 * c[1] <= 26,
+                    "material-free cells must have centers inside a region");
         }
-        require(m.elem_gid.size() == expected_columns * nz, "all positive-area cells retained");
+        require(m.elem_gid.size() == expected_columns * nz,
+                "exactly center-covered cells retained");
         require(outside_centers > 0, "fixture exercises centers outside polygon");
         require(box_cells > 0, "fixture exercises box priority");
     });
