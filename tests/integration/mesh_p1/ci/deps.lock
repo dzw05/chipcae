@@ -18,3 +18,8 @@ MFEM_URL=https://github.com/mfem/mfem/archive/refs/tags/v4.10.tar.gz
 # System MPI (apt). Bump this when the ubuntu-24.04 OpenMPI package changes, so the cache key changes.
 SYSTEM_MPI_PACKAGE=libopenmpi-dev
 SYSTEM_MPI_VERSION=4.1.6-7ubuntu2
+
+# Ubuntu 24.04 shared OCCT 7.6.3; observed in the noble archive. The cache key
+# already hashes this lock. Apt resolves only the distro runtime dependencies.
+SYSTEM_OCCT_VERSION=7.6.3+dfsg1-7.1build1
+SYSTEM_OCCT_PACKAGES="libocct-foundation-dev libocct-modeling-data-dev libocct-modeling-algorithms-dev libocct-ocaf-dev libocct-visualization-dev libocct-data-exchange-dev libocct-foundation-7.6t64 libocct-modeling-data-7.6t64 libocct-modeling-algorithms-7.6t64 libocct-ocaf-7.6t64 libocct-visualization-7.6t64 libocct-data-exchange-7.6t64"
