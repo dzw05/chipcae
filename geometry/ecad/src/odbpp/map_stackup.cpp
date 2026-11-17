@@ -62,11 +62,16 @@ void map_stackup(const OdbJob& j, const MapOptions& options, ImportResult& resul
                 layer.material = material->second;
             auto thickness = attrs->second.find(".layer_dielectric");
             if (thickness != attrs->second.end()) {
-                std::size_t used = 0;
-                odb = static_cast<double>(std::stold(thickness->second, &used) *
-                                          (j.units == detail::OdbUnits::inch ? 0.0254L : 0.001L));
-                if (used != thickness->second.size() || !std::isfinite(odb))
-                    throw std::runtime_error("invalid thickness: " + l.name);
+                try {
+                    std::size_t used = 0;
+                    const auto parsed = std::stold(thickness->second, &used) *
+                                        (j.units == detail::OdbUnits::inch ? 0.0254L : 0.001L);
+                    odb = static_cast<double>(parsed);
+                    if (used != thickness->second.size() || !std::isfinite(odb) || odb <= 0)
+                        odb = 0;
+                } catch (const std::exception&) {
+                    odb = 0;
+                }
             }
         }
         if (!copper && layer.material.empty())

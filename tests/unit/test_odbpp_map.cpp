@@ -177,6 +177,129 @@ void units() {
                 scale(c);
     equal(mapped(mm), mapped(inch));
 }
+void symbol_units() {
+    auto mm = board();
+    auto& copper = mm.features["TOP"];
+    copper.surfaces.clear();
+    copper.symbols = {{"r254"}};
+    copper.pads = {{{2.54, 2.54}, 0, true}};
+    copper.lines = {{{1.27, 5.08}, {3.81, 5.08}, 0, true}};
+    copper.arcs = {{{7.62, 5.08}, {5.08, 7.62}, {5.08, 5.08}, 0, true, false}};
+    OdbLayer drill;
+    drill.name = "DRILL";
+    drill.type = "drill";
+    drill.start_name = "TOP";
+    drill.end_name = "BOTTOM";
+    mm.layers.push_back(drill);
+    auto& holes = mm.features["DRILL"];
+    holes.symbols = {{"r508"}, {"r254"}};
+    holes.pads = {{{2.54, 2.54}, 0, true}, {{5.08, 2.54}, 1, true}};
+    mm.tools["DRILL"] = {{7, "plated", 0.508}};
+    mm.attrs.layer["DRILL"][".plating_thickness"] = "0.0254";
+    auto inch = mm;
+    inch.units = OdbUnits::inch;
+    for (auto& [name, attrs] : inch.attrs.layer)
+        attrs[".layer_dielectric"] = name == "TOP" || name == "BOTTOM" ? "0.0013779527559055118"
+                                     : name == "CORE"                  ? "0.031496062992125984"
+                                                                       : "0.007874015748031496";
+    auto scale = [](OdbContour& c) {
+        c.start.x /= 25.4;
+        c.start.y /= 25.4;
+        for (auto& s : c.segs) {
+            s.end.x /= 25.4;
+            s.end.y /= 25.4;
+            s.center.x /= 25.4;
+            s.center.y /= 25.4;
+        }
+    };
+    for (auto& c : inch.profile.contours)
+        scale(c);
+    for (auto& [name, f] : inch.features)
+        for (auto& s : f.surfaces)
+            for (auto& c : s.contours)
+                scale(c);
+    auto convert = [](OdbPoint& p) {
+        p.x /= 25.4;
+        p.y /= 25.4;
+    };
+    for (auto& [name, f] : inch.features) {
+        for (auto& p : f.pads)
+            convert(p.at);
+        for (auto& l : f.lines) {
+            convert(l.s);
+            convert(l.e);
+        }
+        for (auto& a : f.arcs) {
+            convert(a.s);
+            convert(a.e);
+            convert(a.c);
+        }
+    }
+    inch.features["TOP"].symbols = {{"r10"}};
+    inch.features["DRILL"].symbols = {{"r20"}, {"r10"}};
+    inch.tools["DRILL"].front().finish_size = 0.02;
+    inch.attrs.layer["DRILL"][".plating_thickness"] = "0.001";
+    const auto mapped_mm = mapped(mm), mapped_inch = mapped(inch);
+    auto geometry_mm = mapped_mm, geometry_inch = mapped_inch;
+    geometry_mm.vias.clear();
+    geometry_inch.vias.clear();
+    geometry_mm.via_fractions.clear();
+    geometry_inch.via_fractions.clear();
+    equal(geometry_mm, geometry_inch);
+    require(mapped_mm.vias.size() == mapped_inch.vias.size(), "cross-unit via count");
+    for (std::size_t i = 0; i < mapped_mm.vias.size(); ++i) {
+        const auto& a = mapped_mm.vias[i];
+        const auto& b = mapped_inch.vias[i];
+        require(
+            std::tie(
+                a.id, a.padstack, a.start_layer, a.end_layer, a.position, a.dielectric_layers) ==
+                std::tie(
+                    b.id, b.padstack, b.start_layer, b.end_layer, b.position, b.dielectric_layers),
+            "cross-unit via identity and span");
+        near(a.outer_radius_dbu, b.outer_radius_dbu, 1e-12);
+        near(a.inner_radius_dbu, b.inner_radius_dbu, 1e-12);
+    }
+    require(mapped_mm.via_fractions.size() == mapped_inch.via_fractions.size(),
+            "cross-unit fraction count");
+    for (std::size_t i = 0; i < mapped_mm.via_fractions.size(); ++i) {
+        const auto& a = mapped_mm.via_fractions[i];
+        const auto& b = mapped_inch.via_fractions[i];
+        require(a.layer == b.layer && a.via_count == b.via_count, "cross-unit fraction identity");
+        for (std::size_t axis = 0; axis < 2; ++axis) {
+            near(a.lower[axis], b.lower[axis], 1e-12);
+            near(a.upper[axis], b.upper[axis], 1e-12);
+        }
+        near(a.fraction, b.fraction, 1e-12);
+    }
+    require(mapped_inch.vias.size() == 2 && mapped_inch.report.unsupported.empty(),
+            "inch tool-based and symbol-based drills map successfully");
+    near(mapped_inch.vias[0].outer_radius_dbu, 254);
+    near(mapped_inch.vias[0].inner_radius_dbu, 228.6);
+    near(mapped_inch.vias[1].outer_radius_dbu, 127);
+    near(mapped_inch.vias[1].inner_radius_dbu, 101.6);
+}
+void unavailable_thickness() {
+    for (const auto* text :
+         {"invalid", "0.035junk", "nan", "inf", "-inf", "1e9999", "", "-1", "0"}) {
+        auto j = board();
+        j.attrs.layer["TOP"][".layer_dielectric"] = text;
+        std::vector<ThicknessRecord> records;
+        const auto rejected = map_odb(j, {nullptr, &records});
+        require(!rejected.error.empty() &&
+                    rejected.error.find("missing thickness for 1 layer(s): TOP") !=
+                        std::string::npos,
+                "unavailable thickness participates in aggregate missing report");
+        require(records.size() == 4 && records.front().source == "missing" &&
+                    records.front().thickness_m == 0,
+                "unavailable ODB thickness records missing provenance");
+        ThicknessOverrides overrides{{"TOP", 35e-6}};
+        records.clear();
+        const auto m = mapped(j, {&overrides, &records});
+        near(m.layers.front().thickness_m, 35e-6);
+        require(records.front().source == "override" && !records.front().odb_value_m,
+                "override fills unavailable ODB thickness without conflict");
+    }
+}
 void line_width() {
     auto j = board();
     auto& f = j.features["TOP"];
@@ -471,22 +594,30 @@ void mixed_tools() {
     j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
     auto& f = j.features["DRILL"];
     f.symbols = {{"r600"}};
-    f.pads = {{{2, 3}, 0, true, 0, false, 7}, {{6, 7}, 0, true, 0, false, 9}};
+    f.pads = {{{2, 3}, 0, true}, {{6, 7}, 0, true}};
     j.tools["DRILL"] = {{7, "plated", 0.6}, {9, "non-plated", 0.6}};
+    for (int order = 0; order < 2; ++order) {
+        const auto m = mapped(j);
+        require(m.vias.empty() && m.via_fractions.empty() && m.report.unsupported.size() == 2,
+                "equal diameter tools without linkage cannot classify either hole");
+        for (const auto& item : m.report.unsupported)
+            require(item.element == "ViaToolAmbiguous:DRILL",
+                    "unlinked ambiguous hole is reported instead of guessed");
+        std::reverse(j.tools["DRILL"].begin(), j.tools["DRILL"].end());
+    }
+    // Distinct diameters remain unambiguous in the frozen representation.
+    f.symbols.push_back({"r800"});
+    f.pads.back().sym = 1;
+    j.tools["DRILL"] = {{7, "plated", 0.6}, {9, "non-plated", 0.8}};
     for (int order = 0; order < 2; ++order) {
         const auto m = mapped(j);
         require(m.vias.size() == 1 &&
                     m.vias.front().position == std::array<int64_t, 2>{2000, 3000} &&
                     m.report.unsupported.empty(),
-                "exact tool identity classifies equal diameter holes");
+                "distinct diameters classify plated and non-plated holes in either tool order");
         near(m.vias.front().inner_radius_dbu, 275);
         std::reverse(j.tools["DRILL"].begin(), j.tools["DRILL"].end());
     }
-    f.pads.front().tool_num = -1;
-    const auto m = mapped(j);
-    require(m.vias.empty() && m.report.unsupported.size() == 1 &&
-                m.report.unsupported.front().element == "ViaToolAmbiguous:DRILL",
-            "unlinked ambiguous hole is reported instead of guessed");
 }
 void non_plated() {
     auto j = board();
@@ -1117,6 +1248,8 @@ void drill_rejections() {
 int main() {
     const std::pair<const char*, std::function<void()>> tests[] = {
         {"odbpp_map_units", units},
+        {"odbpp_map_symbol_units", symbol_units},
+        {"odbpp_map_unavailable_thickness", unavailable_thickness},
         {"odbpp_map_line_width", line_width},
         {"odbpp_map_negative", negative},
         {"odbpp_map_stackup_kicad", stackup},

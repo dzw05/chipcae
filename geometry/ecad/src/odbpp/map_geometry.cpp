@@ -217,14 +217,13 @@ struct Mapper {
             bool ambiguous = false;
             if (tools != job.tools.end())
                 for (const auto& t : tools->second)
-                    if (p.tool_num >= 0 ? t.num == p.tool_num
-                                        : std::abs(t.finish_size * scale - s.w) < 1) {
+                    if (std::abs(t.finish_size * scale - s.w) < 1) {
                         ambiguous = tool != nullptr;
                         if (ambiguous)
                             break;
                         tool = &t;
                     }
-            if (ambiguous || (p.tool_num >= 0 && !tool)) {
+            if (ambiguous) {
                 unsupported("ViaToolAmbiguous:" + layer.name);
                 continue;
             }

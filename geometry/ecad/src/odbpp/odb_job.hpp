@@ -40,8 +40,6 @@ struct OdbPad {
     bool positive = true;
     double rot_deg = 0;
     bool mirror = false;
-    // Exact drill tool number when supplied by the feature parser; -1 means unavailable.
-    int tool_num = -1;
 };
 struct OdbLine {
     OdbPoint s, e;
