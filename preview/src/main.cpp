@@ -1,8 +1,15 @@
+#ifdef CHIPCAE_ENABLE_KOKKOS
+#include <Kokkos_Core.hpp>
+#endif
 #include "chipcae/core/error_code.hpp"
 #include "chipcae/core/version.hpp"
 
+#include <algorithm>
+#include <array>
+#include <bit>
 #include <charconv>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
@@ -10,10 +17,12 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #ifdef CHIPCAE_PREVIEW_ENABLED
 #include "chipcae/mesh/background/tensor_grid.hpp"
 #include "chipcae/mesh/background/vtkhdf_writer.hpp"
+#include "mesh_digest.hpp"
 #ifdef CHIPCAE_ENABLE_MPI
 #include <mpi.h>
 #endif
@@ -68,10 +77,20 @@ void event(const std::string& stage, double progress, const std::string& message
     if (rank != 0 && stage != "error")
         return;
 #endif
-    std::cout << "{\"stage\":" << quote(stage) << ",\"progress\":" << progress
-              << ",\"message\":" << quote(message) << "}\n"
-              << std::flush;
+    if (stage == "success" && message.size() >= 2 && message.front() == '{' &&
+        message.back() == '}')
+        std::cout << "{\"stage\":" << quote(stage) << ",\"progress\":" << progress << ','
+                  << message.substr(1, message.size() - 2) << ",\"message\":" << quote(message)
+                  << "}\n"
+                  << std::flush;
+    else
+        std::cout << "{\"stage\":" << quote(stage) << ",\"progress\":" << progress
+                  << ",\"message\":" << quote(message) << "}\n"
+                  << std::flush;
 }
+#ifdef CHIPCAE_PREVIEW_ENABLED
+using chipcae::preview::detail::digest;
+#endif
 #ifdef CHIPCAE_PREVIEW_ENABLED
 int integer(const std::string& value, bool zero) {
     int n = 0;
@@ -108,6 +127,11 @@ int run(int argc, char** argv) {
     using namespace chipcae::mesh;
     std::filesystem::path input, output, surface, polyset;
     GridOptions options;
+#ifdef CHIPCAE_ENABLE_MPI
+    int world_size = 1;
+    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+    options.ranks = world_size;
+#endif
     // The K1 FCBGA fixture has a 10:1 interface cell-height ratio.
     options.max_ratio = 10;
     std::set<std::string> seen;
@@ -207,12 +231,16 @@ int run(int argc, char** argv) {
         throw std::runtime_error("could not move embedded boundary to requested surface path");
     const auto& report = mesh.grid_report;
     const auto& coarse = report.level_axes.front();
+    const auto summary = digest(mesh);
     std::ostringstream effective;
     effective << std::setprecision(17) << "{\"grid\":" << quote(files.grid.string())
-              << ",\"max_ratio\":" << options.max_ratio << ",\"L\":" << report.levels - 1
-              << ",\"n0\":"
+              << ",\"max_ratio\":" << options.max_ratio << ",\"n0\":"
               << quote(std::to_string(coarse[0].size() - 1) + "x" +
                        std::to_string(coarse[1].size() - 1))
+              << ",\"nx0\":" << summary.nx0 << ",\"ny0\":" << summary.ny0
+              << ",\"L\":" << summary.levels << ",\"padded_cells\":" << summary.padded_cells
+              << ",\"nz\":" << summary.nz << ",\"node_count\":" << summary.nodes
+              << ",\"cell_count\":" << summary.cells << ",\"mesh_sha256\":" << quote(summary.sha256)
               << "}";
     event("success", 1, effective.str());
     return 0;
@@ -241,6 +269,9 @@ int main(int argc, char** argv) {
 #endif
     int code = 0;
     try {
+#ifdef CHIPCAE_ENABLE_KOKKOS
+        Kokkos::ScopeGuard guard;
+#endif
         code = run(argc, argv);
     } catch (const MeshFailure& error) {
         std::cerr << error.what() << '\n';
