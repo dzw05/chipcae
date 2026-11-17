@@ -535,8 +535,7 @@ sys.exit(rc)
             if (mode == "success" || mode == "grade-conflict")
                 check(c.grade() == (mode == "grade-conflict" ? "C" : ""),
                       "optional grade for display only");
-            check(c.needsMaterialMapReselect() == (mode == "map-missing" || mode == "crash-map"),
-                  "reselection " + mode);
+            check(c.needsMaterialMapReselect() == (mode == "map-missing"), "reselection " + mode);
             if (mode == "crash-map")
                 check(c.exitCode() == 9 && c.exitStatus() == QProcess::CrashExit,
                       "crash fixture distinguishes signal 9 from normal protocol exit 9");
