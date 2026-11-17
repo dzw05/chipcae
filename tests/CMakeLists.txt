@@ -79,4 +79,5 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME case_run_schema_fixtures
         COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/schema/tests/validate_fixtures.py
                 ${PROJECT_SOURCE_DIR})
+    set_tests_properties(case_run_schema_fixtures PROPERTIES SKIP_RETURN_CODE 77)
 endif()

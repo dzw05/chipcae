@@ -1,0 +1,52 @@
+{
+  "schema": "chipcae.case/1.0",
+  "stack": {
+    "ref": "fcbga_demo.stack.json"
+  },
+  "materials": {
+    "ref": "fcbga_demo.materials.json"
+  },
+  "mesh": {
+    "type": "aligned_cartesian_cut",
+    "cut": {
+      "stabilization": "ghost_penalty"
+    }
+  },
+  "physics": [
+    {
+      "id": "mech",
+      "solver": "fem.solid",
+      "T_ref": 0,
+      "temp_from": "thermal"
+    },
+    {
+      "id": "thermal",
+      "solver": "fem.conduction",
+      "mode": "steady"
+    }
+  ],
+  "loads": [
+    {
+      "type": "fixed_temperature",
+      "target": "face:zmin",
+      "T": 298.15
+    }
+  ],
+  "constraints": {
+    "rigid": "3-2-1"
+  },
+  "output": {
+    "format": "vtkhdf",
+    "warpage": {
+      "standard": "JESD22-B112",
+      "remove_rigid": "best_fit_plane"
+    },
+    "fields": [
+      "U",
+      "layer_id",
+      "material_id",
+      "cell_kind",
+      "elem_gid"
+    ]
+  }
+}
