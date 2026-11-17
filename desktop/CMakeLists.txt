@@ -132,3 +132,20 @@ if(CHIPCAE_BUILD_TESTS)
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
     endforeach()
 endif()
+
+add_library(chipcae_monitor monitor/EventCodec.cpp monitor/EventCodec.hpp
+    monitor/EventTailer.cpp monitor/EventTailer.hpp monitor/RunMonitor.cpp monitor/RunMonitor.hpp
+    monitor/ResidualChart.cpp monitor/ResidualChart.hpp)
+target_include_directories(chipcae_monitor PUBLIC monitor)
+target_link_libraries(chipcae_monitor PUBLIC chipcae_local_jobs chipcae_desktop_results
+    chipcae_desktop_protocol Qt6::Widgets Qt6::OpenGLWidgets ${VTK_LIBRARIES})
+target_link_libraries(chipcae_desktop_ui PUBLIC chipcae_monitor)
+vtk_module_autoinit(TARGETS chipcae_monitor MODULES ${VTK_LIBRARIES})
+if(CHIPCAE_BUILD_TESTS)
+    add_executable(desktop_monitor tests/monitor_test.cpp)
+    target_link_libraries(desktop_monitor PRIVATE chipcae_monitor VTK::IOImage)
+    target_compile_definitions(desktop_monitor PRIVATE CHIPCAE_REPOSITORY="${CMAKE_CURRENT_SOURCE_DIR}/..")
+    vtk_module_autoinit(TARGETS desktop_monitor MODULES ${VTK_LIBRARIES})
+    add_test(NAME desktop_monitor COMMAND desktop_monitor)
+    set_tests_properties(desktop_monitor PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
+endif()
