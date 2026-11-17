@@ -8,3 +8,7 @@ errors:
   - {code: 3, name: COLUMN_SPLIT_ACROSS_RANKS, retryable: false, message: "Column spans multiple ranks"}
   - {code: 4, name: HIERARCHY_INVALID, retryable: false, message: "Column hierarchy is invalid"}
   - {code: 5, name: VERSION_UNSUPPORTED, retryable: false, message: "Protocol version is unsupported"}
+  - {code: 6, name: IMPORT_CONFIRMATION_REQUIRED, retryable: false, message: "Import requires confirmation"}
+  - {code: 7, name: IMPORT_REJECTED, retryable: false, message: "Import rejected"}
+  - {code: 8, name: IMPORT_UNSUPPORTED_ELEMENT, retryable: false, message: "Import contains an unsupported element"}
+  - {code: 9, name: MATERIAL_MAPPING_MISSING, retryable: false, message: "Material mapping is missing"}
