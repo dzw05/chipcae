@@ -12,6 +12,7 @@
 | [ADR-0006](ADR-0006-review-process.md) | AI 交叉评审与 owner 把关 | 已接受 |
 | [ADR-0007](ADR-0007-step-import-occt.md) | STEP 导入采用 OCCT | 已接受 |
 | [ADR-0008](ADR-0008-tech-stack.md) | 技术栈 | 已接受 |
+| [ADR-0009](ADR-0009-ecad-step-import.md) | ECAD 与 STEP 导入阈值 | 已接受 |
 
 新增决策请按 `ADR-XXXX-slug.md` 命名，并在本表登记。
 
@@ -27,5 +28,6 @@
 | [ADR-0006](ADR-0006-review-process.md) | 审查流程 | 已接受 |
 | [ADR-0007](ADR-0007-step-import-occt.md) | STEP/OCCT | 已接受 |
 | [ADR-0008](ADR-0008-tech-stack.md) | 技术栈 | 已接受 |
+| [ADR-0009](ADR-0009-ecad-step-import.md) | ECAD 与 STEP 导入阈值 | 已接受 |
 
 架构草案 ADR-014（作业层接口契约）尚无仓库 ADR；契约接受后再分配仓库编号。

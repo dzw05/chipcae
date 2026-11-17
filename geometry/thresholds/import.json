@@ -1,0 +1,15 @@
+{
+  "weld_rel_L": 1e-6,
+  "weld_rel_t": 0.005,
+  "tauA_rel_L": 1e-5,
+  "tauA_rel_t": 0.02,
+  "tauB_rel_L": 1e-4,
+  "tauB_rel_t": 0.1,
+  "merge_rel_h": 0.01,
+  "merge_abs_max": 1e-6,
+  "merge_max_volume_rel": 1e-4,
+  "thin_ratio": 0.1,
+  "thin_aspect": 1000,
+  "cell_budget_ecad_laptop": 80000,
+  "cell_budget_ecad_server": 200000
+}
