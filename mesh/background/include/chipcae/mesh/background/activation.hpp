@@ -36,7 +36,8 @@ Expected<ActivationResolution> resolve_activation(const StackModel&,
                                                   const HexMeshArrays&,
                                                   const cut::CutLayerArrays*,
                                                   const std::vector<std::string>&);
-// Non-const overloads also append interface: reports to preparation_report.
+// Non-const overloads also append interface: reports to preparation_report. Pass the completed
+// cut layer so cut-face counts and areas are included in those reports.
 Expected<ActivationResolution> resolve_volume_ref(const StackModel&,
                                                   HexMeshArrays&,
                                                   const cut::CutLayerArrays*,
