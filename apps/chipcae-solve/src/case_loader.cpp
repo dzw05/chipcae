@@ -1,5 +1,6 @@
 #include "chipcae/solve/case_loader.hpp"
 
+#include "data_path.hpp"
 #include "sha256.hpp"
 
 #include <algorithm>
@@ -223,7 +224,7 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
                     invalid(polygons.error().reason);
                 sidecars.push_back(std::move(polygons.value()));
             }
-        auto stack = mesh::load_stack(out.stack_path, CHIPCAE_STACK_SCHEMA);
+        auto stack = mesh::load_stack(out.stack_path, chipcae::data_path(CHIPCAE_STACK_SCHEMA));
         if (!stack)
             invalid(stack.error().path + ": " + stack.error().reason);
         out.stack = std::move(stack.value());
@@ -424,7 +425,7 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
             if (item.key() != "schema" && item.key() != "materials" &&
                 !item.key().starts_with("x-"))
                 invalid("unknown material library field");
-        auto material_schema = read(CHIPCAE_MATERIAL_SCHEMA);
+        auto material_schema = read(chipcae::data_path(CHIPCAE_MATERIAL_SCHEMA));
         // material.v1's optional frame reference is unresolved in the baseline schema.
         // O2 uses isotropic materials, so reject a frame instead of ignoring it.
         material_schema.at("properties").erase("material_frame");

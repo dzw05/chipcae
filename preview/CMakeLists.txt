@@ -5,7 +5,7 @@ if(CHIPCAE_ENABLE_JSONCONS AND CHIPCAE_ENABLE_HDF5)
   target_link_libraries(chipcae-preview PRIVATE chipcae_stack chipcae_mesh_background chipcae_mesh_vtkhdf)
   target_compile_definitions(chipcae-preview PRIVATE
     CHIPCAE_PREVIEW_ENABLED=1
-    CHIPCAE_PREVIEW_SCHEMA="${PROJECT_SOURCE_DIR}/schema/stack-0.2.schema.json")
+    CHIPCAE_PREVIEW_SCHEMA="schema/stack-0.2.schema.json")
 endif()
 
 if(CHIPCAE_BUILD_TESTS AND CHIPCAE_ENABLE_JSONCONS AND CHIPCAE_ENABLE_HDF5)
@@ -22,3 +22,9 @@ if(CHIPCAE_BUILD_TESTS AND CHIPCAE_ENABLE_JSONCONS AND CHIPCAE_ENABLE_HDF5)
   add_test(NAME preview_zalign COMMAND preview_zalign $<TARGET_FILE:chipcae-preview>)
   set_tests_properties(preview_zalign PROPERTIES TIMEOUT 60)
 endif()
+
+# Relative to the executable directory, including multi-config output directories.
+file(RELATIVE_PATH _chipcae_source_relative "${CMAKE_CURRENT_BINARY_DIR}" "${PROJECT_SOURCE_DIR}")
+target_compile_definitions(chipcae-preview PRIVATE
+    CHIPCAE_SOURCE_RELATIVE="$<IF:$<BOOL:${CMAKE_CONFIGURATION_TYPES}>,../,>${_chipcae_source_relative}")
+target_include_directories(chipcae-preview PRIVATE ${PROJECT_SOURCE_DIR}/apps/chipcae-solve/src)

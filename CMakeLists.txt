@@ -63,3 +63,6 @@ endif()
 if(CHIPCAE_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
+
+include(ChipcaeInstall)
+include(ChipcaePackaging)
