@@ -1,3 +1,4 @@
+import hashlib
 import json
 import pathlib
 import sys
@@ -33,10 +34,19 @@ for layer in stack.get("layers", []):
     referenced = {layer.get("material")}
     referenced.update(region.get("material") for region in layer.get("regions", []))
     assert referenced <= known_material_ids, "MATERIAL_MAPPING_MISSING: stack material is absent from library"
-assert {"organic_eq", "sac305_ball_eq", "underfill", "silicon"} <= known_material_ids, \
-    "pre-existing material ids must remain available"
+# Freeze every non-copper entry and its order against the pre-copper origin/main
+# baseline. Compact UTF-8 JSON preserves object key order and all field values.
+legacy_materials = [item for item in library["materials"] if item["id"] != "copper"]
+legacy_serialization = json.dumps(
+    legacy_materials, ensure_ascii=False, separators=(",", ":")
+).encode("utf-8")
+assert hashlib.sha256(legacy_serialization).hexdigest() == (
+    "6ed8e9fda21ee725054a88cf6c10ee830b30c6462cee0274c86aea0aba0fe022"
+), "pre-existing material serialization and order must remain unchanged"
 assembly = json.loads((examples / "assembly/package_bulk_parts.assembly.json").read_text(encoding="utf-8"))
-lid_material = assembly["parts"][0]["material"]
+lid_parts = [part for part in assembly["parts"] if part.get("id") == "lid"]
+assert len(lid_parts) == 1, "assembly must identify exactly one lid part"
+lid_material = lid_parts[0].get("material")
 assert lid_material == "copper", "lid material must be exactly copper"
 assert lid_material in known_material_ids, \
     "MATERIAL_MAPPING_MISSING: lid copper material is absent from library"
