@@ -35,7 +35,7 @@ bool index_tar(const std::filesystem::path& path,
                std::string& error) {
     std::ifstream input(path, std::ios::binary);
     std::string header, extension, long_name, pax_path;
-    std::uint64_t remain = 0, padding = 0, position = 0, total = 0, count = 0, pax_size = 0;
+    std::uint64_t remain = 0, padding = 0, position = 0, payload = 0, count = 0, pax_size = 0;
     bool has_pax_size = false, done = false;
     char type = 0;
     int zeroes = 0;
@@ -88,8 +88,8 @@ bool index_tar(const std::filesystem::path& path,
         // empty archives still reach the empty-input check and endless padding stops.
         const auto framing = std::min<std::uint64_t>(limits.entry_count, 200000) * 2048 + 10240;
         if (position > UINT64_MAX - block.size() ||
-            (position + block.size() > limits.total_bytes &&
-             position + block.size() - limits.total_bytes > framing))
+            (position + block.size() - payload > limits.total_bytes &&
+             position + block.size() - payload - limits.total_bytes > framing))
             return fail("total byte limit (tar framing)");
         while (!block.empty()) {
             if (done) {
@@ -103,6 +103,7 @@ bool index_tar(const std::filesystem::path& path,
                 block.remove_prefix(n);
                 position += n;
                 remain -= n;
+                payload += n;
                 if (!remain) {
                     // Output requests stop at payload boundaries, so unrelated entries
                     // cannot contribute compressed bytes to this entry's budget.
@@ -167,11 +168,6 @@ bool index_tar(const std::filesystem::path& path,
                     return false;
                 if (!seen.insert(name).second)
                     return fail("duplicate archive entry " + name);
-                if (size > limits.file_bytes)
-                    return fail("file byte limit");
-                if (size > limits.total_bytes - total)
-                    return fail("total byte limit");
-                total += size;
                 if (type == '0' || type == 0 || type == '5') {
                     entries.push_back({name, size, type == '5'});
                     offsets.push_back(position);

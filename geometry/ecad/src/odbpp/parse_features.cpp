@@ -4,7 +4,7 @@
 #include <cctype>
 #include <charconv>
 #include <cmath>
-#include <set>
+#include <map>
 #include <sstream>
 
 namespace chipcae::geometry::ecad::detail {
@@ -27,7 +27,7 @@ bool distinct(OdbPoint a, OdbPoint b) {
     return a.x != b.x || a.y != b.y;
 }
 bool arc_geometry(OdbPoint start, OdbPoint end, OdbPoint center) {
-    if (!finite(start) || !finite(end) || !finite(center) || !distinct(start, end))
+    if (!finite(start) || !finite(end) || !finite(center))
         return false;
     const double r = std::hypot(start.x - center.x, start.y - center.y);
     const double q = std::hypot(end.x - center.x, end.y - center.y);
@@ -45,7 +45,7 @@ bool records(const ArchiveReader& reader,
     OdbSurface* surface = nullptr;
     bool valid = true;
     std::uint64_t number = 0;
-    std::set<int> symbol_ids;
+    std::map<int, std::size_t> symbol_ids;
     auto report = [&](const std::string& what) {
         result.model.report.unsupported.push_back(
             {"IMPORT_UNSUPPORTED_ELEMENT", path + ": " + what, number});
@@ -55,10 +55,13 @@ bool records(const ArchiveReader& reader,
         valid = false;
         return false;
     };
-    auto symbol = [&](int index) {
-        if (index < 0 || !features || static_cast<std::size_t>(index) >= features->symbols.size() ||
-            !symbol_ids.contains(index))
+    auto symbol = [&](int& index) {
+        auto found = symbol_ids.find(index);
+        if (found == symbol_ids.end()) {
             report("unknown symbol " + std::to_string(index));
+            index = -1;
+        } else
+            index = static_cast<int>(found->second);
     };
     const bool ok = reader.for_each_line(
         path,
@@ -87,12 +90,11 @@ bool records(const ArchiveReader& reader,
                     return fail("malformed symbol index " + path);
                 std::string name;
                 in >> name;
-                if (index < 0 || index > 200000)
+                if (index < 0)
                     return fail("invalid symbol index " + path);
-                if (static_cast<std::size_t>(index) != features->symbols.size() ||
-                    symbol_ids.contains(index))
-                    return fail("nonsequential symbol index");
-                symbol_ids.insert(index);
+                if (symbol_ids.contains(index))
+                    return fail("duplicate symbol index");
+                symbol_ids.emplace(index, features->symbols.size());
                 features->symbols.push_back({name});
                 bool known = false;
                 for (const auto* prefix : {"r", "oval", "rect", "s"})
@@ -145,24 +147,19 @@ bool records(const ArchiveReader& reader,
                 }
                 const auto start =
                     contour->segs.empty() ? contour->start : contour->segs.back().end;
-                if (!finite(s.end) || !distinct(start, s.end) ||
-                    (s.is_arc && !arc_geometry(start, s.end, s.center)))
-                    return fail("degenerate or non-finite segment/arc " + path);
+                if (!finite(s.end) || (s.is_arc && !finite(s.center)))
+                    return fail("non-finite segment/arc " + path);
+                if (!s.is_arc && !distinct(start, s.end))
+                    return true;
                 contour->segs.push_back(s);
             } else if (tag == "OE") {
                 if (!contour)
                     return fail("contour end without start " + path);
                 auto end = contour->segs.empty() ? contour->start : contour->segs.back().end;
                 double scale = job.units == OdbUnits::mm ? 0.001 : 0.0254;
-                if (!features &&
-                    (contour->segs.empty() || std::abs(end.x - contour->start.x) * scale > 1e-9 ||
-                     std::abs(end.y - contour->start.y) * scale > 1e-9))
+                if (!features && (std::abs(end.x - contour->start.x) * scale > 1e-9 ||
+                                  std::abs(end.y - contour->start.y) * scale > 1e-9))
                     return fail("profile contour not closed");
-                const bool has_arc = std::any_of(contour->segs.begin(),
-                                                 contour->segs.end(),
-                                                 [](const auto& seg) { return seg.is_arc; });
-                if (!features && contour->segs.size() < (has_arc ? 2U : 3U))
-                    return fail("insufficient contour segments " + path);
                 contour = nullptr;
             } else if (tag == "SE") {
                 surface = nullptr;

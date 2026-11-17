@@ -47,31 +47,14 @@ def lzw_literals(data):
 
 
 
-def valid_contours(data):
-    # The raw KiCad export contains repeated contour points. Keep the raw input
-    # for rejection tests; generated valid jobs retain the same nonzero edges.
-    result = []
-    point = None
-    for line in data.splitlines(keepends=True):
-        fields = line.split()
-        if fields and fields[0] == b'OB':
-            point = tuple(map(float, fields[1:3]))
-        elif fields and fields[0] in (b'OS', b'OC'):
-            end = tuple(map(float, fields[1:3]))
-            if fields[0] == b'OS' and point == end:
-                continue
-            point = end
-        elif fields and fields[0] == b'OE':
-            point = None
-        result.append(line)
-    return b''.join(result)
-
-
 def main(root, fixture):
     root.mkdir(parents=True, exist_ok=True)
+    stop_files = [('small', b'ok'), ('large', b'stop\n' + b'x' * 200000)]
+    (root / 'early-stop.tgz').write_bytes(gzip.compress(tar_bytes(stop_files), compresslevel=0))
+    with zipfile.ZipFile(root / 'early-stop.zip', 'w', compression=zipfile.ZIP_STORED) as archive:
+        for path, data in stop_files:
+            archive.writestr(path, data)
     files = [(p.relative_to(fixture).as_posix(), p.read_bytes()) for p in sorted(fixture.rglob('*')) if p.is_file()]
-    files = [(path, valid_contours(data) if path.endswith(('/profile', '/features')) else data)
-             for path, data in files]
     for path, data in files:
         destination = root / 'job' / path
         destination.parent.mkdir(parents=True, exist_ok=True)

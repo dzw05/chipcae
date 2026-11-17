@@ -213,13 +213,9 @@ int main() {
     };
     test("odbpp_review_symbol_indices", [&] {
         auto p = temp / "symbol-indices";
-        for (const auto* definitions : {"$1 r100\n", "$0 r100\n$0 r200\n", "$0 r100\n$2 r200\n"}) {
-            fs::remove_all(p);
-            minimal(p);
-            write(p / "steps/pcb/layers/top/features",
-                  std::string(definitions) + "P 0 0 1 P 0 0\n");
-            rejected(p, "nonsequential symbol index");
-        }
+        minimal(p);
+        write(p / "steps/pcb/layers/top/features", "$1 r100\n$1 r200\n");
+        rejected(p, "duplicate symbol index");
         fs::remove_all(p);
         minimal(p);
         write(p / "steps/pcb/layers/top/features",
@@ -231,6 +227,50 @@ int main() {
         require(reported(result.model.report.unsupported, "unknown symbol -1") &&
                     reported(result.model.report.unsupported, "unknown symbol 2"),
                 "out-of-range references reported");
+    });
+    test("odbpp_sparse_symbol_references", [&] {
+        auto p = temp / "sparse-symbols";
+        minimal(p);
+        write(p / "steps/pcb/layers/top/features",
+              "$7 r100\n$1 r200\nP 0 0 1 P 0 0\nL 0 0 1 1 7 P\nA 1 0 -1 0 0 0 1 P 0 Y\n");
+        OdbJob parsed;
+        auto result = read_odbpp_job(p, parsed);
+        require(bool(result), result.error);
+        const auto& f = parsed.features.at("top");
+        require(f.pads.at(0).sym == 1 && f.lines.at(0).sym == 0 && f.arcs.at(0).sym == 1,
+                "references resolve to definition order");
+        require(!reported(result.model.report.unsupported, "unknown symbol"), "known sparse ids");
+        write(p / "steps/pcb/profile", "OB 1 0 I\nOC 1 0 0 0 Y\nOE\n");
+        require(job(p).profile.contours.at(0).segs.size() == 1, "full circle retained");
+    });
+    test("odbpp_unread_payload_and_early_stop", [&] {
+        auto p = temp / "unread-payload";
+        write(p / "small", "ok");
+        write(p / "large", "stop\n" + std::string(200000, 'x'));
+        ArchiveLimits limits;
+        limits.file_bytes = 32768;
+        limits.total_bytes = 32770;
+        std::string out, error;
+        for (const auto& input : {p, temp / "early-stop.tgz", temp / "early-stop.zip"}) {
+            ArchiveReader reader(input, limits);
+            require(reader.open_error().empty(), reader.open_error());
+            require(reader.read_bytes("small", out, error) && out == "ok", error);
+            require(reader.for_each_line(
+                        "large", [](auto) { return false; }, error) &&
+                        error.empty(),
+                    "stop before unread tail exceeds budget: " + error);
+            require(!reader.read_bytes("large", out, error) &&
+                        error.find("file byte limit") != std::string::npos,
+                    "consuming large payload still enforces limit");
+        }
+        for (const auto* name : {"limits.tgz", "job.zip"}) {
+            limits.file_bytes = 1;
+            limits.total_bytes = 1;
+            ArchiveReader archive_reader(temp / name, limits);
+            require(archive_reader.open_error().empty(), archive_reader.open_error());
+            require(!archive_reader.read_bytes(archive_reader.entries().front().path, out, error),
+                    "archive payload limit enforced on read");
+        }
     });
     test("odbpp_review_padded_entry_ratio", [&] {
         for (const auto* order : {"before", "after"})
@@ -281,7 +321,8 @@ int main() {
         std::string out, error;
         require(reader.read_bytes("matrix/matrix", out, error) && out == "oldgnu", error);
     });
-    test("odbpp_raw_duplicate_points_rejected", [&] { rejected(fixture, "segment"); });
+    test("odbpp_raw_duplicate_points_accepted",
+         [&] { require(bool(parse_job(fixture)), "raw export accepted"); });
     test("odbpp_review_contour_geometry", [&] {
         auto p = temp / "bad-geometry";
         for (bool feature : {false, true}) {
@@ -299,10 +340,13 @@ int main() {
                 write(p / (feature ? "steps/pcb/layers/top/features" : "steps/pcb/profile"),
                       "S P 0\n" + std::string(records) + "SE\n");
                 const std::string text(records);
-                const bool profile_only = text == "OB 0 0 I\nOE\n" ||
-                                          text == "OB 0 0 I\nOS 1 0\nOS 0 0\nOE\n" ||
-                                          text == "OB 0 0 I\nOS 1 0\nOS 1 1\nOS 0 1\nOE\n";
-                if (feature && profile_only)
+                const bool finite = text.find("nan") == std::string::npos &&
+                                    text.find("inf") == std::string::npos &&
+                                    text.find("1e309") == std::string::npos;
+                const bool closed = text == "OB 0 0 I\nOE\n" ||
+                                    text == "OB 0 0 I\nOS 1 0\nOS 0 0\nOE\n" ||
+                                    text == "OB 0 0 I\nOS 0 0\nOE\n";
+                if (finite && (feature || closed))
                     require(bool(parse_job(p)), "feature contour closure/count unrestricted");
                 else
                     rejected(p, "");
@@ -743,7 +787,7 @@ int main() {
         const auto r = parse_job(p);
         require(reported(r.model.report.unsupported, "tools.Z"), "nested .Z fallback source path");
         write(p / "steps/pcb/layers/top/features", "$3 r100\n$1 oval100x200\n");
-        rejected(p, "nonsequential symbol index");
+        require(bool(parse_job(p)), "sparse definitions accepted");
     });
     test("odbpp_review_contour_lifetime", [&] {
         auto p = temp / "contour-lifetime";

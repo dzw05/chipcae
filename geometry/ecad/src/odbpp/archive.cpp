@@ -81,19 +81,7 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
     s.limits = limits;
     auto fail = [&](std::string message) { s.error = "IMPORT_REJECTED: " + message; };
     try {
-        std::uint64_t total = 0, count = 0;
-        auto account = [&](std::uint64_t size) {
-            if (size > limits.file_bytes) {
-                fail("file byte limit");
-                return false;
-            }
-            if (size > limits.total_bytes - total) {
-                fail("total byte limit");
-                return false;
-            }
-            total += size;
-            return true;
-        };
+        std::uint64_t count = 0;
         auto count_entry = [&]() {
             if (++count <= limits.entry_count)
                 return true;
@@ -118,8 +106,6 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                     continue;
                 }
                 auto size = dir ? 0 : e.file_size();
-                if (!dir && !account(size))
-                    return;
                 s.entries.push_back({rel, size, dir});
                 s.directory_paths.push_back(e.path());
             }
@@ -229,8 +215,6 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                     bool supported = !zip64 && !local_zip64 && !st.m_is_encrypted &&
                                      (st.m_method == 0 || st.m_method == 8);
                     if (supported && !st.m_is_directory) {
-                        if (!account(st.m_uncomp_size))
-                            return;
                         if (static_cast<double>(st.m_uncomp_size) >
                             static_cast<double>(st.m_comp_size) * limits.ratio) {
                             fail("ratio limit");
@@ -279,8 +263,14 @@ namespace {
 struct ZipSink {
     const ByteSink& sink;
     static std::size_t write(void* opaque, mz_uint64, const void* bytes, std::size_t size) {
-        return static_cast<ZipSink*>(opaque)->sink({static_cast<const char*>(bytes), size}) ? size
-                                                                                            : 0;
+        auto block = std::string_view(static_cast<const char*>(bytes), size);
+        while (!block.empty()) {
+            auto chunk = block.substr(0, 32768);
+            if (!static_cast<ZipSink*>(opaque)->sink(chunk))
+                return 0;
+            block.remove_prefix(chunk.size());
+        }
+        return size;
     }
 };
 } // namespace
@@ -391,11 +381,10 @@ bool ArchiveReader::for_each_line(const std::string& rel,
     constexpr std::size_t max_line_bytes = 1024 * 1024;
     std::string pending;
     bool stopped = false;
+    std::string callback_error;
     const auto status = stream_bytes(
         rel,
         [&](std::string_view block) {
-            if (stopped)
-                return true;
             while (!block.empty()) {
                 auto end = block.find('\n');
                 auto length = end == std::string_view::npos ? block.size() : end;
@@ -414,13 +403,19 @@ bool ArchiveReader::for_each_line(const std::string& rel,
                     stopped = !cb(pending);
                     pending.clear();
                 }
-                if (stopped)
-                    break;
+                if (stopped) {
+                    callback_error = error;
+                    return false;
+                }
                 block.remove_prefix(end + 1);
             }
             return true;
         },
         error);
+    if (stopped) {
+        error = callback_error;
+        return true;
+    }
     if (status == ReadStatus::success && !stopped && !pending.empty())
         cb(pending);
     return status == ReadStatus::success;
