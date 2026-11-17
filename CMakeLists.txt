@@ -44,6 +44,7 @@ add_subdirectory(kernel)
 # Material point library (K3). Self-gated: no-op when Kokkos is unavailable and
 # CHIPCAE_MATERIAL_FETCH_KOKKOS is OFF, so a bare `cmake -B build` still succeeds.
 add_subdirectory(material)
+add_subdirectory(apps/chipcae-solve)
 
 if(CHIPCAE_BUILD_GUI)
     add_subdirectory(gui)

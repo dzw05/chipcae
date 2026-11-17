@@ -1,0 +1,71 @@
+"""Exercise the executable's input failures without pretending to solve physics."""
+import copy
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+
+exe, source = sys.argv[1:]
+start = time.perf_counter()
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    stack = json.loads((Path(source) / 'schema/examples/fcbga_demo.stack.json').read_text())
+    stack['layers'] = stack['layers'][:1]
+    stack.pop('activation_groups', None)
+    (root / 'stack.json').write_text(json.dumps(stack))
+    (root / 'material.json').write_text('{}')
+    profile = {'schema': 'chipcae.run_profile/1.0', 'ranks': 1, 'backend': 'cpu', 'gpus': 0}
+    case = {'schema': 'chipcae.case/1.0', 'stack': {'ref': 'stack.json'},
+            'materials': {'ref': 'material.json'},
+            'mesh': {'type': 'aligned_cartesian_cut'},
+            'physics': [{'id': 'mech', 'solver': 'fem.solid'}],
+            'loads': [{'type': 'uniform_temperature', 'T_ref': 300, 'T_target': 400}],
+            'constraints': {'rigid': '3-2-1'}, 'output': {'format': 'vtkhdf'}}
+
+    def run(c, p, expected, diagnostic=''):
+        (root / 'case.json').write_text(json.dumps(c))
+        (root / 'profile.json').write_text(json.dumps(p))
+        result = subprocess.run([exe, '--case', str(root / 'case.json'), '--profile',
+                                 str(root / 'profile.json'), '--out', str(root / 'out')],
+                                capture_output=True, text=True, timeout=30)
+        assert result.returncode == expected, (result.returncode, result.stderr)
+        assert diagnostic in result.stderr, result.stderr
+        assert not (root / 'out/manifest.json').exists()
+
+    run(case, profile, 2, 'not implemented')
+    missing = copy.deepcopy(case)
+    missing['stack'] = {}
+    run(missing, profile, 12, 'missing ref')
+    altered = copy.deepcopy(case)
+    altered['stack']['sha256'] = hashlib.sha256((root / 'stack.json').read_bytes()).hexdigest()
+    (root / 'stack.json').write_text(json.dumps(stack) + '\n')
+    run(altered, profile, 10, 'hash mismatch')
+    invalid = dict(profile, ranks=2)
+    run(case, invalid, 11, 'profile')
+    cut = copy.deepcopy(stack)
+    cut['layers'][0]['kind'] = 'Explicit'
+    cut['layers'][0]['regions'] = [{'name': 'die', 'material': 'silicon',
+                                  'footprint': {'box': [0.005, 0.005, 0.015, 0.015]}}]
+    (root / 'stack.json').write_text(json.dumps(cut))
+    run(case, profile, 13, 'cut not supported in O2')
+    (root / 'stack.json').write_text(json.dumps(stack))
+    for mutation in ('duplicate', 'temperature', 'target', 'linear'):
+        invalid = copy.deepcopy(case)
+        if mutation == 'duplicate':
+            invalid['loads'][0]['id'] = 'same'
+            invalid['constraints']['id'] = 'same'
+        elif mutation == 'temperature':
+            invalid['physics'].append({'id': 'thermal', 'solver': 'fem.conduction', 'mode': 'steady'})
+        elif mutation == 'target':
+            invalid['constraints'] = {'fixed': [{'target': 'layer:missing'}]}
+        else:
+            invalid['solver'] = {'linear': {'rtol': 0}}
+        run(invalid, profile, 11)
+    for args in ([], ['--case'], ['--help', 'extra'], ['--wat', 'value'],
+                 ['--case', 'a', '--case', 'b', '--out', 'c']):
+        assert subprocess.run([exe, *args], capture_output=True).returncode == 11
+    assert subprocess.run([exe, '--help'], capture_output=True).returncode == 0
+print(f'Input and CLI assertions passed; wall_seconds={time.perf_counter() - start:.6f}')

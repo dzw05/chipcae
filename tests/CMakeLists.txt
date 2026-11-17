@@ -87,3 +87,5 @@ target_link_libraries(chipcae_test_repair_policy PRIVATE chipcae::geometry)
 chipcae_set_warnings(chipcae_test_repair_policy)
 add_test(NAME repair_policy_tiers COMMAND chipcae_test_repair_policy)
 set_tests_properties(repair_policy_tiers PROPERTIES LABELS "mesh;tierA" TIMEOUT 60)
+
+add_subdirectory(solve)
