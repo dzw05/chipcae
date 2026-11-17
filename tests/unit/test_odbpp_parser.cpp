@@ -685,6 +685,30 @@ int main() {
         write(p / "steps/pcb/layers/top/features", std::string(1024 * 1024 + 1, '#'));
         rejected(p, "line byte limit");
     });
+    test("odbpp_review_archive_line_limits", [&] {
+        for (const auto* extension : {".tgz", ".zip"}) {
+            for (const auto* kind : {"boundary", "overflow", "overflow-newline"}) {
+                ArchiveReader reader(temp / (std::string("line-") + kind + extension));
+                require(reader.open_error().empty(), reader.open_error());
+                std::string error;
+                std::size_t calls = 0;
+                const bool ok = reader.for_each_line(
+                    "matrix/matrix",
+                    [&](std::string_view line) {
+                        ++calls;
+                        require(line.size() == 1024 * 1024, "exact line boundary preserved");
+                        return true;
+                    },
+                    error);
+                if (std::string_view(kind) == "boundary")
+                    require(ok && calls == 1, "line at limit accepted: " + error);
+                else
+                    require(!ok && calls == 0 &&
+                                error.starts_with("IMPORT_REJECTED: line byte limit"),
+                            "archive line overflow rejected before callback: " + error);
+            }
+        }
+    });
     test("odbpp_streaming_memory", [&] {
 #ifdef __linux__
         const auto p = temp / "stream";

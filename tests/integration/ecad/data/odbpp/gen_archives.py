@@ -58,6 +58,16 @@ def main(root, fixture):
         with zipfile.ZipFile(root / name, 'w', compression=method) as archive:
             for path, data in files:
                 archive.writestr(path, data)
+    # Stored deflate blocks keep these line-limit fixtures below the ratio limit.
+    for suffix, payload in [('boundary', b'#' * (1024 * 1024)),
+                            ('overflow', b'#' * (1024 * 1024 + 1)),
+                            ('overflow-newline', b'#' * (1024 * 1024 + 1) + b'\n')]:
+        entry = [('matrix/matrix', payload)]
+        (root / ('line-' + suffix + '.tgz')).write_bytes(
+            gzip.compress(tar_bytes(entry), compresslevel=0))
+        with zipfile.ZipFile(root / ('line-' + suffix + '.zip'), 'w',
+                             compression=zipfile.ZIP_STORED) as archive:
+            archive.writestr('matrix/matrix', payload)
     long_path = '/'.join(['directory' * 10] * 3) + '/features'
     format_files = [('matrix/matrix', b'UNITS=MM\n'), (long_path, b'long path payload\0\xff')]
     # Ustar permits at most 155 prefix + 100 basename bytes. A longer complete path
