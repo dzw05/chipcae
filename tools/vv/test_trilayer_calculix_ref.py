@@ -77,6 +77,15 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             variants.append(invalid)
         for field in ("host", "calculix_version"):
             variants.append(dict(data, **{field: ""}))
+            # Nested metadata cannot substitute for either required top-level field.
+            invalid = copy.deepcopy(data)
+            value = invalid.pop(field)
+            invalid.setdefault("provenance", {})[field] = value
+            variants.append(invalid)
+        provenance_only = copy.deepcopy(data)
+        for field in ("host", "calculix_version"):
+            provenance_only.setdefault("provenance", {})[field] = provenance_only.pop(field)
+        variants.append(provenance_only)
         for name in ("", "unknown", "coarse"):
             invalid = copy.deepcopy(data)
             invalid["selected_mesh"] = name
