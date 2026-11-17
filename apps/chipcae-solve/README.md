@@ -54,7 +54,8 @@ vertices of fully interior regular cells and validate exactly six constrained
 DOFs. A domain without suitable regular cells fails explicitly.
 
 The FP64 CPU backend uses PETSc sequential sparse LU with exact row preallocation
-and residual-checked iterative refinement. Events include assembly and LU solve
+and residual-checked iterative refinement. Symmetric diagonal basis normalization
+is applied before factorization; residual acceptance uses the original system. Events include assembly and LU solve
 times. Every MPI rank solves the complete global problem on PETSC_COMM_SELF;
 np agreement verifies reproducibility and output ownership, **not distributed
 solver scalability**. Memory grows with rank count. Each serial interior ghost
@@ -86,7 +87,8 @@ manufactured heat/elasticity convergence at four mesh sizes and degrees 4/6/8,
 geometry closure/divergence-volume checks, and 50-position thermal/mechanical
 spectral scans at aspect ratios 1 and 1:10. The small spectral tests use dense
 symmetric eigenvalues, both unscaled and Jacobi-scaled, instead of a Lanczos
-estimate. Pure natural manufactured solutions are compared modulo their
+estimate. The tenfold variation bound applies to the Jacobi-scaled system used
+by the direct solver; raw estimates are reported separately. Pure natural manufactured solutions are compared modulo their
 constant/rigid nullspaces. The bilayer test compares against an uncut conforming
 Q2 wedge mesh of the same polygonal domain; intermediate PV errors may be
 non-monotone, while finest error must improve on coarsest and stay below 1%.

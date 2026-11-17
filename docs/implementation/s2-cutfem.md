@@ -1,14 +1,13 @@
 # S2 implementation decisions and deviations
 
 The implementation follows `/workspace/briefs/s2-run.md`, the revised design,
-and the supplied concrete plan. `origin/main` and `origin/feat/o2-solve-uncut`
-were fetched and merged before implementation; O2 was initially already an
-ancestor after the main merge. Its reviewed MUST fixes arrived while this task
-was running. A second O2 merge incorporates those fixes and newer main writer
-and preview changes. Conflicts retain cut-aware 3-2-1 selection and integration,
-upstream CSR preallocation, the material module's shared M7 laminate helper
-(also used by CopperMixture), writer validation/FieldData and preview digests.
-The initial S2 constitutive bridge was removed in favor of the corrected O2 API.
+and the supplied concrete plan. Recovery preserved commit `c78b202` and all
+interrupted working-tree changes in WIP commit `3a16266`, then fetched and
+merged `origin/main` (O2 #50) with a merge commit, without rebasing. The merged
+solver retains O2's shared material M7 adapter (tested against `CopperMixture`),
+PETSc CSR preallocation, six-DOF rigid-anchor validation and Q2-to-Q1 output
+interpolation. S2 extends those paths for cut integration and output. Upstream
+Kokkos mesh-test initialization and the Q2 output regression are retained.
 
 Mesh geometry and quadrature remain authoritative. The solver uses the mutable
 clipper to compact exterior cells/nodes while preserving GIDs; its cut indices
@@ -48,7 +47,10 @@ volume to that volume, both at 1e-12. Degrees 4/6/8 all meet the requested order
 The robustness test uses direct symmetric dense eigenvalues for its small Q2
 matrices, rather than PETSc/Lanczos. It records unscaled and Jacobi-scaled
 condition numbers, enabled and zero penalty, thermal and elastic systems, 50
-translations and both unit and 1:10 cells. Zero-penalty numerically nonpositive
+translations and both unit and 1:10 cells. The factor-of-ten acceptance applies
+to Jacobi-scaled matrices, matching the diagonal basis normalization in the
+production direct solver. Raw estimates are recorded separately; no factor-of-ten
+claim is made for the unscaled basis. Zero-penalty numerically nonpositive
 minimum eigenvalues are reported as infinite condition estimates, rather than
 as finite trustworthy estimates.
 
@@ -60,9 +62,8 @@ solutions. PV errors at intermediate refinements are non-monotone; the test
 requires every error below 1% and finest error below coarsest, and records the
 intermediate measurements. No ersatz degradation is used.
 
-Existing O2 pipeline checks remain, with only the copper expected values updated
-to the authoritative M7 rules; the old mesh default-bit test now compares with
-explicit degree 6. The merged O2 test verifies its constitutive bridge against
+Existing O2 pipeline checks remain unchanged; the mesh default-bit test compares
+with explicit degree 6. The merged O2 test verifies its constitutive bridge against
 `CopperMixture`. The output adapter uses the existing results writer, extending
 its previously empty EB block to carry mesh-owned triangles and Q2 fields.
 The writer remains VTKHDF 2.8 with outward rings copied per cell.
@@ -71,3 +72,9 @@ The packaged example is a synthetic two-material cut-corner stack, substituted
 for an importer-generated package. GPU/material CUDA tests remain skipped when unavailable; the newly merged
 preview digest comparison now runs. The user instruction
 to commit without pushing takes precedence over the brief's push/PR instruction.
+
+Recovery validation also found absolute-temperature cancellation in thin-domain
+convection: a constant 350 K solution missed the 1e-8 K check by 1.54e-8 K.
+The thermal system now solves for `T - T_ref`, including shifted essential and
+convection data, then restores absolute T before mechanics/output. The same
+check measures 2.21e-9 K error; layered conduction is within 1.82e-12 K.

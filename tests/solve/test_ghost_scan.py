@@ -36,4 +36,3 @@ with tempfile.TemporaryDirectory() as tmp:
         print('unscaled aspect',aspect,'elastic',elastic,'gamma',gamma,'minimum',min(values),'maximum',max(values),'ratio',ratio,flush=True)
         if gamma:
             assert np.isfinite(values).all()
-

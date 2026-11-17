@@ -185,6 +185,14 @@ with tempfile.TemporaryDirectory() as tmp:
     error = np.max(abs(T-(300+1000/(2*2)*p[:,2]*(.1-p[:,2]))))
     print('heat source max error K=',error,flush=True)
     assert error <= 1e-10
+    # One element through thickness: the Q1 visualization has only boundary
+    # vertices (300 K), while the full Q2 solution peaks at its interior node.
+    projected = copy.deepcopy(thermal)
+    projected['loads'] = [thermal['loads'][0], thermal['loads'][1],
+                          {'type':'heat_source','target':'layer:a','power':100}]
+    _, summary, p, T, *_ = run('q1-output', projected, [('a', .1)], same_materials)
+    assert np.max(abs(T-300)) < 1e-10
+    assert abs(summary['T_max']-300.625) < 1e-10
     # STOP is read after T, before U/output. Ignore malformed/duplicate/partial lines.
     control = 'bad JSON\n' + json.dumps({'cmd_seq':'1','action':'STOP'}) + '\n' + json.dumps({'cmd_seq':'2','action':'STOP'})
     out, ev = run('stop',thermal,layers,materials,2,control)

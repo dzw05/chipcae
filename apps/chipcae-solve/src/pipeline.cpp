@@ -507,6 +507,9 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             emit(io::Progress{window, 0, 0, name == "T" ? 0.5 : 1.0, name + " complete"});
         };
         if (inputs.thermal) {
+            // Solve for T - T_ref to avoid cancellation between absolute
+            // temperatures in thin-domain diffusion/convection systems.
+            temperature = 0.0;
             ConductivityCoefficient k(conductivities);
             BilinearForm form(&scalar);
             form.AddDomainIntegrator(bilinear(new DiffusionIntegrator(k)));
@@ -543,7 +546,7 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                             Array<int> dofs;
                             scalar.GetElementDofs(e, dofs);
                             for (int d : dofs) {
-                                temperature[d] = load.T;
+                                temperature[d] = load.T - inputs.T_ref;
                                 essential.Append(d);
                             }
                         }
@@ -552,8 +555,8 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                         surface_rules.push_back(
                             std::make_unique<CutSurfaceRule>(arrays, *clipped, load.target));
                         form.AddDomainIntegrator(new CutSurfaceMass(*surface_rules.back(), load.h));
-                        rhs.AddDomainIntegrator(
-                            new CutSurfaceLoad(*surface_rules.back(), load.h * load.T_inf));
+                        rhs.AddDomainIntegrator(new CutSurfaceLoad(
+                            *surface_rules.back(), load.h * (load.T_inf - inputs.T_ref)));
                         if (load.target == "boundary:embedded")
                             continue;
                     }
@@ -564,7 +567,7 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                         boundary(arrays, mesh, load.target, all.Size())));
                     auto& marker = *markers.back();
                     if (load.type == "fixed_temperature") {
-                        ConstantCoefficient value(load.T);
+                        ConstantCoefficient value(load.T - inputs.T_ref);
                         temperature.ProjectBdrCoefficient(value, marker);
                         for (int i = 0; i < all.Size(); ++i)
                             all[i] |= marker[i];
@@ -573,8 +576,8 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                         form.AddBoundaryIntegrator(
                             new RegularBoundaryMass(*coefficients.back(), mesh, cut_boundary_cells),
                             marker);
-                        coefficients.push_back(
-                            std::make_unique<ConstantCoefficient>(load.h * load.T_inf));
+                        coefficients.push_back(std::make_unique<ConstantCoefficient>(
+                            load.h * (load.T_inf - inputs.T_ref)));
                         rhs.AddBoundaryIntegrator(
                             new RegularBoundaryLoad(*coefficients.back(), mesh, cut_boundary_cells),
                             marker);
@@ -589,6 +592,7 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             essential.Sort();
             essential.Unique();
             solve(form, rhs, temperature, essential, "T");
+            temperature += inputs.T_ref;
             if (stop())
                 return 0;
         } else
