@@ -1,0 +1,7 @@
+H optimize n staggered n
+$1 GND
+#
+#Netlist points
+#
+1 1.0 17.0 -22.0 B e c staggered 0 0 0
+1 1.0 23.0 -22.0 B e c staggered 0 0 0

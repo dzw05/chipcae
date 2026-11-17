@@ -1,4 +1,4 @@
-add_library(chipcae_geometry_ecad src/ipc2581_reader.cpp src/via_fraction.cpp src/ecad_model.cpp src/material_map.cpp)
+add_library(chipcae_geometry_ecad src/odbpp/read_odbpp.cpp src/odbpp/archive.cpp src/odbpp/parse_matrix.cpp src/odbpp/parse_misc.cpp src/odbpp/parse_features.cpp src/odbpp/map_geometry.cpp src/odbpp/map_stackup.cpp src/ipc2581_reader.cpp src/via_fraction.cpp src/ecad_model.cpp src/material_map.cpp)
 add_library(chipcae::geometry_ecad ALIAS chipcae_geometry_ecad)
 target_include_directories(chipcae_geometry_ecad PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/schema/include)
 target_link_libraries(chipcae_geometry_ecad PUBLIC chipcae::geometry)
