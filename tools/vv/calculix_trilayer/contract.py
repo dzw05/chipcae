@@ -13,6 +13,7 @@ CONTRACT = json.loads(r'''
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "artifact_version",
     "kind",
     "label",
     "W_bfp_m",
@@ -27,6 +28,7 @@ CONTRACT = json.loads(r'''
     "rel_delta"
   ],
   "properties": {
+    "artifact_version": { "type": "integer", "const": 1 },
     "kind": { "const": "REFERENCE", "type": "string" },
     "label": { "type": "string", "minLength": 1 },
     "W_bfp_m": { "type": "number" },

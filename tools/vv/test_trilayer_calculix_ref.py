@@ -47,6 +47,11 @@ class TrilayerCalculixRefTest(unittest.TestCase):
                 validate_reference(dict(portable, provenance={field: value}), contract)
         validate_reference(dict(portable, provenance={"future_metadata": 123}), contract)
         variants = []
+        unversioned = copy.deepcopy(data)
+        del unversioned["artifact_version"]
+        variants.append(unversioned)
+        for version in (0, 2, "1", None, True):
+            variants.append(dict(data, artifact_version=version))
         for field in ("label", "W_bfp_m", "host", "calculix_version"):
             invalid = copy.deepcopy(data)
             del invalid[field]
@@ -98,6 +103,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         for key in contract["required"]:
             self.assertIn(key, data, f"missing required field {key}")
         validate_reference(data, contract)
+        self.assertEqual(data["artifact_version"], 1)
         self.assertEqual(data["kind"], "REFERENCE")
         self.assertEqual(data["element_type"], "C3D20")
         self.assertEqual(data["selected_mesh"], "fine")

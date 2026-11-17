@@ -41,6 +41,8 @@ computed with `tools.vv.warpage_qoi.interp_grid`
 and `qoi_surface` on an 81×81 grid in millimetres, then converted back to metres.
 
 The shared `contract.py` module defines the artifact schema and validator.
+The required integer `artifact_version` is `1`; missing or unsupported versions
+are rejected by both producer and consumer.
 Both `generate.py` (before writing `REFERENCE.json`) and
 `tools/vv/test_trilayer_calculix_ref.py` use this contract. It checks required fields,
 coarse/fine mesh names, fine selection, and equality with the fine mesh value.
@@ -51,7 +53,8 @@ columns 2–3 contain the record marker, 4–13 the node ID, and 14–49
 three 12-character real fields. Adjacent negative fields need no separating
 space, so whitespace splitting is unsuitable. This same layout applies to
 `2C` coordinates and `DISP` values. Run the parser regression checks with
-`python tools/vv/calculix_trilayer/check_frd_parser.py`; they cover both blocks,
+`python tools/vv/calculix_trilayer/check_frd_parser.py`; these manual-only checks
+are not collected by unittest discovery. They cover both blocks,
 adjacent negative fields, exponent signs, node IDs, and block termination.
 
 Recorded W_bfp: coarse 0.004271023422273522 m; fine (selected)
