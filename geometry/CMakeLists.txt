@@ -25,9 +25,12 @@ else()
     target_sources(chipcae_geometry PRIVATE src/step_import_unavailable.cpp)
 endif()
 
-# Expose the configured feature state to the existing acceptance test executable.
-target_compile_definitions(chipcae_geometry INTERFACE
-    CHIPCAE_ACCEPT_TEST_JSONCONS=$<BOOL:${CHIPCAE_ENABLE_JSONCONS}>)
+# The test target is created later by the top-level tests subdirectory.
+if(CHIPCAE_BUILD_TESTS)
+    cmake_language(DEFER DIRECTORY "${PROJECT_SOURCE_DIR}" CALL
+        target_compile_definitions chipcae_test_repair_policy PRIVATE
+        CHIPCAE_ACCEPT_TEST_JSONCONS=$<BOOL:${CHIPCAE_ENABLE_JSONCONS}>)
+endif()
 
 if(CHIPCAE_ENABLE_JSONCONS)
     target_link_libraries(chipcae_geometry PRIVATE jsoncons)

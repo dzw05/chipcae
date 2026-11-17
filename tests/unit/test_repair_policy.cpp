@@ -1,6 +1,7 @@
 #include "chipcae/geometry/import_accept.hpp"
 #include "chipcae/geometry/import_report.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -89,8 +90,10 @@ void accept_file_covers_b() {
     require(list.has_value(), "covers_b: nine-id file must load");
     const auto result = apply_repair_policy(defects, accepted_ids(*list));
     require(result.result == ImportResult::ConfirmationRequired, "covers_b: uncovered B");
-    require(result.defects.back().defect_id == "b-9" &&
-                !result.defects.back().rejection_reason.empty(),
+    const auto uncovered = std::find_if(result.defects.begin(),
+                                        result.defects.end(),
+                                        [](const Defect& d) { return d.defect_id == "b-9"; });
+    require(uncovered != result.defects.end() && !uncovered->rejection_reason.empty(),
             "covers_b: uncovered defect rejection reason");
 }
 void accept_file_unknown_id() {
@@ -190,7 +193,7 @@ bool run_accept_tests() {
         run("accept_file_malformed[" + std::to_string(i) + "]", [&] { malformed(invalid[i]); });
     run("accept_file_missing", [] {
         AcceptFixture f;
-        std::string error;
+        std::string error = "previous error";
         require(!read_accept_file(f.dir / "missing.json", &error), "missing: absent result");
         require(error.empty(), "missing: no error");
     });
@@ -240,7 +243,7 @@ int main() {
     return run_accept_tests() ? 0 : 1;
 #else
     AcceptFixture fixture;
-    std::string error;
+    std::string error = "previous error";
     check(!read_accept_file(fixture.dir / "missing.json", &error), "missing file absent result");
     check(error.empty(), "missing file has no error");
     check(!read_accept_file(fixture.write(R"({"accept":[]})"), &error),

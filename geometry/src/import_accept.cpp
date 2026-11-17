@@ -17,6 +17,8 @@ std::filesystem::path default_accept_file(const std::filesystem::path& input) {
 std::optional<AcceptList> read_accept_file(const std::filesystem::path& path,
                                            std::string* error,
                                            std::vector<std::string>* warnings) {
+    if (error)
+        error->clear();
     const auto reject = [&](const std::string& reason) -> std::optional<AcceptList> {
         if (error)
             *error = "IMPORT_REJECTED: " + reason;
