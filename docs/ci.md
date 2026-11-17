@@ -59,6 +59,12 @@ An older combined prefix+ccache entry named `k1-linux-metis5.1.0-hypre3.2.1-hdf5
 
 The build job uploads `build/junit.xml` from `ctest --output-junit`, plus the perf summary and compare JSON. Retention is 7 days. The nightly clang job uploads its own JUnit file.
 
+### E8 validation (2026-11-17)
+
+Local Release build (`cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release` and `cmake --build build-release --parallel 4`) succeeded. All 12 tests passed with `ctest --test-dir build-release --output-on-failure`; clang-format 23.1.5 passed its dry-run check. The local environment had no Kokkos installation, so CMake skipped the optional material library.
+
+Hosted run [43995538668](https://github.com/dzw05/chipcae/actions/runs/43995538668) passed Lint and Build and test but failed Mesh because the target list omitted `chipcae_test_copper_map`, even though `copper_map_analytic` is registered with CTest's `mesh` label. `.github/workflows/mesh.yml` now builds that target. The matching local mesh workflow configuration builds all five selected tests and passes them. Use `gh run view 43995538668` to inspect the hosted run; invoking `gh run view` non-interactively without a run ID produces the CLI usage error shown in the original report.
+
 ## Merge gate
 
 `main` does not use branch protection. The only hard gate is the aggregate job `CI / ci-ok` in the `CI` workflow (ADR-0006). Do not enable branch protection or a ruleset, and do not mark `CI / Lint` or `CI / Build and test` as required checks.
