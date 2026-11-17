@@ -351,7 +351,8 @@ sys.exit(rc)
                        bool directory = false,
                        bool accept = false,
                        const QString& materialMap = {},
-                       const QString& auxiliaryDir = {}) {
+                       const QString& auxiliaryDir = {},
+                       const QString& ignoredMapTarget = {}) {
             CaseDocument document;
             require(document.load(FIXTURE_DIR "/fcbga_demo.case.json"), "load baseline");
             const auto before = document.stackJson();
@@ -375,6 +376,14 @@ sys.exit(rc)
                 r.polyset = QDir(auxiliaryDir).filePath(QFileInfo(r.polyset).fileName());
                 r.report = QDir(auxiliaryDir).filePath(QFileInfo(r.report).fileName());
             }
+            if (ignoredMapTarget == "input")
+                r.materialMap = r.input;
+            else if (ignoredMapTarget == "output")
+                r.materialMap = r.output;
+            else if (ignoredMapTarget == "polyset")
+                r.materialMap = r.polyset;
+            else if (ignoredMapTarget == "report")
+                r.materialMap = r.report;
             r.program =
                 mode == "launch-failure" ? "/nonexistent/chipcae-import" : PYTHON_EXECUTABLE;
             r.prefix = {script, MOCK_SCRIPT, record, mode};
@@ -628,6 +637,16 @@ sys.exit(rc)
             false,
             false,
             dir.filePath("ignored assembly map.json"));
+        for (const auto& target : {"input", "output", "polyset", "report"})
+            run("success",
+                ImportOutcome::Accepted,
+                ".assembly",
+                ImportKind::Assembly,
+                false,
+                false,
+                {},
+                {},
+                target);
         {
             CaseDocument d;
             require(d.load(FIXTURE_DIR "/fcbga_demo.case.json"), "baseline");

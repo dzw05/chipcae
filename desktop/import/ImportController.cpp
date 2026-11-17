@@ -90,7 +90,7 @@ bool ImportController::start(const ImportRequest& request) {
         auto absolute = QFileInfo(path).absoluteFilePath();
         if (QFileInfo::exists(path) || paths.contains(absolute) ||
             absolute == QFileInfo(input).absoluteFilePath() ||
-            (!request.materialMap.isEmpty() &&
+            (request.kind == ImportKind::Ecad && !request.materialMap.isEmpty() &&
              absolute == QFileInfo(request.materialMap).absoluteFilePath())) {
             error_ = "import destination already exists or collides with another path";
             return false;
