@@ -8,6 +8,7 @@
 #include <fstream>
 #include <hdf5.h>
 #include <iostream>
+#include <jsoncons/json.hpp>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -28,15 +29,6 @@ static std::string read_text(const fs::path& path) {
     return std::string((std::istreambuf_iterator<char>(in)), {});
 }
 
-static double json_number(const std::string& text, const std::string& key) {
-    const auto token = "\"" + key + "\"";
-    auto pos = text.find(token);
-    expect(pos != std::string::npos, "missing key " + key);
-    pos = text.find(':', pos);
-    expect(pos != std::string::npos, "missing colon for " + key);
-    return std::stod(text.substr(pos + 1));
-}
-
 struct Layer {
     std::string name;
     std::string material;
@@ -44,52 +36,15 @@ struct Layer {
     int n_elem_min = 0;
 };
 
-static std::string json_string_field(const std::string& obj, const std::string& key) {
-    const auto token = "\"" + key + "\"";
-    auto pos = obj.find(token);
-    expect(pos != std::string::npos, "missing string " + key);
-    pos = obj.find(':', pos);
-    pos = obj.find('"', pos);
-    expect(pos != std::string::npos, "missing quote " + key);
-    auto end = obj.find('"', pos + 1);
-    return obj.substr(pos + 1, end - pos - 1);
-}
-
-static std::vector<Layer> parse_layers(const std::string& text) {
-    auto start = text.find("\"layers\"");
-    expect(start != std::string::npos, "layers array");
-    start = text.find('[', start);
-    expect(start != std::string::npos, "layers [");
-    int depth = 0;
-    std::vector<std::string> objs;
-    std::string cur;
-    for (std::size_t i = start + 1; i < text.size(); ++i) {
-        char c = text[i];
-        if (c == '{') {
-            if (depth == 0)
-                cur.clear();
-            ++depth;
-        }
-        if (depth >= 1)
-            cur.push_back(c);
-        if (c == '}') {
-            --depth;
-            if (depth == 0)
-                objs.push_back(cur);
-        }
-        if (c == ']' && depth == 0)
-            break;
-    }
+static std::vector<Layer> parse_layers(const jsoncons::json& stack) {
+    expect(stack.contains("layers") && stack["layers"].is_array(), "layers array");
     std::vector<Layer> layers;
-    for (const auto& obj : objs) {
-        // Only top-level layer objects contain "n_elem_min".
-        if (obj.find("\"n_elem_min\"") == std::string::npos)
-            continue;
+    for (const auto& obj : stack["layers"].array_range()) {
         Layer layer;
-        layer.name = json_string_field(obj, "name");
-        layer.material = json_string_field(obj, "material");
-        layer.thickness = json_number(obj, "thickness");
-        layer.n_elem_min = static_cast<int>(json_number(obj, "n_elem_min"));
+        layer.name = obj["name"].as<std::string>();
+        layer.material = obj["material"].as<std::string>();
+        layer.thickness = obj["thickness"].as<double>();
+        layer.n_elem_min = obj["n_elem_min"].as<int>();
         layers.push_back(layer);
     }
     expect(!layers.empty(), "parsed layers");
@@ -161,9 +116,10 @@ int main(int argc, char** argv) {
         // (mesh/background/thresholds/k1.json). Read those keys at runtime;
         // do not bake a second copy of the numbers into this test.
         const auto thresholds = root / "mesh/background/thresholds/k1.json";
-        const double interface_relative = json_number(read_text(thresholds), "interface_relative");
-        const double volume_relative = json_number(read_text(thresholds), "volume_relative");
-        auto layers = parse_layers(read_text(fixture));
+        const auto k1 = jsoncons::json::parse(read_text(thresholds));
+        const double interface_relative = k1["interface_relative"].as<double>();
+        const double volume_relative = k1["volume_relative"].as<double>();
+        auto layers = parse_layers(jsoncons::json::parse(read_text(fixture)));
         expect(layers.size() == 3, "fcbga_demo has 3 layers");
 
         auto dir = fs::temp_directory_path() / ("preview-zalign-" + std::to_string(getpid()));
