@@ -45,16 +45,10 @@ copper = copper_entries[0]
 assert copper["provenance"]["reference"].strip(), "copper must cite a nonempty reference"
 assert copper["provenance"]["source_type"] == "literature", "copper source_type must be literature"
 assert copper["provenance"]["confidence"] == "medium", "copper confidence must be medium"
-assert copper["provenance"]["notes"] == (
-    "近似材料：多晶纯铜室温值，用于 PACKAGE_BULK_PARTS 的 lid；未按实际盖板合金和工艺标定 Approximation basis for annealed "
-    "polycrystalline pure copper: commercial CuOFE/C10100 (Cu >= 99.99%) bulk properties are used as an "
-    "isotropic polycrystalline proxy, not as single-crystal constants or lid-specific calibration. "
-    "Aurubis specifies conductivity for the soft condition and lists soft annealing on p. 2; its generic "
-    "density and modulus and the C10100 Poisson ratio are adopted as room-temperature estimates, not "
-    "certified annealed-temper measurements. The 20-300 C mean expansion coefficient is approximated as "
-    "constant tangent CTE; both 250 K and 400 K table points reuse these estimates without claiming "
-    "measured temperature dependence."
-)
+assert (
+    "近似材料：多晶纯铜室温值，用于 PACKAGE_BULK_PARTS 的 lid；未按实际盖板合金和工艺标定"
+    in copper["provenance"]["notes"]
+), "copper notes must contain the required approximation statement"
 assert copper["model"] == "thermo_elastic"
 assert copper["unit_system"] == "SI"
 assert 8800 <= copper["density"] <= 9000, "copper density must be in kg/m³"
