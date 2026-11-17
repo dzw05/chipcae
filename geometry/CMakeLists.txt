@@ -1,4 +1,6 @@
 add_library(chipcae_geometry
+    src/part_slice.cpp
+    src/assembly.cpp
     src/geometry.cpp
     src/import_thresholds.cpp
     src/import_report.cpp
@@ -9,6 +11,7 @@ add_library(chipcae::geometry ALIAS chipcae_geometry)
 target_include_directories(chipcae_geometry
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${PROJECT_SOURCE_DIR}/schema/include
 )
 
 target_link_libraries(chipcae_geometry PUBLIC chipcae::core)

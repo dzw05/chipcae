@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:chipcae:assembly:0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "board",
+    "parts"
+  ],
+  "properties": {
+    "schema": {
+      "const": "chipcae.assembly/0.1"
+    },
+    "board": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "format",
+        "material_map"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/path"
+        },
+        "format": {
+          "enum": [
+            "ipc2581",
+            "odbpp"
+          ]
+        },
+        "material_map": {
+          "$ref": "#/$defs/path"
+        }
+      }
+    },
+    "materials": {
+      "$ref": "#/$defs/path"
+    },
+    "parts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/part"
+      }
+    },
+    "parts_from_step": {
+      "$ref": "#/$defs/partsFromStep"
+    }
+  },
+  "$defs": {
+    "path": {
+      "type": "string",
+      "pattern": "^(?!.*://)(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(^|/)\\.\\.(/|$)).+"
+    },
+    "attachPlacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attach"
+      ],
+      "properties": {
+        "attach": {
+          "type": "string",
+          "pattern": "^(layer:[^@]+|part:[A-Za-z][A-Za-z0-9_-]{0,63})@(top|bottom)$"
+        },
+        "gap": {
+          "type": "number",
+          "minimum": 0
+        },
+        "bond": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "material",
+            "thickness"
+          ],
+          "properties": {
+            "material": {
+              "type": "string",
+              "minLength": 1
+            },
+            "thickness": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        },
+        "xy": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "rot_z": {
+          "type": "number"
+        }
+      }
+    },
+    "framePlacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "frame",
+        "origin"
+      ],
+      "properties": {
+        "frame": {
+          "const": "step"
+        },
+        "origin": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        }
+      }
+    },
+    "bodyMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "material"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+        },
+        "material": {
+          "type": "string",
+          "minLength": 1
+        },
+        "material_approx": {
+          "type": "boolean"
+        }
+      }
+    },
+    "part": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "step",
+        "material",
+        "placement"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+        },
+        "material": {
+          "type": "string",
+          "minLength": 1
+        },
+        "material_approx": {
+          "type": "boolean"
+        },
+        "step": {
+          "$ref": "#/$defs/path"
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1
+        },
+        "placement": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/attachPlacement"
+            },
+            {
+              "$ref": "#/$defs/framePlacement"
+            }
+          ]
+        }
+      }
+    },
+    "partsFromStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "step",
+        "frame",
+        "origin",
+        "bodies"
+      ],
+      "properties": {
+        "step": {
+          "$ref": "#/$defs/path"
+        },
+        "frame": {
+          "const": "step"
+        },
+        "origin": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "bodies": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/bodyMapping"
+          }
+        }
+      }
+    }
+  }
+}
