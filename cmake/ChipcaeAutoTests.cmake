@@ -17,9 +17,9 @@
 #   Files are globbed with CONFIGURE_DEPENDS, so adding one re-runs CMake.
 #
 # chipcae_auto_test_subdirs()
-#   Called as the last line of tests/CMakeLists.txt. Adds every tests/<a>/CMakeLists.txt
-#   and tests/<a>/<b>/CMakeLists.txt that calls chipcae_auto_tests( and was not
-#   already added explicitly. New cards therefore create their own subdirectory and
+#   Called as the last line of tests/CMakeLists.txt. Adds every tests/<a>/ and
+#   tests/<a>/<b>/ directory that has a CMakeLists.txt plus an (empty) marker file
+#   .chipcae-autotests, and was not already added explicitly. New cards therefore create their own subdirectory and
 #   never touch tests/CMakeLists.txt.
 # The helper functions are intentionally defined once for the whole project.
 include_guard(GLOBAL)
@@ -99,6 +99,10 @@ function(chipcae_auto_test_subdirs)
         "${CMAKE_CURRENT_SOURCE_DIR}/*/CMakeLists.txt"
         "${CMAKE_CURRENT_SOURCE_DIR}/*/*/CMakeLists.txt")
     list(SORT _lists)
+    # Re-run CMake when a marker appears or disappears.
+    file(GLOB _markers CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/*/.chipcae-autotests"
+        "${CMAKE_CURRENT_SOURCE_DIR}/*/*/.chipcae-autotests")
     foreach(_list IN LISTS _lists)
         get_filename_component(_dir "${_list}" DIRECTORY)
         get_filename_component(_parent "${_dir}" DIRECTORY)
@@ -106,16 +110,8 @@ function(chipcae_auto_test_subdirs)
         if(_dir IN_LIST _added OR (NOT _parent STREQUAL CMAKE_CURRENT_SOURCE_DIR AND EXISTS "${_parent}/CMakeLists.txt"))
             continue()
         endif()
-        file(STRINGS "${_list}" _lines)
-        set(_calls FALSE)
-        foreach(_line IN LISTS _lines)
-            string(REGEX REPLACE "#.*$" "" _line "${_line}")
-            if(_line MATCHES "chipcae_auto_tests[ \t]*\\(")
-                set(_calls TRUE)
-                break()
-            endif()
-        endforeach()
-        if(NOT _calls)
+        # Opt-in is structural: a marker file next to the CMakeLists.txt, not text scanning.
+        if(NOT EXISTS "${_dir}/.chipcae-autotests")
             continue()
         endif()
         add_subdirectory("${_dir}")
