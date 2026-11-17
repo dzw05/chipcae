@@ -139,7 +139,8 @@ int main(int argc, char** argv) {
         file = H5Fopen(result.value().embedded_boundary.c_str(), H5F_ACC_RDONLY, H5P_DEFAULT);
         expect(file >= 0, "open EB");
         auto ebn = read<Index>(file, "VTKHDF/NumberOfPoints", H5T_NATIVE_INT64, {1})[0];
-        expect(ebn == static_cast<Index>(2 * c.value().bq_w.size()), "EB points and facets");
+        expect(ebn == static_cast<Index>(c.value().bq_w.size() + c.value().eb_parent_elem.size()),
+               "EB points and facets");
         read<Real>(file, "VTKHDF/Points", H5T_NATIVE_DOUBLE, {static_cast<hsize_t>(ebn), 3});
         read<Real>(
             file, "VTKHDF/PointData/normal", H5T_NATIVE_DOUBLE, {static_cast<hsize_t>(ebn), 3});

@@ -1,0 +1,66 @@
+{
+  "id": "s2-cut-bilayer",
+  "unit": "m",
+  "outline": {
+    "box": [
+      0,
+      0,
+      0.02,
+      0.02
+    ],
+    "polygon": [
+      [
+        0.002,
+        0
+      ],
+      [
+        0.018,
+        0
+      ],
+      [
+        0.02,
+        0.002
+      ],
+      [
+        0.02,
+        0.018
+      ],
+      [
+        0.018,
+        0.02
+      ],
+      [
+        0.002,
+        0.02
+      ],
+      [
+        0,
+        0.018
+      ],
+      [
+        0,
+        0.002
+      ]
+    ]
+  },
+  "symmetry": "none",
+  "package_type": "FCBGA",
+  "layers": [
+    {
+      "name": "base",
+      "kind": "Explicit",
+      "material": "base",
+      "thickness": 0.001,
+      "n_elem_min": 2,
+      "grading": 1
+    },
+    {
+      "name": "top",
+      "kind": "Explicit",
+      "material": "top",
+      "thickness": 0.001,
+      "n_elem_min": 2,
+      "grading": 1
+    }
+  ]
+}
