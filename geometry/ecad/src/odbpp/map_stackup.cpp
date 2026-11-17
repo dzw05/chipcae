@@ -84,10 +84,8 @@ void map_stackup(const OdbJob& j, const MapOptions& options, ImportResult& resul
                 if (!std::isfinite(value) || value <= 0)
                     throw std::runtime_error("invalid override thickness: " + key);
                 if (odb <= 0 || std::abs(value - odb) / odb > 1e-9) {
-                    if (options.override_filename.empty())
-                        throw std::runtime_error("missing override filename provenance: " + key);
                     record.thickness_m = value;
-                    record.source = "override:" + options.override_filename;
+                    record.source = "override";
                     if (odb > 0)
                         record.odb_value_m = odb;
                 }

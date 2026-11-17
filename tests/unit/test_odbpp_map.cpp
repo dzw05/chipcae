@@ -294,9 +294,9 @@ void unavailable_thickness() {
                 "unavailable ODB thickness records missing provenance");
         ThicknessOverrides overrides{{"TOP", 35e-6}};
         records.clear();
-        const auto m = mapped(j, {&overrides, &records, "thickness.json"});
+        const auto m = mapped(j, {&overrides, &records});
         near(m.layers.front().thickness_m, 35e-6);
-        require(records.front().source == "override:thickness.json" && !records.front().odb_value_m,
+        require(records.front().source == "override" && !records.front().odb_value_m,
                 "override fills unavailable ODB thickness without conflict");
     }
 }
@@ -365,6 +365,13 @@ void oval_capsules() {
                             std::to_string(area(m)));
                 require(m.layers.front().polygons.size() == 1, "one capsule contour");
                 const auto& points = m.layers.front().polygons.front().points;
+                long double signed_area = 0;
+                for (std::size_t i = 0; i < points.size(); ++i) {
+                    const auto& next = points[(i + 1) % points.size()];
+                    signed_area += static_cast<long double>(points[i][0]) * next[1] -
+                                   static_cast<long double>(next[0]) * points[i][1];
+                }
+                require(signed_area > 0, "placed mirrored pad has positive exterior winding");
                 const double a = rotation * std::numbers::pi / 180;
                 int straight_sides = 0;
                 for (std::size_t i = 0; i < points.size(); ++i) {
@@ -407,15 +414,14 @@ void overrides() {
     ThicknessOverrides o = {
         {"TOP", 35e-6}, {"CORE", 800e-6}, {"BOTTOM", 35e-6}, {"PREPREG", 300e-6}};
     std::vector<ThicknessRecord> records;
-    auto m = mapped(missing(), {&o, &records, "thickness.json"});
+    auto m = mapped(missing(), {&o, &records});
     require(records.size() == 4, "one record per layer");
     for (std::size_t i = 0; i < records.size(); ++i) {
         const auto& r = records[i];
         require(r.layer == m.layers[i].name, "record layer");
         near(r.thickness_m, o.at(r.layer));
         near(m.layers[i].thickness_m, r.thickness_m);
-        require(r.source == "override:thickness.json",
-                "override filename source and override precedence");
+        require(r.source == "override", "override source and override precedence");
         require(r.odb_value_m.has_value() == (i == 3), "conflict provenance only");
     }
     require(records[3].odb_value_m.has_value() &&
@@ -425,18 +431,16 @@ void overrides() {
 void override_provenance() {
     auto j = board();
     ThicknessOverrides o{{"TOP", 70e-6}};
-    rejected(j, {"override filename", "TOP"}, {&o, nullptr});
     std::vector<ThicknessRecord> records;
-    const auto m = mapped(j, {&o, &records, "stackup-overrides.json"});
+    const auto m = mapped(j, {&o, &records});
     near(m.layers.front().thickness_m, 70e-6);
-    require(records.front().source == "override:stackup-overrides.json" &&
-                records.front().odb_value_m.has_value() &&
+    require(records.front().source == "override" && records.front().odb_value_m.has_value() &&
                 std::abs(*records.front().odb_value_m - 35e-6) <= 1e-12,
-            "exact override filename and original ODB value");
+            "deferred filename provenance and original ODB value");
     // The specified relative conflict threshold preserves ODB provenance for near equality.
     o["TOP"] = 35e-6 * (1 + 0.5e-9);
     records.clear();
-    mapped(j, {&o, &records, "stackup-overrides.json"});
+    mapped(j, {&o, &records});
     require(records.front().source == "odb" && !records.front().odb_value_m,
             "subthreshold override difference is not a conflict");
 }
@@ -448,15 +452,14 @@ void weight() {
     rejected(j, {"TOP"});
     ThicknessOverrides o = {{"TOP", 35e-6}};
     std::vector<ThicknessRecord> records;
-    mapped(j, {&o, &records, "thickness.json"});
+    mapped(j, {&o, &records});
     j.attrs.layer["TOP"][".layer_dielectric"] = "-0.01";
-    near(mapped(j, {&o, nullptr, "thickness.json"}).layers.front().thickness_m, 35e-6);
-    require(records.size() == 4 && records[0].source == "override:thickness.json",
-            "weight override source");
+    near(mapped(j, {&o, nullptr}).layers.front().thickness_m, 35e-6);
+    require(records.size() == 4 && records[0].source == "override", "weight override source");
 }
 void override_case() {
     ThicknessOverrides o = {{"top", 35e-6}, {"core", 800e-6}, {"bottom", 35e-6}, {"unused", 1e-3}};
-    auto m = mapped(missing(), {&o, nullptr, "thickness.json"});
+    auto m = mapped(missing(), {&o, nullptr});
     near(m.layers[0].thickness_m, 35e-6);
 }
 void skip() {
@@ -535,33 +538,74 @@ void via_region_initialization() {
         if (overlap)
             f.pads.push_back(f.pads.front()); // duplicate bounds must not duplicate cells
         const auto m = mapped(j);
-        std::vector<ViaFraction> cells;
         ViaFraction reference;
         reference.layer = 1;
         reference.lower = {1700, 2700};
-        reference.upper = {overlap ? 2500.0 : 2300.0, 3300};
-        cells.push_back(reference);
-        if (!overlap) {
-            reference.lower = {199700, 2700};
-            reference.upper = {200300, 3300};
-            cells.push_back(reference);
-        }
-        require(rasterize_vias(m, cells), "connected region reference rasterizes");
-        require(m.via_fractions.size() == cells.size(), "one cell per connected region");
-        for (std::size_t k = 0; k < cells.size(); ++k) {
-            const auto& actual = m.via_fractions[k];
-            require(actual.layer == cells[k].layer && actual.lower == cells[k].lower &&
-                        actual.upper == cells[k].upper && actual.via_count == cells[k].via_count &&
-                        actual.fraction == cells[k].fraction,
-                    "connected region bounds and rasterization match exactly");
-            if (!overlap) {
-                require(actual.via_count == 1, "separated cell contains exactly one via");
-                near(actual.fraction * 600 * 600, std::numbers::pi * (300 * 300 - 275 * 275), 1e-6);
-            }
-        }
+        reference.upper = {overlap ? 2500.0 : 200300.0, 3300};
+        std::vector<ViaFraction> cells{reference};
+        require(rasterize_vias(m, cells), "IPC envelope reference rasterizes");
+        require(m.via_fractions.size() == 1, "IPC creates one envelope per dielectric");
+        const auto& actual = m.via_fractions.front();
+        require(actual.layer == cells[0].layer && actual.lower == cells[0].lower &&
+                    actual.upper == cells[0].upper && actual.via_count == cells[0].via_count &&
+                    actual.fraction == cells[0].fraction,
+                "IPC envelope bounds and rasterization match exactly");
     }
 }
-void via_connected_regions() {
+// Compare exposed cells with the real IPC importer, including layer order and coverage.
+void ipc_fraction_parity(const EcadModel& odb) {
+    std::random_device random;
+    const auto dir =
+        std::filesystem::temp_directory_path() / ("odb-ipc-vias-" + std::to_string(random()));
+    require(std::filesystem::create_directory(dir), "private IPC via fixture directory");
+    struct Cleanup {
+        std::filesystem::path dir;
+        ~Cleanup() { std::filesystem::remove_all(dir); }
+    } cleanup{dir};
+    const auto file = dir / "vias.xml";
+    {
+        std::ofstream out(file);
+        out << "<IPC-2581><CadHeader units='MICRON'/><CadData>";
+        for (const auto& layer : odb.layers)
+            if (layer.copper)
+                out << "<Layer name='" << layer.name << "' layerFunction='SIGNAL'/>";
+        out << "<Stackup><StackupGroup>";
+        for (const auto& layer : odb.layers)
+            out << "<StackupLayer layerOrGroupRef='" << layer.name << "' thickness='"
+                << layer.thickness_m * 1e6 << "'/>";
+        out << "</StackupGroup></Stackup><Step name='board'>";
+        for (std::size_t i = 0; i < odb.vias.size(); ++i) {
+            const auto& v = odb.vias[i];
+            out << "<LayerFeature layerRef='drill" << i << "'><Set><Hole name='via" << i
+                << "' diameter='" << 2 * v.outer_radius_dbu << "' platingStatus='PLATED' x='"
+                << v.position[0] << "' y='" << v.position[1] << "'><SpecRef id='wall" << i
+                << "'/></Hole></Set></LayerFeature>";
+        }
+        out << "</Step>";
+        for (std::size_t i = 0; i < odb.vias.size(); ++i) {
+            const auto& v = odb.vias[i];
+            out << "<Layer name='drill" << i << "' layerFunction='DRILL'><Span fromLayer='"
+                << v.start_layer << "' toLayer='" << v.end_layer << "'/></Layer>"
+                << "<Spec name='wall" << i
+                << "'><General type='MATERIAL'><Property name='PLATING_THICKNESS' value='"
+                << v.outer_radius_dbu - v.inner_radius_dbu << "' unit='MICRON'/></General></Spec>";
+        }
+        out << "</CadData></IPC-2581>";
+    }
+    const auto ipc = read_ipc2581(file);
+    require(bool(ipc), "IPC via reference imports: " + ipc.error);
+    require(ipc.model.report.unsupported.empty() && ipc.model.vias.size() == odb.vias.size(),
+            "IPC via reference has matching supported vias");
+    require(ipc.model.via_fractions.size() == odb.via_fractions.size(), "IPC fraction count");
+    for (std::size_t i = 0; i < odb.via_fractions.size(); ++i) {
+        const auto& a = odb.via_fractions[i];
+        const auto& b = ipc.model.via_fractions[i];
+        require(std::tie(a.layer, a.lower, a.upper, a.fraction, a.via_count) ==
+                    std::tie(b.layer, b.lower, b.upper, b.fraction, b.via_count),
+                "exact IPC fraction bounds, order, coverage and count");
+    }
+}
+void via_layer_envelope() {
     auto j = board();
     OdbLayer drill;
     drill.name = "DRILL";
@@ -580,21 +624,27 @@ void via_connected_regions() {
         for (int index : order)
             f.pads.push_back(pads[index]);
         const auto m = mapped(j);
-        require(m.via_fractions.size() == 1, "transitively connected vias share one cell");
+        ipc_fraction_parity(m);
+        require(m.via_fractions.size() == 1, "IPC layer envelope contains all vias");
         const auto& cell = m.via_fractions.front();
         require(cell.lower == std::array<double, 2>{1700, 2700} &&
                     cell.upper == std::array<double, 2>{3300, 3300} && cell.via_count == 3,
-                "complete transitive component bounds and membership");
+                "IPC layer envelope bounds and membership");
     } while (std::next_permutation(order.begin(), order.end()));
     f.pads = {{{2, 3}, 0, true}, {{2.5, 3.5}, 0, true}};
     const auto m = mapped(j);
-    require(m.via_fractions.size() == 2,
-            "overlapping bounding boxes do not connect disjoint disks");
-    require(m.via_fractions[0].lower == std::array<double, 2>{1700, 2700} &&
-                m.via_fractions[0].upper == std::array<double, 2>{2300, 3300} &&
-                m.via_fractions[1].lower == std::array<double, 2>{2200, 3200} &&
-                m.via_fractions[1].upper == std::array<double, 2>{2800, 3800},
-            "diagonally separated disk bounds remain distinct");
+    ipc_fraction_parity(m);
+    ViaFraction reference;
+    reference.layer = 1;
+    reference.lower = {1700, 2700};
+    reference.upper = {2800, 3800};
+    std::vector<ViaFraction> cells{reference};
+    require(rasterize_vias(m, cells), "IPC diagonal envelope rasterizes");
+    require(m.via_fractions.size() == 1 && m.via_fractions[0].lower == cells[0].lower &&
+                m.via_fractions[0].upper == cells[0].upper &&
+                m.via_fractions[0].via_count == cells[0].via_count &&
+                m.via_fractions[0].fraction == cells[0].fraction,
+            "IPC shares one layer envelope even for disjoint diagonal disks");
 }
 
 void via_fraction_invariants() {
@@ -624,10 +674,10 @@ void via_fraction_invariants() {
             for (int index : order)
                 f.pads.push_back(pads[index]);
             const auto m = mapped(j);
+            ipc_fraction_parity(m);
             const auto& cells = m.via_fractions;
             auto key = [](const ViaFraction& c) { return std::tie(c.layer, c.lower, c.upper); };
-            require(cells.size() == (separation > 0.6 ? 4 : 2),
-                    "one cell per connected region per crossed dielectric");
+            require(cells.size() == 2, "one IPC envelope per crossed dielectric");
             for (std::size_t i = 0; i < cells.size(); ++i) {
                 const auto& c = cells[i];
                 for (std::size_t axis = 0; axis < 2; ++axis)
@@ -750,7 +800,7 @@ void duplicate_layer() {
 }
 void collision() {
     ThicknessOverrides o = {{"top", 35e-6}, {"TOP", 36e-6}};
-    rejected(board(), {"top", "TOP"}, {&o, nullptr, "thickness.json"});
+    rejected(board(), {"top", "TOP"}, {&o, nullptr});
 }
 void holes_and_profile() {
     auto j = board();
@@ -1246,14 +1296,13 @@ void boundaries() {
     equal(mapped(board()), mapped(j));
     ThicknessOverrides o = {{"top", 70e-6}};
     std::vector<ThicknessRecord> records;
-    const auto m = mapped(j, {&o, &records, "thickness.json"});
+    const auto m = mapped(j, {&o, &records});
     near(m.layers.front().thickness_m, 70e-6);
     near(records.front().thickness_m, 70e-6);
-    require(records.front().source == "override:thickness.json" &&
-                records.front().odb_value_m == 35e-6,
+    require(records.front().source == "override" && records.front().odb_value_m == 35e-6,
             "conflicting override applies and records original value");
     o["top"] = -1;
-    rejected(j, {"top"}, {&o, nullptr, "thickness.json"});
+    rejected(j, {"top"}, {&o, nullptr});
 }
 void degenerate_copper() {
     auto j = board();
@@ -1371,7 +1420,7 @@ int main() {
         {"odbpp_map_non_plated", non_plated},
         {"odbpp_map_mixed_tools", mixed_tools},
         {"odbpp_map_via_fraction_invariants", via_fraction_invariants},
-        {"odbpp_map_via_connected_regions", via_connected_regions},
+        {"odbpp_map_via_layer_envelope", via_layer_envelope},
         {"odbpp_map_duplicate_geometry", duplicate_geometry},
         {"odbpp_map_duplicate_layer", duplicate_layer},
         {"odbpp_map_override_collision", collision},

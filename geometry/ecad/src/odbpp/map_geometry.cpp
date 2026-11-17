@@ -5,7 +5,6 @@
 #include <cmath>
 #include <numbers>
 #include <stdexcept>
-#include <tuple>
 
 namespace chipcae::geometry::ecad::odbpp_detail {
 namespace {
@@ -145,12 +144,16 @@ struct Mapper {
                 local.push_back({std::llround(r * std::cos(a)), std::llround(r * std::sin(a))});
             }
         }
+        // Choose local winding so reflection leaves a positive exterior contour.
+        if ((Area(local) > 0) == p.mirror)
+            std::reverse(local.begin(), local.end());
         double a = p.rot_deg * pi / 180;
         for (auto& v : local) {
             double x = static_cast<double>(v.x) * (p.mirror ? -1 : 1), y = static_cast<double>(v.y);
             v = {std::llround(p.at.x * scale + x * std::cos(a) - y * std::sin(a)),
                  std::llround(p.at.y * scale + x * std::sin(a) + y * std::cos(a))};
         }
+        // Enforce final winding independently of placement and coordinate rounding.
         if (Area(local) < 0)
             std::reverse(local.begin(), local.end());
         return {local};
@@ -293,60 +296,25 @@ struct Mapper {
         }
     }
     void fractions() {
-        std::vector<ViaFraction> cells;
         for (std::size_t i = 0; i < model.layers.size(); ++i) {
-            std::vector<const Via*> vias;
-            for (const auto& v : model.vias)
-                if (std::find(v.dielectric_layers.begin(), v.dielectric_layers.end(), i) !=
+            ViaFraction cell;
+            cell.layer = i;
+            bool found = false;
+            for (const auto& v : model.vias) {
+                if (std::find(v.dielectric_layers.begin(), v.dielectric_layers.end(), i) ==
                     v.dielectric_layers.end())
-                    vias.push_back(&v);
-            // Connected components of touching outer disks, rather than a layer-wide envelope.
-            std::vector<bool> visited(vias.size());
-            for (std::size_t seed = 0; seed < vias.size(); ++seed) {
-                if (visited[seed])
                     continue;
-                ViaFraction cell;
-                cell.layer = i;
                 for (std::size_t axis = 0; axis < 2; ++axis) {
-                    cell.lower[axis] = vias[seed]->position[axis] - vias[seed]->outer_radius_dbu;
-                    cell.upper[axis] = vias[seed]->position[axis] + vias[seed]->outer_radius_dbu;
+                    const double lo = v.position[axis] - v.outer_radius_dbu,
+                                 hi = v.position[axis] + v.outer_radius_dbu;
+                    cell.lower[axis] = found ? std::min(cell.lower[axis], lo) : lo;
+                    cell.upper[axis] = found ? std::max(cell.upper[axis], hi) : hi;
                 }
-                std::vector<std::size_t> component{seed};
-                visited[seed] = true;
-                for (std::size_t next = 0; next < component.size(); ++next) {
-                    const auto& v = *vias[component[next]];
-                    for (std::size_t axis = 0; axis < 2; ++axis) {
-                        cell.lower[axis] =
-                            std::min(cell.lower[axis], v.position[axis] - v.outer_radius_dbu);
-                        cell.upper[axis] =
-                            std::max(cell.upper[axis], v.position[axis] + v.outer_radius_dbu);
-                    }
-                    for (std::size_t k = 0; k < vias.size(); ++k)
-                        if (!visited[k] &&
-                            std::hypot(double(v.position[0]) - vias[k]->position[0],
-                                       double(v.position[1]) - vias[k]->position[1]) <=
-                                v.outer_radius_dbu + vias[k]->outer_radius_dbu) {
-                            visited[k] = true;
-                            component.push_back(k);
-                        }
-                }
-                for (std::size_t axis = 0; axis < 2; ++axis)
-                    if (!std::isfinite(cell.lower[axis]) || !std::isfinite(cell.upper[axis]) ||
-                        !(cell.lower[axis] < cell.upper[axis]))
-                        throw std::runtime_error("invalid via fraction bounds");
-                cells.push_back(cell);
+                found = true;
             }
+            if (found)
+                model.via_fractions.push_back(cell);
         }
-        // Keep the exposed cell order canonical before rasterization fills coverage.
-        const auto key = [](const ViaFraction& c) { return std::tie(c.layer, c.lower, c.upper); };
-        std::sort(cells.begin(), cells.end(), [&](const auto& a, const auto& b) {
-            return key(a) < key(b);
-        });
-        if (std::adjacent_find(cells.begin(), cells.end(), [&](const auto& a, const auto& b) {
-                return key(a) == key(b);
-            }) != cells.end())
-            throw std::runtime_error("duplicate via fraction bounds");
-        model.via_fractions = std::move(cells);
         if (!rasterize_vias(model, model.via_fractions))
             throw std::runtime_error("invalid via fraction bounds");
     }
