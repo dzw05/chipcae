@@ -207,6 +207,8 @@ struct Mapper {
             Paths64 paths;
             for (const auto& c : surface.contours) {
                 auto path = contour(c);
+                if (path.empty() && !c.segs.empty())
+                    throw std::runtime_error("invalid or degenerate contour: " + layer.name);
                 if (!path.empty())
                     paths.push_back(std::move(path));
             }
@@ -365,48 +367,24 @@ struct Mapper {
     }
     void fractions() {
         for (std::size_t i = 0; i < model.layers.size(); ++i) {
-            std::vector<const Via*> pending;
-            for (const auto& v : model.vias)
-                if (std::find(v.dielectric_layers.begin(), v.dielectric_layers.end(), i) !=
+            ViaFraction cell;
+            cell.layer = i;
+            bool found = false;
+            for (const auto& v : model.vias) {
+                if (std::find(v.dielectric_layers.begin(), v.dielectric_layers.end(), i) ==
                     v.dielectric_layers.end())
-                    pending.push_back(&v);
-            while (!pending.empty()) {
-                std::vector<const Via*> cluster{pending.back()};
-                pending.pop_back();
-                // Grow through disk contacts, including transitive connections.
-                for (std::size_t n = 0; n < cluster.size(); ++n)
-                    std::erase_if(pending, [&](const Via* v) {
-                        const auto& other = *cluster[n];
-                        if (std::hypot(v->position[0] - other.position[0],
-                                       v->position[1] - other.position[1]) >
-                            v->outer_radius_dbu + other.outer_radius_dbu)
-                            return false;
-                        cluster.push_back(v);
-                        return true;
-                    });
-                ViaFraction cell;
-                cell.layer = i;
+                    continue;
                 for (std::size_t axis = 0; axis < 2; ++axis) {
-                    cell.lower[axis] =
-                        cluster.front()->position[axis] - cluster.front()->outer_radius_dbu;
-                    cell.upper[axis] =
-                        cluster.front()->position[axis] + cluster.front()->outer_radius_dbu;
-                    for (const auto* v : cluster) {
-                        cell.lower[axis] =
-                            std::min(cell.lower[axis], v->position[axis] - v->outer_radius_dbu);
-                        cell.upper[axis] =
-                            std::max(cell.upper[axis], v->position[axis] + v->outer_radius_dbu);
-                    }
+                    const double lo = v.position[axis] - v.outer_radius_dbu,
+                                 hi = v.position[axis] + v.outer_radius_dbu;
+                    cell.lower[axis] = found ? std::min(cell.lower[axis], lo) : lo;
+                    cell.upper[axis] = found ? std::max(cell.upper[axis], hi) : hi;
                 }
-                model.via_fractions.push_back(cell);
+                found = true;
             }
+            if (found)
+                model.via_fractions.push_back(cell);
         }
-        std::sort(model.via_fractions.begin(),
-                  model.via_fractions.end(),
-                  [](const auto& a, const auto& b) {
-                      return std::tie(a.layer, a.lower, a.upper) <
-                             std::tie(b.layer, b.lower, b.upper);
-                  });
         if (!rasterize_vias(model, model.via_fractions))
             throw std::runtime_error("invalid via fraction bounds");
     }

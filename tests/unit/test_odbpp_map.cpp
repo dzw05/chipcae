@@ -429,7 +429,7 @@ void kicad_stackup() {
     std::vector<ThicknessRecord> records;
     const auto job = kicad_job();
     const auto raw = mapped(job);
-    // Positive exported copper thickness wins even when the project differs.
+    // Conflicting project overrides retain the exported copper thickness in records.
     const ThicknessOverrides overrides{
         {"F.CU", 35e-6}, {"IN1.CU", 35e-6}, {"IN2.CU", 35e-6}, {"B.CU", 35e-6}};
     const auto model = mapped(job, {&overrides, &records});
@@ -450,18 +450,19 @@ void kicad_stackup() {
         require(fold_ascii(actual.name) == name && actual.copper == copper,
                 "KiCad stack table order and copper flags");
         const double thickness = std::stod(child(row, "thickness").children.at(1).value) * 1e-3;
-        near(actual.thickness_m, copper ? 30e-6 : thickness, 1e-6);
+        near(actual.thickness_m, copper ? 35e-6 : thickness, 1e-6);
         require(index < records.size() && records[index].layer == actual.name &&
-                    records[index].source == "odb",
+                    records[index].source == (copper ? "override" : "odb"),
                 "KiCad exported thickness provenance");
         if (copper) {
             near(raw.layers[index].thickness_m, 30e-6, 1e-6);
-            require(!records[index].odb_value_m, "positive ODB copper wins");
+            require(records[index].odb_value_m.has_value(), "copper conflict recorded");
+            near(*records[index].odb_value_m, 30e-6, 1e-12);
         } else {
             near(raw.layers[index].thickness_m, thickness, 1e-6);
             require(!records[index].odb_value_m, "unmodified dielectric provenance");
         }
-        near(records[index].thickness_m, copper ? 30e-6 : thickness, 1e-6);
+        near(records[index].thickness_m, copper ? 35e-6 : thickness, 1e-6);
         ++index;
     }
     require(copper_count == 4 && index == 7 && index == model.layers.size() &&
@@ -651,10 +652,14 @@ void overrides() {
     for (std::size_t i = 0; i < records.size(); ++i) {
         const auto& r = records[i];
         require(r.layer == m.layers[i].name, "record layer");
-        near(r.thickness_m, i == 3 ? 200e-6 : o.at(r.layer));
+        near(r.thickness_m, o.at(r.layer));
         near(m.layers[i].thickness_m, r.thickness_m);
-        require(r.source == (i == 3 ? "odb" : "override"), "first available thickness source");
-        require(!r.odb_value_m, "no conflict override provenance");
+        require(r.source == "override", "first available thickness source");
+        if (i == 3) {
+            require(r.odb_value_m.has_value(), "conflict retains ODB value");
+            near(*r.odb_value_m, 200e-6, 1e-12);
+        } else
+            require(!r.odb_value_m, "missing ODB has no conflict");
     }
 }
 void override_provenance() {
@@ -669,23 +674,25 @@ void override_provenance() {
         ThicknessOverrides o{{"TOP", value}};
         std::vector<ThicknessRecord> records;
         const auto m = mapped(j, {&o, &records});
-        require(m.layers.front().thickness_m == odb, "positive ODB thickness always wins");
-        require(records.front().thickness_m == odb && records.front().source == "odb" &&
-                    !records.front().odb_value_m,
-                "ODB provenance preserved");
+        const bool conflict = std::abs(value - odb) / odb > 1e-9;
+        near(m.layers.front().thickness_m, conflict ? value : odb, 1e-12);
+        require(records.front().source == (conflict ? "override" : "odb"), "selected source");
+        require(records.front().odb_value_m.has_value() == conflict, "conflict provenance");
+        if (conflict)
+            near(*records.front().odb_value_m, odb, 1e-12);
     }
     for (double value : {0.0,
                          -1.0,
                          std::numeric_limits<double>::infinity(),
                          std::numeric_limits<double>::quiet_NaN()}) {
         ThicknessOverrides o{{"TOP", value}};
-        near(mapped(j, {&o, nullptr}).layers.front().thickness_m, odb);
+        rejected(j, {"invalid override thickness", "TOP"}, {&o, nullptr});
         auto missing_job = j;
         missing_job.attrs.layer["TOP"][".layer_dielectric"] = "0";
         rejected(missing_job, {"invalid override thickness", "TOP"}, {&o, nullptr});
     }
     ThicknessOverrides o{{"TOP", 70e-6}};
-    near(mapped(j, {&o, nullptr}).layers.front().thickness_m, odb);
+    near(mapped(j, {&o, nullptr}).layers.front().thickness_m, 70e-6);
 }
 
 void weight() {
@@ -855,21 +862,16 @@ void via_region_initialization() {
         ViaFraction reference;
         reference.layer = 1;
         reference.lower = {1700, 2700};
-        reference.upper = {overlap ? 2500.0 : 2300.0, 3300};
+        reference.upper = {overlap ? 2500.0 : 200300.0, 3300};
         std::vector<ViaFraction> cells{reference};
-        if (!overlap) {
-            reference.lower = {199700, 2700};
-            reference.upper = {200300, 3300};
-            cells.push_back(reference);
-        }
         require(rasterize_vias(m, cells), "IPC envelope reference rasterizes");
-        require(m.via_fractions.size() == cells.size(), "separate regions for disjoint vias");
+        require(m.via_fractions.size() == cells.size(), "one IPC envelope for all layer vias");
         for (std::size_t n = 0; n < cells.size(); ++n)
             require(m.via_fractions[n].lower == cells[n].lower &&
                         m.via_fractions[n].upper == cells[n].upper &&
                         m.via_fractions[n].fraction == cells[n].fraction &&
                         m.via_fractions[n].via_count == cells[n].via_count,
-                    "all cluster bounds and coverage");
+                    "layer envelope bounds and coverage");
         const auto& actual = m.via_fractions.front();
         require(actual.layer == cells[0].layer && actual.lower == cells[0].lower &&
                     actual.upper == cells[0].upper && actual.via_count == cells[0].via_count &&
@@ -921,8 +923,8 @@ void ipc_fraction_parity(const EcadModel& odb) {
     require(bool(ipc), "IPC via reference imports: " + ipc.error);
     require(ipc.model.report.unsupported.empty() && ipc.model.vias.size() == odb.vias.size(),
             "IPC via reference has matching supported vias");
-    auto ipc_cells = odb.via_fractions;
-    require(rasterize_vias(ipc.model, ipc_cells), "IPC vias rasterize on local ODB regions");
+    const auto& ipc_cells = ipc.model.via_fractions;
+    require(ipc_cells.size() == odb.via_fractions.size(), "IPC importer cell count");
     for (std::size_t i = 0; i < odb.via_fractions.size(); ++i) {
         const auto& a = odb.via_fractions[i];
         const auto& b = ipc_cells[i];
@@ -963,13 +965,10 @@ void via_layer_envelope() {
     ViaFraction reference;
     reference.layer = 1;
     reference.lower = {1700, 2700};
-    reference.upper = {2300, 3300};
-    std::vector<ViaFraction> cells{reference};
-    reference.lower = {2200, 3200};
     reference.upper = {2800, 3800};
-    cells.push_back(reference);
+    std::vector<ViaFraction> cells{reference};
     require(rasterize_vias(m, cells), "disjoint diagonal reference rasterizes");
-    require(m.via_fractions.size() == 2, "disjoint diagonal disks have separate regions");
+    require(m.via_fractions.size() == 1, "disjoint diagonal disks share layer envelope");
     for (std::size_t i = 0; i < cells.size(); ++i)
         require(m.via_fractions[i].lower == cells[i].lower &&
                     m.via_fractions[i].upper == cells[i].upper &&
@@ -1007,8 +1006,7 @@ void via_fraction_invariants() {
             ipc_fraction_parity(m);
             const auto& cells = m.via_fractions;
             auto key = [](const ViaFraction& c) { return std::tie(c.layer, c.lower, c.upper); };
-            require(cells.size() == (separation > 0.6 ? 4 : 2),
-                    "one region per connected cluster per dielectric");
+            require(cells.size() == 2, "one envelope per dielectric");
             for (std::size_t i = 0; i < cells.size(); ++i) {
                 const auto& c = cells[i];
                 for (std::size_t axis = 0; axis < 2; ++axis)
@@ -1184,8 +1182,15 @@ void invalid_contours() {
                     model_unavailable = true;
                 }
                 require(model_unavailable, "invalid profile exposes no model value");
-            } else
-                equal(mapped(j), mapped(board()));
+            } else {
+                for (bool hole : {false, true})
+                    for (bool positive : {false, true}) {
+                        auto& surface = j.features["TOP"].surfaces.front();
+                        surface.contours.back().is_hole = hole;
+                        surface.positive = positive;
+                        rejected(j, {"degenerate contour", "TOP"});
+                    }
+            }
         }
     }
 }
@@ -1690,12 +1695,12 @@ void boundaries() {
     ThicknessOverrides o = {{"top", 70e-6}};
     std::vector<ThicknessRecord> records;
     const auto m = mapped(j, {&o, &records});
-    near(m.layers.front().thickness_m, 35e-6);
-    near(records.front().thickness_m, 35e-6);
-    require(records.front().source == "odb" && !records.front().odb_value_m,
-            "case-insensitive override cannot replace ODB thickness");
+    near(m.layers.front().thickness_m, 70e-6);
+    near(records.front().thickness_m, 70e-6);
+    require(records.front().source == "override" && records.front().odb_value_m,
+            "case-insensitive override records conflict");
     o["top"] = -1;
-    near(mapped(j, {&o, nullptr}).layers.front().thickness_m, 35e-6);
+    rejected(j, {"top"}, {&o, nullptr});
     j.attrs.layer["TOP"][".layer_dielectric"] = "0";
     rejected(j, {"top"}, {&o, nullptr});
 }
@@ -1708,6 +1713,8 @@ void degenerate_copper() {
     line.segs = {{{4, 0}, false, {}, false}, {{8, 0}, false, {}, false}};
     f.surfaces.push_back({true, {line}});
     f.surfaces.push_back({false, {square(4)}});
+    rejected(j, {"degenerate contour", "TOP"});
+    f.surfaces = {{true, {square(8)}}, {false, {square(4)}}};
     auto m = mapped(j);
     near(area(m), 48e6);
     for (const auto& polygon : m.layers.front().polygons) {
