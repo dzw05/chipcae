@@ -1,5 +1,5 @@
-#include "../../support/cte_fixtures.hpp"
 #include "chipcae/material/cte_convert.hpp"
+#include "cte_fixtures.hpp"
 
 #include <cstddef>
 #include <cstdio>
@@ -51,6 +51,9 @@ int main(int argc, char** argv) try {
     reject(CteTable{{sec.temperatures.front()}, {sec.alpha.front()}, sec.reference_temperature});
     for (const auto& fixture : {sec, tan}) {
         auto bad = fixture;
+        bad.temperatures.clear();
+        reject(bad);
+        bad = fixture;
         bad.alpha.clear();
         reject(bad);
         bad = fixture;

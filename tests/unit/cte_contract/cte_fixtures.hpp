@@ -3,7 +3,8 @@
 #include "chipcae/material/cte_convert.hpp"
 
 namespace chipcae::material::test {
-// Canonical CTE tables and off-knot samples shared by material and contract tests.
+// Canonical CTE tables and off-knot samples copied unchanged from material/tests/core_math.cpp for
+// contract tests.
 inline const CteTable sec{{250, 300, 350}, {1e-5, 2e-5, 3e-5}, 250};
 inline const CteTable tan{{250, 300, 350}, {1e-5, 3e-5, 5e-5}, 250};
 inline constexpr Real tangent_to_secant_temperature = 325.;

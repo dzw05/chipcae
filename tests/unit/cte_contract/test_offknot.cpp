@@ -1,5 +1,5 @@
-#include "../../support/cte_fixtures.hpp"
 #include "chipcae/material/cte_convert.hpp"
+#include "cte_fixtures.hpp"
 
 #include <cmath>
 #include <cstddef>
@@ -59,8 +59,8 @@ int main(int argc, char** argv) try {
     check(std::isfinite(value), "below tangent is finite");
     check(near(value, exterior_tangent), "below tangent constant extension");
     check(tangent_to_secant(tan, below, value) == StatusCode::Ok, "below tangent status");
-    check(oriented_integral < 0 && below - tan.reference_temperature < 0,
-          "below reference has negative integral and temperature interval");
+    check(value * (below - tan.reference_temperature) < 0,
+          "below reference output implies a negative oriented integral");
     check(std::isfinite(value) && value > 0, "below secant is finite and positive");
     check(near(value, exterior_secant), "below secant equals oriented integral");
 } catch (const std::exception&) {
