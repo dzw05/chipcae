@@ -111,3 +111,13 @@ the assembly diagnostic, exit 2, and empty stdout.
 
 Missing reserved values and repeated missing accept values are compared byte-for-byte
 with goldens from the same baseline binary via `incomplete_reserved --generate`.
+
+Error-precedence regressions in `incomplete_reserved` compare 28 additional
+invocations against the same baseline binary: duplicate input before and after
+output, unknown options, and mixed help preceding each reserved option; plus
+all ordered pairs of accept/t-min/stack-override on output-only paths with both
+output aliases. Exit status, stdout, stderr, and artifact presence/bytes are
+compared without normalization. Reproduce with `incomplete_reserved --generate`
+using the documented baseline binary. Baseline rejects the first unknown reserved
+token without consuming its value; for example output-only `--accept x
+--stack-override y` reports `unknown argument: --accept`.

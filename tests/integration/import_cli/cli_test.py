@@ -120,6 +120,28 @@ def run_case(binary, case, generate=False):
             record_or_compare(result, directory, golden / "mixed_help",
                               ("stdout", "stderr"), generate)
         elif case == "incomplete_reserved":
+            # Earlier baseline errors must win over later reserved options.
+            for option in ("--accept", "--t-min", "--stack-override", "--assembly"):
+                for name, prefix in (
+                    ("duplicate_before_output", ["a.xml", "b.xml", "-o", "stack.json"]),
+                    ("duplicate_after_output", ["a.xml", "-o", "stack.json", "b.xml"]),
+                    ("unknown", ["a.xml", "-o", "stack.json", "--unknown"]),
+                    ("mixed_help", ["a.xml", "-o", "stack.json", "--help"]),
+                ):
+                    result = invoke(binary, [*prefix, option, "xyz"], directory)
+                    record_or_compare(result, directory,
+                                      golden / f"precedence_{name}_{option[2:]}",
+                                      (*ARTIFACTS, "stdout", "stderr"), generate)
+            # Without input or assembly, preserve the first unknown reserved token.
+            for first, second in itertools.permutations(
+                    ("--accept", "--t-min", "--stack-override"), 2):
+                for output_option in ("-o", "--out"):
+                    result = invoke(binary, [output_option, "stack.json", first, "x",
+                                             second, "y"], directory)
+                    record_or_compare(result, directory,
+                                      golden / f"precedence_{output_option.lstrip('-')}_"
+                                      f"{first[2:]}_{second[2:]}",
+                                      (*ARTIFACTS, "stdout", "stderr"), generate)
             for option in ("--accept", "--t-min", "--stack-override", "--assembly"):
                 for name, prefix in (("bare", []), ("input", ["a.xml"]),
                                      ("output", ["-o", "stack.json"])):
