@@ -17,9 +17,10 @@ MaterialMapMissingDialog::MaterialMapMissingDialog(QWidget* parent) : QDialog(pa
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(reselect, &QPushButton::clicked, this, [this] {
         selected_ = ImportSourceDialog::getMaterialMapPath(this);
-        if (!selected_.isEmpty()) {
+        if (selected_.isEmpty())
+            reject();
+        else
             accept();
-        }
     });
 }
 QString MaterialMapMissingDialog::messageText() const {

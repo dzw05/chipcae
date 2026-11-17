@@ -4,6 +4,7 @@
 #include "ImportSourceDialog.hpp"
 #include "MaterialMapMissingDialog.hpp"
 
+#include <QAbstractProxyModel>
 #include <QApplication>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -130,6 +131,11 @@ QString pick(const std::function<QString()>& picker,
                               "map filter exposes " + QString(name));
                 check(dialog->nameFilters() == QStringList{"JSON (*.json)"}, "exact map filter");
             }
+            if (!map && QStringList{"step", "stp"}.contains(QFileInfo(path).suffix().toLower())) {
+                for (const auto& filter : dialog->nameFilters())
+                    if (filter.contains("B 档"))
+                        dialog->selectNameFilter(filter);
+            }
             driver.stop();
             if (cancel) {
                 dialog->reject();
@@ -153,6 +159,16 @@ QString pick(const std::function<QString()>& picker,
                                   "JSON case variant enabled in actual picker model");
                         }
                     }
+                    if (!map &&
+                        QStringList{"step", "stp"}.contains(QFileInfo(path).suffix().toLower())) {
+                        auto* model = dialog->proxyModel();
+                        auto* files = qobject_cast<QFileSystemModel*>(model->sourceModel());
+                        require(files, "source picker filesystem model");
+                        const auto index = model->mapFromSource(files->index(path));
+                        check(!index.isValid() || !(model->flags(index) &
+                                                    (Qt::ItemIsEnabled | Qt::ItemIsSelectable)),
+                              "STEP file disabled under STEP filter");
+                    }
                     auto* edit = dialog->findChild<QLineEdit*>("fileNameEdit");
                     require(edit, "file picker filename field");
                     edit->setText(path);
@@ -175,6 +191,7 @@ QString pick(const std::function<QString()>& picker,
     });
     watchdog.start(2000);
     auto result = picker();
+    check(watchdog.isActive(), "picker returns before watchdog closes dialogs");
     check(seen, "picker opens a file dialog");
     return result;
 }
