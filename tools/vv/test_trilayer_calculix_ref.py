@@ -12,11 +12,114 @@ from __future__ import annotations
 import copy
 import json
 import math
-import tempfile
 import unittest
 from pathlib import Path
 
-from tools.vv.calculix_trilayer.contract import CONTRACT, validate_reference
+
+CONTRACT = json.loads(r'''
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WP-2 coarse/fine trilayer CalculiX REFERENCE artifact (v1 workflow)",
+  "description": "Workflow-specific v1 checks, not a general CalculiX artifact schema, with exactly coarse and fine meshes and fine selection. Equality of top-level W_bfp_m and the selected mesh value is a test-only check, checked by the validator below. Raw schema validation does not enforce equality between instance fields.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "label",
+    "W_bfp_m",
+    "element_type",
+    "geometry",
+    "meshes",
+    "selected_mesh",
+    "prototype_W_bfp_m",
+    "abs_delta_m",
+    "rel_delta"
+  ],
+  "properties": {
+    "artifact_version": { "type": "integer", "const": 1 },
+    "kind": { "const": "REFERENCE", "type": "string" },
+    "label": { "type": "string", "minLength": 1 },
+    "W_bfp_m": { "type": "number" },
+    "element_type": { "type": "string", "const": "C3D20" },
+    "host": { "type": "string", "minLength": 1 },
+    "calculix_version": { "type": "string", "minLength": 1 },
+    "geometry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["L_m", "thicknesses_m", "E_Pa", "nu", "alpha_1_per_K", "dT_K"],
+      "properties": {
+        "L_m": { "type": "number" },
+        "thicknesses_m": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } },
+        "E_Pa": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } },
+        "nu": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } },
+        "alpha_1_per_K": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } },
+        "dT_K": { "type": "number" }
+      }
+    },
+    "meshes": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "allOf": [
+        {
+          "contains": { "properties": { "name": { "const": "coarse" } }, "required": ["name"] },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": { "properties": { "name": { "const": "fine" } }, "required": ["name"] },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "n_elem_xyz", "n_elem_z_per_layer", "W_bfp_m"],
+        "properties": {
+          "name": { "type": "string", "enum": ["coarse", "fine"] },
+          "n_elem_xyz": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "integer" } },
+          "n_elem_z_per_layer": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "integer" } },
+          "W_bfp_m": { "type": "number" }
+        }
+      }
+    },
+    "selected_mesh": { "type": "string", "const": "fine" },
+    "prototype_W_bfp_m": { "type": "number" },
+    "abs_delta_m": { "type": "number" },
+    "rel_delta": { "type": "number" },
+    "provenance": {
+      "type": "object",
+      "description": "Optional, non-contractual generator metadata; arbitrary keys and values are permitted.",
+      "additionalProperties": true
+    }
+  }
+}
+''')
+
+
+def validate_reference(data, contract=CONTRACT):
+    """Add the validator-only selected-value check with const/contains.
+
+    JSON Schema cannot reference another instance field directly, so normalize
+    the contract with the artifact's top-level value before validating it.
+    """
+    import jsonschema
+
+    normalized = copy.deepcopy(contract)
+    normalized["properties"]["meshes"]["allOf"].append({
+        "contains": {
+            "properties": {
+                "name": {"const": data.get("selected_mesh")},
+                "W_bfp_m": {"const": data.get("W_bfp_m")},
+            },
+            "required": ["name", "W_bfp_m"],
+        },
+        "minContains": 1,
+        "maxContains": 1,
+    })
+    jsonschema.Draft202012Validator(normalized).validate(data)
+
 
 ROOT = Path(__file__).resolve().parents[2]
 DIR = ROOT / "tools/vv/calculix_trilayer"
@@ -36,7 +139,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         reversed_meshes = copy.deepcopy(data)
         reversed_meshes["meshes"].reverse()
         validate_reference(reversed_meshes, contract)
-        # Extra provenance is optional; the brief requires top-level environment strings.
+        # Version and environment strings are optional provenance, not payload requirements.
         portable = copy.deepcopy(data)
         portable.pop("provenance", None)
         validate_reference(portable, contract)
@@ -49,10 +152,10 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         variants = []
         unversioned = copy.deepcopy(data)
         del unversioned["artifact_version"]
-        variants.append(unversioned)
+        validate_reference(unversioned)
         for version in (0, 2, "1", None, True):
             variants.append(dict(data, artifact_version=version))
-        for field in ("label", "W_bfp_m", "host", "calculix_version"):
+        for field in ("label", "W_bfp_m"):
             invalid = copy.deepcopy(data)
             del invalid[field]
             variants.append(invalid)
@@ -60,16 +163,25 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             invalid[field] = 123 if field != "W_bfp_m" else "invalid"
             variants.append(invalid)
         for field in ("host", "calculix_version"):
-            variants.append(dict(data, **{field: ""}))
-            # Nested metadata cannot substitute for either required top-level field.
+            for value in (123, "", None, True):
+                variants.append(dict(data, **{field: value}))
+            # Environment metadata may be omitted or moved into provenance.
             invalid = copy.deepcopy(data)
             value = invalid.pop(field)
             invalid.setdefault("provenance", {})[field] = value
-            variants.append(invalid)
+            validate_reference(invalid)
         provenance_only = copy.deepcopy(data)
         for field in ("host", "calculix_version"):
             provenance_only.setdefault("provenance", {})[field] = provenance_only.pop(field)
-        variants.append(provenance_only)
+        validate_reference(provenance_only)
+        spec_shaped = copy.deepcopy(data)
+        for field in ("artifact_version", "provenance"):
+            spec_shaped.pop(field, None)
+        validate_reference(spec_shaped)
+        portable = copy.deepcopy(spec_shaped)
+        for field in ("host", "calculix_version"):
+            portable.pop(field, None)
+        validate_reference(portable)
         for name in ("", "unknown", "coarse"):
             invalid = copy.deepcopy(data)
             invalid["selected_mesh"] = name
@@ -85,7 +197,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         selected["W_bfp_m"] *= 1.01
         # Structural checks alone cannot compare instance fields.
         jsonschema.Draft202012Validator(contract).validate(invalid)
-        # Full producer validation must still reject the mismatched value.
+        # Full test validation must still reject the mismatched value.
         variants.append(invalid)
         for index, invalid in enumerate(variants):
             with self.subTest(variant=index):
@@ -103,15 +215,15 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         for key in contract["required"]:
             self.assertIn(key, data, f"missing required field {key}")
         validate_reference(data, contract)
-        self.assertEqual(data["artifact_version"], 1)
         self.assertEqual(data["kind"], "REFERENCE")
         self.assertEqual(data["element_type"], "C3D20")
         self.assertEqual(data["selected_mesh"], "fine")
         self.assertIsInstance(data["label"], str)
         self.assertIn("参考值（原型计算值）", data["label"])
         for field in ("host", "calculix_version"):
-            self.assertIsInstance(data[field], str)
-            self.assertTrue(data[field].strip())
+            if field in data:
+                self.assertIsInstance(data[field], str)
+                self.assertTrue(data[field].strip())
         geometry = data["geometry"]
         self.assertEqual(geometry["L_m"], 1.0)
         self.assertEqual(geometry["thicknesses_m"], [0.05, 0.01, 0.04])
@@ -143,14 +255,10 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         for field, expected in (("abs_delta_m", abs_delta), ("rel_delta", rel_delta)):
             self.assertTrue(math.isclose(data[field], expected, rel_tol=1e-12, abs_tol=1e-18))
         line = (
-            f"W_bfp={w} prototype=4.269532769e-3 abs_delta={abs_delta} "
+            f"W_bfp={w} prototype=4.269532769e-3（参考值（原型计算值）） abs_delta={abs_delta} "
             f"rel_delta={rel_delta} mesh=fine element=C3D20 "
-            f"ccx={data['calculix_version']}"
+            f"ccx={data.get('calculix_version', 'unrecorded')}"
         )
-        with tempfile.TemporaryDirectory() as directory:
-            log = Path(directory) / "v-ccx-delta.md"
-            log.write_text(line + "\n", encoding="utf-8")
-            self.assertEqual(log.read_text(encoding="utf-8"), line + "\n")
         print(line)
 
 

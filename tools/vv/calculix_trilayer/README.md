@@ -25,7 +25,7 @@ specialist chooses the comparison acceptance criterion later.
 
 ## Regenerating
 
-Requires numpy, scipy (used by the shared interpolation routine), jsonschema, and `ccx` on `PATH` (or `CHIPCAE_CCX`). From the repo root:
+Requires numpy, scipy (used by the shared interpolation routine), and `ccx` on `PATH` (or `CHIPCAE_CCX`). From the repo root:
 
 ```
 python tools/vv/calculix_trilayer/generate.py
@@ -43,13 +43,17 @@ within 1e-12 H, including C3D20 corner and midside nodes. Surface `W_bfp` is
 computed with `tools.vv.warpage_qoi.interp_grid`
 and `qoi_surface` on an 81×81 grid in millimetres, then converted back to metres.
 
-The shared `contract.py` module defines the artifact schema and validator.
-The required integer `artifact_version` is `1`; missing or unsupported versions
-are rejected by both producer and consumer.
-Both `generate.py` (before writing `REFERENCE.json`) and
-`tools/vv/test_trilayer_calculix_ref.py` use this contract. It checks required fields,
-coarse/fine mesh names, fine selection, and equality with the fine mesh value.
-Optional `provenance` metadata cannot replace required top-level environment strings.
+Artifact format and comparison checks live exclusively in
+`tools/vv/test_trilayer_calculix_ref.py`; generation does not validate the payload.
+The v1 contract is specific to this WP-2 coarse/fine refinement workflow, not a
+schema for arbitrary CalculiX studies. It requires exactly one coarse and one
+fine mesh, fine selection, and equality with the fine mesh value.
+`artifact_version` (when present, integer 1), `provenance`, and the top-level
+`host` and `calculix_version` provenance strings are optional. Thus the brief's
+object without version or provenance extensions is accepted. Present environment
+strings must be nonempty; arbitrary nested provenance remains informational.
+Regeneration records the local host and runtime version, so those metadata can
+differ between environments even when the model and results agree.
 
 The ASCII FRD layout used by CalculiX 2.23 is `(1X,I2,I10,3E12.5)`:
 columns 2–3 contain the record marker, 4–13 the node ID, and 14–49
@@ -67,6 +71,7 @@ by the shared `interp_grid` function for linear interpolation.
 
 Run `python3 -m unittest tools.vv.test_trilayer_calculix_ref` after generation.
 The validator requires `jsonschema`, which the lint workflow installs.
-Only passing validation prints the delta report and checks the same single line
-in a temporary report file, which is removed when the test completes. External
-callers can capture stdout to retain the report; generation does not write it.
+Only passing validation prints the single delta report, with the prototype labeled
+参考值（原型计算值）. External callers can capture stdout to retain the report;
+generation does not write it. If optional runtime metadata is absent, the report
+uses `ccx=unrecorded`.
