@@ -3,7 +3,7 @@
 Independent open-source reference for the 1 m × 1 m trilayer warpage case.
 Results in `REFERENCE.json` are **REFERENCE values** (not measured data, not
 an analytical solution). They may be compared with the early MFEM+MUMPS
-prototype 参考值（原型计算值） `W_bfp = 4.269532769e-3` m. Validation applies only the broad `rel_delta < 0.5` sanity bound; the V&V
+prototype 参考值（原型计算值） `W_bfp = 4.269532769e-3` m. Validation applies only the broad `rel_delta < 0.5` (50%) sanity bound; the V&V
 specialist chooses the comparison acceptance criterion later.
 
 ## Model
@@ -58,9 +58,10 @@ the payload.
 The v1 contract is specific to this WP-2 coarse/fine refinement workflow, not a
 schema for arbitrary CalculiX studies. It requires exactly one coarse and one
 fine mesh, fine selection, and equality with the fine mesh value.
-The top-level `host` and `calculix_version` strings are required and must be
-nonempty. The label must exactly include the brief's reference designation and
-both disclaimers. The fixed key set excludes `artifact_version`, `provenance`,
+The top-level `host` and `calculix_version` strings are optional provenance
+metadata and must be nonempty when present. Without a runtime version, the
+delta report uses `ccx=unknown`. The label must exactly include the brief's
+reference designation and both disclaimers. The fixed key set excludes `artifact_version`, `provenance`,
 and other extensions.
 Regeneration records the local host and runtime version, so those strings can
 differ between environments even when the model and results agree.

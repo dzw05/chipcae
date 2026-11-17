@@ -9,11 +9,14 @@ that criterion is left to the V&V specialist.
 
 from __future__ import annotations
 
+import contextlib
 import copy
+import io
 import json
 import math
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 from tools.vv.calculix_trilayer.contract import CONTRACT, validate_reference
@@ -53,15 +56,15 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             for value in (123, "", None, True):
                 variants.append(dict(data, **{field: value}))
             invalid = copy.deepcopy(data)
-            del invalid[field]
-            variants.append(invalid)
+            invalid.pop(field, None)
+            validate_reference(invalid, contract)
             moved = copy.deepcopy(invalid)
-            moved["provenance"] = {field: data[field]}
+            moved["provenance"] = {field: "optional metadata"}
             variants.append(moved)
         portable = copy.deepcopy(data)
         for field in ("host", "calculix_version"):
-            del portable[field]
-        variants.append(portable)
+            portable.pop(field, None)
+        validate_reference(portable, contract)
         for name in ("", "unknown", "coarse"):
             invalid = copy.deepcopy(data)
             invalid["selected_mesh"] = name
@@ -84,6 +87,18 @@ class TrilayerCalculixRefTest(unittest.TestCase):
                 with self.assertRaises(jsonschema.ValidationError):
                     validate_reference(invalid, contract)
 
+    def test_report_without_optional_provenance(self):
+        data = json.loads(REF.read_text(encoding="utf-8"))
+        for field in ("host", "calculix_version"):
+            data.pop(field, None)
+        output = io.StringIO()
+        with mock.patch.object(Path, "open", mock.mock_open(read_data=json.dumps(data))):
+            with contextlib.redirect_stdout(output):
+                self.test_reference_schema_and_report_delta()
+        lines = output.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].endswith("mesh=fine element=C3D20 ccx=unknown"))
+
     def test_reference_schema_and_report_delta(self):
         self.assertTrue(REF.is_file(), f"missing required artifact: {REF}")
         with REF.open(encoding="utf-8") as handle:
@@ -104,8 +119,9 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解",
         )
         for field in ("host", "calculix_version"):
-            self.assertIsInstance(data[field], str)
-            self.assertTrue(data[field].strip())
+            if field in data:
+                self.assertIsInstance(data[field], str)
+                self.assertTrue(data[field].strip())
         geometry = data["geometry"]
         self.assertEqual(geometry["L_m"], 1.0)
         self.assertEqual(geometry["thicknesses_m"], [0.05, 0.01, 0.04])
@@ -141,7 +157,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         line = (
             f"W_bfp={w} prototype=4.269532769e-3 abs_delta={abs_delta} "
             f"rel_delta={rel_delta} mesh=fine element=C3D20 "
-            f"ccx={data['calculix_version']}"
+            f"ccx={data.get('calculix_version', 'unknown')}"
         )
         print(line)
 

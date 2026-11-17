@@ -7,8 +7,6 @@
   "additionalProperties": false,
   "required": [
     "kind",
-    "host",
-    "calculix_version",
     "label",
     "W_bfp_m",
     "element_type",
