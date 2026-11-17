@@ -240,9 +240,9 @@ int run(int argc, char** argv) {
                        std::to_string(coarse[1].size() - 1))
               << ",\"nx0\":" << summary.nx0 << ",\"ny0\":" << summary.ny0
               << ",\"L\":" << summary.levels << ",\"padded_cells\":" << summary.padded_cells
-              << ",\"nz\":" << summary.nz << ",\"node_count\":" << summary.nodes
-              << ",\"cell_count\":" << summary.cells << ",\"mesh_sha256\":" << quote(summary.sha256)
-              << "}";
+              << ",\"void_cells\":" << summary.void_cells << ",\"nz\":" << summary.nz
+              << ",\"node_count\":" << summary.nodes << ",\"cell_count\":" << summary.cells
+              << ",\"mesh_sha256\":" << quote(summary.sha256) << "}";
     event("success", 1, effective.str());
     return 0;
 }

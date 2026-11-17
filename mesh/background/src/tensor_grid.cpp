@@ -139,6 +139,34 @@ bool contains(const Footprint& f, Real x, Real y) {
     }
     return in;
 }
+// A polygon crossing a cell must reach the cut stage even when its center
+// lies outside. Clip each edge against the open xy cell; mere tangency does
+// not retain a cell with no solid area.
+bool polygon_crosses(const Footprint& f, Real x0, Real y0, Real x1, Real y1) {
+    if (f.polygon.empty() || x0 >= f.box[2] || x1 <= f.box[0] || y0 >= f.box[3] || y1 <= f.box[1])
+        return false;
+    for (std::size_t i = 0; i < f.polygon.size(); ++i) {
+        const auto a = f.polygon[i], b = f.polygon[(i + 1) % f.polygon.size()];
+        Real lo = 0, hi = 1;
+        const std::array<Real, 2> lower{x0, y0}, upper{x1, y1};
+        bool valid = true;
+        for (int axis = 0; axis < 2; ++axis) {
+            const Real d = b[axis] - a[axis];
+            if (d == 0) {
+                if (a[axis] <= lower[axis] || a[axis] >= upper[axis])
+                    valid = false;
+            } else {
+                const Real t0 = (lower[axis] - a[axis]) / d;
+                const Real t1 = (upper[axis] - a[axis]) / d;
+                lo = std::max(lo, std::min(t0, t1));
+                hi = std::min(hi, std::max(t0, t1));
+            }
+        }
+        if (valid && lo < hi)
+            return true;
+    }
+    return false;
+}
 Expected<std::array<AxisSegments, 2>>
 plan_axes(const StackModel& s, const GridOptions& o, HexMeshArrays& m) {
     if (!s.symmetry.empty() && s.symmetry != "none")
@@ -509,9 +537,24 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
             add(r.name, r.material, r.body);
         attrs.push_back(row);
     }
+    std::vector<std::size_t> retained;
     for (auto column : columns)
         for (std::size_t k = 0; k < nz; ++k) {
             auto x = column % nx, y = column / nx;
+            const auto& layer = s.layers[cell_layer[k]];
+            bool covered = false;
+            for (const auto& r : layer.regions)
+                covered = covered ||
+                          contains(r.footprint,
+                                   (axes[0][x] + axes[0][x + 1]) / 2,
+                                   (axes[1][y] + axes[1][y + 1]) / 2) ||
+                          polygon_crosses(
+                              r.footprint, axes[0][x], axes[1][y], axes[0][x + 1], axes[1][y + 1]);
+            if (layer.material.empty() && !covered) {
+                ++m.grid_report.void_cells;
+                continue;
+            }
+            retained.push_back(dense_index(nx0, ny0, L, x, y) * nz + k);
             std::array<Local, 8> h = {node(x, y, k),
                                       node(x + 1, y, k),
                                       node(x + 1, y + 1, k),
@@ -530,7 +573,9 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
                     attr = attrs[li][ri + 1];
                 if (!f.polygon.empty() && axes[0][x] < f.box[2] && axes[0][x + 1] > f.box[0] &&
                     axes[1][y] < f.box[3] && axes[1][y + 1] > f.box[1])
-                    m.pending_cut.push_back(static_cast<Local>(m.attribute.size()));
+                    if (m.pending_cut.empty() ||
+                        m.pending_cut.back() != static_cast<Local>(m.attribute.size()))
+                        m.pending_cut.push_back(static_cast<Local>(m.attribute.size()));
             }
             m.attribute.push_back(attr);
             m.elem_gid.push_back(static_cast<Index>(m.elem_gid.size()));
@@ -616,7 +661,53 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
     auto part = expand_column_partition(m.grid_report, nx0, ny0, nz, o.ranks, weights);
     if (!part)
         return part.error();
-    m.partitioning = std::move(part.value());
+    for (auto e : retained)
+        m.partitioning.push_back(part.value()[e]);
+    // Preserve the established B2 ordering for material-only stacks. Void stacks
+    // use compact global lexicographic IDs, while storage stays in column order.
+    if (std::any_of(s.layers.begin(), s.layers.end(), [](const auto& layer) {
+            return layer.material.empty();
+        })) {
+        std::vector<bool> used(m.node_gid.size());
+        for (auto v : m.hex)
+            used[v] = true;
+        std::vector<Local> remap(used.size(), -1);
+        std::vector<Real> vertices;
+        std::vector<Local> layers;
+        std::vector<Index> cols;
+        for (std::size_t v = 0; v < used.size(); ++v)
+            if (used[v]) {
+                remap[v] = static_cast<Local>(layers.size());
+                vertices.insert(
+                    vertices.end(), m.vertices.begin() + 3 * v, m.vertices.begin() + 3 * v + 3);
+                layers.push_back(m.node_layer[v]);
+                cols.push_back(m.node_column[v]);
+            }
+        for (auto& v : m.hex)
+            v = remap[v];
+        for (auto& v : m.bdr_quad)
+            v = remap[v];
+        m.vertices = std::move(vertices);
+        m.node_layer = std::move(layers);
+        m.node_column = std::move(cols);
+        m.node_gid.resize(m.node_layer.size());
+        auto assign = [](auto& gids, auto key) {
+            std::vector<std::size_t> order(gids.size());
+            std::iota(order.begin(), order.end(), 0);
+            std::sort(order.begin(), order.end(), [&](auto a, auto b) { return key(a) < key(b); });
+            for (std::size_t i = 0; i < order.size(); ++i)
+                gids[order[i]] = static_cast<Index>(i);
+        };
+        assign(m.node_gid, [&](auto v) {
+            return std::array<Real, 3>{
+                m.vertices[3 * v], m.vertices[3 * v + 1], m.vertices[3 * v + 2]};
+        });
+        assign(m.elem_gid, [&](auto e) {
+            auto v = m.hex[8 * e];
+            return std::array<Real, 3>{
+                m.vertices[3 * v], m.vertices[3 * v + 1], m.vertices[3 * v + 2]};
+        });
+    }
     // Every actual body transition receives a dedicated aligned interface attribute.
     constexpr int fi[6][4] = {
         {0, 3, 2, 1}, {0, 1, 5, 4}, {1, 2, 6, 5}, {2, 3, 7, 6}, {3, 0, 4, 7}, {4, 5, 6, 7}};
