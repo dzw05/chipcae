@@ -11,6 +11,59 @@ from tools.vv.result_summary import ResultSummaryError, main, summarize
 
 
 class Errors(unittest.TestCase):
+    def assert_invalid(self, run, message):
+        with self.assertRaises(ResultSummaryError) as caught:
+            summarize(run)
+        self.assertEqual(caught.exception.code, 14)
+        self.assertEqual(caught.exception.name, 'INPUT_INVALID')
+        self.assertIn(message, str(caught.exception))
+        err, out = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+            self.assertEqual(main([str(run)]), 14)
+        self.assertEqual(out.getvalue(), '')
+        self.assertTrue(err.getvalue().startswith('result_summary: INPUT_INVALID: '))
+        self.assertEqual(len(err.getvalue().splitlines()), 1)
+
+    def test_dataset_ranks(self):
+        paths = ('hex/NumberOfPoints', 'hex/NumberOfCells', 'hex/Points',
+                 'hex/PointData/U', 'hex/PointData/T', 'hex/Types',
+                 'hex/CellData/layer_id', 'hex/CellData/material_id',
+                 'hex/CellData/cell_kind', 'hex/CellData/elem_gid',
+                 'cut/PointData/T', 'cut/Types',
+                 'hex/FieldData/layer_names', 'cut/FieldData/material_names',
+                 'eb_surface/NumberOfPoints', 'eb_surface/Polygons/NumberOfCells')
+        for path in paths:
+            for scalar in (True, False):
+                with self.subTest(path=path, scalar=scalar), tempfile.TemporaryDirectory() as tmp:
+                    run = Path(tmp)
+                    step, _ = fixture(run)
+                    with h5py.File(step, 'r+') as f:
+                        full = 'VTKHDF/' + path
+                        original = f[full][...]
+                        dtype = f[full].dtype
+                        value = ('bad' if dtype.kind == 'O' else 0) if scalar else original.reshape((1,) + original.shape)
+                        del f[full]
+                        f.create_dataset(full, data=value, dtype=dtype)
+                    self.assert_invalid(run, path.split('/')[-1])
+
+    def test_nonfinite_displacement_components(self):
+        for component in range(3):
+            for value in (np.nan, np.inf, -np.inf):
+                with self.subTest(component=component, value=value), tempfile.TemporaryDirectory() as tmp:
+                    run = Path(tmp)
+                    step, _ = fixture(run)
+                    with h5py.File(step, 'r+') as f:
+                        f['VTKHDF/hex/PointData/U'][5, component] = value
+                    self.assert_invalid(run, 'PointData/U: nonfinite values')
+
+    def test_empty_summary_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            _, manifest = fixture(run)
+            manifest['summary'][0]['name'] = ''
+            save(run, manifest)
+            self.assert_invalid(run, 'invalid summary entry')
+
     def test_invalid_steps(self):
         for steps in ({}, [], [None], [{'file': 123}]):
             with self.subTest(steps=steps), tempfile.TemporaryDirectory() as tmp:

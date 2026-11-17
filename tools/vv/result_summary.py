@@ -17,7 +17,8 @@ import h5py
 import numpy as np
 
 # Direct CLI execution needs the repository root to import the shared VV helper.
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+if __name__ == '__main__':
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tools.vv.warpage_qoi import best_fit_plane
 
 SCHEMA = "chipcae.vv.result_summary/0.1"
@@ -38,6 +39,7 @@ def _require(condition, message):
 def _count(block, path):
     source = block[path]
     _require(isinstance(source, h5py.Dataset)
+             and source.ndim == 1
              and source.dtype.newbyteorder('=') == np.dtype('int64'),
              f"{block.name}/{path}: expected int64 partition counts")
     values = source[...]
@@ -48,8 +50,9 @@ def _count(block, path):
 
 def _array(block, path, shape, dtype):
     _require(path in block, f"{block.name}/{path}: required field missing")
-    values = block[path][...]
-    _require(values.shape == shape, f"{block.name}/{path}: expected shape {shape}")
+    source = block[path]
+    _require(isinstance(source, h5py.Dataset) and source.shape == shape, f"{block.name}/{path}: expected shape {shape}")
+    values = source[...]
     _require(values.dtype.newbyteorder('=') == np.dtype(dtype),
              f"{block.name}/{path}: expected {dtype}")
     if values.dtype.kind == 'f':
@@ -158,7 +161,8 @@ def _read(root):
             if path not in root[block]:
                 continue
             source = root[block][path]
-            _require(source.ndim == 1 and h5py.check_string_dtype(source.dtype) is not None,
+            _require(isinstance(source, h5py.Dataset) and source.ndim == 1
+                     and h5py.check_string_dtype(source.dtype) is not None,
                      f"{source.name}: expected a string vector")
             current = source.asstr()[...].tolist()
             _require(table is None or current == table,
@@ -193,7 +197,7 @@ def _summarize(run_dir, top_rel_tol):
     _require(isinstance(entries, list), 'summary must be a list')
     for index, entry in enumerate(entries):
         _require(isinstance(entry, dict) and isinstance(entry.get('name'), str)
-                 and 'value' in entry, 'invalid summary entry')
+                 and entry['name'] and 'value' in entry, 'invalid summary entry')
         name, value = entry['name'], entry['value']
         _require(name not in summary, f'summary[{index}].name: duplicate summary name: {name}')
         _require(isinstance(value, (int, float)) and not isinstance(value, bool)
