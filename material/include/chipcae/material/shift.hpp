@@ -6,10 +6,18 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <utility>
 #include <vector>
 
 namespace chipcae::material {
+
+namespace detail {
+// Test-first placeholder for the host-only portable Ei helper. No callers in production yet.
+inline Real expint(Real) {
+    return std::numeric_limits<Real>::quiet_NaN();
+}
+} // namespace detail
 
 // CODATA 2018 气体常数 [J/(mol·K)]
 inline constexpr Real kGasConstant = 8.314462618;
