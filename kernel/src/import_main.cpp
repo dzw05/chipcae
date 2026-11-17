@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     std::filesystem::path input, output, polyset, report, material_map;
-    bool accept_b = false;
+    [[maybe_unused]] bool accept_b = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
         auto next = [&](std::filesystem::path& path) {
