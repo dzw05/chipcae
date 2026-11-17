@@ -3,14 +3,83 @@
 """Additional coverage for structural validation and documented edge policies."""
 import contextlib
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
-from fixtures import fixture, h5py, np
+from fixtures import fixture, save, h5py, np
 from tools.vv.result_summary import ResultSummaryError, main, summarize
 
 
 class Edges(unittest.TestCase):
+    def test_partition_allocations(self):
+        for name in ('hex', 'cut', 'eb_surface'):
+            for invalid in ('valid', 'points', 'cells', 'field'):
+                with self.subTest(block=name, invalid=invalid), tempfile.TemporaryDirectory() as tmp:
+                    run = Path(tmp)
+                    step, _ = fixture(run, cut=True)
+                    with h5py.File(step, 'r+') as f:
+                        block = f['VTKHDF/' + name]
+                        topology = block.require_group('Polygons') if name == 'eb_surface' else block
+                        pc = block['NumberOfPoints'][...]
+                        cc = topology['NumberOfCells'][...]
+                        # Each cell references every point allocated to its partition.
+                        topology['NumberOfConnectivityIds'] = pc * cc
+                        topology['Offsets'] = np.concatenate([
+                            np.arange(int(c) + 1, dtype='int64') * p for p, c in zip(pc, cc)])
+                        topology['Connectivity'] = np.concatenate([
+                            np.tile(np.arange(int(p), dtype='int64'), int(c)) for p, c in zip(pc, cc)])
+                        if invalid == 'points':
+                            block['NumberOfPoints'][...] = [int(pc[0]) - 1, int(pc[1]) + 1]
+                        elif invalid == 'cells':
+                            topology['NumberOfCells'][...] = [0, int(cc.sum())]
+                        elif invalid == 'field':
+                            path = 'Points' if name == 'eb_surface' else 'PointData/U'
+                            values = block[path][:-1]
+                            del block[path]
+                            block[path] = values
+                    if invalid == 'valid':
+                        self.assertEqual(summarize(run)['blocks']['hex']['points'], 11)
+                    else:
+                        with self.assertRaises(ResultSummaryError) as caught:
+                            summarize(run)
+                        self.assertEqual(caught.exception.code, 14)
+                        if invalid != 'field':
+                            self.assertIn('partition', str(caught.exception))
+
+    def test_manifest_json_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            _, manifest = fixture(run)
+            values = ['text', None, True, False, [1, 'x', None], {'nested': [False]}, 10**100]
+            manifest['summary'] += [dict(name=f'value_{i}', value=value)
+                                    for i, value in enumerate(values)]
+            save(run, manifest)
+            expected = {entry['name']: entry['value'] for entry in manifest['summary']}
+            self.assertEqual(summarize(run)['manifest_summary'], expected)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(main([str(run)]), 0)
+            self.assertEqual(json.loads(out.getvalue())['manifest_summary'], expected)
+            for value in values[:6] + [float('inf'), float('nan')]:
+                manifest['summary'][1]['value'] = value
+                save(run, manifest)
+                with self.assertRaises(ResultSummaryError) as caught:
+                    summarize(run)
+                self.assertIn('warpage_pv: expected finite numeric value', str(caught.exception))
+
+    def test_empty_step_reference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            _, manifest = fixture(run)
+            manifest['steps'][0]['file'] = ''
+            save(run, manifest)
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(main([str(run)]), 14)
+            self.assertEqual(err.getvalue(),
+                             'result_summary: INPUT_INVALID: expected nonempty steps[0].file string\n')
+
     def test_partition_count_dtypes(self):
         paths = ('hex/NumberOfPoints', 'hex/NumberOfCells',
                  'cut/NumberOfPoints', 'cut/NumberOfCells',
@@ -58,7 +127,12 @@ class Edges(unittest.TestCase):
                         with self.assertRaises(ResultSummaryError) as caught:
                             summarize(run)
                         self.assertEqual(caught.exception.code, 14)
-                        expected = 'partition count mismatch' if invalid == 'partitions' else '/Points:'
+                        expected = {
+                            'partitions': 'partition count mismatch',
+                            'missing': '/Points',
+                            'length': '/Points: expected shape',
+                            'dtype': '/Points: expected float64',
+                        }[invalid]
                         self.assertIn(expected, str(caught.exception))
 
     def test_present_fields_on_empty_blocks_are_validated(self):

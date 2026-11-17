@@ -55,6 +55,40 @@ def _array(block, path, shape, dtype):
     return values
 
 
+def _partitions(block, cells_path='NumberOfCells'):
+    """Check rank-local topology against the allocations used by all fields.
+
+    Points and fields share concatenated tuple slices, with no independent
+    per-field partition metadata. Topology provides the independent check:
+    offsets restart at zero and connectivity IDs are local to each point slice.
+    Minimal field-only inputs can omit topology altogether.
+    """
+    topology = block if cells_path == 'NumberOfCells' else block['Polygons']
+    paths = ('NumberOfConnectivityIds', 'Offsets', 'Connectivity')
+    if not any(path in topology for path in paths):
+        return
+    _require(all(path in topology for path in paths),
+             f'{topology.name}: incomplete partition topology')
+    total = _count(topology, 'NumberOfConnectivityIds')
+    pc = block['NumberOfPoints'][...]
+    cc = block[cells_path][...]
+    nc = topology['NumberOfConnectivityIds'][...]
+    _require(nc.shape == pc.shape, f'{topology.name}: partition count mismatch')
+    offsets = _array(topology, 'Offsets', (sum(int(c) + 1 for c in cc),), 'int64')
+    ids = _array(topology, 'Connectivity', (total,), 'int64')
+    oi = ci = 0
+    for rank, (points, cells, connections) in enumerate(zip(pc, cc, nc)):
+        points, cells, connections = int(points), int(cells), int(connections)
+        off = offsets[oi:oi + cells + 1]
+        local_ids = ids[ci:ci + connections]
+        _require(off[0] == 0 and off[-1] == connections
+                 and np.all(off[1:] >= off[:-1])
+                 and np.all((local_ids >= 0) & (local_ids < points)),
+                 f'{topology.name}: partition {rank} geometry/field allocation mismatch')
+        oi += cells + 1
+        ci += connections
+
+
 def _version(block):
     _require(isinstance(block, h5py.Group), "expected VTKHDF group")
     _require(np.array_equal(block.attrs.get('Version'), [2, 8]),
@@ -96,6 +130,7 @@ def _read(root):
             blocks[name] = dict(points=n, cells=c, cell_kind_counts=counts)
         else:
             blocks[name] = dict(points=n, cells=c, type_counts=_counts(types))
+        _partitions(block)
         data.append((points, u, t))
     eb = root.get('eb_surface')
     if eb is None:
@@ -107,6 +142,7 @@ def _read(root):
         _require(eb['NumberOfPoints'].shape == eb['Polygons/NumberOfCells'].shape,
                  'eb_surface: partition count mismatch')
         _array(eb, 'Points', (n, 3), 'float64')
+        _partitions(eb, 'Polygons/NumberOfCells')
         blocks['eb_surface'] = dict(points=n, polygons=c)
     names = []
     for field in ('layer_names', 'material_names'):
@@ -141,7 +177,8 @@ def _summarize(run_dir, top_rel_tol):
              'expected manifest schema chipcae.results/1.0')
     steps = manifest.get('steps')
     _require(isinstance(steps, list) and len(steps) > 0 and isinstance(steps[0], dict)
-             and isinstance(steps[0].get('file'), str), 'expected steps[0].file string')
+             and isinstance(steps[0].get('file'), str) and steps[0]['file'],
+             'expected nonempty steps[0].file string')
     step_file = steps[0]['file']
     summary = {}
     pv = None
@@ -152,10 +189,11 @@ def _summarize(run_dir, top_rel_tol):
                  and 'value' in entry, 'invalid summary entry')
         name, value = entry['name'], entry['value']
         _require(name not in summary, f'duplicate summary name: {name}')
-        _require(isinstance(value, (int, float)) and not isinstance(value, bool)
-                 and np.isfinite(value), f'{name}: expected finite numeric value')
         summary[name] = value
         if name == 'warpage_pv':
+            _require(isinstance(value, (int, float)) and not isinstance(value, bool)
+                     and (isinstance(value, int) or np.isfinite(value)),
+                     'warpage_pv: expected finite numeric value')
             _require(entry.get('unit') == 'm', 'warpage_pv unit must be m')
             pv = value
     mesh = manifest.get('mesh', {})

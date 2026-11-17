@@ -26,12 +26,16 @@ class Errors(unittest.TestCase):
                             summarize(run)
                         self.assertEqual(caught.exception.code, code)
                         self.assertEqual(caught.exception.name, name)
-                        err, out = io.StringIO(), io.StringIO()
-                        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
-                            self.assertEqual(main([str(run)]), code)
-                        self.assertEqual(out.getvalue(), '')
-                        self.assertEqual(err.getvalue(),
-                                         f'result_summary: {name}: HDF5 failure with details\n')
+                    err, out = io.StringIO(), io.StringIO()
+                    with patch('tools.vv.result_summary.' + target,
+                               side_effect=error_type(message)) as cli_failure, \
+                            contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+                        self.assertEqual(main([str(run)]), code)
+                    self.assertEqual(out.getvalue(), '')
+                    self.assertEqual(err.getvalue(),
+                                     f'result_summary: {name}: HDF5 failure with details\n')
+                    cli_failure.assert_called_once()
+                    self.assertEqual(summarize(run)['blocks']['hex']['points'], 11)
 
     def test_error_interface(self):
         error = ResultSummaryError(14, 'INPUT_INVALID', 'invalid fixture')
