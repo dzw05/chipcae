@@ -1,6 +1,7 @@
 #include "chipcae/material/cte_convert.hpp"
 #include "cte_fixtures.hpp"
 
+#include <Kokkos_Core.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstddef>

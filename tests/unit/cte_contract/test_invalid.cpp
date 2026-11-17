@@ -1,6 +1,7 @@
 #include "chipcae/material/cte_convert.hpp"
 #include "cte_fixtures.hpp"
 
+#include <Kokkos_Core.hpp>
 #include <cstddef>
 #include <cstdio>
 #include <limits>
@@ -92,6 +93,16 @@ int main(int argc, char** argv) try {
             bad.reference_temperature = nonfinite;
             reject(bad);
             Real value = std::numeric_limits<Real>::quiet_NaN();
+            check(secant_to_tangent(bad, fixture.reference_temperature, value) ==
+                      StatusCode::Failed,
+                  "nonfinite reference secant at original reference knot");
+            check(tangent_to_secant(bad, fixture.reference_temperature, value) ==
+                      StatusCode::Failed,
+                  "nonfinite reference tangent at original reference knot");
+            check(secant_to_tangent(bad, bad.reference_temperature, value) == StatusCode::Failed,
+                  "nonfinite reference secant limit query");
+            check(tangent_to_secant(bad, bad.reference_temperature, value) == StatusCode::Failed,
+                  "nonfinite reference tangent limit query");
             check(secant_to_tangent(fixture, nonfinite, value) == StatusCode::Failed,
                   "nonfinite secant input temperature");
             check(tangent_to_secant(fixture, nonfinite, value) == StatusCode::Failed,
