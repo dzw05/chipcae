@@ -3,8 +3,8 @@
 namespace chipcae::desktop {
 class MaterialMapMissingDialog : public QDialog {
 public:
-    explicit MaterialMapMissingDialog(QWidget* parent = nullptr);
-    static QString prompt(QWidget* parent = nullptr);
+    explicit MaterialMapMissingDialog(QWidget* parent = nullptr, const QString& startDir = {});
+    static QString prompt(QWidget* parent = nullptr, const QString& startDir = {});
     QString messageText() const;
 
 private:
