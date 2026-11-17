@@ -512,7 +512,7 @@ int run_assembly(const ImportOptions& options) {
             std::vector<std::string> split, targets;
             for (const auto& n : merged.layers)
                 if (n.name == l.name || n.name.starts_with(l.name + "#")) {
-                    targets.push_back("layer:" + n.name);
+                    targets.push_back(n.name);
                     if (n.name != l.name)
                         split.push_back(n.name);
                 }
@@ -536,8 +536,7 @@ int run_assembly(const ImportOptions& options) {
             const auto& b = base.layers[i].name;
             if (layer_targets[a].empty() || layer_targets[b].empty())
                 continue;
-            auto target = "interface:" + layer_targets[a].back().substr(6) + "|" +
-                          layer_targets[b].front().substr(6);
+            auto target = "interface:" + layer_targets[a].back() + "|" + layer_targets[b].front();
             auto from = "interface:" + a + "|" + b;
             if (target != from)
                 rewrite(from, {target});
