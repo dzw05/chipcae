@@ -69,9 +69,10 @@ expected_legacy_serializations = (
         b'.86e-06]},"interpolation":"linear","extrapolation":"clamp"}}}'
     ),
 )
-legacy_materials = [item for item in library["materials"] if item["id"] != "copper"]
-assert len(legacy_materials) == len(expected_legacy_serializations), "pre-existing material count changed"
-for material, expected in zip(legacy_materials, expected_legacy_serializations):
+assert len(library["materials"]) == len(expected_legacy_serializations) + 1, "material count changed"
+assert material_ids[:4] == ["organic_eq", "sac305_ball_eq", "underfill", "silicon"], "legacy material prefix changed"
+for index, expected in enumerate(expected_legacy_serializations):
+    material = library["materials"][index]
     actual = json.dumps(material, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     assert actual == expected, f"pre-existing material serialization or order changed: {material['id']}"
 
@@ -112,7 +113,10 @@ lid_parts = [part for part in assembly["parts"] if part["id"] == "lid"]
 assert len(lid_parts) == 1, "package bulk parts assembly must contain exactly one lid"
 lid_material = lid_parts[0]["material"]
 assert lid_material == "copper", "package bulk parts lid material must be exactly copper"
-assert lid_material in known_material_ids, "MATERIAL_MAPPING_MISSING: lid material is absent from library"
+for part in assembly["parts"]:
+    assert part["material"] in known_material_ids, "MATERIAL_MAPPING_MISSING: assembly part material is absent from library"
+for body in assembly.get("parts_from_step", {}).get("bodies", {}).values():
+    assert body["material"] in known_material_ids, "MATERIAL_MAPPING_MISSING: STEP body material is absent from library"
 
 for invalid_library in (root / "material/schema/examples/negative-library-missing-schema.json",
                         root / "material/schema/examples/negative-library-invalid-material.json"):
