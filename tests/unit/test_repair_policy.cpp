@@ -191,8 +191,8 @@ bool run_accept_tests() {
     run("accept_file_missing", [] {
         AcceptFixture f;
         std::string error;
-        require(!read_accept_file(f.dir / "missing.json", &error), "missing: must reject");
-        require(error.starts_with("IMPORT_REJECTED: "), "missing: required error prefix");
+        require(!read_accept_file(f.dir / "missing.json", &error), "missing: absent result");
+        require(error.empty(), "missing: no error");
     });
     return failures == 0;
 }
@@ -241,8 +241,8 @@ int main() {
 #else
     AcceptFixture fixture;
     std::string error;
-    check(!read_accept_file(fixture.dir / "missing.json", &error), "missing file rejected");
-    check(error.starts_with("IMPORT_REJECTED: "), "missing file error prefix");
+    check(!read_accept_file(fixture.dir / "missing.json", &error), "missing file absent result");
+    check(error.empty(), "missing file has no error");
     check(!read_accept_file(fixture.write(R"({"accept":[]})"), &error),
           "existing file requires jsoncons");
     check(error == "IMPORT_REJECTED: accept file requires a jsoncons build",
