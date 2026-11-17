@@ -1,8 +1,8 @@
-/build*/
-*.png
 __pycache__/
 *.py[cod]
 *.vtkhdf
 *.caelog
 *.log
 /samples/
+/build*/
+*.png
