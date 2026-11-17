@@ -142,8 +142,8 @@ jobs:
 
   tier-b-mpi:
     name: Tier B MPI
-    if: vars.TIER_B_ENABLED == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'run-heavy') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && fromJSON('["ubuntu-latest"]') || fromJSON(vars.TIER_B_MPI_RUNS_ON || '["self-hosted","linux","x64","mpi"]') }}
+    if: vars.TIER_B_ENABLED == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'run-heavy')
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON(vars.TIER_B_MPI_RUNS_ON || '["self-hosted","linux","x64","mpi"]') }}
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -164,8 +164,8 @@ jobs:
 
   tier-b-gpu:
     name: Tier B GPU
-    if: vars.TIER_B_ENABLED == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'run-heavy') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && fromJSON('["ubuntu-latest"]') || fromJSON(vars.TIER_B_GPU_RUNS_ON || '["self-hosted","linux","gpu"]') }}
+    if: vars.TIER_B_ENABLED == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'run-heavy')
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON(vars.TIER_B_GPU_RUNS_ON || '["self-hosted","linux","gpu"]') }}
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -199,8 +199,8 @@ jobs:
 
   tier-b-perf:
     name: Tier B perf
-    if: vars.TIER_B_ENABLED == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'run-heavy') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && fromJSON('["ubuntu-latest"]') || fromJSON(vars.TIER_B_PERF_RUNS_ON || '["self-hosted","linux","x64"]') }}
+    if: vars.TIER_B_ENABLED == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.label.name == 'run-heavy')
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON(vars.TIER_B_PERF_RUNS_ON || '["self-hosted","linux","x64"]') }}
     timeout-minutes: 30
     steps:
       - name: Checkout

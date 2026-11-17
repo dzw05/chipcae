@@ -182,8 +182,7 @@ jobs:
     if: |
       (github.event_name == 'push' || github.event.pull_request.draft == false) &&
       needs.lint.result == 'success' &&
-      needs.lint.outputs.code == 'true' &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      needs.lint.outputs.code == 'true'
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.TIER_A_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 30
     permissions:
@@ -354,8 +353,7 @@ jobs:
       github.event_name == 'pull_request' &&
       github.event.pull_request.draft == false &&
       needs.lint.result == 'success' &&
-      needs.lint.outputs.mesh == 'true' &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      needs.lint.outputs.mesh == 'true'
     uses: ./.github/workflows/mesh.yml
     permissions:
       contents: read
