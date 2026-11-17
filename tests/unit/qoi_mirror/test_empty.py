@@ -66,11 +66,10 @@ class EmptyTest(unittest.TestCase):
                         os.chdir(host_cwd)
                         sys.argv = host_argv
                         sys.path[:] = host_path
-                        for name in set(sys.modules) - set(host_modules):
-                            del sys.modules[name]
+                        sys.modules.clear()
                         sys.modules.update(host_modules)
         if check_helper:
-            # Exclude test bodies and the guarded unittest launcher.
+# Exclude test bodies and the guarded unittest launcher.
             tree = ast.parse(test_file.read_text())
             import_time = ast.Module(body=[
                 node for node in tree.body
