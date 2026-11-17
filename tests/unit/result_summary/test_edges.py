@@ -390,6 +390,7 @@ class Edges(unittest.TestCase):
             run = Path(tmp)
             step, _ = fixture(run)
             with h5py.File(step, 'r+') as f:
+                del f['VTKHDF/cut/PointData/T']
                 b = f['VTKHDF/hex']
                 for path in ('Points', 'PointData', 'CellData', 'Types'):
                     del b[path]
@@ -398,14 +399,17 @@ class Edges(unittest.TestCase):
                 b['NumberOfPoints'][...] = 0
                 b['NumberOfCells'][...] = 0
             result = summarize(run)
-            self.assertEqual(result['temperature'], dict(
-                min=None, max=None, top_min=None, top_max=None, top_mean=None))
+            self.assertIsNone(result['temperature'])
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(main([str(run)]), 0)
+            self.assertIsNone(json.loads(out.getvalue())['temperature'])
             self.assertEqual(result['warpage']['n_top_points'], 0)
             self.assertIsNone(result['warpage']['w_bfp_m'])
 
     def test_empty_temperature_datasets(self):
         for empty_geometry in (False, True):
-            for temperature_blocks in (('cut',), ('hex', 'cut')) if empty_geometry else (('cut',),):
+            for temperature_blocks in (('cut',), ('hex', 'cut')) if empty_geometry else (('cut',), ('hex',), ('hex', 'cut')):
                 with self.subTest(empty_geometry=empty_geometry, temperature_blocks=temperature_blocks), tempfile.TemporaryDirectory() as tmp:
                     run = Path(tmp)
                     step, _ = fixture(run)
@@ -426,6 +430,18 @@ class Edges(unittest.TestCase):
                                 del block['PointData/T']
                             if name in temperature_blocks:
                                 block['PointData/T'] = np.empty(0, dtype='float64')
+                    if not empty_geometry and 'hex' in temperature_blocks:
+                        with self.assertRaises(ResultSummaryError) as caught:
+                            summarize(run)
+                        self.assertEqual(caught.exception.code, 14)
+                        self.assertEqual(caught.exception.name, 'INPUT_INVALID')
+                        out, err = io.StringIO(), io.StringIO()
+                        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                            self.assertEqual(main([str(run)]), 14)
+                        self.assertEqual(out.getvalue(), '')
+                        self.assertTrue(err.getvalue().startswith('result_summary: INPUT_INVALID:'))
+                        self.assertEqual(len(err.getvalue().splitlines()), 1)
+                        continue
                     result = summarize(run)
                     self.assertEqual(result['temperature'], dict(
                         min=None, max=None, top_min=None, top_max=None, top_mean=None))

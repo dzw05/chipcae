@@ -13,6 +13,7 @@ except ImportError:
     raise SystemExit(77)
 
 ROOT = Path(__file__).resolve().parents[3]
+# Support direct unittest execution from the test directory.
 sys.path.insert(0, str(ROOT))
 SCRIPT = ROOT / 'tools/vv/result_summary.py'
 LAYERS = ['substrate', 'die_attach', 'Si']

@@ -74,7 +74,7 @@ class Optional(unittest.TestCase):
                     self.assertEqual(err.getvalue(), f'result_summary: INPUT_INVALID: {message}\n')
 
     def test_optional_fields(self):
-        for case in ('T', 'eb_surface', 'warpage_pv', 'two_points', 'names', 'mesh', 'zero_pv', 'absolute_step'):
+        for case in ('T', 'eb_surface', 'warpage_pv', 'two_points', 'names', 'mesh', 'zero_pv', 'absolute_step', 'relative_step'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
                 run = Path(tmp) / 'run'
                 step, manifest = fixture(run, two=case == 'two_points')
@@ -93,6 +93,8 @@ class Optional(unittest.TestCase):
                     del manifest['mesh']
                 elif case == 'zero_pv':
                     manifest['summary'][1]['value'] = 0.
+                elif case == 'relative_step':
+                    manifest['steps'][0]['file'] = './' + manifest['steps'][0]['file'].replace('/', '/./')
                 elif case == 'absolute_step':
                     original_step = step
                     relative_file = manifest['steps'][0]['file']
@@ -124,6 +126,11 @@ class Optional(unittest.TestCase):
                 elif case == 'zero_pv':
                     self.assertEqual(r['warpage']['manifest_warpage_pv_m'], 0.)
                     self.assertIsNone(r['warpage']['rel_diff'])
+                elif case == 'relative_step':
+                    self.assertEqual(r['step_file'], manifest['steps'][0]['file'])
+                    self.assertNotEqual(r['step_file'], str(Path(r['step_file'])))
+                    self.assertEqual(r['warpage']['n_top_points'], 9)
+                    self.assertLessEqual(abs(r['warpage']['w_bfp_m'] / .125 - 1.), 1e-12)
                 else:
                     self.assertEqual(r['step_file'], str(step))
                     self.assertEqual(r['warpage']['n_top_points'], 9)

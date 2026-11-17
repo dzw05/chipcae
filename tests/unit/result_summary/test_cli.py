@@ -45,7 +45,7 @@ class CLI(unittest.TestCase):
             step, _ = fixture(run)
             command = [sys.executable, str(SCRIPT), str(run)]
             def invoke(args):
-                result = subprocess.run(command+args, cwd=tmp, capture_output=True, timeout=20)
+                result = subprocess.run(command + args, cwd=tmp, capture_output=True, timeout=20)
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
                 self.assertEqual(result.stderr, b'')
                 return result.stdout
