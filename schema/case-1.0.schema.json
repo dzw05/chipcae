@@ -1,0 +1,668 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:chipcae:case:1.0",
+  "title": "chipcae.case/1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "patternProperties": {
+    "^x-": {}
+  },
+  "required": [
+    "schema",
+    "stack",
+    "materials",
+    "mesh",
+    "physics",
+    "loads",
+    "constraints",
+    "output"
+  ],
+  "properties": {
+    "schema": {
+      "const": "chipcae.case/1.0"
+    },
+    "stack": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string",
+          "pattern": "^(?!.*://)(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(^|/)\\.\\.(/|$)).+"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        }
+      },
+      "additionalProperties": false,
+      "patternProperties": {
+        "^x-": {}
+      },
+      "required": [
+        "ref"
+      ]
+    },
+    "materials": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string",
+          "pattern": "^(?!.*://)(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(^|/)\\.\\.(/|$)).+"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        }
+      },
+      "additionalProperties": false,
+      "patternProperties": {
+        "^x-": {}
+      },
+      "required": [
+        "ref"
+      ]
+    },
+    "mesh": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "aligned_cartesian_cut"
+        },
+        "min_elems_per_layer": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 2
+        },
+        "cell_budget": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "levels": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "cut": {
+          "type": "object",
+          "properties": {
+            "stabilization": {
+              "const": "ghost_penalty"
+            }
+          },
+          "additionalProperties": false,
+          "patternProperties": {
+            "^x-": {}
+          },
+          "required": [
+            "stabilization"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "patternProperties": {
+        "^x-": {}
+      },
+      "required": [
+        "type",
+        "cut"
+      ]
+    },
+    "physics": {
+      "type": "array",
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "id": {
+                "const": "mech"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "id": {
+                "const": "thermal"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          },
+          "maxContains": 1,
+          "minContains": 0
+        }
+      ],
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "thermal"
+              },
+              "solver": {
+                "const": "fem.conduction"
+              },
+              "mode": {
+                "const": "steady"
+              }
+            },
+            "additionalProperties": false,
+            "patternProperties": {
+              "^x-": {}
+            },
+            "required": [
+              "id",
+              "solver",
+              "mode"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "mech"
+              },
+              "solver": {
+                "const": "fem.solid"
+              },
+              "temp_from": {
+                "const": "thermal"
+              },
+              "T_ref": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "nonlinear": {
+                "type": "object",
+                "properties": {
+                  "geometric": {
+                    "const": false,
+                    "default": false
+                  }
+                },
+                "additionalProperties": false,
+                "patternProperties": {
+                  "^x-": {}
+                }
+              }
+            },
+            "additionalProperties": false,
+            "patternProperties": {
+              "^x-": {}
+            },
+            "required": [
+              "id",
+              "solver"
+            ]
+          }
+        ]
+      },
+      "minItems": 1
+    },
+    "loads": {
+      "type": "array",
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "type": {
+                "const": "uniform_temperature"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "maxContains": 1,
+          "minContains": 0
+        }
+      ],
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "uniform_temperature"
+              },
+              "T_ref": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "T_target": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+              }
+            },
+            "additionalProperties": false,
+            "patternProperties": {
+              "^x-": {}
+            },
+            "required": [
+              "type",
+              "T_ref",
+              "T_target"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "fixed_temperature"
+              },
+              "target": {
+                "type": "string",
+                "pattern": "^(layer:.+|face:(xmin|xmax|ymin|ymax|zmin|zmax)|boundary:embedded)$"
+              },
+              "T": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+              }
+            },
+            "additionalProperties": false,
+            "patternProperties": {
+              "^x-": {}
+            },
+            "required": [
+              "type",
+              "target",
+              "T"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "convection"
+              },
+              "target": {
+                "type": "string",
+                "pattern": "^(layer:.+|face:(xmin|xmax|ymin|ymax|zmin|zmax)|boundary:embedded)$"
+              },
+              "h": {
+                "type": "number",
+                "minimum": 0
+              },
+              "T_inf": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+              }
+            },
+            "additionalProperties": false,
+            "patternProperties": {
+              "^x-": {}
+            },
+            "required": [
+              "type",
+              "target",
+              "h",
+              "T_inf"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "heat_source"
+              },
+              "target": {
+                "type": "string",
+                "pattern": "^layer:.+$"
+              },
+              "power": {
+                "type": "number",
+                "description": "Thermal power [W]; negative values represent a heat sink."
+              },
+              "q_vol": {
+                "type": "number",
+                "description": "Volumetric heat generation [W/m^3]; negative values represent a heat sink."
+              },
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+              }
+            },
+            "additionalProperties": false,
+            "patternProperties": {
+              "^x-": {}
+            },
+            "required": [
+              "type",
+              "target"
+            ],
+            "oneOf": [
+              {
+                "required": [
+                  "power"
+                ],
+                "not": {
+                  "required": [
+                    "q_vol"
+                  ]
+                }
+              },
+              {
+                "required": [
+                  "q_vol"
+                ],
+                "not": {
+                  "required": [
+                    "power"
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "constraints": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "rigid": {
+              "const": "3-2-1",
+              "default": "3-2-1"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+            }
+          },
+          "additionalProperties": false,
+          "patternProperties": {
+            "^x-": {}
+          },
+          "required": [
+            "rigid"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "fixed": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "target": {
+                    "type": "string",
+                    "pattern": "^(layer:.+|face:(xmin|xmax|ymin|ymax|zmin|zmax)|boundary:embedded)$"
+                  },
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+                  }
+                },
+                "required": [
+                  "target"
+                ],
+                "additionalProperties": false,
+                "patternProperties": {
+                  "^x-": {}
+                }
+              },
+              "minItems": 1
+            }
+          },
+          "additionalProperties": false,
+          "patternProperties": {
+            "^x-": {}
+          },
+          "required": [
+            "fixed"
+          ]
+        }
+      ]
+    },
+    "solver": {
+      "$ref": "https://chipcae.local/schema/parameters.schema.json"
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "const": "vtkhdf"
+        },
+        "dir": {
+          "type": "string",
+          "pattern": "^(?!.*://)(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(^|/)\\.\\.(/|$)).+"
+        },
+        "warpage": {
+          "type": "object",
+          "properties": {
+            "standard": {
+              "const": "JESD22-B112"
+            },
+            "remove_rigid": {
+              "const": "best_fit_plane"
+            }
+          },
+          "additionalProperties": false,
+          "patternProperties": {
+            "^x-": {}
+          },
+          "required": [
+            "standard",
+            "remove_rigid"
+          ]
+        },
+        "fields": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "T",
+              "U",
+              "layer_id",
+              "material_id",
+              "cell_kind",
+              "elem_gid"
+            ]
+          },
+          "default": [
+            "T",
+            "U",
+            "layer_id",
+            "material_id",
+            "cell_kind",
+            "elem_gid"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "patternProperties": {
+        "^x-": {}
+      },
+      "required": [
+        "format",
+        "warpage"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "loads": {
+            "contains": {
+              "properties": {
+                "type": {
+                  "const": "uniform_temperature"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            }
+          }
+        },
+        "required": [
+          "loads"
+        ]
+      },
+      "then": {
+        "properties": {
+          "physics": {
+            "not": {
+              "contains": {
+                "properties": {
+                  "id": {
+                    "const": "thermal"
+                  }
+                },
+                "required": [
+                  "id"
+                ]
+              }
+            }
+          },
+          "loads": {
+            "not": {
+              "contains": {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "fixed_temperature",
+                      "convection",
+                      "heat_source"
+                    ]
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            }
+          }
+        },
+        "not": {
+          "properties": {
+            "physics": {
+              "contains": {
+                "properties": {
+                  "id": {
+                    "const": "mech"
+                  },
+                  "temp_from": {
+                    "const": "thermal"
+                  }
+                },
+                "required": [
+                  "id",
+                  "temp_from"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "physics": {
+            "contains": {
+              "properties": {
+                "id": {
+                  "const": "thermal"
+                }
+              },
+              "required": [
+                "id"
+              ]
+            }
+          }
+        },
+        "required": [
+          "physics"
+        ]
+      },
+      "then": {
+        "properties": {
+          "physics": {
+            "contains": {
+              "properties": {
+                "id": {
+                  "const": "mech"
+                },
+                "temp_from": {
+                  "const": "thermal"
+                },
+                "T_ref": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              },
+              "required": [
+                "id",
+                "temp_from",
+                "T_ref"
+              ]
+            }
+          },
+          "loads": {
+            "not": {
+              "contains": {
+                "properties": {
+                  "type": {
+                    "const": "uniform_temperature"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            },
+            "anyOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "type": {
+                      "const": "fixed_temperature"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                }
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "type": {
+                      "const": "convection"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}
