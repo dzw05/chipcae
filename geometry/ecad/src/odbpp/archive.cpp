@@ -97,7 +97,9 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                 if (!canonical_path(rel, s.error))
                     return;
                 if (e.is_symlink()) {
-                    s.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT", rel, 0});
+                    s.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT",
+                                             rel + ": directory input symlink unsupported",
+                                             0});
                     continue;
                 }
                 bool dir = e.is_directory();
@@ -388,21 +390,22 @@ bool ArchiveReader::for_each_line(const std::string& rel,
             while (!block.empty()) {
                 auto end = block.find('\n');
                 auto length = end == std::string_view::npos ? block.size() : end;
-                if (length > max_line_bytes - pending.size()) {
+                // Keep one possible CR terminator across input block boundaries.
+                if (length > max_line_bytes + 1 - pending.size()) {
                     error = "IMPORT_REJECTED: line byte limit " + rel;
                     return false;
                 }
-                if (end == std::string_view::npos) {
-                    pending.append(block);
+                pending.append(block.substr(0, length));
+                if (pending.size() > max_line_bytes && pending.back() != '\r') {
+                    error = "IMPORT_REJECTED: line byte limit " + rel;
+                    return false;
+                }
+                if (end == std::string_view::npos)
                     break;
-                }
-                if (pending.empty())
-                    stopped = !cb(block.substr(0, end));
-                else {
-                    pending.append(block.substr(0, end));
-                    stopped = !cb(pending);
-                    pending.clear();
-                }
+                if (!pending.empty() && pending.back() == '\r')
+                    pending.pop_back();
+                stopped = !cb(pending);
+                pending.clear();
                 if (stopped) {
                     callback_error = error;
                     return false;
@@ -416,6 +419,8 @@ bool ArchiveReader::for_each_line(const std::string& rel,
         error = callback_error;
         return error.empty();
     }
+    if (!pending.empty() && pending.back() == '\r')
+        pending.pop_back();
     if (status == ReadStatus::success && !pending.empty() && !cb(pending))
         return error.empty();
     return status == ReadStatus::success;

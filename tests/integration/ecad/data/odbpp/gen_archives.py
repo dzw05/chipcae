@@ -92,6 +92,9 @@ def main(root, fixture):
     (root / 'oldgnu-times.tgz').write_bytes(gzip.compress(oldgnu))
     # Stored deflate blocks keep these line-limit fixtures below the ratio limit.
     for suffix, payload in [('boundary', b'#' * (1024 * 1024)),
+                            ('boundary-crlf', b'#' * (1024 * 1024) + b'\r\n'),
+                            ('boundary-cr', b'#' * (1024 * 1024) + b'\r'),
+                            ('overflow-crlf', b'#' * (1024 * 1024 + 1) + b'\r\n'),
                             ('overflow', b'#' * (1024 * 1024 + 1)),
                             ('overflow-newline', b'#' * (1024 * 1024 + 1) + b'\n')]:
         entry = [('matrix/matrix', payload)]
@@ -179,6 +182,16 @@ def main(root, fixture):
         info.type = tarfile.SYMTYPE
         info.linkname = '/etc/passwd'
         archive.addfile(info)
+    with tarfile.open(root / 'types.tgz', 'w:gz') as archive:
+        info = tarfile.TarInfo('matrix/matrix')
+        info.size = 1
+        archive.addfile(info, io.BytesIO(b'x'))
+        for name, kind in [('hard', tarfile.LNKTYPE), ('sym', tarfile.SYMTYPE),
+                           ('char', tarfile.CHRTYPE), ('block', tarfile.BLKTYPE)]:
+            info = tarfile.TarInfo(name)
+            info.type = kind
+            info.linkname = 'target'
+            archive.addfile(info)
     limit_tar = tar_bytes([('matrix/matrix', b'x' * 8192), ('steps/pcb/profile', b'y' * 8192)])
     (root / 'limits.tgz').write_bytes(gzip.compress(limit_tar, compresslevel=0))
     (root / 'limits-ratio.tgz').write_bytes(gzip.compress(limit_tar))

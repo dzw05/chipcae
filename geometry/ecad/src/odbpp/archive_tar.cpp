@@ -171,8 +171,28 @@ bool index_tar(const std::filesystem::path& path,
                 if (type == '0' || type == 0 || type == '5') {
                     entries.push_back({name, size, type == '5'});
                     offsets.push_back(position);
-                } else
-                    unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT", name, 0});
+                } else {
+                    std::string reason;
+                    switch (type) {
+                    case '1':
+                        reason = "hardlink";
+                        break;
+                    case '2':
+                        reason = "symlink";
+                        break;
+                    case '3':
+                        reason = "character device";
+                        break;
+                    case '4':
+                        reason = "block device";
+                        break;
+                    default:
+                        reason = "entry type " + std::to_string(static_cast<unsigned char>(type));
+                        break;
+                    }
+                    unsupported.push_back(
+                        {"IMPORT_UNSUPPORTED_ELEMENT", name + ": tar " + reason, 0});
+                }
             } else if (size > 1024 * 1024 || size > limits.file_bytes)
                 return fail("file metadata limit");
             entry_size = size;

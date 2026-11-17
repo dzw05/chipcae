@@ -330,6 +330,24 @@ int main() {
         }
         require(error.empty() && decoded == std::string(32745, 'x'), "bounded gzip bytes");
     });
+    test("odbpp_directory_crlf_lines", [&] {
+        auto p = temp / "crlf-lines";
+        // CR falls at the end of a 32 KiB input block.
+        write(p / "text", std::string(32767, 'x') + "\r\nshort\r\nlast\r");
+        ArchiveReader reader(p);
+        std::vector<std::string> lines;
+        std::string error;
+        require(reader.for_each_line(
+                    "text",
+                    [&](auto line) {
+                        lines.emplace_back(line);
+                        return true;
+                    },
+                    error),
+                error);
+        require(lines == std::vector<std::string>{std::string(32767, 'x'), "short", "last"},
+                "CRLF normalized across blocks and at EOF");
+    });
     test("odbpp_line_callback_errors", [&] {
         auto p = temp / "callback-errors";
         for (const auto* content : {"stop\ntail\n", "stop"}) {
@@ -684,6 +702,15 @@ int main() {
             rejected(fs::exists(temp / "corrupt" / name) ? temp / "corrupt" / name : temp / name,
                      reason);
         });
+    test("odbpp_tar_unsupported_types", [&] {
+        ArchiveReader reader(temp / "types.tgz");
+        require(reader.open_error().empty(), reader.open_error());
+        for (const auto* reason : {"hard: tar hardlink",
+                                   "sym: tar symlink",
+                                   "char: tar character device",
+                                   "block: tar block device"})
+            require(reported(reader.unsupported(), reason), reason);
+    });
     test("odbpp_archive_symlink", [&] {
         ArchiveReader reader(temp / "link.tgz");
         require(reader.open_error().empty(), reader.open_error());
@@ -818,7 +845,8 @@ int main() {
             return; // Platforms without symlink privileges still exercise tar links.
         ArchiveReader reader(p);
         require(reader.open_error().empty(), reader.open_error());
-        require(reported(reader.unsupported(), "external"), "directory symlink reported");
+        require(reported(reader.unsupported(), "external: directory input symlink unsupported"),
+                "directory symlink reported");
         require(std::none_of(reader.entries().begin(),
                              reader.entries().end(),
                              [](const auto& e) { return e.path.starts_with("external"); }),
@@ -911,7 +939,12 @@ int main() {
     });
     test("odbpp_review_archive_line_limits", [&] {
         for (const auto* extension : {".tgz", ".zip"}) {
-            for (const auto* kind : {"boundary", "overflow", "overflow-newline"}) {
+            for (const auto* kind : {"boundary",
+                                     "boundary-crlf",
+                                     "boundary-cr",
+                                     "overflow",
+                                     "overflow-newline",
+                                     "overflow-crlf"}) {
                 ArchiveReader reader(temp / (std::string("line-") + kind + extension));
                 require(reader.open_error().empty(), reader.open_error());
                 std::string error;
@@ -924,7 +957,7 @@ int main() {
                         return true;
                     },
                     error);
-                if (std::string_view(kind) == "boundary")
+                if (std::string_view(kind).starts_with("boundary"))
                     require(ok && calls == 1, "line at limit accepted: " + error);
                 else
                     require(!ok && calls == 0 &&
