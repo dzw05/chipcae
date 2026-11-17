@@ -265,7 +265,7 @@ def _diff(odb, ipc, delta):
 
     def add(item, key, left, right, difference, tol, reason, grade):
         for value in (left, right, difference, tol):
-            if isinstance(value, (int, float)):
+            if isinstance(value, float):
                 _number(value)
         entries.append(dict(item=item, key=key, odb=left, ipc=right, delta=difference,
                             tol=tol, tol_derivation=reason, grade=grade, source_loc=None))
@@ -317,8 +317,24 @@ def _diff(odb, ipc, delta):
             'perimeter or fraction × P_outline; fixed fraction propagates '
             'outline area tolerance, no copper perimeter inferred); '
             'signed ring areas summed; relative difference uses larger area, zero versus nonzero is 100%', grade)
-    thickness('total_thickness', 'stack', math.fsum(l['thickness'] for l in a),
-              math.fsum(l['thickness'] for l in b))
+    # Accumulate exact binary ratios before converting to report numbers. This
+    # preserves small differences even when either positive sum exceeds float
+    # range. Such totals are emitted as JSON integers (with sub-unit rounding).
+    ratios_a = [l['thickness'].as_integer_ratio() for l in a]
+    ratios_b = [l['thickness'].as_integer_ratio() for l in b]
+    denominator = max((d for _, d in ratios_a + ratios_b), default=1)
+    total_a = sum(n * (denominator // d) for n, d in ratios_a)
+    total_b = sum(n * (denominator // d) for n, d in ratios_b)
+
+    def report_number(numerator):
+        try:
+            return numerator / denominator
+        except OverflowError:
+            return (numerator + denominator // 2) // denominator
+
+    difference = report_number(abs(total_a - total_b))
+    add('total_thickness', 'stack', report_number(total_a), report_number(total_b),
+        difference, delta, reason, 'hard' if difference > delta else 'info')
     p = max(ga['perimeter'], gb['perimeter'])
     d = abs(ga['area'] - gb['area'])
     hard = d > delta * p or any(abs(x - y) > delta for x, y in zip(ga['box'], gb['box']))
@@ -357,6 +373,7 @@ def write_report(result: dict, out_dir: Path) -> None:
         payload = json.dumps(result, indent=2, ensure_ascii=False, allow_nan=False)
     except ValueError as exc:
         _invalid(str(exc))
+    created = not out.exists()
     try:
         out.mkdir(parents=True, exist_ok=True)
         names = ('diff.json', 'diff.md')
@@ -380,6 +397,8 @@ def write_report(result: dict, out_dir: Path) -> None:
                         (staged / name).replace(out / name)
                 raise
     except OSError as exc:
+        if created and out.is_dir():
+            out.rmdir()
         _invalid(str(exc))
 
 

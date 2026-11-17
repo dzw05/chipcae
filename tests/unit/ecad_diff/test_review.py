@@ -1,5 +1,6 @@
 """Regressions for empty copper and transactional report failures."""
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -82,6 +83,31 @@ def main():
         both_empty = diff_stacks(save(root / 'a.json', a), save(root / 'b.json', b))
         e = entry(both_empty, 'copper_area', '0:F.Cu|F.Cu')
         assert e['grade'] == 'info' and e['tol'] == 0
+        # Individually finite positive thicknesses may exceed float range in sum.
+        huge = board()
+        for layer in huge['layers']:
+            layer['thickness'] = 1e308
+        huge_path = save(root / 'huge.json', huge)
+        huge_result = diff_stacks(huge_path, huge_path)
+        total = entry(huge_result, 'total_thickness')
+        assert total['grade'] == 'info' and total['delta'] == 0
+        assert total['odb'] == total['ipc'] == 3 * int(1e308)
+        write_report(huge_result, root / 'huge-reports')
+        assert json.loads((root / 'huge-reports/diff.json').read_text()) == huge_result
+        normal_path = save(root / 'normal.json', board())
+        total = entry(diff_stacks(huge_path, normal_path), 'total_thickness')
+        assert total['grade'] == 'hard' and total['delta'] == 3 * int(1e308)
+        # Cancellation must happen before rounding overflowing totals for JSON.
+        huge['layers'][2]['thickness'] = 1e-8
+        huge_path = save(root / 'huge.json', huge)
+        other = board()
+        for layer in other['layers']:
+            layer['thickness'] = 1e308
+        other['layers'][2]['thickness'] = 2e-8
+        other_path = save(root / 'other.json', other)
+        for left, right in ((huge_path, other_path), (other_path, huge_path)):
+            total = entry(diff_stacks(left, right), 'total_thickness')
+            assert total['grade'] == 'hard' and total['delta'] == 1e-8
         out = root / 'reports'
         for existing in (False, True):
             if existing:
@@ -101,7 +127,8 @@ def main():
                     assert exc.code == 14
                 else:
                     raise AssertionError('report write unexpectedly succeeded')
-            assert {p.name: p.read_bytes() for p in out.iterdir()} == before
+            assert out.exists() == existing
+            assert ({p.name: p.read_bytes() for p in out.iterdir()} if out.exists() else {}) == before
             replace = Path.replace
 
             def fail_publish(path, target):
@@ -116,7 +143,8 @@ def main():
                     assert exc.code == 14
                 else:
                     raise AssertionError('publication unexpectedly succeeded')
-            assert {p.name: p.read_bytes() for p in out.iterdir()} == before
+            assert out.exists() == existing
+            assert ({p.name: p.read_bytes() for p in out.iterdir()} if out.exists() else {}) == before
 
 
 if __name__ == '__main__':
