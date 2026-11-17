@@ -120,7 +120,10 @@ int main(int argc, char** argv) try {
             check(tangent_to_secant(probe, temperature, value) == StatusCode::Ok &&
                       near(value, expected_integral),
                   "unequal-slope exact off-knot integral");
-            // Establish that these probes reject interpolation of converted nodes.
+            // These reordered fixtures have unequal slopes. In the second segment,
+            // accumulated area from the first makes the secant nonlinear in T;
+            // unlike the original globally linear fixtures, its midpoint differs
+            // from the mean of the converted endpoints.
             if (left == 0)
                 check(!near(expected_derivative, (derivative[left] + derivative[left + 1]) / 2),
                       "derivative probe distinguishes node resampling");
