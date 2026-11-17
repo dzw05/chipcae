@@ -349,7 +349,13 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
     try {
         std::optional<mesh::cut::CutLayerArrays> clipped;
         auto arrays = build_mesh(inputs, &clipped);
-        io::ResultsWriter writer(output, inputs.stack_path, {}, {}, inputs.fields);
+        std::vector<std::string> layer_names, material_names(arrays.attr_table.materials.size());
+        for (const auto& layer : inputs.stack.layers)
+            layer_names.push_back(layer.name);
+        for (const auto& [name, id] : arrays.attr_table.materials)
+            material_names.at(id - 1) = name;
+        io::ResultsWriter writer(
+            output, inputs.stack_path, layer_names, material_names, inputs.fields);
         io::ResultsWriter::MeshSummary summary{};
         summary.nx0 = arrays.grid_report.level_axes.front()[0].size() - 1;
         summary.ny0 = arrays.grid_report.level_axes.front()[1].size() - 1;
@@ -808,7 +814,7 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                     std::find_if(inputs.stack.layers.begin(),
                                  inputs.stack.layers.end(),
                                  [&](const auto& layer) { return layer.name == record.layer; });
-                part.layer_id.push_back(static_cast<int>(it - inputs.stack.layers.begin()));
+                part.layer_id.push_back(static_cast<int>(it - inputs.stack.layers.begin()) + 1);
             }
         writer.write_step(0, 0, result);
         writer.add_summary(

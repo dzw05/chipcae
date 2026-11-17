@@ -25,10 +25,8 @@ public:
                     double bound = side % 2 ? m.axes[axis].back() : m.axes[axis].front();
                     int vertex = m.hex[8 * e + (side % 2 ? 6 : 0)];
                     bool exterior = std::abs(m.vertices[3 * vertex + axis] - bound) < 1e-14;
-                    selected =
-                        exterior &&
-                        (target == faces[side] ||
-                         target == "layer:" + m.attr_table.entries[m.attribute[e] - 1].layer);
+                    selected = (exterior && target == faces[side]) ||
+                               target == "layer:" + m.attr_table.entries[m.attribute[e] - 1].layer;
                 } else if (target == "layer:" + m.attr_table.entries[m.attribute[e] - 1].layer)
                     selected = true;
                 if (!selected)

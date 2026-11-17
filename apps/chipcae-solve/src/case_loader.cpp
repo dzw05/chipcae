@@ -176,16 +176,34 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
         out.stack_path = reference(c.at("stack"), out.case_path.parent_path());
         out.material_path = reference(c.at("materials"), out.case_path.parent_path());
         auto stack_json = read(out.stack_path);
+        std::vector<mesh::Polyset> sidecars;
         if (stack_json.contains("external_refs"))
             for (const auto& ref : stack_json.at("external_refs").array_range()) {
                 Json file_ref = ref;
                 file_ref["ref"] = ref.at("path");
-                (void)reference(file_ref, out.stack_path.parent_path());
+                auto path = reference(file_ref, out.stack_path.parent_path());
+                auto polygons = mesh::read_polyset(path);
+                if (!polygons)
+                    invalid(polygons.error().reason);
+                sidecars.push_back(std::move(polygons.value()));
             }
         auto stack = mesh::load_stack(out.stack_path, CHIPCAE_STACK_SCHEMA);
         if (!stack)
             invalid(stack.error().path + ": " + stack.error().reason);
         out.stack = std::move(stack.value());
+        if (out.stack.outline.polygon.empty())
+            for (const auto& polygons : sidecars)
+                for (const auto& layer : polygons.layers)
+                    if (layer.name == "outline") {
+                        if (layer.ring_offsets.size() != 2 || !out.stack.outline.polygon.empty())
+                            throw InputError(ErrorCode::CUT_UNSUPPORTED,
+                                             "outline polyset requires one ring");
+                        for (auto i = layer.ring_offsets.front(); i < layer.ring_offsets.back();
+                             ++i)
+                            out.stack.outline.polygon.push_back(
+                                {layer.coordinates[2 * i] * polygons.dbu_m,
+                                 layer.coordinates[2 * i + 1] * polygons.dbu_m});
+                    }
         for (const auto& layer : out.stack.layers)
             if (std::any_of(layer.regions.begin(),
                             layer.regions.end(),

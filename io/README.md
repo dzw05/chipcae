@@ -20,7 +20,8 @@ Each `<run>/out/step-<n>.vtkhdf` is a PartitionedDataSetCollection with Version
 hex, cut, eb_surface, particles. Assembly contains soft links at
 volume/hex, volume/cut, boundary/eb_surface, lagrangian/particles, including
 empty blocks. The first two blocks are UnstructuredGrid; the last two are
-empty PolyData (nonempty surface/particle inputs remain reserved).
+PolyData. `eb_surface` contains embedded-boundary triangles for cut meshes;
+`particles` remains empty.
 
 The cut interface accepts polyhedra only: `connectivity` and `offsets` describe
 cell point lists; `face_conn` and `face_off` describe outward face

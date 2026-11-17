@@ -52,6 +52,16 @@ int main() {
         if (mesh.elem_gid[e] != static_cast<chipcae::Index>(e))
             return 3;
     }
+    inputs.stack.outline.polygon = {{{0, 0}}, {{0.03, 0}}, {{0, 0.02}}};
+    try {
+        std::optional<chipcae::mesh::cut::CutLayerArrays> cut;
+        chipcae::solve::build_mesh(inputs, &cut);
+        return 9;
+    } catch (const chipcae::solve::InputError& error) {
+        if (std::string(error.what()).find("outside outline.box") == std::string::npos)
+            return 10;
+    }
+    inputs.stack.outline.polygon.clear();
     inputs.grid.levels = 0;
     auto automatic = chipcae::solve::build_mesh(inputs);
     if (!automatic.grid_report.auto_selected || automatic.grid_report.levels < 1 ||

@@ -6,6 +6,13 @@ mesh::HexMeshArrays build_mesh(const RunInputs& inputs,
                                std::optional<mesh::cut::CutLayerArrays>* cut) {
     // Build the complete bounding grid first: clipping must not discard cells
     // whose centers lie outside the physical outline.
+    for (auto v : inputs.stack.outline.polygon) {
+        const auto& box = inputs.stack.outline.box;
+        if (!std::isfinite(v[0]) || !std::isfinite(v[1]) || v[0] < box[0] || v[0] > box[2] ||
+            v[1] < box[1] || v[1] > box[3])
+            throw InputError(ErrorCode::INPUT_INVALID,
+                             "outline polygon vertex outside outline.box");
+    }
     auto stack = inputs.stack;
     stack.outline.polygon.clear();
     auto result = mesh::build_tensor_grid(stack, inputs.grid);

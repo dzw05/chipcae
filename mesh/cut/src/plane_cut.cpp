@@ -241,7 +241,7 @@ generate(const HexMeshArrays& m, const CutGeometry& g, const CutOptions& o) {
     if (o.export_polyhedra)
         c.polyhedra.emplace();
     // Match the preview writer's stable, one-based layer-name order.
-    std::map<std::string, Local> output_layers;
+    auto output_layers = m.attr_table.layers;
     if (o.export_polyhedra)
         for (const auto& attr : m.attr_table.entries)
             if (!output_layers.contains(attr.layer))
@@ -495,6 +495,11 @@ generate(const HexMeshArrays& m, const CutGeometry& g, const CutOptions& o) {
             }
         }
         c.sub_volfrac.push_back(volume / jac);
+        if (c.sub_attribute.size() > static_cast<std::size_t>(std::numeric_limits<Local>::max()) ||
+            c.sq_w.size() > static_cast<std::size_t>(std::numeric_limits<Local>::max()) ||
+            c.vq_w.size() > static_cast<std::size_t>(std::numeric_limits<Local>::max()) ||
+            c.bq_w.size() > static_cast<std::size_t>(std::numeric_limits<Local>::max()))
+            return Error{"cut/capacity", "quadrature CSR exceeds signed 32-bit capacity"};
         if (volume / jac < o.small_sub_vf)
             c.small_subs.push_back(static_cast<Local>(c.sub_attribute.size() - 1));
         c.sub_off.push_back(static_cast<Local>(c.sub_attribute.size()));

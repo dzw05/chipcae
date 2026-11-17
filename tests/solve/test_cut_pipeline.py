@@ -1,5 +1,7 @@
 """Public cut CLI, coupled heat, rejected inputs, VTK 2.8 and MPI ownership."""
 import copy
+import struct
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -48,6 +50,12 @@ with tempfile.TemporaryDirectory() as tmp:
                         assert group['PointData/T'].shape == (points,)
                         assert group['PointData/U'].shape == (points,3)
                     cells = int(sum(group['NumberOfCells'][:])) if name != 'eb_surface' else int(sum(group['Polygons/NumberOfCells'][:]))
+                    if cells:
+                        ids = group['CellData/layer_id'][:]
+                        assert set(ids) <= set(range(1, len(stack['layers'])+1))
+                        if len(stack['layers']) == 2 and name != 'particles':
+                            gids = group['CellData/elem_gid'][:]
+                            np.testing.assert_array_equal(ids, 1 + (gids % 4)//2)
                     for field in ['layer_id','material_id','cell_kind','elem_gid']:
                         assert len(group['CellData/'+field]) == cells
             for category, block in [('volume','hex'),('volume','cut'),('boundary','eb_surface'),('lagrangian','particles')]:
@@ -107,6 +115,14 @@ with tempfile.TemporaryDirectory() as tmp:
             error = np.max(abs(temperature-(300+100*resistance/.0011)))
             print(block,'layered conduction max error K',error,flush=True)
             assert error <= 1e-8
+    interlayer = copy.deepcopy(layered)
+    interlayer['loads'].append({'type':'convection','target':'layer:base','h':1000,'T_inf':350})
+    # Nonconstant solution exercises Robin terms on trimmed original interlayer faces.
+    robin = run('interlayer-convection', interlayer)
+    assert 300 < robin['T_max'] <= 400
+    with h5py.File(root/'interlayer-convection/out/step-0.vtkhdf') as f:
+        t = f['VTKHDF/cut/PointData/T'][:]
+        assert np.ptp(t) > 10
     thermal['loads'] = [{'type':'fixed_temperature','target':'boundary:embedded','T':350}]
     run('fixed-temperature',thermal,error='Nitsche is not implemented')
     fixed = copy.deepcopy(original)
@@ -126,3 +142,34 @@ with tempfile.TemporaryDirectory() as tmp:
     tiny['outline']['polygon'] = [[0,0],[.02,0],[.02,.00001],[0,.00001]]
     (root/'stack.json').write_text(json.dumps(tiny))
     run('insufficient-constraints',error='six DOFs',error_code=14)
+
+    (root/'stack.json').write_text(json.dumps(stack))
+    # Public fcbga package with an external, hash-checked outline sidecar.
+    package = json.loads((Path(source)/'schema/examples/fcbga_demo.stack.json').read_text())
+    ring = [[0,0],[20000,0],[20000,15000],[15000,20000],[0,20000]]
+    binary = b'CCPOLY01' + struct.pack('<dII',1e-6,1,7) + b'outline'
+    binary += struct.pack('<Iqq',1,0,len(ring))
+    binary += b''.join(struct.pack('<qq',*v) for v in ring)
+    (root/'outline.polyset').write_bytes(binary)
+    package['external_refs'] = [{'path':'outline.polyset','sha256':hashlib.sha256(binary).hexdigest()}]
+    (root/'stack.json').write_text(json.dumps(package))
+    # Freeze illustrative temperature tables at their first sample for the
+    # constant-property solve backend; keep all package material mappings.
+    library = json.loads((Path(source)/'schema/examples/fcbga_demo.materials.json').read_text())
+    for material in library['materials']:
+        for section in ['elastic','thermal_expansion']:
+            table = material[section]['table']
+            table['temperatures'] = table['temperatures'][:1]
+            table['columns'] = {key:values[:1] for key,values in table['columns'].items()}
+            table['interpolation'] = 'constant'
+            table['extrapolation'] = 'clamp'
+    (root/'materials.json').write_text(json.dumps(library))
+    demo = json.loads((Path(source)/'schema/examples/fcbga_demo.case.json').read_text())
+    demo['stack'] = {'ref':'stack.json'}
+    demo['materials'] = {'ref':'materials.json'}
+    demo["mesh"].update(nx=4,ny=4,levels=1,max_ratio=100)
+    demo['solver'] = {'linear':{'preconditioner':'direct'}}
+    demo['output']['fields'] = ['T','U','layer_id','material_id','cell_kind','elem_gid']
+    stack = package
+    run('fcbga-polyset-one',demo)
+    run('fcbga-polyset-two',demo,ranks=2)

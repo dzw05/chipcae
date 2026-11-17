@@ -20,7 +20,9 @@ plane and harmonic through thickness. Polygon copper maps and internal material
 cuts are rejected.
 
 A stack outline may be a convex polygon extruded through every layer, with or
-without a repeated closing vertex. Clockwise and counterclockwise rings work.
+without a repeated closing vertex. Vertices must lie inside `outline.box`.
+When the inline polygon is absent, a hash-checked `external_refs` polyset may
+supply one ring in its `outline` layer. Clockwise and counterclockwise rings work.
 The solver constructs the complete bounding grid, clips it with mesh-owned plane
 half-spaces, removes exterior cells and their exclusive DOFs, and preserves
 surviving element/node GIDs. Layer interfaces remain aligned with z faces.
@@ -41,7 +43,9 @@ relative tolerance 1e-12. Ghost stabilization includes first and second normal
 derivative jumps with `h_perp` and `h_perp^3`, scaled by thermal conductivity or
 normal elastic stiffness (`2 mu + lambda` for isotropic material). Setting
 `gamma_g` to zero disables stabilization and can produce singular small-cut
-systems.
+systems. Across thermal material interfaces the jumps are conductivity weighted;
+across elastic material interfaces curvature is extended without penalizing the
+physical piecewise affine strain jump.
 
 Heat is solved before elasticity, with T evaluated in the same H1 Q2 space.
 Embedded boundaries support natural insulation, traction-free mechanics and

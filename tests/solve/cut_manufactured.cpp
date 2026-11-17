@@ -324,9 +324,13 @@ int main(int argc, char** argv) {
     try {
         for (bool sphere : {false, true})
             for (int degree : {4, 6, 8}) {
-                std::array<std::array<double, 2>, 2> first{}, last{};
+                std::array<std::array<double, 2>, 2> sy{}, sxy{};
+                double sx = 0, sxx = 0;
                 double previous_volume_error = 1, previous_area_error = 1;
                 for (int n : {5, 7, 9, 13}) {
+                    double x = std::log(static_cast<double>(n));
+                    sx += x;
+                    sxx += x * x;
                     Domain d(n, sphere, degree);
                     fem::CutRules rules(d.cut, *d.grid);
                     double volume = std::accumulate(rules.volumes.begin(), rules.volumes.end(), 0.);
@@ -347,17 +351,19 @@ int main(int argc, char** argv) {
                               << " volume_error=" << ve << " area_error=" << ae << std::endl;
                     for (int physics = 0; physics < 2; ++physics) {
                         auto error = solve(d, physics == 1);
-                        if (n == 5)
-                            first[physics] = error;
-                        last[physics] = error;
+                        for (int norm = 0; norm < 2; ++norm) {
+                            double y = std::log(error[norm]);
+                            sy[physics][norm] += y;
+                            sxy[physics][norm] += x * y;
+                        }
                         std::cout << (sphere ? "sphere" : "rotated-box") << " degree=" << degree
                                   << " n=" << n << " physics=" << (physics ? "elastic" : "heat")
                                   << " L2=" << error[0] << " H1=" << error[1] << std::endl;
                     }
                 }
                 for (int physics = 0; physics < 2; ++physics) {
-                    double l2 = std::log(first[physics][0] / last[physics][0]) / std::log(13. / 5.);
-                    double h1 = std::log(first[physics][1] / last[physics][1]) / std::log(13. / 5.);
+                    double l2 = -(4 * sxy[physics][0] - sx * sy[physics][0]) / (4 * sxx - sx * sx);
+                    double h1 = -(4 * sxy[physics][1] - sx * sy[physics][1]) / (4 * sxx - sx * sx);
                     std::cout << "ORDER " << (sphere ? "sphere" : "rotated-box")
                               << " degree=" << degree
                               << " physics=" << (physics ? "elastic" : "heat") << " L2=" << l2

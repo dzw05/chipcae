@@ -31,10 +31,6 @@ GhostPenalty::GhostPenalty(const mesh::HexMeshArrays& m,
         local[m.elem_gid[e]] = e;
     for (std::size_t f = 0; f < c.gp_face_gid.size(); ++f) {
         int a = local.at(c.gp_elem_gid[0][f]), b = local.at(c.gp_elem_gid[1][f]);
-        // A material/layer interface may carry a physical derivative jump.
-        // Ghost extension is confined to each aligned material subdomain.
-        if (m.attribute[a] != m.attribute[b])
-            continue;
         faces_.emplace(std::min(a, b), std::max(a, b));
     }
 }
@@ -71,19 +67,25 @@ void GhostPenalty::AssembleFaceMatrix(const mfem::FiniteElement& a,
         double h1 = std::abs(t.Elem1->Jacobian()(axis, axis)),
                h2 = std::abs(t.Elem2->Jacobian()(axis, axis));
         double h = 2 * h1 * h2 / (h1 + h2);
+        double sa = scale_.at(t.Elem1->Attribute - 1)[axis];
+        double sb = scale_.at(t.Elem2->Attribute - 1)[axis];
+        double scale = std::max(sa, sb);
         for (int i = 0; i < n; ++i) {
             bool minus = i < na;
             int j = minus ? i : i - na;
             auto& d = minus ? da : db;
             auto& hs = minus ? ha : hb;
-            double hi = minus ? h1 : h2, sign = minus ? 1 : -1;
+            double hi = minus ? h1 : h2, sign = (minus ? sa : -sb) / scale;
             jump[i] = 0;
             for (int k = 0; k < 3; ++k)
                 jump[i] += sign * normal[k] * d(j, k);
+            // Across elastic materials, the first normal displacement derivative
+            // includes the physical strain (and thermal eigenstrain) jump. Extend
+            // curvature there; do not penalize the piecewise affine strain mode.
+            if (components_ == 3 && t.Elem1->Attribute != t.Elem2->Attribute)
+                jump[i] = 0;
             jump2[i] = sign * hs(j, diag[axis]) / (hi * hi);
         }
-        double scale = std::max(scale_.at(t.Elem1->Attribute - 1)[axis],
-                                scale_.at(t.Elem2->Attribute - 1)[axis]);
         double w = gamma_ * scale * ip.weight * area;
         // MFEM face vector DOFs: [minus components][plus components].
         for (int c = 0; c < components_; ++c)
