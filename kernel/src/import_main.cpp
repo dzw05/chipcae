@@ -65,13 +65,11 @@ int main(int argc, char** argv) {
             if (arg == "--accept")
                 has_accept = true;
             std::filesystem::path value;
-            if (!next(value)) {
-                if (!input.empty() && !output.empty())
-                    std::cerr << "not implemented yet: " << arg << '\n';
-                else
-                    std::cerr << "unknown argument: " << arg << '\n';
-                return CliExit::usage;
-            }
+            // Unlike existing options, reserved options must not swallow another flag.
+            // Leave it for the next iteration so conflicts and baseline errors are preserved.
+            if (i + 1 >= argc || argv[i + 1][0] == '-')
+                continue;
+            next(value);
             if (arg == "--accept") {
                 options.accept_file = value;
             } else if (arg == "--stack-override") {
