@@ -274,9 +274,9 @@ void symbol_units() {
     require(mapped_inch.vias.size() == 2 && mapped_inch.report.unsupported.empty(),
             "inch tool-based and symbol-based drills map successfully");
     near(mapped_inch.vias[0].outer_radius_dbu, 254);
-    near(mapped_inch.vias[0].inner_radius_dbu, 229);
+    near(mapped_inch.vias[0].inner_radius_dbu, 228.6);
     near(mapped_inch.vias[1].outer_radius_dbu, 127);
-    near(mapped_inch.vias[1].inner_radius_dbu, 102);
+    near(mapped_inch.vias[1].inner_radius_dbu, 101.6);
 }
 void unavailable_thickness() {
     for (const auto* text :
@@ -294,9 +294,9 @@ void unavailable_thickness() {
                 "unavailable ODB thickness records missing provenance");
         ThicknessOverrides overrides{{"TOP", 35e-6}};
         records.clear();
-        const auto m = mapped(j, {&overrides, &records});
+        const auto m = mapped(j, {&overrides, &records, "thickness.csv"});
         near(m.layers.front().thickness_m, 35e-6);
-        require(records.front().source == "override" && !records.front().odb_value_m,
+        require(records.front().source == "override:thickness.csv" && !records.front().odb_value_m,
                 "override fills unavailable ODB thickness without conflict");
     }
 }
@@ -414,35 +414,47 @@ void overrides() {
     ThicknessOverrides o = {
         {"TOP", 35e-6}, {"CORE", 800e-6}, {"BOTTOM", 35e-6}, {"PREPREG", 300e-6}};
     std::vector<ThicknessRecord> records;
-    auto m = mapped(missing(), {&o, &records});
+    auto m = mapped(missing(), {&o, &records, "thickness.csv"});
     require(records.size() == 4, "one record per layer");
     for (std::size_t i = 0; i < records.size(); ++i) {
         const auto& r = records[i];
         require(r.layer == m.layers[i].name, "record layer");
-        near(r.thickness_m, i == 3 ? 200e-6 : o.at(r.layer));
+        near(r.thickness_m, o.at(r.layer));
         near(m.layers[i].thickness_m, r.thickness_m);
-        require(r.source == (i == 3 ? "odb" : "override"), "ODB-first thickness source");
-        require(!r.odb_value_m, "ODB-first mapping emits no conflict provenance");
+        require(r.source == "override:thickness.csv", "exact override filename provenance");
+        if (i == 3)
+            require(r.odb_value_m && std::abs(*r.odb_value_m - 200e-6) <= 1e-12,
+                    "conflict retains original ODB thickness");
+        else
+            require(!r.odb_value_m, "missing ODB thickness has no conflict");
     }
 }
 void override_provenance() {
     auto j = board();
-    // Positive ODB thickness wins regardless of override difference or validity.
-    for (double value : {70e-6,
-                         35e-6 * (1 + 0.5e-9),
-                         35e-6,
-                         0.0,
+    for (double value : {70e-6, 35e-6 * (1 + 2e-9), 35e-6 * (1 + 0.5e-9), 35e-6}) {
+        ThicknessOverrides o{{"TOP", value}};
+        std::vector<ThicknessRecord> records;
+        const auto m = mapped(j, {&o, &records, "thickness.csv"});
+        const bool conflict = std::abs(value - 35e-6) > 1e-9 * 35e-6;
+        near(m.layers.front().thickness_m, conflict ? value : 35e-6, 1e-12);
+        near(records.front().thickness_m, m.layers.front().thickness_m, 1e-12);
+        require(records.front().source == (conflict ? "override:thickness.csv" : "odb"),
+                "override conflict threshold and filename provenance");
+        require(records.front().odb_value_m.has_value() == conflict,
+                "only conflicts record original ODB thickness");
+        if (conflict)
+            require(std::abs(*records.front().odb_value_m - 35e-6) <= 1e-12,
+                    "original ODB value preserved");
+    }
+    for (double value : {0.0,
                          -1.0,
                          std::numeric_limits<double>::infinity(),
                          std::numeric_limits<double>::quiet_NaN()}) {
         ThicknessOverrides o{{"TOP", value}};
-        std::vector<ThicknessRecord> records;
-        const auto m = mapped(j, {&o, &records});
-        near(m.layers.front().thickness_m, 35e-6);
-        near(records.front().thickness_m, 35e-6);
-        require(records.front().source == "odb" && !records.front().odb_value_m,
-                "positive ODB ignores override and retains ODB provenance");
+        rejected(j, {"invalid override thickness", "TOP"}, {&o, nullptr, "thickness.csv"});
     }
+    ThicknessOverrides o{{"TOP", 70e-6}};
+    rejected(j, {"missing override filename", "TOP"}, {&o, nullptr});
 }
 
 void weight() {
@@ -452,14 +464,15 @@ void weight() {
     rejected(j, {"TOP"});
     ThicknessOverrides o = {{"TOP", 35e-6}};
     std::vector<ThicknessRecord> records;
-    mapped(j, {&o, &records});
+    mapped(j, {&o, &records, "thickness.csv"});
     j.attrs.layer["TOP"][".layer_dielectric"] = "-0.01";
-    near(mapped(j, {&o, nullptr}).layers.front().thickness_m, 35e-6);
-    require(records.size() == 4 && records[0].source == "override", "weight override source");
+    near(mapped(j, {&o, nullptr, "thickness.csv"}).layers.front().thickness_m, 35e-6);
+    require(records.size() == 4 && records[0].source == "override:thickness.csv",
+            "weight override source");
 }
 void override_case() {
     ThicknessOverrides o = {{"top", 35e-6}, {"core", 800e-6}, {"bottom", 35e-6}, {"unused", 1e-3}};
-    auto m = mapped(missing(), {&o, nullptr});
+    auto m = mapped(missing(), {&o, nullptr, "thickness.csv"});
     near(m.layers[0].thickness_m, 35e-6);
 }
 void skip() {
@@ -795,7 +808,7 @@ void mixed_tools() {
         j.attrs.layer["DRILL"][".plating_thickness"] = "0.0256";
         const auto odd = mapped(j);
         near(odd.vias.front().outer_radius_dbu, 300.5);
-        near(odd.vias.front().inner_radius_dbu, 274.5);
+        near(odd.vias.front().inner_radius_dbu, 274.9);
         f.symbols = {{"r600"}};
         j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
     }
@@ -861,7 +874,7 @@ void duplicate_layer() {
 }
 void collision() {
     ThicknessOverrides o = {{"top", 35e-6}, {"TOP", 36e-6}};
-    rejected(board(), {"top", "TOP"}, {&o, nullptr});
+    rejected(board(), {"top", "TOP"}, {&o, nullptr, "thickness.csv"});
 }
 void invalid_contours() {
     auto j = board();
@@ -1384,15 +1397,16 @@ void boundaries() {
     equal(mapped(board()), mapped(j));
     ThicknessOverrides o = {{"top", 70e-6}};
     std::vector<ThicknessRecord> records;
-    const auto m = mapped(j, {&o, &records});
-    near(m.layers.front().thickness_m, 35e-6);
-    near(records.front().thickness_m, 35e-6);
-    require(records.front().source == "odb" && !records.front().odb_value_m,
-            "positive ODB wins even with case-insensitive override match");
+    const auto m = mapped(j, {&o, &records, "thickness.csv"});
+    near(m.layers.front().thickness_m, 70e-6);
+    near(records.front().thickness_m, 70e-6);
+    require(records.front().source == "override:thickness.csv" && records.front().odb_value_m &&
+                std::abs(*records.front().odb_value_m - 35e-6) <= 1e-12,
+            "case-insensitive conflict preserves provenance");
     o["top"] = -1;
-    near(mapped(j, {&o, nullptr}).layers.front().thickness_m, 35e-6);
+    rejected(j, {"top"}, {&o, nullptr, "thickness.csv"});
     j.attrs.layer["TOP"][".layer_dielectric"] = "0";
-    rejected(j, {"top"}, {&o, nullptr});
+    rejected(j, {"top"}, {&o, nullptr, "thickness.csv"});
 }
 void degenerate_copper() {
     auto j = board();
@@ -1418,6 +1432,111 @@ void degenerate_copper() {
         require(twice_area != 0, "copper needs nonzero area");
     }
 }
+void boolean_ring_invariants() {
+    auto j = board();
+    auto& f = j.features["TOP"];
+    // A sub-DBU gap closes on rounding, joining the hole to the exterior
+    // at one point. The boolean result must never emit a self-touching ring.
+    OdbContour diamond;
+    diamond.start = {0.0004, 4};
+    diamond.segs = {{{2, 2}, false, {}, false},
+                    {{4, 4}, false, {}, false},
+                    {{2, 6}, false, {}, false},
+                    {diamond.start, false, {}, false}};
+    f.surfaces.push_back({false, {diamond}});
+    auto result = map_odb(j);
+    require(bool(result), "point contact is represented by separate simple rings");
+    require(result.model.layers.front().polygons.size() == 2,
+            "rounded point contact preserves exterior and hole");
+    near(area(result.model), 56e6);
+
+    // Four individually simple triangles produce a non-simple union when the
+    // narrow intersections round to integer DBU. Reject instead of exporting it.
+    auto tiny = board();
+    auto& surfaces = tiny.features["TOP"].surfaces;
+    surfaces.clear();
+    const std::array<std::array<OdbPoint, 3>, 4> triangles = {{
+        {{{0.011, 0.019}, {0.007, 0.006}, {0.017, 0.012}}},
+        {{{0.001, 0.014}, {0.016, 0.018}, {0.014, 0.016}}},
+        {{{0.016, 0.004}, {0.010, 0.006}, {0.017, 0.012}}},
+        {{{0, 0.012}, {0.017, 0.008}, {0.008, 0.019}}},
+    }};
+    for (const auto& vertices : triangles) {
+        OdbContour triangle;
+        triangle.start = vertices[0];
+        for (const auto& point : {vertices[1], vertices[2], vertices[0]}) {
+            OdbSegment seg;
+            seg.end = point;
+            triangle.segs.push_back(seg);
+        }
+        surfaces.push_back({true, {triangle}});
+    }
+    rejected(tiny, {"invalid copper output ring", "TOP"});
+    // A genuine hole and an island exercise alternating winding by depth.
+    f.surfaces.pop_back();
+    auto hole = square(4);
+    hole.start = {1, 1};
+    for (auto& seg : hole.segs) {
+        seg.end.x += 1;
+        seg.end.y += 1;
+    }
+    hole.is_hole = true;
+    f.surfaces.front().contours.push_back(hole);
+    auto island = square(1);
+    island.start = {2, 2};
+    for (auto& seg : island.segs) {
+        seg.end.x += 2;
+        seg.end.y += 2;
+    }
+    f.surfaces.push_back({true, {island}});
+    const auto m = mapped(j);
+    require(m.layers.front().polygons.size() == 3, "exterior, hole and island retained");
+    int positive = 0, negative = 0;
+    for (const auto& polygon : m.layers.front().polygons) {
+        long double sum = 0;
+        std::set<std::array<std::int64_t, 2>> vertices;
+        for (std::size_t i = 0; i < polygon.points.size(); ++i) {
+            const auto& a = polygon.points[i];
+            const auto& b = polygon.points[(i + 1) % polygon.points.size()];
+            require(vertices.insert(a).second, "boolean ring has no repeated vertices");
+            sum += static_cast<long double>(a[0]) * b[1] - static_cast<long double>(b[0]) * a[1];
+        }
+        require(sum != 0, "boolean ring has nonzero area");
+        sum > 0 ? ++positive : ++negative;
+    }
+    require(positive == 2 && negative == 1, "exteriors CCW and holes CW");
+    near(area(m), 49e6);
+}
+void unknown_drill_tools() {
+    auto j = board();
+    OdbLayer l;
+    l.name = "DRILL";
+    l.type = "drill";
+    l.start_name = "TOP";
+    l.end_name = "BOTTOM";
+    j.layers.push_back(l);
+    auto& f = j.features["DRILL"];
+    f.symbols = {{"r600"}};
+    f.pads = {{{2, 3}, 0, true}};
+    j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
+    for (const auto* type : {"", "unknown", "laser", "platted"}) {
+        j.tools["DRILL"] = {{1, type, 0.6}};
+        auto m = mapped(j);
+        require(m.vias.empty() && m.via_fractions.empty(), "unknown tools cannot create vias");
+        require(m.report.unsupported.size() == 1 &&
+                    m.report.unsupported.front().element ==
+                        std::string("ViaToolUnsupported:DRILL:") + type,
+                "unknown tool classification reported");
+        j.tools["DRILL"].push_back({2, "plated", 0.6});
+        for (int order = 0; order < 2; ++order) {
+            m = mapped(j);
+            require(m.vias.empty() && m.report.unsupported.size() == 1 &&
+                        m.report.unsupported.front().element == "ViaToolAmbiguous:DRILL",
+                    "unknown and plated tool ambiguity is order independent");
+            std::reverse(j.tools["DRILL"].begin(), j.tools["DRILL"].end());
+        }
+    }
+}
 void via_radii() {
     auto j = board();
     OdbLayer l;
@@ -1432,7 +1551,7 @@ void via_radii() {
     for (bool with_tool : {false, true}) {
         if (with_tool)
             j.tools["DRILL"] = {{1, "plated", 0.6}};
-        for (const auto* plating : {"0.025", "0.3"}) {
+        for (const auto* plating : {"0.025", "0.3", "0.0001"}) {
             j.attrs.layer["DRILL"][".plating_thickness"] = plating;
             auto m = mapped(j);
             require(m.vias.size() == 1, "valid annulus retained");
@@ -1440,6 +1559,8 @@ void via_radii() {
             require(0 <= v.inner_radius_dbu && v.inner_radius_dbu < v.outer_radius_dbu,
                     "valid via radius invariant");
         }
+        j.attrs.layer["DRILL"][".plating_thickness"] = "0.0001";
+        near(mapped(j).vias.front().inner_radius_dbu, 299.9, 1e-12);
         for (const auto* plating : {"0.301", "1e-300"}) {
             j.attrs.layer["DRILL"][".plating_thickness"] = plating;
             auto m = mapped(j);
@@ -1454,9 +1575,10 @@ void via_radii() {
     for (double diameter : {0.0, -0.0001}) {
         j.tools["DRILL"] = {{1, "plated", diameter}};
         auto m = mapped(j);
-        require(m.vias.empty() && m.report.unsupported.size() == 1 &&
-                    m.report.unsupported.front().element == "ViaGeometry:DRILL",
-                "invalid matched tool diameter rejected");
+        require(m.vias.size() == 1 && m.report.unsupported.empty(),
+                "unmatched nonpositive tool does not replace the positive symbol diameter");
+        near(m.vias.front().outer_radius_dbu, 0.5);
+        near(m.vias.front().inner_radius_dbu, 0.4);
     }
 }
 void drill_rejections() {
@@ -1524,6 +1646,8 @@ int main() {
         {"odbpp_map_ipc_arc_equivalence", ipc_arc_equivalence},
         {"odbpp_map_rectangular_traces", rectangular_traces},
         {"odbpp_map_degenerate_copper", degenerate_copper},
+        {"odbpp_map_boolean_ring_invariants", boolean_ring_invariants},
+        {"odbpp_map_unknown_drill_tools", unknown_drill_tools},
         {"odbpp_map_via_radii", via_radii},
         {"odbpp_map_drill_rejections", drill_rejections}};
     int failures = 0;

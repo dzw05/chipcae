@@ -12,6 +12,33 @@ namespace {
 using namespace detail;
 using namespace Clipper2Lib;
 constexpr double pi = std::numbers::pi;
+// Validate integer output edges, including collinear overlaps and non-adjacent
+// endpoint contacts. Clipper boolean results can acquire these after rounding.
+bool simple_ring(const Path64& path) {
+    auto on_segment = [](const Point64& a, const Point64& b, const Point64& p) {
+        return CrossProductSign(a, b, p) == 0 && p.x >= std::min(a.x, b.x) &&
+               p.x <= std::max(a.x, b.x) && p.y >= std::min(a.y, b.y) && p.y <= std::max(a.y, b.y);
+    };
+    for (std::size_t i = 0; i < path.size(); ++i) {
+        const auto& a = path[i];
+        const auto& b = path[(i + 1) % path.size()];
+        const auto& prev = path[(i + path.size() - 1) % path.size()];
+        if (a == b || on_segment(prev, a, b) || on_segment(a, b, prev))
+            return false;
+        for (std::size_t j = i + 2; j < path.size(); ++j) {
+            if (i == 0 && j + 1 == path.size())
+                continue;
+            const auto& c = path[j];
+            const auto& d = path[(j + 1) % path.size()];
+            const int ab_c = CrossProductSign(a, b, c), ab_d = CrossProductSign(a, b, d);
+            const int cd_a = CrossProductSign(c, d, a), cd_b = CrossProductSign(c, d, b);
+            if ((ab_c * ab_d < 0 && cd_a * cd_b < 0) || on_segment(a, b, c) ||
+                on_segment(a, b, d) || on_segment(c, d, a) || on_segment(c, d, b))
+                return false;
+        }
+    }
+    return true;
+}
 struct Mapper {
     const OdbJob& job;
     EcadModel& model;
@@ -214,18 +241,32 @@ struct Mapper {
                 add(widen(p, s), a.positive);
             }
         }
-        for (auto path : Difference(Union(positive, FillRule::NonZero),
-                                    Union(negative, FillRule::NonZero),
-                                    FillRule::NonZero)) {
+        Clipper64 clipper;
+        clipper.AddSubject(Union(positive, FillRule::NonZero));
+        clipper.AddClip(Union(negative, FillRule::NonZero));
+        PolyTree64 rings;
+        if (!clipper.Execute(ClipType::Difference, FillRule::NonZero, rings))
+            throw std::runtime_error("copper boolean failed: " + layer.name);
+        append_rings(layer, rings);
+    }
+    void append_rings(EcadLayer& layer, const PolyPath64& parent) {
+        for (const auto& ring : parent) {
+            auto path = ring->Polygon();
             StripDuplicates(path, true);
-            if (path.size() < 3 || Area(path) == 0)
-                continue;
+            const auto signed_area = Area(path);
+            if (path.size() < 3 || signed_area == 0 || !simple_ring(path))
+                throw std::runtime_error("invalid copper output ring: " + layer.name);
+            // PolyTree depth defines the required winding independently of area.
+            if ((signed_area > 0) == ring->IsHole())
+                std::reverse(path.begin(), path.end());
             Polygon p;
             for (const auto& v : path)
                 p.points.push_back({v.x, v.y});
             layer.polygons.push_back(std::move(p));
+            append_rings(layer, *ring);
         }
     }
+
     void drill(const OdbLayer& layer, const OdbFeatures& f) {
         for (const auto& l : f.lines) {
             (void)l;
@@ -247,7 +288,7 @@ struct Mapper {
             auto classification = [](const OdbTool& t) {
                 auto type = fold_ascii(t.type);
                 std::erase_if(type, [](char c) { return c == '-' || c == '_'; });
-                return type == "slot" ? 1 : type == "nonplated" ? 2 : 0;
+                return type == "plated" ? 0 : type == "slot" ? 1 : type == "nonplated" ? 2 : 3;
             };
             bool ambiguous = false;
             if (tools != job.tools.end())
@@ -265,6 +306,10 @@ struct Mapper {
             }
             if (s.kind != "round" || (tool && classification(*tool) == 1)) {
                 unsupported("Slot:" + layer.name);
+                continue;
+            }
+            if (tool && classification(*tool) == 3) {
+                unsupported("ViaToolUnsupported:" + layer.name + ":" + tool->type);
                 continue;
             }
             if (tool && classification(*tool) == 2)
@@ -305,7 +350,7 @@ struct Mapper {
             auto pos = point(p.at);
             v.position = {pos.x, pos.y};
             v.outer_radius_dbu = static_cast<double>(diameter) / 2;
-            v.inner_radius_dbu = v.outer_radius_dbu - std::llround(plating);
+            v.inner_radius_dbu = v.outer_radius_dbu - plating;
             if (!std::isfinite(v.outer_radius_dbu) || !std::isfinite(v.inner_radius_dbu) ||
                 !(0 <= v.inner_radius_dbu && v.inner_radius_dbu < v.outer_radius_dbu)) {
                 unsupported("ViaGeometry:" + layer.name);
