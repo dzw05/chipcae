@@ -11,14 +11,18 @@ struct RegionLSOptions {
 };
 // Reuse the cut pipeline's level-set representation.
 using BodyLevelSet = cut::BodyLevelSet;
-// Emit one entry per (layer, effective body) with polygon regions, in stack
-// layer order, then first occurrence of the body in Layer::regions. An empty
-// region body uses its region name, as in the background mesh attribute table.
-// Each entry unions all polygon regions in that layer with that effective body.
-// Its body equals HexMeshArrays::attr_table.bodies.at(effective_body). Recover
-// source regions by matching that body in the corresponding StackModel layer.
-// Bodies may recur across layers: traversal order and body together identify
-// the source group. Groups without polygon regions produce no entry.
+// Define effective_body(r) as r.body when nonempty, otherwise r.name (exact,
+// case-sensitive strings). For each layer index li and effective body b, the
+// source group is every region index ri in stack.layers[li].regions for which
+// footprint.polygon is nonempty and effective_body(region) == b. Distinct region
+// names with the same effective body belong to the same group, including a name
+// fallback that equals another region's explicit body. Box-only regions do not.
+// Emit one entry per nonempty source group; phi represents its polygon union.
+// Order groups by layer index, then by the smallest source region index in each
+// group. Its body is HexMeshArrays::attr_table.bodies.at(b).
+// To recover sources for output entry k, enumerate these groups in that same
+// order: group k gives li and the complete set of ri (and hence source names).
+// Do not match BodyLevelSet::body alone: the same body may recur across layers.
 std::vector<BodyLevelSet>
 region_level_sets(const StackModel&, const HexMeshArrays&, const RegionLSOptions&);
 } // namespace chipcae::mesh
