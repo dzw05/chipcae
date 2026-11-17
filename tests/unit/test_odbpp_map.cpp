@@ -288,6 +288,7 @@ void symbol_units() {
             "inch tool-based and symbol-based drills map successfully");
     near(mapped_inch.vias[0].outer_radius_dbu, 254);
     near(mapped_inch.vias[0].inner_radius_dbu, 228.6);
+    near(mapped_inch.vias[0].outer_radius_dbu - mapped_inch.vias[0].inner_radius_dbu, 25.4, 1e-12);
     near(mapped_inch.vias[1].outer_radius_dbu, 127);
     near(mapped_inch.vias[1].inner_radius_dbu, 101.6);
 }
@@ -428,8 +429,7 @@ void kicad_stackup() {
     std::vector<ThicknessRecord> records;
     const auto job = kicad_job();
     const auto raw = mapped(job);
-    // KiCad 10.0.8 exports 0.035 mm copper as 0.03 mm. Preserve that raw
-    // value, then exercise explicit overrides to recover the project stackup.
+    // Positive exported copper thickness wins even when the project differs.
     const ThicknessOverrides overrides{
         {"F.CU", 35e-6}, {"IN1.CU", 35e-6}, {"IN2.CU", 35e-6}, {"B.CU", 35e-6}};
     const auto model = mapped(job, {&overrides, &records});
@@ -450,20 +450,18 @@ void kicad_stackup() {
         require(fold_ascii(actual.name) == name && actual.copper == copper,
                 "KiCad stack table order and copper flags");
         const double thickness = std::stod(child(row, "thickness").children.at(1).value) * 1e-3;
-        near(actual.thickness_m, thickness, 1e-6);
+        near(actual.thickness_m, copper ? 30e-6 : thickness, 1e-6);
         require(index < records.size() && records[index].layer == actual.name &&
-                    records[index].source == (copper ? "override" : "odb"),
+                    records[index].source == "odb",
                 "KiCad exported thickness provenance");
         if (copper) {
             near(raw.layers[index].thickness_m, 30e-6, 1e-6);
-            require(records[index].odb_value_m.has_value(), "lossy copper export recorded");
-            require(std::abs(*records[index].odb_value_m - 30e-6) <= 1e-12,
-                    "original exported copper thickness");
+            require(!records[index].odb_value_m, "positive ODB copper wins");
         } else {
             near(raw.layers[index].thickness_m, thickness, 1e-6);
             require(!records[index].odb_value_m, "unmodified dielectric provenance");
         }
-        near(records[index].thickness_m, thickness, 1e-6);
+        near(records[index].thickness_m, copper ? 30e-6 : thickness, 1e-6);
         ++index;
     }
     require(copper_count == 4 && index == 7 && index == model.layers.size() &&
@@ -653,14 +651,10 @@ void overrides() {
     for (std::size_t i = 0; i < records.size(); ++i) {
         const auto& r = records[i];
         require(r.layer == m.layers[i].name, "record layer");
-        near(r.thickness_m, o.at(r.layer));
+        near(r.thickness_m, i == 3 ? 200e-6 : o.at(r.layer));
         near(m.layers[i].thickness_m, r.thickness_m);
-        require(r.source == "override", "exact internal override provenance");
-        if (i == 3)
-            require(r.odb_value_m && std::abs(*r.odb_value_m - 200e-6) <= 1e-12,
-                    "conflict retains original ODB thickness");
-        else
-            require(!r.odb_value_m, "missing ODB thickness has no conflict");
+        require(r.source == (i == 3 ? "odb" : "override"), "first available thickness source");
+        require(!r.odb_value_m, "no conflict override provenance");
     }
 }
 void override_provenance() {
@@ -675,30 +669,23 @@ void override_provenance() {
         ThicknessOverrides o{{"TOP", value}};
         std::vector<ThicknessRecord> records;
         const auto m = mapped(j, {&o, &records});
-        const bool conflict = std::abs(value - odb) > 1e-9 * odb;
-        // Exact selection matters here: an absolute tolerance of 1e-12 would
-        // also accept the wrong source value on either side of the threshold.
-        require(m.layers.front().thickness_m == (conflict ? value : odb),
-                "exact override selection around conflict threshold");
-        require(records.front().thickness_m == m.layers.front().thickness_m,
-                "record preserves selected thickness exactly");
-        require(records.front().source == (conflict ? "override" : "odb"),
-                "override conflict threshold and provenance");
-        require(records.front().odb_value_m.has_value() == conflict,
-                "only conflicts record original ODB thickness");
-        if (conflict)
-            require(std::abs(*records.front().odb_value_m - 35e-6) <= 1e-12,
-                    "original ODB value preserved");
+        require(m.layers.front().thickness_m == odb, "positive ODB thickness always wins");
+        require(records.front().thickness_m == odb && records.front().source == "odb" &&
+                    !records.front().odb_value_m,
+                "ODB provenance preserved");
     }
     for (double value : {0.0,
                          -1.0,
                          std::numeric_limits<double>::infinity(),
                          std::numeric_limits<double>::quiet_NaN()}) {
         ThicknessOverrides o{{"TOP", value}};
-        rejected(j, {"invalid override thickness", "TOP"}, {&o, nullptr});
+        near(mapped(j, {&o, nullptr}).layers.front().thickness_m, odb);
+        auto missing_job = j;
+        missing_job.attrs.layer["TOP"][".layer_dielectric"] = "0";
+        rejected(missing_job, {"invalid override thickness", "TOP"}, {&o, nullptr});
     }
     ThicknessOverrides o{{"TOP", 70e-6}};
-    near(mapped(j, {&o, nullptr}).layers.front().thickness_m, 70e-6);
+    near(mapped(j, {&o, nullptr}).layers.front().thickness_m, odb);
 }
 
 void weight() {
@@ -868,10 +855,21 @@ void via_region_initialization() {
         ViaFraction reference;
         reference.layer = 1;
         reference.lower = {1700, 2700};
-        reference.upper = {overlap ? 2500.0 : 200300.0, 3300};
+        reference.upper = {overlap ? 2500.0 : 2300.0, 3300};
         std::vector<ViaFraction> cells{reference};
+        if (!overlap) {
+            reference.lower = {199700, 2700};
+            reference.upper = {200300, 3300};
+            cells.push_back(reference);
+        }
         require(rasterize_vias(m, cells), "IPC envelope reference rasterizes");
-        require(m.via_fractions.size() == 1, "IPC creates one envelope per dielectric");
+        require(m.via_fractions.size() == cells.size(), "separate regions for disjoint vias");
+        for (std::size_t n = 0; n < cells.size(); ++n)
+            require(m.via_fractions[n].lower == cells[n].lower &&
+                        m.via_fractions[n].upper == cells[n].upper &&
+                        m.via_fractions[n].fraction == cells[n].fraction &&
+                        m.via_fractions[n].via_count == cells[n].via_count,
+                    "all cluster bounds and coverage");
         const auto& actual = m.via_fractions.front();
         require(actual.layer == cells[0].layer && actual.lower == cells[0].lower &&
                     actual.upper == cells[0].upper && actual.via_count == cells[0].via_count &&
@@ -923,10 +921,11 @@ void ipc_fraction_parity(const EcadModel& odb) {
     require(bool(ipc), "IPC via reference imports: " + ipc.error);
     require(ipc.model.report.unsupported.empty() && ipc.model.vias.size() == odb.vias.size(),
             "IPC via reference has matching supported vias");
-    require(ipc.model.via_fractions.size() == odb.via_fractions.size(), "IPC fraction count");
+    auto ipc_cells = odb.via_fractions;
+    require(rasterize_vias(ipc.model, ipc_cells), "IPC vias rasterize on local ODB regions");
     for (std::size_t i = 0; i < odb.via_fractions.size(); ++i) {
         const auto& a = odb.via_fractions[i];
-        const auto& b = ipc.model.via_fractions[i];
+        const auto& b = ipc_cells[i];
         require(std::tie(a.layer, a.lower, a.upper, a.fraction, a.via_count) ==
                     std::tie(b.layer, b.lower, b.upper, b.fraction, b.via_count),
                 "exact IPC fraction bounds, order, coverage and count");
@@ -964,14 +963,18 @@ void via_layer_envelope() {
     ViaFraction reference;
     reference.layer = 1;
     reference.lower = {1700, 2700};
-    reference.upper = {2800, 3800};
+    reference.upper = {2300, 3300};
     std::vector<ViaFraction> cells{reference};
-    require(rasterize_vias(m, cells), "IPC diagonal envelope rasterizes");
-    require(m.via_fractions.size() == 1 && m.via_fractions[0].lower == cells[0].lower &&
-                m.via_fractions[0].upper == cells[0].upper &&
-                m.via_fractions[0].via_count == cells[0].via_count &&
-                m.via_fractions[0].fraction == cells[0].fraction,
-            "IPC shares one layer envelope even for disjoint diagonal disks");
+    reference.lower = {2200, 3200};
+    reference.upper = {2800, 3800};
+    cells.push_back(reference);
+    require(rasterize_vias(m, cells), "disjoint diagonal reference rasterizes");
+    require(m.via_fractions.size() == 2, "disjoint diagonal disks have separate regions");
+    for (std::size_t i = 0; i < cells.size(); ++i)
+        require(m.via_fractions[i].lower == cells[i].lower &&
+                    m.via_fractions[i].upper == cells[i].upper &&
+                    m.via_fractions[i].fraction == cells[i].fraction,
+                "diagonal local bounds and coverage");
 }
 
 void via_fraction_invariants() {
@@ -1004,7 +1007,8 @@ void via_fraction_invariants() {
             ipc_fraction_parity(m);
             const auto& cells = m.via_fractions;
             auto key = [](const ViaFraction& c) { return std::tie(c.layer, c.lower, c.upper); };
-            require(cells.size() == 2, "one IPC envelope per crossed dielectric");
+            require(cells.size() == (separation > 0.6 ? 4 : 2),
+                    "one region per connected cluster per dielectric");
             for (std::size_t i = 0; i < cells.size(); ++i) {
                 const auto& c = cells[i];
                 for (std::size_t axis = 0; axis < 2; ++axis)
@@ -1686,13 +1690,12 @@ void boundaries() {
     ThicknessOverrides o = {{"top", 70e-6}};
     std::vector<ThicknessRecord> records;
     const auto m = mapped(j, {&o, &records});
-    near(m.layers.front().thickness_m, 70e-6);
-    near(records.front().thickness_m, 70e-6);
-    require(records.front().source == "override" && records.front().odb_value_m &&
-                std::abs(*records.front().odb_value_m - 35e-6) <= 1e-12,
-            "case-insensitive conflict preserves provenance");
+    near(m.layers.front().thickness_m, 35e-6);
+    near(records.front().thickness_m, 35e-6);
+    require(records.front().source == "odb" && !records.front().odb_value_m,
+            "case-insensitive override cannot replace ODB thickness");
     o["top"] = -1;
-    rejected(j, {"top"}, {&o, nullptr});
+    near(mapped(j, {&o, nullptr}).layers.front().thickness_m, 35e-6);
     j.attrs.layer["TOP"][".layer_dielectric"] = "0";
     rejected(j, {"top"}, {&o, nullptr});
 }
