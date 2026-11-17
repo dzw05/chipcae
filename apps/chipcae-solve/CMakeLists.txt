@@ -17,12 +17,18 @@ if(CHIPCAE_ENABLE_JSONCONS)
     add_library(chipcae_solve_inputs src/case_loader.cpp src/mesh_setup.cpp)
     target_include_directories(chipcae_solve_inputs PUBLIC include PRIVATE ${PROJECT_SOURCE_DIR}/schema/src)
     target_compile_definitions(chipcae_solve_inputs PRIVATE
-        CHIPCAE_MATERIAL_SCHEMA="${PROJECT_SOURCE_DIR}/material/schema/material.v1.schema.json"
-        CHIPCAE_STACK_SCHEMA="${PROJECT_SOURCE_DIR}/schema/stack-0.2.schema.json")
+        CHIPCAE_MATERIAL_SCHEMA="material/schema/material.v1.schema.json"
+        CHIPCAE_STACK_SCHEMA="schema/stack-0.2.schema.json")
     target_link_libraries(chipcae_solve_inputs PUBLIC chipcae_stack chipcae_mesh_background chipcae_mesh_cut jsoncons yaml-cpp::yaml-cpp)
     chipcae_set_warnings(chipcae_solve_inputs)
     target_link_libraries(chipcae-solve PRIVATE chipcae_solve_inputs)
     target_compile_definitions(chipcae-solve PRIVATE CHIPCAE_SOLVE_INPUTS=1)
+endif()
+
+# mfem.hpp includes the installed MFEM configuration (including MFEM_USE_CUDA).
+if(CHIPCAE_ENABLE_MFEM)
+    target_link_libraries(chipcae-solve PRIVATE mfem)
+    target_compile_definitions(chipcae-solve PRIVATE CHIPCAE_SOLVE_MFEM=1)
 endif()
 
 if(CHIPCAE_ENABLE_JSONCONS AND CHIPCAE_ENABLE_MFEM AND CHIPCAE_ENABLE_MPI AND CHIPCAE_ENABLE_HDF5)
@@ -30,7 +36,15 @@ if(CHIPCAE_ENABLE_JSONCONS AND CHIPCAE_ENABLE_MFEM AND CHIPCAE_ENABLE_MPI AND CH
         message(FATAL_ERROR "chipcae-solve requires MFEM built with PETSc support")
     endif()
     target_sources(chipcae-solve PRIVATE src/pipeline.cpp)
-    target_link_libraries(chipcae-solve PRIVATE mfem chipcae::io chipcae::fem)
+    target_link_libraries(chipcae-solve PRIVATE chipcae::io chipcae::fem)
     target_include_directories(chipcae-solve PRIVATE ${PROJECT_SOURCE_DIR}/schema/src ${PROJECT_SOURCE_DIR}/material/include)
     target_compile_definitions(chipcae-solve PRIVATE CHIPCAE_SOLVE_BACKEND=1)
+endif()
+
+if(TARGET chipcae_solve_inputs)
+    # Relative to the executable directory, including multi-config output directories.
+    file(RELATIVE_PATH _chipcae_source_relative "${CMAKE_CURRENT_BINARY_DIR}" "${PROJECT_SOURCE_DIR}")
+    target_compile_definitions(chipcae_solve_inputs PRIVATE
+        CHIPCAE_SOURCE_RELATIVE="$<IF:$<BOOL:${CMAKE_CONFIGURATION_TYPES}>,../,>${_chipcae_source_relative}")
+    target_include_directories(chipcae_solve_inputs PRIVATE ${PROJECT_SOURCE_DIR}/apps/chipcae-solve/src)
 endif()
