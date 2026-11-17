@@ -25,6 +25,13 @@ void check(bool pass, const char* name) {
 
 int main(int argc, char** argv) try {
     Kokkos::ScopeGuard guard(argc, argv);
+    check(near(1e-18, 0) && !near(2e-18, 0), "zero reference absolute tolerance");
+    for (Real tiny : {1e-19, -1e-19, 1e-18, -1e-18}) {
+        check(near(tiny, tiny), "small nonzero reference exact match");
+        check(near(tiny * (1 + 5e-13), tiny), "small nonzero relative tolerance");
+        check(!near(0, tiny) && !near(tiny * (1 + 2e-12), tiny),
+              "small nonzero reference rejects excess relative error");
+    }
     const auto& sec = test::sec;
     const auto& tan = test::tan;
     // Differentiate alpha_sec(T) * (T - T_ref). Interior knots use the
