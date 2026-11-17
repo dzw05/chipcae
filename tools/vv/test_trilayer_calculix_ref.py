@@ -9,6 +9,7 @@ that criterion is left to the V&V specialist.
 
 from __future__ import annotations
 
+import copy
 import json
 import unittest
 from pathlib import Path
@@ -21,6 +22,29 @@ PROTOTYPE = 4.269532769e-3
 
 
 class TrilayerCalculixRefTest(unittest.TestCase):
+    def test_contract_variations_and_no_duplicate_value(self):
+        import jsonschema
+
+        data = json.loads(REF.read_text(encoding="utf-8"))
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        jsonschema.Draft202012Validator.check_schema(contract)
+        validator = jsonschema.Draft202012Validator(contract)
+        variant = copy.deepcopy(data)
+        variant["element_type"] = "C3D8"
+        variant["selected_mesh"] = "coarse"
+        validator.validate(variant)
+        for field in ("element_type", "selected_mesh"):
+            with self.subTest(field=field):
+                invalid = copy.deepcopy(data)
+                invalid[field] = ""
+                with self.assertRaises(jsonschema.ValidationError):
+                    validator.validate(invalid)
+        self.assertNotIn("W_bfp_m", data)
+        invalid = copy.deepcopy(data)
+        invalid["W_bfp_m"] = data["meshes"][0]["W_bfp_m"]
+        with self.assertRaises(jsonschema.ValidationError):
+            validator.validate(invalid)
+
     def test_reference_schema_and_report_delta(self):
         with REF.open(encoding="utf-8") as handle:
             data = json.load(handle)
@@ -43,8 +67,6 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         self.assertTrue(data["calculix_version"].strip())
         self.assertNotIn("host", data)
         self.assertIsInstance(data.get("provenance"), dict)
-        self.assertIsInstance(data["W_bfp_m"], float)
-        self.assertGreater(data["W_bfp_m"], 0.0)
         self.assertAlmostEqual(data["prototype_W_bfp_m"], PROTOTYPE, places=12)
         names = [m["name"] for m in data["meshes"]]
         self.assertEqual(names, ["coarse", "fine"])
@@ -52,9 +74,10 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             self.assertEqual(mesh["n_elem_z_per_layer"], [2, 2, 2])
             self.assertEqual(len(mesh["n_elem_xyz"]), 3)
             self.assertIsInstance(mesh["W_bfp_m"], float)
-        selected = next(m for m in data["meshes"] if m["name"] == "fine")
-        self.assertAlmostEqual(data["W_bfp_m"], selected["W_bfp_m"], places=15)
-        w = data["W_bfp_m"]
+        selected = next(m for m in data["meshes"] if m["name"] == data["selected_mesh"])
+        w = selected["W_bfp_m"]
+        self.assertIsInstance(w, float)
+        self.assertGreater(w, 0.0)
         abs_delta = abs(w - PROTOTYPE)
         rel_delta = abs_delta / PROTOTYPE
         self.assertAlmostEqual(data["abs_delta_m"], abs_delta, places=15)

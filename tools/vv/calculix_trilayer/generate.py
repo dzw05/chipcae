@@ -276,7 +276,6 @@ def main():
         },
         "meshes": results,
         "selected_mesh": "fine",
-        "W_bfp_m": w,
         "prototype_W_bfp_m": PROTOTYPE,
         "abs_delta_m": abs_delta,
         "rel_delta": rel,

@@ -13,7 +13,6 @@
     "geometry",
     "meshes",
     "selected_mesh",
-    "W_bfp_m",
     "prototype_W_bfp_m",
     "abs_delta_m",
     "rel_delta"
@@ -21,7 +20,7 @@
   "properties": {
     "schema_version": { "const": "1", "type": "string" },
     "kind": { "const": "REFERENCE", "type": "string" },
-    "element_type": { "const": "C3D20", "type": "string" },
+    "element_type": { "type": "string", "minLength": 1 },
     "calculix_version": {
       "type": "string",
       "minLength": 1,
@@ -55,8 +54,7 @@
         }
       }
     },
-    "selected_mesh": { "const": "fine", "type": "string" },
-    "W_bfp_m": { "type": "number" },
+    "selected_mesh": { "type": "string", "minLength": 1 },
     "prototype_W_bfp_m": { "type": "number" },
     "abs_delta_m": { "type": "number" },
     "rel_delta": { "type": "number" },

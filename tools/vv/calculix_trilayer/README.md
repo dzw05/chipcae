@@ -34,3 +34,8 @@ and `qoi_surface` on an 81×81 grid in millimetres, then converted back to metre
 The v1 field contract (required keys, types, and which fields are stable) is in `reference.schema.json` (JSON Schema 2020-12).
 
 `provenance` is optional metadata. Ignoring unknown keys under it is a consumer convention, not a JSON Schema-enforced rule.
+
+The contract accepts non-empty `element_type` and `selected_mesh` strings; the
+current producer and its regression checks require C3D20 and fine. The selected
+reference value is the `W_bfp_m` in the mesh named by `selected_mesh`. There is no
+duplicate top-level `W_bfp_m`; consumers compute deltas from that mesh value.
