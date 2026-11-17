@@ -149,6 +149,8 @@ bool records(const ArchiveReader& reader,
                     contour->segs.empty() ? contour->start : contour->segs.back().end;
                 if (!finite(s.end) || (s.is_arc && !finite(s.center)))
                     return fail("non-finite segment/arc " + path);
+                if (s.is_arc && !arc_geometry(start, s.end, s.center))
+                    return fail("invalid arc geometry " + path);
                 if (!s.is_arc && !distinct(start, s.end))
                     return true;
                 contour->segs.push_back(s);

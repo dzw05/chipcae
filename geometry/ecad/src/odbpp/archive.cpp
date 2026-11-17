@@ -414,10 +414,10 @@ bool ArchiveReader::for_each_line(const std::string& rel,
         error);
     if (stopped) {
         error = callback_error;
-        return true;
+        return error.empty();
     }
-    if (status == ReadStatus::success && !stopped && !pending.empty())
-        cb(pending);
+    if (status == ReadStatus::success && !pending.empty() && !cb(pending))
+        return error.empty();
     return status == ReadStatus::success;
 }
 bool ArchiveReader::read_bytes(const std::string& rel, std::string& out, std::string& error) const {

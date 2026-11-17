@@ -315,6 +315,41 @@ int main() {
         data.back() = 'x';
         require(!decode_gzip(data, out, error), "nonzero tail rejected");
     });
+    test("odbpp_gzip_live_output_limit", [&] {
+        std::istringstream input(bytes(temp / "boundary-32745.gz"));
+        GzipCursor cursor(input);
+        std::string_view block;
+        std::string error, decoded;
+        std::size_t calls = 0;
+        for (;;) {
+            const std::size_t limit = calls++ % 2 ? 7 : 513;
+            if (!cursor.next(block, error, limit))
+                break;
+            require(block.size() <= limit, "live gzip output limit");
+            decoded.append(block);
+        }
+        require(error.empty() && decoded == std::string(32745, 'x'), "bounded gzip bytes");
+    });
+    test("odbpp_line_callback_errors", [&] {
+        auto p = temp / "callback-errors";
+        for (const auto* content : {"stop\ntail\n", "stop"}) {
+            write(p / "small", content);
+            for (const auto& input : {p, temp / "early-stop.tgz", temp / "early-stop.zip"}) {
+                ArchiveReader reader(input);
+                require(reader.open_error().empty(), reader.open_error());
+                std::string error;
+                require(!reader.for_each_line(
+                            "small",
+                            [&](auto) {
+                                error = "IMPORT_REJECTED: callback failure";
+                                return false;
+                            },
+                            error),
+                        "callback error propagated");
+                require(error == "IMPORT_REJECTED: callback failure", "callback error retained");
+            }
+        }
+    });
     test("odbpp_review_oldgnu_times", [&] {
         ArchiveReader reader(temp / "oldgnu-times.tgz");
         require(reader.open_error().empty(), reader.open_error());
@@ -323,6 +358,19 @@ int main() {
     });
     test("odbpp_raw_duplicate_points_accepted",
          [&] { require(bool(parse_job(fixture)), "raw export accepted"); });
+    test("odbpp_invalid_contour_arc_radius", [&] {
+        auto p = temp / "invalid-contour-radius";
+        for (bool feature : {false, true}) {
+            for (const auto* records :
+                 {"OB 0 0 I\nOC 0 0 0 0 Y\nOE\n", "OB 1 0 I\nOC 0 2 0 0 Y\nOS 1 0\nOE\n"}) {
+                fs::remove_all(p);
+                minimal(p);
+                write(p / (feature ? "steps/pcb/layers/top/features" : "steps/pcb/profile"),
+                      (feature ? "S P 0\n" : "") + std::string(records) + (feature ? "SE\n" : ""));
+                rejected(p, "invalid arc geometry");
+            }
+        }
+    });
     test("odbpp_review_contour_geometry", [&] {
         auto p = temp / "bad-geometry";
         for (bool feature : {false, true}) {
@@ -346,7 +394,9 @@ int main() {
                 const bool closed = text == "OB 0 0 I\nOE\n" ||
                                     text == "OB 0 0 I\nOS 1 0\nOS 0 0\nOE\n" ||
                                     text == "OB 0 0 I\nOS 0 0\nOE\n";
-                if (finite && (feature || closed))
+                const bool invalid_arc = text.find("OC 1 0 0 0") != std::string::npos ||
+                                         text.find("OC 2 0 0 1") != std::string::npos;
+                if (finite && !invalid_arc && (feature || closed))
                     require(bool(parse_job(p)), "feature contour closure/count unrestricted");
                 else
                     rejected(p, "");
