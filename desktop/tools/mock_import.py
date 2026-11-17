@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Mock chipcae-import. Test-only input contents select a mode (success by default).
 
-Modes: success, b, c, missing, corrupt, invalid, hang. STEP/XML suffixes are
-passed through; this fixture does not parse ECAD. No confirmation CLI is defined.
+The first input line selects protocol outcomes; this fixture does not parse ECAD.
 """
 import argparse
 import json
@@ -83,8 +82,10 @@ def main():
     parser.add_argument("-o", required=True)
     parser.add_argument("--polyset")
     parser.add_argument("--report")
+    parser.add_argument("--material-map")
+    parser.add_argument("--accept-b-tier", action="store_true")
     args = parser.parse_args()
-    mode = pathlib.Path(args.input).read_text().strip() or "success"
+    mode = (pathlib.Path(args.input).read_text().strip().splitlines() or ["success"])[0]
     print("mock import: " + mode, file=sys.stderr, flush=True)
     print("staged-output: " + args.o, file=sys.stderr, flush=True)
     pathlib.Path(args.o).write_text(json.dumps({} if mode == "invalid" else STACK))
@@ -93,15 +94,24 @@ def main():
     if mode == "hang":
         while True:
             time.sleep(1)
-    grade = "B" if mode == "b" else "C" if mode == "c" else "A"
-    report = {"grade": grade, "defects": []}
-    if grade != "A":
-        report["defects"] = [{"code": "IMPORT_REJECTED" if grade == "C" else "MOCK_GAP",
-                              "reason": "MULTI_MATERIAL_CUT_UNSUPPORTED" if grade == "C"
-                              else "Review fixture gap"}]
+    code, exit_code = {
+        "confirm": ("IMPORT_CONFIRMATION_REQUIRED", 6),
+        "b": ("IMPORT_CONFIRMATION_REQUIRED", 6),
+        "reject": ("IMPORT_REJECTED", 7),
+        "c": ("IMPORT_REJECTED", 7),
+        "map-missing": ("MATERIAL_MAPPING_MISSING", 9),
+        "code-mismatch": ("IMPORT_REJECTED", 0),
+        "invalid": ("IMPORT_REJECTED", 7),
+        "missing": ("OK", 1),
+        "corrupt": ("OK", 1),
+    }.get(mode, ("OK", 0))
+    report = {"code": code, "message": "Mock import: " + mode, "defects": []}
+    if code in ("IMPORT_CONFIRMATION_REQUIRED", "IMPORT_REJECTED"):
+        report["defects"] = [{"code": "MOCK_GAP", "reason": "Review fixture gap"}]
     if args.report and mode != "missing":
         pathlib.Path(args.report).write_text("{" if mode == "corrupt" else json.dumps(report))
-    return 2 if grade == "B" else 3 if grade == "C" else 0
+    return exit_code
+
 
 
 if __name__ == "__main__":

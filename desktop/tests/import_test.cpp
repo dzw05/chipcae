@@ -457,6 +457,34 @@ sys.exit(rc)
                 }
             }
         }
+        {
+            CaseDocument d;
+            require(d.load(FIXTURE_DIR "/fcbga_demo.case.json"), "optional export baseline");
+            ImportController c(d);
+            ImportRequest r;
+            r.input = dir.filePath("internal report.xml");
+            write(r.input, "success");
+            r.output = dir.filePath("internal report.stack");
+            r.materialMap = map;
+            r.program = PYTHON_EXECUTABLE;
+            r.prefix = {script, MOCK_SCRIPT, r.input + ".argv", "map-missing"};
+            waitFor(c, [&] { check(c.start(r), "map missing starts without exports"); });
+            check(c.needsMaterialMapReselect(), "completed map missing sets reselection");
+            r.prefix = {script, MOCK_SCRIPT, r.input + ".argv", "success"};
+            waitFor(c, [&] {
+                check(c.start(r), "start without optional exports");
+                check(!c.needsMaterialMapReselect(), "new run clears map missing state");
+            });
+            check(c.outcome() == ImportOutcome::Accepted && QFile::exists(r.output),
+                  "internal report supports acceptance without exports");
+            const auto args = recorded(r.input + ".argv");
+            const auto stage = QFileInfo(args[args.indexOf("-o") + 1]).absolutePath();
+            check(!args.contains("--polyset") && !QDir(stage).exists(),
+                  "no optional polyset and internal staging removed");
+            check(!QFile::exists(dir.filePath("defects.json")) &&
+                      !QFile::exists(dir.filePath("out.polyset")),
+                  "unrequested exports remain unpublished");
+        }
         if (widgets) {
             auto filters = ImportSourceDialog::nameFilters();
             check(filters.contains("IPC-2581 / ODB++ (*.xml *.tgz *.zip)") &&

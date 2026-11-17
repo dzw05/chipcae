@@ -6,7 +6,6 @@
 #include <memory>
 
 namespace chipcae::desktop {
-// D09b test-first compile surface; behavior intentionally remains unimplemented.
 enum class ImportKind { Ecad, Assembly };
 enum class ImportOutcome { None, Running, Accepted, NeedsConfirmation, Rejected, Failed };
 struct ImportRequest {
@@ -16,7 +15,6 @@ struct ImportRequest {
     QString program = "chipcae-import";
     QStringList prefix;
 };
-// Reports currently use {"grade":"A|B|C", "defects":[...]}; raw bytes are retained.
 class ImportController : public QObject {
     Q_OBJECT
 public:
@@ -29,14 +27,11 @@ public:
                const QString& report = {},
                const QString& program = "chipcae-import",
                const QStringList& prefix = {});
-    // Test-first stubs: preserve the existing implementation until the implementation pass.
-    bool start(const ImportRequest& r) {
-        return start(r.input, r.output, r.polyset, r.report, r.program, r.prefix);
-    }
-    ImportOutcome outcome() const { return ImportOutcome::None; }
-    QString reportCode() const { return {}; }
-    bool restartAccepted() { return false; }
-    bool needsMaterialMapReselect() const { return false; }
+    bool start(const ImportRequest& request);
+    ImportOutcome outcome() const { return outcome_; }
+    QString reportCode() const { return reportCode_; }
+    bool restartAccepted();
+    bool needsMaterialMapReselect() const;
     void cancel();
     bool busy() const { return busy_; }
     int exitCode() const { return exitCode_; }
@@ -49,7 +44,7 @@ public slots:
     void confirmDefects();
 signals:
     void defectsReady();
-    void userConfirmed(); // Notification only: no continue CLI contract exists yet.
+    void userConfirmed();
     void finished(bool replaced);
 
 private:
@@ -59,8 +54,10 @@ private:
     PreviewWorker worker_;
     QStringList staged_, destinations_;
     QByteArray stderr_, report_;
-    QString error_, grade_;
-    bool busy_ = false, cancelled_ = false, awaitingConfirmation_ = false;
+    QString error_, grade_, reportCode_;
+    ImportRequest request_;
+    ImportOutcome outcome_ = ImportOutcome::None;
+    bool busy_ = false, cancelled_ = false;
     int exitCode_ = -1;
     QProcess::ExitStatus exitStatus_ = QProcess::NormalExit;
 };

@@ -22,7 +22,7 @@ public:
 };
 } // namespace
 QStringList ImportSourceDialog::nameFilters() {
-    return {"ECAD / STEP B 档 (disabled) (*.xml *.tgz *.zip *.step *.stp)",
+    return {"IPC-2581 / ODB++ (*.xml *.tgz *.zip)",
             "IPC-2581 (*.xml)",
             "ODB++ (*.tgz *.zip)",
             "STEP B 档 (disabled) (*.step *.stp)"};
@@ -34,7 +34,7 @@ bool ImportSourceDialog::isSupportedImportPath(const QString& path) {
     if (file.isDir())
         return true;
     const auto suffix = file.suffix().toLower();
-    return suffix == "xml" || suffix == "tgz" || suffix == "zip";
+    return file.isFile() && (suffix == "xml" || suffix == "tgz" || suffix == "zip");
 }
 QString ImportSourceDialog::getImportPath(QWidget* parent,
                                           const QString& caption,
@@ -60,5 +60,17 @@ QString ImportSourceDialog::getImportPath(QWidget* parent,
     const auto selected = dialog.selectedFiles();
     return !selected.isEmpty() && isSupportedImportPath(selected.first()) ? selected.first()
                                                                           : QString{};
+}
+QString ImportSourceDialog::getMaterialMapPath(QWidget* parent, const QString& startDir) {
+    QFileDialog dialog(parent, QStringLiteral("选择材料映射"), startDir);
+    dialog.setOption(QFileDialog::DontUseNativeDialog);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setNameFilters({"JSON (*.json)"});
+    if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty())
+        return {};
+    const auto path = dialog.selectedFiles().first();
+    const QFileInfo file(path);
+    return file.isFile() && file.suffix().compare("json", Qt::CaseInsensitive) == 0 ? path
+                                                                                    : QString{};
 }
 } // namespace chipcae::desktop

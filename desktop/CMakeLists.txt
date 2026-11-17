@@ -22,6 +22,7 @@ add_library(chipcae_desktop_ui src/MainWindow.cpp src/MainWindow.hpp
     import/ImportController.cpp import/ImportController.hpp
     import/ImportSourceDialog.cpp import/ImportSourceDialog.hpp
     import/DefectsDialog.cpp import/DefectsDialog.hpp
+    import/MaterialMapMissingDialog.cpp import/MaterialMapMissingDialog.hpp
     workers/PreviewWorker.cpp workers/PreviewWorker.hpp
     stack/StackEditor.cpp stack/StackEditor.hpp stack/LayerModel.cpp stack/LayerModel.hpp
     tree/CaseTreeModel.cpp tree/CaseTreeModel.hpp
