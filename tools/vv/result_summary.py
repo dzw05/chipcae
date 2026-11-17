@@ -3,8 +3,8 @@
 # Copyright (c) 2026 Zhiwei Duan
 """Validate and summarize the first step of a chipcae results directory.
 
-Duplicate coordinates must have identical available temperature values;
-duplicate top coordinates must also have identical displacement values.
+Duplicate coordinates use the first stored displacement and first available
+temperature (hex before cut, then partition/storage order), even if copies differ.
 Temperature uses blocks providing T; top_* are null when no global top point
 provides T. The whole
 temperature field is null when no temperature samples are available. Numeric
@@ -203,7 +203,7 @@ def _summarize(run_dir, top_rel_tol):
                  and entry['name'] and 'value' in entry, 'invalid summary entry')
         name, value = entry['name'], entry['value']
         _require(name not in summary, f'summary[{index}].name: duplicate summary name: {name}')
-        _require(isinstance(value, (int, float)) and not isinstance(value, bool)
+        _require(isinstance(value, (int, float))
                  and (isinstance(value, int) or np.isfinite(value)),
                  f'summary[{index}].value ({name}): expected finite numeric value')
         summary[name] = value
@@ -235,21 +235,12 @@ def _summarize(run_dir, top_rel_tol):
         if t is not None:
             all_t[offset:offset + len(p)] = t
         offset += len(p)
-    available = np.flatnonzero(np.isfinite(all_t))
-    if len(available):
-        _, first_t, inverse_t = np.unique(points[available], axis=0,
-                                          return_index=True, return_inverse=True)
-        _require(np.all(all_t[available] == all_t[available[first_t[inverse_t]]]),
-                 'duplicate coordinates: conflicting T values')
     top = np.array([], dtype=int)
     tt = np.array([], dtype='float64')
     if len(points):
         z = points[:, 2]
         indices = np.flatnonzero(z >= z.max() - top_rel_tol * (z.max() - z.min()))
-        _, first, inverse = np.unique(points[indices], axis=0, return_index=True,
-                                      return_inverse=True)
-        _require(np.all(u[indices] == u[indices[first[inverse]]]),
-                 'duplicate top coordinates: conflicting U values')
+        _, first = np.unique(points[indices], axis=0, return_index=True)
         top = indices[first]
         available = indices[np.isfinite(all_t[indices])]
         if len(available):

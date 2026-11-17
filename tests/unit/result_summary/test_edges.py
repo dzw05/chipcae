@@ -51,7 +51,7 @@ class Edges(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)
             _, manifest = fixture(run)
-            values = [0, -2, 3.5, 10**100]
+            values = [0, -2, 3.5, 10**100, True, False]
             manifest['summary'] += [dict(name=f'value_{i}', value=value)
                                     for i, value in enumerate(values)]
             save(run, manifest)
@@ -62,7 +62,7 @@ class Edges(unittest.TestCase):
                 self.assertEqual(main([str(run)]), 0)
             self.assertEqual(json.loads(out.getvalue())['manifest_summary'], expected)
             for index in (0, 1):
-                for value in ('text', None, True, False, [1], {'nested': 1},
+                for value in ('text', None, [1], {'nested': 1},
                               float('inf'), -float('inf'), float('nan')):
                     with self.subTest(index=index, value=value):
                         manifest['summary'][index]['value'] = value
@@ -242,7 +242,7 @@ class Edges(unittest.TestCase):
                 self.assertEqual(result['temperature'], dict(
                     min=100., max=999., top_min=999., top_max=999., top_mean=999.))
 
-    def test_conflicting_duplicate_top_values(self):
+    def test_differing_duplicate_values_use_first_occurrence(self):
         for across_blocks in (False, True):
             for field in ('T', 'U'):
                 with self.subTest(across_blocks=across_blocks, field=field), tempfile.TemporaryDirectory() as tmp:
@@ -250,35 +250,38 @@ class Edges(unittest.TestCase):
                     step, _ = fixture(run, cut=True)
                     with h5py.File(step, 'r+') as f:
                         block = f['VTKHDF/cut' if across_blocks else 'VTKHDF/hex']
-                        index = 0 if across_blocks else 5
+                        index = 0 if across_blocks else 6
                         if across_blocks:
                             block['Points'][index] = [0., 0., 1.]
                             block['PointData/T'][index] = 305.
                             block['PointData/U'][index] = [0., 0., .125]
+                    expected = summarize(run)
+                    with h5py.File(step, 'r+') as f:
+                        block = f['VTKHDF/cut' if across_blocks else 'VTKHDF/hex']
                         block['PointData/' + field][index] = 5000.
-                    with self.assertRaises(ResultSummaryError) as caught:
-                        summarize(run)
-                    self.assertEqual(caught.exception.code, 14)
-                    self.assertIn('conflicting ' + field, str(caught.exception))
-                    err = io.StringIO()
-                    with contextlib.redirect_stderr(err):
-                        self.assertEqual(main([str(run)]), 14)
-                    self.assertIn('result_summary: INPUT_INVALID:', err.getvalue())
+                    result = summarize(run)
+                    # Global extrema include all stored samples, while top
+                    # statistics and warpage count each coordinate once.
+                    if field == 'T':
+                        expected['temperature']['max'] = 5000.
+                    self.assertEqual(result, expected)
+                    out = io.StringIO()
+                    with contextlib.redirect_stdout(out):
+                        self.assertEqual(main([str(run)]), 0)
+                    self.assertEqual(json.loads(out.getvalue()), expected)
 
-    def test_conflicting_duplicate_temperature_below_top(self):
+    def test_differing_duplicate_temperature_below_top(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)
             step, _ = fixture(run, cut=True)
+            expected = summarize(run)
             with h5py.File(step, 'r+') as f:
                 f['VTKHDF/cut/Points'][1] = [0., 0., 0.]
-            with self.assertRaises(ResultSummaryError) as caught:
-                summarize(run)
-            self.assertEqual(caught.exception.code, 14)
-            self.assertIn('conflicting T', str(caught.exception))
-            err = io.StringIO()
-            with contextlib.redirect_stderr(err):
-                self.assertEqual(main([str(run)]), 14)
-            self.assertTrue(err.getvalue().startswith('result_summary: INPUT_INVALID:'))
+            self.assertEqual(summarize(run), expected)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(main([str(run)]), 0)
+            self.assertEqual(json.loads(out.getvalue()), expected)
 
     def test_storage_order_independence(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -24,6 +24,7 @@ def fixture(run, cut=False, two=False):
     step = run / 'out/step-0.vtkhdf'
     step.parent.mkdir(parents=True, exist_ok=True)
     top = np.array([(x, y, 1.) for y in (-1., 0., 1.) for x in (-1., 0., 1.)])
+    # Repeat the top center across partitions to exercise boundary deduplication.
     points = np.concatenate(([[0., 0., 0.]], top[:5], top[4:]))
     counts = [6, 5]
     if two:
