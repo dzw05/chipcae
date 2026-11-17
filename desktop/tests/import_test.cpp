@@ -20,8 +20,12 @@
 #include <functional>
 #include <iostream>
 #include <stdexcept>
+#include <type_traits>
 using namespace chipcae::desktop;
 namespace {
+static_assert(std::is_same_v<decltype(&MaterialMapMissingDialog::prompt), QString (*)(QWidget*)>);
+static_assert(std::is_constructible_v<MaterialMapMissingDialog, QWidget*>);
+static_assert(!std::is_constructible_v<MaterialMapMissingDialog, QWidget*, const QString&>);
 int failures = 0, checks = 0;
 void check(bool ok, const QString& message) {
     ++checks;
