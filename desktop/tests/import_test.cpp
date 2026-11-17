@@ -184,7 +184,7 @@ pathlib.Path(record).write_text(json.dumps(a))
 def value(flag):
     return a[a.index(flag)+1] if flag in a else None
 stack=runpy.run_path(mock)['STACK']
-out=value('-o'); report=value('--report') or str(pathlib.Path(out).parent/'defects.json'); poly=value('--polyset')
+out=value('-o'); report=value('--report'); poly=value('--polyset')
 pathlib.Path(out).write_text(json.dumps({} if mode=='invalid-stack' else stack))
 if poly: pathlib.Path(poly).write_text('polyset')
 if mode=='copy-failure': pathlib.Path(record[:-5]+'.poly').mkdir()
@@ -624,11 +624,11 @@ sys.exit(rc)
                     wanted = {"--assembly", r.input, "-o", stage + "/out.stack.json"};
                 else
                     wanted = {r.input, "-o", stage + "/out.stack.json", "--material-map", map};
-                if (kind == ImportKind::Assembly && !r.report.isEmpty())
+                if (kind == ImportKind::Assembly)
                     wanted << "--report" << stage + "/defects.json";
                 if (!r.polyset.isEmpty())
                     wanted << "--polyset" << stage + "/out.polyset";
-                if (kind == ImportKind::Ecad && !r.report.isEmpty())
+                if (kind == ImportKind::Ecad)
                     wanted << "--report" << stage + "/defects.json";
                 if (r.acceptBTier)
                     wanted << "--accept-b-tier";
