@@ -20,3 +20,23 @@ bool ArchiveReader::for_each_line(const std::string&,
     return false;
 }
 } // namespace chipcae::geometry::ecad::detail
+
+namespace chipcae::geometry::ecad::detail {
+ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLimits&)
+    : ArchiveReader(input) {}
+const std::vector<UnsupportedElement>& ArchiveReader::unsupported() const {
+    static const std::vector<UnsupportedElement> empty;
+    return empty;
+}
+ImportResult read_odbpp_job(const std::filesystem::path& input, OdbJob&) {
+    return read_odbpp(input);
+}
+bool decode_gzip(std::string_view, std::string&, std::string& error) {
+    error = "IMPORT_REJECTED: not implemented";
+    return false;
+}
+bool decode_lzw(std::string_view, std::string&, std::string& error) {
+    error = "IMPORT_REJECTED: not implemented";
+    return false;
+}
+} // namespace chipcae::geometry::ecad::detail
