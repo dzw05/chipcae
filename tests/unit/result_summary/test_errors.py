@@ -4,12 +4,35 @@ import contextlib
 import io
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from fixtures import fixture, save, h5py, np
-from tools.vv.result_summary import ResultSummaryError, main
+from tools.vv.result_summary import ResultSummaryError, main, summarize
 
 
 class Errors(unittest.TestCase):
+    def test_hdf5_failures(self):
+        for stage, target, code, name in (
+                ('open', 'h5py.File', 12, 'INPUT_REFERENCE_MISSING'),
+                ('read', '_read', 14, 'INPUT_INVALID')):
+            for error_type in (OSError, RuntimeError, EOFError):
+                with self.subTest(stage=stage, error=error_type), tempfile.TemporaryDirectory() as tmp:
+                    run = Path(tmp)
+                    fixture(run)
+                    message = 'HDF5 failure\nwith details'
+                    with patch('tools.vv.result_summary.' + target,
+                               side_effect=error_type(message)):
+                        with self.assertRaises(ResultSummaryError) as caught:
+                            summarize(run)
+                        self.assertEqual(caught.exception.code, code)
+                        self.assertEqual(caught.exception.name, name)
+                        err, out = io.StringIO(), io.StringIO()
+                        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+                            self.assertEqual(main([str(run)]), code)
+                        self.assertEqual(out.getvalue(), '')
+                        self.assertEqual(err.getvalue(),
+                                         f'result_summary: {name}: HDF5 failure with details\n')
+
     def test_error_interface(self):
         error = ResultSummaryError(14, 'INPUT_INVALID', 'invalid fixture')
         self.assertIsInstance(error, Exception)
