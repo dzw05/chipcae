@@ -25,6 +25,66 @@ long double exact(std::array<double, 3> n, double d) {
     }
     return sum / (6 * static_cast<long double>(n[0]) * n[1] * n[2]);
 }
+// Independent topology and signed-divergence checks on exported cells.
+void check_poly(const CutPolyhedra& p, double snap) {
+    using V = std::array<double, 3>;
+    auto point = [&](chipcae::Index id) {
+        return V{p.points[3 * id], p.points[3 * id + 1], p.points[3 * id + 2]};
+    };
+    auto sub = [](V a, V b) { return V{a[0] - b[0], a[1] - b[1], a[2] - b[2]}; };
+    auto cross = [](V a, V b) {
+        return V{a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+    };
+    auto dot = [](V a, V b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
+    for (std::size_t i = 0; i < p.volume.size(); ++i) {
+        std::map<std::pair<chipcae::Index, chipcae::Index>, int> edges;
+        std::set<chipcae::Index> ids;
+        for (auto f = p.poly_off[i]; f < p.poly_off[i + 1]; ++f) {
+            auto face = p.poly_faces[f];
+            for (auto j = p.face_off[face]; j < p.face_off[face + 1]; ++j)
+                ids.insert(p.face_conn[j]);
+        }
+        V center{};
+        for (auto id : ids) {
+            auto x = point(id);
+            for (int d = 0; d < 3; ++d)
+                center[d] += x[d] / ids.size();
+        }
+        double volume = 0;
+        for (auto a : ids)
+            for (auto b : ids)
+                if (a < b) {
+                    auto delta = sub(point(a), point(b));
+                    expect(dot(delta, delta) > snap * snap, "canonical points separated");
+                }
+        for (auto f = p.poly_off[i]; f < p.poly_off[i + 1]; ++f) {
+            auto face = p.poly_faces[f], begin = p.face_off[face], end = p.face_off[face + 1];
+            std::set<chipcae::Index> ring;
+            V area{};
+            auto a = point(p.face_conn[begin]);
+            for (auto j = begin; j < end; ++j) {
+                auto u = p.face_conn[j], v = p.face_conn[j + 1 == end ? begin : j + 1];
+                expect(ring.insert(u).second, "simple face ring");
+                ++edges[{u, v}];
+            }
+            for (auto j = begin + 1; j + 1 < end; ++j) {
+                auto b = point(p.face_conn[j]), c = point(p.face_conn[j + 1]);
+                auto n = cross(sub(b, a), sub(c, a));
+                for (int d = 0; d < 3; ++d)
+                    area[d] += n[d] / 2;
+                volume += dot(sub(a, center), cross(sub(b, center), sub(c, center))) / 6;
+            }
+            expect(std::sqrt(dot(area, area)) >= snap * snap, "nondegenerate face");
+            expect(dot(area, sub(a, center)) > 0, "outward face normal");
+        }
+        for (const auto& [edge, count] : edges)
+            expect(count == 1 && edges[{edge.second, edge.first}] == 1, "opposite edge pairing");
+        expect(volume > 0 && std::abs(volume - p.volume[i]) < 1e-12,
+               "positive signed divergence volume");
+        expect(std::abs(p.volume[i] - p.volfrac_ref[i]) < 1e-12,
+               "export matches quadrature fraction");
+    }
+}
 int main(int argc, char** argv) {
 #ifdef CHIPCAE_ENABLE_KOKKOS
     Kokkos::ScopeGuard guard(argc, argv);
@@ -43,11 +103,28 @@ int main(int argc, char** argv) {
     expect(bool(grid), "unit grid");
     const auto original = grid.value();
     CutOptions options;
+    options.export_polyhedra = true;
     options.snap_phi = k1::threshold("snap_phi");
     options.small_sub_vf = k1::threshold("small_sub_vf");
+    {
+        auto r = build_cut_layer(original, {{{0, {1, 1, 0}, 1}}}, options);
+        expect(bool(r), "45 degree cut");
+        auto& p = *r.value().polyhedra;
+        expect(p.points.size() == 18 && p.face_off.size() == 6,
+               "triangular prism: six vertices five faces");
+        expect(std::abs(p.volume[0] - .5) / .5 <= 1e-12, "analytic prism volume");
+        check_poly(p, options.snap_phi);
+        for (const auto& plane :
+             std::vector<Plane>{{0, {1, 1, 1}, 1e-13}, {0, {1, 0, 0}, 1}, {0, {1, 1, 0}, 0}}) {
+            auto edge = build_cut_layer(original, {{plane}}, options);
+            expect(bool(edge), "grazing cut");
+            check_poly(*edge.value().polyhedra, options.snap_phi);
+        }
+    }
     std::mt19937_64 rng(20261116);
     std::uniform_real_distribution<double> uniform(.2, 1);
     std::size_t cut_count = 0;
+    double max_conservation_error = 0, max_fraction_error = 0;
     for (int trial = 0; trial < 1006; ++trial) {
         std::array<double, 3> n{uniform(rng), uniform(rng), uniform(rng)};
         double d = (n[0] + n[1] + n[2]) * uniform(rng);
@@ -62,10 +139,21 @@ int main(int argc, char** argv) {
         }
         if (trial == 1005)
             n = {1, 0, 0};
-        CutGeometry g{{{0, n, d}}};
+        auto plane_n = n;
+        auto plane_d = d;
+        if (trial < 200)
+            for (int axis = 0; axis < 3; ++axis)
+                if (rng() & 1) {
+                    plane_n[axis] = -n[axis];
+                    plane_d -= n[axis];
+                }
+        // Reflect selected cube axes to exercise all normal octants while
+        // retaining the independent positive-weight analytic CDF.
+        CutGeometry g{{{0, plane_n, plane_d}}};
         auto r = build_cut_layer(original, g, options);
         expect(bool(r), "plane cut");
         const auto& c = r.value();
+        check_poly(*c.polyhedra, options.snap_phi);
         double expected = trial == 1005 ? 1 : static_cast<double>(exact(n, d));
         double v = c.void_elem.empty() ? 1 : 0;
         if (!c.cut_elem.empty()) {
@@ -97,6 +185,27 @@ int main(int argc, char** argv) {
         } else
             expect(std::abs(v - expected) <= k1::threshold("cut_volume_relative"),
                    "degenerate volume");
+        if (trial < 200) {
+            max_conservation_error = std::max(max_conservation_error, std::abs(v - expected));
+            expect(std::abs(v - expected) <= 1e-12,
+                   "200 random conservation against analytic void");
+            const auto& poly = *c.polyhedra;
+            expect(poly.volume.size() == c.sub_volfrac.size(), "every random cut exported");
+            for (std::size_t i = 0; i < poly.volume.size(); ++i) {
+                max_fraction_error =
+                    std::max(max_fraction_error, std::abs(poly.volume[i] - c.sub_volfrac[i]));
+                expect(std::abs(poly.volume[i] - c.sub_volfrac[i]) <= 1e-12,
+                       "random fraction agreement");
+            }
+            auto disabled = options;
+            disabled.export_polyhedra = false;
+            auto legacy = build_cut_layer(original, g, disabled);
+            expect(bool(legacy) && !legacy.value().polyhedra &&
+                       legacy.value().sub_volfrac == c.sub_volfrac &&
+                       legacy.value().vq_w == c.vq_w && legacy.value().bq_w == c.bq_w &&
+                       legacy.value().vq_xi == c.vq_xi && legacy.value().bq_xi == c.bq_xi,
+                   "export does not change existing numerics");
+        }
         auto again = build_cut_layer(original, g, options);
         expect(again.value().vq_w == c.vq_w && again.value().bq_w == c.bq_w, "cut replay");
     }
@@ -150,6 +259,24 @@ int main(int argc, char** argv) {
     expect(bool(r), "pruned cut");
     auto& c = r.value();
     expect(mesh.attribute.size() < 16, "void cells removed");
+    const auto& poly = *c.polyhedra;
+    for (std::size_t v = 0; v < poly.point_parent_elem.size(); ++v) {
+        auto e = poly.point_parent_elem[v];
+        expect(e >= 0 && static_cast<std::size_t>(e) < mesh.attribute.size(),
+               "remapped parent local ID");
+        for (int d = 0; d < 3; ++d) {
+            auto lo = mesh.vertices[3 * mesh.hex[8 * e] + d];
+            auto hi = mesh.vertices[3 * mesh.hex[8 * e + 6] + d];
+            expect(std::abs(lo + poly.point_xi[3 * v + d] * (hi - lo) - poly.points[3 * v + d]) <=
+                       1e-14,
+                   "reference interpolation location survives compaction");
+        }
+    }
+    for (std::size_t i = 0; i < poly.volume.size(); ++i) {
+        expect(std::abs(poly.volume[i] / (.25 * .25) - c.sub_volfrac[i]) <= 1e-12,
+               "nonunit parent volume fraction");
+        expect(poly.parent_elem_gid[i] == c.cut_elem_gid[i], "parent GID survives compaction");
+    }
     std::set<Local> attrs(mesh.attribute.begin(), mesh.attribute.end());
     expect(*attrs.begin() == 1, "compact after void removal");
     auto cache = GhostPenaltyCache::prepare(mesh, c, {{1}, {}});
@@ -203,6 +330,7 @@ int main(int argc, char** argv) {
            "cut activation");
     auto fillet = build_cut_layer(original, {{{0, {1, 0, 0}, .8}, {0, {0, 1, 0}, .7}}}, options);
     expect(bool(fillet), "piecewise planar fillet");
+    check_poly(*fillet.value().polyhedra, options.snap_phi);
     expect(std::abs(fillet.value().sub_volfrac[0] - .56) <= k1::threshold("cut_volume_relative"),
            "multi-plane intersection");
     auto tetra = build_cut_layer(original, {{{0, {1, 1, 1}, 1}}}, options);
@@ -216,9 +344,15 @@ int main(int argc, char** argv) {
     auto kept = build_cut_layer(retained, {{{0, {1, 1, 0}, 1}}}, options);
     expect(bool(kept) && retained.attribute.size() == 16 && kept.value().void_attribute > 0,
            "keep void");
+    expect(kept.value().polyhedra->volume.size() == kept.value().cut_elem.size(),
+           "retained voids do not emit empty solids");
+    for (auto kind : kept.value().polyhedra->cell_kind)
+        expect(kind == 1, "only solid cuts have exported geometry");
     expect(std::is_sorted(cache.value().hashes.begin(), cache.value().hashes.end()),
            "cache hashes ordered");
     expect(c.gp_face.size() == brute, "default GP arrays");
+    std::cout << "P1 random200 max_conservation_error=" << max_conservation_error
+              << " max_fraction_error=" << max_fraction_error << '\n';
     std::cout << "G1 random=1000 degeneracies=6 cut-element ratio=" << double(cut_count) / 1006
               << " GP=" << brute << '\n';
 }

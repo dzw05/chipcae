@@ -15,6 +15,7 @@ struct CutOptions {
     // CVs below this sub-volume fraction are recorded in small_subs, without merging;
     // distinct from the design merge threshold (0.1).
     bool keep_void = false;
+    bool export_polyhedra = false;
 };
 // Transactional mutable overload removes void cells and remaps local indices.
 Expected<CutLayerArrays> build_cut_layer(HexMeshArrays&, const CutGeometry&, const CutOptions&);

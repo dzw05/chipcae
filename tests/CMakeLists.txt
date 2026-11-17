@@ -87,3 +87,16 @@ target_link_libraries(chipcae_test_repair_policy PRIVATE chipcae::geometry)
 chipcae_set_warnings(chipcae_test_repair_policy)
 add_test(NAME repair_policy_tiers COMMAND chipcae_test_repair_policy)
 set_tests_properties(repair_policy_tiers PROPERTIES LABELS "mesh;tierA" TIMEOUT 60)
+
+if(CHIPCAE_ENABLE_HDF5)
+    add_test(NAME cut_results_serial COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_cut_results.py $<TARGET_FILE:s2_cut_minimal>
+        ${PROJECT_SOURCE_DIR}/examples/s2_cut_minimal/stackup.json 1)
+    set_tests_properties(cut_results_serial PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
+    if(CHIPCAE_ENABLE_MPI)
+        add_test(NAME cut_results_mpi_2 COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_cut_results.py $<TARGET_FILE:s2_cut_minimal>
+            ${PROJECT_SOURCE_DIR}/examples/s2_cut_minimal/stackup.json 2 ${MPIEXEC_EXECUTABLE})
+        set_tests_properties(cut_results_mpi_2 PROPERTIES LABELS "mpi;io" TIMEOUT 60 PROCESSORS 2 SKIP_RETURN_CODE 77)
+    endif()
+endif()
