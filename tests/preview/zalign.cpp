@@ -180,10 +180,8 @@ int main(int argc, char** argv) {
         auto ncells_v = h5_read<std::int64_t>(file, "VTKHDF/NumberOfCells", H5T_NATIVE_INT64);
         expect(ncells_v.size() == 1, "NumberOfCells scalar");
         const auto nc = static_cast<std::size_t>(ncells_v[0]);
-        // o3-sample-run 17x17x6 is the solver-refined mesh for requested nx=ny=4.
-        // chipcae-preview --nx 4 --ny 4 currently writes nz=6 with a padded in-plane
-        // grid (success event: n0=9x9, cell_count=1944=18x18x6). Assert the preview
-        // CLI output: z has 6 element layers, in-plane is square, cells = nx*ny*6.
+        // Require six z element layers. Do not freeze a particular padded in-plane
+        // cell count; accept any square xy grid the preview CLI emits.
         expect(nc % 6 == 0, "cell count divisible by nz=6");
         const auto nxy =
             static_cast<std::size_t>(std::llround(std::sqrt(static_cast<double>(nc / 6))));
