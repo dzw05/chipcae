@@ -18,10 +18,10 @@ namespace chipcae::mesh {
 // lines are every other fine grid line; finest_axis_index gives their index on
 // the finest axis.
 enum class ColumnKind : std::uint8_t {
-    Regular = 0, // A full column with no cut cells.
-    Cut = 1,     // A column intersected by a cut surface.
-    Partial = 2, // A partly cut or partly solid column.
-    Void = 3     // A column with no degrees of freedom.
+    Regular = 0, // All nz cells active; none in cut_elem.
+    Cut = 1,     // At least one cell in cut_elem.
+    Partial = 2, // No cut cells, but at least one cell void or inactive.
+    Void = 3     // All cells void or inactive; no degrees of freedom.
 };
 
 struct ColumnChildren {
