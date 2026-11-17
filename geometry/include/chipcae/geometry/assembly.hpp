@@ -31,6 +31,8 @@ using Placement = std::variant<AttachPlacement, FramePlacement>;
 struct PlacedPart {
     std::string id, material;
     std::vector<Slab> slabs;
+    // Pose used to generate slabs; attachments retain their resolved_z here.
+    Placement placement;
 };
 Expected<PlacedPart> place(std::vector<Slab> local, const Placement&, const mesh::StackModel& base);
 struct MergeOptions {
