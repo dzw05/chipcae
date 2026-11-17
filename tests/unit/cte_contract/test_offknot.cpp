@@ -114,17 +114,35 @@ int main(int argc, char** argv) try {
     // Extrapolation probe; expectations use endpoint constant extension, not a new CTE datum.
     const Real below = 225;
     const Real exterior_tangent = sec.alpha.front(); // Constant extension: slope zero.
-    // Reverse integration orientation gives a negative area and denominator.
-    const Real oriented_integral = -(tan.reference_temperature - below) * tan.alpha.front();
-    const Real exterior_secant = oriented_integral / (below - tan.reference_temperature);
     check(secant_to_tangent(sec, below, value) == StatusCode::Ok, "below secant status");
     check(std::isfinite(value), "below tangent is finite");
     check(near(value, exterior_tangent), "below tangent constant extension");
-    check(tangent_to_secant(tan, below, value) == StatusCode::Ok, "below tangent status");
-    check(std::isfinite(value) && value > 0, "below secant is finite and positive");
-    check(near((below - tan.reference_temperature) * value, oriented_integral),
-          "below reference output reconstructs oriented integral");
-    check(near(value, exterior_secant), "below secant equals oriented integral");
+    for (const Real reference : {tan.reference_temperature, inverse_sample}) {
+        auto probe = tan;
+        probe.reference_temperature = reference;
+        // Integrate from the reference down to the first knot in reverse segment
+        // order, then continue to below with constant endpoint extension.
+        Real oriented_integral = 0;
+        for (std::size_t right = probe.temperatures.size() - 1; right > 0; --right) {
+            const Real lower = probe.temperatures[right - 1];
+            const Real upper = std::min(reference, probe.temperatures[right]);
+            if (upper <= lower)
+                continue;
+            const Real upper_alpha =
+                probe.alpha[right - 1] + (upper - lower) *
+                                             (probe.alpha[right] - probe.alpha[right - 1]) /
+                                             (probe.temperatures[right] - lower);
+            oriented_integral += (lower - upper) * (upper_alpha + probe.alpha[right - 1]) / 2;
+        }
+        oriented_integral += (below - probe.temperatures.front()) * probe.alpha.front();
+        check(oriented_integral < 0, "below reference integral has negative orientation");
+        const Real exterior_secant = oriented_integral / (below - reference);
+        check(tangent_to_secant(probe, below, value) == StatusCode::Ok, "below tangent status");
+        check(std::isfinite(value) && value > 0, "below secant is finite and positive");
+        check(near((below - reference) * value, oriented_integral),
+              "below reference output reconstructs oriented integral");
+        check(near(value, exterior_secant), "below secant equals oriented integral");
+    }
 } catch (const std::exception&) {
     return 1;
 }
