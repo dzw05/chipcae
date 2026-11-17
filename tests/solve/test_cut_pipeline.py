@@ -95,6 +95,18 @@ with tempfile.TemporaryDirectory() as tmp:
     thermal['loads'] = [{'type':'convection','target':'boundary:embedded','h':10,'T_inf':350}]
     result = run('embedded-convection',thermal)
     assert abs(result['T_max']-350) < 1e-8
+    layered = copy.deepcopy(thermal)
+    layered['loads'] = [{'type':'fixed_temperature','target':'face:zmin','T':300},
+                        {'type':'fixed_temperature','target':'face:zmax','T':400}]
+    run('layered-heat',layered)
+    with h5py.File(root/'layered-heat/out/step-0.vtkhdf') as file:
+        for block in ['hex','cut','eb_surface']:
+            z = file['VTKHDF/'+block+'/Points'][:,2]
+            temperature = file['VTKHDF/'+block+'/PointData/T'][:]
+            resistance = np.minimum(z,.001)+np.maximum(z-.001,0)/10
+            error = np.max(abs(temperature-(300+100*resistance/.0011)))
+            print(block,'layered conduction max error K',error,flush=True)
+            assert error <= 1e-8
     thermal['loads'] = [{'type':'fixed_temperature','target':'boundary:embedded','T':350}]
     run('fixed-temperature',thermal,error='Nitsche is not implemented')
     fixed = copy.deepcopy(original)

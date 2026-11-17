@@ -32,3 +32,7 @@ if(CHIPCAE_ENABLE_HDF5)
     chipcae_set_warnings(s2_cut_minimal)
 endif()
 target_sources(chipcae_io PRIVATE src/control_file.cpp)
+
+if(CHIPCAE_RESULTS_FAULT_INJECTION AND CHIPCAE_BUILD_TESTS)
+    target_compile_definitions(chipcae_io PRIVATE CHIPCAE_RESULTS_FAULT_INJECTION=1)
+endif()

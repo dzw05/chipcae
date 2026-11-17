@@ -54,3 +54,12 @@ workaround, and remaining deviations. Units are SI; numbering is 0-based;
 index types follow A1 (`Index`/`MaterialId`/`BodyId`). EB normals are
 outward from the body. Preparation-stage arrays are replicated; the
 solver later distributes them. `ActivationSet` is consumed read-only.
+
+`mesh_digest_golden` runs preview directly without an MPI launcher. Its Python
+oracle explicitly lists the nodes and hex connectivity for 1×1×1 and 2×1×1
+meshes and packs the schema/README.md contract with `struct`/`hashlib`; it never
+reads mesh arrays or calls the production hash implementation. Default CI enables
+serial HDF5 and JSONCONS to run this test. `mesh_digest_mpi` holds `--levels 1`
+fixed on a 6×1×1 mesh and compares direct execution with 2 and 3 MPI ranks.
+It carries the `mesh;mpi;preview` labels and is also required explicitly with
+`--no-tests=error` in the full-dependency workflow.

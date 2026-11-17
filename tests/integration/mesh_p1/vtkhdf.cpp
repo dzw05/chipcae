@@ -1,3 +1,6 @@
+#ifdef CHIPCAE_ENABLE_KOKKOS
+#include <Kokkos_Core.hpp>
+#endif
 #include "chipcae/mesh/background/vtkhdf_writer.hpp"
 #include "chipcae/mesh/cut/plane_cut.hpp"
 #include "runtime.hpp"

@@ -18,11 +18,20 @@ if(_solve_backend)
     set_tests_properties(solve_pipeline PROPERTIES TIMEOUT 600)
 endif()
 
-# Preview PR #43 has not landed: keep the cross-tool contract visible in CTest.
+# Compare the public solver and preview canonical mesh contracts at np=1 and np=2.
 if(_solve_backend)
     add_test(NAME solve_preview_mesh_digest COMMAND ${Python3_EXECUTABLE}
-        ${CMAKE_CURRENT_SOURCE_DIR}/test_preview_digest.py)
-    set_tests_properties(solve_preview_mesh_digest PROPERTIES SKIP_RETURN_CODE 77)
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_preview_digest.py
+        $<TARGET_FILE:chipcae-solve> $<TARGET_FILE:chipcae-preview>
+        ${MPIEXEC_EXECUTABLE})
+    set_tests_properties(solve_preview_mesh_digest PROPERTIES TIMEOUT 600)
+endif()
+
+if(_solve_backend AND TARGET chipcae_material)
+    add_executable(chipcae_test_solve_mixture test_mixture.cpp)
+    target_include_directories(chipcae_test_solve_mixture PRIVATE ${PROJECT_SOURCE_DIR}/apps/chipcae-solve/include)
+    target_link_libraries(chipcae_test_solve_mixture PRIVATE chipcae_solve_inputs chipcae_material mfem)
+    add_test(NAME solve_material_mixture COMMAND chipcae_test_solve_mixture)
 endif()
 if(_solve_backend)
     add_executable(chipcae_cut_manufactured cut_manufactured.cpp)
@@ -45,14 +54,7 @@ if(_solve_backend)
         ${CMAKE_CURRENT_SOURCE_DIR}/test_ghost_scan.py $<TARGET_FILE:chipcae_ghost_scan>)
     set_tests_properties(solve_ghost_scan PROPERTIES TIMEOUT 300 LABELS "cut;numerical")
 endif()
-if(_solve_backend AND TARGET chipcae::material)
-    add_executable(chipcae_test_solve_constitutive test_constitutive.cpp)
-    target_include_directories(chipcae_test_solve_constitutive PRIVATE ${PROJECT_SOURCE_DIR}/apps/chipcae-solve/src)
-    target_compile_definitions(chipcae_test_solve_constitutive PRIVATE CHIPCAE_SOLVE_MATERIAL=1)
-    target_link_libraries(chipcae_test_solve_constitutive PRIVATE chipcae_solve_inputs chipcae::material mfem)
-    chipcae_set_warnings(chipcae_test_solve_constitutive)
-    add_test(NAME solve_constitutive COMMAND chipcae_test_solve_constitutive)
-endif()
+
 if(_solve_backend)
     add_executable(chipcae_cut_bilayer cut_bilayer.cpp)
     target_link_libraries(chipcae_cut_bilayer PRIVATE chipcae_solve_inputs chipcae::fem)

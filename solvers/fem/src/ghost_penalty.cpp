@@ -31,6 +31,10 @@ GhostPenalty::GhostPenalty(const mesh::HexMeshArrays& m,
         local[m.elem_gid[e]] = e;
     for (std::size_t f = 0; f < c.gp_face_gid.size(); ++f) {
         int a = local.at(c.gp_elem_gid[0][f]), b = local.at(c.gp_elem_gid[1][f]);
+        // A material/layer interface may carry a physical derivative jump.
+        // Ghost extension is confined to each aligned material subdomain.
+        if (m.attribute[a] != m.attribute[b])
+            continue;
         faces_.emplace(std::min(a, b), std::max(a, b));
     }
 }

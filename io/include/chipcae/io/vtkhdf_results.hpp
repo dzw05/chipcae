@@ -35,6 +35,8 @@ public:
     };
     ResultsWriter(std::filesystem::path run,
                   const std::filesystem::path& stackup,
+                  std::vector<std::string> layer_names = {},
+                  std::vector<std::string> material_names = {},
                   std::vector<std::string> fields = {
                       "T", "U", "layer_id", "material_id", "cell_kind", "elem_gid", "volume"});
     void set_mesh(MeshSummary mesh);
@@ -57,6 +59,7 @@ private:
         std::string method;
     };
     std::filesystem::path run_;
+    std::vector<std::string> layer_names_, material_names_;
     std::vector<Step> steps_;
     std::vector<Summary> summary_;
     int rank_ = 0, size_ = 1;

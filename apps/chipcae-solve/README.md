@@ -4,8 +4,8 @@
 
 Build with JSONcons, yaml-cpp, MPI, HDF5 and PETSc-enabled MFEM. Enable
 `CHIPCAE_ENABLE_JSONCONS`, `CHIPCAE_ENABLE_MPI`, `CHIPCAE_ENABLE_HDF5` and
-`CHIPCAE_ENABLE_MFEM`. Copper mixtures additionally require the material library
-and Kokkos (`Kokkos_DIR`). yaml-cpp 0.8.0 is fetched when unavailable; CMake 4
+`CHIPCAE_ENABLE_MFEM`. Copper mixtures use the material library's shared laminate helper;
+material-point comparison tests additionally use Kokkos (`Kokkos_DIR`). yaml-cpp 0.8.0 is fetched when unavailable; CMake 4
 needs `-DCMAKE_POLICY_VERSION_MINIMUM=3.5`. Bare builds retain input validation
 and `--help`, and report an unavailable numerical backend.
 
@@ -15,7 +15,7 @@ SHA-256 checks precede parsing. The material library container is
 Cards must be constant isotropic thermoelastic materials with single-knot E,
 nu and alpha tables; steady conduction also requires positive `conductivity`
 in W/(m K). Layer and aligned region materials remain distinct. Copper fractions
-call the material module's `CopperMixture` (M7); conductivity is arithmetic in
+call the material module's shared M7 law also used by `CopperMixture`; conductivity is arithmetic in
 plane and harmonic through thickness. Polygon copper maps and internal material
 cuts are rejected.
 
@@ -92,7 +92,7 @@ Q2 wedge mesh of the same polygonal domain; intermediate PV errors may be
 non-monotone, while finest error must improve on coarsest and stay below 1%.
 A cut-bilayer center-curvature check uses Timoshenko's reference.
 
-The preview digest comparison remains skipped pending its baseline API, and GPU
+The solver/preview mesh digest comparison runs at np=1/2 after the O2 merge. GPU
 acceptance remains outside this CPU implementation. Protocol codes remain
 MATERIAL_ID_DUPLICATE=11, INPUT_REFERENCE_MISSING=12, CUT_UNSUPPORTED=13 and
 INPUT_INVALID=14.

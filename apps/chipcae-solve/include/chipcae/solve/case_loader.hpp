@@ -24,6 +24,13 @@ struct Load {
     double T_ref = 0, T = 0, h = 0, T_inf = 0, source = 0;
     bool total_power = false;
 };
+inline double heat_source_density(const Load& load, double volume) {
+    if (load.total_power && !(volume > 0))
+        throw InputError(ErrorCode::INPUT_INVALID,
+                         "heat_source total_power requires positive target layer volume: " +
+                             load.target);
+    return load.total_power ? load.source / volume : load.source;
+}
 struct Material {
     std::string id;
     double E = 0, nu = 0, alpha = 0, k = 0;

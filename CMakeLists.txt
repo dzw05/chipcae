@@ -18,6 +18,7 @@ endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(ChipcaeOptions)
+option(CHIPCAE_RESULTS_FAULT_INJECTION "Enable results writer test faults (test builds only)" OFF)
 include(ChipcaeLicensePolicy)
 include(ChipcaeDependencies)
 include(ChipcaeWarnings)

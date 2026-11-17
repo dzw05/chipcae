@@ -2,10 +2,13 @@
 
 The implementation follows `/workspace/briefs/s2-run.md`, the revised design,
 and the supplied concrete plan. `origin/main` and `origin/feat/o2-solve-uncut`
-were fetched and merged before implementation; the latter was already an
-ancestor after the main merge. The fetched O2 code still contained its reviewed
-MUST issues, so this branch fixes material-library copper constitutive calls,
-PETSc row preallocation, and six-DOF 3-2-1 validation directly.
+were fetched and merged before implementation; O2 was initially already an
+ancestor after the main merge. Its reviewed MUST fixes arrived while this task
+was running. A second O2 merge incorporates those fixes and newer main writer
+and preview changes. Conflicts retain cut-aware 3-2-1 selection and integration,
+upstream CSR preallocation, the material module's shared M7 laminate helper
+(also used by CopperMixture), writer validation/FieldData and preview digests.
+The initial S2 constitutive bridge was removed in favor of the corrected O2 API.
 
 Mesh geometry and quadrature remain authoritative. The solver uses the mutable
 clipper to compact exterior cells/nodes while preserving GIDs; its cut indices
@@ -59,12 +62,12 @@ intermediate measurements. No ersatz degradation is used.
 
 Existing O2 pipeline checks remain, with only the copper expected values updated
 to the authoritative M7 rules; the old mesh default-bit test now compares with
-explicit degree 6. Additional tests verify the constitutive bridge against
+explicit degree 6. The merged O2 test verifies its constitutive bridge against
 `CopperMixture`. The output adapter uses the existing results writer, extending
 its previously empty EB block to carry mesh-owned triangles and Q2 fields.
 The writer remains VTKHDF 2.8 with outward rings copied per cell.
 
 The packaged example is a synthetic two-material cut-corner stack, substituted
-for an importer-generated package. GPU/material CUDA tests and the pre-existing
-preview digest dependency remain skipped when unavailable. The user instruction
+for an importer-generated package. GPU/material CUDA tests remain skipped when unavailable; the newly merged
+preview digest comparison now runs. The user instruction
 to commit without pushing takes precedence over the brief's push/PR instruction.

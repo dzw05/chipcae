@@ -3,7 +3,7 @@ set -euo pipefail
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 prototype=${P1_ROOT:-/workspace/prototypes/p1-mfem-thinlayer}
 build=${O1_BUILD:-/workspace/build-o1}
-run=${S1_RUN:-/workspace/samples/s1}
+run=${S1_RUN:-/workspace/samples/s1b}
 np=${NP:-1}
 [[ "$np" == 1 || "$np" == 2 ]]
 [[ ! -e "$run" ]]
@@ -27,4 +27,4 @@ PYCODE
 # Preserve solver evidence separately.
 mkdir -p "$run"
 cp "$work/solver.log" "$run/solver.log"
-mpirun -np "$np" "$build/io/chipcae_write_results" "$run" "$work/export.stack.json" "$work/export"
+mpirun -np "$np" "$build/io/chipcae_write_results" "$run" "$work/export.stack.json" "$work/export" s1

@@ -16,10 +16,39 @@ count is the communicator size and stays fixed across steps. Never share a run
 directory between concurrent writers. Existing finalized runs are rejected.
 
 Each `<run>/out/step-<n>.vtkhdf` is a PartitionedDataSetCollection with Version
-`[2,8]`, four indexed blocks in order: `hex`, `cut`, `eb_surface`, `particles`.
-Assembly has `volume` → hex/cut, `boundary` → eb_surface and `lagrangian` →
-particles soft links. Hex and cut are UnstructuredGrid; the last two are empty
-PolyData placeholders (nonempty inputs are rejected).
+`[2,8]`, fixed ASCII Type attributes, and four indexed blocks in order:
+hex, cut, eb_surface, particles. Assembly contains soft links at
+volume/hex, volume/cut, boundary/eb_surface, lagrangian/particles, including
+empty blocks. The first two blocks are UnstructuredGrid; the last two are
+empty PolyData (nonempty surface/particle inputs remain reserved).
+
+The cut interface accepts polyhedra only: `connectivity` and `offsets` describe
+cell point lists; `face_conn` and `face_off` describe outward face
+loops; `poly_faces` and `poly_off` describe each cell's faces.
+All offsets start at zero and terminate at their connectivity length. Each cell
+owns its faces; negative/shared face IDs and mixed hex/polyhedron inputs are
+rejected. Callers must supply simple planar outward loops with opposite paired
+edges, and verify positive divergence volume against solver truth (the fixture
+uses absolute tolerance 1e-12 for a unit cube). vtkCellSizeFilter alone is not a
+geometry certificate.
+
+Empty blocks retain typed empty fields, Points/U shape (0,3), and one zero
+per rank in counts and offsets. For nonempty geometry-only cut blocks, the
+optional T/U schema is omitted consistently on all ranks. Cut always includes
+all four face arrays and three face counts; PolyData always includes Vertices, Lines, Polygons, Strips.
+
+Constructor `layer_names` and `material_names` are invariant writer-level tables,
+identical on all ranks, emitted as variable-length ASCII string arrays in each
+block's FieldData (validated with VTK 9.7.2). For PDC files this reader requires
+`UpdateInformation()` followed by explicitly enabling `layer_names` and
+`material_names` in `GetFieldDataArraySelection()` before `Update()`. Also call
+`SetUseCache(False)`: the 9.7.2 field-array cache otherwise attaches names only
+to the first block. This deprecated reader switch is a tested workaround; the
+on-disk arrays remain present on every block. As in mesh PR #37, table entry
+`id-1` names one-based classification ID `id`. IDs are bounds checked when a
+table is supplied; empty tables permit callers without name metadata. No names
+are inferred from stackup JSON. The S1 driver explicitly supplies its trilayer
+tables; other exporters should supply their own metadata.
 
 `ResultsStep::cut` accepts rank-local points, connectivity/offsets, face_conn /
 face_off and poly_faces / poly_off. All offsets start at zero and include the
@@ -92,7 +121,20 @@ best-fit plane removed; it cannot be reconstructed faithfully from this vertex
 output. sigma_vm is reserved in the manifest and absent from step data.
 
 Specification: https://docs.vtk.org/en/latest/vtk_file_formats/vtkhdf_file_format/vtkhdf_specifications.html
-The P1 contract is fixed to 2.8 and does not use negative shared-face references.
+The target reader baseline is VTK 9.7.2 with independent outward faces.
+Manifest field descriptors include exact dtype strings; `partitions.per_step`
+lists the communicator size for each step, with `solver_fixed_per_run=true`.
+The keys remain schema_version, steps[].n, fields[].location/components and
+U_mag_max; no aliases or mesh summary are emitted.
+
+`add_summary` accepts an optional method string. S1 warpage_pv uses exactly:
+`top surface (z=max) Q2 nodes; least-squares plane w=a+bx+cy removed; PV=max-min residual`.
+
+`CHIPCAE_RESULTS_FAULT_INJECTION` defaults OFF. Only builds with both this
+option and `CHIPCAE_BUILD_TESTS=ON` compile the CHIPCAE_RESULTS_FAIL and
+CHIPCAE_RESULTS_FAIL_RANK reads and fault behavior. Production builds ignore
+both variables. CI explicitly enables the option for results fault tests;
+ordinary test builds keep it off and check that variables have no effect.
 
 ### Generate S1 (binary output stays outside git)
 
@@ -101,8 +143,8 @@ source /workspace/prototypes/p1-mfem-thinlayer/env.sh
 cmake -S . -B /workspace/build-o1 -DCHIPCAE_ENABLE_HDF5=ON \
   -DCHIPCAE_ENABLE_MPI=ON -DHDF5_ROOT=/workspace/hdf5-mpi
 cmake --build /workspace/build-o1 -j4
-NP=1 O1_BUILD=/workspace/build-o1 tools/samples/make_s1.sh
-# Optional: NP=2 S1_RUN=/workspace/samples/s1-np2 tools/samples/make_s1.sh
+NP=2 S1_RUN=/workspace/samples/s1b O1_BUILD=/workspace/build-o1 tools/samples/make_s1.sh
+# Optional: NP=2 S1_RUN=/workspace/samples/s1b-np2 tools/samples/make_s1.sh
 ```
 
 The script copies P1 source into a disposable directory, applies the committed
@@ -111,7 +153,7 @@ n=8, nz=1 per layer, dT=-100 K. It exports exact vertex DOFs and the original
 Q2 best-fit-plane top-surface PV. The S1 reference temperature is 293.15 K,
 so output T=193.15 K. U_mag_max is the maximum norm over Q2 element nodes.
 The patch exports stackup.json from the same solver layer definitions, using
-chipcae.stack 0.2; s1.stack.json is the equivalent checked-in test fixture. Output defaults to /workspace/samples/s1/;
+chipcae.stack 0.2; s1.stack.json is the equivalent checked-in test fixture. Output defaults to /workspace/samples/s1b/;
 the script refuses to overwrite an existing path. For root OpenMPI execution
 set OMPI_ALLOW_RUN_AS_ROOT=1 and OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1 as required
 by the local MPI installation.

@@ -1,14 +1,11 @@
 #include "chipcae/io/event_log.hpp"
 #include "chipcae/io/vtkhdf_results.hpp"
 #include "chipcae/solve/case_loader.hpp"
+#include "chipcae/solve/mixture.hpp"
 #include "chipcae/solvers/fem/cut_fem.hpp"
-#include "constitutive.hpp"
 #include "cut_convection.hpp"
 #include "cut_output.hpp"
 #include "sha256.hpp"
-#ifdef CHIPCAE_SOLVE_MATERIAL
-#include "chipcae/material/copper_mixture.hpp"
-#endif
 
 #include <algorithm>
 #include <bit>
@@ -22,6 +19,7 @@
 #include <numeric>
 #include <petscksp.h>
 #include <set>
+#include <tuple>
 
 namespace chipcae::solve {
 namespace {
@@ -40,6 +38,8 @@ struct Direct {
     Vec rhs = nullptr, solution = nullptr;
     KSP ksp = nullptr;
     std::uint32_t iterations = 0;
+    double assembly_seconds = 0, factor_seconds = 0;
+    Vector scaled_rhs, scaled_solution;
     ~Direct() {
         KSPDestroy(&ksp);
         VecDestroy(&rhs);
@@ -48,20 +48,39 @@ struct Direct {
     }
     double solve(const SparseMatrix& a, const Vector& b, Vector& x, const LinearOptions& options) {
         const int n = a.Height();
-        std::vector<PetscInt> row_nnz(n);
-        for (int i = 0; i < n; ++i)
-            row_nnz[i] = a.GetI()[i + 1] - a.GetI()[i];
-        check(MatCreateSeqAIJ(PETSC_COMM_SELF, n, n, 0, row_nnz.data(), &mat));
-        check(MatSetOption(mat, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_TRUE));
+        const auto begin = std::chrono::steady_clock::now();
+        // Copy indices explicitly: MFEM int and PetscInt need not have the same width.
+        std::vector<PetscInt> rows(a.GetI(), a.GetI() + n + 1);
+        std::vector<PetscInt> columns(a.GetJ(), a.GetJ() + a.GetI()[n]);
+        std::vector<PetscScalar> values(a.GetData(), a.GetData() + a.GetI()[n]);
+        Vector diagonal(n);
+        for (int i = 0; i < n; ++i) {
+            double value = 0;
+            for (int j = a.GetI()[i]; j < a.GetI()[i + 1]; ++j)
+                if (a.GetJ()[j] == i)
+                    value = a.GetData()[j];
+            if (!(value > 0) || !std::isfinite(value))
+                throw std::runtime_error("nonpositive system diagonal");
+            diagonal[i] = std::sqrt(value);
+        }
+        // Symmetric basis normalization: solve D^-1 A D^-1 y = D^-1 b,
+        // recover x = D^-1 y. Residual acceptance remains in physical units.
         for (int i = 0; i < n; ++i)
             for (int j = a.GetI()[i]; j < a.GetI()[i + 1]; ++j)
-                check(MatSetValue(mat, i, a.GetJ()[j], a.GetData()[j], INSERT_VALUES));
-        check(MatAssemblyBegin(mat, MAT_FINAL_ASSEMBLY));
-        check(MatAssemblyEnd(mat, MAT_FINAL_ASSEMBLY));
-        check(VecCreateSeqWithArray(PETSC_COMM_SELF, 1, n, b.GetData(), &rhs));
+                values[j] /= diagonal[i] * diagonal[a.GetJ()[j]];
+        check(MatCreateSeqAIJ(PETSC_COMM_SELF, n, n, 0, nullptr, &mat));
+        check(MatSeqAIJSetPreallocationCSR(mat, rows.data(), columns.data(), values.data()));
+        assembly_seconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
+        scaled_rhs = b;
+        scaled_solution.SetSize(n);
+        scaled_solution = 0.;
+        for (int i = 0; i < n; ++i)
+            scaled_rhs[i] /= diagonal[i];
+        check(VecCreateSeqWithArray(PETSC_COMM_SELF, 1, n, scaled_rhs.GetData(), &rhs));
         x.SetSize(n);
         x = 0.0;
-        check(VecCreateSeqWithArray(PETSC_COMM_SELF, 1, n, x.GetData(), &solution));
+        check(VecCreateSeqWithArray(PETSC_COMM_SELF, 1, n, scaled_solution.GetData(), &solution));
         check(KSPCreate(PETSC_COMM_SELF, &ksp));
         check(KSPSetOperators(ksp, mat, mat));
         check(KSPSetType(ksp, KSPPREONLY));
@@ -69,11 +88,17 @@ struct Direct {
         check(KSPGetPC(ksp, &pc));
         check(PCSetType(pc, PCLU));
         check(PCFactorSetMatSolverType(pc, MATSOLVERPETSC));
+        const auto factor_begin = std::chrono::steady_clock::now();
+        check(KSPSetUp(ksp));
+        factor_seconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - factor_begin).count();
         check(KSPSolve(ksp, rhs, solution));
         KSPConvergedReason reason;
         check(KSPGetConvergedReason(ksp, &reason));
         if (reason < 0)
             throw std::runtime_error("PETSc LU failed");
+        for (int i = 0; i < n; ++i)
+            x[i] = scaled_solution[i] / diagonal[i];
         Vector residual(n), correction(n);
         double relative = 0;
         // Reuse LU for iterative refinement, checking the actual unpreconditioned residual.
@@ -85,6 +110,8 @@ struct Direct {
             relative = residual.Norml2() / std::max(b.Norml2(), 1.0);
             if (relative <= options.rtol)
                 return relative;
+            for (int j = 0; j < n; ++j)
+                residual[j] /= diagonal[j];
             Vec r, d;
             check(VecCreateSeqWithArray(PETSC_COMM_SELF, 1, n, residual.GetData(), &r));
             check(VecCreateSeqWithArray(PETSC_COMM_SELF, 1, n, correction.GetData(), &d));
@@ -92,7 +119,8 @@ struct Direct {
             VecDestroy(&r);
             VecDestroy(&d);
             check(code);
-            x += correction;
+            for (int j = 0; j < n; ++j)
+                x[j] += correction[j] / diagonal[j];
         }
         throw std::runtime_error("LU refinement failed residual tolerance: " +
                                  std::to_string(relative));
@@ -123,7 +151,6 @@ public:
         }
     }
 };
-
 class MixtureElasticity : public BilinearFormIntegrator {
     const std::vector<Constitutive>& materials;
 
@@ -249,9 +276,6 @@ std::string file_bytes(const std::filesystem::path& path) {
 }
 } // namespace
 int run(const RunInputs& inputs, const std::filesystem::path& output) {
-#ifdef CHIPCAE_SOLVE_MATERIAL
-    Kokkos::ScopeGuard kokkos;
-#endif
     PetscSession petsc;
     int rank = 0;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -325,11 +349,12 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
     try {
         std::optional<mesh::cut::CutLayerArrays> clipped;
         auto arrays = build_mesh(inputs, &clipped);
-        io::ResultsWriter writer(output, inputs.stack_path, inputs.fields);
+        io::ResultsWriter writer(output, inputs.stack_path, {}, {}, inputs.fields);
         io::ResultsWriter::MeshSummary summary{};
         summary.nx0 = arrays.grid_report.level_axes.front()[0].size() - 1;
         summary.ny0 = arrays.grid_report.level_axes.front()[1].size() - 1;
-        summary.L = arrays.grid_report.levels;
+        // The digest contract uses the finest level index, not the level count.
+        summary.L = arrays.grid_report.levels - 1;
         summary.nz = arrays.axes[2].size() - 1;
         const auto nx = arrays.axes[0].size() - 1, ny = arrays.axes[1].size() - 1;
         summary.padded_cells = (nx * ny - (nx - arrays.grid_report.padding[0]) *
@@ -470,6 +495,8 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                 name + " assembly_seconds=" +
                     std::to_string(
                         std::chrono::duration<double>(solve_start - assembly_start).count()) +
+                    " PETSc_CSR_seconds=" + std::to_string(direct.assembly_seconds) +
+                    " factor_seconds=" + std::to_string(direct.factor_seconds) +
                     " LU_solve_seconds=" +
                     std::to_string(std::chrono::duration<double>(solve_end - solve_start).count()),
                 "",
@@ -505,9 +532,10 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                     if (load.total_power && !(volume > 0))
                         throw InputError(ErrorCode::INPUT_INVALID,
                                          "heat_source target has zero volume");
+                    const double density = heat_source_density(load, volume);
                     for (std::size_t a = 0; a < na; ++a)
                         if (arrays.attr_table.entries[a].layer == load.target.substr(6))
-                            source[a] += load.total_power ? load.source / volume : load.source;
+                            source[a] += density;
                 } else if (load.type == "fixed_temperature" && load.target.starts_with("layer:")) {
                     for (int e = 0; e < mesh.GetNE(); ++e)
                         if (arrays.attr_table.entries[arrays.attribute[e] - 1].layer ==
@@ -630,6 +658,7 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             essential.Unique();
             if (essential.Size() != 6)
                 throw InputError(ErrorCode::INPUT_INVALID, "3-2-1 must constrain exactly six DOFs");
+            emit(io::LogLine{1, rank, "3-2-1 constrained_dofs=6 (3+2+1)", "", 0});
         } else {
             Array<int> all(mesh.bdr_attributes.Max());
             all = 0;

@@ -74,7 +74,7 @@ if(CHIPCAE_ENABLE_HDF5)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     add_test(NAME vtkhdf_results_serial COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/test_vtkhdf_results.py $<TARGET_FILE:chipcae_write_results>
-        ${PROJECT_SOURCE_DIR}/tools/samples/s1.stack.json 1)
+        ${PROJECT_SOURCE_DIR}/tools/samples/s1.stack.json 1 none ${CHIPCAE_RESULTS_FAULT_INJECTION})
     set_tests_properties(vtkhdf_results_serial PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
     if(CHIPCAE_ENABLE_MPI)
         include(CheckCXXSymbolExists)
@@ -83,7 +83,7 @@ if(CHIPCAE_ENABLE_HDF5)
         unset(CMAKE_REQUIRED_LIBRARIES)
         add_test(NAME vtkhdf_results_mpi_2 COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/test_vtkhdf_results.py $<TARGET_FILE:chipcae_write_results>
-            ${PROJECT_SOURCE_DIR}/tools/samples/s1.stack.json 2 ${MPIEXEC_EXECUTABLE})
+            ${PROJECT_SOURCE_DIR}/tools/samples/s1.stack.json 2 ${MPIEXEC_EXECUTABLE} ${CHIPCAE_RESULTS_FAULT_INJECTION})
         set_tests_properties(vtkhdf_results_mpi_2 PROPERTIES LABELS "mpi;io" TIMEOUT 180 SKIP_RETURN_CODE 77)
         if(CHIPCAE_RESULTS_PARALLEL_HDF5)
             set_tests_properties(vtkhdf_results_mpi_2 PROPERTIES

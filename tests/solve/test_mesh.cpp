@@ -3,6 +3,20 @@
 #include <iostream>
 #include <set>
 int main() {
+    chipcae::solve::Load power;
+    power.target = "layer:empty";
+    power.total_power = true;
+    power.source = 10;
+    try {
+        chipcae::solve::heat_source_density(power, 0);
+        return 6;
+    } catch (const chipcae::solve::InputError& error) {
+        if (error.code != chipcae::ErrorCode::INPUT_INVALID ||
+            std::string(error.what()).find("positive target layer volume") == std::string::npos)
+            return 7;
+    }
+    if (chipcae::solve::heat_source_density(power, 2) != 5)
+        return 8;
     chipcae::solve::RunInputs inputs;
     inputs.stack.outline.box = {0, 0, 0.02, 0.02};
     chipcae::mesh::Layer layer;
