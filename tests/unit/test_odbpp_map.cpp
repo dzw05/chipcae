@@ -491,6 +491,51 @@ void unsupported() {
     require(m.report.unsupported.front().element == "Symbol:TOP:0", "unknown symbol identity");
     near(area(m), 64e6, 1e-3);
 }
+void stroke_symbols() {
+    for (const auto* name : {"oval2000x1000", "rect2000x1000", "round2000x1000"}) {
+        auto j = board();
+        auto& f = j.features["TOP"];
+        f.symbols = {{name}};
+        f.lines = {{{1, 1}, {7, 1}, 0, true}};
+        f.arcs = {{{2, 0}, {0, 2}, {0, 0}, 0, true, false}};
+        const auto m = mapped(j);
+        near(area(m), 64e6, 1e-3);
+        require(m.report.unsupported.size() == 2, "incompatible line and arc symbols rejected");
+        for (const auto& u : m.report.unsupported)
+            require(u.element == "Symbol:TOP:0", "unsupported stroke symbol identity");
+    }
+    auto j = board();
+    auto& f = j.features["TOP"];
+    f.surfaces.clear();
+    f.symbols = {{"round1000"}};
+    f.lines = {{{1, 1}, {7, 1}, 0, true}};
+    f.arcs = {{{2, 0}, {0, 2}, {0, 0}, 0, true, false}};
+    const auto reference = mapped(j);
+    f.symbols = {{"oval1000x1000"}};
+    equal(reference, mapped(j));
+}
+void unknown_drill_symbols() {
+    for (bool conflicting_tools : {false, true}) {
+        auto j = board();
+        OdbLayer drill;
+        drill.name = "DRILL";
+        drill.type = "drill";
+        drill.start_name = "TOP";
+        drill.end_name = "BOTTOM";
+        j.layers.push_back(drill);
+        auto& f = j.features["DRILL"];
+        f.symbols = {{"unknown"}};
+        f.pads = {{{2, 3}, 0, true}, {{4, 5}, 1, true}};
+        if (conflicting_tools)
+            j.tools["DRILL"] = {{1, "plated", 0}, {2, "slot", 0.0001}};
+        const auto m = mapped(j);
+        require(m.vias.empty() && m.via_fractions.empty(), "unknown drill symbols produce no vias");
+        require(m.report.unsupported.size() == 2, "one report per unknown drill symbol");
+        for (std::size_t i = 0; i < 2; ++i)
+            require(m.report.unsupported[i].element == "Symbol:DRILL:" + std::to_string(i),
+                    "unknown drill symbol precedes tool classification");
+    }
+}
 void via() {
     auto j = board();
     OdbLayer l;
@@ -1417,6 +1462,8 @@ int main() {
         {"odbpp_map_override_case", override_case},
         {"odbpp_map_skip_layers", skip},
         {"odbpp_map_unsupported_symbol", unsupported},
+        {"odbpp_map_stroke_symbols", stroke_symbols},
+        {"odbpp_map_unknown_drill_symbols", unknown_drill_symbols},
         {"odbpp_map_via", via},
         {"odbpp_map_via_region_initialization", via_region_initialization},
         {"odbpp_map_non_plated", non_plated},

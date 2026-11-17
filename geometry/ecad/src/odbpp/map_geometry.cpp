@@ -106,6 +106,15 @@ struct Mapper {
             return {};
         }
     }
+    Symbol stroke_symbol(const OdbFeatures& f, int index) const {
+        auto s = symbol(f, index);
+        // A stroke has one width: only circular or square apertures are supported.
+        if (s.w != s.h)
+            return {};
+        if (s.kind == "oval")
+            s.kind = "round";
+        return s;
+    }
     Paths64 widen(const Path64& p, const Symbol& s) const {
         ClipperOffset offset;
         if (p.size() == 2 && p.front() == p.back())
@@ -178,14 +187,14 @@ struct Mapper {
                 add(pad(p, s), p.positive);
         }
         for (const auto& l : f.lines) {
-            auto s = symbol(f, l.sym);
+            auto s = stroke_symbol(f, l.sym);
             if (s.kind.empty())
                 unsupported("Symbol:" + layer.name + ":" + std::to_string(l.sym));
             else
                 add(widen({point(l.s), point(l.e)}, s), l.positive);
         }
         for (const auto& a : f.arcs) {
-            auto s = symbol(f, a.sym);
+            auto s = stroke_symbol(f, a.sym);
             if (s.kind.empty())
                 unsupported("Symbol:" + layer.name + ":" + std::to_string(a.sym));
             else {
@@ -217,6 +226,10 @@ struct Mapper {
         }
         for (const auto& p : f.pads) {
             auto s = symbol(f, p.sym);
+            if (s.kind.empty()) {
+                unsupported("Symbol:" + layer.name + ":" + std::to_string(p.sym));
+                continue;
+            }
             const OdbTool* tool = nullptr;
             auto tools = job.tools.find(layer.name);
             auto classification = [](const OdbTool& t) {
