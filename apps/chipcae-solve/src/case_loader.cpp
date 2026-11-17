@@ -7,9 +7,11 @@
 #include <cmath>
 #include <fstream>
 #include <jsoncons/json.hpp>
+#include <jsoncons_ext/jsonschema/jsonschema.hpp>
 #include <regex>
 #include <set>
 #include <sstream>
+#include <yaml-cpp/yaml.h>
 namespace chipcae::solve {
 namespace {
 using Json = jsoncons::json;
@@ -28,14 +30,58 @@ std::string bytes(const std::filesystem::path& path) {
                          "cannot read reference: " + path.string());
     return out.str();
 }
+Json yaml_json(const YAML::Node& node, int depth = 0) {
+    if (depth > 64)
+        invalid("YAML nesting exceeds 64 levels");
+    if (node.IsNull())
+        return Json::null();
+    if (node.IsSequence()) {
+        Json a = Json::array();
+        for (const auto& value : node)
+            a.push_back(yaml_json(value, depth + 1));
+        return a;
+    }
+    if (node.IsMap()) {
+        Json obj;
+        for (const auto& value : node) {
+            auto key = value.first.as<std::string>();
+            if (obj.contains(key))
+                invalid("duplicate YAML key: " + key);
+            obj[key] = yaml_json(value.second, depth + 1);
+        }
+        return obj;
+    }
+    auto value = node.Scalar();
+    if (node.Tag() == "!" || node.Tag() == "tag:yaml.org,2002:str")
+        return Json(value);
+    bool boolean;
+    std::int64_t signed_value;
+    std::uint64_t unsigned_value;
+    double real_value;
+    if (YAML::convert<bool>::decode(node, boolean))
+        return Json(boolean);
+    if (YAML::convert<std::int64_t>::decode(node, signed_value))
+        return Json(signed_value);
+    if (YAML::convert<std::uint64_t>::decode(node, unsigned_value))
+        return Json(unsigned_value);
+    if (YAML::convert<double>::decode(node, real_value))
+        return Json(real_value);
+    return Json(value);
+}
 Json read(const std::filesystem::path& path) {
-    return Json::parse(bytes(path));
+    auto content = bytes(path);
+    if (path.extension() == ".yaml" || path.extension() == ".yml")
+        return yaml_json(YAML::Load(content));
+    return Json::parse(content);
 }
 std::filesystem::path reference(const Json& ref, const std::filesystem::path& base) {
     if (!ref.contains("ref") || !ref.at("ref").is_string() ||
         ref.at("ref").as<std::string>().empty())
         throw InputError(ErrorCode::INPUT_REFERENCE_MISSING, "missing ref");
-    auto path = (base / ref.at("ref").as<std::string>()).lexically_normal();
+    std::filesystem::path relative = ref.at("ref").as<std::string>();
+    if (relative.is_absolute())
+        invalid("reference must be relative");
+    auto path = (base / relative).lexically_normal();
     auto content = bytes(path);
     if (ref.contains("sha256")) {
         auto hash = ref.at("sha256").as<std::string>();
@@ -51,6 +97,8 @@ std::filesystem::path reference(const Json& ref, const std::filesystem::path& ba
     return path;
 }
 double finite(const Json& obj, const char* key, bool positive = false) {
+    if (!obj.at(key).is_number())
+        invalid(std::string("number required: ") + key);
     auto value = obj.at(key).as<double>();
     if (!std::isfinite(value) || (positive && value <= 0))
         invalid(std::string("invalid value: ") + key);
@@ -58,7 +106,7 @@ double finite(const Json& obj, const char* key, bool positive = false) {
 }
 int integer(const Json& obj, const char* key, int minimum) {
     const auto& value = obj.at(key);
-    if (!value.is_int64() && !value.is_uint64())
+    if (!value.is_integer<int>())
         invalid(std::string("integer required: ") + key);
     auto n = value.as<int>();
     if (n < minimum)
@@ -73,8 +121,6 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
         RunInputs out;
         out.case_path = std::filesystem::absolute(case_path);
         out.profile_path = std::filesystem::absolute(profile_path);
-        if (case_path.extension() == ".yaml" || case_path.extension() == ".yml")
-            throw InputError(ErrorCode::NOT_IMPLEMENTED, "YAML input not available; use JSON");
         auto c = read(out.case_path);
         auto profile = read(out.profile_path);
         if (c.at("schema").as<std::string>() != "chipcae.case/1.0")
@@ -82,8 +128,11 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
         if (profile.at("schema").as<std::string>() != "chipcae.run_profile/1.0" ||
             integer(profile, "ranks", 1) != ranks)
             invalid("invalid profile: schema or ranks do not match MPI size");
-        if (profile.at("backend").as<std::string>() != "cpu" || integer(profile, "gpus", 0) != 0)
-            throw InputError(ErrorCode::NOT_IMPLEMENTED, "O2 supports CPU profiles only");
+        if (!profile.at("backend").is_string() ||
+            (profile.at("backend").as<std::string>() != "cpu" &&
+             profile.at("backend").as<std::string>() != "cuda"))
+            invalid("invalid profile backend");
+        int gpus = integer(profile, "gpus", 0);
         if (profile.contains("threads_per_rank"))
             (void)integer(profile, "threads_per_rank", 1);
         if (profile.contains("launcher")) {
@@ -91,6 +140,39 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
             if (launcher != "direct" && launcher != "mpirun")
                 invalid("invalid profile launcher");
         }
+        if (profile.contains("mpi_args")) {
+            if (!profile.at("mpi_args").is_array())
+                invalid("mpi_args must be a string array");
+            for (const auto& arg : profile.at("mpi_args").array_range())
+                if (!arg.is_string())
+                    invalid("mpi_args must be a string array");
+        }
+        if (profile.contains("output_interval")) {
+            const auto& interval = profile.at("output_interval");
+            if (!interval.is_object() || interval.contains("steps") == interval.contains("time"))
+                invalid("output_interval requires steps or time");
+            for (const auto& item : interval.object_range())
+                if (item.key() != "steps" && item.key() != "time" && !item.key().starts_with("x-"))
+                    invalid("invalid output_interval field");
+            if (interval.contains("steps"))
+                (void)integer(interval, "steps", 1);
+            else
+                (void)finite(interval, "time", true);
+        }
+        for (const auto& item : profile.object_range()) {
+            const std::set<std::string> known{"schema",
+                                              "ranks",
+                                              "backend",
+                                              "gpus",
+                                              "threads_per_rank",
+                                              "launcher",
+                                              "mpi_args",
+                                              "output_interval"};
+            if (!known.contains(std::string(item.key())) && !item.key().starts_with("x-"))
+                invalid("unknown profile field");
+        }
+        if (profile.at("backend").as<std::string>() != "cpu" || gpus != 0)
+            throw InputError(ErrorCode::NOT_IMPLEMENTED, "O2 supports CPU profiles only");
         out.stack_path = reference(c.at("stack"), out.case_path.parent_path());
         out.material_path = reference(c.at("materials"), out.case_path.parent_path());
         auto stack_json = read(out.stack_path);
@@ -105,7 +187,10 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
             invalid(stack.error().path + ": " + stack.error().reason);
         out.stack = std::move(stack.value());
         for (const auto& layer : out.stack.layers)
-            if (!layer.regions.empty() || (layer.copper && layer.copper->polygons))
+            if (std::any_of(layer.regions.begin(),
+                            layer.regions.end(),
+                            [](const auto& region) { return !region.footprint.polygon.empty(); }) ||
+                (layer.copper && layer.copper->polygons))
                 throw InputError(ErrorCode::CUT_UNSUPPORTED, "cut not supported in O2");
         if (!out.stack.outline.polygon.empty())
             throw InputError(ErrorCode::CUT_UNSUPPORTED, "cut not supported in O2");
@@ -113,6 +198,15 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
         if (m.at("type").as<std::string>() != "aligned_cartesian_cut")
             invalid("invalid mesh type");
         out.grid.ranks = ranks;
+        if (m.contains("nx"))
+            out.grid.nx = integer(m, "nx", 1);
+        if (m.contains("ny"))
+            out.grid.ny = integer(m, "ny", 1);
+        if (m.contains("max_ratio")) {
+            out.grid.max_ratio = finite(m, "max_ratio", true);
+            if (out.grid.max_ratio <= 1)
+                invalid("max_ratio must exceed 1");
+        }
         if (m.contains("cell_budget"))
             out.grid.cell_budget = integer(m, "cell_budget", 1);
         if (m.contains("levels"))
@@ -238,8 +332,63 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
             }
             out.fields.assign(selected.begin(), selected.end());
         }
-        // No invented material-library container: material.v1 currently defines a single card.
-        (void)read(out.material_path);
+        auto library = read(out.material_path);
+        if (library.at("schema").as<std::string>() != "chipcae.material_library/1" ||
+            !library.at("materials").is_array() || library.at("materials").empty())
+            invalid("invalid material library");
+        for (const auto& item : library.object_range())
+            if (item.key() != "schema" && item.key() != "materials" &&
+                !item.key().starts_with("x-"))
+                invalid("unknown material library field");
+        auto material_schema = read(CHIPCAE_MATERIAL_SCHEMA);
+        // material.v1's optional frame reference is unresolved in the baseline schema.
+        // O2 uses isotropic materials, so reject a frame instead of ignoring it.
+        material_schema.at("properties").erase("material_frame");
+        auto validator = jsoncons::jsonschema::make_json_schema(material_schema);
+        for (const auto& card : library.at("materials").array_range()) {
+            validator.validate(card, [&](const auto& error) {
+                invalid("material " + error.instance_location().string() + ": " + error.message());
+                return jsoncons::jsonschema::walk_result::abort;
+            });
+            if (card.contains("material_frame") ||
+                card.at("model").as<std::string>() != "thermo_elastic" ||
+                card.at("elastic").at("symmetry").as<std::string>() != "isotropic" ||
+                card.at("thermal_expansion").at("symmetry").as<std::string>() != "isotropic")
+                invalid("O2 requires isotropic thermo_elastic materials");
+            Material material;
+            material.id = card.at("id").as<std::string>();
+            auto column = [&](const Json& table, const char* name) {
+                const auto& temperatures = table.at("temperatures");
+                const auto& values = table.at("columns").at(name);
+                if (temperatures.size() != values.size() || values.size() != 1)
+                    invalid("O2 requires constant single-temperature material tables");
+                auto v = values.at(0).as<double>();
+                if (!std::isfinite(v))
+                    invalid("nonfinite material property");
+                return v;
+            };
+            material.E = column(card.at("elastic").at("table"), "E");
+            material.nu = column(card.at("elastic").at("table"), "nu");
+            material.alpha = column(card.at("thermal_expansion").at("table"), "alpha");
+            if (!(material.E > 0 && material.nu > -1 && material.nu < 0.5))
+                invalid("invalid elastic properties");
+            if (out.thermal)
+                material.k = finite(card, "conductivity", true);
+            if (!out.materials.emplace(material.id, material).second)
+                invalid("duplicate material id");
+        }
+        auto mapped = [&](const std::string& id) {
+            if (!out.materials.contains(id))
+                throw InputError(ErrorCode::MATERIAL_MAPPING_MISSING,
+                                 "material mapping missing: " + id);
+        };
+        for (const auto& layer : out.stack.layers) {
+            mapped(layer.material);
+            for (const auto& region : layer.regions)
+                mapped(region.material);
+            if (layer.copper)
+                mapped(layer.copper->metal);
+        }
         return out;
     } catch (const InputError&) {
         throw;

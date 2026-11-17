@@ -1,5 +1,6 @@
 #include "chipcae/io/vtkhdf_results.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <iomanip>
@@ -129,8 +130,13 @@ void distributed(hid_t group,
 }
 #endif
 } // namespace
-ResultsWriter::ResultsWriter(std::filesystem::path run, const std::filesystem::path& stackup)
-    : run_(std::move(run)) {
+bool ResultsWriter::selected(const std::string& name) const {
+    return std::find(fields_.begin(), fields_.end(), name) != fields_.end();
+}
+ResultsWriter::ResultsWriter(std::filesystem::path run,
+                             const std::filesystem::path& stackup,
+                             std::vector<std::string> fields)
+    : run_(std::move(run)), fields_(std::move(fields)) {
 #ifdef CHIPCAE_ENABLE_MPI
     int initialized = 0;
     MPI_Initialized(&initialized);
@@ -293,12 +299,17 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                     if (pd < 0 || cd < 0)
                         throw std::runtime_error("create fields");
                 });
-                emit(pd, "T", p.T);
-                emit(pd, "U", p.U, 3);
-                emit(cd, "layer_id", p.layer_id);
-                emit(cd, "material_id", p.material_id);
-                emit(cd, "cell_kind", p.cell_kind);
-                if (gid_any)
+                if (selected("T"))
+                    emit(pd, "T", p.T);
+                if (selected("U"))
+                    emit(pd, "U", p.U, 3);
+                if (selected("layer_id"))
+                    emit(cd, "layer_id", p.layer_id);
+                if (selected("material_id"))
+                    emit(cd, "material_id", p.material_id);
+                if (selected("cell_kind"))
+                    emit(cd, "cell_kind", p.cell_kind);
+                if (gid_any && selected("elem_gid"))
                     emit(cd, "elem_gid", p.elem_gid);
                 if (pd >= 0) {
                     check(H5Gclose(pd));
@@ -365,16 +376,25 @@ void ResultsWriter::finalize() {
                 out << "{\"n\":" << s.n << ",\"time\":" << s.time << ",\"file\":" << quoted(s.file)
                     << '}';
             }
-            out << "],\n\"fields\":[{\"name\":\"T\",\"location\":\"point\",\"components\":1,"
-                   "\"unit\":\"K\"},{\"name\":\"U\",\"location\":\"point\",\"components\":3,"
-                   "\"unit\":\"m\"}";
-            for (auto name : {"layer_id", "material_id", "cell_kind"})
-                out << ",{\"name\":" << quoted(name)
-                    << ",\"location\":\"cell\",\"components\":1,\"unit\":\"1\"}";
-            if (gids_)
-                out << ",{\"name\":\"elem_gid\",\"location\":\"cell\",\"components\":1,\"unit\":"
-                       "\"1\"}";
-            out << ",{\"name\":\"sigma_vm\",\"location\":\"cell\",\"components\":1,\"unit\":\"Pa\","
+            out << "],\n\"fields\":[";
+            bool first_field = true;
+            for (const auto& name : fields_) {
+                if (name == "elem_gid" && !gids_)
+                    continue;
+                if (!first_field)
+                    out << ',';
+                first_field = false;
+                out << "{\"name\":" << quoted(name)
+                    << ",\"location\":" << quoted(name == "T" || name == "U" ? "point" : "cell")
+                    << ",\"components\":" << (name == "U" ? 3 : 1) << ",\"unit\":"
+                    << quoted(name == "T"   ? "K"
+                              : name == "U" ? "m"
+                                            : "1")
+                    << '}';
+            }
+            if (!first_field)
+                out << ',';
+            out << "{\"name\":\"sigma_vm\",\"location\":\"cell\",\"components\":1,\"unit\":\"Pa\","
                    "\"reserved\":true}],\n\"blocks\":[{\"index\":0,\"name\":\"hex\",\"kind\":"
                    "\"UnstructuredGrid\"},{\"index\":1,\"name\":\"cut_poly\",\"kind\":\"VTK_"
                    "POLYHEDRON\"},{\"index\":2,\"name\":\"embedded_boundary\",\"kind\":"

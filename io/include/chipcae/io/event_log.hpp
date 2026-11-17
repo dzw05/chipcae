@@ -75,7 +75,27 @@ struct OutputAvailable {
     std::string checksum;
 };
 
-using EventPayload = std::variant<KernelHello, Progress, Residual, LogLine, State, OutputAvailable>;
+struct ControlAck {
+    std::uint64_t cmd_seq{};
+    std::string client_request_id;
+    std::uint8_t status{1};
+    std::uint64_t effective_step{};
+    std::string message;
+    double effective_time{};
+};
+struct KernelExit {
+    std::int32_t exit_code{};
+    std::uint64_t last_completed_window{};
+    std::string reason;
+};
+using EventPayload = std::variant<KernelHello,
+                                  Progress,
+                                  Residual,
+                                  LogLine,
+                                  State,
+                                  OutputAvailable,
+                                  ControlAck,
+                                  KernelExit>;
 struct Event {
     std::uint64_t seq{};
     std::int64_t wall_time_unix_ns{};

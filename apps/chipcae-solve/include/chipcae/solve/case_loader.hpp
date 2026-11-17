@@ -3,6 +3,7 @@
 #include "chipcae/mesh/background/tensor_grid.hpp"
 
 #include <filesystem>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -22,7 +23,12 @@ struct Load {
     double T_ref = 0, T = 0, h = 0, T_inf = 0, source = 0;
     bool total_power = false;
 };
+struct Material {
+    std::string id;
+    double E = 0, nu = 0, alpha = 0, k = 0;
+};
 struct RunInputs {
+    std::map<std::string, Material> materials;
     std::filesystem::path case_path, profile_path, stack_path, material_path;
     mesh::StackModel stack;
     mesh::GridOptions grid;
@@ -35,5 +41,6 @@ struct RunInputs {
 RunInputs load_inputs(const std::filesystem::path& case_path,
                       const std::filesystem::path& profile_path,
                       int ranks);
+int run(const RunInputs&, const std::filesystem::path&);
 mesh::HexMeshArrays build_mesh(const RunInputs& inputs);
 } // namespace chipcae::solve

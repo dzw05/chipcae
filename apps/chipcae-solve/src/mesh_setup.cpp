@@ -1,11 +1,6 @@
 #include "chipcae/solve/case_loader.hpp"
 namespace chipcae::solve {
 mesh::HexMeshArrays build_mesh(const RunInputs& inputs) {
-    for (const auto& layer : inputs.stack.layers)
-        if (!layer.regions.empty() || (layer.copper && layer.copper->polygons))
-            throw InputError(ErrorCode::CUT_UNSUPPORTED, "cut not supported in O2");
-    if (!inputs.stack.outline.polygon.empty())
-        throw InputError(ErrorCode::CUT_UNSUPPORTED, "cut not supported in O2");
     auto result = mesh::build_tensor_grid(inputs.stack, inputs.grid);
     if (!result)
         throw InputError(ErrorCode::INPUT_INVALID,

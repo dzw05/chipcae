@@ -1,6 +1,7 @@
 #include "chipcae/io/event_log.hpp"
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -329,8 +330,12 @@ void regression_tests(const std::filesystem::path& path) {
 } // namespace
 int main() {
     try {
-        const auto path = std::filesystem::temp_directory_path() / "chipcae-event-log-test.bin";
-        std::filesystem::remove(path);
+        const auto directory =
+            std::filesystem::temp_directory_path() /
+            ("chipcae-event-log-test-" +
+             std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directory(directory);
+        const auto path = directory / "events.bin";
         {
             EventLogWriter writer(path);
             for (std::uint64_t i = 1; i <= 1000; ++i)
@@ -358,6 +363,22 @@ int main() {
         expect(reader.read_from(1001).size() == 1, "reopen append");
         std::filesystem::remove(path);
         regression_tests(path);
+        {
+            EventLogWriter writer(path);
+            writer.append({1, 123, ControlAck{7, "request", 1, 2, "STOP applied", 0.25}});
+            writer.append({2, 124, KernelExit{0, 2, "user_stop"}});
+        }
+        const auto control = EventLogReader(path).read_from(1);
+        expect(control.size() == 2, "control events round trip");
+        const auto ack = std::get<ControlAck>(control[0].payload);
+        expect(ack.cmd_seq == 7 && ack.client_request_id == "request" && ack.status == 1 &&
+                   ack.effective_step == 2 && ack.message == "STOP applied" &&
+                   ack.effective_time == 0.25,
+               "control ack mismatch");
+        const auto exit = std::get<KernelExit>(control[1].payload);
+        expect(exit.exit_code == 0 && exit.last_completed_window == 2 && exit.reason == "user_stop",
+               "exit mismatch");
+        std::filesystem::remove_all(directory);
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;

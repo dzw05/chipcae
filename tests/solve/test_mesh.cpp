@@ -1,6 +1,7 @@
 #include "chipcae/solve/case_loader.hpp"
 
 #include <iostream>
+#include <set>
 int main() {
     chipcae::solve::RunInputs inputs;
     inputs.stack.outline.box = {0, 0, 0.02, 0.02};
@@ -19,6 +20,9 @@ int main() {
     if (!mesh.pending_cut.empty() || mesh.elem_gid.empty())
         return 1;
     auto nz = mesh.axes[2].size() - 1;
+    if (mesh.elem_gid.size() != 128 || nz != 2 ||
+        std::set<int>(mesh.partitioning.begin(), mesh.partitioning.end()) != std::set<int>{0, 1})
+        return 4;
     for (std::size_t e = 0; e < mesh.partitioning.size(); ++e) {
         if (mesh.partitioning[e] != mesh.partitioning[(e / nz) * nz])
             return 2;

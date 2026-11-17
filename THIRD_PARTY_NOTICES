@@ -14,6 +14,7 @@ new ECAD dependencies follow the notices.
 | PETSc | System/package version | BSD-2-Clause | https://petsc.org/ |
 | MFEM | 4.10 | BSD-3-Clause | https://github.com/mfem/mfem |
 | jsoncons | 1.4.0 | Boost Software License 1.0 | https://github.com/danielaparker/jsoncons |
+| yaml-cpp | 0.8.0 | MIT | https://github.com/jbeder/yaml-cpp |
 | Protobuf | System/package version | BSD-3-Clause | https://github.com/protocolbuffers/protobuf |
 | gRPC | System/package version | Apache-2.0 | https://github.com/grpc/grpc |
 | Qt6 | System/package version | LGPL-3.0 / GPL-3.0 / commercial, depending on module and use | https://www.qt.io/ |

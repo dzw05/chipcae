@@ -59,12 +59,17 @@ int main(int argc, char** argv) {
     try {
         const auto inputs =
             chipcae::solve::load_inputs(args.at("--case"), args.at("--profile"), mpi.size);
+#ifdef CHIPCAE_SOLVE_BACKEND
+        return chipcae::solve::run(inputs, args.at("--out"));
+#else
         (void)inputs;
+#endif
     } catch (const chipcae::solve::InputError& error) {
         return fail(error.code, error.what());
+    } catch (const std::exception& error) {
+        return fail(1, error.what());
     }
 #endif
     return fail(chipcae::ErrorCode::NOT_IMPLEMENTED,
-                "O2 numerical backend not implemented: requires MFEM/PETSc/MPI/HDF5 and reviewed "
-                "material conductivity/constraint interfaces");
+                "numerical backend unavailable: enable JSONcons/MPI/HDF5 and PETSc-enabled MFEM");
 }

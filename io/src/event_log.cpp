@@ -146,6 +146,19 @@ Bytes encode(const Event& e) {
                 put(b, static_cast<std::uint8_t>(x.value));
                 put(b, x.window);
                 put(b, x.time);
+            } else if constexpr (std::is_same_v<T, ControlAck>) {
+                put(b, std::uint8_t{17});
+                put(b, x.cmd_seq);
+                put_string(b, x.client_request_id);
+                put(b, x.status);
+                put(b, x.effective_step);
+                put_string(b, x.message);
+                put(b, x.effective_time);
+            } else if constexpr (std::is_same_v<T, KernelExit>) {
+                put(b, std::uint8_t{19});
+                put(b, x.exit_code);
+                put(b, x.last_completed_window);
+                put_string(b, x.reason);
             } else if constexpr (std::is_same_v<T, OutputAvailable>) {
                 put(b, std::uint8_t{22});
                 put(b, x.window);
@@ -223,6 +236,25 @@ Event decode(const Bytes& b) {
         x.window = get<std::uint64_t>(b, p);
         x.time = get<double>(b, p);
         e.payload = x;
+        break;
+    }
+    case 17: {
+        ControlAck x;
+        x.cmd_seq = get<std::uint64_t>(b, p);
+        x.client_request_id = get_string(b, p);
+        x.status = get<std::uint8_t>(b, p);
+        x.effective_step = get<std::uint64_t>(b, p);
+        x.message = get_string(b, p);
+        x.effective_time = get<double>(b, p);
+        e.payload = std::move(x);
+        break;
+    }
+    case 19: {
+        KernelExit x;
+        x.exit_code = get<std::int32_t>(b, p);
+        x.last_completed_window = get<std::uint64_t>(b, p);
+        x.reason = get_string(b, p);
+        e.payload = std::move(x);
         break;
     }
     case 22: {
