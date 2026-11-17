@@ -45,13 +45,20 @@ Expected<std::vector<Local>> expand_column_partition(HexMeshArrays::GridReport& 
             Real(*std::max_element(loads.begin(), loads.end())) * ranks / result.size() - 1;
         if (report.partition_imbalance > .25)
             return Error{"partition", "fine-cell partition imbalance exceeds 0.25"};
-        for (std::size_t l = 1; l < report.column_ranks.size(); ++l)
-            for (std::size_t d = 0; d < report.column_ranks[l].size(); ++d)
-                if (report.column_ranks[l][d] != report.column_ranks[l - 1][d >> 2])
-                    return Error{"HIERARCHY_INVALID", "child and parent ranks differ"};
-        for (std::size_t e = 0; e < result.size(); ++e)
-            if (result[e] != result[(e / nz) * nz])
-                return Error{"COLUMN_SPLIT_ACROSS_RANKS", "column crosses ranks"};
+        for (std::size_t l = 1; l < report.column_ranks.size(); ++l) {
+            const auto nx = nx0 << l, ny = ny0 << l;
+            for (std::size_t j = 0; j < ny; ++j)
+                for (std::size_t i = 0; i < nx; ++i) {
+                    const auto child = dense_index(nx0, ny0, l, i, j);
+                    const auto parent = dense_index(nx0, ny0, l - 1, i >> 1, j >> 1);
+                    if (report.column_ranks[l][child] != report.column_ranks[l - 1][parent])
+                        return Error{"HIERARCHY_INVALID", "child and parent ranks differ"};
+                }
+        }
+        for (std::size_t d = 0; d < fine.size(); ++d)
+            for (std::size_t k = 1; k < nz; ++k)
+                if (result[d * nz + k] != result[d * nz])
+                    return Error{"COLUMN_SPLIT_ACROSS_RANKS", "column crosses ranks"};
         return result;
     } catch (const std::exception& e) {
         return Error{"partition", e.what()};
@@ -202,6 +209,7 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
         }
     }
     const auto original = segments;
+    enum class PrepareFailure { None, Budget, MaxRatio };
     auto prepare = [&](int L, std::array<AxisSegments, 2>& candidate) {
         candidate = original;
         const auto divisor = std::size_t{1} << L;
@@ -210,11 +218,11 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
             const auto padded = ((n + divisor - 1) / divisor) * divisor;
             if (padded > static_cast<std::size_t>(o.cell_budget) ||
                 padded >= static_cast<std::size_t>(std::numeric_limits<Local>::max()))
-                return false;
+                return PrepareFailure::Budget;
             if (!pad_axis(axis, divisor, o.max_ratio))
-                return false;
+                return PrepareFailure::MaxRatio;
         }
-        return true;
+        return PrepareFailure::None;
     };
     auto count = [](const AxisSegments& axis) {
         return std::accumulate(axis.counts.begin(), axis.counts.end(), std::size_t{0});
@@ -229,7 +237,7 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
             if (possible_columns < 16u * o.ranks)
                 break;
             std::array<AxisSegments, 2> candidate;
-            if (!prepare(l, candidate))
+            if (prepare(l, candidate) != PrepareFailure::None)
                 continue;
             const auto nc = (count(candidate[0]) / divisor) * (count(candidate[1]) / divisor);
             if (nc >= 16u * o.ranks)
@@ -251,7 +259,10 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
         } else
             m.grid_report.warnings.push_back("levels=1: direct solve fallback");
     }
-    if (!prepare(L, segments))
+    const auto prepare_failure = prepare(L, segments);
+    if (prepare_failure == PrepareFailure::Budget)
+        return Error{"cell_budget", "divisibility padding exceeds cell budget"};
+    if (prepare_failure == PrepareFailure::MaxRatio)
         return Error{"HIERARCHY_INVALID", "divisibility padding violates max_ratio"};
     const auto divisor = std::size_t{1} << L;
     const auto nx0 = count(segments[0]) / divisor, ny0 = count(segments[1]) / divisor;
