@@ -56,8 +56,7 @@ bool to_stack(const EcadModel& model,
             return fail("polyset too large");
         put(po, static_cast<std::uint32_t>(l.name.size()));
         po.write(l.name.data(), static_cast<std::streamsize>(l.name.size()));
-        put(po, static_cast<std::uint32_t>(l.ring_offsets.size()));
-        put(po, static_cast<std::uint32_t>(l.coordinates.size() / 2));
+        put(po, static_cast<std::uint32_t>(l.ring_offsets.size() - 1));
         for (auto x : l.ring_offsets)
             put_i64(po, x);
         for (auto x : l.coordinates)
@@ -98,8 +97,9 @@ bool to_stack(const EcadModel& model,
             << "\",\"n_elem_min\":1,\"grading\":1,\"material\":\""
             << (l.material.empty() ? (l.copper ? "copper" : "dielectric") : l.material) << '"';
         if (l.copper)
-            out << ",\"copper\":{\"metal\":\"copper\",\"polygons\":{\"file\":\""
-                << polyset_file.filename().string() << "\",\"layer\":\"" << l.name << "\"}}";
+            out << ",\"copper\":{\"metal\":\"" << (l.material.empty() ? "copper" : l.material)
+                << "\",\"polygons\":{\"file\":\"" << polyset_file.filename().string()
+                << "\",\"layer\":\"" << l.name << "\"}}";
         out << '}';
     }
     out << "],\"symmetry\":\"none\",\"package_type\":\"ipc2581\",\"external_refs\":[{\"path\":\""

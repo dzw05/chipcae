@@ -1,0 +1,259 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:chipcae:manifest:1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "steps",
+    "fields",
+    "partitions",
+    "summary"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "chipcae.results/1.0"
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "n",
+          "file"
+        ],
+        "properties": {
+          "n": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "file": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "fields": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "location",
+          "components",
+          "dtype",
+          "unit"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "location": {
+            "enum": [
+              "point",
+              "cell"
+            ]
+          },
+          "components": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "dtype": {
+            "enum": [
+              "float64",
+              "int32",
+              "int64"
+            ]
+          },
+          "unit": {
+            "type": "string"
+          },
+          "reserved": {
+            "type": "boolean"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "T"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            },
+            "then": {
+              "properties": {
+                "unit": {
+                  "const": "K"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "U"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            },
+            "then": {
+              "properties": {
+                "unit": {
+                  "const": "m"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "partitions": {
+      "type": "object",
+      "required": [
+        "per_step",
+        "solver_fixed_per_run"
+      ],
+      "properties": {
+        "per_step": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "solver_fixed_per_run": {
+          "type": "boolean"
+        }
+      }
+    },
+    "mesh": {
+      "type": "object",
+      "required": [
+        "nx0",
+        "ny0",
+        "L",
+        "padded_cells",
+        "nz",
+        "mesh_sha256"
+      ],
+      "properties": {
+        "nx0": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ny0": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "L": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "padded_cells": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "nz": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mesh_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "summary": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "value",
+          "unit"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "number"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "warpage_pv"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            },
+            "then": {
+              "properties": {
+                "unit": {
+                  "const": "m"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "U_mag_max"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            },
+            "then": {
+              "properties": {
+                "unit": {
+                  "const": "m"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "T_max"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            },
+            "then": {
+              "properties": {
+                "unit": {
+                  "const": "K"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
