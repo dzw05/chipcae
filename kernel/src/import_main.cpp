@@ -1,25 +1,15 @@
-#include "chipcae/geometry/import_report.hpp"
-#ifdef CHIPCAE_ENABLE_ECAD
-#include "chipcae/geometry/ecad/ipc2581.hpp"
-#endif
+#include "import_common.hpp"
 
-#include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <string>
+
+using namespace chipcae::importer;
 
 namespace {
-void write_defects(const std::filesystem::path& file,
-                   const std::string& code,
-                   const std::string& message) {
-    std::ofstream out(file);
-    if (out)
-        out << "{\"code\":\"" << code << "\",\"message\":\"" << message << "\",\"defects\":[]}\n";
-}
 void help() {
     std::cout << "usage: chipcae-import <in.step|in.xml> -o <out.stack.json> "
                  "[--polyset <out.polyset>] [--report <defects.json>] [--material-map m.json] "
-                 "[--accept-b-tier]\n";
+                 "[--accept-b-tier]\n"
+              << ecad_help() << step_help();
 }
 } // namespace
 
@@ -28,8 +18,15 @@ int main(int argc, char** argv) {
         help();
         return 0;
     }
-    std::filesystem::path input, output, polyset, report, material_map;
-    [[maybe_unused]] bool accept_b = false;
+    ImportOptions options;
+    auto& input = options.input;
+    auto& output = options.output;
+    auto& polyset = options.polyset;
+    auto& report = options.report;
+    auto& material_map = options.material_map;
+    auto& accept_b = options.accept_b_tier;
+    std::string reserved_argument;
+    bool has_accept = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
         auto next = [&](std::filesystem::path& path) {
@@ -60,6 +57,28 @@ int main(int argc, char** argv) {
             }
         } else if (arg == "--accept-b-tier") {
             accept_b = true;
+        } else if (arg == "--accept" || arg == "--t-min" || arg == "--stack-override" ||
+                   arg == "--assembly") {
+            if (reserved_argument.empty())
+                reserved_argument = arg;
+            if (arg == "--accept")
+                has_accept = true;
+            std::filesystem::path value;
+            if (!next(value))
+                break;
+            if (arg == "--accept") {
+                options.accept_file = value;
+            } else if (arg == "--stack-override") {
+                options.stack_override = value;
+            } else if (arg == "--assembly") {
+                options.assembly = value;
+            } else {
+                try {
+                    options.t_min = std::stod(value.string());
+                } catch (const std::exception&) {
+                    // The reserved-option diagnostic is emitted after conflict checking.
+                }
+            }
         } else if (!arg.empty() && arg[0] != '-' && input.empty()) {
             input = arg;
         } else {
@@ -67,61 +86,21 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    if (accept_b && has_accept) {
+        std::cerr << "conflicting arguments: --accept-b-tier and --accept\n";
+        return exit_usage;
+    }
+    if (!reserved_argument.empty()) {
+        std::cerr << "not implemented yet: " << reserved_argument << '\n';
+        return exit_usage;
+    }
     if (input.empty() || output.empty()) {
         help();
         return 2;
     }
-    if (polyset.empty()) {
-        polyset = output;
-        polyset.replace_extension(".polyset");
-    }
-    if (report.empty()) {
-        report = output.parent_path() / "defects.json";
-        if (report.empty())
-            report = "defects.json";
-    }
+    derive_output_paths(options);
     const auto ext = input.extension().string();
-    if (ext == ".step" || ext == ".stp") {
-        write_defects(report, "IMPORT_REJECTED", "STEP import is unavailable in this build");
-        std::cerr << "IMPORT_REJECTED: STEP importer is unavailable\n";
-        return 7;
-    }
-#ifndef CHIPCAE_ENABLE_ECAD
-    write_defects(report, "IMPORT_REJECTED", "ECAD support is disabled");
-    std::cerr
-        << "IMPORT_REJECTED: ECAD support is disabled; configure with CHIPCAE_ENABLE_ECAD=ON\n";
-    return 7;
-#else
-    if (material_map.empty()) {
-        write_defects(report, "MATERIAL_MAPPING_MISSING", "--material-map is required");
-        std::cerr << "MATERIAL_MAPPING_MISSING: --material-map is required\n";
-        return 9;
-    }
-    auto imported = chipcae::geometry::ecad::read_ipc2581(input);
-    if (!imported) {
-        write_defects(report, "IMPORT_REJECTED", imported.error);
-        std::cerr << "IMPORT_REJECTED: " << imported.error << '\n';
-        return 7;
-    }
-    std::string error;
-    if (!chipcae::geometry::ecad::apply_material_map(imported.model, material_map, &error)) {
-        const bool missing = error.find("MATERIAL_MAPPING_MISSING") != std::string::npos;
-        write_defects(report, missing ? "MATERIAL_MAPPING_MISSING" : "IMPORT_REJECTED", error);
-        std::cerr << error << '\n';
-        return missing ? 9 : 7;
-    }
-    std::filesystem::create_directories(output.parent_path().empty() ? "." : output.parent_path());
-    if (!chipcae::geometry::ecad::to_stack(imported.model, output, polyset, &error)) {
-        write_defects(report, "IMPORT_REJECTED", error);
-        std::cerr << "IMPORT_REJECTED: " << error << '\n';
-        return 7;
-    }
-    const auto report_dir =
-        output.parent_path().empty() ? std::filesystem::path(".") : output.parent_path();
-    chipcae::geometry::ImportReportHeader header;
-    header.b_tier_accepted_all = accept_b;
-    chipcae::geometry::write_import_report(report_dir, header, {}, &error);
-    write_defects(report, "OK", "");
-    return 0;
-#endif
+    if (ext == ".step" || ext == ".stp")
+        return run_step(options);
+    return run_ecad(options);
 }
