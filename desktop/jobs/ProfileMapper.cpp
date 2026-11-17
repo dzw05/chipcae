@@ -3,16 +3,27 @@
 #include <QJsonArray>
 #include <cmath>
 #include <stdexcept>
+#include <string>
 namespace chipcae::desktop {
 jobs::RunProfile ProfileMapper::map(const QJsonObject& p, bool cudaAvailable) {
-    auto integer = [&](const char* key, int fallback) {
-        double value = p.value(key).toDouble(fallback);
+    auto integer = [&](const char* key, const int* fallback) {
+        if (!p.contains(key)) {
+            if (!fallback)
+                throw std::runtime_error(std::string("Missing profile field ") + key);
+            return *fallback;
+        }
+        const auto raw = p.value(key);
+        if (!raw.isDouble())
+            throw std::runtime_error(std::string("Invalid profile integer ") + key);
+        const double value = raw.toDouble();
         if (!std::isfinite(value) || value < 0 || value > 2147483647 || std::floor(value) != value)
-            throw std::runtime_error("Invalid profile integer");
+            throw std::runtime_error(std::string("Invalid profile integer ") + key);
         return static_cast<int>(value);
     };
-    int ranks = integer("ranks", 0), threads = integer("threads_per_rank", 1);
-    int gpus = integer("gpus", 0);
+    const int defaultThreads = 1;
+    int ranks = integer("ranks", nullptr);
+    int threads = integer("threads_per_rank", &defaultThreads);
+    int gpus = integer("gpus", nullptr);
     auto backend = p.value("backend").toString();
     auto launcher = p.value("launcher").toString("mpirun");
     if (p.value("schema") != "chipcae.run_profile/1.0" || ranks < 1 || threads < 1 ||

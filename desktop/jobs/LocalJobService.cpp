@@ -56,19 +56,26 @@ void snapshot(const QString& source,
                 visit(child);
         } else if (value.isObject()) {
             auto o = value.toObject();
-            auto ref = o.value(o.contains("ref") ? "ref" : "path").toString();
-            if (!ref.isEmpty()) {
-                if (QDir::isAbsolutePath(ref) || ref.split('/').contains("..") ||
-                    ref.contains('\\') || ref.contains(':'))
-                    throw std::runtime_error("Unsafe snapshot reference");
-                snapshot(QFileInfo(source).dir().filePath(ref),
-                         QFileInfo(target).dir().filePath(ref),
-                         hashes,
-                         visited,
-                         o.value("sha256").toString());
+            const bool officialRef = o.contains("ref");
+            const bool hashedPath = o.contains("path") && o.contains("sha256");
+            if (officialRef || hashedPath) {
+                auto ref = o.value(officialRef ? "ref" : "path").toString();
+                if (!ref.isEmpty()) {
+                    if (QDir::isAbsolutePath(ref) || ref.split('/').contains("..") ||
+                        ref.contains('\\') || ref.contains(':'))
+                        throw std::runtime_error("Unsafe snapshot reference");
+                    snapshot(QFileInfo(source).dir().filePath(ref),
+                             QFileInfo(target).dir().filePath(ref),
+                             hashes,
+                             visited,
+                             o.value("sha256").toString());
+                }
             }
-            for (auto child : o)
-                visit(child);
+            for (auto it = o.begin(); it != o.end(); ++it) {
+                if (it.key().startsWith("x-"))
+                    continue;
+                visit(it.value());
+            }
         }
     };
     visit(doc.object());
