@@ -22,8 +22,8 @@ multi-knot temperature tables caused the original sample to fail with
 `INPUT_INVALID/14` because they do not meet the single-knot requirement. Schema
 validity alone does not establish support by O2.
 
-The later `max_ratio` failure is a separate mesh constraint: it means adjacent
-cell sizes exceed the configured limit.
+After the temperature tables were corrected, a separate `max_ratio` failure
+was observed: adjacent cell sizes exceeded the configured limit.
 Inspect the mesh and layer discretization to understand that constraint. This
 mesh constraint is separate from the temperature-table requirement. This guide
 neither recommends a general `max_ratio` value nor validates any threshold;

@@ -86,9 +86,7 @@ def check(root):
         "apps/chipcae-solve/README.md",
         "schema/examples/fcbga_demo.case.json",
         "schema/examples/thermal.case.json",
-        "schema/examples/fcbga_demo.materials.json",
         "examples/s2_solve/case.json", "examples/s2_solve/profile.json",
-        "examples/s2_solve/stack.json", "examples/s2_solve/materials.json",
     }
     for case_path in ("schema/examples/fcbga_demo.case.json",
                       "schema/examples/thermal.case.json", "examples/s2_solve/case.json"):
@@ -97,6 +95,8 @@ def check(root):
         case = read_object(case_file)
         inputs = check_case(case_file, case)
         if case_path == "schema/examples/thermal.case.json":
+            require(inputs["referenced_materials"],
+                    f"{case_file}: no referenced thermal materials found")
             # One missing material suffices for the documented unreadiness;
             # adding conductivity to other materials is a legitimate improvement.
             require(any("conductivity" not in material
@@ -113,7 +113,7 @@ def check(root):
     for path in sorted(documented):
         require((root / path).is_file(), f"missing documented file: {path}")
 
-    library = json.loads((root / "schema/examples/fcbga_demo.materials.json").read_text(encoding="utf-8"))
+    library = read_object(root / "schema/examples/fcbga_demo.materials.json")
     materials = library.get("materials")
     require(isinstance(materials, list) and materials,
             "schema/examples/fcbga_demo.materials.json: materials must be a nonempty list")
