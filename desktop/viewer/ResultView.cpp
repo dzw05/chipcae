@@ -293,6 +293,7 @@ void ResultView::rebuild() {
         bar->SetTitle("T (K)");
         d->renderer->AddViewProp(bar);
     }
+    d->renderer->ResetCameraClippingRange();
     if (isVisible())
         d->window->Render();
     update();
