@@ -109,15 +109,17 @@ bool ImportController::start(const ImportRequest& request) {
                staging_->filePath("defects.json")};
     QStringList arguments = request.prefix;
     if (request.kind == ImportKind::Assembly) {
-        arguments << "--assembly" << input << "-o" << staged_[0];
-        arguments << "--report" << staged_[2];
+        arguments << "--assembly" << input << "-o" << output;
+        if (!report.isEmpty())
+            arguments << "--report" << report;
         if (!polyset.isEmpty())
-            arguments << "--polyset" << staged_[1];
+            arguments << "--polyset" << polyset;
     } else {
-        arguments << input << "-o" << staged_[0] << "--material-map" << request.materialMap;
+        arguments << input << "-o" << output << "--material-map" << request.materialMap;
         if (!polyset.isEmpty())
-            arguments << "--polyset" << staged_[1];
-        arguments << "--report" << staged_[2];
+            arguments << "--polyset" << polyset;
+        if (!report.isEmpty())
+            arguments << "--report" << report;
     }
     if (request.acceptBTier)
         arguments << "--accept-b-tier";
@@ -147,7 +149,12 @@ bool ImportController::restartAccepted() {
     auto request = request_;
     request.acceptBTier = true;
     emit userConfirmed();
-    return start(request);
+    const bool started = start(request);
+    if (!started) {
+        emit defectsReady();
+        emit finished(false);
+    }
+    return started;
 }
 void ImportController::confirmDefects() {
     restartAccepted();
@@ -160,6 +167,19 @@ void ImportController::complete(int code, QProcess::ExitStatus status) {
         return;
     exitCode_ = code;
     exitStatus_ = status;
+    // The CLI contract uses the caller's paths. Collect only regular files
+    // after exit so validation and publication retain the same rollback behavior.
+    bool collected = true;
+    for (int i = 0; i < destinations_.size(); ++i) {
+        if (destinations_[i].isEmpty())
+            continue;
+        const QFileInfo generated(destinations_[i]);
+        if (generated.isFile() && !generated.isSymLink() &&
+            !QFile::rename(destinations_[i], staged_[i])) {
+            QFile::remove(destinations_[i]);
+            collected = false;
+        }
+    }
     report_ = readFile(staged_[2]);
     bool validReport = false;
     try {
@@ -176,13 +196,13 @@ void ImportController::complete(int code, QProcess::ExitStatus status) {
     } catch (const std::exception&) {
     }
     outcome_ = ImportOutcome::Failed;
-    if (!cancelled_ && status == QProcess::NormalExit && validReport) {
-        if (code == 0 && reportCode_ == "OK")
+    if (!cancelled_ && collected && status == QProcess::NormalExit) {
+        if (code == 0 && ((validReport && reportCode_ == "OK") || request_.report.isEmpty()))
             outcome_ = ImportOutcome::Accepted;
-        else if (code == 6 && reportCode_ == "IMPORT_CONFIRMATION_REQUIRED")
+        else if (validReport && code == 6 && reportCode_ == "IMPORT_CONFIRMATION_REQUIRED")
             outcome_ = ImportOutcome::NeedsConfirmation;
-        else if ((code == 7 && reportCode_ == "IMPORT_REJECTED") ||
-                 (code == 9 && reportCode_ == "MATERIAL_MAPPING_MISSING"))
+        else if (validReport && ((code == 7 && reportCode_ == "IMPORT_REJECTED") ||
+                                 (code == 9 && reportCode_ == "MATERIAL_MAPPING_MISSING")))
             outcome_ = ImportOutcome::Rejected;
     }
     if (outcome_ == ImportOutcome::Failed && error_.isEmpty())

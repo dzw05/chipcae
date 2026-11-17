@@ -187,7 +187,9 @@ stack=runpy.run_path(mock)['STACK']
 out=value('-o'); report=value('--report'); poly=value('--polyset')
 pathlib.Path(out).write_text(json.dumps({} if mode=='invalid-stack' else stack))
 if poly: pathlib.Path(poly).write_text('polyset')
-if mode=='copy-failure': pathlib.Path(record[:-5]+'.poly').mkdir()
+if mode=='copy-failure':
+    pathlib.Path(poly).unlink()
+    pathlib.Path(poly).mkdir()
 if mode=='hang':
     while True: time.sleep(1)
 code,rc={'confirm':('IMPORT_CONFIRMATION_REQUIRED',6),'reject':('IMPORT_REJECTED',7),
@@ -415,32 +417,35 @@ sys.exit(rc)
                 auto actual = recorded(record);
                 const auto oi = actual.indexOf("-o");
                 require(oi >= 0 && oi + 1 < actual.size(), "recorded output argument");
-                const QString stage = QFileInfo(actual[oi + 1]).absolutePath();
                 QStringList wanted;
                 if (kind == ImportKind::Assembly)
                     wanted = {"--assembly",
                               input,
                               "-o",
-                              stage + "/out.stack.json",
+                              r.output,
                               "--report",
-                              stage + "/defects.json",
+                              r.report,
                               "--polyset",
-                              stage + "/out.polyset"};
+                              r.polyset};
                 else
                     wanted = {input,
                               "-o",
-                              stage + "/out.stack.json",
+                              r.output,
                               "--material-map",
                               r.materialMap,
                               "--polyset",
-                              stage + "/out.polyset",
+                              r.polyset,
                               "--report",
-                              stage + "/defects.json"};
+                              r.report};
                 if (accept)
                     wanted << "--accept-b-tier";
                 check(actual == wanted,
                       "full QStringList argv order and unchanged input " + suffix);
-                check(!QDir(stage).exists(), "staging removed " + mode);
+                check(QDir(dir.path())
+                          .entryList({".chipcae-import-*"},
+                                     QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot)
+                          .isEmpty(),
+                      "staging removed " + mode);
             }
             if (mode == "confirm") {
                 auto* b = button(dialog, "确认并继续");
@@ -608,8 +613,13 @@ sys.exit(rc)
                 const auto record = r.input + ".argv";
                 r.prefix = {script, MOCK_SCRIPT, record, "map-missing"};
                 waitFor(c, [&] { check(c.start(r), "start optional recovery"); });
-                check(c.outcome() == ImportOutcome::Rejected && c.needsMaterialMapReselect(),
-                      "optional report preserves material-map recovery");
+                check(c.outcome() == (r.report.isEmpty() ? ImportOutcome::Failed
+                                                         : ImportOutcome::Rejected) &&
+                          c.needsMaterialMapReselect() == !r.report.isEmpty(),
+                      "nonzero exit requires requested report for recovery");
+                if (r.report.isEmpty())
+                    check(c.error().contains("exit/report mismatch"),
+                          "missing optional report explains nonzero failure");
                 r.prefix = {script, MOCK_SCRIPT, record, "success"};
                 waitFor(c, [&] {
                     check(c.start(r), "start optional exports");
@@ -618,25 +628,28 @@ sys.exit(rc)
                 check(c.outcome() == ImportOutcome::Accepted && !c.needsMaterialMapReselect(),
                       "optional exports accept and reset recovery state");
                 const auto args = recorded(record);
-                const auto stage = QFileInfo(args.at(args.indexOf("-o") + 1)).absolutePath();
                 QStringList wanted;
                 if (kind == ImportKind::Assembly)
-                    wanted = {"--assembly", r.input, "-o", stage + "/out.stack.json"};
+                    wanted = {"--assembly", r.input, "-o", r.output};
                 else
-                    wanted = {r.input, "-o", stage + "/out.stack.json", "--material-map", map};
-                if (kind == ImportKind::Assembly)
-                    wanted << "--report" << stage + "/defects.json";
+                    wanted = {r.input, "-o", r.output, "--material-map", map};
+                if (kind == ImportKind::Assembly && !r.report.isEmpty())
+                    wanted << "--report" << r.report;
                 if (!r.polyset.isEmpty())
-                    wanted << "--polyset" << stage + "/out.polyset";
-                if (kind == ImportKind::Ecad)
-                    wanted << "--report" << stage + "/defects.json";
+                    wanted << "--polyset" << r.polyset;
+                if (kind == ImportKind::Ecad && !r.report.isEmpty())
+                    wanted << "--report" << r.report;
                 if (r.acceptBTier)
                     wanted << "--accept-b-tier";
                 check(args == wanted, "exact argv for every optional flag combination");
                 check(QFile::exists(r.output) && (r.report.isEmpty() || QFile::exists(r.report)) &&
                           (r.polyset.isEmpty() || QFile::exists(r.polyset)),
                       "requested optional exports published");
-                check(!QDir(stage).exists(), "optional staging removed");
+                check(QDir(dir.path())
+                          .entryList({".chipcae-import-*"},
+                                     QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot)
+                          .isEmpty(),
+                      "optional staging removed");
                 check(!QFile::exists(dir.filePath("defects.json")) &&
                           !QFile::exists(dir.filePath("out.polyset")),
                       "unrequested exports remain unpublished");
@@ -662,6 +675,61 @@ sys.exit(rc)
             check(!QFile::exists(record) && !QFile::exists(r.output) && d.stackJson() == before &&
                       !c.needsMaterialMapReselect(),
                   "staging failure preserves document without launching");
+        }
+        for (const int failure : {0, 1, 2}) {
+            CaseDocument d;
+            require(d.load(FIXTURE_DIR "/fcbga_demo.case.json"), "failed restart baseline");
+            const auto before = d.stackJson();
+            ImportController c(d);
+            DefectsDialog dialog(c);
+            ImportRequest r;
+            r.input = dir.filePath(QString("failed restart %1.xml").arg(++serial));
+            write(r.input, "fixture");
+            r.materialMap = map;
+            const auto outputDir = r.input + ".outputs";
+            require(QDir().mkdir(outputDir), "restart output directory");
+            r.output = outputDir + "/out.stack";
+            r.report = r.input + ".report";
+            r.program = PYTHON_EXECUTABLE;
+            const auto record = r.input + ".argv";
+            r.prefix = {script, MOCK_SCRIPT, record, "confirm"};
+            waitFor(c, [&] { check(c.start(r), "start failed-restart fixture"); });
+            require(c.outcome() == ImportOutcome::NeedsConfirmation, "B-tier fixture");
+            const auto firstArgs = read(record);
+            int confirmed = 0, finished = 0;
+            QObject::connect(&c, &ImportController::userConfirmed, [&] { ++confirmed; });
+            QObject::connect(&c, &ImportController::finished, [&](bool replaced) {
+                ++finished;
+                check(!replaced, "failed restart completion does not replace");
+            });
+            if (failure == 1)
+                QFile::remove(r.input);
+            else if (failure == 2)
+                require(QDir().rmdir(outputDir), "remove restart output parent");
+            else
+                write(r.output, "external destination");
+            auto* confirm = button(dialog, "确认并继续");
+            require(confirm && confirm->isEnabled(), "B-tier dialog actionable");
+            confirm->click();
+            const QString expectedError =
+                failure == 1   ? "unsupported import input"
+                : failure == 2 ? "import staging directory creation failed"
+                               : "import destination already exists or collides with another path";
+            check(!c.busy() && c.outcome() == ImportOutcome::Failed && c.error() == expectedError,
+                  "failed restart exposes local failure");
+            check(confirmed == 1 && finished == 1, "failed restart notifies once");
+            check(dialog.isVisible() &&
+                      dialog.findChild<QPlainTextEdit*>()->toPlainText().contains(c.error()),
+                  "failed restart dialog displays new error");
+            auto* buttons = dialog.findChild<QDialogButtonBox*>();
+            check(buttons && buttons->button(QDialogButtonBox::Close)->isEnabled() &&
+                      !confirm->isEnabled(),
+                  "failed restart leaves actionable close and disables invalid confirmation");
+            check(d.stackJson() == before && !d.isDirty() && read(record) == firstArgs,
+                  "failed restart does not launch or change document");
+            if (failure == 0)
+                check(read(r.output) == "external destination",
+                      "failed restart preserves external file");
         }
         if (widgets) {
             auto filters = ImportSourceDialog::nameFilters();
