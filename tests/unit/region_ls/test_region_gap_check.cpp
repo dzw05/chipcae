@@ -17,7 +17,7 @@ int main() {
                 std::string reason;
                 if (s.layers[0].material.size())
                     reason = "in_solid: polygon in material layer";
-                else if (s.outline.polygon.size())
+                else if (s.layers[0].regions[0].name == "edge")
                     reason = "edge outline: spacing < 2h";
                 else
                     reason = "a b: spacing < 2h";
@@ -51,6 +51,25 @@ int main() {
         s.outline.polygon = {{0, 0}, {8, 0}, {8, 8}, {0, 8}};
         s.layers[0].regions = {square("edge", .375, 2, 2, 4)};
         check(s, true, "edge", "outline");
+        for (bool reverse : {false, true})
+            for (int side = 0; side < 4; ++side)
+                for (double gap : {.375, .5, .625}) {
+                    s = stack();
+                    auto r = square("edge", gap, 2, 2, 4);
+                    for (auto& p : r.footprint.polygon)
+                        for (int turn = 0; turn < side; ++turn)
+                            p = {8 - p[1], p[0]};
+                    if (reverse)
+                        std::reverse(r.footprint.polygon.begin(), r.footprint.polygon.end());
+                    s.layers[0].regions = {r};
+                    check(s, gap < .5, "edge", "outline");
+                }
+        // Sharing one outline edge must not exempt a different nearby edge.
+        s = stack();
+        s.layers[0].regions = {square("edge", 0, .375, 2, 4)};
+        check(s, true, "edge", "outline");
+        s.layers[0].regions = {square("edge", 0, 2, 2, 4)};
+        check(s, false, "edge", "outline");
         s = stack();
         s.layers[0].material = "background";
         s.layers[0].regions = {square("in_solid", 2, 2, 6, 6)};

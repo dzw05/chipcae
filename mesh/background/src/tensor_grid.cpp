@@ -133,6 +133,22 @@ Real gap(const Polygon& a, const Polygon& b, bool containment = true) {
         return 0;
     return d;
 }
+// Shared boundary segments do not form a narrow gap to the outline.
+bool coincident_edge(const Polygon& polygon, Point a, Point b) {
+    const Real tol = tolerance(polygon, Polygon{a, b});
+    const Real length = std::hypot(b[0] - a[0], b[1] - a[1]);
+    for (std::size_t i = 0; i < polygon.size(); ++i) {
+        const auto p = polygon[i], q = polygon[(i + 1) % polygon.size()];
+        if (std::abs(cross(a, b, p)) > tol * length || std::abs(cross(a, b, q)) > tol * length)
+            continue;
+        const int axis = std::abs(b[0] - a[0]) >= std::abs(b[1] - a[1]) ? 0 : 1;
+        if (std::min(std::max(a[axis], b[axis]), std::max(p[axis], q[axis])) -
+                std::max(std::min(a[axis], b[axis]), std::min(p[axis], q[axis])) >
+            tol)
+            return true;
+    }
+    return false;
+}
 std::string body(const Inclusion& r) {
     return r.body.empty() ? r.name : r.body;
 }
@@ -564,11 +580,21 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
                     2 * band_h(m, r.footprint.polygon, other.footprint.polygon))
                 return Error{"CUT_UNSUPPORTED", r.name + " " + other.name + ": spacing < 2h"};
         }
-        if (!s.outline.polygon.empty() &&
-            gap(r.footprint.polygon, s.outline.polygon, false) +
-                    tolerance(r.footprint.polygon, s.outline.polygon) <
-                2 * band_h(m, r.footprint.polygon, s.outline.polygon))
-            return Error{"CUT_UNSUPPORTED", r.name + " outline: spacing < 2h"};
+        auto outline = s.outline.polygon;
+        if (outline.empty()) {
+            const auto& b = s.outline.box;
+            outline = {{b[0], b[1]}, {b[2], b[1]}, {b[2], b[3]}, {b[0], b[3]}};
+        }
+        for (std::size_t edge = 0; edge < outline.size(); ++edge) {
+            const auto a = outline[edge], b = outline[(edge + 1) % outline.size()];
+            if (coincident_edge(r.footprint.polygon, a, b))
+                continue;
+            const Polygon boundary{a, b};
+            if (gap(r.footprint.polygon, boundary, false) +
+                    tolerance(r.footprint.polygon, boundary) <
+                2 * band_h(m, r.footprint.polygon, boundary))
+                return Error{"CUT_UNSUPPORTED", r.name + " outline: spacing < 2h"};
+        }
     }
     m.copper_layer_of_layer.assign(s.layers.size(), -1);
     std::size_t copper_layers = 0;
