@@ -68,3 +68,17 @@ target_link_libraries(chipcae_test_import_thresholds PRIVATE chipcae::geometry)
 chipcae_set_warnings(chipcae_test_import_thresholds)
 add_test(NAME import_thresholds COMMAND chipcae_test_import_thresholds)
 set_tests_properties(import_thresholds PROPERTIES LABELS "mesh;tierA" TIMEOUT 60)
+
+if(CHIPCAE_ENABLE_HDF5)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME vtkhdf_results_serial COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_vtkhdf_results.py $<TARGET_FILE:chipcae_write_results>
+        ${PROJECT_SOURCE_DIR}/tools/samples/s1.stack.json 1)
+    set_tests_properties(vtkhdf_results_serial PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+    if(CHIPCAE_ENABLE_MPI)
+        add_test(NAME vtkhdf_results_mpi_2 COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_vtkhdf_results.py $<TARGET_FILE:chipcae_write_results>
+            ${PROJECT_SOURCE_DIR}/tools/samples/s1.stack.json 2 ${MPIEXEC_EXECUTABLE})
+        set_tests_properties(vtkhdf_results_mpi_2 PROPERTIES LABELS "mpi;io" TIMEOUT 60 SKIP_RETURN_CODE 77)
+    endif()
+endif()
