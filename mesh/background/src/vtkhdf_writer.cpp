@@ -245,9 +245,9 @@ Expected<VtkhdfFiles> write_vtkhdf(const std::filesystem::path& stem,
                     const auto& a =
                         m.attr_table.entries.at(static_cast<std::size_t>(m.attribute[e] - 1));
                     fields["attribute"].push_back(m.attribute[e]);
-                    fields["layer"].push_back(layers[a.layer]);
+                    fields["layer_id"].push_back(layers[a.layer]);
                     fields["region"].push_back(a.region.empty() ? 0 : regions[a.region]);
-                    fields["material"].push_back(a.material);
+                    fields["material_id"].push_back(a.material);
                     fields["body"].push_back(a.body);
                     fields["rank"].push_back(m.partitioning[e]);
                     fields["cell_kind"].push_back(voids.contains(e) ? 2 : cuts.contains(e) ? 1 : 0);
@@ -255,8 +255,13 @@ Expected<VtkhdfFiles> write_vtkhdf(const std::filesystem::path& stem,
                                  : cuts.contains(e) ? cut->sub_volfrac[cuts[e]]
                                                     : 1);
                 }
-                for (auto name :
-                     {"attribute", "layer", "region", "material", "body", "rank", "cell_kind"})
+                for (auto name : {"attribute",
+                                  "layer_id",
+                                  "region",
+                                  "material_id",
+                                  "body",
+                                  "rank",
+                                  "cell_kind"})
                     dataset(cd, name, fields[name], ctx);
                 dataset(cd, "vol_frac", vf, ctx);
                 check(H5Fflush(file, H5F_SCOPE_GLOBAL));
