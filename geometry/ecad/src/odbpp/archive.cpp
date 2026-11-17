@@ -1,4 +1,4 @@
-#include "archive.hpp"
+#include "archive_codecs.hpp"
 
 #include <algorithm>
 #include <array>
@@ -470,9 +470,10 @@ bool ArchiveReader::for_each_line(const std::string& rel,
         error = callback_error;
         return error.empty();
     }
+    const bool final_record = !pending.empty();
     if (!pending.empty() && pending.back() == '\r')
         pending.pop_back();
-    if (status == ReadStatus::success && !pending.empty() && !cb(pending))
+    if (status == ReadStatus::success && final_record && !cb(pending))
         return error.empty();
     return status == ReadStatus::success;
 }

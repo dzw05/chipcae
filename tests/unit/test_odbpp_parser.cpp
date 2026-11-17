@@ -1,4 +1,5 @@
-#include "../../geometry/ecad/src/odbpp/archive.hpp"
+#include "../../geometry/ecad/src/odbpp/archive_codecs.hpp"
+#include "../../geometry/ecad/src/odbpp/parser.hpp"
 
 #include <algorithm>
 #include <array>
@@ -413,13 +414,29 @@ int main() {
         std::string error, decoded;
         std::size_t calls = 0;
         for (;;) {
-            const std::size_t limit = calls++ % 2 ? 7 : 513;
+            const std::size_t limit = calls++ % 3 == 0 ? 1 : (calls % 2 ? 7 : 513);
             if (!cursor.next(block, error, limit))
                 break;
             require(block.size() <= limit, "live gzip output limit");
             decoded.append(block);
         }
         require(error.empty() && decoded == std::string(32745, 'x'), "bounded gzip bytes");
+    });
+    test("odbpp_gzip_multimember_tiny_chunks", [&] {
+        std::istringstream input(bytes(temp / "multi.tgz"));
+        GzipCursor cursor(input);
+        std::string_view block;
+        std::string decoded, error;
+        std::size_t calls = 0;
+        for (;;) {
+            const std::size_t limit = calls++ % 2 ? 17 : 1;
+            if (!cursor.next(block, error, limit))
+                break;
+            require(block.size() <= limit, "multimember chunk bound");
+            decoded.append(block);
+        }
+        require(error.empty() && decoded == bytes(temp / "job.tar"),
+                "buffered trailers and following members with tiny output");
     });
     test("odbpp_directory_crlf_lines", [&] {
         auto p = temp / "crlf-lines";
@@ -691,6 +708,30 @@ int main() {
         const auto files = archive(temp / "normalized.tgz");
         require(files.size() == 1 && files.at("matrix/matrix") == "normalized",
                 "canonical separators and leading ./");
+    });
+    test("odbpp_line_record_semantics", [&] {
+        auto p = temp / "line-semantics";
+        for (const std::string text : {"", "\n", "a\n", "a\n\n", "a", "\r"}) {
+            write(p / "text", text);
+            ArchiveReader reader(p);
+            std::vector<std::string> actual, expected;
+            std::istringstream input(text);
+            std::string line, error;
+            while (std::getline(input, line)) {
+                if (!line.empty() && line.back() == '\r')
+                    line.pop_back();
+                expected.push_back(line);
+            }
+            require(reader.for_each_line(
+                        "text",
+                        [&](auto value) {
+                            actual.emplace_back(value);
+                            return true;
+                        },
+                        error),
+                    error);
+            require(actual == expected, "getline record semantics");
+        }
     });
     test("odbpp_archive_lines", [&] {
         ArchiveReader reader(temp / "job.tgz");
