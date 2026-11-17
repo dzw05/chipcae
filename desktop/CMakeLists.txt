@@ -19,9 +19,10 @@ target_compile_definitions(chipcae_document PRIVATE
     CHIPCAE_SCHEMA_DIR="${CMAKE_CURRENT_BINARY_DIR}/document-schema")
 add_library(chipcae_desktop_ui src/MainWindow.cpp src/MainWindow.hpp
     workers/PreviewWorker.cpp workers/PreviewWorker.hpp
+    stack/StackEditor.cpp stack/StackEditor.hpp stack/LayerModel.cpp stack/LayerModel.hpp
     forms/SchemaValidator.cpp forms/SchemaValidator.hpp
     forms/SchemaForm.cpp forms/SchemaForm.hpp forms/CaseOutline.cpp forms/CaseOutline.hpp)
-target_include_directories(chipcae_desktop_ui PUBLIC src workers forms)
+target_include_directories(chipcae_desktop_ui PUBLIC src workers forms stack)
 target_link_libraries(chipcae_desktop_ui PUBLIC chipcae_document Qt6::Core Qt6::Gui Qt6::Widgets
     Qt6::OpenGLWidgets ${VTK_LIBRARIES} jsoncons::jsoncons)
 target_compile_definitions(chipcae_desktop_ui PRIVATE CHIPCAE_REPOSITORY="${CMAKE_CURRENT_SOURCE_DIR}/..")
@@ -64,4 +65,13 @@ if(CHIPCAE_BUILD_TESTS)
     target_compile_definitions(desktop_forms_test PRIVATE CHIPCAE_REPOSITORY="${CMAKE_CURRENT_SOURCE_DIR}/..")
     add_test(NAME desktop_forms COMMAND desktop_forms_test)
     set_tests_properties(desktop_forms PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+endif()
+
+if(CHIPCAE_BUILD_TESTS)
+    add_executable(desktop_stack tests/stack_editor_test.cpp)
+    target_link_libraries(desktop_stack PRIVATE chipcae_desktop_ui)
+    target_compile_definitions(desktop_stack PRIVATE
+        DOCUMENT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../schema/examples")
+    add_test(NAME desktop_stack COMMAND desktop_stack)
+    set_tests_properties(desktop_stack PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endif()
