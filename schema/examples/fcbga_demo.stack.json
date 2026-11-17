@@ -24,7 +24,7 @@
       "name": "bump_eq",
       "thickness": 0.0001,
       "kind": "Homogenized",
-      "material": "SAC305_ball_eq",
+      "material": "sac305_ball_eq",
       "n_elem_min": 2,
       "grading": 1
     },

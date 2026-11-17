@@ -13,6 +13,28 @@ except ImportError:
 examples = root / "schema/examples"
 parameters = json.loads((root / "schema/parameters.schema.json").read_text(encoding="utf-8"))
 registry = Registry().with_resource(parameters["$id"], Resource.from_contents(parameters))
+material_schema = json.loads((root / "material/schema/material.v1.schema.json").read_text(encoding="utf-8"))
+library_schema = json.loads((root / "material/schema/material-library.v1.schema.json").read_text(encoding="utf-8"))
+registry = registry.with_resource(material_schema["$id"], Resource.from_contents(material_schema))
+registry = registry.with_resource(library_schema["$id"], Resource.from_contents(library_schema))
+library_validator = jsonschema.Draft202012Validator(library_schema, registry=registry)
+library = json.loads((root / "schema/examples/fcbga_demo.materials.json").read_text(encoding="utf-8"))
+library_validator.validate(library)
+material_ids = [item["id"] for item in library["materials"]]
+assert len(material_ids) == len(set(material_ids)), "MATERIAL_ID_DUPLICATE: library ids must be unique"
+stack = json.loads((root / "schema/examples/fcbga_demo.stack.json").read_text(encoding="utf-8"))
+known_material_ids = set(material_ids)
+for layer in stack.get("layers", []):
+    referenced = {layer.get("material")}
+    referenced.update(region.get("material") for region in layer.get("regions", []))
+    assert referenced <= known_material_ids, "MATERIAL_MAPPING_MISSING: stack material is absent from library"
+for invalid_library in (root / "material/schema/examples/negative-library-missing-schema.json",
+                        root / "material/schema/examples/negative-library-invalid-material.json"):
+    try:
+        library_validator.validate(json.loads(invalid_library.read_text(encoding="utf-8")))
+    except jsonschema.ValidationError:
+        continue
+    raise AssertionError(f"negative material library unexpectedly validated: {invalid_library}")
 
 for schema_file, valid, invalid_prefix in [
     (root / "schema/case-1.0.schema.json", examples / "fcbga_demo.case.json", "negative-case-"),
