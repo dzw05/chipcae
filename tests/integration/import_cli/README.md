@@ -48,8 +48,11 @@ option on a valid input/output parse path, the test requires exit 2 and stderr
 containing both `not implemented yet` and the option name. It also covers
 `--t-min` placeholder values using the same substring contract. Conflicts in
 both flag orders require exit 2 only. Missing reserved values on valid parse
-paths require the same diagnostic substrings, including a missing accept value
-after accept-b-tier. Incomplete input/output invocations retain the baseline unknown-argument response.
+paths require baseline help on stdout, empty stderr, and exit 2, including a
+missing accept value after accept-b-tier. Reserved options consume their next
+argument exactly like existing valued options, even when it resembles a flag.
+Incomplete input/output invocations with supplied reserved values retain the
+baseline unknown-argument response.
 The planned `--assembly assembly.json -o out.stack.json` invocation is the explicit
 exception and requires the reserved diagnostic. Help paths
 are checked separately by the `help` case against the baseline help bytes.

@@ -60,16 +60,15 @@ int main(int argc, char** argv) {
             accept_b = true;
         } else if (arg == "--accept" || arg == "--t-min" || arg == "--stack-override" ||
                    arg == "--assembly") {
+            std::filesystem::path value;
+            if (!next(value)) {
+                help();
+                return CliExit::usage;
+            }
             if (reserved_argument.empty())
                 reserved_argument = arg;
             if (arg == "--accept")
                 has_accept = true;
-            std::filesystem::path value;
-            // Unlike existing options, reserved options must not swallow another flag.
-            // Leave it for the next iteration so conflicts and baseline errors are preserved.
-            if (i + 1 >= argc || argv[i + 1][0] == '-')
-                continue;
-            next(value);
             if (arg == "--accept") {
                 options.accept_file = value;
             } else if (arg == "--stack-override") {

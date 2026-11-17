@@ -154,39 +154,28 @@ def run_case(binary, case, generate=False):
                                ["a.xml", "-o", "stack.json", "--accept-b-tier"]):
                     result = invoke(binary, [*prefix, option], directory)
                     check(result.returncode == 2, f"missing {option}: exit {result.returncode}")
-                    if option == "--accept" and "--accept-b-tier" in prefix:
-                        check(b"conflicting arguments" in result.stderr,
-                              f"missing {option}: expected conflict: {result.stderr!r}")
-                    elif prefix:
-                        check(b"not implemented yet" in result.stderr and
-                              option.encode() in result.stderr,
-                              f"missing {option}: reserved diagnostic differs: {result.stderr!r}")
+                    check(result.stdout == (golden / "missing_out_value" / "stdout").read_bytes(),
+                          f"missing {option}: baseline help differs: {result.stdout!r}")
+                    check(result.stderr == b"",
+                          f"missing {option}: unexpected stderr: {result.stderr!r}")
+            # Like existing valued options, reserved options consume even flag-shaped values.
             for option in ("--accept", "--t-min", "--stack-override", "--assembly"):
-                for flag in ("--accept-b-tier", "--report", "--help"):
-                    suffix = [flag, "defects.json"] if flag == "--report" else [flag]
-                    for prefix in (["a.xml"], ["a.xml", "-o", "stack.json"]):
-                        result = invoke(binary, [*prefix, option, *suffix], directory)
-                        check(result.returncode == 2 and result.stdout == b"",
-                              f"{option} before {flag}: unexpected exit/stdout")
-                        if flag == "--help":
-                            expected = b"unknown argument: --help\n"
-                            check(result.stderr == expected,
-                                  f"{option} before help: baseline stderr differs: {result.stderr!r}")
-                        elif len(prefix) == 1:
-                            check(result.stderr == f"unknown argument: {option}\n".encode(),
-                                  f"incomplete {option} before {flag}: {result.stderr!r}")
-                        elif option == "--accept" and flag == "--accept-b-tier":
-                            check(b"conflicting arguments" in result.stderr,
-                                  f"{option} before {flag}: conflict not detected: {result.stderr!r}")
-                        else:
-                            check(b"not implemented yet" in result.stderr and
-                                  option.encode() in result.stderr,
-                                  f"{option} before {flag}: reserved diagnostic differs: {result.stderr!r}")
+                for value in ("--accept-b-tier", "--report", "--help", "-1e-5"):
+                    result = invoke(binary, ["a.xml", "-o", "stack.json", option, value], directory)
+                    check(result.returncode == 2 and result.stdout == b"" and
+                          b"not implemented yet" in result.stderr and option.encode() in result.stderr,
+                          f"{option} value {value}: reserved diagnostic differs: {result.stderr!r}")
+                result = invoke(binary, ["a.xml", "-o", "stack.json", option,
+                                         "--report", "defects.json"], directory)
+                check(result.returncode == 2 and result.stdout == b"" and
+                      result.stderr == b"unknown argument: defects.json\n",
+                      f"{option}: flag-shaped value was not consumed: {result.stderr!r}")
             for flags in (("--accept", "--accept-b-tier", "--accept"),
-                          ("--accept", "x", "--accept", "--accept-b-tier")):
+                          ("--accept", "x", "--accept-b-tier", "--accept")):
                 result = invoke(binary, ["a.xml", "-o", "stack.json", *flags], directory)
-                check(result.returncode == 2 and b"conflicting arguments" in result.stderr,
-                      f"repeated conflict {flags}: {result.stderr!r}")
+                check(result.returncode == 2 and result.stderr == b"" and
+                      result.stdout == (golden / "missing_out_value" / "stdout").read_bytes(),
+                      f"repeated missing value {flags}: expected baseline help")
             for flags in (("--accept-b-tier", "--accept", "x"),
                           ("--accept", "x", "--accept-b-tier")):
                 result = invoke(binary, [FIXTURES / "board_2layer.xml", "-o", "stack.json", *flags], directory)

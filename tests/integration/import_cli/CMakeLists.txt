@@ -10,9 +10,9 @@ add_test(NAME ${import_cli_regression}
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/cli_test.py
             $<TARGET_FILE:chipcae-import> ${import_cli_case})
 foreach(case step reserved help)
-    if(case STREQUAL "step")
+    if("${case}" STREQUAL "step")
         set(name import_cli_step_unchanged)
-    elseif(case STREQUAL "reserved")
+    elseif("${case}" STREQUAL "reserved")
         set(name import_cli_reserved_args)
     else()
         set(name import_cli_help_unchanged)
