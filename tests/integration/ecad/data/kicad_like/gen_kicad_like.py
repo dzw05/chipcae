@@ -45,3 +45,24 @@ p.write_text(p.read_text().replace('type="MATERIAL"','type="OTHER"'))
 emit('missing_spec', [('DIELECTRIC_1','DIELECTRIC','0.1','wrong')], materials=True)
 p = ROOT / 'missing_spec.xml'
 p.write_text(p.read_text().replace('id="spec-DIELECTRIC_1"','id="absent"'))
+
+# I-IPC-GEOM: isolated traces and missing/mixed plating; old outputs stay unchanged.
+def geometry_case(name, body):
+    emit(name, [cu[0]], feature='<LayerFeature layerRef="F.Cu"><Set>'+body+'</Set></LayerFeature>')
+
+def line(y, desc):
+    return f'<Line startX="1" startY="{y}" endX="11" endY="{y}">{desc}</Line>'
+
+geometry_case('inline_linedesc_with_id', line(1, '<LineDesc id="W1" lineWidth="0.4"/>') + line(3, '<LineDescRef id="W1"/>'))
+for end in ['SQUARE', 'FLAT', 'FOO', 'round']:
+    geometry_case('line_end_'+end.lower(), line(1, f'<LineDesc id="W1" lineWidth="0.4" lineEnd="{end}"/>'))
+for end in ['ROUND', 'SQUARE']:
+    geometry_case('arc_'+end.lower(), f'<Arc startX="0" startY="100" endX="200" endY="100" centerX="100" centerY="100" clockwise="false"><LineDesc lineWidth="2" lineEnd="{end}"/></Arc>')
+plated = '<Layer name="drill-plated" layerFunction="DRILL"><Span fromLayer="F.Cu" toLayer="B.Cu"/><SpecRef id="plating"/></Layer><Spec name="plating"><General type="MATERIAL"><Property name="PLATING_THICKNESS" value="0.02" unit="MILLIMETER"/></General></Spec>'
+missing = '<Layer name="drill-missing" layerFunction="DRILL"><Span fromLayer="F.Cu" toLayer="B.Cu"/></Layer>'
+features = '<PadStackDef name="via"><PadstackHoleDef name="hole" diameter="0.5" platingStatus="VIA"/></PadStackDef>'
+for name, count in [('plated',3), ('missing',2)]:
+    features += f'<LayerFeature layerRef="drill-{name}"><Set>' + ''.join(f'<Pad padstackDefRef="via"><Location x="{i*2}" y="{1 if name=="plated" else 4}"/></Pad>' for i in range(count)) + '</Set></LayerFeature>'
+emit('via_plating_mixed', [cu[0]]+core+[cu[-1]], feature=features)
+p = ROOT / 'via_plating_mixed.xml'
+p.write_text(p.read_text().replace('<Step name="board">', plated+missing+'<Step name="board">'))
