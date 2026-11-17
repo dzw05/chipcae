@@ -887,11 +887,16 @@ void invalid_contours() {
     auto j = board();
     j.profile.contours.push_back(square(2));
     rejected(j, {"multiple profile exteriors"});
-    for (bool profile : {false, true}) {
+    for (bool profile : {true, false}) {
         for (const auto& points :
              std::vector<std::vector<OdbPoint>>{{{1, 1}, {0, 0}, {1, 1}, {0, 0}},
                                                 {{1, 1}, {2, 2}, {0, 0}},
-                                                {{0.0001, 0}, {0, 0.0001}, {0, 0}}}) {
+                                                {{0.0001, 0}, {0, 0.0001}, {0, 0}},
+                                                // Nonzero-area crossing, endpoint contact, and
+                                                // adjacent collinear backtracking.
+                                                {{4, 4}, {0, 4}, {3, 0}},
+                                                {{4, 0}, {4, 4}, {2, 0}, {0, 4}},
+                                                {{4, 0}, {2, 0}, {2, 4}, {0, 4}}}) {
             j = board();
             OdbContour c;
             for (const auto& end : points) {
@@ -903,9 +908,11 @@ void invalid_contours() {
                 j.profile.contours = {c};
             else
                 j.features["TOP"].surfaces.front().contours.push_back(c);
-            if (profile)
+            if (profile) {
                 rejected(j, {"degenerate contour"});
-            else
+                require(map_odb(j).model.outline.points.empty(),
+                        "invalid profile rejected before populating outline");
+            } else
                 equal(mapped(j), mapped(board()));
         }
     }

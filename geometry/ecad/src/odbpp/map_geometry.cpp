@@ -12,8 +12,8 @@ namespace {
 using namespace detail;
 using namespace Clipper2Lib;
 constexpr double pi = std::numbers::pi;
-// Validate integer output edges, including collinear overlaps and non-adjacent
-// endpoint contacts. Clipper boolean results can acquire these after rounding.
+// Validate integer contour and output edges, including collinear overlaps and
+// non-adjacent endpoint contacts introduced by input geometry or rounding.
 bool simple_ring(const Path64& path) {
     auto on_segment = [](const Point64& a, const Point64& b, const Point64& p) {
         return CrossProductSign(a, b, p) == 0 && p.x >= std::min(a.x, b.x) &&
@@ -89,7 +89,7 @@ struct Mapper {
             return std::tie(a.x, a.y) < std::tie(b.x, b.y);
         });
         distinct.erase(std::unique(distinct.begin(), distinct.end()), distinct.end());
-        if (distinct.size() < 3 || Area(p) == 0)
+        if (distinct.size() < 3 || Area(p) == 0 || !simple_ring(p))
             return {};
         if ((Area(p) > 0) == c.is_hole)
             std::reverse(p.begin(), p.end());
@@ -409,7 +409,7 @@ ImportResult map_odb(const OdbJob& job, const MapOptions& options) {
                 exterior = true;
                 const auto path = m.contour(c);
                 if (path.empty())
-                    throw std::runtime_error("degenerate contour");
+                    throw std::runtime_error("invalid or degenerate contour");
                 for (const auto& p : path)
                     result.model.outline.points.push_back({p.x, p.y});
             }
