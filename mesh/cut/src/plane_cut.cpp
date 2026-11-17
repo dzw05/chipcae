@@ -333,7 +333,32 @@ generate(const HexMeshArrays& m, const CutGeometry& g, const CutOptions& o) {
                             c.vq_xi[k].push_back(point[k]);
                         c.vq_w.push_back(vol * q.w * 6 / jac);
                     }
+                // Mesh owns quadrature on every cut face, including the
+                // surviving pieces of the original Cartesian boundary faces.
+                int side = -1;
+                if (!f.embedded) {
+                    for (int k = 0; k < 3; ++k)
+                        if (std::abs(f.normal[k]) > .5)
+                            side = 2 * k + (f.normal[k] > 0 ? 1 : 0);
+                }
+                for (const auto& q : triangle_rule(o.quad_degree)) {
+                    V point{};
+                    for (int k = 0; k < 3; ++k)
+                        point = add(point, mul(std::array<V, 3>{a, b, d}[k], q.l[k]));
+                    point = xi(point);
+                    for (int k = 0; k < 3; ++k)
+                        c.sq_xi[k].push_back(point[k]);
+                    c.sq_w.push_back(area * q.w * 2);
+                    c.sq_side.push_back(side);
+                }
                 if (f.embedded) {
+                    for (auto vertex : {a, b, d}) {
+                        auto reference = xi(vertex);
+                        c.eb_points.insert(c.eb_points.end(), vertex.begin(), vertex.end());
+                        c.eb_xi.insert(c.eb_xi.end(), reference.begin(), reference.end());
+                        c.eb_normals.insert(c.eb_normals.end(), f.normal.begin(), f.normal.end());
+                        c.eb_parent_elem.push_back(static_cast<Local>(e));
+                    }
                     if (o.quad_degree == 2)
                         for (int q = 0; q < 3; ++q) {
                             V point = xi(add(mul(add(a, add(b, d)), Real(1) / 6),
@@ -447,6 +472,7 @@ generate(const HexMeshArrays& m, const CutGeometry& g, const CutOptions& o) {
         if (volume / jac < o.small_sub_vf)
             c.small_subs.push_back(static_cast<Local>(c.sub_attribute.size() - 1));
         c.sub_off.push_back(static_cast<Local>(c.sub_attribute.size()));
+        c.sq_off.push_back(static_cast<Local>(c.sq_w.size()));
         c.vq_off.push_back(static_cast<Local>(c.vq_w.size()));
         c.bq_off.push_back(static_cast<Local>(c.bq_w.size()));
         c.exterior_area_vector.push_back(exterior);
@@ -496,6 +522,8 @@ build_cut_layer(HexMeshArrays& mesh, const CutGeometry& g, const CutOptions& o) 
         for (auto& e : c.polyhedra->point_parent_elem)
             e = map[e];
     for (auto& e : c.cut_elem)
+        e = map[e];
+    for (auto& e : c.eb_parent_elem)
         e = map[e];
     if (o.keep_void) {
         for (auto& e : c.void_elem)

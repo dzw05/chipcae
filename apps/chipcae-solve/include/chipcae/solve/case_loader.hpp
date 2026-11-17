@@ -1,6 +1,7 @@
 #pragma once
 #include "chipcae/core/error_code.hpp"
 #include "chipcae/mesh/background/tensor_grid.hpp"
+#include "chipcae/mesh/cut/plane_cut.hpp"
 
 #include <filesystem>
 #include <map>
@@ -35,6 +36,9 @@ struct RunInputs {
     LinearOptions linear;
     std::vector<Load> loads;
     std::vector<std::string> fixed, fields;
+    mesh::cut::CutOptions cut_options;
+    double ghost_penalty = 0.1;
+    bool cut_as_hex = false;
     bool thermal = false;
     double T_ref = 0;
 };
@@ -42,5 +46,6 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
                       const std::filesystem::path& profile_path,
                       int ranks);
 int run(const RunInputs&, const std::filesystem::path&);
-mesh::HexMeshArrays build_mesh(const RunInputs& inputs);
+mesh::HexMeshArrays build_mesh(const RunInputs& inputs,
+                               std::optional<mesh::cut::CutLayerArrays>* cut = nullptr);
 } // namespace chipcae::solve

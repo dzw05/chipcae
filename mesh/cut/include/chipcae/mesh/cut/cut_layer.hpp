@@ -33,6 +33,14 @@ struct CutLayerArrays {
     std::vector<Local> gp_face_minus, gp_face_plus, gp_owner_rank;
     std::map<std::string, std::vector<Local>> face_sets; // EB quadrature face groups.
 
+    // Explicit EB triangles independent of quadrature degree and polyhedron export.
+    std::vector<Real> eb_points, eb_xi, eb_normals;
+    std::vector<Local> eb_parent_elem;
+    // All polyhedron face quadrature, physical area weights. side=-1 denotes
+    // embedded faces; 0..5 are xmin,xmax,ymin,ymax,zmin,zmax on the parent.
+    std::vector<Local> sq_off{0}, sq_side;
+    std::array<std::vector<Real>, 3> sq_xi;
+    std::vector<Real> sq_w;
     Local void_attribute = -1;
     std::vector<Index> cut_elem_gid;
     std::vector<Local> void_elem, small_subs;

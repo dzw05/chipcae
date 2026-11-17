@@ -191,12 +191,34 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
                             layer.regions.end(),
                             [](const auto& region) { return !region.footprint.polygon.empty(); }) ||
                 (layer.copper && layer.copper->polygons))
-                throw InputError(ErrorCode::CUT_UNSUPPORTED, "cut not supported in O2");
-        if (!out.stack.outline.polygon.empty())
-            throw InputError(ErrorCode::CUT_UNSUPPORTED, "cut not supported in O2");
+                throw InputError(ErrorCode::CUT_UNSUPPORTED,
+                                 "internal material cuts are not supported");
+
         const auto& m = c.at("mesh");
         if (m.at("type").as<std::string>() != "aligned_cartesian_cut")
             invalid("invalid mesh type");
+        if (m.contains("cut")) {
+            const auto& co = m.at("cut");
+            if (!co.is_object())
+                invalid("mesh.cut must be an object");
+            for (const auto& item : co.object_range())
+                if (item.key() != "quad_degree" && item.key() != "gamma_g" &&
+                    item.key() != "stabilization" && !item.key().starts_with("x-"))
+                    invalid("unknown mesh.cut option");
+            if (co.contains("quad_degree"))
+                out.cut_options.quad_degree = integer(co, "quad_degree", 2);
+            if (out.cut_options.quad_degree != 2 && out.cut_options.quad_degree != 4 &&
+                out.cut_options.quad_degree != 6 && out.cut_options.quad_degree != 8)
+                invalid("cut quad_degree must be 2, 4, 6 or 8");
+            if (co.contains("gamma_g")) {
+                out.ghost_penalty = finite(co, "gamma_g");
+                if (out.ghost_penalty < 0)
+                    invalid("gamma_g must be nonnegative");
+            }
+            if (co.contains("stabilization") &&
+                co.at("stabilization").as<std::string>() != "ghost_penalty")
+                invalid("unsupported cut stabilization");
+        }
         out.grid.ranks = ranks;
         if (m.contains("nx"))
             out.grid.nx = integer(m, "nx", 1);
@@ -225,7 +247,7 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
         };
         auto check_target = [&](const std::string& target) {
             if (target == "boundary:embedded")
-                throw InputError(ErrorCode::CUT_UNSUPPORTED, "cut not supported in O2");
+                return;
             if (std::regex_match(target, std::regex("face:(xmin|xmax|ymin|ymax|zmin|zmax)")))
                 return;
             if (target.starts_with("layer:"))
@@ -268,6 +290,10 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
                 load.target = obj.at("target").as<std::string>();
                 check_target(load.target);
                 if (load.type == "fixed_temperature") {
+                    if (load.target == "boundary:embedded")
+                        throw InputError(ErrorCode::CUT_UNSUPPORTED,
+                                         "embedded fixed temperature is not supported: Nitsche is "
+                                         "not implemented");
                     load.T = finite(obj, "T");
                     ++anchors;
                 } else if (load.type == "convection") {
@@ -300,6 +326,10 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
                 (void)check_id(fixed);
                 auto target = fixed.at("target").as<std::string>();
                 check_target(target);
+                if (target == "boundary:embedded")
+                    throw InputError(
+                        ErrorCode::CUT_UNSUPPORTED,
+                        "embedded fixed displacement is not supported: Nitsche is not implemented");
                 out.fixed.push_back(target);
             }
             if (out.fixed.empty())

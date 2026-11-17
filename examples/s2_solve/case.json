@@ -1,0 +1,46 @@
+{
+  "schema": "chipcae.case/1.0",
+  "stack": {
+    "ref": "stack.json"
+  },
+  "materials": {
+    "ref": "materials.json"
+  },
+  "mesh": {
+    "type": "aligned_cartesian_cut",
+    "nx": 8,
+    "ny": 8,
+    "levels": 1,
+    "min_elems_per_layer": 2,
+    "max_ratio": 10,
+    "cut": {
+      "stabilization": "ghost_penalty",
+      "quad_degree": 6,
+      "gamma_g": 0.1
+    }
+  },
+  "physics": [
+    {
+      "id": "mech",
+      "solver": "fem.solid"
+    }
+  ],
+  "loads": [
+    {
+      "type": "uniform_temperature",
+      "T_ref": 400,
+      "T_target": 300
+    }
+  ],
+  "constraints": {
+    "rigid": "3-2-1"
+  },
+  "solver": {
+    "linear": {
+      "preconditioner": "direct"
+    }
+  },
+  "output": {
+    "format": "vtkhdf"
+  }
+}

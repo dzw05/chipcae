@@ -217,9 +217,9 @@ with tempfile.TemporaryDirectory() as tmp:
     materials = [card('a',25e9,.3,1e-5,2),card('b',25e9,.3,1e-5,2),card('copper',110e9,.34,17e-6,400)]
     for fraction in (0, .3, 1):
         _, _, p, _, U, _ = run('copper-'+str(fraction),mixture_case,layers,materials,copper=fraction)
-        alpha = (fraction*110e9*17e-6+(1-fraction)*25e9*1e-5)/(fraction*110e9+(1-fraction)*25e9)
+        alpha = (fraction*110e9/(1-.34)*17e-6+(1-fraction)*25e9/(1-.3)*1e-5)/(fraction*110e9/(1-.34)+(1-fraction)*25e9/(1-.3))
         nu = fraction*.34+(1-fraction)*.3
-        alpha_z = fraction*1.34*17e-6+(1-fraction)*1.3*1e-5-nu*alpha
+        alpha_z = fraction*(17e-6-2*.34/(1-.34)*(alpha-17e-6))+(1-fraction)*(1e-5-2*.3/(1-.3)*(alpha-1e-5))
         expected = p*np.array([alpha,alpha,alpha_z])*(-100)
         assert np.max(abs(U-expected)) < 1e-11
     fixed = copy.deepcopy(mixture_case)

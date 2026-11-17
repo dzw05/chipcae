@@ -401,7 +401,7 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                  p.hex.size() % 8 == 0 && p.T.size() == np && p.U.size() == 3 * np &&
                  p.layer_id.size() == nc && p.material_id.size() == nc &&
                  p.cell_kind.size() == nc && (p.elem_gid.empty() || p.elem_gid.size() == nc) &&
-                 empty(local.embedded_boundary) && empty(local.particles);
+                 empty(local.particles);
     for (auto id : p.hex)
         valid = valid && id >= 0 && static_cast<std::size_t>(id) < np;
     for (auto kind : p.cell_kind)
@@ -416,6 +416,18 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
 #endif
     agree(!gid_any || nc == 0 || gid_present);
     agree(steps_.empty() || gids_ == (gid_any != 0));
+    const auto& eb = local.embedded_boundary;
+    bool eb_valid =
+        eb.face_conn.empty() && eb.hex.empty() && eb.poly_faces.empty() &&
+        eb.face_off == std::vector<Index>{0} && eb.poly_off == std::vector<Index>{0} &&
+        eb.offsets == std::vector<Index>{0} && eb.points.size() % 3 == 0 &&
+        eb.connectivity.size() % 3 == 0 && eb.T.size() == eb.points.size() / 3 &&
+        eb.U.size() == eb.points.size() && eb.elem_gid.size() == eb.connectivity.size() / 3 &&
+        eb.layer_id.size() == eb.elem_gid.size() && eb.material_id.size() == eb.elem_gid.size() &&
+        eb.cell_kind.size() == eb.elem_gid.size();
+    for (auto v : eb.connectivity)
+        eb_valid &= v >= 0 && static_cast<std::size_t>(v) < eb.points.size() / 3;
+    agree(eb_valid);
     bool parallel = false;
 #if defined(H5_HAVE_PARALLEL) && defined(CHIPCAE_ENABLE_MPI)
     parallel = size_ > 1 && !std::getenv("CHIPCAE_RESULTS_SERIAL");
@@ -531,7 +543,10 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                 }));
             });
             ResultsPartition none;
-            const auto& q = block == 0 ? p : block == 1 ? cut : none;
+            const auto& q = block == 0   ? p
+                            : block == 1 ? cut
+                            : block == 2 ? local.embedded_boundary
+                                         : none;
             auto emit = [&]<class T>(hid_t target,
                                      const char* name,
                                      const std::vector<T>& v,
@@ -602,11 +617,14 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                         if (t < 0)
                             throw std::runtime_error("create topology");
                     });
-                    topology(t, {}, 1);
+                    if (block == 2 && std::string(name) == "Polygons")
+                        topology(t, q.connectivity, 3);
+                    else
+                        topology(t, {}, 1);
                     if (t >= 0)
                         check(hcall(parallel, rank_, "H5Gclose", [&] { return H5Gclose(t); }));
                 }
-            if (block < 2) {
+            if (block < 3) {
                 hid_t pd = -1, cd = -1;
                 metadata([&] {
                     pd = hcall(parallel, rank_, "H5Gcreate2", [&] {
@@ -618,9 +636,9 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                     if (pd < 0 || cd < 0)
                         throw std::runtime_error("create fields");
                 });
-                if (selected("T") && (block == 0 || (schema & 1)))
+                if (selected("T") && (block != 1 || (schema & 1)))
                     emit(pd, "T", q.T);
-                if (selected("U") && (block == 0 || (schema & 2)))
+                if (selected("U") && (block != 1 || (schema & 2)))
                     emit(pd, "U", q.U, 3);
                 if (selected("layer_id") || block == 1)
                     emit(cd, "layer_id", q.layer_id);
@@ -637,7 +655,7 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                     check(hcall(parallel, rank_, "H5Gclose", [&] { return H5Gclose(cd); }));
                 }
             }
-            if (block >= 2) {
+            if (block >= 3) {
                 metadata([&] {
                     H5 pd(hcall(parallel,
                                 rank_,
@@ -689,12 +707,13 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
     steps_.push_back({n, time, std::move(filename)});
 #endif
 }
-void ResultsWriter::add_summary(std::string name, double value, std::string unit, int step) {
+void ResultsWriter::add_summary(
+    std::string name, double value, std::string unit, int step, std::string method) {
     if (!std::isfinite(value))
         throw std::invalid_argument("nonfinite summary");
     quoted(name);
     quoted(unit);
-    summary_.push_back({std::move(name), value, std::move(unit), step});
+    summary_.push_back({std::move(name), value, std::move(unit), step, std::move(method)});
 }
 void ResultsWriter::finalize() {
     bool ok = true;
@@ -767,7 +786,10 @@ void ResultsWriter::finalize() {
                     out << ',';
                 first = false;
                 out << "{\"name\":" << quoted(s.name) << ",\"value\":" << s.value
-                    << ",\"unit\":" << quoted(s.unit) << ",\"step\":" << s.step << '}';
+                    << ",\"unit\":" << quoted(s.unit) << ",\"step\":" << s.step;
+                if (!s.method.empty())
+                    out << ",\"method\":" << quoted(s.method);
+                out << '}';
             }
             out << "]";
             if (mesh_) {

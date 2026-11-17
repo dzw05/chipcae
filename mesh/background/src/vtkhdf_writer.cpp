@@ -277,16 +277,13 @@ Expected<VtkhdfFiles> write_vtkhdf(const std::filesystem::path& stem,
                                 }
                                 weights.push_back(cut->bq_w[q]);
                             }
-                            // Three triangle-rule points determine each planar facet exactly.
-                            for (Local q = cut->bq_off[sub]; q + 2 < cut->bq_off[sub + 1]; q += 3)
-                                for (int v = 0; v < 3; ++v) {
+                            // Explicit mesh-owned triangles are independent of bq degree.
+                            for (std::size_t v = 0; v < cut->eb_parent_elem.size(); ++v)
+                                if (cut->eb_parent_elem[v] == e) {
                                     triangles.push_back(static_cast<Index>(eb.size() / 3));
                                     for (int k = 0; k < 3; ++k) {
-                                        eb.push_back(2 * physical(q + v, k) -
-                                                     (physical(q, k) + physical(q + 1, k) +
-                                                      physical(q + 2, k)) /
-                                                         3);
-                                        normals.push_back(cut->bq_n[k][q]);
+                                        eb.push_back(cut->eb_points[3 * v + k]);
+                                        normals.push_back(cut->eb_normals[3 * v + k]);
                                     }
                                     weights.push_back(0);
                                 }

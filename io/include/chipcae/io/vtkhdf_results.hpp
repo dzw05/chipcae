@@ -39,7 +39,8 @@ public:
                       "T", "U", "layer_id", "material_id", "cell_kind", "elem_gid", "volume"});
     void set_mesh(MeshSummary mesh);
     void write_step(int n, double time, const ResultsStep& local);
-    void add_summary(std::string name, double value, std::string unit, int step);
+    void add_summary(
+        std::string name, double value, std::string unit, int step, std::string method = {});
     void finalize();
 
 private:
@@ -53,6 +54,7 @@ private:
         double value;
         std::string unit;
         int step;
+        std::string method;
     };
     std::filesystem::path run_;
     std::vector<Step> steps_;
