@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from tools.vv.calculix_trilayer.generate import build_mesh, parse_frd, top_node_count, w_bfp_from_frd, write_inp  # noqa: E402
+from tools.vv.calculix_trilayer.generate import build_mesh, ccx_version, parse_frd, top_node_count, w_bfp_from_frd, write_inp  # noqa: E402
 
 
 class FrdParserTest(unittest.TestCase):
@@ -137,6 +137,36 @@ class FrdParserTest(unittest.TestCase):
             with patch("tools.vv.calculix_trilayer.generate.parse_frd", return_value=(nodes, disp)):
                 with self.assertRaisesRegex(RuntimeError, "expected .* C3D20 top nodes"):
                     w_bfp_from_frd(Path("sample.frd"), expected)
+
+    def test_top_coordinates_must_match_expected(self):
+        for nodes in ({1: (0, 0, 0.1), 2: (1, 0, 0.1)},
+                      {2: (1, 0, 0.1)}):
+            with self.subTest(nodes=nodes), patch(
+                "tools.vv.calculix_trilayer.generate.parse_frd",
+                return_value=(nodes, {1: (0, 0, 1)}),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "coordinate"):
+                    w_bfp_from_frd(Path("sample.frd"), {1})
+
+    def test_ccx_version_requires_successful_version_output(self):
+        for code, stdout, stderr in (
+            (0, "This is Version 2.23\n", ""),
+            (201, "This is Version 2.23\n", ""),
+            (201, "", ""),
+            (0, "", "\nThis is Version 2.23\n"),
+            (0, "", ""), (0, "unknown", ""),
+            (1, "This is Version 2.23", "failed"),
+            (0, "This is Version 2.23 extra", ""),
+        ):
+            with self.subTest(code=code, stdout=stdout, stderr=stderr), patch(
+                "tools.vv.calculix_trilayer.generate.subprocess.run",
+                return_value=subprocess.CompletedProcess([], code, stdout, stderr),
+            ):
+                if code in (0, 201) and "This is Version 2.23\n" in stdout + stderr:
+                    self.assertEqual(ccx_version(), "This is Version 2.23")
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "valid version"):
+                        ccx_version()
 
     def test_coordinate_and_displacement_records(self):
         # Literal CalculiX ASCII short-format records, including abutting negatives.

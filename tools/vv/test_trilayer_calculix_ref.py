@@ -29,7 +29,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
                     "host"}
         self.assertIsInstance(data, dict)
         self.assertEqual(required, data.keys(), "unexpected or missing top-level fields")
-        for field in ("calculix_version", "host"):
+        for field in ("kind", "element_type", "selected_mesh", "calculix_version", "host"):
             self.assertIsInstance(data[field], str)
             self.assertTrue(data[field].strip())
         self.assertRegex(data["calculix_version"], r"\AThis is Version [0-9]+\.[0-9]+(?:\.[0-9]+)?\Z")
@@ -133,7 +133,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         }.items():
             variants.extend(dict(data, **{field: value}) for value in values)
         for value in (123, "", "   ", None, True):
-            for field in ("calculix_version", "host"):
+            for field in ("kind", "element_type", "selected_mesh", "calculix_version", "host"):
                 variants.append(dict(data, **{field: value}))
         for names in (("coarse", "coarse"), ("fine", "fine"),
                       ("coarse", "unknown"), ("coarse", "fine", "fine")):

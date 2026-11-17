@@ -235,10 +235,12 @@ def w_bfp_from_frd(frd: Path, expected_top) -> float:
         raise RuntimeError(f"no DISP records parsed from {frd}")
     selected = set(disp)
     geometric_top = {nid for nid, xyz in nodes.items() if xyz[2] >= H - 1e-12 * H}
-    if selected != expected_top or not expected_top <= geometric_top:
+    if selected != expected_top or geometric_top != expected_top:
         raise RuntimeError(
             f"{frd}: expected {len(expected_top)} C3D20 top nodes, got {len(selected)}; "
-            f"missing={sorted(expected_top - selected)}, extra={sorted(selected - expected_top)}"
+            f"missing={sorted(expected_top - selected)}, extra={sorted(selected - expected_top)}; "
+            f"coordinate missing={sorted(expected_top - geometric_top)}, "
+            f"coordinate extra={sorted(geometric_top - expected_top)}"
         )
     rows = []
     for nid in sorted(expected_top):
@@ -256,8 +258,13 @@ def w_bfp_from_frd(frd: Path, expected_top) -> float:
 
 def ccx_version() -> str:
     r = subprocess.run([CCX, "-v"], capture_output=True, text=True)
-    out = (r.stdout or r.stderr or "").strip() or f"exit {r.returncode}"
-    return out.splitlines()[0][:120]
+    out = "\n".join((r.stdout or "", r.stderr or ""))
+    versions = [line.strip() for line in out.splitlines()
+                if re.fullmatch(r"This is Version [0-9]+\.[0-9]+(?:\.[0-9]+)?", line.strip())]
+    # CalculiX 2.23 exits with 201 for its version-only invocation.
+    if r.returncode not in (0, 201) or len(versions) != 1:
+        raise RuntimeError(f"ccx -v failed to report a valid version (exit {r.returncode}): {out.strip()!r}")
+    return versions[0]
 
 
 def run_mesh(workdir: Path, name: str):
