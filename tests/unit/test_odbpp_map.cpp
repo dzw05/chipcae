@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -13,6 +14,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 
@@ -328,7 +330,206 @@ void negative() {
     f.pads.push_back({{4, 4}, 0, false});
     near(area(mapped(j)), 64e6 - std::numbers::pi * 1e6, 1e-3);
 }
+// Read only the fixture's S-expression structure, independently of the mapper.
+struct KicadNode {
+    std::string value;
+    std::vector<KicadNode> children;
+};
+KicadNode kicad_node(std::istream& in) {
+    in >> std::ws;
+    KicadNode node;
+    if (in.peek() == '(') {
+        in.get();
+        while (in >> std::ws && in.peek() != ')') {
+            require(in.peek() != EOF, "unterminated KiCad fixture node");
+            node.children.push_back(kicad_node(in));
+        }
+        require(in.get() == ')', "KiCad closing parenthesis");
+    } else if (in.peek() == '"') {
+        in.get();
+        std::getline(in, node.value, '"');
+    } else {
+        while (in && in.peek() != EOF && in.peek() != ')' &&
+               !std::isspace(static_cast<unsigned char>(in.peek())))
+            node.value += static_cast<char>(in.get());
+    }
+    return node;
+}
+const KicadNode& child(const KicadNode& node, std::string_view key) {
+    for (const auto& c : node.children)
+        if (!c.children.empty() && c.children[0].value == key)
+            return c;
+    throw std::runtime_error("missing KiCad fixture field: " + std::string(key));
+}
+std::filesystem::path source_root() {
+    return std::filesystem::path(__FILE__).parent_path().parent_path().parent_path();
+}
+KicadNode kicad_board() {
+    std::ifstream in(source_root() / "tools/fixtures/kicad_odbpp/kicad4l.kicad_pcb");
+    require(bool(in), "open KiCad project fixture");
+    return kicad_node(in);
+}
+// The E-ODB-1 parser is a stub on this branch. Read the exported matrix and
+// attrlists directly for this mapper test; do not derive ODB inputs from KiCad.
+OdbJob kicad_job() {
+    const auto root = source_root() / "tests/integration/ecad/data/odbpp/kicad4l";
+    std::ifstream matrix(root / "matrix/matrix");
+    require(bool(matrix), "open exported matrix");
+    OdbJob job;
+    job.step = "pcb";
+    std::string line;
+    OdbLayer layer;
+    bool in_layer = false;
+    while (std::getline(matrix, line)) {
+        std::istringstream fields(line);
+        std::string field;
+        fields >> field;
+        if (field == "LAYER") {
+            layer = {};
+            in_layer = true;
+        } else if (in_layer && field == "}") {
+            job.layers.push_back(layer);
+            in_layer = false;
+        } else if (in_layer) {
+            const auto eq = field.find('=');
+            const auto key = field.substr(0, eq), value = field.substr(eq + 1);
+            if (key == "NAME")
+                layer.name = value;
+            if (key == "TYPE")
+                layer.type = value;
+            if (key == "ROW")
+                layer.row = std::stoi(value);
+            if (key == "START_NAME")
+                layer.start_name = value;
+            if (key == "END_NAME")
+                layer.end_name = value;
+        }
+    }
+    for (const auto& l : job.layers) {
+        std::ifstream attrs(root / "steps/pcb/layers" / fold_ascii(l.name) / "attrlist");
+        require(bool(attrs), "open exported attrlist: " + l.name);
+        while (std::getline(attrs, line)) {
+            const auto eq = line.find('=');
+            if (eq != std::string::npos && line.starts_with('.'))
+                job.attrs.layer[l.name][line.substr(0, eq)] = line.substr(eq + 1);
+        }
+    }
+    require(!job.layers.empty(), "exported matrix has layers");
+    return job;
+}
+void kicad_stackup() {
+    const auto pcb = kicad_board();
+    const auto& table = child(child(pcb, "setup"), "stackup");
+    std::vector<ThicknessRecord> records;
+    const auto job = kicad_job();
+    const auto raw = mapped(job);
+    // KiCad 10.0.8 exports 0.035 mm copper as 0.03 mm. Preserve that raw
+    // value, then exercise explicit overrides to recover the project stackup.
+    const ThicknessOverrides overrides{
+        {"F.CU", 35e-6}, {"IN1.CU", 35e-6}, {"IN2.CU", 35e-6}, {"B.CU", 35e-6}};
+    const auto model = mapped(job, {&overrides, &records});
+    std::size_t index = 0;
+    std::size_t copper_count = 0;
+    for (const auto& row : table.children) {
+        if (row.children.empty() || row.children[0].value != "layer")
+            continue;
+        const auto type = child(row, "type").children.at(1).value;
+        if (type != "copper" && type != "core" && type != "prepreg")
+            continue;
+        require(index < model.layers.size(), "missing mapped KiCad stack layer");
+        auto name = fold_ascii(row.children.at(1).value);
+        std::replace(name.begin(), name.end(), ' ', '_');
+        const auto& actual = model.layers[index];
+        const bool copper = type == "copper";
+        copper_count += copper;
+        require(fold_ascii(actual.name) == name && actual.copper == copper,
+                "KiCad stack table order and copper flags");
+        const double thickness = std::stod(child(row, "thickness").children.at(1).value) * 1e-3;
+        near(actual.thickness_m, thickness, 1e-6);
+        require(index < records.size() && records[index].layer == actual.name &&
+                    records[index].source == (copper ? "override" : "odb"),
+                "KiCad exported thickness provenance");
+        if (copper) {
+            near(raw.layers[index].thickness_m, 30e-6, 1e-6);
+            require(records[index].odb_value_m.has_value(), "lossy copper export recorded");
+            require(std::abs(*records[index].odb_value_m - 30e-6) <= 1e-12,
+                    "original exported copper thickness");
+        } else {
+            near(raw.layers[index].thickness_m, thickness, 1e-6);
+            require(!records[index].odb_value_m, "unmodified dielectric provenance");
+        }
+        near(records[index].thickness_m, thickness, 1e-6);
+        ++index;
+    }
+    require(copper_count == 4 && index == 7 && index == model.layers.size() &&
+                index == records.size(),
+            "complete four-copper-layer KiCad stack table");
+}
+void kicad_via() {
+    auto job = kicad_job();
+    const std::string drill = "DRILL_PLATED_F.CU-B.CU";
+    const auto file = source_root() / "tests/integration/ecad/data/odbpp/kicad4l/steps/pcb/layers" /
+                      fold_ascii(drill) / "features";
+    std::ifstream in(file);
+    require(bool(in), "open exported drill features");
+    auto& features = job.features[drill];
+    std::string line;
+    while (std::getline(in, line)) {
+        std::istringstream fields(line);
+        std::string tag;
+        fields >> tag;
+        if (tag.starts_with('$')) {
+            int index = std::stoi(tag.substr(1));
+            std::string symbol;
+            fields >> symbol;
+            // KiCad's r alias is outside this mapper's round/rect/oval contract.
+            if (symbol.starts_with('r'))
+                symbol = "round" + symbol.substr(1);
+            require(index == static_cast<int>(features.symbols.size()), "fixture symbol order");
+            features.symbols.push_back({symbol});
+        } else if (tag == "P") {
+            OdbPad pad;
+            fields >> pad.at.x >> pad.at.y >> pad.sym;
+            require(bool(fields), "exported drill pad fields");
+            features.pads.push_back(pad);
+        }
+    }
+    // KiCad omits plating thickness; supply it explicitly, never as a production default.
+    job.attrs.layer[drill][".plating_thickness"] = "0.025";
+    const auto model = mapped(job);
+    const auto pcb = kicad_board();
+    const auto& footprint = child(pcb, "footprint");
+    const auto& origin = child(footprint, "at");
+    std::size_t count = 0;
+    for (const auto& pad : footprint.children) {
+        if (pad.children.empty() || pad.children[0].value != "pad")
+            continue;
+        const auto& hole = child(pad, "drill");
+        if (hole.children.at(1).value == "oval")
+            continue;
+        require(count < model.vias.size(), "missing KiCad circular hole");
+        const auto& at = child(pad, "at");
+        const auto& actual = model.vias[count++];
+        const double x =
+            std::stod(origin.children.at(1).value) + std::stod(at.children.at(1).value);
+        const double y =
+            std::stod(origin.children.at(2).value) + std::stod(at.children.at(2).value);
+        require(std::abs(actual.position[0] - x * 1000) <= 1 &&
+                    std::abs(actual.position[1] + y * 1000) <= 1,
+                "KiCad hole position (ODB Y inverted)");
+        require(std::abs(actual.outer_radius_dbu - std::stod(hole.children.at(1).value) * 500) <= 1,
+                "KiCad hole outer radius");
+        require(actual.start_layer == "F.CU" && actual.end_layer == "B.CU",
+                "KiCad through-hole span");
+    }
+    require(count == 1 && count == model.vias.size(), "all KiCad circular holes mapped");
+    require(std::any_of(model.report.unsupported.begin(),
+                        model.report.unsupported.end(),
+                        [&](const auto& item) { return item.element == "Slot:" + drill; }),
+            "KiCad oval drill remains unsupported");
+}
 void stackup() {
+    kicad_stackup();
     std::vector<ThicknessRecord> records;
     auto m = mapped(board(), {nullptr, &records});
     require(records.size() == 4, "one thickness record per stack layer");
@@ -601,6 +802,7 @@ void unknown_drill_symbols() {
     }
 }
 void via() {
+    kicad_via();
     auto j = board();
     OdbLayer l;
     l.name = "DRILL";
