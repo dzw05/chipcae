@@ -60,13 +60,14 @@ void RunMonitor::consume(const io::Event& event) {
             if constexpr (std::is_same_v<T, io::Progress>)
                 progress = x;
             else if constexpr (std::is_same_v<T, io::State>) {
-                static const char* names[] = {"Unspecified",
-                                              "Starting",
-                                              "Running",
-                                              "Paused",
-                                              "Awaiting exit",
-                                              "Awaiting exit"};
-                state = names[static_cast<unsigned>(x.value)];
+                static const char* names[] = {
+                    "Unspecified", "Starting", "Running", "Paused", "Completed", "Failed"};
+                const auto value = static_cast<unsigned>(x.value);
+                if (value >= sizeof(names) / sizeof(names[0])) {
+                    diagnostics.append("invalid state value");
+                    return;
+                }
+                state = names[value];
                 reconcile();
             } else if constexpr (std::is_same_v<T, io::Residual>)
                 residuals.push_back(

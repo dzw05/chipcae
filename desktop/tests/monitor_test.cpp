@@ -168,6 +168,16 @@ int main(int argc, char** argv) {
     check(tailer.poll().events.empty(), "replacement no replay");
     write(tail, bytes.first(20), true);
     check(tailer.poll().events.empty() && tailer.offset() == end, "truncated tail");
+    RunMonitor stateMonitor(dir.path(), EventFormat::LegacyCaelog1);
+    stateMonitor.consume({1, 0, chipcae::io::State{chipcae::io::State::Value::completed, 2, 1.5}});
+    check(stateMonitor.state == "Completed", "completed state label");
+    stateMonitor.consume({2, 0, chipcae::io::State{chipcae::io::State::Value::failed, 2, 1.5}});
+    check(stateMonitor.state == "Failed", "failed state label");
+    stateMonitor.consume(
+        {3, 0, chipcae::io::State{static_cast<chipcae::io::State::Value>(6), 2, 1.5}});
+    check(stateMonitor.state == "Failed" &&
+              stateMonitor.diagnostics.contains("invalid state value"),
+          "invalid state preserves label and reports diagnostic");
     RunMonitor monitor(dir.path(), EventFormat::LegacyCaelog1);
     monitor.trackStop(1, "id");
     monitor.checkTimeout(30000);

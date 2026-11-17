@@ -8,6 +8,8 @@ EventTailer::EventTailer(QString path, EventFormat format)
 DecodeResult EventTailer::poll() {
     struct stat info{};
     if (::stat(path_.toLocal8Bit().constData(), &info) == 0) {
+        // Keep the sequence watermark across replacement/truncation to avoid replay.
+        // A tailer belongs to one run; a producer restarting sequences needs a new tailer.
         if (device_ != quint64(info.st_dev) || inode_ != quint64(info.st_ino) ||
             quint64(info.st_size) < offset_)
             offset_ = 0;
