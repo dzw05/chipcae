@@ -66,6 +66,7 @@ int main(int argc, char** argv) {
             chipcae::solve::load_inputs(args.at("--case"), args.at("--profile"), mpi.size);
 #ifdef MFEM_USE_CUDA
         // MFEM device state is process-global; keep it alive through solve::run below.
+        // Device selection alone does not guarantee CUDA support in downstream solver operators.
         std::unique_ptr<mfem::Device> device;
 #endif
         if (inputs.backend == "cuda") {
