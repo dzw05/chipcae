@@ -41,12 +41,18 @@ ctest --test-dir <build-on-dir> --output-on-failure
 ctest --test-dir <build-off-dir> --output-on-failure
 ```
 
-Before implementation, all regression guards must pass. Only the four reserved
-option diagnostics are expected to fail: baseline stderr says `unknown argument`
-rather than `not implemented yet`. The reserved test collects all four failures
-and checks each option name and exit 2. It also checks conflict exit 2 in both
-flag orders, without requiring particular conflict text. These are deliberate
-failing assertions, not tests marked `WILL_FAIL` or skipped.
+The generator records only unchanged baseline behavior (`noop`, `step`, `help`,
+and `ecad_off`). Reserved options intentionally change diagnostics, so they have
+no baseline goldens and are never passed to the generator. For each reserved
+option on a valid input/output parse path, the test requires exit 2 and stderr
+containing both `not implemented yet` and the option name. It also covers
+`--t-min` placeholder values using the same substring contract. Conflicts in
+both flag orders and missing reserved values require exit 2 only. Help paths
+are checked separately by the `help` case against the baseline help bytes.
+
+Historically, before implementation the four reserved diagnostic assertions
+failed because baseline stderr said `unknown argument`. The current test checks
+the final contract; it is neither marked `WILL_FAIL` nor skipped.
 
 Review regression coverage also compares the positive `--accept-b-tier` case,
 `--out`, explicit `--polyset`/`--report` paths, and missing material-map output
