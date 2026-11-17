@@ -123,6 +123,37 @@ class Edges(unittest.TestCase):
                 self.assertEqual(result['temperature'], dict(
                     min=100., max=999., top_min=999., top_max=999., top_mean=999.))
 
+    def test_empty_trailing_block_temperature_alignment(self):
+        for empty_t in (False, True):
+            with self.subTest(empty_t=empty_t), tempfile.TemporaryDirectory() as tmp:
+                run = Path(tmp)
+                step, _ = fixture(run, cut=True)
+                with h5py.File(step, 'r+') as f:
+                    block = f['VTKHDF/cut']
+                    for path in ('Points', 'PointData', 'CellData', 'Types'):
+                        del block[path]
+                    block['Points'] = np.empty((0, 3), dtype='float64')
+                    block['NumberOfPoints'][...] = 0
+                    block['NumberOfCells'][...] = 0
+                    if empty_t:
+                        block['PointData/T'] = np.empty(0, dtype='float64')
+                    # Put the top point second so top indices differ from
+                    # indices into the subset of top temperatures.
+                    populated = f['VTKHDF/hex']
+                    del populated['Points']
+                    del populated['PointData/T']
+                    del populated['PointData/U']
+                    populated['NumberOfPoints'][...] = [1, 1]
+                    populated['PointData/U'] = np.zeros((2, 3), dtype='float64')
+                    populated['Points'] = [[0., 0., 0.], [2., 0., 1.]]
+                    populated['PointData/T'] = [100., 999.]
+                result = summarize(run)
+                self.assertEqual(result['blocks']['cut']['points'], 0)
+                self.assertEqual(result['blocks']['hex']['points'], 2)
+                self.assertEqual(result['warpage']['n_top_points'], 1)
+                self.assertEqual(result['temperature'], dict(
+                    min=100., max=999., top_min=999., top_max=999., top_mean=999.))
+
     def test_duplicate_temperature_correspondence(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)

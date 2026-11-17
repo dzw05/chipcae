@@ -89,12 +89,12 @@ def _read(root):
             if c or path in block:
                 fields[field] = _array(block, path, (c,),
                                        'int64' if field == 'elem_gid' else 'int32')
+        types = (_array(block, 'Types', (c,), 'uint8')
+                 if c or 'Types' in block else np.array([], dtype='uint8'))
         if name == 'hex':
             counts = _counts(fields.get('cell_kind', np.array([], dtype='int32')))
             blocks[name] = dict(points=n, cells=c, cell_kind_counts=counts)
         else:
-            types = (_array(block, 'Types', (c,), 'uint8')
-                     if c or 'Types' in block else np.array([], dtype='uint8'))
             blocks[name] = dict(points=n, cells=c, type_counts=_counts(types))
         data.append((points, u, t))
     eb = root.get('eb_surface')
@@ -187,10 +187,14 @@ def _summarize(run_dir, top_rel_tol):
     if any(len(p) and t is not None for p, _, t in data):
         _require(all(d[2] is not None for d in data if len(d[0])),
                  "partial T coverage: temperature required for every nonempty block")
-        # Mirror the point concatenation block for block. Missing T is valid
-        # only for empty geometry here, so it contributes a zero-length slice.
-        all_t = np.concatenate([t if t is not None else np.empty(0, dtype='float64')
-                                for _, _, t in data])
+        # Fill the same slices used by concatenated points, including empty
+        # blocks without T. Coverage above guarantees T for every filled slice.
+        all_t = np.empty(len(points), dtype='float64')
+        offset = 0
+        for p, _, t in data:
+            if len(p):
+                all_t[offset:offset + len(p)] = t
+            offset += len(p)
         # Keep temperatures paired with the original point indices selected
         # above; duplicate coordinates retain their first stored value.
         tt = all_t[top]

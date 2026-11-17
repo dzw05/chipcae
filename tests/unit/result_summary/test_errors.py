@@ -48,8 +48,6 @@ class Errors(unittest.TestCase):
         for block in ('hex', 'cut'):
             for field in ('PointData/U', 'CellData/layer_id', 'CellData/material_id',
                           'CellData/cell_kind', 'CellData/elem_gid', 'Types'):
-                if block == 'hex' and field == 'Types':
-                    continue
                 with self.subTest(block=block, field=field), tempfile.TemporaryDirectory() as tmp:
                     run = Path(tmp)
                     step, _ = fixture(run, cut=True)
@@ -76,6 +74,32 @@ class Errors(unittest.TestCase):
                     self.assertEqual(main([str(run)]), 0 if dtype == 'uint8' else 14)
                 if dtype != 'uint8':
                     self.assertIn('cut/Types: expected uint8', err.getvalue())
+
+    def test_types_validation(self):
+        for block in ('hex', 'cut'):
+            for empty in (False, True):
+                for invalid in ('dtype', 'length', 'rank', 'valid'):
+                    with self.subTest(block=block, empty=empty, invalid=invalid), tempfile.TemporaryDirectory() as tmp:
+                        run = Path(tmp)
+                        step, _ = fixture(run, cut=True)
+                        with h5py.File(step, 'r+') as f:
+                            group = f['VTKHDF/' + block]
+                            if empty:
+                                group['NumberOfCells'][...] = 0
+                                for field in list(group['CellData']):
+                                    dtype = group['CellData/' + field].dtype
+                                    del group['CellData/' + field]
+                                    group['CellData/' + field] = np.empty(0, dtype=dtype)
+                            count = int(group['NumberOfCells'][...].sum())
+                            del group['Types']
+                            shape = (count, 1) if invalid == 'rank' else (count + (invalid == 'length'),)
+                            group['Types'] = np.full(shape, 12 if block == 'hex' else 42,
+                                                     dtype='int32' if invalid == 'dtype' else 'uint8')
+                        err = io.StringIO()
+                        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                            self.assertEqual(main([str(run)]), 0 if invalid == 'valid' else 14)
+                        if invalid != 'valid':
+                            self.assertIn(f'{block}/Types: expected', err.getvalue())
 
     def test_name_table_dtype(self):
         for block in ('hex', 'cut'):
