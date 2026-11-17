@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # WP-2 三层板 CalculiX 独立参考
 
 Independent open-source reference for the 1 m × 1 m trilayer warpage case.
