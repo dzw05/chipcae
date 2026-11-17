@@ -51,7 +51,7 @@ def main():
             number(e['odb'], AREA)
             number(e['ipc'], width * 1e-9 * 0.005)
             number(e['delta'], AREA - width * 1e-9 * 0.005)
-            tolerance(e, DELTA, PERIMETER)
+            tolerance(e, DELTA, 2 * (width * 1e-9 + 0.005))
         b = copy.deepcopy(a)
         b['layers'][0]['name'] = 'f.cu'
         r = diff_stacks(pa, save(directory / 'b.json', b))

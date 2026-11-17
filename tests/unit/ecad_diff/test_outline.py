@@ -22,9 +22,14 @@ def main():
             b = board()
             b['external_refs'] = [{'path': sidecar.name,
                                    'sha256': hashlib.sha256(data).hexdigest()}]
+            unrelated = directory / 'metadata.json'
+            unrelated.write_text('{"description": "valid unrelated reference"}')
+            b['external_refs'].append({'path': unrelated.name,
+                                       'sha256': hashlib.sha256(unrelated.read_bytes()).hexdigest()})
             pb = directory / 'b.json'
             # The triangle must override its rectangular box, and also work without a box.
-            for outline in ({'box': [0, 0, 0.01, 0.005]}, {}):
+            for outline in ({'box': [0, 0, 0.01, 0.005]}, {},
+                            {'polygon': [[0, 0], [0.01, 0], [0.01, 0.005], [0, 0.005]]}):
                 b['outline'] = outline
                 result = diff_stacks(pa, save(pb, b))
                 assert result['summary']['hard'] == 0

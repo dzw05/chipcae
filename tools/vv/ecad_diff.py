@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 import struct
 import sys
+import tempfile
 
 SCHEMA = 'chipcae.vv.ecad_diff/0.1'
 DEFAULT_DELTA_M = 1e-9
@@ -79,6 +80,31 @@ def _read_polyset(data):
     return layers
 
 
+def _has_outline(data):
+    """Inspect polyset layer headers without decoding unrelated geometry."""
+    if not data.startswith(b'CCPOLY01'):
+        return False
+    try:
+        count = struct.unpack_from('<I', data, 16)[0]
+        position = 20
+        for _ in range(count):
+            size = struct.unpack_from('<I', data, position)[0]
+            position += 4
+            name = data[position:position + size]
+            position += size
+            if name == b'outline':
+                return True
+            rings = struct.unpack_from('<I', data, position)[0]
+            position += 4
+            points = struct.unpack_from('<q', data, position + rings * 8)[0]
+            if points < 0:
+                return False
+            position += (rings + 1) * 8 + points * 16
+    except (struct.error, OverflowError):
+        return False
+    return False
+
+
 def _geometry(points):
     if not isinstance(points, list) or len(points) < 3:
         _invalid('polygon requires at least three points')
@@ -107,7 +133,7 @@ def _load(path):
         _invalid('invalid outline')
     polysets = {}
 
-    def load_polyset(file):
+    def load_polyset(file, outline_only=False):
         _string(file)
         if Path(file).is_absolute() or '..' in Path(file).parts or '\\' in file or '://' in file:
             _invalid('polyset path must be relative')
@@ -119,6 +145,8 @@ def _load(path):
             if ref is None:
                 raise EcadDiffError(12, 'INPUT_REFERENCE_MISSING', 'polyset absent from external_refs')
             data = _bytes(Path(path).parent / file)
+            if outline_only and not _has_outline(data):
+                return
             digest = _string(ref['sha256'])
             if len(digest) != 64 or any(c not in '0123456789abcdefABCDEF' for c in digest):
                 _invalid('invalid SHA-256 digest')
@@ -151,30 +179,30 @@ def _load(path):
         _invalid('invalid external_refs')
     for ref in refs:
         file = _string(ref['path'])
-        load_polyset(file)
-    if 'polygon' in outline:
+        load_polyset(file, outline_only=True)
+    rings = next((p['outline'] for p in polysets.values() if 'outline' in p), None)
+    if rings is not None:
+        if len(rings) != 1:
+            _invalid('polyset outline must have exactly one ring')
+        geometry = _geometry(rings[0])
+    elif 'polygon' in outline:
         geometry = _geometry(outline['polygon'])
     else:
-        rings = next((p['outline'] for p in polysets.values() if 'outline' in p), None)
-        if rings is not None:
-            if len(rings) != 1:
-                _invalid('polyset outline must have exactly one ring')
-            geometry = _geometry(rings[0])
-        else:
-            box = outline['box']
-            if not isinstance(box, list) or len(box) != 4:
-                _invalid('invalid outline box')
-            x, y, xx, yy = [_number(v) for v in box]
-            if xx <= x or yy <= y:
-                _invalid('invalid outline box bounds')
-            geometry = _geometry([[x, y], [xx, y], [xx, yy], [x, yy]])
+        box = outline['box']
+        if not isinstance(box, list) or len(box) != 4:
+            _invalid('invalid outline box')
+        x, y, xx, yy = [_number(v) for v in box]
+        if xx <= x or yy <= y:
+            _invalid('invalid outline box bounds')
+        geometry = _geometry([[x, y], [xx, y], [xx, yy], [x, yy]])
     copper_values = []
     for layer in stack['layers']:
         copper = layer.get('copper')
         if copper is None:
             copper_values.append(None)
         elif 'fraction' in copper:
-            copper_values.append((copper['fraction'] * geometry['area'], geometry['perimeter']))
+            copper_values.append((copper['fraction'] * geometry['area'],
+                                  geometry['perimeter'] * math.sqrt(copper['fraction'])))
         else:
             p = copper['polygons']
             gs = [_geometry(r) for r in polysets[p['file']][p['layer']]]
@@ -231,11 +259,21 @@ def _diff(odb, ipc, delta):
         if ca[i] is not None or cb[i] is not None:
             ax, px = ca[i] or (0, 0)
             ay, py = cb[i] or (0, 0)
+            # A fraction carries no boundary; use the corresponding explicit copper rings.
+            fx = 'fraction' in x.get('copper', {})
+            fy = 'fraction' in y.get('copper', {})
+            if fx and not fy and py > 0:
+                px = py
+            if fy and not fx and px > 0:
+                py = px
             d, p = abs(ax - ay), max(px, py)
+            if p == 0:
+                p = max(4 * math.sqrt(max(ax, ay)), delta)
             relative = d / max(ax, ay) if max(ax, ay) else 0
             grade = 'hard' if relative > 0.01 else 'discuss' if d > delta * p else 'info'
             add('copper_area', key, ax, ay, d, delta * p,
-                f'δ = {delta}; P_layer = {p} (total ring perimeter; fraction uses outline); '
+                f'δ = {delta}; P_layer = {p} (total copper ring perimeter; '
+                'fractions use paired rings or scaled outline; empty fallback 4√area or δ); '
                 'absolute ring areas summed; relative difference uses larger area, zero versus nonzero is 100%', grade)
     thickness('total_thickness', 'stack', math.fsum(l['thickness'] for l in a),
               math.fsum(l['thickness'] for l in b))
@@ -274,8 +312,26 @@ def write_report(result: dict, out_dir: Path) -> None:
     payload = json.dumps(result, indent=2, ensure_ascii=False, allow_nan=False)
     try:
         out.mkdir(parents=True, exist_ok=True)
-        (out / 'diff.json').write_text(payload, encoding='utf-8')
-        (out / 'diff.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        names = ('diff.json', 'diff.md')
+        previous = {name: (out / name).read_bytes() if (out / name).exists() else None
+                    for name in names}
+        with tempfile.TemporaryDirectory(prefix='.ecad-diff-', dir=out) as staging:
+            staged = Path(staging)
+            (staged / names[0]).write_text(payload, encoding='utf-8')
+            (staged / names[1]).write_text('\n'.join(lines) + '\n', encoding='utf-8')
+            published = []
+            try:
+                for name in names:
+                    (staged / name).replace(out / name)
+                    published.append(name)
+            except OSError:
+                for name in reversed(published):
+                    if previous[name] is None:
+                        (out / name).unlink()
+                    else:
+                        (staged / name).write_bytes(previous[name])
+                        (staged / name).replace(out / name)
+                raise
     except OSError as exc:
         _invalid(str(exc))
 
