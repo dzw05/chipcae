@@ -453,6 +453,71 @@ void boundaries() {
     o["top"] = -1;
     rejected(j, {"top"}, {&o, nullptr});
 }
+void degenerate_copper() {
+    auto j = board();
+    auto& f = j.features["TOP"];
+    f.surfaces.clear();
+    f.surfaces.push_back({true, {square(0), square(0.0001), square(8)}});
+    OdbContour line;
+    line.segs = {{{4, 0}, false, {}, false}, {{8, 0}, false, {}, false}};
+    f.surfaces.push_back({true, {line}});
+    f.surfaces.push_back({false, {square(4)}});
+    auto m = mapped(j);
+    near(area(m), 48e6);
+    for (const auto& polygon : m.layers.front().polygons) {
+        require(polygon.points.size() >= 3, "copper needs three vertices");
+        long double twice_area = 0;
+        for (std::size_t i = 0; i < polygon.points.size(); ++i) {
+            const auto& a = polygon.points[i];
+            const auto& b = polygon.points[(i + 1) % polygon.points.size()];
+            require(a != b, "no duplicate copper edge vertices");
+            twice_area +=
+                static_cast<long double>(a[0]) * b[1] - static_cast<long double>(b[0]) * a[1];
+        }
+        require(twice_area != 0, "copper needs nonzero area");
+    }
+}
+void via_radii() {
+    auto j = board();
+    OdbLayer l;
+    l.name = "DRILL";
+    l.type = "drill";
+    l.start_name = "TOP";
+    l.end_name = "BOTTOM";
+    j.layers.push_back(l);
+    auto& f = j.features["DRILL"];
+    f.symbols = {{"r600"}};
+    f.pads = {{{2, 3}, 0, true}};
+    for (bool with_tool : {false, true}) {
+        if (with_tool)
+            j.tools["DRILL"] = {{1, "plated", 0.6}};
+        for (const auto* plating : {"0.025", "0.3"}) {
+            j.attrs.layer["DRILL"][".plating_thickness"] = plating;
+            auto m = mapped(j);
+            require(m.vias.size() == 1, "valid annulus retained");
+            const auto& v = m.vias.front();
+            require(0 <= v.inner_radius_dbu && v.inner_radius_dbu < v.outer_radius_dbu,
+                    "valid via radius invariant");
+        }
+        for (const auto* plating : {"0.301", "1e-300"}) {
+            j.attrs.layer["DRILL"][".plating_thickness"] = plating;
+            auto m = mapped(j);
+            require(m.vias.empty() && m.via_fractions.empty(), "invalid annulus omitted");
+            require(m.report.unsupported.size() == 1 &&
+                        m.report.unsupported.front().element == "ViaGeometry:DRILL",
+                    "invalid annulus reported");
+        }
+    }
+    f.symbols = {{"r0.5"}};
+    j.attrs.layer["DRILL"][".plating_thickness"] = "0.0001";
+    for (double diameter : {0.0, -0.0001}) {
+        j.tools["DRILL"] = {{1, "plated", diameter}};
+        auto m = mapped(j);
+        require(m.vias.empty() && m.report.unsupported.size() == 1 &&
+                    m.report.unsupported.front().element == "ViaGeometry:DRILL",
+                "invalid matched tool diameter rejected");
+    }
+}
 void drill_rejections() {
     auto j = board();
     OdbLayer l;
@@ -496,6 +561,8 @@ int main() {
         {"odbpp_map_holes_profile", holes_and_profile},
         {"odbpp_map_pads_arcs", pads_and_arcs},
         {"odbpp_map_boundaries", boundaries},
+        {"odbpp_map_degenerate_copper", degenerate_copper},
+        {"odbpp_map_via_radii", via_radii},
         {"odbpp_map_drill_rejections", drill_rejections}};
     int failures = 0;
     for (const auto& [name, test] : tests) {

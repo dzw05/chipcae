@@ -188,9 +188,12 @@ struct Mapper {
                 add(widen(p, s), a.positive);
             }
         }
-        for (const auto& path : Difference(Union(positive, FillRule::NonZero),
-                                           Union(negative, FillRule::NonZero),
-                                           FillRule::NonZero)) {
+        for (auto path : Difference(Union(positive, FillRule::NonZero),
+                                    Union(negative, FillRule::NonZero),
+                                    FillRule::NonZero)) {
+            StripDuplicates(path, true);
+            if (path.size() < 3 || Area(path) == 0)
+                continue;
             Polygon p;
             for (const auto& v : path)
                 p.points.push_back({v.x, v.y});
@@ -251,7 +254,12 @@ struct Mapper {
             auto pos = point(p.at);
             v.position = {pos.x, pos.y};
             v.outer_radius_dbu = tool ? tool->finish_size * scale / 2 : s.w / 2;
-            v.inner_radius_dbu = std::max(0.0, v.outer_radius_dbu - plating);
+            v.inner_radius_dbu = v.outer_radius_dbu - plating;
+            if (!std::isfinite(v.outer_radius_dbu) || !std::isfinite(v.inner_radius_dbu) ||
+                !(0 <= v.inner_radius_dbu && v.inner_radius_dbu < v.outer_radius_dbu)) {
+                unsupported("ViaGeometry:" + layer.name);
+                continue;
+            }
             auto ai = static_cast<std::size_t>(a - model.layers.begin()),
                  bi = static_cast<std::size_t>(b - model.layers.begin());
             for (auto i = std::min(ai, bi) + 1; i < std::max(ai, bi); ++i)
