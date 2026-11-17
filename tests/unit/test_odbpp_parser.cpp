@@ -1402,6 +1402,30 @@ int main(int argc, char** argv) {
             require(decoded == std::string(size, 'x'), "gzip boundary bytes");
         }
     });
+    test("odbpp_gzip_eof_probe_preserves_trailer", [&] {
+        for (const auto size : {32745, 32746}) {
+            const auto data = bytes(temp / ("boundary-" + std::to_string(size) + ".gz"));
+            require(data.size() == static_cast<std::size_t>(size + 23),
+                    "stored gzip ends at or just beyond the input buffer boundary");
+            for (const auto limit : {1, 17, 32768}) {
+                std::istringstream input(data);
+                GzipCursor cursor(input);
+                std::string_view block;
+                std::string out, error;
+                while (cursor.next(block, error, limit)) {
+                    require(block.size() <= static_cast<std::size_t>(limit), "bounded output");
+                    out.append(block);
+                }
+                require(input.eof(), "final input availability check reaches EOF");
+                require(error.empty() && out == std::string(size, 'x'),
+                        "EOF probing preserves buffered and split trailers: " + error);
+            }
+            std::string out, error;
+            require(!decode_gzip(data.substr(0, data.size() - 1), out, error) &&
+                        error == "IMPORT_REJECTED: gzip truncated trailer",
+                    "missing trailer byte remains rejected: " + error);
+        }
+    });
     test("odbpp_zip_payload_accounting", [&] {
         ArchiveLimits limits;
         limits.file_bytes = 1;
