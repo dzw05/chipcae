@@ -31,13 +31,13 @@ for layer in stack.get("layers", []):
 assert {"organic_eq", "sac305_ball_eq", "underfill", "silicon"} <= known_material_ids, \
     "pre-existing material ids must remain available"
 assembly = json.loads((examples / "assembly/package_bulk_parts.assembly.json").read_text(encoding="utf-8"))
-assembly_material_ids = {part["material"] for part in assembly["parts"]}
-assembly_material_ids.update(
-    body["material"] for body in assembly.get("parts_from_step", {}).get("bodies", {}).values()
-)
+# Explicit parts and STEP body mappings both carry part ids and materials.
+assembly_parts = list(assembly.get("parts", []))
+assembly_parts.extend(assembly.get("parts_from_step", {}).get("bodies", {}).values())
+assembly_material_ids = {part["material"] for part in assembly_parts}
 assert assembly_material_ids <= known_material_ids, \
     "MATERIAL_MAPPING_MISSING: assembly material is absent from library"
-lid_parts = [part for part in assembly["parts"] if part["id"] == "lid"]
+lid_parts = [part for part in assembly_parts if part["id"] == "lid"]
 assert len(lid_parts) == 1, "assembly must contain exactly one lid part"
 assert lid_parts[0]["material"] == "copper", "lid material must be exactly copper"
 copper_entries = [item for item in library["materials"] if item["id"] == "copper"]
