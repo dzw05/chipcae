@@ -30,7 +30,7 @@ void check_invalid(Construct construct, const char* name) {
 
 int main(int argc, char** argv) {
     Kokkos::ScopeGuard guard(argc, argv);
-    check_invalid([] { TemperatureTable table({}, {{1e-5}}); }, "empty temperatures");
+    check_invalid([] { TemperatureTable table({}, {{}}); }, "empty temperatures");
     check_invalid([] { TemperatureTable table({250}, {}); }, "empty columns");
     check_invalid([] { TemperatureTable table({250, 300}, {{1e-5}}); }, "column length mismatch");
     check_invalid([] { TemperatureTable table({300, 300, 300}, {{1e-5, 2e-5, 4e-5}}); },
