@@ -286,8 +286,10 @@ bool ResultSession::preflight(const QString& path) {
         warnings_ << QString("VTKHDF Version 2.%1 compatibility read").arg(version[1]);
     Handle typeAttr{H5Aopen(group.id, "Type", H5P_DEFAULT), H5Aclose};
     Handle type{typeAttr.id < 0 ? -1 : H5Aget_type(typeAttr.id), H5Tclose};
-    if (type.id < 0 || H5Tget_class(type.id) != H5T_STRING || H5Tis_variable_str(type.id) != 0 ||
-        H5Tget_size(type.id) > 256) {
+    Handle typeSpace{typeAttr.id < 0 ? -1 : H5Aget_space(typeAttr.id), H5Sclose};
+    if (type.id < 0 || typeSpace.id < 0 || H5Tget_class(type.id) != H5T_STRING ||
+        H5Tis_variable_str(type.id) != 0 || H5Tget_size(type.id) > 256 ||
+        H5Sget_simple_extent_npoints(typeSpace.id) != 1) {
         error_ = "invalid VTKHDF Type";
         return false;
     }

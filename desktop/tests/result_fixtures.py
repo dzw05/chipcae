@@ -46,3 +46,9 @@ for name, version in [('legacy', [2, 0]), ('future', [2, 10]), ('wrong_major', [
     shutil.copyfile(root / 'temporal_ug.vtkhdf', root / (name + '.vtkhdf'))
     with h5py.File(root / (name + '.vtkhdf'), 'r+') as f:
         f['VTKHDF'].attrs['Version'] = version
+
+import numpy as np
+shutil.copyfile(root / 'temporal_ug.vtkhdf', root / 'type_multi.vtkhdf')
+with h5py.File(root / 'type_multi.vtkhdf', 'r+') as f:
+    del f['VTKHDF'].attrs['Type']
+    f['VTKHDF'].attrs.create('Type', np.array([b'PartitionedDataSetCollection', b'extra'], dtype='S32'))
