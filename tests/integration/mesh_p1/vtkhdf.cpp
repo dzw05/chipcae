@@ -19,6 +19,9 @@ template <class T>
 std::vector<T> read(hid_t file, const char* name, hid_t type, std::vector<hsize_t> shape) {
     hid_t d = H5Dopen2(file, name, H5P_DEFAULT);
     expect(d >= 0, "dataset exists");
+    hid_t datatype = H5Dget_type(d);
+    expect(H5Tequal(datatype, type) > 0, "dataset type");
+    H5Tclose(datatype);
     hid_t s = H5Dget_space(d);
     expect(H5Sget_simple_extent_ndims(s) == static_cast<int>(shape.size()), "dataset rank");
     std::vector<hsize_t> dims(shape.size());
@@ -69,12 +72,12 @@ int main(int argc, char** argv) {
                 regions[a.region] = static_cast<Local>(regions.size() + 1);
         }
         std::set<Local> kinds;
-        for (auto name : {"layer", "region", "material", "body", "rank", "cell_kind"}) {
+        for (auto name : {"layer_id", "region", "material_id", "body", "rank", "cell_kind"}) {
             auto path = std::string("VTKHDF/CellData/") + name;
             auto field = read<Local>(file, path.c_str(), H5T_NATIVE_INT32, {nc});
             for (std::size_t e = 0; e < field.size(); ++e) {
                 auto a = m.attr_table.entries[m.attribute[e] - 1];
-                if (std::string(name) == "layer")
+                if (std::string(name) == "layer_id")
                     expect(field[e] == layers[a.layer], "layer values");
                 if (std::string(name) == "region")
                     expect(field[e] == (a.region.empty() ? 0 : regions[a.region]), "region values");
@@ -90,11 +93,19 @@ int main(int argc, char** argv) {
                     expect(field[e] == (isvoid ? 2 : iscut ? 1 : 0), "cell kind values");
                     kinds.insert(field[e]);
                 }
-                if (std::string(name) == "material")
+                if (std::string(name) == "material_id")
                     expect(field[e] == a.material, "material values");
                 if (std::string(name) == "body")
                     expect(field[e] == a.body, "body values");
             }
+        }
+        for (auto name : {"layer", "material"}) {
+            hid_t old = -1;
+            H5E_BEGIN_TRY {
+                old = H5Dopen2(file, (std::string("VTKHDF/CellData/") + name).c_str(), H5P_DEFAULT);
+            }
+            H5E_END_TRY;
+            expect(old < 0, "old dataset cannot open");
         }
         expect(kinds == std::set<Local>({0, 1, 2}), "regular cut covered kinds");
         auto vf = read<Real>(file, "VTKHDF/CellData/vol_frac", H5T_NATIVE_DOUBLE, {nc});
