@@ -19,12 +19,15 @@ int main() {
             auto& in = src[0].sections[k].outer.pts;
             check(out.size() == in.size(), "vertex count");
             for (size_t i = 0; i < in.size(); ++i) {
-                near(out[i][0], c * in[i][0] - s * in[i][1] + .005, 1e-15);
-                near(out[i][1], s * in[i][0] + c * in[i][1] + .007, 1e-15);
+                near(out[i][0], c * in[i][0] - s * in[i][1] + .005, 2e-17);
+                near(out[i][1], s * in[i][0] + c * in[i][1] + .007, 2e-17);
             }
             check(area(out) > 0, "CCW preserved");
         }
-        auto m = merge(base(), {{"lid", "metal", p.value().slabs}});
+        check(p.value().id.empty() && p.value().material.empty(), "place identity empty");
+        auto rectangle = p.value().slabs;
+        rectangle[0].sections.resize(1);
+        auto m = merge(base(), {{"lid", "metal", rectangle}});
         for (auto& v : m.stack.layers.back().regions) {
             auto& q = v.footprint.polygon;
             check(!q.empty(), "rotated polygon");

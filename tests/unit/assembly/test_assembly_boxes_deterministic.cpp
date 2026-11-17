@@ -10,11 +10,22 @@ int main() {
         double sum = 0;
         for (auto& v : m.stack.layers.back().regions) {
             check(v.body == "ring", "ring body");
-            check(!v.footprint.polygon.empty(), "ring must be polygon");
-            sum += std::abs(area(v.footprint.polygon));
+            check(v.footprint.polygon.empty(), "rectilinear cuts are boxes");
+            sum += (v.footprint.box[2] - v.footprint.box[0]) *
+                   (v.footprint.box[3] - v.footprint.box[1]);
         }
         near(sum, .000136, .000136 * 1e-12);
         auto n = merge(base(), {p});
+        same_regions(m, n);
+        auto& section = p.slabs[0].sections[0];
+        auto reverse = [](Ring& r) {
+            std::reverse(r.pts.begin(), r.pts.end());
+            std::rotate(r.pts.begin(), r.pts.begin() + 1, r.pts.end());
+        };
+        reverse(section.outer);
+        for (auto& h : section.holes)
+            reverse(h);
+        same_regions(m, merge(base(), {p}));
         check(m.stack.layers.size() == n.stack.layers.size(), "same layers");
         for (size_t k = 0; k < m.stack.layers.size(); ++k) {
             auto& a = m.stack.layers[k].regions;

@@ -2,6 +2,13 @@
 int main() {
     return run([] {
         auto b = base();
+        b.unit = "m";
+        b.symmetry = "none";
+        b.package_type = "test";
+        b.warnings = {"keep"};
+        b.activation_groups["identity"] = {"layer:Core"};
+        b.layers[0].regions.push_back(
+            {"seed", "seed-material", "seed-body", {{0, 0, .001, .001}, {}}});
         auto r = merge_parts(b, {}, options());
         check(bool(r), "empty parts succeeds");
         check(r.value().defects.empty() && r.value().welded_interfaces == 0, "identity metadata");
@@ -9,7 +16,17 @@ int main() {
                   r.value().stack.layers.size() == 1 && r.value().stack.layers[0].name == "Core" &&
                   r.value().stack.layers[0].thickness == .001,
               "identity stack");
-        check(!merge_parts({}, {part()}, options()), "empty base invalid");
+        const auto& identity = r.value().stack;
+        check(identity.unit == b.unit && identity.symmetry == b.symmetry &&
+                  identity.package_type == b.package_type && identity.warnings == b.warnings &&
+                  identity.activation_groups == b.activation_groups,
+              "identity preserves stack metadata");
+        check(identity.layers[0].body == b.layers[0].body &&
+                  identity.layers[0].material == b.layers[0].material &&
+                  identity.layers[0].regions[0].name == "seed" &&
+                  identity.layers[0].regions[0].body == "seed-body",
+              "identity preserves layer and region fields");
+        invalid_input(merge_parts({}, {part()}, options()));
         auto p = part();
         p.slabs.clear();
         check(!merge_parts(b, {p}, options()), "empty slabs invalid");

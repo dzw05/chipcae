@@ -61,11 +61,11 @@ inline bool covers(const Footprint& f, double x, double y) {
 inline void invariants(const MergeResult& r, double total) {
     std::set<std::string> names;
     double sum = 0;
+    std::set<std::string> regions;
     for (auto& l : r.stack.layers) {
         check(names.insert(l.name).second, "duplicate layer name");
         check(l.thickness > 0, "nonpositive layer");
         sum += l.thickness;
-        std::set<std::string> regions;
         for (auto& v : l.regions) {
             check(regions.insert(v.name).second, "duplicate region");
             check(v.footprint.box[0] < v.footprint.box[2] &&
@@ -74,7 +74,13 @@ inline void invariants(const MergeResult& r, double total) {
             auto& poly = v.footprint.polygon;
             check(poly.empty() || poly.size() >= 3, "invalid polygon");
             if (!poly.empty()) {
-                check(std::abs(area(poly)) > 0, "zero polygon area");
+                check(area(poly) > 0, "polygon must be CCW");
+                for (size_t i = 0; i < poly.size(); ++i) {
+                    auto a = poly[i], b = poly[(i + 1) % poly.size()],
+                         c = poly[(i + 2) % poly.size()];
+                    check((b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]) > 0,
+                          "normalized polygon must be strictly convex");
+                }
                 for (size_t i = 0; i < poly.size(); ++i)
                     for (size_t j = i + 1; j < poly.size(); ++j) {
                         if (j == i + 1 || (i == 0 && j + 1 == poly.size()))
@@ -112,5 +118,29 @@ int run(F f) {
     } catch (const std::exception& e) {
         std::cerr << "FAIL: acceptance requires implemented behavior: " << e.what() << '\n';
         return 1;
+    }
+}
+
+template <class T>
+inline void invalid_input(const T& r, const std::string& exact = {}) {
+    check(!r, "invalid input must fail");
+    check(r.error().message.starts_with("INPUT_INVALID: "), "registered error prefix");
+    if (!exact.empty())
+        check(r.error().message == "INPUT_INVALID: " + exact, exact.c_str());
+}
+inline SlabSection ell() {
+    return {Ring{{{0, 0}, {.04, 0}, {.04, .01}, {.01, .01}, {.01, .04}, {0, .04}}}, {}};
+}
+inline void same_regions(const MergeResult& a, const MergeResult& b) {
+    check(a.stack.layers.size() == b.stack.layers.size(), "same layer count");
+    for (size_t k = 0; k < a.stack.layers.size(); ++k) {
+        const auto& x = a.stack.layers[k].regions;
+        const auto& y = b.stack.layers[k].regions;
+        check(x.size() == y.size(), "same region count");
+        for (size_t i = 0; i < x.size(); ++i)
+            check(x[i].name == y[i].name && x[i].body == y[i].body &&
+                      x[i].material == y[i].material && x[i].footprint.box == y[i].footprint.box &&
+                      x[i].footprint.polygon == y[i].footprint.polygon,
+                  "field-for-field ordered regions");
     }
 }

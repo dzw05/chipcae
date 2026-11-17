@@ -13,10 +13,11 @@ int main() {
                 a.rot_z_deg = 30;
                 auto r = place(src, a, b);
                 check(bool(r), "attach succeeds");
+                check(r.value().id.empty() && r.value().material.empty(), "place identity empty");
                 auto s = r.value().slabs;
                 check(s.size() == 1, "no synthetic bond");
-                near(s[0].z0, side == AttachSide::top ? .001 + gap : -.001 - gap, 1e-15);
-                near(s[0].z1 - s[0].z0, .001, 1e-15);
+                near(s[0].z0, side == AttachSide::top ? .001 + gap : -.001 - gap, 6e-18);
+                near(s[0].z1 - s[0].z0, .001, 6e-18);
                 near(src[0].z0, .003, 0);
                 near(src[0].z1, .004, 0);
                 check(src[0].sections[0].outer.pts == rect().outer.pts, "source section unchanged");
@@ -24,6 +25,8 @@ int main() {
                     a.bond = Bond{"adhesive", gap};
                     auto bonded = place(src, a, b);
                     check(bool(bonded), "bond attach succeeds");
+                    check(bonded.value().id.empty() && bonded.value().material.empty(),
+                          "bonded place identity empty");
                     auto t = bonded.value().slabs;
                     check(t.size() == s.size(), "bond does not add source slabs");
                     near(t[0].z0, s[0].z0, 0);
@@ -34,8 +37,8 @@ int main() {
                     Slab bond = side == AttachSide::top
                                     ? Slab{s[0].z0 - gap, s[0].z0, s[0].sections}
                                     : Slab{s[0].z1, s[0].z1 + gap, s[0].sections};
-                    near(bond.z1 - bond.z0, gap, 1e-15);
-                    near(bond.sections[0].outer.pts[0][0], .002, 1e-15);
+                    near(bond.z1 - bond.z0, gap, 6e-18);
+                    near(bond.sections[0].outer.pts[0][0], .002, 6e-18);
                     auto m = merge(b, {original, {"lid.bond", "adhesive", {bond}}}, .002 + gap);
                     bool found = false;
                     for (auto& l : m.stack.layers)
@@ -47,7 +50,7 @@ int main() {
                             }
                     check(found, "bond region");
                     a.bond->thickness = gap * 2;
-                    check(!place(src, a, b), "gap mismatch rejected");
+                    invalid_input(place(src, a, b), "bond gap != thickness");
                 } else
                     check(!a.bond, "zero gap without bond");
                 if (gap > 0) {
