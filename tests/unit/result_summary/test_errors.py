@@ -11,6 +11,37 @@ from tools.vv.result_summary import ResultSummaryError, main, summarize
 
 
 class Errors(unittest.TestCase):
+    def test_invalid_steps(self):
+        for steps in ({}, [], [None], [{'file': 123}]):
+            with self.subTest(steps=steps), tempfile.TemporaryDirectory() as tmp:
+                run = Path(tmp)
+                _, manifest = fixture(run)
+                manifest['steps'] = steps
+                save(run, manifest)
+                with self.assertRaises(ResultSummaryError) as caught:
+                    summarize(run)
+                self.assertEqual(caught.exception.code, 14)
+                self.assertEqual(caught.exception.name, 'INPUT_INVALID')
+                err, out = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+                    self.assertEqual(main([str(run)]), 14)
+                self.assertEqual(out.getvalue(), '')
+                self.assertEqual(err.getvalue(),
+                                 'result_summary: INPUT_INVALID: expected nonempty steps[0].file string\n')
+
+    def test_warpage_unit_diagnostic(self):
+        for unit in (None, 'mm', ''):
+            with self.subTest(unit=unit), tempfile.TemporaryDirectory() as tmp:
+                run = Path(tmp)
+                _, manifest = fixture(run)
+                manifest['summary'][1]['unit'] = unit
+                save(run, manifest)
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    self.assertEqual(main([str(run)]), 14)
+                self.assertEqual(err.getvalue(),
+                                 'result_summary: INPUT_INVALID: summary[1].unit (warpage_pv): expected "m"\n')
+
     def test_manifest_invalid_utf8(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)

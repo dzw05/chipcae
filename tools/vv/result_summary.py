@@ -15,6 +15,7 @@ import sys
 import h5py
 import numpy as np
 
+# Direct CLI execution needs the repository root to import the shared VV helper.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tools.vv.warpage_qoi import best_fit_plane
 
@@ -199,7 +200,8 @@ def _summarize(run_dir, top_rel_tol):
                  f'summary[{index}].value ({name}): expected finite numeric value')
         summary[name] = value
         if name == 'warpage_pv':
-            _require(entry.get('unit') == 'm', 'warpage_pv unit must be m')
+            _require(entry.get('unit') == 'm',
+                     f'summary[{index}].unit (warpage_pv): expected "m"')
             pv = value
     mesh = manifest.get('mesh', {})
     _require(isinstance(mesh, dict), 'mesh must be an object')

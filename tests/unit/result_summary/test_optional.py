@@ -5,11 +5,41 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
-from fixtures import fixture, fixed_keys, save, h5py, LAYERS, MATERIALS
+from fixtures import fixture, fixed_keys, save, h5py, np, LAYERS, MATERIALS
 from tools.vv.result_summary import ResultSummaryError, main, summarize
 
 
 class Optional(unittest.TestCase):
+    def test_top_surface_tolerance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run)
+            with h5py.File(step, 'r+') as f:
+                block = f['VTKHDF/hex']
+                points = block['Points'][...]
+                # Lower both copies of the center by less than default tol * H.
+                center = (points[:, 0] == 0.) & (points[:, 1] == 0.) & (points[:, 2] == 1.)
+                self.assertEqual(int(np.count_nonzero(center)), 2)
+                points[center, 2] = 1. - 5e-13
+                block['Points'][...] = points
+                temperatures = block['PointData/T'][...]
+                temperatures[center] = 1000.
+                block['PointData/T'][...] = temperatures
+            default = summarize(run)
+            exact = summarize(run, top_rel_tol=0.)
+            for result in (default, exact):
+                fixed_keys(self, result)
+            self.assertEqual(default['warpage']['n_top_points'], 9)
+            self.assertEqual(exact['warpage']['n_top_points'], 8)
+            for result, maximum, mean, warpage in (
+                    (default, 1000., 3440. / 9., .125),
+                    (exact, 309., 305., .0625)):
+                self.assertEqual(result['temperature']['top_min'], 301.)
+                self.assertEqual(result['temperature']['top_max'], maximum)
+                self.assertLessEqual(abs(result['temperature']['top_mean'] / mean - 1.), 1e-14)
+                # Quadratic residual range is k/2 with center, k/4 without it.
+                self.assertLessEqual(abs(result['warpage']['w_bfp_m'] / warpage - 1.), 1e-12)
+
     def test_single_name_table(self):
         for block in ('hex', 'cut'):
             with self.subTest(block=block), tempfile.TemporaryDirectory() as tmp:
