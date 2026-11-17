@@ -46,8 +46,12 @@ Mesh array order is immaterial. Top-level `W_bfp_m` must equal the selected
 mesh value. The test validator normalizes a copy of the schema with a
 `contains` constraint binding the selected name and top-level value via `const`,
 since JSON Schema cannot directly compare two instance fields. Validation checks
-this relationship and the broad `rel_delta < 0.5` sanity bound. Required `label` and `host` fields
-record the reference status and execution host.
+this relationship and the broad `rel_delta < 0.5` sanity bound. Required `label`
+records the reference status. `host` and `calculix_version` are
+optional informational provenance, outside the stable numerical contract. The
+generator records the host under optional `provenance.host`; legacy top-level
+`host` remains accepted. The version banner remains an optional top-level field
+for compatibility; reports use `ccx=unknown` when it is absent.
 
 Run `python3 -m unittest tools.vv.test_trilayer_calculix_ref` after generation.
 Only passing validation prints the delta report and checks the same single line

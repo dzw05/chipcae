@@ -57,8 +57,19 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         reversed_meshes = copy.deepcopy(data)
         reversed_meshes["meshes"].reverse()
         validate_reference(reversed_meshes, contract)
+        # Environment metadata is optional; legacy top-level metadata remains valid.
+        portable = copy.deepcopy(data)
+        for field in ("host", "calculix_version", "provenance"):
+            portable.pop(field, None)
+        validate_reference(portable, contract)
+        legacy = dict(portable, host="another host", calculix_version="another banner")
+        validate_reference(legacy, contract)
         variants = []
-        for field in ("label", "host", "W_bfp_m"):
+        for field in ("host", "calculix_version"):
+            for value in (123, ""):
+                invalid = dict(portable, **{field: value})
+                variants.append(invalid)
+        for field in ("label", "W_bfp_m"):
             invalid = copy.deepcopy(data)
             del invalid[field]
             variants.append(invalid)
@@ -99,11 +110,8 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         self.assertEqual(data["kind"], "REFERENCE")
         self.assertEqual(data["element_type"], "C3D20")
         self.assertEqual(data["selected_mesh"], "fine")
-        self.assertIsInstance(data.get("calculix_version"), str)
-        self.assertTrue(data["calculix_version"].strip())
-        for field in ("label", "host"):
-            self.assertIsInstance(data[field], str)
-            self.assertTrue(data[field].strip())
+        self.assertIsInstance(data["label"], str)
+        self.assertTrue(data["label"].strip())
         self.assertAlmostEqual(data["prototype_W_bfp_m"], PROTOTYPE, places=12)
         names = [m["name"] for m in data["meshes"]]
         self.assertCountEqual(names, ["coarse", "fine"])
@@ -124,7 +132,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         line = (
             f"W_bfp={w} prototype=4.269532769e-3 abs_delta={abs_delta} "
             f"rel_delta={rel_delta} mesh=fine element=C3D20 "
-            f"ccx={data['calculix_version']}"
+            f"ccx={data.get('calculix_version', 'unknown')}"
         )
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory) / "v-ccx-delta.md"
