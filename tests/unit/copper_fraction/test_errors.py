@@ -21,7 +21,8 @@ class Errors(unittest.TestCase):
                 code = 14
                 if case == 'magic': data = b'BADMAGIC' + data[8:]
                 if case == 'offsets':
-                    data = polyset([('F.Cu', (RECT[:3],))])
+                    data = polyset([('F.Cu', (RECT,))])
+                    # All offsets fit the four-point payload; only their order is invalid.
                     data = data[:32] + struct.pack('<qqq', 0, 4, 3) + data[48:]
                     # ring_count follows the four-byte F.Cu name.
                     data = data[:28] + struct.pack('<I', 2) + data[32:]

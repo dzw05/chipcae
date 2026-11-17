@@ -54,6 +54,20 @@ def cli(root, stack, suffix='one'):
     return output, report
 
 
+def assert_key_order(actual, expected):
+    """Compare every nested object order as well as values."""
+    if isinstance(expected, dict):
+        assert list(actual) == list(expected)
+        for key in expected:
+            assert_key_order(actual[key], expected[key])
+    elif isinstance(expected, list):
+        assert len(actual) == len(expected)
+        for new, old in zip(actual, expected, strict=True):
+            assert_key_order(new, old)
+    else:
+        assert actual == expected
+
+
 def check(root):
     from tools.stack.copper_fraction import homogenize_copper
     from tools.stack.polyset import read_polyset, ring_area_m2, layer_area_m2
@@ -68,24 +82,25 @@ def check(root):
     assert stack == before
     assert json.dumps(stack, ensure_ascii=False) == json.dumps(before, ensure_ascii=False)
     extended = copy.deepcopy(stack)
-    extended['x-note'] = {'label': '整层平均', 'values': [1, 2.25]}
+    extended['x-note'] = {'values': [{'z-last': 1, 'a-first': 2.25}], 'label': '整层平均'}
     extension_output, _ = homogenize_copper(extended, root)
-    assert extension_output['x-note'] == extended['x-note']
+    assert_key_order(extension_output['x-note'], extended['x-note'])
     assert list(extension_output) == [key for key in extended if key != 'external_refs']
     assert list(output) == [key for key in stack if key != 'external_refs']
     assert 'external_refs' not in output
     for key in stack:
         if key not in ('external_refs', 'layers'):
-            assert output[key] == stack[key]
+            assert_key_order(output[key], stack[key])
     for index, (old, new) in enumerate(zip(stack['layers'], output['layers'], strict=True)):
         assert list(old) == list(new)
         if index < 2:
-            assert {k: v for k, v in old.items() if k != 'copper'} == {k: v for k, v in new.items() if k != 'copper'}
+            assert_key_order({k: v for k, v in new.items() if k != 'copper'},
+                             {k: v for k, v in old.items() if k != 'copper'})
             assert list(new['copper']) == ['metal', 'fraction']
             assert new['copper']['metal'] == old['copper']['metal']
             assert math.isclose(new['copper']['fraction'], [0.06, 0][index], rel_tol=1e-12)
         else:
-            assert old == new
+            assert_key_order(new, old)
     assert len(report) == 2
     for item, name, area, fraction in zip(report, ['F.Cu', 'Empty'], [3e-6, 0], [0.06, 0], strict=True):
         assert set(item) == {'layer', 'copper_area_m2', 'outline_area_m2', 'fraction'}
@@ -99,7 +114,7 @@ def check(root):
     for layers in ([], [stack['layers'][2], stack['layers'][3]]):
         plain = dict(stack, layers=layers)
         converted, entries = homogenize_copper(plain, root)
-        assert converted == {k: v for k, v in plain.items() if k != 'external_refs'}
+        assert_key_order(converted, {k: v for k, v in plain.items() if k != 'external_refs'})
         assert entries == []
     # Tolerance is applied to signed fractions before clamping.
     for width, expected in [(1.0 + 5e-13, 1.0), (-5e-13, 0.0)]:
