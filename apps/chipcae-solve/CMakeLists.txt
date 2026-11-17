@@ -28,6 +28,6 @@ if(CHIPCAE_ENABLE_JSONCONS AND CHIPCAE_ENABLE_MFEM AND CHIPCAE_ENABLE_MPI AND CH
     endif()
     target_sources(chipcae-solve PRIVATE src/pipeline.cpp)
     target_link_libraries(chipcae-solve PRIVATE mfem chipcae::io)
-    target_include_directories(chipcae-solve PRIVATE ${PROJECT_SOURCE_DIR}/schema/src)
+    target_include_directories(chipcae-solve PRIVATE ${PROJECT_SOURCE_DIR}/schema/src ${PROJECT_SOURCE_DIR}/material/include)
     target_compile_definitions(chipcae-solve PRIVATE CHIPCAE_SOLVE_BACKEND=1)
 endif()

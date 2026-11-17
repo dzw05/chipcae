@@ -87,13 +87,15 @@ with tempfile.TemporaryDirectory() as tmp:
         summary = {s['name']: s['value'] for s in manifest['summary']}
         assert all(np.isfinite(v) for v in summary.values())
         assert {10, 11, 19, 21, 22} <= {kind for kind, _ in ev}
+        divisor = 2 ** (c['mesh']['levels'] - 1)
+        cells = len(layers) * ((c['mesh']['nx']+divisor-1)//divisor*divisor) * ((c['mesh']['ny']+divisor-1)//divisor*divisor)
         with h5py.File(out / manifest['steps'][0]['file']) as f:
             g = f['VTKHDF/hex']
             points = g['Points'][:]
             T = g['PointData/T'][:] if 'T' in g['PointData'] else None
             U = g['PointData/U'][:] if 'U' in g['PointData'] else None
             gids = g['CellData/elem_gid'][:] if 'elem_gid' in g['CellData'] else None
-            assert g['Connectivity'].size == len(layers) * c['mesh']['nx'] * c['mesh']['ny'] * 8
+            assert g['Connectivity'].size == cells * 8
             if gids is not None:
                 # Reconstruct global numbering independently from partition-local VTK data.
                 axes = [sorted(set(points[:, d])) for d in range(3)]
@@ -122,7 +124,7 @@ with tempfile.TemporaryDirectory() as tmp:
                 assert meta['mesh_sha256'] == hashlib.sha256(raw).hexdigest()
 
             if gids is not None:
-                assert sorted(gids.tolist()) == list(range(len(layers) * c['mesh']['nx'] * c['mesh']['ny']))
+                assert sorted(gids.tolist()) == list(range(cells))
         return manifest, summary, points, T, U, ev
 
     materials = [card('substrate', 25e9, .3, 15e-6), card('silicon', 130e9, .3, 2.6e-6)]
@@ -217,11 +219,16 @@ with tempfile.TemporaryDirectory() as tmp:
     materials = [card('a',25e9,.3,1e-5,2),card('b',25e9,.3,1e-5,2),card('copper',110e9,.34,17e-6,400)]
     for fraction in (0, .3, 1):
         _, _, p, _, U, _ = run('copper-'+str(fraction),mixture_case,layers,materials,copper=fraction)
-        alpha = (fraction*110e9*17e-6+(1-fraction)*25e9*1e-5)/(fraction*110e9+(1-fraction)*25e9)
+        alpha = (fraction*110e9/(1-.34)*17e-6+(1-fraction)*25e9/(1-.3)*1e-5)/(fraction*110e9/(1-.34)+(1-fraction)*25e9/(1-.3))
         nu = fraction*.34+(1-fraction)*.3
-        alpha_z = fraction*1.34*17e-6+(1-fraction)*1.3*1e-5-nu*alpha
+        alpha_z = fraction*(17e-6-2*.34/(1-.34)*(alpha-17e-6))+(1-fraction)*(1e-5-2*.3/(1-.3)*(alpha-1e-5))
         expected = p*np.array([alpha,alpha,alpha_z])*(-100)
         assert np.max(abs(U-expected)) < 1e-11
+    padded = copy.deepcopy(mixture_case)
+    padded['mesh'].update(nx=3, ny=5, levels=2)
+    _, _, p, _, U, ev = run('padding-3x5', padded, layers, materials, copper=.3)
+    assert any(b'constrained_dofs=6' in payload for kind, payload in ev if kind == 20)
+    assert np.max(abs(U)) > 0 and np.all(np.isfinite(U))
     fixed = copy.deepcopy(mixture_case)
     fixed['constraints'] = {'fixed':[{'target':'face:xmin'}]}
     materials = [card('a',25e9,.3,0,2),card('b',25e9,.3,0,2)]

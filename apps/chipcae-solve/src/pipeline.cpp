@@ -1,6 +1,7 @@
 #include "chipcae/io/event_log.hpp"
 #include "chipcae/io/vtkhdf_results.hpp"
 #include "chipcae/solve/case_loader.hpp"
+#include "chipcae/solve/mixture.hpp"
 #include "sha256.hpp"
 
 #include <algorithm>
@@ -15,6 +16,7 @@
 #include <numeric>
 #include <petscksp.h>
 #include <set>
+#include <tuple>
 
 namespace chipcae::solve {
 namespace {
@@ -33,6 +35,7 @@ struct Direct {
     Vec rhs = nullptr, solution = nullptr;
     KSP ksp = nullptr;
     std::uint32_t iterations = 0;
+    double assembly_seconds = 0, factor_seconds = 0;
     ~Direct() {
         KSPDestroy(&ksp);
         VecDestroy(&rhs);
@@ -41,13 +44,15 @@ struct Direct {
     }
     double solve(const SparseMatrix& a, const Vector& b, Vector& x, const LinearOptions& options) {
         const int n = a.Height();
+        const auto begin = std::chrono::steady_clock::now();
+        // Copy indices explicitly: MFEM int and PetscInt need not have the same width.
+        std::vector<PetscInt> rows(a.GetI(), a.GetI() + n + 1);
+        std::vector<PetscInt> columns(a.GetJ(), a.GetJ() + a.GetI()[n]);
+        std::vector<PetscScalar> values(a.GetData(), a.GetData() + a.GetI()[n]);
         check(MatCreateSeqAIJ(PETSC_COMM_SELF, n, n, 0, nullptr, &mat));
-        check(MatSetOption(mat, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_FALSE));
-        for (int i = 0; i < n; ++i)
-            for (int j = a.GetI()[i]; j < a.GetI()[i + 1]; ++j)
-                check(MatSetValue(mat, i, a.GetJ()[j], a.GetData()[j], INSERT_VALUES));
-        check(MatAssemblyBegin(mat, MAT_FINAL_ASSEMBLY));
-        check(MatAssemblyEnd(mat, MAT_FINAL_ASSEMBLY));
+        check(MatSeqAIJSetPreallocationCSR(mat, rows.data(), columns.data(), values.data()));
+        assembly_seconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
         check(VecCreateSeqWithArray(PETSC_COMM_SELF, 1, n, b.GetData(), &rhs));
         x.SetSize(n);
         x = 0.0;
@@ -59,6 +64,10 @@ struct Direct {
         check(KSPGetPC(ksp, &pc));
         check(PCSetType(pc, PCLU));
         check(PCFactorSetMatSolverType(pc, MATSOLVERPETSC));
+        const auto factor_begin = std::chrono::steady_clock::now();
+        check(KSPSetUp(ksp));
+        factor_seconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - factor_begin).count();
         check(KSPSolve(ksp, rhs, solution));
         KSPConvergedReason reason;
         check(KSPGetConvergedReason(ksp, &reason));
@@ -112,35 +121,6 @@ public:
         }
     }
 };
-// M1 laminate engineering rules, with z normal to the stack. C uses engineering
-// shear strain (xx, yy, zz, yz, xz, xy), unlike the material-point tensor Voigt API.
-struct Constitutive {
-    DenseMatrix C;
-    Vector alpha;
-    Constitutive() : C(6), alpha(3) {}
-};
-Constitutive mixture(const Material& matrix, const Material& metal, double f) {
-    const double m = 1 - f;
-    const double E = f * metal.E + m * matrix.E, nu = f * metal.nu + m * matrix.nu;
-    const double Ez = 1 / (f / metal.E + m / matrix.E);
-    const double Gm = matrix.E / (2 * (1 + matrix.nu)), Gc = metal.E / (2 * (1 + metal.nu));
-    DenseMatrix compliance(6);
-    compliance = 0.0;
-    compliance(0, 0) = compliance(1, 1) = 1 / E;
-    compliance(2, 2) = 1 / Ez;
-    compliance(0, 1) = compliance(1, 0) = compliance(0, 2) = compliance(2, 0) = compliance(1, 2) =
-        compliance(2, 1) = -nu / E;
-    compliance(3, 3) = compliance(4, 4) = f / Gc + m / Gm;
-    compliance(5, 5) = 1 / (f * Gc + m * Gm);
-    Constitutive result;
-    DenseMatrixInverse inverse(compliance);
-    inverse.GetInverseMatrix(result.C);
-    result.alpha[0] = result.alpha[1] =
-        (f * metal.E * metal.alpha + m * matrix.E * matrix.alpha) / E;
-    result.alpha[2] = f * (1 + metal.nu) * metal.alpha + m * (1 + matrix.nu) * matrix.alpha -
-                      nu * result.alpha[0];
-    return result;
-}
 class MixtureElasticity : public BilinearFormIntegrator {
     const std::vector<Constitutive>& materials;
 
@@ -463,6 +443,13 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                 throw std::runtime_error("expected serial sparse matrix");
             Direct direct;
             double residual = direct.solve(*matrix, b, x, inputs.linear);
+            emit(io::LogLine{
+                1,
+                rank,
+                name + " PETSc CSR assembly_seconds=" + std::to_string(direct.assembly_seconds) +
+                    " factor_seconds=" + std::to_string(direct.factor_seconds),
+                "",
+                0});
             form.RecoverFEMSolution(x, rhs, field);
             ++window;
             emit(io::Residual{"PETSc.LU", name, window, direct.iterations, residual, 64, "", 0});
@@ -484,9 +471,10 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                         if (arrays.attr_table.entries[arrays.attribute[e] - 1].layer ==
                             load.target.substr(6))
                             volume += mesh.GetElementVolume(e);
+                    const double density = heat_source_density(load, volume);
                     for (std::size_t a = 0; a < na; ++a)
                         if (arrays.attr_table.entries[a].layer == load.target.substr(6))
-                            source[a] += load.total_power ? load.source / volume : load.source;
+                            source[a] += density;
                 } else if (load.type == "fixed_temperature" && load.target.starts_with("layer:")) {
                     for (int e = 0; e < mesh.GetNE(); ++e)
                         if (arrays.attr_table.entries[arrays.attribute[e] - 1].layer ==
@@ -545,22 +533,50 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             rhs.AddDomainIntegrator(new ThermalForce(s));
         Array<int> essential;
         if (inputs.fixed.empty()) {
-            const auto& x = arrays.axes[0];
-            const auto& y = arrays.axes[1];
-            double z = arrays.axes[2].front();
-            for (int v = 0; v < mesh.GetNV(); ++v) {
-                const double* p = mesh.GetVertex(v);
-                if (p[2] != z)
-                    continue;
-                int count = p[0] == x.front() && p[1] == y.front()  ? 3
-                            : p[0] == x.back() && p[1] == y.front() ? 2
-                            : p[0] == x.front() && p[1] == y.back() ? 1
-                                                                    : 0;
-                Array<int> dofs;
-                vector.GetVertexVDofs(v, dofs);
-                for (int c = 3 - count; c < 3; ++c)
-                    essential.Append(dofs[c]);
+            // Only vertices incident to real cells can anchor rigid modes (padding is empty).
+            std::set<int> active;
+            for (int e = 0; e < mesh.GetNE(); ++e) {
+                Array<int> vertices;
+                mesh.GetElementVertices(e, vertices);
+                for (int v : vertices)
+                    active.insert(v);
             }
+            int a = -1, b = -1, c = -1;
+            for (int v : active) {
+                const auto* p = mesh.GetVertex(v);
+                if (a < 0 ||
+                    std::tie(p[2], p[1], p[0]) <
+                        std::tie(mesh.GetVertex(a)[2], mesh.GetVertex(a)[1], mesh.GetVertex(a)[0]))
+                    a = v;
+            }
+            if (a >= 0) {
+                const auto* origin = mesh.GetVertex(a);
+                for (int v : active) {
+                    const auto* p = mesh.GetVertex(v);
+                    if (p[2] == origin[2] && p[1] == origin[1] && p[0] > origin[0] &&
+                        (b < 0 || p[0] > mesh.GetVertex(b)[0]))
+                        b = v;
+                    if (p[2] == origin[2] && p[1] > origin[1] &&
+                        (c < 0 || p[1] > mesh.GetVertex(c)[1]))
+                        c = v;
+                }
+            }
+            for (auto [vertex, count] : {std::pair{a, 3}, {b, 2}, {c, 1}}) {
+                if (vertex < 0)
+                    throw InputError(
+                        ErrorCode::INPUT_INVALID,
+                        "3-2-1 constraint error: cannot select three noncollinear active vertices");
+                Array<int> dofs;
+                vector.GetVertexVDofs(vertex, dofs);
+                for (int component = 3 - count; component < 3; ++component)
+                    essential.Append(dofs[component]);
+            }
+            essential.Sort();
+            essential.Unique();
+            if (essential.Size() != 6)
+                throw InputError(ErrorCode::INPUT_INVALID,
+                                 "3-2-1 constraint error: expected exactly 6 constrained DOFs");
+            emit(io::LogLine{1, rank, "3-2-1 constrained_dofs=6 (3+2+1)", "", 0});
         } else {
             Array<int> all(mesh.bdr_attributes.Max());
             all = 0;
