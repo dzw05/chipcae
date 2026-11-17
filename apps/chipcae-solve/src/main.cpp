@@ -3,6 +3,10 @@
 
 #include <iostream>
 #include <map>
+#include <memory>
+#ifdef CHIPCAE_SOLVE_MFEM
+#include <mfem.hpp>
+#endif
 #include <string>
 #ifdef CHIPCAE_ENABLE_MPI
 #include <mpi.h>
@@ -66,6 +70,21 @@ int main(int argc, char** argv) {
     try {
         auto inputs =
             chipcae::solve::load_inputs(args.at("--case"), args.at("--profile"), mpi.size);
+#if defined(MFEM_USE_CUDA) && defined(CHIPCAE_SOLVE_MFEM)
+        // MFEM device state is process-global; keep it alive through solve::run below.
+        // Device selection alone does not guarantee CUDA support in downstream solver operators.
+        std::unique_ptr<mfem::Device> device;
+#endif
+        if (inputs.backend == "cuda") {
+#if !defined(MFEM_USE_CUDA) || !defined(CHIPCAE_SOLVE_MFEM)
+            return fail(chipcae::ErrorCode::NOT_IMPLEMENTED,
+                        "chipcae-solve built without CUDA-enabled MFEM");
+#else
+            device = std::make_unique<mfem::Device>("cuda");
+            if (mpi.rank == 0)
+                device->Print(std::cout);
+#endif
+        }
 #ifdef CHIPCAE_SOLVE_BACKEND
         inputs.cut_as_hex = args.contains("--cut-output");
         return chipcae::solve::run(inputs, args.at("--out"));

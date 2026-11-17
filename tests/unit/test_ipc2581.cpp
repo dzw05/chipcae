@@ -7,7 +7,9 @@
 #include <iomanip>
 #include <iostream>
 #include <random>
+#include <set>
 #include <sstream>
+#include <stdexcept>
 
 // Reserve a private directory so concurrent test processes never share map files.
 struct ScopedMap {
@@ -104,7 +106,7 @@ static bool golden_regression() {
         std::ofstream out(map);
         out << R"({"FR4":"mat.fr4","copper":"mat.cu"})";
     }
-    for (auto board : {"board_2layer", "board_4layer"}) {
+    for (auto board : {"board_2layer", "board_4layer", "board_arc"}) {
         auto r = ecad::read_ipc2581(root / "tests/integration/ecad/data" /
                                     (std::string(board) + ".xml"));
         if (!r)
@@ -277,9 +279,301 @@ static bool kicad_acceptance() {
     return failures == 0;
 }
 
+// Acceptance cases deliberately collect failures so one missing feature cannot hide another.
+static ecad::EcadModel geometry_read(const std::filesystem::path& path) {
+    auto r = ecad::read_ipc2581(path);
+    if (!r)
+        throw std::runtime_error("import failed: " + r.error);
+    return std::move(r.model);
+}
+static ecad::EcadModel geometry_xml(const std::string& body, const std::string& dictionary = "") {
+    ScopedMap temporary;
+    auto path = temporary.directory / "input.xml";
+    {
+        std::ofstream out(path);
+        out << "<IPC-2581><CadHeader units='MILLIMETER'/><CadData>"
+               "<Layer name='F.Cu' layerFunction='CONDUCTOR'/>"
+               "<Stackup><StackupGroup><StackupLayer layerOrGroupRef='F.Cu' thickness='0.035'/>"
+               "</StackupGroup></Stackup>"
+            << dictionary << "<Step name='acceptance'><LayerFeature layerRef='F.Cu'><Set>" << body
+            << "</Set></LayerFeature></Step></CadData></IPC-2581>";
+    }
+    return geometry_read(path);
+}
+static std::string geometry_line(int y, const std::string& desc) {
+    return "<Line startX='1' startY='" + std::to_string(y) + "' endX='11' endY='" +
+           std::to_string(y) + "'>" + desc + "</Line>";
+}
+static double geometry_area(const ecad::EcadModel& m, const std::string& name) {
+    double result = 0;
+    for (const auto& l : m.layers) {
+        if (l.name != name)
+            continue;
+        for (const auto& p : l.polygons) {
+            long double twice = 0;
+            for (std::size_t i = 0; i < p.points.size(); ++i) {
+                auto a = p.points[i], b = p.points[(i + 1) % p.points.size()];
+                twice +=
+                    static_cast<long double>(a[0]) * b[1] - static_cast<long double>(b[0]) * a[1];
+            }
+            result += std::abs(static_cast<double>(twice)) * m.dbu_m * m.dbu_m / 2;
+        }
+    }
+    return result * 1e6; // mm^2
+}
+static bool geometry_acceptance() {
+    const auto root =
+        std::filesystem::path(CHIPCAE_TEST_SOURCE_DIR) / "tests/integration/ecad/data/kicad_like";
+    const double pi = std::acos(-1.0);
+    auto round_area = [&](double length, double width) {
+        return length * width + pi * width * width / 4;
+    };
+    int failures = 0;
+    std::string current;
+    auto check = [&](bool ok, const std::string& detail) {
+        if (!ok) {
+            ++failures;
+            std::cerr << "FAIL " << current << ": " << detail << '\n';
+        }
+    };
+    auto area = [&](const ecad::EcadModel& m, double expected, const std::string& layer = "F.Cu") {
+        const double actual = geometry_area(m, layer);
+        check(std::abs(actual - expected) / expected <= 1e-3,
+              layer + " area expected=" + std::to_string(expected) +
+                  " actual=" + std::to_string(actual));
+    };
+    auto reports =
+        [&](const ecad::EcadModel& m, std::set<std::string> expected, bool via_only = false) {
+            std::set<std::string> actual;
+            std::size_t count = 0;
+            for (const auto& u : m.report.unsupported) {
+                if (via_only && u.element.rfind("Via", 0) != 0)
+                    continue;
+                ++count;
+                actual.insert(u.element);
+                check(u.code == "IMPORT_UNSUPPORTED_ELEMENT", "unsupported code");
+            }
+            std::ostringstream detail;
+            detail << "unsupported expected";
+            for (const auto& e : expected)
+                detail << " [" << e << ']';
+            detail << " actual count=" << count;
+            for (const auto& e : actual)
+                detail << " [" << e << ']';
+            check(actual == expected && count == expected.size(), detail.str());
+        };
+    auto run = [&](const char* name, auto test) {
+        current = name;
+        const int before = failures;
+        try {
+            test();
+        } catch (const std::exception& e) {
+            check(false, e.what());
+        }
+        std::cout << (before == failures ? "PASS " : "FAIL ") << name << '\n';
+    };
+    run("ipc_duplicate_lines_union", [&] {
+        const auto line = geometry_line(1, "<LineDesc lineWidth='0.4'/>");
+        auto model = geometry_xml(line + line);
+        check(model.layers.size() == 1 && model.layers[0].polygons.size() == 1,
+              "identical lines merge into one polygon");
+        area(model, round_area(10, .4));
+        reports(model, {});
+    });
+    run("ipc_pad_artwork_before_stackup", [&] {
+        ScopedMap temporary;
+        const auto path = temporary.directory / "forward-pad.xml";
+        {
+            std::ofstream out(path);
+            out << "<IPC-2581><CadHeader units='MILLIMETER'/><CadData>"
+                   "<EntryStandard id='disk'><Circle diameter='1'/></EntryStandard>"
+                   "<Step><LayerFeature layerRef='F.Cu'><Set>"
+                   "<Pad padstackDefRef='artwork'><Location x='2' y='3'/>"
+                   "<StandardPrimitiveRef id='disk'/></Pad>"
+                << geometry_line(3, "<LineDesc lineWidth='0.2'/>")
+                << "</Set></LayerFeature></Step>"
+                   "<StackupLayer layerOrGroupRef='mask'/>"
+                   "<StackupLayer layerOrGroupRef='F.Cu'/>"
+                   "<Layer name='mask' layerFunction='SOLDERMASK'/>"
+                   "<Layer name='F.Cu' layerFunction='CONDUCTOR'/>"
+                   "</CadData></IPC-2581>";
+        }
+        auto model = geometry_read(path);
+        check(model.layers.size() == 1 && model.layers[0].name == "F.Cu" &&
+                  model.layers[0].polygons.size() == 1,
+              "forward pad and trace merge on compacted copper layer");
+        // Compare with the same artwork parsed after its layer has been indexed.
+        auto baseline =
+            geometry_xml("<Pad padstackDefRef='artwork'><Location x='2' y='3'/>"
+                         "<StandardPrimitiveRef id='disk'/></Pad>" +
+                             geometry_line(3, "<LineDesc lineWidth='0.2'/>"),
+                         "<EntryStandard id='disk'><Circle diameter='1'/></EntryStandard>");
+        area(model, geometry_area(baseline, "F.Cu"));
+        check(geometry_area(model, "F.Cu") > round_area(10, .2),
+              "forward pad contributes copper area");
+        check(model.vias.empty(), "pad artwork creates no drilled vias");
+    });
+    run("ipc_pad_union_preserves_unrelated_trace", [&] {
+        const auto artwork = "<Pad padstackDefRef='artwork'><Location x='0' "
+                             "y='0'/><StandardPrimitiveRef id='disk'/></Pad>" +
+                             geometry_line(5, "<LineDesc lineWidth='0.4'/>") +
+                             "<Line startX='0' startY='0' endX='0.2' endY='0'>"
+                             "<LineDesc lineWidth='0.2'/></Line>";
+        const std::string dictionary =
+            "<EntryStandard id='disk'><Circle diameter='1'/></EntryStandard>";
+        const auto baseline = geometry_xml(artwork, dictionary);
+        const auto filtered = geometry_xml(
+            artwork + "<Polygon/>"
+                      "<Polygon><PolyBegin x='2' y='2'/></Polygon>"
+                      "<Polygon><PolyBegin x='2' y='2'/><PolyStepSegment x='3' y='3'/></Polygon>"
+                      "<Polygon><PolyBegin x='2' y='2'/><PolyStepSegment x='3' y='3'/>"
+                      "<PolyStepSegment x='4' y='4'/></Polygon>"
+                      "<Polygon><PolyBegin x='2' y='2'/><PolyStepSegment x='2.001' y='2'/>"
+                      "<PolyStepSegment x='2' y='2.001'/></Polygon>",
+            dictionary);
+        for (const auto* model : {&baseline, &filtered}) {
+            check(model->layers.size() == 1 && model->layers[0].polygons.size() == 2,
+                  "pad and unrelated trace remain separate");
+            area(*model, pi / 4 + round_area(10, .4));
+            if (model->layers.size() == 1) {
+                for (const auto& polygon : model->layers[0].polygons) {
+                    check(polygon.points.size() >= 3, "union emits valid rings");
+                    if (polygon.points.size() < 3)
+                        continue;
+                    auto isolated = *model;
+                    isolated.layers[0].polygons = {polygon};
+                    area(isolated, polygon.points.front()[1] > 1000 ? round_area(10, .4) : pi / 4);
+                }
+            }
+        }
+    });
+    run("ipc_inline_linedesc_with_id", [&] {
+        auto m = geometry_read(root / "inline_linedesc_with_id.xml");
+        check(m.layers.size() == 1 && m.layers[0].polygons.size() == 2, "both lines appear");
+        area(m, 2 * round_area(10, .4));
+        if (m.layers.size() == 1 && m.layers[0].polygons.size() == 2) {
+            auto isolated = m;
+            for (const auto& polygon : m.layers[0].polygons) {
+                isolated.layers[0].polygons = {polygon};
+                area(isolated, round_area(10, .4));
+            }
+        }
+        reports(m, {});
+    });
+    run("ipc_inline_priority_and_zero_width", [&] {
+        auto m =
+            geometry_xml(geometry_line(1, "<LineDesc lineWidth='0.4'/><LineDescRef id='W'/>") +
+                             geometry_line(3, "<LineDescRef id='W'/><LineDesc lineWidth='0'/>") +
+                             geometry_line(5, "<LineDesc/>"),
+                         "<LineDesc id='W' lineWidth='0.2'/>");
+        area(m, round_area(10, .4));
+        reports(m, {"LineWidthMissing:F.Cu"});
+    });
+    run("ipc_round_coincident_endpoints", [&] {
+        auto m = geometry_xml("<Line startX='1' startY='1' endX='1' endY='1'>"
+                              "<LineDesc lineWidth='0.4' lineEnd='round'/></Line>");
+        area(m, round_area(0, .4));
+        reports(m, {});
+    });
+    run("ipc_linedesc_forward_reference", [&] {
+        auto m = geometry_xml(geometry_line(1, "<LineDescRef id='LATER'/>") +
+                              geometry_line(3, "<LineDesc id='LATER' lineWidth='0.4'/>"));
+        area(m, 2 * round_area(10, .4));
+        reports(m, {});
+    });
+    run("ipc_report_first_problem_order", [&] {
+        auto m = geometry_xml(geometry_line(1, "") + "<VendorExtension/>" + geometry_line(3, "") +
+                              geometry_line(5, "<LineDescRef id='NOPE'/>"));
+        reports(m, {"LineWidthMissing:F.Cu", "VendorExtension", "LineDescMissing:NOPE"});
+        check(m.report.unsupported.size() == 3 &&
+                  m.report.unsupported[0].element == "LineWidthMissing:F.Cu" &&
+                  m.report.unsupported[1].element == "VendorExtension" &&
+                  m.report.unsupported[2].element == "LineDescMissing:NOPE",
+              "deferred reports retain first-problem order");
+    });
+    run("ipc_line_width_missing", [&] {
+        auto m = geometry_xml(geometry_line(1, "") + geometry_line(3, "") +
+                              geometry_line(5, "<LineDesc id='valid' lineWidth='0.4'/>"));
+        check(m.layers.size() == 1 && m.layers[0].polygons.size() == 1, "only valid line appears");
+        area(m, round_area(10, .4));
+        reports(m, {"LineWidthMissing:F.Cu"});
+    });
+    run("ipc_linedesc_duplicate", [&] {
+        auto m = geometry_xml(
+            geometry_line(1, "<LineDesc id='W1' lineWidth='0.4'/>") +
+                geometry_line(3, "<LineDescRef id='W1'/>") +
+                geometry_line(5, "<LineDesc id='W1' lineWidth='0.6'/>"),
+            "<DictionaryLineDesc><LineDesc id='W1' lineWidth='0.2'/></DictionaryLineDesc>");
+        area(m, round_area(10, .4) + round_area(10, .2) + round_area(10, .6));
+        // The dictionary wrapper remains an unrelated unsupported XML element.
+        reports(m, {"DictionaryLineDesc", "LineDescDuplicate:W1"});
+    });
+    run("ipc_linedesc_missing", [&] {
+        auto m = geometry_xml(geometry_line(1, "<LineDescRef id='NOPE'/>") +
+                              geometry_line(3, "<LineDescRef id='NOPE'/>"));
+        check(m.layers.size() == 1 && m.layers[0].polygons.empty(),
+              "missing references draw no polygons");
+        reports(m, {"LineDescMissing:NOPE"});
+    });
+    for (const auto& end : {std::string("square"),
+                            std::string("flat"),
+                            std::string("unknown"),
+                            std::string("round")}) {
+        run(("ipc_line_end_" + end).c_str(), [&] {
+            auto m =
+                geometry_read(root / ("line_end_" + (end == "unknown" ? "foo" : end) + ".xml"));
+            area(m, end == "square" ? 10.4 * .4 : end == "flat" ? 10 * .4 : round_area(10, .4));
+            reports(m,
+                    end == "unknown" ? std::set<std::string>{"LineEndUnsupported:F.Cu:FOO"}
+                                     : std::set<std::string>{});
+        });
+    }
+    for (bool square : {false, true}) {
+        run(square ? "ipc_arc_square_as_round" : "ipc_arc_round", [&] {
+            auto m = geometry_read(root / (square ? "arc_square.xml" : "arc_round.xml"));
+            area(m, pi * 100 * 2 + pi);
+            reports(m,
+                    square ? std::set<std::string>{"LineEndUnsupported:F.Cu:SQUARE"}
+                           : std::set<std::string>{});
+        });
+    }
+    run("ipc_kicad_inline_linedesc", [&] {
+        auto m = geometry_read(root / "board_kicad10/board.xml");
+        check(m.layers.size() == 7, "four copper and three dielectric layers");
+        for (const auto& name : {"F.Cu", "B.Cu"}) {
+            bool nonempty = false;
+            for (const auto& l : m.layers)
+                if (l.name == name)
+                    nonempty = !l.polygons.empty();
+            check(nonempty, std::string(name) + " polygons > 0");
+            area(m,
+                 2 * round_area(10, .2) + round_area(10, .4) +
+                     (std::string(name) == "F.Cu" ? 2 : 1) * pi / 4,
+                 name);
+        }
+        for (const auto& u : m.report.unsupported)
+            check(u.element.rfind("LineWidthMissing:", 0) != 0, "no missing-width report");
+    });
+    run("ipc_via_plating_missing_grouped", [&] {
+        auto m = geometry_read(root / "board_kicad10/board.xml");
+        check(m.vias.empty() && m.via_fractions.empty(),
+              "missing plating contributes no vias or fractions");
+        reports(m, {"ViaPlatingMissing:F.Cu:B.Cu:1", "ViaPlatingMissing:F.Cu:In1.Cu:1"}, true);
+    });
+    run("ipc_via_plating_mixed", [&] {
+        auto m = geometry_read(root / "via_plating_mixed.xml");
+        check(m.vias.size() == 3, "exactly three plated vias");
+        for (const auto& f : m.via_fractions)
+            check(f.via_count == 3, "only plated vias contribute fractions");
+        reports(m, {"ViaPlatingMissing:F.Cu:B.Cu:2"});
+    });
+    return failures == 0;
+}
+
 int main() {
     if (!golden_regression())
         return 11;
+    std::cout << "PASS ipc_linedesc_ref_unchanged\n";
     namespace ecad = chipcae::geometry::ecad;
     const auto root =
         std::filesystem::path(CHIPCAE_TEST_SOURCE_DIR) / "tests/integration/ecad/data";
@@ -327,6 +621,8 @@ int main() {
     std::filesystem::remove_all(output);
     if (!kicad_acceptance())
         return 12;
+    if (!geometry_acceptance())
+        return 13;
     std::cout << "IPC-2581 SAX reader checks passed\n";
     return 0;
 }

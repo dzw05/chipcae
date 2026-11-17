@@ -8,6 +8,16 @@ if(TARGET chipcae_solve_inputs)
     add_test(NAME solve_inputs COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/test_inputs.py $<TARGET_FILE:chipcae-solve> ${PROJECT_SOURCE_DIR} ${_solve_backend})
     set_tests_properties(solve_inputs PROPERTIES TIMEOUT 600)
+    foreach(_profile_case IN ITEMS cuda_unavailable cuda_gpus_zero cpu_gpus_nonzero)
+        # The unavailable diagnostic applies only without CUDA-enabled MFEM.
+        if(_profile_case STREQUAL "cuda_unavailable" AND MFEM_USE_CUDA)
+            continue()
+        endif()
+        add_test(NAME solve_profile_${_profile_case} COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_run_profile.py
+            $<TARGET_FILE:chipcae-solve> ${PROJECT_SOURCE_DIR} ${_profile_case})
+        set_tests_properties(solve_profile_${_profile_case} PROPERTIES TIMEOUT 150)
+    endforeach()
     add_executable(chipcae_test_solve_interpolation test_interpolation.cpp)
     target_link_libraries(chipcae_test_solve_interpolation PRIVATE chipcae_solve_inputs)
     chipcae_set_warnings(chipcae_test_solve_interpolation)
