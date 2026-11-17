@@ -9,7 +9,10 @@
 #   - test_*.cpp : one executable per file, linked to LIBS (default chipcae::core),
 #                  add_test NAME = <PREFIX><file stem without "test_">.
 #                  Compiled with CHIPCAE_SOURCE_DIR / CHIPCAE_TEST_SOURCE_DIR defined.
-#   - test_*.py  : run with Python3 (arg 1 = project source dir), SKIP_RETURN_CODE 77.
+#   - test_*.py  : run with Python3 (arg 1 = project source dir), SKIP_RETURN_CODE 77
+#                  (C++ tests get no skip code, so a stray "return 77" fails).
+#   Test names are global to CTest: pass PREFIX <area>_ if a stem could collide, and
+#   LABELS tierA (or mesh, ...) if the test should run in label-filtered jobs.
 #   - test_occt_*: collected only when CHIPCAE_ENABLE_OCCT=ON, extra label "occt".
 #   Files are globbed with CONFIGURE_DEPENDS, so adding one re-runs CMake.
 #
@@ -23,6 +26,9 @@ include_guard(GLOBAL)
 
 function(chipcae_auto_tests)
     cmake_parse_arguments(AT "" "TIMEOUT;PREFIX" "LIBS;LABELS" ${ARGN})
+    if(AT_UNPARSED_ARGUMENTS)
+        message(FATAL_ERROR "chipcae_auto_tests: unknown arguments: ${AT_UNPARSED_ARGUMENTS}")
+    endif()
     if(NOT AT_LIBS)
         set(AT_LIBS chipcae::core)
     endif()
@@ -59,14 +65,16 @@ function(chipcae_auto_tests)
                 chipcae_set_warnings(${_exe})
             endif()
             add_test(NAME ${_name} COMMAND ${_exe})
+            # C++ tests: a stray "return 77" must fail, not skip.
         else()
             if(NOT Python3_EXECUTABLE)
                 find_package(Python3 COMPONENTS Interpreter REQUIRED)
             endif()
             add_test(NAME ${_name} COMMAND ${Python3_EXECUTABLE} "${_src}" "${PROJECT_SOURCE_DIR}")
-            set_tests_properties(${_name} PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+            set_tests_properties(${_name} PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+                                                     SKIP_RETURN_CODE 77)
         endif()
-        set_tests_properties(${_name} PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT ${AT_TIMEOUT}
+        set_tests_properties(${_name} PROPERTIES TIMEOUT ${AT_TIMEOUT}
             ENVIRONMENT "CHIPCAE_SOURCE_DIR=${PROJECT_SOURCE_DIR};CHIPCAE_BINARY_DIR=${PROJECT_BINARY_DIR}")
         if(_labels)
             set_tests_properties(${_name} PROPERTIES LABELS "${_labels}")
@@ -75,6 +83,7 @@ function(chipcae_auto_tests)
 endfunction()
 
 function(chipcae_auto_test_subdirs)
+    # SUBDIRECTORIES lists the absolute *source* dirs already added (CMake docs).
     get_property(_added DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY SUBDIRECTORIES)
     file(GLOB _lists CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/*/CMakeLists.txt"
@@ -87,9 +96,16 @@ function(chipcae_auto_test_subdirs)
         if(_dir IN_LIST _added OR (NOT _parent STREQUAL CMAKE_CURRENT_SOURCE_DIR AND EXISTS "${_parent}/CMakeLists.txt"))
             continue()
         endif()
-        file(READ "${_list}" _body)
-        string(FIND "${_body}" "chipcae_auto_tests(" _pos)
-        if(_pos EQUAL -1)
+        file(STRINGS "${_list}" _lines)
+        set(_calls FALSE)
+        foreach(_line IN LISTS _lines)
+            string(REGEX REPLACE "#.*$" "" _line "${_line}")
+            if(_line MATCHES "chipcae_auto_tests[ \t]*\\(")
+                set(_calls TRUE)
+                break()
+            endif()
+        endforeach()
+        if(NOT _calls)
             continue()
         endif()
         add_subdirectory("${_dir}")
