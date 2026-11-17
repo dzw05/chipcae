@@ -50,6 +50,7 @@ struct Material {
     bool E_clamped = false, nu_clamped = false, alpha_clamped = false;
 };
 struct RunInputs {
+    std::string backend = "cpu";
     std::map<std::string, Material> materials;
     std::filesystem::path case_path, profile_path, stack_path, material_path;
     mesh::StackModel stack;

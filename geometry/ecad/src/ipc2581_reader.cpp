@@ -35,7 +35,7 @@ struct Parser {
         Via via;
         std::string layer, spec;
         double diameter = 0;
-        bool plated = true;
+        bool plated = true, artwork = false;
     };
     std::vector<Pending> pending;
     bool in_hole = false, in_pad = false, in_component = false;
@@ -90,6 +90,14 @@ struct Parser {
     }
     // Resolve deferred definitions and compact layers before computing any via indices.
     void resolve() {
+        for (auto& t : deferred_traces)
+            draw_trace(t);
+        deferred_traces.clear();
+        auto& reports = model.report.unsupported;
+        reports.erase(std::remove_if(reports.begin(),
+                                     reports.end(),
+                                     [](const auto& r) { return r.element.empty(); }),
+                      reports.end());
         std::vector<EcadLayer> retained;
         std::vector<UnsupportedElement> additions;
         std::set<std::string> seen;
@@ -128,6 +136,49 @@ struct Parser {
             retained.push_back(std::move(layer));
         }
         model.layers = std::move(retained);
+        for (const auto& artwork : deferred_artwork) {
+            const auto& pad = pending[artwork.pad];
+            auto li = layer_index.find(pad.layer);
+            if (li == layer_index.end() || skipped(pad.layer))
+                continue;
+            const auto center = pad.via.position;
+            Polygon polygon;
+            for (int i = 0; i < 256; ++i) {
+                const double angle = 2 * std::acos(-1.0) * i / 256;
+                polygon.points.push_back(
+                    {std::llround(center[0] + artwork.radius * std::cos(angle)),
+                     std::llround(center[1] + artwork.radius * std::sin(angle))});
+            }
+            model.layers[li->second].polygons.push_back(std::move(polygon));
+        }
+        // Merge overlapping copper artwork and traces before computing their area.
+        for (auto& layer : model.layers) {
+            auto& polygons = layer.polygons;
+            if (polygons.size() < 2)
+                continue;
+            Clipper2Lib::Paths64 paths;
+            for (const auto& p : polygons) {
+                if (p.points.size() < 3)
+                    continue;
+                Clipper2Lib::Path64 points;
+                for (const auto& v : p.points)
+                    points.push_back({v[0], v[1]});
+                const double area = Clipper2Lib::Area(points);
+                // Reject collapsed rings and sub-grid slivers before clipping (area in DBU^2).
+                if (std::abs(area) < 1.0)
+                    continue;
+                if (area < 0)
+                    std::reverse(points.begin(), points.end());
+                paths.push_back(std::move(points));
+            }
+            polygons.clear();
+            for (const auto& points : Clipper2Lib::Union(paths, Clipper2Lib::FillRule::NonZero)) {
+                Polygon p;
+                for (const auto& v : points)
+                    p.points.push_back({v.x, v.y});
+                polygons.push_back(std::move(p));
+            }
+        }
         model.report.unsupported.insert(
             model.report.unsupported.begin(), additions.begin(), additions.end());
         for (std::size_t ci = 0; ci < model.components.size(); ++ci) {
@@ -152,7 +203,11 @@ struct Parser {
             for (std::size_t i = 0; i < c.pads.size(); ++i)
                 c.pads[i].position = transform(package_pins[c.package][i]);
         }
+        std::map<std::pair<std::size_t, std::size_t>, std::size_t> missing_plating;
         for (auto& p : pending) {
+            // Copper pad instances describe artwork, not additional drilled vias.
+            if (p.artwork)
+                continue;
             if (!p.via.padstack.empty()) {
                 auto h = holes.find(p.via.padstack);
                 if (h == holes.end()) {
@@ -174,9 +229,13 @@ struct Parser {
             auto thickness = plating.find(p.spec.empty() ? layer_specs[p.layer] : p.spec);
             if (a == layer_index.end() || b == layer_index.end() ||
                 !model.layers[a->second].copper || !model.layers[b->second].copper ||
-                thickness == plating.end() || p.diameter <= 0 || thickness->second <= 0) {
+                p.diameter <= 0 || (thickness != plating.end() && thickness->second <= 0)) {
                 model.report.unsupported.push_back(
                     {"IMPORT_UNSUPPORTED_ELEMENT", "ViaGeometry:" + p.via.id, 0});
+                continue;
+            }
+            if (thickness == plating.end()) {
+                ++missing_plating[{a->second, b->second}];
                 continue;
             }
             p.via.outer_radius_dbu = p.diameter / 2;
@@ -187,6 +246,12 @@ struct Parser {
                     p.via.dielectric_layers.push_back(i);
             model.vias.push_back(std::move(p.via));
         }
+        for (const auto& [pair, count] : missing_plating)
+            model.report.unsupported.push_back(
+                {"IMPORT_UNSUPPORTED_ELEMENT",
+                 "ViaPlatingMissing:" + model.layers[pair.first].name + ":" +
+                     model.layers[pair.second].name + ":" + std::to_string(count),
+                 0});
         for (std::size_t i = 0; i < model.layers.size(); ++i) {
             ViaFraction cell;
             cell.layer = i;
@@ -216,10 +281,71 @@ struct Parser {
     struct Trace {
         Clipper2Lib::Path64 path;
         double width = 0;
+        bool inline_width = false, arc = false;
+        std::string ref, layer, end;
+        double unit = 1e-3;
+        std::size_t slot = 0;
+        std::uint64_t line = 0;
     };
     Trace trace;
     std::map<std::string, double> line_widths;
-    std::string active_line_desc;
+    bool in_trace = false;
+    std::vector<Trace> deferred_traces;
+    std::set<std::string> duplicate_ids, missing_ids, missing_layers, end_layers;
+    std::map<std::string, double> circles;
+    std::string standard;
+    struct Artwork {
+        std::size_t pad;
+        double radius;
+    };
+    std::vector<Artwork> deferred_artwork;
+    void draw_trace(Trace& t, Clipper2Lib::EndType end = Clipper2Lib::EndType::Round) {
+        auto li = layer_index.find(t.layer);
+        if (li == layer_index.end() || skipped(t.layer))
+            return;
+        std::string problem;
+        if (!t.inline_width && !t.ref.empty()) {
+            auto w = line_widths.find(t.ref);
+            if (w == line_widths.end()) {
+                if (missing_ids.insert(t.ref).second)
+                    problem = "LineDescMissing:" + t.ref;
+            } else
+                t.width = w->second;
+        }
+        if (t.width <= 0) {
+            if ((t.inline_width || t.ref.empty() || line_widths.count(t.ref)) &&
+                missing_layers.insert(t.layer).second)
+                problem = "LineWidthMissing:" + t.layer;
+            if (!problem.empty())
+                model.report.unsupported[t.slot] = {"IMPORT_UNSUPPORTED_ELEMENT", problem, t.line};
+            return;
+        }
+        const auto style = uppercase(t.end);
+        if (!t.arc && style == "SQUARE")
+            end = Clipper2Lib::EndType::Square;
+        else if (!t.arc && style == "FLAT")
+            end = Clipper2Lib::EndType::Butt;
+        else if (!style.empty() && style != "ROUND" && end_layers.insert(t.layer).second)
+            model.report.unsupported[t.slot] = {"IMPORT_UNSUPPORTED_ELEMENT",
+                                                "LineEndUnsupported:" + t.layer + ":" + t.end,
+                                                t.line};
+        Clipper2Lib::ClipperOffset offset;
+        // A collapsed ROUND line is a disk; keep its discretization error below 1e-3.
+        if (t.path.size() == 2 && t.path.front() == t.path.back())
+            offset.ArcTolerance(0.01);
+        offset.AddPath(t.path, Clipper2Lib::JoinType::Round, end);
+        Clipper2Lib::Paths64 inflated;
+        offset.Execute(t.width * t.unit / 2e-6, inflated);
+        auto& dst = model.layers[li->second].polygons;
+        for (const auto& path : inflated) {
+            Polygon polygon;
+            for (const auto& p : path)
+                polygon.points.push_back({p.x, p.y});
+            if (polygon.points.size() >= 3)
+                dst.push_back(std::move(polygon));
+        }
+        model.layers[li->second].copper = true;
+    }
     Polygon* active = nullptr;
     std::vector<double> x_values;
     std::string failure;
@@ -253,6 +379,8 @@ struct Parser {
     void start(const char* raw, const XML_Char** a) {
         const auto name = local(raw);
         path.push_back(name);
+        if (name == "StandardPrimitiveRef" && in_pad)
+            pending.back().artwork = true;
         const auto parent = path.size() > 1 ? path[path.size() - 2] : std::string{};
         if (name == "Property" && !spec.empty() && material_general_depth &&
             materials[spec].empty() && !value(a, "text").empty())
@@ -356,6 +484,8 @@ struct Parser {
             const char* unit = attr(a, "units");
             if (unit && std::string_view(unit) == "MICRON")
                 units_to_m = 1e-6;
+            else if (unit && std::string_view(unit) == "MILLIMETER")
+                units_to_m = 1e-3;
             else if (unit && std::string_view(unit) == "INCH")
                 units_to_m = 0.0254;
         } else if (name == "Profile") {
@@ -380,17 +510,41 @@ struct Parser {
             } else if (current_layer.empty() &&
                        (!model.outline.points.empty() || parent == "Profile"))
                 active = &model.outline;
+        } else if (name == "EntryStandard") {
+            model.report.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT", name, line_number()});
+            standard = value(a, "id");
+        } else if (name == "Circle" && !standard.empty()) {
+            model.report.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT", name, line_number()});
+            circles[standard] = number(attr(a, "diameter")) * scale();
+        } else if (name == "StandardPrimitiveRef" && in_pad && circles.count(value(a, "id"))) {
+            model.report.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT", name, line_number()});
+            deferred_artwork.push_back({pending.size() - 1, circles[value(a, "id")] / 2});
         } else if (name == "LineDesc") {
             const char* id = attr(a, "id");
-            if (id) {
-                line_widths[id] = number(attr(a, "lineWidth"));
-                trace.width = number(attr(a, "lineWidth"));
+            const double width = number(attr(a, "lineWidth"));
+            if (id && !line_widths.emplace(id, width).second && duplicate_ids.insert(id).second)
+                model.report.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT",
+                                                    "LineDescDuplicate:" + std::string(id),
+                                                    line_number()});
+            if (in_trace) {
+                trace.width = width;
+                trace.inline_width = true;
+                if (attr(a, "lineEnd"))
+                    trace.end = value(a, "lineEnd");
             }
         } else if (name == "LineDescRef") {
-            const char* id = attr(a, "id");
-            active_line_desc = id ? id : "";
+            if (in_trace)
+                trace.ref = value(a, "id");
         } else if (name == "Line" || name == "Arc") {
             trace = Trace{};
+            in_trace = true;
+            trace.arc = name == "Arc";
+            trace.end = value(a, "lineEnd");
+            trace.layer = current_layer;
+            trace.unit = units_to_m;
+            trace.line = line_number();
+            trace.slot = model.report.unsupported.size();
+            model.report.unsupported.push_back({});
             const double coord_scale = units_to_m / 1e-6;
             trace.path.push_back(
                 {static_cast<std::int64_t>(std::llround(number(attr(a, "startX")) * coord_scale)),
@@ -473,30 +627,12 @@ struct Parser {
             definition_layer.clear();
         if (n == "Spec")
             spec.clear();
-        if (n == "LineDescRef") {
-            auto it = line_widths.find(active_line_desc);
-            if (it != line_widths.end())
-                trace.width = it->second;
-            active_line_desc.clear();
-        }
-        if ((n == "Line" || n == "Arc") && trace.path.size() >= 2 && trace.width > 0) {
-            auto li = layer_index.find(current_layer);
-            if (li != layer_index.end() && !skipped(current_layer)) {
-                Clipper2Lib::ClipperOffset offset;
-                offset.AddPath(
-                    trace.path, Clipper2Lib::JoinType::Round, Clipper2Lib::EndType::Round);
-                Clipper2Lib::Paths64 inflated;
-                offset.Execute(trace.width * units_to_m / 2e-6, inflated);
-                auto& dst = model.layers[li->second].polygons;
-                for (const auto& path : inflated) {
-                    Polygon polygon;
-                    for (const auto& p : path)
-                        polygon.points.push_back({p.x, p.y});
-                    if (polygon.points.size() >= 3)
-                        dst.push_back(std::move(polygon));
-                }
-                model.layers[li->second].copper = true;
-            }
+        if (n == "EntryStandard")
+            standard.clear();
+        if (n == "Line" || n == "Arc") {
+            // Retain primitive order for first-problem reports, including forward references.
+            deferred_traces.push_back(std::move(trace));
+            in_trace = false;
         }
         if (n == "Polygon" || n == "Profile")
             active = nullptr;
