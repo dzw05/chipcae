@@ -42,8 +42,11 @@ The v1 field contract (required keys, types, and which fields are stable) is in 
 unknown top-level keys are rejected.
 
 The v1 contract requires exactly one coarse and one fine mesh and selects fine.
-Top-level `W_bfp_m` must equal the selected mesh value; validation checks this
-and the broad `rel_delta < 0.5` sanity bound. Required `label` and `host` fields
+Mesh array order is immaterial. Top-level `W_bfp_m` must equal the selected
+mesh value. The test validator normalizes a copy of the schema with a
+`contains` constraint binding the selected name and top-level value via `const`,
+since JSON Schema cannot directly compare two instance fields. Validation checks
+this relationship and the broad `rel_delta < 0.5` sanity bound. Required `label` and `host` fields
 record the reference status and execution host.
 
 Run `python3 -m unittest tools.vv.test_trilayer_calculix_ref` after generation.

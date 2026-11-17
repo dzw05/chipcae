@@ -23,6 +23,29 @@ CONTRACT = DIR / "reference.schema.json"
 PROTOTYPE = 4.269532769e-3
 
 
+def validate_reference(data, contract):
+    """Bind the selected value with standard JSON Schema const/contains.
+
+    JSON Schema cannot reference another instance field directly, so normalize
+    the contract with the artifact's top-level value before validating it.
+    """
+    import jsonschema
+
+    normalized = copy.deepcopy(contract)
+    normalized["properties"]["meshes"]["allOf"].append({
+        "contains": {
+            "properties": {
+                "name": {"const": data.get("selected_mesh")},
+                "W_bfp_m": {"const": data.get("W_bfp_m")},
+            },
+            "required": ["name", "W_bfp_m"],
+        },
+        "minContains": 1,
+        "maxContains": 1,
+    })
+    jsonschema.Draft202012Validator(normalized).validate(data)
+
+
 class TrilayerCalculixRefTest(unittest.TestCase):
     def test_contract_rejects_invalid_artifacts(self):
         import jsonschema
@@ -30,8 +53,10 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         data = json.loads(REF.read_text(encoding="utf-8"))
         contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
         jsonschema.Draft202012Validator.check_schema(contract)
-        validator = jsonschema.Draft202012Validator(contract)
-        validator.validate(data)
+        validate_reference(data, contract)
+        reversed_meshes = copy.deepcopy(data)
+        reversed_meshes["meshes"].reverse()
+        validate_reference(reversed_meshes, contract)
         variants = []
         for field in ("label", "host", "W_bfp_m"):
             invalid = copy.deepcopy(data)
@@ -49,10 +74,15 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             invalid = copy.deepcopy(data)
             invalid["meshes"] = [dict(data["meshes"][0], name=name) for name in names]
             variants.append(invalid)
+        invalid = copy.deepcopy(data)
+        selected = next(m for m in invalid["meshes"]
+                        if m["name"] == invalid["selected_mesh"])
+        selected["W_bfp_m"] *= 1.01
+        variants.append(invalid)
         for index, invalid in enumerate(variants):
             with self.subTest(variant=index):
                 with self.assertRaises(jsonschema.ValidationError):
-                    validator.validate(invalid)
+                    validate_reference(invalid, contract)
 
     def test_reference_schema_and_report_delta(self):
         with REF.open(encoding="utf-8") as handle:
@@ -64,8 +94,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         self.assertIn("properties", contract)
         for key in contract["required"]:
             self.assertIn(key, data, f"missing required field {key}")
-        import jsonschema
-        jsonschema.Draft202012Validator(contract).validate(data)
+        validate_reference(data, contract)
         self.assertEqual(data["schema_version"], "1")
         self.assertEqual(data["kind"], "REFERENCE")
         self.assertEqual(data["element_type"], "C3D20")
@@ -77,7 +106,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             self.assertTrue(data[field].strip())
         self.assertAlmostEqual(data["prototype_W_bfp_m"], PROTOTYPE, places=12)
         names = [m["name"] for m in data["meshes"]]
-        self.assertEqual(names, ["coarse", "fine"])
+        self.assertCountEqual(names, ["coarse", "fine"])
         for mesh in data["meshes"]:
             self.assertEqual(mesh["n_elem_z_per_layer"], [2, 2, 2])
             self.assertEqual(len(mesh["n_elem_xyz"]), 3)
