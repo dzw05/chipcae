@@ -15,6 +15,22 @@ from tools.vv.calculix_trilayer.generate import build_mesh, parse_frd, top_node_
 
 
 class FrdParserTest(unittest.TestCase):
+    def test_full_width_node_id(self):
+        # All ten ID columns are occupied; negative values abut the ID.
+        record = " -11234567890-1.23456E+02 2.34567E-03-3.45678E+01"
+        self.assertEqual(len(record), 49)
+        self.assertEqual(record[3:13], "1234567890")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "wide-id.frd"
+            path.write_text(
+                "  2C\n" + record + "\n -3\n -4  DISP\n" + record + "\n -3\n",
+                encoding="ascii",
+            )
+            nodes, disp = parse_frd(path)
+        expected = {1234567890: (-123.456, 0.00234567, -34.5678)}
+        self.assertEqual(nodes, expected)
+        self.assertEqual(disp, expected)
+
     def test_checked_in_decks_match_generator(self):
         with tempfile.TemporaryDirectory() as directory:
             for name, n in (("coarse", 8), ("fine", 16)):
