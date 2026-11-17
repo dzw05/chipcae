@@ -120,7 +120,11 @@ int main(int argc, char** argv) try {
             check(tangent_to_secant(probe, temperature, value) == StatusCode::Ok &&
                       near(value, expected_integral),
                   "unequal-slope exact off-knot integral");
-            // These reordered fixtures have unequal slopes. In the second segment,
+            // These reordered fixtures have unequal slopes. The right-hand derivative
+            // at the next knot uses a different slope, so interpolating converted
+            // node values across segment 0 does not give its exact midpoint.
+            // Within one segment the derivative is linear; that is not the
+            // endpoint pair used here. In the second segment,
             // accumulated area from the first makes the secant nonlinear in T;
             // unlike the original globally linear fixtures, its midpoint differs
             // from the mean of the converted endpoints.
@@ -132,6 +136,9 @@ int main(int argc, char** argv) try {
                       "integral probe distinguishes node resampling");
         }
     }
+    // The public header defines the integral from stored Tref and explicitly
+    // promises exact arbitrary-T evaluation with constant endpoint extension.
+    // These probes exercise those definitions, including exterior references.
     // Move Tref independently of the first knot. Include references in both
     // segments and beyond either endpoint, with queries on both sides of Tref.
     // Each numeric table is interpreted independently in each conversion direction;

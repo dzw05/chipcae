@@ -3,7 +3,6 @@
 
 #include <Kokkos_Core.hpp>
 #include <algorithm>
-#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <limits>
@@ -89,6 +88,9 @@ int main(int argc, char** argv) try {
     }
     // Keep the canonical knots/alpha values, moving only Tref to an existing
     // interior knot. Iterate the input sequence to check vector output order.
+    // Both fixtures are continuous: either one-sided integral-average limit is
+    // alpha(Tref). In the derivative formula the slope term vanishes at Tref,
+    // so the left and right limits also agree there.
     for (auto fixture : {sec, tan}) {
         const std::size_t reference = fixture.temperatures.size() / 2;
         fixture.reference_temperature = fixture.temperatures[reference];
