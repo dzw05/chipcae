@@ -26,17 +26,11 @@ class TrilayerCalculixRefTest(unittest.TestCase):
     def validate_artifact(self, data):
         required = {"kind", "label", "W_bfp_m", "element_type", "geometry",
                     "meshes", "selected_mesh", "prototype_W_bfp_m",
-                    "abs_delta_m", "rel_delta", "provenance"}
+                    "abs_delta_m", "rel_delta", "calculix_version"}
         self.assertIsInstance(data, dict)
         self.assertEqual(set(data), required)
-        provenance = data["provenance"]
-        self.assertIsInstance(provenance, dict)
-        self.assertEqual(set(provenance), {"version", "host", "calculix_version"})
-        self.assertEqual(type(provenance["version"]), int)
-        self.assertEqual(provenance["version"], 1)
-        for field in ("host", "calculix_version"):
-            self.assertIsInstance(provenance[field], str)
-            self.assertTrue(provenance[field].strip())
+        self.assertIsInstance(data["calculix_version"], str)
+        self.assertTrue(data["calculix_version"].strip())
         for field in ("W_bfp_m", "prototype_W_bfp_m", "abs_delta_m", "rel_delta"):
             self.assertIn(type(data[field]), (int, float))
             self.assertTrue(math.isfinite(data[field]))
@@ -64,6 +58,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         self.assertEqual(geometry["dT_K"], -100.0)
         self.assertAlmostEqual(data["prototype_W_bfp_m"], PROTOTYPE, places=12)
         self.assertIsInstance(data["meshes"], list)
+        self.assertEqual(len(data["meshes"]), 2)
         names = [m["name"] for m in data["meshes"]]
         self.assertCountEqual(names, ["coarse", "fine"])
         for mesh in data["meshes"]:
@@ -106,11 +101,6 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             del invalid[field]
             with self.subTest(missing=field), self.assertRaises(AssertionError):
                 self.validate_artifact(invalid)
-        for field in ("host", "calculix_version", "version"):
-            invalid = copy.deepcopy(data)
-            del invalid["provenance"][field]
-            with self.subTest(missing=field), self.assertRaises(AssertionError):
-                self.validate_artifact(invalid)
         variants = []
         for field, values in {
             "label": (123, "参考值（原型计算值）", "不是实测，不是解析解"),
@@ -118,17 +108,14 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             "selected_mesh": ("", "unknown", "coarse"),
         }.items():
             variants.extend(dict(data, **{field: value}) for value in values)
-        for field in ("host", "calculix_version"):
-            for value in (123, "", None, True):
-                invalid = copy.deepcopy(data)
-                invalid["provenance"][field] = value
-                variants.append(invalid)
+        for value in (123, "", "   ", None, True):
+            variants.append(dict(data, calculix_version=value))
         for names in (("coarse", "coarse"), ("fine", "fine"),
                       ("coarse", "unknown"), ("coarse", "fine", "fine")):
             invalid = copy.deepcopy(data)
             invalid["meshes"] = [dict(data["meshes"][0], name=name) for name in names]
             variants.append(invalid)
-        for field in ("artifact_version", "host", "calculix_version"):
+        for field in ("artifact_version", "host", "provenance"):
             variants.append(dict(data, **{field: "unexpected"}))
         for index, invalid in enumerate(variants):
             with self.subTest(variant=index), self.assertRaises(AssertionError):
@@ -145,7 +132,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         line = (
             f"W_bfp={w} prototype=4.269532769e-3 abs_delta={abs_delta} "
             f"rel_delta={rel_delta} mesh=fine element=C3D20 "
-            f"ccx={data['provenance']['calculix_version']}"
+            f"ccx={data['calculix_version']}"
         )
         log = Path("/workspace/tasks/logs/v-ccx-delta.md")
         log.parent.mkdir(parents=True, exist_ok=True)

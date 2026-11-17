@@ -1,4 +1,4 @@
-# WP-2 trilayer CalculiX reference
+# WP-2 三层板 CalculiX 独立参考
 
 Independent open-source reference for the 1 m × 1 m trilayer warpage case.
 Results in `REFERENCE.json` are **REFERENCE values** (not measured data, not
@@ -54,10 +54,10 @@ machine-readable format for generation. The [contract.py](contract.py) validator
 adds the selected-value check before generation writes the artifact.
 The comparison test reads only `REFERENCE.json`, using explicit required-field,
 model, refinement, and arithmetic checks without importing the schema or generator.
-Required environment strings live in `provenance`, whose `version` is 1.
-This versioned metadata object keeps host-specific values outside the top-level
-result contract. Both host and runtime version must be nonempty; reports use
-the recorded runtime version.
+The runtime version is recorded in the top-level `calculix_version` string and
+must be nonempty; reports use that recorded version. Host metadata is omitted
+from the canonical artifact and schema so regeneration cannot introduce
+machine-specific provenance. There is no `provenance` wrapper.
 
 The ASCII FRD layout used by CalculiX 2.23 is `(1X,I2,I10,3E12.5)`:
 columns 2–3 contain the record marker, 4–13 the node ID, and 14–49

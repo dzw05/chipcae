@@ -3,6 +3,7 @@
   "label": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解",
   "W_bfp_m": 0.004274306997289974,
   "element_type": "C3D20",
+  "calculix_version": "This is Version 2.23",
   "geometry": {
     "L_m": 1.0,
     "thicknesses_m": [
@@ -60,10 +61,5 @@
   "selected_mesh": "fine",
   "prototype_W_bfp_m": 0.004269532769,
   "abs_delta_m": 4.774228289973655e-06,
-  "rel_delta": 0.0011182086069553374,
-  "provenance": {
-    "version": 1,
-    "host": "grok-bot-vm-509543457 Linux x86_64",
-    "calculix_version": "This is Version 2.23"
-  }
+  "rel_delta": 0.0011182086069553374
 }

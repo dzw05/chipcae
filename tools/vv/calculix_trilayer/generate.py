@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import platform
 import re
 import subprocess
 import sys
@@ -311,11 +310,7 @@ def main():
         "label": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解",
         "W_bfp_m": w,
         "element_type": "C3D20",
-        "provenance": {
-            "version": 1,
-            "calculix_version": ver,
-            "host": f"{platform.node()} {platform.system()} {platform.machine()}",
-        },
+        "calculix_version": ver,
         "geometry": {
             "L_m": L,
             "thicknesses_m": THICK,
