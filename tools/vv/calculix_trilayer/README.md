@@ -51,8 +51,19 @@ computed with `tools.vv.warpage_qoi.interp_grid`
 and `qoi_surface` on an 81×81 grid in millimetres, then converted back to metres.
 
 The checked-in [reference.schema.json](reference.schema.json) is the shared
-machine-readable format for generation. The [contract.py](contract.py) validator
-adds the selected-value check before generation writes the artifact.
+structural schema. Standard JSON Schema cannot compare instance fields, so schema
+validation alone is insufficient. All schema consumers must use the shared
+[contract.py](contract.py) `validate_reference(data)` API (also used by generation)
+or its CLI:
+
+```
+python3 tools/vv/calculix_trilayer/contract.py tools/vv/calculix_trilayer/REFERENCE.json
+```
+
+Both entry points enforce the schema and equality of top-level `W_bfp_m` with
+the selected mesh's `W_bfp_m`, without pinning the checked-in numeric result.
+The CLI exits nonzero on invalid artifacts. Run
+`python3 tools/vv/calculix_trilayer/check_contract.py` for consumer regressions.
 The comparison test reads only `REFERENCE.json`, using explicit required-field,
 model, refinement, and arithmetic checks without importing the schema or generator.
 The runtime version is recorded in the top-level `calculix_version` string and

@@ -2,7 +2,7 @@
   "$comment": "SPDX-License-Identifier: Apache-2.0; Copyright (c) 2026 Zhiwei Duan",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "WP-2 coarse/fine trilayer CalculiX REFERENCE artifact (v1 workflow)",
-  "description": "Workflow-specific v1 checks, not a general CalculiX artifact schema, with exactly coarse and fine meshes and fine selection. Equality of top-level W_bfp_m and the selected mesh value is a validator-only check in contract.py. Raw schema validation does not enforce equality between instance fields.",
+  "description": "Workflow-specific v1 checks, not a general CalculiX artifact schema, with exactly coarse and fine meshes and fine selection. Full validation requires the shared contract.py validate_reference API or CLI (python3 tools/vv/calculix_trilayer/contract.py ARTIFACT.json), which also enforces selected-value equality. Standard JSON Schema alone cannot compare instance fields.",
   "type": "object",
   "additionalProperties": false,
   "required": [
