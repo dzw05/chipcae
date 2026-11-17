@@ -2,24 +2,33 @@
 using namespace sp5;
 int main() {
     return run([] {
-        // Frozen API has no error return: compare the exception's leading error-name token exactly.
         auto check = [](StackModel s, bool reject, const char* first, const char* second) {
-            auto m = samples(32);
-            bodies(m, s);
-            bool caught = false;
-            try {
-                (void)region_level_sets(s, m, {});
-            } catch (const std::exception& e) {
-                caught = true;
-                std::string message = e.what();
-                auto end = message.find_first_of(": \t\n");
-                require(message.substr(0, end) == "CUT_UNSUPPORTED",
-                        "exact error code must be CUT_UNSUPPORTED");
-                require(message.find(first) != std::string::npos &&
-                            message.find(second) != std::string::npos,
-                        "gap diagnostic must name offending regions or outline");
+            // Conservative polygon bounds keep a uniform h=8/32 independent of the gap.
+            // Polygon vertices, rather than these bounds, define its geometry.
+            for (auto& r : s.layers[0].regions)
+                r.footprint.box = s.outline.box;
+            GridOptions o;
+            o.nx = o.ny = 32;
+            o.levels = 1;
+            auto result = build_tensor_grid(s, o);
+            require(bool(result) != reject, "build_tensor_grid gap acceptance threshold");
+            if (!result) {
+                std::string reason;
+                if (s.layers[0].material.size())
+                    reason = "in_solid: polygon in material layer";
+                else if (s.outline.polygon.size())
+                    reason = "edge outline: spacing < 2h";
+                else
+                    reason = "a b: spacing < 2h";
+                require(result.error().reason == reason, "exact cut precondition reason");
+                require(result.error().path == "CUT_UNSUPPORTED", "exact error code");
+                require(result.error().reason.find(first) != std::string::npos &&
+                            result.error().reason.find(second) != std::string::npos,
+                        "gap diagnostic names offending regions");
             }
-            require(caught == reject, "gap acceptance threshold");
+            // Validation belongs solely to build_tensor_grid, even for unsupported geometry.
+            auto m = samples(32);
+            require(!levels(s, m).empty(), "level sets do not perform cut preconditions");
         };
         for (bool same_material : {false, true})
             for (double gap : {.375, .625}) {

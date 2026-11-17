@@ -8,8 +8,7 @@ import tempfile
 
 
 def main():
-    build = next(p for p in [Path.cwd(), *Path.cwd().parents]
-                 if (p / 'CMakeCache.txt').exists())
+    build = Path(os.environ['CHIPCAE_BINARY_DIR'])
     preview = build / 'preview/chipcae-preview'
     cache = (build / 'CMakeCache.txt').read_text()
     with tempfile.TemporaryDirectory(prefix='sp5-preview-') as tmp:

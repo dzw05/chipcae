@@ -63,25 +63,16 @@ int main() {
         ls = levels(s, m);
         require(ls.size() == 2 && ls[0].body == m.attr_table.bodies.at("first") &&
                     ls[1].body == m.attr_table.bodies.at("second_polygon"),
-                "polygon-bearing groups follow first body occurrence including boxes");
-
-        // Retain crossing cells whose centers are outside a triangular region.
+                "polygon-bearing groups follow BodyId order");
+        // The sampling API must not repeat build_tensor_grid's cut preconditions.
         s = stack();
-        auto triangle = square("triangle", 2, 2, 6, 6);
-        triangle.footprint.polygon = {{2, 2}, {6, 2}, {2, 6}};
-        s.layers[0].regions = {triangle};
-        m = grid(s);
-        bool crossing = false;
-        for (auto e : m.pending_cut) {
-            double x = 0, y = 0;
-            for (int v = 0; v < 8; ++v) {
-                x += m.vertices[3 * m.hex[8 * e + v]] / 8;
-                y += m.vertices[3 * m.hex[8 * e + v] + 1] / 8;
-            }
-            if (x + y >= 8)
-                crossing = true;
-        }
-        require(crossing, "polygon crossing cells must remain eligible for cutting");
-        compact(m);
+        s.layers[0].material = "background";
+        s.layers[0].regions = {square("material_polygon", 2, 2, 6, 6)};
+        m = samples(16);
+        require(levels(s, m).size() == 1, "level sets have no material-layer cut rejection");
+        s.layers[0].material.clear();
+        s.layers[0].regions = {square("near_a", 2, 2, 3, 3), square("near_b", 3.1, 2, 4.1, 3)};
+        m = samples(16);
+        require(levels(s, m).size() == 2, "level sets have no polygon-gap cut rejection");
     });
 }

@@ -12,7 +12,7 @@ int main() {
         m.vertices.insert(m.vertices.end(), {4, 4, 1.5});
         m.node_gid.push_back(static_cast<chipcae::Index>(m.node_gid.size()));
         auto ls = levels(s, m);
-        require(ls.size() == 2, "one LS per layer/body");
+        require(ls.size() == 2, "one LS per distinct polygon-source body");
         require(ls[0].body == m.attr_table.bodies.at("A") &&
                     ls[1].body == m.attr_table.bodies.at("B"),
                 "LS order and body table IDs");

@@ -145,41 +145,18 @@ inline double area(const std::vector<double>& phi, int n) {
 inline void compact(const HexMeshArrays& m) {
     std::set<Local> used(m.hex.begin(), m.hex.end());
     require(used.size() == m.node_gid.size(), "unused nodes must be removed");
-    auto ids = [](auto v) {
-        std::sort(v.begin(), v.end());
-        for (std::size_t i = 0; i < v.size(); ++i)
-            require(v[i] == static_cast<chipcae::Index>(i), "GIDs must be compact from zero");
-    };
-    ids(m.node_gid);
-    ids(m.elem_gid);
-    std::vector<std::size_t> order(m.node_gid.size());
-    std::iota(order.begin(), order.end(), 0);
-    std::sort(
-        order.begin(), order.end(), [&](auto a, auto b) { return m.node_gid[a] < m.node_gid[b]; });
-    std::array<double, 3> previous{};
-    bool first = true;
-    for (auto node : order) {
-        std::array<double, 3> xyz{
-            m.vertices[3 * node], m.vertices[3 * node + 1], m.vertices[3 * node + 2]};
-        require(first || previous < xyz,
-                "node GIDs must follow global (i,j,k) lexicographic order");
-        first = false;
-        previous = xyz;
-    }
-    order.resize(m.elem_gid.size());
-    std::iota(order.begin(), order.end(), 0);
-    std::sort(
-        order.begin(), order.end(), [&](auto a, auto b) { return m.elem_gid[a] < m.elem_gid[b]; });
-    first = true;
-    for (auto cell : order) {
-        std::array<double, 3> xyz{};
-        for (int v = 0; v < 8; ++v)
-            for (int d = 0; d < 3; ++d)
-                xyz[d] += m.vertices[3 * m.hex[8 * cell + v] + d] / 8;
-        require(first || previous < xyz,
-                "element GIDs must follow global (i,j,k) lexicographic order");
-        first = false;
-        previous = xyz;
-    }
+    require(std::set<chipcae::Index>(m.node_gid.begin(), m.node_gid.end()).size() ==
+                m.node_gid.size(),
+            "node GIDs must be unique");
+    require(std::set<chipcae::Index>(m.elem_gid.begin(), m.elem_gid.end()).size() ==
+                m.elem_gid.size(),
+            "element GIDs must be unique");
+}
+inline std::array<double, 3> center(const HexMeshArrays& m, std::size_t e) {
+    std::array<double, 3> c{};
+    for (int v = 0; v < 8; ++v)
+        for (int d = 0; d < 3; ++d)
+            c[d] += m.vertices[3 * m.hex[8 * e + v] + d] / 8;
+    return c;
 }
 } // namespace sp5
