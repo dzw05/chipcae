@@ -370,9 +370,13 @@ ArchiveReader::ReadStatus ArchiveReader::stream_bytes(const std::string& rel,
             error = "IMPORT_REJECTED: total byte limit " + rel;
             return false;
         }
+        // A consumer may stop within this block (for example after its first line).
+        // Commit only accepted blocks so its unread tail cannot charge later reads.
+        if (!consume(b))
+            return false;
         s.actual_total += growth;
         s.actual_sizes[index] += growth;
-        return consume(b);
+        return true;
     };
     if (s.directory) {
         std::ifstream in(s.directory_paths[index], std::ios::binary);

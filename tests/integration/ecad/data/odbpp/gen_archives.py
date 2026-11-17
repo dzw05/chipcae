@@ -72,6 +72,16 @@ def main(root, fixture):
         destination = root / 'job' / path
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(data)
+    for label, required in [('irrelevant-Z', None), ('matrix-Z', 'matrix/matrix'),
+                            ('profile-Z', 'steps/pcb/profile')]:
+        members = [(path + '.Z' if path == required else path,
+                    lzw_literals(data) if path == required else data) for path, data in files]
+        if required is None:
+            members.append(('irrelevant.Z', lzw_literals(b'ignored')))
+        (root / (label + '.tgz')).write_bytes(gzip.compress(tar_bytes(members)))
+        with zipfile.ZipFile(root / (label + '.zip'), 'w') as archive:
+            for path, data in members:
+                archive.writestr(path, data)
     selected_job = files + [('irrelevant', b'x' * (1024 * 1024))]
     (root / 'selected-job.tgz').write_bytes(gzip.compress(tar_bytes(selected_job)))
     with zipfile.ZipFile(root / 'selected-job.zip', 'w', compression=zipfile.ZIP_DEFLATED) as archive:

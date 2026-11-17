@@ -407,6 +407,37 @@ int main() {
                     "nested .Z never reaches text parser");
         }
     });
+    test("odbpp_early_stop_preserves_total_budget", [&] {
+        for (const auto* name : {"early-stop.tgz", "early-stop.zip"}) {
+            ArchiveLimits limits;
+            limits.file_bytes = 32768;
+            limits.total_bytes = 32768;
+            ArchiveReader reader(temp / name, limits);
+            std::string out, error;
+            require(reader.open_error().empty(), reader.open_error());
+            require(reader.for_each_line("large", [](auto) { return false; }, error), error);
+            require(reader.read_bytes("small", out, error) && out == "ok",
+                    "stopped block must not exhaust later reads: " + error);
+        }
+    });
+    test("odbpp_required_and_irrelevant_Z_archives", [&] {
+        for (const auto* extension : {".tgz", ".zip"}) {
+            auto irrelevant = parse_job(temp / (std::string("irrelevant-Z") + extension));
+            require(bool(irrelevant) && reported(irrelevant.model.report.unsupported,
+                                                 "irrelevant.Z: .Z compression"),
+                    "irrelevant .Z reported while job imports: " + irrelevant.error);
+            for (const auto* label : {"matrix-Z", "profile-Z"}) {
+                const std::string path =
+                    std::string(label) == "matrix-Z" ? "matrix/matrix" : "steps/pcb/profile";
+                auto required = parse_job(temp / (std::string(label) + extension));
+                require(
+                    !required && required.error.starts_with("IMPORT_REJECTED:") &&
+                        required.error.find(path) != std::string::npos &&
+                        reported(required.model.report.unsupported, path + ".Z: .Z compression"),
+                    "required compressed file rejected with source diagnostic: " + required.error);
+            }
+        }
+    });
     test("odbpp_gzip_live_output_limit", [&] {
         std::istringstream input(bytes(temp / "boundary-32745.gz"));
         GzipCursor cursor(input);
