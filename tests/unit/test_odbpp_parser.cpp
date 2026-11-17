@@ -437,10 +437,30 @@ int main() {
                 auto required = parse_job(temp / (std::string(label) + extension));
                 require(
                     !required && required.error.starts_with("IMPORT_REJECTED:") &&
-                        required.error.find(path) != std::string::npos &&
+                        required.error ==
+                            "IMPORT_REJECTED: required file uses unsupported .Z compression " +
+                                path + ".Z" &&
                         reported(required.model.report.unsupported, path + ".Z: .Z compression"),
                     "required compressed file rejected with source diagnostic: " + required.error);
             }
+        }
+    });
+    test("odbpp_required_Z_directory", [&] {
+        for (const auto* path : {"matrix/matrix", "steps/pcb/profile"}) {
+            auto dir =
+                temp / (std::string(path) == "matrix/matrix" ? "matrix-Z-dir" : "profile-Z-dir");
+            minimal(dir);
+            fs::rename(dir / path, dir / (std::string(path) + ".Z"));
+            auto result = parse_job(dir);
+            require(!result &&
+                        result.error ==
+                            "IMPORT_REJECTED: required file uses unsupported .Z compression " +
+                                std::string(path) + ".Z" &&
+                        reported(result.model.report.unsupported,
+                                 std::string(path) + ".Z: .Z compression"),
+                    "required directory .Z source diagnostic: " + result.error);
+            minimal(dir);
+            require(bool(parse_job(dir)), "uncompressed required file takes precedence");
         }
     });
     test("odbpp_gzip_live_output_limit", [&] {

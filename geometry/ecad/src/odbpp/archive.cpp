@@ -326,6 +326,16 @@ ArchiveReader::ReadStatus ArchiveReader::stream_bytes(const std::string& rel,
         return e.path == rel && !e.is_dir;
     });
     if (it == s.entries.end()) {
+        // Required ODB++ text may be present only as an unsupported compressed file.
+        const auto compressed =
+            std::find_if(s.entries.begin(), s.entries.end(), [&](const auto& e) {
+                return !e.is_dir && (e.path == rel + ".Z" || e.path == rel + ".z");
+            });
+        if (compressed != s.entries.end()) {
+            error = "IMPORT_REJECTED: required file uses unsupported .Z compression " +
+                    compressed->path;
+            return ReadStatus::unsupported;
+        }
         error = "IMPORT_REJECTED: missing file " + rel;
         return ReadStatus::error;
     }
