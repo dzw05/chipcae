@@ -92,7 +92,7 @@ struct Defect {
     std::string action;
     std::string rejection_reason;
     bool material_ambiguous = false;
-    std::string details;
+    std::string details{};
 };
 
 struct ImportAssessment {

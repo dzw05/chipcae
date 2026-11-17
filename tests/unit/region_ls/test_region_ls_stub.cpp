@@ -5,7 +5,7 @@
 #include <string_view>
 #include <type_traits>
 
-static_assert(std::is_empty_v<chipcae::mesh::BodyLevelSet>);
+static_assert(std::is_same_v<chipcae::mesh::BodyLevelSet, chipcae::mesh::cut::BodyLevelSet>);
 
 int main() {
     int failures = 0;

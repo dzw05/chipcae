@@ -1,5 +1,6 @@
 #pragma once
 #include "chipcae/mesh/background/hex_mesh_arrays.hpp"
+#include "chipcae/mesh/cut/cut_layer.hpp"
 #include "chipcae/schema/stack.hpp"
 
 #include <vector>
@@ -8,7 +9,7 @@ namespace chipcae::mesh {
 struct RegionLSOptions {
     Real inside_tol_rel = 1e-12;
 };
-struct BodyLevelSet {};
+using BodyLevelSet = cut::BodyLevelSet;
 // Define effective_body(r) as r.body when nonempty, otherwise r.name (exact,
 // case-sensitive strings). For each layer index li and effective body b, the
 // source group is every region index ri in stack.layers[li].regions for which
