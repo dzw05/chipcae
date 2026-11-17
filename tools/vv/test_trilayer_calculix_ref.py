@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Zhiwei Duan
 """Lint-safe checks for the WP-2 CalculiX REFERENCE artifact.
 
 Does not import numpy and does not invoke ccx. The file records a reference
