@@ -103,6 +103,12 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/schema/tests/validate_fixtures.py
                 ${PROJECT_SOURCE_DIR})
     set_tests_properties(case_run_schema_fixtures PROPERTIES SKIP_RETURN_CODE 77)
+    foreach(contract schemas error_codes)
+        add_test(NAME contract_${contract}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/contract/validate_contracts.py
+                    ${contract} ${PROJECT_SOURCE_DIR})
+        set_tests_properties(contract_${contract} PROPERTIES SKIP_RETURN_CODE 77)
+    endforeach()
 endif()
 
 add_executable(chipcae_test_repair_policy unit/test_repair_policy.cpp)
@@ -181,3 +187,6 @@ if(CHIPCAE_ENABLE_ECAD)
     set_tests_properties(ecad_e2e_fcbga PROPERTIES LABELS "nightly" TIMEOUT 300)
 endif()
 add_subdirectory(solve)
+
+add_test(NAME contract_public_headers COMMAND ${CMAKE_COMMAND}
+    -DROOT=${PROJECT_SOURCE_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/contract/check_public_headers.cmake)

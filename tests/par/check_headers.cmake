@@ -1,3 +1,6 @@
+if(CONTRACT_PUBLIC_HEADERS)
+    include("${CMAKE_CURRENT_LIST_DIR}/../core/check_public_headers.cmake")
+endif()
 file(GLOB headers "${ROOT}/core/include/chipcae/par/*.hpp" "${ROOT}/coupling/include/chipcae/coupling/step_loop.hpp")
 foreach(header IN LISTS headers)
     file(READ "${header}" text)
