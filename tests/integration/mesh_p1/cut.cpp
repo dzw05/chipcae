@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
     const auto original = grid.value();
     CutOptions options;
     options.snap_phi = k1::threshold("snap_phi");
-    options.vf_min = k1::threshold("vf_min");
+    options.small_sub_vf = k1::threshold("small_sub_vf");
     std::mt19937_64 rng(20261116);
     std::uniform_real_distribution<double> uniform(.2, 1);
     std::size_t cut_count = 0;
@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
                 : trial == 1001 ? 1
                 : trial == 1002 ? 2
                 : trial == 1003 ? 3
-                : trial == 1004 ? std::sqrt(options.vf_min)
+                : trial == 1004 ? std::sqrt(options.small_sub_vf)
                                 : 1;
         }
         if (trial == 1005)

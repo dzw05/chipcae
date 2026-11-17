@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
         expect(bool(adapter), "cut adapter");
         cut::CutOptions co;
         co.snap_phi = k1::threshold("snap_phi");
-        co.vf_min = k1::threshold("vf_min");
+        co.small_sub_vf = k1::threshold("small_sub_vf");
         std::mt19937_64 rng(17);
         std::uniform_real_distribution<double> random(.2, 1);
         double total = 0;
