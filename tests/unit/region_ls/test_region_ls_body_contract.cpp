@@ -2,6 +2,30 @@
 using namespace sp5;
 int main() {
     return run([] {
+        // The frozen contract specifies a pointwise minimum, including where
+        // same-body sources overlap. Nested polygons also expose why selecting
+        // the negative value nearest zero is not a distance to the union.
+        {
+            auto nested = stack();
+            auto outer = square("outer", 1, 1, 7, 7);
+            auto inner = square("inner", 3, 3, 5, 5);
+            outer.body = inner.body = "shared";
+            nested.layers[0].regions = {outer, inner};
+            HexMeshArrays points;
+            points.vertices = {4, 4, .5, 2, 4, .5, 0, 4, .5};
+            points.attr_table.bodies = {{"shared", 91}};
+            for (bool reverse : {false, true}) {
+                if (reverse)
+                    std::reverse(nested.layers[0].regions.begin(), nested.layers[0].regions.end());
+                const auto values = region_level_sets(nested, points, {});
+                require(values.size() == 1 && values[0].body == 91,
+                        "nested same-body sources produce one entry");
+                const std::array<double, 3> expected = {-3, -1, 1};
+                for (std::size_t n = 0; n < expected.size(); ++n)
+                    require(std::abs(values[0].phi[n] - expected[n]) <= 1e-12,
+                            "nested source minimum is independent of source order");
+            }
+        }
         auto s = stack();
         auto a = square("lower", 1, 1, 3, 3);
         a.body = "shared";

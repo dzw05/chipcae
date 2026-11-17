@@ -77,5 +77,21 @@ int main() {
         s.layers[0].material = "background";
         s.layers[0].regions = {square("in_solid", 2, 2, 6, 6)};
         check(s, true, "", "");
+        // Grid-aligned edges and vertices only touch some neighboring cells.
+        // Material-layer polygons must still fail before ownership/pending_cut,
+        // rather than return a mesh with tangential cells marked pending.
+        for (bool triangle : {false, true}) {
+            auto& footprint = s.layers[0].regions[0].footprint;
+            if (triangle)
+                footprint.polygon = {{2, 2}, {6, 2}, {2, 6}};
+            GridOptions o;
+            o.nx = o.ny = 32;
+            o.levels = 1;
+            const auto result = build_tensor_grid(s, o);
+            require(!result, "material-layer edge/vertex contact cannot reach pending_cut");
+            require(result.error().path == "CUT_UNSUPPORTED" &&
+                        result.error().reason == "in_solid: polygon in material layer",
+                    "material-layer polygons rejected before cell ownership");
+        }
     });
 }
