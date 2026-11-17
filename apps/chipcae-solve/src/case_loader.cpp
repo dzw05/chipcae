@@ -208,8 +208,11 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
             if (!known.contains(std::string(item.key())) && !item.key().starts_with("x-"))
                 invalid("unknown profile field");
         }
-        if (profile.at("backend").as<std::string>() != "cpu" || gpus != 0)
-            throw InputError(ErrorCode::NOT_IMPLEMENTED, "O2 supports CPU profiles only");
+        out.backend = profile.at("backend").as<std::string>();
+        if (out.backend == "cpu" && gpus != 0)
+            invalid("backend=cpu requires gpus=0");
+        if (out.backend == "cuda" && gpus == 0)
+            invalid("backend=cuda requires gpus>=1");
         out.stack_path = reference(c.at("stack"), out.case_path.parent_path());
         out.material_path = reference(c.at("materials"), out.case_path.parent_path());
         auto stack_json = read(out.stack_path);
