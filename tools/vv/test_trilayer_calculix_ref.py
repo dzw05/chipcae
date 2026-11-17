@@ -26,10 +26,9 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         required = {"kind", "label", "W_bfp_m", "element_type", "geometry",
                     "meshes", "selected_mesh", "prototype_W_bfp_m",
                     "abs_delta_m", "rel_delta", "calculix_version",
-                    "host", "SPDX-License-Identifier"}
+                    "host"}
         self.assertIsInstance(data, dict)
-        self.assertTrue(required <= data.keys(), "missing required top-level fields")
-        self.assertEqual(data["SPDX-License-Identifier"], "Apache-2.0")
+        self.assertEqual(set(data), required, "unexpected or missing top-level fields")
         for field in ("kind", "element_type", "selected_mesh", "calculix_version", "host"):
             self.assertIsInstance(data[field], str)
             self.assertTrue(data[field].strip())
@@ -47,8 +46,8 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         )
         geometry = data["geometry"]
         self.assertIsInstance(geometry, dict)
-        self.assertTrue({"L_m", "thicknesses_m", "E_Pa", "nu",
-                                         "alpha_1_per_K", "dT_K"} <= geometry.keys())
+        self.assertEqual(set(geometry), {"L_m", "thicknesses_m", "E_Pa", "nu",
+                                         "alpha_1_per_K", "dT_K"})
         for field in ("L_m", "thicknesses_m", "E_Pa", "nu", "alpha_1_per_K", "dT_K"):
             value = geometry[field]
             for number in value if isinstance(value, list) else [value]:
@@ -62,10 +61,9 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         self.assertEqual(geometry["dT_K"], -100.0)
         self.assertIsInstance(data["meshes"], list)
         self.assertEqual(len(data["meshes"]), 2)
-        names = [m["name"] for m in data["meshes"]]
-        self.assertCountEqual(names, ["coarse", "fine"])
         for mesh in data["meshes"]:
-            self.assertTrue({"name", "n_elem_xyz", "n_elem_z_per_layer", "W_bfp_m"} <= mesh.keys())
+            self.assertIsInstance(mesh, dict)
+            self.assertEqual(set(mesh), {"name", "n_elem_xyz", "n_elem_z_per_layer", "W_bfp_m"})
             for field in ("n_elem_xyz", "n_elem_z_per_layer"):
                 for number in mesh[field]:
                     self.assertEqual(type(number), int)
@@ -77,6 +75,8 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             self.assertIn(type(mesh["W_bfp_m"]), (int, float))
             self.assertTrue(math.isfinite(mesh["W_bfp_m"]))
             self.assertGreater(mesh["W_bfp_m"], 0.0)
+        names = [m["name"] for m in data["meshes"]]
+        self.assertCountEqual(names, ["coarse", "fine"])
         meshes = {m["name"]: m for m in data["meshes"]}
         coarse, fine = meshes["coarse"], meshes["fine"]
         for axis in (0, 1):
@@ -106,14 +106,30 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         reversed_meshes = copy.deepcopy(data)
         reversed_meshes["meshes"].reverse()
         self.validate_artifact(reversed_meshes)
-        extended = copy.deepcopy(data)
-        extended["provenance"] = {"sources": ["CalculiX"]}
-        extended["unknown_field"] = "additional metadata"
-        extended["SPDX-License-Identifier"] = "Apache-2.0"
-        extended["geometry"]["description"] = "model metadata"
-        for mesh in extended["meshes"]:
-            mesh["description"] = "mesh metadata"
-        self.validate_artifact(extended)
+        # Reject extensions independently at every object level, including each mesh.
+        for path in ((), ("geometry",), ("meshes", 0), ("meshes", 1)):
+            for field, value in (("unknown_field", "metadata"),
+                                 ("provenance", {"sources": ["CalculiX"]}),
+                                 ("SPDX-License-Identifier", "Apache-2.0")):
+                invalid = copy.deepcopy(data)
+                target = invalid
+                for key in path:
+                    target = target[key]
+                target[field] = value
+                with self.assertRaises(AssertionError, msg=f"path={path} extra={field}"):
+                    self.validate_artifact(invalid)
+        for path in (("geometry",), ("meshes", 0), ("meshes", 1)):
+            target = data
+            for key in path:
+                target = target[key]
+            for field in target:
+                invalid = copy.deepcopy(data)
+                nested = invalid
+                for key in path:
+                    nested = nested[key]
+                del nested[field]
+                with self.assertRaises(AssertionError, msg=f"path={path} missing={field}"):
+                    self.validate_artifact(invalid)
         changed_prototype = copy.deepcopy(data)
         changed_prototype["prototype_W_bfp_m"] *= 1.001
         changed_prototype["abs_delta_m"] = abs(
@@ -131,7 +147,6 @@ class TrilayerCalculixRefTest(unittest.TestCase):
                 self.validate_artifact(invalid)
         variants = []
         for field, values in {
-            "SPDX-License-Identifier": (None, "", "MIT"),
             "label": (123, "参考值（原型计算值）", "不是实测，不是解析解"),
             "W_bfp_m": ("invalid", True, float("nan")),
             "selected_mesh": ("", "unknown", "coarse"),
