@@ -33,15 +33,30 @@ int main(int argc, char** argv) {
             expect(WIFEXITED(code) && WEXITSTATUS(code) == expected_code, "CLI exact exit status");
             std::ifstream stream(dir / "stdout");
             std::string line, last;
-            int count = 0;
+            int count = 0, terminal = 0;
             while (std::getline(stream, line)) {
                 auto event = jsoncons::json::parse(line);
                 expect(event.at("stage").is_string(), "stage string");
                 expect(event.at("progress").is_number(), "numeric progress");
                 expect(event.at("message").is_string(), "message string");
                 last = event.at("stage").as<std::string>();
+                if (last == "success" || last == "error")
+                    ++terminal;
+                if (last == "success") {
+                    auto params = jsoncons::json::parse(event.at("message").as<std::string>());
+                    expect(params.at("grid").is_string(), "effective grid");
+                    expect(params.at("max_ratio").as<double>() ==
+                               (args.find("--max-ratio 12.5") != std::string::npos ? 12.5 : 10),
+                           "effective max ratio");
+                    expect(params.at("L").as<int>() == 1 &&
+                               params.at("n0").as<std::string>() == "5x5",
+                           "effective hierarchy");
+                }
                 ++count;
             }
+            if (expected_code == 0)
+                expect(terminal == 1 && count == 4,
+                       "exactly one terminal and rank-zero progress events");
             expect(count > 0 && last == (expected_code == 0 ? "success" : "error"),
                    "terminal JSON event");
         };
@@ -72,6 +87,37 @@ int main(int argc, char** argv) {
         for (const auto& entry : mesh.value().attr_table.entries)
             if (!layers.contains(entry.layer))
                 layers[entry.layer] = static_cast<std::int32_t>(layers.size() + 1);
+        for (auto name : {"layer_names", "material_names"}) {
+            std::vector<std::string> expected;
+            if (std::string(name) == "layer_names") {
+                for (const auto& layer : stack.value().layers)
+                    expected.push_back(layer.name);
+            } else {
+                expected.resize(mesh.value().attr_table.materials.size());
+                for (const auto& [material, id] : mesh.value().attr_table.materials)
+                    expected.at(id - 1) = material;
+            }
+            auto path = std::string("VTKHDF/FieldData/") + name;
+            dataset = H5Dopen2(file, path.c_str(), H5P_DEFAULT);
+            expect(dataset >= 0, "name array exists");
+            hid_t type = H5Dget_type(dataset), space = H5Dget_space(dataset);
+            hsize_t count = 0;
+            expect(H5Tget_class(type) == H5T_STRING && H5Tget_cset(type) == H5T_CSET_UTF8,
+                   "UTF-8 string array");
+            expect(H5Sget_simple_extent_ndims(space) == 1 &&
+                       H5Sget_simple_extent_dims(space, &count, nullptr) >= 0 &&
+                       count == expected.size(),
+                   "name array shape");
+            auto width = H5Tget_size(type);
+            std::vector<char> bytes(count * width);
+            expect(H5Dread(dataset, type, H5S_ALL, H5S_ALL, H5P_DEFAULT, bytes.data()) >= 0,
+                   "name array read");
+            for (std::size_t i = 0; i < expected.size(); ++i)
+                expect(std::string(bytes.data() + i * width) == expected[i], "ID to name mapping");
+            H5Sclose(space);
+            H5Tclose(type);
+            H5Dclose(dataset);
+        }
         for (auto name : {"layer_id", "material_id", "cell_kind"}) {
             auto path = std::string("VTKHDF/CellData/") + name;
             dataset = H5Dopen2(file, path.c_str(), H5P_DEFAULT);
@@ -110,6 +156,7 @@ int main(int argc, char** argv) {
         H5Fclose(file);
         std::cout << "K1 NumberOfCells=" << nc
                   << "; layer_id/material_id int32 values and shape verified\n";
+        invoke(base + " --max-ratio 12.5 -o " + shell((dir / "ratio").string()), 0);
         auto exact = dir / "exact.vtkhdf";
         auto surface = dir / "custom.eb.vtkhdf";
         invoke(base + " -o " + shell(exact.string()) + " --surface " + shell(surface.string()), 0);
@@ -172,6 +219,9 @@ int main(int argc, char** argv) {
                  shell((dir / "absent.stack.json").string()) + " -o " + shell(bad.string()),
                  shell(fixture.string()) + " --nx 2 -o " + shell(bad.string()),
                  base + " --nx 3 -o " + shell(bad.string()),
+                 base + " --max-ratio nan -o " + shell(bad.string()),
+                 base + " --max-ratio 0.5 -o " + shell(bad.string()),
+                 base + " --max-ratio 10junk -o " + shell(bad.string()),
                  base + " --levels nope -o " + shell(bad.string())}) {
             invoke(args, 1);
             expect(!fs::exists(bad.string() + ".vtkhdf") &&

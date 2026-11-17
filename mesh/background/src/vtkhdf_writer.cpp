@@ -95,6 +95,29 @@ void dataset(hid_t parent,
     if (!data.empty())
         check(H5Dwrite(set, native<T>(), H5S_ALL, H5S_ALL, transfer, data.data()));
 }
+// Fixed-width UTF-8 strings also work with parallel HDF5 (no variable-length heap).
+void strings(hid_t parent,
+             const char* name,
+             const std::vector<std::string>& values,
+             const WriterContext& ctx) {
+    std::size_t width = 1;
+    for (const auto& value : values)
+        width = std::max(width, value.size() + 1);
+    H5 type(H5Tcopy(H5T_C_S1), H5Tclose);
+    check(H5Tset_size(type, width));
+    check(H5Tset_cset(type, H5T_CSET_UTF8));
+    check(H5Tset_strpad(type, H5T_STR_NULLPAD));
+    hsize_t count = values.size();
+    H5 space(H5Screate_simple(1, &count, nullptr), H5Sclose);
+    H5 set(H5Dcreate2(parent, name, type, space, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT), H5Dclose);
+    if (!ctx.collective || ctx.rank == 0) {
+        std::vector<char> bytes(values.size() * width, 0);
+        for (std::size_t i = 0; i < values.size(); ++i)
+            std::copy(values[i].begin(), values[i].end(), bytes.begin() + i * width);
+        if (!bytes.empty())
+            check(H5Dwrite(set, type, H5S_ALL, H5S_ALL, H5P_DEFAULT, bytes.data()));
+    }
+}
 void header(hid_t root, const std::string& type) {
     hsize_t two = 2;
     H5 vs(H5Screate_simple(1, &two, nullptr), H5Sclose);
@@ -241,6 +264,16 @@ Expected<VtkhdfFiles> write_vtkhdf(const std::filesystem::path& stem,
                     if (!a.region.empty() && !regions.contains(a.region))
                         regions[a.region] = static_cast<RegionId>(regions.size() + 1);
                 }
+                std::vector<std::string> layer_names(layers.size()),
+                    material_names(m.attr_table.materials.size());
+                for (const auto& [name, id] : layers)
+                    layer_names.at(id - 1) = name;
+                for (const auto& [name, id] : m.attr_table.materials)
+                    material_names.at(id - 1) = name;
+                H5 fd(H5Gcreate2(root, "FieldData", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT),
+                      H5Gclose);
+                strings(fd, "layer_names", layer_names, ctx);
+                strings(fd, "material_names", material_names, ctx);
                 for (auto e : cells) {
                     const auto& a =
                         m.attr_table.entries.at(static_cast<std::size_t>(m.attribute[e] - 1));

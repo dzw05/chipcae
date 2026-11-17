@@ -2,9 +2,12 @@
 #include "chipcae/core/version.hpp"
 
 #include <charconv>
+#include <cmath>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -57,6 +60,14 @@ std::string quote(const std::string& text) {
     return result + '"';
 }
 void event(const std::string& stage, double progress, const std::string& message) {
+#if defined(CHIPCAE_PREVIEW_ENABLED) && defined(CHIPCAE_ENABLE_MPI)
+    int initialized = 0, rank = 0;
+    MPI_Initialized(&initialized);
+    if (initialized)
+        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    if (rank != 0 && stage != "error")
+        return;
+#endif
     std::cout << "{\"stage\":" << quote(stage) << ",\"progress\":" << progress
               << ",\"message\":" << quote(message) << "}\n"
               << std::flush;
@@ -103,7 +114,7 @@ int run(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-o" || arg == "--surface" || arg == "--polyset" || arg == "--nx" ||
-            arg == "--ny" || arg == "--levels") {
+            arg == "--ny" || arg == "--levels" || arg == "--max-ratio") {
             if (!seen.insert(arg).second)
                 throw std::runtime_error("duplicate option: " + arg);
             if (++i == argc || std::string(argv[i]).empty())
@@ -119,7 +130,15 @@ int run(int argc, char** argv) {
                 options.nx = integer(value, false);
             else if (arg == "--ny")
                 options.ny = integer(value, false);
-            else
+            else if (arg == "--max-ratio") {
+                double ratio = 0;
+                auto [end, error] =
+                    std::from_chars(value.data(), value.data() + value.size(), ratio);
+                if (error != std::errc{} || end != value.data() + value.size() ||
+                    !std::isfinite(ratio) || ratio < 1)
+                    throw std::runtime_error("invalid max ratio: " + value);
+                options.max_ratio = ratio;
+            } else
                 options.levels = integer(value, true);
         } else if (arg.starts_with('-') || !input.empty()) {
             throw std::runtime_error("unexpected argument: " + arg);
@@ -186,7 +205,16 @@ int run(int argc, char** argv) {
 #endif
     if (rename_failed)
         throw std::runtime_error("could not move embedded boundary to requested surface path");
-    event("success", 1, files.grid.string());
+    const auto& report = mesh.grid_report;
+    const auto& coarse = report.level_axes.front();
+    std::ostringstream effective;
+    effective << std::setprecision(17) << "{\"grid\":" << quote(files.grid.string())
+              << ",\"max_ratio\":" << options.max_ratio << ",\"L\":" << report.levels - 1
+              << ",\"n0\":"
+              << quote(std::to_string(coarse[0].size() - 1) + "x" +
+                       std::to_string(coarse[1].size() - 1))
+              << "}";
+    event("success", 1, effective.str());
     return 0;
 }
 #endif
@@ -198,7 +226,7 @@ int main(int argc, char** argv) {
             event("help",
                   1,
                   "chipcae-preview <stack.json> [--polyset f] [--nx N --ny N] "
-                  "[--levels N] -o <stem|out.vtkhdf> [--surface <exact-eb-file>] "
+                  "[--levels N] [--max-ratio R] -o <stem|out.vtkhdf> [--surface <exact-eb-file>] "
                   "(--polyset overrides meshing sidecars; levels=0 is automatic)");
             return 0;
         }

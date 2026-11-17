@@ -13,13 +13,17 @@ chipcae-preview input.stack.json --nx 2 --ny 2 --levels 0 -o output.vtkhdf
 
 `-o` accepts a stem or a filename ending in `.vtkhdf`. `--nx` and `--ny`
 must appear together and be positive integers. `--levels` accepts a nonnegative
-integer; 0 retains automatic hierarchy selection. Defaults come from `GridOptions`, except `max_ratio=10` for preview: the K1
+integer; 0 retains automatic hierarchy selection. Defaults come from `GridOptions`, except `--max-ratio R` defaults to 10 for preview (finite R >= 1): the K1
 FCBGA example has a 10:1 interface cell-height jump and fails the library
 default of 2. The library default and stack layer counts remain unchanged.
 Unknown options, duplicate options, malformed numbers, and extra input paths fail.
 Every stdout line, including help, version, success, and errors, is a JSON object
 with `stage`, numeric `progress` in [0,1], and string `message`. Diagnostics and
-stack warnings go to stderr. Failures use the existing `INTERNAL` (exit 1);
+stack warnings go to stderr. Progress and success events come only from MPI rank 0;
+errors may come from any rank. The success `message` is itself valid JSON with
+`grid`, `max_ratio`, `L` (effective finest level, zero based), and `n0` (effective
+coarse grid dimensions, `AxB`). Use the same ratio in preview and solve to reproduce
+the mesh. Failures use the existing `INTERNAL` (exit 1);
 no protocol codes were added.
 
 `--polyset file` overrides the polygon data used for meshing. Stack loading still
@@ -37,5 +41,8 @@ a move failure reports an error but may leave the successfully written grid and
 default companion. This avoids changing the writer interface in P0-1.
 
 Cell fields are `layer_id` and `material_id` (int32); the old names are removed.
-Their existing compact layer mapping and material table values are preserved.
+`layer_id` is the stack layer order + 1. Stack 0.2 has no material table:
+`material_id` follows tensor_grid's 1-based first-appearance order of material
+names. The grid's `VTKHDF/FieldData/layer_names` and `material_names` string
+arrays map index i to ID i+1, using the same attribute-table source as the cell IDs.
 `cell_kind` remains 0 for regular, 1 for cut, and 2 for void cells.
