@@ -79,17 +79,18 @@ void map_stackup(const OdbJob& j, const MapOptions& options, ImportResult& resul
                 if (!std::isfinite(value) || value <= 0)
                     throw std::runtime_error("invalid override thickness: " + key);
                 if (odb <= 0) {
-                    if (options.override_filename.empty())
-                        throw std::runtime_error("missing override filename: " + key);
                     record.thickness_m = value;
-                    record.source = "override:" + options.override_filename;
+                    record.source = "override";
                 } else if (value != odb) {
                     record.odb_value_m = odb;
                 }
             }
-        if (record.thickness_m <= 0)
+        if (record.thickness_m <= 0) {
             missing.push_back(l.name);
-        else if (options.records)
+            record.thickness_m = 0;
+            record.source = "missing";
+        }
+        if (options.records)
             options.records->push_back(record);
         layer.thickness_m = record.thickness_m;
         result.model.layers.push_back(std::move(layer));

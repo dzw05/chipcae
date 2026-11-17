@@ -15,6 +15,7 @@ using ThicknessOverrides = std::map<std::string, double>;
 struct ThicknessRecord {
     std::string layer;
     double thickness_m = 0;
+    // "odb", "override", or "missing"; the caller attaches override filename provenance.
     std::string source;
     // Original positive ODB value when a differing override was supplied but ignored.
     std::optional<double> odb_value_m;
@@ -22,8 +23,6 @@ struct ThicknessRecord {
 struct MapOptions {
     const ThicknessOverrides* overrides = nullptr;
     std::vector<ThicknessRecord>* records = nullptr;
-    // Required when an override supplies missing thickness; used verbatim in provenance.
-    std::string override_filename;
 };
 // Shared private implementation helpers; no public API additions.
 std::string fold_ascii(std::string);

@@ -1,8 +1,10 @@
 #include "map.hpp"
 
 #include <algorithm>
+#include <array>
 #include <clipper2/clipper.h>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -193,7 +195,7 @@ void negative() {
 }
 void stackup() {
     std::vector<ThicknessRecord> records;
-    auto m = mapped(board(), {nullptr, &records, {}});
+    auto m = mapped(board(), {nullptr, &records});
     require(records.size() == 4, "one thickness record per stack layer");
     require(m.layers.size() == 4, "four stack layers");
     const char* names[] = {"TOP", "CORE", "BOTTOM", "PREPREG"};
@@ -265,21 +267,32 @@ void oval_capsules() {
     }
 }
 void missing_thickness() {
-    rejected(missing(), {"3", "TOP", "CORE", "BOTTOM"});
+    std::vector<ThicknessRecord> records;
+    rejected(missing(), {"3", "TOP", "CORE", "BOTTOM"}, {nullptr, &records});
+    require(records.size() == 4, "rejected import still records every layer");
+    const char* names[] = {"TOP", "CORE", "BOTTOM", "PREPREG"};
+    for (std::size_t i = 0; i < records.size(); ++i) {
+        require(records[i].layer == names[i], "missing thickness record layer");
+        require(records[i].source == (i < 3 ? "missing" : "odb"), "missing provenance");
+        require(!records[i].odb_value_m, "missing thickness has no conflict");
+        if (i < 3)
+            require(records[i].thickness_m == 0, "missing thickness is explicitly zero");
+        else
+            near(records[i].thickness_m, 200e-6);
+    }
 }
 void overrides() {
     ThicknessOverrides o = {
         {"TOP", 35e-6}, {"CORE", 800e-6}, {"BOTTOM", 35e-6}, {"PREPREG", 300e-6}};
     std::vector<ThicknessRecord> records;
-    rejected(missing(), {"missing override filename", "TOP"}, {&o, nullptr, {}});
-    auto m = mapped(missing(), {&o, &records, "custom-stackup.json"});
+    auto m = mapped(missing(), {&o, &records});
     require(records.size() == 4, "one record per layer");
     for (std::size_t i = 0; i < records.size(); ++i) {
         const auto& r = records[i];
         require(r.layer == m.layers[i].name, "record layer");
         near(r.thickness_m, i == 3 ? 200e-6 : o.at(r.layer));
         near(m.layers[i].thickness_m, r.thickness_m);
-        require(r.source == (i == 3 ? "odb" : "override:custom-stackup.json"),
+        require(r.source == (i == 3 ? "odb" : "override"),
                 "override filename source and ODB precedence");
         require(r.odb_value_m.has_value() == (i == 3), "conflict provenance only");
     }
@@ -294,15 +307,14 @@ void weight() {
     rejected(j, {"TOP"});
     ThicknessOverrides o = {{"TOP", 35e-6}};
     std::vector<ThicknessRecord> records;
-    mapped(j, {&o, &records, "custom-stackup.json"});
+    mapped(j, {&o, &records});
     j.attrs.layer["TOP"][".layer_dielectric"] = "-0.01";
-    near(mapped(j, {&o, nullptr, "negative-stackup.json"}).layers.front().thickness_m, 35e-6);
-    require(records.size() == 4 && records[0].source == "override:custom-stackup.json",
-            "weight override source");
+    near(mapped(j, {&o, nullptr}).layers.front().thickness_m, 35e-6);
+    require(records.size() == 4 && records[0].source == "override", "weight override source");
 }
 void override_case() {
     ThicknessOverrides o = {{"top", 35e-6}, {"core", 800e-6}, {"bottom", 35e-6}, {"unused", 1e-3}};
-    auto m = mapped(missing(), {&o, nullptr, "custom-stackup.json"});
+    auto m = mapped(missing(), {&o, nullptr});
     near(m.layers[0].thickness_m, 35e-6);
 }
 void skip() {
@@ -331,6 +343,7 @@ void unsupported() {
     f.pads.push_back({{4, 4}, 0, true});
     auto m = mapped(j);
     require(m.report.unsupported.size() == 1, "one unknown symbol report");
+    require(m.report.unsupported.front().element == "Symbol:TOP:0", "unknown symbol identity");
     near(area(m), 64e6, 1e-3);
 }
 void via() {
@@ -360,10 +373,83 @@ void via() {
     }
     bool slot_reported = false;
     for (const auto& u : m.report.unsupported)
-        slot_reported = slot_reported || u.element.find("slot") != std::string::npos ||
-                        u.element.find("Slot") != std::string::npos;
+        slot_reported = slot_reported || u.element == "Slot:DRILL";
     require(slot_reported && m.report.unsupported.size() == 2, "line and tool slot unsupported");
     require(!m.via_fractions.empty(), "via rasterization initialized");
+}
+void via_locality() {
+    auto j = board();
+    OdbLayer drill;
+    drill.name = "DRILL";
+    drill.type = "drill";
+    drill.start_name = "TOP";
+    drill.end_name = "BOTTOM";
+    j.layers.push_back(drill);
+    j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
+    auto& f = j.features["DRILL"];
+    f.symbols = {{"r600"}};
+    for (bool overlap : {false, true}) {
+        f.pads = {{{2, 3}, 0, true}, {{overlap ? 2.2 : 200, 3}, 0, true}};
+        if (overlap)
+            f.pads.push_back(f.pads.front()); // duplicate bounds must not duplicate cells
+        const auto m = mapped(j);
+        require(m.via_fractions.size() == 2, "two local cells");
+        double integrated = 0;
+        for (std::size_t k = 0; k < m.via_fractions.size(); ++k) {
+            const auto& cell = m.via_fractions[k];
+            require(cell.layer == 1 && cell.fraction > 0 && cell.fraction <= 1,
+                    "dielectric cell is rasterized");
+            bool local = false;
+            for (const auto& v : m.vias)
+                local = local || (cell.lower[0] >= v.position[0] - v.outer_radius_dbu &&
+                                  cell.upper[0] <= v.position[0] + v.outer_radius_dbu &&
+                                  cell.lower[1] >= v.position[1] - v.outer_radius_dbu &&
+                                  cell.upper[1] <= v.position[1] + v.outer_radius_dbu);
+            require(local, "every cell lies inside one via's bounding box");
+            require(cell.via_count == (overlap ? (k == 0 ? 3 : 1) : 1), "local via count");
+            for (std::size_t n = 0; n < k; ++n) {
+                const auto& prior = m.via_fractions[n];
+                require(cell.upper[0] <= prior.lower[0] || prior.upper[0] <= cell.lower[0] ||
+                            cell.upper[1] <= prior.lower[1] || prior.upper[1] <= cell.lower[1],
+                        "fraction cells have disjoint interiors");
+            }
+            integrated +=
+                cell.fraction * (cell.upper[0] - cell.lower[0]) * (cell.upper[1] - cell.lower[1]);
+        }
+        ViaFraction reference;
+        reference.layer = 1;
+        reference.lower = {1700, 2700};
+        reference.upper = {overlap ? 2500.0 : 200300.0, 3300};
+        std::vector<ViaFraction> cells{reference};
+        require(rasterize_vias(m, cells), "union reference rasterizes");
+        near(integrated, cells[0].fraction * (reference.upper[0] - reference.lower[0]) * 600, 1e-6);
+        if (!overlap)
+            near(integrated, 2 * std::numbers::pi * (300 * 300 - 275 * 275), 1e-6);
+    }
+}
+void non_plated() {
+    auto j = board();
+    OdbLayer drill;
+    drill.name = "DRILL";
+    drill.type = "drill";
+    drill.start_name = "TOP";
+    drill.end_name = "BOTTOM";
+    j.layers.push_back(drill);
+    auto& f = j.features["DRILL"];
+    f.symbols = {{"r600"}};
+    f.pads = {{{2, 3}, 0, true}};
+    for (const auto* type : {"NON-PLATED", "non_plated", "NonPlated"}) {
+        j.tools["DRILL"] = {{1, type, 0.6}};
+        for (bool plating : {false, true}) {
+            if (plating)
+                j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
+            else
+                j.attrs.layer.erase("DRILL");
+            const auto m = mapped(j);
+            require(m.vias.empty() && m.via_fractions.empty() && m.report.unsupported.empty(),
+                    "non-plated holes produce neither vias nor missing-plating reports");
+        }
+    }
 }
 void duplicate_geometry() {
     auto j = board();
@@ -377,7 +463,7 @@ void duplicate_layer() {
 }
 void collision() {
     ThicknessOverrides o = {{"top", 35e-6}, {"TOP", 36e-6}};
-    rejected(board(), {"top", "TOP"}, {&o, nullptr, "custom-stackup.json"});
+    rejected(board(), {"top", "TOP"}, {&o, nullptr});
 }
 void holes_and_profile() {
     auto j = board();
@@ -576,13 +662,13 @@ void boundaries() {
     equal(mapped(board()), mapped(j));
     ThicknessOverrides o = {{"top", 70e-6}};
     std::vector<ThicknessRecord> records;
-    const auto m = mapped(j, {&o, &records, "custom-stackup.json"});
+    const auto m = mapped(j, {&o, &records});
     near(m.layers.front().thickness_m, 35e-6);
     near(records.front().thickness_m, 35e-6);
     require(records.front().source == "odb" && records.front().odb_value_m == 35e-6,
             "conflicting override retains ODB and records original value");
     o["top"] = -1;
-    rejected(j, {"top"}, {&o, nullptr, "custom-stackup.json"});
+    rejected(j, {"top"}, {&o, nullptr});
 }
 void degenerate_copper() {
     auto j = board();
@@ -693,6 +779,8 @@ int main() {
         {"odbpp_map_skip_layers", skip},
         {"odbpp_map_unsupported_symbol", unsupported},
         {"odbpp_map_via", via},
+        {"odbpp_map_via_locality", via_locality},
+        {"odbpp_map_non_plated", non_plated},
         {"odbpp_map_duplicate_geometry", duplicate_geometry},
         {"odbpp_map_duplicate_layer", duplicate_layer},
         {"odbpp_map_override_collision", collision},
