@@ -20,9 +20,11 @@ def main():
                 ('trailing', 14, 'INPUT_INVALID'),
                 *[(case, 14, 'INPUT_INVALID') for case in (
                     'unused_magic', 'unused_truncated', 'unused_dbu',
-                    'unused_offsets', 'unused_trailing', 'unused_duplicate')],
+                    'unused_offsets', 'unused_negative', 'unused_terminal',
+                    'unused_zero_terminal', 'unused_trailing', 'unused_duplicate')],
                 ('delta', 14, 'INPUT_INVALID'),
                 ('derived_nonfinite', 14, 'INPUT_INVALID'),
+                ('copper_nonfinite', 14, 'INPUT_INVALID'),
                 ('unit', 14, 'INPUT_INVALID'),
                 ('utf8', 14, 'INPUT_INVALID'),
                 ('output_file', 14, 'INPUT_INVALID')):
@@ -36,6 +38,16 @@ def main():
                 # Finite inputs can overflow δ × P without invalid geometry.
                 delta = 1e308
                 b['outline']['box'] = [0, 0, 1, 1]
+            if case == 'copper_nonfinite':
+                # Each finite ring has area 2.5e307; eight rings overflow the sum.
+                data = (b'CCPOLY01' + struct.pack('<dII', 5e153, 1, 4) + b'F.Cu'
+                        + struct.pack('<I9q', 8, *range(0, 33, 4))
+                        + struct.pack('<qqqqqqqq', 0, 0, 1, 0, 1, 1, 0, 1) * 8)
+                (folder / 'huge.polyset').write_bytes(data)
+                b['external_refs'] = [{'path': 'huge.polyset',
+                                       'sha256': hashlib.sha256(data).hexdigest()}]
+                b['layers'][0]['copper'] = {'metal': 'mat.cu',
+                    'polygons': {'file': 'huge.polyset', 'layer': 'F.Cu'}}
             if case in ('missing_polyset', 'hash', 'trailing'):
                 p = polyset(folder, b, trailing=b'x' if case == 'trailing' else b'')
                 if case == 'missing_polyset':
@@ -53,6 +65,12 @@ def main():
                     'unused_offsets': (b'CCPOLY01' + struct.pack('<dI', 1e-9, 1)
                                        + layer[:12] + struct.pack('<qq', 0, 2)
                                        + struct.pack('<qqqq', 0, 0, 1, 0)),
+                    'unused_negative': (b'CCPOLY01' + struct.pack('<dI', 1e-9, 1)
+                                        + layer[:12] + struct.pack('<qq', 0, -3)),
+                    'unused_terminal': (b'CCPOLY01' + struct.pack('<dI', 1e-9, 1)
+                                        + layer[:12] + struct.pack('<qq', 0, 4)),
+                    'unused_zero_terminal': (b'CCPOLY01' + struct.pack('<dI', 1e-9, 1)
+                                             + layer[:8] + struct.pack('<Iq', 0, -1)),
                     'unused_trailing': header + b'x',
                     'unused_duplicate': (b'CCPOLY01' + struct.pack('<dI', 1e-9, 2)
                                          + layer + layer),
@@ -70,6 +88,7 @@ def main():
                 out.write_text('existing file', encoding='utf-8')
             try:
                 result = diff_stacks(good, path, delta)
+                assert case not in ('derived_nonfinite', 'copper_nonfinite'), (case, result)
                 write_report(result, out)
             except EcadDiffError as exc:
                 assert exc.code == code and exc.name == name, (case, exc)

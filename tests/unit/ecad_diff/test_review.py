@@ -29,7 +29,7 @@ def main():
                 assert exc.code == code, (digest, exc)
             else:
                 raise AssertionError('accepted invalid unused reference digest')
-        # The fraction estimate exceeds the explicit copper perimeter here.
+        # The propagated fraction area-error coefficient exceeds the polygon perimeter.
         fraction, polygon = board(), board()
         fraction['outline']['box'] = [0, 0, 0.1, 0.0005]
         polyset(root, polygon, width=9990000)

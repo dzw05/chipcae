@@ -30,6 +30,28 @@ def main():
                 total = entry(r, 'total_thickness')
                 assert total['grade'] == grade
                 tolerance(total, delta)
+        # Rounded endpoint addition equals y although the actual difference exceeds δ.
+        a = board()
+        a['layers'][1]['thickness'] = 1.0
+        b = copy.deepcopy(a)
+        b['layers'][1]['thickness'] = math.nextafter(1.0, math.inf)
+        delta = math.nextafter(b['layers'][1]['thickness'] - 1.0, 0.0)
+        for left, right in ((a, b), (b, a)):
+            e = entry(diff_stacks(save(directory / 'a.json', left),
+                                  save(directory / 'b.json', right), delta),
+                      'thickness', '1:core|core')
+            assert e['delta'] > delta and e['grade'] == 'hard'
+        # Fraction area uncertainty is f times the outline area uncertainty.
+        a, b = board(), board()
+        a['layers'][0]['copper']['fraction'] = 0.25
+        b['layers'][0]['copper']['fraction'] = 0.2500002
+        for left, right in ((a, b), (b, a)):
+            e = entry(diff_stacks(save(directory / 'a.json', left),
+                                  save(directory / 'b.json', right)),
+                      'copper_area', '0:F.Cu|F.Cu')
+            tolerance(e, DELTA, 0.2500002 * PERIMETER)
+            assert e['grade'] == 'discuss'
+            assert 'no copper perimeter inferred' in e['tol_derivation']
         # The next representable thickness beyond the boundary must still fail.
         a = board()
         pa = save(directory / 'a.json', a)

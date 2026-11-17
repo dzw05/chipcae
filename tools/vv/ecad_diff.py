@@ -175,13 +175,20 @@ def _load(path):
         if copper is None:
             copper_values.append(None)
         elif 'fraction' in copper:
+            # A = f * A_outline: with fixed f, propagate the outline area
+            # bound as f * δ * P_outline. This coefficient is not a copper
+            # perimeter estimate; unknown copper geometry cannot supply one.
             copper_values.append((copper['fraction'] * geometry['area'],
-                                  geometry['perimeter'] * math.sqrt(copper['fraction'])))
+                                  copper['fraction'] * geometry['perimeter']))
         else:
             p = copper['polygons']
             gs = [_geometry(r) for r in polysets[p['file']][p['layer']]]
             copper_values.append((math.fsum(g['area'] for g in gs),
                                   math.fsum(g['perimeter'] for g in gs)))
+    for value in copper_values:
+        if value is not None:
+            for number in value:
+                _number(number)
     return stack['layers'], geometry, copper_values
 
 
@@ -209,6 +216,9 @@ def _diff(odb, ipc, delta):
     entries = []
 
     def add(item, key, left, right, difference, tol, reason, grade):
+        for value in (left, right, difference, tol):
+            if isinstance(value, (int, float)):
+                _number(value)
         entries.append(dict(item=item, key=key, odb=left, ipc=right, delta=difference,
                             tol=tol, tol_derivation=reason, grade=grade, source_loc=None))
 
@@ -216,8 +226,7 @@ def _diff(odb, ipc, delta):
 
     def thickness(item, key, x, y):
         d = abs(x - y)
-        # Compare endpoints so subtraction cancellation cannot move equality above δ.
-        add(item, key, x, y, d, delta, reason, 'hard' if max(x, y) > min(x, y) + delta else 'info')
+        add(item, key, x, y, d, delta, reason, 'hard' if d > delta else 'info')
 
     sa = ['copper' in layer for layer in a]
     sb = ['copper' in layer for layer in b]
@@ -249,8 +258,9 @@ def _diff(odb, ipc, delta):
         grade = ('hard' if relative > 0.01 else
                  'discuss' if d > delta * p else 'info')
         add('copper_area', key, ax, ay, d, delta * p,
-            f'δ = {delta}; P_layer = {p} (total copper ring perimeter; '
-            'fractions use scaled outline); '
+            f'δ = {delta}; P_layer = {p} (maximum area-error coefficient: polygon total ring '
+            'perimeter or fraction × P_outline; fixed fraction propagates '
+            'outline area tolerance, no copper perimeter inferred); '
             'absolute ring areas summed; relative difference uses larger area, zero versus nonzero is 100%', grade)
     thickness('total_thickness', 'stack', math.fsum(l['thickness'] for l in a),
               math.fsum(l['thickness'] for l in b))
