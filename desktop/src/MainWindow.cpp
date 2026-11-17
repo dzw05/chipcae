@@ -12,6 +12,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QPushButton>
 #include <QSplitter>
 #include <QTimer>
@@ -103,6 +104,7 @@ void MainWindow::monitorRun(const QString& directory,
                             chipcae::desktop::LocalJobService* broker,
                             const QString& runId,
                             const QString& eventFile) {
+    const QPointer<chipcae::desktop::LocalJobService> guardedBroker(broker);
     auto model = std::make_shared<chipcae::desktop::RunMonitor>(directory, format, eventFile);
     auto* dock = new QDockWidget("Run monitor: " + directory, this);
     auto* panel = new QWidget(dock);
@@ -118,42 +120,51 @@ void MainWindow::monitorRun(const QString& directory,
     layout->addWidget(logs);
     layout->addWidget(stop);
     auto elapsed = std::make_shared<QElapsedTimer>();
-    connect(stop, &QPushButton::clicked, panel, [model, broker, runId, elapsed] {
-        model->stop(*broker, runId);
+    connect(stop, &QPushButton::clicked, panel, [model, guardedBroker, runId, elapsed] {
+        if (!guardedBroker)
+            return;
+        model->stop(*guardedBroker, runId);
         elapsed->start();
     });
     auto* timer = new QTimer(panel);
-    connect(timer, &QTimer::timeout, panel, [model, status, chart, logs, elapsed, broker, runId] {
-        model->poll();
-        if (broker) {
-            chipcae::desktop::jobs::JobRef ref;
-            ref.set_run_id(runId.toStdString());
-            try {
-                auto job = broker->Get(ref);
-                if (job.state() == chipcae::desktop::jobs::JOB_STATE_COMPLETED ||
-                    job.state() == chipcae::desktop::jobs::JOB_STATE_FAILED)
-                    model->processExited(job.native().exit_status_raw());
-            } catch (const std::exception&) {
-            }
-        }
-        if (elapsed->isValid())
-            model->checkTimeout(elapsed->elapsed());
-        auto text = QString("%4 | %1 | %2% | STOP %3")
-                        .arg(model->state)
-                        .arg(model->progress.fraction * 100)
-                        .arg(model->stopStatus)
-                        .arg(model->format == chipcae::desktop::EventFormat::LegacyCaelog1
-                                 ? "Legacy CAELOG1"
-                                 : "CCEVLOG (unsupported)");
-        if (model->ack)
-            text += QString(" step=%1 time=%2")
-                        .arg(model->ack->effective_step)
-                        .arg(model->ack->effective_time);
-        status->setText(text);
-        logs->setPlainText((model->logs + model->diagnostics).join('\n'));
-        if (chart->samples().size() != model->residuals.size())
-            chart->setSamples(model->residuals);
-    });
+    connect(timer,
+            &QTimer::timeout,
+            panel,
+            [model, status, chart, logs, elapsed, guardedBroker, runId] {
+                model->poll();
+                if (guardedBroker) {
+                    chipcae::desktop::jobs::JobRef ref;
+                    ref.set_run_id(runId.toStdString());
+                    try {
+                        auto job = guardedBroker->Get(ref);
+                        if (job.state() == chipcae::desktop::jobs::JOB_STATE_COMPLETED ||
+                            job.state() == chipcae::desktop::jobs::JOB_STATE_FAILED)
+                            model->processExited(job.native().exit_status_raw());
+                    } catch (const std::exception& e) {
+                        const auto diagnostic =
+                            QString("cannot get job status: %1").arg(QString::fromUtf8(e.what()));
+                        if (!model->diagnostics.contains(diagnostic))
+                            model->diagnostics.append(diagnostic);
+                    }
+                }
+                if (elapsed->isValid())
+                    model->checkTimeout(elapsed->elapsed());
+                auto text = QString("%4 | %1 | %2% | STOP %3")
+                                .arg(model->state)
+                                .arg(model->progress.fraction * 100)
+                                .arg(model->stopStatus)
+                                .arg(model->format == chipcae::desktop::EventFormat::LegacyCaelog1
+                                         ? "Legacy CAELOG1"
+                                         : "CCEVLOG (unsupported)");
+                if (model->ack)
+                    text += QString(" step=%1 time=%2")
+                                .arg(model->ack->effective_step)
+                                .arg(model->ack->effective_time);
+                status->setText(text);
+                logs->setPlainText((model->logs + model->diagnostics).join('\n'));
+                if (chart->samples().size() != model->residuals.size())
+                    chart->setSamples(model->residuals);
+            });
     timer->start(250);
     dock->setWidget(panel);
     addDockWidget(Qt::BottomDockWidgetArea, dock);

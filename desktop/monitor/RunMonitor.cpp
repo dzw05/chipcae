@@ -20,7 +20,8 @@ void RunMonitor::poll() {
     if (!file.exists())
         return;
     if (!file.open(QIODevice::ReadOnly)) {
-        diagnostics.append("cannot read control.jsonl");
+        if (!diagnostics.contains("cannot read control.jsonl"))
+            diagnostics.append("cannot read control.jsonl");
         return;
     }
     if (quint64(file.size()) < commandOffset_)
@@ -104,7 +105,7 @@ void RunMonitor::consume(const io::Event& event) {
                     auto doc = QJsonDocument::fromJson(file.readAll(), &error);
                     if (error.error == QJsonParseError::NoError && doc.isObject())
                         manifest = doc.object();
-                    else
+                    else if (!diagnostics.contains("invalid output manifest"))
                         diagnostics.append("invalid output manifest");
                 }
             }
