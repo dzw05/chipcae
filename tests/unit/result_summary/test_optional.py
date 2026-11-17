@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Zhiwei Duan
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
 from fixtures import fixture, fixed_keys, save, h5py, LAYERS, MATERIALS
-from tools.vv.result_summary import summarize
+from tools.vv.result_summary import ResultSummaryError, main, summarize
 
 
 class Optional(unittest.TestCase):
@@ -16,8 +18,30 @@ class Optional(unittest.TestCase):
                 with h5py.File(step, 'r+') as f:
                     del f['VTKHDF/' + block + '/FieldData']
                 result = summarize(run)
+                fixed_keys(self, result)
                 self.assertEqual(result['layer_names'], LAYERS)
                 self.assertEqual(result['material_names'], MATERIALS)
+
+    def test_malformed_optional_containers(self):
+        for key, values, message in (
+                ('mesh', (None, [], '', 1, True), 'mesh must be an object'),
+                ('summary', (None, {}, '', 1, True), 'summary must be a list')):
+            for value in values:
+                with self.subTest(key=key, value=value), tempfile.TemporaryDirectory() as tmp:
+                    run = Path(tmp)
+                    _, manifest = fixture(run)
+                    manifest[key] = value
+                    save(run, manifest)
+                    with self.assertRaises(ResultSummaryError) as caught:
+                        summarize(run)
+                    self.assertEqual(caught.exception.code, 14)
+                    self.assertEqual(caught.exception.name, 'INPUT_INVALID')
+                    self.assertEqual(str(caught.exception), message)
+                    err, out = io.StringIO(), io.StringIO()
+                    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+                        self.assertEqual(main([str(run)]), 14)
+                    self.assertEqual(out.getvalue(), '')
+                    self.assertEqual(err.getvalue(), f'result_summary: INPUT_INVALID: {message}\n')
 
     def test_optional_fields(self):
         for case in ('T', 'eb_surface', 'warpage_pv', 'two_points', 'names', 'mesh', 'zero_pv', 'absolute_step'):

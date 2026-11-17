@@ -47,11 +47,11 @@ class Edges(unittest.TestCase):
                         if invalid != 'field':
                             self.assertIn('partition', str(caught.exception))
 
-    def test_manifest_json_values(self):
+    def test_manifest_numeric_values(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)
             _, manifest = fixture(run)
-            values = ['text', None, True, False, [1, 'x', None], {'nested': [False]}, 10**100]
+            values = [0, -2, 3.5, 10**100]
             manifest['summary'] += [dict(name=f'value_{i}', value=value)
                                     for i, value in enumerate(values)]
             save(run, manifest)
@@ -61,12 +61,23 @@ class Edges(unittest.TestCase):
             with contextlib.redirect_stdout(out):
                 self.assertEqual(main([str(run)]), 0)
             self.assertEqual(json.loads(out.getvalue())['manifest_summary'], expected)
-            for value in values[:6] + [float('inf'), float('nan')]:
-                manifest['summary'][1]['value'] = value
-                save(run, manifest)
-                with self.assertRaises(ResultSummaryError) as caught:
-                    summarize(run)
-                self.assertIn('warpage_pv: expected finite numeric value', str(caught.exception))
+            for index in (0, 1):
+                for value in ('text', None, True, False, [1], {'nested': 1},
+                              float('inf'), -float('inf'), float('nan')):
+                    with self.subTest(index=index, value=value):
+                        manifest['summary'][index]['value'] = value
+                        save(run, manifest)
+                        with self.assertRaises(ResultSummaryError) as caught:
+                            summarize(run)
+                        self.assertEqual(caught.exception.code, 14)
+                        message = f'summary[{index}].value ({manifest["summary"][index]["name"]}): expected finite numeric value'
+                        self.assertEqual(str(caught.exception), message)
+                        err, out = io.StringIO(), io.StringIO()
+                        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+                            self.assertEqual(main([str(run)]), 14)
+                        self.assertEqual(out.getvalue(), '')
+                        self.assertEqual(err.getvalue(), f'result_summary: INPUT_INVALID: {message}\n')
+                manifest['summary'][index]['value'] = 1.
 
     def test_empty_step_reference(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -189,16 +189,16 @@ def _summarize(run_dir, top_rel_tol):
     pv = None
     entries = manifest.get('summary', [])
     _require(isinstance(entries, list), 'summary must be a list')
-    for entry in entries:
+    for index, entry in enumerate(entries):
         _require(isinstance(entry, dict) and isinstance(entry.get('name'), str)
                  and 'value' in entry, 'invalid summary entry')
         name, value = entry['name'], entry['value']
-        _require(name not in summary, f'duplicate summary name: {name}')
+        _require(name not in summary, f'summary[{index}].name: duplicate summary name: {name}')
+        _require(isinstance(value, (int, float)) and not isinstance(value, bool)
+                 and (isinstance(value, int) or np.isfinite(value)),
+                 f'summary[{index}].value ({name}): expected finite numeric value')
         summary[name] = value
         if name == 'warpage_pv':
-            _require(isinstance(value, (int, float)) and not isinstance(value, bool)
-                     and (isinstance(value, int) or np.isfinite(value)),
-                     'warpage_pv: expected finite numeric value')
             _require(entry.get('unit') == 'm', 'warpage_pv unit must be m')
             pv = value
     mesh = manifest.get('mesh', {})
@@ -216,7 +216,7 @@ def _summarize(run_dir, top_rel_tol):
                      '/VTKHDF: required group missing or invalid')
             blocks, data, names = _read(f['VTKHDF'])
     except (OSError, RuntimeError, EOFError) as exc:
-        raise ResultSummaryError(14, 'INPUT_INVALID', str(exc)) from exc
+        raise ResultSummaryError(12, 'INPUT_REFERENCE_MISSING', str(exc)) from exc
     points = np.concatenate([d[0] for d in data])
     u = np.concatenate([d[1] for d in data])
     top = np.array([], dtype=int)

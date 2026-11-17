@@ -30,7 +30,7 @@ class Errors(unittest.TestCase):
     def test_hdf5_failures(self):
         for stage, target, code, name in (
                 ('open', 'h5py.File', 12, 'INPUT_REFERENCE_MISSING'),
-                ('read', '_read', 14, 'INPUT_INVALID')):
+                ('read', '_read', 12, 'INPUT_REFERENCE_MISSING')):
             for error_type in (OSError, RuntimeError, EOFError):
                 with self.subTest(stage=stage, error=error_type), tempfile.TemporaryDirectory() as tmp:
                     run = Path(tmp)
@@ -232,6 +232,9 @@ class Errors(unittest.TestCase):
                 name = 'INPUT_REFERENCE_MISSING' if code == 12 else 'INPUT_INVALID'
                 self.assertTrue(err.getvalue().startswith('result_summary: '+name+':'), err.getvalue())
                 self.assertEqual(len(err.getvalue().splitlines()), 1)
+                if case == 'duplicate':
+                    self.assertEqual(err.getvalue(),
+                                     'result_summary: INPUT_INVALID: summary[2].name: duplicate summary name: warpage_pv\n')
 
 
 if __name__ == '__main__':
