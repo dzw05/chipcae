@@ -129,6 +129,18 @@ def run_case(binary, case, generate=False):
                     record_or_compare(result, directory,
                                       golden / f"incomplete_{option[2:]}_{name}",
                                       ("stdout", "stderr"), generate)
+            for option in ("--accept", "--t-min", "--stack-override", "--assembly"):
+                for name, prefix in (("bare", []), ("valid", ["a.xml", "-o", "stack.json"]),
+                                     ("conflict", ["a.xml", "-o", "stack.json", "--accept-b-tier"])):
+                    result = invoke(binary, [*prefix, option], directory)
+                    record_or_compare(result, directory,
+                                      golden / f"missing_reserved_{option[2:]}_{name}",
+                                      ("stdout", "stderr"), generate)
+            for index, flags in enumerate((("--accept", "--accept-b-tier", "--accept"),
+                                           ("--accept", "x", "--accept-b-tier", "--accept"))):
+                result = invoke(binary, ["a.xml", "-o", "stack.json", *flags], directory)
+                record_or_compare(result, directory, golden / f"repeated_missing_accept_{index}",
+                                  ("stdout", "stderr"), generate)
         elif case == "reserved":
             check(not generate, "reserved diagnostics are assertions, not baseline goldens")
             failures = []
@@ -164,15 +176,6 @@ def run_case(binary, case, generate=False):
                 if b"not implemented yet" not in result.stderr or option.encode() not in result.stderr:
                     failures.append(f"{option}: expected stderr containing 'not implemented yet' "
                                     f"and '{option}'; actual={result.stderr!r}")
-            for option in ("--accept", "--t-min", "--stack-override", "--assembly"):
-                for prefix in ([], ["a.xml", "-o", "stack.json"],
-                               ["a.xml", "-o", "stack.json", "--accept-b-tier"]):
-                    result = invoke(binary, [*prefix, option], directory)
-                    check(result.returncode == 2, f"missing {option}: exit {result.returncode}")
-                    check(result.stdout == (golden / "missing_out_value" / "stdout").read_bytes(),
-                          f"missing {option}: baseline help differs: {result.stdout!r}")
-                    check(result.stderr == b"",
-                          f"missing {option}: unexpected stderr: {result.stderr!r}")
             # Like existing valued options, reserved options consume even flag-shaped values.
             for option in ("--accept", "--t-min", "--stack-override", "--assembly"):
                 for value in ("--accept-b-tier", "--report", "--help", "-1e-5"):
@@ -185,12 +188,6 @@ def run_case(binary, case, generate=False):
                 check(result.returncode == 2 and result.stdout == b"" and
                       result.stderr == b"unknown argument: defects.json\n",
                       f"{option}: flag-shaped value was not consumed: {result.stderr!r}")
-            for flags in (("--accept", "--accept-b-tier", "--accept"),
-                          ("--accept", "x", "--accept-b-tier", "--accept")):
-                result = invoke(binary, ["a.xml", "-o", "stack.json", *flags], directory)
-                check(result.returncode == 2 and result.stderr == b"" and
-                      result.stdout == (golden / "missing_out_value" / "stdout").read_bytes(),
-                      f"repeated missing value {flags}: expected baseline help")
             for flags in (("--accept-b-tier", "--accept", "x"),
                           ("--accept", "x", "--accept-b-tier")):
                 result = invoke(binary, [FIXTURES / "board_2layer.xml", "-o", "stack.json", *flags], directory)

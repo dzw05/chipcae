@@ -42,13 +42,13 @@ ctest --test-dir <build-off-dir> --output-on-failure
 ```
 
 The generator records only unchanged baseline behavior (`noop`, `step`, `help`,
-and `ecad_off`). Reserved options intentionally change diagnostics, so they have
-no baseline goldens and are never passed to the generator. For each reserved
+and `ecad_off`, plus `incomplete_reserved`). Supplied reserved options on normal
+parse paths intentionally change diagnostics and are not passed to the generator. For each reserved
 option on a valid input/output parse path, the test requires exit 2 and stderr
 containing both `not implemented yet` and the option name. It also covers
 `--t-min` placeholder values using the same substring contract. Conflicts in
 both flag orders require exit 2 only. Missing reserved values on valid parse
-paths require baseline help on stdout, empty stderr, and exit 2, including a
+paths require baseline unknown-argument stderr, empty stdout, and exit 2, including a
 missing accept value after accept-b-tier. Reserved options consume their next
 argument exactly like existing valued options, even when it resembles a flag.
 Incomplete input/output invocations with supplied reserved values retain the
@@ -106,3 +106,6 @@ ECAD OFF retains the brief's exact exit-code/defects comparison scope.
 Mixed reserved assembly regressions exercise all six orderings of the output,
 reserved option, and assembly pairs, with both `-o` and `--out`. Each requires
 the assembly diagnostic, exit 2, and empty stdout.
+
+Missing reserved values and repeated missing accept values are compared byte-for-byte
+with goldens from the same baseline binary via `incomplete_reserved --generate`.

@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
                    arg == "--assembly") {
             std::filesystem::path value;
             if (!next(value)) {
-                help();
+                std::cerr << "unknown argument: " << arg << '\n';
                 return chipcae::importer::CliExit::usage;
             }
             // --t-min consumes a placeholder value; numeric parsing belongs to I-STEP-B.
