@@ -2,7 +2,7 @@
 
 面向芯片与电子行业的多物理场仿真软件。旗舰场景是封装翘曲，产品路线是热-力一体化。
 
-本仓库是单一大仓库：求解内核、桌面界面和通信协议放在一起。软件源码公开仅供查阅，不得引入 GPL 依赖。
+本仓库是单一大仓库：求解内核、桌面界面和通信协议放在一起。源码公开，仅供查阅，不得引入 GPL 依赖。
 
 ## 当前状态
 
@@ -76,7 +76,7 @@ Python 绑定使用 nanobind（需要 Python 3.9+ 开发头文件）。
 Copyright (c) 2026 Zhiwei Duan
 All rights reserved. Source is published for viewing only; no permission is granted to use, copy, modify, merge, publish, distribute, sublicense, or sell without prior written permission. See [LICENSE](LICENSE) for full terms and exceptions.
 
-保留所有权利，源码公开仅供查阅；未经事先书面许可，不得使用、复制、修改、合并、发布、分发、再许可或销售。完整条款及例外（`cases/benchmarks/`：CC BY 4.0；`tools/vv/`、`tests/vv/`：Apache-2.0）见 [LICENSE](LICENSE)。
+保留所有权利，源码公开仅供查阅；未经事先书面许可，不得使用、复制、修改、合并、发布、分发、再许可或销售。完整条款及例外见 [LICENSE](LICENSE)。
 
 O2 求解器当前限制：每个 MPI rank 均在 `PETSC_COMM_SELF` 上对全局串行网格执行完整求解。
 不同 `np` 的结果一致仅验证重复求解及输出一致性，不证明分布式求解正确；总内存随 `np` 增长。

@@ -180,6 +180,7 @@ jobs:
     name: Build and test
     needs: lint
     if: |
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
       (github.event_name == 'push' || github.event.pull_request.draft == false) &&
       needs.lint.result == 'success' &&
       needs.lint.outputs.code == 'true'
@@ -350,6 +351,7 @@ jobs:
     name: Mesh
     needs: lint
     if: >
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.draft == false &&
       needs.lint.result == 'success' &&
