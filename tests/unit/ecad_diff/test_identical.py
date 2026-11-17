@@ -119,6 +119,14 @@ def main():
         for item in dict(expected):
             assert any(row[0] == item for row in rows), item
         assert diff_stacks(path, path) == result
+        linked = board()
+        target = polyset(directory, linked)
+        alias = directory / 'alias.polyset'
+        alias.symlink_to(target.name)
+        linked['external_refs'][0]['path'] = alias.name
+        linked['layers'][0]['copper']['polygons']['file'] = alias.name
+        linked_path = save(directory / 'linked.json', linked)
+        assert diff_stacks(path, linked_path)['summary'] == result['summary']
 
 
 if __name__ == '__main__':

@@ -16,6 +16,9 @@ def main():
         for case, code, name in (
                 ('missing_stack', 12, 'INPUT_REFERENCE_MISSING'),
                 ('missing_polyset', 12, 'INPUT_REFERENCE_MISSING'),
+                ('symlink_file', 14, 'INPUT_INVALID'),
+                ('symlink_directory', 14, 'INPUT_INVALID'),
+                ('symlink_unused', 14, 'INPUT_INVALID'),
                 ('hash', 10, 'INPUT_HASH_MISMATCH'),
                 ('duplicate_hash', 10, 'INPUT_HASH_MISMATCH'),
                 ('duplicate_digest', 14, 'INPUT_INVALID'),
@@ -78,6 +81,20 @@ def main():
                     b['external_refs'].append(ref)
                 if case == 'hash':
                     b['external_refs'][0]['sha256'] = '0' * 64
+            if case.startswith('symlink_'):
+                outside = directory / (case + '_outside')
+                outside.mkdir()
+                target = polyset(outside, b)
+                if case == 'symlink_directory':
+                    (folder / 'linked').symlink_to(outside, target_is_directory=True)
+                    reference = 'linked/' + target.name
+                else:
+                    (folder / target.name).symlink_to(target)
+                    reference = target.name
+                b['external_refs'][0]['path'] = reference
+                b['layers'][0]['copper']['polygons']['file'] = reference
+                if case == 'symlink_unused':
+                    b['layers'][0]['copper'] = {'metal': 'mat.cu', 'fraction': 1.0}
             if case.startswith('unused_'):
                 header = b'CCPOLY01' + struct.pack('<dI', 1e-9, 0)
                 layer = (struct.pack('<I', 4) + b'F.Cu' + struct.pack('<Iqq', 1, 0, 3)

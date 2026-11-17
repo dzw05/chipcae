@@ -149,7 +149,14 @@ def _load(path):
             matching_refs = [r for r in refs if r['path'] == file]
             if not matching_refs:
                 raise EcadDiffError(12, 'INPUT_REFERENCE_MISSING', 'polyset absent from external_refs')
-            data = _bytes(Path(path).parent / file)
+            try:
+                stack_directory = Path(path).parent.resolve()
+                polyset_path = (stack_directory / file).resolve()
+            except (OSError, RuntimeError) as exc:
+                raise EcadDiffError(12, 'INPUT_REFERENCE_MISSING', str(exc)) from exc
+            if not polyset_path.is_relative_to(stack_directory):
+                _invalid('polyset path must remain within the stack directory')
+            data = _bytes(polyset_path)
             actual_digest = hashlib.sha256(data).hexdigest()
             for ref in matching_refs:
                 digest = _string(ref['sha256'])
