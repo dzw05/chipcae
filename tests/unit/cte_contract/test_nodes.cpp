@@ -24,9 +24,13 @@ int main(int argc, char** argv) {
     const CteTable sec{{250, 300, 350}, {1e-5, 2e-5, 3e-5}, 250};
     const CteTable tan{{250, 300, 350}, {1e-5, 3e-5, 5e-5}, 250};
     // alpha_sec + (T - T_ref) times the prescribed adjacent segment slope.
-    const std::vector<Real> tangent_expected{1e-5,
-                                             2e-5 + (300 - 250) * (3e-5 - 2e-5) / (350 - 300),
-                                             3e-5 + (350 - 250) * (3e-5 - 2e-5) / (350 - 300)};
+    // The final node is 5e-5 /K; 4e-5 /K belongs to the 325 K off-knot case.
+    const Real last_segment_slope =
+        (sec.alpha[2] - sec.alpha[1]) / (sec.temperatures[2] - sec.temperatures[1]);
+    const std::vector<Real> tangent_expected{
+        sec.alpha[0],
+        sec.alpha[1] + (sec.temperatures[1] - sec.reference_temperature) * last_segment_slope,
+        sec.alpha[2] + (sec.temperatures[2] - sec.reference_temperature) * last_segment_slope};
     // Exact trapezoid areas divided by distance from T_ref; limit at T_ref.
     const std::vector<Real> secant_expected{
         1e-5,
