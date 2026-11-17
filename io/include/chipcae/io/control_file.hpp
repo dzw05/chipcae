@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -28,7 +29,8 @@ struct ControlCommand {
 // remains unread until a subsequent call observes its newline.
 class ControlFileReader {
 public:
-    explicit ControlFileReader(std::filesystem::path path);
+    explicit ControlFileReader(std::filesystem::path path,
+                               std::function<void(const std::string&)> warning_sink = {});
     std::vector<ControlCommand> read_available();
     std::uint64_t last_sequence() const noexcept { return last_sequence_; }
 
@@ -36,5 +38,6 @@ private:
     std::filesystem::path path_;
     std::uintmax_t offset_{};
     std::uint64_t last_sequence_{};
+    std::function<void(const std::string&)> warning_sink_;
 };
 } // namespace chipcae::io

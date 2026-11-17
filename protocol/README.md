@@ -10,4 +10,6 @@
 
 ## 运行控制文件
 
-运行目录中的 `control.jsonl` 是 `chipcae.run.v1.ControlCommand` 的 proto3 JSON 映射，每行一条命令。界面仅追加写，内核只读；`cmd_seq` 必须严格递增，内核忽略已处理（`cmd_seq` 不大于最后处理值）的命令。内核在每个全局窗口边界检查一次；稳态在每次外迭代或每个物理场完成后检查。每条命令都在事件日志写入 `RunEvent.control_ack`，其 `effective_step` / `effective_time` 指向生效前最后完成的窗口。暂停期间持续写 `State=PAUSED`；`STOP` 结束时写 `KernelExit(reason="user_stop")`。末尾尚未写完的 JSON 行在出现换行符前不处理。
+提交运行时界面创建空的 `control.jsonl`；文件不存在时内核按无命令处理。运行目录中的 `control.jsonl` 是 `chipcae.run.v1.ControlCommand` 的 proto3 JSON 映射，每行一条命令。界面仅追加写，内核只读；`cmd_seq` 从 1 开始并严格递增，内核忽略已处理（`cmd_seq` 不大于最后处理值）的命令。内核在每个全局窗口边界检查一次；稳态在每次外迭代或每个物理场完成后检查。每条命令都在事件日志写入 `RunEvent.control_ack`，其 `effective_step` / `effective_time` 指向生效前最后完成的窗口。暂停期间持续写 `State=PAUSED`；`STOP` 结束时写 `KernelExit(reason="user_stop")`。末尾尚未写完的 JSON 行在出现换行符前不处理。
+
+格式非法的完整行写入 `LogLine(level=WARN)` 后跳过，且不推进已处理序号；无换行的末尾半行等待后续追加。
