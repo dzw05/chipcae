@@ -715,7 +715,7 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
             bool covered = false, box_owned = false;
             for (const auto& r : layer.regions) {
                 box_owned = box_owned || box_covers(r.footprint);
-                covered = covered || contains(r.footprint, cx, cy) ||
+                covered = covered || box_covers(r.footprint) || contains(r.footprint, cx, cy) ||
                           polygon_crosses(
                               r.footprint, axes[0][x], axes[1][y], axes[0][x + 1], axes[1][y + 1]);
             }

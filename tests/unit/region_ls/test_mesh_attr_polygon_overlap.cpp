@@ -28,7 +28,6 @@ int main() {
                         ++outside_centers;
                 }
         for (std::size_t e = 0; e < m.elem_gid.size(); ++e) {
-            auto c = center(m, e);
             double xmin = 8, ymin = 8, xmax = 0, ymax = 0;
             for (int v = 0; v < 8; ++v) {
                 auto n = m.hex[8 * e + v];
@@ -42,8 +41,8 @@ int main() {
             require(xmax > 2 && ymax > 2 && 3 * std::max(2., xmin) + 4 * std::max(2., ymin) < 26,
                     "zero-area polygon contacts must be omitted");
             const auto& attr = m.attr_table.entries.at(m.attribute[e] - 1);
-            const bool box_owned = c[0] > 2 && c[0] < 3 && c[1] > 2 && c[1] < 3;
-            if (c[0] > 2 && c[0] < 3 && c[1] > 2 && c[1] < 3) {
+            const bool box_owned = xmin < 3 && xmax > 2 && ymin < 3 && ymax > 2;
+            if (box_owned) {
                 ++box_cells;
                 require(attr.region == "box_priority",
                         "box ownership takes precedence over later polygons");
@@ -88,6 +87,23 @@ int main() {
                 }
             }
             require(exercised, "fixture covers a snapped box strip with center outside");
+            // Retention must use that same box coverage even without a polygon.
+            s.layers[0].regions = {anchor, priority};
+            auto boxes = build_tensor_grid(s, o);
+            require(bool(boxes), "snapped box-only fixture builds");
+            bool retained_strip = false;
+            const auto& box_mesh = boxes.value();
+            for (std::size_t e = 0; e < box_mesh.elem_gid.size(); ++e) {
+                const auto c = center(box_mesh, e);
+                if (c[0] > 3.04 && c[0] < 4 && c[1] > 2 && c[1] < 3) {
+                    retained_strip = true;
+                    require(box_mesh.attr_table.entries[box_mesh.attribute[e] - 1].region ==
+                                "snapped_box",
+                            "box-only overlap retains box attribute");
+                }
+            }
+            require(retained_strip, "box-only positive-area strip must be retained");
+            require(box_mesh.pending_cut.empty(), "box-only cells need no polygon cuts");
         }
     });
 }
