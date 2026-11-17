@@ -3,6 +3,7 @@
 #endif
 #include "chipcae/core/error_code.hpp"
 #include "chipcae/core/version.hpp"
+#include "data_path.hpp"
 
 #include <algorithm>
 #include <array>
@@ -182,7 +183,7 @@ int run(int argc, char** argv) {
     if (!surface.empty() && same_path(surface, grid_path))
         throw std::runtime_error("surface and grid paths must differ");
     event("load", 0, "Loading stack 0.2");
-    auto stack = checked(load_stack(input, CHIPCAE_PREVIEW_SCHEMA));
+    auto stack = checked(load_stack(input, chipcae::data_path(CHIPCAE_PREVIEW_SCHEMA)));
     for (const auto& warning : stack.warnings)
         std::cerr << warning << '\n';
     std::set<std::filesystem::path> sidecars;
