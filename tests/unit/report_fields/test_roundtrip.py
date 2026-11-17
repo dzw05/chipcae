@@ -21,11 +21,11 @@ TIER_COUNTS = {
 }
 
 
-def expected_rows(mode):
+def expected_rows(mode, reason):
     ids = ["caseA", "casea", "duplicate", "duplicate"]
     return [dict(zip(COLUMNS, [
         ids[i] if mode == "four" else "replacement", TIERS[i], f"kind_{i}",
-        0, f"L{i}", 0.125 + i * 0.25, f"repair_{i}", f"action_{i}",
+        reason, f"L{i}", 0.125 + i * 0.25, f"repair_{i}", f"action_{i}",
         f"rejection_{i}", bool(i % 2),
     ])) for i in range(4 if mode == "four" else 0 if mode == "empty" else 1)]
 
@@ -48,13 +48,13 @@ def exact(actual, expected, location):
             location, actual, expected)
 
 
-def verify(writer, directory, mode):
+def verify(writer, directory, mode, reason):
     result = subprocess.run([writer, str(directory), mode], check=True,
                             capture_output=True, text=True)
     paths = result.stdout.splitlines()
     assert paths == [str(directory / "import_report.json"),
                      str(directory / "import_report.csv")], result.stdout
-    rows = expected_rows(mode)
+    rows = expected_rows(mode, reason)
     expected = dict(L=1.0, t_min=0.1, eps_weld=0.000001, tau_A=0.00002,
                     tau_B=0.0003, delta_f=0.004,
                     tier_counts=TIER_COUNTS[mode],
@@ -83,11 +83,13 @@ def verify(writer, directory, mode):
 def main():
     writer = os.environ["CHIPCAE_REPORTFIELDS_WRITER"]
     assert Path(writer).is_absolute() and Path(writer).is_file(), writer
+    reason = int(subprocess.run([writer, "--reason-value"], check=True,
+                                capture_output=True, text=True).stdout)
     with tempfile.TemporaryDirectory(prefix="chipcae-reportfields-") as temporary:
         directory = Path(temporary) / "reports"
-        first_paths = verify(writer, directory, "four")
-        assert verify(writer, directory, "replacement") == first_paths
-        assert verify(writer, directory, "empty") == first_paths
+        first_paths = verify(writer, directory, "four", reason)
+        assert verify(writer, directory, "replacement", reason) == first_paths
+        assert verify(writer, directory, "empty", reason) == first_paths
 
 
 if __name__ == "__main__":

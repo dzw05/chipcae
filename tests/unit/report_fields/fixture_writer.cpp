@@ -5,6 +5,11 @@
 using namespace chipcae::geometry;
 
 int main(int argc, char** argv) {
+    constexpr auto reason = DefectReason::TOLERANCE_RANGE_UNSUPPORTED;
+    if (argc == 2 && std::string(argv[1]) == "--reason-value") {
+        std::cout << static_cast<int>(reason) << '\n';
+        return 0;
+    }
     if (argc != 3) {
         std::cerr << "expected directory and mode\n";
         return 1;
@@ -19,12 +24,13 @@ int main(int argc, char** argv) {
     header.tolerances = {0.000001, 0.00002, 0.0003, 0.004};
     header.b_tier_accepted_all = mode == "replacement";
     std::vector<Defect> defects;
+    constexpr Tier tiers[] = {Tier::Weld, Tier::A, Tier::B, Tier::C};
     const std::string ids[] = {"caseA", "casea", "duplicate", "duplicate"};
     if (mode != "empty") {
         for (int tier = 0; tier < (mode == "four" ? 4 : 1); ++tier) {
             Defect d;
-            d.tier = static_cast<Tier>(tier);
-            d.reason = DefectReason::TOLERANCE_RANGE_UNSUPPORTED;
+            d.tier = tiers[tier];
+            d.reason = reason;
             d.dimension = std::string("L") + std::to_string(tier);
             d.size = 0.125 + tier * 0.25;
             d.defect_id = mode == "four" ? ids[tier] : "replacement";
