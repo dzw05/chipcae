@@ -14,6 +14,11 @@ COLUMNS = [
     "suggestion", "action", "rejection_reason", "material_ambiguous",
 ]
 TIERS = ["Weld", "A", "B", "C"]
+TIER_COUNTS = {
+    "four": {"Weld": 1, "A": 1, "B": 1, "C": 1},
+    "replacement": {"Weld": 1, "A": 0, "B": 0, "C": 0},
+    "empty": {"Weld": 0, "A": 0, "B": 0, "C": 0},
+}
 
 
 def expected_rows(mode):
@@ -52,8 +57,7 @@ def verify(writer, directory, mode):
     rows = expected_rows(mode)
     expected = dict(L=1.0, t_min=0.1, eps_weld=0.000001, tau_A=0.00002,
                     tau_B=0.0003, delta_f=0.004,
-                    tier_counts={tier: sum(row["tier"] == tier for row in rows)
-                                 for tier in TIERS},
+                    tier_counts=TIER_COUNTS[mode],
                     b_tier_accepted="all" if mode == "replacement" else None,
                     defects=rows)
     with Path(paths[0]).open(encoding="ascii") as stream:
