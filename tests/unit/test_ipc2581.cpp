@@ -372,6 +372,40 @@ static bool geometry_acceptance() {
         }
         std::cout << (before == failures ? "PASS " : "FAIL ") << name << '\n';
     };
+    run("ipc_pad_union_preserves_unrelated_trace", [&] {
+        const auto artwork = "<Pad padstackDefRef='artwork'><Location x='0' "
+                             "y='0'/><StandardPrimitiveRef id='disk'/></Pad>" +
+                             geometry_line(5, "<LineDesc lineWidth='0.4'/>") +
+                             "<Line startX='0' startY='0' endX='0.2' endY='0'>"
+                             "<LineDesc lineWidth='0.2'/></Line>";
+        const std::string dictionary =
+            "<EntryStandard id='disk'><Circle diameter='1'/></EntryStandard>";
+        const auto baseline = geometry_xml(artwork, dictionary);
+        const auto filtered = geometry_xml(
+            artwork + "<Polygon/>"
+                      "<Polygon><PolyBegin x='2' y='2'/></Polygon>"
+                      "<Polygon><PolyBegin x='2' y='2'/><PolyStepSegment x='3' y='3'/></Polygon>"
+                      "<Polygon><PolyBegin x='2' y='2'/><PolyStepSegment x='3' y='3'/>"
+                      "<PolyStepSegment x='4' y='4'/></Polygon>"
+                      "<Polygon><PolyBegin x='2' y='2'/><PolyStepSegment x='2.001' y='2'/>"
+                      "<PolyStepSegment x='2' y='2.001'/></Polygon>",
+            dictionary);
+        for (const auto* model : {&baseline, &filtered}) {
+            check(model->layers.size() == 1 && model->layers[0].polygons.size() == 2,
+                  "pad and unrelated trace remain separate");
+            area(*model, pi / 4 + round_area(10, .4));
+            if (model->layers.size() == 1) {
+                for (const auto& polygon : model->layers[0].polygons) {
+                    check(polygon.points.size() >= 3, "union emits valid rings");
+                    if (polygon.points.size() < 3)
+                        continue;
+                    auto isolated = *model;
+                    isolated.layers[0].polygons = {polygon};
+                    area(isolated, polygon.points.front()[1] > 1000 ? round_area(10, .4) : pi / 4);
+                }
+            }
+        }
+    });
     run("ipc_inline_linedesc_with_id", [&] {
         auto m = geometry_read(root / "inline_linedesc_with_id.xml");
         check(m.layers.size() == 1 && m.layers[0].polygons.size() == 2, "both lines appear");

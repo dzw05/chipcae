@@ -106,10 +106,16 @@ struct Parser {
             auto& polygons = model.layers[li->second].polygons;
             Clipper2Lib::Paths64 paths;
             for (const auto& p : polygons) {
+                if (p.points.size() < 3)
+                    continue;
                 Clipper2Lib::Path64 points;
                 for (const auto& v : p.points)
                     points.push_back({v[0], v[1]});
-                if (Clipper2Lib::Area(points) < 0)
+                const double area = Clipper2Lib::Area(points);
+                // Reject collapsed rings and sub-grid slivers before clipping (area in DBU^2).
+                if (std::abs(area) < 1.0)
+                    continue;
+                if (area < 0)
                     std::reverse(points.begin(), points.end());
                 paths.push_back(std::move(points));
             }
