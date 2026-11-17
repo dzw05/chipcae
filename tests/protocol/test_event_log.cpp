@@ -1,8 +1,8 @@
 #include "chipcae/io/event_log.hpp"
 
 #include <array>
-#include <cstring>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -342,7 +342,8 @@ std::vector<Event> golden_events() {
     return {state, progress, residual_batch, log, ack, exit};
 }
 void verify_golden_fixture() {
-    const auto path = std::filesystem::path(CHIPCAE_SOURCE_DIR) / "tests/protocol/fixtures/event_log_v1.bin";
+    const auto path =
+        std::filesystem::path(CHIPCAE_SOURCE_DIR) / "tests/protocol/fixtures/event_log_v1.bin";
     auto bytes = load(path);
     expect(bytes.size() > 16, "golden fixture exists");
     const auto decoded = EventLogReader(path).read_from(0);
@@ -352,27 +353,40 @@ void verify_golden_fixture() {
         expect(decoded[i].seq == expected[i].seq &&
                    decoded[i].wall_time_unix_ns == expected[i].wall_time_unix_ns,
                "golden fixture event metadata");
-        expect(decoded[i].payload.index() == expected[i].payload.index(), "golden fixture payload kind");
+        expect(decoded[i].payload.index() == expected[i].payload.index(),
+               "golden fixture payload kind");
         if (auto value = std::get_if<State>(&expected[i].payload)) {
             const auto& actual = std::get<State>(decoded[i].payload);
-            expect(actual.value == value->value && actual.window == value->window && actual.time == value->time, "golden state");
+            expect(actual.value == value->value && actual.window == value->window &&
+                       actual.time == value->time,
+                   "golden state");
         } else if (auto value = std::get_if<Progress>(&expected[i].payload)) {
             const auto& actual = std::get<Progress>(decoded[i].payload);
-            expect(actual.window == value->window && actual.time == value->time && actual.dt == value->dt && actual.fraction == value->fraction && actual.message == value->message, "golden progress");
+            expect(actual.window == value->window && actual.time == value->time &&
+                       actual.dt == value->dt && actual.fraction == value->fraction &&
+                       actual.message == value->message,
+                   "golden progress");
         } else if (auto value = std::get_if<ResidualBatch>(&expected[i].payload)) {
             expect(std::get<ResidualBatch>(decoded[i].payload) == *value, "golden residual batch");
         } else if (auto value = std::get_if<LogLine>(&expected[i].payload)) {
             const auto& actual = std::get<LogLine>(decoded[i].payload);
-            expect(actual.level == value->level && actual.rank == value->rank && actual.message == value->message && actual.code == value->code && actual.error_code == value->error_code, "golden log line");
+            expect(actual.level == value->level && actual.rank == value->rank &&
+                       actual.message == value->message && actual.code == value->code &&
+                       actual.error_code == value->error_code,
+                   "golden log line");
         } else if (auto value = std::get_if<ControlAck>(&expected[i].payload)) {
             expect(std::get<ControlAck>(decoded[i].payload) == *value, "golden control ack");
         } else if (auto value = std::get_if<KernelExit>(&expected[i].payload)) {
             expect(std::get<KernelExit>(decoded[i].payload) == *value, "golden kernel exit");
         }
     }
-    std::ifstream json(std::filesystem::path(CHIPCAE_SOURCE_DIR) / "tests/protocol/fixtures/event_log_v1.json");
+    std::ifstream json(std::filesystem::path(CHIPCAE_SOURCE_DIR) /
+                       "tests/protocol/fixtures/event_log_v1.json");
     const std::string expectation((std::istreambuf_iterator<char>(json)), {});
-    expect(expectation.find("ResidualBatch") != std::string::npos && expectation.find("ControlAck") != std::string::npos && expectation.find("KernelExit") != std::string::npos, "golden JSON expectation contains payload types");
+    expect(expectation.find("ResidualBatch") != std::string::npos &&
+               expectation.find("ControlAck") != std::string::npos &&
+               expectation.find("KernelExit") != std::string::npos,
+           "golden JSON expectation contains payload types");
 }
 } // namespace
 int main(int argc, char** argv) {
@@ -381,7 +395,12 @@ int main(int argc, char** argv) {
             const std::filesystem::path path(argv[2]);
             std::filesystem::create_directories(path.parent_path());
             std::filesystem::remove(path);
-            { EventLogWriter writer(path); for (const auto& event : golden_events()) writer.append(event); writer.append(Event{7, 1700000000000000007LL, KernelExit{0, 5, "discarded_crc"}}); }
+            {
+                EventLogWriter writer(path);
+                for (const auto& event : golden_events())
+                    writer.append(event);
+                writer.append(Event{7, 1700000000000000007LL, KernelExit{0, 5, "discarded_crc"}});
+            }
             auto bytes = load(path);
             // The last complete record has a deliberately invalid CRC. The trailing partial magic
             // independently records the torn-tail framing expected of the v1 reader.

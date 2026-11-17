@@ -520,6 +520,48 @@
     {
       "if": {
         "properties": {
+          "physics": {
+            "not": {
+              "contains": {
+                "properties": {
+                  "id": {
+                    "const": "thermal"
+                  }
+                },
+                "required": [
+                  "id"
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "physics"
+        ]
+      },
+      "then": {
+        "properties": {
+          "loads": {
+            "contains": {
+              "properties": {
+                "type": {
+                  "const": "uniform_temperature"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            }
+          }
+        },
+        "required": [
+          "loads"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
           "loads": {
             "contains": {
               "properties": {

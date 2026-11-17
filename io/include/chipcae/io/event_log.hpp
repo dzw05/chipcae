@@ -104,8 +104,15 @@ struct KernelExit {
     bool operator==(const KernelExit&) const = default;
 };
 
-using EventPayload = std::variant<KernelHello, Progress, Residual, LogLine, State, OutputAvailable,
-                                  ResidualBatch, ControlAck, KernelExit>;
+using EventPayload = std::variant<KernelHello,
+                                  Progress,
+                                  Residual,
+                                  LogLine,
+                                  State,
+                                  OutputAvailable,
+                                  ResidualBatch,
+                                  ControlAck,
+                                  KernelExit>;
 struct Event {
     std::uint64_t seq{};
     std::int64_t wall_time_unix_ns{};
