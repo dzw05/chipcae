@@ -8,6 +8,8 @@ temperature values. Temperature uses blocks providing T; absent samples have
 null statistics (including top_* when no global top point provides T). The whole
 temperature field is null only when no block provides T. Numeric
 field types accept either byte order, retaining the required kind and width.
+Collinear top geometry fits along its centered principal axis (constant fit
+when x/y have rank zero), using the shared plane fitter for residuals.
 """
 import argparse
 import json
@@ -251,7 +253,17 @@ def _summarize(run_dir, top_rel_tol):
             tt = all_t[available[np.sort(first_t)]]
     w = None
     if len(top) >= 3:
-        _, residual = best_fit_plane(points[top, 0], points[top, 1], u[top, 2])
+        xy = points[top, :2]
+        centered = xy - xy[0]
+        if np.linalg.matrix_rank(centered) < 2:
+            # Plane slopes are not unique on a line; its fitted values are.
+            # Remove the redundant direction explicitly, retaining the shared
+            # least-squares API and avoiding large absolute coordinate offsets.
+            _, _, axes = np.linalg.svd(centered, full_matrices=False)
+            along = centered @ axes[0]
+            _, residual = best_fit_plane(along, np.zeros_like(along), u[top, 2])
+        else:
+            _, residual = best_fit_plane(xy[:, 0], xy[:, 1], u[top, 2])
         w = float(np.ptp(residual))
     temperature = None
     if any(t is not None for _, _, t in data):

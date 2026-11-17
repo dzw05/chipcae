@@ -54,6 +54,7 @@ class CLI(unittest.TestCase):
             output = Path(tmp)/'summary.json'
             self.assertEqual(invoke(['-o', str(output)]), b'')
             self.assertEqual(first, output.read_bytes())
+            # The brief freezes the byte-for-byte JSON layout as a CLI contract.
             expected = json.dumps(summarize(run), indent=2, sort_keys=False, ensure_ascii=False)+'\n'
             self.assertEqual(first, expected.encode('utf-8'))
             self.assertTrue(first.endswith(b'\n'))

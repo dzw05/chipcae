@@ -303,6 +303,41 @@ class Edges(unittest.TestCase):
             self.assertAlmostEqual(result['warpage']['w_bfp_m'], 1., places=12)
             self.assertAlmostEqual(result['warpage']['rel_diff'], 9., places=12)
 
+    def test_translated_oblique_collinear_top(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run)
+            with h5py.File(step, 'r+') as f:
+                block = f['VTKHDF/hex']
+                points = block['Points'][...]
+                x = points[:, 0].copy()
+                points[:, 0] = 1e12 + x
+                points[:, 1] = -1e12 + 2. * x
+                block['Points'][...] = points
+                block['PointData/T'][...] = 305. + x
+                u = np.zeros_like(points)
+                u[:, 2] = x ** 2 + 3. * x + 7.
+                block['PointData/U'][...] = u
+            result = summarize(run)
+            self.assertEqual(result['warpage']['n_top_points'], 3)
+            self.assertLessEqual(abs(result['warpage']['w_bfp_m'] - 1.), 1e-12)
+            self.assertLessEqual(abs(result['warpage']['rel_diff'] / 9. - 1.), 1e-12)
+
+    def test_duplicate_only_top(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run)
+            with h5py.File(step, 'r+') as f:
+                block = f['VTKHDF/hex']
+                block['Points'][...] = np.tile([2., 3., 1.], (len(block['Points']), 1))
+                block['PointData/T'][...] = 305.
+                block['PointData/U'][...] = 0.
+            result = summarize(run)
+            self.assertEqual(result['warpage']['n_top_points'], 1)
+            self.assertIsNone(result['warpage']['w_bfp_m'])
+            self.assertIsNone(result['warpage']['rel_diff'])
+            self.assertEqual(result['temperature']['top_mean'], 305.)
+
     def test_required_groups(self):
         for group in ('VTKHDF', 'VTKHDF/hex', 'VTKHDF/cut'):
             for replacement in (False, True):
