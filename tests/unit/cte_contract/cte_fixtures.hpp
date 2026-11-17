@@ -7,6 +7,7 @@
 
 namespace chipcae::material::test {
 inline bool near(Real actual, Real expected) {
+    // Scale by the reference only, as required by the contract comparison.
     // Treat cancellation residuals within the zero-reference absolute tolerance as zero.
     const Real scale = std::abs(expected);
     return std::isfinite(actual) && std::isfinite(expected) &&

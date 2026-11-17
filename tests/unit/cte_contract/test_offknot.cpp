@@ -89,10 +89,10 @@ int main(int argc, char** argv) try {
             const Real expected_derivative =
                 alpha + (temperature - probe.reference_temperature) *
                             (probe.alpha[left + 1] - probe.alpha[left]) / width;
-            const Real preceding_area = left == 0
-                                            ? 0
-                                            : (probe.temperatures[1] - probe.temperatures[0]) *
-                                                  (probe.alpha[0] + probe.alpha[1]) / 2;
+            Real preceding_area = 0;
+            for (std::size_t segment = 0; segment < left; ++segment)
+                preceding_area += (probe.temperatures[segment + 1] - probe.temperatures[segment]) *
+                                  (probe.alpha[segment] + probe.alpha[segment + 1]) / 2;
             const Real expected_integral =
                 (preceding_area + width / 2 * (probe.alpha[left] + alpha) / 2) /
                 (temperature - probe.reference_temperature);
