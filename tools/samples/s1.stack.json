@@ -1,0 +1,9 @@
+{
+  "id": "s1_p1_trilayer", "unit": "m", "outline": {"box": [0, 0, 1, 1]},
+  "symmetry": "none", "package_type": "FCBGA",
+  "layers": [
+    {"name": "substrate", "thickness": 0.05, "kind": "Homogenized", "material": "substrate", "n_elem_min": 1, "grading": 1},
+    {"name": "die_attach", "thickness": 0.01, "kind": "Homogenized", "material": "die_attach", "n_elem_min": 1, "grading": 1},
+    {"name": "Si", "thickness": 0.04, "kind": "Homogenized", "material": "Si", "n_elem_min": 1, "grading": 1}
+  ]
+}

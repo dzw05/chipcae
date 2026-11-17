@@ -1,3 +1,5 @@
+/build*/
+*.png
 __pycache__/
 *.py[cod]
 *.vtkhdf

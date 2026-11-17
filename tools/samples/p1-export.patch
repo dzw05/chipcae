@@ -1,0 +1,67 @@
+--- a/src/p1_thinlayer.cpp
++++ b/src/p1_thinlayer.cpp
+@@ -735,6 +735,7 @@
+    const char *device_config = "cpu";
+    const char *solvers = "sys,elast,gamg_rbm,gamg";
+    const char *dump = "";
++   const char *export_results = "";
+    double theta = -1.0; int agg = -1, relax_sweeps = -1, schwarz = 0, colsmooth = 0, bc = 0, n0 = 0, cheb_deg = 3, patch = 0;
+    double cheb_lo = 0.1;
+    int part_mode = 0;
+@@ -742,6 +743,7 @@
+    int gmg_coarse_op = 0, gmg_nu = 0; double gmg_drop = 0.0;
+    int cheb_eig_iters = 30, cheb_eig_ref_iters = 0, cheb_deg_finest = -1;
+    OptionsParser args(argc, argv);
++   args.AddOption(&export_results, "-export", "--export-results", "O1 per-rank text export prefix");
+    args.AddOption(&order, "-o", "--order", "H1 order");
+    args.AddOption(&nxy, "-n", "--nxy", "elements per in-plane direction");
+    args.AddOption(&nzl, "-nz", "--nz-per-layer", "elements per layer through thickness");
+@@ -1629,6 +1631,48 @@
+    {
+       a.RecoverFEMSolution(Xsol, b, x);
+       x.HostRead();
++      if (std::string(export_results).size())
++      {
++         MFEM_VERIFY(order == 2 && nxy == 8 && nzl == 1, "S1 export requires Q2 n=8 nz=1");
++         if (myid == 0) {
++            std::ofstream stack_json(std::string(export_results) + ".stack.json");
++            stack_json << std::setprecision(17) << "{\"id\":\"s1_p1_trilayer\",\"unit\":\"m\",\"outline\":{\"box\":[0,0," << L << "," << L
++                       << "]},\"symmetry\":\"none\",\"package_type\":\"FCBGA\",\"layers\":[";
++            for (int l=0;l<nl;++l) {
++               if(l)stack_json << ",";
++               stack_json << "{\"name\":" << jstr(layers[l].name) << ",\"thickness\":" << layers[l].frac*H
++                          << ",\"kind\":\"Homogenized\",\"material\":" << jstr(layers[l].name) << ",\"n_elem_min\":1,\"grading\":1}";
++            }
++            stack_json << "]}\n";
++         }
++         std::ofstream out(std::string(export_results) + "." + std::to_string(myid));
++         out << std::setprecision(17) << pmesh.GetNV() << " " << pmesh.GetNE() << "\n";
++         for (int v=0; v<pmesh.GetNV(); ++v) {
++            const double *P=pmesh.GetVertex(v); Array<int> vd; fes.GetVertexVDofs(v,vd);
++            for (int c=0;c<3;++c) out << P[c] << " ";
++            for (int c=0;c<3;++c) { int d=vd[c]; out << (d>=0 ? x(d) : -x(-1-d)) << " "; }
++            out << "\n";
++         }
++         for (int e=0;e<pmesh.GetNE();++e) {
++            Array<int> vertices; pmesh.GetElementVertices(e,vertices);
++            for(int v:vertices) out << v << " ";
++            Vector center(3); pmesh.GetElementCenter(e,center);
++            int ix=std::min(nxy-1,int(center(0)/L*nxy)), iy=std::min(nxy-1,int(center(1)/L*nxy));
++            long long morton=0; for(int bit=0;bit<3;++bit) { morton |= ((ix>>bit)&1LL)<<(2*bit); morton |= ((iy>>bit)&1LL)<<(2*bit+1); }
++            int layer=pmesh.GetAttribute(e);
++            out << layer << " " << layer << " 0 " << morton*nz+(layer-1) << "\n";
++         }
++         // Use the original Q2 top-surface best-fit-plane PV, before vertex reduction.
++         out << WarpagePV(Xsol.GetData(),top_surf,MPI_COMM_WORLD) << "\n";
++         double umax=0; Vector value(3);
++         for(int e=0;e<pmesh.GetNE();++e) {
++            const IntegrationRule& nodes=fes.GetFE(e)->GetNodes();
++            for(int i=0;i<nodes.GetNPoints();++i) { x.GetVectorValue(e,nodes.IntPoint(i),value); umax=std::max(umax,value.Norml2()); }
++         }
++         double global_umax=0; MPI_Allreduce(&umax,&global_umax,1,MPI_DOUBLE,MPI_MAX,MPI_COMM_WORLD);
++         out << global_umax << "\n";
++      }
++
+       DenseMatrix N(6); N = 0.0; Vector rhs(6); rhs = 0.0;
+       double wmax_loc = 0, wmin_loc = 0;
+       for (int v = 0; v < pmesh.GetNV(); v++)
