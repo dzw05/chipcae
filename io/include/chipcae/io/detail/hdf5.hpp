@@ -6,9 +6,6 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-#ifdef CHIPCAE_ENABLE_MPI
-#include <mpi.h>
-#endif
 namespace chipcae::hdf_detail {
 struct WriterContext {
     bool collective = false;
