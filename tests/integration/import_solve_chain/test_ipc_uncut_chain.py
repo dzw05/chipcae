@@ -35,8 +35,6 @@ def main():
 
         write('material_map.json', {'FR4': 'mat.fr4', 'copper': 'mat.cu'})
         run([importer, SOURCE / 'tests/integration/ecad/data/board_2layer.xml', '-o', 'stack.json', '--polyset', 'stack.polyset', '--report', 'defects.json', '--material-map', 'material_map.json'])
-        # Import here so enabled integration exercises the importer before the missing feature.
-        from tools.stack.copper_fraction import homogenize_copper
         run([sys.executable, SOURCE / 'tools/stack/copper_fraction.py', 'stack.json', '-o', 'solve.stack.json', '--report', 'cf.json'])
         report = json.loads((root / 'cf.json').read_text())
         fractions = {entry['layer']: entry['fraction'] for entry in report['layers']}
