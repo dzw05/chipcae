@@ -407,7 +407,8 @@ jobs:
           set -euo pipefail
           exec > >(tee build-desktop/logs/sdk-install.log) 2>&1
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ccache
+          sudo apt-get install -y --no-install-recommends \
+            ccache xvfb libgl1-mesa-dri libglx-mesa0 libegl-mesa0 libgbm1
           mkdir -p "$RUNNER_TEMP/desktop-bin"
           curl --fail --location --retry 3 https://micro.mamba.pm/api/micromamba/linux-64/2.0.5 \
             -o "$RUNNER_TEMP/desktop-micromamba.tar.bz2"
@@ -438,8 +439,13 @@ jobs:
           micromamba run -p "$DESKTOP_PREFIX" ctest --test-dir build-desktop \
             --no-tests=error --output-on-failure -E 'desktop_.*(render|capture|chart)' \
             --output-junit "$PWD/build-desktop/junit-desktop.xml"
-          micromamba run -p "$DESKTOP_PREFIX" env -u DISPLAY \
-            VTK_DEFAULT_OPENGL_WINDOW=vtkEGLRenderWindow \
+          # ubuntu-latest has no /dev/dri. vtkEGLRenderWindow needs
+          # EGL_EXT_platform_device and segfaults after a failed init (see
+          # actions/runs/44011339515). Render under Xvfb + Mesa llvmpipe instead;
+          # this still produces desktop-render.png and is not a skip.
+          xvfb-run -a micromamba run -p "$DESKTOP_PREFIX" \
+            env LIBGL_ALWAYS_SOFTWARE=1 \
+            VTK_DEFAULT_OPENGL_WINDOW=vtkXOpenGLRenderWindow \
             ctest --test-dir build-desktop --no-tests=error --output-on-failure \
             -R 'desktop_.*(render|capture|chart)' --output-junit "$PWD/build-desktop/junit-render.xml"
 

@@ -1,0 +1,4 @@
+# Preserve upstream vendor formatting.
+BasedOnStyle: InheritParentConfig
+DisableFormat: true
+SortIncludes: Never
