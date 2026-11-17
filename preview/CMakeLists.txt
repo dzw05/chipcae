@@ -8,7 +8,7 @@ if(CHIPCAE_ENABLE_JSONCONS AND CHIPCAE_ENABLE_HDF5)
     CHIPCAE_PREVIEW_SCHEMA="${PROJECT_SOURCE_DIR}/schema/stack-0.2.schema.json")
 endif()
 
-if(CHIPCAE_ENABLE_JSONCONS AND CHIPCAE_ENABLE_HDF5)
+if(CHIPCAE_BUILD_TESTS AND CHIPCAE_ENABLE_JSONCONS AND CHIPCAE_ENABLE_HDF5)
   add_executable(preview_zalign ${PROJECT_SOURCE_DIR}/tests/preview/zalign.cpp)
   if(TARGET HDF5::HDF5)
     target_link_libraries(preview_zalign PRIVATE HDF5::HDF5 jsoncons)

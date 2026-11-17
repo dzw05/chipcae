@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -27,6 +28,13 @@ static std::string read_text(const fs::path& path) {
     std::ifstream in(path);
     expect(in.good(), "open " + path.string());
     return std::string((std::istreambuf_iterator<char>(in)), {});
+}
+
+static std::string shell(const std::string& value) {
+    std::string out = "'";
+    for (char c : value)
+        out += c == '\'' ? "'\\''" : std::string(1, c);
+    return out + "'";
 }
 
 struct Layer {
@@ -108,6 +116,7 @@ hex_volume(const std::vector<double>& pts, const std::vector<std::int64_t>& conn
 }
 
 int main(int argc, char** argv) {
+    fs::path dir;
     try {
         expect(argc == 2, "usage: preview_zalign <chipcae-preview>");
         const fs::path root(CHIPCAE_SOURCE_DIR);
@@ -119,17 +128,33 @@ int main(int argc, char** argv) {
         const auto k1 = jsoncons::json::parse(read_text(thresholds));
         const double interface_relative = k1["interface_relative"].as<double>();
         const double volume_relative = k1["volume_relative"].as<double>();
-        auto layers = parse_layers(jsoncons::json::parse(read_text(fixture)));
+        const auto stack = jsoncons::json::parse(read_text(fixture));
+        auto layers = parse_layers(stack);
+        std::string die_material;
+        std::vector<double> die;
+        std::size_t die_layer = layers.size();
+        for (std::size_t i = 0; i < layers.size(); ++i) {
+            if (layers[i].name != "die_layer")
+                continue;
+            for (const auto& region : stack["layers"][i]["regions"].array_range()) {
+                if (region["name"].as<std::string>() == "die") {
+                    die_layer = i;
+                    die_material = region["material"].as<std::string>();
+                    die = region["footprint"]["box"].as<std::vector<double>>();
+                }
+            }
+        }
+        expect(die_layer < layers.size() && die.size() == 4, "die region and footprint box");
         expect(layers.size() == 3, "fcbga_demo has 3 layers");
 
-        auto dir = fs::temp_directory_path() / ("preview-zalign-" + std::to_string(getpid()));
+        dir = fs::temp_directory_path() / ("preview-zalign-" + std::to_string(getpid()));
         fs::create_directories(dir);
         const auto out_prefix = dir / "grid";
         const auto grid = fs::path(out_prefix.string() + ".vtkhdf");
         std::ostringstream cmd;
-        cmd << "'" << argv[1] << "' '" << fixture.string() << "' --nx 4 --ny 4 -o '"
-            << out_prefix.string() << "' >'" << (dir / "stdout").string() << "' 2>'"
-            << (dir / "stderr").string() << "'";
+        cmd << shell(argv[1]) << " " << shell(fixture.string()) << " --nx 4 --ny 4 --levels 1 -o "
+            << shell(out_prefix.string()) << " >" << shell((dir / "stdout").string()) << " 2>"
+            << shell((dir / "stderr").string());
         int code = std::system(cmd.str().c_str());
         expect(WIFEXITED(code) && WEXITSTATUS(code) == 0, "chipcae-preview exit 0");
         expect(fs::exists(grid), "grid.vtkhdf exists");
@@ -139,12 +164,7 @@ int main(int argc, char** argv) {
         auto ncells_v = h5_read<std::int64_t>(file, "VTKHDF/NumberOfCells", H5T_NATIVE_INT64);
         expect(ncells_v.size() == 1, "NumberOfCells scalar");
         const auto nc = static_cast<std::size_t>(ncells_v[0]);
-        // Require six z element layers. Do not freeze a particular padded in-plane
-        // cell count; accept any square xy grid the preview CLI emits.
-        expect(nc % 6 == 0, "cell count divisible by nz=6");
-        const auto nxy =
-            static_cast<std::size_t>(std::llround(std::sqrt(static_cast<double>(nc / 6))));
-        expect(nxy * nxy * 6 == nc, "in-plane cell counts form a square times nz=6");
+        expect(nc == 17 * 17 * 6, "17x17x6 cells");
         auto points = h5_read<double>(file, "VTKHDF/Points", H5T_NATIVE_DOUBLE);
         expect(points.size() % 3 == 0, "points xyz");
         auto offsets = h5_read<std::int64_t>(file, "VTKHDF/Offsets", H5T_NATIVE_INT64);
@@ -172,19 +192,26 @@ int main(int argc, char** argv) {
                     return static_cast<std::int32_t>(i + 1);
             throw std::runtime_error("missing material " + name);
         };
-        const auto id_underfill = material_index("underfill");
-        const auto id_silicon = material_index("silicon");
-        const auto id_organic = material_index("organic_eq");
-        const auto id_sac = material_index("sac305_ball_eq");
+        const auto id_die = material_index(die_material);
+        std::vector<std::int32_t> default_materials;
+        for (const auto& layer : layers)
+            default_materials.push_back(material_index(layer.material));
 
-        std::vector<double> z_planes, z_centers;
+        std::vector<double> z_planes, x_planes, y_planes;
         double xmin = 1e300, xmax = -1e300, ymin = 1e300, ymax = -1e300;
         for (std::size_t i = 0; i < points.size() / 3; ++i) {
             xmin = std::min(xmin, points[3 * i]);
             xmax = std::max(xmax, points[3 * i]);
             ymin = std::min(ymin, points[3 * i + 1]);
             ymax = std::max(ymax, points[3 * i + 1]);
+            x_planes.push_back(points[3 * i]);
+            y_planes.push_back(points[3 * i + 1]);
             z_planes.push_back(points[3 * i + 2]);
+        }
+        for (auto* planes : {&x_planes, &y_planes}) {
+            std::sort(planes->begin(), planes->end());
+            planes->erase(std::unique(planes->begin(), planes->end()), planes->end());
+            expect(planes->size() == 18, "18 planes for 17 in-plane cells");
         }
         std::sort(z_planes.begin(), z_planes.end());
         z_planes.erase(std::unique(z_planes.begin(),
@@ -197,14 +224,13 @@ int main(int argc, char** argv) {
         for (const auto& layer : layers)
             H += layer.thickness;
         const double iface_tol = interface_relative * H;
-        std::vector<double> interfaces{z_planes.front()}; // bottom
-        // Interfaces are cumulative thicknesses measured from the mesh bottom.
-        double zacc = z_planes.front();
+        expect(std::abs(z_planes.front()) <= iface_tol, "bottom z = 0");
+        std::vector<double> interfaces{0};
+        double zacc = 0;
         for (const auto& layer : layers) {
             zacc += layer.thickness;
             interfaces.push_back(zacc);
         }
-        expect(std::abs(interfaces.back() - z_planes.front() - H) <= iface_tol, "top = bottom+H");
         for (double z : interfaces) {
             auto it = std::find_if(z_planes.begin(), z_planes.end(), [&](double p) {
                 return std::abs(p - z) <= iface_tol;
@@ -212,10 +238,8 @@ int main(int argc, char** argv) {
             expect(it != z_planes.end(), "interface z falls on a mesh plane");
         }
 
-        std::vector<int> z_layers_per_id(layers.size(), 0);
         std::vector<std::vector<double>> zc_by_layer(layers.size());
         double volume = 0;
-        const double die[4] = {0.005, 0.005, 0.015, 0.015};
         for (std::size_t c = 0; c < nc; ++c) {
             expect(offsets[c + 1] - offsets[c] == 8, "8-node hex");
             const auto off = static_cast<std::size_t>(offsets[c]);
@@ -234,15 +258,12 @@ int main(int argc, char** argv) {
                    "layer_id 1-based");
             const auto li = static_cast<std::size_t>(layer_id[c] - 1);
             zc_by_layer[li].push_back(cz);
-            if (layers[li].name == "substrate")
-                expect(material_id[c] == id_organic, "substrate material");
-            else if (layers[li].name == "bump_eq")
-                expect(material_id[c] == id_sac, "bump_eq material");
-            else if (layers[li].name == "die_layer") {
-                const bool in_die = cx >= die[0] && cy >= die[1] && cx <= die[2] && cy <= die[3];
-                expect(material_id[c] == (in_die ? id_silicon : id_underfill),
-                       "die_layer region material");
-            }
+            expect(cz > interfaces[li] && cz < interfaces[li + 1],
+                   "layer_id matches geometric layer");
+            const bool in_die =
+                li == die_layer && cx >= die[0] && cy >= die[1] && cx <= die[2] && cy <= die[3];
+            expect(material_id[c] == (in_die ? id_die : default_materials[li]),
+                   "fixture layer and region material");
         }
         for (std::size_t i = 0; i < layers.size(); ++i) {
             auto zs = zc_by_layer[i];
@@ -254,7 +275,14 @@ int main(int argc, char** argv) {
             expect(static_cast<int>(zs.size()) >= layers[i].n_elem_min,
                    "z element layers >= n_elem_min");
         }
-        const double area = (xmax - xmin) * (ymax - ymin);
+        const auto outline = stack["outline"]["box"].as<std::vector<double>>();
+        expect(outline.size() == 4, "outline box");
+        expect(std::abs(xmin - outline[0]) <= iface_tol &&
+                   std::abs(ymin - outline[1]) <= iface_tol &&
+                   std::abs(xmax - outline[2]) <= iface_tol &&
+                   std::abs(ymax - outline[3]) <= iface_tol,
+               "mesh matches fixture outline");
+        const double area = (outline[2] - outline[0]) * (outline[3] - outline[1]);
         const double expected = area * H;
         expect(std::abs(volume - expected) <= volume_relative * expected, "volume conservation");
 
@@ -263,6 +291,9 @@ int main(int argc, char** argv) {
         fs::remove_all(dir);
         return 0;
     } catch (const std::exception& ex) {
+        std::error_code cleanup_error;
+        if (!dir.empty())
+            fs::remove_all(dir, cleanup_error);
         std::cerr << "preview_zalign failed: " << ex.what() << "\n";
         return 1;
     }
