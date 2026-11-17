@@ -10,6 +10,8 @@ using Json = jsoncons::json;
 struct DocumentError {
     QString code;
     QString message;
+    QString pointer;
+    QString source = "case";
 };
 using DocumentErrors = std::vector<DocumentError>;
 struct MeshOptions {
@@ -31,6 +33,8 @@ class CaseDocument : public QObject {
 public:
     explicit CaseDocument(QObject* parent = nullptr);
     bool load(const QString& path);
+    bool checkImportedStack(const Json& stack) const;
+    bool replaceImportedStack(const Json& stack);
     bool save(const QString& path);
     DocumentErrors validate() const;
     bool isDirty() const { return dirty_; }
@@ -41,6 +45,8 @@ public:
     // JSON Pointer mutation and grouping hook for D05 / D11; no undo stack.
     void setValue(const std::string& pointer, const Json& value);
     void beginEdit();
+    void applyStackJson(const Json& value);
+    Json submitSnapshot() const { return data_; }
     MeshOptions meshOptions() const;
     void setMeshOptions(const MeshOptions& options);
     bool finalizeMeshForSubmit();
@@ -49,6 +55,7 @@ public:
     bool setMaterialLibrary(const Json& value);
     Json materialLibrary() const { return materials_; }
     Json stackJson() const { return stack_; }
+    bool setStackJson(const Json& value);
     bool loadRunProfile(const QString& path);
     bool saveRunProfile(const QString& path);
     Json runProfile() const { return profile_; }

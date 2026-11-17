@@ -1,6 +1,7 @@
 #include "PreviewWorker.hpp"
 PreviewWorker::PreviewWorker(QObject* parent) : QObject(parent) {
     killTimer_.setSingleShot(true);
+    connect(&process_, &QProcess::started, this, [this] { emit started(process_.processId()); });
     connect(&killTimer_, &QTimer::timeout, &process_, &QProcess::kill);
     connect(&process_, &QProcess::readyReadStandardOutput, this, [this] { drain(false); });
     connect(&process_, &QProcess::readyReadStandardError, this, [this] { drain(true); });
@@ -21,6 +22,11 @@ PreviewWorker::~PreviewWorker() {
     }
 }
 bool PreviewWorker::start(const QString& program, const QStringList& arguments) {
+    return start(program, arguments, QProcessEnvironment::systemEnvironment());
+}
+bool PreviewWorker::start(const QString& program,
+                          const QStringList& arguments,
+                          const QProcessEnvironment& environment) {
     if (process_.state() != QProcess::NotRunning) {
         return false;
     }
@@ -28,6 +34,7 @@ bool PreviewWorker::start(const QString& program, const QStringList& arguments) 
     stdoutBuffer_.clear();
     stderrBuffer_.clear();
     process_.setProcessChannelMode(QProcess::SeparateChannels);
+    process_.setProcessEnvironment(environment);
     process_.start(program, arguments);
     return true;
 }

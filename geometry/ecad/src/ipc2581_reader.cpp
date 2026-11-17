@@ -14,6 +14,125 @@ namespace chipcae::geometry::ecad {
 namespace {
 struct Parser {
     EcadModel model;
+    struct HoleDef {
+        double diameter = 0;
+        bool plated = false;
+    };
+    std::map<std::string, HoleDef> holes;
+    std::map<std::string, Component> packages;
+    using SourcePoint = std::array<double, 2>;
+    std::map<std::string, std::vector<SourcePoint>> package_points, package_pins;
+    std::vector<SourcePoint> component_origins;
+    SourcePoint source_point(const XML_Char** a) const {
+        return {number(attr(a, "x")) * scale(), number(attr(a, "y")) * scale()};
+    }
+    std::map<std::string, std::pair<std::string, std::string>> spans;
+    std::map<std::string, std::string> layer_specs;
+    std::map<std::string, double> plating;
+    std::string definition_layer, package, padstack, spec;
+    struct Pending {
+        Via via;
+        std::string layer, spec;
+        double diameter = 0;
+        bool plated = true;
+    };
+    std::vector<Pending> pending;
+    bool in_hole = false, in_pad = false, in_component = false;
+    double scale() const { return units_to_m / model.dbu_m; }
+    static std::string value(const XML_Char** a, const char* key) {
+        auto v = attr(a, key);
+        return v ? v : "";
+    }
+    std::array<std::int64_t, 2> point(const XML_Char** a) const {
+        return {std::llround(number(attr(a, "x")) * scale()),
+                std::llround(number(attr(a, "y")) * scale())};
+    }
+    void resolve() {
+        for (auto& layer : model.layers) {
+            auto d = layer_defs.find(layer.name);
+            if (d != layer_defs.end()) {
+                layer.function = d->second.first;
+                layer.copper = layer.copper || d->second.second;
+            }
+        }
+        for (std::size_t ci = 0; ci < model.components.size(); ++ci) {
+            auto& c = model.components[ci];
+            auto pkg = packages.find(c.package);
+            if (pkg == packages.end()) {
+                model.report.unsupported.push_back(
+                    {"IMPORT_UNSUPPORTED_ELEMENT", "PackageRef:" + c.package, 0});
+                continue;
+            }
+            auto transform = [&](SourcePoint p) {
+                const double t = c.rotation_degrees * std::acos(-1.0) / 180;
+                const double x = c.mirror ? -static_cast<double>(p[0]) : static_cast<double>(p[0]);
+                return std::array<std::int64_t, 2>{
+                    std::llround(component_origins[ci][0] + x * std::cos(t) - p[1] * std::sin(t)),
+                    std::llround(component_origins[ci][1] + x * std::sin(t) + p[1] * std::cos(t))};
+            };
+            c.outline = pkg->second.outline;
+            c.pads = pkg->second.pads;
+            for (std::size_t i = 0; i < c.outline.points.size(); ++i)
+                c.outline.points[i] = transform(package_points[c.package][i]);
+            for (std::size_t i = 0; i < c.pads.size(); ++i)
+                c.pads[i].position = transform(package_pins[c.package][i]);
+        }
+        for (auto& p : pending) {
+            if (!p.via.padstack.empty()) {
+                auto h = holes.find(p.via.padstack);
+                if (h == holes.end()) {
+                    model.report.unsupported.push_back(
+                        {"IMPORT_UNSUPPORTED_ELEMENT", "PadstackRef:" + p.via.padstack, 0});
+                    continue;
+                }
+                p.diameter = h->second.diameter;
+                p.plated = h->second.plated;
+            }
+            if (!p.plated)
+                continue;
+            auto span = spans.find(p.layer);
+            if (span != spans.end()) {
+                p.via.start_layer = span->second.first;
+                p.via.end_layer = span->second.second;
+            }
+            auto a = layer_index.find(p.via.start_layer), b = layer_index.find(p.via.end_layer);
+            auto thickness = plating.find(p.spec.empty() ? layer_specs[p.layer] : p.spec);
+            if (a == layer_index.end() || b == layer_index.end() ||
+                !model.layers[a->second].copper || !model.layers[b->second].copper ||
+                thickness == plating.end() || p.diameter <= 0 || thickness->second <= 0) {
+                model.report.unsupported.push_back(
+                    {"IMPORT_UNSUPPORTED_ELEMENT", "ViaGeometry:" + p.via.id, 0});
+                continue;
+            }
+            p.via.outer_radius_dbu = p.diameter / 2;
+            p.via.inner_radius_dbu = std::max(0.0, p.diameter / 2 - thickness->second);
+            for (auto i = std::min(a->second, b->second) + 1; i < std::max(a->second, b->second);
+                 ++i)
+                if (!model.layers[i].copper)
+                    p.via.dielectric_layers.push_back(i);
+            model.vias.push_back(std::move(p.via));
+        }
+        for (std::size_t i = 0; i < model.layers.size(); ++i) {
+            ViaFraction cell;
+            cell.layer = i;
+            bool found = false;
+            for (const auto& v : model.vias) {
+                if (std::find(v.dielectric_layers.begin(), v.dielectric_layers.end(), i) ==
+                    v.dielectric_layers.end())
+                    continue;
+                for (std::size_t axis = 0; axis < 2; ++axis) {
+                    const double lo = v.position[axis] - v.outer_radius_dbu,
+                                 hi = v.position[axis] + v.outer_radius_dbu;
+                    cell.lower[axis] = found ? std::min(cell.lower[axis], lo) : lo;
+                    cell.upper[axis] = found ? std::max(cell.upper[axis], hi) : hi;
+                }
+                found = true;
+            }
+            if (found)
+                model.via_fractions.push_back(cell);
+        }
+        rasterize_vias(model, model.via_fractions);
+    }
     std::vector<std::string> path;
     std::map<std::string, std::size_t> layer_index;
     std::map<std::string, std::pair<std::string, bool>> layer_defs;
@@ -60,7 +179,71 @@ struct Parser {
         const auto name = local(raw);
         path.push_back(name);
         const auto parent = path.size() > 1 ? path[path.size() - 2] : std::string{};
-        if (name == "StackupLayer") {
+        if (name == "Package") {
+            package = value(a, "name");
+            packages[package] = Component{};
+            package_points[package].clear();
+            package_pins[package].clear();
+        } else if (name == "Component") {
+            model.components.emplace_back();
+            component_origins.push_back({});
+            auto& c = model.components.back();
+            c.id = value(a, "refDes");
+            c.package = value(a, "packageRef");
+            in_component = true;
+        } else if (name == "Pin" && !package.empty()) {
+            packages[package].pads.push_back({value(a, "number"), {}});
+            package_pins[package].push_back({});
+        } else if (name == "Xform" && in_component) {
+            auto& c = model.components.back();
+            c.rotation_degrees = number(attr(a, "rotation"));
+            c.mirror = value(a, "mirror") == "true";
+        } else if (name == "Location" && in_component) {
+            model.components.back().position = point(a);
+            component_origins.back() = source_point(a);
+        } else if (name == "Location" && parent == "Pin" && !package.empty()) {
+            packages[package].pads.back().position = point(a);
+            package_pins[package].back() = source_point(a);
+        } else if (name == "PadStackDef") {
+            padstack = value(a, "name");
+        } else if (name == "PadstackHoleDef") {
+            holes[padstack] = {number(attr(a, "diameter")) * scale(),
+                               value(a, "platingStatus") != "NONPLATED"};
+        } else if (name == "Hole" || (name == "Pad" && attr(a, "padstackDefRef"))) {
+            Pending p;
+            p.layer = current_layer;
+            p.via.id = value(a, "name");
+            if (p.via.id.empty())
+                p.via.id = "via" + std::to_string(pending.size());
+            p.via.padstack = value(a, "padstackDefRef");
+            p.via.position = point(a);
+            p.diameter = number(attr(a, "diameter")) * scale();
+            p.plated = value(a, "platingStatus") != "NONPLATED";
+            pending.push_back(p);
+            in_hole = name == "Hole";
+            in_pad = name == "Pad";
+        } else if (name == "Location" && in_pad) {
+            pending.back().via.position = point(a);
+        } else if (name == "Span") {
+            spans[definition_layer] = {value(a, "fromLayer"), value(a, "toLayer")};
+        } else if (name == "Spec") {
+            spec = value(a, "name");
+        } else if (name == "Property" && !spec.empty() && value(a, "name") == "PLATING_THICKNESS") {
+            double unit = units_to_m;
+            auto u = value(a, "unit");
+            if (u == "MICRON")
+                unit = 1e-6;
+            else if (u == "INCH")
+                unit = 0.0254;
+            else if (u == "MILLIMETER")
+                unit = 1e-3;
+            plating[spec] = number(attr(a, "value")) * unit / model.dbu_m;
+        } else if (name == "SpecRef") {
+            if (in_hole)
+                pending.back().spec = value(a, "id");
+            else if (parent == "Layer")
+                layer_specs[definition_layer] = value(a, "id");
+        } else if (name == "StackupLayer") {
             EcadLayer l;
             const char* ref = attr(a, "layerOrGroupRef");
             l.name = ref ? ref : "layer" + std::to_string(model.layers.size());
@@ -78,6 +261,7 @@ struct Parser {
             model.layers.push_back(std::move(l));
             current_layer.clear();
         } else if (name == "Layer") {
+            definition_layer = value(a, "name");
             const char* n = attr(a, "name");
             const char* f = attr(a, "layerFunction");
             if (n && f)
@@ -91,17 +275,19 @@ struct Parser {
             else if (unit && std::string_view(unit) == "INCH")
                 units_to_m = 0.0254;
         } else if (name == "Profile") {
-            active = &model.outline;
+            active = package.empty() ? &model.outline : &packages[package].outline;
         } else if (name == "LayerFeature") {
             const char* n = attr(a, "layerRef");
             current_layer = n ? n : "";
             auto it = layer_index.find(current_layer);
-            if (it != layer_index.end())
+            if (it != layer_index.end() && layer_defs[current_layer].second)
                 model.layers[it->second].copper = true;
         } else if (name == "Polygon") {
             active = nullptr;
             auto it = layer_index.find(current_layer);
-            if (it != layer_index.end()) {
+            if (!package.empty()) {
+                active = &packages[package].outline;
+            } else if (it != layer_index.end()) {
                 model.layers[it->second].copper = true;
                 model.layers[it->second].polygons.emplace_back();
                 active = &model.layers[it->second].polygons.back();
@@ -162,6 +348,8 @@ struct Parser {
             if (x && y) {
                 auto px = number(x), py = number(y);
                 const double scale = units_to_m / 1e-6;
+                if (active && !package.empty())
+                    package_points[package].push_back(source_point(a));
                 if (active)
                     active->points.push_back({static_cast<std::int64_t>(std::llround(px * scale)),
                                               static_cast<std::int64_t>(std::llround(py * scale))});
@@ -176,12 +364,26 @@ struct Parser {
                    name != "Layer" && name != "StackupGroup" && name != "Spec" &&
                    name != "HistoryRecord" && name != "LogisticHeader" && name != "Bom" &&
                    name != "Line" && name != "Arc" && name != "LineDesc" && name != "LineDescRef" &&
-                   name != "CadHeader") {
+                   name != "CadHeader" && name != "Outline" && name != "General") {
             model.report.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT", name, line_number()});
         }
     }
     void end(const char* raw) {
         auto n = local(raw);
+        if (n == "Package")
+            package.clear();
+        if (n == "Component")
+            in_component = false;
+        if (n == "Hole")
+            in_hole = false;
+        if (n == "Pad")
+            in_pad = false;
+        if (n == "PadStackDef")
+            padstack.clear();
+        if (n == "Layer")
+            definition_layer.clear();
+        if (n == "Spec")
+            spec.clear();
         if (n == "LineDescRef") {
             auto it = line_widths.find(active_line_desc);
             if (it != line_widths.end())
@@ -246,6 +448,7 @@ ImportResult read_ipc2581(const std::filesystem::path& file) {
         }
     }
     XML_ParserFree(state.parser);
+    state.resolve();
     result.model = std::move(state.model);
     for (auto& l : result.model.layers)
         if (l.function.find("SIGNAL") != std::string::npos ||

@@ -440,6 +440,22 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
         GridFunction temperature(&scalar), displacement(&vector);
         temperature = inputs.T_ref;
         displacement = 0.0;
+        // Freeze constitutive properties at the reference temperature for this one-way solve.
+        const auto& materials = inputs.materials;
+        for (const auto& [id, material] : materials) {
+            auto warn = [&](bool clamped, const char* property) {
+                if (clamped)
+                    emit(io::LogLine{2,
+                                     0,
+                                     "material " + id + "/" + property +
+                                         ": T_ref outside table range; clamped to nearest endpoint",
+                                     "",
+                                     0});
+            };
+            warn(material.E_clamped, "E");
+            warn(material.nu_clamped, "nu");
+            warn(material.alpha_clamped, "alpha");
+        }
         const std::size_t na = arrays.attr_table.entries.size();
         std::vector<Constitutive> mixtures;
         std::vector<std::array<double, 3>> conductivities;
@@ -451,10 +467,13 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             for (const auto& [name, number] : arrays.attr_table.materials)
                 if (number == record.material)
                     id = name;
-            const auto& m = inputs.materials.at(id);
+            const auto& m = materials.at(id);
             lambda[a] = m.E * m.nu / ((1 + m.nu) * (1 - 2 * m.nu));
             mu[a] = m.E / (2 * (1 + m.nu));
             stress[a] = (3 * lambda[a] + 2 * mu[a]) * m.alpha;
+            if (!std::isfinite(lambda[a]) || !std::isfinite(mu[a]) || !std::isfinite(stress[a]))
+                throw InputError(ErrorCode::INPUT_INVALID,
+                                 "material " + id + ": nonfinite constitutive coefficient");
             conductivities.push_back({m.k, m.k, m.k});
             auto layer =
                 std::find_if(inputs.stack.layers.begin(),
@@ -462,7 +481,7 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                              [&](const auto& value) { return value.name == record.layer; });
             if (layer->copper) {
                 has_copper = true;
-                const auto& metal = inputs.materials.at(layer->copper->metal);
+                const auto& metal = materials.at(layer->copper->metal);
                 double f = *layer->copper->fraction;
                 mixtures.push_back(mixture(m, metal, f));
                 if (inputs.thermal)
