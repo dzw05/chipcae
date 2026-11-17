@@ -9,7 +9,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(sys.argv.pop(1)).resolve()))
+helper_dir = Path(__file__).resolve().parent
+source_dir = helper_dir.parents[2]
+for directory in (source_dir, helper_dir):
+    if str(directory) not in sys.path:
+        sys.path.insert(0, str(directory))
 
 from qoi_parse import np, sorted_rows
 from tools.vv.warpage_qoi import mirror_quarter
@@ -123,4 +127,8 @@ class AxesTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    # CTest passes the source directory as a legacy positional argument.
+    argv = sys.argv.copy()
+    if argv[1:2] == [str(source_dir)]:
+        del argv[1]
+    unittest.main(argv=argv)
