@@ -123,7 +123,7 @@ def run(path, windows=3, delay=0.):
     path = Path(path); path.mkdir(parents=True,exist_ok=True)
     controls = ControlReader(path/'control.jsonl')
     # Do not truncate a control file populated by the caller.
-    (path/'control.jsonl').touch(exist_ok=True)
+    # The launcher broker owns control.jsonl; the reader tolerates a missing file.
     with (path/'events.caelog').open('wb') as wire, (path/'mock-events.jsonl').open('w') as stream:
         seq = 0
         def emit(kind,payload):
@@ -172,8 +172,21 @@ def fixtures(path):
 
 if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--run-dir',type=Path,required=True); p.add_argument('--windows',type=int,default=3)
+    p.add_argument('--run-dir',type=Path); p.add_argument('--case',type=Path)
+    p.add_argument('--profile',type=Path); p.add_argument('--out',type=Path); p.add_argument('--windows',type=int,default=3)
     p.add_argument('--delay',type=float,default=0.)
     a = p.parse_args()
     if a.windows < 1: p.error('--windows must be positive')
-    run(a.run_dir,a.windows,a.delay)
+    output = a.out or a.run_dir
+    if output is None: p.error('--run-dir or --out is required')
+    if a.out:
+        if not a.case or not a.profile: p.error('--out requires --case and --profile')
+        import sys, os
+        output.mkdir(parents=True,exist_ok=True)
+        (output/'mock-argv.json').write_text(json.dumps(dict(argv=sys.argv[1:], omp=os.environ.get('OMP_NUM_THREADS'))))
+        profile = json.loads(a.profile.read_text())
+        a.windows = profile.get('x-mock-windows', a.windows)
+        a.delay = profile.get('x-mock-delay', a.delay)
+        if profile.get('x-mock-exit'): sys.exit(profile['x-mock-exit'])
+        if profile.get('x-mock-missing-exit'): sys.exit(0)
+    run(output,a.windows,a.delay)
