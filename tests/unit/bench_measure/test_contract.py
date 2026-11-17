@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -113,6 +114,8 @@ class Contract(unittest.TestCase):
             self.assertIsInstance(run["error"], str)
             if run["status"] == "passed":
                 self.assertEqual(run["error"], "")
+            elif run["status"] == "failed":
+                self.assertTrue(run["error"])
 
     def test_success_and_default_repeat(self):
         rc, runner = self.invoke()
@@ -140,6 +143,7 @@ class Contract(unittest.TestCase):
         rc, runner = self.invoke(SyntheticRunner(names=[]), ticks=())
         self.assertEqual(rc, 1)
         data = self.payload()
+        self.assertEqual(data["kind"], "未测量")
         self.assertEqual(data["runs"], [])
         self.assertIs(data["all_passed"], False)
         self.assertEqual(data["error"], "test not registered")
@@ -192,6 +196,28 @@ class Contract(unittest.TestCase):
                 self.assertEqual(run["wall_seconds"], 0.25)
                 self.assertIn(type(error).__name__, run["error"])
                 self.assertIn(str(error), run["error"])
+
+    def test_unexpected_report_errors_are_recorded(self):
+        for error in (RuntimeError("synthetic report failure"), ValueError()):
+            with self.subTest(error=error):
+                self.out.unlink(missing_ok=True)
+                with patch.object(self.tool, "report_status", side_effect=error):
+                    rc, _ = self.invoke()
+                self.assertEqual(rc, 1)
+                data = self.payload()
+                self.check_payload(data, 1, False)
+                run = data["runs"][0]
+                self.assertEqual(run["status"], "failed")
+                self.assertIn(type(error).__name__, run["error"])
+                self.assertEqual(run["wall_seconds"], 0.25)
+
+    def test_failed_report_without_details_gets_error(self):
+        with patch.object(self.tool, "report_status", return_value=("failed", "")):
+            rc, _ = self.invoke()
+        self.assertEqual(rc, 1)
+        run = self.payload()["runs"][0]
+        self.assertEqual(run["status"], "failed")
+        self.assertTrue(run["error"])
 
     def test_empty_execution_results_cannot_pass(self):
         rc, _ = self.invoke(SyntheticRunner(outcomes=[(0, "empty")]))

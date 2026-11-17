@@ -81,17 +81,19 @@ def run_once(build, test, index, report, runner, clock):
         return run
     try:
         run['status'], run['error'] = report_status(report, test)
-    except (OSError, ET.ParseError) as error:
+    except Exception as error:
         run['error'] = exception_message(error)
     if run['returncode'] != 0:
         run['status'] = 'failed'
         run['error'] = f"CTest exited with {run['returncode']}"
+    if run['status'] == 'failed' and not run['error']:
+        run['error'] = 'run failed without report details'
     return run
 
 
 def assemble_result(args, runs, error):
     passed = len(runs) == args.repeat and all(r['status'] == 'passed' for r in runs)
-    return dict(schema_version=1, kind='实测', test=args.test, repeat=args.repeat,
+    return dict(schema_version=1, kind='实测' if runs else '未测量', test=args.test, repeat=args.repeat,
                 runs=runs, all_passed=passed,
                 error=error or ('' if passed else 'one or more runs did not pass'))
 
