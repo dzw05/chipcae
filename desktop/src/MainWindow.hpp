@@ -4,9 +4,11 @@
 #include "ResultSession.hpp"
 
 #include <QMainWindow>
+class QAction;
 #include <QTemporaryDir>
 #include <functional>
 #include <memory>
+#include <vector>
 namespace chipcae::desktop {
 class RunMonitor;
 class ImportController;
@@ -17,7 +19,7 @@ class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(QWidget* parent = nullptr);
     chipcae::desktop::CaseDocument* document() { return &document_; }
-    bool openCase(const QString& path) { return document_.load(path); }
+    bool openCase(const QString& path);
     bool saveCase(const QString& path) { return document_.save(path); }
 
     ~MainWindow() override;
@@ -45,4 +47,6 @@ private:
     chipcae::desktop::ResultView* resultView_ = nullptr;
     QDockWidget* resultDock_ = nullptr;
     std::function<void()> beginImportUi_;
+    std::vector<QAction*> importBlockedActions_;
+    bool importBusy() const;
 };

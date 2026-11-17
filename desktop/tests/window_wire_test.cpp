@@ -73,8 +73,14 @@ void wiring(Window& w, const QString& samples) {
         require(w.importEcadPath(input.fileName(), PYTHON_EXECUTABLE, {MOCK_SCRIPT}),
                 "start import");
         require(w.importController()->busy(), "controller running");
-        if (cancel)
+        if (cancel) {
+            require(!w.loadHandwrittenStack() && w.document()->stackJson() == before,
+                    "handwritten template blocked during import");
+            require(
+                !w.openCase(QString(CHIPCAE_REPOSITORY) + "/schema/examples/fcbga_demo.case.json"),
+                "open case blocked during import");
             QTimer::singleShot(100, &loop, [&] { w.cancelImport(); });
+        }
         loop.exec();
         QObject::disconnect(connection);
         require(finished, "import finished");

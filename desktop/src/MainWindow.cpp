@@ -37,7 +37,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         if (!ok && !document_.errors().empty())
             QMessageBox::warning(this, tr("Case document"), document_.errors().front().message);
     };
-    menu->addAction(tr("Open"), this, [this, report] {
+    auto* openCaseAction = menu->addAction(tr("Open"), this, [this, report] {
         const auto path = QFileDialog::getOpenFileName(this, tr("Open case"), {}, "JSON (*.json)");
         if (!path.isEmpty())
             report(openCase(path));
@@ -68,7 +68,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             QMessageBox::warning(
                 this, tr("Open Results"), tr("Cannot open result manifest or first step"));
     });
-    menu->addAction(tr("Load handwritten stack template"), this, [this] {
+    auto* handwrittenAction = menu->addAction(tr("Load handwritten stack template"), this, [this] {
         if (!loadHandwrittenStack())
             QMessageBox::warning(this, tr("Stack"), tr("Cannot load handwritten stack template"));
     });
@@ -103,18 +103,27 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 appendLog();
                 logTimer->stop();
                 cancel->hide();
+                for (auto* action : importBlockedActions_)
+                    action->setEnabled(true);
+                if (auto* stack = findChild<chipcae::desktop::StackEditor*>())
+                    stack->setEnabled(true);
                 statusBar()->showMessage(replaced ? tr("Import complete") : tr("Import ended"));
             });
     connect(importer_, &chipcae::desktop::ImportController::userConfirmed, this, [this] {
         statusBar()->showMessage(tr("Defects acknowledged"));
     });
     logTimer->setInterval(100);
+    importBlockedActions_ = {openCaseAction, handwrittenAction};
     beginImportUi_ = [this, cancel, logTimer, importDock, importLog, logged] {
         *logged = 0;
         importLog->clear();
         importDock->show();
         cancel->show();
         statusBar()->showMessage(tr("导入中"));
+        for (auto* action : importBlockedActions_)
+            action->setEnabled(false);
+        if (auto* stack = findChild<chipcae::desktop::StackEditor*>())
+            stack->setEnabled(false);
         logTimer->start();
     };
     auto* view = new QVTKOpenGLNativeWidget(this);
@@ -245,6 +254,16 @@ MainWindow::~MainWindow() {
     delete importer_;
 }
 
+bool MainWindow::importBusy() const {
+    return importer_ && importer_->busy();
+}
+
+bool MainWindow::openCase(const QString& path) {
+    if (importBusy())
+        return false;
+    return document_.load(path);
+}
+
 bool MainWindow::importEcadPath(const QString& input,
                                 const QString& program,
                                 const QStringList& prefix) {
@@ -268,6 +287,8 @@ void MainWindow::cancelImport() {
 }
 
 bool MainWindow::loadHandwrittenStack(const QString& path) {
+    if (importBusy())
+        return false;
     QFile file(path.isEmpty()
                    ? QString(CHIPCAE_REPOSITORY) + "/schema/examples/fcbga_demo.stack.json"
                    : path);
