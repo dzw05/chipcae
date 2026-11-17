@@ -1,11 +1,16 @@
+#include "MainWindow.hpp"
 #include "ResidualChart.hpp"
 
 #include <QApplication>
 #include <QDateTime>
+#include <QDockWidget>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
+#include <QPointer>
+#include <QPushButton>
 #include <QSurfaceFormat>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -45,12 +50,69 @@ void write(const QString& path, const QByteArray& bytes, bool append = false) {
           "open");
     check(f.write(bytes) == bytes.size(), "write");
 }
+void brokerLifetime() {
+    QTemporaryDir dir;
+    check(dir.isValid(), "lifetime temporary directory");
+    MainWindow window;
+    auto broker = std::make_unique<LocalJobService>(
+        LauncherConfig{dir.filePath("runs"), "unused-solver", "mpirun", false, true});
+    window.monitorRun(dir.path(), EventFormat::LegacyCaelog1, broker.get(), "lifetime-run");
+    QPointer<QDockWidget> dock;
+    for (auto* candidate : window.findChildren<QDockWidget*>())
+        if (candidate->windowTitle() == "Run monitor: " + dir.path())
+            dock = candidate;
+    check(dock, "monitor dock exists");
+    QPointer<QPushButton> stop;
+    for (auto* candidate : dock->findChildren<QPushButton*>())
+        if (candidate->text() == "STOP")
+            stop = candidate;
+    check(stop && stop->isEnabled(), "broker enables STOP");
+    const auto timers = dock->findChildren<QTimer*>();
+    check(timers.size() == 1, "one monitor timer");
+    QPointer<QTimer> timer = timers.front();
+    check(timer->isActive() && timer->interval() == 250, "monitor timer active at 250 ms");
+    int timeouts = 0;
+    QObject::connect(timer, &QTimer::timeout, &window, [&] { ++timeouts; });
+    broker.reset();
+    QEventLoop loop;
+    QElapsedTimer elapsed;
+    elapsed.start();
+    QTimer::singleShot(600, &loop, &QEventLoop::quit);
+    loop.exec();
+    check(elapsed.elapsed() > 250 && timeouts > 0, "monitor polled after broker destruction");
+    check(dock && stop && timer && timer->isActive(), "monitor survives broker destruction");
+    stop->click();
+    QCoreApplication::processEvents();
+    check(dock && stop && timer && timer->isActive(),
+          "STOP safely returns after broker destruction");
+}
+void invalidManifestRepetition() {
+    QTemporaryDir dir;
+    check(dir.isValid(), "manifest temporary directory");
+    write(dir.filePath("manifest.json"), "{invalid");
+    RunMonitor monitor(dir.path(), EventFormat::LegacyCaelog1);
+    for (quint64 seq = 1; seq <= 3; ++seq) {
+        monitor.consume({seq, 0, chipcae::io::OutputAvailable{2, 1.5, "untrusted", ""}});
+        check(monitor.manifestLookups == seq, "each output event reads invalid manifest");
+        check(monitor.diagnostics.count("invalid output manifest") == 1,
+              "repeated invalid manifest diagnostic is deduplicated");
+    }
+}
 int main(int argc, char** argv) {
     const bool present = qEnvironmentVariableIsSet("CHIPCAE_MONITOR_PRESENT");
     if (present)
         qputenv("QT_QPA_PLATFORM", "xcb");
     QSurfaceFormat::setDefaultFormat(QVTKOpenGLNativeWidget::defaultFormat());
     QApplication app(argc, argv);
+    // Allow each regression to be diagnosed independently if the other aborts.
+    if (app.arguments().contains("--broker-lifetime")) {
+        brokerLifetime();
+        return 0;
+    }
+    if (app.arguments().contains("--invalid-manifest")) {
+        invalidManifestRepetition();
+        return 0;
+    }
     vtkNew<RenderErrors> renderErrors;
     vtkOutputWindow::SetInstance(renderErrors);
     QTemporaryDir dir;
@@ -316,5 +378,7 @@ int main(int argc, char** argv) {
     png->Write();
     check(QFileInfo("desktop-monitor.png").size() > 0, "capture artifact");
     check(renderErrors->errors == 0, "no VTK rendering errors");
+    brokerLifetime();
+    invalidManifestRepetition();
     return 0;
 }
