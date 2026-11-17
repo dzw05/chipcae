@@ -44,6 +44,60 @@ class Errors(unittest.TestCase):
                         self.assertIn('conflicting', err.getvalue())
                         self.assertEqual(len(err.getvalue().splitlines()), 1)
 
+    def test_required_field_diagnostics(self):
+        for block in ('hex', 'cut'):
+            for field in ('PointData/U', 'CellData/layer_id', 'CellData/material_id',
+                          'CellData/cell_kind', 'CellData/elem_gid', 'Types'):
+                if block == 'hex' and field == 'Types':
+                    continue
+                with self.subTest(block=block, field=field), tempfile.TemporaryDirectory() as tmp:
+                    run = Path(tmp)
+                    step, _ = fixture(run, cut=True)
+                    path = f'VTKHDF/{block}/{field}'
+                    with h5py.File(step, 'r+') as f:
+                        del f[path]
+                    err = io.StringIO()
+                    with contextlib.redirect_stderr(err):
+                        self.assertEqual(main([str(run)]), 14)
+                    self.assertEqual(err.getvalue(),
+                                     f'result_summary: INPUT_INVALID: /{path}: required field missing\n')
+
+    def test_cut_types_dtype(self):
+        for dtype in ('int8', 'int32', 'uint16', 'float64', 'uint8'):
+            with self.subTest(dtype=dtype), tempfile.TemporaryDirectory() as tmp:
+                run = Path(tmp)
+                step, _ = fixture(run, cut=True)
+                with h5py.File(step, 'r+') as f:
+                    path = 'VTKHDF/cut/Types'
+                    del f[path]
+                    f[path] = np.array([42, 42], dtype=dtype)
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(main([str(run)]), 0 if dtype == 'uint8' else 14)
+                if dtype != 'uint8':
+                    self.assertIn('cut/Types: expected uint8', err.getvalue())
+
+    def test_name_table_dtype(self):
+        for block in ('hex', 'cut'):
+            for field in ('layer_names', 'material_names'):
+                for dtype in ('int32', 'float64', 'S8', 'utf8'):
+                    with self.subTest(block=block, field=field, dtype=dtype), tempfile.TemporaryDirectory() as tmp:
+                        run = Path(tmp)
+                        step, _ = fixture(run)
+                        with h5py.File(step, 'r+') as f:
+                            # Remove the other copy so this checks dtype alone.
+                            for name in ('hex', 'cut'):
+                                del f[f'VTKHDF/{name}/FieldData/{field}']
+                            path = f'VTKHDF/{block}/FieldData/{field}'
+                            string = dtype in ('S8', 'utf8')
+                            f.create_dataset(path, data=['one', 'two'] if string else [1, 2],
+                                             dtype=h5py.string_dtype() if dtype == 'utf8' else dtype)
+                        err = io.StringIO()
+                        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                            self.assertEqual(main([str(run)]), 0 if string else 14)
+                        if not string:
+                            self.assertIn(f'/{path}: expected a string vector', err.getvalue())
+
     def test_invalid_inputs(self):
         cases = ['manifest_missing', 'step_missing', 'schema', 'hex_missing', 'version', 'T_length', 'elem_dtype', 'U_missing', 'kind_missing', 'duplicate', 'unit', 'empty_manifest', 'malformed_manifest']
         for case in cases:

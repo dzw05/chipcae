@@ -41,14 +41,42 @@ class Edges(unittest.TestCase):
             run = Path(tmp)
             step, _ = fixture(run, cut=True)
             with h5py.File(step, 'r+') as f:
-                # The duplicate precedes later top points and the cut block.
-                f['VTKHDF/hex/PointData/T'][6] = 5000.
+                # Change the first copy (index 5); index 6 is discarded.
+                f['VTKHDF/hex/PointData/T'][5] = 5000.
             result = summarize(run)
             self.assertEqual(result['temperature']['max'], 5000.)
             self.assertEqual(result['temperature']['top_min'], 301.)
-            self.assertEqual(result['temperature']['top_max'], 999.)
-            self.assertAlmostEqual(result['temperature']['top_mean'], 374.4)
+            self.assertEqual(result['temperature']['top_max'], 5000.)
+            self.assertAlmostEqual(result['temperature']['top_mean'], 843.9)
             self.assertEqual(result['warpage']['n_top_points'], 10)
+
+    def test_duplicate_across_blocks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run, cut=True)
+            with h5py.File(step, 'r+') as f:
+                f['VTKHDF/cut/Points'][0] = [0., 0., 1.]
+            result = summarize(run)
+            self.assertEqual(result['temperature']['max'], 999.)
+            self.assertEqual(result['temperature']['top_max'], 309.)
+            self.assertEqual(result['temperature']['top_mean'], 305.)
+            self.assertEqual(result['warpage']['n_top_points'], 9)
+
+    def test_collinear_top_geometry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run)
+            with h5py.File(step, 'r+') as f:
+                points = f['VTKHDF/hex/Points'][...]
+                points[:, 1] = 0.
+                f['VTKHDF/hex/Points'][...] = points
+                u = np.zeros_like(points)
+                u[:, 2] = points[:, 0] ** 2
+                f['VTKHDF/hex/PointData/U'][...] = u
+            result = summarize(run)
+            self.assertEqual(result['warpage']['n_top_points'], 3)
+            self.assertAlmostEqual(result['warpage']['w_bfp_m'], 1., places=12)
+            self.assertAlmostEqual(result['warpage']['rel_diff'], 9., places=12)
 
     def test_required_groups(self):
         for group in ('VTKHDF', 'VTKHDF/hex', 'VTKHDF/cut'):

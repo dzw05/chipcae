@@ -41,6 +41,7 @@ def _count(block, path):
 
 
 def _array(block, path, shape, dtype):
+    _require(path in block, f"{block.name}/{path}: required field missing")
     values = block[path][...]
     _require(values.shape == shape, f"{block.name}/{path}: expected shape {shape}")
     _require(values.dtype.newbyteorder('=') == np.dtype(dtype),
@@ -89,8 +90,8 @@ def _read(root):
             counts = _counts(fields.get('cell_kind', np.array([], dtype='int32')))
             blocks[name] = dict(points=n, cells=c, cell_kind_counts=counts)
         else:
-            types = block['Types'][...] if c or 'Types' in block else np.array([], dtype='uint8')
-            _require(types.shape == (c,) and types.dtype.kind in 'iu', 'cut/Types: invalid cell types')
+            types = (_array(block, 'Types', (c,), 'uint8')
+                     if c or 'Types' in block else np.array([], dtype='uint8'))
             blocks[name] = dict(points=n, cells=c, type_counts=_counts(types))
         data.append((points, u, t))
     eb = root.get('eb_surface')
@@ -109,7 +110,8 @@ def _read(root):
             if path not in root[block]:
                 continue
             source = root[block][path]
-            _require(source.ndim == 1, f"{source.name}: expected a string vector")
+            _require(source.ndim == 1 and h5py.check_string_dtype(source.dtype) is not None,
+                     f"{source.name}: expected a string vector")
             current = source.asstr()[...].tolist()
             _require(table is None or current == table,
                      f"{source.name}: conflicting {field} tables in hex and cut")
