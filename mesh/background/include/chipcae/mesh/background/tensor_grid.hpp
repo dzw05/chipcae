@@ -1,4 +1,5 @@
 #pragma once
+#include "column_hierarchy.hpp"
 #include "hex_mesh_arrays.hpp"
 
 #include <limits>
@@ -13,8 +14,7 @@ struct GridOptions {
     Real ar_max = std::numeric_limits<Real>::infinity();
     Index cell_budget = 50000;
     Local ranks = 1, nx = 1, ny = 1;
-    Local levels = 0;             // 0 selects automatically; otherwise L = levels - 1.
-    Index max_coarse_columns = 0; // Soft solver limit; zero means unlimited.
+    Local levels = 0; // 0 selects automatically; otherwise L = levels - 1.
     // Deprecated compatibility field; par's compile-time choice controls partitioning.
     bool use_metis = false;
 };
@@ -23,5 +23,6 @@ Expected<Real> column_partition_imbalance(const std::vector<std::vector<Local>>&
                                           std::size_t nz,
                                           int ranks);
 } // namespace detail
+Expected<std::vector<LevelCandidate>> hierarchy_candidates(const StackModel&, const GridOptions&);
 Expected<HexMeshArrays> build_tensor_grid(const StackModel&, const GridOptions&);
 } // namespace chipcae::mesh

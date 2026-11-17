@@ -1,6 +1,12 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
 #ifdef CHIPCAE_ENABLE_KOKKOS
 #include <Kokkos_Core.hpp>
@@ -10,6 +16,84 @@
 #endif
 
 namespace chipcae::mesh {
+
+struct LevelCandidate {
+    int L;
+    std::size_t nx0, ny0, padded_cells;
+    bool feasible;
+};
+struct LevelChoice {
+    int L = 0, rule = 3;
+    std::size_t C_L = 0, N_L = 0;
+    std::vector<std::string> warnings;
+};
+
+// Invalid solver parameters throw invalid_argument. Candidates whose arithmetic
+// cannot be represented in size_t are ineligible (including for direct metrics).
+inline LevelChoice select_levels(std::span<const LevelCandidate> candidates,
+                                 std::size_t nz,
+                                 int np,
+                                 std::size_t n_cap = 50000,
+                                 int eq_per_node = 3,
+                                 int p = 2) {
+    if (np <= 0 || p <= 0 || eq_per_node <= 0)
+        throw std::invalid_argument("np, p and eq_per_node must be positive");
+    const auto limit = std::numeric_limits<std::size_t>::max();
+    auto multiply = [=](std::size_t a, std::size_t b, std::size_t& out) {
+        if (b && a > limit / b)
+            return false;
+        out = a * b;
+        return true;
+    };
+    LevelChoice first, last, direct;
+    bool found_first = false, found_last = false;
+    std::size_t minimum = 0, preferred = 0;
+    const bool valid_minimum = multiply(16, np, minimum);
+    const bool valid_preferred = multiply(64, np, preferred);
+    for (const auto& c : candidates) {
+        if (!c.feasible || c.L < 0 || c.L > 30 || !c.nx0 || !c.ny0)
+            continue;
+        LevelChoice choice;
+        choice.L = c.L;
+        std::size_t x, y, z, xy, xyz;
+        if (!multiply(c.nx0, c.ny0, choice.C_L) || !multiply(p, c.nx0, x) || x == limit ||
+            !multiply(p, c.ny0, y) || y == limit || !multiply(p, nz, z) || z == limit ||
+            !multiply(x + 1, y + 1, xy) || !multiply(xy, z + 1, xyz) ||
+            !multiply(eq_per_node, xyz, choice.N_L))
+            continue;
+        if (c.L == 0) {
+            direct = choice;
+            continue;
+        }
+        if (!valid_minimum || choice.C_L < minimum)
+            continue;
+        if (!found_last || c.L > last.L) {
+            last = choice;
+            found_last = true;
+        }
+        if (choice.N_L <= n_cap && (!found_first || c.L < first.L)) {
+            first = choice;
+            found_first = true;
+        }
+    }
+    if (found_first) {
+        first.rule = 1;
+        if (!valid_preferred || first.C_L < preferred)
+            first.warnings.push_back("coarse columns below 64*np");
+        return first;
+    }
+    if (found_last) {
+        last.rule = 2;
+        last.warnings.push_back("coarse equations exceed n_cap: L=" + std::to_string(last.L) +
+                                " C_L=" + std::to_string(last.C_L) + " N_L=" +
+                                std::to_string(last.N_L) + " n_cap=" + std::to_string(n_cap));
+        return last;
+    }
+    direct.rule = 3;
+    direct.warnings.push_back(
+        "direct solve: no feasible L>=1 with C_L>=16*np and representable equation count");
+    return direct;
+}
 
 // Each finer level has twice as many cells per axis as its coarse level, so
 // fine dense indices are 4 * coarse dense + r, where r = morton(i & 1, j & 1).

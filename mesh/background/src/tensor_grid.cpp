@@ -138,15 +138,17 @@ bool contains(const Footprint& f, Real x, Real y) {
     }
     return in;
 }
-} // namespace
-Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions& o) {
+Expected<std::array<AxisSegments, 2>>
+plan_axes(const StackModel& s, const GridOptions& o, HexMeshArrays& m) {
     if (!s.symmetry.empty() && s.symmetry != "none")
         return Error{"symmetry", "symmetry other than none is not implemented"};
     if (o.nx < 1 || o.ny < 1 || o.ranks < 1 || o.cell_budget < 1 || !(o.snap_tol >= 0) ||
         !(o.max_ratio >= 1) || !std::isfinite(o.snap_tol) || !std::isfinite(o.max_ratio))
         return Error{"grid", "invalid options"};
     const auto& b = s.outline.box;
-    if (!(b[2] > b[0] && b[3] > b[1]) || s.layers.empty())
+    if (!(b[2] > b[0] && b[3] > b[1]) ||
+        !std::all_of(b.begin(), b.end(), [](Real x) { return std::isfinite(x); }) ||
+        s.layers.empty())
         return Error{"outline", "positive box and nonempty layers required"};
     std::set<std::string> names;
     for (const auto& l : s.layers) {
@@ -169,9 +171,8 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
     if (Index(o.nx) * o.ny > o.cell_budget / minimum_z)
         return Error{"cell_budget",
                      "requested xyz resolution exceeds budget; revise nx/ny/n_elem_min explicitly"};
-    if (o.levels < 0 || o.levels > 31 || o.max_coarse_columns < 0)
+    if (o.levels < 0 || o.levels > 31)
         return Error{"HIERARCHY_INVALID", "invalid hierarchy options"};
-    HexMeshArrays m;
     std::array<AxisSegments, 2> segments;
     auto& axes = m.axes;
     for (int a = 0; a < 2; ++a) {
@@ -211,19 +212,24 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
             spacing = std::min(spacing, (snapped[j] - snapped[j - 1]) / minimum);
         if (o.max_ratio > 1)
             spacing *= std::min(Real(1), o.max_ratio - 1);
+        std::size_t total = 0;
         for (std::size_t j = 1; j < snapped.size(); ++j) {
-            Real proposed = std::ceil((snapped[j] - snapped[j - 1]) / spacing);
+            Real proposed =
+                std::max(Real(minimum), std::ceil((snapped[j] - snapped[j - 1]) / spacing));
             if (proposed > Real(o.cell_budget) ||
-                proposed > Real(std::numeric_limits<Local>::max()) ||
-                Real(v.size()) + proposed > Real(o.cell_budget))
+                proposed > Real(std::numeric_limits<Local>::max()) || !std::isfinite(proposed) ||
+                proposed > Real(static_cast<std::size_t>(o.cell_budget) - total) ||
+                proposed >=
+                    Real(static_cast<std::size_t>(std::numeric_limits<Local>::max()) - total))
                 return Error{"cell_budget",
                              "xy grading refinement exceeds budget; revise feature spacing or "
                              "nx/ny explicitly"};
             Local count = std::max(minimum, static_cast<Local>(proposed));
             segments[a].counts.push_back(count);
+            total += static_cast<std::size_t>(count);
         }
     }
-    const auto original = segments;
+    const auto& original = segments;
     for (const auto& axis : original)
         for (std::size_t i = 1; i < axis.counts.size(); ++i) {
             const Real left = (axis.lines[i] - axis.lines[i - 1]) / axis.counts[i - 1];
@@ -233,86 +239,16 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
                 return Error{"grid/grading",
                              "max_ratio=1 requires exactly commensurate feature intervals"};
         }
-    enum class PrepareFailure { None, Budget, MaxRatio };
-    auto prepare = [&](int L, std::array<AxisSegments, 2>& candidate) {
-        candidate = original;
-        const auto divisor = std::size_t{1} << L;
-        for (auto& axis : candidate) {
-            const auto n = std::accumulate(axis.counts.begin(), axis.counts.end(), std::size_t{0});
-            const auto padded = ((n + divisor - 1) / divisor) * divisor;
-            if (padded > static_cast<std::size_t>(o.cell_budget) ||
-                padded >= static_cast<std::size_t>(std::numeric_limits<Local>::max()))
-                return PrepareFailure::Budget;
-            if (!pad_axis(axis, divisor, o.max_ratio))
-                return PrepareFailure::MaxRatio;
-        }
-        return PrepareFailure::None;
-    };
-    auto count = [](const AxisSegments& axis) {
-        return std::accumulate(axis.counts.begin(), axis.counts.end(), std::size_t{0});
-    };
-    int L = o.levels ? o.levels - 1 : 0;
-    if (!o.levels) {
-        int preferred = -1, normal = -1, relaxed = -1;
-        for (int l = 0; l < 31; ++l) {
-            const auto divisor = std::size_t{1} << l;
-            const auto possible_columns = ((count(original[0]) + divisor - 1) / divisor) *
-                                          ((count(original[1]) + divisor - 1) / divisor);
-            if (possible_columns < 16u * o.ranks)
-                break;
-            std::array<AxisSegments, 2> candidate;
-            if (prepare(l, candidate) != PrepareFailure::None)
-                continue;
-            const auto nc = (count(candidate[0]) / divisor) * (count(candidate[1]) / divisor);
-            if (nc >= 16u * o.ranks)
-                relaxed = l;
-            if (nc >= 64u * o.ranks) {
-                normal = l;
-                if (!o.max_coarse_columns || nc <= static_cast<std::size_t>(o.max_coarse_columns))
-                    preferred = l;
-            }
-        }
-        if (preferred >= 0)
-            L = preferred;
-        else if (normal >= 0) {
-            L = normal;
-            m.grid_report.warnings.push_back("coarse column soft limit exceeded");
-        } else if (relaxed >= 0) {
-            L = relaxed;
-            m.grid_report.warnings.push_back("coarse columns below 64*np; using 16*np minimum");
-        } else
-            m.grid_report.warnings.push_back("levels=1: direct solve fallback");
-    }
-    const auto prepare_failure = prepare(L, segments);
-    if (prepare_failure == PrepareFailure::Budget)
-        return Error{"cell_budget", "divisibility padding exceeds cell budget"};
-    if (prepare_failure == PrepareFailure::MaxRatio)
-        return Error{"HIERARCHY_INVALID", "divisibility padding violates max_ratio"};
-    const auto divisor = std::size_t{1} << L;
-    const auto nx0 = count(segments[0]) / divisor, ny0 = count(segments[1]) / divisor;
-    if (o.levels && nx0 * ny0 < 16u * o.ranks)
-        return Error{"HIERARCHY_INVALID", "coarsest columns below 16*np"};
-    m.grid_report.levels = L + 1;
-    for (int a = 0; a < 2; ++a) {
-        auto& v = axes[a];
-        m.grid_report.padding[a] = count(segments[a]) - count(original[a]);
-        if (count(segments[a]) > static_cast<std::size_t>(o.cell_budget) ||
-            count(segments[a]) >= static_cast<std::size_t>(std::numeric_limits<Local>::max()))
-            return Error{"cell_budget", "hierarchy padding exceeds capacity"};
-        for (std::size_t j = 0; j < segments[a].counts.size(); ++j)
-            for (std::size_t k = 0; k < segments[a].counts[j]; ++k)
-                v.push_back(segments[a].lines[j] +
-                            (segments[a].lines[j + 1] - segments[a].lines[j]) * k /
-                                segments[a].counts[j]);
-        v.push_back(segments[a].lines.back());
-    }
-    std::clog << "run_config levels=" << L + 1 << " n0=" << nx0 << 'x' << ny0
-              << " part=" << (par::ColumnExtrudePartitioner::uses_metis() ? "metis" : "serpentine")
-              << " np=" << o.ranks << " coarse=" << nx0 * ny0 << '\n';
-    for (const auto& warning : m.grid_report.warnings)
-        std::clog << "warning: " << warning << '\n';
-    axes[2] = {0};
-    std::vector<Local> cell_layer;
+    return segments;
+}
+Expected<bool> plan_z(const StackModel& s,
+                      const GridOptions& o,
+                      HexMeshArrays& m,
+                      std::vector<Local>& cell_layer,
+                      bool materialize = true) {
+    auto& axes = m.axes;
+    if (materialize)
+        axes[2] = {0};
     Real z = 0, last_dz = 0;
     for (std::size_t li = 0; li < s.layers.size(); ++li) {
         const auto& l = s.layers[li];
@@ -338,19 +274,141 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
                     "interface adjacent size ratio exceeds max_ratio; refine layer counts"};
             last_dz = dz;
             z += dz;
-            axes[2].push_back(k + 1 == l.n_elem_min ? start + l.thickness : z);
-            cell_layer.push_back(static_cast<Local>(li));
+            if (materialize) {
+                axes[2].push_back(k + 1 == l.n_elem_min ? start + l.thickness : z);
+                cell_layer.push_back(static_cast<Local>(li));
+            }
             weight *= l.grading;
         }
         z = start + l.thickness;
     }
+    return true;
+}
+std::size_t count(const AxisSegments& axis) {
+    return std::accumulate(axis.counts.begin(), axis.counts.end(), std::size_t{0});
+}
+enum class PrepareFailure { None, Budget, MaxRatio };
+PrepareFailure prepare(const std::array<AxisSegments, 2>& original,
+                       const GridOptions& o,
+                       int L,
+                       std::array<AxisSegments, 2>& candidate) {
+    candidate = original;
+    const auto divisor = std::size_t{1} << L;
+    for (auto& axis : candidate) {
+        const auto n = count(axis);
+        if (n > std::numeric_limits<std::size_t>::max() - (divisor - 1))
+            return PrepareFailure::Budget;
+        const auto blocks = (n + divisor - 1) / divisor;
+        if (blocks > std::numeric_limits<std::size_t>::max() / divisor)
+            return PrepareFailure::Budget;
+        const auto padded = blocks * divisor;
+        if (padded > static_cast<std::size_t>(o.cell_budget) ||
+            padded >= static_cast<std::size_t>(std::numeric_limits<Local>::max()))
+            return PrepareFailure::Budget;
+        if (!pad_axis(axis, divisor, o.max_ratio))
+            return PrepareFailure::MaxRatio;
+    }
+    return PrepareFailure::None;
+}
+bool within_budget(const std::array<AxisSegments, 2>& axes, std::size_t nz, const GridOptions& o) {
+    return count(axes[0]) <= static_cast<std::size_t>(o.cell_budget) / count(axes[1]) / nz;
+}
+} // namespace
+Expected<std::vector<LevelCandidate>> hierarchy_candidates(const StackModel& s,
+                                                           const GridOptions& o) {
+    HexMeshArrays planning;
+    auto original = plan_axes(s, o, planning);
+    if (!original)
+        return original.error();
+    std::vector<Local> cell_layer;
+    auto z = plan_z(s, o, planning, cell_layer, false);
+    if (!z)
+        return z.error();
+    std::size_t nz = 0;
+    for (const auto& layer : s.layers)
+        nz += static_cast<std::size_t>(layer.n_elem_min);
+    std::vector<LevelCandidate> result;
+    for (int L = 0; L <= 30; ++L) {
+        std::array<AxisSegments, 2> axes;
+        auto failure = prepare(original.value(), o, L, axes);
+        const auto divisor = std::size_t{1} << L;
+        // Base axes have fewer than INT32_MAX cells, and divisor <= 2^30.
+        // These rounded counts and the sum of additions fit even 32-bit size_t.
+        // Infeasible rows describe the requested padding, not a partial retry.
+        const auto nx = (count(original.value()[0]) + divisor - 1) / divisor * divisor;
+        const auto ny = (count(original.value()[1]) + divisor - 1) / divisor * divisor;
+        result.push_back({L,
+                          nx / divisor,
+                          ny / divisor,
+                          nx - count(original.value()[0]) + ny - count(original.value()[1]),
+                          failure == PrepareFailure::None && within_budget(axes, nz, o)});
+    }
+    return result;
+}
+Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions& o) {
+    HexMeshArrays m;
+    auto planned = plan_axes(s, o, m);
+    if (!planned)
+        return planned.error();
+    const auto original = planned.value();
+    std::array<AxisSegments, 2> segments;
+    auto& axes = m.axes;
+    std::vector<Local> cell_layer;
+    auto z_plan = plan_z(s, o, m, cell_layer);
+    if (!z_plan)
+        return z_plan.error();
+    int L = o.levels ? o.levels - 1 : 0;
+    LevelChoice choice;
+    if (!o.levels) {
+        auto candidates = hierarchy_candidates(s, o);
+        if (!candidates)
+            return candidates.error();
+        choice = select_levels(candidates.value(), cell_layer.size(), o.ranks);
+        L = choice.L;
+        m.grid_report.warnings = choice.warnings;
+        m.grid_report.rule = choice.rule;
+        m.grid_report.auto_selected = true;
+    }
+    const auto failure = prepare(original, o, L, segments);
+    if (failure != PrepareFailure::None || !within_budget(segments, cell_layer.size(), o))
+        return Error{"HIERARCHY_INVALID", "hierarchy padding violates budget or max_ratio"};
+    const auto divisor = std::size_t{1} << L;
+    const auto nx0 = count(segments[0]) / divisor, ny0 = count(segments[1]) / divisor;
+    if (o.levels && nx0 * ny0 < static_cast<std::size_t>(o.ranks))
+        return Error{"hierarchy/levels", "coarsest columns below ranks"};
+    if (o.levels && nx0 * ny0 / 16 < static_cast<std::size_t>(o.ranks))
+        m.grid_report.warnings.push_back("coarse columns below 16*np");
+    const LevelCandidate selected{0, nx0, ny0, 0, true};
+    m.grid_report.N_L = o.levels
+                            ? select_levels(std::span(&selected, 1), cell_layer.size(), o.ranks).N_L
+                            : choice.N_L;
+    m.grid_report.levels = L + 1;
+    for (int a = 0; a < 2; ++a) {
+        auto& v = axes[a];
+        m.grid_report.padding[a] = count(segments[a]) - count(original[a]);
+        if (count(segments[a]) > static_cast<std::size_t>(o.cell_budget) ||
+            count(segments[a]) >= static_cast<std::size_t>(std::numeric_limits<Local>::max()))
+            return Error{"cell_budget", "hierarchy padding exceeds capacity"};
+        for (std::size_t j = 0; j < segments[a].counts.size(); ++j)
+            for (std::size_t k = 0; k < segments[a].counts[j]; ++k)
+                v.push_back(segments[a].lines[j] +
+                            (segments[a].lines[j + 1] - segments[a].lines[j]) * k /
+                                segments[a].counts[j]);
+        v.push_back(segments[a].lines.back());
+    }
+    if (!o.levels)
+        std::clog << "levels=auto(L=" << L << ", rule=" << choice.rule << ")\n";
+    std::clog << "run_config levels=" << L + 1 << " n0=" << nx0 << 'x' << ny0
+              << " part=" << (par::ColumnExtrudePartitioner::uses_metis() ? "metis" : "serpentine")
+              << " np=" << o.ranks << " coarse=" << nx0 * ny0 << '\n';
+    for (const auto& warning : m.grid_report.warnings)
+        std::clog << "warning: " << warning << '\n';
     auto nx = axes[0].size() - 1, ny = axes[1].size() - 1, nz = axes[2].size() - 1;
     if (nx > static_cast<std::size_t>(o.cell_budget) / ny / nz)
         return Error{"cell_budget",
                      "exceeded; reduce nx=" + std::to_string(nx) + ", ny=" + std::to_string(ny) +
                          ", nz=" + std::to_string(nz) + " explicitly"};
-    if ((nx + 1) * (ny + 1) * (nz + 1) >
-        static_cast<std::size_t>(std::numeric_limits<Local>::max()))
+    if (nx + 1 > static_cast<std::size_t>(std::numeric_limits<Local>::max()) / (ny + 1) / (nz + 1))
         return Error{"grid", "local int32 capacity exceeded"};
     std::vector<std::size_t> columns(nx * ny), node_columns((nx + 1) * (ny + 1));
     std::iota(columns.begin(), columns.end(), 0);
