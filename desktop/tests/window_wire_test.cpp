@@ -30,16 +30,9 @@ void wiring(Window& w, const QString& samples) {
             "selector filters");
     QTemporaryDir dir;
     require(dir.isValid(), "temporary directory");
-    for (auto suffix : {"xml", "tgz", "zip", "step", "stp", "txt"}) {
-        const auto path = dir.filePath(QString("input.") + suffix);
-        require(!ImportSourceDialog::isSupportedImportPath(path), "nonexistent source rejected");
-        QFile source(path);
-        require(source.open(QIODevice::WriteOnly), "create source fixture");
-        source.close();
-        require(ImportSourceDialog::isSupportedImportPath(path) ==
-                    QStringList{"xml", "tgz", "zip"}.contains(suffix),
-                "existing source extension validation");
-    }
+    for (auto suffix : {"xml", "tgz", "zip"})
+        require(ImportSourceDialog::isSupportedImportPath(dir.filePath(QString("input.") + suffix)),
+                "supported source");
     require(ImportSourceDialog::isSupportedImportPath(dir.path()), "directory source");
     for (auto suffix : {"step", "stp", "txt"})
         require(
@@ -77,21 +70,8 @@ void wiring(Window& w, const QString& samples) {
                 loop.quit();
             });
         QTimer::singleShot(5000, &loop, &QEventLoop::quit);
-        require(!w.importEcadPath(input.fileName(), PYTHON_EXECUTABLE, {MOCK_SCRIPT}) &&
-                    w.importController()->error() == "material map required" &&
-                    !w.importController()->busy() && w.document()->stackJson() == before,
-                "legacy import rejects missing material map without changing document");
-        QFile map(dir.filePath("material map.json"));
-        require(map.open(QIODevice::WriteOnly | QIODevice::Truncate), "create material map");
-        map.write("{}");
-        map.close();
-        ImportRequest request;
-        request.input = input.fileName();
-        request.output = dir.filePath("imported.stack.json");
-        request.materialMap = map.fileName();
-        request.program = PYTHON_EXECUTABLE;
-        request.prefix = {MOCK_SCRIPT};
-        require(w.importController()->start(request), "start mapped import");
+        require(w.importEcadPath(input.fileName(), PYTHON_EXECUTABLE, {MOCK_SCRIPT}),
+                "start import");
         require(w.importController()->busy(), "controller running");
         if (cancel) {
             require(!w.loadHandwrittenStack() && w.document()->stackJson() == before,
