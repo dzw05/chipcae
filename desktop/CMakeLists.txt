@@ -237,3 +237,7 @@ if(CHIPCAE_BUILD_TESTS)
     set_tests_properties(desktop_window_submit PROPERTIES FIXTURES_REQUIRED result_samples
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
 endif()
+
+target_sources(chipcae_desktop_ui PRIVATE jobs/SubmitDialog.cpp provenance/Provenance.cpp)
+target_include_directories(chipcae_desktop_ui PUBLIC provenance)
+target_link_libraries(chipcae_desktop_ui PUBLIC chipcae_desktop_config chipcae_desktop_preview chipcae_local_jobs)

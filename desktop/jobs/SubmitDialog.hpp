@@ -1,16 +1,20 @@
 #pragma once
 #include <QDialog>
 #include <QJsonObject>
+class QSpinBox;
 namespace chipcae::desktop {
-// Test-first API stubs, with no profile or persistence behavior.
 class SubmitDialog : public QDialog {
 public:
-    explicit SubmitDialog(QWidget* parent = nullptr) : QDialog(parent) {}
-    bool loadProfile(const QString&) { return false; }
-    bool saveProfile(const QString&) const { return false; }
-    QJsonObject profile() const { return {}; }
-    void setProfile(const QJsonObject&) {}
-    int meshNx() const { return 0; }
-    void setMeshNx(int) {}
+    explicit SubmitDialog(QWidget* parent = nullptr);
+    bool loadProfile(const QString& path);
+    bool saveProfile(const QString& path) const;
+    QJsonObject profile() const;
+    void setProfile(const QJsonObject& value);
+    int meshNx() const;
+    void setMeshNx(int nx);
+
+private:
+    QJsonObject profile_;
+    QSpinBox *ranks_, *threads_, *nx_;
 };
 } // namespace chipcae::desktop
