@@ -31,6 +31,13 @@ public:
     const QStringList& warnings() const { return warnings_; }
     const QString& error() const { return error_; }
     const QMap<QString, QStringList>& nameTables() const { return names_; }
+    // Names are read from HDF5 FieldData (fixed-width or H5T_VARIABLE UTF-8).
+    // vtkHDFReader does not put these arrays on the partitions it returns.
+    // Index i corresponds to integer id i+1 (ids are 1-based).
+    QStringList layerNames() const;
+    QStringList materialNames() const;
+    QString layerName(int id) const;
+    QString materialName(int id) const;
     const EventLogResult& eventLog() const { return log_; }
     // cell_kind=2 stays in raw data; views should hide these cells by default.
     static constexpr int hiddenCellKind = 2;

@@ -11,9 +11,11 @@
 #include <stdexcept>
 #include <vtkActor.h>
 #include <vtkCell.h>
+#include <vtkCellData.h>
 #include <vtkDataSet.h>
 #include <vtkDataSetMapper.h>
 #include <vtkEGLRenderWindow.h>
+#include <vtkFieldData.h>
 #include <vtkNew.h>
 #include <vtkPartitionedDataSet.h>
 #include <vtkPartitionedDataSetCollection.h>
@@ -22,6 +24,7 @@
 #include <vtkRenderWindow.h>
 #include <vtkRenderer.h>
 #include <vtkSmartPointer.h>
+#include <vtkStringArray.h>
 #include <vtkVersion.h>
 #include <vtkXOpenGLRenderWindow.h>
 using chipcae::desktop::ResultSession;
@@ -114,6 +117,13 @@ int main(int argc, char** argv) {
                     auto pdc = vtkPartitionedDataSetCollection::SafeDownCast(object);
                     topology(pdc->GetPartitionedDataSet(1)->GetPartition(0));
                     require(!s.nameTables().isEmpty(), "fixed width names absent");
+                    require(s.layerName(1) == "substrate" && s.layerName(2) == "bump_eq" &&
+                                s.layerName(3) == "die_layer",
+                            "fixed-width layer id map");
+                    require(s.materialName(1) == "organic_eq" && s.materialName(4) == "silicon",
+                            "fixed-width material id map");
+                    require(s.layerName(0).isEmpty() && s.layerName(99).isEmpty(),
+                            "out-of-range id");
                 }
             }
         }
@@ -187,6 +197,52 @@ int main(int argc, char** argv) {
         }
         require(s.open(root.filePath("type_multi.vtkhdf")), s.error());
         require(!s.loadStep(0) && s.error().contains("Type"), "multi-value Type accepted");
+        require(s.open(root.filePath("name_vlen.vtkhdf")), s.error());
+        auto vlen = s.loadStep(0);
+        require(vlen != nullptr, s.error());
+        require(s.layerName(1) == "substrate" && s.layerName(2) == "die_attach" &&
+                    s.layerName(3) == "Si",
+                "variable-length layer id map");
+        require(s.materialName(1) == "substrate" && s.materialName(3) == "Si",
+                "variable-length material id map");
+        require(first(vlen)->GetFieldData() &&
+                    first(vlen)->GetFieldData()->GetAbstractArray("layer_names"),
+                "name tables attached to partition FieldData");
+        QString s1b;
+        for (const auto& candidate : {QString::fromUtf8(qgetenv("CHIPCAE_S1B")),
+                                      QStringLiteral("/workspace/samples/s1b")}) {
+            if (!candidate.isEmpty() && QFileInfo(candidate).exists()) {
+                s1b = candidate;
+                break;
+            }
+        }
+        if (s1b.isEmpty()) {
+            std::cout << "s1b fixture not present; skipped official variable-length name tables\n";
+        } else {
+            require(s.open(s1b), s.error());
+            auto official = s.loadStep(0, "T");
+            require(official != nullptr, s.error());
+            require(s.layerName(1) == "substrate" && s.layerName(2) == "die_attach" &&
+                        s.layerName(3) == "Si",
+                    "s1b layer id map");
+            require(s.materialName(1) == "substrate" && s.materialName(2) == "die_attach" &&
+                        s.materialName(3) == "Si",
+                    "s1b material id map");
+            auto hex = first(official);
+            require(hex && hex->GetCellData() && hex->GetCellData()->GetArray("layer_id"),
+                    "s1b layer_id missing");
+            auto* ids = hex->GetCellData()->GetArray("layer_id");
+            require(s.layerName(static_cast<int>(ids->GetComponent(0, 0))) ==
+                        s.layerName(static_cast<int>(ids->GetComponent(0, 0))),
+                    "s1b cell id maps to a name");
+            const auto firstId = static_cast<int>(ids->GetComponent(0, 0));
+            require(!s.layerName(firstId).isEmpty(), "s1b first cell layer id has no name");
+            require(hex->GetFieldData() && hex->GetFieldData()->GetAbstractArray("layer_names"),
+                    "s1b names attached after VTK read");
+            std::cout << "s1b names: " << s.layerName(1).toStdString() << ","
+                      << s.layerName(2).toStdString() << "," << s.layerName(3).toStdString()
+                      << "\n";
+        }
         QString s1;
         for (const auto& candidate : {QString::fromUtf8(qgetenv("CHIPCAE_S1")),
                                       QStringLiteral("/workspace/samples/s1"),

@@ -52,3 +52,18 @@ shutil.copyfile(root / 'temporal_ug.vtkhdf', root / 'type_multi.vtkhdf')
 with h5py.File(root / 'type_multi.vtkhdf', 'r+') as f:
     del f['VTKHDF'].attrs['Type']
     f['VTKHDF'].attrs.create('Type', np.array([b'PartitionedDataSetCollection', b'extra'], dtype='S32'))
+
+# Variable-length FieldData names, matching the official s1b / O1b writer.
+shutil.copyfile(root / 'default/out/step-0.vtkhdf', root / 'name_vlen.vtkhdf')
+with h5py.File(root / 'name_vlen.vtkhdf', 'r+') as f:
+    dt = h5py.string_dtype(encoding='utf-8')
+    for name in list(f['VTKHDF'].keys()):
+        grp = f['VTKHDF'][name]
+        if not isinstance(grp, h5py.Group) or name == 'Assembly':
+            continue
+        fd = grp.require_group('FieldData')
+        for key in ('layer_names', 'material_names'):
+            if key in fd:
+                del fd[key]
+        fd.create_dataset('layer_names', data=np.array(['substrate', 'die_attach', 'Si'], dtype=object), dtype=dt)
+        fd.create_dataset('material_names', data=np.array(['substrate', 'die_attach', 'Si'], dtype=object), dtype=dt)

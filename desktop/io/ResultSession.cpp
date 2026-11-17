@@ -7,15 +7,18 @@
 #include <QJsonDocument>
 #include <cstring>
 #include <filesystem>
+#include <vector>
 #include <vtkCallbackCommand.h>
 #include <vtkCellData.h>
 #include <vtkCommand.h>
 #include <vtkCompositeDataIterator.h>
 #include <vtkCompositeDataSet.h>
 #include <vtkDataSet.h>
+#include <vtkFieldData.h>
 #include <vtkHDFReader.h>
 #include <vtkNew.h>
 #include <vtkPointData.h>
+#include <vtkStringArray.h>
 #include <vtk_hdf5.h>
 
 namespace chipcae::desktop {
@@ -100,9 +103,64 @@ herr_t visit(hid_t file, const char* path, const H5O_info_t* info, void* context
                 names << QString::fromUtf8(end < 0 ? item : item.left(end));
             }
             scan.names.insert(name, names);
+        } else if (H5Tget_class(type.id) == H5T_STRING && H5Tis_variable_str(type.id) != 0) {
+            // Official S1b / O1b writer uses H5T_VARIABLE strings; vtkHDFReader
+            // does not expose these FieldData arrays on the partitions it builds.
+            if (count > 1048576) {
+                scan.error = "oversized name table";
+                return 1;
+            }
+            std::vector<char*> buffer(static_cast<size_t>(count), nullptr);
+            if (H5Dread(ds.id, type.id, H5S_ALL, H5S_ALL, H5P_DEFAULT, buffer.data()) < 0) {
+                scan.error = "cannot read name table";
+                return 1;
+            }
+            QStringList names;
+            for (hssize_t i = 0; i < count; ++i)
+                names << QString::fromUtf8(
+                    buffer[static_cast<size_t>(i)] ? buffer[static_cast<size_t>(i)] : "");
+            scan.names.insert(name, names);
+            H5Dvlen_reclaim(type.id, space.id, H5P_DEFAULT, buffer.data());
         }
     }
     return 0;
+}
+
+QStringList tableNamed(const QMap<QString, QStringList>& tables, const char* suffix) {
+    QStringList chosen;
+    const QString ending = QString::fromLatin1(suffix);
+    for (auto it = tables.constBegin(); it != tables.constEnd(); ++it) {
+        if (!it.key().endsWith(ending))
+            continue;
+        if (it.key().contains("/hex/"))
+            return it.value();
+        if (chosen.isEmpty())
+            chosen = it.value();
+    }
+    return chosen;
+}
+QString idName(const QStringList& names, int id) {
+    if (id < 1 || id > names.size())
+        return {};
+    return names[id - 1];
+}
+void attachNameTables(vtkDataObject* object,
+                      const QStringList& layers,
+                      const QStringList& materials) {
+    if (!object)
+        return;
+    auto add = [&](const char* name, const QStringList& values) {
+        if (object->GetFieldData() && object->GetFieldData()->GetAbstractArray(name))
+            return;
+        vtkNew<vtkStringArray> array;
+        array->SetName(name);
+        array->SetNumberOfValues(values.size());
+        for (int i = 0; i < values.size(); ++i)
+            array->SetValue(i, values[i].toUtf8().constData());
+        object->GetFieldData()->AddArray(array);
+    };
+    add("layer_names", layers);
+    add("material_names", materials);
 }
 } // namespace
 QString ResultSession::checkedPath(const QString& relative) const {
@@ -404,6 +462,15 @@ vtkSmartPointer<vtkDataObject> ResultSession::loadStep(qint64 n, const QString& 
             inspect(result);
         if (!found)
             warnings_ << "selected field absent (empty or mesh-only result)";
+        const auto layers = tableNamed(names_, "/layer_names");
+        const auto materials = tableNamed(names_, "/material_names");
+        attachNameTables(result, layers, materials);
+        if (auto composite = vtkCompositeDataSet::SafeDownCast(result)) {
+            vtkSmartPointer<vtkCompositeDataIterator> it;
+            it.TakeReference(composite->NewIterator());
+            for (it->InitTraversal(); !it->IsDoneWithTraversal(); it->GoToNextItem())
+                attachNameTables(it->GetCurrentDataObject(), layers, materials);
+        }
         return result;
     } catch (const std::exception& e) {
         error_ = QString::fromUtf8(e.what());
@@ -460,5 +527,17 @@ EventLogResult ResultSession::readEventLog(const QString& path, int format) {
         out.error = QString::fromUtf8(e.what());
     }
     return out;
+}
+QStringList ResultSession::layerNames() const {
+    return tableNamed(names_, "/layer_names");
+}
+QStringList ResultSession::materialNames() const {
+    return tableNamed(names_, "/material_names");
+}
+QString ResultSession::layerName(int id) const {
+    return idName(layerNames(), id);
+}
+QString ResultSession::materialName(int id) const {
+    return idName(materialNames(), id);
 }
 } // namespace chipcae::desktop

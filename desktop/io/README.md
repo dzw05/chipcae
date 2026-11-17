@@ -18,7 +18,7 @@ if (session.open(runDirectory)) {
 无 sidecar 的 standalone 文件提供 n=0/time=0；其他 temporal 时刻通过 sidecar steps 选择。
 `steps/fields/blocks/summary/meshDigest` 返回 Qt JSON 值，保留单位、dtype、partitions
 等原 manifest 信息（完整内容由 `manifest()` 提供）。块名和 summary 兼容名在访问器中规范化。
-`nameTables()` 的键是 HDF dataset 路径，值是固定宽 UTF-8 字符串列表；索引 i 对应 id i+1。
+`nameTables()` 的键是 HDF dataset 路径，值为名字列表。`layerNames()` / `materialNames()` 给出规范表，`layerName(id)` / `materialName(id)` 按 1-based id 映射（索引 i 对应 id i+1）。名字表用 HDF5 直接读取 `FieldData/layer_names` 与 `material_names`，同时支持定长 NULL 填充 UTF-8（预览/D02 样例）和 H5T_VARIABLE（O1b / s1b）。vtkHDFReader 不会把这些数组放到分区 FieldData 上；`loadStep` 会把规范表写回返回对象及其分区，便于视图使用。
 原始 cell_kind=2 数据保留，视图应按 `hiddenCellKind` 默认隐藏。
 
 这是同步、无线程归属 UI 的库；大文件应在调用者 worker 线程读取，每个线程独占 session。
