@@ -2,8 +2,11 @@
 #include "cte_fixtures.hpp"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
-#include <cstdlib>
+#include <limits>
+#include <stdexcept>
+#include <vector>
 
 using namespace chipcae::material;
 
@@ -11,7 +14,7 @@ namespace {
 void check(bool pass, const char* name) {
     if (!pass) {
         std::fprintf(stderr, "FAIL ctecontract: %s\n", name);
-        std::exit(EXIT_FAILURE);
+        throw std::runtime_error(name);
     }
 }
 bool near(Real actual, Real expected) {
@@ -20,19 +23,32 @@ bool near(Real actual, Real expected) {
 }
 } // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv) try {
     Kokkos::ScopeGuard guard(argc, argv);
-    const auto& sec = test::secant_cte;
-    const auto& tan = test::tangent_cte;
-    // Interpolated secant plus distance times slope at 325 K.
-    const Real tangent_expected =
-        (2e-5 + (325 - 300) * (3e-5 - 2e-5) / 50) + (325 - 250) * (3e-5 - 2e-5) / 50;
-    // Two trapezoids, with interpolated tangent 4e-5 at 325 K.
-    const Real secant_expected = (50 * (1e-5 + 3e-5) / 2 + 25 * (3e-5 + 4e-5) / 2) / (325 - 250);
-    Real value;
-    check(secant_to_tangent(sec, 325, value) == StatusCode::Ok, "325 secant status");
+    const auto& sec = test::sec;
+    const auto& tan = test::tan;
+    // Expectations and sample temperatures are the existing core_math checks.
+    const Real sample = test::secant_to_tangent_temperature;
+    const Real slope = (sec.alpha[2] - sec.alpha[1]) / (sec.temperatures[2] - sec.temperatures[1]);
+    const Real tangent_expected = sec.alpha[1] + (sample - sec.temperatures[1]) * slope +
+                                  (sample - sec.reference_temperature) * slope;
+    const Real inverse_sample = test::tangent_to_secant_temperature;
+    const Real interpolated = tan.alpha[1] + (inverse_sample - tan.temperatures[1]) *
+                                                 (tan.alpha[2] - tan.alpha[1]) /
+                                                 (tan.temperatures[2] - tan.temperatures[1]);
+    const Real secant_expected =
+        ((tan.temperatures[1] - tan.temperatures[0]) * (tan.alpha[0] + tan.alpha[1]) / 2 +
+         (inverse_sample - tan.temperatures[1]) * (tan.alpha[1] + interpolated) / 2) /
+        (inverse_sample - tan.reference_temperature);
+    check(near(tangent_expected, test::secant_to_tangent_expected), "existing tangent sample");
+    check(near(secant_expected, test::tangent_to_secant_expected), "existing secant sample");
+    Real value = std::numeric_limits<Real>::quiet_NaN();
+    check(secant_to_tangent(sec, test::secant_to_tangent_temperature, value) == StatusCode::Ok,
+          "325 secant status");
     check(near(value, tangent_expected), "325 tangent definition (4e-5 /K)");
-    check(tangent_to_secant(tan, 325, value) == StatusCode::Ok, "325 tangent status");
+    value = std::numeric_limits<Real>::quiet_NaN();
+    check(tangent_to_secant(tan, test::tangent_to_secant_temperature, value) == StatusCode::Ok,
+          "325 tangent status");
     check(near(value, secant_expected), "325 secant definition (2.5e-5 /K)");
     const Real below = 225;
     const Real exterior_tangent = sec.alpha.front(); // Constant extension: slope zero.
@@ -42,5 +58,7 @@ int main(int argc, char** argv) {
     check(secant_to_tangent(sec, below, value) == StatusCode::Ok, "below secant status");
     check(near(value, exterior_tangent), "below tangent constant extension");
     check(tangent_to_secant(tan, below, value) == StatusCode::Ok, "below tangent status");
-    check(near(value, exterior_secant), "below secant oriented integral is finite");
+    check(near(value, exterior_secant), "below secant equals oriented integral");
+} catch (const std::exception&) {
+    return 1;
 }

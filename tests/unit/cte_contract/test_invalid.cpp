@@ -1,9 +1,11 @@
 #include "chipcae/material/cte_convert.hpp"
 #include "cte_fixtures.hpp"
 
+#include <cstddef>
 #include <cstdio>
-#include <cstdlib>
 #include <limits>
+#include <stdexcept>
+#include <vector>
 
 using namespace chipcae::material;
 
@@ -11,15 +13,15 @@ namespace {
 void check(bool pass, const char* name) {
     if (!pass) {
         std::fprintf(stderr, "FAIL ctecontract: %s\n", name);
-        std::exit(EXIT_FAILURE);
+        throw std::runtime_error(name);
     }
 }
 } // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv) try {
     Kokkos::ScopeGuard guard(argc, argv);
-    const auto& sec = test::secant_cte;
-    const auto& tan = test::tangent_cte;
+    const auto& sec = test::sec;
+    const auto& tan = test::tan;
     auto reject = [&](const CteTable& bad) {
         std::vector<Real> out;
         for (bool prefill : {false, true}) {
@@ -37,14 +39,17 @@ int main(int argc, char** argv) {
                   "invalid tangent vector status");
             check(out.empty(), "invalid tangent clears vector");
         }
-        Real value;
+        Real value = std::numeric_limits<Real>::quiet_NaN();
         check(secant_to_tangent(bad, 325, value) == StatusCode::Failed, "invalid secant scalar");
         check(tangent_to_secant(bad, 325, value) == StatusCode::Failed, "invalid tangent scalar");
     };
     reject(CteTable{});
-    reject(CteTable{{250}, {1e-5}, 250});
+    reject(CteTable{{sec.temperatures.front()}, {sec.alpha.front()}, sec.reference_temperature});
     for (const auto& fixture : {sec, tan}) {
         auto bad = fixture;
+        bad.alpha.clear();
+        reject(bad);
+        bad = fixture;
         bad.alpha.pop_back();
         reject(bad);
         bad = fixture;
@@ -70,11 +75,13 @@ int main(int argc, char** argv) {
             bad = fixture;
             bad.reference_temperature = nonfinite;
             reject(bad);
-            Real value;
+            Real value = std::numeric_limits<Real>::quiet_NaN();
             check(secant_to_tangent(fixture, nonfinite, value) == StatusCode::Failed,
                   "nonfinite secant input temperature");
             check(tangent_to_secant(fixture, nonfinite, value) == StatusCode::Failed,
                   "nonfinite tangent input temperature");
         }
     }
+} catch (const std::exception&) {
+    return 1;
 }
