@@ -4,6 +4,7 @@
 #include <cmath>
 #include <iomanip>
 #include <limits>
+#include <map>
 #include <set>
 #include <sstream>
 
@@ -351,9 +352,11 @@ place(std::vector<Slab> local, const Placement& placement, const StackModel& bas
 
 Expected<MergeResult>
 merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOptions& options) {
+    MergeResult result{base, {}, 0};
+    if (parts.empty())
+        return result;
     if (base.layers.empty())
         return invalid("base has no layers");
-    MergeResult result{base, {}, 0};
     if (!std::isfinite(options.t_min) || !std::isfinite(options.eps_weld) ||
         !std::isfinite(options.tau_a) || options.eps_weld <= 0 || options.t_min <= 0 ||
         options.tau_a <= 0)
@@ -385,8 +388,6 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
             if (reserved.count(name))
                 return invalid("part id collides with " + name);
     }
-    if (parts.empty())
-        return result;
     std::set<Real> interfaces(boundaries.begin(), boundaries.end());
     // Establish all ordinary candidate interfaces in sorted order, independent
     // of part precedence. Base interfaces always have priority over new ones.
@@ -410,9 +411,13 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
         std::vector<Footprint> regions;
     };
     std::vector<std::vector<Source>> sources;
-    for (Real z : candidates)
-        if (aligned(z) != z)
-            ++result.welded_interfaces;
+    std::set<Real> snapped_interfaces;
+    for (Real z : candidates) {
+        Real target = aligned(z);
+        if (target != z)
+            snapped_interfaces.insert(target);
+    }
+    result.welded_interfaces = static_cast<std::int64_t>(snapped_interfaces.size());
     std::set<Real> original_interfaces = candidates;
     original_interfaces.insert(boundaries.begin(), boundaries.end());
     for (const auto& p : parts) {

@@ -16,5 +16,16 @@ int main() {
         near(m.stack.layers.front().thickness, .001);
         near(m.stack.layers.back().thickness, .001);
         check(m.welded_interfaces > 0 && m.defects.empty(), "weld only counts");
+        auto a = part("a", .001 + options().eps_weld / 4, .002);
+        auto b = part("b", .001 + options().eps_weld / 2, .002);
+        b.slabs[0].sections = {rect(.01, .01)};
+        auto shared = merge(base(), {a, b});
+        check(shared.welded_interfaces == 1 && shared.defects.empty(),
+              "distinct candidate heights snapping to one interface count once");
+        a.slabs[0].z1 += options().eps_weld / 4;
+        b.slabs[0].z1 += options().eps_weld / 2;
+        auto distinct = merge(base(), {part("anchor"), a, b});
+        check(distinct.welded_interfaces == 2 && distinct.defects.empty(),
+              "distinct snapped interfaces each count once");
     });
 }

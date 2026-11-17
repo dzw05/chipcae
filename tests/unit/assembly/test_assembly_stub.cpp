@@ -26,6 +26,19 @@ int main() {
                   identity.layers[0].regions[0].name == "seed" &&
                   identity.layers[0].regions[0].body == "seed-body",
               "identity preserves layer and region fields");
+        b.layers.clear();
+        auto empty = merge_parts(b, {}, options());
+        check(bool(empty), "empty parts accepts base without layers");
+        check(empty.value().stack.layers.empty() && empty.value().stack.id == b.id &&
+                  empty.value().stack.outline.box == b.outline.box &&
+                  empty.value().stack.activation_groups == b.activation_groups &&
+                  empty.value().stack.warnings == b.warnings &&
+                  empty.value().stack.unit == b.unit &&
+                  empty.value().stack.symmetry == b.symmetry &&
+                  empty.value().stack.package_type == b.package_type &&
+                  empty.value().defects.empty() && empty.value().welded_interfaces == 0,
+              "empty base identity preserves metadata");
+        b = base();
         invalid_input(merge_parts({}, {part()}, options()));
         auto p = part();
         p.slabs.clear();
