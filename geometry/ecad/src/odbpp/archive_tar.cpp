@@ -149,7 +149,10 @@ bool index_tar(const std::filesystem::path& path,
                 return fail("entry count limit");
             type = header[156];
             std::string name = field(std::string_view(header).substr(0, 100));
-            if (header.compare(257, 5, "ustar") == 0 && header[262] == '\0') {
+            // GNU space-version headers reuse the prefix bytes for timestamps.
+            // Only the POSIX version identifies a prefix-bearing layout.
+            if (header.compare(257, 5, "ustar") == 0 &&
+                (header[262] == '\0' || header[262] == ' ') && header.compare(263, 2, "00") == 0) {
                 auto prefix = field(std::string_view(header).substr(345, 155));
                 if (!prefix.empty())
                     name = prefix + "/" + name;
@@ -185,6 +188,12 @@ bool index_tar(const std::filesystem::path& path,
                         break;
                     case '4':
                         reason = "block device";
+                        break;
+                    case '6':
+                        reason = "FIFO";
+                        break;
+                    case '7':
+                        reason = "contiguous file";
                         break;
                     default:
                         reason = "entry type " + std::to_string(static_cast<unsigned char>(type));

@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cmath>
 #include <map>
+#include <numbers>
 #include <sstream>
 
 namespace chipcae::geometry::ecad::detail {
@@ -35,12 +36,215 @@ bool arc_geometry(OdbPoint start, OdbPoint end, OdbPoint center) {
     return std::isfinite(r) && std::isfinite(q) && r > 0 && q > 0 &&
            std::abs(r - q) <= 1e-9 * std::max(r, q);
 }
+// Validate the original line/circular-arc geometry without tessellating it.
+constexpr double tau = 2 * std::numbers::pi;
+double cross(OdbPoint a, OdbPoint b) {
+    return a.x * b.y - a.y * b.x;
+}
+OdbPoint sub(OdbPoint a, OdbPoint b) {
+    return {a.x - b.x, a.y - b.y};
+}
+struct Edge {
+    OdbPoint a, b, c;
+    bool arc, cw;
+    double radius() const { return std::hypot(a.x - c.x, a.y - c.y); }
+    double angle() const { return std::atan2(a.y - c.y, a.x - c.x); }
+    double sweep() const {
+        double d = std::atan2(b.y - c.y, b.x - c.x) - angle();
+        if (cw) {
+            while (d >= 0)
+                d -= tau;
+        } else {
+            while (d <= 0)
+                d += tau;
+        }
+        return d;
+    }
+    bool on(OdbPoint p) const {
+        if (!arc)
+            return std::abs(cross(sub(b, a), sub(p, a))) <=
+                       1e-12 * std::hypot(b.x - a.x, b.y - a.y) &&
+                   p.x >= std::min(a.x, b.x) - 1e-12 && p.x <= std::max(a.x, b.x) + 1e-12 &&
+                   p.y >= std::min(a.y, b.y) - 1e-12 && p.y <= std::max(a.y, b.y) + 1e-12;
+        if (std::abs(std::hypot(p.x - c.x, p.y - c.y) - radius()) > 1e-12 * radius())
+            return false;
+        double d = std::atan2(p.y - c.y, p.x - c.x) - angle();
+        if (cw) {
+            while (d > 0)
+                d -= tau;
+        } else {
+            while (d < 0)
+                d += tau;
+        }
+        return std::abs(d) <= std::abs(sweep()) + 1e-12;
+    }
+};
+std::vector<Edge> edges(const OdbContour& contour) {
+    std::vector<Edge> out;
+    auto start = contour.start;
+    for (const auto& s : contour.segs) {
+        out.push_back({start, s.end, s.center, s.is_arc, s.cw});
+        start = s.end;
+    }
+    // Closure uses the public per-axis tolerance; include its tiny closing edge.
+    if (distinct(start, contour.start))
+        out.push_back({start, contour.start, {}, false, false});
+    return out;
+}
+std::vector<OdbPoint> intersections(Edge e, Edge f) {
+    std::vector<OdbPoint> out;
+    auto add = [&](OdbPoint p) {
+        if (e.on(p) && f.on(p))
+            out.push_back(p);
+    };
+    if (!e.arc && !f.arc) {
+        const auto u = sub(e.b, e.a), v = sub(f.b, f.a);
+        const double det = cross(u, v);
+        if (det != 0) {
+            const double t = cross(sub(f.a, e.a), v) / det;
+            add({e.a.x + t * u.x, e.a.y + t * u.y});
+        } else {
+            for (auto p : {e.a, e.b, f.a, f.b})
+                add(p);
+        }
+    } else if (!e.arc || !f.arc) {
+        if (e.arc)
+            std::swap(e, f);
+        const auto u = sub(e.b, e.a), v = sub(e.a, f.c);
+        const double a = cross(u, {-u.y, u.x});
+        const double b = 2 * (u.x * v.x + u.y * v.y);
+        const double c = v.x * v.x + v.y * v.y - f.radius() * f.radius();
+        const double d = b * b - 4 * a * c;
+        if (d >= 0 && a > 0)
+            for (double t : {(-b - std::sqrt(d)) / (2 * a), (-b + std::sqrt(d)) / (2 * a)})
+                add({e.a.x + t * u.x, e.a.y + t * u.y});
+    } else {
+        const double d = std::hypot(f.c.x - e.c.x, f.c.y - e.c.y);
+        const double r = e.radius(), q = f.radius();
+        if (d == 0) {
+            if (std::abs(r - q) <= 1e-12 * r) {
+                for (auto p : {e.a, e.b, f.a, f.b})
+                    add(p);
+                // Interior samples expose coincident full circles and overlapping arcs.
+                for (const auto& g : {e, f}) {
+                    const double t = g.angle() + g.sweep() / 2;
+                    add({g.c.x + g.radius() * std::cos(t), g.c.y + g.radius() * std::sin(t)});
+                }
+            }
+        } else if (d <= r + q && d >= std::abs(r - q)) {
+            const double x = (r * r - q * q + d * d) / (2 * d);
+            const double y = std::sqrt(std::max(0.0, r * r - x * x));
+            const auto u = sub(f.c, e.c);
+            for (double sign : {-1.0, 1.0})
+                add({e.c.x + (x * u.x - sign * y * u.y) / d,
+                     e.c.y + (x * u.y + sign * y * u.x) / d});
+        }
+    }
+    return out;
+}
+bool contains(const std::vector<Edge>& ring, OdbPoint p) {
+    bool inside = false;
+    for (const auto& e : ring) {
+        if (!e.arc) {
+            if ((e.a.y > p.y) != (e.b.y > p.y) &&
+                e.a.x + (p.y - e.a.y) * (e.b.x - e.a.x) / (e.b.y - e.a.y) > p.x)
+                inside = !inside;
+            continue;
+        }
+        // Split at vertical extrema, then use the same half-open ray rule as lines.
+        const double begin = e.angle(), sweep = e.sweep();
+        std::vector<double> cuts{0, 1};
+        for (int k = -4; k <= 4; ++k) {
+            double t = (std::numbers::pi / 2 + k * std::numbers::pi - begin) / sweep;
+            if (t > 0 && t < 1)
+                cuts.push_back(t);
+        }
+        std::sort(cuts.begin(), cuts.end());
+        for (std::size_t i = 1; i < cuts.size(); ++i) {
+            const double a = begin + cuts[i - 1] * sweep, b = begin + cuts[i] * sweep;
+            const double ya = e.c.y + e.radius() * std::sin(a),
+                         yb = e.c.y + e.radius() * std::sin(b);
+            if ((ya > p.y) == (yb > p.y))
+                continue;
+            const double dy = p.y - e.c.y;
+            const double dx = std::sqrt(std::max(0.0, e.radius() * e.radius() - dy * dy));
+            const double x = e.c.x + (std::cos((a + b) / 2) >= 0 ? dx : -dx);
+            if (x > p.x)
+                inside = !inside;
+        }
+    }
+    return inside;
+}
+bool valid_ring(const OdbContour& contour) {
+    const auto ring = edges(contour);
+    long double area = 0;
+    for (const auto& e : ring) {
+        // Translate to the ring origin to avoid cancellation for distant coordinates.
+        const auto a = sub(e.a, contour.start), b = sub(e.b, contour.start);
+        if (!e.arc)
+            area += static_cast<long double>(a.x) * b.y - static_cast<long double>(a.y) * b.x;
+        else {
+            const auto c = sub(e.c, contour.start);
+            area += static_cast<long double>(c.x) * (b.y - a.y) -
+                    static_cast<long double>(c.y) * (b.x - a.x) +
+                    static_cast<long double>(e.radius()) * e.radius() * e.sweep();
+        }
+    }
+    if (!std::isfinite(area) || area == 0)
+        return false;
+    for (std::size_t i = 0; i < ring.size(); ++i)
+        for (std::size_t j = i + 1; j < ring.size(); ++j)
+            for (auto p : intersections(ring[i], ring[j])) {
+                const auto same = [](OdbPoint a, OdbPoint b) {
+                    return std::hypot(a.x - b.x, a.y - b.y) <= 1e-12;
+                };
+                // ODB exports use retraced bridges to join boundary loops. Shared
+                // vertices and collinear bridges are valid; transverse crossings are not.
+                if (same(p, ring[i].a) || same(p, ring[i].b) || same(p, ring[j].a) ||
+                    same(p, ring[j].b))
+                    continue;
+                if (!ring[i].arc && !ring[j].arc &&
+                    cross(sub(ring[i].b, ring[i].a), sub(ring[j].b, ring[j].a)) == 0)
+                    continue;
+                return false;
+            }
+    return true;
+}
+bool valid_topology(const std::vector<OdbContour>& contours) {
+    if (contours.empty())
+        return false;
+    std::vector<std::vector<Edge>> rings;
+    for (const auto& c : contours)
+        rings.push_back(edges(c));
+    for (std::size_t i = 0; i < rings.size(); ++i) {
+        std::size_t parents = 0;
+        for (std::size_t j = 0; j < rings.size(); ++j) {
+            if (i == j)
+                continue;
+            for (const auto& e : rings[i])
+                for (const auto& f : rings[j])
+                    if (!intersections(e, f).empty())
+                        return false;
+            if (contains(rings[j], contours[i].start)) {
+                if (contours[j].is_hole || !contours[i].is_hole)
+                    return false;
+                ++parents;
+            }
+        }
+        if (parents != (contours[i].is_hole ? 1u : 0u))
+            return false;
+    }
+    return true;
+}
 // Coordinates stay in job units in the frozen intermediate model.
 bool records(const ArchiveReader& reader,
              const std::string& path,
              OdbJob& job,
              OdbFeatures* features,
              ImportResult& result) {
+    OdbContour pending_contour;
+    OdbSurface pending_surface;
+    std::vector<OdbContour> profile_contours;
     OdbContour* contour = nullptr;
     OdbSurface* surface = nullptr;
     bool valid = true;
@@ -115,8 +319,8 @@ bool records(const ArchiveReader& reader,
                 char polarity = 'P';
                 in >> polarity;
                 if (features) {
-                    features->surfaces.push_back({polarity == 'P', {}});
-                    surface = &features->surfaces.back();
+                    pending_surface = {polarity == 'P', {}};
+                    surface = &pending_surface;
                 }
             } else if (tag == "OB") {
                 OdbContour c;
@@ -126,12 +330,10 @@ bool records(const ArchiveReader& reader,
                 if (!finite(c.start))
                     return fail("non-finite contour " + path);
                 c.is_hole = kind == 'H';
-                auto& contours = features ? (surface ? surface->contours : job.profile.contours)
-                                          : job.profile.contours;
                 if (features && !surface)
                     return fail("contour outside surface " + path);
-                contours.push_back(c);
-                contour = &contours.back();
+                pending_contour = std::move(c);
+                contour = &pending_contour;
             } else if (tag == "OS" || tag == "OC") {
                 if (!contour)
                     return fail("segment outside contour " + path);
@@ -159,11 +361,20 @@ bool records(const ArchiveReader& reader,
                     return fail("contour end without start " + path);
                 auto end = contour->segs.empty() ? contour->start : contour->segs.back().end;
                 double scale = job.units == OdbUnits::mm ? 0.001 : 0.0254;
-                if (!features && (std::abs(end.x - contour->start.x) * scale > 1e-9 ||
-                                  std::abs(end.y - contour->start.y) * scale > 1e-9))
-                    return fail("profile contour not closed");
+                if (std::abs(end.x - contour->start.x) * scale > 1e-9 ||
+                    std::abs(end.y - contour->start.y) * scale > 1e-9)
+                    return fail(features ? "surface contour not closed"
+                                         : "profile contour not closed");
+                if (!valid_ring(*contour))
+                    return fail("degenerate or self-intersecting contour " + path);
+                auto& contours = surface ? surface->contours : profile_contours;
+                contours.push_back(std::move(pending_contour));
                 contour = nullptr;
             } else if (tag == "SE") {
+                if (surface && !valid_topology(surface->contours))
+                    return fail("invalid surface topology " + path);
+                if (surface)
+                    features->surfaces.push_back(std::move(pending_surface));
                 surface = nullptr;
             } else if (tag == "P" && features) {
                 OdbPad p;
@@ -221,9 +432,14 @@ bool records(const ArchiveReader& reader,
         result.error = "IMPORT_REJECTED: unterminated contour/surface " + path;
         return false;
     }
-    if (!features && job.profile.contours.empty()) {
+    if (!features && profile_contours.empty()) {
         result.error = "IMPORT_REJECTED: missing profile contours";
         return false;
+    }
+    if (!features) {
+        if (!valid_topology(profile_contours))
+            return fail("invalid profile topology " + path);
+        job.profile.contours = std::move(profile_contours);
     }
     return true;
 }

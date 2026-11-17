@@ -16,6 +16,8 @@
 #include <tuple>
 #ifdef __linux__
 #include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -405,19 +407,7 @@ int main() {
                 minimal(p);
                 write(p / (feature ? "steps/pcb/layers/top/features" : "steps/pcb/profile"),
                       "S P 0\n" + std::string(records) + "SE\n");
-                const std::string text(records);
-                const bool finite = text.find("nan") == std::string::npos &&
-                                    text.find("inf") == std::string::npos &&
-                                    text.find("1e309") == std::string::npos;
-                const bool closed = text == "OB 0 0 I\nOE\n" ||
-                                    text == "OB 0 0 I\nOS 1 0\nOS 0 0\nOE\n" ||
-                                    text == "OB 0 0 I\nOS 0 0\nOE\n";
-                const bool invalid_arc = text.find("OC 1 0 0 0") != std::string::npos ||
-                                         text.find("OC 2 0 0 1") != std::string::npos;
-                if (finite && !invalid_arc && (feature || closed))
-                    require(bool(parse_job(p)), "feature contour closure/count unrestricted");
-                else
-                    rejected(p, "");
+                rejected(p, "");
             }
         }
         for (const auto* record :
@@ -708,7 +698,9 @@ int main() {
         for (const auto* reason : {"hard: tar hardlink",
                                    "sym: tar symlink",
                                    "char: tar character device",
-                                   "block: tar block device"})
+                                   "block: tar block device",
+                                   "fifo: tar FIFO",
+                                   "contiguous: tar contiguous file"})
             require(reported(reader.unsupported(), reason), reason);
     });
     test("odbpp_archive_symlink", [&] {
@@ -1076,6 +1068,148 @@ int main() {
         write(p / "steps/readme.txt", "text");
         write(p / "steps/matrix", "text");
         rejected(p, "no step");
+    });
+    test("odbpp_review_unreadable_subdirectory", [&] {
+#ifdef __linux__
+        const auto p = temp / "permissions";
+        minimal(p);
+        write(p / "blocked/payload", "unreadable");
+        fs::permissions(p / "blocked", fs::perms::none);
+        // A child drops root privileges when necessary so the permission failure
+        // is exercised even in root-run CI, without changing the test process.
+        const auto child = fork();
+        require(child >= 0, "fork permission probe");
+        if (child == 0) {
+            if (getuid() == 0 && (setgid(65534) != 0 || setuid(65534) != 0))
+                _exit(2);
+            ArchiveReader reader(p);
+            std::string out, error;
+            const bool ok = reader.open_error().empty() &&
+                            reported(reader.unsupported(), "blocked: cannot read directory") &&
+                            reader.read_bytes("matrix/matrix", out, error) && !out.empty();
+            _exit(ok ? 0 : 1);
+        }
+        int status = 0;
+        const auto waited = waitpid(child, &status, 0);
+        fs::permissions(p / "blocked", fs::perms::owner_all);
+        require(waited == child && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                "unreadable subtree reported while unrelated payload remains readable");
+#endif
+    });
+    test("odbpp_review_gzip_flags_and_final_buffer", [&] {
+        for (int flag : {2, 4, 8, 16}) {
+            std::string out, error;
+            require(decode_gzip(bytes(temp / ("flag-" + std::to_string(flag) + ".gz")), out, error),
+                    error);
+            require(out == "flag payload", "individual gzip optional header flag");
+        }
+        for (const auto size : {0, 32745, 32746, 65513}) {
+            const auto data = bytes(temp / ("boundary-" + std::to_string(size) + ".gz"));
+            for (const auto limit : {1, 17, 32768}) {
+                std::istringstream input(data + bytes(temp / "flag-2.gz"));
+                GzipCursor cursor(input);
+                std::string_view block;
+                std::string out, error;
+                while (cursor.next(block, error, limit)) {
+                    require(block.size() <= static_cast<std::size_t>(limit), "bounded output");
+                    out.append(block);
+                }
+                require(error.empty() && out == std::string(size, 'x') + "flag payload",
+                        "buffered member boundary: " + error);
+            }
+        }
+    });
+    test("odbpp_review_surface_topology", [&] {
+        const auto p = temp / "topology";
+        const auto square = [](int x, int y, int size, char kind) {
+            return "OB " + std::to_string(x) + " " + std::to_string(y) + " " + kind + "\nOS " +
+                   std::to_string(x + size) + " " + std::to_string(y) + "\nOS " +
+                   std::to_string(x + size) + " " + std::to_string(y + size) + "\nOS " +
+                   std::to_string(x) + " " + std::to_string(y + size) + "\nOS " +
+                   std::to_string(x) + " " + std::to_string(y) + "\nOE\n";
+        };
+        const auto outer = square(0, 0, 10, 'I');
+        const auto hole = square(2, 2, 2, 'H');
+        for (bool feature : {false, true}) {
+            minimal(p);
+            const auto path = p / (feature ? "steps/pcb/layers/top/features" : "steps/pcb/profile");
+            const auto put = [&](const std::string& rings) {
+                write(path, "S P\n" + rings + "SE\n");
+            };
+            for (const auto& rings : {outer,
+                                      outer + hole,
+                                      hole + outer,
+                                      outer + square(20, 0, 10, 'I'),
+                                      std::string("OB 10 0 I\nOC 10 0 0 0 N\nOE\n") + hole}) {
+                put(rings);
+                require(bool(parse_job(p)), "valid line/arc topology");
+            }
+            for (const auto& rings :
+                 {hole,
+                  outer + square(20, 20, 2, 'H'),
+                  outer + square(0, 2, 2, 'H'),
+                  outer + square(9, 2, 2, 'H'),
+                  outer + square(2, 2, 2, 'I'),
+                  outer + hole + square(3, 3, 2, 'H'),
+                  outer + square(1, 1, 6, 'H') + hole,
+                  outer + outer,
+                  std::string("OB 0 0 I\nOS 4 4\nOS 0 4\nOS 3 0\nOS 0 0\nOE\n")}) {
+                put(rings);
+                rejected(p, "");
+            }
+            put("OB 10 0 I\nOC 10 0 0 0 N\nOE\nOB 11 0 H\nOC 11 0 9 0 N\nOE\n");
+            rejected(p, "topology");
+            put("OB 10 0 I\nOC 10 0 0 0 N\nOE\nOB 2 0 H\nOC 2 0 0 0 Y\nOE\n");
+            require(bool(parse_job(p)), "concentric circular hole");
+        }
+    });
+    test("odbpp_review_paths_and_tar_magic", [&] {
+        require(archive(temp / "space-ustar.tgz").at("prefix/" + std::string(99, 'f')) ==
+                    "space magic",
+                "space ustar prefix retained");
+        for (const auto* ext : {".tgz", ".zip"}) {
+            require(archive(temp / (std::string("path-colon") + ext)).at("part:rev/file") == "x",
+                    "POSIX colon path accepted");
+            for (const auto* kind : {"absolute", "drive", "relative-drive", "traversal"}) {
+                ArchiveReader reader(temp / (std::string("path-") + kind + ext));
+                require(reader.open_error().starts_with("IMPORT_REJECTED: invalid archive path"),
+                        reader.open_error());
+            }
+        }
+        const auto p = temp / "colon-dir";
+        write(p / "part:rev/file", "x");
+        require(archive(p).at("part:rev/file") == "x", "directory colon path accepted");
+    });
+    test("odbpp_review_caps_all_containers", [&] {
+        for (const auto* container : {"limits.tgz", "caps.zip", "caps-dir"}) {
+            for (const auto* reason : {"file", "total", "entry", "ratio"}) {
+                if (std::string(container) == "caps-dir" && std::string(reason) == "ratio")
+                    continue; // Uncompressed directory input has no compression ratio.
+                ArchiveLimits limits;
+                if (std::string(reason) == "file")
+                    limits.file_bytes = 4096;
+                if (std::string(reason) == "total")
+                    limits.total_bytes = 10000;
+                if (std::string(reason) == "entry")
+                    limits.entry_count = 1;
+                if (std::string(reason) == "ratio")
+                    limits.ratio = 0.5;
+                ArchiveReader reader(temp / container, limits);
+                std::string error = reader.open_error();
+                if (error.empty()) {
+                    for (const auto& e : reader.entries()) {
+                        if (e.is_dir)
+                            continue;
+                        std::string out;
+                        if (!reader.read_bytes(e.path, out, error))
+                            break;
+                    }
+                }
+                require(error.starts_with("IMPORT_REJECTED:") &&
+                            error.find(reason) != std::string::npos,
+                        std::string(container) + " " + reason + ": " + error);
+            }
+        }
     });
     test("odbpp_streaming_memory", [&] {
 #ifdef __linux__

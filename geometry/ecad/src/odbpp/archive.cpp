@@ -23,7 +23,10 @@ bool canonical_path(std::string& path, std::string& error) {
     std::replace(path.begin(), path.end(), '\\', '/');
     while (path.starts_with("./"))
         path.erase(0, 2);
-    bool invalid = path.empty() || path.front() == '/' || path.find(':') != std::string::npos ||
+    bool invalid = path.empty() || path.front() == '/' ||
+                   (path.size() >= 2 &&
+                    ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) &&
+                    path[1] == ':') ||
                    path.find('\0') != std::string::npos;
     std::string out;
     std::size_t i = 0;
@@ -90,26 +93,55 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
         };
         if (std::filesystem::is_directory(input)) {
             s.directory = true;
-            for (const auto& e : std::filesystem::recursive_directory_iterator(input)) {
+            std::error_code ec;
+            const auto options = std::filesystem::directory_options::skip_permission_denied;
+            std::filesystem::recursive_directory_iterator it(input, options, ec), end;
+            if (ec) {
+                fail("cannot enumerate input: " + ec.message());
+                return;
+            }
+            while (it != end) {
+                const auto e = *it;
                 if (!count_entry())
                     return;
                 auto rel = e.path().lexically_relative(input).generic_string();
                 if (!canonical_path(rel, s.error))
                     return;
-                if (e.is_symlink()) {
-                    s.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT",
-                                             rel + ": directory input symlink unsupported",
-                                             0});
-                    continue;
+                auto report = [&](const std::string& reason) {
+                    s.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT", rel + ": " + reason, 0});
+                };
+                const auto status = e.symlink_status(ec);
+                if (ec) {
+                    report("cannot inspect directory entry: " + ec.message());
+                    it.disable_recursion_pending();
+                } else if (std::filesystem::is_symlink(status)) {
+                    report("directory input symlink unsupported");
+                    it.disable_recursion_pending();
+                } else {
+                    const bool dir = std::filesystem::is_directory(status);
+                    if (!dir && !std::filesystem::is_regular_file(status)) {
+                        report("unsupported directory entry type");
+                    } else {
+                        const auto size = dir ? 0 : e.file_size(ec);
+                        if (ec)
+                            report("cannot read file size: " + ec.message());
+                        else {
+                            s.entries.push_back({rel, size, dir});
+                            s.directory_paths.push_back(e.path());
+                        }
+                        if (dir) {
+                            std::filesystem::directory_iterator probe(e.path(), ec);
+                            if (ec) {
+                                report("cannot read directory: " + ec.message());
+                                it.disable_recursion_pending();
+                            }
+                        }
+                    }
                 }
-                bool dir = e.is_directory();
-                if (!dir && !e.is_regular_file()) {
-                    s.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT", rel, 0});
-                    continue;
-                }
-                auto size = dir ? 0 : e.file_size();
-                s.entries.push_back({rel, size, dir});
-                s.directory_paths.push_back(e.path());
+                ec.clear();
+                it.increment(ec);
+                if (ec)
+                    report("cannot traverse directory: " + ec.message());
             }
         } else {
             auto name = lower(input.filename().string());

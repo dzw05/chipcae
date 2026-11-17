@@ -22,10 +22,16 @@ def tar_bytes(files, fmt=tarfile.USTAR_FORMAT):
     return out.getvalue()
 
 
-def gzip_member(data):
-    header = b'\x1f\x8b\x08\x1e' + b'\0' * 4 + b'\0\xff'
-    header += struct.pack('<H', 4) + b'ABCD' + b'part.tar\0' + b'acceptance\0'
-    header += struct.pack('<H', zlib.crc32(header) & 0xffff)
+def gzip_member(data, flags=0x1e):
+    header = b'\x1f\x8b\x08' + bytes([flags]) + b'\0' * 4 + b'\0\xff'
+    if flags & 4:
+        header += struct.pack('<H', 4) + b'ABCD'
+    if flags & 8:
+        header += b'part.tar\0'
+    if flags & 16:
+        header += b'acceptance\0'
+    if flags & 2:
+        header += struct.pack('<H', zlib.crc32(header) & 0xffff)
     compressor = zlib.compressobj(wbits=-15)
     return header + compressor.compress(data) + compressor.flush() + struct.pack('<II', zlib.crc32(data), len(data))
 
@@ -103,6 +109,27 @@ def main(root, fixture):
         with zipfile.ZipFile(root / ('line-' + suffix + '.zip'), 'w',
                              compression=zipfile.ZIP_STORED) as archive:
             archive.writestr('matrix/matrix', payload)
+    # POSIX prefix layout with a space-terminated magic and explicit version.
+    space_ustar = bytearray(tar_bytes([('prefix/' + 'f' * 99, b'space magic')]))
+    space_ustar[262] = ord(' ')
+    space_ustar[148:156] = b' ' * 8
+    space_ustar[148:156] = ('%06o\0 ' % sum(space_ustar[:512])).encode()
+    (root / 'space-ustar.tgz').write_bytes(gzip.compress(space_ustar))
+    for label, path in [('colon', 'part:rev/file'), ('absolute', '/matrix/matrix'),
+                        ('drive', 'C:/matrix/matrix'), ('relative-drive', 'C:matrix'),
+                        ('traversal', '../matrix/matrix')]:
+        with zipfile.ZipFile(root / ('path-' + label + '.zip'), 'w') as archive:
+            archive.writestr(path, b'x')
+        (root / ('path-' + label + '.tgz')).write_bytes(
+            gzip.compress(tar_bytes([(path, b'x')])))
+    cap_files = [('matrix/matrix', b'x' * 8192), ('steps/pcb/profile', b'y' * 8192)]
+    with zipfile.ZipFile(root / 'caps.zip', 'w', compression=zipfile.ZIP_STORED) as archive:
+        for path, data in cap_files:
+            archive.writestr(path, data)
+    for path, data in cap_files:
+        destination = root / 'caps-dir' / path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
     long_path = '/'.join(['directory' * 10] * 3) + '/features'
     format_files = [('matrix/matrix', b'UNITS=MM\n'), (long_path, b'long path payload\0\xff')]
     # Ustar permits at most 155 prefix + 100 basename bytes. A longer complete path
@@ -152,6 +179,8 @@ def main(root, fixture):
     # Stored deflate crosses the 32 KiB input boundary, including exact EOF alignment.
     for size in [0, 32745, 32746, 65513]:
         (root / ('boundary-%d.gz' % size)).write_bytes(gzip.compress(b'x' * size, compresslevel=0))
+    for flag in [2, 4, 8, 16]:
+        (root / ('flag-%d.gz' % flag)).write_bytes(gzip_member(b'flag payload', flag))
     cut = len(tar) // 2
     multi = gzip_member(tar[:cut]) + gzip_member(tar[cut:])
     (root / 'multi.tgz').write_bytes(multi)
@@ -187,7 +216,8 @@ def main(root, fixture):
         info.size = 1
         archive.addfile(info, io.BytesIO(b'x'))
         for name, kind in [('hard', tarfile.LNKTYPE), ('sym', tarfile.SYMTYPE),
-                           ('char', tarfile.CHRTYPE), ('block', tarfile.BLKTYPE)]:
+                           ('char', tarfile.CHRTYPE), ('block', tarfile.BLKTYPE),
+                           ('fifo', tarfile.FIFOTYPE), ('contiguous', tarfile.CONTTYPE)]:
             info = tarfile.TarInfo(name)
             info.type = kind
             info.linkname = 'target'
