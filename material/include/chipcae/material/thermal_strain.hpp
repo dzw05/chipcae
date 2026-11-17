@@ -70,6 +70,7 @@ public:
     }
 
     // 实际使用的 CTE 类型、T_ref、T_sf（主机侧元数据，规范 1.2 日志要求）。
+    bool isotropic() const noexcept { return params_.symmetry == ThermalSymmetry::Isotropic; }
     CteType cte_type() const noexcept { return params_.cte_type; }
     Real reference_temperature() const noexcept { return params_.T_ref; }
     Real stress_free_temperature() const noexcept { return params_.T_sf; }

@@ -168,6 +168,14 @@ jobs:
     runs-on: ${{ fromJSON(vars.TIER_B_GPU_RUNS_ON || '["self-hosted","linux","gpu"]') }}
     timeout-minutes: 30
     steps:
+      - name: Material copper mixture CUDA consistency
+        run: |
+          if [ -x build/material/material_copper_mixture ]; then
+            ctest --test-dir build -R '^material_cu_mix_cuda$' --output-on-failure
+          else
+            echo "SKIP: CUDA-enabled material binary is unavailable on this runner"
+          fi
+
       - name: GPU slot
         run: |
           echo "Tier B GPU skeleton. No device binary is launched."

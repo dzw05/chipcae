@@ -59,6 +59,7 @@ struct PointInput {
     bool override_T_sf = false;
     Real T_sf = 0;
     const Mat3* R = nullptr; // 全局→材料主轴的旋转（参考构型中定义）；nullptr = 重合
+    Real point_param = 0;    // Copper fraction φ at this integration point, in [0, 1].
 };
 
 struct PointOutput {
