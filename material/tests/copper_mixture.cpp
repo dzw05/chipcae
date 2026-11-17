@@ -318,7 +318,7 @@ void batch(bool mixture) {
     }
 }
 template <class Exec, class Space>
-auto execution() {
+typename Kokkos::View<Real**, Space>::HostMirror execution() {
     CopperMixture<Space> mix(
         ThermoElastic<Space>{ElasticSymmetry::Isotropic,
                              card(false).elastic_table,
@@ -348,7 +348,9 @@ auto execution() {
     auto codes = Kokkos::create_mirror_view_and_copy(MS{}, status);
     for (int j = 0; j < 2121; ++j)
         check(codes(j) == int(StatusCode::Ok), "exec status");
-    return Kokkos::create_mirror_view_and_copy(MS{}, result);
+    auto h = Kokkos::create_mirror_view(result);
+    Kokkos::deep_copy(h, result);
+    return h;
 }
 void exec(bool require_cuda = false) {
 #if !defined(KOKKOS_ENABLE_CUDA)
