@@ -1,6 +1,8 @@
 #include "chipcae/io/vtkhdf_results.hpp"
 
 #include <filesystem>
+#include <fstream>
+#include <hdf5.h>
 #include <iostream>
 #include <stdexcept>
 #ifdef CHIPCAE_ENABLE_MPI
@@ -43,6 +45,42 @@ int main(int argc, char** argv) {
         p.cell_kind = {1};
         p.volume = {1};
         writer.write_step(0, 0, step); // Geometry-only cut fields are optional.
+        // Selection applies to physical fields; cut topology metadata stays required.
+        auto selected_run = run / "selected";
+        ResultsWriter selected_writer(
+            selected_run, std::string(K1_ROOT) + "/tools/samples/s1.stack.json", {}, {}, {"U"});
+        auto selected_step = step;
+        selected_step.cut.T.assign(8, 300);
+        selected_step.cut.U.assign(24, 0);
+        selected_writer.write_step(0, 0, selected_step);
+        selected_writer.add_summary("warpage_pv", 0, "m", 0);
+        selected_writer.add_summary("T_max", 300, "K", 0);
+        selected_writer.add_summary("U_mag_max", 0, "m", 0);
+        selected_writer.finalize();
+        if (rank == 0) {
+            auto file =
+                H5Fopen((selected_run / "out/step-0.vtkhdf").c_str(), H5F_ACC_RDONLY, H5P_DEFAULT);
+            if (file < 0)
+                throw std::runtime_error("selected cut output missing");
+            bool valid = H5Lexists(file, "/VTKHDF/cut/PointData/T", H5P_DEFAULT) == 0;
+            for (const auto* name : {"PointData/U",
+                                     "CellData/elem_gid",
+                                     "CellData/volume",
+                                     "CellData/layer_id",
+                                     "CellData/material_id",
+                                     "CellData/cell_kind"})
+                valid &=
+                    H5Lexists(file, (std::string("/VTKHDF/cut/") + name).c_str(), H5P_DEFAULT) > 0;
+            H5Fclose(file);
+            std::ifstream manifest(selected_run / "manifest.json");
+            std::string json((std::istreambuf_iterator<char>(manifest)), {});
+            valid &= json.find("\"name\":\"T\"") == std::string::npos;
+            for (const auto* name :
+                 {"U", "elem_gid", "volume", "layer_id", "material_id", "cell_kind"})
+                valid &= json.find(std::string("\"name\":\"") + name + "\"") != std::string::npos;
+            if (!valid)
+                throw std::runtime_error("cut field selection lost required metadata");
+        }
         for (int trial = 0; trial < 13; ++trial) {
             auto bad = step;
             if (rank == 0) {

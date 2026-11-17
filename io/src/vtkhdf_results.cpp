@@ -254,12 +254,20 @@ void distributed(hid_t group,
 }
 #endif
 } // namespace
+bool ResultsWriter::selected(const std::string& name) const {
+    return std::find(fields_.begin(), fields_.end(), name) != fields_.end();
+}
+void ResultsWriter::set_mesh(MeshSummary mesh) {
+    mesh_ = std::move(mesh);
+    finalize(); // Publish before any physical solve, with no steps yet.
+}
 ResultsWriter::ResultsWriter(std::filesystem::path run,
                              const std::filesystem::path& stackup,
                              std::vector<std::string> layer_names,
-                             std::vector<std::string> material_names)
+                             std::vector<std::string> material_names,
+                             std::vector<std::string> fields)
     : run_(std::move(run)), layer_names_(std::move(layer_names)),
-      material_names_(std::move(material_names)) {
+      material_names_(std::move(material_names)), fields_(std::move(fields)) {
 #ifdef CHIPCAE_ENABLE_MPI
     int initialized = 0;
     MPI_Initialized(&initialized);
@@ -422,10 +430,12 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
         cv &= kind == 1 || kind == 2;
     int fields = (!cut.T.empty() ? 1 : 0) | (!cut.U.empty() ? 2 : 0);
     int schema = fields;
+    int cut_present = cn != 0, cut_any = cut_present;
     int cut_points_any = !cut.points.empty();
     int fallback = local.cut_as_hex, fallback_max = fallback, fallback_min = fallback;
 #ifdef CHIPCAE_ENABLE_MPI
     if (size_ > 1) {
+        MPI_Allreduce(&cut_present, &cut_any, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
         MPI_Allreduce(&fields, &schema, 1, MPI_INT, MPI_BOR, MPI_COMM_WORLD);
         int cut_points = cut_points_any;
         MPI_Allreduce(&cut_points, &cut_points_any, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
@@ -679,16 +689,19 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                     if (pd < 0 || cd < 0)
                         throw std::runtime_error("create fields");
                 });
-                if (block != 1 || (cut_points_any == 0) || (schema & 1))
+                if (selected("T") && (block != 1 || cut_points_any == 0 || (schema & 1)))
                     emit(pd, "T", q.T);
-                if (block != 1 || (cut_points_any == 0) || (schema & 2))
+                if (selected("U") && (block != 1 || cut_points_any == 0 || (schema & 2)))
                     emit(pd, "U", q.U, 3);
-                emit(cd, "layer_id", q.layer_id);
-                emit(cd, "material_id", q.material_id);
-                emit(cd, "cell_kind", q.cell_kind);
-                if (gid_any || block == 1)
+                if (selected("layer_id") || block == 1)
+                    emit(cd, "layer_id", q.layer_id);
+                if (selected("material_id") || block == 1)
+                    emit(cd, "material_id", q.material_id);
+                if (selected("cell_kind") || block == 1)
+                    emit(cd, "cell_kind", q.cell_kind);
+                if ((gid_any && selected("elem_gid")) || block == 1)
                     emit(cd, "elem_gid", q.elem_gid);
-                if (block == 1)
+                if (block == 1 && (selected("volume") || cut_any))
                     emit(cd, "volume", q.volume);
                 if (pd >= 0) {
                     check(hcall(parallel, rank_, "H5Gclose", [&] { return H5Gclose(pd); }));
@@ -737,6 +750,7 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
         }
     agree(ok);
     gids_ = gid_any != 0;
+    cut_fields_ = cut_fields_ || cut_any != 0;
     steps_.push_back({n, time, std::move(filename)});
 #endif
 }
@@ -779,21 +793,38 @@ void ResultsWriter::finalize() {
             out << "],\n\"partitions\":{\"per_step\":[";
             for (std::size_t i = 0; i < steps_.size(); ++i)
                 out << (i ? "," : "") << size_;
-            out << "],\"solver_fixed_per_run\":true},\n\"fields\":[{\"name\":\"T\",\"location\":"
-                   "\"point\",\"components\":1,"
-                   "\"unit\":\"K\",\"dtype\":\"float64\"},{\"name\":\"U\",\"location\":\"point\","
-                   "\"components\":3,"
-                   "\"unit\":\"m\",\"dtype\":\"float64\"}";
-            for (auto name : {"layer_id", "material_id", "cell_kind"})
-                out << ",{\"name\":" << quoted(name)
-                    << ",\"location\":\"cell\",\"components\":1,\"unit\":\"1\",\"dtype\":"
-                       "\"int32\"}";
-            // Cut always carries its parent GID, including empty templates.
-            out << ",{\"name\":\"elem_gid\",\"location\":\"cell\",\"components\":1,\"unit\":"
-                   "\"1\",\"dtype\":\"int64\"}";
-            out << ",{\"name\":\"volume\",\"location\":\"cell\",\"components\":1,\"unit\":\"m3\","
-                   "\"dtype\":\"float64\"}";
-            out << ",{\"name\":\"sigma_vm\",\"location\":\"cell\",\"components\":1,\"unit\":\"Pa\","
+            out << "],\"solver_fixed_per_run\":true},\n\"fields\":[";
+            bool first_field = true;
+            auto manifest_fields = fields_;
+            // Required cut metadata survives physical-field selection.
+            if (cut_fields_)
+                for (const auto* name :
+                     {"layer_id", "material_id", "cell_kind", "elem_gid", "volume"})
+                    if (!selected(name))
+                        manifest_fields.emplace_back(name);
+            for (const auto& name : manifest_fields) {
+                // The default volume schema includes the empty cut template and its GIDs.
+                if (name == "elem_gid" && !gids_ && !cut_fields_ && !selected("volume"))
+                    continue;
+                if (!first_field)
+                    out << ',';
+                first_field = false;
+                out << "{\"name\":" << quoted(name)
+                    << ",\"location\":" << quoted(name == "T" || name == "U" ? "point" : "cell")
+                    << ",\"components\":" << (name == "U" ? 3 : 1) << ",\"unit\":"
+                    << quoted(name == "T"        ? "K"
+                              : name == "U"      ? "m"
+                              : name == "volume" ? "m3"
+                                                 : "1")
+                    << ",\"dtype\":"
+                    << quoted(name == "T" || name == "U" || name == "volume" ? "float64"
+                              : name == "elem_gid"                           ? "int64"
+                                                                             : "int32")
+                    << '}';
+            }
+            if (!first_field)
+                out << ',';
+            out << "{\"name\":\"sigma_vm\",\"location\":\"cell\",\"components\":1,\"unit\":\"Pa\","
                    "\"dtype\":\"float64\",\"reserved\":true}],\n\"blocks\":[{\"index\":0,\"name\":"
                    "\"hex\",\"kind\":"
                    "\"UnstructuredGrid\"},{\"index\":1,\"name\":\"cut\",\"kind\":"
@@ -811,7 +842,14 @@ void ResultsWriter::finalize() {
                     out << ",\"method\":" << quoted(s.method);
                 out << '}';
             }
-            out << "]\n}\n";
+            out << "]";
+            if (mesh_) {
+                const auto& m = *mesh_;
+                out << ",\n\"mesh\":{\"nx0\":" << m.nx0 << ",\"ny0\":" << m.ny0 << ",\"L\":" << m.L
+                    << ",\"padded_cells\":" << m.padded_cells << ",\"nz\":" << m.nz
+                    << ",\"mesh_sha256\":" << quoted(m.mesh_sha256) << '}';
+            }
+            out << "\n}\n";
             out.close();
             std::filesystem::rename(tmp, run_ / "manifest.json");
         } catch (...) {
