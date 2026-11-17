@@ -70,3 +70,16 @@ if(CHIPCAE_ENABLE_JSONCONS)
     target_compile_definitions(chipcae-import PRIVATE CHIPCAE_ENABLE_JSONCONS=1)
     target_link_libraries(chipcae-import PRIVATE chipcae_stack jsoncons)
 endif()
+
+# Runtime contracts travel with the build/install, independently of the checkout.
+foreach(asset schema/assembly-0.1.schema.json schema/stack-0.2.schema.json protocol/errors.yaml)
+    configure_file("${PROJECT_SOURCE_DIR}/${asset}"
+        "${PROJECT_BINARY_DIR}/import-assets/${asset}" COPYONLY)
+endforeach()
+# Installed schemas/protocol are already packaged by ChipcaeInstall.cmake.
+
+# E-ODB-3 may enable this once the public reader is implemented, rather than a stub.
+option(CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE "Assembly can use the implemented E-ODB-3 reader" OFF)
+if(CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE)
+    target_compile_definitions(chipcae-import PRIVATE CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE=1)
+endif()

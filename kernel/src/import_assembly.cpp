@@ -10,7 +10,20 @@
 namespace chipcae::importer {
 namespace {
 std::filesystem::path assembly_root() {
-    return std::filesystem::path(__FILE__).parent_path().parent_path().parent_path();
+    // Build and installed executables carry their own runtime assets.
+    auto dir = std::filesystem::read_symlink("/proc/self/exe").parent_path();
+    const auto installed = dir / "../share/chipcae";
+    if (std::filesystem::exists(installed / "protocol/errors.yaml"))
+        return installed;
+    for (auto candidate = dir; !candidate.empty();) {
+        if (std::filesystem::exists(candidate / "import-assets/protocol/errors.yaml"))
+            return candidate / "import-assets";
+        auto parent = candidate.parent_path();
+        if (parent == candidate)
+            break;
+        candidate = parent;
+    }
+    return installed;
 }
 const char* step_kind(geometry::StepDefectKind k) {
     using K = geometry::StepDefectKind;
@@ -112,36 +125,28 @@ int run_assembly(const ImportOptions& options) {
     auto reports = [&](const std::string& code, const std::string& message) {
         std::string error;
         const auto dir = import_report_directory(options.output);
-        if (!write_import_report(dir, header, defects, &error))
+        // The geometry writer owns the common JSON/CSV contract. Stage its output,
+        // then publish the assembly extension once, preserving every common field.
+        auto staging = dir / "assembly-report.tmp";
+        if (!std::filesystem::create_directory(staging))
+            throw std::runtime_error("cannot create assembly report staging directory");
+        struct ReportCleanup {
+            std::filesystem::path dir;
+            ~ReportCleanup() {
+                std::error_code ec;
+                std::filesystem::remove(dir / "import_report.json", ec);
+                std::filesystem::remove(dir / "import_report.csv", ec);
+                std::filesystem::remove(dir, ec);
+            }
+        } cleanup{staging};
+        if (!write_import_report(staging, header, defects, &error))
             throw std::runtime_error(error);
-        J report;
-        report["L"] = header.L;
-        report["t_min"] = header.t_min;
-        report["eps_weld"] = header.tolerances.eps_weld;
-        report["tau_A"] = header.tolerances.tau_A;
-        report["tau_B"] = header.tolerances.tau_B;
-        report["delta_f"] = header.tolerances.delta_f;
-        report["b_tier_accepted"] = header.b_tier_accepted_all ? J("all") : J::null();
-        for (auto tier : {Tier::Weld, Tier::A, Tier::B, Tier::C})
-            report["tier_counts"][tier_name(tier)] = 0;
-        report["defects"] = J::array();
-        for (const auto& defect : defects) {
-            J d;
-            d["defect_id"] = defect_id(defect);
-            d["tier"] = tier_name(defect.tier);
-            d["kind"] = defect.kind;
-            d["reason"] = static_cast<unsigned>(defect.reason);
-            d["dimension"] = defect.dimension;
-            d["size"] = defect.size;
-            d["suggestion"] = defect.suggestion;
-            d["action"] = defect.action;
-            d["rejection_reason"] = defect.rejection_reason;
-            d["material_ambiguous"] = defect.material_ambiguous;
-            d["details"] = defect.details;
-            report["defects"].push_back(d);
-            auto tier = tier_name(defect.tier);
-            report["tier_counts"][tier] = report["tier_counts"][tier].as<unsigned>() + 1;
-        }
+        std::ifstream common(staging / "import_report.json");
+        J report = J::parse(common);
+        // Assembly diagnostics add provenance to the shared defect records.
+        for (std::size_t i = 0; i < defects.size(); ++i)
+            report["defects"][i]["details"] = defects[i].details;
+        std::filesystem::rename(staging / "import_report.csv", dir / "import_report.csv");
         report["parts"] = parts;
         std::ofstream out(dir / "import_report.json");
         out << report << '\n';
@@ -163,7 +168,8 @@ int run_assembly(const ImportOptions& options) {
         std::filesystem::create_directories(import_report_directory(options.output));
         if (std::filesystem::weakly_canonical(
                 options.polyset.parent_path().empty() ? "." : options.polyset.parent_path()) !=
-            std::filesystem::weakly_canonical(import_report_directory(options.output)))
+            std::filesystem::weakly_canonical(
+                options.output.parent_path().empty() ? "." : options.output.parent_path()))
             return fail(14, "INPUT_INVALID", "INPUT_INVALID: polyset must be in output directory");
         J doc;
         try {
@@ -177,11 +183,6 @@ int run_assembly(const ImportOptions& options) {
                         "INPUT_INVALID: assembly=" + options.assembly.string() +
                             "; json_path=$: " + e.what());
         }
-        for (auto key : {"schema", "board", "parts"})
-            if (!doc.contains(key))
-                return fail(14,
-                            "INPUT_INVALID",
-                            std::string("INPUT_INVALID: json_path=$/") + key + ": required");
         std::ifstream spec(assembly_root() / "schema/assembly-0.1.schema.json");
         auto validator = jsoncons::jsonschema::make_json_schema(J::parse(spec));
         std::string invalid;
@@ -226,9 +227,19 @@ int run_assembly(const ImportOptions& options) {
         return fail(7, "IMPORT_REJECTED", "ECAD support disabled");
 #else
         const auto& b = doc["board"];
-        auto board = b["format"].as<std::string>() == "odbpp"
-                         ? ecad::read_odbpp(root / b["path"].as<std::string>())
-                         : ecad::read_ipc2581(root / b["path"].as<std::string>());
+        auto read_board = [&]() -> ecad::ImportResult {
+            if (b["format"].as<std::string>() == "odbpp") {
+#ifdef CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE
+                return ecad::read_odbpp(root / b["path"].as<std::string>());
+#else
+                ecad::ImportResult unavailable;
+                unavailable.error = "IMPORT_REJECTED: odbpp reader not yet available";
+                return unavailable;
+#endif
+            }
+            return ecad::read_ipc2581(root / b["path"].as<std::string>());
+        };
+        auto board = read_board();
         if (!board)
             return fail(7, "IMPORT_REJECTED", board.error);
         std::string error;

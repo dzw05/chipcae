@@ -30,3 +30,16 @@ This checkout still contains the SP0 throwing implementations of slicing,
 placement and merge. Assembly currently treats those exact placeholder errors
 as empty results, as permitted by the SP4 brief; it cannot produce part regions
 or real slicing/merge diagnostics until SP2/SP3 land. All other errors propagate.
+
+Assembly reports preserve the shared geometry report fields and CSV contract.
+The assembly JSON extension adds `details` to each defect and a `parts` object
+containing `split_layers`, `rewrite_targets`, and `material_approx`; the final
+`import_report.json` is published once from the shared report data.
+
+The build copies assembly/stack schemas and the error protocol into
+`import-assets` beside the build outputs. Installation packages them under
+`share/chipcae`, resolved relative to the executable, so assembly
+imports do not require the source checkout.
+Until E-ODB-3 supplies an implemented reader, ODB++ assembly boards reject with
+`odbpp reader not yet available`. Integration builds may enable
+`CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE` once that implementation is present.

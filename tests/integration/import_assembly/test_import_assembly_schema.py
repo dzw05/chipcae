@@ -7,6 +7,10 @@ with tempfile.TemporaryDirectory() as tmp:
     original = copy.deepcopy(a.document)
     invalid = [dict(original, schema='chipcae.assembly/9'),
                dict(original, unexpected=True),
+               {},
+               *[{k: v for k, v in original.items() if k != missing}
+                 for missing in ('schema', 'board', 'parts')],
+               dict(original, board=dict(original['board'], format='unknown')),
                dict(original, board=dict(original['board'], path='../board.xml'))]
     for document in invalid:
         a.document = document
@@ -15,8 +19,8 @@ with tempfile.TemporaryDirectory() as tmp:
         check(result, 7)
         assert 'json_path' in result.stderr, result.stderr
         assert not a.output.exists()
-    # Missing required fields, malformed JSON, and missing file are input errors.
-    for text in ('{}', '{broken'):
+    # Malformed JSON and missing files are input errors.
+    for text in ('{broken',):
         (a.root / 'assembly.json').write_text(text)
         result = a.run()
         check(result, 14)
