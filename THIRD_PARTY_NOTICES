@@ -27,6 +27,7 @@ new ECAD dependencies follow the notices.
 | ArborX | Current compatible version | BSD-3-Clause | https://github.com/arborx/ArborX |
 | MUMPS | Optional; dynamically linked | CeCILL-C | https://mumps-solver.org/ |
 | Clipper2 | 2.0.1 | BSL-1.0 | https://github.com/PolyClipping/Clipper2 |
+| miniz | 3.0.2 | MIT | https://github.com/richgel999/miniz |
 | Expat | 2.10.0 | MIT | https://github.com/libexpat/libexpat |
 
 ## Boost Software License 1.0 (BSL-1.0)

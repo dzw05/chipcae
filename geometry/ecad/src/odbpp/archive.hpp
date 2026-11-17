@@ -19,6 +19,9 @@ struct ArchiveLimits;
 class ArchiveReader {
     struct State;
     std::shared_ptr<State> state_;
+    bool stream_bytes(const std::string&,
+                      const std::function<bool(std::string_view)>&,
+                      std::string&) const;
 
 public:
     explicit ArchiveReader(const std::filesystem::path& input); // 目录、.tgz/.tar.gz、.zip
@@ -59,6 +62,7 @@ bool index_tar(const std::filesystem::path&,
 bool parse_matrix(const ArchiveReader&, OdbJob&, std::string&);
 bool parse_misc(const ArchiveReader&, OdbJob&, std::string&);
 bool parse_features(const ArchiveReader&, OdbJob&, ImportResult&);
+std::string layer_directory(const ArchiveReader&, const OdbJob&, const std::string&);
 std::string trim(std::string_view);
 std::string lower(std::string);
 bool canonical_path(std::string&, std::string&);

@@ -43,8 +43,12 @@ OdbJob job(const fs::path& path) {
     require(bool(result), path.string() + ": " + result.error);
     return out;
 }
+ImportResult parse_job(const fs::path& path) {
+    OdbJob parsed;
+    return read_odbpp_job(path, parsed);
+}
 void rejected(const fs::path& path, const std::string& reason) {
-    auto result = read_odbpp(path);
+    auto result = parse_job(path);
     require(!result && result.error.starts_with("IMPORT_REJECTED:") &&
                 result.error.find(reason) != std::string::npos,
             path.filename().string() + ": expected rejection containing '" + reason + "', got '" +
@@ -210,37 +214,37 @@ int main() {
     test("odbpp_matrix_order", [&] {
         auto j = job(temp / "job");
         // 实测: 31 blocks in matrix order; KiCad copper table F.Cu/In1.Cu/In2.Cu/B.Cu.
-        const std::vector<std::string> names = {"comp_+_top",
-                                                "f.silkscreen",
-                                                "f.paste",
-                                                "f.mask",
-                                                "f.cu",
-                                                "dielectric_1",
-                                                "in1.cu",
-                                                "dielectric_2",
-                                                "in2.cu",
-                                                "dielectric_3",
-                                                "b.cu",
-                                                "b.mask",
-                                                "b.paste",
-                                                "b.silkscreen",
-                                                "f.adhesive",
-                                                "b.adhesive",
-                                                "user.drawings",
-                                                "user.comments",
-                                                "user.eco1",
-                                                "user.eco2",
-                                                "edge.cuts",
-                                                "margin",
-                                                "b.courtyard",
-                                                "f.courtyard",
-                                                "b.fab",
-                                                "f.fab",
-                                                "user.1",
-                                                "user.2",
-                                                "user.3",
-                                                "user.4",
-                                                "drill_plated_f.cu-b.cu"};
+        const std::vector<std::string> names = {"COMP_+_TOP",
+                                                "F.SILKSCREEN",
+                                                "F.PASTE",
+                                                "F.MASK",
+                                                "F.CU",
+                                                "DIELECTRIC_1",
+                                                "IN1.CU",
+                                                "DIELECTRIC_2",
+                                                "IN2.CU",
+                                                "DIELECTRIC_3",
+                                                "B.CU",
+                                                "B.MASK",
+                                                "B.PASTE",
+                                                "B.SILKSCREEN",
+                                                "F.ADHESIVE",
+                                                "B.ADHESIVE",
+                                                "USER.DRAWINGS",
+                                                "USER.COMMENTS",
+                                                "USER.ECO1",
+                                                "USER.ECO2",
+                                                "EDGE.CUTS",
+                                                "MARGIN",
+                                                "B.COURTYARD",
+                                                "F.COURTYARD",
+                                                "B.FAB",
+                                                "F.FAB",
+                                                "USER.1",
+                                                "USER.2",
+                                                "USER.3",
+                                                "USER.4",
+                                                "DRILL_PLATED_F.CU-B.CU"};
         const std::vector<std::string> types = {
             "component",    "silk_screen", "solder_paste", "solder_mask", "signal",   "dielectric",
             "signal",       "dielectric",  "signal",       "dielectric",  "signal",   "solder_mask",
@@ -308,13 +312,13 @@ int main() {
         auto j = job(temp / "job");
         // 实测: P/L/A/S records counted independently from checked-in layer files.
         const std::map<std::string, std::array<std::size_t, 4>> nonzero = {
-            {"f.cu", {2, 0, 1, 1}},
-            {"in1.cu", {2, 0, 0, 1}},
-            {"in2.cu", {2, 0, 0, 1}},
-            {"b.cu", {2, 0, 0, 1}},
-            {"drill_plated_f.cu-b.cu", {2, 0, 0, 0}},
-            {"edge.cuts", {0, 4, 0, 0}},
-            {"f.silkscreen", {0, 10, 0, 0}}};
+            {"F.CU", {2, 0, 1, 1}},
+            {"IN1.CU", {2, 0, 0, 1}},
+            {"IN2.CU", {2, 0, 0, 1}},
+            {"B.CU", {2, 0, 0, 1}},
+            {"DRILL_PLATED_F.CU-B.CU", {2, 0, 0, 0}},
+            {"EDGE.CUTS", {0, 4, 0, 0}},
+            {"F.SILKSCREEN", {0, 10, 0, 0}}};
         require(j.layers.size() == 31, "all fixture layers");
         for (const auto& layer : j.layers) {
             auto it = nonzero.find(layer.name);
@@ -330,12 +334,12 @@ int main() {
         }
     });
     test("odbpp_duplicate_entry", [&] {
-        auto r = read_odbpp(temp / "duplicate.tgz");
+        auto r = parse_job(temp / "duplicate.tgz");
         require(r.error.starts_with("IMPORT_REJECTED: duplicate archive entry matrix/matrix"),
                 r.error);
     });
     test("odbpp_duplicate_zip", [&] {
-        auto r = read_odbpp(temp / "duplicate.zip");
+        auto r = parse_job(temp / "duplicate.zip");
         require(r.error.starts_with("IMPORT_REJECTED: duplicate archive entry matrix/matrix"),
                 r.error);
     });
@@ -406,7 +410,7 @@ int main() {
                 "expected gzip CRC rejection, got " + error);
     });
     test("odbpp_archive_lzw", [&] {
-        auto result = read_odbpp(temp / "job.tar.Z");
+        auto result = parse_job(temp / "job.tar.Z");
         if (reported(result.model.report.unsupported, (temp / "job.tar.Z").string()))
             return;
         require(bool(result), result.error);
@@ -467,7 +471,7 @@ int main() {
         require(reported(reader.unsupported(), "outside-link"), "symlink unsupported diagnostic");
     });
     test("odbpp_unknown_record", [&] {
-        auto result = read_odbpp(temp / "corrupt/unknown");
+        auto result = parse_job(temp / "corrupt/unknown");
         require(bool(result), result.error);
         require(reported(result.model.report.unsupported, "steps/pcb/layers/f.cu/features", 3),
                 "unknown record source filename and exact line 3");
@@ -507,7 +511,7 @@ int main() {
         require(j.features.empty() || j.features.at("top").pads.empty(),
                 "missing features allowed");
         write(p / "steps/pcb/layers/top/features", "");
-        require(bool(read_odbpp(p)), "empty features allowed");
+        require(bool(parse_job(p)), "empty features allowed");
     });
     test("odbpp_attrs_tools", [&] {
         auto p = temp / "attrs";
@@ -538,7 +542,7 @@ int main() {
             write(p / "steps/pcb/profile",
                   "UNITS=MM\nS P 0\nOB 0 0 I\nOS 1 0\nOS 1 1\nOS " + end + "\nOE\nSE\n");
             if (accepted)
-                require(bool(read_odbpp(p)), "per-axis 1e-9 meter tolerance");
+                require(bool(parse_job(p)), "per-axis 1e-9 meter tolerance");
             else
                 rejected(p, "profile contour not closed");
         });
@@ -561,7 +565,7 @@ int main() {
         auto p = temp / "step-selection";
         minimal(p);
         fs::rename(p / "steps/pcb", p / "steps/first");
-        auto r = read_odbpp(p);
+        auto r = parse_job(p);
         require(bool(r) && reported(r.model.report.unsupported, "selected step first"),
                 "fallback step report");
         require(job(p).step == "first", "first discovered step");
@@ -573,7 +577,7 @@ int main() {
         minimal(p);
         write(p / "steps/pcb/layers/top/features",
               "UNITS=INCH\n$0 vendor_shape\nT text\nB barcode\nP 0 0 7 P 0 0\n");
-        const auto r = read_odbpp(p);
+        const auto r = parse_job(p);
         require(bool(r), r.error);
         const auto& u = r.model.report.unsupported;
         require(reported(u, "features: unit mismatch", 1) &&
@@ -606,10 +610,80 @@ int main() {
         require(symbols.size() == 2 && symbols[0].name == "r100" &&
                     symbols[1].name == "oval100x200",
                 "symbol definition appearance order");
-        const auto r = read_odbpp(p);
+        const auto r = parse_job(p);
         require(reported(r.model.report.unsupported, "tools.Z"), "nested .Z fallback source path");
         require(reported(r.model.report.unsupported, "nonsequential symbol index 3", 1),
                 "unrepresentable symbol index reported");
+    });
+    test("odbpp_review_contour_lifetime", [&] {
+        auto p = temp / "contour-lifetime";
+        minimal(p);
+        for (const auto* record : {"S P", "SE", "OB 1 1 I"}) {
+            write(p / "steps/pcb/layers/top/features",
+                  std::string("S P\nOB 0 0 I\n") + record + "\nOS 0 0\nOE\nSE\n");
+            rejected(p, "record while contour open");
+        }
+    });
+    test("odbpp_review_case_sensitive_layers", [&] {
+        auto p = temp / "layer-case";
+        minimal(p);
+        write(p / "matrix/matrix", "UNITS=MM\nLAYER {\nNAME=Top\n}\nLAYER {\nNAME=top\n}\n");
+        write(p / "steps/pcb/layers/Top/features", "$0 r100\nP 0 0 0 P 0 0\n");
+        write(p / "steps/pcb/layers/top/features", "$0 r200\n");
+        write(p / "steps/pcb/layers/Top/attrlist", "label=upper\n");
+        write(p / "steps/pcb/layers/top/attrlist", "label=lower\n");
+        auto j = job(p);
+        require(j.attrs.layer.at("Top").at("label") == "upper" &&
+                    j.attrs.layer.at("top").at("label") == "lower",
+                "case-sensitive layer attributes");
+        require(j.layers[0].name == "Top" && j.layers[1].name == "top" &&
+                    j.features.at("Top").pads.size() == 1 && j.features.at("top").pads.empty(),
+                "distinct case-sensitive layer names and feature paths");
+        auto r = parse_job(p);
+        require(!reported(r.model.report.unsupported, "nonsequential symbol index"),
+                "fixture-compatible zero-based symbol definitions");
+    });
+    test("odbpp_review_empty_unsupported", [&] {
+        auto r = parse_job(temp / "job.tar.Z");
+        require(!r && r.error == "IMPORT_REJECTED: empty input" &&
+                    reported(r.model.report.unsupported, ".Z compression"),
+                "top-level .Z both rejected and reported");
+        auto p = temp / "only-links";
+        fs::create_directories(p);
+        std::error_code ec;
+        fs::create_symlink(temp / "job.tar.Z", p / "link", ec);
+        if (!ec)
+            rejected(p, "empty input");
+    });
+    test("odbpp_review_runtime_limits", [&] {
+        for (bool lines : {false, true}) {
+            for (bool total : {false, true}) {
+                auto p = temp / "growing-input";
+                fs::create_directories(p);
+                write(p / "a", "a");
+                write(p / "b", "b");
+                ArchiveLimits limits;
+                limits.file_bytes = total ? 100 : 4;
+                limits.total_bytes = total ? 4 : 100;
+                ArchiveReader reader(p, limits);
+                require(reader.open_error().empty(), reader.open_error());
+                std::string out, error;
+                require(reader.read_bytes("b", out, error), error);
+                // Reading the same file again must not consume its budget twice.
+                require(reader.read_bytes("b", out, error), error);
+                write(p / "a", "12345");
+                bool ok = lines ? reader.for_each_line(
+                                      "a", [](auto) { return true; }, error)
+                                : reader.read_bytes("a", out, error);
+                require(!ok && error.find(total ? "total byte limit" : "file byte limit") !=
+                                   std::string::npos,
+                        "runtime limit: " + error);
+            }
+        }
+        auto p = temp / "long-line";
+        minimal(p);
+        write(p / "steps/pcb/layers/top/features", std::string(1024 * 1024 + 1, '#'));
+        rejected(p, "line byte limit");
     });
     test("odbpp_streaming_memory", [&] {
 #ifdef __linux__
@@ -628,7 +702,7 @@ int main() {
         rusage before{}, after{};
         require(getrusage(RUSAGE_SELF, &before) == 0, "getrusage before");
         const auto start = std::chrono::steady_clock::now();
-        auto result = read_odbpp(p);
+        auto result = parse_job(p);
         const auto elapsed = std::chrono::steady_clock::now() - start;
         require(getrusage(RUSAGE_SELF, &after) == 0, "getrusage after");
         require(bool(result), result.error);

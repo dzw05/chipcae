@@ -80,7 +80,11 @@ bool records(const ArchiveReader& reader,
                     report("unknown symbol " + name);
                 return true;
             }
+            if (contour && (tag == "S" || tag == "SE" || tag == "OB"))
+                return fail("record while contour open " + path);
             if (tag == "S") {
+                if (surface)
+                    return fail("nested surface " + path);
                 char polarity = 'P';
                 in >> polarity;
                 if (features) {
@@ -185,7 +189,7 @@ bool parse_features(const ArchiveReader& reader, OdbJob& job, ImportResult& resu
     if (!records(reader, "steps/" + job.step + "/profile", job, nullptr, result))
         return false;
     for (const auto& layer : job.layers) {
-        auto base = "steps/" + job.step + "/layers/" + layer.name + "/";
+        auto base = layer_directory(reader, job, layer.name);
         if (exists(reader, base + "features") &&
             !records(reader, base + "features", job, &job.features[layer.name], result))
             return false;

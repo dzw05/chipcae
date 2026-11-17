@@ -51,6 +51,9 @@ bool canonical_path(std::string& path, std::string& error) {
 }
 struct ArchiveReader::State {
     std::filesystem::path input;
+    ArchiveLimits limits;
+    std::vector<std::uint64_t> actual_sizes;
+    std::uint64_t actual_total = 0;
     std::string error;
     std::vector<ArchiveEntry> entries;
     std::vector<std::uint64_t> offsets;
@@ -71,6 +74,7 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
     : state_(std::make_shared<State>()) {
     auto& s = *state_;
     s.input = input;
+    s.limits = limits;
     auto fail = [&](std::string message) { s.error = "IMPORT_REJECTED: " + message; };
     try {
         std::uint64_t total = 0, count = 0;
@@ -124,6 +128,7 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
             if (name.ends_with(".z")) {
                 s.unsupported.push_back(
                     {"IMPORT_UNSUPPORTED_ELEMENT", input.string() + ": .Z compression", 0});
+                fail("empty input");
                 return;
             }
             if (name.ends_with(".tgz") || name.ends_with(".tar.gz")) {
@@ -259,10 +264,11 @@ struct ZipSink {
     }
 };
 } // namespace
-// All readers deliver bounded chunks; the only unbounded retained data is caller-requested bytes.
-bool ArchiveReader::for_each_line(const std::string& rel,
-                                  const std::function<bool(std::string_view)>& cb,
-                                  std::string& error) const {
+// Enforce limits against delivered bytes as well as archive metadata. Repeated reads
+// count each entry's largest observed size once toward the archive total.
+bool ArchiveReader::stream_bytes(const std::string& rel,
+                                 const ByteSink& consume,
+                                 std::string& error) const {
     auto& s = *state_;
     error.clear();
     if (!s.error.empty()) {
@@ -277,33 +283,23 @@ bool ArchiveReader::for_each_line(const std::string& rel,
         return false;
     }
     auto index = static_cast<std::size_t>(it - s.entries.begin());
-    std::string pending;
-    bool stopped = false;
-    ByteSink sink = [&](std::string_view block) {
-        if (stopped)
-            return true;
-        while (!block.empty()) {
-            auto end = block.find('\n');
-            if (end == std::string_view::npos) {
-                pending.append(block);
-                break;
-            }
-            if (pending.empty()) {
-                if (!cb(block.substr(0, end)))
-                    stopped = true;
-            } else {
-                pending.append(block.substr(0, end));
-                if (!cb(pending))
-                    stopped = true;
-                pending.clear();
-            }
-            if (stopped)
-                break;
-            block.remove_prefix(end + 1);
+    s.actual_sizes.resize(s.entries.size());
+    std::uint64_t delivered = 0;
+    ByteSink sink = [&](std::string_view b) {
+        if (b.size() > s.limits.file_bytes - delivered) {
+            error = "IMPORT_REJECTED: file byte limit " + rel;
+            return false;
         }
-        return true;
+        delivered += b.size();
+        auto growth = delivered > s.actual_sizes[index] ? delivered - s.actual_sizes[index] : 0;
+        if (growth > s.limits.total_bytes - s.actual_total) {
+            error = "IMPORT_REJECTED: total byte limit " + rel;
+            return false;
+        }
+        s.actual_total += growth;
+        s.actual_sizes[index] += growth;
+        return consume(b);
     };
-    bool ok = true;
     if (s.directory) {
         std::ifstream in(s.directory_paths[index], std::ios::binary);
         if (!in) {
@@ -311,101 +307,96 @@ bool ArchiveReader::for_each_line(const std::string& rel,
             return false;
         }
         std::array<char, 32768> buffer{};
-        while (!stopped && in) {
+        while (in) {
             in.read(buffer.data(), buffer.size());
-            sink({buffer.data(), static_cast<std::size_t>(in.gcount())});
+            if (!sink({buffer.data(), static_cast<std::size_t>(in.gcount())}))
+                return false;
         }
-        if (in.bad()) {
-            error = "IMPORT_REJECTED: read failure " + rel;
-            return false;
-        }
-    } else if (s.zipped) {
-        if (!s.zip_supported[index]) {
-            error = "IMPORT_REJECTED: required file uses unsupported zip encoding " + rel;
-            return false;
-        }
-        ZipSink adapter{sink};
-        ok = mz_zip_reader_extract_to_callback(
-                 &s.zip, s.zip_indices[index], ZipSink::write, &adapter, 0) != 0;
-        if (!ok)
-            error = "IMPORT_REJECTED: zip CRC or corrupt payload " + rel;
-    } else {
-        std::ifstream in(s.input, std::ios::binary);
-        std::uint64_t pos = 0, start = s.offsets[index], end = start + it->size;
-        ok = stream_gzip(
-            in,
-            [&](std::string_view b) {
-                auto finish = pos + b.size();
-                if (pos < end && finish > start) {
-                    auto lo = std::max(pos, start) - pos, hi = std::min(finish, end) - pos;
-                    sink(b.substr(static_cast<std::size_t>(lo), static_cast<std::size_t>(hi - lo)));
-                }
-                pos = finish;
-                return true;
-            },
-            error);
-    }
-    if (ok && !stopped && !pending.empty())
-        cb(pending);
-    return ok;
-}
-bool ArchiveReader::read_bytes(const std::string& rel, std::string& out, std::string& error) const {
-    // Byte reads preserve even a missing final newline; do not reconstruct from lines.
-    auto& s = *state_;
-    out.clear();
-    error.clear();
-    if (!s.error.empty()) {
-        error = s.error;
-        return false;
-    }
-    auto it = std::find_if(s.entries.begin(), s.entries.end(), [&](const auto& e) {
-        return e.path == rel && !e.is_dir;
-    });
-    if (it == s.entries.end()) {
-        error = "IMPORT_REJECTED: missing file " + rel;
-        return false;
-    }
-    auto index = static_cast<std::size_t>(it - s.entries.begin());
-    if (s.directory) {
-        std::ifstream in(s.directory_paths[index], std::ios::binary);
-        if (!in) {
-            error = "IMPORT_REJECTED: cannot read " + rel;
-            return false;
-        }
-        out.assign(std::istreambuf_iterator<char>(in), {});
         if (in.bad()) {
             error = "IMPORT_REJECTED: read failure " + rel;
             return false;
         }
         return true;
     }
-    ByteSink sink = [&](std::string_view b) {
-        out.append(b);
-        return true;
-    };
     if (s.zipped) {
         if (!s.zip_supported[index]) {
-            error = "IMPORT_UNSUPPORTED_ELEMENT: " + rel;
+            error = "IMPORT_REJECTED: required file uses unsupported zip encoding " + rel;
             return false;
         }
         ZipSink adapter{sink};
         if (mz_zip_reader_extract_to_callback(
                 &s.zip, s.zip_indices[index], ZipSink::write, &adapter, 0))
             return true;
-        error = "IMPORT_REJECTED: zip CRC or corrupt payload " + rel;
+        if (error.empty())
+            error = "IMPORT_REJECTED: zip CRC or corrupt payload " + rel;
         return false;
     }
     std::ifstream in(s.input, std::ios::binary);
     std::uint64_t pos = 0, start = s.offsets[index], end = start + it->size;
-    return stream_gzip(
+    std::string codec_error;
+    bool ok = stream_gzip(
         in,
         [&](std::string_view b) {
             auto finish = pos + b.size();
-            if (pos < end && finish > start)
-                sink(b.substr(
+            if (pos < end && finish > start &&
+                !sink(b.substr(
                     static_cast<std::size_t>(std::max(pos, start) - pos),
-                    static_cast<std::size_t>(std::min(finish, end) - std::max(pos, start))));
+                    static_cast<std::size_t>(std::min(finish, end) - std::max(pos, start)))))
+                return false;
             pos = finish;
+            return true;
+        },
+        codec_error);
+    if (!ok && error.empty())
+        error = codec_error;
+    return ok;
+}
+bool ArchiveReader::for_each_line(const std::string& rel,
+                                  const std::function<bool(std::string_view)>& cb,
+                                  std::string& error) const {
+    constexpr std::size_t max_line_bytes = 1024 * 1024;
+    std::string pending;
+    bool stopped = false;
+    const bool ok = stream_bytes(
+        rel,
+        [&](std::string_view block) {
+            if (stopped)
+                return true;
+            while (!block.empty()) {
+                auto end = block.find('\n');
+                auto length = end == std::string_view::npos ? block.size() : end;
+                if (length > max_line_bytes - pending.size()) {
+                    error = "IMPORT_REJECTED: line byte limit " + rel;
+                    return false;
+                }
+                if (end == std::string_view::npos) {
+                    pending.append(block);
+                    break;
+                }
+                if (pending.empty())
+                    stopped = !cb(block.substr(0, end));
+                else {
+                    pending.append(block.substr(0, end));
+                    stopped = !cb(pending);
+                    pending.clear();
+                }
+                if (stopped)
+                    break;
+                block.remove_prefix(end + 1);
+            }
+            return true;
+        },
+        error);
+    if (ok && !stopped && !pending.empty())
+        cb(pending);
+    return ok;
+}
+bool ArchiveReader::read_bytes(const std::string& rel, std::string& out, std::string& error) const {
+    out.clear();
+    return stream_bytes(
+        rel,
+        [&](std::string_view b) {
+            out.append(b);
             return true;
         },
         error);
