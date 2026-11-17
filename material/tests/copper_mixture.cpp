@@ -1,6 +1,7 @@
 #include "chipcae/material/copper_mixture.hpp"
 
 #include "chipcae/material/activation.hpp"
+#include "chipcae/material/expand_point_param.hpp"
 #include "chipcae/material/material_params.hpp"
 
 #include <cstring>
@@ -278,6 +279,13 @@ void batch(bool mixture) {
         Kokkos::deep_copy(saved_C, out.tangent);
         Kokkos::deep_copy(saved_th, out.thermal_strain);
         Kokkos::deep_copy(saved_state, next);
+        for (int count : {N - 1, N + 1}) {
+            in.point_param = Vec1<Real, MS>("mismatch", count);
+            model->update_batch(ctx, in, old, next, out);
+            Kokkos::fence();
+            for (int j = 0; j < N; ++j)
+                check(out.status(j).code == StatusCode::Failed, "parameter extent accepted");
+        }
         in.point_param = phi;
         model->update_batch(ctx, in, old, next, out);
         Kokkos::fence();
@@ -355,20 +363,33 @@ void exec(bool require_cuda = false) {
     auto a = execution<Kokkos::Serial, MS>(), b = execution<Kokkos::OpenMP, MS>();
     check(std::memcmp(a.data(), b.data(), a.size() * sizeof(Real)) == 0, "Serial/OpenMP differ");
     std::cout << "Serial/OpenMP bitwise equal: " << a.size() << " scalars\n";
+#endif
 #if defined(KOKKOS_ENABLE_CUDA)
+    auto a_cuda = execution<Kokkos::DefaultHostExecutionSpace, MS>();
     auto c = execution<Kokkos::Cuda, Kokkos::CudaSpace>();
-    for (std::size_t i = 0; i < a.size(); ++i)
-        near(a.data()[i], c.data()[i]);
+    for (std::size_t i = 0; i < a_cuda.size(); ++i)
+        near(a_cuda.data()[i], c.data()[i]);
 #endif
-#else
-    std::cout << "SKIP: Serial and OpenMP required\n";
-#endif
+}
+void expansion() {
+    chipcae::mesh::HexMeshArrays mesh;
+    mesh.axes[2] = {0, 1, 2, 3};
+    // Nonlocal/reordered GIDs ensure expansion uses global columns, not local indices.
+    mesh.elem_gid = {8, 0, 4, 7, 2, 3, 6, 1, 5};
+    auto device = chipcae::mesh::upload<MS>(mesh);
+    auto phi = chipcae::mesh::upload_vector<Real, MS>({.1, .5, .9}, "columns");
+    auto expanded = expand_point_param(device, phi);
+    auto host = Kokkos::create_mirror_view_and_copy(MS{}, expanded);
+    for (std::size_t e = 0; e < mesh.elem_gid.size(); ++e)
+        check(host(e) == phi(mesh.elem_gid[e] / 3), "column expansion");
 }
 int main(int argc, char** argv) {
     Kokkos::ScopeGuard guard(argc, argv);
     try {
         std::string which = argv[1];
-        if (which == "limits")
+        if (which == "expand")
+            expansion();
+        else if (which == "limits")
             limits();
         else if (which == "laminate")
             laminate();

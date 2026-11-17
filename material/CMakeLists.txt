@@ -167,7 +167,12 @@ endif()
 if(CHIPCAE_MATERIAL_ENABLE_TESTS)
     add_executable(material_copper_mixture tests/copper_mixture.cpp)
     target_link_libraries(material_copper_mixture PRIVATE chipcae_material)
-    foreach(case IN ITEMS limits laminate spd reject_visco exec)
+    target_include_directories(material_copper_mixture PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../mesh/background/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../core/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../schema/include)
+    target_compile_definitions(material_copper_mixture PRIVATE CHIPCAE_ENABLE_KOKKOS)
+    foreach(case IN ITEMS limits laminate spd reject_visco exec expand)
         add_test(NAME material_cu_mix_${case} COMMAND material_copper_mixture ${case})
         set_tests_properties(material_cu_mix_${case} PROPERTIES LABELS tierA TIMEOUT 60
             ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false" SKIP_REGULAR_EXPRESSION "SKIP:")

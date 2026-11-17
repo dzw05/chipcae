@@ -71,7 +71,8 @@ View1<T, MemSpace> upload_vector(const std::vector<T>& src, const std::string& n
 template <class MemSpace>
 struct HexMeshDevice {
     View1<const Local, MemSpace> node_layer, elem_attribute, elem_material;
-    View1<const Index, MemSpace> node_column;
+    View1<const Index, MemSpace> node_column, elem_gid;
+    std::size_t nz = 0;
 };
 template <class MemSpace>
 HexMeshDevice<MemSpace> upload(const HexMeshArrays& m) {
@@ -81,6 +82,8 @@ HexMeshDevice<MemSpace> upload(const HexMeshArrays& m) {
     return {upload_vector<Local, MemSpace>(m.node_layer, "node_layer"),
             upload_vector<Local, MemSpace>(m.attribute, "elem_attribute"),
             upload_vector<Local, MemSpace>(materials, "elem_material"),
-            upload_vector<Index, MemSpace>(m.node_column, "node_column")};
+            upload_vector<Index, MemSpace>(m.node_column, "node_column"),
+            upload_vector<Index, MemSpace>(m.elem_gid, "elem_gid"),
+            m.axes[2].empty() ? 0 : m.axes[2].size() - 1};
 }
 } // namespace chipcae::mesh

@@ -168,13 +168,28 @@ jobs:
     runs-on: ${{ fromJSON(vars.TIER_B_GPU_RUNS_ON || '["self-hosted","linux","gpu"]') }}
     timeout-minutes: 30
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build CUDA material copper mixture
+        run: |
+          set -euo pipefail
+          cmake -S material -B build-material-kokkos-source \
+            -DCHIPCAE_MATERIAL_FETCH_KOKKOS=ON \
+            -DCHIPCAE_MATERIAL_ENABLE_PYTHON=OFF
+          cmake -S material -B build-material-cuda \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCHIPCAE_MATERIAL_FETCH_KOKKOS=ON \
+            -DCHIPCAE_MATERIAL_ENABLE_PYTHON=OFF \
+            -DKokkos_ENABLE_CUDA=ON \
+            -DCMAKE_CXX_COMPILER="$PWD/build-material-kokkos-source/_deps/kokkos-src/bin/nvcc_wrapper"
+          cmake --build build-material-cuda --target material_copper_mixture --parallel
+
       - name: Material copper mixture CUDA consistency
         run: |
-          if [ -x build/material/material_copper_mixture ]; then
-            ctest --test-dir build -R '^material_cu_mix_cuda$' --output-on-failure
-          else
-            echo "SKIP: CUDA-enabled material binary is unavailable on this runner"
-          fi
+          set -euo pipefail
+          test -x build-material-cuda/material_copper_mixture
+          ctest --test-dir build-material-cuda -R '^material_cu_mix_cuda$' --no-tests=error --output-on-failure
 
       - name: GPU slot
         run: |

@@ -125,6 +125,12 @@ public:
                       Soa<const Real, MS> state_old,
                       Soa<Real, MS> state_new,
                       BatchOutput<MS>& out) const override {
+        if (in.point_param.extent(0) != 0 && in.point_param.extent(0) != in.strain_np1.extent(1)) {
+            Status failed{};
+            failed.code = StatusCode::Failed;
+            Kokkos::deep_copy(out.status, failed);
+            return;
+        }
         const auto validity = validity_;
         if (validity.enabled && validity.clamp) {
             auto a = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, in.T_n);
