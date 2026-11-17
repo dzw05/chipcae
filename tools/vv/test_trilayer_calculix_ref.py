@@ -12,6 +12,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -96,9 +97,10 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             f"rel_delta={rel_delta} mesh=fine element=C3D20 "
             f"ccx={data['calculix_version']}"
         )
-        log = Path("/workspace/tasks/logs/v-ccx-delta.md")
-        log.parent.mkdir(parents=True, exist_ok=True)
-        log.write_text(line + "\n", encoding="utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "v-ccx-delta.md"
+            log.write_text(line + "\n", encoding="utf-8")
+            self.assertEqual(log.read_text(encoding="utf-8"), line + "\n")
         print(line)
 
 

@@ -16,8 +16,8 @@ specialist chooses the comparison acceptance criterion later.
 - Boundary conditions: 3-2-1 on the z = 0 corners, as in
   `apps/chipcae-solve/README.md` (xmin/ymin fix ux,uy,uz; xmax/ymin fix uy,uz;
   xmin/ymax fix uz).
-- Solver: CalculiX 2.23 (`ccx`) from conda-forge, installed at
-  `/workspace/tools/calculix-env`.
+- Solver: conda-forge package `calculix=2.23`; the `ccx -v` runtime
+  version string is `This is Version 2.23`.
 
 ## Regenerating
 
@@ -28,12 +28,18 @@ python tools/vv/calculix_trilayer/generate.py
 ```
 
 The script writes `work/{coarse,fine}.*` (not committed) and updates
-`REFERENCE.json`. Surface `W_bfp` is computed with `tools.vv.warpage_qoi.interp_grid`
+`REFERENCE.json`. The ASCII `.frd` parser reads coordinates from the `2C`
+block and displacements from the `-4 DISP` block, using fixed-width `-1`
+node records until each `-3` terminator. Node IDs join coordinates and
+displacements. Top-surface selection uses undeformed z at H = 0.10 m
+within 1e-12 H, including C3D20 corner and midside nodes. Surface `W_bfp` is
+computed with `tools.vv.warpage_qoi.interp_grid`
 and `qoi_surface` on an 81×81 grid in millimetres, then converted back to metres.
 
 The v1 field contract (required keys, types, and which fields are stable) is in `reference.schema.json` (JSON Schema 2020-12).
 
-`provenance` is optional metadata. Ignoring unknown keys under it is a consumer convention, not a JSON Schema-enforced rule.
+`provenance` is optional metadata and permits unknown keys within that object;
+unknown top-level keys are rejected.
 
 The v1 contract requires exactly one coarse and one fine mesh and selects fine.
 Top-level `W_bfp_m` must equal the selected mesh value; validation checks this
@@ -41,5 +47,6 @@ and the broad `rel_delta < 0.5` sanity bound. Required `label` and `host` fields
 record the reference status and execution host.
 
 Run `python3 -m unittest tools.vv.test_trilayer_calculix_ref` after generation.
-Only passing validation prints the delta report and writes the same single line
-to `/workspace/tasks/logs/v-ccx-delta.md`; generation does not write that log.
+Only passing validation prints the delta report and checks the same single line
+in a temporary report file, which is removed when the test completes. External
+callers can capture stdout to retain the report; generation does not write it.

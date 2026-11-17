@@ -32,7 +32,7 @@ MESHES = {
     "fine": {"nx": 16, "ny": 16},
 }
 PROTOTYPE = 4.269532769e-3
-CCX = os.environ.get("CHIPCAE_CCX", "/workspace/tools/calculix-env/bin/ccx")
+CCX = os.environ.get("CHIPCAE_CCX", "ccx")
 
 
 def node_id(i, j, k, nx, ny, nz):
