@@ -103,3 +103,51 @@ if(CHIPCAE_ENABLE_MUMPS)
         endif()
     endforeach()
 endif()
+
+if(CHIPCAE_ENABLE_ECAD)
+    find_package(Clipper2 CONFIG QUIET)
+    if(NOT TARGET Clipper2)
+        include(FetchContent)
+        set(CLIPPER2_UTILS OFF CACHE BOOL "Build Clipper2 utilities" FORCE)
+        set(CLIPPER2_EXAMPLES OFF CACHE BOOL "Build Clipper2 examples" FORCE)
+        set(CLIPPER2_TESTS OFF CACHE BOOL "Build Clipper2 tests" FORCE)
+        set(CLIPPER2_HI_PRECISION OFF CACHE BOOL "Use Clipper2 high precision" FORCE)
+        set(CLIPPER2_USINGZ OFF CACHE STRING "Build only the non-Z Clipper2 library" FORCE)
+        if(DEFINED BUILD_SHARED_LIBS)
+            set(_chipcae_had_build_shared_libs TRUE)
+            set(_chipcae_saved_build_shared_libs "${BUILD_SHARED_LIBS}")
+        else()
+            set(_chipcae_had_build_shared_libs FALSE)
+        endif()
+        set(BUILD_SHARED_LIBS OFF)
+        FetchContent_Declare(Clipper2
+            URL https://github.com/PolyClipping/Clipper2/archive/refs/tags/Clipper2_2.0.1.tar.gz
+            URL_HASH SHA256=2a3693aceab4aed3e39b743e038d87701acc53cf05ed7b2013aab3e0aec5287e
+            SOURCE_SUBDIR CPP
+        )
+        FetchContent_MakeAvailable(Clipper2)
+        if(_chipcae_had_build_shared_libs)
+            set(BUILD_SHARED_LIBS "${_chipcae_saved_build_shared_libs}")
+        else()
+            unset(BUILD_SHARED_LIBS)
+        endif()
+        unset(_chipcae_had_build_shared_libs)
+        unset(_chipcae_saved_build_shared_libs)
+    endif()
+
+    find_package(EXPAT QUIET)
+    if(NOT TARGET EXPAT::EXPAT AND NOT TARGET expat)
+        include(FetchContent)
+        set(EXPAT_BUILD_TOOLS OFF CACHE BOOL "Build Expat tools" FORCE)
+        set(EXPAT_BUILD_EXAMPLES OFF CACHE BOOL "Build Expat examples" FORCE)
+        set(EXPAT_BUILD_TESTS OFF CACHE BOOL "Build Expat tests" FORCE)
+        set(EXPAT_BUILD_DOCS OFF CACHE BOOL "Build Expat documentation" FORCE)
+        set(EXPAT_SHARED_LIBS OFF CACHE BOOL "Build static Expat" FORCE)
+        FetchContent_Declare(EXPAT
+            URL https://github.com/libexpat/libexpat/archive/refs/tags/R_2_10_0.tar.gz
+            URL_HASH SHA256=b3644a12f62d7762b62c444f69d169ba0234f13138d0240244bca64cbe35286f
+            SOURCE_SUBDIR expat
+        )
+        FetchContent_MakeAvailable(EXPAT)
+    endif()
+endif()

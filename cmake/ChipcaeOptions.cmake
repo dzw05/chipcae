@@ -19,6 +19,7 @@ option(CHIPCAE_ENABLE_QT "Enable Qt6 (implied by CHIPCAE_BUILD_GUI)" OFF)
 option(CHIPCAE_ENABLE_VTK "Enable VTK visualization" OFF)
 option(CHIPCAE_ENABLE_OCCT "Enable Open CASCADE (OCCT) CAD import" OFF)
 option(CHIPCAE_ENABLE_MUMPS "Enable MUMPS direct solver (optional; dynamic linking only; default OFF)" OFF)
+option(CHIPCAE_ENABLE_ECAD "Enable ECAD import (Clipper2 + Expat)" OFF)
 option(CHIPCAE_ENABLE_PRECICE "Build the v2 preCICE adapter placeholder" OFF)
 option(CHIPCAE_ENABLE_PARTICLES "Link the reserved particle backend into the kernel" OFF)
 

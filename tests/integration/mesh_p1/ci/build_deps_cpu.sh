@@ -14,8 +14,10 @@ mkdir -p "$work/src" "$prefix"
 export CMAKE_PREFIX_PATH="$prefix${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
 export CC=mpicc CXX=mpicxx
 jobs=${CMAKE_BUILD_PARALLEL_LEVEL:-2}
-# Local shortcut: stamp is this script's sha256. CI verifies .k1-manifest instead.
-key=$(sha256sum "$0" | cut -d' ' -f1)
+# ECAD dependencies use the matching version pins in deps.lock and are fetched
+# by the project configure via FetchContent, so they remain static and identical
+# between PR and nightly builds. Include deps.lock in the local prefix stamp too.
+key=$(sha256sum "$0" "$here/deps.lock" | sha256sum | cut -d' ' -f1)
 if [[ -f "$prefix/.k1-ready" && $(cat "$prefix/.k1-ready") == "$key" && -f "$prefix/.k1-manifest" ]]; then
   echo "Dependency prefix at $prefix is already complete."
   exit 0

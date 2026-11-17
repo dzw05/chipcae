@@ -45,7 +45,31 @@ jobs:
           ccache --zero-stats
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCHIPCAE_WARNINGS_AS_ERRORS=ON
+            -DCHIPCAE_WARNINGS_AS_ERRORS=ON \
+            -DCHIPCAE_ENABLE_ECAD=ON \
+            -DCMAKE_DISABLE_FIND_PACKAGE_Clipper2=TRUE \
+            -DCMAKE_DISABLE_FIND_PACKAGE_EXPAT=TRUE
+
+      - name: third_party_notices_check (tierA)
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path.cwd()
+          allowlist = {line.split('#', 1)[0].strip().lower() for line in (root / 'cmake/dependencies.allowlist').read_text().splitlines() if line.split('#', 1)[0].strip()}
+          notices = (root / 'THIRD_PARTY_NOTICES').read_text().lower()
+          pattern = re.compile(r'(?:find_package|fetchcontent_declare)\s*\(\s*([a-z0-9_.-]+)', re.I)
+          refs = set()
+          for path in root.joinpath('cmake').rglob('*.cmake'):
+              refs.update(name.lower() for name in pattern.findall(path.read_text()))
+          refs = {'python' if name == 'python3' else name for name in refs}
+          missing_allowlist = sorted(ref for ref in refs if ref not in allowlist)
+          missing_notice = sorted(ref for ref in refs if not re.search(r'\|\s*' + re.escape(ref) + r'\s*\|', notices))
+          if missing_allowlist or missing_notice:
+              raise SystemExit(f'missing allowlist entries={missing_allowlist}; missing notice entries={missing_notice}')
+          print(f'Checked {len(refs)} CMake dependencies against allowlist and THIRD_PARTY_NOTICES')
+          PY
 
       - name: Build mesh test targets
         env:
@@ -53,7 +77,7 @@ jobs:
           CCACHE_MAXSIZE: 200M
         run: |
           set -euo pipefail
-          # Default flags are OFF, so only Tier A mesh tests exist (k1_background, k1_cut).
+          # Build the currently registered Tier A mesh test targets.
           cmake --build build --target k1_background k1_cut --parallel
           ccache --show-stats
 
