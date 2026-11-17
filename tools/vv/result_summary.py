@@ -3,10 +3,11 @@
 # Copyright (c) 2026 Zhiwei Duan
 """Validate and summarize the first step of a chipcae results directory.
 
-Duplicate top coordinates must have identical displacement and available
-temperature values. Temperature uses blocks providing T; absent samples have
-null statistics (including top_* when no global top point provides T). The whole
-temperature field is null only when no block provides T. Numeric
+Duplicate coordinates must have identical available temperature values;
+duplicate top coordinates must also have identical displacement values.
+Temperature uses blocks providing T; top_* are null when no global top point
+provides T. The whole
+temperature field is null when no temperature samples are available. Numeric
 field types accept either byte order, retaining the required kind and width.
 Collinear top geometry fits along its centered principal axis (constant fit
 when x/y have rank zero), using the shared plane fitter for residuals.
@@ -234,6 +235,12 @@ def _summarize(run_dir, top_rel_tol):
         if t is not None:
             all_t[offset:offset + len(p)] = t
         offset += len(p)
+    available = np.flatnonzero(np.isfinite(all_t))
+    if len(available):
+        _, first_t, inverse_t = np.unique(points[available], axis=0,
+                                          return_index=True, return_inverse=True)
+        _require(np.all(all_t[available] == all_t[available[first_t[inverse_t]]]),
+                 'duplicate coordinates: conflicting T values')
     top = np.array([], dtype=int)
     tt = np.array([], dtype='float64')
     if len(points):
@@ -243,14 +250,11 @@ def _summarize(run_dir, top_rel_tol):
                                       return_inverse=True)
         _require(np.all(u[indices] == u[indices[first[inverse]]]),
                  'duplicate top coordinates: conflicting U values')
-        top = indices[np.sort(first)]
+        top = indices[first]
         available = indices[np.isfinite(all_t[indices])]
         if len(available):
-            _, first_t, inverse_t = np.unique(points[available], axis=0,
-                                              return_index=True, return_inverse=True)
-            _require(np.all(all_t[available] == all_t[available[first_t[inverse_t]]]),
-                     'duplicate top coordinates: conflicting T values')
-            tt = all_t[available[np.sort(first_t)]]
+            _, first_t = np.unique(points[available], axis=0, return_index=True)
+            tt = all_t[available[first_t]]
     w = None
     if len(top) >= 3:
         xy = points[top, :2]
@@ -266,7 +270,7 @@ def _summarize(run_dir, top_rel_tol):
             _, residual = best_fit_plane(xy[:, 0], xy[:, 1], u[top, 2])
         w = float(np.ptp(residual))
     temperature = None
-    if any(t is not None for _, _, t in data):
+    if np.any(np.isfinite(all_t)):
         available_t = all_t[np.isfinite(all_t)]
         temperature = dict(min=float(available_t.min()) if len(available_t) else None,
                            max=float(available_t.max()) if len(available_t) else None,

@@ -265,6 +265,32 @@ class Edges(unittest.TestCase):
                         self.assertEqual(main([str(run)]), 14)
                     self.assertIn('result_summary: INPUT_INVALID:', err.getvalue())
 
+    def test_conflicting_duplicate_temperature_below_top(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run, cut=True)
+            with h5py.File(step, 'r+') as f:
+                f['VTKHDF/cut/Points'][1] = [0., 0., 0.]
+            with self.assertRaises(ResultSummaryError) as caught:
+                summarize(run)
+            self.assertEqual(caught.exception.code, 14)
+            self.assertIn('conflicting T', str(caught.exception))
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(main([str(run)]), 14)
+            self.assertTrue(err.getvalue().startswith('result_summary: INPUT_INVALID:'))
+
+    def test_storage_order_independence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run, cut=True)
+            expected = summarize(run)
+            with h5py.File(step, 'r+') as f:
+                block = f['VTKHDF/hex']
+                for path in ('Points', 'PointData/T', 'PointData/U'):
+                    block[path][...] = block[path][...][::-1]
+            self.assertEqual(summarize(run), expected)
+
     def test_matching_duplicate_across_blocks(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)
@@ -478,8 +504,7 @@ class Edges(unittest.TestCase):
                         self.assertEqual(len(err.getvalue().splitlines()), 1)
                         continue
                     result = summarize(run)
-                    self.assertEqual(result['temperature'], dict(
-                        min=None, max=None, top_min=None, top_max=None, top_mean=None))
+                    self.assertIsNone(result['temperature'])
                     fixed_keys(self, result)
                     self.assertEqual(result['warpage']['n_top_points'], 0 if empty_geometry else 9)
                     out = io.StringIO()

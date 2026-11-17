@@ -38,7 +38,7 @@ def fixture(run, cut=False, two=False):
             b.attrs['Version'] = [2, 8]
             b.attrs['Type'] = np.bytes_('UnstructuredGrid')
             b.attrs['Index'] = index
-            p = points if name == 'hex' else (np.array([[2., 0., 1.], [0., 0., 0.]]) if cut else np.empty((0, 3)))
+            p = points if name == 'hex' else (np.array([[2., 0., 1.], [2., 0., 0.]]) if cut else np.empty((0, 3)))
             pc = counts if name == 'hex' else ([1, 1] if cut else [0, 0])
             cc = [1, 1] if name == 'hex' or cut else [0, 0]
             b['Points'] = p.astype('float64')
