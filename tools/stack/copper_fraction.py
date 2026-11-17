@@ -118,7 +118,7 @@ def _homogenize(stack, stack_dir):
             if any(not (x0 <= x <= x1 and y0 <= y <= y1) for x, y in ring):
                 raise invalid('outline polygon outside outline box')
         area = abs(ring_area_m2(ring, 1.0))
-    elif 'box' not in outline and outline_ring is not None:
+    elif outline_ring is not None:
         ring, dbu = outline_ring
         area = abs(ring_area_m2(ring, dbu))
         outline['polygon'] = [[x * dbu, y * dbu] for x, y in ring]

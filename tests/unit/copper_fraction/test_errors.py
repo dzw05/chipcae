@@ -10,7 +10,7 @@ class Errors(unittest.TestCase):
                  'magic', 'offsets', 'negative_offset', 'oversized_offset', 'short_ring', 'trailing', 'truncated', 'empty_sidecar', 'utf8',
                  'zero_dbu', 'nan_dbu', 'first_offset', 'empty_first_offset', 'case', 'missing_layer', 'duplicates',
                  'too_large', 'negative', 'unit', 'same_path', 'two_outlines', 'zero_outlines',
-                 'zero_outline', 'empty_json', 'invalid_json',
+                 'zero_outline', 'zero_polygon', 'empty_json', 'invalid_json',
                  'missing_unit', 'missing_layers', 'missing_outline', 'bad_outline',
                  'empty_outline', 'polygon_outside_box', 'bad_box', 'bad_polygon', 'missing_refs',
                  'bad_refs', 'bad_ref', 'missing_ref_path', 'missing_ref_hash',
@@ -64,6 +64,8 @@ class Errors(unittest.TestCase):
                 if case in ('case', 'missing_layer'):
                     stack['layers'][0]['copper']['polygons']['layer'] = 'f.cu' if case == 'case' else 'absent'
                 if case == 'unit': stack['unit'] = 'mm'
+                if case == 'zero_polygon':
+                    stack['outline']['polygon'] = [[0, 0], [.001, .001], [.002, .002]]
                 if case == 'zero_outline': stack['outline']['box'] = [0, 0, 0, 0]
                 if case in ('missing_unit', 'missing_layers', 'missing_outline', 'missing_refs'):
                     stack.pop({'missing_refs': 'external_refs'}.get(case, case.removeprefix('missing_')))
