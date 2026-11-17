@@ -102,3 +102,7 @@ at `/workspace/tasks/istepa-golden-build/kernel/chipcae-import` from the detache
 `1607ad5fde6641a92fb7da7a0a66f456e4ec4adf` baseline source. Reproduce using the
 `noop`, `step`, `help`, and `incomplete_reserved` cases with `--generate`.
 ECAD OFF retains the brief's exact exit-code/defects comparison scope.
+
+Mixed reserved assembly regressions exercise all six orderings of the output,
+reserved option, and assembly pairs, with both `-o` and `--out`. Each requires
+the assembly diagnostic, exit 2, and empty stdout.

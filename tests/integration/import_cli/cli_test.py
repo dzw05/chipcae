@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Byte-level CLI acceptance tests; generation is only for the documented baseline."""
 import argparse
+import itertools
 import pathlib
 import shutil
 import subprocess
@@ -140,13 +141,15 @@ def run_case(binary, case, generate=False):
                   b"--assembly" in result.stderr, "assembly output-first: diagnostic differs")
             # With no input, assembly determines the diagnostic in either option order.
             for option in ("--accept", "--t-min", "--stack-override"):
-                for args in (["-o", "stack.json", option, "xyz", "--assembly", "assembly.json"],
-                             [option, "xyz", "--assembly", "assembly.json", "-o", "stack.json"],
-                             ["--assembly", "assembly.json", option, "xyz", "-o", "stack.json"]):
-                    result = invoke(binary, args, directory)
-                    check(result.returncode == 2 and result.stdout == b"" and
-                          b"not implemented yet" in result.stderr and b"--assembly" in result.stderr,
-                          f"mixed assembly {args}: diagnostic differs: {result.stderr!r}")
+                for output_option in ("-o", "--out"):
+                    groups = ((output_option, "stack.json"), (option, "xyz"),
+                              ("--assembly", "assembly.json"))
+                    for ordering in itertools.permutations(groups):
+                        args = [arg for group in ordering for arg in group]
+                        result = invoke(binary, args, directory)
+                        check(result.returncode == 2 and result.stdout == b"" and
+                              b"not implemented yet" in result.stderr and b"--assembly" in result.stderr,
+                              f"mixed assembly {args}: diagnostic differs: {result.stderr!r}")
             for value in ("xyz", "1e9999", "1e-5", ""):
                 result = invoke(binary, ["a.xml", "-o", "stack.json", "--t-min", value], directory)
                 check(result.returncode == 2 and b"not implemented yet" in result.stderr and
