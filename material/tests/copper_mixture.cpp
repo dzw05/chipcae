@@ -5,6 +5,7 @@
 #include "chipcae/material/material_params.hpp"
 
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -135,15 +136,18 @@ void laminate() {
             near(1 / S[14], Ez);
             max_error = std::max(max_error, std::abs(1 / S[14] / Ez - 1));
             Real Gm = Em / (2 * (1 + nm)), Gc = Ec / (2 * (1 + nc));
-            near(1 / (2 * S[35]), f * Gc + (1 - f) * Gm);
+            near(1 / (2 * S[35]), Ex / (2 * (1 + n)), 1e-14);
             near(1 / (2 * S[21]), 1 / (f / Gc + (1 - f) / Gm));
             near(-S[2] / S[0], n);
             auto x = run(a, in), y = run(b, in);
-            Real th = (f * Ec * y.thermal_strain[0] + (1 - f) * Em * x.thermal_strain[0]) / Ex;
+            Real Mc = Ec / (1 - nc), Mm = Em / (1 - nm);
+            Real th = (f * Mc * y.thermal_strain[0] + (1 - f) * Mm * x.thermal_strain[0]) /
+                      (f * Mc + (1 - f) * Mm);
             near(out.thermal_strain[0], th);
             near(out.thermal_strain[2],
-                 f * (1 + nc) * y.thermal_strain[0] + (1 - f) * (1 + nm) * x.thermal_strain[0] -
-                     n * th);
+                 f * (y.thermal_strain[0] - 2 * nc / (1 - nc) * (th - y.thermal_strain[0])) +
+                     (1 - f) *
+                         (x.thermal_strain[0] - 2 * nm / (1 - nm) * (th - x.thermal_strain[0])));
             in.override_T_sf = true;
             in.T_sf = T;
             out = run(mix, in);
@@ -375,21 +379,79 @@ void exec(bool require_cuda = false) {
 }
 void expansion() {
     chipcae::mesh::HexMeshArrays mesh;
+    mesh.axes[0] = {0, 1, 2};
+    mesh.axes[1] = {0, 1, 2}; // Four padded columns; trailing column has no elements.
     mesh.axes[2] = {0, 1, 2, 3};
     // Nonlocal/reordered GIDs ensure expansion uses global columns, not local indices.
     mesh.elem_gid = {8, 0, 4, 7, 2, 3, 6, 1, 5};
     auto device = chipcae::mesh::upload<MS>(mesh);
-    auto phi = chipcae::mesh::upload_vector<Real, MS>({.1, .5, .9}, "columns");
+    auto phi = chipcae::mesh::upload_vector<Real, MS>({.1, .5, .9, .7}, "columns");
+    for (int length : {3, 5}) {
+        auto bad = chipcae::mesh::upload_vector<Real, MS>(std::vector<Real>(length), "bad");
+        bool caught = false;
+        try {
+            expand_point_param(device, bad);
+        } catch (const std::invalid_argument& e) {
+            std::string message = e.what();
+            caught = message.find("expected 4") != message.npos &&
+                     message.find("actual " + std::to_string(length)) != message.npos;
+        }
+        check(caught, "padded column extent diagnostic");
+    }
     auto expanded = expand_point_param(device, phi);
     auto host = Kokkos::create_mirror_view_and_copy(MS{}, expanded);
     for (std::size_t e = 0; e < mesh.elem_gid.size(); ++e)
         check(host(e) == phi(mesh.elem_gid[e] / 3), "column expansion");
 }
+// Emit actual component thermal strains, preserving tangent/secant and T_sf conventions.
+void reference_cases() {
+    std::cout << std::setprecision(17);
+    for (bool polyimide : {false, true}) {
+        auto m = card(false), c = card(true);
+        // Isotropic equivalent test cards: existing FR4-like card and a softer PI-like pair.
+        if (polyimide) {
+            m.elastic_table = TemperatureTable({233, 533}, {{3e9, 1.5e9}, {.34, .36}});
+            m.cte_table = TemperatureTable({233, 533}, {{20e-6, 40e-6}});
+        }
+        auto a = kernel(m), b = kernel(c);
+        CopperMixture<MS> mix(a, b);
+        for (Real T : {233., 400., 533.})
+            for (bool override_zero : {false, true})
+                for (int i = 0; i <= 10; ++i) {
+                    auto in = input(i / 10., T);
+                    in.override_T_sf = override_zero;
+                    in.T_sf = 350;
+                    auto x = run(a, in), y = run(b, in), out = run(mix, in);
+                    if (i == 0 || i == 10) {
+                        const auto& pure = i == 0 ? x : y;
+                        for (int j = 0; j < 6; ++j)
+                            near(out.thermal_strain[j], pure.thermal_strain[j], 1e-14);
+                        for (int j = 0; j < 36; ++j)
+                            near(out.tangent[j], pure.tangent[j], 1e-14);
+                    }
+                    Real Em, nm, Ec, nc;
+                    a.isotropic_properties(in, Em, nm);
+                    b.isotropic_properties(in, Ec, nc);
+                    auto S = inverse(out.tangent);
+                    Real f = in.point_param, Ex = f * Ec + (1 - f) * Em;
+                    Real n = f * nc + (1 - f) * nm;
+                    if (i > 0 && i < 10)
+                        near(1 / (2 * S[35]), Ex / (2 * (1 + n)), 1e-14);
+                    std::cout << polyimide << ' ' << T << ' ' << override_zero << ' ' << f << ' '
+                              << Em << ' ' << nm << ' ' << Ec << ' ' << nc << ' '
+                              << x.thermal_strain[0] << ' ' << y.thermal_strain[0] << ' '
+                              << out.thermal_strain[0] << ' ' << out.thermal_strain[2] << ' '
+                              << 1 / (2 * S[35]) << '\n';
+                }
+    }
+}
 int main(int argc, char** argv) {
     Kokkos::ScopeGuard guard(argc, argv);
     try {
         std::string which = argv[1];
-        if (which == "expand")
+        if (which == "reference")
+            reference_cases();
+        else if (which == "expand")
             expansion();
         else if (which == "limits")
             limits();
