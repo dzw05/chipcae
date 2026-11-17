@@ -52,29 +52,10 @@ within 1e-12 H, including C3D20 corner and midside nodes. Surface `W_bfp` is
 computed with `tools.vv.warpage_qoi.interp_grid`
 and `qoi_surface` on an 81×81 grid in millimetres, then converted back to metres.
 
-The normative [artifact contract](CONTRACT.md) requires the validator and schema
-to be distributed together with `REFERENCE.json`. The checked-in
-[reference.schema.json](reference.schema.json) is the shared structural schema. Standard JSON Schema cannot compare instance fields, so schema
-validation alone is insufficient. All schema consumers must use the shared
-[contract.py](contract.py) `validate_reference(data)` API (also used by generation)
-or its CLI:
-
-```
-python3 tools/vv/calculix_trilayer/contract.py tools/vv/calculix_trilayer/REFERENCE.json
-```
-
-Both entry points enforce the schema and equality of top-level `W_bfp_m` with
-the selected mesh's `W_bfp_m`, without pinning the checked-in numeric result.
-The CLI exits nonzero on invalid artifacts. Run
-`python3 tools/vv/calculix_trilayer/check_contract.py` for consumer regressions.
-The comparison test reads only `REFERENCE.json`, using explicit required-field,
-model, refinement, and arithmetic checks without importing the schema or generator.
-The runtime version is recorded in the top-level `calculix_version` string and
-must be nonempty; reports use that recorded version. The required integer
-`artifact_version` is `1`; the schema, generation validator, and independent
-reader reject missing or unsupported versions. The required nonempty `host`
-string records the generating machine and operating system (the checked-in
-reference was generated on box Linux x86_64). There is no `provenance` wrapper.
+The comparison test reads only `REFERENCE.json` and checks the required fields,
+model, refinement, and delta arithmetic. The runtime version and generating
+host are recorded in `calculix_version` and `host`. JSON SPDX metadata records
+the Apache-2.0 license and is preserved by generation.
 
 The ASCII FRD layout used by CalculiX 2.23 is `(1X,I2,I10,3E12.5)`:
 columns 2–3 contain the record marker, 4–13 the node ID, and 14–49
@@ -93,7 +74,7 @@ rerun `generate.py` to recreate them. Scipy is used indirectly
 by the shared `interp_grid` function for linear interpolation.
 
 Run `python3 -m unittest tools.vv.test_trilayer_calculix_ref` after generation.
-Generation validation requires `jsonschema`; the comparison test uses only the standard library.
+The comparison test uses only the standard library.
 Only passing validation prints the single delta report in the brief's fixed
 field order. The prototype is the 参考值（原型计算值） described above.
 The passing comparison test also overwrites `/workspace/tasks/logs/v-ccx-delta.md`

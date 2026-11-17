@@ -1,4 +1,5 @@
 {
+  "SPDX-License-Identifier": "Apache-2.0",
   "kind": "REFERENCE",
   "label": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解",
   "W_bfp_m": 0.004274306997289974,
@@ -62,6 +63,5 @@
   "prototype_W_bfp_m": 0.004269532769,
   "abs_delta_m": 4.774228289973655e-06,
   "rel_delta": 0.0011182086069553374,
-  "artifact_version": 1,
   "host": "box Linux x86_64"
 }
