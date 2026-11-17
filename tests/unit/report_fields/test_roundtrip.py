@@ -36,6 +36,7 @@ def exact(actual, expected, location):
         assert math.isfinite(actual) and abs(actual - expected) <= 1e-15, (
             location, actual, expected)
     elif isinstance(expected, dict):
+        # Freeze the schema as well as values: additional keys require explicit review.
         assert type(actual) is dict and actual.keys() == expected.keys(), location
         for key, value in expected.items():
             exact(actual[key], value, f"{location}.{key}")
@@ -50,7 +51,7 @@ def exact(actual, expected, location):
 
 def verify(writer, directory, mode, reason):
     result = subprocess.run([writer, str(directory), mode], check=True,
-                            capture_output=True, text=True)
+                            capture_output=True, text=True, timeout=10)
     paths = result.stdout.splitlines()
     assert paths == [str(directory / "import_report.json"),
                      str(directory / "import_report.csv")], result.stdout
@@ -84,7 +85,7 @@ def main():
     writer = os.environ["CHIPCAE_REPORTFIELDS_WRITER"]
     assert Path(writer).is_absolute() and Path(writer).is_file(), writer
     reason = int(subprocess.run([writer, "--reason-value"], check=True,
-                                capture_output=True, text=True).stdout)
+                                capture_output=True, text=True, timeout=10).stdout)
     with tempfile.TemporaryDirectory(prefix="chipcae-reportfields-") as temporary:
         directory = Path(temporary) / "reports"
         first_paths = verify(writer, directory, "four", reason)

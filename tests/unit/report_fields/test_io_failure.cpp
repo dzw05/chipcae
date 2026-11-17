@@ -33,6 +33,16 @@ struct TemporaryDirectory {
 
 int main() {
     try {
+        ImportReportHeader header;
+        header.L = 1;
+        header.t_min = .1;
+        header.tolerances = {0.000001, 0.00002, 0.0003, 0.004};
+        {
+            TemporaryDirectory temporary;
+            std::string error;
+            if (!write_import_report(temporary.path / "reports", header, {}, &error))
+                throw std::runtime_error("unblocked report directory failed: " + error);
+        }
         for (bool nested : {false, true}) {
             TemporaryDirectory temporary;
             const auto blocker = temporary.path / "ordinary-file";
@@ -44,7 +54,7 @@ int main() {
             }
             std::string error;
             const auto directory = nested ? blocker / "reports" : blocker;
-            if (write_import_report(directory, {}, {}, &error))
+            if (write_import_report(directory, header, {}, &error))
                 throw std::runtime_error("blocked report directory unexpectedly succeeded");
             if (error.empty())
                 throw std::runtime_error("blocked report directory returned an empty error");

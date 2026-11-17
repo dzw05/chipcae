@@ -6,6 +6,7 @@ using namespace chipcae::geometry;
 
 int main(int argc, char** argv) {
     constexpr auto reason = DefectReason::TOLERANCE_RANGE_UNSUPPORTED;
+    // Expose the named enum value to the Python field expectations.
     if (argc == 2 && std::string(argv[1]) == "--reason-value") {
         std::cout << static_cast<int>(reason) << '\n';
         return 0;
