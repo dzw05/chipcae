@@ -48,6 +48,20 @@ struct Residual {
     std::string code;
     std::uint32_t error_code{};
 };
+struct ResidualBatchPoint {
+    std::string solver, field;
+    std::uint32_t iteration{};
+    double norm{};
+    std::uint32_t flags{}, linear_iterations{}, window_iterations{};
+    bool operator==(const ResidualBatchPoint&) const = default;
+};
+struct ResidualBatch {
+    std::uint64_t window{};
+    double time{};
+    std::vector<ResidualBatchPoint> points;
+    std::uint32_t dropped_intermediate{};
+    bool operator==(const ResidualBatch&) const = default;
+};
 struct LogLine {
     std::int32_t level{};
     std::int32_t rank{};
@@ -74,8 +88,31 @@ struct OutputAvailable {
     std::string path;
     std::string checksum;
 };
+struct ControlAck {
+    std::uint64_t cmd_seq{};
+    std::string client_request_id;
+    std::uint32_t status{};
+    std::uint64_t effective_step{};
+    std::string message;
+    double effective_time{};
+    bool operator==(const ControlAck&) const = default;
+};
+struct KernelExit {
+    std::int32_t exit_code{};
+    std::uint64_t last_completed_window{};
+    std::string reason;
+    bool operator==(const KernelExit&) const = default;
+};
 
-using EventPayload = std::variant<KernelHello, Progress, Residual, LogLine, State, OutputAvailable>;
+using EventPayload = std::variant<KernelHello,
+                                  Progress,
+                                  Residual,
+                                  LogLine,
+                                  State,
+                                  OutputAvailable,
+                                  ResidualBatch,
+                                  ControlAck,
+                                  KernelExit>;
 struct Event {
     std::uint64_t seq{};
     std::int64_t wall_time_unix_ns{};
