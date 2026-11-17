@@ -599,15 +599,42 @@ void mixed_tools() {
     auto& f = j.features["DRILL"];
     f.symbols = {{"r600"}};
     f.pads = {{{2, 3}, 0, true}, {{6, 7}, 0, true}};
-    j.tools["DRILL"] = {{7, "plated", 0.6}, {9, "non-plated", 0.6}};
+    // Repeated plated sizes retain the matrix span and symbol diameter.
+    j.tools["DRILL"] = {{7, "plated", 0.6}, {9, "PLATED", 0.6}};
     for (int order = 0; order < 2; ++order) {
         const auto m = mapped(j);
-        require(m.vias.empty() && m.via_fractions.empty() && m.report.unsupported.size() == 2,
-                "equal diameter tools without linkage cannot classify either hole");
-        for (const auto& item : m.report.unsupported)
-            require(item.element == "ViaToolAmbiguous:DRILL",
-                    "unlinked ambiguous hole is reported instead of guessed");
+        require(m.vias.size() == 2 && !m.via_fractions.empty() && m.report.unsupported.empty(),
+                "same-classification duplicate sizes map both vias");
+        for (std::size_t i = 0; i < m.vias.size(); ++i) {
+            const auto& v = m.vias[i];
+            require(v.start_layer == "TOP" && v.end_layer == "BOTTOM", "matrix drill span");
+            require(v.position ==
+                        std::array<int64_t, 2>{i == 0 ? 2000 : 6000, i == 0 ? 3000 : 7000},
+                    "duplicate size via position");
+            near(v.outer_radius_dbu, 300);
+            near(v.inner_radius_dbu, 275);
+        }
         std::reverse(j.tools["DRILL"].begin(), j.tools["DRILL"].end());
+    }
+    j.tools["DRILL"] = {{7, "plated", 0.6005}, {9, "plated", 0.5995}};
+    const auto rounded = mapped(j);
+    require(rounded.vias.size() == 2 && rounded.report.unsupported.empty(),
+            "sub-dbu matching duplicates retain symbol diameter");
+    for (const auto& v : rounded.vias) {
+        near(v.outer_radius_dbu, 300);
+        near(v.inner_radius_dbu, 275);
+    }
+    for (const auto& type : {"non-plated", "slot"}) {
+        j.tools["DRILL"] = {{7, "plated", 0.6}, {9, type, 0.6}};
+        for (int order = 0; order < 2; ++order) {
+            const auto m = mapped(j);
+            require(m.vias.empty() && m.via_fractions.empty() && m.report.unsupported.size() == 2,
+                    "conflicting tool classifications cannot classify either hole");
+            for (const auto& item : m.report.unsupported)
+                require(item.element == "ViaToolAmbiguous:DRILL",
+                        "unlinked ambiguous hole is reported instead of guessed");
+            std::reverse(j.tools["DRILL"].begin(), j.tools["DRILL"].end());
+        }
     }
     // Distinct diameters remain unambiguous in the frozen representation.
     f.symbols.push_back({"r800"});

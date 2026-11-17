@@ -215,29 +215,32 @@ struct Mapper {
             auto s = symbol(f, p.sym);
             const OdbTool* tool = nullptr;
             auto tools = job.tools.find(layer.name);
+            auto classification = [](const OdbTool& t) {
+                auto type = fold_ascii(t.type);
+                std::erase_if(type, [](char c) { return c == '-' || c == '_'; });
+                return type == "slot" ? 1 : type == "nonplated" ? 2 : 0;
+            };
             bool ambiguous = false;
+            std::size_t matches = 0;
             if (tools != job.tools.end())
                 for (const auto& t : tools->second)
                     if (std::abs(t.finish_size * scale - s.w) < 1) {
-                        ambiguous = tool != nullptr;
-                        if (ambiguous)
-                            break;
-                        tool = &t;
+                        ++matches;
+                        if (tool && classification(*tool) != classification(t))
+                            ambiguous = true;
+                        else if (!tool)
+                            tool = &t;
                     }
             if (ambiguous) {
                 unsupported("ViaToolAmbiguous:" + layer.name);
                 continue;
             }
-            if (s.kind != "round" || (tool && fold_ascii(tool->type) == "slot")) {
+            if (s.kind != "round" || (tool && classification(*tool) == 1)) {
                 unsupported("Slot:" + layer.name);
                 continue;
             }
-            if (tool) {
-                auto type = fold_ascii(tool->type);
-                std::erase_if(type, [](char c) { return c == '-' || c == '_'; });
-                if (type == "nonplated")
-                    continue;
-            }
+            if (tool && classification(*tool) == 2)
+                continue;
             auto a = std::find_if(model.layers.begin(), model.layers.end(), [&](const auto& l) {
                 return l.name == layer.start_name;
             });
@@ -273,7 +276,7 @@ struct Mapper {
             v.end_layer = layer.end_name;
             auto pos = point(p.at);
             v.position = {pos.x, pos.y};
-            v.outer_radius_dbu = tool ? tool->finish_size * scale / 2 : s.w / 2;
+            v.outer_radius_dbu = matches == 1 ? tool->finish_size * scale / 2 : s.w / 2;
             v.inner_radius_dbu = v.outer_radius_dbu - plating;
             if (!std::isfinite(v.outer_radius_dbu) || !std::isfinite(v.inner_radius_dbu) ||
                 !(0 <= v.inner_radius_dbu && v.inner_radius_dbu < v.outer_radius_dbu)) {
