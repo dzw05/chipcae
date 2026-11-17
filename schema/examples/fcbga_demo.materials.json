@@ -204,6 +204,60 @@
           "extrapolation": "clamp"
         }
       }
+    },
+    {
+      "id": "copper",
+      "schema_version": "1",
+      "unit_system": "SI",
+      "density": 8940,
+      "model": "thermo_elastic",
+      "provenance": {
+        "source_type": "literature",
+        "confidence": "medium",
+        "reference": "Aurubis Material Datasheet CuOFE, PNA 203, UNS C10100, EN_2024_11, p. 1 (density, Young modulus, conductivity, expansion): https://www.aurubis.com/en/dam/jcr%3A7f1f3c64-448e-4b72-bf75-d0559fcea3ca/PNA%20203_CuOFE_C10100-EN-%5BBP%5D.pdf ; eFunda, Properties of Copper Alloy UNS C10100, Mechanical Properties at 25 C (Poisson ratio): https://www.efunda.com/Materials/alloys/copper/show_copper.cfm?ID=UNS_C10100&Page_Title=UNS+C10100&show_prop=all",
+        "notes": "近似材料：多晶纯铜室温值，用于 PACKAGE_BULK_PARTS 的 lid；未按实际盖板合金和工艺标定"
+      },
+      "elastic": {
+        "symmetry": "isotropic",
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "E": [
+              127000000000,
+              127000000000
+            ],
+            "nu": [
+              0.34,
+              0.34
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      },
+      "thermal_expansion": {
+        "cte_type": "tangent",
+        "symmetry": "isotropic",
+        "stress_free_temperature": 298.15,
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "alpha": [
+              1.77e-05,
+              1.77e-05
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      },
+      "conductivity": 394
     }
   ],
   "x-note": "illustrative, not measured or vendor data"
