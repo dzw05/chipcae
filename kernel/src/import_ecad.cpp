@@ -1,4 +1,5 @@
 #include "chipcae/geometry/import_report.hpp"
+#include "import_cli_contract.hpp"
 #include "import_common.hpp"
 #ifdef CHIPCAE_ENABLE_ECAD
 #include "chipcae/geometry/ecad/ipc2581.hpp"
