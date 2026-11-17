@@ -67,3 +67,29 @@ with h5py.File(root / 'name_vlen.vtkhdf', 'r+') as f:
                 del fd[key]
         fd.create_dataset('layer_names', data=np.array(['substrate', 'die_attach', 'Si'], dtype=object), dtype=dt)
         fd.create_dataset('material_names', data=np.array(['substrate', 'die_attach', 'Si'], dtype=object), dtype=dt)
+
+# D04 fixtures: compacted picking must never turn an original gid into a local id.
+for variant in ('viewer_mixed', 'viewer_mesh'):
+    target = root / variant
+    (target / 'out').mkdir(parents=True, exist_ok=True)
+    q = S.part(0)
+    q['points'] = np.concatenate([q['points'] + [i * 2, 0, 0] for i in range(3)])
+    q['types'] = np.full(3, 12, np.uint8)
+    q['conn'] = np.arange(24, dtype=np.int64)
+    q['offsets'] = [0, 8, 16, 24]
+    q['PointData'] = {k: np.concatenate([v] * 3) for k, v in q['PointData'].items()}
+    q['CellData'] = dict(cell_kind=np.array([2, 1, 0], dtype=np.int32),
+                         layer_id=np.array([1, 2, 3], dtype=np.int32),
+                         elem_gid=np.array([2**53 + 101, 2**53 + 103, 2**53 + 107], dtype=np.int64))
+    if variant == 'viewer_mesh':
+        q['PointData'] = {}
+        del q['CellData']['elem_gid']
+    S.W.write_pdc(target / 'out/step.vtkhdf', [('hex', 'UnstructuredGrid', [q], (2, 8))],
+                  {'volume': ['hex']}, (2, 8))
+    manifest = dict(schema_version='chipcae.results/1.0', fields=[],
+                    blocks=[dict(name='hex', index=0)],
+                    steps=[dict(n=0, time=0, file='out/step.vtkhdf')],
+                    summary=[] if variant == 'viewer_mesh' else
+                    [dict(step=0, name='warpage_pv', value=12345, unit='m'),
+                     dict(step=0, name='U_mag_max', value=54321, unit='m')])
+    (target / 'manifest.json').write_text(json.dumps(manifest))
