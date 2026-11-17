@@ -5,6 +5,7 @@
 #include <cmath>
 #include <numbers>
 #include <stdexcept>
+#include <tuple>
 
 namespace chipcae::geometry::ecad::odbpp_detail {
 namespace {
@@ -288,6 +289,7 @@ struct Mapper {
         }
     }
     void fractions() {
+        std::vector<ViaFraction> cells;
         for (std::size_t i = 0; i < model.layers.size(); ++i) {
             ViaFraction cell;
             cell.layer = i;
@@ -304,9 +306,24 @@ struct Mapper {
                 }
                 found = true;
             }
-            if (found)
-                model.via_fractions.push_back(cell);
+            if (found) {
+                for (std::size_t axis = 0; axis < 2; ++axis)
+                    if (!std::isfinite(cell.lower[axis]) || !std::isfinite(cell.upper[axis]) ||
+                        !(cell.lower[axis] < cell.upper[axis]))
+                        throw std::runtime_error("invalid via fraction bounds");
+                cells.push_back(cell);
+            }
         }
+        // Keep the exposed cell order canonical before rasterization fills coverage.
+        const auto key = [](const ViaFraction& c) { return std::tie(c.layer, c.lower, c.upper); };
+        std::sort(cells.begin(), cells.end(), [&](const auto& a, const auto& b) {
+            return key(a) < key(b);
+        });
+        if (std::adjacent_find(cells.begin(), cells.end(), [&](const auto& a, const auto& b) {
+                return key(a) == key(b);
+            }) != cells.end())
+            throw std::runtime_error("duplicate via fraction bounds");
+        model.via_fractions = std::move(cells);
         if (!rasterize_vias(model, model.via_fractions))
             throw std::runtime_error("invalid via fraction bounds");
     }

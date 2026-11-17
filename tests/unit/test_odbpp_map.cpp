@@ -536,11 +536,17 @@ void via_ipc_initialization() {
 }
 void via_fraction_invariants() {
     auto j = board();
+    // Cross both dielectrics so exposed ordering is checked on multiple cells.
+    auto bottom = j.layers[2];
+    bottom.name = "LAST";
+    bottom.row = 5;
+    j.layers.push_back(bottom);
+    j.attrs.layer["LAST"] = j.attrs.layer["BOTTOM"];
     OdbLayer drill;
     drill.name = "DRILL";
     drill.type = "drill";
     drill.start_name = "TOP";
-    drill.end_name = "BOTTOM";
+    drill.end_name = "LAST";
     j.layers.push_back(drill);
     j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
     auto& f = j.features["DRILL"];
@@ -555,12 +561,9 @@ void via_fraction_invariants() {
             for (int index : order)
                 f.pads.push_back(pads[index]);
             const auto m = mapped(j);
-            auto cells = m.via_fractions;
+            const auto& cells = m.via_fractions;
             auto key = [](const ViaFraction& c) { return std::tie(c.layer, c.lower, c.upper); };
-            std::sort(cells.begin(), cells.end(), [&](const auto& a, const auto& b) {
-                return key(a) < key(b);
-            });
-            require(!cells.empty(), "fraction cells present");
+            require(cells.size() == 2, "one fraction cell per crossed dielectric");
             for (std::size_t i = 0; i < cells.size(); ++i) {
                 const auto& c = cells[i];
                 for (std::size_t axis = 0; axis < 2; ++axis)
@@ -569,7 +572,8 @@ void via_fraction_invariants() {
                             "finite strict fraction bounds");
                 require(std::isfinite(c.fraction) && c.fraction > 0 && c.fraction <= 1,
                         "finite fraction coverage");
-                require(i == 0 || key(cells[i - 1]) != key(c), "no duplicate cells");
+                require(i == 0 || key(cells[i - 1]) < key(c),
+                        "canonical order without duplicate cells");
             }
             if (reference.empty())
                 reference = cells;
@@ -577,7 +581,7 @@ void via_fraction_invariants() {
             for (std::size_t i = 0; i < cells.size(); ++i) {
                 require(key(cells[i]) == key(reference[i]) &&
                             cells[i].via_count == reference[i].via_count,
-                        "permutation normalized bounds and via count");
+                        "permutation exposed bounds, order and via count");
                 near(cells[i].fraction, reference[i].fraction, 1e-12);
             }
         } while (std::next_permutation(order.begin(), order.end()));
