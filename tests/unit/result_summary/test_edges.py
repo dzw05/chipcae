@@ -7,7 +7,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from fixtures import fixture, save, h5py, np
+from fixtures import fixture, fixed_keys, save, h5py, np
 from tools.vv.result_summary import ResultSummaryError, main, summarize
 
 
@@ -367,7 +367,8 @@ class Edges(unittest.TestCase):
                 del f['VTKHDF/hex/PointData/T']
                 f['VTKHDF/cut/Points'][...] = [[2., 0., .5], [0., 0., 0.]]
             result = summarize(run)
-            self.assertIsNone(result['temperature'])
+            self.assertEqual(result['temperature'], dict(
+                min=100., max=999., top_min=None, top_max=None, top_mean=None))
             self.assertEqual(result['warpage']['n_top_points'], 9)
 
     def test_byte_order(self):
@@ -397,7 +398,8 @@ class Edges(unittest.TestCase):
                 b['NumberOfPoints'][...] = 0
                 b['NumberOfCells'][...] = 0
             result = summarize(run)
-            self.assertIsNone(result['temperature'])
+            self.assertEqual(result['temperature'], dict(
+                min=None, max=None, top_min=None, top_max=None, top_mean=None))
             self.assertEqual(result['warpage']['n_top_points'], 0)
             self.assertIsNone(result['warpage']['w_bfp_m'])
 
@@ -425,12 +427,14 @@ class Edges(unittest.TestCase):
                             if name in temperature_blocks:
                                 block['PointData/T'] = np.empty(0, dtype='float64')
                     result = summarize(run)
-                    self.assertIsNone(result['temperature'])
+                    self.assertEqual(result['temperature'], dict(
+                        min=None, max=None, top_min=None, top_max=None, top_mean=None))
+                    fixed_keys(self, result)
                     self.assertEqual(result['warpage']['n_top_points'], 0 if empty_geometry else 9)
                     out = io.StringIO()
                     with contextlib.redirect_stdout(out):
                         self.assertEqual(main([str(run)]), 0)
-                    self.assertIn('"temperature": null', out.getvalue())
+                    self.assertEqual(json.loads(out.getvalue())['temperature'], result['temperature'])
 
     def test_structural_errors(self):
         for case in ('corrupt', 'U_components', 'negative_counts', 'cut_types', 'cut_types_length', 'root_version'):

@@ -4,8 +4,9 @@
 """Validate and summarize the first step of a chipcae results directory.
 
 Duplicate top coordinates must have identical displacement and available
-temperature values. Temperature uses blocks providing T, and is null when none
-of their points lie on the global top surface. Numeric
+temperature values. Temperature uses blocks providing T; absent samples have
+null statistics (including top_* when no global top point provides T). The whole
+temperature field is null only when no block provides T. Numeric
 field types accept either byte order, retaining the required kind and width.
 """
 import argparse
@@ -253,11 +254,13 @@ def _summarize(run_dir, top_rel_tol):
         _, residual = best_fit_plane(points[top, 0], points[top, 1], u[top, 2])
         w = float(np.ptp(residual))
     temperature = None
-    if len(tt):
+    if any(t is not None for _, _, t in data):
         available_t = all_t[np.isfinite(all_t)]
-        temperature = dict(min=float(available_t.min()), max=float(available_t.max()),
-                           top_min=float(tt.min()), top_max=float(tt.max()),
-                           top_mean=float(tt.mean()))
+        temperature = dict(min=float(available_t.min()) if len(available_t) else None,
+                           max=float(available_t.max()) if len(available_t) else None,
+                           top_min=float(tt.min()) if len(tt) else None,
+                           top_max=float(tt.max()) if len(tt) else None,
+                           top_mean=float(tt.mean()) if len(tt) else None)
     return dict(schema=SCHEMA, step_file=step_file, mesh_sha256=mesh.get('mesh_sha256'),
                 blocks=blocks, layer_names=names[0], material_names=names[1],
                 temperature=temperature,
