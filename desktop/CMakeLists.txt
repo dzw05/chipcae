@@ -86,6 +86,22 @@ if(CHIPCAE_BUILD_TESTS)
     set_tests_properties(desktop_forms PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endif()
 
+add_library(chipcae_local_jobs jobs/JobTypes.cpp jobs/JobTypes.hpp
+    jobs/ProfileMapper.cpp jobs/ProfileMapper.hpp jobs/LocalJobService.cpp jobs/LocalJobService.hpp)
+target_include_directories(chipcae_local_jobs PUBLIC jobs)
+target_link_libraries(chipcae_local_jobs PUBLIC chipcae_desktop_ui chipcae_desktop_protocol)
+if(CHIPCAE_BUILD_TESTS)
+    add_executable(desktop_launcher tests/launcher_test.cpp)
+    target_link_libraries(desktop_launcher PRIVATE chipcae_local_jobs)
+    target_compile_definitions(desktop_launcher PRIVATE CHIPCAE_REPOSITORY="${CMAKE_CURRENT_SOURCE_DIR}/..")
+    add_test(NAME desktop_launcher COMMAND desktop_launcher)
+    set_tests_properties(desktop_launcher PROPERTIES TIMEOUT 45)
+endif()
+if(CHIPCAE_BUILD_TESTS)
+    add_test(NAME desktop_launcher_control_reader
+        COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/launcher_control_test.py")
+endif()
+
 if(CHIPCAE_BUILD_TESTS)
     add_executable(desktop_stack tests/stack_editor_test.cpp)
     target_link_libraries(desktop_stack PRIVATE chipcae_desktop_ui)
