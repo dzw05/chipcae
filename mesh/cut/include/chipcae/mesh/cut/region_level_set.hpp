@@ -5,7 +5,7 @@
 
 #include <vector>
 
-namespace chipcae::mesh::cut {
+namespace chipcae::mesh {
 struct RegionLSOptions {
     Real inside_tol_rel = 1e-12;
 };
@@ -21,6 +21,6 @@ struct RegionLSOptions {
 // To recover sources for output entry k, enumerate these groups in that same
 // order: group k gives li and the complete set of ri (and hence source names).
 // Body identity alone is insufficient: the same body may recur across layers.
-std::vector<BodyLevelSet>
+std::vector<cut::BodyLevelSet>
 region_level_sets(const StackModel&, const HexMeshArrays&, const RegionLSOptions&);
-} // namespace chipcae::mesh::cut
+} // namespace chipcae::mesh
