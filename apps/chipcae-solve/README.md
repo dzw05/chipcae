@@ -102,3 +102,11 @@ The solver/preview mesh digest comparison runs at np=1/2 after the O2 merge. GPU
 acceptance remains outside this CPU implementation. Protocol codes remain
 MATERIAL_ID_DUPLICATE=11, INPUT_REFERENCE_MISSING=12, CUT_UNSUPPORTED=13 and
 INPUT_INVALID=14.
+
+Run profiles accept case-sensitive `backend=cpu` with `gpus=0`, or
+`backend=cuda` with `gpus>=1`. A CUDA profile selects `mfem::Device("cuda")`
+only when built with CUDA-enabled MFEM, and reports the selected device.
+Otherwise it exits with NOT_IMPLEMENTED (2) and
+`chipcae-solve built without CUDA-enabled MFEM`. Invalid backend/GPU-count
+pairings exit with INPUT_INVALID (14). Device selection keeps the existing
+solve path; it does not promise GPU execution or acceleration.

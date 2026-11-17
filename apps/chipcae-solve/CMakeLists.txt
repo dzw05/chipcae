@@ -25,6 +25,12 @@ if(CHIPCAE_ENABLE_JSONCONS)
     target_compile_definitions(chipcae-solve PRIVATE CHIPCAE_SOLVE_INPUTS=1)
 endif()
 
+# mfem.hpp includes the installed MFEM configuration (including MFEM_USE_CUDA).
+if(CHIPCAE_ENABLE_MFEM)
+    target_link_libraries(chipcae-solve PRIVATE mfem)
+    target_compile_definitions(chipcae-solve PRIVATE CHIPCAE_SOLVE_MFEM=1)
+endif()
+
 if(CHIPCAE_ENABLE_JSONCONS AND CHIPCAE_ENABLE_MFEM AND CHIPCAE_ENABLE_MPI AND CHIPCAE_ENABLE_HDF5)
     if(NOT MFEM_USE_PETSC)
         message(FATAL_ERROR "chipcae-solve requires MFEM built with PETSc support")
