@@ -28,7 +28,8 @@ DefectsDialog::DefectsDialog(ImportController& controller, QWidget* parent) : QD
                                      QString::fromUtf8(controller.reportBytes()),
                                      QString::fromUtf8(controller.stderrText())));
         confirm_->setEnabled(controller.grade() == "B");
-        if (controller.grade() != "A")
+        if (controller.grade() != "A" || !controller.error().isEmpty() ||
+            controller.exitCode() != 0)
             open();
     });
 }
