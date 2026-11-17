@@ -1,3 +1,4 @@
+#include "../../../material/tests/cte_fixtures.hpp"
 #include "chipcae/material/cte_convert.hpp"
 
 #include <cstdio>
@@ -17,8 +18,8 @@ void check(bool pass, const char* name) {
 
 int main(int argc, char** argv) {
     Kokkos::ScopeGuard guard(argc, argv);
-    const CteTable sec{{250, 300, 350}, {1e-5, 2e-5, 3e-5}, 250};
-    const CteTable tan{{250, 300, 350}, {1e-5, 3e-5, 5e-5}, 250};
+    const auto& sec = test::secant_cte;
+    const auto& tan = test::tangent_cte;
     auto reject = [&](const CteTable& bad) {
         std::vector<Real> out;
         for (bool prefill : {false, true}) {

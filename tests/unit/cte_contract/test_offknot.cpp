@@ -1,3 +1,4 @@
+#include "../../../material/tests/cte_fixtures.hpp"
 #include "chipcae/material/cte_convert.hpp"
 
 #include <cmath>
@@ -21,8 +22,8 @@ bool near(Real actual, Real expected) {
 
 int main(int argc, char** argv) {
     Kokkos::ScopeGuard guard(argc, argv);
-    const CteTable sec{{250, 300, 350}, {1e-5, 2e-5, 3e-5}, 250};
-    const CteTable tan{{250, 300, 350}, {1e-5, 3e-5, 5e-5}, 250};
+    const auto& sec = test::secant_cte;
+    const auto& tan = test::tangent_cte;
     // Interpolated secant plus distance times slope at 325 K.
     const Real tangent_expected =
         (2e-5 + (325 - 300) * (3e-5 - 2e-5) / 50) + (325 - 250) * (3e-5 - 2e-5) / 50;

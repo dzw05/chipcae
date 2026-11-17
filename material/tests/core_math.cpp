@@ -1,6 +1,7 @@
 #include "chipcae/material/cte_convert.hpp"
 #include "chipcae/material/prony_viscoelastic.hpp"
 #include "chipcae/material/schema.hpp"
+#include "cte_fixtures.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -36,11 +37,11 @@ int main(int argc, char** argv) {
     Real left = th[0];
     thermal.evaluate(300 + 1e-7, th);
     check(std::abs(th[0] - left) < 7e-12, "CTE continuous at jump");
-    CteTable sec{{250, 300, 350}, {1e-5, 2e-5, 3e-5}, 250};
+    const auto& sec = test::secant_cte;
     std::vector<Real> converted;
     check(secant_to_tangent(sec, converted) == StatusCode::Ok && near(converted[1], 3e-5),
           "secant derivative conversion");
-    CteTable tan{{250, 300, 350}, {1e-5, 3e-5, 5e-5}, 250};
+    const auto& tan = test::tangent_cte;
     check(tangent_to_secant(tan, converted) == StatusCode::Ok && near(converted[1], 2e-5),
           "tangent integral conversion");
     Real exact;
