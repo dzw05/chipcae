@@ -164,6 +164,18 @@ int main(int argc, char** argv) {
                 "dangling material ref diagnostic");
         require(!form.load(root + "/desktop/tests/data/not-delivered.schema.json", Json::object()),
                 "missing schema explicit");
+        require(form.load(schemaFile, sample), "reload sample for stale-error check");
+        auto* nx = form.findChild<QLineEdit*>("/mesh/nx");
+        require(nx != nullptr, "mesh nx editor");
+        nx->setText("-");
+        emit nx->textEdited("-");
+        require(!form.errors().isEmpty(), "invalid numeric input reported");
+        form.setObjectPath("/loads");
+        form.setObjectPath("");
+        bool stale = false;
+        for (const auto& error : form.errors())
+            stale = stale || error.message.contains("Invalid JSON value");
+        require(!stale, "rebuilt editor must drop discarded input errors");
         std::cout
             << "Schema forms: sample, refs, enum, required, extra, nested, conditional and UI OK\n";
     } catch (const std::exception& error) {

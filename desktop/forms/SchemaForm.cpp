@@ -211,6 +211,7 @@ void SchemaForm::scheduleRebuild() {
     });
 }
 void SchemaForm::rebuild() {
+    inputErrors_.clear();
     delete fields_;
     auto* scroll = new QScrollArea(this);
     fields_ = scroll;
@@ -221,6 +222,8 @@ void SchemaForm::rebuild() {
     layout_->insertWidget(0, scroll, 1);
     render(rows, schemaAt(path_), path_);
     rows->addStretch();
+    if (validator_)
+        validate();
 }
 void SchemaForm::render(QVBoxLayout* rows, const Json& input, const QString& path, int depth) {
     if (depth > 32) {
