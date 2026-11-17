@@ -67,6 +67,7 @@ with tempfile.TemporaryDirectory(prefix="demogate-") as tmp:
         if rejected:
             print("case-sensitive target observation:", detail, flush=True)
             assert result.returncode == 14, detail
+            assert "chipcae-solve: invalid target: layer:Die_layer" in result.stderr, detail
             return
         assert result.returncode == 0, detail
         out = work / name
@@ -101,6 +102,7 @@ with tempfile.TemporaryDirectory(prefix="demogate-") as tmp:
     height = zmax - points[:, 2].min()
     assert height > 0
     top = points[:, 2] >= zmax - 1e-12 * height
+    # First-occurrence indices follow the sorted unique vertices, preserving U pairing.
     vertices, indices = np.unique(points[top], axis=0, return_index=True)
     assert len(vertices) >= 3
     _, residual = qoi.best_fit_plane(vertices[:, 0], vertices[:, 1], displacement[top][indices, 2])

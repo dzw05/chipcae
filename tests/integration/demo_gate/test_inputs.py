@@ -55,6 +55,7 @@ for name, path in schemas.items():
         resolution = {"registry": registry}
     else:
         schema = json.loads(json.dumps(schema).replace("chipcae://", "https://chipcae.invalid/"))
+        # Deprecated RefResolver is only a fallback for older jsonschema installations.
         resolution = {"resolver": jsonschema.RefResolver.from_schema(schema, store=schema_store)}
     jsonschema.validators.validator_for(schema)(schema, **resolution).validate(inputs[name])
 

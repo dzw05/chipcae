@@ -23,3 +23,11 @@ chipcae-solve --case examples/demo_gate/case.json --profile examples/demo_gate/p
 等效厚度方向标量值，不能反映真实面内铜层扩热；焊球等效层铺满整层并使用
 SAC305 体材料导热系数，会高估该层导热。密度仍为母版占位值，稳态导热不使用它。
 因此一维估算不能替代三维温度场与实际封装的验证。
+
+本演示输入的扩展元数据也属于冻结的样例契约，由 `demogate_inputs` 校验：
+每张材料卡必须包含字符串 `x-conductivity-source`，说明相邻 `conductivity`
+的公开来源；四张卡的引用句全文（含链接、标点）以本目录 `materials.json`
+为准，测试中的 `sources` 表保存相同文本。顶层 `x-note` 必须逐字保留
+`schema/examples/fcbga_demo.materials.json` 母版的说明。
+这些是本样例的文档与来源追溯字段，不参与求解，也不要求其他材料库采用；
+材料库 schema 的顶层 `^x-` 扩展点允许 `x-note`，本样例在此明确其含义与保留规则。
