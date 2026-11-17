@@ -348,13 +348,20 @@ void stackup() {
 void missing_material() {
     auto j = board();
     j.attrs.layer["CORE"].erase(".material");
-    rejected(j, {".material", "CORE"});
+    require(mapped(j).layers[1].material.empty(), "missing material is preserved without defaults");
     j.attrs.layer["CORE"][".material"] = "";
-    rejected(j, {".material", "CORE"});
+    require(mapped(j).layers[1].material.empty(), "empty material is preserved without defaults");
     j.attrs.layer.erase("CORE");
     std::vector<ThicknessRecord> records;
     rejected(j, {"missing thickness", "CORE"}, {nullptr, &records});
     require(records.size() == 4, "missing attrlist still records every layer");
+    ThicknessOverrides overrides{{"CORE", 800e-6}};
+    records.clear();
+    const auto m = mapped(j, {&overrides, &records});
+    require(m.layers[1].material.empty(), "absent attrlist does not invent a material");
+    require(records.size() == 4 && records[1].source == "override",
+            "thickness override allows absent attrlist without defaulting material");
+    near(m.layers[1].thickness_m, 800e-6);
 }
 void oval_capsules() {
     for (const auto& [symbol, vertical, circular] : {std::tuple{"oval4000x2000", false, false},

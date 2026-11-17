@@ -37,7 +37,6 @@ void map_stackup(const OdbJob& j, const MapOptions& options, ImportResult& resul
     std::stable_sort(
         layers.begin(), layers.end(), [](const auto& a, const auto& b) { return a.row < b.row; });
     std::vector<std::string> missing;
-    std::optional<std::string> missing_material;
     for (const auto& l : layers) {
         const auto type = fold_ascii(l.type);
         const bool copper = type == "signal" || type == "power_ground";
@@ -75,8 +74,6 @@ void map_stackup(const OdbJob& j, const MapOptions& options, ImportResult& resul
                 }
             }
         }
-        if (!copper && layer.material.empty() && !missing_material)
-            missing_material = l.name;
         double selected = odb;
         std::string source = odb > 0 ? "odb" : "missing";
         std::optional<double> original;
@@ -108,7 +105,5 @@ void map_stackup(const OdbJob& j, const MapOptions& options, ImportResult& resul
             error += name + ", ";
         throw std::runtime_error(error.substr(0, error.size() - 2));
     }
-    if (missing_material)
-        throw std::runtime_error("missing .material for dielectric layer: " + *missing_material);
 }
 } // namespace chipcae::geometry::ecad::odbpp_detail
