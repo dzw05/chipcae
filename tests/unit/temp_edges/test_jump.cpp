@@ -37,8 +37,10 @@ int main(int argc, char** argv) {
     check(table.evaluate(0, 300, value) == StatusCode::Ok, "jump status");
     check_near(value, 4e-5, "jump takes right value");
     check(table.evaluate(0, 275, value) == StatusCode::Ok, "left segment status");
+    // Midpoint of (250, 1e-5) and the left jump node (300, 2e-5).
     check_near(value, 1.5e-5, "left segment interpolation");
     check(table.evaluate(0, 350, value) == StatusCode::Ok, "right segment status");
+    // Midpoint of the right jump node (300, 4e-5) and (400, 6e-5).
     check_near(value, 5e-5, "right segment interpolation");
     for (int repeat = 0; repeat < 100; ++repeat) {
         check(table.evaluate(0, 300, value) == StatusCode::Ok, "repeated jump status");
