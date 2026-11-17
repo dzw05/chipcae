@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Zhiwei Duan
 """Manual FRD parser regressions; requires the generator's numpy/scipy environment."""
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from generate import parse_frd
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from tools.vv.calculix_trilayer.generate import parse_frd  # noqa: E402
 
 
 class FrdParserTest(unittest.TestCase):

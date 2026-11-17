@@ -16,6 +16,7 @@ import numpy as np
 REPO = Path(__file__).resolve().parents[3]
 # This repo-local script imports the shared QoI implementation from the checkout.
 sys.path.insert(0, str(REPO))
+from tools.vv.calculix_trilayer.contract import validate_reference  # noqa: E402
 from tools.vv.warpage_qoi import interp_grid, qoi_surface  # noqa: E402
 
 L = 1.0
@@ -285,6 +286,7 @@ def main():
             "label": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解",
         },
     }
+    validate_reference(payload)
     out = here / "REFERENCE.json"
     out.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
 

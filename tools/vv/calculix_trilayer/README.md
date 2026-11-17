@@ -11,6 +11,10 @@ specialist chooses the comparison acceptance criterion later.
 - Geometry and cards match the WP-2 trilayer: thicknesses 0.05 / 0.01 / 0.04 m,
   E = 25 / 3 / 130 GPa, ν = 0.2 / 0.35 / 0.28, α = 15e-6 / 50e-6 / 2.6e-6 1/K,
   ΔT = −100 K (400 K → 300 K).
+- Thermal strain follows the [CalculiX manual, §7.56](https://www.dhondt.de/ccx_2.22.pdf#page=501):
+  `alpha(T)*(T-Tref) - alpha(T0)*(T0-Tref)`. With constant alpha in each
+  material, the reference temperature cancels, so the initial 400 K and target
+  300 K cards give exactly `alpha*(-100 K)` without an explicit `ZERO`.
 - Elements: C3D20 only (20-node quadratic bricks). Coarse 8×8×6, fine 16×16×6
   (two elements through each layer). The recorded value uses `selected_mesh = fine`.
 - Boundary conditions: 3-2-1 on the z = 0 corners, as in
@@ -21,7 +25,7 @@ specialist chooses the comparison acceptance criterion later.
 
 ## Regenerating
 
-Requires numpy, scipy, and `ccx` on `PATH` (or `CHIPCAE_CCX`). From the repo root:
+Requires numpy, scipy (used by the shared interpolation routine), jsonschema, and `ccx` on `PATH` (or `CHIPCAE_CCX`). From the repo root:
 
 ```
 python tools/vv/calculix_trilayer/generate.py
@@ -36,8 +40,9 @@ within 1e-12 H, including C3D20 corner and midside nodes. Surface `W_bfp` is
 computed with `tools.vv.warpage_qoi.interp_grid`
 and `qoi_surface` on an 81×81 grid in millimetres, then converted back to metres.
 
-Structural validation is inline in `tools/vv/test_trilayer_calculix_ref.py`;
-`REFERENCE.json` is its only required artifact. It checks required fields,
+The shared `contract.py` module defines the artifact schema and validator.
+Both `generate.py` (before writing `REFERENCE.json`) and
+`tools/vv/test_trilayer_calculix_ref.py` use this contract. It checks required fields,
 coarse/fine mesh names, fine selection, and equality with the fine mesh value.
 Optional `provenance` metadata cannot replace required top-level environment strings.
 
