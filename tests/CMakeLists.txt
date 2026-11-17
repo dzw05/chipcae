@@ -5,7 +5,7 @@ add_test(NAME core COMMAND chipcae_test_core)
 
 add_executable(chipcae_test_mesh unit/test_mesh.cpp)
 target_link_libraries(chipcae_test_mesh PRIVATE chipcae::mesh chipcae::geometry chipcae::fvm chipcae::fem
-                                                chipcae::particles)
+                                                chipcae::particles chipcae_mesh_background)
 chipcae_set_warnings(chipcae_test_mesh)
 add_test(NAME mesh COMMAND chipcae_test_mesh)
 
@@ -54,6 +54,14 @@ if(CHIPCAE_ENABLE_MPI)
     set_tests_properties(par_mpi_2 par_mpi_4 PROPERTIES LABELS "mpi;par")
 endif()
 add_subdirectory(integration/mesh_p1)
+
+if(CHIPCAE_ENABLE_ECAD)
+    add_executable(chipcae_test_copper_map unit/test_copper_map.cpp)
+    target_link_libraries(chipcae_test_copper_map PRIVATE chipcae_mesh_background)
+    chipcae_set_warnings(chipcae_test_copper_map)
+    add_test(NAME copper_map_analytic COMMAND chipcae_test_copper_map)
+    set_tests_properties(copper_map_analytic PROPERTIES LABELS "mesh;tierA" TIMEOUT 60)
+endif()
 
 add_executable(chipcae_test_import_thresholds unit/test_import_thresholds.cpp)
 target_link_libraries(chipcae_test_import_thresholds PRIVATE chipcae::geometry)

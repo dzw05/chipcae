@@ -163,3 +163,27 @@ if(CHIPCAE_MATERIAL_ENABLE_TESTS)
     add_test(NAME material_review_regressions COMMAND material_review_regressions ${CMAKE_CURRENT_SOURCE_DIR}/tests/negative)
     set_tests_properties(material_review_regressions PROPERTIES LABELS "T22;layout_hash;memory_space" ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
 endif()
+
+if(CHIPCAE_MATERIAL_ENABLE_TESTS)
+    add_executable(material_copper_mixture tests/copper_mixture.cpp)
+    target_link_libraries(material_copper_mixture PRIVATE chipcae_material)
+    target_include_directories(material_copper_mixture PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../mesh/background/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../core/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../schema/include)
+    target_compile_definitions(material_copper_mixture PRIVATE CHIPCAE_ENABLE_KOKKOS)
+    foreach(case IN ITEMS limits laminate spd reject_visco exec expand)
+        add_test(NAME material_cu_mix_${case} COMMAND material_copper_mixture ${case})
+        set_tests_properties(material_cu_mix_${case} PROPERTIES LABELS tierA TIMEOUT 60
+            ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false" SKIP_REGULAR_EXPRESSION "SKIP:")
+    endforeach()
+    add_test(NAME material_point_param_empty COMMAND material_copper_mixture empty)
+    set_tests_properties(material_point_param_empty PROPERTIES LABELS tierA TIMEOUT 60
+        ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
+endif()
+
+if(CHIPCAE_MATERIAL_ENABLE_TESTS)
+    add_test(NAME material_cu_mix_cuda COMMAND material_copper_mixture exec_cuda)
+    set_tests_properties(material_cu_mix_cuda PROPERTIES LABELS nightly TIMEOUT 60
+        ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false" SKIP_REGULAR_EXPRESSION "SKIP:")
+endif()

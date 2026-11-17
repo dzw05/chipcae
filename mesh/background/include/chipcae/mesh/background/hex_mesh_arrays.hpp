@@ -24,7 +24,8 @@ struct HexMeshArrays {
     std::vector<Index> elem_gid, node_gid;
     // Hard constraint: a column never crosses ranks. The column-to-rank map
     // from par is expanded in Morton column order and passed to mfem::ParMesh.
-    std::vector<Local> partitioning, node_layer;
+    std::vector<Local> partitioning, node_layer, copper_layer_of_layer;
+    std::vector<Real> copper_phi; // [copper layer][Morton column]
     std::vector<Index> node_column;
     std::vector<Real> attr_frame, nodes;
     bool internal_interfaces = false;
@@ -38,6 +39,9 @@ struct HexMeshArrays {
     std::vector<InterfaceReport> preparation_report;
     struct GridReport {
         Local levels = 1;
+        int rule = 0; // 1/2/3 for auto selection; 0 for explicit levels.
+        std::size_t N_L = 0;
+        bool auto_selected = false;
         std::array<std::size_t, 2> padding{};
         std::vector<Real> max_aspect_ratio; // Coarsest to finest, z unchanged.
         std::vector<std::array<std::vector<Real>, 2>> level_axes;
@@ -71,7 +75,9 @@ View1<T, MemSpace> upload_vector(const std::vector<T>& src, const std::string& n
 template <class MemSpace>
 struct HexMeshDevice {
     View1<const Local, MemSpace> node_layer, elem_attribute, elem_material;
-    View1<const Index, MemSpace> node_column;
+    View1<const Index, MemSpace> node_column, elem_gid;
+    View1<const Real, MemSpace> copper_phi;
+    std::size_t nz = 0;
 };
 template <class MemSpace>
 HexMeshDevice<MemSpace> upload(const HexMeshArrays& m) {
@@ -81,6 +87,9 @@ HexMeshDevice<MemSpace> upload(const HexMeshArrays& m) {
     return {upload_vector<Local, MemSpace>(m.node_layer, "node_layer"),
             upload_vector<Local, MemSpace>(m.attribute, "elem_attribute"),
             upload_vector<Local, MemSpace>(materials, "elem_material"),
-            upload_vector<Index, MemSpace>(m.node_column, "node_column")};
+            upload_vector<Index, MemSpace>(m.node_column, "node_column"),
+            upload_vector<Index, MemSpace>(m.elem_gid, "elem_gid"),
+            upload_vector<Real, MemSpace>(m.copper_phi, "copper_phi"),
+            m.axes[2].empty() ? 0 : m.axes[2].size() - 1};
 }
 } // namespace chipcae::mesh

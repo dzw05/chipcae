@@ -154,6 +154,13 @@ int main() {
     expect(bool(padded), "nonuniform padded grid");
     const auto& pg = padded.value();
     const auto& report = pg.grid_report;
+    auto padded_candidates = hierarchy_candidates(nonuniform, padded_options);
+    expect(bool(padded_candidates), "nonuniform candidate planning");
+    const auto& padded_candidate = padded_candidates.value()[1];
+    expect(padded_candidate.feasible && padded_candidate.nx0 == (pg.axes[0].size() - 1) / 2 &&
+               padded_candidate.ny0 == (pg.axes[1].size() - 1) / 2 &&
+               padded_candidate.padded_cells == report.padding[0] + report.padding[1],
+           "nonuniform candidate padding matches build");
     expect(report.padding[0] == 1 && report.padding[1] == 0, "padding counts");
     expect(report.levels == 2 && report.max_aspect_ratio.size() == 2, "per-level aspect report");
     expect(std::find(pg.axes[0].begin(), pg.axes[0].end(), 2.5) != pg.axes[0].end(),
@@ -213,18 +220,22 @@ int main() {
     auto invalid = padded_options;
     invalid.levels = 4;
     auto invalid_grid = build_tensor_grid(nonuniform, invalid);
-    expect(!invalid_grid && invalid_grid.error().path == "HIERARCHY_INVALID",
-           "explicit insufficient coarse columns");
+    expect(bool(invalid_grid) && invalid_grid.value().grid_report.levels == 4 &&
+               !invalid_grid.value().grid_report.warnings.empty(),
+           "explicit below 16*np warns and continues");
     auto incommensurate_options = padded_options;
     incommensurate_options.max_ratio = 1;
     auto incommensurate_explicit = build_tensor_grid(nonuniform, incommensurate_options);
     expect(!incommensurate_explicit && incommensurate_explicit.error().path == "grid/grading",
            "incommensurate grading error at explicit levels");
+    auto incommensurate_candidates = hierarchy_candidates(nonuniform, incommensurate_options);
+    expect(!incommensurate_candidates && incommensurate_candidates.error().path == "grid/grading",
+           "original grading error returns no candidate table");
     incommensurate_options.levels = 0;
     auto incommensurate_auto = build_tensor_grid(nonuniform, incommensurate_options);
     expect(!incommensurate_auto && incommensurate_auto.error().path == "grid/grading",
            "incommensurate grading error at automatic levels");
-    // Exercise normal, soft-limit, relaxed and direct selection, and inherited loads.
+    // Exercise automatic selection and inherited loads across rank counts.
     for (int ranks : {1, 2, 4}) {
         auto options = k1::options();
         options.nx = options.ny = 8;
@@ -242,19 +253,27 @@ int main() {
                 expect(g.grid_report.column_ranks[l][d] ==
                            g.grid_report.column_ranks[l - 1][d >> 2],
                        "multirank child same rank as parent");
-        options.max_coarse_columns = 1;
-        auto soft = build_tensor_grid(s, options);
-        expect(bool(soft) && soft.value().grid_report.levels == g.grid_report.levels &&
-                   !soft.value().grid_report.warnings.empty(),
-               "soft cap preserves lower bound");
+        auto candidates = hierarchy_candidates(s, options);
+        expect(bool(candidates), "candidate planning");
+        auto choice = select_levels(candidates.value(), g.axes[2].size() - 1, ranks);
+        expect(g.grid_report.auto_selected && g.grid_report.rule == choice.rule &&
+                   g.grid_report.N_L == choice.N_L && g.grid_report.levels == choice.L + 1,
+               "automatic report matches selector");
     }
     StackModel plain = s;
     plain.layers[0].regions.clear();
     plain.activation_groups.clear();
     auto selection = k1::options();
     selection.nx = selection.ny = 4;
+    auto previous_relaxed = build_tensor_grid(plain, selection);
+    expect(bool(previous_relaxed) && previous_relaxed.value().grid_report.levels == 1 &&
+               previous_relaxed.value().grid_report.rule == 3 &&
+               !previous_relaxed.value().grid_report.warnings.empty(),
+           "previous relaxed case now uses direct fallback");
+    selection.nx = selection.ny = 8;
     auto relaxed = build_tensor_grid(plain, selection);
-    expect(bool(relaxed) && relaxed.value().grid_report.levels == 1 &&
+    expect(bool(relaxed) && relaxed.value().grid_report.levels == 2 &&
+               relaxed.value().grid_report.rule == 1 &&
                !relaxed.value().grid_report.warnings.empty(),
            "relaxed minimum");
     selection.nx = selection.ny = 2;

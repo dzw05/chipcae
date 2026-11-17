@@ -40,6 +40,7 @@ struct BatchInput {
     Soa<const Real, MS> strain_n, strain_np1; // [6][N]
     Vec1<const Real, MS> T_n, T_np1;          // [N]
     Soa<const Real, MS> R;                    // [9][N]，可为空 extents（表示与全局重合）
+    Vec1<const Real, MS> point_param;         // [N], empty extents use PointInput default (φ = 0).
 };
 template <class MS>
 struct BatchOutput {
@@ -54,7 +55,7 @@ struct BatchOutput {
 
 // 主机侧外壳（v0.2.2）：只用于按批分发、插件注册和 nanobind（Q10）入口；设备内核内不得出现虚调用。
 // update_batch 内部按 ModelKind switch 到 MaterialAdapter<M, MS>，由它启动 Kokkos::parallel_for。
-enum class ModelKind : std::uint8_t { ThermoElastic, PronyViscoelastic /* 新模型在此登记 */ };
+enum class ModelKind : std::uint8_t { ThermoElastic, PronyViscoelastic, CopperMixture };
 
 template <class MS> // MS = Kokkos::HostSpace 或设备内存空间，各实例化一份
 class IMaterial {
@@ -124,6 +125,12 @@ public:
                       Soa<const Real, MS> state_old,
                       Soa<Real, MS> state_new,
                       BatchOutput<MS>& out) const override {
+        if (in.point_param.extent(0) != 0 && in.point_param.extent(0) != in.strain_np1.extent(1)) {
+            Status failed{};
+            failed.code = StatusCode::Failed;
+            Kokkos::deep_copy(out.status, failed);
+            return;
+        }
         const auto validity = validity_;
         if (validity.enabled && validity.clamp) {
             auto a = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, in.T_n);
@@ -148,6 +155,8 @@ public:
                 }
                 pin.T_n = in.T_n(j);
                 pin.T_np1 = in.T_np1(j);
+                if (in.point_param.extent(0) != 0)
+                    pin.point_param = in.point_param(j);
                 Mat3 R{};
                 if (in.R.extent(1) != 0) {
                     for (int i = 0; i < 9; ++i)
@@ -208,5 +217,12 @@ struct MaterialParams; // 见 chipcae/material/material_params.hpp
 template <class MS> // model_id → ModelKind → switch 到 MaterialAdapter<M, MS>；参数 deep_copy 到 MS
                     // 中的只读 View
 std::unique_ptr<IMaterial<MS>> make_material(const MaterialParams& validated);
+
+// Runtime stack composition; options carry outer activation/eigenstrain and identity only.
+// Component cards must be plain isotropic thermo_elastic@1 materials.
+template <class MS>
+std::unique_ptr<IMaterial<MS>> make_copper_mixture(const MaterialParams& matrix,
+                                                   const MaterialParams& copper,
+                                                   const MaterialParams& options);
 
 } // namespace chipcae::material
