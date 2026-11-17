@@ -102,7 +102,7 @@ def main(root):
     if positive is not None:
         # Layer names are preserved verbatim; only the final side suffix is parsed.
         for target in ('layer:Cu@inner@top', 'layer:Cu@inner@bottom',
-                       'layer:@top@bottom', 'layer:Cu\ninner@top'):
+                       'layer:@top@bottom'):
             document = copy.deepcopy(positive)
             document['parts'][0]['placement']['attach'] = target
             if errors(document, validator):
@@ -114,10 +114,20 @@ def main(root):
             found = errors(document, validator)
             if '/parts/0/placement/attach' not in {location for location, _ in found}:
                 failures.append(f'invalid attachment {target!r} accepted: {found}')
-        # Every path reference must scan beyond LF when rejecting unsafe segments.
+        # Reject embedded and trailing line breaks, including regex end-anchor cases.
+        for line_break in ('\n', '\r', '\r\n', '\u2028', '\u2029'):
+            for target in (f'layer:Cu{line_break}inner@top',
+                           f'layer:Cu@top{line_break}', f'part:lid@top{line_break}'):
+                document = copy.deepcopy(positive)
+                document['parts'][0]['placement']['attach'] = target
+                found = errors(document, validator)
+                if '/parts/0/placement/attach' not in {location for location, _ in found}:
+                    failures.append(f'multiline attachment {target!r} accepted: {found}')
+        # Every path reference must reject blank paths and scan beyond LF for unsafe segments.
         for path in (('board', 'path'), ('board', 'material_map'),
                      ('materials',), ('parts', 0, 'step'), ('parts_from_step', 'step')):
-            for unsafe in ('ok\n/../outside', 'ok\n\\outside', 'ok\nhttps://outside'):
+            for unsafe in ('', ' ', '\t', '\n', ' \r\n\t', '\u2003',
+                           'ok\n/../outside', 'ok\n\\outside', 'ok\nhttps://outside'):
                 document = copy.deepcopy(positive)
                 document['parts_from_step'] = {
                     'step': 'bulk.step', 'frame': 'step', 'origin': [0, 0, 0], 'bodies': {}

@@ -51,7 +51,7 @@
   "$defs": {
     "path": {
       "type": "string",
-      "pattern": "^(?![\\s\\S]*://)(?!/)(?![A-Za-z]:)(?![\\s\\S]*\\\\)(?![\\s\\S]*(^|/)\\.\\.(/|$))[\\s\\S]+$"
+      "pattern": "^(?=[\\s\\S]*\\S)(?![\\s\\S]*://)(?!/)(?![A-Za-z]:)(?![\\s\\S]*\\\\)(?![\\s\\S]*(^|/)\\.\\.(/|$))[\\s\\S]+$"
     },
     "attachPlacement": {
       "type": "object",
@@ -62,7 +62,7 @@
       "properties": {
         "attach": {
           "type": "string",
-          "pattern": "^(layer:[\\s\\S]+|part:[A-Za-z][A-Za-z0-9_-]{0,63})@(top|bottom)$"
+          "pattern": "^(layer:[^\\r\\n\\u2028\\u2029]+|part:[A-Za-z][A-Za-z0-9_-]{0,63})@(top|bottom)(?![\\s\\S])"
         },
         "gap": {
           "type": "number",
