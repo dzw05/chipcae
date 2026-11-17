@@ -75,6 +75,8 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             invalid = copy.deepcopy(data)
             invalid[field] = 123 if field != "W_bfp_m" else "invalid"
             variants.append(invalid)
+        for field in ("host", "calculix_version"):
+            variants.append(dict(data, **{field: ""}))
         for name in ("", "unknown", "coarse"):
             invalid = copy.deepcopy(data)
             invalid["selected_mesh"] = name
@@ -110,7 +112,10 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         self.assertEqual(data["element_type"], "C3D20")
         self.assertEqual(data["selected_mesh"], "fine")
         self.assertIsInstance(data["label"], str)
-        self.assertTrue(data["label"].strip())
+        self.assertIn("参考值（原型计算值）", data["label"])
+        for field in ("host", "calculix_version"):
+            self.assertIsInstance(data[field], str)
+            self.assertTrue(data[field].strip())
         self.assertAlmostEqual(data["prototype_W_bfp_m"], PROTOTYPE, places=12)
         names = [m["name"] for m in data["meshes"]]
         self.assertCountEqual(names, ["coarse", "fine"])

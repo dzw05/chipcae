@@ -71,7 +71,6 @@ def build_mesh(nx, ny):
 
     elements = []  # (eid, mid, n20)
     eid = 1
-    layer_eids = [[] for _ in THICK]
     z_elem = 0
     for li, nze in enumerate(Z_PER_LAYER):
         for ke in range(nze):
@@ -106,14 +105,13 @@ def build_mesh(nx, ny):
                     n20s = (n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, n11, n12,
                             n13, n14, n15, n16, n17, n18, n19, n20)
                     elements.append((eid, li + 1, n20s))
-                    layer_eids[li].append(eid)
                     eid += 1
             z_elem += 1
-    return coords, elements, layer_eids, nz
+    return coords, elements, nz
 
 
 def write_inp(path: Path, name: str, nx, ny):
-    coords, elements, layer_eids, nz = build_mesh(nx, ny)
+    coords, elements, nz = build_mesh(nx, ny)
     lines = ["*HEADING", f" chipcae WP-2 trilayer {name} C3D20 REFERENCE (not measured)", "*NODE"]
     for nid in sorted(coords):
         x, y, z = coords[nid]
@@ -140,7 +138,7 @@ def write_inp(path: Path, name: str, nx, ny):
         f"{n_xmin_ymax}",
     ]
     # top surface (all z=H nodes, including midsides)
-    top = [nid for nid, (_, _, z) in coords.items() if abs(z - H) <= 1e-14 * max(H, 1.0)]
+    top = [nid for nid, (_, _, z) in coords.items() if z >= H - 1e-12 * H]
     lines.append("*NSET, NSET=TOP")
     for i in range(0, len(top), 16):
         lines.append(",".join(str(n) for n in top[i:i + 16]))
@@ -171,7 +169,6 @@ def write_inp(path: Path, name: str, nx, ny):
         "*END STEP",
     ]
     path.write_text("\n".join(lines) + "\n")
-    return coords, top, nz
 
 
 def parse_frd(path: Path):
@@ -210,7 +207,7 @@ def w_bfp_from_frd(frd: Path) -> float:
             continue
         x, y, z = nodes[nid]
         # top surface only (generator requested NSET=TOP, but keep the geometric filter)
-        if abs(z - H) > 1e-12 * H:
+        if z < H - 1e-12 * H:
             continue
         rows.append((x * 1000.0, y * 1000.0, uz * 1000.0))  # mm
     if not rows:
@@ -233,7 +230,7 @@ def ccx_version() -> str:
 def run_mesh(workdir: Path, name: str):
     nx, ny = MESHES[name]["nx"], MESHES[name]["ny"]
     inp = workdir / f"{name}.inp"
-    coords, top, nz = write_inp(inp, name, nx, ny)
+    write_inp(inp, name, nx, ny)
     # ccx expects the jobname without extension, and CWD = workdir
     job = name
     r = subprocess.run([CCX, job], cwd=workdir, capture_output=True, text=True)
