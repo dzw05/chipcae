@@ -1,3 +1,0 @@
-# Schema validation dependencies for sampledocs_contract.
-jsonschema==4.26.0
-referencing==0.37.0

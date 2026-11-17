@@ -26,7 +26,8 @@ The later `max_ratio` failure is a separate mesh constraint: it means adjacent
 cell sizes exceed the configured limit.
 Inspect the mesh and layer discretization to understand that constraint. This
 mesh constraint is separate from the temperature-table requirement. This guide
-neither recommends a general `max_ratio` value nor validates any threshold; loosening a limit requires evidence for the intended mesh.
+neither recommends a general `max_ratio` value nor validates any threshold;
+loosening a limit requires evidence for the intended mesh.
 
 Steady conduction requires positive `conductivity` in W/(m K).
 The thermal sample `schema/examples/thermal.case.json` references the same FCBGA

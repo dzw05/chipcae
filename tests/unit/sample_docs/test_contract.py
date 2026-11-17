@@ -14,26 +14,29 @@ def require(condition, message):
 
 
 def validate_input(root, path, schema_path):
-    # Keep full schema checks; report missing/incompatible dependencies explicitly.
+    # Keep full schema checks without pinning the host tooling versions.
     try:
-        from importlib.metadata import version
         import jsonschema
         from referencing import Registry, Resource
-        for package, expected in (("jsonschema", "4.26.0"), ("referencing", "0.37.0")):
-            require(version(package) == expected,
-                    f"{package}=={expected} required; install with "
-                    "python3 -m pip install -r tests/unit/sample_docs/requirements.txt")
     except ImportError as error:
         raise AssertionError(
-            "schema validation dependencies unavailable; install with "
-            "python3 -m pip install -r tests/unit/sample_docs/requirements.txt"
+            "schema validation dependencies unavailable; "
+            "install compatible jsonschema and referencing packages"
         ) from error
 
     require(path.is_file(), f"missing command input or reference: {path}")
     document = json.loads(path.read_text(encoding="utf-8"))
     registry = Registry()
-    for source in list((root / "schema").glob("*.schema.json")) + list(
-            (root / "material/schema").glob("*.schema.json")):
+    # Only the checked input schemas and their external references are needed.
+    for relative in (
+        "schema/case-1.0.schema.json",
+        "schema/parameters.schema.json",
+        "schema/run-profile-1.0.schema.json",
+        "schema/stack-0.2.schema.json",
+        "material/schema/material-library.v1.schema.json",
+        "material/schema/material.v1.schema.json",
+    ):
+        source = root / relative
         schema = json.loads(source.read_text(encoding="utf-8"))
         registry = registry.with_resource(schema["$id"], Resource.from_contents(schema))
     schema = json.loads((root / schema_path).read_text(encoding="utf-8"))
@@ -150,7 +153,7 @@ def check(root):
     for path in sorted(documented):
         require((root / path).is_file(), f"missing documented file: {path}")
 
-    library = json.loads((root / "schema/examples/fcbga_demo.materials.json").read_text())
+    library = json.loads((root / "schema/examples/fcbga_demo.materials.json").read_text(encoding="utf-8"))
     materials = library.get("materials")
     require(isinstance(materials, list) and materials,
             "schema/examples/fcbga_demo.materials.json: materials must be a nonempty list")
