@@ -93,5 +93,38 @@ int main() {
                 near(area(box), 0.0002, 1e-15, "selected body area");
             }
         }
+        // A vertical sheet ending at the midpoint must not add its boundary
+        // edge to the box contour. Exercise contact from either side.
+        for (const bool above : {false, true}) {
+            TopoDS_Compound contact;
+            builder.MakeCompound(contact);
+            builder.Add(contact, BRepPrimAPI_MakeBox(40, 30, 0.5).Shape());
+            BRepBuilderAPI_MakePolygon wire;
+            const double end = above ? 0.5 : 0.0;
+            wire.Add(gp_Pnt(50, 0, end));
+            wire.Add(gp_Pnt(50, 10, end));
+            wire.Add(gp_Pnt(50, 10, 0.25));
+            wire.Add(gp_Pnt(50, 0, 0.25));
+            wire.Close();
+            builder.Add(contact, BRepBuilderAPI_MakeFace(wire.Wire()).Face());
+            Handle(TDocStd_Document) contact_doc = new TDocStd_Document("BinXCAF");
+            const auto contact_tool = XCAFDoc_DocumentTool::ShapeTool(contact_doc->Main());
+            TDataStd_Name::Set(contact_tool->AddShape(contact, false), "contact");
+            STEPCAFControl_Writer contact_writer;
+            require(contact_writer.Transfer(contact_doc, STEPControl_AsIs), "contact transfer");
+            require(contact_writer.Write(path.string().c_str()) == IFSelect_RetDone,
+                    "contact write");
+            const auto touching =
+                import_step(path, {compute_tolerances({0.06, 0.0005, 0.001, 0}, {}).value()});
+            require(touching.body_names.size() == 1, "one contact body");
+            auto midpoint_options = options();
+            midpoint_options.tau_a = 0.00025;
+            midpoint_options.tau_b = 0.00025;
+            const auto sliced = slice_prismatic(touching, "contact", midpoint_options);
+            const auto slab = single(sliced);
+            rectangle(slab.sections.front().outer, 1e-12);
+            near(area(slab), 0.0012, 1e-15, "endpoint contact contributes no section edge");
+            same(sliced, slice_prismatic(touching, "contact", midpoint_options));
+        }
     });
 }

@@ -86,16 +86,16 @@ Polylines section_edges(const TopoDS_Shape& shape, Real z, Real chord) {
     builder.MakeCompound(crossing);
     for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
         auto face = TopoDS::Face(it.Current());
-        BRepAdaptor_Surface surface(face);
-        if (surface.GetType() == GeomAbs_Plane &&
-            std::abs(surface.Plane().Axis().Direction().Z()) >= 1 - 1e-9 &&
-            surface.Plane().Location().Z() != z)
-            continue;
         Bnd_Box bounds;
         BRepBndLib::AddOptimal(face, bounds, false, false);
         Real x0, y0, z0, x1, y1, z1;
         bounds.Get(x0, y0, z0, x1, y1, z1);
-        if (z >= z0 && z <= z1)
+        // Require points on both sides of the plane. Allow for roundoff in
+        // the geometric bounds, without using OCCT's larger intersection
+        // tolerance, which can exceed the slab sampling inset.
+        const Real crossing_tol = 64 * std::numeric_limits<Real>::epsilon() *
+                                  std::max({Real(1), std::abs(z), std::abs(z0), std::abs(z1)});
+        if (z - z0 > crossing_tol && z1 - z > crossing_tol)
             builder.Add(crossing, face);
     }
     BRepAlgoAPI_Section section(crossing, gp_Pln(gp_Pnt(0, 0, z), gp_Dir(0, 0, 1)), false);
