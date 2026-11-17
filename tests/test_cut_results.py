@@ -13,6 +13,15 @@ except ImportError:
     print('SKIP: h5py/numpy unavailable')
     sys.exit(77)
 
+try:
+    import vtk
+except ImportError:
+    print('SKIP: mandatory readback requires vtk==9.7.2')
+    sys.exit(77)
+if vtk.vtkVersion.GetVTKVersion() != '9.7.2':
+    print('SKIP: mandatory readback requires vtk==9.7.2; found ' + vtk.vtkVersion.GetVTKVersion())
+    sys.exit(77)
+
 
 class CutResultsTest(unittest.TestCase):
     def test_s2(self):
@@ -28,7 +37,33 @@ class CutResultsTest(unittest.TestCase):
             manifest = json.loads((run/'manifest.json').read_text())
             self.assertEqual([b['name'] for b in manifest['blocks']],NAMES)
             self.assertEqual(next(s['value'] for s in manifest['summary'] if s['name']=='T_max'),308)
+            expected_dtypes = dict(T='float64', U='float64', layer_id='int32',
+                                   material_id='int32', cell_kind='int32', elem_gid='int64',
+                                   volume='float64', sigma_vm='float64')
+            self.assertEqual({f['name']: f['dtype'] for f in manifest['fields']}, expected_dtypes)
             check(path)
+            # Corrupt each independent topology contract and require checker rejection.
+            import shutil
+            for field, index, value in [('Connectivity', 0, 1),
+                                        ('PolyhedronToFaces', 0, 1),
+                                        ('FaceConnectivity', 0, 0),
+                                        ('Connectivity', 0, 6)]:
+                corrupt = pathlib.Path(tmp)/'corrupt.vtkhdf'
+                shutil.copyfile(path, corrupt)
+                with h5py.File(corrupt, 'r+') as f:
+                    g = f['VTKHDF/cut']
+                    if field == 'FaceConnectivity':
+                        value = g[field][1]
+                    if field == 'Connectivity' and value == 6:
+                        points = g['Points'][:]
+                        del g['Points']
+                        g.create_dataset('Points', data=np.vstack([points, [2., 2., 2.]]))
+                        counts = g['NumberOfPoints'][:]
+                        counts[-1] += 1
+                        g['NumberOfPoints'][:] = counts
+                    g[field][index] = value
+                with self.assertRaises(AssertionError):
+                    check(corrupt)
             with h5py.File(path) as f:
                 root = f['VTKHDF']; g = root['cut']
                 expected_counts = [1] if ranks == 1 else [0,1]
@@ -57,29 +92,24 @@ class CutResultsTest(unittest.TestCase):
                 np.testing.assert_array_equal(g['NumberOfCells'],[2] if ranks==1 else [1,1])
                 np.testing.assert_array_equal(g['Connectivity'],list(range(16)) if ranks==1 else list(range(8))*2)
                 np.testing.assert_array_equal(g['Offsets'],[0,8,16] if ranks==1 else [0,8,0,8])
-            try:
-                import vtk
-            except ImportError:
-                print('VTK readback SKIP: install vtk==9.7.2')
-            else:
-                reader = vtk.vtkHDFReader(); reader.SetFileName(str(path)); reader.Update()
-                output = reader.GetOutputDataObject(0)
-                self.assertEqual(output.GetNumberOfPartitionedDataSets(),4)
-                for i,name in enumerate(NAMES):
-                    self.assertEqual(output.GetMetaData(i).Get(vtk.vtkCompositeDataSet.NAME()),name)
-                    self.assertEqual(output.GetPartitionedDataSet(i).GetNumberOfPartitions(),ranks)
-                    for rank in range(ranks):
-                        self.assertIsNotNone(output.GetPartition(i,rank))
-                grid = output.GetPartition(1,0 if ranks==1 else 1)
-                self.assertEqual(grid.GetNumberOfCells(),1)
-                self.assertEqual(grid.GetCellType(0),42)
-                self.assertEqual(grid.GetCell(0).GetNumberOfFaces(),5)
-                vf = vtk.vtkCellSizeFilter(); vf.SetInputData(grid); vf.Update()
-                volume = vf.GetOutput().GetCellData().GetArray('Volume').GetValue(0)
-                self.assertLessEqual(abs(volume-.5)/.5,1e-12)
-                if ranks==2:
-                    self.assertEqual(output.GetPartition(1,0).GetNumberOfCells(),0)
-                print(f'VTK {vtk.vtkVersion.GetVTKVersion()} volume={volume:.17g}')
+            reader = vtk.vtkHDFReader(); reader.SetFileName(str(path)); reader.Update()
+            output = reader.GetOutputDataObject(0)
+            self.assertEqual(output.GetNumberOfPartitionedDataSets(),4)
+            for i,name in enumerate(NAMES):
+                self.assertEqual(output.GetMetaData(i).Get(vtk.vtkCompositeDataSet.NAME()),name)
+                self.assertEqual(output.GetPartitionedDataSet(i).GetNumberOfPartitions(),ranks)
+                for rank in range(ranks):
+                    self.assertIsNotNone(output.GetPartition(i,rank))
+            grid = output.GetPartition(1,0 if ranks==1 else 1)
+            self.assertEqual(grid.GetNumberOfCells(),1)
+            self.assertEqual(grid.GetCellType(0),42)
+            self.assertEqual(grid.GetCell(0).GetNumberOfFaces(),5)
+            vf = vtk.vtkCellSizeFilter(); vf.SetInputData(grid); vf.Update()
+            volume = vf.GetOutput().GetCellData().GetArray('Volume').GetValue(0)
+            self.assertLessEqual(abs(volume-.5)/.5,1e-12)
+            if ranks==2:
+                self.assertEqual(output.GetPartition(1,0).GetNumberOfCells(),0)
+            print(f'VTK {vtk.vtkVersion.GetVTKVersion()} volume={volume:.17g}')
 
 
 if __name__ == '__main__':

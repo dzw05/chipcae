@@ -39,7 +39,7 @@ def check(path):
                 assert np.all(root[name][topo]['Offsets'][:] == 0)
         print('rule 4 PASS')
         # Rank-local offsets and point/face IDs restart independently.
-        ps = fs = cs = fcs = pfs = 0
+        ps = fs = cs = fcs = pfs = conn_start = 0
         max_volume_error = 0.
         for rank, nc in enumerate(g['NumberOfCells'][:]):
             npnt = int(g['NumberOfPoints'][rank]); nf = int(g['NumberOfFaces'][rank])
@@ -48,8 +48,15 @@ def check(path):
             po = g['PolyhedronOffsets'][cs+rank:cs+rank+nc+1]
             fc = g['FaceConnectivity'][fcs:fcs+int(g['NumberOfFaceConnectivityIds'][rank])]
             pf = g['PolyhedronToFaces'][pfs:pfs+int(g['NumberOfPolyhedronToFaceIds'][rank])]
+            offsets = g['Offsets'][cs+rank:cs+rank+nc+1]
+            connectivity = g['Connectivity'][conn_start:conn_start+int(g['NumberOfConnectivityIds'][rank])]
             for i in range(nc):
+                cell_ids = connectivity[offsets[i]:offsets[i+1]].tolist()
+                assert len(cell_ids) == len(set(cell_ids))
+                assert all(0 <= v < npnt for v in cell_ids)
                 faces = [fc[fo[j]:fo[j+1]].tolist() for j in pf[po[i]:po[i+1]]]
+                assert len({frozenset(face) for face in faces}) == len(faces)
+                assert all(v in cell_ids for face in faces for v in face)
                 ids = list(dict.fromkeys(v for face in faces for v in face))
                 center = P[ids].mean(axis=0); edges = collections.Counter(); volume = 0.
                 for face in faces:
@@ -64,6 +71,7 @@ def check(path):
                 expected = g['CellData/volume'][cs+i]
                 max_volume_error = max(max_volume_error, abs(volume-expected))
                 assert volume > 0 and abs(volume-expected) <= 1e-12
+            conn_start += int(g['NumberOfConnectivityIds'][rank])
             ps += npnt; fs += nf; cs += nc
             fcs += int(g['NumberOfFaceConnectivityIds'][rank]); pfs += int(g['NumberOfPolyhedronToFaceIds'][rank])
         print(f'rule 5 PASS (max divergence error {max_volume_error:.3g})')

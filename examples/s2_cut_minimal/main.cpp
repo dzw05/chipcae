@@ -72,6 +72,33 @@ int main(int argc, char** argv) {
                                       ? 1
                                       : 0);
         }
+        // Solver nodal values, evaluated on a parent using trilinear basis functions.
+        auto fields = [&](Index parent, const double* xi) {
+            static constexpr int corner[8][3] = {{0, 0, 0},
+                                                 {1, 0, 0},
+                                                 {1, 1, 0},
+                                                 {0, 1, 0},
+                                                 {0, 0, 1},
+                                                 {1, 0, 1},
+                                                 {1, 1, 1},
+                                                 {0, 1, 1}};
+            std::array<double, 4> value{};
+            for (int j = 0; j < 8; ++j) {
+                double weight = 1;
+                for (int d = 0; d < 3; ++d)
+                    weight *= corner[j][d] ? xi[d] : 1 - xi[d];
+                auto v = m.hex[8 * parent + j];
+                value[0] += weight * (300 + m.vertices[3 * v] + 2 * m.vertices[3 * v + 1] +
+                                      3 * m.vertices[3 * v + 2]);
+                for (int d = 1; d < 4; ++d)
+                    value[d] += weight * (.001 * d);
+            }
+            return value;
+        };
+        // Exercise the parent mapping independently of exported physical points.
+        const double origin[3] = {0, 0, 0};
+        if (fields(1, origin)[0] != 303)
+            throw std::runtime_error("parent reference evaluation failed");
         auto& q = step.cut;
         for (std::size_t i = 0; i < c.volume.size(); ++i) {
             auto first_face = c.poly_faces[c.poly_off[i]];
@@ -86,8 +113,9 @@ int main(int argc, char** argv) {
                     auto v = c.face_conn[j];
                     if (remap[v] < 0) {
                         remap[v] = q.points.size() / 3;
-                        // Solver boundary: point_parent_elem and point_xi identify
-                        // the parent basis location. This analytic field is exact there.
+                        auto values = fields(c.point_parent_elem[v], &c.point_xi[3 * v]);
+                        q.T.push_back(values[0]);
+                        q.U.insert(q.U.end(), values.begin() + 1, values.end());
                         q.points.insert(
                             q.points.end(), c.points.begin() + 3 * v, c.points.begin() + 3 * v + 3);
                         q.connectivity.push_back(remap[v]);
@@ -104,7 +132,7 @@ int main(int argc, char** argv) {
             q.cell_kind.push_back(1);
             q.volume.push_back(c.volume[i]);
         }
-        for (auto* p : {&h, &q})
+        for (auto* p : {&h})
             for (std::size_t v = 0; v < p->points.size() / 3; ++v) {
                 p->T.push_back(300 + p->points[3 * v] + 2 * p->points[3 * v + 1] +
                                3 * p->points[3 * v + 2]);

@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <set>
 #include <stdexcept>
 #ifdef CHIPCAE_ENABLE_HDF5
 #include "chipcae/io/detail/hdf5.hpp"
@@ -184,6 +185,17 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
     for (auto id : p.hex)
         input_ids &= id >= 0 && static_cast<std::size_t>(id) < p.points.size() / 3;
     agree(input_ids);
+    bool matched = true;
+    if (!local.cut_as_hex) {
+        // Never silently lose a cut parent when geometric export was skipped.
+        for (std::size_t i = 0; i < input_cells; ++i)
+            if (p.cell_kind[i] == 1)
+                matched &= p.elem_gid.size() == input_cells &&
+                           std::find(local.cut.elem_gid.begin(),
+                                     local.cut.elem_gid.end(),
+                                     p.elem_gid[i]) != local.cut.elem_gid.end();
+    }
+    agree(matched);
     if (!local.cut_as_hex) {
         ResultsPartition filtered = p;
         filtered.hex.clear();
@@ -234,6 +246,23 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
         cv &= id >= 0 && static_cast<std::size_t>(id) < cut.points.size() / 3;
     for (auto id : cut.poly_faces)
         cv &= id >= 0 && static_cast<std::size_t>(id) + 1 < cut.face_off.size();
+    if (cv) {
+        for (std::size_t i = 0; i < cn; ++i) {
+            std::set<Index> vertices(cut.connectivity.begin() + cut.offsets[i],
+                                     cut.connectivity.begin() + cut.offsets[i + 1]);
+            cv &= vertices.size() == static_cast<std::size_t>(cut.offsets[i + 1] - cut.offsets[i]);
+            std::set<std::set<Index>> faces;
+            for (auto j = cut.poly_off[i]; j < cut.poly_off[i + 1]; ++j) {
+                auto f = cut.poly_faces[j];
+                std::set<Index> ring;
+                for (auto k = cut.face_off[f]; k < cut.face_off[f + 1]; ++k) {
+                    cv &= vertices.contains(cut.face_conn[k]);
+                    cv &= ring.insert(cut.face_conn[k]).second;
+                }
+                cv &= faces.insert(std::move(ring)).second;
+            }
+        }
+    }
     for (auto v : cut.volume)
         cv &= std::isfinite(v) && v > 0;
     for (auto kind : cut.cell_kind)
@@ -488,18 +517,21 @@ void ResultsWriter::finalize() {
                     << '}';
             }
             out << "],\n\"fields\":[{\"name\":\"T\",\"location\":\"point\",\"components\":1,"
-                   "\"unit\":\"K\"},{\"name\":\"U\",\"location\":\"point\",\"components\":3,"
-                   "\"unit\":\"m\"}";
+                   "\"unit\":\"K\",\"dtype\":\"float64\"},{\"name\":\"U\",\"location\":\"point\","
+                   "\"components\":3,"
+                   "\"unit\":\"m\",\"dtype\":\"float64\"}";
             for (auto name : {"layer_id", "material_id", "cell_kind"})
                 out << ",{\"name\":" << quoted(name)
-                    << ",\"location\":\"cell\",\"components\":1,\"unit\":\"1\"}";
+                    << ",\"location\":\"cell\",\"components\":1,\"unit\":\"1\",\"dtype\":"
+                       "\"int32\"}";
             // Cut always carries its parent GID, including empty templates.
             out << ",{\"name\":\"elem_gid\",\"location\":\"cell\",\"components\":1,\"unit\":"
-                   "\"1\"}";
+                   "\"1\",\"dtype\":\"int64\"}";
             out << ",{\"name\":\"volume\",\"location\":\"cell\",\"components\":1,\"unit\":\"m3\","
                    "\"dtype\":\"float64\"}";
             out << ",{\"name\":\"sigma_vm\",\"location\":\"cell\",\"components\":1,\"unit\":\"Pa\","
-                   "\"reserved\":true}],\n\"blocks\":[{\"index\":0,\"name\":\"hex\",\"kind\":"
+                   "\"dtype\":\"float64\",\"reserved\":true}],\n\"blocks\":[{\"index\":0,\"name\":"
+                   "\"hex\",\"kind\":"
                    "\"UnstructuredGrid\"},{\"index\":1,\"name\":\"cut\",\"kind\":\"VTK_"
                    "POLYHEDRON\"},{\"index\":2,\"name\":\"eb_surface\",\"kind\":"
                    "\"PolyData\"},{\"index\":3,\"name\":\"particles\",\"kind\":\"PolyData\"}],"

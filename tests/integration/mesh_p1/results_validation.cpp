@@ -43,7 +43,7 @@ int main(int argc, char** argv) {
         p.cell_kind = {1};
         p.volume = {1};
         writer.write_step(0, 0, step); // Geometry-only cut fields are optional.
-        for (int trial = 0; trial < 8; ++trial) {
+        for (int trial = 0; trial < 13; ++trial) {
             auto bad = step;
             if (rank == 0) {
                 switch (trial) {
@@ -68,6 +68,29 @@ int main(int argc, char** argv) {
                 case 6:
                     bad.embedded_boundary.face_conn = {1};
                     break;
+                case 8:
+                    bad.cut.connectivity[0] = 1;
+                    break;
+                case 9:
+                    bad.cut.poly_faces[0] = 1;
+                    break;
+                case 10:
+                    bad.cut.points.insert(bad.cut.points.end(), {2, 2, 2});
+                    bad.cut.connectivity[0] = 8;
+                    break;
+                case 11:
+                    bad.cut.face_conn[0] = 3;
+                    break;
+                case 12:
+                    bad.hex.points = bad.cut.points;
+                    bad.hex.hex = bad.cut.connectivity;
+                    bad.hex.T.assign(8, 300);
+                    bad.hex.U.assign(24, 0);
+                    bad.hex.elem_gid = {999};
+                    bad.hex.layer_id = {1};
+                    bad.hex.material_id = {2};
+                    bad.hex.cell_kind = {1};
+                    break;
                 case 7:
                     bad.cut.material_id.clear();
                     break;
@@ -88,7 +111,7 @@ int main(int argc, char** argv) {
                 bad.cut.T.assign(8, 300);
             bool rejected = false;
             try {
-                writer.write_step(9, 0, bad);
+                writer.write_step(20, 0, bad);
             } catch (const std::exception&) {
                 rejected = true;
             }
@@ -99,7 +122,7 @@ int main(int argc, char** argv) {
                 bad.cut_as_hex = true;
             rejected = false;
             try {
-                writer.write_step(10, 0, bad);
+                writer.write_step(21, 0, bad);
             } catch (const std::exception&) {
                 rejected = true;
             }
