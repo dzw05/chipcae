@@ -195,6 +195,41 @@ def main():
             else:
                 assert not out.exists()
 
+        for kind in ('file', 'directory', 'dangling'):
+            target = directory / ('output_target_' + kind)
+            if kind == 'file':
+                target.write_bytes(b'preserve existing file')
+            elif kind == 'directory':
+                target.mkdir()
+                (target / 'sentinel').write_bytes(b'preserve directory')
+            out = directory / ('output_symlink_' + kind)
+            out.symlink_to(target, target_is_directory=kind == 'directory')
+            try:
+                write_report(diff_stacks(good, good), out)
+            except EcadDiffError as exc:
+                assert exc.code == 14 and exc.name == 'INPUT_INVALID', exc
+            else:
+                raise AssertionError(f'{kind}: API accepted output symlink')
+            # Reject the output before trying even a missing or malformed input.
+            for input_path in (good, directory / 'missing.json', path):
+                path.write_bytes(b'not JSON')
+                proc = subprocess.run(
+                    [sys.executable, str(ROOT / 'tools/vv/ecad_diff.py'),
+                     '--odb', str(good), '--ipc', str(input_path), '-o', str(out)],
+                    capture_output=True, text=True)
+                assert proc.returncode == 14, (kind, proc.stderr)
+                assert len(proc.stderr.splitlines()) == 1, proc.stderr
+                assert proc.stderr.startswith('ecad_diff: INPUT_INVALID: '), proc.stderr
+                assert 'output' in proc.stderr, proc.stderr
+            assert out.is_symlink() and out.readlink() == target
+            if kind == 'file':
+                assert target.read_bytes() == b'preserve existing file'
+            elif kind == 'directory':
+                assert list(target.iterdir()) == [target / 'sentinel']
+                assert (target / 'sentinel').read_bytes() == b'preserve directory'
+            else:
+                assert not target.exists()
+
 
 if __name__ == '__main__':
     main()

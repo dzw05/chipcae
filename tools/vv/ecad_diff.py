@@ -327,6 +327,8 @@ def _diff(odb, ipc, delta):
 
 def write_report(result: dict, out_dir: Path) -> None:
     out = Path(out_dir)
+    if out.is_symlink():
+        _invalid('output path is a symlink')
     lines = [f"odb: {result['inputs']['odb']}; ipc: {result['inputs']['ipc']}; δ = {result['delta_m']}",
              '', '| item | hard | discuss | info |', '| --- | --- | --- | --- |']
     for item in dict.fromkeys(e['item'] for e in result['entries']):
@@ -380,6 +382,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--delta-m', default=DEFAULT_DELTA_M)
     args = parser.parse_args(argv)
     try:
+        if Path(args.o).is_symlink():
+            _invalid('output path is a symlink')
         if Path(args.o).is_file():
             _invalid('output path is an existing ordinary file')
         try:
