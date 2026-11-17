@@ -8,6 +8,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <set>
 #include <string_view>
 
 namespace chipcae::geometry::ecad {
@@ -47,14 +48,88 @@ struct Parser {
         return {std::llround(number(attr(a, "x")) * scale()),
                 std::llround(number(attr(a, "y")) * scale())};
     }
+    std::map<std::size_t, std::string> stack_specs;
+    std::set<std::size_t> explicit_materials;
+    std::map<std::string, std::string> materials;
+    std::size_t material_general_depth = 0;
+    enum class Kind { copper, dielectric, skipped, mask, unknown };
+    static std::string uppercase(std::string s) {
+        for (char& c : s)
+            if (c >= 'a' && c <= 'z')
+                c -= 'a' - 'A';
+        return s;
+    }
+    static Kind classify(const std::string& raw) {
+        const auto f = uppercase(raw);
+        if (f == "SOLDERMASK")
+            return Kind::mask;
+        for (const auto* name : {"SILKSCREEN",
+                                 "LEGEND",
+                                 "SOLDERPASTE",
+                                 "PASTEMASK",
+                                 "DOCUMENT",
+                                 "ASSEMBLY",
+                                 "COURTYARD",
+                                 "GLUE",
+                                 "BOARD_OUTLINE"})
+            if (f == name)
+                return Kind::skipped;
+        if (f.rfind("DRILL", 0) == 0)
+            return Kind::skipped;
+        for (const auto* name : {"CONDUCTOR", "SIGNAL", "PLANE", "MIXED"})
+            if (f.find(name) != std::string::npos)
+                return Kind::copper;
+        return f.rfind("DIEL", 0) == 0 ? Kind::dielectric : Kind::unknown;
+    }
+    bool skipped(const std::string& name) const {
+        const auto it = layer_defs.find(name);
+        if (it == layer_defs.end())
+            return false;
+        const auto k = classify(it->second.first);
+        return k != Kind::copper && k != Kind::dielectric;
+    }
+    // Resolve deferred definitions and compact layers before computing any via indices.
     void resolve() {
-        for (auto& layer : model.layers) {
+        std::vector<EcadLayer> retained;
+        std::vector<UnsupportedElement> additions;
+        std::set<std::string> seen;
+        layer_index.clear();
+        for (std::size_t i = 0; i < model.layers.size(); ++i) {
+            auto& layer = model.layers[i];
             auto d = layer_defs.find(layer.name);
             if (d != layer_defs.end()) {
-                layer.function = d->second.first;
-                layer.copper = layer.copper || d->second.second;
+                if (layer.function.empty())
+                    layer.function = d->second.first;
+                const auto kind = classify(layer.function);
+                const bool first = seen.insert(layer.name).second;
+                if (kind != Kind::copper && kind != Kind::dielectric) {
+                    if (first) {
+                        const auto& f = layer.function;
+                        const auto k = classify(f);
+                        const auto element = k == Kind::mask ? "SolderMask:" + layer.name
+                                             : k == Kind::skipped
+                                                 ? "SkippedLayer:" + layer.name + ":" + f
+                                                 : "LayerFunction:" + f + ":" + layer.name;
+                        additions.push_back({"IMPORT_UNSUPPORTED_ELEMENT", element, 0});
+                    }
+                    continue;
+                }
+                layer.copper = layer.copper || classify(layer.function) == Kind::copper;
             }
+            if (layer.material.empty() && !explicit_materials.count(i)) {
+                const auto ref = stack_specs.find(i);
+                if (ref != stack_specs.end()) {
+                    const auto material = materials.find(ref->second);
+                    if (material != materials.end())
+                        layer.material = material->second;
+                }
+            }
+            layer_index[layer.name] = retained.size();
+            retained.push_back(std::move(layer));
         }
+        model.layers = std::move(retained);
+        model.report.unsupported.insert(
+            model.report.unsupported.begin(), additions.begin(), additions.end());
         for (std::size_t ci = 0; ci < model.components.size(); ++ci) {
             auto& c = model.components[ci];
             auto pkg = packages.find(c.package);
@@ -179,6 +254,9 @@ struct Parser {
         const auto name = local(raw);
         path.push_back(name);
         const auto parent = path.size() > 1 ? path[path.size() - 2] : std::string{};
+        if (name == "Property" && !spec.empty() && material_general_depth &&
+            materials[spec].empty() && !value(a, "text").empty())
+            materials[spec] = value(a, "text");
         if (name == "Package") {
             package = value(a, "name");
             packages[package] = Component{};
@@ -228,6 +306,8 @@ struct Parser {
             spans[definition_layer] = {value(a, "fromLayer"), value(a, "toLayer")};
         } else if (name == "Spec") {
             spec = value(a, "name");
+        } else if (name == "General" && !spec.empty() && value(a, "type") == "MATERIAL") {
+            material_general_depth = path.size();
         } else if (name == "Property" && !spec.empty() && value(a, "name") == "PLATING_THICKNESS") {
             double unit = units_to_m;
             auto u = value(a, "unit");
@@ -241,6 +321,8 @@ struct Parser {
         } else if (name == "SpecRef") {
             if (in_hole)
                 pending.back().spec = value(a, "id");
+            else if (parent == "StackupLayer" && !model.layers.empty())
+                stack_specs[model.layers.size() - 1] = value(a, "id");
             else if (parent == "Layer")
                 layer_specs[definition_layer] = value(a, "id");
         } else if (name == "StackupLayer") {
@@ -248,6 +330,8 @@ struct Parser {
             const char* ref = attr(a, "layerOrGroupRef");
             l.name = ref ? ref : "layer" + std::to_string(model.layers.size());
             l.material = attr(a, "matDes") ? attr(a, "matDes") : "";
+            if (attr(a, "matDes"))
+                explicit_materials.insert(model.layers.size());
             if (auto def = layer_defs.find(l.name); def != layer_defs.end()) {
                 l.function = def->second.first;
                 l.copper = def->second.second;
@@ -280,18 +364,21 @@ struct Parser {
             const char* n = attr(a, "layerRef");
             current_layer = n ? n : "";
             auto it = layer_index.find(current_layer);
-            if (it != layer_index.end() && layer_defs[current_layer].second)
+            const auto def = layer_defs.find(current_layer);
+            if (it != layer_index.end() && def != layer_defs.end() &&
+                classify(def->second.first) == Kind::copper)
                 model.layers[it->second].copper = true;
         } else if (name == "Polygon") {
             active = nullptr;
             auto it = layer_index.find(current_layer);
             if (!package.empty()) {
                 active = &packages[package].outline;
-            } else if (it != layer_index.end()) {
+            } else if (it != layer_index.end() && !skipped(current_layer)) {
                 model.layers[it->second].copper = true;
                 model.layers[it->second].polygons.emplace_back();
                 active = &model.layers[it->second].polygons.back();
-            } else if (!model.outline.points.empty() || parent == "Profile")
+            } else if (current_layer.empty() &&
+                       (!model.outline.points.empty() || parent == "Profile"))
                 active = &model.outline;
         } else if (name == "LineDesc") {
             const char* id = attr(a, "id");
@@ -370,6 +457,8 @@ struct Parser {
     }
     void end(const char* raw) {
         auto n = local(raw);
+        if (n == "General" && path.size() == material_general_depth)
+            material_general_depth = 0;
         if (n == "Package")
             package.clear();
         if (n == "Component")
@@ -392,7 +481,7 @@ struct Parser {
         }
         if ((n == "Line" || n == "Arc") && trace.path.size() >= 2 && trace.width > 0) {
             auto li = layer_index.find(current_layer);
-            if (li != layer_index.end()) {
+            if (li != layer_index.end() && !skipped(current_layer)) {
                 Clipper2Lib::ClipperOffset offset;
                 offset.AddPath(
                     trace.path, Clipper2Lib::JoinType::Round, Clipper2Lib::EndType::Round);

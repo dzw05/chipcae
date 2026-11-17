@@ -315,7 +315,8 @@ int main() {
     auto c = ecad::read_ipc2581(root / "board_arc.xml");
     if (!c || c.model.layers.size() != 1 || c.model.layers[0].polygons.empty())
         return 5;
-    const auto output = std::filesystem::temp_directory_path() / "chipcae-ipc2581-test";
+    const ScopedMap output_directory;
+    const auto output = output_directory.directory;
     std::filesystem::create_directories(output);
     std::string error;
     if (!ecad::to_stack(a.model, output / "board.stack.json", output / "board.polyset", &error))
