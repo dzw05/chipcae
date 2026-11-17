@@ -20,6 +20,7 @@ target_compile_definitions(chipcae_document PRIVATE
     CHIPCAE_SCHEMA_DIR="${CMAKE_CURRENT_BINARY_DIR}/document-schema")
 add_library(chipcae_desktop_ui src/MainWindow.cpp src/MainWindow.hpp
     import/ImportController.cpp import/ImportController.hpp
+    import/ImportSourceDialog.cpp import/ImportSourceDialog.hpp
     import/DefectsDialog.cpp import/DefectsDialog.hpp
     workers/PreviewWorker.cpp workers/PreviewWorker.hpp
     stack/StackEditor.cpp stack/StackEditor.hpp stack/LayerModel.cpp stack/LayerModel.hpp
@@ -191,6 +192,20 @@ if(CHIPCAE_BUILD_TESTS)
         PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
 endif()
 
+if(CHIPCAE_BUILD_TESTS)
+    add_executable(desktop_window_wire tests/window_wire_test.cpp)
+    target_link_libraries(desktop_window_wire PRIVATE chipcae_desktop_ui chipcae_desktop_viewer chipcae_desktop_results)
+    target_compile_definitions(desktop_window_wire PRIVATE
+        CHIPCAE_REPOSITORY="${CMAKE_CURRENT_SOURCE_DIR}/.."
+        PYTHON_EXECUTABLE="${CHIPCAE_IMPORT_PYTHON}"
+        MOCK_SCRIPT="${CMAKE_CURRENT_SOURCE_DIR}/tools/mock_import.py")
+    vtk_module_autoinit(TARGETS desktop_window_wire MODULES ${VTK_LIBRARIES})
+    add_test(NAME desktop_window_wire COMMAND desktop_window_wire ${CMAKE_CURRENT_BINARY_DIR}/result-samples)
+    set_tests_properties(desktop_window_wire PROPERTIES FIXTURES_REQUIRED result_samples
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 90)
+endif()
+
+target_link_libraries(chipcae_desktop_ui PUBLIC chipcae_desktop_viewer)
 if(CHIPCAE_BUILD_TESTS)
     add_executable(desktop_config tests/config_test.cpp)
     target_include_directories(desktop_config PRIVATE config)
