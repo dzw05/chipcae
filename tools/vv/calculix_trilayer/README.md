@@ -1,7 +1,7 @@
 # WP-2 trilayer CalculiX reference
 
 Independent open-source reference for the 1 m × 1 m trilayer warpage case.
-Results in `REFERENCE.json` are **REFERENCE values** (not measured data, not
+Results in `REFERENCE.json` (`schema_version` 1) are **REFERENCE values** (not measured data, not
 an analytical solution). They may be compared with the early MFEM+MUMPS
 prototype `W_bfp = 4.269532769e-3` m. This directory does **not** set a
 pass/fail gate; the V&V specialist chooses the comparison criterion later.

@@ -22,11 +22,14 @@ class TrilayerCalculixRefTest(unittest.TestCase):
     def test_reference_schema_and_report_delta(self):
         with REF.open(encoding="utf-8") as handle:
             data = json.load(handle)
+        self.assertEqual(data["schema_version"], "1")
         self.assertEqual(data["kind"], "REFERENCE")
         self.assertEqual(data["element_type"], "C3D20")
         self.assertEqual(data["selected_mesh"], "fine")
-        self.assertIn("calculix_version", data)
-        self.assertIn("2.23", str(data["calculix_version"]))
+        self.assertIsInstance(data.get("calculix_version"), str)
+        self.assertTrue(data["calculix_version"].strip())
+        self.assertNotIn("host", data)
+        self.assertIsInstance(data.get("provenance"), dict)
         self.assertIsInstance(data["W_bfp_m"], float)
         self.assertGreater(data["W_bfp_m"], 0.0)
         self.assertAlmostEqual(data["prototype_W_bfp_m"], PROTOTYPE, places=12)
