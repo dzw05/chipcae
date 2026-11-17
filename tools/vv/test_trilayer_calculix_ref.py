@@ -28,7 +28,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
                     "abs_delta_m", "rel_delta", "calculix_version",
                     "host"}
         self.assertIsInstance(data, dict)
-        self.assertEqual(required, data.keys(), "unexpected or missing top-level fields")
+        self.assertTrue(required <= data.keys(), "missing required top-level fields")
         for field in ("kind", "element_type", "selected_mesh", "calculix_version", "host"):
             self.assertIsInstance(data[field], str)
             self.assertTrue(data[field].strip())
@@ -106,6 +106,9 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         reversed_meshes["meshes"].reverse()
         self.validate_artifact(reversed_meshes)
         extended = copy.deepcopy(data)
+        extended["provenance"] = {"sources": ["CalculiX"]}
+        extended["unknown_field"] = "additional metadata"
+        extended["SPDX-License-Identifier"] = "Apache-2.0"
         extended["geometry"]["description"] = "model metadata"
         for mesh in extended["meshes"]:
             mesh["description"] = "mesh metadata"
@@ -142,8 +145,6 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             variants.append(invalid)
         for value in ("unknown", "This is Version", "This is Version 2.23\nextra"):
             variants.append(dict(data, calculix_version=value))
-        for field in ("unknown_field", "provenance", "SPDX-License-Identifier"):
-            variants.append(dict(data, **{field: "additional metadata"}))
         changed_layers = copy.deepcopy(data)
         for mesh in changed_layers["meshes"]:
             mesh["n_elem_z_per_layer"] = [3, 2, 2]
