@@ -78,16 +78,61 @@ bool apply_material_map(EcadModel& model, const std::filesystem::path& file, std
     if (p != text.size())
         return fail("invalid material map: trailing data");
 
+    auto folded = [](std::string s) {
+        for (char& c : s)
+            if (c >= 'a' && c <= 'z')
+                c -= 'a' - 'A';
+        return s;
+    };
+    auto quoted = [](const std::vector<std::string>& keys) {
+        std::string result;
+        for (const auto& key : keys) {
+            if (!result.empty())
+                result += ", ";
+            result += "\"" + key + "\"";
+        }
+        return result;
+    };
+    std::vector<std::string> missing;
     for (auto& layer : model.layers) {
-        const std::string source =
-            layer.material.empty() ? (layer.copper ? "copper" : "") : layer.material;
-        if (source.empty())
-            return fail("MATERIAL_MAPPING_MISSING: layer '" + layer.name +
-                        "' has no ECAD material");
-        const auto found = mapping.find(source);
-        if (found == mapping.end())
-            return fail("MATERIAL_MAPPING_MISSING: no mapping for ECAD material '" + source + "'");
-        layer.material = found->second;
+        std::vector<std::string> tried, conflicts;
+        auto found = mapping.end();
+        if (!layer.material.empty()) {
+            tried.push_back(layer.material);
+            found = mapping.find(layer.material);
+            if (found == mapping.end()) {
+                for (auto it = mapping.begin(); it != mapping.end(); ++it)
+                    if (folded(it->first) == folded(layer.material)) {
+                        conflicts.push_back(it->first);
+                        found = it;
+                    }
+                if (conflicts.size() != 1)
+                    found = mapping.end();
+            }
+        }
+        if (found == mapping.end()) {
+            tried.push_back("layer:" + layer.name);
+            found = mapping.find(tried.back());
+        }
+        if (found == mapping.end() && layer.copper) {
+            tried.push_back("copper");
+            found = mapping.find(tried.back());
+        }
+        if (found != mapping.end()) {
+            layer.material = found->second;
+            continue;
+        }
+        std::string entry = layer.name + " (tried: " + quoted(tried);
+        if (conflicts.size() > 1)
+            entry += "; case-conflict: " + quoted(conflicts);
+        missing.push_back(entry + ")");
+    }
+    if (!missing.empty()) {
+        std::string message =
+            "MATERIAL_MAPPING_MISSING: " + std::to_string(missing.size()) + " layer(s) unmapped: ";
+        for (std::size_t i = 0; i < missing.size(); ++i)
+            message += (i ? "; " : "") + missing[i];
+        return fail(message);
     }
     return true;
 }
