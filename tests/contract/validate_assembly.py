@@ -101,13 +101,15 @@ def main(root):
         check(f'negative-assembly-{suffix}.json', expected)
     if positive is not None:
         # Layer names are preserved verbatim; only the final side suffix is parsed.
-        for target in ('layer:Cu@inner@top', 'layer:Cu@inner@bottom',
+        for target in ('layer:C@top', 'layer:C@bottom', 'layer:@@top',
+                       'layer:Cu@inner@top', 'layer:Cu@inner@bottom',
                        'layer:@top@bottom'):
             document = copy.deepcopy(positive)
             document['parts'][0]['placement']['attach'] = target
             if errors(document, validator):
                 failures.append(f'valid layer attachment {target!r} rejected')
-        for target in ('layer:@top', 'layer:@bottom', 'layer:Cu@inner', 'layer:Cu@inner@side',
+        for target in ('layer:', 'layer:@top', 'layer:@bottom',
+                       'layer:Cu@inner', 'layer:Cu@inner@side',
                        'part:bad@id@top'):
             document = copy.deepcopy(positive)
             document['parts'][0]['placement']['attach'] = target

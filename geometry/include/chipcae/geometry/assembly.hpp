@@ -10,7 +10,7 @@
 #include <vector>
 
 namespace chipcae::geometry {
-using mesh::StackModel;
+using chipcae::mesh::StackModel;
 enum class AttachSide { top, bottom };
 struct Bond {
     std::string material;
