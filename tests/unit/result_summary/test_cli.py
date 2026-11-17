@@ -6,11 +6,39 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from fixtures import fixture, SCRIPT, h5py
+from fixtures import fixture, save, SCRIPT, h5py
 from tools.vv.result_summary import summarize
 
 
 class CLI(unittest.TestCase):
+    def test_failure_stderr_contract(self):
+        for case in ('invalid_manifest', 'missing_manifest', 'invalid_tolerance'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                run = Path(tmp) / 'run'
+                _, manifest = fixture(run)
+                args = []
+                if case == 'invalid_manifest':
+                    manifest['schema_version'] = 'unsupported'
+                    save(run, manifest)
+                    code, name = 14, 'INPUT_INVALID'
+                    reason = 'expected manifest schema chipcae.results/1.0'
+                elif case == 'missing_manifest':
+                    (run / 'manifest.json').unlink()
+                    code, name = 12, 'INPUT_REFERENCE_MISSING'
+                    reason = str(FileNotFoundError(2, 'No such file or directory',
+                                                   str(run / 'manifest.json')))
+                else:
+                    args = ['--top-rel-tol', '-1']
+                    code, name = 14, 'INPUT_INVALID'
+                    reason = 'top_rel_tol must be finite and nonnegative'
+                result = subprocess.run(
+                    [sys.executable, str(SCRIPT), str(run)] + args,
+                    cwd=tmp, capture_output=True, timeout=20)
+                self.assertEqual(result.returncode, code)
+                self.assertEqual(result.stdout, b'')
+                self.assertEqual(result.stderr,
+                                 f'result_summary: {name}: {reason}\n'.encode('utf-8'))
+
     def test_bytes_and_repeatability(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)/'run'
