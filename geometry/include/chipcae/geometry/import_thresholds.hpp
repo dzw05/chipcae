@@ -3,6 +3,7 @@
 #include "chipcae/core/types.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <variant>
 
@@ -10,6 +11,7 @@ namespace chipcae::geometry {
 
 struct ImportScales {
     Real L = 0;
+    // Thinnest layer retained in the mesh after thin-layer merging.
     Real t_min = 0;
     Real h_xy = 0;
     Real dbu_m = 0;
@@ -42,6 +44,25 @@ struct ImportThresholdError {
     std::string message;
 };
 
+enum class Tier : std::uint8_t { Weld, A, B, C };
+enum class DefectReason : std::uint8_t { TOLERANCE_RANGE_UNSUPPORTED };
+
+struct Defect {
+    Tier tier = Tier::B;
+    DefectReason reason;
+    std::string dimension;
+    Real size;
+    std::string suggestion;
+};
+
+struct ImportAssessment {
+    Tier tier = Tier::A;
+    ImportTolerances tolerances;
+    bool confirmation_required = false;
+    bool ordering_guaranteed = true;
+    std::optional<Defect> defect;
+};
+
 template <class T>
 class Expected {
     std::variant<T, ImportThresholdError> value_;
@@ -56,8 +77,9 @@ public:
 };
 
 Expected<ImportTolerances> compute_tolerances(const ImportScales&, const ThresholdFile&);
+Expected<ImportAssessment>
+assess_import(const ImportScales&, const ThresholdFile& = {}, bool confirmed = false);
 
-enum class Tier : std::uint8_t { Weld, A, B, C };
 Tier classify(Real defect_size, const ImportTolerances&);
 
 enum class ThinLayerResult : std::uint8_t { Keep, MergeSuggested, Error };

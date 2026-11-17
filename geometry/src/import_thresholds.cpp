@@ -33,6 +33,37 @@ Expected<ImportTolerances> compute_tolerances(const ImportScales& s, const Thres
         std::max(std::min(t.merge_rel_h * s.h_xy, t.merge_abs_max), 2 * s.dbu_m)};
 }
 
+Expected<ImportAssessment>
+assess_import(const ImportScales& s, const ThresholdFile& t, bool confirmed) {
+    auto computed = compute_tolerances(s, t);
+    if (!computed)
+        return computed.error();
+
+    constexpr Real min_length = 4e-3;
+    constexpr Real min_kept_thickness = 2e-6;
+    const bool length_unsupported = s.L < min_length;
+    const bool thickness_unsupported = s.t_min < min_kept_thickness;
+    if (!length_unsupported && !thickness_unsupported)
+        return ImportAssessment{Tier::A, computed.value(), false, true, std::nullopt};
+
+    const std::string dimension = length_unsupported ? "L" : "t_min";
+    const Real size = length_unsupported ? s.L : s.t_min;
+    ImportAssessment assessment{Tier::B,
+                                computed.value(),
+                                true,
+                                false,
+                                Defect{Tier::B,
+                                       DefectReason::TOLERANCE_RANGE_UNSUPPORTED,
+                                       dimension,
+                                       size,
+                                       "merge into an adjacent layer or use an equivalent layer"}};
+    if (confirmed) {
+        assessment.confirmation_required = false;
+        assessment.tolerances.eps_weld = 1e-8;
+    }
+    return assessment;
+}
+
 Tier classify(Real defect_size, const ImportTolerances& tolerances) {
     if (!std::isfinite(defect_size) || defect_size < 0 || !std::isfinite(tolerances.eps_weld) ||
         !std::isfinite(tolerances.tau_A) || !std::isfinite(tolerances.tau_B)) {

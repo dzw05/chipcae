@@ -54,7 +54,7 @@ jobs:
         run: |
           set -euo pipefail
           # Default flags are OFF, so only Tier A mesh tests exist (k1_background, k1_cut).
-          cmake --build build --target k1_background k1_cut --parallel
+          cmake --build build --target k1_background k1_cut chipcae_test_import_thresholds --parallel
           ccache --show-stats
 
       - name: Run mesh tests
