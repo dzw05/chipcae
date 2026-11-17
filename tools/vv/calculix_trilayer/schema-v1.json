@@ -1,0 +1,26 @@
+{
+  "schema_version": "1",
+  "description": "Contract for tools/vv/calculix_trilayer/REFERENCE.json. stable fields may be relied on across regenerations; other fields are informational.",
+  "required": {
+    "schema_version": { "type": "string", "stable": true, "const": "1" },
+    "kind": { "type": "string", "stable": true, "const": "REFERENCE" },
+    "element_type": { "type": "string", "stable": true, "const": "C3D20" },
+    "selected_mesh": { "type": "string", "stable": true, "const": "fine" },
+    "W_bfp_m": { "type": "number", "stable": true },
+    "prototype_W_bfp_m": { "type": "number", "stable": true },
+    "abs_delta_m": { "type": "number", "stable": true },
+    "rel_delta": { "type": "number", "stable": true },
+    "geometry": { "type": "object", "stable": true },
+    "meshes": { "type": "array", "stable": true },
+    "calculix_version": { "type": "string", "stable": false, "note": "Free-form ccx banner; informational only." },
+    "label": { "type": "string", "stable": false, "note": "Human-readable prose; not for programmatic comparison." },
+    "provenance": { "type": "object", "stable": false, "note": "Optional generator metadata; not part of the scientific value." }
+  },
+  "forbidden": ["host"],
+  "mesh_item_required": {
+    "name": "string",
+    "n_elem_xyz": "array",
+    "n_elem_z_per_layer": "array",
+    "W_bfp_m": "number"
+  }
+}

@@ -30,3 +30,5 @@ python tools/vv/calculix_trilayer/generate.py
 The script writes `work/{coarse,fine}.*` (not committed) and updates
 `REFERENCE.json`. Surface `W_bfp` is computed with `tools.vv.warpage_qoi.interp_grid`
 and `qoi_surface` on an 81×81 grid in millimetres, then converted back to metres.
+
+The v1 field contract (required keys, types, and which fields are stable) is in `schema-v1.json`.
