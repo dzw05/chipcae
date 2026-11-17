@@ -22,6 +22,14 @@
 #include <iostream>
 #include <stdexcept>
 #include <type_traits>
+namespace chipcae::desktop {
+struct ImportControllerTestAccess {
+    static void setCopy(ImportController& controller,
+                        std::function<bool(const QString&, const QString&)> copy) {
+        controller.copyOutput_ = std::move(copy);
+    }
+};
+} // namespace chipcae::desktop
 using namespace chipcae::desktop;
 namespace {
 static_assert(std::is_same_v<decltype(&MaterialMapMissingDialog::prompt), QString (*)(QWidget*)>);
@@ -318,6 +326,20 @@ sys.exit(rc)
                 mode == "launch-failure" ? "/nonexistent/chipcae-import" : PYTHON_EXECUTABLE;
             r.prefix = {script, MOCK_SCRIPT, record, mode};
             r.kind = kind;
+            int copyCalls = 0;
+            const bool partialCopy = mode.startsWith("partial-copy-");
+            const int failingCopy = partialCopy ? mode.right(1).toInt() : -1;
+            if (partialCopy)
+                ImportControllerTestAccess::setCopy(
+                    c, [&](const QString& source, const QString& destination) {
+                        if (copyCalls++ == failingCopy) {
+                            write(destination, "partial import output");
+                            check(QFileInfo(destination).isFile(),
+                                  "failure injected after creation");
+                            return false;
+                        }
+                        return QFile::copy(source, destination);
+                    });
             bool replaced = false;
             int confirmations = 0;
             QObject::connect(&c, &ImportController::finished, [&](bool b) { replaced = b; });
@@ -334,6 +356,10 @@ sys.exit(rc)
                     QTimer::singleShot(150, &c, &ImportController::cancel);
             });
             check(c.outcome() == expected, "outcome " + mode);
+            if (partialCopy)
+                check(copyCalls == failingCopy + 1 &&
+                          c.error() == "Cannot publish import outputs" && !document.isDirty(),
+                      "partial copy stops publication and preserves clean document " + mode);
             const QString code = mode == "confirm" ? "IMPORT_CONFIRMATION_REQUIRED"
                                  : mode == "reject" || mode == "mismatch" ? "IMPORT_REJECTED"
                                  : mode == "map-missing" || mode == "crash-map"
@@ -476,6 +502,9 @@ sys.exit(rc)
                                  {"bad-defects-type", ImportOutcome::Failed},
                                  {"invalid-stack", ImportOutcome::Failed},
                                  {"copy-failure", ImportOutcome::Failed},
+                                 {"partial-copy-0", ImportOutcome::Failed},
+                                 {"partial-copy-1", ImportOutcome::Failed},
+                                 {"partial-copy-2", ImportOutcome::Failed},
                                  {"hang", ImportOutcome::Failed},
                                  {"launch-failure", ImportOutcome::Failed},
                                  {"lower", ImportOutcome::Failed},

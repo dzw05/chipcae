@@ -105,6 +105,8 @@ def main():
         "missing": ("OK", 1),
         "corrupt": ("OK", 1),
     }.get(mode, ("OK", 0))
+    # --accept-b-tier is accepted for argv compatibility; confirm/b modes always
+    # request confirmation. Accepted reruns use the independent controller fixture.
     report = {"code": code, "message": "Mock import: " + mode, "defects": []}
     if code in ("IMPORT_CONFIRMATION_REQUIRED", "IMPORT_REJECTED"):
         report["defects"] = [{"code": "MOCK_GAP", "reason": "Review fixture gap"}]

@@ -111,7 +111,7 @@ void wiring(Window& w, const QString& samples) {
             require(replaced && w.document()->stackJson() != before &&
                         editor->model()->rowCount() ==
                             static_cast<int>(w.document()->stackJson().at("layers").size()),
-                    "A import refresh");
+                    "accepted import refresh");
     };
     require(w.openCase(QString(CHIPCAE_REPOSITORY) + "/schema/examples/fcbga_demo.case.json"),
             "load case and materials for validated import");

@@ -17,7 +17,10 @@ QByteArray readFile(const QString& path) {
 }
 } // namespace
 ImportController::ImportController(CaseDocument& document, QObject* parent)
-    : QObject(parent), document_(document) {
+    : QObject(parent), copyOutput_([](const QString& source, const QString& destination) {
+          return QFile::copy(source, destination);
+      }),
+      document_(document) {
     connect(&worker_, &PreviewWorker::stderrLine, this, [this](const QByteArray& line) {
         stderr_ += line + '\n';
     });
@@ -198,7 +201,13 @@ void ImportController::complete(int code, QProcess::ExitStatus status) {
             for (int i = 0; i < destinations_.size(); ++i) {
                 if (destinations_[i].isEmpty())
                     continue;
-                if (!QFile::copy(staged_[i], destinations_[i])) {
+                const QFileInfo destination(destinations_[i]);
+                const bool existed = destination.exists() || destination.isSymLink();
+                if (!copyOutput_(staged_[i], destinations_[i])) {
+                    // A failed copy may have created a partial destination. Preserve
+                    // paths that appeared since preflight, but remove our own partial file.
+                    if (!existed)
+                        QFile::remove(destinations_[i]);
                     throw std::runtime_error("Cannot publish import outputs");
                 }
                 published << destinations_[i];
