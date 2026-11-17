@@ -1,11 +1,16 @@
 #include "map.hpp"
 
 #include <algorithm>
+#include <clipper2/clipper.h>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <numbers>
+#include <random>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <tuple>
 
@@ -188,7 +193,7 @@ void negative() {
 }
 void stackup() {
     std::vector<ThicknessRecord> records;
-    auto m = mapped(board(), {nullptr, &records});
+    auto m = mapped(board(), {nullptr, &records, {}});
     require(records.size() == 4, "one thickness record per stack layer");
     require(m.layers.size() == 4, "four stack layers");
     const char* names[] = {"TOP", "CORE", "BOTTOM", "PREPREG"};
@@ -262,19 +267,21 @@ void oval_capsules() {
 void missing_thickness() {
     rejected(missing(), {"3", "TOP", "CORE", "BOTTOM"});
 }
-// The frozen options use the private mapper convention thickness.json for provenance.
 void overrides() {
     ThicknessOverrides o = {
         {"TOP", 35e-6}, {"CORE", 800e-6}, {"BOTTOM", 35e-6}, {"PREPREG", 300e-6}};
     std::vector<ThicknessRecord> records;
-    auto m = mapped(missing(), {&o, &records});
+    rejected(missing(), {"missing override filename", "TOP"}, {&o, nullptr, {}});
+    auto m = mapped(missing(), {&o, &records, "custom-stackup.json"});
     require(records.size() == 4, "one record per layer");
     for (std::size_t i = 0; i < records.size(); ++i) {
         const auto& r = records[i];
         require(r.layer == m.layers[i].name, "record layer");
-        near(r.thickness_m, o.at(r.layer));
+        near(r.thickness_m, i == 3 ? 200e-6 : o.at(r.layer));
         near(m.layers[i].thickness_m, r.thickness_m);
-        require(r.source == "override:thickness.json", "override filename source");
+        require(r.source == (i == 3 ? "odb" : "override:custom-stackup.json"),
+                "override filename source and ODB precedence");
+        require(r.odb_value_m.has_value() == (i == 3), "conflict provenance only");
     }
     require(records[3].odb_value_m.has_value() &&
                 std::abs(*records[3].odb_value_m - 200e-6) <= 1e-12,
@@ -287,13 +294,15 @@ void weight() {
     rejected(j, {"TOP"});
     ThicknessOverrides o = {{"TOP", 35e-6}};
     std::vector<ThicknessRecord> records;
-    mapped(j, {&o, &records});
-    require(records.size() == 4 && records[0].source == "override:thickness.json",
+    mapped(j, {&o, &records, "custom-stackup.json"});
+    j.attrs.layer["TOP"][".layer_dielectric"] = "-0.01";
+    near(mapped(j, {&o, nullptr, "negative-stackup.json"}).layers.front().thickness_m, 35e-6);
+    require(records.size() == 4 && records[0].source == "override:custom-stackup.json",
             "weight override source");
 }
 void override_case() {
     ThicknessOverrides o = {{"top", 35e-6}, {"core", 800e-6}, {"bottom", 35e-6}, {"unused", 1e-3}};
-    auto m = mapped(missing(), {&o, nullptr});
+    auto m = mapped(missing(), {&o, nullptr, "custom-stackup.json"});
     near(m.layers[0].thickness_m, 35e-6);
 }
 void skip() {
@@ -368,7 +377,7 @@ void duplicate_layer() {
 }
 void collision() {
     ThicknessOverrides o = {{"top", 35e-6}, {"TOP", 36e-6}};
-    rejected(board(), {"top", "TOP"}, {&o, nullptr});
+    rejected(board(), {"top", "TOP"}, {&o, nullptr, "custom-stackup.json"});
 }
 void holes_and_profile() {
     auto j = board();
@@ -387,6 +396,62 @@ void holes_and_profile() {
                 m.report.unsupported.front().element == "ProfileHole",
             "profile hole report");
     require(m.outline.points.size() == 4, "profile outer contour");
+}
+// Independently construct IPC's quarter-arc discretization (MM, radius = y span).
+// Compare exact offset vertices, including joins, rather than an analytic area bound.
+void check_arc_stroke(const OdbJob& j, bool rectangular) {
+    using namespace Clipper2Lib;
+    const auto& arc = j.features.at("TOP").arcs.front();
+    const double radius = 2;
+    const double tolerance = 0.01 * radius;
+    const double step = 2 * std::acos(1 - tolerance / radius);
+    const int count = static_cast<int>(std::ceil((std::numbers::pi / 2) / step));
+    const double begin = std::atan2(arc.s.y - arc.c.y, arc.s.x - arc.c.x);
+    Path64 path;
+    for (int i = 0; i <= count; ++i) {
+        const double angle = begin + (std::numbers::pi / 2) * i / count;
+        path.push_back({std::llround((arc.c.x + radius * std::cos(angle)) * 1000),
+                        std::llround((arc.c.y + radius * std::sin(angle)) * 1000)});
+    }
+    ClipperOffset offset;
+    offset.AddPath(path,
+                   rectangular ? JoinType::Miter : JoinType::Round,
+                   rectangular ? EndType::Square : EndType::Round);
+    Paths64 expected;
+    offset.Execute(500, expected);
+    const auto m = mapped(j);
+    require(expected.size() == 1 && m.layers.front().polygons.size() == 1,
+            "one arc stroke contour");
+    std::set<std::array<std::int64_t, 2>> vertices;
+    for (const auto& p : expected.front())
+        vertices.insert({p.x, p.y});
+    const auto& actual = m.layers.front().polygons.front().points;
+    require(actual.size() == expected.front().size() &&
+                std::set<std::array<std::int64_t, 2>>(actual.begin(), actual.end()) == vertices,
+            "IPC-resolution arc stroke vertices and joins");
+}
+void rect_strokes_and_rotation() {
+    for (bool rectangular : {false, true}) {
+        auto j = board();
+        auto& f = j.features["TOP"];
+        f.surfaces.clear();
+        f.symbols = {{rectangular ? "rect1000x1000" : "round1000"}};
+        if (rectangular) {
+            f.lines = {{{1, 1}, {7, 1}, 0, true}};
+            const auto m = mapped(j);
+            near(area(m), 7e6);
+            require(m.layers.front().polygons.front().points.size() == 4,
+                    "rect line has four square corners");
+            f.lines.clear();
+        }
+        for (int eighth = 0; eighth < 8; ++eighth) {
+            const double angle = eighth * std::numbers::pi / 4;
+            OdbPoint start{2 * std::cos(angle), 2 * std::sin(angle)};
+            OdbPoint end{-2 * std::sin(angle), 2 * std::cos(angle)};
+            f.arcs = {{start, end, {0, 0}, 0, true, false}};
+            check_arc_stroke(j, rectangular);
+        }
+    }
 }
 void pads_and_arcs() {
     auto j = board();
@@ -410,8 +475,7 @@ void pads_and_arcs() {
     near(area(mapped(j)), 1e6 + std::numbers::pi * 250000, 1e-3);
     f.pads.clear();
     f.arcs = {{{4, 2}, {2, 4}, {2, 2}, 2, true, false}};
-    // IPC's source arc tolerance permits chord error; test a quarter annulus plus round caps.
-    near(area(mapped(j)), std::numbers::pi * 1e6 + std::numbers::pi * 250000, 0.02);
+    check_arc_stroke(j, false);
     auto inch = j;
     inch.units = OdbUnits::inch;
     for (auto& [name, attrs] : inch.attrs.layer)
@@ -434,6 +498,69 @@ void pads_and_arcs() {
     inch.features["TOP"].symbols[2].name = "round39.37007874015748";
     equal(mapped(j), mapped(inch));
 }
+// Exercise the real IPC reader at both orientations, including its Y-span tolerance.
+void ipc_arc_equivalence() {
+    std::random_device random;
+    const auto dir =
+        std::filesystem::temp_directory_path() / ("odb-ipc-arc-" + std::to_string(random()));
+    require(std::filesystem::create_directory(dir), "private IPC fixture directory");
+    struct Cleanup {
+        std::filesystem::path dir;
+        ~Cleanup() { std::filesystem::remove_all(dir); }
+    } cleanup{dir};
+    for (int orientation : {0, 1, 2, 3}) {
+        const bool rotated = orientation % 2;
+        const bool semicircle = orientation >= 2;
+        auto j = board();
+        auto& f = j.features["TOP"];
+        f.surfaces.clear();
+        f.symbols = {{"round1000"}};
+        const double radius = semicircle ? 0.5 : 2;
+        const OdbPoint start = rotated ? OdbPoint{2, 2 + radius} : OdbPoint{2 + radius, 2};
+        const OdbPoint end = semicircle
+                                 ? (rotated ? OdbPoint{2, 2 - radius} : OdbPoint{2 - radius, 2})
+                                 : (rotated ? OdbPoint{2 - radius, 2} : OdbPoint{2, 2 + radius});
+        f.arcs = {{start, end, {2, 2}, 0, true, false}};
+        std::ostringstream xml;
+        xml << R"(<IPC-2581><Ecad><CadData><Layer name="TOP" layerFunction="CONDUCTOR"/>
+<Stackup><StackupGroup name="S"><StackupLayer layerOrGroupRef="TOP" thickness="0.035"/>
+</StackupGroup></Stackup><Step name="board"><LayerFeature layerRef="TOP"><Set><Arc startX=")"
+            << start.x << "\" startY=\"" << start.y << "\" endX=\"" << end.x << "\" endY=\""
+            << end.y
+            << R"(" centerX="2" centerY="2" clockwise="false"><LineDesc lineWidth="1" lineEnd="ROUND"/>
+</Arc></Set></LayerFeature></Step></CadData></Ecad></IPC-2581>)";
+        const auto file = dir / "arc.xml";
+        {
+            std::ofstream out(file);
+            out << xml.str();
+        }
+        const auto ipc = read_ipc2581(file);
+        require(bool(ipc), "IPC reference imports: " + ipc.error);
+        const auto odb = mapped(j);
+        require(ipc.model.layers.size() == 1 && ipc.model.report.unsupported.empty(),
+                "IPC reference has one supported copper layer");
+        require(odb.layers.front().polygons.size() == 1 &&
+                    ipc.model.layers.front().polygons.size() == 1,
+                "one stroke from each reader");
+        const auto& a = odb.layers.front().polygons.front().points;
+        const auto& b = ipc.model.layers.front().polygons.front().points;
+        require(a.size() == b.size() &&
+                    std::set<std::array<std::int64_t, 2>>(a.begin(), a.end()) ==
+                        std::set<std::array<std::int64_t, 2>>(b.begin(), b.end()),
+                "ODB and IPC arc vertices agree exactly");
+    }
+}
+void rectangular_traces() {
+    auto j = board();
+    auto& f = j.features["TOP"];
+    f.surfaces.clear();
+    f.symbols = {{"rect1000x1000"}};
+    f.lines = {{{1, 1}, {7, 1}, 0, true}};
+    near(area(mapped(j)), 7e6, 1e-3);
+    f.lines.clear();
+    f.arcs = {{{4, 2}, {2, 4}, {2, 2}, 0, true, false}};
+    check_arc_stroke(j, true);
+}
 void boundaries() {
     rejected(OdbJob{}, {"empty"});
     auto j = board();
@@ -445,13 +572,15 @@ void boundaries() {
             l.type = "DIELECTRIC";
     }
     equal(mapped(board()), mapped(j));
-    ThicknessOverrides o = {{"top", 35e-6 * (1 + 1e-10)}};
+    ThicknessOverrides o = {{"top", 70e-6}};
     std::vector<ThicknessRecord> records;
-    mapped(j, {&o, &records});
-    require(records.front().source == "odb" && !records.front().odb_value_m,
-            "matching override retains ODB");
+    const auto m = mapped(j, {&o, &records, "custom-stackup.json"});
+    near(m.layers.front().thickness_m, 35e-6);
+    near(records.front().thickness_m, 35e-6);
+    require(records.front().source == "odb" && records.front().odb_value_m == 35e-6,
+            "conflicting override retains ODB and records original value");
     o["top"] = -1;
-    rejected(j, {"top"}, {&o, nullptr});
+    rejected(j, {"top"}, {&o, nullptr, "custom-stackup.json"});
 }
 void degenerate_copper() {
     auto j = board();
@@ -560,7 +689,10 @@ int main() {
         {"odbpp_map_override_collision", collision},
         {"odbpp_map_holes_profile", holes_and_profile},
         {"odbpp_map_pads_arcs", pads_and_arcs},
+        {"odbpp_map_rect_strokes_rotation", rect_strokes_and_rotation},
         {"odbpp_map_boundaries", boundaries},
+        {"odbpp_map_ipc_arc_equivalence", ipc_arc_equivalence},
+        {"odbpp_map_rectangular_traces", rectangular_traces},
         {"odbpp_map_degenerate_copper", degenerate_copper},
         {"odbpp_map_via_radii", via_radii},
         {"odbpp_map_drill_rejections", drill_rejections}};

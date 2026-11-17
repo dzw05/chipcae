@@ -78,13 +78,13 @@ void map_stackup(const OdbJob& j, const MapOptions& options, ImportResult& resul
                     continue;
                 if (!std::isfinite(value) || value <= 0)
                     throw std::runtime_error("invalid override thickness: " + key);
-                if (odb <= 0 || std::abs(value - odb) / odb > 1e-9) {
+                if (odb <= 0) {
+                    if (options.override_filename.empty())
+                        throw std::runtime_error("missing override filename: " + key);
                     record.thickness_m = value;
-                    // Frozen options have no filename; use the acceptance contract's conventional
-                    // name.
-                    record.source = "override:thickness.json";
-                    if (odb > 0)
-                        record.odb_value_m = odb;
+                    record.source = "override:" + options.override_filename;
+                } else if (value != odb) {
+                    record.odb_value_m = odb;
                 }
             }
         if (record.thickness_m <= 0)

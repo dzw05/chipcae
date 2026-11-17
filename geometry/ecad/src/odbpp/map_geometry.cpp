@@ -30,9 +30,8 @@ struct Mapper {
         } else if (sweep <= 0)
             sweep += 2 * pi;
         const double radius = std::hypot(s.x - c.x, s.y - c.y) * scale;
-        // IPC tolerance formula in MM, keeping equivalent INCH input identical.
-        const double tol =
-            std::max(1e-6, 0.01 * std::max(1.0, std::abs(e.y - s.y) * scale / 1000)) * 1000;
+        // Radius-based IPC-style tolerance in MM, invariant under rotation and units.
+        const double tol = std::max(1e-6, 0.01 * std::max(1.0, radius / 1000)) * 1000;
         const double step =
             radius > tol ? 2 * std::acos(std::clamp(1 - tol / radius, -1.0, 1.0)) : std::abs(sweep);
         const int count =
@@ -110,7 +109,9 @@ struct Mapper {
         ClipperOffset offset;
         if (p.size() == 2 && p.front() == p.back())
             offset.ArcTolerance(0.01);
-        offset.AddPath(p, JoinType::Round, s.kind == "rect" ? EndType::Square : EndType::Round);
+        offset.AddPath(p,
+                       s.kind == "rect" ? JoinType::Miter : JoinType::Round,
+                       s.kind == "rect" ? EndType::Square : EndType::Round);
         Paths64 out;
         offset.Execute(s.w / 2, out);
         return out;
@@ -295,6 +296,7 @@ struct Mapper {
 Expected<EcadModel> map_odb(const OdbJob& job, const MapOptions& options) {
     ImportResult result;
     result.model.id = job.step;
+    result.model.dbu_m = 1e-6;
     try {
         map_stackup(job, options, result);
         Mapper m{job, result.model, unit_m(job) / result.model.dbu_m};
