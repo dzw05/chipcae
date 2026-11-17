@@ -44,40 +44,6 @@ std::vector<std::string> listing(const fs::path& archive, bool verbose) {
 Paths archive_paths(const fs::path& archive) {
     require(fs::is_regular_file(archive), "Missing archive: " + archive.string());
     const auto names = listing(archive, false);
-    const auto metadata = listing(archive, true);
-    require(names.size() == metadata.size(), "Inconsistent archive listing");
-    Paths paths;
-    for (std::size_t i = 0; i < names.size(); ++i) {
-        // Verbose tar output distinguishes regular files from directories and symlinks.
-        if (metadata[i].empty() || metadata[i][0] != '-')
-            continue;
-        auto name = names[i];
-        std::replace(name.begin(), name.end(), '\\', '/');
-        while (name.starts_with("./"))
-            name.erase(0, 2);
-        require(paths.insert(name).second, "Duplicate archive file: " + name);
-    }
-    require(!paths.empty(), "Archive has no regular files");
-    return paths;
-}
-Paths normalize(Paths paths, const Paths& directory) {
-    if (paths == directory)
-        return paths;
-    const auto slash = paths.begin()->find('/');
-    if (slash == std::string::npos)
-        return paths;
-    const auto prefix = paths.begin()->substr(0, slash + 1);
-    Paths stripped;
-    for (const auto& path : paths) {
-        if (!path.starts_with(prefix))
-            return paths;
-        stripped.insert(path.substr(prefix.size()));
-    }
-    return stripped;
-}
-Paths archive_paths(const fs::path& archive) {
-    require(fs::is_regular_file(archive), "Missing archive: " + archive.string());
-    const auto names = listing(archive, false);
     const auto details = listing(archive, true);
     require(names.size() == details.size(), "Archive listings disagree: " + archive.string());
     Paths paths;
@@ -95,7 +61,7 @@ Paths archive_paths(const fs::path& archive) {
         if (details[i].empty() || details[i].front() != '-')
             continue; // verbose listing identifies directories and symbolic links
         all_nested = all_nested && slash != std::string::npos;
-        paths.insert(name);
+        require(paths.insert(name).second, "Duplicate archive file: " + name);
     }
     require(!paths.empty(), "Archive has no regular files: " + archive.string());
     if (roots.size() == 1 && all_nested) {
