@@ -47,7 +47,15 @@ endfunction()
 set_property(GLOBAL PROPERTY CHIPCAE_VTK_VISITED "")
 chipcae_assert_no_vtk(chipcae-kernel)
 
-add_executable(chipcae-import src/import_main.cpp)
+add_executable(chipcae-import
+    src/import_main.cpp
+    src/import_common.hpp
+    src/import_common.cpp
+    src/import_ecad.cpp
+    src/import_step.cpp
+    src/stack_override.hpp
+    src/stack_override.cpp
+)
 target_link_libraries(chipcae-import PRIVATE chipcae::geometry)
 if(CHIPCAE_ENABLE_ECAD)
     target_link_libraries(chipcae-import PRIVATE chipcae::geometry_ecad)

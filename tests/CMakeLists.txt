@@ -213,5 +213,8 @@ add_test(NAME contract_public_headers COMMAND ${CMAKE_COMMAND}
 add_subdirectory(contract)
 add_subdirectory(vv)
 
+# Explicit registration required by the import CLI brief; the auto-scan skips added dirs.
+add_subdirectory(integration/import_cli)
+
 # Keep this the last line: auto-adds test subdirectories that call chipcae_auto_tests().
 chipcae_auto_test_subdirs()
