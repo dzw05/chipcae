@@ -128,11 +128,7 @@ QString pick(const std::function<QString()>& picker,
                     for (const auto& name : {"map.json", "map.JSON", "map.JsOn"})
                         check(QDir::match(model->nameFilters(), name),
                               "map filter exposes " + QString(name));
-                check(
-                    dialog->nameFilters() ==
-                        QStringList{"JSON (*.json *.jsoN *.jsOn *.jsON *.jSon *.jSoN *.jSOn *.jSON "
-                                    "*.Json *.JsoN *.JsOn *.JsON *.JSon *.JSoN *.JSOn *.JSON)"},
-                    "exact map filter");
+                check(dialog->nameFilters() == QStringList{"JSON (*.json)"}, "exact map filter");
             }
             driver.stop();
             if (cancel) {
@@ -807,9 +803,9 @@ sys.exit(rc)
             check(filters.contains("IPC-2581 / ODB++ (*.xml *.tgz *.zip)") &&
                       filters.contains("ODB++ (*.tgz *.zip)"),
                   "ECAD and ODB filters");
-            for (const auto& filter : filters)
-                check(!filter.contains("*.step") && !filter.contains("*.stp"),
-                      "unsupported STEP formats absent from chooser");
+            check(filters.join(' ').contains("B 档") &&
+                      filters.join(' ').contains("(*.step *.stp)"),
+                  "disabled STEP formats disclosed in chooser");
             for (const auto& suffix : {"xml",
                                        "XML",
                                        "tgz",

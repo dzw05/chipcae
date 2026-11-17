@@ -22,7 +22,10 @@ public:
 };
 } // namespace
 QStringList ImportSourceDialog::nameFilters() {
-    return {"IPC-2581 / ODB++ (*.xml *.tgz *.zip)", "IPC-2581 (*.xml)", "ODB++ (*.tgz *.zip)"};
+    return {"IPC-2581 / ODB++ (*.xml *.tgz *.zip)",
+            "IPC-2581 (*.xml)",
+            "ODB++ (*.tgz *.zip)",
+            "STEP (*.step *.stp) — B 档 (disabled)"};
 }
 bool ImportSourceDialog::isSupportedImportPath(const QString& path) {
     if (path.isEmpty())
@@ -62,9 +65,7 @@ QString ImportSourceDialog::getMaterialMapPath(QWidget* parent, const QString& s
     QFileDialog dialog(parent, QStringLiteral("选择材料映射"), startDir);
     dialog.setOption(QFileDialog::DontUseNativeDialog);
     dialog.setFileMode(QFileDialog::ExistingFile);
-    // Use literal suffixes: file-dialog glob backends need not support character classes.
-    dialog.setNameFilters({"JSON (*.json *.jsoN *.jsOn *.jsON *.jSon *.jSoN *.jSOn *.jSON "
-                           "*.Json *.JsoN *.JsOn *.JsON *.JSon *.JSoN *.JSOn *.JSON)"});
+    dialog.setNameFilters({"JSON (*.json)"});
     if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty())
         return {};
     const auto path = dialog.selectedFiles().first();

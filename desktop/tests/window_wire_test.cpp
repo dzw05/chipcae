@@ -23,13 +23,15 @@ void require(bool value, const char* message) {
 }
 template <class Window>
 void wiring(Window& w, const QString& samples) {
-    const auto filters = ImportSourceDialog::nameFilters();
-    require(filters.contains("IPC-2581 / ODB++ (*.xml *.tgz *.zip)") &&
-                filters.contains("ODB++ (*.tgz *.zip)"),
+    const auto names = ImportSourceDialog::nameFilters();
+    require(names.contains("IPC-2581 / ODB++ (*.xml *.tgz *.zip)") &&
+                names.contains("ODB++ (*.tgz *.zip)"),
             "enabled selector filters match ECAD launch types");
-    for (const auto& filter : filters)
-        require(!filter.contains("*.step") && !filter.contains("*.stp"),
-                "unsupported STEP formats absent from chooser");
+    const auto filters = names.join(' ');
+    require(filters.contains("*.tgz") && filters.contains("*.zip") && filters.contains("ODB++") &&
+                filters.contains("*.step") && filters.contains("*.stp") &&
+                filters.contains("B 档") && filters.contains("disabled"),
+            "selector filters");
     QTemporaryDir dir;
     require(dir.isValid(), "temporary directory");
     for (auto suffix : {"xml", "tgz", "zip", "step", "stp", "txt"}) {
