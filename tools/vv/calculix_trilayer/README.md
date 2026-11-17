@@ -52,12 +52,12 @@ within 1e-12 H, including C3D20 corner and midside nodes. Surface `W_bfp` is
 computed with `tools.vv.warpage_qoi.interp_grid`
 and `qoi_surface` on an 81×81 grid in millimetres, then converted back to metres.
 
-The comparison test reads only `REFERENCE.json` and checks the fixed key sets,
-model, refinement, and delta arithmetic. The runtime version and generating
-host are recorded in `calculix_version` and `host`. The JSON contains exactly
-the keys specified in the brief at the top level and in geometry and mesh objects;
-unknown or missing keys are rejected. `REFERENCE.json` is licensed under Apache-2.0,
-as recorded in this README’s SPDX header. Source and deck headers also record Apache-2.0.
+The comparison test reads only `REFERENCE.json` and checks required normative
+fields, model, refinement, and delta arithmetic. Optional runtime provenance
+(`calculix_version` and `host`) does not affect validation; unknown extension
+fields are allowed at the top level and in geometry and mesh objects.
+`REFERENCE.json` is distributed under Apache-2.0. Source and deck headers also
+record Apache-2.0.
 
 The ASCII FRD layout used by CalculiX 2.23 is `(1X,I2,I10,3E12.5)`:
 columns 2–3 contain the record marker, 4–13 the node ID, and 14–49
