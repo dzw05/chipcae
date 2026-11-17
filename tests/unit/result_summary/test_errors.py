@@ -127,6 +127,8 @@ class Errors(unittest.TestCase):
                     step, _ = fixture(run, cut=True)
                     path = f'VTKHDF/{block}/{field}'
                     with h5py.File(step, 'r+') as f:
+                        count = 'NumberOfPoints' if field == 'PointData/U' else 'NumberOfCells'
+                        self.assertGreater(int(f[f'VTKHDF/{block}/{count}'][...].sum()), 0)
                         del f[path]
                     err = io.StringIO()
                     with contextlib.redirect_stderr(err):

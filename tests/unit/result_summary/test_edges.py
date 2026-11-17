@@ -239,30 +239,41 @@ class Edges(unittest.TestCase):
                 self.assertEqual(result['temperature'], dict(
                     min=100., max=999., top_min=999., top_max=999., top_mean=999.))
 
-    def test_duplicate_temperature_correspondence(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            run = Path(tmp)
-            step, _ = fixture(run, cut=True)
-            with h5py.File(step, 'r+') as f:
-                # Change the first copy (index 5); index 6 is discarded.
-                f['VTKHDF/hex/PointData/T'][5] = 5000.
-            result = summarize(run)
-            self.assertEqual(result['temperature']['max'], 5000.)
-            self.assertEqual(result['temperature']['top_min'], 301.)
-            self.assertEqual(result['temperature']['top_max'], 5000.)
-            self.assertAlmostEqual(result['temperature']['top_mean'], 843.9)
-            self.assertEqual(result['warpage']['n_top_points'], 10)
+    def test_conflicting_duplicate_top_values(self):
+        for across_blocks in (False, True):
+            for field in ('T', 'U'):
+                with self.subTest(across_blocks=across_blocks, field=field), tempfile.TemporaryDirectory() as tmp:
+                    run = Path(tmp)
+                    step, _ = fixture(run, cut=True)
+                    with h5py.File(step, 'r+') as f:
+                        block = f['VTKHDF/cut' if across_blocks else 'VTKHDF/hex']
+                        index = 0 if across_blocks else 5
+                        if across_blocks:
+                            block['Points'][index] = [0., 0., 1.]
+                            block['PointData/T'][index] = 305.
+                            block['PointData/U'][index] = [0., 0., .125]
+                        block['PointData/' + field][index] = 5000.
+                    with self.assertRaises(ResultSummaryError) as caught:
+                        summarize(run)
+                    self.assertEqual(caught.exception.code, 14)
+                    self.assertIn('conflicting ' + field, str(caught.exception))
+                    err = io.StringIO()
+                    with contextlib.redirect_stderr(err):
+                        self.assertEqual(main([str(run)]), 14)
+                    self.assertIn('result_summary: INPUT_INVALID:', err.getvalue())
 
-    def test_duplicate_across_blocks(self):
+    def test_matching_duplicate_across_blocks(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)
             step, _ = fixture(run, cut=True)
             with h5py.File(step, 'r+') as f:
-                f['VTKHDF/cut/Points'][0] = [0., 0., 1.]
+                cut = f['VTKHDF/cut']
+                cut['Points'][0] = [0., 0., 1.]
+                cut['PointData/T'][0] = 305.
+                cut['PointData/U'][0] = [0., 0., .125]
             result = summarize(run)
-            self.assertEqual(result['temperature']['max'], 999.)
-            self.assertEqual(result['temperature']['top_max'], 309.)
-            self.assertEqual(result['temperature']['top_mean'], 305.)
+            self.assertEqual(result['temperature'], dict(
+                min=100., max=309., top_min=301., top_max=309., top_mean=305.))
             self.assertEqual(result['warpage']['n_top_points'], 9)
 
     def test_collinear_top_geometry(self):
@@ -273,6 +284,7 @@ class Edges(unittest.TestCase):
                 points = f['VTKHDF/hex/Points'][...]
                 points[:, 1] = 0.
                 f['VTKHDF/hex/Points'][...] = points
+                f['VTKHDF/hex/PointData/T'][...] = 305. + points[:, 0]
                 u = np.zeros_like(points)
                 u[:, 2] = points[:, 0] ** 2
                 f['VTKHDF/hex/PointData/U'][...] = u
@@ -316,16 +328,37 @@ class Edges(unittest.TestCase):
                 step, _ = fixture(run, cut=True)
                 with h5py.File(step, 'r+') as f:
                     del f[f'VTKHDF/{missing}/PointData/T']
-                with self.assertRaises(ResultSummaryError) as caught:
-                    summarize(run)
-                self.assertEqual(caught.exception.code, 14)
-                self.assertEqual(caught.exception.name, 'INPUT_INVALID')
-                err = io.StringIO()
-                out = io.StringIO()
-                with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
-                    self.assertEqual(main([str(run)]), 14)
-                self.assertEqual(out.getvalue(), '')
-                self.assertIn('INPUT_INVALID: partial T coverage', err.getvalue())
+                result = summarize(run)
+                expected = (dict(min=100., max=999., top_min=999., top_max=999., top_mean=999.)
+                            if missing == 'hex' else
+                            dict(min=300., max=309., top_min=301., top_max=309., top_mean=305.))
+                self.assertEqual(result['temperature'], expected)
+                self.assertEqual(result['warpage']['n_top_points'], 10)
+
+    def test_duplicate_with_temperature_only_in_cut(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run, cut=True)
+            with h5py.File(step, 'r+') as f:
+                del f['VTKHDF/hex/PointData/T']
+                cut = f['VTKHDF/cut']
+                cut['Points'][0] = [0., 0., 1.]
+                cut['PointData/U'][0] = [0., 0., .125]
+            result = summarize(run)
+            self.assertEqual(result['temperature'], dict(
+                min=100., max=999., top_min=999., top_max=999., top_mean=999.))
+            self.assertEqual(result['warpage']['n_top_points'], 9)
+
+    def test_temperature_below_global_top(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run, cut=True)
+            with h5py.File(step, 'r+') as f:
+                del f['VTKHDF/hex/PointData/T']
+                f['VTKHDF/cut/Points'][...] = [[2., 0., .5], [0., 0., 0.]]
+            result = summarize(run)
+            self.assertIsNone(result['temperature'])
+            self.assertEqual(result['warpage']['n_top_points'], 9)
 
     def test_byte_order(self):
         with tempfile.TemporaryDirectory() as tmp:

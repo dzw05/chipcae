@@ -3,8 +3,9 @@
 # Copyright (c) 2026 Zhiwei Duan
 """Validate and summarize the first step of a chipcae results directory.
 
-Duplicate coordinates use the first stored displacement/temperature. Temperature
-fields must cover all nonempty blocks or be absent from all of them. Numeric
+Duplicate top coordinates must have identical displacement and available
+temperature values. Temperature uses blocks providing T, and is null when none
+of their points lie on the global top surface. Numeric
 field types accept either byte order, retaining the required kind and width.
 """
 import argparse
@@ -221,36 +222,39 @@ def _summarize(run_dir, top_rel_tol):
         raise ResultSummaryError(12, 'INPUT_REFERENCE_MISSING', str(exc)) from exc
     points = np.concatenate([d[0] for d in data])
     u = np.concatenate([d[1] for d in data])
+    all_t = np.full(len(points), np.nan, dtype='float64')
+    offset = 0
+    for p, _, t in data:
+        if t is not None:
+            all_t[offset:offset + len(p)] = t
+        offset += len(p)
     top = np.array([], dtype=int)
+    tt = np.array([], dtype='float64')
     if len(points):
         z = points[:, 2]
         indices = np.flatnonzero(z >= z.max() - top_rel_tol * (z.max() - z.min()))
-        _, first = np.unique(points[indices], axis=0, return_index=True)
-        # Reuse the first stored indices for both coordinates and their U/T.
+        _, first, inverse = np.unique(points[indices], axis=0, return_index=True,
+                                      return_inverse=True)
+        _require(np.all(u[indices] == u[indices[first[inverse]]]),
+                 'duplicate top coordinates: conflicting U values')
         top = indices[np.sort(first)]
+        available = indices[np.isfinite(all_t[indices])]
+        if len(available):
+            _, first_t, inverse_t = np.unique(points[available], axis=0,
+                                              return_index=True, return_inverse=True)
+            _require(np.all(all_t[available] == all_t[available[first_t[inverse_t]]]),
+                     'duplicate top coordinates: conflicting T values')
+            tt = all_t[available[np.sort(first_t)]]
     w = None
     if len(top) >= 3:
         _, residual = best_fit_plane(points[top, 0], points[top, 1], u[top, 2])
         w = float(np.ptp(residual))
     temperature = None
-    if any(len(p) and t is not None for p, _, t in data):
-        _require(all(d[2] is not None for d in data if len(d[0])),
-                 "partial T coverage: temperature required for every nonempty block")
-        # Fill the same slices used by concatenated points, including empty
-        # blocks without T. Coverage above guarantees T for every filled slice.
-        all_t = np.empty(len(points), dtype='float64')
-        offset = 0
-        for p, _, t in data:
-            if len(p):
-                all_t[offset:offset + len(p)] = t
-            offset += len(p)
-        # Keep temperatures paired with the original point indices selected
-        # above; duplicate coordinates retain their first stored value.
-        tt = all_t[top]
-        temperature = dict(min=float(all_t.min()), max=float(all_t.max()),
-                           top_min=float(tt.min()) if len(tt) else None,
-                           top_max=float(tt.max()) if len(tt) else None,
-                           top_mean=float(tt.mean()) if len(tt) else None)
+    if len(tt):
+        available_t = all_t[np.isfinite(all_t)]
+        temperature = dict(min=float(available_t.min()), max=float(available_t.max()),
+                           top_min=float(tt.min()), top_max=float(tt.max()),
+                           top_mean=float(tt.mean()))
     return dict(schema=SCHEMA, step_file=step_file, mesh_sha256=mesh.get('mesh_sha256'),
                 blocks=blocks, layer_names=names[0], material_names=names[1],
                 temperature=temperature,
