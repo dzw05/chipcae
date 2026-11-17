@@ -608,7 +608,8 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
                         found->area += intersection(previous.footprint, current);
                 }
                 for (const auto& overlap : overlaps)
-                    if (overlap.area > options.tau_a * options.tau_a)
+                    if (overlap.material != parts[p].material &&
+                        overlap.area > options.tau_a * options.tau_a)
                         result.defects.push_back(diagnostic(Tier::C,
                                                             DefectReason::PART_OVERLAP,
                                                             parts[p].id + "#" + std::to_string(s) +
