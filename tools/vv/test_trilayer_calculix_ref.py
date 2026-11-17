@@ -26,9 +26,10 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         required = {"kind", "label", "W_bfp_m", "element_type", "geometry",
                     "meshes", "selected_mesh", "prototype_W_bfp_m",
                     "abs_delta_m", "rel_delta", "calculix_version",
-                    "host"}
+                    "host", "SPDX-License-Identifier"}
         self.assertIsInstance(data, dict)
         self.assertTrue(required <= data.keys(), "missing required top-level fields")
+        self.assertEqual(data["SPDX-License-Identifier"], "Apache-2.0")
         for field in ("kind", "element_type", "selected_mesh", "calculix_version", "host"):
             self.assertIsInstance(data[field], str)
             self.assertTrue(data[field].strip())
@@ -130,6 +131,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
                 self.validate_artifact(invalid)
         variants = []
         for field, values in {
+            "SPDX-License-Identifier": (None, "", "MIT"),
             "label": (123, "参考值（原型计算值）", "不是实测，不是解析解"),
             "W_bfp_m": ("invalid", True, float("nan")),
             "selected_mesh": ("", "unknown", "coarse"),
