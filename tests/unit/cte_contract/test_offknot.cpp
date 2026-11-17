@@ -146,7 +146,7 @@ int main(int argc, char** argv) try {
         for (Real reference : {below,
                                knots.front(),
                                (knots[0] + knots[1]) / 2,
-                               inverse_sample,
+                               (knots[1] + knots[2]) / 2,
                                knots.back(),
                                above}) {
             probe.reference_temperature = reference;
@@ -183,7 +183,8 @@ int main(int argc, char** argv) try {
                       "arbitrary reference derivative scalar node status");
                 verify_derivative(knots[i], value);
             }
-            for (Real temperature : {below, (knots[0] + knots[1]) / 2, sample, above, reference}) {
+            for (Real temperature :
+                 {below, (knots[0] + knots[1]) / 2, (knots[1] + knots[2]) / 2, above, reference}) {
                 check(secant_to_tangent(probe, temperature, value) == StatusCode::Ok,
                       "arbitrary reference derivative scalar status");
                 verify_derivative(temperature, value);
@@ -219,7 +220,7 @@ int main(int argc, char** argv) try {
             for (std::size_t i = 0; i < knots.size(); ++i)
                 verify(knots[i], converted[i]);
             for (Real temperature :
-                 {below, (knots[0] + knots[1]) / 2, inverse_sample, above, reference}) {
+                 {below, (knots[0] + knots[1]) / 2, (knots[1] + knots[2]) / 2, above, reference}) {
                 check(tangent_to_secant(probe, temperature, value) == StatusCode::Ok,
                       "arbitrary reference scalar status");
                 verify(temperature, value);
@@ -227,12 +228,14 @@ int main(int argc, char** argv) try {
         }
     }
     // Extrapolation probe; expectations use endpoint constant extension, not a new CTE datum.
-    const Real below = 225;
+    const Real below =
+        sec.temperatures.front() - (sec.temperatures[1] - sec.temperatures.front()) / 2;
     const Real exterior_tangent = sec.alpha.front(); // Constant extension: slope zero.
     check(secant_to_tangent(sec, below, value) == StatusCode::Ok, "below secant status");
     check(std::isfinite(value), "below tangent is finite");
     check(near(value, exterior_tangent), "below tangent constant extension");
-    for (const Real reference : {tan.reference_temperature, inverse_sample}) {
+    for (const Real reference :
+         {tan.reference_temperature, (tan.temperatures[1] + tan.temperatures[2]) / 2}) {
         auto probe = tan;
         probe.reference_temperature = reference;
         // Integrate from the reference down to the first knot in reverse segment
