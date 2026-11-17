@@ -57,7 +57,7 @@ class GzipCursor {
     std::unique_ptr<State> state_;
 
 public:
-    explicit GzipCursor(std::istream&);
+    explicit GzipCursor(std::istream&, std::uint64_t total_limit = ArchiveLimits{}.total_bytes);
     ~GzipCursor();
     bool next(std::string_view&, std::string&, std::size_t max_output = 32768);
     std::uint64_t consumed_bytes() const { return consumed_; }

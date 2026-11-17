@@ -497,6 +497,36 @@ int main(int argc, char** argv) {
             require(bool(parse_job(dir)), "uncompressed required file takes precedence");
         }
     });
+    test("odbpp_gzip_total_output_limit", [&] {
+        for (const auto* name : {"boundary-32745.gz", "multi.tgz"}) {
+            const auto compressed = bytes(temp / name);
+            std::string full, error;
+            require(decode_gzip(compressed, full, error), error);
+            for (const auto limit : {full.size() - 1, full.size()}) {
+                std::istringstream input(compressed);
+                GzipCursor cursor(input, limit);
+                std::string_view block;
+                std::size_t delivered = 0;
+                while (cursor.next(block, error, 17))
+                    delivered += block.size();
+                require(delivered <= limit, "gzip never exposes bytes beyond total limit");
+                if (limit == full.size())
+                    require(error.empty() && delivered == limit, "exact gzip total limit");
+                else
+                    require(error == "IMPORT_REJECTED: gzip total byte limit", error);
+            }
+        }
+    });
+    test("odbpp_empty_matrix", [&] {
+        const auto dir = temp / "empty-matrix";
+        for (const auto* text : {"", "# comment\n", "UNITS=MM\n"}) {
+            minimal(dir);
+            write(dir / "matrix/matrix", text);
+            rejected(dir, "matrix contains no layers");
+        }
+        fs::remove(dir / "matrix/matrix");
+        rejected(dir, "missing file matrix/matrix");
+    });
     test("odbpp_gzip_live_output_limit", [&] {
         std::istringstream input(bytes(temp / "boundary-32745.gz"));
         GzipCursor cursor(input);
@@ -907,6 +937,8 @@ int main(int argc, char** argv) {
     test("odbpp_archive_tar_formats", [&] {
         const auto expected = archive(temp / "ustar.tgz");
         require(expected.size() == 2, "regular files only");
+        require(expected.contains(std::string(155, 'p') + "/" + std::string(100, 'f')),
+                "maximum ustar prefix and basename represented across all three formats");
         require(expected == archive(temp / "gnu.tgz") && expected == archive(temp / "pax.tgz"),
                 "ustar/GNU/pax bytes");
         const auto long_files = archive(temp / "gnu-long.tgz");
@@ -1384,7 +1416,7 @@ int main(int argc, char** argv) {
     });
     test("odbpp_step_files_are_not_steps", [&] {
         auto p = temp / "step-files";
-        write(p / "matrix/matrix", "UNITS=MM\n");
+        write(p / "matrix/matrix", "UNITS=MM\nLAYER {\nNAME=top\n}\n");
         write(p / "steps/readme.txt", "text");
         write(p / "steps/matrix", "text");
         rejected(p, "no step");

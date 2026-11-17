@@ -59,13 +59,15 @@ struct GzipCursor::State {
     static State decode(std::istream& stream,
                         std::string& error,
                         std::uint64_t& consumed,
-                        const std::size_t& output_limit) {
+                        const std::size_t& output_limit,
+                        std::uint64_t total_limit) {
         Input input{stream, {}, 0, 0, consumed};
         auto fail = [&](const char* reason) {
             error = std::string("IMPORT_REJECTED: gzip ") + reason;
             return false;
         };
         bool member = false;
+        std::uint64_t total_size = 0;
         while (input.fill()) {
             member = true;
             mz_ulong header_crc = MZ_CRC32_INIT;
@@ -134,7 +136,7 @@ struct GzipCursor::State {
             std::array<mz_uint8, 2 * TINFL_LZ_DICT_SIZE> output{};
             std::size_t offset = 0;
             mz_ulong crc = MZ_CRC32_INIT;
-            std::uint32_t size = 0;
+            std::uint64_t size = 0;
             for (;;) {
                 if (!input.fill()) {
                     fail("truncated deflate");
@@ -160,7 +162,12 @@ struct GzipCursor::State {
                 input.pos += n;
                 consumed += n;
                 crc = mz_crc32(crc, output.data() + offset, count);
-                size += static_cast<std::uint32_t>(count);
+                if (count > total_limit - total_size) {
+                    fail("total byte limit");
+                    co_return;
+                }
+                total_size += count;
+                size += count;
                 if (count)
                     co_yield std::string_view{reinterpret_cast<char*>(output.data() + offset),
                                               count};
@@ -218,8 +225,9 @@ struct GzipCursor::State {
             fail("empty input");
     }
 };
-GzipCursor::GzipCursor(std::istream& stream)
-    : state_(std::make_unique<State>(State::decode(stream, error_, consumed_, output_limit_))) {}
+GzipCursor::GzipCursor(std::istream& stream, std::uint64_t total_limit)
+    : state_(std::make_unique<State>(
+          State::decode(stream, error_, consumed_, output_limit_, total_limit))) {}
 GzipCursor::~GzipCursor() = default;
 bool GzipCursor::next(std::string_view& block, std::string& error, std::size_t max_output) {
     output_limit_ = std::max<std::size_t>(1, max_output);

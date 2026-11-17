@@ -168,7 +168,7 @@ def main(root, fixture):
     format_files = [('matrix/matrix', b'UNITS=MM\n'), (long_path, b'long path payload\0\xff')]
     # Ustar permits at most 155 prefix + 100 basename bytes. A longer complete path
     # cannot be represented; use its maximum legal split, and GNU/pax for >255.
-    legal = 'p' * 150 + '/' + 'f' * 99
+    legal = 'p' * 155 + '/' + 'f' * 100
     for fmt, name in [(tarfile.USTAR_FORMAT, 'ustar'), (tarfile.GNU_FORMAT, 'gnu'), (tarfile.PAX_FORMAT, 'pax')]:
         (root / (name + '.tgz')).write_bytes(gzip.compress(tar_bytes([('matrix/matrix', b'UNITS=MM\n'), (legal, b'same bytes')], fmt)))
     for fmt, name in [(tarfile.GNU_FORMAT, 'gnu-long'), (tarfile.PAX_FORMAT, 'pax-long')]:
