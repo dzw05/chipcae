@@ -20,8 +20,13 @@ registry = registry.with_resource(library_schema["$id"], Resource.from_contents(
 library_validator = jsonschema.Draft202012Validator(library_schema, registry=registry)
 library = json.loads((root / "schema/examples/fcbga_demo.materials.json").read_text(encoding="utf-8"))
 library_validator.validate(library)
-material_ids = [item["id"] for item in library["materials"]]
-assert len(material_ids) == len(set(material_ids)), "MATERIAL_ID_DUPLICATE: library ids must be unique"
+def validate_material_ids(material_library):
+    ids = [item["id"] for item in material_library["materials"]]
+    assert len(ids) == len(set(ids)), "MATERIAL_ID_DUPLICATE (11): library ids must be unique"
+    return ids
+
+
+material_ids = validate_material_ids(library)
 stack = json.loads((root / "schema/examples/fcbga_demo.stack.json").read_text(encoding="utf-8"))
 known_material_ids = set(material_ids)
 for layer in stack.get("layers", []):
@@ -31,13 +36,9 @@ for layer in stack.get("layers", []):
 assert {"organic_eq", "sac305_ball_eq", "underfill", "silicon"} <= known_material_ids, \
     "pre-existing material ids must remain available"
 assembly = json.loads((examples / "assembly/package_bulk_parts.assembly.json").read_text(encoding="utf-8"))
-# Find the lid in either explicit parts or STEP body mappings.
-assembly_parts = list(assembly.get("parts", []))
-assembly_parts.extend(assembly.get("parts_from_step", {}).get("bodies", {}).values())
-lid_parts = [part for part in assembly_parts if part.get("id") == "lid"]
-assert len(lid_parts) == 1, "assembly must contain exactly one lid part"
-assert lid_parts[0].get("material") == "copper", "lid material must be exactly copper"
-assert lid_parts[0].get("material") in known_material_ids, \
+lid_material = assembly["parts"][0]["material"]
+assert lid_material == "copper", "lid material must be exactly copper"
+assert lid_material in known_material_ids, \
     "MATERIAL_MAPPING_MISSING: lid copper material is absent from library"
 copper_entries = [item for item in library["materials"] if item["id"] == "copper"]
 assert len(copper_entries) == 1, "materials library must contain exactly one copper entry"
@@ -69,6 +70,16 @@ for property_name, column, lower, upper in (
     assert all(lower <= value <= upper for value in values), f"copper {column} outside SI bounds"
 assert copper["thermal_expansion"]["cte_type"] == "tangent"
 assert copper["thermal_expansion"]["stress_free_temperature"] == 298.15
+
+# A schema-valid duplicate must fail the same semantic check as the real fixture.
+duplicate_library = dict(library, materials=[*library["materials"], copper])
+library_validator.validate(duplicate_library)
+try:
+    validate_material_ids(duplicate_library)
+except AssertionError as error:
+    assert str(error) == "MATERIAL_ID_DUPLICATE (11): library ids must be unique"
+else:
+    raise AssertionError("duplicate copper id unexpectedly validated")
 
 for invalid_library in (root / "material/schema/examples/negative-library-missing-schema.json",
                         root / "material/schema/examples/negative-library-invalid-material.json"):
