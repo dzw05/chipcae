@@ -47,8 +47,6 @@ def schemas(root):
             targets = ["schema/case-1.0.schema.json"]
         elif ".run-profile." in path.name or path.name.startswith("negative-profile-"):
             targets = ["schema/run-profile-1.0.schema.json"]
-        elif ".assembly." in path.name or path.name.startswith("negative-assembly-"):
-            targets = ["schema/assembly-0.1.schema.json"]
         elif ".materials." in path.name:
             targets = ["material/schema/material-library.v1.schema.json"]
         else:
@@ -58,12 +56,7 @@ def schemas(root):
         for target in targets:
             schema = documents[target]
             validator = jsonschema.validators.validator_for(schema)(schema, registry=registry)
-            if target == "schema/assembly-0.1.schema.json":
-                # Assembly has cross-field invariants beyond JSON Schema.
-                from validate_assembly import errors as assembly_errors
-                errors = assembly_errors(instance, validator)
-            else:
-                errors = list(validator.iter_errors(instance))
+            errors = list(validator.iter_errors(instance))
             if path.name.startswith("negative-"):
                 assert errors, f"{path}: $: negative fixture unexpectedly accepted by {target}"
             else:

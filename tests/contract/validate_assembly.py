@@ -49,7 +49,7 @@ def main(root):
     Draft202012Validator.check_schema(schema)
     registry = Registry().with_resource(schema['$id'], Resource.from_contents(schema))
     validator = Draft202012Validator(schema, registry=registry)
-    examples = root / 'schema/examples'
+    examples = root / 'schema/examples/assembly'
     failures = []
 
     def check(name, expected=None):

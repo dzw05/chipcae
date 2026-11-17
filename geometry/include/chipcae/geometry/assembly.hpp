@@ -31,18 +31,23 @@ using Placement = std::variant<AttachPlacement, FramePlacement>;
 struct PlacedPart {
     std::string id, material;
     std::vector<Slab> slabs;
-    // Pose used to generate slabs; attachments retain their resolved_z here.
-    Placement placement;
 };
-Expected<PlacedPart> place(std::vector<Slab> local, const Placement&, const mesh::StackModel& base);
+mesh::Expected<PlacedPart>
+place(std::vector<Slab> local, const Placement&, const mesh::StackModel& base);
 struct MergeOptions {
     Real t_min, eps_weld, tau_a;
 };
+// Layers follow increasing z. Copied base regions retain their input order;
+// appended regions follow input part order, then zero-based slab/section order.
+// Hole-bridge fragments use deterministic fragment order within each section.
+// Appended regions have body == PlacedPart::id and name <id>#<slab>#<section>.
+// Copies across split layers and hole-bridge fragments share source identity;
+// use (layer, body, name) to recover provenance, rather than vector position.
 struct MergeResult {
     mesh::StackModel stack;
     std::vector<Defect> defects;
     std::int64_t welded_interfaces = 0;
 };
-Expected<MergeResult>
+mesh::Expected<MergeResult>
 merge_parts(mesh::StackModel base, const std::vector<PlacedPart>&, const MergeOptions&);
 } // namespace chipcae::geometry
