@@ -2,6 +2,7 @@
 
 #include <stdexcept>
 
+// SP0 contract stub; SP5 supplies the implementation.
 namespace chipcae::mesh {
 std::vector<BodyLevelSet>
 region_level_sets(const StackModel&, const HexMeshArrays&, const RegionLSOptions&) {

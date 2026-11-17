@@ -2,6 +2,7 @@
 
 #include <stdexcept>
 
+// SP0 contract stub; SP3 supplies the implementation.
 namespace chipcae::geometry {
 Expected<PlacedPart> place(std::vector<Slab>, const Placement&, const StackModel&) {
     throw std::logic_error("not implemented: place");
