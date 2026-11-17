@@ -111,10 +111,28 @@ class Errors(unittest.TestCase):
             self.assertEqual(err.getvalue(),
                              'result_summary: INPUT_INVALID: manifest.json: invalid UTF-8\n')
 
+    def test_manifest_must_be_object(self):
+        for manifest in (None, [], 'manifest', 1, True):
+            with self.subTest(manifest=manifest), tempfile.TemporaryDirectory() as tmp:
+                run = Path(tmp)
+                save(run, manifest)
+                self.assert_invalid(run, 'manifest must be an object')
+
+    def test_unresolvable_dataset_reference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run)
+            with h5py.File(step, 'r+') as f:
+                block = f['VTKHDF/hex']
+                del block['Points']
+                block['Points'] = h5py.ExternalLink('missing-data.h5', '/Points')
+            # The step file opens, but its required geometry cannot be resolved.
+            self.assert_invalid(run, 'open')
+
     def test_hdf5_failures(self):
         for stage, target, code, name in (
                 ('open', 'h5py.File', 12, 'INPUT_REFERENCE_MISSING'),
-                ('read', '_read', 12, 'INPUT_REFERENCE_MISSING')):
+                ('read', '_read', 14, 'INPUT_INVALID')):
             for error_type in (OSError, RuntimeError, EOFError):
                 with self.subTest(stage=stage, error=error_type), tempfile.TemporaryDirectory() as tmp:
                     run = Path(tmp)

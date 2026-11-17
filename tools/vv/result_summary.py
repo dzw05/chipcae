@@ -187,7 +187,8 @@ def _summarize(run_dir, top_rel_tol):
         manifest = json.loads(content)
     except json.JSONDecodeError as exc:
         raise ResultSummaryError(14, 'INPUT_INVALID', f'manifest.json: {exc}') from exc
-    _require(isinstance(manifest, dict) and manifest.get('schema_version') == 'chipcae.results/1.0',
+    _require(isinstance(manifest, dict), 'manifest must be an object')
+    _require(manifest.get('schema_version') == 'chipcae.results/1.0',
              'expected manifest schema chipcae.results/1.0')
     steps = manifest.get('steps')
     _require(isinstance(steps, list) and len(steps) > 0 and isinstance(steps[0], dict)
@@ -220,13 +221,10 @@ def _summarize(run_dir, top_rel_tol):
         step = h5py.File(path, 'r')
     except (OSError, RuntimeError, EOFError) as exc:
         raise ResultSummaryError(12, 'INPUT_REFERENCE_MISSING', str(exc)) from exc
-    try:
-        with step as f:
-            _require('VTKHDF' in f and isinstance(f['VTKHDF'], h5py.Group),
-                     '/VTKHDF: required group missing or invalid')
-            blocks, data, names = _read(f['VTKHDF'])
-    except (OSError, RuntimeError, EOFError) as exc:
-        raise ResultSummaryError(12, 'INPUT_REFERENCE_MISSING', str(exc)) from exc
+    with step as f:
+        _require('VTKHDF' in f and isinstance(f['VTKHDF'], h5py.Group),
+                 '/VTKHDF: required group missing or invalid')
+        blocks, data, names = _read(f['VTKHDF'])
     points = np.concatenate([d[0] for d in data])
     u = np.concatenate([d[1] for d in data])
     all_t = np.full(len(points), np.nan, dtype='float64')
@@ -282,7 +280,7 @@ def summarize(run_dir: Path, top_rel_tol: float = 1e-12) -> dict:
         return _summarize(Path(run_dir), top_rel_tol)
     except ResultSummaryError:
         raise
-    except (OSError, ValueError, TypeError, KeyError, IndexError, AttributeError,
+    except (OSError, RuntimeError, EOFError, ValueError, TypeError, KeyError, IndexError, AttributeError,
             OverflowError, np.linalg.LinAlgError) as exc:
         raise ResultSummaryError(14, 'INPUT_INVALID', str(exc)) from exc
 
