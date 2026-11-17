@@ -274,9 +274,9 @@ void symbol_units() {
     require(mapped_inch.vias.size() == 2 && mapped_inch.report.unsupported.empty(),
             "inch tool-based and symbol-based drills map successfully");
     near(mapped_inch.vias[0].outer_radius_dbu, 254);
-    near(mapped_inch.vias[0].inner_radius_dbu, 228.6);
+    near(mapped_inch.vias[0].inner_radius_dbu, 229);
     near(mapped_inch.vias[1].outer_radius_dbu, 127);
-    near(mapped_inch.vias[1].inner_radius_dbu, 101.6);
+    near(mapped_inch.vias[1].inner_radius_dbu, 102);
 }
 void unavailable_thickness() {
     for (const auto* text :
@@ -778,10 +778,26 @@ void mixed_tools() {
     j.tools["DRILL"] = {{7, "plated", 0.6005}, {9, "plated", 0.5995}};
     const auto rounded = mapped(j);
     require(rounded.vias.size() == 2 && rounded.report.unsupported.empty(),
-            "sub-dbu matching duplicates retain symbol diameter");
+            "rounded tool matching retains rounded symbol diameter");
     for (const auto& v : rounded.vias) {
         near(v.outer_radius_dbu, 300);
         near(v.inner_radius_dbu, 275);
+    }
+    for (const auto* type : {"non-plated", "slot"}) {
+        f.symbols = {{"r600.49"}};
+        j.tools["DRILL"] = {{7, "plated", 0.60049}, {9, type, 0.60051}};
+        const auto m = mapped(j);
+        require(m.vias.size() == 2 && m.report.unsupported.empty(),
+                "different rounded DBU diameters cannot create classification ambiguity");
+        near(m.vias.front().outer_radius_dbu, 300);
+        f.symbols = {{"r600.51"}};
+        j.tools["DRILL"] = {{7, "plated", 0.60051}};
+        j.attrs.layer["DRILL"][".plating_thickness"] = "0.0256";
+        const auto odd = mapped(j);
+        near(odd.vias.front().outer_radius_dbu, 300.5);
+        near(odd.vias.front().inner_radius_dbu, 274.5);
+        f.symbols = {{"r600"}};
+        j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
     }
     for (const auto& type : {"non-plated", "slot"}) {
         j.tools["DRILL"] = {{7, "plated", 0.6}, {9, type, 0.6}};
@@ -846,6 +862,33 @@ void duplicate_layer() {
 void collision() {
     ThicknessOverrides o = {{"top", 35e-6}, {"TOP", 36e-6}};
     rejected(board(), {"top", "TOP"}, {&o, nullptr});
+}
+void invalid_contours() {
+    auto j = board();
+    j.profile.contours.push_back(square(2));
+    rejected(j, {"multiple profile exteriors"});
+    for (bool profile : {false, true}) {
+        for (const auto& points :
+             std::vector<std::vector<OdbPoint>>{{{1, 1}, {0, 0}, {1, 1}, {0, 0}},
+                                                {{1, 1}, {2, 2}, {0, 0}},
+                                                {{0.0001, 0}, {0, 0.0001}, {0, 0}}}) {
+            j = board();
+            OdbContour c;
+            for (const auto& end : points) {
+                OdbSegment segment;
+                segment.end = end;
+                c.segs.push_back(segment);
+            }
+            if (profile)
+                j.profile.contours = {c};
+            else
+                j.features["TOP"].surfaces.front().contours.push_back(c);
+            if (profile)
+                rejected(j, {"degenerate contour"});
+            else
+                equal(mapped(j), mapped(board()));
+        }
+    }
 }
 void holes_and_profile() {
     auto j = board();
@@ -1474,6 +1517,7 @@ int main() {
         {"odbpp_map_duplicate_layer", duplicate_layer},
         {"odbpp_map_override_collision", collision},
         {"odbpp_map_holes_profile", holes_and_profile},
+        {"odbpp_map_invalid_contours", invalid_contours},
         {"odbpp_map_pads_arcs", pads_and_arcs},
         {"odbpp_map_rect_strokes_rotation", rect_strokes_and_rotation},
         {"odbpp_map_boundaries", boundaries},

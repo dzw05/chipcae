@@ -5,6 +5,7 @@
 #include <cmath>
 #include <numbers>
 #include <stdexcept>
+#include <tuple>
 
 namespace chipcae::geometry::ecad::odbpp_detail {
 namespace {
@@ -56,6 +57,13 @@ struct Mapper {
         }
         if (p.size() > 1 && p.front() == p.back())
             p.pop_back();
+        auto distinct = p;
+        std::sort(distinct.begin(), distinct.end(), [](const auto& a, const auto& b) {
+            return std::tie(a.x, a.y) < std::tie(b.x, b.y);
+        });
+        distinct.erase(std::unique(distinct.begin(), distinct.end()), distinct.end());
+        if (distinct.size() < 3 || Area(p) == 0)
+            return {};
         if ((Area(p) > 0) == c.is_hole)
             std::reverse(p.begin(), p.end());
         return p;
@@ -175,8 +183,11 @@ struct Mapper {
         };
         for (const auto& surface : f.surfaces) {
             Paths64 paths;
-            for (const auto& c : surface.contours)
-                paths.push_back(contour(c));
+            for (const auto& c : surface.contours) {
+                auto path = contour(c);
+                if (!path.empty())
+                    paths.push_back(std::move(path));
+            }
             add(Union(paths, FillRule::NonZero), surface.positive);
         }
         for (const auto& p : f.pads) {
@@ -230,6 +241,7 @@ struct Mapper {
                 unsupported("Symbol:" + layer.name + ":" + std::to_string(p.sym));
                 continue;
             }
+            const auto diameter = std::llround(s.w);
             const OdbTool* tool = nullptr;
             auto tools = job.tools.find(layer.name);
             auto classification = [](const OdbTool& t) {
@@ -238,11 +250,10 @@ struct Mapper {
                 return type == "slot" ? 1 : type == "nonplated" ? 2 : 0;
             };
             bool ambiguous = false;
-            std::size_t matches = 0;
             if (tools != job.tools.end())
                 for (const auto& t : tools->second)
-                    if (std::abs(t.finish_size * scale - s.w) < 1) {
-                        ++matches;
+                    if (std::isfinite(t.finish_size * scale) &&
+                        std::llround(t.finish_size * scale) == diameter) {
                         if (tool && classification(*tool) != classification(t))
                             ambiguous = true;
                         else if (!tool)
@@ -293,8 +304,8 @@ struct Mapper {
             v.end_layer = layer.end_name;
             auto pos = point(p.at);
             v.position = {pos.x, pos.y};
-            v.outer_radius_dbu = matches == 1 ? tool->finish_size * scale / 2 : s.w / 2;
-            v.inner_radius_dbu = v.outer_radius_dbu - plating;
+            v.outer_radius_dbu = static_cast<double>(diameter) / 2;
+            v.inner_radius_dbu = v.outer_radius_dbu - std::llround(plating);
             if (!std::isfinite(v.outer_radius_dbu) || !std::isfinite(v.inner_radius_dbu) ||
                 !(0 <= v.inner_radius_dbu && v.inner_radius_dbu < v.outer_radius_dbu)) {
                 unsupported("ViaGeometry:" + layer.name);
@@ -340,12 +351,20 @@ ImportResult map_odb(const OdbJob& job, const MapOptions& options) {
     try {
         map_stackup(job, options, result);
         Mapper m{job, result.model, unit_m(job) / result.model.dbu_m};
+        bool exterior = false;
         for (const auto& c : job.profile.contours) {
             if (c.is_hole)
                 m.unsupported("ProfileHole");
-            else if (result.model.outline.points.empty())
-                for (const auto& p : m.contour(c))
+            else {
+                if (exterior)
+                    throw std::runtime_error("multiple profile exteriors");
+                exterior = true;
+                const auto path = m.contour(c);
+                if (path.empty())
+                    throw std::runtime_error("degenerate contour");
+                for (const auto& p : path)
                     result.model.outline.points.push_back({p.x, p.y});
+            }
         }
         for (auto& layer : result.model.layers) {
             auto f = job.features.find(layer.name);

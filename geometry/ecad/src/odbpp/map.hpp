@@ -12,7 +12,8 @@ using ThicknessOverrides = std::map<std::string, double>;
 struct ThicknessRecord {
     std::string layer;
     double thickness_m = 0;
-    // "odb", "override", or "missing"; E-ODB-3 adds filename provenance.
+    // "odb", "override", or "missing". The frozen MapOptions has no filename;
+    // E-ODB-3 must complete the brief's "override:<filename>" provenance.
     std::string source;
     // Reserved for caller provenance; mapping leaves this unset (positive ODB wins).
     std::optional<double> odb_value_m;
