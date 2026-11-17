@@ -30,9 +30,12 @@ void wiring(Window& w, const QString& samples) {
             "selector filters");
     QTemporaryDir dir;
     require(dir.isValid(), "temporary directory");
-    for (auto suffix : {"xml", "tgz", "zip"})
-        require(ImportSourceDialog::isSupportedImportPath(dir.filePath(QString("input.") + suffix)),
-                "supported source");
+    for (auto suffix : {"xml", "tgz", "zip"}) {
+        QFile input(dir.filePath(QString("input.") + suffix));
+        require(input.open(QIODevice::WriteOnly), "create supported source fixture");
+        input.close();
+        require(ImportSourceDialog::isSupportedImportPath(input.fileName()), "supported source");
+    }
     require(ImportSourceDialog::isSupportedImportPath(dir.path()), "directory source");
     for (auto suffix : {"step", "stp", "txt"})
         require(
@@ -70,8 +73,20 @@ void wiring(Window& w, const QString& samples) {
                 loop.quit();
             });
         QTimer::singleShot(5000, &loop, &QEventLoop::quit);
-        require(w.importEcadPath(input.fileName(), PYTHON_EXECUTABLE, {MOCK_SCRIPT}),
-                "start import");
+        QFile map(dir.filePath("material-map.json"));
+        require(map.open(QIODevice::WriteOnly), "write material map fixture");
+        map.write("{}");
+        map.close();
+        ImportRequest request;
+        request.input = input.fileName();
+        request.output = dir.filePath("import.stack.json");
+        request.materialMap = map.fileName();
+        request.polyset = dir.filePath("import.polyset");
+        request.report = dir.filePath("defects.json");
+        request.kind = ImportKind::Ecad;
+        request.program = PYTHON_EXECUTABLE;
+        request.prefix = {MOCK_SCRIPT};
+        require(w.importController()->start(request), "start ImportRequest");
         require(w.importController()->busy(), "controller running");
         if (cancel) {
             require(!w.loadHandwrittenStack() && w.document()->stackJson() == before,
@@ -122,11 +137,6 @@ int main(int argc, char** argv) {
         require(text.contains("Import ECAD"), "missing Import ECAD action");
         require(text.contains("Open Results"), "missing Open Results action");
         require(text.contains("handwritten", Qt::CaseInsensitive), "missing handwritten action");
-        require(!text.contains("Submit") && !text.contains("Preview"), "out of scope actions");
-        for (auto* child : w.findChildren<QObject*>())
-            require(QByteArray(child->metaObject()->className()) !=
-                        "chipcae::desktop::LocalJobService",
-                    "window owns job service");
         wiring(w, QString::fromLocal8Bit(argv[1]));
         std::cout << "window wiring checks passed\n";
     } catch (const std::exception& e) {

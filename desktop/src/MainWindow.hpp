@@ -3,6 +3,7 @@
 #include "EventCodec.hpp"
 #include "ResultSession.hpp"
 
+#include <QJsonObject>
 #include <QMainWindow>
 class QAction;
 #include <QTemporaryDir>
@@ -38,6 +39,19 @@ public:
                     chipcae::desktop::LocalJobService* broker = nullptr,
                     const QString& runId = {},
                     const QString& eventFile = "events.caelog");
+
+    // Test-first API stubs: intentionally inert until D14b-2 implementation.
+    bool previewMesh(const QString& = "chipcae-preview", const QStringList& = {}) { return false; }
+    bool submitCurrentCase() { return false; }
+    void setSubmitProfile(const QJsonObject&) {}
+    QJsonObject submitProfile() const { return {}; }
+    bool caseIsOpen() const { return false; }
+    QString sourceBadgeText() const { return {}; }
+    QString sourceBannerText() const { return {}; }
+    QString provenanceWatermark() const { return {}; }
+    QString summaryWithSource(const QString&) const { return {}; }
+    QString monitorStatusText() const { return {}; }
+    bool captureResults(const QString&) { return false; }
 
 private:
     chipcae::desktop::CaseDocument document_;
