@@ -1,12 +1,19 @@
 #include "archive.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <set>
 #include <sstream>
 
 namespace chipcae::geometry::ecad::detail {
 namespace {
+template <typename T>
+bool number_value(std::string_view text, T& value) {
+    const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+    return error == std::errc{} && end == text.data() + text.size() &&
+           std::isfinite(static_cast<double>(value));
+}
 bool exists(const ArchiveReader& reader, const std::string& path) {
     return std::any_of(reader.entries().begin(), reader.entries().end(), [&](const auto& e) {
         return e.path == path && !e.is_dir;
@@ -58,7 +65,9 @@ bool records(const ArchiveReader& reader,
             if (tag == "F" || tag[0] == '@' || tag[0] == '&' || tag[0] == ';')
                 return true;
             if (tag[0] == '$' && features) {
-                int index = std::stoi(tag.substr(1));
+                int index = 0;
+                if (!number_value(std::string_view(tag).substr(1), index))
+                    return fail("malformed symbol index " + path);
                 std::string name;
                 in >> name;
                 if (index < 0 || index > 200000)
@@ -199,6 +208,7 @@ bool parse_features(const ArchiveReader& reader, OdbJob& job, ImportResult& resu
         auto& tools = job.tools[layer.name];
         OdbTool tool;
         bool active = false;
+        bool valid = true;
         std::uint64_t number = 0;
         if (!reader.for_each_line(
                 base + "tools",
@@ -225,16 +235,21 @@ bool parse_features(const ArchiveReader& reader, OdbJob& job, ImportResult& resu
                         result.model.report.unsupported.push_back(
                             {"IMPORT_UNSUPPORTED_ELEMENT", base + "tools: unit mismatch", number});
                     if (active) {
-                        if (key == "NUM")
-                            tool.num = std::stoi(value);
-                        else if (key == "TYPE")
+                        if ((key == "NUM" && !number_value(value, tool.num)) ||
+                            (key == "FINISH_SIZE" && !number_value(value, tool.finish_size))) {
+                            result.error =
+                                "IMPORT_REJECTED: malformed tool " + key + " " + base + "tools";
+                            valid = false;
+                            return false;
+                        }
+                        if (key == "TYPE")
                             tool.type = value;
-                        else if (key == "FINISH_SIZE")
-                            tool.finish_size = std::stod(value);
                     }
                     return true;
                 },
                 result.error))
+            return false;
+        if (!valid)
             return false;
         if (active) {
             result.error = "IMPORT_REJECTED: unterminated tools " + base + "tools";

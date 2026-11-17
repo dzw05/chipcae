@@ -757,6 +757,69 @@ int main() {
                     "explicit angle and mirror preserved");
         }
     });
+    test("odbpp_gzip_final_input_boundaries", [&] {
+        for (const auto size : {0, 32745, 32746, 65513}) {
+            std::string decoded, error;
+            require(decode_gzip(
+                        bytes(temp / ("boundary-" + std::to_string(size) + ".gz")), decoded, error),
+                    error);
+            require(decoded == std::string(size, 'x'), "gzip boundary bytes");
+        }
+    });
+    test("odbpp_zip_payload_accounting", [&] {
+        ArchiveLimits limits;
+        limits.file_bytes = 1;
+        limits.total_bytes = 1;
+        limits.entry_count = 1;
+        for (const auto* name : {"ratio-unsupported.zip",
+                                 "ratio-zip64.zip",
+                                 "ratio-encrypted.zip",
+                                 "directories.zip"}) {
+            limits.ratio = std::string(name) == "directories.zip" ? 200 : 0.00001;
+            ArchiveReader reader(temp / name, limits);
+            require(reader.open_error().empty(), std::string(name) + ": " + reader.open_error());
+            if (std::string(name) == "directories.zip") {
+                require(reader.entries().size() == 2 && reader.entries()[0].is_dir,
+                        "directory remains listed");
+                std::string payload, error;
+                require(reader.read_bytes("payload", payload, error) && payload == "x", error);
+            } else
+                require(reported(reader.unsupported(), "matrix/matrix"), "unsupported retained");
+        }
+    });
+    test("odbpp_malformed_numeric_fields", [&] {
+        auto p = temp / "malformed-numbers";
+        for (const auto* value : {"", "bad", "999999999999999999999999", "1junk"}) {
+            minimal(p);
+            write(p / "steps/pcb/layers/top/features", "$" + std::string(value) + " r100\n");
+            rejected(p, "malformed symbol index steps/pcb/layers/top/features");
+            write(p / "steps/pcb/layers/top/features", "");
+            for (const auto* key : {"NUM", "FINISH_SIZE"}) {
+                write(p / "steps/pcb/layers/top/tools",
+                      "TOOLS {\n" + std::string(key) + "=" + value + "\n}\n");
+                // Large finite values are legal doubles, but out of range for integer NUM.
+                if (std::string(key) == "FINISH_SIZE" && std::string(value).starts_with("999"))
+                    continue;
+                rejected(p, "malformed tool " + std::string(key) + " steps/pcb/layers/top/tools");
+            }
+        }
+        for (const auto* value : {"nan", "inf", "1e999"}) {
+            minimal(p);
+            write(p / "steps/pcb/layers/top/tools",
+                  "TOOLS {\nFINISH_SIZE=" + std::string(value) + "\n}\n");
+            rejected(p, "malformed tool FINISH_SIZE");
+        }
+        minimal(p);
+        write(p / "matrix/matrix", "LAYER {\nNAME=top\nROW=1junk\n}\n");
+        rejected(p, "malformed matrix ROW matrix/matrix");
+    });
+    test("odbpp_step_files_are_not_steps", [&] {
+        auto p = temp / "step-files";
+        write(p / "matrix/matrix", "UNITS=MM\n");
+        write(p / "steps/readme.txt", "text");
+        write(p / "steps/matrix", "text");
+        rejected(p, "no step");
+    });
     test("odbpp_streaming_memory", [&] {
 #ifdef __linux__
         const auto p = temp / "stream";

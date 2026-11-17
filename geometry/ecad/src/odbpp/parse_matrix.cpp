@@ -1,6 +1,7 @@
 #include "archive.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <set>
 
 namespace chipcae::geometry::ecad::detail {
@@ -64,9 +65,15 @@ bool parse_matrix(const ArchiveReader& reader, OdbJob& job, std::string& error) 
                     layer.type = lower(value);
                 else if (key == "POLARITY")
                     layer.polarity = lower(value);
-                else if (key == "ROW")
-                    layer.row = std::stoi(value);
-                else if (key == "START_NAME")
+                else if (key == "ROW") {
+                    const auto [end, ec] =
+                        std::from_chars(value.data(), value.data() + value.size(), layer.row);
+                    if (ec != std::errc{} || end != value.data() + value.size()) {
+                        error = "IMPORT_REJECTED: malformed matrix ROW matrix/matrix";
+                        valid = false;
+                        return false;
+                    }
+                } else if (key == "START_NAME")
                     layer.start_name = lower(value);
                 else if (key == "END_NAME")
                     layer.end_name = lower(value);

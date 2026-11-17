@@ -91,6 +91,12 @@ def main(root, fixture):
             encrypted[pos + flag_offset] |= 1
             start = pos + 4
     (root / 'encrypted.zip').write_bytes(encrypted)
+    # Unsupported files and directories never enter payload safety accounting.
+    for source in ['unsupported.zip', 'zip64.zip', 'encrypted.zip']:
+        shutil.copyfile(root / source, root / ('ratio-' + source))
+    with zipfile.ZipFile(root / 'directories.zip', 'w') as archive:
+        archive.writestr('steps/pcb/', b'')
+        archive.writestr('payload', b'x')
     (root / 'many-small.tgz').write_bytes(gzip.compress(tar_bytes(
         [('file%d' % i, b'x' * 1024) for i in range(100)])))
     # Exercise pax size overriding the following ordinary header's size.
@@ -107,6 +113,9 @@ def main(root, fixture):
     checksum = sum(data[1024:1536])
     data[1024 + 148:1024 + 156] = ('%06o\0 ' % checksum).encode()
     (root / 'pax-size.tgz').write_bytes(gzip.compress(data))
+    # Stored deflate crosses the 32 KiB input boundary, including exact EOF alignment.
+    for size in [0, 32745, 32746, 65513]:
+        (root / ('boundary-%d.gz' % size)).write_bytes(gzip.compress(b'x' * size, compresslevel=0))
     cut = len(tar) // 2
     multi = gzip_member(tar[:cut]) + gzip_member(tar[cut:])
     (root / 'multi.tgz').write_bytes(multi)

@@ -84,13 +84,16 @@ bool stream_gzip(std::istream& stream, const ByteSink& sink, std::string& error)
             if (!input.fill())
                 return fail("truncated deflate");
             std::size_t n = input.end - input.pos, count = output.size() - offset;
-            auto status = tinfl_decompress(&inflater,
-                                           input.bytes.data() + input.pos,
-                                           &n,
-                                           output.data(),
-                                           output.data() + offset,
-                                           &count,
-                                           TINFL_FLAG_HAS_MORE_INPUT);
+            auto status =
+                tinfl_decompress(&inflater,
+                                 input.bytes.data() + input.pos,
+                                 &n,
+                                 output.data(),
+                                 output.data() + offset,
+                                 &count,
+                                 stream.eof() || stream.peek() == std::char_traits<char>::eof()
+                                     ? 0
+                                     : TINFL_FLAG_HAS_MORE_INPUT);
             input.pos += n;
             crc = mz_crc32(crc, output.data() + offset, count);
             size += static_cast<std::uint32_t>(count);
@@ -99,6 +102,8 @@ bool stream_gzip(std::istream& stream, const ByteSink& sink, std::string& error)
             offset = (offset + count) % output.size();
             if (status == TINFL_STATUS_DONE)
                 break;
+            if (status == TINFL_STATUS_FAILED_CANNOT_MAKE_PROGRESS)
+                return fail("truncated deflate");
             if (status < 0)
                 return fail("invalid deflate");
             if (!n && !count)

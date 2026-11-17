@@ -169,13 +169,6 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                         fail("duplicate archive entry " + rel);
                         return;
                     }
-                    if (!account(st.m_uncomp_size))
-                        return;
-                    if (static_cast<double>(st.m_uncomp_size) >
-                        static_cast<double>(st.m_comp_size) * limits.ratio) {
-                        fail("ratio limit");
-                        return;
-                    }
                     // Local-only zip64 headers need not set miniz's central-directory flag.
                     if (archive_size < 30 || st.m_local_header_ofs > archive_size - 30) {
                         fail("truncated zip local header");
@@ -221,6 +214,15 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                     }
                     bool supported = !zip64 && !local_zip64 && !st.m_is_encrypted &&
                                      (st.m_method == 0 || st.m_method == 8);
+                    if (supported && !st.m_is_directory) {
+                        if (!account(st.m_uncomp_size))
+                            return;
+                        if (static_cast<double>(st.m_uncomp_size) >
+                            static_cast<double>(st.m_comp_size) * limits.ratio) {
+                            fail("ratio limit");
+                            return;
+                        }
+                    }
                     if (!supported)
                         s.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT",
                                                  rel + ": zip compression/encryption/zip64",
