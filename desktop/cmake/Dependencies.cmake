@@ -17,6 +17,7 @@ if(NOT CHIPCAE_HAS_CXX11_ABI)
 endif()
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets OpenGLWidgets)
 find_package(VTK 9.7 REQUIRED COMPONENTS CommonCore CommonDataModel FiltersSources
+    FiltersCore FiltersExtraction FiltersGeneral RenderingAnnotation
     RenderingCore RenderingOpenGL2 InteractionStyle GUISupportQt IOHDF IOImage
     ChartsCore ViewsContext2D RenderingContextOpenGL2)
 if(NOT VTK_VERSION VERSION_LESS 9.8)
