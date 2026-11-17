@@ -135,7 +135,9 @@ int main(int argc, char** argv) try {
     // Move Tref independently of the first knot. Include references in both
     // segments and beyond either endpoint, with queries on both sides of Tref.
     // Each numeric table is interpreted independently in each conversion direction;
-    // derivative and integral expectations use that direction's definition.
+    // CteTable has no directional kind: for the supplied alpha(T), the oracles
+    // differentiate alpha(T)*(T-Tref) or integrate alpha(T) from Tref to T.
+    // Neither direction assumes the two fixtures are companion functions.
     for (auto probe : {sec, tan}) {
         std::swap(probe.alpha[1], probe.alpha[2]);
         const auto& knots = probe.temperatures;
@@ -187,7 +189,9 @@ int main(int argc, char** argv) try {
                 verify_derivative(temperature, value);
             }
             auto verify = [&](Real temperature, Real actual) {
-                // Both fixtures remain positive under interpolation and extension.
+                // These fixture values stay positive under interpolation and extension.
+                // For T != Tref, integral and (T-Tref) have the same sign, so
+                // their quotient is positive; at Tref the limit is alpha(Tref).
                 check(std::isfinite(actual) && actual > 0,
                       "arbitrary reference secant is finite and positive");
                 if (temperature == reference) {

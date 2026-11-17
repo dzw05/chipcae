@@ -3,7 +3,8 @@ if(NOT TARGET chipcae::material)
 endif()
 
 # Keep the baseline read-only while deriving all canonical CTE data from it.
-# Fail closed if its fixture syntax changes, rather than retaining stale literals.
+# Extraction depends on the exact CteTable initializer and scalar-check syntax
+# in core_math.cpp; fail closed if it changes rather than retaining stale literals.
 set(_cte_source "${PROJECT_SOURCE_DIR}/material/tests/core_math.cpp")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_cte_source}")
 file(READ "${_cte_source}" _cte_math)
