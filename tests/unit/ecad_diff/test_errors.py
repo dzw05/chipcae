@@ -25,6 +25,11 @@ def main():
                 ('delta', 14, 'INPUT_INVALID'),
                 ('derived_nonfinite', 14, 'INPUT_INVALID'),
                 ('copper_nonfinite', 14, 'INPUT_INVALID'),
+                *[(case, 14, 'INPUT_INVALID') for case in (
+                    'empty', 'root', 'missing_unit', 'missing_layers', 'missing_outline',
+                    'bad_layers', 'bad_outline', 'bad_layer', 'missing_thickness',
+                    'missing_material', 'bad_copper', 'missing_metal', 'bad_polygons',
+                    'missing_polygon_file', 'bad_ref')],
                 ('unit', 14, 'INPUT_INVALID'),
                 ('utf8', 14, 'INPUT_INVALID'),
                 ('output_file', 14, 'INPUT_INVALID')):
@@ -80,8 +85,31 @@ def main():
                                        'sha256': hashlib.sha256(malformed).hexdigest()}]
             if case == 'unit':
                 b['unit'] = 'mm'
+            if case == 'root':
+                b = []
+            if case.startswith('missing_') and case[8:] in ('unit', 'layers', 'outline'):
+                del b[case[8:]]
+            if case == 'bad_layers':
+                b['layers'] = {}
+            if case == 'bad_outline':
+                b['outline'] = []
+            if case == 'bad_layer':
+                b['layers'][0] = []
+            if case in ('missing_thickness', 'missing_material'):
+                del b['layers'][0][case[8:]]
+            if case == 'bad_copper':
+                b['layers'][0]['copper'] = []
+            if case == 'missing_metal':
+                del b['layers'][0]['copper']['metal']
+            if case in ('bad_polygons', 'missing_polygon_file'):
+                b['layers'][0]['copper'] = {
+                    'metal': 'mat.cu', 'polygons': [] if case == 'bad_polygons' else {}}
+            if case == 'bad_ref':
+                b['external_refs'] = [None]
             if case != 'missing_stack':
                 save(path, b)
+            if case == 'empty':
+                path.write_bytes(b'')
             if case == 'utf8':
                 path.write_bytes(b'{"unit": "m", "bad": "\xff"}')
             if case == 'output_file':

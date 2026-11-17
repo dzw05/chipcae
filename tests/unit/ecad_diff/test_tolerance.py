@@ -74,6 +74,8 @@ def main():
                      (polygon[i][1] - polygon[i-1][1]) ** 2) ** 0.5
                     for i in range(len(polygon)))
             tolerance(e, DELTA, max(PERIMETER, p))
+            assert 'area tolerance δ × P' in e['tol_derivation']
+            assert 'box coordinate tolerance δ' in e['tol_derivation']
             assert 'arcs already discretized by readers; e_chord not included' in e['tol_derivation']
         for width, grade in ((9950000, 'discuss'), (9800000, 'hard')):
             b = copy.deepcopy(a)

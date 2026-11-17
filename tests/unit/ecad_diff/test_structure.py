@@ -21,6 +21,7 @@ def main():
                                           (pb, pa, '3:extra|', 'ipc')):
             r = diff_stacks(left, right)
             assert entry(r, 'layers')['grade'] == 'hard'
+            assert 'layer count differs' in entry(r, 'layers')['tol_derivation']
             assert entry(r, 'layers')['delta'] == 1
             e = entry(r, 'thickness', key)
             assert e['grade'] == 'hard' and e[missing] is None
@@ -54,6 +55,7 @@ def main():
         for left, right in ((pa, pb), (pb, pa)):
             e = entry(diff_stacks(left, right), 'layers')
             assert e['grade'] == 'hard' and e['delta'] == 2
+            assert 'copper/dielectric sequence differs' in e['tol_derivation']
         # Every aligned layer gets a copper row, including zero-area mismatches.
         for left_copper, right_copper, grade in ((False, False, 'info'),
                                                  (True, False, 'info'),

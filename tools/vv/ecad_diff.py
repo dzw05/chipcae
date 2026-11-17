@@ -104,11 +104,38 @@ def _load(path):
         stack = json.loads(_bytes(path))
     except UnicodeDecodeError as exc:
         _invalid(str(exc))
-    if stack['unit'] != 'm' or not isinstance(stack['layers'], list):
+    if not isinstance(stack, dict):
+        _invalid('stack must be an object')
+    if stack.get('unit') != 'm' or not isinstance(stack.get('layers'), list):
         _invalid('expected meter units and a layer array')
-    outline = stack['outline']
+    outline = stack.get('outline')
     if not isinstance(outline, dict):
         _invalid('invalid outline')
+    for layer in stack['layers']:
+        if not isinstance(layer, dict):
+            _invalid('layer must be an object')
+        _string(layer.get('name'))
+        _number(layer.get('thickness'), True)
+        _string(layer.get('material'))
+        if 'copper' in layer:
+            copper = layer['copper']
+            if not isinstance(copper, dict):
+                _invalid('copper must be an object')
+            _string(copper.get('metal'))
+            if 'polygons' in copper:
+                polygons = copper['polygons']
+                if not isinstance(polygons, dict):
+                    _invalid('copper polygons must be an object')
+                _string(polygons.get('file'))
+                _string(polygons.get('layer'))
+    refs = stack.get('external_refs', [])
+    if not isinstance(refs, list):
+        _invalid('invalid external_refs')
+    for ref in refs:
+        if not isinstance(ref, dict):
+            _invalid('external reference must be an object')
+        _string(ref.get('path'))
+        _string(ref.get('sha256'))
     polysets = {}
 
     def load_polyset(file):
@@ -235,8 +262,15 @@ def _diff(odb, ipc, delta):
     same_structure = len(a) == len(b) and sa == sb
     # Count missing positions plus copper/dielectric mismatches at aligned positions.
     structure_delta = abs(len(a) - len(b)) + sum(x != y for x, y in zip(sa, sb))
+    structure_reasons = []
+    if len(a) != len(b):
+        structure_reasons.append(f'layer count differs: {len(a)} versus {len(b)}')
+    if sa != sb:
+        structure_reasons.append('copper/dielectric sequence differs')
+    layer_reason = '; '.join(structure_reasons) if structure_reasons else (
+        'identical' if names_a == names_b else 'layer names differ')
     add('layers', 'stack', names_a, names_b, structure_delta,
-        None, 'identical' if names_a == names_b else 'layer names differ',
+        None, layer_reason,
         'info' if same_structure else 'hard')
     for i in range(max(len(a), len(b))):
         x = a[i] if i < len(a) else None
