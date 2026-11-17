@@ -372,6 +372,47 @@ static bool geometry_acceptance() {
         }
         std::cout << (before == failures ? "PASS " : "FAIL ") << name << '\n';
     };
+    run("ipc_duplicate_lines_union", [&] {
+        const auto line = geometry_line(1, "<LineDesc lineWidth='0.4'/>");
+        auto model = geometry_xml(line + line);
+        check(model.layers.size() == 1 && model.layers[0].polygons.size() == 1,
+              "identical lines merge into one polygon");
+        area(model, round_area(10, .4));
+        reports(model, {});
+    });
+    run("ipc_pad_artwork_before_stackup", [&] {
+        ScopedMap temporary;
+        const auto path = temporary.directory / "forward-pad.xml";
+        {
+            std::ofstream out(path);
+            out << "<IPC-2581><CadHeader units='MILLIMETER'/><CadData>"
+                   "<EntryStandard id='disk'><Circle diameter='1'/></EntryStandard>"
+                   "<Step><LayerFeature layerRef='F.Cu'><Set>"
+                   "<Pad padstackDefRef='artwork'><Location x='2' y='3'/>"
+                   "<StandardPrimitiveRef id='disk'/></Pad>"
+                << geometry_line(3, "<LineDesc lineWidth='0.2'/>")
+                << "</Set></LayerFeature></Step>"
+                   "<StackupLayer layerOrGroupRef='mask'/>"
+                   "<StackupLayer layerOrGroupRef='F.Cu'/>"
+                   "<Layer name='mask' layerFunction='SOLDERMASK'/>"
+                   "<Layer name='F.Cu' layerFunction='CONDUCTOR'/>"
+                   "</CadData></IPC-2581>";
+        }
+        auto model = geometry_read(path);
+        check(model.layers.size() == 1 && model.layers[0].name == "F.Cu" &&
+                  model.layers[0].polygons.size() == 1,
+              "forward pad and trace merge on compacted copper layer");
+        // Compare with the same artwork parsed after its layer has been indexed.
+        auto baseline =
+            geometry_xml("<Pad padstackDefRef='artwork'><Location x='2' y='3'/>"
+                         "<StandardPrimitiveRef id='disk'/></Pad>" +
+                             geometry_line(3, "<LineDesc lineWidth='0.2'/>"),
+                         "<EntryStandard id='disk'><Circle diameter='1'/></EntryStandard>");
+        area(model, geometry_area(baseline, "F.Cu"));
+        check(geometry_area(model, "F.Cu") > round_area(10, .2),
+              "forward pad contributes copper area");
+        check(model.vias.empty(), "pad artwork creates no drilled vias");
+    });
     run("ipc_pad_union_preserves_unrelated_trace", [&] {
         const auto artwork = "<Pad padstackDefRef='artwork'><Location x='0' "
                              "y='0'/><StandardPrimitiveRef id='disk'/></Pad>" +

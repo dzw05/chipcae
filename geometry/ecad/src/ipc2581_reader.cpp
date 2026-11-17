@@ -98,35 +98,6 @@ struct Parser {
                                      reports.end(),
                                      [](const auto& r) { return r.element.empty(); }),
                       reports.end());
-        // Union pad-bearing layers so contained connection stubs add no copper area.
-        for (const auto& name : pad_layers) {
-            auto li = layer_index.find(name);
-            if (li == layer_index.end())
-                continue;
-            auto& polygons = model.layers[li->second].polygons;
-            Clipper2Lib::Paths64 paths;
-            for (const auto& p : polygons) {
-                if (p.points.size() < 3)
-                    continue;
-                Clipper2Lib::Path64 points;
-                for (const auto& v : p.points)
-                    points.push_back({v[0], v[1]});
-                const double area = Clipper2Lib::Area(points);
-                // Reject collapsed rings and sub-grid slivers before clipping (area in DBU^2).
-                if (std::abs(area) < 1.0)
-                    continue;
-                if (area < 0)
-                    std::reverse(points.begin(), points.end());
-                paths.push_back(std::move(points));
-            }
-            polygons.clear();
-            for (const auto& points : Clipper2Lib::Union(paths, Clipper2Lib::FillRule::NonZero)) {
-                Polygon p;
-                for (const auto& v : points)
-                    p.points.push_back({v.x, v.y});
-                polygons.push_back(std::move(p));
-            }
-        }
         std::vector<EcadLayer> retained;
         std::vector<UnsupportedElement> additions;
         std::set<std::string> seen;
@@ -165,6 +136,49 @@ struct Parser {
             retained.push_back(std::move(layer));
         }
         model.layers = std::move(retained);
+        for (const auto& artwork : deferred_artwork) {
+            const auto& pad = pending[artwork.pad];
+            auto li = layer_index.find(pad.layer);
+            if (li == layer_index.end() || skipped(pad.layer))
+                continue;
+            const auto center = pad.via.position;
+            Polygon polygon;
+            for (int i = 0; i < 256; ++i) {
+                const double angle = 2 * std::acos(-1.0) * i / 256;
+                polygon.points.push_back(
+                    {std::llround(center[0] + artwork.radius * std::cos(angle)),
+                     std::llround(center[1] + artwork.radius * std::sin(angle))});
+            }
+            model.layers[li->second].polygons.push_back(std::move(polygon));
+        }
+        // Merge overlapping copper artwork and traces before computing their area.
+        for (auto& layer : model.layers) {
+            auto& polygons = layer.polygons;
+            if (polygons.size() < 2)
+                continue;
+            Clipper2Lib::Paths64 paths;
+            for (const auto& p : polygons) {
+                if (p.points.size() < 3)
+                    continue;
+                Clipper2Lib::Path64 points;
+                for (const auto& v : p.points)
+                    points.push_back({v[0], v[1]});
+                const double area = Clipper2Lib::Area(points);
+                // Reject collapsed rings and sub-grid slivers before clipping (area in DBU^2).
+                if (std::abs(area) < 1.0)
+                    continue;
+                if (area < 0)
+                    std::reverse(points.begin(), points.end());
+                paths.push_back(std::move(points));
+            }
+            polygons.clear();
+            for (const auto& points : Clipper2Lib::Union(paths, Clipper2Lib::FillRule::NonZero)) {
+                Polygon p;
+                for (const auto& v : points)
+                    p.points.push_back({v.x, v.y});
+                polygons.push_back(std::move(p));
+            }
+        }
         model.report.unsupported.insert(
             model.report.unsupported.begin(), additions.begin(), additions.end());
         for (std::size_t ci = 0; ci < model.components.size(); ++ci) {
@@ -280,7 +294,11 @@ struct Parser {
     std::set<std::string> duplicate_ids, missing_ids, missing_layers, end_layers;
     std::map<std::string, double> circles;
     std::string standard;
-    std::set<std::string> pad_layers;
+    struct Artwork {
+        std::size_t pad;
+        double radius;
+    };
+    std::vector<Artwork> deferred_artwork;
     void draw_trace(Trace& t, Clipper2Lib::EndType end = Clipper2Lib::EndType::Round) {
         auto li = layer_index.find(t.layer);
         if (li == layer_index.end() || skipped(t.layer))
@@ -500,19 +518,7 @@ struct Parser {
             circles[standard] = number(attr(a, "diameter")) * scale();
         } else if (name == "StandardPrimitiveRef" && in_pad && circles.count(value(a, "id"))) {
             model.report.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT", name, line_number()});
-            auto li = layer_index.find(current_layer);
-            if (li != layer_index.end() && !skipped(current_layer)) {
-                const auto center = pending.back().via.position;
-                const double radius = circles[value(a, "id")] / 2;
-                Polygon polygon;
-                for (int i = 0; i < 256; ++i) {
-                    const double angle = 2 * std::acos(-1.0) * i / 256;
-                    polygon.points.push_back({std::llround(center[0] + radius * std::cos(angle)),
-                                              std::llround(center[1] + radius * std::sin(angle))});
-                }
-                model.layers[li->second].polygons.push_back(std::move(polygon));
-                pad_layers.insert(current_layer);
-            }
+            deferred_artwork.push_back({pending.size() - 1, circles[value(a, "id")] / 2});
         } else if (name == "LineDesc") {
             const char* id = attr(a, "id");
             const double width = number(attr(a, "lineWidth"));
