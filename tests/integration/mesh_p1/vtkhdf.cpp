@@ -42,6 +42,9 @@ int main(int argc, char** argv) {
     (void)argv;
 #endif
     {
+#ifdef CHIPCAE_ENABLE_KOKKOS
+        Kokkos::ScopeGuard guard(argc, argv);
+#endif
         auto comm = chipcae::Communicator::world();
         auto s = k1::stack();
         auto o = k1::options();
