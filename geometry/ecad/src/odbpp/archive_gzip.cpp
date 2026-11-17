@@ -1,7 +1,9 @@
 #include "archive.hpp"
 
+#include <algorithm>
 #include <array>
 #include <coroutine>
+#include <cstring>
 #include <miniz.h>
 #include <sstream>
 #include <utility>
@@ -13,6 +15,7 @@ struct Input {
     std::istream& in;
     std::array<unsigned char, 32768> bytes{};
     std::size_t pos = 0, end = 0;
+    std::uint64_t& consumed;
     bool fill() {
         if (pos != end)
             return true;
@@ -21,7 +24,12 @@ struct Input {
         pos = 0;
         return end != 0;
     }
-    int get() { return fill() ? bytes[pos++] : -1; }
+    int get() {
+        if (!fill())
+            return -1;
+        ++consumed;
+        return bytes[pos++];
+    }
 };
 } // namespace
 struct GzipCursor::State {
@@ -46,8 +54,11 @@ struct GzipCursor::State {
     }
     State(State&& other) noexcept : handle(std::exchange(other.handle, {})) {}
     explicit State(std::coroutine_handle<promise_type> h) : handle(h) {}
-    static State decode(std::istream& stream, std::string& error) {
-        Input input{stream};
+    static State decode(std::istream& stream,
+                        std::string& error,
+                        std::uint64_t& consumed,
+                        const std::size_t& output_limit) {
+        Input input{stream, {}, 0, 0, consumed};
         auto fail = [&](const char* reason) {
             error = std::string("IMPORT_REJECTED: gzip ") + reason;
             return false;
@@ -126,7 +137,7 @@ struct GzipCursor::State {
             }
             tinfl_decompressor inflater;
             tinfl_init(&inflater);
-            std::array<mz_uint8, TINFL_LZ_DICT_SIZE> output{};
+            std::array<mz_uint8, 2 * TINFL_LZ_DICT_SIZE> output{};
             std::size_t offset = 0;
             mz_ulong crc = MZ_CRC32_INIT;
             std::uint32_t size = 0;
@@ -135,24 +146,33 @@ struct GzipCursor::State {
                     fail("truncated deflate");
                     co_return;
                 }
-                std::size_t n = input.end - input.pos, count = output.size() - offset;
-                auto status =
-                    tinfl_decompress(&inflater,
-                                     input.bytes.data() + input.pos,
-                                     &n,
-                                     output.data(),
-                                     output.data() + offset,
-                                     &count,
-                                     stream.eof() || stream.peek() == std::char_traits<char>::eof()
-                                         ? 0
-                                         : TINFL_FLAG_HAS_MORE_INPUT);
+                std::size_t n = input.end - input.pos,
+                            count = std::min(output.size() - offset, output_limit);
+                auto status = tinfl_decompress(
+                    &inflater,
+                    input.bytes.data() + input.pos,
+                    &n,
+                    output.data(),
+                    output.data() + offset,
+                    &count,
+                    TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF |
+                        (stream.eof() || stream.peek() == std::char_traits<char>::eof()
+                             ? 0
+                             : TINFL_FLAG_HAS_MORE_INPUT));
                 input.pos += n;
+                consumed += n;
                 crc = mz_crc32(crc, output.data() + offset, count);
                 size += static_cast<std::uint32_t>(count);
                 if (count)
                     co_yield std::string_view{reinterpret_cast<char*>(output.data() + offset),
                                               count};
-                offset = (offset + count) % output.size();
+                offset += count;
+                if (offset == output.size()) {
+                    // Retain the full deflate history while allowing arbitrary output stops.
+                    std::memmove(
+                        output.data(), output.data() + TINFL_LZ_DICT_SIZE, TINFL_LZ_DICT_SIZE);
+                    offset = TINFL_LZ_DICT_SIZE;
+                }
                 if (status == TINFL_STATUS_DONE)
                     break;
                 if (status == TINFL_STATUS_FAILED_CANNOT_MAKE_PROGRESS) {
@@ -197,9 +217,10 @@ struct GzipCursor::State {
     }
 };
 GzipCursor::GzipCursor(std::istream& stream)
-    : state_(std::make_unique<State>(State::decode(stream, error_))) {}
+    : state_(std::make_unique<State>(State::decode(stream, error_, consumed_, output_limit_))) {}
 GzipCursor::~GzipCursor() = default;
-bool GzipCursor::next(std::string_view& block, std::string& error) {
+bool GzipCursor::next(std::string_view& block, std::string& error, std::size_t max_output) {
+    output_limit_ = std::max<std::size_t>(1, max_output);
     auto h = state_->handle;
     if (!h.done())
         h.resume();

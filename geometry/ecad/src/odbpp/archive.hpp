@@ -57,12 +57,15 @@ using ByteSink = std::function<bool(std::string_view)>;
 class GzipCursor {
     struct State;
     std::string error_;
+    std::uint64_t consumed_ = 0;
+    std::size_t output_limit_ = 32768;
     std::unique_ptr<State> state_;
 
 public:
     explicit GzipCursor(std::istream&);
     ~GzipCursor();
-    bool next(std::string_view&, std::string&);
+    bool next(std::string_view&, std::string&, std::size_t max_output = 32768);
+    std::uint64_t consumed_bytes() const { return consumed_; }
 };
 bool stream_gzip(std::istream&, const ByteSink&, std::string&);
 bool index_tar(const std::filesystem::path&,

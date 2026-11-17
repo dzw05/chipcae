@@ -211,6 +211,32 @@ int main() {
             std::cerr << "FAIL " << name << ": " << e.what() << '\n';
         }
     };
+    test("odbpp_review_symbol_indices", [&] {
+        auto p = temp / "symbol-indices";
+        for (const auto* definitions : {"$1 r100\n", "$0 r100\n$0 r200\n", "$0 r100\n$2 r200\n"}) {
+            fs::remove_all(p);
+            minimal(p);
+            write(p / "steps/pcb/layers/top/features",
+                  std::string(definitions) + "P 0 0 1 P 0 0\n");
+            rejected(p, "nonsequential symbol index");
+        }
+        fs::remove_all(p);
+        minimal(p);
+        write(p / "steps/pcb/layers/top/features",
+              "$0 r100\n$1 r200\nP 0 0 1 P 0 0\nP 0 0 -1 P 0 0\nP 0 0 2 P 0 0\n");
+        OdbJob parsed;
+        auto result = read_odbpp_job(p, parsed);
+        require(bool(result), result.error);
+        require(parsed.features.at("top").symbols.size() == 2, "sequential definitions retained");
+        require(reported(result.model.report.unsupported, "unknown symbol -1") &&
+                    reported(result.model.report.unsupported, "unknown symbol 2"),
+                "out-of-range references reported");
+    });
+    test("odbpp_review_padded_entry_ratio", [&] {
+        for (const auto* order : {"before", "after"})
+            rejected(temp / "corrupt" / (std::string("ratio-padded-") + order + ".tgz"),
+                     "ratio limit");
+    });
     test("odbpp_review_all_entry_counts", [&] {
         ArchiveLimits limits;
         limits.entry_count = 2;
@@ -272,7 +298,14 @@ int main() {
                 minimal(p);
                 write(p / (feature ? "steps/pcb/layers/top/features" : "steps/pcb/profile"),
                       "S P 0\n" + std::string(records) + "SE\n");
-                rejected(p, "");
+                const std::string text(records);
+                const bool profile_only = text == "OB 0 0 I\nOE\n" ||
+                                          text == "OB 0 0 I\nOS 1 0\nOS 0 0\nOE\n" ||
+                                          text == "OB 0 0 I\nOS 1 0\nOS 1 1\nOS 0 1\nOE\n";
+                if (feature && profile_only)
+                    require(bool(parse_job(p)), "feature contour closure/count unrestricted");
+                else
+                    rejected(p, "");
             }
         }
         for (const auto* record :
@@ -524,7 +557,9 @@ int main() {
                 limits.entry_count = 1;
             if (std::string(reason) == "ratio")
                 limits.ratio = 2;
-            ArchiveReader reader(temp / "limits.tgz", limits);
+            ArchiveReader reader(
+                temp / (std::string(reason) == "ratio" ? "limits-ratio.tgz" : "limits.tgz"),
+                limits);
             std::string error = reader.open_error();
             if (error.empty())
                 for (const auto& e : reader.entries()) {
@@ -675,8 +710,9 @@ int main() {
         require(bool(r), r.error);
         const auto& u = r.model.report.unsupported;
         require(reported(u, "features: unit mismatch", 1) &&
-                    reported(u, "unknown symbol vendor_shape", 2) && reported(u, "record T", 3) &&
-                    reported(u, "record B", 4) && reported(u, "unknown symbol 7", 5),
+                    reported(u, "unsupported symbol vendor_shape", 2) &&
+                    reported(u, "record T", 3) && reported(u, "record B", 4) &&
+                    reported(u, "unknown symbol 7", 5),
                 "diagnostic file and exact line for each unsupported element");
     });
     test("odbpp_directory_symlink", [&] {
@@ -697,7 +733,7 @@ int main() {
     test("odbpp_symbol_order_and_nested_Z", [&] {
         auto p = temp / "symbol-order";
         minimal(p);
-        write(p / "steps/pcb/layers/top/features", "$3 r100\n$1 oval100x200\n");
+        write(p / "steps/pcb/layers/top/features", "$0 r100\n$1 oval100x200\n");
         write(p / "steps/pcb/layers/top/tools.Z", "unsupported compressed file");
         auto j = job(p);
         const auto& symbols = j.features.at("top").symbols;
@@ -706,8 +742,8 @@ int main() {
                 "symbol definition appearance order");
         const auto r = parse_job(p);
         require(reported(r.model.report.unsupported, "tools.Z"), "nested .Z fallback source path");
-        require(reported(r.model.report.unsupported, "nonsequential symbol index 3", 1),
-                "unrepresentable symbol index reported");
+        write(p / "steps/pcb/layers/top/features", "$3 r100\n$1 oval100x200\n");
+        rejected(p, "nonsequential symbol index");
     });
     test("odbpp_review_contour_lifetime", [&] {
         auto p = temp / "contour-lifetime";

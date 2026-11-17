@@ -2,6 +2,7 @@
 """Generate owned ODB++ acceptance inputs, including corrupt binary cases."""
 import gzip
 import io
+import random
 import shutil
 import struct
 import sys
@@ -145,8 +146,9 @@ def main(root, fixture):
     with zipfile.ZipFile(root / 'directories.zip', 'w') as archive:
         archive.writestr('steps/pcb/', b'')
         archive.writestr('payload', b'x')
+    # Stored deflate keeps each small entry below even the reduced 2:1 budget.
     (root / 'many-small.tgz').write_bytes(gzip.compress(tar_bytes(
-        [('file%d' % i, b'x' * 1024) for i in range(100)])))
+        [('file%d' % i, b'x' * 1024) for i in range(100)]), compresslevel=0))
     # Exercise pax size overriding the following ordinary header's size.
     out = io.BytesIO()
     with tarfile.open(fileobj=out, mode='w', format=tarfile.PAX_FORMAT) as archive:
@@ -194,7 +196,9 @@ def main(root, fixture):
         info.type = tarfile.SYMTYPE
         info.linkname = '/etc/passwd'
         archive.addfile(info)
-    (root / 'limits.tgz').write_bytes(gzip.compress(tar_bytes([('matrix/matrix', b'x' * 8192), ('steps/pcb/profile', b'y' * 8192)])))
+    limit_tar = tar_bytes([('matrix/matrix', b'x' * 8192), ('steps/pcb/profile', b'y' * 8192)])
+    (root / 'limits.tgz').write_bytes(gzip.compress(limit_tar, compresslevel=0))
+    (root / 'limits-ratio.tgz').write_bytes(gzip.compress(limit_tar))
     unknown = root / 'unknown'
     shutil.copytree(root / 'job', unknown)
     (unknown / 'steps/pcb/layers/f.cu/features').write_text('UNITS=MM\n$0 r100\nQ unknown\n')
@@ -211,10 +215,18 @@ def main(root, fixture):
     bad = bytearray(gzip.compress(tar))
     bad[-4] ^= 1
     (root / 'isize.tgz').write_bytes(bad)
+    # Incompressible neighbors must not dilute a highly compressed entry.
+    noise = random.Random(93).randbytes(256 * 1024)
+    for order in ['before', 'after']:
+        members = [('bomb', b'x' * (1024 * 1024))]
+        members.insert(0 if order == 'before' else 1, ('noise', noise))
+        (root / ('ratio-padded-' + order + '.tgz')).write_bytes(
+            gzip.compress(tar_bytes(members)))
     corrupt = root / 'corrupt'
     corrupt.mkdir()
     for name in ['truncated.tgz', 'bad-crc.zip', 'missing-matrix.tgz', 'missing-profile.tgz',
-                 'traversal.tgz', 'absolute.tgz', 'drive.tgz', 'crc.tgz', 'checksum.tgz', 'isize.tgz']:
+                 'traversal.tgz', 'absolute.tgz', 'drive.tgz', 'crc.tgz', 'checksum.tgz', 'isize.tgz',
+                 'ratio-padded-before.tgz', 'ratio-padded-after.tgz']:
         (root / name).rename(corrupt / name)
     (root / 'unknown').rename(corrupt / 'unknown')
 

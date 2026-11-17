@@ -56,7 +56,8 @@ bool records(const ArchiveReader& reader,
         return false;
     };
     auto symbol = [&](int index) {
-        if (!symbol_ids.contains(index))
+        if (index < 0 || !features || static_cast<std::size_t>(index) >= features->symbols.size() ||
+            !symbol_ids.contains(index))
             report("unknown symbol " + std::to_string(index));
     };
     const bool ok = reader.for_each_line(
@@ -90,8 +91,7 @@ bool records(const ArchiveReader& reader,
                     return fail("invalid symbol index " + path);
                 if (static_cast<std::size_t>(index) != features->symbols.size() ||
                     symbol_ids.contains(index))
-                    report("nonsequential symbol index " + std::to_string(index));
-                // The frozen vector retains definition order; unusual indices are reported.
+                    return fail("nonsequential symbol index");
                 symbol_ids.insert(index);
                 features->symbols.push_back({name});
                 bool known = false;
@@ -102,7 +102,7 @@ bool records(const ArchiveReader& reader,
                             name[std::char_traits<char>::length(prefix)])))
                         known = true;
                 if (!known)
-                    report("unknown symbol " + name);
+                    report("unsupported symbol " + name);
                 return true;
             }
             if (contour && (tag == "S" || tag == "SE" || tag == "OB"))
@@ -154,14 +154,14 @@ bool records(const ArchiveReader& reader,
                     return fail("contour end without start " + path);
                 auto end = contour->segs.empty() ? contour->start : contour->segs.back().end;
                 double scale = job.units == OdbUnits::mm ? 0.001 : 0.0254;
-                if (contour->segs.empty() || std::abs(end.x - contour->start.x) * scale > 1e-9 ||
-                    std::abs(end.y - contour->start.y) * scale > 1e-9)
-                    return fail(features ? "feature contour not closed"
-                                         : "profile contour not closed");
+                if (!features &&
+                    (contour->segs.empty() || std::abs(end.x - contour->start.x) * scale > 1e-9 ||
+                     std::abs(end.y - contour->start.y) * scale > 1e-9))
+                    return fail("profile contour not closed");
                 const bool has_arc = std::any_of(contour->segs.begin(),
                                                  contour->segs.end(),
                                                  [](const auto& seg) { return seg.is_arc; });
-                if (contour->segs.size() < (has_arc ? 2U : 3U))
+                if (!features && contour->segs.size() < (has_arc ? 2U : 3U))
                     return fail("insufficient contour segments " + path);
                 contour = nullptr;
             } else if (tag == "SE") {
