@@ -57,6 +57,8 @@ def read_polyset(path: Path) -> Polyset:
             names.add(name)
             ring_count = unpack('<I')[0]
             offsets = unpack('<' + str(ring_count + 1) + 'q')
+            if any(offset < 0 or offset > (len(data) - position) // 16 for offset in offsets):
+                raise ValueError('ring offset outside coordinate payload')
             if offsets[0] != 0 or any(b - a < 3 for a, b in zip(offsets, offsets[1:])):
                 raise ValueError('invalid ring offsets or short ring')
             coordinates = take(offsets[-1] * 16)

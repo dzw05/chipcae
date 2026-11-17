@@ -111,6 +111,14 @@ def check(root):
             boundary['external_refs'][0]['sha256'] = hashlib.sha256((root / 'copper.polyset').read_bytes()).hexdigest()
         bounded, _ = homogenize_copper(boundary, root)
         assert bounded['layers'][0]['copper']['fraction'] == expected
+    from tools.stack.polyset import StackPrepError
+    boundary['outline'] = {'box': [0, 0, 1.0 / 2e-12, 1]}
+    try:
+        homogenize_copper(boundary, root)
+    except StackPrepError as exc:
+        assert (exc.code, exc.name) == (14, 'INPUT_INVALID')
+    else:
+        raise AssertionError('fraction below -1e-12 must be rejected')
     fixture(root)  # Restore the original sidecar before exercising the CLI.
     path, rp = cli(root, stack)
     assert json.loads(path.read_text()) == output

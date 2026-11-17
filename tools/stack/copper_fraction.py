@@ -18,6 +18,12 @@ def invalid(message):
     return StackPrepError(14, 'INPUT_INVALID', message)
 
 
+def required(obj, key):
+    if key not in obj:
+        raise StackPrepError(12, 'INPUT_REFERENCE_MISSING', f'missing input field: {key}')
+    return obj[key]
+
+
 def homogenize_copper(stack: dict, stack_dir: Path) -> tuple[dict, list[dict]]:
     try:
         return _homogenize(stack, stack_dir)
@@ -28,14 +34,29 @@ def homogenize_copper(stack: dict, stack_dir: Path) -> tuple[dict, list[dict]]:
 def _homogenize(stack, stack_dir):
     if not isinstance(stack, dict):
         raise invalid('stack must be an object')
-    if stack['unit'] != 'm':
+    if required(stack, 'unit') != 'm':
         raise invalid('unit must be m')
-    if not isinstance(stack.get('layers'), list):
+    if not isinstance(required(stack, 'layers'), list):
         raise invalid('layers must be an array')
     if any(not isinstance(layer, dict) or
            ('copper' in layer and not isinstance(layer['copper'], dict))
            for layer in stack['layers']):
         raise invalid('invalid stack layer or copper object')
+    outline = required(stack, 'outline')
+    if not isinstance(outline, dict) or not any(k in outline for k in ('box', 'polygon')):
+        raise invalid('outline must be an object containing box or polygon')
+    if 'box' in outline:
+        box = outline['box']
+        if (not isinstance(box, list) or len(box) != 4 or
+                any(type(v) not in (int, float) or not math.isfinite(v) for v in box)):
+            raise invalid('invalid outline box')
+    if 'polygon' in outline:
+        polygon = outline['polygon']
+        if (not isinstance(polygon, list) or len(polygon) < 3 or
+                any(not isinstance(p, list) or len(p) != 2 or
+                    any(type(v) not in (int, float) or not math.isfinite(v) for v in p)
+                    for p in polygon)):
+            raise invalid('invalid outline polygon')
     result = copy.deepcopy(stack)
     result.pop('external_refs', None)
     converted = [layer for layer in result['layers']
@@ -43,14 +64,29 @@ def _homogenize(stack, stack_dir):
     if not converted:
         return result, []
     refs = {}
-    for ref in stack.get('external_refs', []):
-        path, digest = ref['path'], ref['sha256']
+    references = required(stack, 'external_refs')
+    if not isinstance(references, list):
+        raise StackPrepError(12, 'INPUT_REFERENCE_MISSING', 'external_refs must be an array')
+    for ref in references:
+        if not isinstance(ref, dict):
+            raise StackPrepError(12, 'INPUT_REFERENCE_MISSING', 'invalid reference entry')
+        path, digest = required(ref, 'path'), required(ref, 'sha256')
+        if not isinstance(path, str) or not path or not isinstance(digest, str):
+            raise StackPrepError(12, 'INPUT_REFERENCE_MISSING', 'invalid reference path or hash')
         if path in refs and refs[path] != digest:
             raise StackPrepError(10, 'INPUT_HASH_MISMATCH', 'conflicting reference hashes')
         refs[path] = digest
     polysets = {}
     for layer in converted:
-        path = layer['copper']['polygons']['file']
+        polygons = layer['copper']['polygons']
+        if not isinstance(polygons, dict):
+            raise invalid('polygons must be an object')
+        path = required(polygons, 'file')
+        required(polygons, 'layer')
+        required(layer, 'name')
+        required(layer['copper'], 'metal')
+        if not isinstance(path, str):
+            raise invalid('polygon file must be a string')
         if path not in refs:
             raise StackPrepError(12, 'INPUT_REFERENCE_MISSING', 'sidecar absent from external_refs')
         if path not in polysets:

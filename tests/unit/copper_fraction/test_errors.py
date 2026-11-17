@@ -7,10 +7,13 @@ class Errors(unittest.TestCase):
     def test_protocol_errors(self):
         names = {10: 'INPUT_HASH_MISMATCH', 12: 'INPUT_REFERENCE_MISSING', 13: 'CUT_UNSUPPORTED', 14: 'INPUT_INVALID'}
         cases = ['missing_stack', 'missing_sidecar', 'missing_reference', 'hash', 'conflicting_hash',
-                 'magic', 'offsets', 'short_ring', 'trailing', 'truncated', 'empty_sidecar', 'utf8',
+                 'magic', 'offsets', 'negative_offset', 'oversized_offset', 'short_ring', 'trailing', 'truncated', 'empty_sidecar', 'utf8',
                  'zero_dbu', 'nan_dbu', 'first_offset', 'case', 'missing_layer', 'duplicates',
                  'too_large', 'negative', 'unit', 'same_path', 'two_outlines', 'zero_outlines',
-                 'zero_outline', 'empty_json', 'invalid_json']
+                 'zero_outline', 'empty_json', 'invalid_json',
+                 'missing_unit', 'missing_layers', 'missing_outline', 'bad_outline',
+                 'empty_outline', 'bad_box', 'bad_polygon', 'missing_refs',
+                 'bad_refs', 'bad_ref', 'missing_ref_path', 'missing_ref_hash']
         for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
@@ -18,9 +21,12 @@ class Errors(unittest.TestCase):
                 code = 14
                 if case == 'magic': data = b'BADMAGIC' + data[8:]
                 if case == 'offsets':
+                    data = polyset([('F.Cu', (RECT[:3],))])
                     data = data[:32] + struct.pack('<qqq', 0, 4, 3) + data[48:]
                     # ring_count follows the four-byte F.Cu name.
                     data = data[:28] + struct.pack('<I', 2) + data[32:]
+                if case == 'negative_offset': data = data[:40] + struct.pack('<q', -1) + data[48:]
+                if case == 'oversized_offset': data = data[:40] + struct.pack('<q', 10000) + data[48:]
                 if case == 'first_offset': data = data[:32] + struct.pack('<q', 1) + data[40:]
                 if case == 'short_ring': data = polyset([('F.Cu', (((0, 0), (1, 1)),))])
                 if case == 'trailing': data += b'x'
@@ -54,6 +60,19 @@ class Errors(unittest.TestCase):
                     stack['layers'][0]['copper']['polygons']['layer'] = 'f.cu' if case == 'case' else 'absent'
                 if case == 'unit': stack['unit'] = 'mm'
                 if case == 'zero_outline': stack['outline']['box'] = [0, 0, 0, 0]
+                if case in ('missing_unit', 'missing_layers', 'missing_outline', 'missing_refs'):
+                    stack.pop({'missing_refs': 'external_refs'}.get(case, case.removeprefix('missing_')))
+                    code = 12
+                if case == 'bad_outline': stack['outline'] = []
+                if case == 'empty_outline': stack['outline'] = {}
+                if case == 'bad_box': stack['outline'] = {'box': [0, 1]}
+                if case == 'bad_polygon': stack['outline'] = {'polygon': [None]}
+                if case in ('bad_refs', 'bad_ref', 'missing_ref_path', 'missing_ref_hash'):
+                    if case == 'bad_refs': stack['external_refs'] = {}
+                    if case == 'bad_ref': stack['external_refs'] = [None]
+                    if case == 'missing_ref_path': stack['external_refs'][0].pop('path')
+                    if case == 'missing_ref_hash': stack['external_refs'][0].pop('sha256')
+                    code = 12
                 source, output = root / 'input.json', root / 'output.json'
                 source.write_text(json.dumps(stack))
                 if case == 'empty_json': source.write_text('')
