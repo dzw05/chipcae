@@ -9,10 +9,12 @@ int main() {
         require(m.grid_report.void_cells == 384,
                 "void_cells must equal candidate minus emitted cells");
         compact(m);
-        auto other = grid(s, 4, 2);
-        require(chipcae::preview::detail::digest(m).sha256 ==
-                    chipcae::preview::detail::digest(other).sha256,
-                "void mesh hash must be rank independent");
+        for (int ranks : {2, 3}) {
+            auto other = grid(s, 4, ranks);
+            require(chipcae::preview::detail::digest(m).sha256 ==
+                        chipcae::preview::detail::digest(other).sha256,
+                    "void mesh hash must be rank independent");
+        }
         s.layers[0].regions.clear();
         auto empty = grid(s);
         require(empty.hex.empty() && empty.vertices.empty(),
