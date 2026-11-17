@@ -294,9 +294,9 @@ void unavailable_thickness() {
                 "unavailable ODB thickness records missing provenance");
         ThicknessOverrides overrides{{"TOP", 35e-6}};
         records.clear();
-        const auto m = mapped(j, {&overrides, &records});
+        const auto m = mapped(j, {&overrides, &records, "thickness.json"});
         near(m.layers.front().thickness_m, 35e-6);
-        require(records.front().source == "override" && !records.front().odb_value_m,
+        require(records.front().source == "override:thickness.json" && !records.front().odb_value_m,
                 "override fills unavailable ODB thickness without conflict");
     }
 }
@@ -407,21 +407,40 @@ void overrides() {
     ThicknessOverrides o = {
         {"TOP", 35e-6}, {"CORE", 800e-6}, {"BOTTOM", 35e-6}, {"PREPREG", 300e-6}};
     std::vector<ThicknessRecord> records;
-    auto m = mapped(missing(), {&o, &records});
+    auto m = mapped(missing(), {&o, &records, "thickness.json"});
     require(records.size() == 4, "one record per layer");
     for (std::size_t i = 0; i < records.size(); ++i) {
         const auto& r = records[i];
         require(r.layer == m.layers[i].name, "record layer");
-        near(r.thickness_m, i == 3 ? 200e-6 : o.at(r.layer));
+        near(r.thickness_m, o.at(r.layer));
         near(m.layers[i].thickness_m, r.thickness_m);
-        require(r.source == (i == 3 ? "odb" : "override"),
-                "override filename source and ODB precedence");
+        require(r.source == "override:thickness.json",
+                "override filename source and override precedence");
         require(r.odb_value_m.has_value() == (i == 3), "conflict provenance only");
     }
     require(records[3].odb_value_m.has_value() &&
                 std::abs(*records[3].odb_value_m - 200e-6) <= 1e-12,
             "original ODB thickness");
 }
+void override_provenance() {
+    auto j = board();
+    ThicknessOverrides o{{"TOP", 70e-6}};
+    rejected(j, {"override filename", "TOP"}, {&o, nullptr});
+    std::vector<ThicknessRecord> records;
+    const auto m = mapped(j, {&o, &records, "stackup-overrides.json"});
+    near(m.layers.front().thickness_m, 70e-6);
+    require(records.front().source == "override:stackup-overrides.json" &&
+                records.front().odb_value_m.has_value() &&
+                std::abs(*records.front().odb_value_m - 35e-6) <= 1e-12,
+            "exact override filename and original ODB value");
+    // The specified relative conflict threshold preserves ODB provenance for near equality.
+    o["TOP"] = 35e-6 * (1 + 0.5e-9);
+    records.clear();
+    mapped(j, {&o, &records, "stackup-overrides.json"});
+    require(records.front().source == "odb" && !records.front().odb_value_m,
+            "subthreshold override difference is not a conflict");
+}
+
 void weight() {
     auto j = board();
     j.attrs.layer["TOP"][".layer_dielectric"] = "0";
@@ -429,14 +448,15 @@ void weight() {
     rejected(j, {"TOP"});
     ThicknessOverrides o = {{"TOP", 35e-6}};
     std::vector<ThicknessRecord> records;
-    mapped(j, {&o, &records});
+    mapped(j, {&o, &records, "thickness.json"});
     j.attrs.layer["TOP"][".layer_dielectric"] = "-0.01";
-    near(mapped(j, {&o, nullptr}).layers.front().thickness_m, 35e-6);
-    require(records.size() == 4 && records[0].source == "override", "weight override source");
+    near(mapped(j, {&o, nullptr, "thickness.json"}).layers.front().thickness_m, 35e-6);
+    require(records.size() == 4 && records[0].source == "override:thickness.json",
+            "weight override source");
 }
 void override_case() {
     ThicknessOverrides o = {{"top", 35e-6}, {"core", 800e-6}, {"bottom", 35e-6}, {"unused", 1e-3}};
-    auto m = mapped(missing(), {&o, nullptr});
+    auto m = mapped(missing(), {&o, nullptr, "thickness.json"});
     near(m.layers[0].thickness_m, 35e-6);
 }
 void skip() {
@@ -499,7 +519,7 @@ void via() {
     require(slot_reported && m.report.unsupported.size() == 2, "line and tool slot unsupported");
     require(!m.via_fractions.empty(), "via rasterization initialized");
 }
-void via_ipc_initialization() {
+void via_region_initialization() {
     auto j = board();
     OdbLayer drill;
     drill.name = "DRILL";
@@ -515,25 +535,68 @@ void via_ipc_initialization() {
         if (overlap)
             f.pads.push_back(f.pads.front()); // duplicate bounds must not duplicate cells
         const auto m = mapped(j);
-        // IPC initializes one envelope for all vias crossing a dielectric.
+        std::vector<ViaFraction> cells;
         ViaFraction reference;
         reference.layer = 1;
         reference.lower = {1700, 2700};
-        reference.upper = {overlap ? 2500.0 : 200300.0, 3300};
-        std::vector<ViaFraction> cells{reference};
-        require(rasterize_vias(m, cells), "IPC envelope reference rasterizes");
-        require(m.via_fractions.size() == cells.size(), "IPC cell count");
-        const auto& actual = m.via_fractions.front();
-        require(actual.layer == cells[0].layer && actual.lower == cells[0].lower &&
-                    actual.upper == cells[0].upper && actual.via_count == cells[0].via_count &&
-                    actual.fraction == cells[0].fraction,
-                "IPC initialization and rasterization match exactly");
-        if (!overlap)
-            near(actual.fraction * (reference.upper[0] - reference.lower[0]) * 600,
-                 2 * std::numbers::pi * (300 * 300 - 275 * 275),
-                 1e-6);
+        reference.upper = {overlap ? 2500.0 : 2300.0, 3300};
+        cells.push_back(reference);
+        if (!overlap) {
+            reference.lower = {199700, 2700};
+            reference.upper = {200300, 3300};
+            cells.push_back(reference);
+        }
+        require(rasterize_vias(m, cells), "connected region reference rasterizes");
+        require(m.via_fractions.size() == cells.size(), "one cell per connected region");
+        for (std::size_t k = 0; k < cells.size(); ++k) {
+            const auto& actual = m.via_fractions[k];
+            require(actual.layer == cells[k].layer && actual.lower == cells[k].lower &&
+                        actual.upper == cells[k].upper && actual.via_count == cells[k].via_count &&
+                        actual.fraction == cells[k].fraction,
+                    "connected region bounds and rasterization match exactly");
+            if (!overlap) {
+                require(actual.via_count == 1, "separated cell contains exactly one via");
+                near(actual.fraction * 600 * 600, std::numbers::pi * (300 * 300 - 275 * 275), 1e-6);
+            }
+        }
     }
 }
+void via_connected_regions() {
+    auto j = board();
+    OdbLayer drill;
+    drill.name = "DRILL";
+    drill.type = "drill";
+    drill.start_name = "TOP";
+    drill.end_name = "BOTTOM";
+    j.layers.push_back(drill);
+    j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
+    auto& f = j.features["DRILL"];
+    f.symbols = {{"r600"}};
+    // The middle disk connects the first two only transitively.
+    const std::array<OdbPad, 3> pads{{{{2, 3}, 0, true}, {{3, 3}, 0, true}, {{2.5, 3}, 0, true}}};
+    std::array<int, 3> order{0, 1, 2};
+    do {
+        f.pads.clear();
+        for (int index : order)
+            f.pads.push_back(pads[index]);
+        const auto m = mapped(j);
+        require(m.via_fractions.size() == 1, "transitively connected vias share one cell");
+        const auto& cell = m.via_fractions.front();
+        require(cell.lower == std::array<double, 2>{1700, 2700} &&
+                    cell.upper == std::array<double, 2>{3300, 3300} && cell.via_count == 3,
+                "complete transitive component bounds and membership");
+    } while (std::next_permutation(order.begin(), order.end()));
+    f.pads = {{{2, 3}, 0, true}, {{2.5, 3.5}, 0, true}};
+    const auto m = mapped(j);
+    require(m.via_fractions.size() == 2,
+            "overlapping bounding boxes do not connect disjoint disks");
+    require(m.via_fractions[0].lower == std::array<double, 2>{1700, 2700} &&
+                m.via_fractions[0].upper == std::array<double, 2>{2300, 3300} &&
+                m.via_fractions[1].lower == std::array<double, 2>{2200, 3200} &&
+                m.via_fractions[1].upper == std::array<double, 2>{2800, 3800},
+            "diagonally separated disk bounds remain distinct");
+}
+
 void via_fraction_invariants() {
     auto j = board();
     // Cross both dielectrics so exposed ordering is checked on multiple cells.
@@ -551,7 +614,7 @@ void via_fraction_invariants() {
     j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
     auto& f = j.features["DRILL"];
     f.symbols = {{"r600"}};
-    for (double separation : {0.0, 0.2, 0.6}) {
+    for (double separation : {0.0, 0.2, 0.6, 0.7}) {
         const std::array<OdbPad, 3> pads{
             {{{2, 3}, 0, true}, {{2 + separation, 3}, 0, true}, {{2, 3}, 0, true}}};
         std::array<int, 3> order{0, 1, 2};
@@ -563,7 +626,8 @@ void via_fraction_invariants() {
             const auto m = mapped(j);
             const auto& cells = m.via_fractions;
             auto key = [](const ViaFraction& c) { return std::tie(c.layer, c.lower, c.upper); };
-            require(cells.size() == 2, "one fraction cell per crossed dielectric");
+            require(cells.size() == (separation > 0.6 ? 4 : 2),
+                    "one cell per connected region per crossed dielectric");
             for (std::size_t i = 0; i < cells.size(); ++i) {
                 const auto& c = cells[i];
                 for (std::size_t axis = 0; axis < 2; ++axis)
@@ -686,7 +750,7 @@ void duplicate_layer() {
 }
 void collision() {
     ThicknessOverrides o = {{"top", 35e-6}, {"TOP", 36e-6}};
-    rejected(board(), {"top", "TOP"}, {&o, nullptr});
+    rejected(board(), {"top", "TOP"}, {&o, nullptr, "thickness.json"});
 }
 void holes_and_profile() {
     auto j = board();
@@ -706,9 +770,9 @@ void holes_and_profile() {
             "profile hole report");
     require(m.outline.points.size() == 4, "profile outer contour");
 }
-// Frozen Clipper2 2.0.1 offset vertices from the independent radius-based
-// reference construction (round/miter joins, round/square caps). Keep exact
-// comparisons without propagating the mapper's private Clipper2 dependency.
+// Frozen Clipper2 2.0.1 offset vertices at IPC Y-span resolution.
+// Reader-to-reader tests below independently guard round arc and line parity;
+// these exact snapshots also guard miter joins and square caps.
 void check_arc_stroke(const OdbJob& j, bool rectangular) {
     static const std::vector<std::array<std::int64_t, 2>> references[] = {
         {
@@ -742,22 +806,22 @@ void check_arc_stroke(const OdbJob& j, bool rectangular) {
             {1792, -455}, {1851, -477}, {1913, -492}, {1976, -499},
         },
         {
-            {1466, 917},   {1528, 927},   {1589, 946},   {1646, 971},   {1700, 1004},
-            {1750, 1044},  {1794, 1089},  {1832, 1140},  {1863, 1194},  {1887, 1253},
-            {1904, 1314},  {1913, 1376},  {1913, 1440},  {1906, 1503},  {1891, 1564},
-            {1868, 1623},  {1838, 1679},  {1802, 1730},  {1759, 1776},  {1719, 1811},
-            {1305, 2129},  {1252, 2164},  {1192, 2194},  {710, 2394},   {650, 2414},
-            {588, 2427},   {583, 2428},   {65, 2496},    {2, 2500},     {-61, 2496},
-            {-65, 2496},   {-583, 2428},  {-645, 2416},  {-705, 2396},  {-710, 2394},
-            {-1192, 2194}, {-1248, 2166}, {-1301, 2131}, {-1305, 2129}, {-1719, 1811},
-            {-1766, 1769}, {-1808, 1722}, {-1844, 1669}, {-1873, 1613}, {-1894, 1554},
-            {-1908, 1492}, {-1914, 1429}, {-1912, 1366}, {-1902, 1304}, {-1884, 1243},
-            {-1858, 1185}, {-1826, 1131}, {-1787, 1081}, {-1742, 1037}, {-1692, 998},
-            {-1637, 967},  {-1579, 942},  {-1518, 925},  {-1455, 916},  {-1392, 914},
-            {-1329, 921},  {-1268, 936},  {-1209, 958},  {-1153, 988},  {-1109, 1017},
-            {-746, 1295},  {-387, 1444},  {0, 1495},     {387, 1444},   {746, 1295},
-            {1109, 1017},  {1162, 982},   {1218, 954},   {1278, 933},   {1340, 920},
-            {1403, 914},
+            {-1313, 924},  {-1252, 941},  {-1194, 965},  {-1139, 996},  {-1097, 1028},
+            {-834, 1243},  {-569, 1385},  {-296, 1468},  {0, 1497},     {296, 1468},
+            {569, 1385},   {834, 1243},   {1097, 1028},  {1148, 991},   {1203, 961},
+            {1262, 938},   {1324, 922},   {1386, 915},   {1450, 915},   {1512, 924},
+            {1573, 940},   {1632, 964},   {1687, 995},   {1738, 1033},  {1783, 1077},
+            {1823, 1126},  {1856, 1180},  {1882, 1237},  {1900, 1298},  {1911, 1360},
+            {1914, 1423},  {1909, 1486},  {1896, 1548},  {1875, 1608},  {1847, 1664},
+            {1812, 1717},  {1770, 1765},  {1731, 1800},  {1428, 2049},  {1377, 2086},
+            {1347, 2104},  {1001, 2289},  {943, 2315},   {910, 2326},   {535, 2440},
+            {474, 2455},   {438, 2460},   {48, 2498},    {-15, 2500},   {-48, 2498},
+            {-438, 2460},  {-501, 2450},  {-535, 2440},  {-910, 2326},  {-970, 2304},
+            {-1001, 2289}, {-1347, 2104}, {-1401, 2071}, {-1428, 2049}, {-1731, 1800},
+            {-1778, 1757}, {-1818, 1709}, {-1852, 1655}, {-1879, 1598}, {-1898, 1538},
+            {-1910, 1476}, {-1914, 1413}, {-1910, 1350}, {-1898, 1288}, {-1878, 1228},
+            {-1851, 1170}, {-1816, 1117}, {-1776, 1069}, {-1729, 1026}, {-1678, 989},
+            {-1622, 959},  {-1563, 937},  {-1502, 922},  {-1439, 915},  {-1376, 915},
         },
         {
             {-1902, -490}, {-1841, -474}, {-1783, -450}, {-1728, -419}, {-1677, -382},
@@ -778,22 +842,21 @@ void check_arc_stroke(const OdbJob& j, bool rectangular) {
             {-1965, -499},
         },
         {
-            {-1366, -1912}, {-1304, -1902}, {-1243, -1884}, {-1185, -1858}, {-1131, -1826},
-            {-1081, -1787}, {-1037, -1742}, {-998, -1692},  {-967, -1637},  {-942, -1579},
-            {-925, -1518},  {-916, -1455},  {-914, -1392},  {-921, -1329},  {-936, -1268},
-            {-958, -1209},  {-988, -1153},  {-1017, -1109}, {-1295, -746},  {-1444, -387},
-            {-1495, 0},     {-1444, 387},   {-1295, 746},   {-1017, 1109},  {-982, 1162},
-            {-954, 1218},   {-933, 1278},   {-920, 1340},   {-914, 1403},   {-917, 1466},
-            {-927, 1528},   {-946, 1589},   {-971, 1646},   {-1004, 1700},  {-1044, 1750},
-            {-1089, 1794},  {-1140, 1832},  {-1194, 1863},  {-1253, 1887},  {-1314, 1904},
-            {-1376, 1913},  {-1440, 1913},  {-1503, 1906},  {-1564, 1891},  {-1623, 1868},
-            {-1679, 1838},  {-1730, 1802},  {-1776, 1759},  {-1811, 1719},  {-2129, 1305},
-            {-2164, 1252},  {-2194, 1192},  {-2394, 710},   {-2414, 650},   {-2427, 588},
-            {-2428, 583},   {-2496, 65},    {-2500, 2},     {-2496, -61},   {-2496, -65},
-            {-2428, -583},  {-2416, -645},  {-2396, -705},  {-2394, -710},  {-2194, -1192},
-            {-2166, -1248}, {-2131, -1301}, {-2129, -1305}, {-1811, -1719}, {-1769, -1766},
-            {-1722, -1808}, {-1669, -1844}, {-1613, -1873}, {-1554, -1894}, {-1492, -1908},
-            {-1429, -1914},
+            {-1316, -1904}, {-1255, -1888}, {-1197, -1864}, {-1142, -1833}, {-1091, -1796},
+            {-1045, -1752}, {-1006, -1703}, {-973, -1649},  {-946, -1591},  {-928, -1531},
+            {-917, -1468},  {-914, -1405},  {-919, -1342},  {-932, -1280},  {-953, -1221},
+            {-981, -1164},  {-1010, -1120}, {-1330, -679},  {-1475, -232},  {-1475, 232},
+            {-1330, 679},   {-1010, 1120},  {-976, 1173},   {-949, 1231},   {-929, 1291},
+            {-918, 1353},   {-914, 1416},   {-918, 1479},   {-930, 1541},   {-950, 1601},
+            {-978, 1658},   {-1012, 1711},  {-1053, 1759},  {-1099, 1802},  {-1151, 1839},
+            {-1206, 1869},  {-1265, 1891},  {-1327, 1906},  {-1390, 1913},  {-1453, 1912},
+            {-1515, 1904},  {-1576, 1887},  {-1635, 1863},  {-1690, 1831},  {-1740, 1793},
+            {-1785, 1749},  {-1818, 1708},  {-2186, 1202},  {-2220, 1149},  {-2247, 1091},
+            {-2258, 1062},  {-2451, 467},   {-2466, 406},   {-2474, 343},   {-2475, 313},
+            {-2475, -313},  {-2471, -376},  {-2459, -438},  {-2451, -467},  {-2258, -1062},
+            {-2234, -1121}, {-2204, -1176}, {-2186, -1202}, {-1818, -1708}, {-1778, -1757},
+            {-1732, -1800}, {-1681, -1837}, {-1625, -1867}, {-1566, -1890}, {-1505, -1906},
+            {-1442, -1913}, {-1379, -1913},
         },
         {
             {61, -2496},    {123, -2485},   {183, -2465},   {241, -2438},   {294, -2404},
@@ -814,22 +877,22 @@ void check_arc_stroke(const OdbJob& j, bool rectangular) {
             {-2, -2500},
         },
         {
-            {61, -2496},    {65, -2496},    {583, -2428},   {645, -2416},   {705, -2396},
-            {710, -2394},   {1192, -2194},  {1248, -2166},  {1301, -2131},  {1305, -2129},
-            {1719, -1811},  {1766, -1769},  {1808, -1722},  {1844, -1669},  {1873, -1613},
-            {1894, -1554},  {1908, -1492},  {1914, -1429},  {1912, -1366},  {1902, -1304},
-            {1884, -1243},  {1858, -1185},  {1826, -1131},  {1787, -1081},  {1742, -1037},
-            {1692, -998},   {1637, -967},   {1579, -942},   {1518, -925},   {1455, -916},
-            {1392, -914},   {1329, -921},   {1268, -936},   {1209, -958},   {1153, -988},
-            {1109, -1017},  {746, -1295},   {387, -1444},   {0, -1495},     {-387, -1444},
-            {-746, -1295},  {-1109, -1017}, {-1162, -982},  {-1218, -954},  {-1278, -933},
-            {-1340, -920},  {-1403, -914},  {-1466, -917},  {-1528, -927},  {-1589, -946},
-            {-1646, -971},  {-1700, -1004}, {-1750, -1044}, {-1794, -1089}, {-1832, -1140},
-            {-1863, -1194}, {-1887, -1253}, {-1904, -1314}, {-1913, -1376}, {-1913, -1440},
-            {-1906, -1503}, {-1891, -1564}, {-1868, -1623}, {-1838, -1679}, {-1802, -1730},
-            {-1759, -1776}, {-1719, -1811}, {-1305, -2129}, {-1252, -2164}, {-1192, -2194},
-            {-710, -2394},  {-650, -2414},  {-588, -2427},  {-583, -2428},  {-65, -2496},
-            {-2, -2500},
+            {48, -2498},    {438, -2460},   {501, -2450},   {535, -2440},   {910, -2326},
+            {970, -2304},   {1001, -2289},  {1347, -2104},  {1401, -2071},  {1428, -2049},
+            {1731, -1800},  {1778, -1757},  {1818, -1709},  {1852, -1655},  {1879, -1598},
+            {1898, -1538},  {1910, -1476},  {1914, -1413},  {1910, -1350},  {1898, -1288},
+            {1878, -1228},  {1851, -1170},  {1816, -1117},  {1776, -1069},  {1729, -1026},
+            {1678, -989},   {1622, -959},   {1563, -937},   {1502, -922},   {1439, -915},
+            {1376, -915},   {1313, -924},   {1252, -941},   {1194, -965},   {1139, -996},
+            {1097, -1028},  {834, -1243},   {569, -1385},   {296, -1468},   {0, -1497},
+            {-296, -1468},  {-569, -1385},  {-834, -1243},  {-1097, -1028}, {-1148, -991},
+            {-1203, -961},  {-1262, -938},  {-1324, -922},  {-1386, -915},  {-1450, -915},
+            {-1512, -924},  {-1573, -940},  {-1632, -964},  {-1687, -995},  {-1738, -1033},
+            {-1783, -1077}, {-1823, -1126}, {-1856, -1180}, {-1882, -1237}, {-1900, -1298},
+            {-1911, -1360}, {-1914, -1423}, {-1909, -1486}, {-1896, -1548}, {-1875, -1608},
+            {-1847, -1664}, {-1812, -1717}, {-1770, -1765}, {-1731, -1800}, {-1428, -2049},
+            {-1377, -2086}, {-1347, -2104}, {-1001, -2289}, {-943, -2315},  {-910, -2326},
+            {-535, -2440},  {-474, -2455},  {-438, -2460},  {-48, -2498},   {15, -2500},
         },
         {
             {65, -2496},   {583, -2428},  {645, -2416},  {705, -2396},  {710, -2394},
@@ -850,22 +913,21 @@ void check_arc_stroke(const OdbJob& j, bool rectangular) {
             {13, -2500},
         },
         {
-            {1503, -1906}, {1564, -1891}, {1623, -1868}, {1679, -1838}, {1730, -1802},
-            {1776, -1759}, {1811, -1719}, {2129, -1305}, {2164, -1252}, {2194, -1192},
-            {2394, -710},  {2414, -650},  {2427, -588},  {2428, -583},  {2496, -65},
-            {2500, -2},    {2496, 61},    {2496, 65},    {2428, 583},   {2416, 645},
-            {2396, 705},   {2394, 710},   {2194, 1192},  {2166, 1248},  {2131, 1301},
-            {2129, 1305},  {1811, 1719},  {1769, 1766},  {1722, 1808},  {1669, 1844},
-            {1613, 1873},  {1554, 1894},  {1492, 1908},  {1429, 1914},  {1366, 1912},
-            {1304, 1902},  {1243, 1884},  {1185, 1858},  {1131, 1826},  {1081, 1787},
-            {1037, 1742},  {998, 1692},   {967, 1637},   {942, 1579},   {925, 1518},
-            {916, 1455},   {914, 1392},   {921, 1329},   {936, 1268},   {958, 1209},
-            {988, 1153},   {1017, 1109},  {1295, 746},   {1444, 387},   {1495, 0},
-            {1444, -387},  {1295, -746},  {1017, -1109}, {982, -1162},  {954, -1218},
-            {933, -1278},  {920, -1340},  {914, -1403},  {917, -1466},  {927, -1528},
-            {946, -1589},  {971, -1646},  {1004, -1700}, {1044, -1750}, {1089, -1794},
-            {1140, -1832}, {1194, -1863}, {1253, -1887}, {1314, -1904}, {1376, -1913},
-            {1440, -1913},
+            {1453, -1912}, {1515, -1904}, {1576, -1887}, {1635, -1863}, {1690, -1831},
+            {1740, -1793}, {1785, -1749}, {1818, -1708}, {2186, -1202}, {2220, -1149},
+            {2247, -1091}, {2258, -1062}, {2451, -467},  {2466, -406},  {2474, -343},
+            {2475, -313},  {2475, 313},   {2471, 376},   {2459, 438},   {2451, 467},
+            {2258, 1062},  {2234, 1121},  {2204, 1176},  {2186, 1202},  {1818, 1708},
+            {1778, 1757},  {1732, 1800},  {1681, 1837},  {1625, 1867},  {1566, 1890},
+            {1505, 1906},  {1442, 1913},  {1379, 1913},  {1316, 1904},  {1255, 1888},
+            {1197, 1864},  {1142, 1833},  {1091, 1796},  {1045, 1752},  {1006, 1703},
+            {973, 1649},   {946, 1591},   {928, 1531},   {917, 1468},   {914, 1405},
+            {919, 1342},   {932, 1280},   {953, 1221},   {981, 1164},   {1010, 1120},
+            {1330, 679},   {1475, 232},   {1475, -232},  {1330, -679},  {1010, -1120},
+            {976, -1173},  {949, -1231},  {929, -1291},  {918, -1353},  {914, -1416},
+            {918, -1479},  {930, -1541},  {950, -1601},  {978, -1658},  {1012, -1711},
+            {1053, -1759}, {1099, -1802}, {1151, -1839}, {1206, -1869}, {1265, -1891},
+            {1327, -1906}, {1390, -1913},
         },
         {
             {2561, -431},
@@ -884,20 +946,24 @@ void check_arc_stroke(const OdbJob& j, bool rectangular) {
             {1569, -561},
         },
         {
-            {2115, 1506},
-            {1252, 2169},
-            {649, 2419},
-            {0, 2504},
-            {-649, 2419},
-            {-1252, 2169},
-            {-2115, 1506},
-            {-1506, 713},
-            {-746, 1295},
-            {-387, 1444},
-            {0, 1495},
-            {387, 1444},
-            {746, 1295},
-            {1506, 713},
+            {2118, 1483},
+            {1390, 2081},
+            {957, 2312},
+            {488, 2455},
+            {0, 2502},
+            {-488, 2455},
+            {-957, 2312},
+            {-1390, 2081},
+            {-2118, 1483},
+            {-1483, 710},
+            {-834, 1243},
+            {-569, 1385},
+            {-296, 1468},
+            {0, 1497},
+            {296, 1468},
+            {569, 1385},
+            {834, 1243},
+            {1483, 710},
         },
         {
             {-1444, 387},
@@ -916,20 +982,18 @@ void check_arc_stroke(const OdbJob& j, bool rectangular) {
             {-1569, -561},
         },
         {
-            {-713, -1506},
-            {-1295, -746},
-            {-1444, -387},
-            {-1495, 0},
-            {-1444, 387},
-            {-1295, 746},
-            {-713, 1506},
-            {-1506, 2115},
-            {-2169, 1252},
-            {-2419, 649},
-            {-2504, 0},
-            {-2419, -649},
-            {-2169, -1252},
-            {-1506, -2115},
+            {-716, -1524},
+            {-1330, -679},
+            {-1475, -232},
+            {-1475, 232},
+            {-1330, 679},
+            {-716, 1524},
+            {-1524, 2112},
+            {-2233, 1138},
+            {-2475, 392},
+            {-2475, -392},
+            {-2233, -1138},
+            {-1524, -2112},
         },
         {
             {561, -1569},
@@ -948,20 +1012,24 @@ void check_arc_stroke(const OdbJob& j, bool rectangular) {
             {431, -2561},
         },
         {
-            {649, -2419},
-            {1252, -2169},
-            {2115, -1506},
-            {1506, -713},
-            {746, -1295},
-            {387, -1444},
-            {0, -1495},
-            {-387, -1444},
-            {-746, -1295},
-            {-1506, -713},
-            {-2115, -1506},
-            {-1252, -2169},
-            {-649, -2419},
-            {0, -2504},
+            {488, -2455},
+            {957, -2312},
+            {1390, -2081},
+            {2118, -1483},
+            {1483, -710},
+            {834, -1243},
+            {569, -1385},
+            {296, -1468},
+            {0, -1497},
+            {-296, -1468},
+            {-569, -1385},
+            {-834, -1243},
+            {-1483, -710},
+            {-2118, -1483},
+            {-1390, -2081},
+            {-957, -2312},
+            {-488, -2455},
+            {0, -2502},
         },
         {
             {649, -2419},
@@ -980,20 +1048,18 @@ void check_arc_stroke(const OdbJob& j, bool rectangular) {
             {-431, -2561},
         },
         {
-            {2169, -1252},
-            {2419, -649},
-            {2504, 0},
-            {2419, 649},
-            {2169, 1252},
-            {1506, 2115},
-            {713, 1506},
-            {1295, 746},
-            {1444, 387},
-            {1495, 0},
-            {1444, -387},
-            {1295, -746},
-            {713, -1506},
-            {1506, -2115},
+            {2233, -1138},
+            {2475, -392},
+            {2475, 392},
+            {2233, 1138},
+            {1524, 2112},
+            {716, 1524},
+            {1330, 679},
+            {1475, 232},
+            {1475, -232},
+            {1330, -679},
+            {716, -1524},
+            {1524, -2112},
         },
         {
             {4561, 1569},
@@ -1108,27 +1174,33 @@ void ipc_arc_equivalence() {
         std::filesystem::path dir;
         ~Cleanup() { std::filesystem::remove_all(dir); }
     } cleanup{dir};
-    for (int orientation : {0, 1, 2, 3}) {
+    for (int orientation : {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}) {
         const bool rotated = orientation % 2;
         const bool semicircle = orientation >= 2;
         auto j = board();
         auto& f = j.features["TOP"];
         f.surfaces.clear();
         f.symbols = {{"round1000"}};
-        const double radius = semicircle ? 0.5 : 2;
+        const double radius = orientation >= 4 ? 2 : semicircle ? 0.5 : 2;
         const OdbPoint start = rotated ? OdbPoint{2, 2 + radius} : OdbPoint{2 + radius, 2};
         const OdbPoint end = semicircle
                                  ? (rotated ? OdbPoint{2, 2 - radius} : OdbPoint{2 - radius, 2})
                                  : (rotated ? OdbPoint{2 - radius, 2} : OdbPoint{2, 2 + radius});
-        f.arcs = {{start, end, {2, 2}, 0, true, false}};
+        const bool line = orientation >= 8;
+        const OdbPoint finish = orientation == 9 ? start : end;
+        if (line)
+            f.lines = {{start, finish, 0, true}};
+        else
+            f.arcs = {{start, finish, {2, 2}, 0, true, false}};
         std::ostringstream xml;
         xml << R"(<IPC-2581><Ecad><CadData><Layer name="TOP" layerFunction="CONDUCTOR"/>
 <Stackup><StackupGroup name="S"><StackupLayer layerOrGroupRef="TOP" thickness="0.035"/>
-</StackupGroup></Stackup><Step name="board"><LayerFeature layerRef="TOP"><Set><Arc startX=")"
-            << start.x << "\" startY=\"" << start.y << "\" endX=\"" << end.x << "\" endY=\""
-            << end.y
+</StackupGroup></Stackup><Step name="board"><LayerFeature layerRef="TOP"><Set><)"
+            << (line ? "Line" : "Arc") << R"( startX=")" << start.x << "\" startY=\"" << start.y
+            << "\" endX=\"" << finish.x << "\" endY=\"" << finish.y
             << R"(" centerX="2" centerY="2" clockwise="false"><LineDesc lineWidth="1" lineEnd="ROUND"/>
-</Arc></Set></LayerFeature></Step></CadData></Ecad></IPC-2581>)";
+</)" << (line ? "Line" : "Arc")
+            << R"(></Set></LayerFeature></Step></CadData></Ecad></IPC-2581>)";
         const auto file = dir / "arc.xml";
         {
             std::ofstream out(file);
@@ -1147,7 +1219,7 @@ void ipc_arc_equivalence() {
         require(a.size() == b.size() &&
                     std::set<std::array<std::int64_t, 2>>(a.begin(), a.end()) ==
                         std::set<std::array<std::int64_t, 2>>(b.begin(), b.end()),
-                "ODB and IPC arc vertices agree exactly");
+                "ODB and IPC arc/line vertices agree exactly");
     }
 }
 void rectangular_traces() {
@@ -1174,13 +1246,14 @@ void boundaries() {
     equal(mapped(board()), mapped(j));
     ThicknessOverrides o = {{"top", 70e-6}};
     std::vector<ThicknessRecord> records;
-    const auto m = mapped(j, {&o, &records});
-    near(m.layers.front().thickness_m, 35e-6);
-    near(records.front().thickness_m, 35e-6);
-    require(records.front().source == "odb" && records.front().odb_value_m == 35e-6,
-            "conflicting override retains ODB and records original value");
+    const auto m = mapped(j, {&o, &records, "thickness.json"});
+    near(m.layers.front().thickness_m, 70e-6);
+    near(records.front().thickness_m, 70e-6);
+    require(records.front().source == "override:thickness.json" &&
+                records.front().odb_value_m == 35e-6,
+            "conflicting override applies and records original value");
     o["top"] = -1;
-    rejected(j, {"top"}, {&o, nullptr});
+    rejected(j, {"top"}, {&o, nullptr, "thickness.json"});
 }
 void degenerate_copper() {
     auto j = board();
@@ -1288,15 +1361,17 @@ int main() {
         {"odbpp_map_missing_material", missing_material},
         {"odbpp_map_oval_capsules", oval_capsules},
         {"odbpp_map_thickness_override", overrides},
+        {"odbpp_map_override_provenance", override_provenance},
         {"odbpp_map_copper_weight_ignored", weight},
         {"odbpp_map_override_case", override_case},
         {"odbpp_map_skip_layers", skip},
         {"odbpp_map_unsupported_symbol", unsupported},
         {"odbpp_map_via", via},
-        {"odbpp_map_via_ipc_initialization", via_ipc_initialization},
+        {"odbpp_map_via_region_initialization", via_region_initialization},
         {"odbpp_map_non_plated", non_plated},
         {"odbpp_map_mixed_tools", mixed_tools},
         {"odbpp_map_via_fraction_invariants", via_fraction_invariants},
+        {"odbpp_map_via_connected_regions", via_connected_regions},
         {"odbpp_map_duplicate_geometry", duplicate_geometry},
         {"odbpp_map_duplicate_layer", duplicate_layer},
         {"odbpp_map_override_collision", collision},

@@ -31,8 +31,9 @@ struct Mapper {
         } else if (sweep <= 0)
             sweep += 2 * pi;
         const double radius = std::hypot(s.x - c.x, s.y - c.y) * scale;
-        // Use radius in IPC's MM tolerance formula so rotation cannot change resolution.
-        const double tol = std::max(1e-6, 0.01 * std::max(1.0, radius / 1000)) * 1000;
+        // Match IPC arc discretization in MM, including its endpoint Y-span tolerance.
+        const double tol =
+            std::max(1e-6, 0.01 * std::max(1.0, std::abs(e.y - s.y) * scale / 1000)) * 1000;
         const double step =
             radius > tol ? 2 * std::acos(std::clamp(1 - tol / radius, -1.0, 1.0)) : std::abs(sweep);
         const int count =
@@ -294,22 +295,41 @@ struct Mapper {
     void fractions() {
         std::vector<ViaFraction> cells;
         for (std::size_t i = 0; i < model.layers.size(); ++i) {
-            ViaFraction cell;
-            cell.layer = i;
-            bool found = false;
-            for (const auto& v : model.vias) {
-                if (std::find(v.dielectric_layers.begin(), v.dielectric_layers.end(), i) ==
+            std::vector<const Via*> vias;
+            for (const auto& v : model.vias)
+                if (std::find(v.dielectric_layers.begin(), v.dielectric_layers.end(), i) !=
                     v.dielectric_layers.end())
+                    vias.push_back(&v);
+            // Connected components of touching outer disks, rather than a layer-wide envelope.
+            std::vector<bool> visited(vias.size());
+            for (std::size_t seed = 0; seed < vias.size(); ++seed) {
+                if (visited[seed])
                     continue;
+                ViaFraction cell;
+                cell.layer = i;
                 for (std::size_t axis = 0; axis < 2; ++axis) {
-                    const double lo = v.position[axis] - v.outer_radius_dbu,
-                                 hi = v.position[axis] + v.outer_radius_dbu;
-                    cell.lower[axis] = found ? std::min(cell.lower[axis], lo) : lo;
-                    cell.upper[axis] = found ? std::max(cell.upper[axis], hi) : hi;
+                    cell.lower[axis] = vias[seed]->position[axis] - vias[seed]->outer_radius_dbu;
+                    cell.upper[axis] = vias[seed]->position[axis] + vias[seed]->outer_radius_dbu;
                 }
-                found = true;
-            }
-            if (found) {
+                std::vector<std::size_t> component{seed};
+                visited[seed] = true;
+                for (std::size_t next = 0; next < component.size(); ++next) {
+                    const auto& v = *vias[component[next]];
+                    for (std::size_t axis = 0; axis < 2; ++axis) {
+                        cell.lower[axis] =
+                            std::min(cell.lower[axis], v.position[axis] - v.outer_radius_dbu);
+                        cell.upper[axis] =
+                            std::max(cell.upper[axis], v.position[axis] + v.outer_radius_dbu);
+                    }
+                    for (std::size_t k = 0; k < vias.size(); ++k)
+                        if (!visited[k] &&
+                            std::hypot(double(v.position[0]) - vias[k]->position[0],
+                                       double(v.position[1]) - vias[k]->position[1]) <=
+                                v.outer_radius_dbu + vias[k]->outer_radius_dbu) {
+                            visited[k] = true;
+                            component.push_back(k);
+                        }
+                }
                 for (std::size_t axis = 0; axis < 2; ++axis)
                     if (!std::isfinite(cell.lower[axis]) || !std::isfinite(cell.upper[axis]) ||
                         !(cell.lower[axis] < cell.upper[axis]))
