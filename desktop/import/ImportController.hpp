@@ -50,6 +50,7 @@ signals:
 
 private:
     friend struct ImportControllerTestAccess;
+    static QStringList argumentsFor(const ImportRequest& request);
     std::function<bool(const QString&, const QString&)> copyOutput_;
     void complete(int code, QProcess::ExitStatus status);
     CaseDocument& document_;

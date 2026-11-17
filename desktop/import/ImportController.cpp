@@ -107,22 +107,13 @@ bool ImportController::start(const ImportRequest& request) {
     staged_ = {staging_->filePath("out.stack.json"),
                staging_->filePath("out.polyset"),
                staging_->filePath("defects.json")};
-    QStringList arguments = request.prefix;
-    if (request.kind == ImportKind::Assembly) {
-        arguments << "--assembly" << input << "-o" << output;
-        if (!report.isEmpty())
-            arguments << "--report" << report;
-        if (!polyset.isEmpty())
-            arguments << "--polyset" << polyset;
-    } else {
-        arguments << input << "-o" << output << "--material-map" << request.materialMap;
-        if (!polyset.isEmpty())
-            arguments << "--polyset" << polyset;
-        if (!report.isEmpty())
-            arguments << "--report" << report;
-    }
-    if (request.acceptBTier)
-        arguments << "--accept-b-tier";
+    // Keep caller input and mapping paths unchanged; only generated artifacts
+    // belong in the private staging directory until validation succeeds.
+    auto stagedRequest = request;
+    stagedRequest.output = staged_[0];
+    stagedRequest.polyset = polyset.isEmpty() ? QString{} : staged_[1];
+    stagedRequest.report = staged_[2]; // Required for classification, even without export.
+    const auto arguments = request.prefix + argumentsFor(stagedRequest);
     cancelled_ = false;
     busy_ = true;
     outcome_ = ImportOutcome::Running;
@@ -135,6 +126,27 @@ bool ImportController::start(const ImportRequest& request) {
     }
     request_ = request;
     return true;
+}
+
+QStringList ImportController::argumentsFor(const ImportRequest& request) {
+    QStringList arguments;
+    if (request.kind == ImportKind::Assembly) {
+        arguments << "--assembly" << request.input << "-o" << request.output;
+        if (!request.report.isEmpty())
+            arguments << "--report" << request.report;
+        if (!request.polyset.isEmpty())
+            arguments << "--polyset" << request.polyset;
+    } else {
+        arguments << request.input << "-o" << request.output << "--material-map"
+                  << request.materialMap;
+        if (!request.polyset.isEmpty())
+            arguments << "--polyset" << request.polyset;
+        if (!request.report.isEmpty())
+            arguments << "--report" << request.report;
+    }
+    if (request.acceptBTier)
+        arguments << "--accept-b-tier";
+    return arguments;
 }
 
 void ImportController::cancel() {
@@ -168,19 +180,6 @@ void ImportController::complete(int code, QProcess::ExitStatus status) {
         return;
     exitCode_ = code;
     exitStatus_ = status;
-    // The CLI contract uses the caller's paths. Collect only regular files
-    // after exit so validation and publication retain the same rollback behavior.
-    bool collected = true;
-    for (int i = 0; i < destinations_.size(); ++i) {
-        if (destinations_[i].isEmpty())
-            continue;
-        const QFileInfo generated(destinations_[i]);
-        if (generated.isFile() && !generated.isSymLink() &&
-            !QFile::rename(destinations_[i], staged_[i])) {
-            QFile::remove(destinations_[i]);
-            collected = false;
-        }
-    }
     report_ = readFile(staged_[2]);
     bool validReport = false;
     try {
@@ -197,8 +196,8 @@ void ImportController::complete(int code, QProcess::ExitStatus status) {
     } catch (const std::exception&) {
     }
     outcome_ = ImportOutcome::Failed;
-    if (!cancelled_ && collected && status == QProcess::NormalExit) {
-        if (code == 0 && ((validReport && reportCode_ == "OK") || request_.report.isEmpty()))
+    if (!cancelled_ && status == QProcess::NormalExit) {
+        if (code == 0 && validReport && reportCode_ == "OK")
             outcome_ = ImportOutcome::Accepted;
         else if (validReport && code == 6 && reportCode_ == "IMPORT_CONFIRMATION_REQUIRED")
             outcome_ = ImportOutcome::NeedsConfirmation;

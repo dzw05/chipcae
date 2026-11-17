@@ -27,6 +27,9 @@
 #endif
 namespace chipcae::desktop {
 struct ImportControllerTestAccess {
+    static QStringList arguments(const ImportRequest& request) {
+        return ImportController::argumentsFor(request);
+    }
     static void setCopy(ImportController& controller,
                         std::function<bool(const QString&, const QString&)> copy) {
         controller.copyOutput_ = std::move(copy);
@@ -67,6 +70,18 @@ QStringList recorded(const QString& path) {
     for (const auto& item : parsed.array_range())
         result << QString::fromStdString(item.as<std::string>());
     return result;
+}
+void checkStagedArguments(const ImportRequest& request, const QStringList& actual) {
+    const auto outputIndex = actual.indexOf("-o");
+    require(outputIndex >= 0 && outputIndex + 1 < actual.size(), "child output argument");
+    const auto staging = QFileInfo(actual[outputIndex + 1]).absoluteDir();
+    auto staged = request;
+    staged.output = staging.filePath("out.stack.json");
+    staged.report = staging.filePath("defects.json");
+    staged.polyset = request.polyset.isEmpty() ? QString{} : staging.filePath("out.polyset");
+    check(staging.dirName().startsWith(".chipcae-import-") &&
+              actual == ImportControllerTestAccess::arguments(staged),
+          "exact child argv uses staged artifacts, unchanged input/map, and no prefix");
 }
 void waitFor(ImportController& c, const std::function<void()>& action) {
     QEventLoop loop;
@@ -193,13 +208,14 @@ if poly: pathlib.Path(poly).write_text('polyset')
 if mode=='copy-failure':
     pathlib.Path(poly).unlink()
     pathlib.Path(poly).mkdir()
+assert not pathlib.Path(record.removesuffix('.argv')+'.stack').exists()
 if mode=='hang':
     while True: time.sleep(1)
 code,rc={'confirm':('IMPORT_CONFIRMATION_REQUIRED',6),'reject':('IMPORT_REJECTED',7),
 'map-missing':('MATERIAL_MAPPING_MISSING',9),'crash-map':('MATERIAL_MAPPING_MISSING',9),'mismatch':('IMPORT_REJECTED',0),
 'missing6':('OK',6),'lower':('ok',0)}.get(mode,('OK',0))
 if mode=='confirm' and '--accept-b-tier' in a: code,rc='OK',0
-if report and mode!='missing6':
+if report and mode not in ('missing6','missing0'):
     payload={'code':code,'message':'fixture message','defects':[] if code=='OK' else [{'code':'MOCK_GAP'}]}
     if mode=='grade-conflict': payload['grade']='C'
     if mode.startswith('bad-'):
@@ -363,7 +379,12 @@ sys.exit(rc)
                 check(!c.start(r), "busy rejects duplicate");
                 check(!c.restartAccepted(), "busy rejects restart");
                 if (mode == "hang")
-                    QTimer::singleShot(150, &c, &ImportController::cancel);
+                    QTimer::singleShot(150, &c, [&] {
+                        check(!QFile::exists(r.output) && !QFile::exists(r.polyset) &&
+                                  !QFile::exists(r.report),
+                              "running child has no caller-visible artifacts");
+                        c.cancel();
+                    });
             });
             check(c.outcome() == expected, "outcome " + mode);
             if (partialCopy)
@@ -412,9 +433,7 @@ sys.exit(rc)
                       "accepted stack exact JSON equality");
             } else {
                 check(!replaced && document.stackJson() == before, "unchanged stack " + mode);
-                check(!QFile::exists(r.output) &&
-                          (mode == "copy-failure" ? QFileInfo(r.polyset).isDir()
-                                                  : !QFile::exists(r.polyset)) &&
+                check(!QFile::exists(r.output) && !QFile::exists(r.polyset) &&
                           !QFile::exists(r.report),
                       "no partial publication " + mode);
             }
@@ -422,6 +441,15 @@ sys.exit(rc)
                 check(QFile::exists(record), "process actually launched " + mode);
             if (QFile::exists(record)) {
                 auto actual = recorded(record);
+                for (const auto& flag : {"-o", "--polyset", "--report"}) {
+                    const auto index = actual.indexOf(flag);
+                    require(index >= 0 && index + 1 < actual.size(), "staged artifact flag");
+                    check(
+                        QFileInfo(actual[index + 1]).absolutePath().contains(".chipcae-import-") &&
+                            !QStringList{r.output, r.polyset, r.report}.contains(actual[index + 1]),
+                        "child artifact paths are private staging paths");
+                }
+                checkStagedArguments(r, actual);
                 const auto oi = actual.indexOf("-o");
                 require(oi >= 0 && oi + 1 < actual.size(), "recorded output argument");
                 QStringList wanted;
@@ -446,7 +474,7 @@ sys.exit(rc)
                               r.report};
                 if (accept)
                     wanted << "--accept-b-tier";
-                check(actual == wanted,
+                check(ImportControllerTestAccess::arguments(r) == wanted,
                       "full QStringList argv order and unchanged input " + suffix);
                 check(QDir(dir.path())
                           .entryList({".chipcae-import-*"},
@@ -545,9 +573,9 @@ sys.exit(rc)
                     false,
                     {},
                     auxiliary.path());
-                std::cout << "Cross-device collection exercised on distinct filesystem devices\n";
+                std::cout << "Cross-device publication exercised on distinct filesystem devices\n";
             } else {
-                std::cout << "SKIP: no writable second filesystem for cross-device collection\n";
+                std::cout << "SKIP: no writable second filesystem for cross-device publication\n";
             }
         }
 #endif
@@ -649,13 +677,17 @@ sys.exit(rc)
                 const auto record = r.input + ".argv";
                 r.prefix = {script, MOCK_SCRIPT, record, "map-missing"};
                 waitFor(c, [&] { check(c.start(r), "start optional recovery"); });
-                check(c.outcome() == (r.report.isEmpty() ? ImportOutcome::Failed
-                                                         : ImportOutcome::Rejected) &&
-                          c.needsMaterialMapReselect() == !r.report.isEmpty(),
-                      "nonzero exit requires requested report for recovery");
-                if (r.report.isEmpty())
-                    check(c.error().contains("exit/report mismatch"),
-                          "missing optional report explains nonzero failure");
+                check(c.outcome() == ImportOutcome::Rejected && c.needsMaterialMapReselect(),
+                      "code 9 recovery is independent of report export");
+                for (const auto& invalidReport : {"missing0", "corrupt", "mismatch"}) {
+                    r.prefix = {script, MOCK_SCRIPT, record, invalidReport};
+                    waitFor(c, [&] { check(c.start(r), "start invalid optional report"); });
+                    check(c.outcome() == ImportOutcome::Failed &&
+                              c.error().contains("exit/report mismatch") && !d.isDirty() &&
+                              !QFile::exists(r.output) && !QFile::exists(r.report) &&
+                              !QFile::exists(r.polyset),
+                          "invalid exit 0 report fails regardless of export selection");
+                }
                 r.prefix = {script, MOCK_SCRIPT, record, "success"};
                 waitFor(c, [&] {
                     check(c.start(r), "start optional exports");
@@ -664,6 +696,7 @@ sys.exit(rc)
                 check(c.outcome() == ImportOutcome::Accepted && !c.needsMaterialMapReselect(),
                       "optional exports accept and reset recovery state");
                 const auto args = recorded(record);
+                checkStagedArguments(r, args);
                 QStringList wanted;
                 if (kind == ImportKind::Assembly)
                     wanted = {"--assembly", r.input, "-o", r.output};
@@ -677,7 +710,9 @@ sys.exit(rc)
                     wanted << "--report" << r.report;
                 if (r.acceptBTier)
                     wanted << "--accept-b-tier";
-                check(args == wanted, "exact argv for every optional flag combination");
+                check(ImportControllerTestAccess::arguments(r) == wanted,
+                      "exact caller argv for every optional flag combination");
+                check(args.contains("--report"), "internal report always requested");
                 check(QFile::exists(r.output) && (r.report.isEmpty() || QFile::exists(r.report)) &&
                           (r.polyset.isEmpty() || QFile::exists(r.polyset)),
                       "requested optional exports published");
