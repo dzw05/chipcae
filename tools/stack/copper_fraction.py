@@ -18,6 +18,10 @@ def invalid(message):
     return StackPrepError(14, 'INPUT_INVALID', message)
 
 
+def reject_constant(value):
+    raise invalid(f'nonstandard JSON constant: {value}')
+
+
 def required(obj, key):
     if key not in obj:
         raise invalid(f'missing input field: {key}')
@@ -170,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
             raise invalid('input, output and report paths must differ')
         try:
             with args.input.open(encoding='utf-8') as source:
-                stack = json.load(source)
+                stack = json.load(source, parse_constant=reject_constant)
         except OSError as exc:
             raise StackPrepError(12, 'INPUT_REFERENCE_MISSING', str(exc)) from exc
         except (ValueError, UnicodeError) as exc:
@@ -178,8 +182,11 @@ def main(argv: list[str] | None = None) -> int:
         output, entries = homogenize_copper(stack, args.input.parent)
         report = dict(schema='chipcae.stackprep.copper_fraction/0.1',
                       method='layer-average', layers=entries)
-        payload = json.dumps(output, indent=2, ensure_ascii=False) + '\n'
-        report_payload = json.dumps(report, indent=2, ensure_ascii=False) + '\n'
+        try:
+            payload = json.dumps(output, indent=2, ensure_ascii=False, allow_nan=False) + '\n'
+            report_payload = json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False) + '\n'
+        except ValueError as exc:
+            raise invalid(str(exc)) from exc
         # Stage both complete payloads before replacing either destination.
         staged = []
         try:

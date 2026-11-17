@@ -1,9 +1,42 @@
 """Every rejected input must fail with its protocol code, before writing."""
 import unittest
+from unittest.mock import patch
+from contextlib import redirect_stderr
+import io
 from test_fraction import *
 
 
 class Errors(unittest.TestCase):
+    def test_polyset_read_race(self):
+        from tools.stack.copper_fraction import main
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stack = fixture(root)
+            source, output = root / 'input.json', root / 'output.json'
+            source.write_text(json.dumps(stack))
+            read_bytes = Path.read_bytes
+
+            for failure in (FileNotFoundError, PermissionError):
+                with self.subTest(failure=failure):
+                    reads = 0
+
+                    def disappearing(path):
+                        nonlocal reads
+                        if path == root / 'copper.polyset':
+                            reads += 1
+                            if reads == 2:
+                                raise failure('sidecar became unreadable')
+                        return read_bytes(path)
+
+                    stderr = io.StringIO()
+                    with patch.object(Path, 'read_bytes', disappearing), redirect_stderr(stderr):
+                        code = main([str(source), '-o', str(output)])
+                    self.assertEqual(reads, 2)
+                    self.assertEqual(code, 12)
+                    self.assertIn('copper_fraction: INPUT_REFERENCE_MISSING:', stderr.getvalue())
+                    self.assertEqual(len(stderr.getvalue().splitlines()), 1)
+                    self.assertFalse(output.exists())
+
     def test_protocol_errors(self):
         names = {10: 'INPUT_HASH_MISMATCH', 12: 'INPUT_REFERENCE_MISSING', 13: 'CUT_UNSUPPORTED', 14: 'INPUT_INVALID'}
         cases = ['missing_stack', 'missing_sidecar', 'missing_reference', 'hash', 'conflicting_hash',
@@ -11,6 +44,8 @@ class Errors(unittest.TestCase):
                  'zero_dbu', 'nan_dbu', 'first_offset', 'empty_first_offset', 'case', 'missing_layer', 'duplicates',
                  'too_large', 'negative', 'unit', 'same_path', 'two_outlines', 'zero_outlines',
                  'zero_outline', 'zero_polygon', 'empty_json', 'invalid_json',
+                 'nan_json', 'infinity_json', 'negative_infinity_json', 'overflow_json',
+                 'inline_two_outlines', 'inline_zero_outlines',
                  'missing_unit', 'missing_layers', 'missing_outline', 'bad_outline',
                  'empty_outline', 'polygon_outside_box', 'bad_box', 'bad_polygon', 'missing_refs',
                  'bad_refs', 'bad_ref', 'missing_ref_path', 'missing_ref_hash',
@@ -44,11 +79,13 @@ class Errors(unittest.TestCase):
                 if case == 'duplicates': data = polyset([('F.Cu', (RECT,)), ('F.Cu', ())])
                 if case == 'too_large': data = polyset([('F.Cu', (((0, 0), (20000, 0), (20000, 20000), (0, 20000)),))])
                 if case == 'negative': data = polyset([('F.Cu', (tuple(reversed(RECT)),))])
-                if case in ('two_outlines', 'zero_outlines'):
-                    data = polyset([('F.Cu', (RECT,)), ('outline', (RECT, RECT) if case == 'two_outlines' else ())])
+                if case in ('two_outlines', 'zero_outlines', 'inline_two_outlines', 'inline_zero_outlines'):
+                    data = polyset([('F.Cu', (RECT,)), ('outline', (RECT, RECT) if case.endswith('two_outlines') else ())])
                     code = 13
                 stack = fixture(root, data)
                 stack['layers'] = stack['layers'][:1]
+                if case.startswith('inline_'):
+                    stack['outline']['polygon'] = [[0, 0], [.01, 0], [.01, .005], [0, .005]]
                 if case == 'missing_stack': code = 12
                 if case == 'missing_sidecar':
                     (root / 'copper.polyset').unlink()
@@ -91,6 +128,12 @@ class Errors(unittest.TestCase):
                 source.write_text(json.dumps(stack))
                 if case == 'empty_json': source.write_text('')
                 if case == 'invalid_json': source.write_text('{bad')
+                constants = {'nan_json': 'NaN', 'infinity_json': 'Infinity',
+                             'negative_infinity_json': '-Infinity', 'overflow_json': '1e999'}
+                if case in constants:
+                    # Extension values also need strict JSON, even on the passthrough path.
+                    stack['layers'] = []
+                    source.write_text(json.dumps(stack)[:-1] + ', "x-number": ' + constants[case] + '}')
                 if case == 'missing_stack': source.unlink()
                 before = source.read_bytes() if source.exists() else None
                 if case == 'same_path': output = source
