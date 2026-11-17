@@ -409,6 +409,23 @@ bool CaseDocument::finalizeMeshForSubmit() {
         return false;
     }
 }
+bool CaseDocument::setStackJson(const Json& value) {
+    try {
+        static const auto validator = jsoncons::jsonschema::make_json_schema(
+            read(QStringLiteral(CHIPCAE_SCHEMA_DIR "/stack-0.2.schema.json")));
+        if (!validator.is_valid(value))
+            throw std::runtime_error("STACK_SCHEMA_INVALID");
+        if (stack_ != value) {
+            stack_ = value;
+            markDirty();
+        }
+        errors_.clear();
+        return true;
+    } catch (const std::exception& e) {
+        errors_ = {exceptionError(e)};
+        return false;
+    }
+}
 bool CaseDocument::setMaterialLibrary(const Json& value) {
     try {
         libraryCheck(value);

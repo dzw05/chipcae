@@ -53,6 +53,7 @@ public:
     bool setMaterialLibrary(const Json& value);
     Json materialLibrary() const { return materials_; }
     Json stackJson() const { return stack_; }
+    bool setStackJson(const Json& value);
     bool loadRunProfile(const QString& path);
     bool saveRunProfile(const QString& path);
     Json runProfile() const { return profile_; }
