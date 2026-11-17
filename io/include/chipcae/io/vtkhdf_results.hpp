@@ -10,17 +10,20 @@ namespace chipcae::io {
 // Coordinates and U are interleaved xyz; connectivity uses rank-local point IDs.
 // The caller samples Q2 at the eight exact vertex nodes, without interpolation.
 struct ResultsPartition {
-    std::vector<double> points, T, U;
+    std::vector<double> points, T, U, volume;
+    // Cut topology, all rank-local. Offsets include initial zero and terminal size.
+    // Each cell lists its unique points and references its own outward face rings.
+    std::vector<Index> connectivity, offsets{0}, face_conn, face_off{0}, poly_faces, poly_off{0};
     std::vector<Index> hex, elem_gid; // elem_gid optional: dense Morton column * global nz + k
     std::vector<std::int32_t> layer_id, material_id, cell_kind;
 };
 struct ResultsStep {
     ResultsPartition hex;
-    // Reserved interfaces: nonempty blocks are rejected until geometry is agreed.
-    ResultsPartition cut_poly, embedded_boundary, particles;
-    // TODO: VTK_POLYHEDRON FaceConnectivity/FaceOffsets and
-    // PolyhedronToFaces/PolyhedronOffsets; shared face -(n+1) convention
-    // awaits mesh/geometry confirmation. Do not emit invented face arrays.
+    // T/U optional on cut, schema must match across ranks with cut points.
+    // elem_gid, metadata and volume are required per cut cell.
+    ResultsPartition cut, embedded_boundary, particles;
+    // Caller supplies the parent hex representation in hex for fallback.
+    bool cut_as_hex = false;
 };
 class ResultsWriter {
 public:
@@ -33,7 +36,7 @@ public:
     ResultsWriter(std::filesystem::path run,
                   const std::filesystem::path& stackup,
                   std::vector<std::string> fields = {
-                      "T", "U", "layer_id", "material_id", "cell_kind", "elem_gid"});
+                      "T", "U", "layer_id", "material_id", "cell_kind", "elem_gid", "volume"});
     void set_mesh(MeshSummary mesh);
     void write_step(int n, double time, const ResultsStep& local);
     void add_summary(std::string name, double value, std::string unit, int step);
@@ -56,6 +59,7 @@ private:
     std::vector<Summary> summary_;
     int rank_ = 0, size_ = 1;
     bool gids_ = false;
+    bool cut_fields_ = false;
     std::vector<std::string> fields_;
     bool selected(const std::string& name) const;
     std::optional<MeshSummary> mesh_;

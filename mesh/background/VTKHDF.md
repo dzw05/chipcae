@@ -1,5 +1,12 @@
 # VTKHDF output
 
+This API (`mesh/background/vtkhdf_writer.*`) is the mesh preview writer.
+S2 solver results must reuse `io::ResultsWriter`, not build a second PDC writer.
+See [the results contract](../../io/README.md): VTKHDF [2,8], blocks
+`hex`, `cut`, `eb_surface`, `particles`, with nonnegative per-cell copied
+outward faces and complete empty polyhedron templates. `--cut-as-hex` maps
+to `ResultsStep::cut_as_hex` on that path.
+
 Enable `CHIPCAE_ENABLE_HDF5`. Output is an independent UnstructuredGrid file
 per rank plus a companion PolyData file, not collective parallel output.
 Both have `/VTKHDF` Type/Version attributes and partition counts. Hex cells

@@ -1,0 +1,33 @@
+{
+  "id": "s2_cut_minimal",
+  "unit": "m",
+  "outline": {
+    "box": [
+      0,
+      0,
+      1,
+      1
+    ]
+  },
+  "symmetry": "none",
+  "package_type": "FCBGA",
+  "layers": [
+    {
+      "name": "base",
+      "kind": "Explicit",
+      "material": "solid",
+      "thickness": 1,
+      "n_elem_min": 1,
+      "grading": 1
+    },
+    {
+      "name": "top",
+      "kind": "Explicit",
+      "material": "solid",
+      "body": "cap",
+      "thickness": 1,
+      "n_elem_min": 1,
+      "grading": 1
+    }
+  ]
+}
