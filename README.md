@@ -78,6 +78,8 @@ All rights reserved. Source is published for viewing only; no permission is gran
 
 保留所有权利，源码公开仅供查阅；未经事先书面许可，不得使用、复制、修改、合并、发布、分发、再许可或销售。条款及例外见 [LICENSE](LICENSE)。
 
+Exceptions / 例外：`cases/benchmarks/` — CC BY 4.0（[LICENSE](cases/benchmarks/LICENSE)、[NOTICE](cases/benchmarks/NOTICE)）；`tools/vv/` 与 `tests/vv/` — Apache-2.0（[LICENSE](tools/vv/LICENSE)、[LICENSE](tests/vv/LICENSE)）。
+
 O2 求解器当前限制：每个 MPI rank 均在 `PETSC_COMM_SELF` 上对全局串行网格执行完整求解。
 不同 `np` 的结果一致仅验证重复求解及输出一致性，不证明分布式求解正确；总内存随 `np` 增长。
 分布式求解将随 GMG 落地。
