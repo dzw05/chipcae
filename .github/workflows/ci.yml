@@ -159,7 +159,7 @@ jobs:
                 ;;
             esac
             case "$file" in
-              schema/*|mesh/*|geometry/*|tests/integration/mesh_p1/*|tests/unit/test_import_thresholds*)
+              schema/*|mesh/*|geometry/*|tests/integration/mesh_p1/*|tests/unit/test_import_thresholds*|tests/unit/test_repair_policy.cpp)
                 mesh=true
                 ;;
             esac
