@@ -2,6 +2,7 @@
 
 #include "chipcae/mesh/background/activation.hpp"
 #include "chipcae/mesh/background/column_hierarchy.hpp"
+#include "chipcae/mesh/background/copper_map.hpp"
 #include "chipcae/mesh/background/sfc.hpp"
 #include "chipcae/par/column_extrude_partitioner.hpp"
 
@@ -345,7 +346,8 @@ Expected<std::vector<LevelCandidate>> hierarchy_candidates(const StackModel& s,
     }
     return result;
 }
-Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions& o) {
+Expected<HexMeshArrays>
+build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* polyset) {
     HexMeshArrays m;
     auto planned = plan_axes(s, o, m);
     if (!planned)
@@ -404,6 +406,54 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
     for (const auto& warning : m.grid_report.warnings)
         std::clog << "warning: " << warning << '\n';
     auto nx = axes[0].size() - 1, ny = axes[1].size() - 1, nz = axes[2].size() - 1;
+    m.copper_layer_of_layer.assign(s.layers.size(), -1);
+    std::size_t copper_layers = 0;
+    for (std::size_t li = 0; li < s.layers.size(); ++li)
+        if (s.layers[li].copper) {
+            if (s.layers[li].copper->polygons && !polyset)
+                return Error{"copper", "polygon sidecar data is not available to tensor_grid"};
+            m.copper_layer_of_layer[li] = static_cast<Local>(copper_layers++);
+        }
+    m.copper_phi.assign(copper_layers * nx * ny, 0);
+    for (std::size_t li = 0; li < s.layers.size(); ++li)
+        if (s.layers[li].copper) {
+            const auto offset = static_cast<std::size_t>(m.copper_layer_of_layer[li]) * nx * ny;
+            if (s.layers[li].copper->fraction) {
+                std::fill_n(m.copper_phi.begin() + static_cast<std::ptrdiff_t>(offset),
+                            nx * ny,
+                            *s.layers[li].copper->fraction);
+            } else if (s.layers[li].copper->polygons) {
+                const auto& name = s.layers[li].copper->polygons->layer;
+                auto source = std::find_if(polyset->layers.begin(),
+                                           polyset->layers.end(),
+                                           [&](const auto& p) { return p.name == name; });
+                if (source == polyset->layers.end())
+                    return Error{"copper", "polyset does not contain layer " + name};
+                if (!(polyset->dbu_m > 0) || source->ring_offsets.size() < 2 ||
+                    source->coordinates.size() % 2 != 0)
+                    return Error{"copper", "invalid polyset geometry"};
+                std::vector<CopperPath> paths;
+                for (std::size_t r = 0; r + 1 < source->ring_offsets.size(); ++r) {
+                    const auto begin = source->ring_offsets[r], end = source->ring_offsets[r + 1];
+                    if (begin < 0 || end < begin ||
+                        static_cast<std::uint64_t>(end) * 2 > source->coordinates.size())
+                        return Error{"copper", "invalid polyset ring offsets"};
+                    auto& path = paths.emplace_back();
+                    path.reserve(static_cast<std::size_t>(end - begin));
+                    for (auto point = begin; point < end; ++point)
+                        path.push_back({source->coordinates[2 * point] * polyset->dbu_m,
+                                        source->coordinates[2 * point + 1] * polyset->dbu_m});
+                }
+                try {
+                    auto phi = rasterize_copper(axes[0], axes[1], paths);
+                    std::copy(phi.begin(),
+                              phi.end(),
+                              m.copper_phi.begin() + static_cast<std::ptrdiff_t>(offset));
+                } catch (const std::exception& e) {
+                    return Error{"copper", e.what()};
+                }
+            }
+        }
     if (nx > static_cast<std::size_t>(o.cell_budget) / ny / nz)
         return Error{"cell_budget",
                      "exceeded; reduce nx=" + std::to_string(nx) + ", ny=" + std::to_string(ny) +
@@ -639,5 +689,12 @@ Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions
         m.attr_table.references["group:" + name] = group.value().cells.attributes;
     }
     return m;
+}
+Expected<HexMeshArrays> build_tensor_grid(const StackModel& s, const GridOptions& o) {
+    return build_tensor_grid(s, o, static_cast<const Polyset*>(nullptr));
+}
+Expected<HexMeshArrays>
+build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset& polyset) {
+    return build_tensor_grid(s, o, &polyset);
 }
 } // namespace chipcae::mesh

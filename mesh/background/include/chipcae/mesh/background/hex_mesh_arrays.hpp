@@ -24,7 +24,8 @@ struct HexMeshArrays {
     std::vector<Index> elem_gid, node_gid;
     // Hard constraint: a column never crosses ranks. The column-to-rank map
     // from par is expanded in Morton column order and passed to mfem::ParMesh.
-    std::vector<Local> partitioning, node_layer;
+    std::vector<Local> partitioning, node_layer, copper_layer_of_layer;
+    std::vector<Real> copper_phi; // [copper layer][Morton column]
     std::vector<Index> node_column;
     std::vector<Real> attr_frame, nodes;
     bool internal_interfaces = false;
@@ -75,6 +76,7 @@ template <class MemSpace>
 struct HexMeshDevice {
     View1<const Local, MemSpace> node_layer, elem_attribute, elem_material;
     View1<const Index, MemSpace> node_column;
+    View1<const Real, MemSpace> copper_phi;
 };
 template <class MemSpace>
 HexMeshDevice<MemSpace> upload(const HexMeshArrays& m) {
@@ -84,6 +86,7 @@ HexMeshDevice<MemSpace> upload(const HexMeshArrays& m) {
     return {upload_vector<Local, MemSpace>(m.node_layer, "node_layer"),
             upload_vector<Local, MemSpace>(m.attribute, "elem_attribute"),
             upload_vector<Local, MemSpace>(materials, "elem_material"),
-            upload_vector<Index, MemSpace>(m.node_column, "node_column")};
+            upload_vector<Index, MemSpace>(m.node_column, "node_column"),
+            upload_vector<Real, MemSpace>(m.copper_phi, "copper_phi")};
 }
 } // namespace chipcae::mesh
