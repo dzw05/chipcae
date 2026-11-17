@@ -161,6 +161,7 @@ class Edges(unittest.TestCase):
                             for group in ('Points', 'PointData', 'CellData', 'Types'):
                                 del block[group]
                             block['Points'] = np.empty((0, 3), dtype='float64')
+                            block['Types'] = np.empty(0, dtype='uint8')
                             block['NumberOfPoints'][...] = 0
                             block['NumberOfCells'][...] = 0
                             # Only the empty block has T in the temperature
@@ -192,6 +193,7 @@ class Edges(unittest.TestCase):
                     for path in ('Points', 'PointData', 'CellData', 'Types'):
                         del block[path]
                     block['Points'] = np.empty((0, 3), dtype='float64')
+                    block['Types'] = np.empty(0, dtype='uint8')
                     block['NumberOfPoints'][...] = 0
                     block['NumberOfCells'][...] = 0
                     if empty_t:
@@ -218,6 +220,7 @@ class Edges(unittest.TestCase):
                     for path in ('Points', 'PointData', 'CellData', 'Types'):
                         del block[path]
                     block['Points'] = np.empty((0, 3), dtype='float64')
+                    block['Types'] = np.empty(0, dtype='uint8')
                     block['NumberOfPoints'][...] = 0
                     block['NumberOfCells'][...] = 0
                     if empty_t:
@@ -267,6 +270,11 @@ class Edges(unittest.TestCase):
             run = Path(tmp)
             step, _ = fixture(run, cut=True)
             with h5py.File(step, 'r+') as f:
+                # Reverse storage order so unique-coordinate order and first
+                # occurrence order differ, retaining paired point fields.
+                for path in ('Points', 'PointData/U', 'PointData/T'):
+                    field = f['VTKHDF/hex/' + path]
+                    field[...] = field[...][::-1]
                 cut = f['VTKHDF/cut']
                 cut['Points'][0] = [0., 0., 1.]
                 cut['PointData/T'][0] = 305.
@@ -275,6 +283,8 @@ class Edges(unittest.TestCase):
             self.assertEqual(result['temperature'], dict(
                 min=100., max=309., top_min=301., top_max=309., top_mean=305.))
             self.assertEqual(result['warpage']['n_top_points'], 9)
+            self.assertLessEqual(abs(result['warpage']['w_bfp_m'] / .125 - 1.), 1e-12)
+            self.assertLessEqual(abs(result['warpage']['rel_diff'] / .25 - 1.), 1e-12)
 
     def test_collinear_top_geometry(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -383,6 +393,7 @@ class Edges(unittest.TestCase):
                 for path in ('Points', 'PointData', 'CellData', 'Types'):
                     del b[path]
                 b['Points'] = np.empty((0, 3), dtype='float64')
+                b['Types'] = np.empty(0, dtype='uint8')
                 b['NumberOfPoints'][...] = 0
                 b['NumberOfCells'][...] = 0
             result = summarize(run)
@@ -402,6 +413,7 @@ class Edges(unittest.TestCase):
                             for path in ('Points', 'PointData', 'CellData', 'Types'):
                                 del block[path]
                             block['Points'] = np.empty((0, 3), dtype='float64')
+                            block['Types'] = np.empty(0, dtype='uint8')
                             block['NumberOfPoints'][...] = 0
                             block['NumberOfCells'][...] = 0
                         else:

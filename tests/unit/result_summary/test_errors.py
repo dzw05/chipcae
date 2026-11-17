@@ -207,7 +207,7 @@ class Errors(unittest.TestCase):
     def test_types_validation(self):
         for block in ('hex', 'cut'):
             for empty in (False, True):
-                for invalid in ('dtype', 'length', 'rank', 'valid'):
+                for invalid in ('missing', 'dtype', 'length', 'rank', 'valid'):
                     with self.subTest(block=block, empty=empty, invalid=invalid), tempfile.TemporaryDirectory() as tmp:
                         run = Path(tmp)
                         step, _ = fixture(run, cut=True)
@@ -222,12 +222,20 @@ class Errors(unittest.TestCase):
                             count = int(group['NumberOfCells'][...].sum())
                             del group['Types']
                             shape = (count, 1) if invalid == 'rank' else (count + (invalid == 'length'),)
-                            group['Types'] = np.full(shape, 12 if block == 'hex' else 42,
-                                                     dtype='int32' if invalid == 'dtype' else 'uint8')
+                            if invalid != 'missing':
+                                group['Types'] = np.full(shape, 12 if block == 'hex' else 42,
+                                                         dtype='int32' if invalid == 'dtype' else 'uint8')
                         err = io.StringIO()
                         with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
                             self.assertEqual(main([str(run)]), 0 if invalid == 'valid' else 14)
-                        if invalid != 'valid':
+                        if invalid == 'missing':
+                            self.assertEqual(err.getvalue(),
+                                             f'result_summary: INPUT_INVALID: /VTKHDF/{block}/Types: required field missing\n')
+                            with self.assertRaises(ResultSummaryError) as caught:
+                                summarize(run)
+                            self.assertEqual(caught.exception.code, 14)
+                            self.assertEqual(caught.exception.name, 'INPUT_INVALID')
+                        elif invalid != 'valid':
                             self.assertIn(f'{block}/Types: expected', err.getvalue())
 
     def test_cell_type_values(self):

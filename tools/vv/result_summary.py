@@ -128,8 +128,7 @@ def _read(root):
             if c or path in block:
                 fields[field] = _array(block, path, (c,),
                                        'int64' if field == 'elem_gid' else 'int32')
-        types = (_array(block, 'Types', (c,), 'uint8')
-                 if c or 'Types' in block else np.array([], dtype='uint8'))
+        types = _array(block, 'Types', (c,), 'uint8')
         expected_type = 12 if name == 'hex' else 42
         _require(np.all(types == expected_type),
                  f'{block.name}/Types: expected cell type {expected_type}')

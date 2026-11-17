@@ -76,7 +76,7 @@ class Optional(unittest.TestCase):
     def test_optional_fields(self):
         for case in ('T', 'eb_surface', 'warpage_pv', 'two_points', 'names', 'mesh', 'zero_pv', 'absolute_step'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
-                run = Path(tmp)
+                run = Path(tmp) / 'run'
                 step, manifest = fixture(run, two=case == 'two_points')
                 with h5py.File(step, 'r+') as f:
                     if case == 'T':
@@ -94,6 +94,10 @@ class Optional(unittest.TestCase):
                 elif case == 'zero_pv':
                     manifest['summary'][1]['value'] = 0.
                 elif case == 'absolute_step':
+                    original_step = step
+                    relative_file = manifest['steps'][0]['file']
+                    step = step.rename(Path(tmp) / 'external-step.vtkhdf')
+                    self.assertFalse(original_step.exists())
                     manifest['steps'][0]['file'] = str(step)
                 save(run, manifest)
                 r = summarize(run)
@@ -122,6 +126,14 @@ class Optional(unittest.TestCase):
                     self.assertIsNone(r['warpage']['rel_diff'])
                 else:
                     self.assertEqual(r['step_file'], str(step))
+                    self.assertEqual(r['warpage']['n_top_points'], 9)
+                    self.assertLessEqual(abs(r['warpage']['w_bfp_m'] / .125 - 1.), 1e-12)
+                    manifest['steps'][0]['file'] = relative_file
+                    save(run, manifest)
+                    with self.assertRaises(ResultSummaryError) as caught:
+                        summarize(run)
+                    self.assertEqual(caught.exception.code, 12)
+                    self.assertEqual(caught.exception.name, 'INPUT_REFERENCE_MISSING')
 
 
 if __name__ == '__main__':
