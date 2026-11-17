@@ -123,7 +123,23 @@ if(CHIPCAE_ENABLE_ECAD)
             set(_chipcae_miniz_saved_policy "${CMAKE_POLICY_DEFAULT_CMP0077}")
         endif()
         set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+        # miniz 3.0.2 declares CMake 3.0 compatibility, removed in CMake 4.
+        # Limit the compatibility override to this dependency and preserve any
+        # stricter policy minimum supplied by the caller.
+        if(DEFINED CMAKE_POLICY_VERSION_MINIMUM)
+            set(_chipcae_miniz_saved_minimum "${CMAKE_POLICY_VERSION_MINIMUM}")
+        endif()
+        if(NOT DEFINED CMAKE_POLICY_VERSION_MINIMUM OR
+           CMAKE_POLICY_VERSION_MINIMUM VERSION_LESS 3.5)
+            set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+        endif()
         FetchContent_MakeAvailable(miniz)
+        if(DEFINED _chipcae_miniz_saved_minimum)
+            set(CMAKE_POLICY_VERSION_MINIMUM "${_chipcae_miniz_saved_minimum}")
+            unset(_chipcae_miniz_saved_minimum)
+        else()
+            unset(CMAKE_POLICY_VERSION_MINIMUM)
+        endif()
         if(DEFINED _chipcae_miniz_saved_policy)
             set(CMAKE_POLICY_DEFAULT_CMP0077 "${_chipcae_miniz_saved_policy}")
             unset(_chipcae_miniz_saved_policy)
