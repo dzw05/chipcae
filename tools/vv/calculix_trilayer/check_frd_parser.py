@@ -6,16 +6,37 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from tools.vv.calculix_trilayer.generate import parse_frd  # noqa: E402
+from tools.vv.calculix_trilayer.generate import build_mesh, parse_frd, top_node_count, w_bfp_from_frd  # noqa: E402
 
 
 class FrdParserTest(unittest.TestCase):
+    def test_mesh_has_only_connected_nodes(self):
+        for nx, expected in ((8, 225), (16, 833)):
+            with self.subTest(nx=nx):
+                coords, elements, _ = build_mesh(nx, nx)
+                used = {nid for _, _, nodes in elements for nid in nodes}
+                self.assertEqual(set(coords), used)
+                self.assertEqual(sorted(coords), list(range(1, len(coords) + 1)))
+                top = {nid for nid, (_, _, z) in coords.items() if z >= 0.1 - 1e-13}
+                self.assertEqual(len(top), expected)
+                self.assertEqual(len(top), top_node_count(nx, nx))
+                self.assertTrue(top <= used)
+
+    def test_incomplete_or_extra_top_displacements_fail(self):
+        nodes = {1: (0, 0, 0.1), 2: (1, 0, 0.1)}
+        for disp in ({1: (0, 0, 1)}, {1: (0, 0, 1), 2: (0, 0, 1)}):
+            expected = {1, 2} if len(disp) == 1 else {1}
+            with patch("tools.vv.calculix_trilayer.generate.parse_frd", return_value=(nodes, disp)):
+                with self.assertRaisesRegex(RuntimeError, "expected .* C3D20 top nodes"):
+                    w_bfp_from_frd(Path("sample.frd"), expected)
+
     def test_coordinate_and_displacement_records(self):
         # Literal CalculiX ASCII short-format records, including abutting negatives.
         text = (
-            "    2C\n"
+            "  2C\n"
             " -1         1 0.00000E+00 1.00000E+00 1.00000E-01\n"
             " -1     12345-1.23456E+02-2.34567E-03 3.45678E+01\n"
             " -3\n"

@@ -37,12 +37,17 @@ CCX = os.environ.get("CHIPCAE_CCX", "ccx")
 
 
 def node_id(i, j, k, nx, ny, nz):
-    """Lexicographic id, 1-based, of a tensor-product Lagrange-quadratic point.
+    """Temporary lexicographic id of a tensor-product quadratic point.
 
-    There are (2*nx+1, 2*ny+1, 2*nz+1) nodes.
+    Used element nodes are compactly renumbered before writing the deck.
     """
     mx, my = 2 * nx + 1, 2 * ny + 1
     return 1 + i + mx * (j + my * k)
+
+
+def top_node_count(nx, ny):
+    """C3D20 surface corners plus the two families of edge midpoints."""
+    return (nx + 1) * (ny + 1) + nx * (ny + 1) + (nx + 1) * ny
 
 
 def build_mesh(nx, ny):
@@ -107,6 +112,15 @@ def build_mesh(nx, ny):
                     elements.append((eid, li + 1, n20s))
                     eid += 1
             z_elem += 1
+    # C3D20 uses corners and edge midpoints, never face or volume centres.
+    used = sorted({nid for _, _, nodes in elements for nid in nodes})
+    compact = {nid: index for index, nid in enumerate(used, start=1)}
+    coords = {compact[nid]: coords[nid] for nid in used}
+    elements = [(eid, mid, tuple(compact[nid] for nid in nodes))
+                for eid, mid, nodes in elements]
+    top = {nid for nid, (_, _, z) in coords.items() if z >= H - 1e-12 * H}
+    assert len(top) == top_node_count(nx, ny)
+    assert top <= {nid for _, _, nodes in elements for nid in nodes}
     return coords, elements, nz
 
 
@@ -132,9 +146,10 @@ def write_inp(path: Path, name: str, nx, ny):
             lines.append(f"{eid}, {a},")
             lines.append(f"{b}")
     # bottom corner nodes for 3-2-1 (z=0)
-    n_xmin_ymin = node_id(0, 0, 0, nx, ny, nz)
-    n_xmax_ymin = node_id(2 * nx, 0, 0, nx, ny, nz)
-    n_xmin_ymax = node_id(0, 2 * ny, 0, nx, ny, nz)
+    by_position = {xyz: nid for nid, xyz in coords.items()}
+    n_xmin_ymin = by_position[(0.0, 0.0, 0.0)]
+    n_xmax_ymin = by_position[(L, 0.0, 0.0)]
+    n_xmin_ymax = by_position[(0.0, L, 0.0)]
     lines += [
         f"*NSET, NSET=C321_3",
         f"{n_xmin_ymin}",
@@ -196,14 +211,14 @@ def parse_frd(path: Path):
                 disp[nid] = (a, b, c)
         elif key.startswith("-3"):
             mode = None
-        elif line.startswith("    2C"):
+        elif key.split()[:1] == ["2C"]:
             mode = "coords"
         elif key.startswith("-4") and "DISP" in line:
             mode = "disp"
     return nodes, disp
 
 
-def w_bfp_from_frd(frd: Path) -> float:
+def w_bfp_from_frd(frd: Path, expected_top) -> float:
     nodes, disp = parse_frd(frd)
     if not disp:
         raise RuntimeError(f"no DISP records parsed from {frd}")
@@ -216,8 +231,12 @@ def w_bfp_from_frd(frd: Path) -> float:
         if z < H - 1e-12 * H:
             continue
         rows.append((x * 1000.0, y * 1000.0, uz * 1000.0))  # mm
-    if not rows:
-        raise RuntimeError("no top-surface nodes in DISP")
+    selected = {nid for nid in disp if nid in nodes and nodes[nid][2] >= H - 1e-12 * H}
+    if selected != expected_top or len(rows) != len(expected_top):
+        raise RuntimeError(
+            f"{frd}: expected {len(expected_top)} C3D20 top nodes, got {len(rows)}; "
+            f"missing={sorted(expected_top - selected)}, extra={sorted(selected - expected_top)}"
+        )
     P = np.array(rows, dtype=float)
     # P for interp_grid is x,y,z,ux,uy,uz — z unused, ux uy unused
     Pall = np.column_stack([P[:, 0], P[:, 1], np.zeros(len(P)), np.zeros(len(P)), np.zeros(len(P)), P[:, 2]])
@@ -246,12 +265,14 @@ def run_mesh(workdir: Path, name: str):
     r = subprocess.run([CCX, job], cwd=workdir, capture_output=True, text=True)
     (workdir / f"{name}.ccx.stdout").write_text(r.stdout)
     (workdir / f"{name}.ccx.stderr").write_text(r.stderr)
-    if r.returncode != 0:
+    if r.returncode != 0 or "*ERROR" in (r.stdout + r.stderr).upper():
         raise RuntimeError(f"ccx {name} failed: {r.stderr[-2000:]}\n{r.stdout[-2000:]}")
     frd = workdir / f"{name}.frd"
     if not frd.exists():
         raise RuntimeError(f"missing {frd}")
-    w = w_bfp_from_frd(frd)
+    coords, _, _ = build_mesh(nx, ny)
+    expected_top = {nid for nid, (_, _, z) in coords.items() if z >= H - 1e-12 * H}
+    w = w_bfp_from_frd(frd, expected_top)
     return {
         "name": name,
         "n_elem_xyz": [nx, ny, sum(Z_PER_LAYER)],

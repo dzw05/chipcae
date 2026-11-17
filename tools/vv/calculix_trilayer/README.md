@@ -35,6 +35,12 @@ The deterministic input decks [coarse.inp](coarse.inp) and [fine.inp](fine.inp)
 are committed alongside the generator. The script regenerates these decks,
 copies them into ignored `work/` for solving, and updates `REFERENCE.json`.
 Solver outputs stay in `work/`; stale FRD results are deleted before each run.
+A nonzero exit status or `*ERROR` in solver stdout/stderr fails generation.
+Only nodes referenced by C3D20 elements are emitted, with compact IDs used by
+NALL and the temperature cards. The coarse/fine meshes contain 2061/7565 nodes;
+their TOP sets contain exactly 225/833 connected corner and edge-midpoint nodes.
+The FRD reader requires the exact expected top-node IDs before interpolation,
+so missing or extra top displacements cannot silently change the result.
 The ASCII `.frd` parser reads coordinates from the `2C`
 block and displacements from the `-4 DISP` block, using fixed-width `-1`
 node records until each `-3` terminator. Node IDs join coordinates and
@@ -43,8 +49,12 @@ within 1e-12 H, including C3D20 corner and midside nodes. Surface `W_bfp` is
 computed with `tools.vv.warpage_qoi.interp_grid`
 and `qoi_surface` on an 81×81 grid in millimetres, then converted back to metres.
 
-Artifact format and comparison checks live exclusively in
-`tools/vv/test_trilayer_calculix_ref.py`; generation does not validate the payload.
+The checked-in [reference.schema.json](reference.schema.json) is the shared
+machine-readable source of truth for the artifact format. The
+[contract.py](contract.py) validator loads it and adds the cross-field selected-value
+check; `tools/vv/test_trilayer_calculix_ref.py` imports that shared validator and
+checks the model parameters and delta arithmetic. Generation does not validate
+the payload.
 The v1 contract is specific to this WP-2 coarse/fine refinement workflow, not a
 schema for arbitrary CalculiX studies. It requires exactly one coarse and one
 fine mesh, fine selection, and equality with the fine mesh value.
@@ -62,7 +72,8 @@ space, so whitespace splitting is unsuitable. This same layout applies to
 `2C` coordinates and `DISP` values. Run the parser regression checks with
 `python tools/vv/calculix_trilayer/check_frd_parser.py`; these manual-only checks
 are not collected by unittest discovery. They cover both blocks,
-adjacent negative fields, exponent signs, node IDs, and block termination.
+adjacent negative fields, exponent signs, node IDs, block termination, variable
+header spacing, connected mesh nodes, and missing/extra top displacements.
 
 Recorded W_bfp: coarse 0.004271023422273522 m; fine (selected)
 0.004274306997289974 m. Reproducible input decks are committed as `coarse.inp` and `fine.inp`;

@@ -1,0 +1,185 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0; Copyright (c) 2026 Zhiwei Duan",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WP-2 coarse/fine trilayer CalculiX REFERENCE artifact (v1 workflow)",
+  "description": "Workflow-specific v1 checks, not a general CalculiX artifact schema, with exactly coarse and fine meshes and fine selection. Equality of top-level W_bfp_m and the selected mesh value is a validator-only check in contract.py. Raw schema validation does not enforce equality between instance fields.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "host",
+    "calculix_version",
+    "label",
+    "W_bfp_m",
+    "element_type",
+    "geometry",
+    "meshes",
+    "selected_mesh",
+    "prototype_W_bfp_m",
+    "abs_delta_m",
+    "rel_delta"
+  ],
+  "properties": {
+    "kind": {
+      "const": "REFERENCE",
+      "type": "string"
+    },
+    "label": {
+      "type": "string",
+      "const": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解"
+    },
+    "W_bfp_m": {
+      "type": "number"
+    },
+    "element_type": {
+      "type": "string",
+      "const": "C3D20"
+    },
+    "host": {
+      "type": "string",
+      "minLength": 1
+    },
+    "calculix_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "geometry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "L_m",
+        "thicknesses_m",
+        "E_Pa",
+        "nu",
+        "alpha_1_per_K",
+        "dT_K"
+      ],
+      "properties": {
+        "L_m": {
+          "type": "number"
+        },
+        "thicknesses_m": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "number"
+          }
+        },
+        "E_Pa": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "number"
+          }
+        },
+        "nu": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "number"
+          }
+        },
+        "alpha_1_per_K": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "number"
+          }
+        },
+        "dT_K": {
+          "type": "number"
+        }
+      }
+    },
+    "meshes": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "name": {
+                "const": "coarse"
+              }
+            },
+            "required": [
+              "name"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": {
+                "const": "fine"
+              }
+            },
+            "required": [
+              "name"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "n_elem_xyz",
+          "n_elem_z_per_layer",
+          "W_bfp_m"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": [
+              "coarse",
+              "fine"
+            ]
+          },
+          "n_elem_xyz": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "type": "integer"
+            }
+          },
+          "n_elem_z_per_layer": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "type": "integer"
+            }
+          },
+          "W_bfp_m": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "selected_mesh": {
+      "type": "string",
+      "const": "fine"
+    },
+    "prototype_W_bfp_m": {
+      "type": "number"
+    },
+    "abs_delta_m": {
+      "type": "number"
+    },
+    "rel_delta": {
+      "type": "number"
+    }
+  }
+}
