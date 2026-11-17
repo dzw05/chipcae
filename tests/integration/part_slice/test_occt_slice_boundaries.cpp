@@ -15,7 +15,9 @@ int main() {
         failures += run([&] {
             auto renamed = input;
             renamed.body_names = {"CaseSensitive"};
-            rejection(slice_prismatic(renamed, "casesensitive", options()), "body not found");
+            const auto r = slice_prismatic(renamed, "casesensitive", options());
+            rejection(r, "body not found");
+            same(r, slice_prismatic(renamed, "casesensitive", options()));
         });
         failures += run([&] {
             StepImportResult empty;

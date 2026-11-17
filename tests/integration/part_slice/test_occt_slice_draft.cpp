@@ -12,7 +12,11 @@ int main() {
                 loft.AddWire(square(inset, 0.5));
                 loft.Build();
                 require(loft.IsDone(), "draft fixture built");
-                const auto r = slice(fixture(loft.Shape()));
+                const auto input = fixture(loft.Shape());
+                const auto r = slice(input);
+                same(r, slice(input));
+                if (factor < 1)
+                    require(!r.slabs.empty(), "accepted B draft retains slabs");
                 require(tier(r) == (factor < 1 ? Tier::B : Tier::C), "draft threshold tier");
                 if (factor > 1) {
                     bool found = false;

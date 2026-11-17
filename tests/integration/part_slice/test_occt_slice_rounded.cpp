@@ -13,7 +13,10 @@ int main() {
         }
         fillet.Build();
         require(fillet.IsDone(), "rounded fixture built");
-        const auto s = single(slice(fixture(fillet.Shape())));
+        const auto input = fixture(fillet.Shape());
+        const auto result = slice(input);
+        const auto s = single(result);
+        same(result, slice(input));
         require(s.sections[0].holes.empty(), "rounded plate no holes");
         const auto& pts = s.sections[0].outer.pts;
         const double pi = std::acos(-1.0), radius = 0.002;

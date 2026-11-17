@@ -9,6 +9,11 @@ int main() {
         const auto r = slice(input);
         require(tier(r) == Tier::A, "hat tier A");
         require(r.slabs.size() == 2, "hat has two slabs");
+        require(r.slabs[0].sections.size() == 1 && r.slabs[1].sections.size() == 1,
+                "one connected section in each hat slab");
+        require(r.slabs[0].sections[0].holes.size() == 1, "flange has one hole");
+        require(r.slabs[1].sections[0].holes.empty(), "lid has no hole");
+        same(r, slice(input));
         near(r.slabs[0].z0, 0, 1e-12, "flange bottom");
         near(r.slabs[0].z1, 0.002, 1e-12, "flange top");
         near(r.slabs[1].z0, 0.002, 1e-12, "lid bottom");

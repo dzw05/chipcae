@@ -5,11 +5,15 @@ int main() {
     return 77;
 #else
     return run([] {
-        const auto r = slice_prismatic({}, "any body", options());
-        require(r.slabs.empty() && r.defects.size() == 1, "no OCCT: empty slabs and one defect");
-        require(r.defects[0].tier == Tier::C, "no OCCT: tier C");
-        require(std::string(to_string(r.defects[0].reason)) == "OCCT_UNAVAILABLE",
-                "no OCCT reason");
+        for (const auto& name : {"", "any body", "CaseSensitive"}) {
+            const auto r = slice_prismatic({}, name, options());
+            require(r.slabs.empty() && r.defects.size() == 1,
+                    "no OCCT: empty slabs and one defect");
+            require(r.defects[0].tier == Tier::C, "no OCCT: tier C");
+            require(std::string(to_string(r.defects[0].reason)) == "OCCT_UNAVAILABLE",
+                    "no OCCT reason");
+            same(r, slice_prismatic({}, name, options()));
+        }
     });
 #endif
 }
