@@ -22,6 +22,7 @@ def main():
                     'unused_magic', 'unused_truncated', 'unused_dbu',
                     'unused_offsets', 'unused_trailing', 'unused_duplicate')],
                 ('delta', 14, 'INPUT_INVALID'),
+                ('derived_nonfinite', 14, 'INPUT_INVALID'),
                 ('unit', 14, 'INPUT_INVALID'),
                 ('utf8', 14, 'INPUT_INVALID'),
                 ('output_file', 14, 'INPUT_INVALID')):
@@ -31,6 +32,10 @@ def main():
             path = folder / 'stack.json'
             out = folder / 'reports'
             delta = 0 if case == 'delta' else 1e-9
+            if case == 'derived_nonfinite':
+                # Finite inputs can overflow δ × P without invalid geometry.
+                delta = 1e308
+                b['outline']['box'] = [0, 0, 1, 1]
             if case in ('missing_polyset', 'hash', 'trailing'):
                 p = polyset(folder, b, trailing=b'x' if case == 'trailing' else b'')
                 if case == 'missing_polyset':

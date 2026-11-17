@@ -56,8 +56,8 @@ def main():
             assert e['grade'] == 'hard' and e['delta'] == 2
         # Every aligned layer gets a copper row, including zero-area mismatches.
         for left_copper, right_copper, grade in ((False, False, 'info'),
-                                                 (True, False, 'hard'),
-                                                 (False, True, 'hard'),
+                                                 (True, False, 'info'),
+                                                 (False, True, 'info'),
                                                  (True, True, 'info')):
             left, right = board(), board()
             for stack, present in ((left, left_copper), (right, right_copper)):
@@ -71,6 +71,8 @@ def main():
             assert e['grade'] == grade and e['tol'] == 0
             assert e['odb'] == e['ipc'] == e['delta'] == 0
             assert 'P_layer = 0' in e['tol_derivation']
+            layers = entry(r, 'layers')
+            assert layers['grade'] == ('info' if left_copper == right_copper else 'hard')
         # Pipes in keys and nested material values remain within Markdown cells.
         b = copy.deepcopy(a)
         b['layers'][0]['material'] = 'mat|FR4'

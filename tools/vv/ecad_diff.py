@@ -246,11 +246,11 @@ def _diff(odb, ipc, delta):
         ay, py = cb[i] or (0, 0)
         d, p = abs(ax - ay), max(px, py)
         relative = d / max(ax, ay) if max(ax, ay) else 0
-        grade = ('hard' if sa[i] != sb[i] or relative > 0.01 else
+        grade = ('hard' if relative > 0.01 else
                  'discuss' if d > delta * p else 'info')
         add('copper_area', key, ax, ay, d, delta * p,
             f'δ = {delta}; P_layer = {p} (total copper ring perimeter; '
-            'fractions use scaled outline); copper/dielectric mismatch is hard; '
+            'fractions use scaled outline); '
             'absolute ring areas summed; relative difference uses larger area, zero versus nonzero is 100%', grade)
     thickness('total_thickness', 'stack', math.fsum(l['thickness'] for l in a),
               math.fsum(l['thickness'] for l in b))
@@ -286,7 +286,10 @@ def write_report(result: dict, out_dir: Path) -> None:
                                       ('item', 'key', 'odb', 'ipc', 'delta', 'tol', 'grade')) + ' |')
     if not details:
         lines.append('| 无 | | | | | | |')
-    payload = json.dumps(result, indent=2, ensure_ascii=False, allow_nan=False)
+    try:
+        payload = json.dumps(result, indent=2, ensure_ascii=False, allow_nan=False)
+    except ValueError as exc:
+        _invalid(str(exc))
     try:
         out.mkdir(parents=True, exist_ok=True)
         names = ('diff.json', 'diff.md')
