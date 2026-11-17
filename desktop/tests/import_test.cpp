@@ -11,6 +11,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFileSystemModel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QProcess>
@@ -96,8 +97,14 @@ QString pick(const std::function<QString()>& picker,
             if (!dialog || !dialog->isVisible())
                 continue;
             seen = true;
-            if (map)
-                check(dialog->nameFilters() == QStringList{"JSON (*.json)"}, "exact map filter");
+            if (map) {
+                for (auto* model : dialog->findChildren<QFileSystemModel*>())
+                    for (const auto& name : {"map.json", "map.JSON", "map.JsOn"})
+                        check(QDir::match(model->nameFilters(), name),
+                              "map filter exposes " + QString(name));
+                check(dialog->nameFilters() == QStringList{"JSON (*.[jJ][sS][oO][nN])"},
+                      "exact map filter");
+            }
             driver.stop();
             if (cancel) {
                 dialog->reject();
@@ -165,13 +172,22 @@ if mode=='copy-failure': pathlib.Path(record[:-5]+'.poly').mkdir()
 if mode=='hang':
     while True: time.sleep(1)
 code,rc={'confirm':('IMPORT_CONFIRMATION_REQUIRED',6),'reject':('IMPORT_REJECTED',7),
-'map-missing':('MATERIAL_MAPPING_MISSING',9),'mismatch':('IMPORT_REJECTED',0),
+'map-missing':('MATERIAL_MAPPING_MISSING',9),'crash-map':('MATERIAL_MAPPING_MISSING',9),'mismatch':('IMPORT_REJECTED',0),
 'missing6':('OK',6),'lower':('ok',0)}.get(mode,('OK',0))
 if mode=='confirm' and '--accept-b-tier' in a: code,rc='OK',0
 if report and mode!='missing6':
     payload={'code':code,'message':'fixture message','defects':[] if code=='OK' else [{'code':'MOCK_GAP'}]}
     if mode=='grade-conflict': payload['grade']='C'
+    if mode.startswith('bad-'):
+        payload['code']='MATERIAL_MAPPING_MISSING'; payload['grade']='B'; rc=9
+        if mode=='bad-message-missing': del payload['message']
+        if mode=='bad-message-type': payload['message']=123
+        if mode=='bad-defects-missing': del payload['defects']
+        if mode=='bad-defects-type': payload['defects']={}
     pathlib.Path(report).write_text('{' if mode=='corrupt' else json.dumps(payload))
+if mode=='crash-map':
+    import os,signal
+    os.kill(os.getpid(),signal.SIGKILL)
 sys.exit(rc)
 )PY");
         if (!widgets) {
@@ -309,19 +325,27 @@ sys.exit(rc)
             check(c.outcome() == expected, "outcome " + mode);
             const QString code = mode == "confirm" ? "IMPORT_CONFIRMATION_REQUIRED"
                                  : mode == "reject" || mode == "mismatch" ? "IMPORT_REJECTED"
-                                 : mode == "map-missing" ? "MATERIAL_MAPPING_MISSING"
-                                 : mode == "lower"       ? "ok"
-                                                         : "OK";
+                                 : mode == "map-missing" || mode == "crash-map"
+                                     ? "MATERIAL_MAPPING_MISSING"
+                                 : mode == "lower" ? "ok"
+                                                   : "OK";
             if (mode != "hang" && mode != "launch-failure" && mode != "missing6" &&
-                mode != "corrupt")
+                !mode.startsWith("bad-") && mode != "corrupt")
                 check(c.reportCode() == code, "raw report code " + mode);
             if (mode == "success" || mode == "grade-conflict")
                 check(c.grade() == (mode == "grade-conflict" ? "C" : ""),
                       "optional grade for display only");
-            check(c.needsMaterialMapReselect() == (mode == "map-missing"), "reselection " + mode);
+            check(c.needsMaterialMapReselect() == (mode == "map-missing" || mode == "crash-map"),
+                  "reselection " + mode);
+            if (mode == "crash-map")
+                check(c.exitCode() == 9 && c.exitStatus() == QProcess::CrashExit,
+                      "crash fixture exercises recovery independent of exit status");
             if (mode == "mismatch" || mode == "missing6")
                 check(c.error().contains("exit/report mismatch"),
                       "paired exit/report error " + mode);
+            if (mode.startsWith("bad-"))
+                check(c.reportCode().isEmpty() && c.grade().isEmpty(),
+                      "invalid report exposes no partial fields " + mode);
             if (mode == "corrupt")
                 check(c.reportBytes() == "{", "retain malformed raw report");
             if (expected == ImportOutcome::Accepted) {
@@ -431,9 +455,14 @@ sys.exit(rc)
                                  {"confirm", ImportOutcome::NeedsConfirmation},
                                  {"reject", ImportOutcome::Rejected},
                                  {"map-missing", ImportOutcome::Rejected},
+                                 {"crash-map", ImportOutcome::Failed},
                                  {"mismatch", ImportOutcome::Failed},
                                  {"missing6", ImportOutcome::Failed},
                                  {"corrupt", ImportOutcome::Failed},
+                                 {"bad-message-missing", ImportOutcome::Failed},
+                                 {"bad-message-type", ImportOutcome::Failed},
+                                 {"bad-defects-missing", ImportOutcome::Failed},
+                                 {"bad-defects-type", ImportOutcome::Failed},
                                  {"invalid-stack", ImportOutcome::Failed},
                                  {"copy-failure", ImportOutcome::Failed},
                                  {"hang", ImportOutcome::Failed},

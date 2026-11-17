@@ -152,8 +152,7 @@ void ImportController::confirmDefects() {
     restartAccepted();
 }
 bool ImportController::needsMaterialMapReselect() const {
-    return exitStatus_ == QProcess::NormalExit && exitCode_ == 9 &&
-           reportCode_ == "MATERIAL_MAPPING_MISSING";
+    return exitCode_ == 9 && reportCode_ == "MATERIAL_MAPPING_MISSING";
 }
 void ImportController::complete(int code, QProcess::ExitStatus status) {
     if (!busy_)
@@ -164,10 +163,15 @@ void ImportController::complete(int code, QProcess::ExitStatus status) {
     bool validReport = false;
     try {
         auto parsed = Json::parse(report_.toStdString());
-        reportCode_ = QString::fromStdString(parsed.at("code").as<std::string>());
+        const auto reportCode = QString::fromStdString(parsed.at("code").as<std::string>());
+        QString grade;
         if (parsed.contains("grade") && parsed.at("grade").is_string())
-            grade_ = QString::fromStdString(parsed.at("grade").as<std::string>());
+            grade = QString::fromStdString(parsed.at("grade").as<std::string>());
         validReport = parsed.at("message").is_string() && parsed.at("defects").is_array();
+        if (validReport) {
+            reportCode_ = reportCode;
+            grade_ = grade;
+        }
     } catch (const std::exception&) {
     }
     outcome_ = ImportOutcome::Failed;
