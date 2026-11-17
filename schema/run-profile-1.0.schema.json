@@ -70,6 +70,19 @@
           ]
         }
       ]
+    },
+    "launcher": {
+      "enum": [
+        "mpirun",
+        "direct"
+      ],
+      "default": "mpirun"
+    },
+    "mpi_args": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   }
 }

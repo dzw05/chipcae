@@ -144,6 +144,9 @@
               },
               "temp_from": {
                 "const": "thermal"
+              },
+              "T_ref": {
+                "type": "number"
               }
             },
             "additionalProperties": false,
@@ -152,8 +155,7 @@
             },
             "required": [
               "id",
-              "solver",
-              "temp_from"
+              "solver"
             ]
           }
         ]
@@ -188,6 +190,10 @@
               },
               "T_target": {
                 "type": "number"
+              },
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]{1,64}$"
               }
             },
             "additionalProperties": false,
@@ -212,6 +218,10 @@
               },
               "T": {
                 "type": "number"
+              },
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]{1,64}$"
               }
             },
             "additionalProperties": false,
@@ -240,6 +250,10 @@
               },
               "T_inf": {
                 "type": "number"
+              },
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]{1,64}$"
               }
             },
             "additionalProperties": false,
@@ -268,6 +282,10 @@
               },
               "q_vol": {
                 "type": "number"
+              },
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]{1,64}$"
               }
             },
             "additionalProperties": false,
@@ -276,9 +294,7 @@
             },
             "required": [
               "type",
-              "target",
-              "power",
-              "q_vol"
+              "target"
             ],
             "oneOf": [
               {
@@ -314,6 +330,10 @@
             "rigid": {
               "const": "3-2-1",
               "default": "3-2-1"
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$"
             }
           },
           "additionalProperties": false,
@@ -330,8 +350,24 @@
             "fixed": {
               "type": "array",
               "items": {
-                "type": "string",
-                "pattern": "^(layer:.+|face:(xmin|xmax|ymin|ymax|zmin|zmax)|boundary:embedded)$"
+                "type": "object",
+                "properties": {
+                  "target": {
+                    "type": "string",
+                    "pattern": "^(layer:.+|face:(xmin|xmax|ymin|ymax|zmin|zmax)|boundary:embedded)$"
+                  },
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+                  }
+                },
+                "required": [
+                  "target"
+                ],
+                "additionalProperties": false,
+                "patternProperties": {
+                  "^x-": {}
+                }
               },
               "minItems": 1
             }
@@ -376,6 +412,28 @@
           "required": [
             "standard",
             "remove_rigid"
+          ]
+        },
+        "fields": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "T",
+              "U",
+              "layer_id",
+              "material_id",
+              "cell_kind",
+              "elem_gid"
+            ]
+          },
+          "default": [
+            "T",
+            "U",
+            "layer_id",
+            "material_id",
+            "cell_kind",
+            "elem_gid"
           ]
         }
       },
