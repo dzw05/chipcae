@@ -1,5 +1,8 @@
 #include "MainWindow.hpp"
 
+#include <QFileDialog>
+#include <QMenuBar>
+#include <QMessageBox>
 #include <QVTKOpenGLNativeWidget.h>
 #include <vtkActor.h>
 #include <vtkConeSource.h>
@@ -8,6 +11,21 @@
 #include <vtkPolyDataMapper.h>
 #include <vtkRenderer.h>
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
+    auto* menu = menuBar()->addMenu(tr("File"));
+    auto report = [this](bool ok) {
+        if (!ok && !document_.errors().empty())
+            QMessageBox::warning(this, tr("Case document"), document_.errors().front().message);
+    };
+    menu->addAction(tr("Open"), this, [this, report] {
+        const auto path = QFileDialog::getOpenFileName(this, tr("Open case"), {}, "JSON (*.json)");
+        if (!path.isEmpty())
+            report(openCase(path));
+    });
+    menu->addAction(tr("Save"), this, [this, report] {
+        const auto path = QFileDialog::getSaveFileName(this, tr("Save case"), {}, "JSON (*.json)");
+        if (!path.isEmpty())
+            report(saveCase(path));
+    });
     auto* view = new QVTKOpenGLNativeWidget(this);
     vtkNew<vtkGenericOpenGLRenderWindow> window;
     view->setRenderWindow(window);

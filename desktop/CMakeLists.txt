@@ -7,10 +7,20 @@ option(CHIPCAE_BUILD_TESTS "Build desktop smoke tests" ON)
 include(cmake/Dependencies.cmake)
 include(cmake/ProtocolGeneration.cmake)
 chipcae_generate_protocol()
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/document-schema")
+foreach(schema case-1.0 parameters run-profile-1.0 stack-0.2)
+    configure_file("../schema/${schema}.schema.json"
+        "document-schema/${schema}.schema.json" COPYONLY)
+endforeach()
+add_library(chipcae_document document/CaseDocument.cpp document/CaseDocument.hpp)
+target_include_directories(chipcae_document PUBLIC document)
+target_link_libraries(chipcae_document PUBLIC Qt6::Core jsoncons::jsoncons)
+target_compile_definitions(chipcae_document PRIVATE
+    CHIPCAE_SCHEMA_DIR="${CMAKE_CURRENT_BINARY_DIR}/document-schema")
 add_library(chipcae_desktop_ui src/MainWindow.cpp src/MainWindow.hpp
     workers/PreviewWorker.cpp workers/PreviewWorker.hpp)
 target_include_directories(chipcae_desktop_ui PUBLIC src workers)
-target_link_libraries(chipcae_desktop_ui PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets
+target_link_libraries(chipcae_desktop_ui PUBLIC chipcae_document Qt6::Core Qt6::Gui Qt6::Widgets
     Qt6::OpenGLWidgets ${VTK_LIBRARIES})
 add_executable(chipcae-desktop src/main.cpp)
 target_link_libraries(chipcae-desktop PRIVATE chipcae_desktop_ui chipcae_desktop_protocol)
@@ -36,4 +46,12 @@ if(CHIPCAE_BUILD_TESTS)
     endforeach()
     set_tests_properties(desktop_window_smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     set_tests_properties(desktop_render_smoke PROPERTIES ENVIRONMENT "VTK_DEFAULT_OPENGL_WINDOW=vtkEGLRenderWindow;DISPLAY=")
+endif()
+
+if(CHIPCAE_BUILD_TESTS)
+    add_executable(desktop_document tests/document_test.cpp)
+    target_link_libraries(desktop_document PRIVATE chipcae_document)
+    target_compile_definitions(desktop_document PRIVATE
+        DOCUMENT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../schema/examples")
+    add_test(NAME desktop_document COMMAND desktop_document)
 endif()
