@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <set>
+#include <stdexcept>
 #include <tuple>
 namespace chipcae::mesh::cut {
 namespace {
@@ -14,50 +16,76 @@ struct SimplexPoint {
     std::array<Real, 4> l;
     Real w;
 };
-std::vector<std::pair<Real, Real>> gauss01(int n) {
-    std::vector<std::pair<Real, Real>> r(n);
-    for (int i = 0; i < n; ++i) {
-        Real x = std::cos(std::acos(Real(-1)) * (i + .75) / (n + .5)), dx;
-        do {
-            Real p = 1, q = 0;
-            for (int k = 1; k <= n; ++k) {
-                Real t = ((2 * k - 1) * x * p - (k - 1) * q) / k;
-                q = p;
-                p = t;
-            }
-            Real dp = n * (x * p - q) / (x * x - 1);
-            dx = p / dp;
-            x -= dx;
-        } while (std::abs(dx) > 2e-16);
-        Real p = 1, q = 0;
-        for (int k = 1; k <= n; ++k) {
-            Real t = ((2 * k - 1) * x * p - (k - 1) * q) / k;
-            q = p;
-            p = t;
+// Jacobi P_n^(alpha,0) on [-1,1], with its derivative.
+std::pair<Real, Real> jacobi(int n, int alpha, Real x) {
+    Real p = 1, dp = 0, q = 0, dq = 0;
+    for (int k = 1; k <= n; ++k) {
+        Real t, dt;
+        if (k == 1) {
+            t = (alpha + (alpha + 2) * x) / 2;
+            dt = Real(alpha + 2) / 2;
+        } else {
+            Real h = 2 * k + alpha;
+            Real a = (h - 1) * (h * (h - 2) * x + alpha * alpha);
+            Real da = (h - 1) * h * (h - 2);
+            Real b = 2 * (k + alpha - 1) * (k - 1) * h;
+            Real c = 2 * k * (k + alpha) * (h - 2);
+            t = (a * p - b * q) / c;
+            dt = (da * p + a * dp - b * dq) / c;
         }
-        Real dp = n * (x * p - q) / (x * x - 1);
-        r[i] = {(x + 1) / 2, 1 / ((1 - x * x) * dp * dp)};
+        q = p;
+        dq = dp;
+        p = t;
+        dp = dt;
     }
-    return r;
+    return {p, dp};
+}
+// Shifted Gauss-Jacobi: integrates (1-u)^alpha on [0,1]. alpha=0 is Legendre.
+std::vector<std::pair<Real, Real>> gauss01(int n, int alpha = 0) {
+    std::vector<Real> bounds{-1};
+    if (n > 1)
+        for (auto [u, w] : gauss01(n - 1, alpha))
+            bounds.push_back(2 * u - 1);
+    bounds.push_back(1);
+    std::vector<std::pair<Real, Real>> out;
+    for (int i = 0; i < n; ++i) {
+        Real lo = bounds[i], hi = bounds[i + 1], x = (lo + hi) / 2;
+        Real plo = jacobi(n, alpha, lo).first;
+        bool converged = false;
+        for (int iteration = 0; iteration < 100; ++iteration) {
+            auto [p, dp] = jacobi(n, alpha, x);
+            Real dx = p / dp;
+            if (std::abs(dx) <=
+                4 * std::numeric_limits<Real>::epsilon() * std::max(Real(1), std::abs(x))) {
+                x -= dx;
+                converged = true;
+                break;
+            }
+            if ((p > 0) == (plo > 0)) {
+                lo = x;
+                plo = p;
+            } else
+                hi = x;
+            Real next = x - dx;
+            x = next > lo && next < hi ? next : (lo + hi) / 2;
+        }
+        if (!converged)
+            throw std::runtime_error("Gauss-Jacobi root did not converge in 100 iterations");
+        auto [p, dp] = jacobi(n, alpha, x);
+        // The Jacobi normalization constant cancels the shift's 2^(alpha+1).
+        out.push_back({(x + 1) / 2, 1 / ((1 - x * x) * dp * dp)});
+    }
+    return out;
 }
 std::vector<SimplexPoint> tetra_rule(int degree) {
-    auto g = gauss01((degree + 4) / 2);
+    int n = degree / 2 + 1;
+    auto gu = gauss01(n, 2), gv = gauss01(n, 1), gz = gauss01(n);
     std::vector<SimplexPoint> out;
-    std::array<int, 4> perm{0, 1, 2, 3};
-    for (auto [u, wu] : g)
-        for (auto [v, wv] : g)
-            for (auto [z, wz] : g) {
-                std::array<Real, 4> l{
-                    (1 - u) * (1 - v) * (1 - z), u, (1 - u) * v, (1 - u) * (1 - v) * z};
-                Real w = wu * wv * wz * (1 - u) * (1 - u) * (1 - v) / 24;
-                std::sort(perm.begin(), perm.end());
-                do {
-                    std::array<Real, 4> a;
-                    for (int k = 0; k < 4; ++k)
-                        a[k] = l[perm[k]];
-                    out.push_back({a, w});
-                } while (std::next_permutation(perm.begin(), perm.end()));
-            }
+    for (auto [u, wu] : gu)
+        for (auto [v, wv] : gv)
+            for (auto [z, wz] : gz)
+                out.push_back({{(1 - u) * (1 - v) * (1 - z), u, (1 - u) * v, (1 - u) * (1 - v) * z},
+                               wu * wv * wz});
     return out;
 }
 struct TriPoint {
@@ -65,21 +93,12 @@ struct TriPoint {
     Real w;
 };
 std::vector<TriPoint> triangle_rule(int degree) {
-    auto g = gauss01((degree + 3) / 2);
+    int n = degree / 2 + 1;
+    auto gu = gauss01(n, 1), gv = gauss01(n);
     std::vector<TriPoint> out;
-    std::array<int, 3> perm{0, 1, 2};
-    for (auto [u, wu] : g)
-        for (auto [v, wv] : g) {
-            std::array<Real, 3> l{1 - u - (1 - u) * v, u, (1 - u) * v};
-            Real w = wu * wv * (1 - u) / 6;
-            std::sort(perm.begin(), perm.end());
-            do {
-                std::array<Real, 3> a;
-                for (int k = 0; k < 3; ++k)
-                    a[k] = l[perm[k]];
-                out.push_back({a, w});
-            } while (std::next_permutation(perm.begin(), perm.end()));
-        }
+    for (auto [u, wu] : gu)
+        for (auto [v, wv] : gv)
+            out.push_back({{(1 - u) * (1 - v), u, (1 - u) * v}, wu * wv});
     return out;
 }
 using Polygon = std::vector<V>;

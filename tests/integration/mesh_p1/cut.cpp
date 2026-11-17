@@ -244,6 +244,87 @@ int main(int argc, char** argv) {
                 }
     }
     auto default_cut = build_cut_layer(original, {{{0, {1, 1, 1}, 1}}}, CutOptions{});
+    // (1,2,3) yields pentagons away from d=3; its largest component equals
+    // the sum of the others, so use (1,2,2.5) as well for a true hexagon.
+    for (auto normal : {std::array<double, 3>{1, 2, 3}, std::array<double, 3>{1, 2, 2.5}}) {
+        double offset = normal[2] == 3 ? 2.5 : 2.75;
+        int triangles = normal[2] == 3 ? 3 : 4;
+        for (int degree : {2, 4, 6, 8}) {
+            auto opts = options;
+            opts.quad_degree = degree;
+            std::array<CutLayerArrays, 2> sides;
+            std::array<double, 2> areas{};
+            for (int side = 0; side < 2; ++side) {
+                double sign = side == 0 ? 1 : -1;
+                auto sided_normal = normal;
+                for (auto& x : sided_normal)
+                    x *= sign;
+                auto mesh_copy = original;
+                auto result =
+                    build_cut_layer(mesh_copy, {{{0, sided_normal, sign * offset}}}, opts);
+                expect(bool(result), "oblique cut");
+                sides[side] = result.value();
+                const auto& c = sides[side];
+                int n = degree / 2 + 1;
+                int nv = degree == 2 ? 4 : n * n * n;
+                int nb = degree == 2 ? 3 : n * n;
+                int tets = normal[2] == 3 && side == 0 ? 12 : 16;
+                expect(c.vq_w.size() == std::size_t(tets * nv), "point count per fan tetrahedron");
+                expect(c.bq_w.size() == std::size_t(triangles * nb),
+                       "point count per interface triangle");
+                for (auto w : c.vq_w)
+                    expect(w > 0, "positive volume weights");
+                for (auto w : c.bq_w)
+                    expect(w > 0, "positive boundary weights");
+                for (const auto& x : c.vq_xi)
+                    for (auto v : x)
+                        expect(v > 0 && v < 1, "strictly interior volume points");
+                for (const auto& x : c.bq_xi)
+                    for (auto v : x)
+                        expect(v > 0 && v < 1, "interface points inside cube");
+                for (std::size_t sub = 0; sub < c.sub_volfrac.size(); ++sub) {
+                    double volume = std::accumulate(
+                        c.vq_w.begin() + c.vq_off[sub], c.vq_w.begin() + c.vq_off[sub + 1], 0.0);
+                    expect(std::abs(volume - c.sub_volfrac[sub]) <= 1e-12 * c.sub_volfrac[sub],
+                           "subcell weight/volume agreement");
+                    double area = std::accumulate(
+                        c.bq_w.begin() + c.bq_off[sub], c.bq_w.begin() + c.bq_off[sub + 1], 0.0);
+                    const auto& av = c.exterior_area_vector[sub];
+                    double geometric_area =
+                        std::sqrt(std::inner_product(av.begin(), av.end(), av.begin(), 0.0));
+                    expect(std::abs(area - geometric_area) <= 1e-12 * geometric_area,
+                           "subcell weight/geometric interface area agreement");
+                    areas[side] += area;
+                }
+                double reported_area = 0;
+                for (const auto& report : mesh_copy.preparation_report)
+                    reported_area += report.cut_area;
+                expect(std::abs(reported_area - areas[side]) <= 1e-12 * areas[side],
+                       "reported interface area agreement");
+            }
+            for (int a = 0; a <= degree; ++a)
+                for (int b = 0; a + b <= degree; ++b)
+                    for (int z = 0; a + b + z <= degree; ++z) {
+                        double volume = 0;
+                        std::array<double, 2> surface{};
+                        for (int side = 0; side < 2; ++side) {
+                            const auto& c = sides[side];
+                            for (std::size_t q = 0; q < c.vq_w.size(); ++q)
+                                volume += c.vq_w[q] * std::pow(c.vq_xi[0][q], a) *
+                                          std::pow(c.vq_xi[1][q], b) * std::pow(c.vq_xi[2][q], z);
+                            for (std::size_t q = 0; q < c.bq_w.size(); ++q)
+                                surface[side] += c.bq_w[q] * std::pow(c.bq_xi[0][q], a) *
+                                                 std::pow(c.bq_xi[1][q], b) *
+                                                 std::pow(c.bq_xi[2][q], z);
+                        }
+                        double analytic = 1.0 / ((a + 1) * (b + 1) * (z + 1));
+                        expect(std::abs(volume - analytic) <= 1e-12 * analytic,
+                               "complementary oblique monomial volume");
+                        expect(std::abs(surface[0] - surface[1]) <= 1e-12 * surface[0],
+                               "complementary oblique monomial surface");
+                    }
+        }
+    }
     auto explicit_2 = CutOptions{};
     explicit_2.quad_degree = 2;
     auto legacy_path = build_cut_layer(original, {{{0, {1, 1, 1}, 1}}}, explicit_2);
