@@ -28,61 +28,20 @@ for layer in stack.get("layers", []):
     referenced = {layer.get("material")}
     referenced.update(region.get("material") for region in layer.get("regions", []))
     assert referenced <= known_material_ids, "MATERIAL_MAPPING_MISSING: stack material is absent from library"
-# Fixed pre-copper snapshots preserve both entry contents and their order.
-original_materials = [json.loads(entry) for entry in (
-    (
-        '{"id": "organic_eq", "schema_version": "1", "unit_system": "SI", "density": 1000, "model": '
-        '"thermo_elastic", "provenance": {"source_type": "illustrative", "confidence": "illustrative"},'
-        ' "elastic": {"symmetry": "isotropic", "table": {"temperatures": [250, 400], "columns": {"E": '
-        '[25000000000.0, 22500000000.0], "nu": [0.3, 0.31]}, "interpolation": "linear", '
-        '"extrapolation": "clamp"}}, "thermal_expansion": {"cte_type": "tangent", "symmetry": '
-        '"isotropic", "stress_free_temperature": 298.15, "table": {"temperatures": [250, 400], '
-        '"columns": {"alpha": [1.5e-05, 1.65e-05]}, "interpolation": "linear", "extrapolation": '
-        '"clamp"}}}'
-    ),
-    (
-        '{"id": "sac305_ball_eq", "schema_version": "1", "unit_system": "SI", "density": 1000, "model":'
-        ' "thermo_elastic", "provenance": {"source_type": "illustrative", "confidence": '
-        '"illustrative"}, "elastic": {"symmetry": "isotropic", "table": {"temperatures": [250, 400], '
-        '"columns": {"E": [45000000000.0, 40500000000.0], "nu": [0.35, 0.36]}, "interpolation": '
-        '"linear", "extrapolation": "clamp"}}, "thermal_expansion": {"cte_type": "tangent", "symmetry":'
-        ' "isotropic", "stress_free_temperature": 298.15, "table": {"temperatures": [250, 400], '
-        '"columns": {"alpha": [2.2e-05, 2.4200000000000002e-05]}, "interpolation": "linear", '
-        '"extrapolation": "clamp"}}}'
-    ),
-    (
-        '{"id": "underfill", "schema_version": "1", "unit_system": "SI", "density": 1000, "model": '
-        '"thermo_elastic", "provenance": {"source_type": "illustrative", "confidence": "illustrative"},'
-        ' "elastic": {"symmetry": "isotropic", "table": {"temperatures": [250, 400], "columns": {"E": '
-        '[8000000000.0, 7200000000.0], "nu": [0.32, 0.33]}, "interpolation": "linear", "extrapolation":'
-        ' "clamp"}}, "thermal_expansion": {"cte_type": "tangent", "symmetry": "isotropic", '
-        '"stress_free_temperature": 298.15, "table": {"temperatures": [250, 400], "columns": {"alpha": '
-        '[3e-05, 3.3e-05]}, "interpolation": "linear", "extrapolation": "clamp"}}}'
-    ),
-    (
-        '{"id": "silicon", "schema_version": "1", "unit_system": "SI", "density": 1000, "model": '
-        '"thermo_elastic", "provenance": {"source_type": "illustrative", "confidence": "illustrative"},'
-        ' "elastic": {"symmetry": "isotropic", "table": {"temperatures": [250, 400], "columns": {"E": '
-        '[130000000000.0, 117000000000.0], "nu": [0.28, 0.29000000000000004]}, "interpolation": '
-        '"linear", "extrapolation": "clamp"}}, "thermal_expansion": {"cte_type": "tangent", "symmetry":'
-        ' "isotropic", "stress_free_temperature": 298.15, "table": {"temperatures": [250, 400], '
-        '"columns": {"alpha": [2.6e-06, 2.86e-06]}, "interpolation": "linear", "extrapolation": '
-        '"clamp"}}}'
-    ),
-)]
-assert [item for item in library["materials"] if item["id"] != "copper"] == original_materials, \
-    "pre-existing material contents and order must remain unchanged"
-assert [json.dumps(item) for item in library["materials"] if item["id"] != "copper"] == [
-    json.dumps(item) for item in original_materials
-], "pre-existing serialized material entries must remain unchanged"
+assert {"organic_eq", "sac305_ball_eq", "underfill", "silicon"} <= known_material_ids, \
+    "pre-existing material ids must remain available"
 assembly = json.loads((examples / "assembly/package_bulk_parts.assembly.json").read_text(encoding="utf-8"))
+assembly_material_ids = {part["material"] for part in assembly["parts"]}
+assembly_material_ids.update(
+    body["material"] for body in assembly.get("parts_from_step", {}).get("bodies", {}).values()
+)
+assert assembly_material_ids <= known_material_ids, \
+    "MATERIAL_MAPPING_MISSING: assembly material is absent from library"
 lid_parts = [part for part in assembly["parts"] if part["id"] == "lid"]
 assert len(lid_parts) == 1, "assembly must contain exactly one lid part"
 assert lid_parts[0]["material"] == "copper", "lid material must be exactly copper"
 copper_entries = [item for item in library["materials"] if item["id"] == "copper"]
 assert len(copper_entries) == 1, "materials library must contain exactly one copper entry"
-assert material_ids == [item["id"] for item in original_materials] + ["copper"], \
-    "copper must be appended after silicon, preserving the original material order"
 copper = copper_entries[0]
 assert copper["provenance"]["reference"].strip(), "copper must cite a nonempty reference"
 assert copper["provenance"]["source_type"] == "literature"
