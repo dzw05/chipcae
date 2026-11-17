@@ -33,6 +33,8 @@ class CaseDocument : public QObject {
 public:
     explicit CaseDocument(QObject* parent = nullptr);
     bool load(const QString& path);
+    bool checkImportedStack(const Json& stack) const;
+    bool replaceImportedStack(const Json& stack);
     bool save(const QString& path);
     DocumentErrors validate() const;
     bool isDirty() const { return dirty_; }
@@ -53,6 +55,7 @@ public:
     bool setMaterialLibrary(const Json& value);
     Json materialLibrary() const { return materials_; }
     Json stackJson() const { return stack_; }
+    bool setStackJson(const Json& value);
     bool loadRunProfile(const QString& path);
     bool saveRunProfile(const QString& path);
     Json runProfile() const { return profile_; }

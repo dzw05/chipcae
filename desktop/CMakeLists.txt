@@ -19,11 +19,14 @@ target_link_libraries(chipcae_document PUBLIC Qt6::Core jsoncons::jsoncons)
 target_compile_definitions(chipcae_document PRIVATE
     CHIPCAE_SCHEMA_DIR="${CMAKE_CURRENT_BINARY_DIR}/document-schema")
 add_library(chipcae_desktop_ui src/MainWindow.cpp src/MainWindow.hpp
+    import/ImportController.cpp import/ImportController.hpp
+    import/DefectsDialog.cpp import/DefectsDialog.hpp
     workers/PreviewWorker.cpp workers/PreviewWorker.hpp
+    stack/StackEditor.cpp stack/StackEditor.hpp stack/LayerModel.cpp stack/LayerModel.hpp
     tree/CaseTreeModel.cpp tree/CaseTreeModel.hpp
     tree/CaseTreeView.cpp tree/CaseTreeView.hpp
     forms/SchemaForm.cpp forms/SchemaForm.hpp forms/CaseOutline.cpp forms/CaseOutline.hpp)
-target_include_directories(chipcae_desktop_ui PUBLIC src workers forms tree)
+target_include_directories(chipcae_desktop_ui PUBLIC src workers forms import stack tree)
 target_link_libraries(chipcae_desktop_ui PUBLIC chipcae_document Qt6::Core Qt6::Gui Qt6::Widgets
     Qt6::OpenGLWidgets ${VTK_LIBRARIES} jsoncons::jsoncons)
 target_compile_definitions(chipcae_desktop_ui PRIVATE CHIPCAE_REPOSITORY="${CMAKE_CURRENT_SOURCE_DIR}/..")
@@ -85,6 +88,35 @@ if(CHIPCAE_BUILD_TESTS)
     set_tests_properties(desktop_forms PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endif()
 
+add_library(chipcae_desktop_preview preview/PreviewController.cpp preview/PreviewController.hpp
+    preview/PreviewOptions.cpp preview/PreviewOptions.hpp)
+target_include_directories(chipcae_desktop_preview PUBLIC preview)
+target_link_libraries(chipcae_desktop_preview PUBLIC chipcae_desktop_ui chipcae_desktop_results)
+if(CHIPCAE_BUILD_TESTS)
+    add_executable(desktop_preview tests/preview_test.cpp)
+    target_link_libraries(desktop_preview PRIVATE chipcae_desktop_preview)
+    target_compile_definitions(desktop_preview PRIVATE
+        PREVIEW_PYTHON="${CHIPCAE_FIXTURE_PYTHON}"
+        PREVIEW_MOCK="${CMAKE_CURRENT_SOURCE_DIR}/tools/mock_preview.py")
+    add_test(NAME desktop_preview COMMAND desktop_preview ${CMAKE_CURRENT_BINARY_DIR}/result-samples)
+    set_tests_properties(desktop_preview PROPERTIES FIXTURES_REQUIRED result_samples TIMEOUT 60
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
+if(CHIPCAE_BUILD_TESTS)
+    find_program(CHIPCAE_IMPORT_PYTHON NAMES python python3 REQUIRED)
+    add_executable(desktop_import_test tests/import_test.cpp)
+    target_link_libraries(desktop_import_test PRIVATE chipcae_desktop_ui)
+    target_compile_definitions(desktop_import_test PRIVATE
+        FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../schema/examples"
+        MOCK_SCRIPT="${CMAKE_CURRENT_SOURCE_DIR}/tools/mock_import.py"
+        PYTHON_EXECUTABLE="${CHIPCAE_IMPORT_PYTHON}")
+    add_test(NAME desktop_import COMMAND desktop_import_test)
+    add_test(NAME desktop_import_dialog COMMAND desktop_import_test --dialog)
+    set_tests_properties(desktop_import desktop_import_dialog PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+endif()
+
 add_library(chipcae_local_jobs jobs/JobTypes.cpp jobs/JobTypes.hpp
     jobs/ProfileMapper.cpp jobs/ProfileMapper.hpp jobs/LocalJobService.cpp jobs/LocalJobService.hpp)
 target_include_directories(chipcae_local_jobs PUBLIC jobs)
@@ -102,6 +134,12 @@ if(CHIPCAE_BUILD_TESTS)
 endif()
 
 if(CHIPCAE_BUILD_TESTS)
+    add_executable(desktop_stack tests/stack_editor_test.cpp)
+    target_link_libraries(desktop_stack PRIVATE chipcae_desktop_ui)
+    target_compile_definitions(desktop_stack PRIVATE
+        DOCUMENT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../schema/examples")
+    add_test(NAME desktop_stack COMMAND desktop_stack)
+    set_tests_properties(desktop_stack PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
     add_executable(desktop_tree tests/tree_test.cpp)
     target_link_libraries(desktop_tree PRIVATE chipcae_desktop_ui)
     target_compile_definitions(desktop_tree PRIVATE CHIPCAE_REPOSITORY="${CMAKE_CURRENT_SOURCE_DIR}/..")

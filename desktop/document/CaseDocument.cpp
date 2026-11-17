@@ -104,6 +104,23 @@ MeshDigest MeshDigest::fromJson(const Json& v) {
     return d;
 }
 CaseDocument::CaseDocument(QObject* parent) : QObject(parent) {}
+bool CaseDocument::checkImportedStack(const Json& stack) const {
+    // External asset relocation awaits the real importer contract.
+    if (stack.empty() || stack.contains("external_refs"))
+        return false;
+    CaseDocument candidate;
+    candidate.data_ = data_;
+    candidate.materials_ = materials_;
+    candidate.stack_ = stack;
+    return candidate.validate().empty();
+}
+bool CaseDocument::replaceImportedStack(const Json& stack) {
+    if (!checkImportedStack(stack))
+        return false;
+    stack_ = stack;
+    markDirty();
+    return true;
+}
 void CaseDocument::markDirty() {
     if (!dirty_) {
         dirty_ = true;
@@ -406,6 +423,23 @@ bool CaseDocument::finalizeMeshForSubmit() {
         return true;
     } catch (const std::exception& e) {
         errors_.push_back(exceptionError(e));
+        return false;
+    }
+}
+bool CaseDocument::setStackJson(const Json& value) {
+    try {
+        static const auto validator = jsoncons::jsonschema::make_json_schema(
+            read(QStringLiteral(CHIPCAE_SCHEMA_DIR "/stack-0.2.schema.json")));
+        if (!validator.is_valid(value))
+            throw std::runtime_error("STACK_SCHEMA_INVALID");
+        if (stack_ != value) {
+            stack_ = value;
+            markDirty();
+        }
+        errors_.clear();
+        return true;
+    } catch (const std::exception& e) {
+        errors_ = {exceptionError(e)};
         return false;
     }
 }

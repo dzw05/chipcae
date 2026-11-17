@@ -20,22 +20,22 @@
           ],
           "columns": {
             "E": [
-              1000000000.0,
-              2000000000.0
+              25000000000.0,
+              22500000000.0
             ],
             "nu": [
               0.3,
-              0.3
+              0.31
             ]
           },
           "interpolation": "linear",
-          "extrapolation": "error"
+          "extrapolation": "clamp"
         }
       },
       "thermal_expansion": {
         "cte_type": "tangent",
         "symmetry": "isotropic",
-        "stress_free_temperature": 300,
+        "stress_free_temperature": 298.15,
         "table": {
           "temperatures": [
             250,
@@ -43,12 +43,12 @@
           ],
           "columns": {
             "alpha": [
-              1e-05,
-              2e-05
+              1.5e-05,
+              1.65e-05
             ]
           },
           "interpolation": "linear",
-          "extrapolation": "error"
+          "extrapolation": "clamp"
         }
       }
     },
@@ -71,22 +71,22 @@
           ],
           "columns": {
             "E": [
-              1000000000.0,
-              2000000000.0
+              45000000000.0,
+              40500000000.0
             ],
             "nu": [
-              0.3,
-              0.3
+              0.35,
+              0.36
             ]
           },
           "interpolation": "linear",
-          "extrapolation": "error"
+          "extrapolation": "clamp"
         }
       },
       "thermal_expansion": {
         "cte_type": "tangent",
         "symmetry": "isotropic",
-        "stress_free_temperature": 300,
+        "stress_free_temperature": 298.15,
         "table": {
           "temperatures": [
             250,
@@ -94,12 +94,12 @@
           ],
           "columns": {
             "alpha": [
-              1e-05,
-              2e-05
+              2.2e-05,
+              2.4200000000000002e-05
             ]
           },
           "interpolation": "linear",
-          "extrapolation": "error"
+          "extrapolation": "clamp"
         }
       }
     },
@@ -122,22 +122,22 @@
           ],
           "columns": {
             "E": [
-              1000000000.0,
-              2000000000.0
+              8000000000.0,
+              7200000000.0
             ],
             "nu": [
-              0.3,
-              0.3
+              0.32,
+              0.33
             ]
           },
           "interpolation": "linear",
-          "extrapolation": "error"
+          "extrapolation": "clamp"
         }
       },
       "thermal_expansion": {
         "cte_type": "tangent",
         "symmetry": "isotropic",
-        "stress_free_temperature": 300,
+        "stress_free_temperature": 298.15,
         "table": {
           "temperatures": [
             250,
@@ -145,12 +145,12 @@
           ],
           "columns": {
             "alpha": [
-              1e-05,
-              2e-05
+              3e-05,
+              3.3e-05
             ]
           },
           "interpolation": "linear",
-          "extrapolation": "error"
+          "extrapolation": "clamp"
         }
       }
     },
@@ -173,22 +173,22 @@
           ],
           "columns": {
             "E": [
-              1000000000.0,
-              2000000000.0
+              130000000000.0,
+              117000000000.0
             ],
             "nu": [
-              0.3,
-              0.3
+              0.28,
+              0.29000000000000004
             ]
           },
           "interpolation": "linear",
-          "extrapolation": "error"
+          "extrapolation": "clamp"
         }
       },
       "thermal_expansion": {
         "cte_type": "tangent",
         "symmetry": "isotropic",
-        "stress_free_temperature": 300,
+        "stress_free_temperature": 298.15,
         "table": {
           "temperatures": [
             250,
@@ -196,14 +196,15 @@
           ],
           "columns": {
             "alpha": [
-              1e-05,
-              2e-05
+              2.6e-06,
+              2.86e-06
             ]
           },
           "interpolation": "linear",
-          "extrapolation": "error"
+          "extrapolation": "clamp"
         }
       }
     }
-  ]
+  ],
+  "x-note": "illustrative, not measured or vendor data"
 }

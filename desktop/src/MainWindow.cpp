@@ -2,6 +2,7 @@
 
 #include "CaseTreeView.hpp"
 #include "ResidualChart.hpp"
+#include "StackEditor.hpp"
 
 #include <QDockWidget>
 #include <QElapsedTimer>
@@ -71,6 +72,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     dock->setWindowTitle("Case");
     dock->setWidget(split);
     addDockWidget(Qt::LeftDockWidgetArea, dock);
+    auto* stackDock = new QDockWidget(tr("Stack"), this);
+    stackDock->setWidget(new chipcae::desktop::StackEditor(document(), stackDock));
+    addDockWidget(Qt::RightDockWidgetArea, stackDock);
     auto* edits = menuBar()->addMenu(tr("Case"));
     edits->addAction(tr("Apply properties"), outline, [outline] { outline->commitEdit(); });
     edits->addAction(tr("Cancel properties"), outline, [outline] { outline->cancelEdit(); });
@@ -90,6 +94,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         setWindowModified(dirty);
     });
     setWindowTitle("ChipCAE Desktop[*]");
+
     resize(960, 640);
 }
 
