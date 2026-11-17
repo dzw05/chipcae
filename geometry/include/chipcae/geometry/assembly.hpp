@@ -23,7 +23,7 @@ struct AttachPlacement {
     std::optional<Bond> bond;
     std::array<Real, 2> xy{0, 0};
     Real rot_z_deg = 0;
-    std::optional<Real> resolved_z; // Resolved part attachment face, in metres.
+    std::optional<Real> resolved_z; // Resolved part attachment face, global z in metres.
 };
 struct FramePlacement {
     std::array<Real, 3> origin{0, 0, 0};

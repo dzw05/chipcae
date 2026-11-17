@@ -234,11 +234,6 @@ add_test(NAME part_headers_no_mpi_geometry COMMAND cmake
 add_test(NAME part_headers_no_mpi_cut COMMAND cmake
     -DHEADER_DIR=${PROJECT_SOURCE_DIR}/mesh/cut/include/chipcae/mesh/cut
     -P ${CMAKE_CURRENT_SOURCE_DIR}/core/check_public_headers.cmake)
-add_subdirectory(integration/part_slice)
-add_subdirectory(integration/import_assembly)
-add_subdirectory(integration/step_parts_e2e)
-add_subdirectory(unit/assembly)
-add_subdirectory(unit/region_ls)
 add_subdirectory(vv)
 
 # Keep this the last line: auto-adds test subdirectories that call chipcae_auto_tests().

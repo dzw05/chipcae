@@ -62,7 +62,7 @@
       "properties": {
         "attach": {
           "type": "string",
-          "pattern": "^(layer:[^@]+|part:[A-Za-z][A-Za-z0-9_-]{0,63})@(top|bottom)$"
+          "pattern": "^(layer:[\\s\\S]+|part:[A-Za-z][A-Za-z0-9_-]{0,63})@(top|bottom)$"
         },
         "gap": {
           "type": "number",

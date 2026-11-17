@@ -100,6 +100,20 @@ def main(root):
     }.items():
         check(f'negative-assembly-{suffix}.json', expected)
     if positive is not None:
+        # Layer names are preserved verbatim; only the final side suffix is parsed.
+        for target in ('layer:Cu@inner@top', 'layer:Cu@inner@bottom',
+                       'layer:@top@bottom', 'layer:Cu\ninner@top'):
+            document = copy.deepcopy(positive)
+            document['parts'][0]['placement']['attach'] = target
+            if errors(document, validator):
+                failures.append(f'valid layer attachment {target!r} rejected')
+        for target in ('layer:@top', 'layer:Cu@inner', 'layer:Cu@inner@side',
+                       'part:bad@id@top'):
+            document = copy.deepcopy(positive)
+            document['parts'][0]['placement']['attach'] = target
+            found = errors(document, validator)
+            if '/parts/0/placement/attach' not in {location for location, _ in found}:
+                failures.append(f'invalid attachment {target!r} accepted: {found}')
         # Every path reference must scan beyond LF when rejecting unsafe segments.
         for path in (('board', 'path'), ('board', 'material_map'),
                      ('materials',), ('parts', 0, 'step'), ('parts_from_step', 'step')):
