@@ -1,6 +1,7 @@
 #include "chipcae/geometry/step_import.hpp"
 
 #include "diagnostic_id.hpp"
+#include "step_options.hpp"
 
 #include <BOPAlgo_ArgumentAnalyzer.hxx>
 #include <BRepAdaptor_Curve.hxx>
@@ -16,8 +17,13 @@
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
+#include <Interface_Static.hxx>
 #include <STEPCAFControl_Reader.hxx>
+#include <ShapeAnalysis_ShapeTolerance.hxx>
 #include <ShapeBuild_ReShape.hxx>
+#include <StepBasic_ConversionBasedUnit.hxx>
+#include <StepBasic_SiUnit.hxx>
+#include <StepBasic_UncertaintyMeasureWithUnit.hxx>
 #include <StepData_StepModel.hxx>
 #include <TCollection_AsciiString.hxx>
 #include <TDataStd_Name.hxx>
@@ -40,6 +46,7 @@
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace chipcae::geometry {
 namespace detail {
@@ -92,14 +99,22 @@ public:
 std::array<Real, 6> bounds(const TopoDS_Shape& shape) {
     Bnd_Box b;
     // Do not use triangulations or topology tolerances to inflate SI boxes.
-    BRepBndLib::AddOptimal(shape, b, false, false);
+    try {
+        BRepBndLib::AddOptimal(shape, b, false, false);
+    } catch (const Standard_Failure&) {
+        // Missing surfaces/pcurves can invalidate exact bounds. Preserve a
+        // location from surviving vertices so the dirty shape can be reported.
+        b.SetVoid();
+        for (TopExp_Explorer it(shape, TopAbs_VERTEX); it.More(); it.Next())
+            b.Add(BRep_Tool::Pnt(TopoDS::Vertex(it.Current())));
+    }
     if (b.IsVoid())
-        throw std::runtime_error("STEP shape has no finite bounding box");
+        return {};
     std::array<Real, 6> result;
     b.Get(result[0], result[1], result[2], result[3], result[4], result[5]);
     for (auto x : result)
         if (!std::isfinite(x))
-            throw std::runtime_error("STEP has unbounded geometry");
+            return {};
     return result;
 }
 Real extent(const TopoDS_Shape& shape) {
@@ -132,20 +147,6 @@ std::string label_name(const TDF_Label& label) {
     utf8.resize(static_cast<std::size_t>(count));
     return utf8;
 }
-// A failed analyzer must never yield a clean or partial inspection.
-void perform_analysis(BOPAlgo_ArgumentAnalyzer& analyzer) {
-    analyzer.Perform();
-    if (analyzer.HasErrors()) {
-        std::ostringstream diagnostics;
-        analyzer.DumpErrors(diagnostics);
-        throw std::runtime_error("STEP argument analyzer failed: " + diagnostics.str());
-    }
-    for (const auto& failure : analyzer.GetCheckResult())
-        if (failure.GetCheckStatus() != BOPAlgo_SelfIntersect &&
-            failure.GetCheckStatus() != BOPAlgo_TooSmallEdge)
-            throw std::runtime_error("unsupported STEP argument analyzer status: " +
-                                     std::to_string(static_cast<int>(failure.GetCheckStatus())));
-}
 bool contains(const TopoDS_Shape& ancestor, const TopoDS_Shape& shape) {
     if (ancestor.IsSame(shape))
         return true;
@@ -154,7 +155,180 @@ bool contains(const TopoDS_Shape& ancestor, const TopoDS_Shape& shape) {
             return true;
     return false;
 }
+Real unit_scale(const StepBasic_Unit& unit, int depth = 0) {
+    if (depth > 8)
+        return 1;
+    auto named = unit.NamedUnit();
+    auto si = Handle(StepBasic_SiUnit)::DownCast(named);
+    if (!si.IsNull()) {
+        if (!si->HasPrefix())
+            return 1;
+        constexpr int powers[] = {18, 15, 12, 9, 6, 3, 2, 1, -1, -2, -3, -6, -9, -12, -15, -18};
+        return std::pow(10.0, powers[static_cast<int>(si->Prefix())]);
+    }
+    auto conversion = Handle(StepBasic_ConversionBasedUnit)::DownCast(named);
+    if (!conversion.IsNull() && !conversion->ConversionFactor().IsNull()) {
+        auto factor = conversion->ConversionFactor();
+        return factor->ValueComponent() * unit_scale(factor->UnitComponent(), depth + 1);
+    }
+    return 1;
+}
+std::string status_name(BRepCheck_Status status) {
+    switch (status) {
+    case BRepCheck_NoError:
+        return "BRepCheck_NoError";
+    case BRepCheck_InvalidPointOnCurve:
+        return "BRepCheck_InvalidPointOnCurve";
+    case BRepCheck_InvalidPointOnCurveOnSurface:
+        return "BRepCheck_InvalidPointOnCurveOnSurface";
+    case BRepCheck_InvalidPointOnSurface:
+        return "BRepCheck_InvalidPointOnSurface";
+    case BRepCheck_No3DCurve:
+        return "BRepCheck_No3DCurve";
+    case BRepCheck_Multiple3DCurve:
+        return "BRepCheck_Multiple3DCurve";
+    case BRepCheck_Invalid3DCurve:
+        return "BRepCheck_Invalid3DCurve";
+    case BRepCheck_NoCurveOnSurface:
+        return "BRepCheck_NoCurveOnSurface";
+    case BRepCheck_InvalidCurveOnSurface:
+        return "BRepCheck_InvalidCurveOnSurface";
+    case BRepCheck_InvalidCurveOnClosedSurface:
+        return "BRepCheck_InvalidCurveOnClosedSurface";
+    case BRepCheck_InvalidSameRangeFlag:
+        return "BRepCheck_InvalidSameRangeFlag";
+    case BRepCheck_InvalidSameParameterFlag:
+        return "BRepCheck_InvalidSameParameterFlag";
+    case BRepCheck_InvalidDegeneratedFlag:
+        return "BRepCheck_InvalidDegeneratedFlag";
+    case BRepCheck_FreeEdge:
+        return "BRepCheck_FreeEdge";
+    case BRepCheck_InvalidMultiConnexity:
+        return "BRepCheck_InvalidMultiConnexity";
+    case BRepCheck_InvalidRange:
+        return "BRepCheck_InvalidRange";
+    case BRepCheck_EmptyWire:
+        return "BRepCheck_EmptyWire";
+    case BRepCheck_RedundantEdge:
+        return "BRepCheck_RedundantEdge";
+    case BRepCheck_SelfIntersectingWire:
+        return "BRepCheck_SelfIntersectingWire";
+    case BRepCheck_NoSurface:
+        return "BRepCheck_NoSurface";
+    case BRepCheck_InvalidWire:
+        return "BRepCheck_InvalidWire";
+    case BRepCheck_RedundantWire:
+        return "BRepCheck_RedundantWire";
+    case BRepCheck_IntersectingWires:
+        return "BRepCheck_IntersectingWires";
+    case BRepCheck_InvalidImbricationOfWires:
+        return "BRepCheck_InvalidImbricationOfWires";
+    case BRepCheck_EmptyShell:
+        return "BRepCheck_EmptyShell";
+    case BRepCheck_RedundantFace:
+        return "BRepCheck_RedundantFace";
+    case BRepCheck_InvalidImbricationOfShells:
+        return "BRepCheck_InvalidImbricationOfShells";
+    case BRepCheck_UnorientableShape:
+        return "BRepCheck_UnorientableShape";
+    case BRepCheck_NotClosed:
+        return "BRepCheck_NotClosed";
+    case BRepCheck_NotConnected:
+        return "BRepCheck_NotConnected";
+    case BRepCheck_SubshapeNotInShape:
+        return "BRepCheck_SubshapeNotInShape";
+    case BRepCheck_BadOrientation:
+        return "BRepCheck_BadOrientation";
+    case BRepCheck_BadOrientationOfSubshape:
+        return "BRepCheck_BadOrientationOfSubshape";
+    case BRepCheck_InvalidPolygonOnTriangulation:
+        return "BRepCheck_InvalidPolygonOnTriangulation";
+    case BRepCheck_InvalidToleranceValue:
+        return "BRepCheck_InvalidToleranceValue";
+    case BRepCheck_EnclosedRegion:
+        return "BRepCheck_EnclosedRegion";
+    case BRepCheck_CheckFail:
+        return "BRepCheck_CheckFail";
+    }
+    return "BRepCheck_Unknown_" + std::to_string(static_cast<int>(status));
+}
+std::string status_name(BOPAlgo_CheckStatus status) {
+    switch (status) {
+    case BOPAlgo_CheckUnknown:
+        return "BOPAlgo_CheckUnknown";
+    case BOPAlgo_BadType:
+        return "BOPAlgo_BadType";
+    case BOPAlgo_SelfIntersect:
+        return "BOPAlgo_SelfIntersect";
+    case BOPAlgo_TooSmallEdge:
+        return "BOPAlgo_TooSmallEdge";
+    case BOPAlgo_NonRecoverableFace:
+        return "BOPAlgo_NonRecoverableFace";
+    case BOPAlgo_IncompatibilityOfVertex:
+        return "BOPAlgo_IncompatibilityOfVertex";
+    case BOPAlgo_IncompatibilityOfEdge:
+        return "BOPAlgo_IncompatibilityOfEdge";
+    case BOPAlgo_IncompatibilityOfFace:
+        return "BOPAlgo_IncompatibilityOfFace";
+    case BOPAlgo_OperationAborted:
+        return "BOPAlgo_OperationAborted";
+    case BOPAlgo_GeomAbs_C0:
+        return "BOPAlgo_GeomAbs_C0";
+    case BOPAlgo_InvalidCurveOnSurface:
+        return "BOPAlgo_InvalidCurveOnSurface";
+    case BOPAlgo_NotValid:
+        return "BOPAlgo_NotValid";
+    }
+    return "BOPAlgo_Unknown_" + std::to_string(static_cast<int>(status));
+}
+template <class Callback>
+void nearby_pairs(const std::vector<TopoDS_Shape>& shapes, Real inflation, Callback callback) {
+    struct Entry {
+        std::size_t index;
+        std::array<Real, 6> box;
+    };
+    std::vector<Entry> entries;
+    for (std::size_t i = 0; i < shapes.size(); ++i)
+        entries.push_back({i, bounds(shapes[i])});
+    std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) {
+        return a.box[0] < b.box[0];
+    });
+    for (std::size_t i = 0; i < entries.size(); ++i)
+        for (std::size_t j = i + 1;
+             j < entries.size() && entries[j].box[0] <= entries[i].box[3] + 2 * inflation;
+             ++j) {
+            bool overlap = true;
+            for (int axis = 1; axis < 3; ++axis)
+                overlap = overlap &&
+                          entries[i].box[axis] <= entries[j].box[axis + 3] + 2 * inflation &&
+                          entries[j].box[axis] <= entries[i].box[axis + 3] + 2 * inflation;
+            if (overlap)
+                callback(entries[i].index, entries[j].index);
+        }
+}
+class ReadPrecision {
+    int mode_ = Interface_Static::IVal("read.precision.mode");
+    int maxmode_ = Interface_Static::IVal("read.maxprecision.mode");
+    double val_ = Interface_Static::RVal("read.precision.val");
+    double maxval_ = Interface_Static::RVal("read.maxprecision.val");
+
+public:
+    explicit ReadPrecision(const ImportTolerances& t) {
+        Interface_Static::SetIVal("read.precision.mode", 1);
+        Interface_Static::SetRVal("read.precision.val", t.eps_weld);
+        Interface_Static::SetIVal("read.maxprecision.mode", 1);
+        Interface_Static::SetRVal("read.maxprecision.val", t.tau_A);
+    }
+    ~ReadPrecision() {
+        Interface_Static::SetIVal("read.precision.mode", mode_);
+        Interface_Static::SetRVal("read.precision.val", val_);
+        Interface_Static::SetIVal("read.maxprecision.mode", maxmode_);
+        Interface_Static::SetRVal("read.maxprecision.val", maxval_);
+    }
+};
 struct Inspector {
+    std::unordered_set<std::string> ids;
+    std::unordered_set<Index> duplicate_reported;
     detail::StepShape& source;
     StepImportResult& result;
     const StepImportOptions& options;
@@ -176,11 +350,13 @@ struct Inspector {
              const TopoDS_Shape& shape,
              Real measured,
              std::array<Real, 3> where,
-             Index face = 0) {
+             Index face = 0,
+             std::string status = {}) {
         if (!face)
             face = face_of(shape);
         StepDefect d;
         d.kind = kind;
+        d.status = std::move(status);
         d.measured = measured;
         d.where = where;
         d.bbox = bounds(shape);
@@ -193,21 +369,48 @@ struct Inspector {
             d.step_entity = source.entities.at(static_cast<std::size_t>(face - 1));
             d.body_name = source.names.at(static_cast<std::size_t>(face - 1));
         }
-        d.tier = classify(measured, options.tolerances);
+        switch (kind) {
+        case StepDefectKind::Gap:
+        case StepDefectKind::SmallEdge:
+        case StepDefectKind::SmallFace:
+        case StepDefectKind::SliverFace:
+        case StepDefectKind::ToleranceExceeded:
+            d.tier = classify(measured, options.tolerances);
+            break;
+        case StepDefectKind::DuplicateFace:
+        case StepDefectKind::WireSelfIntersection:
+            d.tier = Tier::A;
+            break;
+        case StepDefectKind::FlippedFace:
+        case StepDefectKind::SolidOverlap:
+        case StepDefectKind::InvalidGeometry:
+            d.tier = Tier::B;
+            break;
+        default:
+            d.tier = Tier::C;
+            break;
+        }
+        if (kind == StepDefectKind::DuplicateFace)
+            duplicate_reported.insert(face);
         d.defect_id = detail::diagnostic_id(d, options.tolerances.eps_weld);
-        if (std::none_of(result.defects.begin(), result.defects.end(), [&](const StepDefect& old) {
-                return old.defect_id == d.defect_id;
-            }))
+        if (ids.insert(d.defect_id + d.status).second)
             result.defects.push_back(std::move(d));
     }
-    bool duplicate_faces(const TopoDS_Shape& a, const TopoDS_Shape& b) const {
+    bool duplicate_faces(const TopoDS_Shape& a, const TopoDS_Shape& b) {
         const auto ba = bounds(a), bb = bounds(b);
         for (std::size_t k = 0; k < 6; ++k)
             if (std::abs(ba[k] - bb[k]) > options.tolerances.eps_weld)
                 return false;
         BRepAlgoAPI_Common common(a, b);
-        if (!common.IsDone())
-            throw std::runtime_error("STEP duplicate-face inspection failed");
+        if (!common.IsDone()) {
+            add(StepDefectKind::InvalidGeometry,
+                a,
+                extent(a),
+                center(a),
+                0,
+                "Duplicate-face boolean failed");
+            return false;
+        }
         const auto wa = face_width(a), wb = face_width(b);
         const auto wc = face_width(common.Shape());
         return wa > 0 && std::abs(wa - wb) <= options.tolerances.eps_weld &&
@@ -250,24 +453,24 @@ struct Inspector {
                             center(affected));
                         break;
                     case BRepCheck_InvalidMultiConnexity:
-                        add(StepDefectKind::NonManifoldEdge,
-                            affected,
-                            extent(affected),
-                            center(affected));
+                        // Edge usage is evaluated per solid below, never over an assembly.
                         break;
                     case BRepCheck_FreeEdge:
                     case BRepCheck_NotClosed:
-                        add(affected.ShapeType() == TopAbs_SHELL ? StepDefectKind::OpenShell
-                                                                 : StepDefectKind::OpenEdge,
-                            affected,
-                            extent(affected),
-                            center(affected));
+                        if (affected.ShapeType() == TopAbs_SHELL)
+                            add(StepDefectKind::OpenShell,
+                                affected,
+                                extent(affected),
+                                center(affected));
                         break;
                     default:
-                        // Do not silently label an unsupported validity failure as a
-                        // different physical defect or return a clean report.
-                        throw std::runtime_error("unmapped STEP validity status: " +
-                                                 std::to_string(static_cast<int>(it.Value())));
+                        add(StepDefectKind::InvalidGeometry,
+                            affected,
+                            extent(affected),
+                            center(affected),
+                            0,
+                            status_name(it.Value()));
+                        break;
                     }
                 }
             };
@@ -283,79 +486,78 @@ struct Inspector {
                     extent(it.Current()),
                     center(it.Current()));
         }
-        BOPAlgo_ArgumentAnalyzer args;
-        args.SetShape1(source.shape);
-        args.SelfInterMode() = true;
-        args.SmallEdgeMode() = true;
-        perform_analysis(args);
-        for (const auto& failure : args.GetCheckResult()) {
-            const auto& faulty = failure.GetFaultyShapes1();
-            if (faulty.IsEmpty())
-                throw std::runtime_error("STEP analyzer returned no faulty topology");
-            if (failure.GetCheckStatus() == BOPAlgo_TooSmallEdge) {
-                for (const auto& s : faulty) {
-                    if (s.ShapeType() != TopAbs_EDGE)
-                        throw std::runtime_error("STEP small-edge analyzer returned a non-edge");
-                    add(StepDefectKind::SmallEdge, s, length(s), center(s));
+        // Analyze each body independently; inter-body contacts belong to the pair pass.
+        std::vector<TopoDS_Shape> bodies;
+        for (TopExp_Explorer it(source.shape, TopAbs_SOLID); it.More(); it.Next())
+            bodies.push_back(it.Current());
+        for (TopExp_Explorer it(source.shape, TopAbs_SHELL, TopAbs_SOLID); it.More(); it.Next())
+            bodies.push_back(it.Current());
+        for (TopExp_Explorer it(source.shape, TopAbs_FACE, TopAbs_SHELL); it.More(); it.Next())
+            bodies.push_back(it.Current());
+        for (const auto& body : bodies) {
+            BOPAlgo_ArgumentAnalyzer args;
+            args.SetShape1(body);
+            args.SelfInterMode() = true;
+            args.SmallEdgeMode() = true;
+            args.Perform();
+            if (args.HasErrors())
+                add(StepDefectKind::InvalidGeometry,
+                    body,
+                    extent(body),
+                    center(body),
+                    0,
+                    "ArgumentAnalyzer failure");
+            for (const auto& failure : args.GetCheckResult()) {
+                const auto& faulty = failure.GetFaultyShapes1();
+                if (failure.GetCheckStatus() == BOPAlgo_TooSmallEdge) {
+                    for (const auto& shape : faulty)
+                        add(StepDefectKind::SmallEdge, shape, length(shape), center(shape));
+                    continue;
                 }
-                continue;
-            }
-            // An edge/vertex interference is a wire failure only when all
-            // participants belong to the same wire. Face/solid interference
-            // must not be reported as a wire defect.
-            bool wire_failure = false;
-            for (TopExp_Explorer it(source.shape, TopAbs_WIRE); it.More(); it.Next()) {
-                bool in_wire = true;
-                for (const auto& s : faulty)
-                    in_wire = in_wire && contains(it.Current(), s);
-                if (in_wire) {
-                    add(StepDefectKind::WireSelfIntersection,
-                        it.Current(),
-                        extent(it.Current()),
-                        center(it.Current()));
-                    wire_failure = true;
-                }
-            }
-            if (wire_failure)
-                continue;
-            bool solid_interference = true;
-            for (const auto& s : faulty) {
-                bool in_solid = false;
-                for (TopExp_Explorer it(source.shape, TopAbs_SOLID); it.More(); it.Next())
-                    in_solid = in_solid || contains(it.Current(), s);
-                solid_interference = solid_interference && in_solid;
-            }
-            if (solid_interference) {
-                // Inter-solid interference is measured below. An interference
-                // entirely inside one solid has no supported diagnostic kind.
-                for (TopExp_Explorer it(source.shape, TopAbs_SOLID); it.More(); it.Next()) {
-                    bool all_inside = true;
-                    for (const auto& s : faulty)
-                        all_inside = all_inside && contains(it.Current(), s);
-                    if (all_inside)
-                        throw std::runtime_error(
-                            "unsupported STEP self-interference within a solid");
-                }
-                continue;
-            }
-            // Coincident standalone faces are a supported face interference.
-            // Confirm geometric equality before using the DuplicateFace kind.
-            bool duplicate = false;
-            for (int i = 1; i <= source.faces.Extent(); ++i)
-                for (int j = i + 1; j <= source.faces.Extent(); ++j) {
-                    const auto& a = source.faces(i);
-                    const auto& b = source.faces(j);
-                    bool covered = true;
-                    for (const auto& s : faulty)
-                        covered = covered && (contains(a, s) || contains(b, s));
-                    if (covered && duplicate_faces(a, b)) {
-                        add(StepDefectKind::DuplicateFace, a, face_width(a), center(a));
-                        duplicate = true;
+                bool wire = false;
+                if (failure.GetCheckStatus() == BOPAlgo_SelfIntersect && !faulty.IsEmpty())
+                    for (TopExp_Explorer it(body, TopAbs_WIRE); it.More(); it.Next()) {
+                        bool all = true;
+                        for (const auto& shape : faulty)
+                            all = all && contains(it.Current(), shape);
+                        if (all) {
+                            add(StepDefectKind::WireSelfIntersection,
+                                it.Current(),
+                                extent(it.Current()),
+                                center(it.Current()));
+                            wire = true;
+                        }
                     }
+                if (!wire) {
+                    const auto kind = failure.GetCheckStatus() == BOPAlgo_SelfIntersect
+                                          ? StepDefectKind::FaceSelfIntersection
+                                          : StepDefectKind::InvalidGeometry;
+                    if (faulty.IsEmpty())
+                        add(kind,
+                            body,
+                            extent(body),
+                            center(body),
+                            0,
+                            status_name(failure.GetCheckStatus()));
+                    for (const auto& shape : faulty)
+                        add(kind,
+                            shape,
+                            extent(shape),
+                            center(shape),
+                            0,
+                            status_name(failure.GetCheckStatus()));
                 }
-            if (duplicate)
-                continue;
-            throw std::runtime_error("unsupported STEP face/shell self-interference");
+            }
+            TopTools_IndexedDataMapOfShapeListOfShape usage;
+            if (body.ShapeType() == TopAbs_SOLID) {
+                TopExp::MapShapesAndUniqueAncestors(body, TopAbs_EDGE, TopAbs_FACE, usage);
+                for (int i = 1; i <= usage.Extent(); ++i)
+                    if (usage.FindFromIndex(i).Extent() > 2)
+                        add(StepDefectKind::NonManifoldEdge,
+                            usage.FindKey(i),
+                            length(usage.FindKey(i)),
+                            center(usage.FindKey(i)));
+            }
         }
         TopTools_IndexedDataMapOfShapeListOfShape edges;
         TopExp::MapShapesAndUniqueAncestors(source.shape, TopAbs_EDGE, TopAbs_FACE, edges);
@@ -365,98 +567,97 @@ struct Inspector {
             if (BRep_Tool::Degenerated(TopoDS::Edge(e)))
                 continue;
             const auto& faces = edges.FindFromIndex(i);
-            if (faces.Extent() > 2)
-                add(StepDefectKind::NonManifoldEdge, e, length(e), center(e));
             if (faces.Extent() == 1 &&
                 !BRep_Tool::IsClosed(TopoDS::Edge(e), TopoDS::Face(faces.First()))) {
                 boundary.push_back(i);
-                add(StepDefectKind::OpenEdge, e, length(e), center(e));
             }
             if (length(e) < options.tolerances.eps_weld)
                 add(StepDefectKind::SmallEdge, e, length(e), center(e));
         }
         // Nearby free boundaries on different faces are candidate gaps. Locate at
         // the midpoint of closest points, measured as their exact separation.
-        for (std::size_t i = 0; i < boundary.size(); ++i)
-            for (std::size_t j = i + 1; j < boundary.size(); ++j) {
-                const auto a = boundary[i], b = boundary[j];
-                if (edges.FindFromIndex(a).First().IsSame(edges.FindFromIndex(b).First()))
-                    continue;
-                BRepExtrema_DistShapeShape distance(edges.FindKey(a), edges.FindKey(b));
-                if (!distance.IsDone() || distance.NbSolution() == 0)
-                    continue;
-                const auto gap = distance.Value();
-                if (gap <= options.tolerances.eps_weld || gap > options.tolerances.tau_B)
-                    continue;
-                // A whole opposing edge must be close; endpoint-only proximity is
-                // not evidence of a missing seam.
-                const auto ca = center(edges.FindKey(a)), cb = center(edges.FindKey(b));
-                if (std::hypot(ca[0] - cb[0], ca[1] - cb[1], ca[2] - cb[2]) >
-                    options.tolerances.tau_B)
-                    continue;
-                BRepAdaptor_Curve curve(TopoDS::Edge(edges.FindKey(a)));
-                const auto midpoint =
-                    curve.Value((curve.FirstParameter() + curve.LastParameter()) / 2);
-                const auto vertex = BRepBuilderAPI_MakeVertex(midpoint).Vertex();
-                BRepExtrema_DistShapeShape local(vertex, edges.FindKey(b));
-                if (!local.IsDone() || local.NbSolution() == 0 ||
-                    local.Value() <= options.tolerances.eps_weld ||
-                    local.Value() > options.tolerances.tau_B)
-                    continue;
-                const auto opposite = local.PointOnShape2(1);
-                std::array<Real, 3> where{(midpoint.X() + opposite.X()) / 2,
-                                          (midpoint.Y() + opposite.Y()) / 2,
-                                          (midpoint.Z() + opposite.Z()) / 2};
-                add(StepDefectKind::Gap,
-                    edges.FindKey(a),
-                    local.Value(),
-                    where,
-                    source.faces.FindIndex(edges.FindFromIndex(a).First()));
-            }
-        for (int i = 1; i <= source.faces.Extent(); ++i) {
-            const auto& f = source.faces(i);
-            const auto width = face_width(f);
-            if (width < options.tolerances.eps_weld)
-                add(StepDefectKind::SmallFace, f, width, center(f));
-            const auto perimeter = length(f);
-            if (perimeter > 0 && width > 0 &&
-                width * width / perimeter < options.tolerances.eps_weld)
-                add(StepDefectKind::SliverFace, f, width * width / perimeter, center(f));
-        }
+        std::vector<TopoDS_Shape> free_edges;
+        std::unordered_set<int> paired;
+        for (auto index : boundary)
+            free_edges.push_back(edges.FindKey(index));
+        nearby_pairs(free_edges, options.tolerances.tau_B, [&](std::size_t i, std::size_t j) {
+            const auto a = boundary[i], b = boundary[j];
+            if (edges.FindFromIndex(a).First().IsSame(edges.FindFromIndex(b).First()))
+                return;
+            BRepExtrema_DistShapeShape distance(edges.FindKey(a), edges.FindKey(b));
+            if (!distance.IsDone() || distance.NbSolution() == 0)
+                return;
+            const auto gap = distance.Value();
+            if (gap > options.tolerances.tau_B)
+                return;
+            // A whole opposing edge must be close; endpoint-only proximity is
+            // not evidence of a missing seam.
+            const auto ca = center(edges.FindKey(a)), cb = center(edges.FindKey(b));
+            if (std::hypot(ca[0] - cb[0], ca[1] - cb[1], ca[2] - cb[2]) > options.tolerances.tau_B)
+                return;
+            BRepAdaptor_Curve curve(TopoDS::Edge(edges.FindKey(a)));
+            const auto midpoint = curve.Value((curve.FirstParameter() + curve.LastParameter()) / 2);
+            const auto vertex = BRepBuilderAPI_MakeVertex(midpoint).Vertex();
+            BRepExtrema_DistShapeShape local(vertex, edges.FindKey(b));
+            if (!local.IsDone() || local.NbSolution() == 0 ||
+                local.Value() > options.tolerances.tau_B)
+                return;
+            const auto opposite = local.PointOnShape2(1);
+            std::array<Real, 3> where{(midpoint.X() + opposite.X()) / 2,
+                                      (midpoint.Y() + opposite.Y()) / 2,
+                                      (midpoint.Z() + opposite.Z()) / 2};
+            paired.insert(a);
+            paired.insert(b);
+            add(StepDefectKind::Gap,
+                edges.FindKey(a),
+                local.Value(),
+                where,
+                source.faces.FindIndex(edges.FindFromIndex(a).First()));
+        });
+        for (auto index : boundary)
+            if (!paired.count(index))
+                add(StepDefectKind::OpenEdge,
+                    edges.FindKey(index),
+                    length(edges.FindKey(index)),
+                    center(edges.FindKey(index)));
+        std::vector<TopoDS_Shape> faces;
         for (int i = 1; i <= source.faces.Extent(); ++i)
-            for (int j = i + 1; j <= source.faces.Extent(); ++j) {
-                const auto& a = source.faces(i);
-                const auto& b = source.faces(j);
-                if (duplicate_faces(a, b))
-                    add(StepDefectKind::DuplicateFace, a, face_width(a), center(a));
-            }
+            faces.push_back(source.faces(i));
+        nearby_pairs(faces, options.tolerances.tau_B, [&](std::size_t i, std::size_t j) {
+            if (duplicate_reported.count(static_cast<Index>(i + 1)) ||
+                duplicate_reported.count(static_cast<Index>(j + 1)))
+                return;
+            if (duplicate_faces(faces[i], faces[j]))
+                add(StepDefectKind::DuplicateFace,
+                    faces[i],
+                    face_width(faces[i]),
+                    center(faces[i]));
+        });
         TopTools_IndexedMapOfShape solids;
         TopExp::MapShapes(source.shape, TopAbs_SOLID, solids);
+        std::vector<TopoDS_Shape> solid_shapes;
         for (int i = 1; i <= solids.Extent(); ++i)
-            for (int j = i + 1; j <= solids.Extent(); ++j) {
-                // Analyze the pair as one argument: SelfInterMode checks
-                // cross-solid interference as well as each solid's topology.
-                BRep_Builder pair_builder;
-                TopoDS_Compound pair;
-                pair_builder.MakeCompound(pair);
-                pair_builder.Add(pair, solids(i));
-                pair_builder.Add(pair, solids(j));
-                BOPAlgo_ArgumentAnalyzer pair_args;
-                pair_args.SetShape1(pair);
-                pair_args.SelfInterMode() = true;
-                perform_analysis(pair_args);
-                // Exact common volume also catches complete containment.
-                BRepAlgoAPI_Common common(solids(i), solids(j));
-                if (!common.IsDone())
-                    throw std::runtime_error("STEP overlap inspection failed");
-                GProp_GProps volume;
-                BRepGProp::VolumeProperties(common.Shape(), volume);
-                if (volume.Mass() > 0)
-                    add(StepDefectKind::SolidOverlap,
-                        solids(i),
-                        std::cbrt(volume.Mass()),
-                        center(common.Shape()));
+            solid_shapes.push_back(solids(i));
+        nearby_pairs(solid_shapes, options.tolerances.tau_B, [&](std::size_t i, std::size_t j) {
+            // Exact common volume also catches complete containment.
+            BRepAlgoAPI_Common common(solid_shapes[i], solid_shapes[j]);
+            if (!common.IsDone()) {
+                add(StepDefectKind::InvalidGeometry,
+                    solid_shapes[i],
+                    extent(solid_shapes[i]),
+                    center(solid_shapes[i]),
+                    0,
+                    "Boolean common failed");
+                return;
             }
+            GProp_GProps volume;
+            BRepGProp::VolumeProperties(common.Shape(), volume);
+            if (volume.Mass() > 0)
+                add(StepDefectKind::SolidOverlap,
+                    solid_shapes[i],
+                    std::cbrt(volume.Mass()),
+                    center(common.Shape()));
+        });
     }
 };
 } // namespace
@@ -466,14 +667,12 @@ bool step_import_available() noexcept {
 StepImportResult import_step(const std::filesystem::path& path,
                              const StepImportOptions& options) try {
     const auto& t = options.tolerances;
-    if (path.empty() || !std::isfinite(options.h_min) || options.h_min <= 0 ||
-        !std::isfinite(t.eps_weld) || !std::isfinite(t.tau_A) || !std::isfinite(t.tau_B) ||
-        t.eps_weld <= 0 || t.tau_A < t.eps_weld || t.tau_B < t.tau_A)
-        throw std::invalid_argument("invalid STEP path or inspection scales");
+    detail::validate_step_options(path, options);
     // OCCT's exchange configuration uses process-global state.
     static std::mutex exchange_mutex;
     const std::lock_guard lock(exchange_mutex);
     STEPCAFControl_Reader reader;
+    const ReadPrecision read_precision(t);
     reader.SetNameMode(true);
     if (reader.ReadFile(path.string().c_str()) != IFSelect_RetDone)
         throw std::runtime_error("cannot read STEP: " + path.string());
@@ -519,8 +718,6 @@ StepImportResult import_step(const std::filesystem::path& path,
             if (id > 0)
                 source->entities[static_cast<std::size_t>(i - 1)] = "#" + std::to_string(id);
         }
-        if (source->entities[static_cast<std::size_t>(i - 1)].empty())
-            throw std::runtime_error("cannot attribute original STEP face " + std::to_string(i));
         // Explicit identity history: E4 does not replace faces. E5 can compose
         // its replacement history with this preserved original topology.
         source->history->Replace(face, face);
@@ -551,7 +748,60 @@ StepImportResult import_step(const std::filesystem::path& path,
     };
     for (int i = 1; i <= roots.Length(); ++i)
         visit(roots(i), "", TopLoc_Location());
-    Inspector{*source, result, options}.inspect();
+    Inspector inspector{{}, {}, *source, result, options};
+    try {
+        for (int i = 1; i <= source->faces.Extent(); ++i)
+            if (source->entities[static_cast<std::size_t>(i - 1)].empty())
+                inspector.add(StepDefectKind::InvalidGeometry,
+                              source->faces(i),
+                              0,
+                              center(source->faces(i)),
+                              i,
+                              "Original STEP face attribution unavailable");
+        for (int i = 1; i <= model->NbEntities(); ++i) {
+            auto uncertainty =
+                Handle(StepBasic_UncertaintyMeasureWithUnit)::DownCast(model->Value(i));
+            if (uncertainty.IsNull())
+                continue;
+            const auto value =
+                uncertainty->ValueComponent() * unit_scale(uncertainty->UnitComponent());
+            if (value > t.tau_A) {
+                // The declaration applies to every transferred face in its representation.
+                for (int face = 1; face <= source->faces.Extent(); ++face)
+                    inspector.add(StepDefectKind::ToleranceExceeded,
+                                  source->faces(face),
+                                  value,
+                                  center(source->faces(face)),
+                                  face,
+                                  "STEP uncertainty #" +
+                                      std::to_string(model->IdentLabel(uncertainty)));
+            }
+        }
+        ShapeAnalysis_ShapeTolerance tolerance_scan;
+        auto excessive = tolerance_scan.OverTolerance(source->shape, t.tau_A);
+        for (int i = 1; i <= excessive->Length(); ++i) {
+            const auto& shape = excessive->Value(i);
+            inspector.add(StepDefectKind::ToleranceExceeded,
+                          shape,
+                          tolerance_scan.Tolerance(shape, 1),
+                          center(shape));
+        }
+        inspector.inspect();
+    } catch (const Standard_Failure& failure) {
+        inspector.add(StepDefectKind::InvalidGeometry,
+                      source->shape,
+                      0,
+                      center(source->shape),
+                      0,
+                      failure.GetMessageString());
+    } catch (const std::runtime_error& failure) {
+        inspector.add(StepDefectKind::InvalidGeometry,
+                      source->shape,
+                      0,
+                      center(source->shape),
+                      0,
+                      failure.what());
+    }
     result.source = std::move(source);
     return result;
 } catch (const Standard_Failure& failure) {

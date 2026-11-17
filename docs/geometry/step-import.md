@@ -34,7 +34,9 @@ IDs use an internal SHA-256 implementation with no additional library.
 The canonical UTF-8 key is decimal enum value, original `#entity`, one-based
 face index and three rounded SI coordinates divided by eps_weld, separated by
 `|`, without whitespace. Rounding uses `std::round` (ties away from zero),
-classic locale and fixed decimal integers, with negative zero normalized to zero. The first 16 lowercase hex digits
+classic locale and fixed decimal integers, with negative zero normalized to zero.
+When present, the original status is appended to distinguish validity failures at
+the same location. The first 16 lowercase hex digits
 are reported. IDs intentionally have 64 displayed bits as specified in E4.
 
 ## Inspection policy
@@ -50,19 +52,29 @@ exceptions. A mutex serializes this library's exchange calls; applications
 using OCCT exchange directly must serialize those calls with their imports.
 No ShapeFix, sewing, or healing is invoked. `action` stays empty.
 
-`BRepCheck_Analyzer` reports orientation, duplicate topology, open boundaries,
-nonmanifold connectivity and intersecting wires. Unsupported validity statuses
-fail explicitly rather than returning a clean or falsely classified report.
-`BOPAlgo_ArgumentAnalyzer` checks self-interference and small edges, and runs
-on a compound of each solid pair to check cross-solid interference. Analyzer
-errors include OCCT diagnostics; unsupported result statuses fail explicitly.
-Only interference contained in a common wire is classified as a wire failure.
-Inter-solid interference is measured with exact common volume; complete
-containment is detected by that volume check as well. Coincident standalone
-faces use exact common area to confirm duplicate faces. Other face/shell
-self-interference and self-interference within one solid fail explicitly
-because the public diagnostic kinds do not represent them. Boolean operations compute temporary inspection results;
-none replaces source geometry.
+`BRepCheck_Analyzer` reports orientation, duplicate topology, open boundaries
+and intersecting wires. Other validity statuses become `InvalidGeometry`, with
+the original symbolic BRepCheck name in `status`. ArgumentAnalyzer findings
+outside a common wire become `FaceSelfIntersection` or `InvalidGeometry`.
+Dirty geometry returns located diagnostics for E5 to write before deciding
+whether to reject. Read and transfer failures still throw.
+
+Non-manifold edge usage is counted independently within each solid. Shared
+faces and edges between distinct solids are multi-body interfaces.
+ArgumentAnalyzer runs per body; sorted bounding boxes inflated by tau_B filter
+candidate face, free-edge, and solid pairs before exact checks. Duplicate
+faces already reported by BRepCheck are excluded from repeat exact checks.
+Exact common volume detects solid overlap, including full containment.
+Temporary boolean results never replace the source geometry.
+
+Callers must supply `compute_tolerances(ImportScales{L, t_min, h_xy, dbu_m},
+ThresholdFile{})`; zero/default options throw `invalid_argument`. The reader
+sets `read.precision.mode=1`, `read.precision.val=eps_weld`,
+`read.maxprecision.mode=1`, and `read.maxprecision.val=tau_A` under the exchange
+mutex. A scope guard restores all four settings on success and failure.
+The original file uncertainty (converted using its STEP unit) and maximum
+vertex/edge/face tolerances from `ShapeAnalysis_ShapeTolerance` are reported
+as `ToleranceExceeded` when above tau_A: B through tau_B, C above tau_B.
 
 Measurements, all in metres:
 
@@ -76,14 +88,19 @@ Measurements, all in metres:
 | FlippedFace, WireSelfIntersection, OpenShell | Bounding diagonal of the affected topology |
 
 Gaps are candidate missing seams: both exact separation and boundary-box centre
-distance must be above eps_weld and at most tau_B. Location is halfway between an actual edge parameter midpoint and its
+distance must be at most tau_B. Location is halfway between an actual edge parameter midpoint and its
 closest point on the opposing edge, making the authored straight seam midpoint
 repeatable. Boundary endpoints alone do not imply a gap. This is not a general
 surface reconstruction algorithm: unequal or curved seams may require E5 or
-future inspection policy. Open boundaries remain reported independently.
+future inspection policy. Paired boundaries merge into Gap; unpaired boundaries remain OpenEdge.
 Other locations are affected topology box centres; overlap uses the common
-region centre. Bboxes enclose the implicated source shape and reported location. Tier comes from
-E3 `classify(measured, tolerances)`; it is not authorization to repair.
+region centre. Bboxes enclose the implicated source shape and reported location. Only Gap, SmallEdge, SmallFace, SliverFace and ToleranceExceeded use
+E3 `classify(measured, tolerances)`. NonManifoldEdge, FaceSelfIntersection,
+OpenShell and unpaired OpenEdge are C; FlippedFace, SolidOverlap and
+InvalidGeometry are B; DuplicateFace and WireSelfIntersection are A.
+Measurements retain their physical values regardless of fixed grades.
+E5 must verify repaired wire tolerances and downgrade when above tau_A.
+Grades do not authorize repair.
 `NearLayerInterface` needs layer context and `UnitSuspect` needs a caller's
 physical scale expectations, neither of which can be inferred reliably from a
 STEP file alone. E4 does not invent these findings.
@@ -94,7 +111,12 @@ All STEP fixtures are authored at test runtime using OCCT primitives and writers
 They cover equivalent mm/metre boxes against known SI dimensions, a 20 um seam
 with the exact first ADVANCED_FACE file reference and tau_B location check,
 repeatable IDs, named enclosure/lid/ring paths, clean topology, and contained
-and crossing solid overlap, including rejection of wire misclassification. SHA-256 has empty, abc and multiblock known-answer checks.
+and crossing solid overlap, including rejection of wire misclassification.
+Review regressions cover bow-tie faces, corrupt cylindrical pcurves, fixed
+wire/overlap/duplicate/open-boundary grades, per-solid non-manifold usage,
+file uncertainty above tau_B, precision-state restoration, and default option
+rejection. A 30x30 array plus one overlapping box must import within 60 seconds
+and report exactly one B-tier overlap. SHA-256 has empty, abc and multiblock known-answer checks.
 The standalone header compiles without OCCT headers or definitions, even in
 an OCCT-enabled build. Its tierA timeout is 60 seconds.
 

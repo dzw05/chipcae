@@ -9,7 +9,7 @@
 namespace chipcae::geometry {
 // All lengths are metres. h_min is supplied by the caller's intended mesh.
 struct StepImportOptions {
-    ImportTolerances tolerances{1e-9, 1e-6, 1e-4, 0};
+    ImportTolerances tolerances{}; // Required: compute_tolerances with caller scales.
     Real h_min = 1e-3;
 };
 namespace detail {

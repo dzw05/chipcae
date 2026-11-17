@@ -21,7 +21,10 @@ enum class StepDefectKind : std::uint16_t {
     SolidOverlap,
     OpenShell,
     NearLayerInterface,
-    UnitSuspect
+    UnitSuspect,
+    FaceSelfIntersection,
+    InvalidGeometry,
+    ToleranceExceeded
 };
 struct StepDefect {
     std::string defect_id;
@@ -34,5 +37,6 @@ struct StepDefect {
     std::array<Real, 6> bbox{};
     std::array<Real, 3> where{};
     std::string action;
+    std::string status; // Original BRepCheck/ArgumentAnalyzer status, when applicable.
 };
 } // namespace chipcae::geometry

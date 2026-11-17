@@ -2,8 +2,11 @@
 #include "chipcae/geometry/geometry.hpp"
 
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Splitter.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRep_Builder.hxx>
 #include <IFSelect_ReturnStatus.hxx>
 #include <Interface_Static.hxx>
@@ -12,17 +15,22 @@
 #include <StepData_StepModel.hxx>
 #include <TDataStd_Name.hxx>
 #include <TDocStd_Document.hxx>
+#include <TopExp_Explorer.hxx>
 #include <TopoDS_Compound.hxx>
+#include <TopoDS_Shell.hxx>
+#include <TopoDS_Solid.hxx>
 #include <XCAFDoc_DocumentTool.hxx>
 #include <XCAFDoc_ShapeTool.hxx>
 #include <XSAlgo.hxx>
 #include <XSAlgo_AlgoContainer.hxx>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <gp_Pln.hxx>
 #include <iostream>
 #include <iterator>
+#include <regex>
 #include <stdexcept>
 
 using namespace chipcae::geometry;
@@ -42,19 +50,31 @@ void write(const TopoDS_Shape& shape, const std::filesystem::path& path, const c
             "fixture transfer failed");
     require(writer.Write(path.string().c_str()) == IFSelect_RetDone, "fixture write failed");
 }
+StepImportOptions options() {
+    return {compute_tolerances(ImportScales{1.0, 0.001, 0.001, 0}, ThresholdFile{}).value()};
+}
 void units(const std::filesystem::path& dir) {
     const auto box = BRepPrimAPI_MakeBox(gp_Pnt(3, 5, 7), 20, 30, 40).Shape();
     write(box, dir / "mm.step", "MM");
     write(box, dir / "m.step", "M");
     const auto algorithms = XSAlgo::AlgoContainer();
-    auto mm = import_step(dir / "mm.step"), m = import_step(dir / "m.step");
+    const auto precision_mode = Interface_Static::IVal("read.precision.mode");
+    const auto precision_value = Interface_Static::RVal("read.precision.val");
+    const auto max_mode = Interface_Static::IVal("read.maxprecision.mode");
+    const auto max_value = Interface_Static::RVal("read.maxprecision.val");
+    auto mm = import_step(dir / "mm.step", options()), m = import_step(dir / "m.step", options());
     require(algorithms == XSAlgo::AlgoContainer(), "exchange hooks were not restored");
+    require(precision_mode == Interface_Static::IVal("read.precision.mode") &&
+                precision_value == Interface_Static::RVal("read.precision.val") &&
+                max_mode == Interface_Static::IVal("read.maxprecision.mode") &&
+                max_value == Interface_Static::RVal("read.maxprecision.val"),
+            "read precision controls not restored");
     for (std::size_t i = 0; i < 6; ++i)
         require(std::abs(mm.bbox[i] - m.bbox[i]) <=
                     1e-12 * std::max(std::abs(mm.bbox[i]), std::abs(m.bbox[i])),
                 "mm/m mismatch");
     require(std::abs(m.bbox[3] - 0.023) < 1e-14, "box not in metres");
-    auto geom = Geometry::from_step(dir / "m.step");
+    auto geom = Geometry::from_step(dir / "m.step", options());
     require(geom.step() && geom.step()->source, "geometry lost source ownership");
     bool rejected = false;
     try {
@@ -64,14 +84,14 @@ void units(const std::filesystem::path& dir) {
     }
     require(rejected, "STEP SDF must explicitly reject unsupported evaluation");
     auto invalid = StepImportOptions{};
-    invalid.h_min = 0;
+
     rejected = false;
     try {
         (void)import_step(dir / "m.step", invalid);
     } catch (const std::invalid_argument&) {
         rejected = true;
     }
-    require(rejected, "invalid h_min accepted");
+    require(rejected, "default tolerances accepted");
 }
 void gap(const std::filesystem::path& dir) {
     // Two planar rectangles with a 20 micrometre seam at x=10.01 mm.
@@ -82,7 +102,7 @@ void gap(const std::filesystem::path& dir) {
     b.Add(pair, BRepBuilderAPI_MakeFace(plane, 0, 10, 0, 10).Face());
     b.Add(pair, BRepBuilderAPI_MakeFace(plane, 10.02, 20, 0, 10).Face());
     write(pair, dir / "gap.step");
-    auto result = import_step(dir / "gap.step");
+    auto result = import_step(dir / "gap.step", options());
     const auto found =
         std::find_if(result.defects.begin(), result.defects.end(), [](const StepDefect& d) {
             return d.kind == StepDefectKind::Gap;
@@ -96,7 +116,7 @@ void gap(const std::filesystem::path& dir) {
     require(found->defect_id.size() == 16, "wrong ID length");
     require(std::abs(found->measured - 20e-6) < 1e-12, "gap size wrong");
     require(std::hypot(found->where[0] - 0.01001, found->where[1] - 0.005, found->where[2]) <=
-                StepImportOptions{}.tolerances.tau_B,
+                options().tolerances.tau_B,
             "gap location outside tauB");
     std::ifstream file(dir / "gap.step");
     const std::string text((std::istreambuf_iterator<char>(file)), {});
@@ -111,7 +131,22 @@ void gap(const std::filesystem::path& dir) {
     require(found->step_entity == text.substr(hash, end - hash), "wrong original face reference");
     require(found->face_index == 1, "unstable face index");
     require(found->action.empty(), "detection performed repair");
-    const auto again = import_step(dir / "gap.step");
+    require(std::all_of(result.defects.begin(),
+                        result.defects.end(),
+                        [](const StepDefect& d) {
+                            return (d.kind != StepDefectKind::OpenEdge &&
+                                    d.kind != StepDefectKind::OpenShell) ||
+                                   d.tier == Tier::C;
+                        }),
+            "unpaired open boundaries must be C");
+    require(std::none_of(result.defects.begin(),
+                         result.defects.end(),
+                         [&](const StepDefect& d) {
+                             return d.kind == StepDefectKind::OpenEdge && d.where[0] > 0.009 &&
+                                    d.where[0] < 0.011 && d.where[1] > 0.004 && d.where[1] < 0.006;
+                         }),
+            "paired seam still reported as OpenEdge");
+    const auto again = import_step(dir / "gap.step", options());
     const auto repeated =
         std::find_if(again.defects.begin(), again.defects.end(), [](const StepDefect& d) {
             return d.kind == StepDefectKind::Gap;
@@ -147,7 +182,7 @@ void clean(const std::filesystem::path& dir) {
     require(writer.Transfer(doc), "named assembly transfer failed");
     require(writer.Write((dir / "clean.step").string().c_str()) == IFSelect_RetDone,
             "named assembly write failed");
-    auto result = import_step(dir / "clean.step");
+    auto result = import_step(dir / "clean.step", options());
     for (const auto& d : result.defects)
         std::cerr << "unexpected defect " << static_cast<int>(d.kind) << ' ' << d.step_entity
                   << '\n';
@@ -158,11 +193,12 @@ void clean(const std::filesystem::path& dir) {
     // Also exercise complete solid containment, which has no crossing faces.
     b.Add(assembly, BRepPrimAPI_MakeBox(gp_Pnt(4, 4, 8.5), 1, 1, 1).Shape());
     write(assembly, dir / "overlap.step");
-    result = import_step(dir / "overlap.step");
+    result = import_step(dir / "overlap.step", options());
     require(std::any_of(result.defects.begin(),
                         result.defects.end(),
                         [](const StepDefect& d) {
-                            return d.kind == StepDefectKind::SolidOverlap && d.measured > 0;
+                            return d.kind == StepDefectKind::SolidOverlap && d.tier == Tier::B &&
+                                   d.measured > 0;
                         }),
             "contained solid overlap missed");
     // Crossing faces exercise ArgumentAnalyzer's inter-solid interference.
@@ -171,7 +207,7 @@ void clean(const std::filesystem::path& dir) {
     b.Add(crossing, BRepPrimAPI_MakeBox(10, 10, 10).Shape());
     b.Add(crossing, BRepPrimAPI_MakeBox(gp_Pnt(5, 5, 5), 10, 10, 10).Shape());
     write(crossing, dir / "crossing.step");
-    result = import_step(dir / "crossing.step");
+    result = import_step(dir / "crossing.step", options());
     require(std::any_of(result.defects.begin(),
                         result.defects.end(),
                         [](const StepDefect& d) {
@@ -190,12 +226,123 @@ void clean(const std::filesystem::path& dir) {
     b.Add(duplicate, BRepBuilderAPI_MakeFace(plane, 0, 10, 0, 10).Face());
     b.Add(duplicate, BRepBuilderAPI_MakeFace(plane, 0, 10, 0, 10).Face());
     write(duplicate, dir / "duplicate.step");
-    result = import_step(dir / "duplicate.step");
-    require(
-        std::any_of(result.defects.begin(),
-                    result.defects.end(),
-                    [](const StepDefect& d) { return d.kind == StepDefectKind::DuplicateFace; }),
-        "duplicate faces missed");
+    result = import_step(dir / "duplicate.step", options());
+    require(std::any_of(result.defects.begin(),
+                        result.defects.end(),
+                        [](const StepDefect& d) {
+                            return d.kind == StepDefectKind::DuplicateFace && d.tier == Tier::A;
+                        }),
+            "duplicate faces missed");
+}
+void regressions(const std::filesystem::path& dir) {
+    BRepBuilderAPI_MakePolygon polygon;
+    polygon.Add(gp_Pnt(0, 0, 0));
+    polygon.Add(gp_Pnt(10, 10, 0));
+    polygon.Add(gp_Pnt(0, 10, 0));
+    polygon.Add(gp_Pnt(10, 0, 0));
+    polygon.Close();
+    write(BRepBuilderAPI_MakeFace(polygon.Wire()).Shape(), dir / "bowtie.step");
+    auto dirty = import_step(dir / "bowtie.step", options());
+    require(!dirty.defects.empty(), "bow-tie returned clean report");
+    require(std::any_of(dirty.defects.begin(),
+                        dirty.defects.end(),
+                        [](const StepDefect& d) {
+                            return d.kind == StepDefectKind::WireSelfIntersection &&
+                                   d.tier == Tier::A;
+                        }),
+            "wire intersection must have fixed A grade");
+    for (const auto& d : dirty.defects)
+        require(!d.step_entity.empty(), "dirty face attribution missing");
+    write(BRepPrimAPI_MakeCylinder(10, 10).Shape(), dir / "pcurve.step");
+    {
+        std::ifstream input(dir / "pcurve.step");
+        std::string text((std::istreambuf_iterator<char>(input)), {});
+        const std::string before = "CARTESIAN_POINT('',(0.,1.E-02))";
+        auto pos = text.find(before);
+        require(pos != std::string::npos, "pcurve fixture missing 2D point");
+        text.replace(pos, before.size(), "CARTESIAN_POINT('',(1.,1.))");
+        std::ofstream output(dir / "pcurve.step");
+        output << text;
+    }
+    const auto previous_pcurve = Interface_Static::IVal("read.surfacecurve.mode");
+    Interface_Static::SetIVal("read.surfacecurve.mode", -2);
+    auto bad_pcurve = import_step(dir / "pcurve.step", options());
+    Interface_Static::SetIVal("read.surfacecurve.mode", previous_pcurve);
+    require(std::any_of(bad_pcurve.defects.begin(),
+                        bad_pcurve.defects.end(),
+                        [](const StepDefect& d) {
+                            return d.kind == StepDefectKind::InvalidGeometry && d.tier == Tier::B &&
+                                   d.status.find("BRepCheck_") == 0 && !d.step_entity.empty();
+                        }),
+            "bad pcurve missing located original validity status");
+    // General Fuse preserves the common topological face/edge between bodies.
+    for (bool face_contact : {true, false}) {
+        TopTools_ListOfShape boxes;
+        boxes.Append(BRepPrimAPI_MakeBox(10, 10, 10).Shape());
+        boxes.Append(BRepPrimAPI_MakeBox(gp_Pnt(10, face_contact ? 0 : 10, 0), 10, 10, 10).Shape());
+        BRepAlgoAPI_Splitter splitter;
+        splitter.SetArguments(boxes);
+        splitter.Build();
+        require(splitter.IsDone(), "contact fixture splitter failed");
+        TopoDS_Shape shape = splitter.Shape();
+        if (!face_contact) {
+            BRep_Builder builder;
+            TopoDS_Solid one;
+            builder.MakeSolid(one);
+            TopoDS_Shell shell;
+            builder.MakeShell(shell);
+            for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next())
+                builder.Add(shell, it.Current());
+            builder.Add(one, shell);
+            shape = one;
+        }
+        write(shape, dir / "contact.step");
+        auto contact = import_step(dir / "contact.step", options());
+        auto count =
+            std::count_if(contact.defects.begin(), contact.defects.end(), [](const StepDefect& d) {
+                return d.kind == StepDefectKind::NonManifoldEdge && d.tier == Tier::C;
+            });
+        require(face_contact ? count == 0 : count > 0,
+                "per-solid non-manifold classification failed");
+    }
+    // File uncertainty is independent of the forced transfer precision.
+    write(BRepPrimAPI_MakeBox(10, 10, 10).Shape(), dir / "precision.step");
+    std::ifstream input(dir / "precision.step");
+    std::string text((std::istreambuf_iterator<char>(input)), {});
+    text =
+        std::regex_replace(text,
+                           std::regex("UNCERTAINTY_MEASURE_WITH_UNIT\\(LENGTH_MEASURE\\([^)]*\\)"),
+                           "UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(0.001)");
+    {
+        std::ofstream output(dir / "precision.step");
+        output << text;
+    }
+    auto precision = import_step(dir / "precision.step", options());
+    require(std::any_of(precision.defects.begin(),
+                        precision.defects.end(),
+                        [](const StepDefect& d) {
+                            return d.kind == StepDefectKind::ToleranceExceeded && d.tier == Tier::C;
+                        }),
+            "file precision above tauB not rejected");
+    BRep_Builder builder;
+    TopoDS_Compound array;
+    builder.MakeCompound(array);
+    for (int x = 0; x < 30; ++x)
+        for (int y = 0; y < 30; ++y)
+            builder.Add(array, BRepPrimAPI_MakeBox(gp_Pnt(3 * x, 3 * y, 0), 1, 1, 1).Shape());
+    builder.Add(array, BRepPrimAPI_MakeBox(gp_Pnt(0.5, 0.5, 0.5), 1, 1, 1).Shape());
+    write(array, dir / "array.step");
+    auto start = std::chrono::steady_clock::now();
+    auto result = import_step(dir / "array.step", options());
+    require(std::chrono::steady_clock::now() - start < std::chrono::seconds(60),
+            "array inspection exceeded 60 seconds");
+    require(std::count_if(result.defects.begin(),
+                          result.defects.end(),
+                          [](const StepDefect& d) {
+                              return d.kind == StepDefectKind::SolidOverlap && d.tier == Tier::B;
+                          }) == 1,
+            "array must report exactly one overlap pair");
+    require(result.defects.size() == 1, "non-touching boxes produced spurious defects");
 }
 } // namespace
 int main(int argc, char** argv) {
@@ -211,6 +358,8 @@ int main(int argc, char** argv) {
             units(dir);
         else if (std::string(argv[1]) == "gap")
             gap(dir);
+        else if (std::string(argv[1]) == "regressions")
+            regressions(dir);
         else
             clean(dir);
         std::filesystem::remove_all(dir);

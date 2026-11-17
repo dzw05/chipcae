@@ -89,6 +89,8 @@ inline std::string diagnostic_id(const StepDefect& d, Real eps) {
             throw std::invalid_argument("STEP ID quantization overflow");
         key << '|' << std::fixed << std::setprecision(0) << (rounded == 0 ? 0.0 : rounded);
     }
+    if (!d.status.empty())
+        key << '|' << d.status;
     return sha256_prefix(key.str());
 }
 } // namespace chipcae::geometry::detail
