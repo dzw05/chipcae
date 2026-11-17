@@ -68,9 +68,20 @@ Footprint footprint(const Polygon& p, bool box_only) {
         f.polygon = p;
     return f;
 }
+// Restrict coordinate coalescing to floating-point roundoff at this geometry's scale.
+Real coordinate_tolerance(const Polygon& p) {
+    Real scale = 0;
+    for (const auto& v : p)
+        scale = std::max({scale, std::abs(v[0]), std::abs(v[1])});
+    return 32 * std::numeric_limits<Real>::epsilon() * scale;
+}
 Polygon normalize(Polygon p) {
-    p.erase(std::unique(p.begin(), p.end()), p.end());
-    if (p.size() > 1 && p.front() == p.back())
+    const Real tolerance = coordinate_tolerance(p);
+    auto coincident = [=](Point a, Point b) {
+        return std::abs(a[0] - b[0]) <= tolerance && std::abs(a[1] - b[1]) <= tolerance;
+    };
+    p.erase(std::unique(p.begin(), p.end(), coincident), p.end());
+    if (p.size() > 1 && coincident(p.front(), p.back()))
         p.pop_back();
     bool changed = true;
     while (changed && p.size() >= 3) {
@@ -96,9 +107,10 @@ Polygon normalize(Polygon p) {
     return p;
 }
 bool rectilinear(const Polygon& p) {
+    const Real tolerance = coordinate_tolerance(p);
     for (size_t i = 0; i < p.size(); ++i) {
         auto a = p[i], b = p[(i + 1) % p.size()];
-        if (a[0] != b[0] && a[1] != b[1])
+        if (std::abs(a[0] - b[0]) > tolerance && std::abs(a[1] - b[1]) > tolerance)
             return false;
     }
     return true;
@@ -184,6 +196,27 @@ std::vector<Footprint> footprints(const SlabSection& section, Polygon& prior, st
         }
         prior = p;
         return {footprint(p, false)};
+    }
+    // Canonicalize both axes together across outer and hole rings before strip
+    // decomposition, so equivalent edges share exact strip endpoints/heights.
+    for (size_t axis = 0; axis < 2; ++axis) {
+        std::vector<Real> coordinates;
+        Real tolerance = 0;
+        for (const auto& r : rings) {
+            tolerance = std::max(tolerance, coordinate_tolerance(r));
+            for (auto p : r)
+                coordinates.push_back(p[axis]);
+        }
+        std::sort(coordinates.begin(), coordinates.end());
+        std::vector<Real> canonical;
+        for (Real v : coordinates)
+            if (canonical.empty() || v - canonical.back() > tolerance)
+                canonical.push_back(v);
+        for (auto& r : rings)
+            for (auto& p : r) {
+                auto hi = std::upper_bound(canonical.begin(), canonical.end(), p[axis]);
+                p[axis] = *std::prev(hi);
+            }
     }
     std::vector<Real> xs;
     for (const auto& r : rings)

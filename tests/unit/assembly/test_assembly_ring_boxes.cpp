@@ -20,6 +20,31 @@ int main() {
             sum += (expected[i][2] - expected[i][0]) * (expected[i][3] - expected[i][1]);
         }
         near(sum, .04 * .04 - .03 * .03, (.04 * .04 - .03 * .03) * 1e-12);
+        for (double angle : {90., 180., 270.}) {
+            for (const auto& section : {p.slabs[0].sections.front(), ell()}) {
+                AttachPlacement a;
+                a.target = "layer:Core";
+                a.rot_z_deg = angle;
+                a.xy = {.005, .007};
+                auto placed = place({Slab{0, .001, {section}}}, a, b);
+                check(bool(placed), "quarter-turn placement succeeds");
+                placed.value().id = "rotated";
+                placed.value().material = "metal";
+                auto rotated = merge(b, {placed.value()});
+                check(!defect(rotated, DefectReason::PART_NOT_PRISMATIC),
+                      "quarter-turn rectilinear section remains supported");
+                const auto& boxes = rotated.stack.layers.back().regions;
+                check(boxes.size() == (section.holes.empty() ? 2 : 4),
+                      "quarter-turn preserves box decomposition");
+                double area_sum = 0;
+                for (const auto& region : boxes) {
+                    check(region.footprint.polygon.empty(), "quarter-turn emits boxes");
+                    const auto& box = region.footprint.box;
+                    area_sum += (box[2] - box[0]) * (box[3] - box[1]);
+                }
+                near(area_sum, .0007, .0007 * 1e-12);
+            }
+        }
         p.slabs[0].sections = {ell()};
         auto l = merge(b, {p});
         const auto& lr = l.stack.layers.back().regions;

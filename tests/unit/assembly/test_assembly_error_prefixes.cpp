@@ -14,6 +14,11 @@ int main() {
         AttachPlacement a;
         a.target = "layer:Core";
         check(bool(place(src, a, b)), "layer resolves without resolved_z");
+        a.target = "layer:missing";
+        a.resolved_z = .003;
+        auto resolved = place(src, a, b);
+        check(bool(resolved), "resolved face bypasses target lookup per placement brief");
+        near(resolved.value().slabs.front().z0, .003);
         a.gap = 5e-5;
         a.bond = Bond{"glue", 1e-4};
         invalid_input(place(src, a, b), "bond gap != thickness");
@@ -23,7 +28,7 @@ int main() {
             invalid_input(place(src, a, b), "bond thickness must be > 0");
         }
         invalid_input(place({}, FramePlacement{}, b));
-        invalid_input(merge_parts({}, {part()}, options()));
+        invalid_input(merge_parts({}, {part()}, options()), "base has no layers");
         auto empty = part();
         empty.slabs.clear();
         invalid_input(merge_parts(b, {empty}, options()));
