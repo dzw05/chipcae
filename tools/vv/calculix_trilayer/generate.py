@@ -172,7 +172,7 @@ def write_inp(path: Path, name: str, nx, ny):
             f"*MATERIAL, NAME=MAT{mid}",
             "*ELASTIC",
             f"{e:.8g}, {nu:.8g}",
-            "*EXPANSION",
+            f"*EXPANSION, ZERO={T0:.8g}",
             f"{al:.8g}",
             f"*SOLID SECTION, ELSET=LAY{mid}, MATERIAL=MAT{mid}",
         ]

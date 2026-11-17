@@ -12,9 +12,10 @@ specialist chooses the comparison acceptance criterion later.
   E = 25 / 3 / 130 GPa, ν = 0.2 / 0.35 / 0.28, α = 15e-6 / 50e-6 / 2.6e-6 1/K,
   ΔT = −100 K (400 K → 300 K).
 - Thermal strain follows the [CalculiX manual, §7.56](https://www.dhondt.de/ccx_2.22.pdf#page=501):
-  `alpha(T)*(T-Tref) - alpha(T0)*(T0-Tref)`. With constant alpha in each
-  material, the reference temperature cancels, so the initial 400 K and target
-  300 K cards give exactly `alpha*(-100 K)` without an explicit `ZERO`.
+  `alpha(T)*(T-Tref) - alpha(T0)*(T0-Tref)`. Each material explicitly sets
+  `*EXPANSION, ZERO=400`; `*INITIAL CONDITIONS, TYPE=TEMPERATURE` sets all
+  nodes to the stress-free 400 K state, and the step sets `*TEMPERATURE` to
+  300 K. Thus the thermal strain is `alpha*(-100 K)` in every layer.
 - Elements: C3D20 only (20-node quadratic bricks). Coarse 8×8×6, fine 16×16×6
   (two elements through each layer). The recorded value uses `selected_mesh = fine`.
 - Boundary conditions: 3-2-1 on the z = 0 corners, as in
