@@ -46,7 +46,7 @@ must validate it against schema/stack-0.2.schema.json. The legacy ResultManifest
 and ResultWriter APIs remain available unchanged.
 
 Every published step requires solver summaries warpage_pv (m), T_max (K), and
-U_abs_max (m). warpage_pv must come from the solver's full Q2 field with the
+U_mag_max (m). warpage_pv must come from the solver's full Q2 field with the
 best-fit plane removed; it cannot be reconstructed faithfully from this vertex
 output. sigma_vm is reserved in the manifest and absent from step data.
 
@@ -69,7 +69,7 @@ The script copies P1 source into a disposable directory, applies the committed
 p1-export.patch there, builds CPU MFEM, and solves the uncut trilayer at p=2,
 n=8, nz=1 per layer, dT=-100 K. It exports exact vertex DOFs and the original
 Q2 best-fit-plane top-surface PV. The S1 reference temperature is 293.15 K,
-so output T=193.15 K. U_abs_max is the maximum norm over Q2 element nodes.
+so output T=193.15 K. U_mag_max is the maximum norm over Q2 element nodes.
 The patch exports stackup.json from the same solver layer definitions, using
 chipcae.stack 0.2; s1.stack.json is the equivalent checked-in test fixture. Output defaults to /workspace/samples/s1/;
 the script refuses to overwrite an existing path. For root OpenMPI execution

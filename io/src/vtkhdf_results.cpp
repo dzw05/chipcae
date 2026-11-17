@@ -343,7 +343,7 @@ void ResultsWriter::finalize() {
     if (rank_ == 0)
         try {
             for (auto& step : steps_)
-                for (auto name : {"warpage_pv", "T_max", "U_abs_max"}) {
+                for (auto name : {"warpage_pv", "T_max", "U_mag_max"}) {
                     bool found = false;
                     for (auto& s : summary_)
                         if (s.step == step.n && s.name == name)

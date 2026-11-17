@@ -28,7 +28,7 @@ class ResultsTest(unittest.TestCase):
             self.assertEqual([s['n'] for s in m['steps']], [0,1])
             self.assertEqual(len(m['summary']),6)
             self.assertEqual(next(s['value'] for s in m['summary'] if s['name']=='warpage_pv'),0.001)
-            self.assertEqual({s['name'] for s in m['summary']}, {'warpage_pv','T_max','U_abs_max'})
+            self.assertEqual({s['name'] for s in m['summary']}, {'warpage_pv','T_max','U_mag_max'})
             self.assertTrue(next(f for f in m['fields'] if f['name']=='sigma_vm')['reserved'])
             self.assertEqual(json.loads((run/'stackup.json').read_text()), json.loads(pathlib.Path(sys.argv[2]).read_text()))
             with h5py.File(run/m['steps'][0]['file']) as f:

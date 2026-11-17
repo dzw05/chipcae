@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
         writer.write_step(0, 0, step);
         writer.add_summary("warpage_pv", pv, "m", 0);
         writer.add_summary("T_max", 193.15, "K", 0);
-        writer.add_summary("U_abs_max", umax, "m", 0);
+        writer.add_summary("U_mag_max", umax, "m", 0);
         writer.finalize();
         if (argc == 3) {
             // Validation errors must be collective even when only rank zero is bad.
@@ -92,7 +92,7 @@ int main(int argc, char** argv) {
             }
             writer.add_summary("warpage_pv", pv, "m", 1);
             writer.add_summary("T_max", 193.15, "K", 1);
-            writer.add_summary("U_abs_max", umax, "m", 1);
+            writer.add_summary("U_mag_max", umax, "m", 1);
             writer.finalize();
         }
 
