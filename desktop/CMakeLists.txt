@@ -82,3 +82,18 @@ if(CHIPCAE_BUILD_TESTS)
     add_test(NAME desktop_forms COMMAND desktop_forms_test)
     set_tests_properties(desktop_forms PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endif()
+
+add_library(chipcae_desktop_preview preview/PreviewController.cpp preview/PreviewController.hpp
+    preview/PreviewOptions.cpp preview/PreviewOptions.hpp)
+target_include_directories(chipcae_desktop_preview PUBLIC preview)
+target_link_libraries(chipcae_desktop_preview PUBLIC chipcae_desktop_ui chipcae_desktop_results)
+if(CHIPCAE_BUILD_TESTS)
+    add_executable(desktop_preview tests/preview_test.cpp)
+    target_link_libraries(desktop_preview PRIVATE chipcae_desktop_preview)
+    target_compile_definitions(desktop_preview PRIVATE
+        PREVIEW_PYTHON="${CHIPCAE_FIXTURE_PYTHON}"
+        PREVIEW_MOCK="${CMAKE_CURRENT_SOURCE_DIR}/tools/mock_preview.py")
+    add_test(NAME desktop_preview COMMAND desktop_preview ${CMAKE_CURRENT_BINARY_DIR}/result-samples)
+    set_tests_properties(desktop_preview PROPERTIES FIXTURES_REQUIRED result_samples TIMEOUT 60
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
