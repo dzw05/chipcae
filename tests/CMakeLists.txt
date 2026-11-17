@@ -97,17 +97,15 @@ target_link_libraries(chipcae_test_control_file PRIVATE chipcae::io)
 chipcae_set_warnings(chipcae_test_control_file)
 add_test(NAME control_file COMMAND chipcae_test_control_file)
 
-find_package(Python3 COMPONENTS Interpreter QUIET)
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
 if(Python3_Interpreter_FOUND)
     add_test(NAME case_run_schema_fixtures
         COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/schema/tests/validate_fixtures.py
                 ${PROJECT_SOURCE_DIR})
-    set_tests_properties(case_run_schema_fixtures PROPERTIES SKIP_RETURN_CODE 77)
     foreach(contract schemas error_codes)
         add_test(NAME contract_${contract}
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/contract/validate_contracts.py
                     ${contract} ${PROJECT_SOURCE_DIR})
-        set_tests_properties(contract_${contract} PROPERTIES SKIP_RETURN_CODE 77)
     endforeach()
 endif()
 
@@ -189,4 +187,4 @@ endif()
 add_subdirectory(solve)
 
 add_test(NAME contract_public_headers COMMAND ${CMAKE_COMMAND}
-    -DROOT=${PROJECT_SOURCE_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/contract/check_public_headers.cmake)
+    -DROOT=${PROJECT_SOURCE_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/core/check_public_headers.cmake)

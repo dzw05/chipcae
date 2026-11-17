@@ -14,8 +14,8 @@ def dependencies(schemas=False):
             import referencing
         return yaml
     except ImportError as error:
-        print(f"SKIP: contract validation dependency unavailable: {error}")
-        sys.exit(77)
+        print(f"FAIL: contract validation dependency unavailable: {error}", file=sys.stderr)
+        sys.exit(1)
 
 
 def schemas(root):
@@ -31,7 +31,7 @@ def schemas(root):
             jsonschema.validators.validator_for(schema).check_schema(schema)
         except (ValueError, jsonschema.SchemaError) as error:
             raise AssertionError(f"{path}: schema field {getattr(error, 'json_path', '$')}: {error}") from error
-        documents[path.name] = schema
+        documents[path.relative_to(root).as_posix()] = schema
         registry = registry.with_resource(schema["$id"], Resource.from_contents(schema))
 
     for path in sorted((root / "schema/examples").iterdir()):
@@ -40,17 +40,19 @@ def schemas(root):
         text = path.read_text(encoding="utf-8")
         instance = json.loads(text) if path.suffix == ".json" else yaml.safe_load(text)
         if ".stack." in path.name:
-            # Matches tests/integration/mesh_p1/schema.cpp; stacks have no version field.
-            versions = ("0.2",) if path.name == "fcbga_cu.stack.json" else ("0.1", "0.2")
-            targets = [f"stack-{version}.schema.json" for version in versions]
+            # Unversioned stacks may conform to any published stack contract.
+            targets = sorted(key for key in documents if key.startswith("schema/stack-") and key.endswith(".schema.json"))
+            assert targets, f"{path}: $: no published stack schemas"
         elif ".case." in path.name or path.name.startswith("negative-case-"):
-            targets = ["case-1.0.schema.json"]
+            targets = ["schema/case-1.0.schema.json"]
         elif ".run-profile." in path.name or path.name.startswith("negative-profile-"):
-            targets = ["run-profile-1.0.schema.json"]
+            targets = ["schema/run-profile-1.0.schema.json"]
         elif ".materials." in path.name:
-            targets = ["material-library.v1.schema.json"]
+            targets = ["material/schema/material-library.v1.schema.json"]
         else:
             raise AssertionError(f"{path}: $: no corresponding schema")
+        failures = []
+        accepted = False
         for target in targets:
             schema = documents[target]
             validator = jsonschema.validators.validator_for(schema)(schema, registry=registry)
@@ -58,9 +60,12 @@ def schemas(root):
             if path.name.startswith("negative-"):
                 assert errors, f"{path}: $: negative fixture unexpectedly accepted by {target}"
             else:
-                assert not errors, "\n".join(
+                accepted |= not errors
+                failures.extend(
                     f"{path}: {error.json_path}: {error.message} ({target})" for error in errors
                 )
+        if not path.name.startswith("negative-"):
+            assert accepted, "\n".join(failures)
 
     # Reuse library negatives, material mappings, and case semantic checks.
     result = subprocess.run([sys.executable, str(root / "schema/tests/validate_fixtures.py"), str(root)],

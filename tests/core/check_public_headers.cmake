@@ -4,11 +4,14 @@ if(HEADER_DIR)
 endif()
 if(ROOT)
     foreach(public_root core/include io/include mesh/include mesh/background/include mesh/cut/include
-            geometry/include geometry/ecad/include material/include solvers/fem/include
+            geometry/include geometry/ecad/include material/include coupling/include jobmgr/include schema/include solvers/fem/include
             solvers/fvm/include solvers/particles/include)
         file(GLOB_RECURSE module_headers "${ROOT}/${public_root}/*.h" "${ROOT}/${public_root}/*.hpp")
         list(APPEND headers ${module_headers})
     endforeach()
+endif()
+if(NOT headers)
+    message(FATAL_ERROR "No public headers found: HEADER_DIR=${HEADER_DIR}, ROOT=${ROOT}")
 endif()
 foreach(header IN LISTS headers)
     file(READ "${header}" contents)
