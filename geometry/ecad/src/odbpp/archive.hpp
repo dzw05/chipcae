@@ -14,6 +14,7 @@ struct ArchiveEntry {
     std::string path;
     std::uint64_t size = 0;
     bool is_dir = false;
+    std::uint64_t compressed_size = 0;
 };
 struct ArchiveLimits;
 class ArchiveReader {

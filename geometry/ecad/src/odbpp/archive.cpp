@@ -115,8 +115,8 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                     report("cannot inspect directory entry: " + ec.message());
                     it.disable_recursion_pending();
                 } else if (std::filesystem::is_symlink(status)) {
-                    fail("directory input symlink " + rel);
-                    return;
+                    report("directory input symlink unsupported");
+                    it.disable_recursion_pending();
                 } else {
                     const bool dir = std::filesystem::is_directory(status);
                     if (!dir && !std::filesystem::is_regular_file(status)) {
@@ -253,11 +253,6 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                             fail("corrupt zip entry: zero compressed size " + rel);
                             return;
                         }
-                        if (static_cast<double>(st.m_uncomp_size) >
-                            static_cast<double>(st.m_comp_size) * limits.ratio) {
-                            fail("ratio limit");
-                            return;
-                        }
                     }
                     const std::string reason = zip64 || local_zip64 ? "zip64"
                                                : st.m_is_encrypted  ? "zip encryption"
@@ -267,7 +262,8 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                         s.unsupported.push_back(
                             {"IMPORT_UNSUPPORTED_ELEMENT", rel + ": " + reason, 0});
                     s.zip_reasons.push_back(reason);
-                    s.entries.push_back({rel, st.m_uncomp_size, st.m_is_directory != 0});
+                    s.entries.push_back(
+                        {rel, st.m_uncomp_size, st.m_is_directory != 0, st.m_comp_size});
                     s.zip_indices.push_back(i);
                     s.zip_supported.push_back(supported);
                 }
@@ -316,7 +312,7 @@ bool ArchiveReader::is_supported(const std::string& rel) const {
     const auto& s = *state_;
     for (std::size_t i = 0; i < s.entries.size(); ++i)
         if (s.entries[i].path == rel)
-            return !s.zipped || s.zip_supported[i];
+            return !lower(rel).ends_with(".z") && (!s.zipped || s.zip_supported[i]);
     return true;
 }
 // Enforce delivered-byte limits too; repeated reads charge each entry only once.
@@ -337,6 +333,17 @@ ArchiveReader::ReadStatus ArchiveReader::stream_bytes(const std::string& rel,
         return ReadStatus::error;
     }
     auto index = static_cast<std::size_t>(it - s.entries.begin());
+    if (!is_supported(rel)) {
+        const auto reason = lower(rel).ends_with(".z") ? ".Z compression" : s.zip_reasons[index];
+        error =
+            "IMPORT_REJECTED: required file uses unsupported " + std::string(reason) + " " + rel;
+        return ReadStatus::unsupported;
+    }
+    if (!s.directory &&
+        static_cast<double>(it->size) > static_cast<double>(it->compressed_size) * s.limits.ratio) {
+        error = "IMPORT_REJECTED: ratio limit " + rel;
+        return ReadStatus::error;
+    }
     s.actual_sizes.resize(s.entries.size());
     std::uint64_t delivered = 0;
     ByteSink sink = [&](std::string_view b) {
@@ -373,11 +380,6 @@ ArchiveReader::ReadStatus ArchiveReader::stream_bytes(const std::string& rel,
         return ReadStatus::success;
     }
     if (s.zipped) {
-        if (!s.zip_supported[index]) {
-            error = "IMPORT_REJECTED: required file uses unsupported " + s.zip_reasons[index] +
-                    " " + rel;
-            return ReadStatus::unsupported;
-        }
         ZipSink adapter{sink};
         if (mz_zip_reader_extract_to_callback(
                 &s.zip, s.zip_indices[index], ZipSink::write, &adapter, 0))

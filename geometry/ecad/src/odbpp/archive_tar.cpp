@@ -82,11 +82,9 @@ bool index_tar(const std::filesystem::path& path,
         return true;
     };
     GzipCursor cursor(input);
-    std::uint64_t entry_compressed_start = 0, entry_size = 0;
+    std::uint64_t entry_compressed_start = 0;
+    bool regular_payload = false;
     auto consume = [&](std::string_view block) {
-        // Every decompressed byte counts, including skipped payload and tar framing.
-        if (position > limits.total_bytes || block.size() > limits.total_bytes - position)
-            return fail("total byte limit");
         while (!block.empty()) {
             if (done) {
                 position += block.size();
@@ -103,9 +101,8 @@ bool index_tar(const std::filesystem::path& path,
                     // Output requests stop at payload boundaries, so unrelated entries
                     // cannot contribute compressed bytes to this entry's budget.
                     const auto compressed = cursor.consumed_bytes() - entry_compressed_start;
-                    if (static_cast<double>(entry_size) >
-                        static_cast<double>(std::max<std::uint64_t>(1, compressed)) * limits.ratio)
-                        return fail("ratio limit");
+                    if (regular_payload)
+                        entries.back().compressed_size = std::max<std::uint64_t>(1, compressed);
                     if (!metadata())
                         return false;
                 }
@@ -199,7 +196,7 @@ bool index_tar(const std::filesystem::path& path,
                 }
             } else if (size > 1024 * 1024 || size > limits.file_bytes)
                 return fail("file metadata limit");
-            entry_size = size;
+            regular_payload = type == '0' || type == 0;
             entry_compressed_start = cursor.consumed_bytes();
             remain = size;
             padding = (512 - size % 512) % 512;

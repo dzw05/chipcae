@@ -163,6 +163,10 @@ struct GzipCursor::State {
                     // Retain the full deflate history while allowing arbitrary output stops.
                     std::memmove(
                         output.data(), output.data() + TINFL_LZ_DICT_SIZE, TINFL_LZ_DICT_SIZE);
+                    // tinfl may suspend halfway through a match. Its saved source
+                    // offset must move with the retained history as well.
+                    if (inflater.m_dist_from_out_buf_start >= TINFL_LZ_DICT_SIZE)
+                        inflater.m_dist_from_out_buf_start -= TINFL_LZ_DICT_SIZE;
                     offset = TINFL_LZ_DICT_SIZE;
                 }
                 if (status == TINFL_STATUS_DONE)

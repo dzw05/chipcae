@@ -255,11 +255,6 @@ int main() {
         std::string out, error;
         for (const auto& input : {p, temp / "early-stop.tgz", temp / "early-stop.zip"}) {
             ArchiveReader reader(input, limits);
-            if (input.extension() == ".tgz") {
-                require(reader.open_error().find("total byte limit") != std::string::npos,
-                        "tar indexing charges unread decompressed payload");
-                continue;
-            }
             require(reader.open_error().empty(), reader.open_error());
             require(reader.read_bytes("small", out, error) && out == "ok", error);
             require(reader.for_each_line(
@@ -274,20 +269,22 @@ int main() {
             limits.file_bytes = 1;
             limits.total_bytes = 1;
             ArchiveReader archive_reader(temp / name, limits);
-            if (std::string(name) == "limits.tgz") {
-                require(archive_reader.open_error().find("total byte limit") != std::string::npos,
-                        "tar indexing enforces total limit before reads");
-                continue;
-            }
             require(archive_reader.open_error().empty(), archive_reader.open_error());
             require(!archive_reader.read_bytes(archive_reader.entries().front().path, out, error),
                     "archive payload limit enforced on read");
         }
     });
     test("odbpp_review_padded_entry_ratio", [&] {
-        for (const auto* order : {"before", "after"})
-            rejected(temp / "corrupt" / (std::string("ratio-padded-") + order + ".tgz"),
-                     "ratio limit");
+        for (const auto* order : {"before", "after"}) {
+            ArchiveReader reader(temp / "corrupt" /
+                                 (std::string("ratio-padded-") + order + ".tgz"));
+            require(reader.open_error().empty(), reader.open_error());
+            std::string out, error;
+            require(reader.read_bytes("noise", out, error), error);
+            require(!reader.read_bytes("bomb", out, error) &&
+                        error.find("ratio limit") != std::string::npos,
+                    "requested entry ratio cannot be diluted by neighbors");
+        }
     });
     test("odbpp_review_all_entry_counts", [&] {
         ArchiveLimits limits;
@@ -341,20 +338,68 @@ int main() {
         require(empty.open_error().empty(), empty.open_error());
         require(empty.read_bytes("payload", out, error) && out.empty(), error);
     });
-    test("odbpp_tar_total_includes_framing", [&] {
+    test("odbpp_tar_total_requested_payload", [&] {
         ArchiveLimits limits;
-        const auto size = bytes(temp / "job.tar").size();
-        limits.total_bytes = size;
-        ArchiveReader exact(temp / "job.tgz", limits);
+        limits.total_bytes = 2;
+        ArchiveReader exact(temp / "early-stop.tgz", limits);
         require(exact.open_error().empty(), exact.open_error());
-        limits.total_bytes = size - 1;
-        ArchiveReader over(temp / "job.tgz", limits);
-        require(over.open_error().find("total byte limit") != std::string::npos,
-                "tar framing counts at exact total boundary");
-        limits.total_bytes = 1023;
+        std::string out, error;
+        require(exact.read_bytes("small", out, error) && out == "ok", error);
+        require(exact.read_bytes("small", out, error) && out == "ok", "repeat read charged once");
+        limits.total_bytes = 1;
+        ArchiveReader over(temp / "early-stop.tgz", limits);
+        require(over.open_error().empty(), over.open_error());
+        require(!over.read_bytes("small", out, error) &&
+                    error.find("total byte limit") != std::string::npos,
+                "requested payload enforces exact total boundary");
         ArchiveReader framing(temp / "framing-only.tgz", limits);
-        require(framing.open_error().find("total byte limit") != std::string::npos,
-                "even an empty tar charges its end blocks");
+        require(framing.open_error() == "IMPORT_REJECTED: empty input",
+                "framing is not extracted content");
+    });
+    test("odbpp_gzip_sliding_match_history", [&] {
+        std::string out, error;
+        require(decode_gzip(bytes(temp / "sliding-match.gz"), out, error), error);
+        require(out == std::string(1024 * 1024, 'x'),
+                "every byte across suspended match and history slides");
+    });
+    test("odbpp_selected_payload_limits_and_Z", [&] {
+        for (const auto* name : {"selected-job.tgz", "selected-job.zip"})
+            require(bool(parse_job(temp / name)), "irrelevant high-ratio member permits import");
+        for (const auto* name : {"selected.tgz", "selected.zip"}) {
+            ArchiveLimits limits;
+            limits.total_bytes = 2;
+            limits.file_bytes = 2;
+            ArchiveReader reader(temp / name, limits);
+            require(reader.open_error().empty(), reader.open_error());
+            std::string out, error;
+            require(reader.read_bytes("small", out, error) && out == "ok", error);
+            require(!reader.read_bytes("irrelevant", out, error) &&
+                        error.find("ratio limit") != std::string::npos,
+                    "ratio enforced when payload requested");
+        }
+        auto dir = temp / "nested-Z";
+        write(dir / "payload.Z", "compressed bytes");
+        for (const auto& input : {dir, temp / "nested-Z.tgz", temp / "nested-Z.zip"}) {
+            ArchiveReader reader(input);
+            require(reader.open_error().empty(), reader.open_error());
+            require(reported(reader.unsupported(), "payload.Z: .Z compression"),
+                    "nested .Z reported");
+            require(!reader.is_supported("payload.Z"), "nested .Z unsupported status");
+            std::string out, error;
+            require(!reader.read_bytes("payload.Z", out, error) && out.empty() &&
+                        error.find("unsupported .Z compression") != std::string::npos,
+                    "nested .Z bytes never consumed");
+            bool called = false;
+            require(!reader.for_each_line(
+                        "payload.Z",
+                        [&](auto) {
+                            called = true;
+                            return true;
+                        },
+                        error) &&
+                        !called && error.find("unsupported .Z compression") != std::string::npos,
+                    "nested .Z never reaches text parser");
+        }
     });
     test("odbpp_gzip_live_output_limit", [&] {
         std::istringstream input(bytes(temp / "boundary-32745.gz"));
@@ -884,12 +929,18 @@ int main() {
             if (ec)
                 return; // Platforms without symlink privileges still exercise tar links.
             ArchiveReader reader(p);
-            require(reader.open_error() == "IMPORT_REJECTED: directory input symlink link",
-                    "directory symlink rejected: " + reader.open_error());
+            require(reader.open_error().empty(), reader.open_error());
+            require(reported(reader.unsupported(), "link: directory input symlink unsupported"),
+                    "directory symlink reported");
+            require(std::none_of(reader.entries().begin(),
+                                 reader.entries().end(),
+                                 [](const auto& e) {
+                                     return e.path == "link" || e.path.starts_with("link/");
+                                 }),
+                    "symlink never traversed or indexed");
             std::string output, error;
-            require(!reader.read_bytes("matrix/matrix", output, error) &&
-                        error == reader.open_error(),
-                    "rejected directory cannot deliver payload");
+            require(reader.read_bytes("matrix/matrix", output, error), error);
+            require(bool(parse_job(p)), "unrelated symlink permits import");
         }
     });
     test("odbpp_symbol_order_and_nested_Z", [&] {
@@ -945,7 +996,7 @@ int main() {
         std::error_code ec;
         fs::create_symlink(temp / "job.tar.Z", p / "link", ec);
         if (!ec)
-            rejected(p, "directory input symlink link");
+            rejected(p, "empty input");
     });
     test("odbpp_review_runtime_limits", [&] {
         for (bool lines : {false, true}) {

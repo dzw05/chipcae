@@ -55,6 +55,13 @@ def lzw_literals(data):
 
 def main(root, fixture):
     root.mkdir(parents=True, exist_ok=True)
+    for name, members in [('selected', [('small', b'ok'), ('irrelevant', b'x' * (1024 * 1024))]),
+                          ('nested-Z', [('payload.Z', b'compressed bytes')])]:
+        (root / (name + '.tgz')).write_bytes(gzip.compress(tar_bytes(members)))
+        with zipfile.ZipFile(root / (name + '.zip'), 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+            for path, data in members:
+                archive.writestr(path, data)
+    (root / 'sliding-match.gz').write_bytes(gzip.compress(b'x' * (1024 * 1024)))
     stop_files = [('small', b'ok'), ('large', b'stop\n' + b'x' * 200000)]
     (root / 'early-stop.tgz').write_bytes(gzip.compress(tar_bytes(stop_files), compresslevel=0))
     with zipfile.ZipFile(root / 'early-stop.zip', 'w', compression=zipfile.ZIP_STORED) as archive:
@@ -65,6 +72,11 @@ def main(root, fixture):
         destination = root / 'job' / path
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(data)
+    selected_job = files + [('irrelevant', b'x' * (1024 * 1024))]
+    (root / 'selected-job.tgz').write_bytes(gzip.compress(tar_bytes(selected_job)))
+    with zipfile.ZipFile(root / 'selected-job.zip', 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+        for path, data in selected_job:
+            archive.writestr(path, data)
     tar = tar_bytes(files)
     (root / 'job.tar').write_bytes(tar)
     (root / 'job.tgz').write_bytes(gzip.compress(tar))
