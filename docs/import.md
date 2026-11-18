@@ -41,11 +41,16 @@ The build copies assembly/stack schemas and the error protocol into
 `share/chipcae`, resolved relative to the executable, so assembly
 imports do not require the source checkout.
 Until E-ODB-3 supplies an implemented reader, ODB++ assembly boards reject with
-`odbpp reader not yet available`. At configure time, CMake reads the linked
-ODB++ implementation sources and sets `CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE` to
-OFF if any contains `not implemented`, or ON otherwise. This detected cache
-value is forced and cannot be overridden with `-D`; changes to those sources
-trigger reconfiguration. ODB++ assembly support also requires ECAD to be enabled.
+`odbpp reader not yet available`. Implementation owners declare support through
+`CHIPCAE_ODBPP_AVAILABLE` on the linked ECAD target and
+`CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE` on the linked geometry target. Until those
+implementations land, CMake recognizes the frozen SP0 stub sources by digest
+and reports support as OFF. Changed implementations without a target declaration,
+missing capability sources on a target, declarations enabling a known stub, and
+contradictory `-DCHIPCAE_ASSEMBLY_*_AVAILABLE` values are configuration errors.
+The detected values are normal CMake variables, not forced cache entries;
+implementation changes trigger reconfiguration. ODB++ assembly support also
+requires ECAD to be enabled.
 Imported product names also enforce the display-only
 `NOT_CAE_GEOMETRY` rejection, including for ordinary STEP filenames and
 unmapped bodies in `parts_from_step`.

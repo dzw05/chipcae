@@ -21,3 +21,13 @@ with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as othe
     a.report = Path(other) / 'defects.json'
     check(a.run(), 0)
     check(a.run('--polyset', other + '/wrong.polyset'), 14)
+
+    absolute = a.root.resolve() / 'absolute.polyset'
+    check(a.run('--polyset', absolute), 0)
+    stack = a.stack()
+    assert absolute.is_file()
+    assert stack['external_refs']
+    files = {layer['copper']['polygons']['file']
+             for layer in stack['layers'] if 'copper' in layer}
+    assert {r['path'] for r in stack['external_refs']} == files
+    assert all((a.root / file).resolve() == absolute for file in files)

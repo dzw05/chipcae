@@ -13,59 +13,10 @@
 #include <set>
 #include <sstream>
 #include <yaml-cpp/yaml.h>
+#if defined(CHIPCAE_ENABLE_JSONCONS)
+#include <jsoncons/json.hpp>
+#endif
 namespace chipcae::importer {
-namespace {
-std::string defect_json_quote(const std::string& s) {
-    std::ostringstream out;
-    out << '"';
-    for (unsigned char c : s) {
-        if (c == '"' || c == '\\')
-            out << '\\' << c;
-        else if (c < 0x20)
-            out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << unsigned(c);
-        else
-            out << c;
-    }
-    out << '"';
-    return out.str();
-}
-} // namespace
-
-void write_defect(std::ostream& out, const geometry::Defect& d) {
-    const auto id = geometry::defect_id(d), tier = geometry::tier_name(d.tier);
-    out << "{\"defect_id\":" << defect_json_quote(id) << ",\"tier\":" << defect_json_quote(tier)
-        << ",\"kind\":" << defect_json_quote(d.kind)
-        << ",\"reason\":" << static_cast<unsigned>(d.reason)
-        << ",\"dimension\":" << defect_json_quote(d.dimension)
-        << ",\"size\":" << std::setprecision(17) << d.size
-        << ",\"suggestion\":" << defect_json_quote(d.suggestion)
-        << ",\"action\":" << defect_json_quote(d.action)
-        << ",\"rejection_reason\":" << defect_json_quote(d.rejection_reason)
-        << ",\"material_ambiguous\":" << (d.material_ambiguous ? "true" : "false");
-    out << ",\"details\":" << defect_json_quote(d.details);
-    out << '}';
-}
-void write_defects(const std::filesystem::path& file,
-                   const std::string& code,
-                   const std::string& message,
-                   const std::vector<geometry::Defect>& defects) {
-    if (file.empty())
-        return;
-    std::ofstream out(file);
-    out << "{\"code\":" << defect_json_quote(code) << ",\"message\":" << defect_json_quote(message)
-        << ",\"defects\":[";
-    bool first = true;
-    for (const auto& d : defects) {
-        if (!first)
-            out << ',';
-        first = false;
-        write_defect(out, d);
-    }
-    out << "]}\n";
-    out.close();
-    if (!out)
-        throw std::runtime_error("cannot write defects output");
-}
 std::optional<int> protocol_error_code(const std::string& name, std::istream& input) {
     try {
         const auto document = YAML::Load(input);
@@ -86,127 +37,63 @@ struct ImportReportParts {
     std::vector<std::string> material_approx;
 };
 
-namespace {
-std::string quote(const std::string& s) {
-    std::string out = "\"";
-    for (char c : s) {
-        if (c == '"')
-            out += '"';
-        out += c;
-    }
-    return out + '"';
-}
-std::string json_quote(const std::string& s) {
-    std::ostringstream out;
-    out << '"';
-    for (unsigned char c : s) {
-        if (c == '"' || c == '\\')
-            out << '\\' << c;
-        else if (c < 0x20)
-            out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << unsigned(c);
-        else
-            out << c;
-    }
-    out << '"';
-    return out.str();
-}
-void strings(std::ostream& out, const std::vector<std::string>& values) {
-    out << '[';
-    bool first = true;
-    for (const auto& value : values) {
-        if (!first)
-            out << ',';
-        first = false;
-        out << json_quote(value);
-    }
-    out << ']';
-}
-} // namespace
+#if defined(CHIPCAE_ENABLE_JSONCONS)
 inline bool write_assembly_report(const std::filesystem::path& dir,
                                   const ImportReportHeader& h,
                                   const std::vector<Defect>& ds,
                                   std::string* error,
                                   const ImportReportParts* parts) {
-    std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-    if (ec) {
+    if (!geometry::write_import_report(dir, h, ds, error))
+        return false;
+    try {
+        using J = jsoncons::json;
+        std::ifstream input(dir / "import_report.json");
+        auto report = J::parse(input);
+        input.close();
+        for (std::size_t i = 0; i < ds.size(); ++i)
+            report["defects"][i]["details"] = ds[i].details;
+        if (parts) {
+            auto& summary = report["parts"];
+            summary["split_layers"] = J::object();
+            for (const auto& [name, targets] : parts->split_layers)
+                summary["split_layers"][name] = targets;
+            summary["rewrite_targets"] = J::array();
+            for (const auto& [from, targets] : parts->rewrite_targets) {
+                J entry;
+                entry["from"] = from;
+                entry["to"] = targets;
+                summary["rewrite_targets"].push_back(entry);
+            }
+            summary["material_approx"] = J::array();
+            for (const auto& id : parts->material_approx) {
+                J entry;
+                entry["id"] = id;
+                entry["material_approx"] = true;
+                entry["label"] = "近似材料";
+                summary["material_approx"].push_back(entry);
+            }
+        }
+        std::ofstream output(dir / "import_report.json");
+        output << report << '\n';
+        output.close();
+        if (!output)
+            throw std::runtime_error("cannot write report output");
+        return true;
+    } catch (const std::exception& e) {
         if (error)
-            *error = ec.message();
+            *error = e.what();
         return false;
     }
-    unsigned counts[4]{};
-    for (const auto& d : ds)
-        ++counts[static_cast<unsigned>(d.tier)];
-    std::ofstream j(dir / "import_report.json"), c(dir / "import_report.csv");
-    if (!j || !c) {
-        if (error)
-            *error = "cannot open report output";
-        return false;
-    }
-    j << std::setprecision(17) << "{\"L\":" << h.L << ",\"t_min\":" << h.t_min
-      << ",\"eps_weld\":" << h.tolerances.eps_weld << ",\"tau_A\":" << h.tolerances.tau_A
-      << ",\"tau_B\":" << h.tolerances.tau_B << ",\"delta_f\":" << h.tolerances.delta_f
-      << ",\"tier_counts\":{\"Weld\":" << counts[0] << ",\"A\":" << counts[1]
-      << ",\"B\":" << counts[2] << ",\"C\":" << counts[3]
-      << "},\"b_tier_accepted\":" << (h.b_tier_accepted_all ? "\"all\"" : "null")
-      << ",\"defects\":[";
-    c << "defect_id,tier,kind,reason,dimension,size,suggestion,action,rejection_reason,material_"
-         "ambiguous\n";
-    bool first = true;
-    for (const auto& d : ds) {
-        const auto id = defect_id(d), tier = tier_name(d.tier);
-        if (!first)
-            j << ',';
-        first = false;
-        write_defect(j, d);
-        c << quote(id) << ',' << quote(tier) << ',' << quote(d.kind) << ','
-          << static_cast<unsigned>(d.reason) << ',' << quote(d.dimension) << ','
-          << std::setprecision(17) << d.size << ',' << quote(d.suggestion) << ',' << quote(d.action)
-          << ',' << quote(d.rejection_reason) << ',' << (d.material_ambiguous ? "true" : "false")
-          << '\n';
-    }
-    j << ']';
-    if (parts) {
-        j << ",\"parts\":{\"split_layers\":{";
-        bool first = true;
-        for (const auto& [name, targets] : parts->split_layers) {
-            if (!first)
-                j << ',';
-            first = false;
-            j << json_quote(name) << ':';
-            strings(j, targets);
-        }
-        j << "},\"rewrite_targets\":[";
-        first = true;
-        for (const auto& [from, targets] : parts->rewrite_targets) {
-            if (!first)
-                j << ',';
-            first = false;
-            j << "{\"from\":" << json_quote(from) << ",\"to\":";
-            strings(j, targets);
-            j << '}';
-        }
-        j << "],\"material_approx\":[";
-        first = true;
-        for (const auto& id : parts->material_approx) {
-            if (!first)
-                j << ',';
-            first = false;
-            j << "{\"id\":" << json_quote(id)
-              << ",\"material_approx\":true,\"label\":\"近似材料\"}";
-        }
-        j << "]}";
-    }
-    j << "}\n";
-    j.close();
-    c.close();
-    if (!j || !c) {
-        if (error)
-            *error = "cannot write report output";
-        return false;
-    }
-    return true;
 }
+#else
+inline bool write_assembly_report(const std::filesystem::path& dir,
+                                  const ImportReportHeader& h,
+                                  const std::vector<Defect>& ds,
+                                  std::string* error,
+                                  const ImportReportParts*) {
+    return geometry::write_import_report(dir, h, ds, error);
+}
+#endif
 
 std::filesystem::path assembly_root() {
     // Linux runtime packaging uses /proc/self/exe to locate assets independently of cwd.
@@ -313,6 +200,50 @@ std::vector<std::string> interface_rewrite_targets(const std::vector<std::string
             targets.push_back("interface:" + a + "|" + b);
     return targets;
 }
+inline void summarize_assembly_parts(const mesh::StackModel& base,
+                                     const mesh::StackModel& merged,
+                                     ImportReportParts& parts) {
+    auto rewrite = [&](const std::string& from, const std::vector<std::string>& targets) {
+        if (targets.empty())
+            return;
+        parts.rewrite_targets.emplace_back(from, targets);
+    };
+    std::map<std::string, std::vector<std::string>> layer_targets;
+    for (const auto& l : base.layers) {
+        std::vector<std::string> split, targets;
+        for (const auto& n : merged.layers)
+            if (n.name == l.name || n.name.starts_with(l.name + "#")) {
+                targets.push_back(n.name);
+                if (n.name != l.name)
+                    split.push_back(n.name);
+            }
+        layer_targets[l.name] = targets;
+        if (!split.empty()) {
+            parts.split_layers[l.name] = split;
+            rewrite("layer:" + l.name, targets);
+        }
+        for (const auto& r : l.regions) {
+            std::vector<std::string> rt;
+            for (const auto& n : merged.layers)
+                for (const auto& nr : n.regions)
+                    if (nr.name == r.name || nr.name.starts_with(r.name + "#"))
+                        rt.push_back("region:" + nr.name);
+            if (rt != std::vector<std::string>{"region:" + r.name})
+                rewrite("region:" + r.name, rt);
+        }
+    }
+    for (std::size_t i = 1; i < base.layers.size(); ++i) {
+        const auto& a = base.layers[i - 1].name;
+        const auto& b = base.layers[i].name;
+        if (layer_targets[a].empty() || layer_targets[b].empty())
+            continue;
+        auto targets = interface_rewrite_targets(layer_targets[a], layer_targets[b]);
+        auto from = "interface:" + a + "|" + b;
+        if (targets != std::vector<std::string>{from})
+            rewrite(from, targets);
+    }
+}
+
 bool assembly_display_only(const geometry::StepImportResult& result) {
     return std::any_of(result.body_names.begin(), result.body_names.end(), [](const auto& name) {
         return name.find("NOT_CAE_GEOMETRY") != std::string::npos;
@@ -759,45 +690,7 @@ int run_assembly(const ImportOptions& options) {
                     throw;
             }
         }
-        auto rewrite = [&](const std::string& from, const std::vector<std::string>& targets) {
-            if (targets.empty())
-                return;
-            parts.rewrite_targets.emplace_back(from, targets);
-        };
-        std::map<std::string, std::vector<std::string>> layer_targets;
-        for (const auto& l : base.layers) {
-            std::vector<std::string> split, targets;
-            for (const auto& n : merged.layers)
-                if (n.name == l.name || n.name.starts_with(l.name + "#")) {
-                    targets.push_back(n.name);
-                    if (n.name != l.name)
-                        split.push_back(n.name);
-                }
-            layer_targets[l.name] = targets;
-            if (!split.empty()) {
-                parts.split_layers[l.name] = split;
-                rewrite("layer:" + l.name, targets);
-            }
-            for (const auto& r : l.regions) {
-                std::vector<std::string> rt;
-                for (const auto& n : merged.layers)
-                    for (const auto& nr : n.regions)
-                        if (nr.name == r.name || nr.name.starts_with(r.name + "#"))
-                            rt.push_back("region:" + nr.name);
-                if (rt != std::vector<std::string>{"region:" + r.name})
-                    rewrite("region:" + r.name, rt);
-            }
-        }
-        for (std::size_t i = 1; i < base.layers.size(); ++i) {
-            const auto& a = base.layers[i - 1].name;
-            const auto& b = base.layers[i].name;
-            if (layer_targets[a].empty() || layer_targets[b].empty())
-                continue;
-            auto targets = interface_rewrite_targets(layer_targets[a], layer_targets[b]);
-            auto from = "interface:" + a + "|" + b;
-            if (targets != std::vector<std::string>{from})
-                rewrite(from, targets);
-        }
+        summarize_assembly_parts(base, merged, parts);
         auto policy = apply_repair_policy(defects, accepted, options.accept_b_tier);
         for (const auto& warning : policy.warnings)
             std::cerr << "Warning: " << warning << '\n';

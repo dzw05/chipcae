@@ -60,6 +60,21 @@ int main() {
              std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         std::filesystem::create_directories(dir);
         importer::ImportReportParts parts;
+        mesh::StackModel base, merged;
+        mesh::Layer layer;
+        layer.name = "L";
+        base.layers.push_back(layer);
+        layer.name = "L#0";
+        merged.layers.push_back(layer);
+        layer.name = "L#1";
+        merged.layers.push_back(layer);
+        importer::summarize_assembly_parts(base, merged, parts);
+        require(parts.split_layers.at("L") == std::vector<std::string>{"L#0", "L#1"},
+                "synthetic layer split must be derived without slicing");
+        require(parts.rewrite_targets ==
+                    std::vector<std::pair<std::string, std::vector<std::string>>>{
+                        {"layer:L", {"L#0", "L#1"}}},
+                "synthetic layer rewrite must be derived without slicing");
         const std::string special = "layer\"\\\n";
         parts.split_layers[special] = {special + "#0", special + "#1"};
         parts.rewrite_targets.emplace_back("layer:" + special, parts.split_layers[special]);
@@ -67,11 +82,23 @@ int main() {
         require(importer::write_assembly_report(dir, {}, mapped, nullptr, &parts),
                 "report write failed");
 #ifdef SP4_HAS_JSONCONS
+        require(geometry::write_import_report(dir / "shared", {}, mapped),
+                "shared report write failed");
+        const auto shared =
+            jsoncons::json::parse(sp4_test::bytes(dir / "shared/import_report.json"));
+        auto assembly = jsoncons::json::parse(sp4_test::bytes(dir / "import_report.json"));
+        assembly.erase("parts");
+        for (auto& d : assembly["defects"].array_range())
+            d.erase("details");
+        require(assembly == shared, "assembly must preserve all shared report fields");
+        require(sp4_test::bytes(dir / "import_report.csv") ==
+                    sp4_test::bytes(dir / "shared/import_report.csv"),
+                "assembly CSV must be byte-identical to shared CSV");
         const auto json = jsoncons::json::parse(sp4_test::bytes(dir / "import_report.json"));
         require(json["parts"]["split_layers"][special].as<std::vector<std::string>>() ==
                     parts.split_layers[special],
                 "split layer extension roundtrip");
-        require(json["parts"]["rewrite_targets"][0]["from"].as<std::string>() == "layer:" + special,
+        require(json["parts"]["rewrite_targets"][1]["from"].as<std::string>() == "layer:" + special,
                 "rewrite extension roundtrip");
         require(json["parts"]["material_approx"][0]["id"].as<std::string>() == special,
                 "material extension roundtrip");

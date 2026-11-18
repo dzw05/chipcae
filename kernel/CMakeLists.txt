@@ -78,28 +78,67 @@ foreach(asset schema/assembly-0.1.schema.json schema/stack-0.2.schema.json proto
 endforeach()
 # Installed schemas/protocol are already packaged by ChipcaeInstall.cmake.
 
-# Derive capabilities from the linked implementation sources, not a manual
-# cache switch. CONFIGURE_DEPENDS reruns this check when a stub is replaced.
-function(chipcae_assembly_capability variable)
-    set(available ON)
-    foreach(source IN LISTS ARGN)
-        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-            "${PROJECT_SOURCE_DIR}/${source}")
-        file(READ "${PROJECT_SOURCE_DIR}/${source}" implementation)
-        if(implementation MATCHES "not implemented")
+# Implementation owners can declare capabilities on their linked targets with
+# CHIPCAE_ODBPP_AVAILABLE / CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE. Until those
+# implementations land, recognize only the frozen SP0 stubs. Unknown sources
+# require an explicit owner declaration; they must never silently skip tests.
+function(chipcae_assembly_capability variable target property)
+    if(NOT TARGET "${target}")
+        set(available OFF)
+    else()
+        get_target_property(available "${target}" "${property}")
+        get_target_property(linked_sources "${target}" SOURCES)
+        get_target_property(source_dir "${target}" SOURCE_DIR)
+        set(linked_paths "")
+        foreach(linked_source IN LISTS linked_sources)
+            if(NOT linked_source MATCHES "^\\$<")
+                get_filename_component(linked_path "${linked_source}" ABSOLUTE BASE_DIR "${source_dir}")
+                list(APPEND linked_paths "${linked_path}")
+            endif()
+        endforeach()
+        set(known_stubs TRUE)
+        set(has_stub FALSE)
+        foreach(entry IN LISTS ARGN)
+            string(REPLACE "=" ";" fields "${entry}")
+            list(GET fields 0 source)
+            list(GET fields 1 expected)
+            if(NOT "${PROJECT_SOURCE_DIR}/${source}" IN_LIST linked_paths)
+                message(FATAL_ERROR "${target} does not link capability source ${source}")
+            endif()
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                "${PROJECT_SOURCE_DIR}/${source}")
+            file(SHA256 "${PROJECT_SOURCE_DIR}/${source}" actual)
+            if(NOT actual STREQUAL expected)
+                set(known_stubs FALSE)
+            else()
+                set(has_stub TRUE)
+            endif()
+        endforeach()
+        if(available STREQUAL "available-NOTFOUND")
+            if(NOT known_stubs)
+                message(FATAL_ERROR
+                    "${target} must declare target property ${property}: implementation changed")
+            endif()
             set(available OFF)
+        elseif(available AND has_stub)
+            message(FATAL_ERROR "${property} contradicts the linked SP0 stub implementation")
         endif()
-    endforeach()
-    set(${variable} ${available} CACHE BOOL "Detected assembly implementation capability" FORCE)
+    endif()
+    if(DEFINED ${variable} AND NOT "${${variable}}" STREQUAL "${available}")
+        message(FATAL_ERROR "${variable} contradicts capability of linked target ${target}")
+    endif()
+    # Normal scope value: no forced cache entry and no user override of detection.
+    set(${variable} "${available}" PARENT_SCOPE)
 endfunction()
 chipcae_assembly_capability(CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE
-    geometry/ecad/src/odbpp/read_odbpp.cpp
-    geometry/ecad/src/odbpp/archive.cpp
-    geometry/ecad/src/odbpp/parse_matrix.cpp
-    geometry/ecad/src/odbpp/parse_misc.cpp
-    geometry/ecad/src/odbpp/parse_features.cpp
-    geometry/ecad/src/odbpp/map_geometry.cpp
-    geometry/ecad/src/odbpp/map_stackup.cpp)
+    chipcae::geometry_ecad CHIPCAE_ODBPP_AVAILABLE
+    geometry/ecad/src/odbpp/read_odbpp.cpp=6628d0a6da63c95d671516b8f363c81815d8ce2a3a833f2197025a644480e78c
+    geometry/ecad/src/odbpp/archive.cpp=a6ff915908e71adc9c3856f120341a6a0a9a94515c54814aa5cd8a6905c6486d
+    geometry/ecad/src/odbpp/parse_matrix.cpp=b2ce6c53c25112ada17ffaf53a634b92e9fcd46ca054c836ddae6685faa3d8ec
+    geometry/ecad/src/odbpp/parse_misc.cpp=c1980e074585e92b72a1775fd426bb64af670b741ae81ddc1c52e19f6dc0d707
+    geometry/ecad/src/odbpp/parse_features.cpp=56b70d3646b398a01033615a1b63fdf3825a108a57f02fd76f89510733d6d225
+    geometry/ecad/src/odbpp/map_geometry.cpp=3c5c0333cd1313921e1bb73165a62539500724b9337aad4b56c32d6a1ebd9b33
+    geometry/ecad/src/odbpp/map_stackup.cpp=e25128a8e1195ce2b2a45217a485bcfa4a18621e6aba73a82b8ff3c01cf7b8df)
 if(CHIPCAE_ENABLE_ECAD AND CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE)
     target_compile_definitions(chipcae-import PRIVATE CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE=1)
 endif()
@@ -118,6 +157,8 @@ endif()
 target_link_libraries(chipcae-import PRIVATE yaml-cpp::yaml-cpp)
 
 chipcae_assembly_capability(CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE
-    geometry/src/part_slice.cpp geometry/src/assembly.cpp)
+    chipcae::geometry CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE
+    geometry/src/part_slice.cpp=272343039fc9cc88524823ba4186de1bab636ad8c7cadaf40830451400ef5249
+    geometry/src/assembly.cpp=5be184d43be7a2a27b7ef0874a08fcec2de1c35d9e6c639e986223b621e38627)
 file(GENERATE OUTPUT "${PROJECT_BINARY_DIR}/import-assets/assembly-capabilities.json"
     CONTENT "{\"geometry\": \"${CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE}\"}\n")

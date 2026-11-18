@@ -92,14 +92,25 @@ int main() {
         require(before == sp4_test::bytes(dir / "copper.polyset"), "writer modified sidecar");
         // Reject references outside the output root before creating an output file.
         const auto rejected = dir / "rejected.json";
-        for (const auto& file :
-             {std::string("../outside.polyset"), (dir / "copper.polyset").string()}) {
+        for (const auto& file : {std::string("../outside.polyset"),
+                                 (dir.parent_path() / "outside.polyset").string()}) {
             auto invalid = model;
             invalid.layers[0].copper->polygons->file = file;
             require(!chipcae::importer::write_stack(invalid, rejected),
                     "invalid sidecar reference must be rejected");
             require(!std::filesystem::exists(rejected), "invalid reference created output");
         }
+        auto absolute = model;
+        for (auto& layer : absolute.layers)
+            if (layer.copper && layer.copper->polygons)
+                layer.copper->polygons->file = (dir / "copper.polyset").string();
+        require(bool(chipcae::importer::write_stack(absolute, rejected)),
+                "absolute sidecar failed");
+        const auto absolute_json = jsoncons::json::parse(sp4_test::bytes(rejected));
+        require(absolute_json["external_refs"][0]["path"].as<std::string>() ==
+                    (dir / "copper.polyset").string(),
+                "absolute spelling changed");
+        std::filesystem::remove(rejected);
         std::filesystem::create_symlink(dir.parent_path(), dir / "escape");
         auto invalid = model;
         invalid.layers[0].copper->polygons->file = "escape/outside.polyset";
