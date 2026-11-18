@@ -71,6 +71,8 @@ public:
     bool previewMesh(const QString& program = "chipcae-preview",
                      const QStringList& prefix = {},
                      const chipcae::desktop::PreviewOptions& options = {});
+    // Test-first stub: the preview options panel is not wired into the window yet.
+    chipcae::desktop::PreviewOptionsPanel* previewOptionsPanel() const { return nullptr; }
     chipcae::desktop::PreviewView* previewView() const;
     bool previewDisplayStale() const;
     bool submitCurrentCase();
