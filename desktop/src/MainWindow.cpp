@@ -53,6 +53,21 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             previewDigestValid_ = true;
             previewMeshOptions_ = document_.meshOptions();
             writePreviewToCaseAction_->setEnabled(true);
+            auto view = std::make_unique<chipcae::desktop::PreviewView>();
+            if (!view->show(*preview_)) {
+                statusBar()->showMessage(tr("Cannot display preview mesh"));
+                return;
+            }
+            // Controls reference the result view and session; destroy them first.
+            delete resultDock_;
+            resultDock_ = nullptr;
+            watermarkLabel_ = nullptr;
+            delete takeCentralWidget();
+            resultView_ = nullptr;
+            setCentralWidget(view.release());
+            refreshSourceUi();
+            previewDisplayed_ = true;
+            previewDisplayStale_ = false;
         } else {
             clearPreviewMeshOptions();
         }
@@ -192,7 +207,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     dock->setWidget(split);
     addDockWidget(Qt::LeftDockWidgetArea, dock);
     auto* stackDock = new QDockWidget(tr("Stack"), this);
-    stackDock->setWidget(new chipcae::desktop::StackEditor(document(), stackDock));
+    auto* stack = new chipcae::desktop::StackEditor(document(), stackDock);
+    connect(stack, &chipcae::desktop::StackEditor::previewInvalidated, this, [this] {
+        if (previewDisplayed_)
+            previewDisplayStale_ = true;
+    });
+    stackDock->setWidget(stack);
     addDockWidget(Qt::RightDockWidgetArea, stackDock);
     auto* edits = menuBar()->addMenu(tr("Case"));
     edits->addAction(tr("Apply properties"), outline, [outline] { outline->commitEdit(); });
@@ -539,9 +559,15 @@ bool MainWindow::workBusy() const {
         return false;
     }
 }
+chipcae::desktop::PreviewView* MainWindow::previewView() const {
+    return qobject_cast<chipcae::desktop::PreviewView*>(centralWidget());
+}
+bool MainWindow::previewDisplayStale() const {
+    return previewDisplayStale_;
+}
 bool MainWindow::previewMesh(const QString& program,
                              const QStringList& prefix,
-                             const chipcae::desktop::PreviewOptions&) {
+                             const chipcae::desktop::PreviewOptions& options) {
     if (workBusy() || !caseIsOpen())
         return false;
     clearPreviewMeshOptions();
@@ -559,7 +585,7 @@ bool MainWindow::previewMesh(const QString& program,
                     &document_,
                     previewOutput_->filePath(ref),
                     previewOutput_->filePath("mesh.vtkhdf"),
-                    {},
+                    options,
                     program == "chipcae-preview" ? entry.program : program,
                     program == "chipcae-preview" && prefix.isEmpty() ? entry.prefix : prefix);
             }
@@ -575,7 +601,7 @@ bool MainWindow::previewMesh(const QString& program,
     return preview_->start(&document_,
                            stack,
                            previewOutput_->filePath("mesh.vtkhdf"),
-                           {},
+                           options,
                            program == "chipcae-preview" ? entry.program : program,
                            program == "chipcae-preview" && prefix.isEmpty() ? entry.prefix
                                                                             : prefix);

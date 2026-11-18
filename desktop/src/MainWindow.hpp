@@ -58,9 +58,8 @@ public:
     bool previewMesh(const QString& program = "chipcae-preview",
                      const QStringList& prefix = {},
                      const chipcae::desktop::PreviewOptions& options = {});
-    // Test-first API stubs: central preview display and invalidation are not wired yet.
-    chipcae::desktop::PreviewView* previewView() const { return nullptr; }
-    bool previewDisplayStale() const { return false; }
+    chipcae::desktop::PreviewView* previewView() const;
+    bool previewDisplayStale() const;
     bool submitCurrentCase();
     void setSubmitProfile(const QJsonObject& p) { profile_ = p; }
     QJsonObject submitProfile() const { return profile_; }
@@ -101,6 +100,8 @@ private:
     QString lastMeshDigestDetail_;
     bool lastOpenCancelledForMeshDigest_ = false;
     bool previewDigestValid_ = false;
+    bool previewDisplayed_ = false;
+    bool previewDisplayStale_ = false;
     std::optional<chipcae::desktop::MeshOptions> previewMeshOptions_;
     QAction* writePreviewToCaseAction_ = nullptr;
     void clearPreviewMeshOptions();
