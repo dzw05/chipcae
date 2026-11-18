@@ -14,8 +14,7 @@ class WriterTwoSteps(unittest.TestCase):
         build = os.environ.get('CHIPCAE_BINARY_DIR')
         writer = Path(build) / 'io/chipcae_write_results' if build else None
         if writer is None or not writer.is_file() or not os.access(writer, os.X_OK):
-            print('SKIP: chipcae_write_results unavailable')
-            raise SystemExit(77)
+            self.skipTest('chipcae_write_results unavailable')
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp) / 'run'
             generated = subprocess.run(
