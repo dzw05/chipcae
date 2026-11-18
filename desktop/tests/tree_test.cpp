@@ -43,6 +43,12 @@ static void assemblyTreeAcceptance() {
     check(tree.index(0, 0).data() == "Stack layers" && tree.index(1, 0).data() == "Bodies" &&
               tree.index(2, 0).data() == "Materials",
           "root order Stack layers, Bodies, Materials");
+    const auto layers = tree.index(0, 0);
+    check(tree.rowCount(layers) == 2, "Stack layers contains only layers, no stack metadata");
+    for (int i = 0; i < tree.rowCount(layers); ++i)
+        check(tree.index(i, 0, layers).data(CaseTreeModel::PointerRole) ==
+                  QString("/layers/%1").arg(i),
+              "layer order excludes metadata");
     const auto bodies = childNamed(tree, {}, "Bodies");
     check(bodies.isValid() && tree.locate("", "bodies-index") == bodies, "Bodies root and locate");
     check(tree.rowCount(bodies) == 4, "four case-sensitive body groups, no anonymous index group");
@@ -106,11 +112,24 @@ static void assemblyTreeAcceptance() {
     check(!stackGroup.data().toString().contains("近似材料") &&
               stackGroup.data(CaseTreeModel::BodyAnnotationRole).toString().isEmpty(),
           "stack groups have no annotation");
+    for (const auto& duplicate :
+         {QJsonObject{{"id", "lid"}, {"material_approx", false}}, QJsonObject{{"id", "lid"}}}) {
+        tree.applyPartSummary(
+            QJsonArray{QJsonObject{{"id", "lid"}, {"material_approx", true}}, duplicate});
+        check(lid.data().toString() == "lid （近似材料）" &&
+                  lid.data(CaseTreeModel::BodyAnnotationRole) == "近似材料",
+              "duplicate false or missing approximation retains earlier true");
+    }
+    tree.applyPartSummary(QJsonArray{QJsonObject{{"id", "lid"}, {"material_approx", true}}});
     tree.applyPartSummary(QJsonArray{});
+    check(lid.data().toString() == "lid （近似材料）" &&
+              lid.data(CaseTreeModel::BodyAnnotationRole) == "近似材料",
+          "empty summary preserves label and annotation");
+    tree.applyPartSummary(QJsonArray{QJsonObject{{"id", "lid"}, {"material_approx", false}}});
     auto cleanLid = childNamed(tree, tree.locate("", "bodies-index"), "lid");
     check(cleanLid.isValid() &&
               cleanLid.data(CaseTreeModel::BodyAnnotationRole).toString().isEmpty(),
-          "empty summary clears annotation");
+          "nonempty false summary clears annotation");
     for (const auto& node : {tree.locate("", "bodies-index"),
                              cleanLid,
                              tree.locate("/layers/0/regions/0", "bodies-index")}) {

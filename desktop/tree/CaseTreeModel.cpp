@@ -64,13 +64,6 @@ void CaseTreeModel::refresh() {
     auto* layers = displayNode(invisibleRootItem(), "Stack layers", "stack");
     auto* bodies = displayNode(invisibleRootItem(), "Bodies", "bodies-index");
     QMap<QString, QStandardItem*> indexGroups;
-    if (stack.is_object()) {
-        for (const auto& member : stack.object_range()) {
-            const auto key = QString::fromStdString(member.key());
-            if (key != "layers")
-                append(layers, member.value(), "/" + key, "stack", key);
-        }
-    }
     if (stack.is_object() && stack.contains("layers") && stack.at("layers").is_array()) {
         const auto& values = stack.at("layers");
         for (size_t i = 0; i < values.size(); ++i) {
@@ -129,12 +122,16 @@ void CaseTreeModel::refresh() {
                key == std::string("output") ? "Results / output" : key);
 }
 void CaseTreeModel::applyPartSummary(const QJsonArray& parts) {
+    if (parts.isEmpty())
+        return;
     QMap<QString, bool> approximate;
     for (const auto& part : parts) {
         const auto object = part.toObject();
-        if (object.value("id").isString())
-            approximate[object.value("id").toString()] =
-                object.value("material_approx").toBool(false);
+        if (object.value("id").isString()) {
+            const auto id = object.value("id").toString();
+            approximate[id] =
+                approximate.value(id) || object.value("material_approx").toBool(false);
+        }
     }
     auto* bodies = itemFromIndex(locate("", "bodies-index"));
     if (!bodies)

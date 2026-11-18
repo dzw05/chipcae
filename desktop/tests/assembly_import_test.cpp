@@ -149,6 +149,43 @@ int main(int argc, char** argv) {
             require(QJsonDocument::fromJson(read(report)).object()["code"] == "IMPORT_REJECTED",
                     "rejection report");
         });
+    test("mock path components", [&] {
+        for (const auto* key : {"path", "material_map", "materials", "step"}) {
+            for (const auto& path : {QString("parts/lid..v2.step"),
+                                     QString("parts/../lid.step"),
+                                     QString(R"(parts\..\lid.step)"),
+                                     QString(R"(parts/..\lid.step)"),
+                                     QString(R"(parts\../lid.step)")}) {
+                QTemporaryDir dir;
+                auto assembly =
+                    QJsonDocument::fromJson(read(fixtures + "/example.assembly.json")).object();
+                if (QString(key) == "materials")
+                    assembly[key] = path;
+                else if (QString(key) == "step") {
+                    auto parts = assembly["parts"].toArray();
+                    auto part = parts[0].toObject();
+                    part[key] = path;
+                    parts[0] = part;
+                    assembly["parts"] = parts;
+                } else {
+                    auto board = assembly["board"].toObject();
+                    board[key] = path;
+                    assembly["board"] = board;
+                }
+                const auto input = dir.filePath("assembly.json");
+                const auto output = dir.filePath("stack.json");
+                write(input, QJsonDocument(assembly).toJson());
+                write(output, "sentinel");
+                const auto code = run({"--assembly", input, "-o", output});
+                if (path.contains("lid..v2"))
+                    require(code == 0 && read(output) != "sentinel",
+                            "ordinary filename with dots imports");
+                else
+                    require(code == 7 && read(output) == "sentinel",
+                            "either slash style traversal rejected without changing output");
+            }
+        }
+    });
     test("mock required arguments and unreadable input", [&] {
         QTemporaryDir dir;
         for (const auto& args :

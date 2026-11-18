@@ -20,7 +20,8 @@ def unsafe_path(value):
     if not isinstance(value, str):
         return True
     return (PurePosixPath(value).is_absolute()
-            or PureWindowsPath(value).is_absolute() or ".." in value)
+            or PureWindowsPath(value).is_absolute()
+            or ".." in PurePosixPath(value.replace("\\", "/")).parts)
 
 
 def rejection(assembly):
