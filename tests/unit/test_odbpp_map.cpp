@@ -456,7 +456,8 @@ void kicad_stackup() {
                 "KiCad exported thickness provenance");
         if (copper) {
             near(raw.layers[index].thickness_m, 30e-6, 1e-6);
-            require(!records[index].odb_value_m, "ODB source has no override conflict");
+            require(records[index].odb_value_m.has_value(), "copper override conflict provenance");
+            near(*records[index].odb_value_m, 30e-6, 1e-12);
         } else {
             near(raw.layers[index].thickness_m, thickness, 1e-6);
             require(!records[index].odb_value_m, "unmodified dielectric provenance");
@@ -486,7 +487,7 @@ void kicad_via() {
             std::string symbol;
             fields >> symbol;
             // KiCad's r alias is outside this mapper's round/rect/oval contract.
-            if (symbol.starts_with('r'))
+            if (symbol.size() > 1 && symbol[0] == 'r' && symbol[1] >= '0' && symbol[1] <= '9')
                 symbol = "round" + symbol.substr(1);
             require(index == static_cast<int>(features.symbols.size()), "fixture symbol order");
             features.symbols.push_back({symbol});
@@ -654,25 +655,33 @@ void overrides() {
         near(r.thickness_m, i == 3 ? 200e-6 : o.at(r.layer));
         near(m.layers[i].thickness_m, r.thickness_m);
         require(r.source == (i == 3 ? "odb" : "override"), "first available thickness source");
-        require(!r.odb_value_m, "first available source has no conflict");
+        if (i == 3) {
+            require(r.odb_value_m.has_value(), "ODB override conflict provenance");
+            near(*r.odb_value_m, 200e-6, 1e-12);
+        } else
+            require(!r.odb_value_m, "missing ODB has no conflict provenance");
     }
 }
 void override_provenance() {
     auto j = board();
     const double odb = mapped(j).layers.front().thickness_m;
-    for (double value : {2 * odb,
-                         odb * (1 + 2e-9),
-                         odb * (1 - 2e-9),
-                         odb * (1 + 0.5e-9),
-                         odb * (1 - 0.5e-9),
-                         odb}) {
-        ThicknessOverrides o{{"TOP", value}};
+    for (const auto& [value, conflict] : {std::pair{2 * odb, true},
+                                          {odb * (1 + 2e-9), true},
+                                          {odb * (1 - 2e-9), true},
+                                          {odb * (1 + 0.5e-9), false},
+                                          {odb * (1 - 0.5e-9), false},
+                                          {odb, false}}) {
+        ThicknessOverrides o{{"top", value}};
         std::vector<ThicknessRecord> records;
         const auto m = mapped(j, {&o, &records});
         near(m.layers.front().thickness_m, odb, 1e-12);
         near(records.front().thickness_m, odb, 1e-12);
         require(records.front().source == "odb", "positive ODB wins over every override");
-        require(!records.front().odb_value_m, "unused override has no conflict provenance");
+        require(records.front().odb_value_m.has_value() == conflict,
+                "relative conflict threshold provenance");
+        if (conflict)
+            near(*records.front().odb_value_m, odb, 1e-12);
+        require(!records.back().odb_value_m, "no matching override has no conflict provenance");
     }
     for (double value : {0.0,
                          -1.0,
@@ -1691,8 +1700,9 @@ void boundaries() {
     const double odb = mapped(board()).layers.front().thickness_m;
     near(m.layers.front().thickness_m, odb, 1e-12);
     near(records.front().thickness_m, odb, 1e-12);
-    require(records.front().source == "odb" && !records.front().odb_value_m,
+    require(records.front().source == "odb" && records.front().odb_value_m,
             "positive ODB wins over case-insensitive override");
+    near(*records.front().odb_value_m, odb, 1e-12);
     o["top"] = -1;
     near(mapped(j, {&o, nullptr}).layers.front().thickness_m, odb, 1e-12);
     j.attrs.layer["TOP"][".layer_dielectric"] = "0";

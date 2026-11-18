@@ -6,6 +6,7 @@
 #include <numbers>
 #include <stdexcept>
 #include <tuple>
+#include <utility>
 
 namespace chipcae::geometry::ecad::odbpp_detail {
 namespace {
