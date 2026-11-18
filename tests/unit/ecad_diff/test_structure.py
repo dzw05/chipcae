@@ -89,6 +89,24 @@ def main():
             assert 'P_layer = 0' in e['tol_derivation']
             layers = entry(r, 'layers')
             assert layers['grade'] == ('info' if left_copper == right_copper else 'hard')
+        # Missing copper defaults only its own side to zero; preserve present area.
+        for representation in ('fraction', 'polygons'):
+            present, absent = board(), board()
+            if representation == 'polygons':
+                polyset(directory, present)
+            del absent['layers'][0]['copper']
+            present_path = save(directory / 'present.json', present)
+            absent_path = save(directory / 'absent.json', absent)
+            for left, right, present_side in ((present_path, absent_path, 'odb'),
+                                               (absent_path, present_path, 'ipc')):
+                result = diff_stacks(left, right)
+                e = entry(result, 'copper_area', '0:F.Cu|F.Cu')
+                assert e['grade'] == 'hard'
+                number(e[present_side], AREA)
+                assert e['ipc' if present_side == 'odb' else 'odb'] == 0
+                number(e['delta'], AREA)
+                number(e['tol'], result['delta_m'] * 0.03)
+                assert entry(result, 'layers')['grade'] == 'hard'
         # Pipes in keys and nested material values remain within Markdown cells.
         b = copy.deepcopy(a)
         b['layers'][0]['material'] = 'mat|FR4'
