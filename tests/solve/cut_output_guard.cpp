@@ -45,6 +45,7 @@ struct Fixture {
         options.levels = 1;
         options.max_ratio = 100;
         mesh = mesh::build_tensor_grid(stack, options).value();
+        mesh.partitioning.assign(mesh.elem_gid.size(), 0);
 
         mesh::cut::CutGeometry geometry;
         for (const auto& [name, body] : mesh.attr_table.bodies) {
@@ -54,7 +55,6 @@ struct Fixture {
         mesh::cut::CutOptions cut_options;
         cut_options.export_polyhedra = true;
         cut = mesh::cut::build_cut_layer(mesh, geometry, cut_options).value();
-        mesh.partitioning.assign(mesh.elem_gid.size(), 0);
     }
 
     Local attribute_layer(Local parent) const {
