@@ -1,4 +1,6 @@
 if(TARGET chipcae-solve AND CHIPCAE_ENABLE_MFEM AND CHIPCAE_ENABLE_MPI AND CHIPCAE_ENABLE_HDF5)
+    # cmake/ChipcaeAutoTests.cmake documents and passes PROJECT_SOURCE_DIR as
+    # Python argument 1 for every collected test, matching the fallback below.
     chipcae_auto_tests(PREFIX demogate_ LABELS "cut;numerical" TIMEOUT 1800)
     set_property(TEST demogate_solve APPEND PROPERTY ENVIRONMENT
         "CHIPCAE_SOLVE_EXE=$<TARGET_FILE:chipcae-solve>")

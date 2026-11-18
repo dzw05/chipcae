@@ -77,6 +77,7 @@ with tempfile.TemporaryDirectory(prefix="demogate-") as tmp:
     polygon = np.asarray(read(work / "stack.json")["outline"]["polygon"])
     assert len(blocks["cut"]["Types"]) > 0
     assert np.all(blocks["cut"]["Types"] == 42)
+    assert len(blocks["hex"]["Types"]) > 0
     assert np.all(blocks["hex"]["CellData/cell_kind"] == 0)
     for name, block in blocks.items():
         points = block["Points"]
