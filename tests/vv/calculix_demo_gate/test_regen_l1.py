@@ -177,6 +177,73 @@ class DemoGateRegenTest(unittest.TestCase):
                 self.assertFalse(stale.exists(), "runner must remove stale FRD before launching ccx")
                 self.assertFalse((work / "REFERENCE.json").exists())
 
+    def test_failed_solver_retains_measured_resource_evidence(self):
+        module = self.generator()
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            fake = work / "failed_ccx"
+            fake.write_text(f"#!{sys.executable}\nraise SystemExit(7)\n")
+            fake.chmod(0o755)
+            with patch.object(module, "CCX", str(fake)):
+                with self.assertRaises(RuntimeError):
+                    module.run_ccx(work, "failed")
+            evidence = json.loads((work / "failed.failure.json").read_text())
+            self.assertEqual(evidence["returncode"], 7)
+            self.assertEqual(evidence["label"], "实测")
+            self.assertGreater(evidence["peak_rss_KiB"], 0)
+            self.assertGreater(evidence["wall_seconds"], 0)
+            self.assertFalse((work / "REFERENCE.json").exists())
+
+    def test_memory_limit_terminates_and_reaps_solver(self):
+        module = self.generator()
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            fake = work / "sleeping_ccx"
+            fake.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(60)\n")
+            fake.chmod(0o755)
+            processes = []
+            launch = subprocess.Popen
+
+            def record_launch(*args, **kwargs):
+                process = launch(*args, **kwargs)
+                processes.append(process)
+                return process
+
+            with patch("subprocess.Popen", side_effect=record_launch), patch.object(
+                module, "process_tree_rss", return_value=8 * 1024**2 + 1
+            ):
+                with self.assertRaisesRegex(ValueError, "8 GiB"):
+                    module.measured_solver(work, "guard", str(fake))
+            self.assertEqual(len(processes), 1)
+            self.assertIsNotNone(processes[0].poll(), "memory guard must reap the solver")
+            evidence = json.loads((work / "guard.failure.json").read_text())
+            self.assertEqual(evidence["peak_rss_KiB"], 8 * 1024**2 + 1)
+            self.assertFalse((work / "REFERENCE.json").exists())
+
+    def test_assessment_rejects_zero_differences_and_preserves_status_precedence(self):
+        module = self.generator()
+
+        def level(w, t, top):
+            return {"W_bfp_m": w, "T_max_K": t, "T_top_min_K": top,
+                    "heat_source": {"relative_error": 0.0},
+                    "temperature_transfer": {"max_abs_delta_K": 0.0}}
+
+        levels = [level(1.004, 308.154, 303.154), level(1.001, 308.151, 303.151),
+                  level(1.0, 308.15, 303.15)]
+        symmetry = level(1.004, 308.154, 303.154)
+        cross = level(1.0, 308.15, 303.15)
+        qualified = module.assess_reference(levels, symmetry, cross, 298.15)
+        self.assertEqual(qualified["status"], "合格")
+        self.assertEqual(set(qualified["selected"].values()), {"richardson"})
+        cross["W_bfp_m"] = 1.01
+        self.assertEqual(module.assess_reference(levels, symmetry, cross, 298.15)["status"],
+                         "需讨论")
+        levels[2]["T_max_K"] = levels[1]["T_max_K"]
+        rejected = module.assess_reference(levels, symmetry, cross, 298.15)
+        self.assertEqual(rejected["status"], "参考不合格")
+        self.assertIsNone(rejected["observed_order"]["T_max_K"])
+        self.assertFalse(rejected["criteria"]["b"])
+
     def test_version_query_accepts_201_and_requires_a_unique_version(self):
         module = self.generator()
         for code, stdout, stderr, accepted in (
