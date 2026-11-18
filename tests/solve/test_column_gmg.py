@@ -112,8 +112,10 @@ def run(exe, mpiexec, source, root, name, nx, ny, levels, preconditioner, ranks=
 
 
 def gmg_stats(result):
+    # LogLine carries binary code/error fields after its text, so bound numeric tokens.
     matches = [re.search(rb'U column_gmg L=(\d+) iterations=(\d+) '
-                         rb'relative_residual=(\S+) setup_seconds=(\S+) solve_seconds=(\S+)', log)
+                         rb'relative_residual=([-+0-9.eE]+) setup_seconds=([-+0-9.eE]+) '
+                         rb'solve_seconds=([-+0-9.eE]+)', log)
                for log in result['logs']]
     matches = [match for match in matches if match]
     assert len(matches) == 1, (f"{result['name']}: events are missing the U column_gmg L= line",
@@ -130,7 +132,8 @@ def gmg_stats(result):
 
 
 def lu_stats(result):
-    matches = [re.search(rb'U assembly_seconds=\S+.*? factor_seconds=(\S+) LU_solve_seconds=(\S+)', log)
+    matches = [re.search(rb'U assembly_seconds=[-+0-9.eE]+.*? factor_seconds=([-+0-9.eE]+) '
+                         rb'LU_solve_seconds=([-+0-9.eE]+)', log)
                for log in result['logs']]
     matches = [match for match in matches if match]
     assert len(matches) == 1, (f"{result['name']}: missing U LU timing line", result['logs'])
