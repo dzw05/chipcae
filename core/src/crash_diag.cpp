@@ -24,15 +24,14 @@ struct Snapshot {
     char lines[5][line_capacity]{};
     std::size_t lengths[5]{};
 };
-// A writer owns a slot at -1, a reader pins it at 1. The published slot is
-// never selected by the single ordinary-code writer. Three slots leave a spare
-// even when a handler on another thread has pinned an older publication.
-struct Slot {
-    std::atomic<int> users{0};
-    Snapshot snapshot;
-};
+// The first handler announces acquisition through handling before loading the
+// publication. The single ordinary-code writer checks that flag before loading
+// its current slot and never starts another update after acquisition begins.
+// One update already in flight can finish only in the other slot. Sequentially
+// consistent flag/publication operations let the handler read either complete
+// snapshot without waiting for an interrupted writer or racing slot reuse.
 static_assert(std::atomic<int>::is_always_lock_free);
-std::array<Slot, 3> slots;
+std::array<Snapshot, 2> slots;
 std::atomic<int> published{0};
 std::atomic_flag handling = ATOMIC_FLAG_INIT;
 int pinned_slot = 0;
@@ -88,7 +87,7 @@ static void write_signal_line(int sig) {
         ++index;
     if (index == 5 || signal_fd < 0)
         return;
-    const auto& snapshot = slots[pinned_slot].snapshot;
+    const auto& snapshot = slots[pinned_slot];
     const char* bytes = snapshot.lines[index];
     std::size_t offset = 0;
     unsigned int attempts = 0;
@@ -181,8 +180,7 @@ void CrashDiag::install(const std::filesystem::path& run_dir, int rank) {
         if (!S_ISREG(info.st_mode) || info.st_size != 0)
             throw std::runtime_error("diagnostic signal file must be an empty regular file");
         for (auto& slot : slots) {
-            slot.users.store(0);
-            format_snapshot(slot.snapshot, 0, 0.0);
+            format_snapshot(slot, 0, 0.0);
         }
         published.store(0);
         handling.clear();
@@ -192,8 +190,6 @@ void CrashDiag::install(const std::filesystem::path& run_dir, int rank) {
         ::sigemptyset(&action.sa_mask);
         for (const int sig : fatal_signals)
             ::sigaddset(&action.sa_mask, sig);
-        // The handler queues the same signal; delivery after return uses SIG_DFL.
-        action.sa_flags = SA_RESETHAND;
         for (std::size_t i = 0; i < fatal_signals.size(); ++i) {
             if (::sigaction(fatal_signals[i], &action, &previous_actions[i]) != 0)
                 system_failure("install diagnostic signal handler");
@@ -221,18 +217,11 @@ void CrashDiag::set_window(std::uint64_t window, double time) {
         return;
     if (!std::isfinite(time))
         throw std::invalid_argument("diagnostic time must be finite");
-    const int current = published.load();
-    for (int i = 0; i < 3; ++i) {
-        if (i == current)
-            continue;
-        int expected = 0;
-        if (!slots[i].users.compare_exchange_strong(expected, -1))
-            continue;
-        format_snapshot(slots[i].snapshot, window, time);
-        slots[i].users.store(0);
-        published.store(i);
+    if (handling.test())
         return;
-    }
+    const int next = 1 - published.load();
+    format_snapshot(slots[next], window, time);
+    published.store(next);
 }
 
 void CrashDiag::on_error(const CrashError& error) {
@@ -240,7 +229,7 @@ void CrashDiag::on_error(const CrashError& error) {
         throw std::logic_error("crash diagnostics are not installed");
     if (!valid_category(error.category))
         throw std::invalid_argument("invalid diagnostic failure category");
-    const auto& snapshot = slots[published.load()].snapshot;
+    const auto& snapshot = slots[published.load()];
     const std::string json =
         "{\"schema\":\"chipcae.diag.rank/0.1\",\"rank\":" + number(installed_rank) +
         ",\"category\":" + json_quote(error.category) + ",\"code\":" + json_quote(error.code) +
@@ -282,22 +271,10 @@ void CrashDiag::on_error(const CrashError& error) {
 // BEGIN SIGNAL HANDLER: all atomics below are always lock-free.
 void CrashDiag::on_signal(int sig) {
     if (!handling.test_and_set()) {
-        for (;;) {
-            const int index = published.load();
-            int expected = 0;
-            if (!slots[index].users.compare_exchange_strong(expected, 1))
-                continue;
-            if (index == published.load()) {
-                pinned_slot = index;
-                break;
-            }
-            slots[index].users.store(0);
-        }
+        pinned_slot = published.load();
         write_signal_line(sig);
     }
-    // Required deviation from the write/_exit-only contract: requeue this
-    // signal under SA_RESETHAND to preserve WIFSIGNALED/WTERMSIG semantics.
-    ::raise(sig);
+    ::_exit(128 + sig);
 }
 // END SIGNAL HANDLER
 

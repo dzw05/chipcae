@@ -1,5 +1,7 @@
 #include "support.hpp"
 
+#include <algorithm>
+#include <initializer_list>
 #include <regex>
 #include <spawn.h>
 
@@ -76,6 +78,20 @@ void rg_forbidden(const fs::path& file) {
     check(WIFEXITED(status) && WEXITSTATUS(status) == 1,
           "rg found forbidden signal-path operations or inspection failed");
 }
+
+void check_calls(const std::string& code, std::initializer_list<std::string_view> allowed) {
+    const std::regex call(R"(\b((?:[A-Za-z_]\w*\s*(?:::|\.)\s*)*[A-Za-z_]\w*)\s*\()");
+    for (auto it = std::sregex_iterator(code.begin(), code.end(), call);
+         it != std::sregex_iterator{};
+         ++it) {
+        const auto name = std::regex_replace((*it)[1].str(), std::regex(R"(\s+)"), "");
+        if (name == "if" || name == "while" || name == "for" || name == "switch" ||
+            name == "sizeof")
+            continue;
+        check(std::find(allowed.begin(), allowed.end(), name) != allowed.end(),
+              "signal path calls a function outside its whitelist: " + name);
+    }
+}
 } // namespace
 
 int main() {
@@ -96,15 +112,24 @@ int main() {
         rg_forbidden(helper_file);
         check(handler.find("write_signal_line") != std::string::npos,
               "on_signal must use the inspected signal writer");
-        const std::regex call(R"(\b([A-Za-z_]\w*)\s*\()");
-        for (auto it = std::sregex_iterator(helper.begin(), helper.end(), call);
-             it != std::sregex_iterator{};
-             ++it) {
-            const auto name = (*it)[1].str();
-            check(name == "write" || name == "_exit" || name == "if" || name == "while" ||
-                      name == "for" || name == "switch" || name == "sizeof",
-                  "signal writer calls a function outside write/_exit whitelist: " + name);
-        }
+        // Metadata is allowed only on the known, always-lock-free atomic objects.
+        const auto check_handler = [](const std::string& code) {
+            check_calls(code,
+                        {"handling.test_and_set", "published.load", "write_signal_line", "_exit"});
+        };
+        check_handler("if (!handling.test_and_set()) { published.load(); write_signal_line(sig); } "
+                      "::_exit(128 + sig);");
+        for (const auto* forbidden : {"::raise(sig);",
+                                      "::kill(1, sig);",
+                                      "std::terminate();",
+                                      "uninspected_helper(sig);",
+                                      "other.load();"})
+            expect_throw<std::runtime_error>([&] { check_handler(forbidden); },
+                                             "handler whitelist accepted a forbidden call");
+        check_handler(handler);
+        check(std::regex_search(handler, std::regex(R"(\b_exit\s*\()")),
+              "on_signal never calls _exit");
+        check_calls(helper, {"write", "_exit"});
         check(std::regex_search(helper, std::regex(R"(\bwrite\s*\()")),
               "signal writer never calls write");
     });

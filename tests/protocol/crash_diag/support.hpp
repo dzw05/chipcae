@@ -319,8 +319,8 @@ inline void disable_core_dumps() {
     check(::setrlimit(RLIMIT_CORE, &limit) == 0, "setrlimit failed");
 }
 inline void fatal_status(int status, int sig) {
-    check(WIFSIGNALED(status) && WTERMSIG(status) == sig,
-          "child must terminate by the injected signal (not return or throw)");
+    check(WIFEXITED(status) && WEXITSTATUS(status) == 128 + sig,
+          "handler must terminate with _exit(128 + sig) (not return or re-raise)");
 }
 inline void signal_evidence(const fs::path& dir, int rank, std::uint64_t window, int sig) {
     const auto expected =
