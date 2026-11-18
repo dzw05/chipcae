@@ -5,6 +5,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace chipcae::geometry::ecad {
 namespace {
@@ -21,13 +24,8 @@ std::string lower(std::string value) {
 }
 } // namespace
 ImportResult read_ipc2581_zip(const std::filesystem::path& file) {
-    if (lower(file.extension().string()) != ".zip" || std::filesystem::is_directory(file))
-        return rejected("IMPORT_REJECTED: IPC ZIP reader requires a .zip file");
     detail::ArchiveReader archive(file);
-    // For nonempty ZIP files this diagnostic follows successful archive validation.
-    // ZIPs without members need the IPC-specific no-XML diagnostic below.
-    if (!archive.open_error().empty() && (archive.open_error() != "IMPORT_REJECTED: empty input" ||
-                                          std::filesystem::file_size(file) == 0))
+    if (!archive.open_error().empty())
         return rejected(archive.open_error());
     std::vector<std::string> matches;
     for (const auto& entry : archive.entries()) {
@@ -49,7 +47,7 @@ ImportResult read_ipc2581_zip(const std::filesystem::path& file) {
             error += matches.empty() ? archive.entries()[i].path : matches[i];
         }
         if (count > 20)
-            error += " … (total " + std::to_string(count) + ")";
+            error += " …（共 " + std::to_string(count) + " 个）";
         return rejected(std::move(error));
     }
     const auto& name = matches.front();
@@ -75,9 +73,8 @@ ImportResult read_ipc2581_zip(const std::filesystem::path& file) {
             return !feed_failed;
         },
         error);
-    auto result = parser.finish();
     if (!feed_failed && !streamed && !error.empty())
         return rejected(std::move(error));
-    return result;
+    return parser.finish();
 }
 } // namespace chipcae::geometry::ecad

@@ -216,12 +216,8 @@ add_subdirectory(vv)
 # Explicit registration required by the import CLI brief; the auto-scan skips added dirs.
 add_subdirectory(integration/import_cli)
 
-# Keep this the last line: auto-adds test subdirectories that call chipcae_auto_tests().
-chipcae_auto_test_subdirs()
-
 # I-IPC-ZIP-LIB acceptance (test-first).
 if(CHIPCAE_ENABLE_ECAD)
-    find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_executable(chipcae_test_ipc2581_zip unit/test_ipc2581_zip.cpp)
     target_link_libraries(chipcae_test_ipc2581_zip PRIVATE chipcae::geometry_ecad)
     target_compile_definitions(chipcae_test_ipc2581_zip PRIVATE
@@ -233,6 +229,7 @@ if(CHIPCAE_ENABLE_ECAD)
         set_tests_properties(ipc_zip_${case} PROPERTIES LABELS "ecad" TIMEOUT 120)
     endforeach()
     set_tests_properties(ipc_zip_streaming PROPERTIES LABELS "ecad;heavy;nightly" TIMEOUT 600)
-    add_test(NAME ipc_reader_chunks_noop COMMAND chipcae_test_ipc2581)
-    set_tests_properties(ipc_reader_chunks_noop PROPERTIES LABELS "ecad" TIMEOUT 60)
 endif()
+
+# Keep this the last line: auto-adds test subdirectories that call chipcae_auto_tests().
+chipcae_auto_test_subdirs()

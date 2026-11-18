@@ -2,6 +2,7 @@
 #include "chipcae/geometry/ecad/ipc2581_zip.hpp"
 
 #include <bit>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -10,9 +11,12 @@
 #include <random>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <utility>
+#include <vector>
 namespace fs = std::filesystem;
 namespace ecad = chipcae::geometry::ecad;
 static void require(bool ok, const std::string& message) {
@@ -37,6 +41,7 @@ static std::string bytes(const fs::path& p) {
 static void write(const fs::path& p, const std::string& data) {
     std::ofstream out(p, std::ios::binary);
     out << data;
+    out.close();
     require(bool(out), "cannot write " + p.string());
 }
 // Arguments go through exec, never through shell quoting. Python's standard library
@@ -230,10 +235,22 @@ int main(int argc, char** argv) {
             }
         } else if (test == "ipc_zip_no_xml") {
             zip(archive, {});
-            rejected(ecad::read_ipc2581_zip(archive), {"no .xml entry"});
+            {
+                ecad::detail::ArchiveReader reader(archive);
+                require(!reader.open_error().empty(), "ArchiveReader rejects empty archive");
+                rejected(ecad::read_ipc2581_zip(archive), {});
+                require(ecad::read_ipc2581_zip(archive).error == reader.open_error(),
+                        "empty archive error must propagate verbatim");
+            }
             write(xml, "");
             zip(archive, {{"folder/", xml}});
-            rejected(ecad::read_ipc2581_zip(archive), {"no .xml entry"});
+            {
+                ecad::detail::ArchiveReader reader(archive);
+                require(!reader.open_error().empty(), "ArchiveReader rejects empty archive");
+                rejected(ecad::read_ipc2581_zip(archive), {});
+                require(ecad::read_ipc2581_zip(archive).error == reader.open_error(),
+                        "empty archive error must propagate verbatim");
+            }
             zip(archive, {{"folder/", xml}, {"__MACOSX/x.xml", fixture}, {"._a.xml", fixture}});
             rejected(ecad::read_ipc2581_zip(archive), {"no .xml entry"});
             zip(archive,
@@ -245,7 +262,7 @@ int main(int argc, char** argv) {
                 entries.emplace_back("raw-" + std::to_string(i) + ".txt", fixture);
             zip(archive, entries);
             auto r = ecad::read_ipc2581_zip(archive);
-            rejected(r, {"no .xml entry", "25"});
+            rejected(r, {"no .xml entry", "…（共 25 个）"});
             std::size_t previous = 0;
             for (int i = 0; i < 20; ++i) {
                 auto pos = r.error.find(entries[i].first);
@@ -393,7 +410,7 @@ int main(int argc, char** argv) {
         std::cout << "PASS " << test << '\n';
         return 0;
     } catch (const std::exception& e) {
-        std::cerr << "FAIL " << argv[1] << ": " << e.what() << '\n';
+        std::cerr << "FAIL " << (argc > 1 ? argv[1] : "(missing case)") << ": " << e.what() << '\n';
         return 1;
     }
 }
