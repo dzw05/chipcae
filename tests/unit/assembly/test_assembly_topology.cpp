@@ -53,9 +53,9 @@ int main() {
             }
         near(material_area, .01 * .01 - 2 * .002 * .002, 1e-16);
 
-        // Positive input area can collapse under scale-dependent coordinate normalization.
+        // A sliver below roundoff at its local extent collapses during normalization.
         p = part("collapsed");
-        p.slabs[0].sections = {rect(1, 1, 1e-15, 1e-15)};
+        p.slabs[0].sections = {rect(0, 0, .01, 1e-18)};
         const auto& tiny = p.slabs[0].sections[0].outer.pts;
         check((tiny[1][0] - tiny[0][0]) * (tiny[2][1] - tiny[0][1]) > 0,
               "positive pre-normalization area");

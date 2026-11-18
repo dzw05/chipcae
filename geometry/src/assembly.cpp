@@ -138,10 +138,15 @@ Footprint footprint(const Polygon& p, bool box_only) {
 }
 // Restrict coordinate coalescing to floating-point roundoff at this geometry's scale.
 Real coordinate_tolerance(const Polygon& p) {
-    Real scale = 0;
+    if (p.empty())
+        return 0;
+    Point lo = p.front(), hi = p.front();
     for (const auto& v : p)
-        scale = std::max({scale, std::abs(v[0]), std::abs(v[1])});
-    return 32 * std::numeric_limits<Real>::epsilon() * scale;
+        for (size_t j = 0; j < 2; ++j) {
+            lo[j] = std::min(lo[j], v[j]);
+            hi[j] = std::max(hi[j], v[j]);
+        }
+    return 32 * std::numeric_limits<Real>::epsilon() * std::max(hi[0] - lo[0], hi[1] - lo[1]);
 }
 Polygon normalize(Polygon p) {
     const Real tolerance = coordinate_tolerance(p);
@@ -186,11 +191,12 @@ bool rectilinear(const Polygon& p) {
 bool same_polygon(const Polygon& a, const Polygon& b) {
     if (a.size() != b.size())
         return false;
+    const Real tolerance = std::max(coordinate_tolerance(a), coordinate_tolerance(b));
     for (size_t shift = 0; shift < b.size(); ++shift) {
         bool equal = true;
         for (size_t i = 0; i < a.size(); ++i)
             for (size_t j = 0; j < 2; ++j)
-                equal = equal && std::abs(a[i][j] - b[(i + shift) % b.size()][j]) <= 1e-12;
+                equal = equal && std::abs(a[i][j] - b[(i + shift) % b.size()][j]) <= tolerance;
         if (equal)
             return true;
     }
@@ -546,8 +552,12 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
         if (std::abs(z - target) >= options.t_min)
             interfaces.insert(z);
     }
+    const std::set<Real> base_interfaces(boundaries.begin(), boundaries.end());
     auto aligned = [&](Real z) {
-        Real target = nearest(z, interfaces);
+        Real target = nearest(z, base_interfaces);
+        if (std::abs(z - target) < options.t_min)
+            return target;
+        target = nearest(z, interfaces);
         return std::abs(z - target) < options.t_min ? target : z;
     };
     // A shared exact endpoint is a weld too. A solitary endpoint introduced by
