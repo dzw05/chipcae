@@ -59,7 +59,7 @@ for name, path in schemas.items():
         resolution = {"resolver": jsonschema.RefResolver.from_schema(schema, store=schema_store)}
     jsonschema.validators.validator_for(schema)(schema, **resolution).validate(inputs[name])
 
-expected_stack = read(root / "schema/examples/fcbga_demo.stack.json")
+expected_stack = read(Path(__file__).with_name("baseline.stack.json"))
 expected_stack["id"] = "demo_gate"
 expected_stack["outline"]["polygon"] = polygon
 assert inputs["stack"] == expected_stack, "stack differs beyond the frozen edits"
@@ -94,7 +94,7 @@ for card in materials["materials"]:
     assert card.pop("conductivity") == conductivity[ident], ident
     source = card.pop("x-conductivity-source")
     assert source == sources[ident], (ident, source)
-assert materials == read(root / "schema/examples/fcbga_demo.materials.json")
+assert materials == read(Path(__file__).with_name("baseline.materials.json"))
 
 assert inputs["profile"] == {
     "schema": "chipcae.run_profile/1.0", "ranks": 1, "backend": "cpu", "gpus": 0}

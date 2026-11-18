@@ -1,32 +1,36 @@
-# DEMO-GATE acceptance validation
+# DEMO-GATE regression validation
 
-Acceptance is checked by `demogate_inputs` and, when MFEM, MPI, HDF5 and
-`chipcae-solve` are available, `demogate_solve`. Run the Release build and tests
-with the shared-slot command wrappers:
+Configure a Release build with MFEM, MPI and HDF5, then run:
 
 ```sh
-cmake --build /workspace/build-demogate-tdd-release -j2
-ctest --test-dir /workspace/build-demogate-tdd-release --output-on-failure
-ctest --test-dir /workspace/build-demogate-tdd-release -R '^demogate_' -V
+cmake --build <build-dir> -j2
+ctest --test-dir <build-dir> --output-on-failure
+ctest --test-dir <build-dir> -R '^demogate_' -V
 ```
 
-The verbose solve log prints 实测, the date in Asia/Shanghai, machine, HEAD,
-input implementation revision, working-tree status, cell and point counts,
-maximum temperature (K), solver warpage (m), mesh hash, and main-solve wall time.
-The solver evaluates its best-fit-plane QoI on Q2 nodes and cut-face quadrature
-points; VTKHDF contains only vertices. These sampling sets can produce different
-fitted planes and extrema, so a vertex fit cannot independently cross-check the
-solver QoI to a justified relative tolerance. The former unasserted vertex-fit
-comparison has been removed. Solver warpage must remain finite and positive,
-and repeated runs must agree to relative tolerance 1e-12.
+The verbose log marks observations 实测 and includes date (UTC+8), machine,
+revision (best effort), counts, temperature, warpage, mesh hash and wall time.
 
-Both output blocks must contain nonempty integer cell_kind, layer_id,
-material_id, and elem_gid arrays with one entry per cell; cell_kind must be 0
-for hex cells and 1 for cut cells. The zero-source control requires constant
-298.15 K temperature within 1e-8 K and displacement magnitude at most 1e-12 m.
-The negative control requires exit 14 and `chipcae-solve: invalid target: layer:Die_layer` on stderr.
+`baseline.stack.json` and `baseline.materials.json` freeze the brief's templates,
+with SHA256 db79e596ad6a1260378e9ce58b16ddf418645dd785f99dbc96d23f6d85d711d2
+and 6c6c06161fdf12df26021bfe6f8146cc08ab633dcf0f0da5529612e99d8bbe4f.
+Citation text was checked against the supplied thermal-properties brief §2.
 
-Historical runs against other revisions or uncommitted fixes are omitted.
-This file describes how to collect acceptance evidence; it makes no numerical
-acceptance claims for the current revision. The validation summary and final
-commit SHA are recorded in `/workspace/tasks/logs/demo-gate-sample-last.md`.
+The writer interface is documented in io/README.md: hex/cut PDC blocks,
+VTK types 12/42, one-based classification IDs, dense Morton column * nz + k
+identities. Spatial centroids must match the frozen layer heights and die box;
+all three layers and four materials must occur. The frozen mesh has 288 aligned
+columns and six thickness intervals, so IDs must cover 0 through 1727 once.
+
+Numerical bands are coarse regression guards, not physical validation of a real
+package. Substrate resistance t/(kA) is 0.823 K/W; allowed temperature rise is
+0.1 to 5 times P*R, with the existing maximum-principle bound retained and
+T_max below 340 K. Mean temperatures increase away from the cold bottom.
+Displacement magnitude is between 1 nm and 100 um. Thermal mismatch scale
+alpha*deltaT*L^2/H motivates a broad warpage band of 0.01 to 100 um.
+PV has no sign; the fitted top-surface center residual must be positive in that
+same band. This checks upward center curvature without defining S_cc on a cut
+outline. Vertex W_bfp is reported, with no relative-error acceptance criterion
+against the solver's Q2/quadrature-sampled PV. Repeat T/U and PV must agree to
+relative tolerance 1e-12. The zero-source and case-sensitive target controls
+retain their original thresholds.
