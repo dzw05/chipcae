@@ -2,6 +2,7 @@
 """Byte-level CLI acceptance tests; generation is only for the documented baseline."""
 import argparse
 import itertools
+import json
 import pathlib
 import shutil
 import subprocess
@@ -24,7 +25,7 @@ def check(condition, message):
         raise AssertionError(message)
 
 
-def record_or_compare(result, directory, reference, artifacts, generate):
+def record_or_compare(result, directory, reference, artifacts, generate, stdout_suffix=b""):
     (directory / "stdout").write_bytes(result.stdout)
     (directory / "stderr").write_bytes(result.stderr)
     if generate:
@@ -47,8 +48,44 @@ def record_or_compare(result, directory, reference, artifacts, generate):
             check(actual.exists() == golden.exists(),
                   f"{reference.name}/{name}: presence differs")
             if golden.exists():
-                check(actual.read_bytes() == golden.read_bytes(),
+                check(actual.read_bytes() == golden.read_bytes() +
+                      (stdout_suffix if name == "stdout" else b""),
                       f"{reference.name}/{name}: bytes differ")
+
+
+ECAD_HELP = (b"ODB++ / IPC-2581: chipcae-import <board.xml|board.tgz|board.zip|odb-directory> "
+             b"-o out.stack.json --material-map map.json [--stack-override override.json] "
+             b"[--report defects.json] [--accept import.accept.json | --accept-b-tier]\n")
+
+
+def check_unsupported(result, directory, reference):
+    # The ECAD CLI now requires explicit confirmation for these three omissions.
+    check(result.returncode == 6 and result.stdout == b"" and result.stderr ==
+          b"IMPORT_CONFIRMATION_REQUIRED: tier B defects require confirmation\n",
+          "unsupported: expected unconfirmed B exit 6 and diagnostic")
+    for name in ("stack.json", "stack.polyset", "import_layers.json"):
+        check(not (directory / name).exists(), f"unsupported: published {name}")
+    check(json.loads((directory / "defects.json").read_text()) == {
+        "code": "IMPORT_CONFIRMATION_REQUIRED",
+        "message": "tier B defects require confirmation", "defects": []},
+        "unsupported: confirmation summary differs")
+    expected = json.loads((reference / "import_report.json").read_text())
+    expected["tier_counts"]["B"] = 3
+    expected["defects"] = [{
+        "defect_id": f"board/Mystery{suffix}/2", "tier": "B",
+        "kind": "IMPORT_UNSUPPORTED_ELEMENT", "reason": 0, "dimension": "element",
+        "size": 1, "suggestion": "confirm omitted metadata, components or text",
+        "action": "", "rejection_reason": "tier B defect requires explicit confirmation",
+        "material_ambiguous": False} for suffix in "ABC"]
+    check(json.loads((directory / "import_report.json").read_text()) == expected,
+          "unsupported: three complete B defects must be reported")
+    expected_csv = (reference / "import_report.csv").read_bytes() + b"".join(
+        f'"board/Mystery{suffix}/2","B","IMPORT_UNSUPPORTED_ELEMENT",0,"element",1,'
+        '"confirm omitted metadata, components or text","",'
+        '"tier B defect requires explicit confirmation",false\n'.encode()
+        for suffix in "ABC")
+    check((directory / "import_report.csv").read_bytes() == expected_csv,
+          "unsupported: CSV defects differ")
 
 
 def run_case(binary, case, generate=False):
@@ -61,7 +98,11 @@ def run_case(binary, case, generate=False):
                 work.mkdir()
                 result = invoke(binary, [FIXTURES / f"{board}.xml", "-o", "stack.json",
                                          "--material-map", HERE / "material_map.json"], work)
-                record_or_compare(result, work, golden / board, (*ARTIFACTS, "stdout", "stderr"), generate)
+                if board == "unsupported" and not generate:
+                    check_unsupported(result, work, golden / board)
+                else:
+                    record_or_compare(result, work, golden / board,
+                                      (*ARTIFACTS, "stdout", "stderr"), generate)
             for name in ("empty_input", "truncated_input"):
                 work = directory / name
                 work.mkdir()
@@ -115,7 +156,8 @@ def run_case(binary, case, generate=False):
                 result = invoke(binary, args, directory)
                 check(result.returncode == code, f"{name}: exit {result.returncode}")
                 check(result.stderr == b"", f"{name}: unexpected stderr {result.stderr!r}")
-                record_or_compare(result, directory, golden / name, ("stdout", "stderr"), generate)
+                record_or_compare(result, directory, golden / name, ("stdout", "stderr"), generate,
+                                  stdout_suffix=ECAD_HELP)
             result = invoke(binary, ["a.xml", "-o", "b", "--help"], directory)
             record_or_compare(result, directory, golden / "mixed_help",
                               ("stdout", "stderr"), generate)
