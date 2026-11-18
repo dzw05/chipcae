@@ -539,7 +539,9 @@ bool MainWindow::workBusy() const {
         return false;
     }
 }
-bool MainWindow::previewMesh(const QString& program, const QStringList& prefix) {
+bool MainWindow::previewMesh(const QString& program,
+                             const QStringList& prefix,
+                             const chipcae::desktop::PreviewOptions&) {
     if (workBusy() || !caseIsOpen())
         return false;
     clearPreviewMeshOptions();

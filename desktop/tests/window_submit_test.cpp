@@ -3,18 +3,23 @@
 #include "LocalJobService.hpp"
 #include "MainWindow.hpp"
 #include "PreviewController.hpp"
+#include "ResultControls.hpp"
 #include "ResultView.hpp"
+#include "StackEditor.hpp"
 #include "SubmitDialog.hpp"
 
 #include <QAction>
 #include <QApplication>
 #include <QDir>
 #include <QDirIterator>
+#include <QDockWidget>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QLabel>
+#include <QPointer>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QStatusBar>
@@ -163,21 +168,29 @@ struct Fixture {
                       .toJson());
         return dir;
     }
-    QString previewScript() {
+    QString previewArguments() const { return temp.filePath("preview-argv.json"); }
+    QString previewScript(const QString& gate = {}, bool fail = false) {
         // Adapt the CLI fixture outside the schema-validated document.
         auto previewScript = temp.filePath("mock_window_preview.py");
         auto fixtureStack = temp.filePath("preview-input.json");
         write(fixtureStack,
-              QJsonDocument(
-                  QJsonObject{{"mock", QJsonObject{{"fixture", samples + "/legacy.vtkhdf"}}}})
+              QJsonDocument(QJsonObject{{"mock",
+                                         QJsonObject{{"fixture", samples + "/legacy.vtkhdf"},
+                                                     {"argv", previewArguments()},
+                                                     {"mode", fail ? "nonzero" : "success"}}}})
                   .toJson());
         auto encoded = [](const QString& value) {
             auto json = QJsonDocument(QJsonArray{value}).toJson(QJsonDocument::Compact);
             return json.mid(1, json.size() - 2);
         };
+        QByteArray wait;
+        if (!gate.isEmpty())
+            wait = "from pathlib import Path\nimport time\nPath(" + encoded(gate + ".ready") +
+                   ").write_text('ready')\nwhile not Path(" + encoded(gate) +
+                   ").exists():\n    time.sleep(0.01)\n";
         write(previewScript,
-              "import sys, runpy\nsys.argv[1] = " + encoded(fixtureStack) + "\nrunpy.run_path(" +
-                  encoded(PREVIEW_MOCK) + ", run_name='__main__')\n");
+              "import sys, runpy\n" + wait + "sys.argv[1] = " + encoded(fixtureStack) +
+                  "\nrunpy.run_path(" + encoded(PREVIEW_MOCK) + ", run_name='__main__')\n");
         return previewScript;
     }
     void openCase(MainWindow& w) {
@@ -191,7 +204,7 @@ PreviewController* previewController(MainWindow& w) {
     check(controllers.size() == 1, "window owns one preview controller");
     return controllers.first();
 }
-QString successfulPreview(MainWindow& w, Fixture& f) {
+QString successfulPreview(MainWindow& w, Fixture& f, const PreviewOptions& options = {}) {
     auto* controller = previewController(w);
     QObject receiver;
     bool finished = false, success = false;
@@ -199,7 +212,7 @@ QString successfulPreview(MainWindow& w, Fixture& f) {
         finished = true;
         success = ok;
     });
-    check(w.previewMesh(PYTHON_EXECUTABLE, {f.previewScript()}), "digest preview starts");
+    check(w.previewMesh(PYTHON_EXECUTABLE, {f.previewScript()}, options), "digest preview starts");
     check(waitFor([&] { return finished; }) && success, "digest preview finished(true)");
     check(controller->mesh() != nullptr && controller->digest().has_value(),
           "successful preview has mesh and digest");
@@ -276,6 +289,81 @@ QAction* writeAction(MainWindow& w) {
     }
     check(found != nullptr, "visible exact-text 写入 case action exists");
     return found;
+}
+PreviewOptions specifiedOptions() {
+    PreviewOptions options;
+    options.nx = 8;
+    options.ny = 9;
+    options.levels = 3;
+    options.maxRatio = 12;
+    return options;
+}
+void checkPreviewDisplay(MainWindow& w) {
+    PreviewView reference;
+    check(reference.show(*previewController(w)), "reference PreviewView shows current controller");
+    auto* view = w.previewView();
+    check(view != nullptr, "successful preview must install a central PreviewView");
+    check(w.centralWidget() == view, "PreviewView is the current central widget");
+    check(view->displayed() != nullptr, "central preview displays mesh data");
+    check(view->colorMode() == PreviewColorMode::Layer, "central preview defaults to Layer colors");
+    check(!view->summaryText().isEmpty(), "central preview has a mesh summary");
+    check(view->summaryText().toUtf8() == reference.summaryText().toUtf8(),
+          "central summary matches reference PreviewView byte for byte");
+    check(!w.previewDisplayStale(), "successful display resets stale flag");
+    check(w.writePreviewToCaseEnabled() && writeAction(w)->isEnabled(),
+          "successful display retains enabled write API and action");
+}
+void checkPreviewArguments(Fixture& f, const PreviewOptions& expected) {
+    const auto args = QJsonDocument::fromJson(read(f.previewArguments())).object();
+    check(args.contains("nx") && args.contains("ny") && args.contains("levels") &&
+              args.contains("max_ratio") && args.contains("surface"),
+          "preview CLI records every requested option field");
+    if (expected.nx) {
+        check(args["nx"].toInt(-1) == *expected.nx && args["ny"].toInt(-1) == *expected.ny,
+              "MainWindow forwards requested nx and ny");
+    } else {
+        check(args["nx"].isNull() && args["ny"].isNull(), "MainWindow preserves absent nx and ny");
+    }
+    check(args["levels"].toInt(-1) == expected.levels, "MainWindow forwards requested levels");
+    // Exact equality is the brief's forwarding contract (10 and 12 are exactly representable).
+    check(args["max_ratio"].toDouble(-1) == expected.maxRatio,
+          "MainWindow forwards requested max_ratio exactly");
+    if (expected.surface.isEmpty())
+        check(args["surface"].isNull(), "MainWindow preserves empty surface option");
+    else
+        check(args["surface"].toString() == expected.surface,
+              "MainWindow forwards the complete surface path including spaces");
+}
+struct PreviewSnapshot {
+    QPointer<PreviewView> view;
+    QByteArray summary;
+    vtkDataSet* displayed;
+    explicit PreviewSnapshot(MainWindow& w)
+        : view(w.previewView()), summary(view ? view->summaryText().toUtf8() : QByteArray()),
+          displayed(view ? view->displayed() : nullptr) {
+        check(view && displayed, "establish a displayed preview before preservation check");
+    }
+    void preserved(MainWindow& w) const {
+        check(view && w.previewView() == view && w.centralWidget() == view,
+              "pending or unsuccessful preview preserves the last central preview object");
+        check(view->summaryText().toUtf8() == summary && view->displayed() == displayed,
+              "pending or unsuccessful preview preserves displayed data and summary");
+    }
+};
+void editThickness(MainWindow& w) {
+    auto* editor = w.findChild<StackEditor*>();
+    check(editor != nullptr, "window owns StackEditor");
+    QObject receiver;
+    bool invalidated = false;
+    QObject::connect(
+        editor, &StackEditor::previewInvalidated, &receiver, [&] { invalidated = true; });
+    auto* model = editor->model();
+    auto index = model->index(0, LayerModel::Thickness);
+    check(index.isValid(), "fixture has an editable layer");
+    const double thickness = model->data(index, Qt::EditRole).toDouble();
+    check(thickness > 0 && model->setData(index, thickness * 1.1, Qt::EditRole),
+          "legal layer thickness edit succeeds");
+    check(waitFor([&] { return invalidated; }), "layer edit emits previewInvalidated");
 }
 void checkMeshOptions(const MeshOptions& actual, const MeshOptions& cached) {
     check(actual.nx == cached.nx && actual.ny == cached.ny && actual.levels == cached.levels &&
@@ -384,6 +472,204 @@ int main(int argc, char** argv) {
         }
     };
     using Choice = MainWindow::MeshDigestDialogChoice;
+    test("preview display defaults and no case rejection", [&] {
+        MainWindow w;
+        auto* central = w.centralWidget();
+        check(!w.caseIsOpen() && !w.previewMesh(PYTHON_EXECUTABLE, {PREVIEW_MOCK}),
+              "preview without an open case is rejected");
+        check(!w.previewView() && !w.previewDisplayStale() && w.centralWidget() == central,
+              "fresh window keeps placeholder with no preview and no stale display");
+    });
+    for (bool handwritten : {false, true}) {
+        for (bool specified : {false, true}) {
+            auto name = QString("preview options reach CLI: %1 %2")
+                            .arg(handwritten ? "handwritten stack" : "schema case",
+                                 specified ? "specified" : "defaults");
+            test(name.toUtf8().constData(), [&] {
+                Fixture f(argv[1]);
+                MainWindow w;
+                if (handwritten) {
+                    check(w.loadHandwrittenStack(), "load direct stack preview input");
+                    // The direct-stack branch still needs a mesh options object for the
+                    // controller's existing effective-options update; keep schema absent.
+                    w.document()->applyJson(Json::parse(R"({"mesh":{}})"));
+                } else
+                    f.openCase(w);
+                check(w.document()->toJson().contains("schema") == !handwritten,
+                      "fixture selects the intended schema-bundle or direct-stack branch");
+                auto options = specified ? specifiedOptions() : PreviewOptions{};
+                if (specified)
+                    options.surface = f.temp.filePath("surface mesh with spaces.vtkhdf");
+                successfulPreview(w, f, options);
+                checkPreviewArguments(f, options);
+                checkPreviewDisplay(w);
+                if (specified)
+                    check(w.previewView()->summaryText().section('\n', 0, 0) ==
+                              "nx=8 ny=9 levels=3 max_ratio=12",
+                          "specified preview summary has the frozen exact first line");
+            });
+        }
+    }
+    test("pending first preview keeps placeholder until successful display", [&] {
+        Fixture f(argv[1]);
+        MainWindow w;
+        f.openCase(w);
+        auto* central = w.centralWidget();
+        auto* controller = previewController(w);
+        QObject receiver;
+        bool finished = false, success = false;
+        QObject::connect(controller, &PreviewController::finished, &receiver, [&](bool ok) {
+            finished = true;
+            success = ok;
+        });
+        auto gate = f.temp.filePath("preview-release");
+        check(w.previewMesh(PYTHON_EXECUTABLE, {f.previewScript(gate)}), "gated preview starts");
+        check(waitFor([&] { return QFile::exists(gate + ".ready"); }), "preview reaches gate");
+        check(!finished && controller->running(), "gate holds preview before completion");
+        check(!w.previewView() && w.centralWidget() == central && !w.previewDisplayStale(),
+              "pending first preview leaves placeholder and stale flag unchanged");
+        write(gate, "go");
+        check(waitFor([&] { return finished; }) && success, "released preview finished(true)");
+        checkPreviewDisplay(w);
+    });
+    test("repeated preview displays the latest mesh summary", [&] {
+        Fixture f(argv[1]);
+        MainWindow w;
+        f.openCase(w);
+        successfulPreview(w, f);
+        checkPreviewDisplay(w);
+        auto first = w.previewView()->summaryText().toUtf8();
+        successfulPreview(w, f, specifiedOptions());
+        checkPreviewDisplay(w);
+        check(w.previewView()->summaryText().toUtf8() != first,
+              "second display replaces the first preview summary");
+        check(w.previewView()->summaryText().section('\n', 0, 0) ==
+                  "nx=8 ny=9 levels=3 max_ratio=12",
+              "second display reflects latest explicit options");
+    });
+    for (bool priorPreview : {false, true}) {
+        for (auto mode : {"failure", "cancel", "start failure"}) {
+            auto name = QString("unsuccessful preview preserves display: %1 %2")
+                            .arg(priorPreview ? "after success" : "first attempt", mode);
+            test(name.toUtf8().constData(), [&] {
+                Fixture f(argv[1]);
+                MainWindow w;
+                f.openCase(w);
+                std::optional<PreviewSnapshot> previous;
+                if (priorPreview) {
+                    successfulPreview(w, f);
+                    checkPreviewDisplay(w);
+                    previous.emplace(w);
+                }
+                auto* central = w.centralWidget();
+                auto preserved = [&] {
+                    if (previous)
+                        previous->preserved(w);
+                    else
+                        check(!w.previewView() && w.centralWidget() == central,
+                              "unsuccessful first preview keeps the original central widget");
+                };
+                auto* controller = previewController(w);
+                QObject receiver;
+                bool finished = false, success = true;
+                QObject::connect(controller, &PreviewController::finished, &receiver, [&](bool ok) {
+                    finished = true;
+                    success = ok;
+                });
+                const bool missingProgram = QString(mode) == "start failure";
+                auto gate = f.temp.filePath("failed-preview-release");
+                auto script = f.previewScript(gate, true);
+                bool started = w.previewMesh(missingProgram ? f.temp.filePath("missing-program")
+                                                            : QString(PYTHON_EXECUTABLE),
+                                             {script});
+                check(started || missingProgram, "unsuccessful fixture starts or fails to start");
+                preserved();
+                if (!missingProgram) {
+                    check(waitFor([&] { return QFile::exists(gate + ".ready"); }),
+                          "unsuccessful preview reaches gate");
+                    check(!finished && controller->running(), "gate holds unsuccessful preview");
+                    preserved();
+                    if (QString(mode) == "cancel")
+                        controller->cancel();
+                    else
+                        write(gate, "go");
+                }
+                if (started)
+                    check(waitFor([&] { return finished; }) && !success,
+                          "unsuccessful preview emits finished(false)");
+                check(!controller->running(), "unsuccessful preview is no longer running");
+                preserved();
+                check(!w.previewDisplayStale(),
+                      "failure alone does not invalidate displayed stack");
+            });
+        }
+    }
+    test("preview results preview releases replaced views and result controls", [&] {
+        Fixture f(argv[1]);
+        MainWindow w;
+        f.openCase(w);
+        successfulPreview(w, f);
+        checkPreviewDisplay(w);
+        QPointer<PreviewView> oldPreview = w.previewView();
+        w.setMeshDigestDialogChoice(Choice::Accept);
+        check(w.openResultsPath(f.result("mock") + "/manifest.json"), "open results after preview");
+        check(w.resultView() && w.centralWidget() == w.resultView() && !w.previewView(),
+              "results replace central preview and clear preview getter");
+        check(waitFor([&] { return oldPreview.isNull(); }), "replaced PreviewView is released");
+        QPointer<ResultView> oldResult = w.resultView();
+        QPointer<QWidget> controls;
+        QPointer<QDockWidget> dock;
+        for (auto* widget : w.findChildren<QWidget*>()) {
+            if (dynamic_cast<ResultControls*>(widget)) {
+                check(!controls, "one result controls widget before replacement");
+                controls = widget;
+                dock = qobject_cast<QDockWidget*>(widget->parentWidget());
+            }
+        }
+        QPointer<QLabel> watermark;
+        for (auto* label : oldResult->findChildren<QLabel*>()) {
+            if (label->text() == w.provenanceWatermark())
+                watermark = label;
+        }
+        check(controls && dock && watermark, "result controls dock and watermark are present");
+        successfulPreview(w, f, specifiedOptions());
+        checkPreviewDisplay(w);
+        check(w.resultView() == nullptr, "preview replacement clears resultView getter");
+        check(waitFor([&] { return !oldResult && !controls && !dock && !watermark; }),
+              "preview replacement releases old result, controls, dock and watermark");
+    });
+    test("stack invalidation tracks the most recent successful preview display", [&] {
+        Fixture f(argv[1]);
+        MainWindow w;
+        f.openCase(w);
+        editThickness(w);
+        check(!w.previewDisplayStale(), "editing before the first display does not mark it stale");
+        successfulPreview(w, f);
+        checkPreviewDisplay(w);
+        editThickness(w);
+        check(waitFor([&] { return w.previewDisplayStale(); }),
+              "stack invalidation after a successful display marks the preview stale");
+        successfulPreview(w, f);
+        checkPreviewDisplay(w);
+        check(!w.previewDisplayStale(), "new successful display clears stack staleness");
+    });
+    test("specified preview to write case preserves effective mesh options", [&] {
+        Fixture f(argv[1]);
+        MainWindow w;
+        f.openCase(w);
+        successfulPreview(w, f, specifiedOptions());
+        checkPreviewArguments(f, specifiedOptions());
+        checkPreviewDisplay(w);
+        const auto effective = previewController(w)->effectiveOptions();
+        const auto cellBudget = w.document()->meshOptions().cellBudget;
+        check(w.writePreviewToCase(), "displayed preview options write to case and finalize");
+        const auto actual = w.document()->meshOptions();
+        check(actual.nx == effective.nx && actual.ny == effective.ny &&
+                  actual.levels == effective.levels && actual.maxRatio == effective.maxRatio,
+              "written nx, ny, levels and maxRatio equal preview effective options exactly");
+        check(actual.cellBudget == cellBudget && w.document()->errors().empty(),
+              "write retains cellBudget and finalizes without validation errors");
+    });
     test("digest defaults and unavailable write leave document unchanged", [&] {
         MainWindow w;
         check(w.meshDigestDialogChoice() == Choice::Unset, "digest hook initially Unset");
@@ -401,8 +687,8 @@ int main(int argc, char** argv) {
         MainWindow w;
         f.openCase(w);
         check(w.openResultsPath(f.result("real") + "/manifest.json"), "open original result");
-        ResultSnapshot before(w);
         auto hash = successfulPreview(w, f);
+        ResultSnapshot before(w);
         auto other = differentHash(hash);
         auto path = digestResult(f, other);
         w.setMeshDigestDialogChoice(Choice::Cancel);
@@ -858,6 +1144,7 @@ int main(int argc, char** argv) {
         auto controllers = w.findChildren<PreviewController*>();
         check(!controllers.isEmpty() && controllers.first()->mesh() != nullptr,
               "completed preview has mesh");
+        checkPreviewDisplay(w);
     });
     test("submit auto monitor and completed results", [&] {
         Fixture f(argv[1]);
