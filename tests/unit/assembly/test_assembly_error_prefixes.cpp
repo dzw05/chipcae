@@ -27,6 +27,15 @@ int main() {
             a.bond->thickness = t;
             invalid_input(place(src, a, b), "bond thickness must be > 0");
         }
+        a.bond->thickness = 5e-5;
+        for (double gap :
+             {std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
+            a.gap = gap;
+            invalid_input(place(src, a, b), "invalid attachment gap");
+            a.bond.reset();
+            invalid_input(place(src, a, b), "invalid attachment gap");
+            a.bond = Bond{"glue", 5e-5};
+        }
         invalid_input(place({}, FramePlacement{}, b));
         invalid_input(merge_parts({}, {part()}, options()), "base has no layers");
         auto empty = part();

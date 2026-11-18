@@ -395,10 +395,12 @@ place(std::vector<Slab> local, const Placement& placement, const StackModel& bas
         const auto& attach = std::get<AttachPlacement>(placement);
         if (attach.bond && (!std::isfinite(attach.bond->thickness) || attach.bond->thickness <= 0))
             return invalid("bond thickness must be > 0");
-        if (attach.bond && attach.bond->thickness != attach.gap)
-            return invalid("bond gap != thickness");
         if (!std::isfinite(attach.gap) || attach.gap < 0)
             return invalid("invalid attachment gap");
+        if (attach.bond && std::abs(attach.bond->thickness - attach.gap) >
+                               4 * std::numeric_limits<Real>::epsilon() *
+                                   std::max(std::abs(attach.bond->thickness), std::abs(attach.gap)))
+            return invalid("bond gap != thickness");
         if (attach.target.rfind("part:", 0) == 0 && !attach.resolved_z)
             return invalid("part attach requires resolved_z");
         Real face = 0;
@@ -548,10 +550,21 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
         Real target = nearest(z, interfaces);
         return std::abs(z - target) < options.t_min ? target : z;
     };
+    // A shared exact endpoint is a weld too. A solitary endpoint introduced by
+    // one slab is only a new interface, not a weld.
+    std::map<Real, size_t> endpoint_counts;
+    for (Real z : boundaries)
+        ++endpoint_counts[z];
+    for (const auto& slabs : sources)
+        for (const auto& source : slabs)
+            if (!source.regions.empty()) {
+                ++endpoint_counts[source.lo];
+                ++endpoint_counts[source.hi];
+            }
     std::set<Real> snapped_interfaces;
     for (Real z : candidates) {
         Real target = aligned(z);
-        if (target != z && std::abs(z - target) < options.eps_weld)
+        if ((target != z || endpoint_counts[z] > 1) && std::abs(z - target) < options.eps_weld)
             snapped_interfaces.insert(target);
     }
     result.welded_interfaces = static_cast<std::int64_t>(snapped_interfaces.size());

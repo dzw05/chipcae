@@ -49,6 +49,10 @@ int main() {
                                       "bond identity");
                             }
                     check(found, "bond region");
+                    a.bond->thickness = std::nextafter(gap, 0.);
+                    check(bool(place(src, a, b)), "one-ulp bond difference accepted");
+                    a.bond->thickness = std::nextafter(gap, 1.);
+                    check(bool(place(src, a, b)), "one-ulp bond difference accepted above gap");
                     a.bond->thickness = gap * 2;
                     invalid_input(place(src, a, b), "bond gap != thickness");
                 } else
