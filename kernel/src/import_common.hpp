@@ -1,11 +1,8 @@
 #pragma once
 
-#include "chipcae/geometry/import_thresholds.hpp"
-
 #include <filesystem>
 #include <optional>
 #include <string>
-#include <vector>
 
 // Private to chipcae-import; this header is not an installed public API.
 namespace chipcae::importer {
@@ -34,10 +31,6 @@ std::string step_help();
 void write_defects(const std::filesystem::path& file,
                    const std::string& code,
                    const std::string& message);
-void write_defects(const std::filesystem::path& file,
-                   const std::string& code,
-                   const std::string& message,
-                   const std::vector<geometry::Defect>& defects);
 void derive_output_paths(ImportOptions& options);
 std::filesystem::path import_report_directory(const std::filesystem::path& output);
 } // namespace chipcae::importer

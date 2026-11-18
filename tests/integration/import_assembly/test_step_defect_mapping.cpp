@@ -103,13 +103,13 @@ int main() {
         require(json["parts"]["material_approx"][0]["id"].as<std::string>() == special,
                 "material extension roundtrip");
         require(json.at("defects").size() == 3, "report roundtrip count");
-        importer::write_defects(dir / "defects.json", "IMPORT_REJECTED", special, mapped);
+        importer::write_assembly_defects(dir / "defects.json", "IMPORT_REJECTED", special, mapped);
         const auto defects_json = jsoncons::json::parse(sp4_test::bytes(dir / "defects.json"));
-        require(defects_json["defects"] == json["defects"],
-                "shared writer must preserve the final report defect vector");
+        require(defects_json["defects"] == shared["defects"],
+                "defects output must preserve shared fields without details");
         require(defects_json["message"].as<std::string>() == special,
                 "shared defects writer must escape messages");
-        importer::write_defects({}, "OK", "", mapped);
+        importer::write_assembly_defects({}, "OK", "", mapped);
 
         for (std::size_t i = 0; i < mapped.size(); ++i) {
             const auto& d = json.at("defects").at(i);

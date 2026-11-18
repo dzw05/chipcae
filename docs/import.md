@@ -34,7 +34,7 @@ or real slicing/merge diagnostics until SP2/SP3 land. All other errors propagate
 Assembly reports preserve the shared geometry report fields and CSV contract.
 The assembly JSON extension adds `details` to each defect and a `parts` object
 containing `split_layers`, `rewrite_targets`, and `material_approx`; the final
-`import_report.json` is published once from the shared report data.
+`import_report.json` is written from the shared report data and updated when a failure changes the final diagnostics.
 
 The build copies assembly/stack schemas and the error protocol into
 `import-assets` beside the build outputs. Installation packages them under

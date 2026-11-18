@@ -13,8 +13,11 @@ int main() {
     for (bool accept_all : {false, true}) {
         const auto policy =
             geometry::apply_repair_policy(defects, {"lid/attach_invalid"}, accept_all);
-        if (policy.result != geometry::ImportResult::Rejected ||
-            importer::assembly_error_exit("IMPORT_REJECTED: C-tier defects") != 7)
+        if (policy.result != geometry::ImportResult::Rejected
+#if defined(CHIPCAE_ENABLE_JSONCONS)
+            || importer::assembly_error_exit("IMPORT_REJECTED: C-tier defects") != 7
+#endif
+        )
             return 1;
     }
     auto part =
@@ -27,8 +30,10 @@ int main() {
     b.defect_id = "synthetic/thin-layer";
     if (geometry::apply_repair_policy({b}, {}).result !=
             geometry::ImportResult::ConfirmationRequired ||
+#if defined(CHIPCAE_ENABLE_JSONCONS)
         importer::assembly_error_exit(
             "IMPORT_CONFIRMATION_REQUIRED: B-tier defects require acceptance") != 6 ||
+#endif
         geometry::apply_repair_policy({b}, {b.defect_id}).result !=
             geometry::ImportResult::Success ||
         geometry::apply_repair_policy({b}, {}, true).result != geometry::ImportResult::Success)

@@ -1,6 +1,7 @@
 """Capability declarations must agree with linked implementations."""
 import hashlib
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 from assembly_test_support import SOURCE
@@ -37,7 +38,7 @@ with tempfile.TemporaryDirectory() as tmp:
         config += ('if(NOT DETECTED STREQUAL "' + (declaration or 'OFF') + '")\n'
                    'message(FATAL_ERROR "wrong detected capability")\nendif()\n')
         (case / 'CMakeLists.txt').write_text(config)
-        args = ['cmake', '-G', 'Ninja', '-S', str(case), '-B', str(case / 'build')]
+        args = ['cmake', '-G', 'Ninja' if shutil.which('ninja') else 'Unix Makefiles', '-S', str(case), '-B', str(case / 'build')]
         if override:
             args.append('-DDETECTED=' + override)
         result = subprocess.run(args, capture_output=True, text=True)

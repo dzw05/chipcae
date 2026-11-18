@@ -4,6 +4,7 @@
 #include <sstream>
 
 int main() {
+#if defined(CHIPCAE_ENABLE_JSONCONS)
     using chipcae::importer::assembly_error_exit;
     const auto prefixed = chipcae::importer::assembly_failure_message(
         "INPUT_INVALID", "CUT_UNSUPPORTED: outline needs one ring");
@@ -39,4 +40,7 @@ int main() {
             assembly_error_exit("BOGUS: x", unknown) != 1)
             return 1;
     }
+#else
+    return 77;
+#endif
 }
