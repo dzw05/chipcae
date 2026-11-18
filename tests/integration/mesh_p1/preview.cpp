@@ -30,12 +30,21 @@ int main(int argc, char** argv) {
     try {
         auto fixture = fs::path(K1_ROOT) / "schema/examples/fcbga_demo.stack.json";
         auto output = dir / "grid";
-        auto invoke = [&](const std::string& args, int expected_code) {
+        auto invoke = [&](const std::string& args,
+                          int expected_code,
+                          int expected_levels = -1,
+                          std::string expected_n0 = "") {
+            jsoncons::json summary;
             auto prefix = argc == 4 ? shell(argv[2]) + " " + argv[3] + " " : "";
             auto command = prefix + shell(argv[1]) + " " + args + " >" +
                            shell((dir / "stdout").string()) + " 2>" +
                            shell((dir / "stderr").string());
             int code = std::system(command.c_str());
+            if (!WIFEXITED(code) || WEXITSTATUS(code) != expected_code) {
+                std::ifstream diagnostic(dir / "stderr");
+                std::cerr << "Expected exit " << expected_code << ", actual status " << code << ": "
+                          << diagnostic.rdbuf();
+            }
             expect(WIFEXITED(code) && WEXITSTATUS(code) == expected_code, "CLI exact exit status");
             std::ifstream stream(dir / "stdout");
             std::string line, last;
@@ -54,9 +63,16 @@ int main(int argc, char** argv) {
                     expect(params.at("max_ratio").as<double>() ==
                                (args.find("--max-ratio 12.5") != std::string::npos ? 12.5 : 10),
                            "effective max ratio");
-                    expect(params.at("L").as<int>() == (argc == 4 ? 0 : 1) &&
-                               params.at("n0").as<std::string>() == (argc == 4 ? "9x9" : "5x5"),
-                           "effective hierarchy");
+                    expect(
+                        params.at("L").as<int>() ==
+                                (expected_levels < 0 ? (argc == 4 ? 0 : 1) : expected_levels) &&
+                            params.at("n0").as<std::string>() ==
+                                (expected_n0.empty() ? (argc == 4 ? "9x9" : "5x5") : expected_n0),
+                        "effective hierarchy");
+                    for (const auto& field : params.object_range())
+                        expect(event.at(field.key()) == field.value(),
+                               "top-level and success.message summaries agree");
+                    summary = params;
                 }
                 ++count;
             }
@@ -65,6 +81,7 @@ int main(int argc, char** argv) {
                        "exactly one terminal and rank-zero progress events");
             expect(count > 0 && last == (expected_code == 0 ? "success" : "error"),
                    "terminal JSON event");
+            return summary;
         };
         auto base = shell(fixture.string()) + " --nx 2 --ny 2 --levels 0";
         invoke(base + " -o " + shell(output.string()), 0);
@@ -242,6 +259,57 @@ int main(int argc, char** argv) {
         std::ofstream(invalid) << "{\"bad\": true}";
         invoke(shell(invalid.string()) + " -o " + shell(bad.string()), 1);
         expect(!fs::exists(bad.string() + ".vtkhdf"), "no invalid stack output");
+        auto tiny = dir / "tiny.stack.json";
+        std::ofstream(tiny) << R"({"id":"tiny","unit":"m","outline":{"box":[0,0,7,5]},
+"symmetry":"none","package_type":"FCBGA","layers":[{"name":"solid","thickness":1,
+"kind":"Homogenized","material":"solid_eq","n_elem_min":1,"grading":1}]})";
+        int acceptance_failures = 0;
+        auto acceptance = [&](const char* name, auto check) {
+            try {
+                check();
+            } catch (const std::exception& error) {
+                ++acceptance_failures;
+                std::cerr << name << ": " << error.what() << '\n';
+            }
+        };
+        auto stderr_contains = [&](const char* path) {
+            std::ifstream diagnostic(dir / "stderr");
+            std::string message((std::istreambuf_iterator<char>(diagnostic)), {});
+            expect(message.find(path) != std::string::npos, "mesh error path in stderr");
+        };
+        acceptance("tiny padding and SHA", [&] {
+            auto summary = invoke(shell(tiny.string()) + " --nx 7 --ny 5 --levels 2 -o " +
+                                      shell((dir / "padded").string()),
+                                  0,
+                                  1,
+                                  "4x3");
+            for (auto [key, value] : {std::pair{"nx0", 4}, {"ny0", 3}, {"L", 1}, {"nz", 1}})
+                expect(summary.at(key).is_int64() && summary.at(key).as<int>() == value,
+                       "tiny hierarchy integer summary");
+            // Pre-change baseline aafc877142d5ebe2d16befe80f8c830384beeb49; tiny box=[0,0,7,5],
+            // nx=7, ny=5, levels=2.
+            expect(summary.at("mesh_sha256").as<std::string>() ==
+                       "31ccb0783121d620d23890e5bab6e87fa6f86cc4cc8bc521ff9138c715ac49a6",
+                   "padded mesh SHA matches pre-change baseline");
+            const auto& padded = summary.at("padded_cells");
+            std::cerr << "tiny padded_cells=" << padded << "; expected 13\n";
+            expect(padded.is_int64() && padded.as<int>() == 13 && padded.as<int>() > 0,
+                   "padded_cells is integer 13 and positive");
+        });
+        acceptance("tiny cell budget", [&] {
+            invoke(shell(tiny.string()) + " --nx 50001 --ny 1 --levels 1 -o " +
+                       shell((dir / "budget").string()),
+                   14);
+            stderr_contains("cell_budget");
+        });
+        if (argc == 4)
+            acceptance("tiny hierarchy alias", [&] {
+                invoke(shell(tiny.string()) + " --nx 2 --ny 2 --levels 2 -o " +
+                           shell((dir / "hierarchy").string()),
+                       4);
+                stderr_contains("hierarchy/levels");
+            });
+        expect(acceptance_failures == 0, "preview acceptance cases");
         fs::remove_all(dir);
     } catch (...) {
         std::cerr << "Preview artifacts: " << dir << '\n';
