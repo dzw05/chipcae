@@ -6,6 +6,7 @@
 
 #include <QPointer>
 #include <QWidget>
+#include <memory>
 #include <vtkType.h>
 
 class vtkDataSet;
@@ -56,15 +57,16 @@ private:
     bool running_ = false, success_ = false, cancelled_ = false;
     int nx_ = 0, ny_ = 0, finest_ = 0;
     double ratio_ = 10;
+    PreviewOptions effective_;
 };
 
 enum class PreviewColorMode { Layer, Material };
 
-// TEST-FIRST: declarations backed only by inert compilation stubs in the .cpp.
 class PreviewView : public QWidget {
     Q_OBJECT
 public:
     explicit PreviewView(QWidget* parent = nullptr);
+    ~PreviewView() override;
     using QWidget::show;
     bool show(const PreviewController& controller);
     bool show(vtkDataObject* mesh,
@@ -79,5 +81,9 @@ public:
     QString scalarArrayName() const;
     vtkDataSet* displayed() const;
     int highlightedCount() const;
+
+private:
+    struct State;
+    std::unique_ptr<State> d;
 };
 } // namespace chipcae::desktop

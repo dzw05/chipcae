@@ -13,6 +13,7 @@
 #include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
 #include <vtkCellData.h>
@@ -215,6 +216,51 @@ void viewAcceptance(Acceptance& a) {
         a.values(view, "cell_kind", {0, 1, 1, 0}, "composite filtering");
         a.expect(view.summaryText() == firstLine + "\nhex cut downgrade",
                  "multiple downgraded blocks append the marker only once");
+    }
+    {
+        // Appending a block without ids must not discard another block's classification.
+        auto first = grid();
+        auto second = grid();
+        second->GetCellData()->RemoveArray("layer_id");
+        first->GetCellData()->RemoveArray("material_id");
+        vtkNew<vtkMultiBlockDataSet> composite;
+        composite->SetBlock(0, first);
+        composite->SetBlock(1, second);
+        PreviewView view;
+        a.expect(view.show(composite, layers, materials, {block, block}, options),
+                 "partially missing classification arrays accepted");
+        a.cells(view, 4, 2, "partially missing classifications");
+        auto shown = view.displayed();
+        auto layer = shown ? shown->GetCellData()->GetArray("layer_id") : nullptr;
+        auto material = shown ? shown->GetCellData()->GetArray("material_id") : nullptr;
+        a.expect(layer && layer->GetNumberOfTuples() == 4 && layer->GetComponent(0, 0) == 1 &&
+                     layer->GetComponent(1, 0) == 2 && std::isnan(layer->GetComponent(2, 0)),
+                 "known layer ids survive append and missing ids remain unknown");
+        a.expect(material && material->GetNumberOfTuples() == 4 &&
+                     std::isnan(material->GetComponent(0, 0)) &&
+                     material->GetComponent(2, 0) == 1 && material->GetComponent(3, 0) == 1,
+                 "known material ids survive append and missing ids remain unknown");
+        a.expect(view.colorBarTitle().contains("die"), "partial layer names remain available");
+        view.setColorMode(PreviewColorMode::Material);
+        a.expect(view.colorBarTitle().contains("cu"), "partial material names remain available");
+        // Both the display and its arrays must own their data independently of the input.
+        addCells(second, "material_id", {9, 9, 9});
+        a.expect(material && material->GetComponent(2, 0) == 1,
+                 "displayed classification is independent of later input changes");
+        const auto summary = view.summaryText();
+        PreviewBlock invalid = block;
+        invalid.visibleCells = {3};
+        a.expect(!view.show(first, layers, materials, {invalid}, {}),
+                 "out-of-range cells rejected");
+        invalid = block;
+        invalid.highlightedCells = {2};
+        a.expect(!view.show(first, layers, materials, {invalid}, {}),
+                 "highlights outside visible cells rejected");
+        a.expect(!view.show(composite, layers, materials, {block}, {}),
+                 "mismatched block count rejected");
+        a.expect(view.displayed() == shown && view.summaryText() == summary &&
+                     view.highlightedCount() == 2 && view.colorMode() == PreviewColorMode::Material,
+                 "invalid replacements preserve the last valid result");
     }
     {
         PreviewView view;

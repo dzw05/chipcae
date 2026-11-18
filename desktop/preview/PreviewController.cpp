@@ -1,21 +1,41 @@
 #include "PreviewController.hpp"
 
+#include <QColor>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLabel>
 #include <QRegularExpression>
+#include <QVBoxLayout>
+#include <QVTKOpenGLNativeWidget.h>
+#include <algorithm>
 #include <cmath>
 #include <limits>
+#include <set>
 #include <stdexcept>
+#include <vector>
+#include <vtkActor.h>
+#include <vtkAppendFilter.h>
 #include <vtkCellData.h>
 #include <vtkCellType.h>
 #include <vtkCompositeDataIterator.h>
 #include <vtkCompositeDataSet.h>
 #include <vtkDataArray.h>
 #include <vtkDataSet.h>
+#include <vtkDataSetMapper.h>
+#include <vtkDoubleArray.h>
+#include <vtkExtractCells.h>
+#include <vtkGenericOpenGLRenderWindow.h>
+#include <vtkLookupTable.h>
+#include <vtkNew.h>
+#include <vtkProperty.h>
+#include <vtkRenderer.h>
+#include <vtkScalarBarActor.h>
+#include <vtkUnstructuredGrid.h>
+#include <vtkVariant.h>
 
 namespace chipcae::desktop {
 namespace {
@@ -59,6 +79,7 @@ bool PreviewController::start(CaseDocument* document,
         return false;
     error_.clear();
     success_ = false;
+    effective_ = {};
     cancelled_ = false;
     mesh_ = nullptr;
     surfaceMesh_ = nullptr;
@@ -208,6 +229,10 @@ void PreviewController::complete(int code, QProcess::ExitStatus status) {
         options.maxRatio = ratio_;
         options.levels = finest_ + 1;
         document_->setMeshOptions(options);
+        effective_.nx = options.nx;
+        effective_.ny = options.ny;
+        effective_.levels = options.levels;
+        effective_.maxRatio = options.maxRatio;
     } catch (const std::exception& e) {
         error_ = QString::fromUtf8(e.what());
         mesh_ = nullptr;
@@ -241,39 +266,278 @@ void PreviewController::inspect(vtkDataObject* object) {
         blocks_ << block;
     }
 }
-// TEST-FIRST compilation stubs only. The acceptance tests intentionally remain red;
-// snapshot capture, data extraction, coloring and rendering are not implemented here.
 PreviewOptions PreviewController::effectiveOptions() const {
-    return {};
+    return !running_ && error_.isEmpty() && mesh_ ? effective_ : PreviewOptions{};
 }
-PreviewView::PreviewView(QWidget* parent) : QWidget(parent) {}
-bool PreviewView::show(const PreviewController&) {
-    return false;
+namespace {
+class PreviewRenderWidget : public QVTKOpenGLNativeWidget {
+public:
+    explicit PreviewRenderWidget(QWidget* parent) : QVTKOpenGLNativeWidget(parent) {
+        setFormat(QVTKOpenGLNativeWidget::defaultFormat());
+    }
+    void requestRender() {
+        dirty_ = true;
+        update();
+    }
+
+protected:
+    void paintGL() override {
+        // QVTK normally blits its previous render on paint. Render changed data only
+        // here, when Qt has made a real context current, never during show(mesh).
+        if (dirty_ && renderWindow()) {
+            dirty_ = false;
+            renderWindow()->Render();
+        }
+        QVTKOpenGLNativeWidget::paintGL();
+    }
+
+private:
+    bool dirty_ = true;
+};
+void dataSets(vtkDataObject* object, std::vector<vtkDataSet*>& result) {
+    // Match inspect(): only dataset leaves consume a PreviewBlock.
+    if (auto composite = vtkCompositeDataSet::SafeDownCast(object)) {
+        auto it = vtkSmartPointer<vtkCompositeDataIterator>::Take(composite->NewIterator());
+        for (it->InitTraversal(); !it->IsDoneWithTraversal(); it->GoToNextItem())
+            dataSets(it->GetCurrentDataObject(), result);
+    } else if (auto data = vtkDataSet::SafeDownCast(object)) {
+        result.push_back(data);
+    }
 }
-bool PreviewView::show(vtkDataObject*,
-                       const QStringList&,
-                       const QStringList&,
-                       const QList<PreviewBlock>&,
-                       const PreviewOptions&) {
-    return false;
+bool validCells(const QList<vtkIdType>& ids, vtkIdType count) {
+    vtkIdType previous = -1;
+    for (auto id : ids) {
+        if (id <= previous || id >= count)
+            return false;
+        previous = id;
+    }
+    return true;
 }
-void PreviewView::setColorMode(PreviewColorMode) {}
+vtkSmartPointer<vtkUnstructuredGrid> extract(vtkDataSet* data, const QList<vtkIdType>& ids) {
+    vtkNew<vtkExtractCells> filter;
+    filter->SetInputData(data);
+    filter->SetCellIds(ids.constData(), static_cast<vtkIdType>(ids.size()));
+    filter->AssumeSortedAndUniqueIdsOn();
+    filter->PassThroughCellIdsOff();
+    filter->Update();
+    auto result = vtkSmartPointer<vtkUnstructuredGrid>::New();
+    result->DeepCopy(filter->GetOutput());
+    return result;
+}
+vtkSmartPointer<vtkUnstructuredGrid>
+append(std::vector<vtkSmartPointer<vtkUnstructuredGrid>>& pieces) {
+    // vtkAppendFilter intersects array schemas. Normalize classification to doubles,
+    // padding absent ids with NaN so a partial name table never loses known ids or
+    // invents a category for cells whose classification is unknown.
+    for (const char* name : {"layer_id", "material_id"}) {
+        const bool present = std::any_of(pieces.begin(), pieces.end(), [name](const auto& p) {
+            return p->GetCellData()->GetArray(name) != nullptr;
+        });
+        if (!present)
+            continue;
+        for (auto& piece : pieces) {
+            auto source = piece->GetCellData()->GetArray(name);
+            vtkNew<vtkDoubleArray> ids;
+            ids->SetName(name);
+            ids->SetNumberOfTuples(piece->GetNumberOfCells());
+            for (vtkIdType i = 0; i < piece->GetNumberOfCells(); ++i)
+                ids->SetValue(i,
+                              source && i < source->GetNumberOfTuples()
+                                  ? source->GetComponent(i, 0)
+                                  : std::numeric_limits<double>::quiet_NaN());
+            piece->GetCellData()->AddArray(ids);
+        }
+    }
+    auto result = vtkSmartPointer<vtkUnstructuredGrid>::New();
+    if (!pieces.empty()) {
+        vtkNew<vtkAppendFilter> filter;
+        filter->MergePointsOff();
+        for (const auto& piece : pieces)
+            filter->AddInputData(piece);
+        filter->Update();
+        result->DeepCopy(filter->GetOutput());
+    }
+    return result;
+}
+} // namespace
+struct PreviewView::State {
+    struct Result {
+        vtkSmartPointer<vtkUnstructuredGrid> data, highlights;
+        QStringList layers, materials;
+        QString summary;
+    } result;
+    PreviewColorMode mode = PreviewColorMode::Layer;
+    QString title = "layer_id";
+    QLabel* summaryLabel = nullptr;
+    PreviewRenderWidget* widget = nullptr;
+    vtkSmartPointer<vtkGenericOpenGLRenderWindow> window =
+        vtkSmartPointer<vtkGenericOpenGLRenderWindow>::New();
+    vtkSmartPointer<vtkRenderer> renderer = vtkSmartPointer<vtkRenderer>::New();
+    vtkSmartPointer<vtkDataSetMapper> mapper = vtkSmartPointer<vtkDataSetMapper>::New();
+    vtkSmartPointer<vtkDataSetMapper> highlightMapper = vtkSmartPointer<vtkDataSetMapper>::New();
+    vtkSmartPointer<vtkActor> actor = vtkSmartPointer<vtkActor>::New();
+    vtkSmartPointer<vtkActor> highlightActor = vtkSmartPointer<vtkActor>::New();
+    vtkSmartPointer<vtkScalarBarActor> bar = vtkSmartPointer<vtkScalarBarActor>::New();
+
+    const char* arrayName() const {
+        return mode == PreviewColorMode::Layer ? "layer_id" : "material_id";
+    }
+    void color() {
+        mapper->SetScalarModeToUseCellFieldData();
+        mapper->SelectColorArray(arrayName());
+        mapper->SetColorModeToMapScalars();
+        mapper->UseLookupTableScalarRangeOn();
+        auto values = result.data ? result.data->GetCellData()->GetArray(arrayName()) : nullptr;
+        std::set<int> ids;
+        if (values)
+            for (vtkIdType i = 0; i < values->GetNumberOfTuples(); ++i) {
+                const double value = values->GetComponent(i, 0);
+                if (std::isfinite(value) && value >= std::numeric_limits<int>::min() &&
+                    value <= std::numeric_limits<int>::max() && std::trunc(value) == value)
+                    ids.insert(static_cast<int>(value));
+            }
+        vtkNew<vtkLookupTable> colors;
+        colors->IndexedLookupOn();
+        colors->SetNanColor(0.65, 0.65, 0.65, 1);
+        colors->SetNumberOfTableValues(static_cast<vtkIdType>(ids.size()));
+        colors->Build();
+        const auto& names = mode == PreviewColorMode::Layer ? result.layers : result.materials;
+        QStringList labels;
+        vtkIdType index = 0;
+        for (int id : ids) {
+            const QString name =
+                id > 0 && id <= names.size() && !names[id - 1].isEmpty()
+                    ? names[id - 1]
+                    : QString(mode == PreviewColorMode::Layer ? "layer %1" : "material %1").arg(id);
+            labels << name;
+            colors->SetAnnotation(vtkVariant(static_cast<double>(id)), name.toStdString());
+            // ID-based hue keeps a category's color stable when the visible set changes.
+            const double hue = id * 0.618033988749895;
+            const auto color = QColor::fromHsvF(hue - std::floor(hue), 0.6, 0.9);
+            colors->SetTableValue(index++, color.redF(), color.greenF(), color.blueF(), 1);
+        }
+        title = arrayName();
+        if (!labels.isEmpty())
+            title += ": " + labels.join(", ");
+        mapper->SetLookupTable(colors);
+        mapper->SetScalarVisibility(values != nullptr);
+        bar->SetLookupTable(colors);
+        bar->SetTitle(title.toUtf8().constData());
+        bar->SetVisibility(!ids.empty());
+    }
+};
+PreviewView::PreviewView(QWidget* parent) : QWidget(parent), d(std::make_unique<State>()) {
+    auto layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    d->summaryLabel = new QLabel(this);
+    d->summaryLabel->setWordWrap(true);
+    d->widget = new PreviewRenderWidget(this);
+    layout->addWidget(d->summaryLabel);
+    layout->addWidget(d->widget);
+    d->widget->setRenderWindow(d->window);
+    d->window->AddRenderer(d->renderer);
+    d->renderer->SetBackground(0.12, 0.14, 0.18);
+    d->actor->SetMapper(d->mapper);
+    d->actor->GetProperty()->SetColor(0.65, 0.65, 0.65);
+    d->highlightMapper->ScalarVisibilityOff();
+    d->highlightActor->SetMapper(d->highlightMapper);
+    d->highlightActor->GetProperty()->SetRepresentationToWireframe();
+    d->highlightActor->GetProperty()->SetColor(1, 0.9, 0.1);
+    d->highlightActor->GetProperty()->SetLineWidth(3);
+    d->highlightActor->GetProperty()->LightingOff();
+    d->renderer->AddActor(d->actor);
+    d->renderer->AddActor(d->highlightActor);
+    d->renderer->AddViewProp(d->bar);
+    d->actor->VisibilityOff();
+    d->highlightActor->VisibilityOff();
+    d->bar->VisibilityOff();
+}
+PreviewView::~PreviewView() = default;
+bool PreviewView::show(const PreviewController& controller) {
+    if (controller.running() || !controller.error().isEmpty() || !controller.mesh() ||
+        controller.effectiveOptions().levels == 0)
+        return false;
+    return show(controller.mesh(),
+                controller.session().layerNames(),
+                controller.session().materialNames(),
+                controller.blocks(),
+                controller.effectiveOptions());
+}
+bool PreviewView::show(vtkDataObject* mesh,
+                       const QStringList& layerNames,
+                       const QStringList& materialNames,
+                       const QList<PreviewBlock>& blocks,
+                       const PreviewOptions& effective) {
+    if (!mesh)
+        return false;
+    std::vector<vtkDataSet*> inputs;
+    dataSets(mesh, inputs);
+    // An explicitly empty block list requests a valid empty view.
+    if (!blocks.empty() && inputs.size() != static_cast<std::size_t>(blocks.size()))
+        return false;
+    std::vector<vtkSmartPointer<vtkUnstructuredGrid>> visible, highlighted;
+    qsizetype highlightCount = 0;
+    bool downgrade = false;
+    for (qsizetype i = 0; i < blocks.size(); ++i) {
+        const auto& block = blocks[i];
+        auto input = inputs[static_cast<std::size_t>(i)];
+        const auto count = input->GetNumberOfCells();
+        if (!validCells(block.visibleCells, count) || !validCells(block.highlightedCells, count))
+            return false;
+        for (auto id : block.highlightedCells)
+            if (!std::binary_search(block.visibleCells.begin(), block.visibleCells.end(), id))
+                return false;
+        if (block.highlightedCells.size() > std::numeric_limits<int>::max() - highlightCount)
+            return false;
+        highlightCount += block.highlightedCells.size();
+        visible.push_back(extract(input, block.visibleCells));
+        highlighted.push_back(extract(input, block.highlightedCells));
+        downgrade = downgrade || block.hexCutDowngrade;
+    }
+    State::Result next;
+    next.data = append(visible);
+    next.highlights = append(highlighted);
+    next.layers = layerNames;
+    next.materials = materialNames;
+    next.summary = QString("nx=%1 ny=%2 levels=%3 max_ratio=%4")
+                       .arg(effective.nx ? QString::number(*effective.nx) : "auto")
+                       .arg(effective.ny ? QString::number(*effective.ny) : "auto")
+                       .arg(effective.levels)
+                       .arg(QString::number(effective.maxRatio, 'g', 15));
+    if (downgrade)
+        next.summary += "\nhex cut downgrade";
+    d->result = std::move(next);
+    d->mapper->SetInputData(d->result.data);
+    d->highlightMapper->SetInputData(d->result.highlights);
+    d->actor->SetVisibility(d->result.data->GetNumberOfCells() > 0);
+    d->highlightActor->SetVisibility(d->result.highlights->GetNumberOfCells() > 0);
+    d->summaryLabel->setText(d->result.summary);
+    d->color();
+    d->renderer->ResetCamera();
+    d->widget->requestRender();
+    return true;
+}
+void PreviewView::setColorMode(PreviewColorMode mode) {
+    d->mode = mode;
+    d->color();
+    d->widget->requestRender();
+}
 PreviewColorMode PreviewView::colorMode() const {
-    return PreviewColorMode::Layer;
+    return d->mode;
 }
 QString PreviewView::summaryText() const {
-    return {};
+    return d->result.summary;
 }
 QString PreviewView::colorBarTitle() const {
-    return {};
+    return d->title;
 }
 QString PreviewView::scalarArrayName() const {
-    return {};
+    return d->arrayName();
 }
 vtkDataSet* PreviewView::displayed() const {
-    return nullptr;
+    return d->result.data;
 }
 int PreviewView::highlightedCount() const {
-    return 0;
+    return d->result.highlights ? static_cast<int>(d->result.highlights->GetNumberOfCells()) : 0;
 }
 } // namespace chipcae::desktop
