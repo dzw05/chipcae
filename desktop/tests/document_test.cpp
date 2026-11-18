@@ -537,12 +537,87 @@ void testImportThenReplacement(const QString& replacement) {
             document.applyStackJson(stack);
         require(document.stackJson() == stack, "replace stack contents");
     }
+    const auto expectedStack = document.stackJson();
+    const auto expectedData = document.toJson();
     const auto path = fixture.root.filePath("replacement.json");
-    require(!document.save(path), "replacement cannot reuse the old import's source directory");
+    require(document.save(path), "edits with unchanged external_refs preserve the import root");
+    CaseDocument reloaded;
+    require(reloaded.load(path) && reloaded.validate().empty(), "reload edited imported stack");
+    requireRelocatedAssets(
+        expectedStack, reloaded.stackJson(), fixture.source, stackDirectory(reloaded, path));
+    auto expectedCase = expectedData;
+    expectedCase["stack"] = reloaded.toJson().at("stack");
+    expectedCase["materials"] = reloaded.toJson().at("materials");
+    require(reloaded.toJson() == expectedCase, "save preserves edited case data");
+}
+
+void testImportThenExternalRefChange(const QString& replacement) {
+    ImportFixture fixture;
+    CaseDocument document;
+    seedUnsavedDocument(document, fixture);
+    require(document.replaceImportedStack(fixture.stack, fixture.source.absolutePath()),
+            "import before changing external_refs");
+    writeBytes(fixture.source.filePath("replacement.bin"), fixture.payload);
+    auto stack = document.stackJson();
+    stack["external_refs"][0]["path"] = "replacement.bin";
+    if (replacement == "setStackJson")
+        require(document.setStackJson(stack), "replace external_refs through setStackJson");
+    else
+        document.applyStackJson(stack);
+    require(document.stackJson() == stack, "publish changed external_refs");
+    const auto data = document.toJson();
+    const auto hash = document.contentHash();
+    const auto path = fixture.root.filePath("replacement.json");
+    require(!document.save(path), "changed external_refs cannot reuse the old import root");
     require(document.errors().size() == 1 &&
                 document.errors().front().message.contains("Missing original stack location"),
-            "replacement clears the pending import location");
+            "changed external_refs clear the pending import location");
     require(!QFileInfo::exists(path), "failed replacement save creates no case file");
+    require(document.toJson() == data && document.stackJson() == stack &&
+                document.contentHash() == hash && document.isDirty(),
+            "failed replacement save preserves document state");
+    require(QDir(fixture.root.path()).entryList({"case-assets-*"}, QDir::Dirs).size() == 1,
+            "failed replacement save leaves no extra bundle");
+}
+
+void testSaveWithoutMaterials(const char* externalRefs) {
+    ImportFixture fixture;
+    CaseDocument document;
+    CaseDocumentTestAccess::seedUnsavedCase(document, fixture.document.toJson());
+    auto stack = fixture.stack;
+    stack["id"] = "imported-without-materials";
+    if (QString::fromLatin1(externalRefs) == "absent")
+        stack.erase("external_refs");
+    else if (QString::fromLatin1(externalRefs) == "empty")
+        stack["external_refs"] = Json::array();
+    require(document.materialLibrary().empty(), "unsaved document has no material library");
+    require(document.replaceImportedStack(stack, fixture.source.absolutePath()),
+            "preflight permits import before material library initialization");
+    const auto data = document.toJson();
+    const auto hash = document.contentHash();
+    const auto path = fixture.root.filePath("missing-materials.json");
+    const QByteArray sentinel{"existing-case-must-survive"};
+    writeBytes(path, sentinel);
+    require(!document.save(path), "save rejects an imported stack without materials");
+    require(document.errors().size() == 1 &&
+                document.errors().front().message.contains("material", Qt::CaseInsensitive),
+            "save explains the missing material library");
+    require(readBytes(path) == sentinel, "rejected save preserves the existing case file");
+    require(document.toJson() == data && document.stackJson() == stack &&
+                document.contentHash() == hash && document.isDirty(),
+            "rejected save preserves the unsaved import");
+    require(QDir(fixture.root.path()).entryList({"case-assets-*"}, QDir::Dirs).size() == 1,
+            "rejected save creates no bundle");
+    require(document.setMaterialLibrary(fixture.document.materialLibrary()),
+            "initialize materials after a rejected save");
+    require(document.save(path), "retry saves the imported stack after materials are initialized");
+    CaseDocument reloaded;
+    require(reloaded.load(path) && reloaded.validate().empty(), "reload initialized import");
+    if (QString::fromLatin1(externalRefs) == "nonempty")
+        requireRelocatedAssets(
+            stack, reloaded.stackJson(), fixture.source, stackDirectory(reloaded, path));
+    else
+        require(reloaded.stackJson() == stack, "retry saves the imported stack without sidecars");
 }
 
 void testConflictingRefs() {
@@ -717,6 +792,12 @@ bool runImportAcceptance() {
     for (const auto* replacement : {"applyJson", "setStackJson", "applyStackJson", "renameLayer"})
         run("import then " + QString::fromLatin1(replacement),
             [=] { testImportThenReplacement(replacement); });
+    for (const auto* replacement : {"setStackJson", "applyStackJson"})
+        run("changed external_refs through " + QString::fromLatin1(replacement),
+            [=] { testImportThenExternalRefChange(replacement); });
+    for (const auto* externalRefs : {"absent", "empty", "nonempty"})
+        run("save without materials with " + QString::fromLatin1(externalRefs) + " external refs",
+            [=] { testSaveWithoutMaterials(externalRefs); });
     run("conflicting refs", testConflictingRefs);
     run("copy rollback", testCopyRollback);
     run("escaping destination ancestor", testEscapingDestinationAncestor);

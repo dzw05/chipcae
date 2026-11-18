@@ -136,6 +136,12 @@ QString externalRefPointer(size_t index) {
     return QString("/external_refs/%1").arg(index);
 }
 
+bool sameExternalReferences(const Json& left, const Json& right) {
+    const bool hasRefs = left.contains("external_refs");
+    return hasRefs == right.contains("external_refs") &&
+           (!hasRefs || left.at("external_refs") == right.at("external_refs"));
+}
+
 struct ExternalAsset {
     QString path;
     QByteArray hash;
@@ -423,13 +429,15 @@ void CaseDocument::applyJson(const Json& value) {
     data_ = value;
     materials_ = std::move(materials);
     stack_ = std::move(stack);
-    importedStackSourceRoot_.clear();
+    if (refsChanged)
+        importedStackSourceRoot_.clear();
     markDirty();
 }
 void CaseDocument::applyStackJson(const Json& value) {
     if (stack_ != value) {
+        if (!sameExternalReferences(stack_, value))
+            importedStackSourceRoot_.clear();
         stack_ = value;
-        importedStackSourceRoot_.clear();
         markDirty();
     }
 }
@@ -604,6 +612,11 @@ bool CaseDocument::save(const QString& path) {
     errors_ = validate();
     if (!errors_.empty())
         return false;
+    if (!stack_.empty() && materials_.empty()) {
+        errors_ = {
+            {"DOCUMENT_ERROR", "Cannot save a stack without a material library", "/materials"}};
+        return false;
+    }
     try {
         auto copy = data_;
         auto stagedStack = stack_;
@@ -683,11 +696,7 @@ bool CaseDocument::setStackJson(const Json& value) {
             read(QStringLiteral(CHIPCAE_SCHEMA_DIR "/stack-0.2.schema.json")));
         if (!validator.is_valid(value))
             throw std::runtime_error("STACK_SCHEMA_INVALID");
-        if (stack_ != value) {
-            stack_ = value;
-            importedStackSourceRoot_.clear();
-            markDirty();
-        }
+        applyStackJson(value);
         errors_.clear();
         return true;
     } catch (const std::exception& e) {
@@ -793,7 +802,6 @@ bool CaseDocument::renameLayer(const std::string& oldName, const std::string& ne
     update(update, data_);
     update(update, copy);
     stack_ = copy;
-    importedStackSourceRoot_.clear();
     markDirty();
     return true;
 }
