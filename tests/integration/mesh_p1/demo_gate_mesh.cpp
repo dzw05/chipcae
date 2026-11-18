@@ -72,6 +72,9 @@ std::uint64_t bits(Real value) {
 } // namespace
 
 int main() try {
+#ifdef CHIPCAE_ENABLE_KOKKOS
+    Kokkos::ScopeGuard guard;
+#endif
     // Synthetic SI fixture for the mesh volume gate in §3.8a.
     constexpr Real chamfer = 0.002;
     constexpr Real volume = 6.272e-7;
@@ -104,6 +107,8 @@ int main() try {
         stack.layers.push_back(std::move(layer));
     }
     auto options = k1::options();
+    // One cell per layer requires the fixture's 10:1 substrate-to-bump size ratio.
+    options.max_ratio = 10;
     options.nx = options.ny = 4;
     options.levels = 1;
     const HexMeshArrays mesh = require_value(build_tensor_grid(stack, options),
