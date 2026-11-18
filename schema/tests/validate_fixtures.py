@@ -20,7 +20,6 @@ registry = registry.with_resource(library_schema["$id"], Resource.from_contents(
 library_validator = jsonschema.Draft202012Validator(library_schema, registry=registry)
 library = json.loads((root / "schema/examples/fcbga_demo.materials.json").read_text(encoding="utf-8"))
 library_validator.validate(library)
-
 material_ids = [item["id"] for item in library["materials"]]
 assert len(material_ids) == len(set(material_ids)), "MATERIAL_ID_DUPLICATE: library ids must be unique"
 stack = json.loads((root / "schema/examples/fcbga_demo.stack.json").read_text(encoding="utf-8"))
@@ -73,6 +72,7 @@ for schema_file, valid, invalid_prefix in [
         raise AssertionError(f"negative fixture unexpectedly validated: {invalid}")
 # The brief freezes the original entries' serialized bytes and array positions.
 # These snapshots come from the SP0 baseline, including whitespace and key order.
+# File formatting is frozen here to enforce the brief’s 比较口径 legacy-byte clause.
 expected_legacy_serializations = (
     """{
       "id": "organic_eq",
@@ -283,14 +283,16 @@ library_text = (examples / "fcbga_demo.materials.json").read_bytes().decode("utf
 position = library_text.index("[", library_text.index('"materials"')) + 1
 decoder = json.JSONDecoder()
 for expected in expected_legacy_serializations:
-    while library_text[position].isspace() or library_text[position] == ",":
+    while position < len(library_text) and (library_text[position].isspace() or library_text[position] == ","):
         position += 1
+    assert position < len(library_text), "missing pre-existing material serialization"
     _, end = decoder.raw_decode(library_text, position)
     assert library_text[position:end].encode("utf-8") == expected.encode("utf-8"), (
         f"pre-existing material serialization or position changed: {json.loads(expected)['id']}"
     )
     position = end
 
+assert "Copper" not in known_material_ids, "material IDs are case-sensitive"
 copper_entries = [item for item in library["materials"] if item["id"] == "copper"]
 assert len(copper_entries) == 1, "materials library must contain exactly one copper entry"
 copper = copper_entries[0]
