@@ -105,6 +105,96 @@ def _partitions(block, cells_path='NumberOfCells'):
         ci += connections
 
 
+def _polyhedra(block):
+    """Validate partition-local, exclusively owned faces and signed cell volumes."""
+    paths = ('FaceConnectivity', 'FaceOffsets', 'PolyhedronToFaces',
+             'PolyhedronOffsets', 'NumberOfFaces', 'NumberOfFaceConnectivityIds',
+             'NumberOfPolyhedronToFaceIds')
+    if not any(path in block for path in paths):
+        return
+    for path in paths:
+        _require(path in block, f'{block.name}/{path}: incomplete polyhedron topology')
+
+    pc = block['NumberOfPoints'][...]
+    cc = block['NumberOfCells'][...]
+    totals, counts = [], []
+    for path in paths[4:]:
+        totals.append(_count(block, path))
+        counts.append(_array(block, path, (len(pc),), 'int64'))
+    nf, nfc, npf = counts
+    face_ids = _array(block, 'FaceConnectivity', (totals[1],), 'int64')
+    face_offsets = _array(block, 'FaceOffsets', (totals[0] + len(pc),), 'int64')
+    poly_faces = _array(block, 'PolyhedronToFaces', (totals[2],), 'int64')
+    total_cells = sum(int(c) for c in cc)
+    poly_offsets = _array(block, 'PolyhedronOffsets', (total_cells + len(pc),), 'int64')
+    points = _array(block, 'Points', (sum(int(p) for p in pc), 3), 'float64')
+    volumes = (_array(block, 'CellData/volume', (total_cells,), 'float64')
+               if 'CellData/volume' in block else None)
+
+    point_cursor = cell_cursor = face_offset_cursor = poly_offset_cursor = 0
+    face_id_cursor = face_ref_cursor = 0
+    for rank, allocation in enumerate(zip(pc, cc, nf, nfc, npf)):
+        point_count, cells, faces, connections, references = map(int, allocation)
+        fo = face_offsets[face_offset_cursor:face_offset_cursor + faces + 1]
+        po = poly_offsets[poly_offset_cursor:poly_offset_cursor + cells + 1]
+        ids = face_ids[face_id_cursor:face_id_cursor + connections]
+        refs = poly_faces[face_ref_cursor:face_ref_cursor + references]
+        local_points = points[point_cursor:point_cursor + point_count]
+        # Validate endpoints and ordering before subtracting offsets or indexing.
+        for path, offsets, terminal, minimum in (
+                ('FaceOffsets', fo, connections, 3),
+                ('PolyhedronOffsets', po, references, 4)):
+            _require(offsets[0] == 0 and offsets[-1] == terminal
+                     and np.all(offsets[1:] >= offsets[:-1]),
+                     f'{block.name}/{path}: partition {rank} invalid offsets')
+            _require(np.all(offsets[1:] - offsets[:-1] >= minimum),
+                     f'{block.name}/{path}: partition {rank} '
+                     f'each list requires at least {minimum} IDs')
+        _require(np.all((ids >= 0) & (ids < point_count)),
+                 f'{block.name}/FaceConnectivity: partition {rank} point ID out of bounds')
+        _require(np.all((refs >= 0) & (refs < faces)),
+                 f'{block.name}/PolyhedronToFaces: partition {rank} face ID out of bounds')
+        _require(references == faces
+                 and np.array_equal(np.sort(refs), np.arange(faces, dtype='int64')),
+                 f'{block.name}/PolyhedronToFaces: partition {rank} '
+                 'each face must be referenced exactly once')
+
+        for cell in range(cells):
+            rings = [ids[int(fo[face]):int(fo[face + 1])]
+                     for face in refs[int(po[cell]):int(po[cell + 1])]]
+            vertices = local_points[np.unique(np.concatenate(rings))]
+            # Overflow and invalid derived arithmetic become protocol errors below.
+            # Keep face/triangle accumulation in deterministic stored order.
+            with np.errstate(all='ignore'):
+                center = vertices.mean(axis=0)
+                volume = np.float64(0.)
+                for ring in rings:
+                    coords = local_points[ring] - center
+                    for i in range(1, len(coords) - 1):
+                        volume += np.dot(coords[0], np.cross(coords[i], coords[i + 1])) / 6.
+            _require(np.isfinite(volume) and volume > 0,
+                     f'{block.name}/PolyhedronToFaces: partition {rank} cell {cell} '
+                     f'nonpositive polyhedron volume (computed={volume})')
+            if volumes is not None:
+                reference = volumes[cell_cursor + cell]
+                with np.errstate(all='ignore'):
+                    bbox_volume = np.prod(vertices.max(axis=0) - vertices.min(axis=0))
+                    tolerance = 1e-9 * max(abs(reference), bbox_volume)
+                    difference = abs(volume - reference)
+                _require(reference > 0 and np.isfinite(bbox_volume)
+                         and np.isfinite(tolerance) and np.isfinite(difference)
+                         and difference <= tolerance,
+                         f'{block.name}/CellData/volume: volume mismatch, '
+                         f'partition {rank} cell {cell} computed={volume} '
+                         f'reference={reference} bbox_volume={bbox_volume}')
+        point_cursor += point_count
+        cell_cursor += cells
+        face_offset_cursor += faces + 1
+        poly_offset_cursor += cells + 1
+        face_id_cursor += connections
+        face_ref_cursor += references
+
+
 def _version(block):
     _require(isinstance(block, h5py.Group), f"{block.name}: expected VTKHDF group")
     _require(np.array_equal(block.attrs.get('Version'), [2, 8]),
@@ -149,6 +239,8 @@ def _read(root):
         else:
             blocks[name] = dict(points=n, cells=c, type_counts=_counts(types))
         _partitions(block)
+        if name == 'cut':
+            _polyhedra(block)
         data.append((points, u))
     _require(len(temperatures) in (0, len(data)),
              'PointData/T must be present in both hex and cut or absent from both')
