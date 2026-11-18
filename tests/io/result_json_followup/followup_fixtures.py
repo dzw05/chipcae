@@ -9,7 +9,6 @@ import subprocess
 import sys
 
 # Preserve the shared fixture dependency checks (exit 77 for h5py/numpy).
-from fixtures import fixture
 import export_fixtures as shared
 
 exporter = shared.exporter
