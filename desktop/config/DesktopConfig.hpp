@@ -2,6 +2,7 @@
 #include "JobTypes.hpp"
 
 #include <QProcessEnvironment>
+#include <QStringList>
 
 namespace chipcae::desktop {
 struct DesktopEntrypoint {
