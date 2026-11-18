@@ -372,6 +372,32 @@ void testCopyRollback() {
             "copy failure leaves the occupied asset intact");
 }
 
+void testEscapingDestinationAncestor() {
+    ImportFixture fixture;
+    auto& document = fixture.document;
+    const auto destination = stackDirectory(document, fixture.casePath);
+    const auto outside = fixture.root.filePath("outside");
+    require(QDir().mkdir(outside), "create directory outside the destination");
+    require(fixture.source.mkdir("nested"), "create nested source asset directory");
+    writeBytes(fixture.source.filePath("nested/copy.bin"), fixture.payload);
+    const auto link = destination.filePath("nested");
+    require(QFile::link(outside, link), "create an escaping destination symlink");
+    fixture.stack["external_refs"].push_back(externalRef("nested/copy.bin", fixture.hash));
+
+    const auto original = document.stackJson();
+    const auto source = fixture.source.absolutePath();
+    require(document.checkImportedStack(fixture.stack, source),
+            "escaping destination fixture passes source preflight");
+    require(!document.replaceImportedStack(fixture.stack, source),
+            "replace rejects an escaping destination ancestor");
+    requireIssueAt(document.errors(), "INPUT_REF_COPY_FAILED", "/external_refs/1/path");
+    require(document.stackJson() == original && !document.isDirty(),
+            "escaping destination preserves the current stack and dirty state");
+    require(QFileInfo(link).isSymLink() && !QDir(outside).exists("copy.bin") &&
+                !destination.exists("polyset.bin"),
+            "rollback preserves the symlink and removes the earlier copy");
+}
+
 void testUnknownMaterial() {
     ImportFixture fixture;
     fixture.stack["layers"][0]["material"] = "unknown_import_material";
@@ -454,6 +480,7 @@ bool runImportAcceptance() {
     run("duplicates, collision, and retry", testDuplicatesAndCollision);
     run("conflicting refs", testConflictingRefs);
     run("copy rollback", testCopyRollback);
+    run("escaping destination ancestor", testEscapingDestinationAncestor);
     run("unknown material", testUnknownMaterial);
     run("removed target layer", testRemovedTargetLayer);
     return passed;

@@ -69,10 +69,15 @@ signals:
     void editStarted();
 
 private:
+    struct StackImport;
+    StackImport preflightImportedStack(const Json& stack, const QString& sourceDir) const;
+    void validateSchemas(DocumentErrors& result) const;
+    void validateContents(DocumentErrors& result) const;
     void markDirty();
     Json data_ = Json::object(), materials_ = Json::object(), stack_ = Json::object();
     Json profile_ = Json::object();
     QString path_;
+    QString importedStackSourceRoot_;
     QByteArray hash_;
     bool dirty_ = false;
     DocumentErrors errors_;
