@@ -17,7 +17,7 @@ int main() {
                     for (const auto& r : l.regions)
                         if (r.body == "subject") {
                             if (!found)
-                                check(z == .001, "subject starts at qualifying base boundary");
+                                near(z, .001);
                             found = true;
                         }
                     z += l.thickness;

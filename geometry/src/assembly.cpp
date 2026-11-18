@@ -26,7 +26,7 @@ Real area(const Polygon& p) {
     Real sum = 0;
     if (p.empty())
         return 0;
-    // Translate to avoid cancellation for small shapes far from the origin.
+    // Fan triangles relative to p[0] to avoid cancellation far from the origin.
     for (size_t i = 1; i + 1 < p.size(); ++i)
         sum += cross(p[0], p[i], p[i + 1]);
     return std::abs(sum) / 2;
@@ -243,7 +243,7 @@ std::vector<Polygon> fragments(const SlabSection& section) {
     }
     return out;
 }
-std::vector<Footprint> footprints(const SlabSection& section, Polygon& prior, std::string& reason) {
+std::vector<Footprint> section_footprints(const SlabSection& section, std::string& reason) {
     std::vector<Polygon> rings{normalize(section.outer.pts)};
     for (const auto& h : section.holes)
         rings.push_back(normalize(h.pts));
@@ -264,11 +264,6 @@ std::vector<Footprint> footprints(const SlabSection& section, Polygon& prior, st
                 reason = "non-convex section";
                 return {};
             }
-        if (!prior.empty() && !same_polygon(prior, p)) {
-            reason = "multiple distinct cut sections";
-            return {};
-        }
-        prior = p;
         return {footprint(p, false)};
     }
     // Canonicalize both axes together across outer and hole rings before strip
@@ -331,6 +326,23 @@ std::vector<Footprint> footprints(const SlabSection& section, Polygon& prior, st
     if (out.empty())
         reason = "degenerate section";
     std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) { return a.box < b.box; });
+    return out;
+}
+// Both box decompositions and normalized polygons participate in the signature.
+std::vector<Footprint>
+footprints(const SlabSection& section, std::vector<Footprint>& prior, std::string& reason) {
+    auto out = section_footprints(section, reason);
+    if (!reason.empty())
+        return {};
+    bool same = prior.size() == out.size();
+    for (size_t i = 0; same && i < out.size(); ++i)
+        same = prior[i].polygon.empty() == out[i].polygon.empty() &&
+               same_polygon(polygon(prior[i]), polygon(out[i]));
+    if (!prior.empty() && !same) {
+        reason = "multiple distinct cut sections";
+        return {};
+    }
+    prior = out;
     return out;
 }
 Real convex_intersection(Polygon subject, const Polygon& clip) {
@@ -510,13 +522,13 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
     // Resolve support before any source may influence alignment.
     for (const auto& p : parts) {
         std::vector<Source> slabs;
-        Polygon prior_polygon;
+        std::vector<Footprint> prior_signature;
         for (const auto& s : p.slabs) {
             Source source{s.z0, s.z1, {}};
             std::string reason;
-            Polygon candidate_polygon = prior_polygon;
+            auto candidate_signature = prior_signature;
             for (const auto& section : s.sections) {
-                auto fs = footprints(section, candidate_polygon, reason);
+                auto fs = footprints(section, candidate_signature, reason);
                 source.regions.insert(source.regions.end(), fs.begin(), fs.end());
                 if (!reason.empty())
                     break;
@@ -529,7 +541,7 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
                                p.id + "/cut_unsupported#" + std::to_string(slabs.size()),
                                "cut_unsupported: " + reason));
             } else
-                prior_polygon = std::move(candidate_polygon);
+                prior_signature = std::move(candidate_signature);
             std::stable_sort(source.regions.begin(),
                              source.regions.end(),
                              [](const auto& a, const auto& b) { return a.box < b.box; });
@@ -560,21 +572,21 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
         target = nearest(z, interfaces);
         return std::abs(z - target) < options.t_min ? target : z;
     };
-    // A shared exact endpoint is a weld too. A solitary endpoint introduced by
-    // one slab is only a new interface, not a weld.
+    // Count every surviving snap under the same t_min rule used by aligned().
+    // Shared exact endpoints also weld; solitary new endpoints do not.
     std::map<Real, size_t> endpoint_counts;
     for (Real z : boundaries)
         ++endpoint_counts[z];
     for (const auto& slabs : sources)
         for (const auto& source : slabs)
-            if (!source.regions.empty()) {
+            if (!source.regions.empty() && aligned(source.lo) < aligned(source.hi)) {
                 ++endpoint_counts[source.lo];
                 ++endpoint_counts[source.hi];
             }
     std::set<Real> snapped_interfaces;
     for (Real z : candidates) {
         Real target = aligned(z);
-        if ((target != z || endpoint_counts[z] > 1) && std::abs(z - target) < options.eps_weld)
+        if (endpoint_counts[z] > 0 && (target != z || endpoint_counts[z] > 1))
             snapped_interfaces.insert(target);
     }
     result.welded_interfaces = static_cast<std::int64_t>(snapped_interfaces.size());
@@ -586,7 +598,6 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
         const auto& p = parts[p_index];
         size_t thin_index = 0;
         size_t slab_index = 0;
-        bool bond = p.id.size() >= 5 && p.id.compare(p.id.size() - 5, 5, ".bond") == 0;
         for (const auto& s : p.slabs) {
             auto& source = sources[p_index][slab_index++];
             source.lo = aligned(s.z0);
@@ -616,8 +627,7 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
             };
             for (size_t i = 1; i < cuts.size(); ++i) {
                 Real t = cuts[i] - cuts[i - 1];
-                if (!source.regions.empty() && t < options.t_min &&
-                    (bond || t >= options.eps_weld)) {
+                if (!source.regions.empty() && t < options.t_min) {
                     Real after = std::max(Real(0), aligned(cuts[i]) - aligned(cuts[i - 1]));
                     report_thin(t, after);
                 }
@@ -660,9 +670,8 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
         layer_order[l.name] = o;
         for (size_t k = 0; k < split_counts[o]; ++k) {
             auto suffix = split_counts[o] > 1 ? "#" + std::to_string(k) : "";
-            for (const auto& name : {l.name + suffix})
-                if (!suffix.empty() && base_names.count(name))
-                    return invalid("split name collides with " + name);
+            if (!suffix.empty() && base_names.count(l.name + suffix))
+                return invalid("split name collides with " + l.name + suffix);
             layer_pieces[l.name].push_back(l.name + suffix);
             used_names.insert(l.name + suffix);
             for (const auto& r : l.regions) {

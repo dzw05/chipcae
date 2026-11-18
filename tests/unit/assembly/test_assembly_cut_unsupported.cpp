@@ -77,6 +77,19 @@ int main() {
                       "unsupported neighbor produces only its cut defect");
             }
         }
+        // Every section participates in consistency checks, including boxes.
+        for (bool same_slab : {false, true})
+            for (bool polygon_cut : {false, true}) {
+                auto p = part("mixed");
+                auto other = rect(.003, .002);
+                if (polygon_cut)
+                    other.outer.pts.pop_back();
+                if (same_slab)
+                    p.slabs[0].sections.push_back(other);
+                else
+                    p.slabs.push_back({.002, .003, {other}});
+                unsupported(p, "multiple distinct cut sections", same_slab ? 0 : 1);
+            }
         SlabSection chamfer{Ring{{{.002, 0},
                                   {.054, 0},
                                   {.056, .002},

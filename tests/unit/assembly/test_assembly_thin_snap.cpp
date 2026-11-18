@@ -6,8 +6,8 @@ int main() {
                 auto p = part(bond ? "lid.bond" : "lid", .001, .001 + t);
                 auto r = merge_parts(base(), {p}, options());
                 check(bool(r), "thin merge succeeds");
-                check(r.value().welded_interfaces == 1,
-                      "exact base weld counts once, including when the upper endpoint snaps there");
+                check(r.value().welded_interfaces == 0,
+                      "collapsed slab contributes no weld endpoints");
                 bool found = false;
                 for (auto& d : r.value().defects)
                     if (d.reason == DefectReason::THIN_LAYER_MERGED) {
@@ -32,8 +32,7 @@ int main() {
                         check(original && resulting && count >= 2,
                               "details include original and resulting thicknesses");
                     }
-                check(found == (bond || t >= options().eps_weld),
-                      "bond always reports thin; sub weld ordinary only counts");
+                check(found, "every supported thin interval reports material loss");
                 double z = 0;
                 for (auto& l : r.value().stack.layers) {
                     check(l.thickness > 0, "positive snapped layers");
@@ -46,6 +45,14 @@ int main() {
                   interior.stack.layers[0].thickness == .001 &&
                   interior.stack.layers[0].regions.empty(),
               "collapsed interior source cannot split base");
+        auto subweld = merge(base(), {part("subweld", .0005, .00050005)}, .001);
+        check(subweld.welded_interfaces == 0 && subweld.defects.size() == 1 &&
+                  subweld.defects[0].tier == Tier::B &&
+                  subweld.defects[0].reason == DefectReason::THIN_LAYER_MERGED &&
+                  subweld.defects[0].defect_id == "subweld/thin#0",
+              "collapsed sub-weld slab reports thin loss without a phantom weld");
+        check(subweld.stack.layers.size() == 1 && subweld.stack.layers[0].regions.empty(),
+              "collapsed sub-weld slab does not split or populate the base");
         auto remote = merge(base(), {part("remote", .002, .002005)}, .001);
         check(remote.stack.layers.size() == 1 && remote.stack.layers[0].regions.empty(),
               "eliminated remote source cannot extend stack with phantom void");

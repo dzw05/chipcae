@@ -5,7 +5,7 @@ int main() {
         b.layers[0].regions.push_back(
             {"existing", "seed", "board", {{.001, .001, .002, .002}, {}}});
         auto a = part("A", .0005, .001);
-        a.slabs.push_back({.0005, .001, {rect(.007, .007)}});
+        a.slabs.push_back({.0005, .001, {rect(.002, .002)}});
         auto c = part("a", .0005, .001);
         auto m = merge(b, {a, c}, .001);
         auto& rs = m.stack.layers.back().regions;
