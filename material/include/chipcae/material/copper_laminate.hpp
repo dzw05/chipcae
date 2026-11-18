@@ -28,5 +28,8 @@ CHIPCAE_LAMINATE_INLINE void copper_laminate(double Em,
     th[2] =
         f * (ac - 2 * nc / (1 - nc) * (th[0] - ac)) + m * (am - 2 * nm / (1 - nm) * (th[0] - am));
 }
+
+// TEST-FIRST stub: leave the output untouched until conductivity is implemented.
+CHIPCAE_LAMINATE_INLINE void copper_laminate_conductivity(double, double, double, double*) {}
 } // namespace chipcae::material
 #undef CHIPCAE_LAMINATE_INLINE
