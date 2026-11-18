@@ -93,6 +93,7 @@ private:
         chipcae::desktop::MeshSha256Compare::PreviewMissing;
     QString lastMeshDigestDetail_;
     bool lastOpenCancelledForMeshDigest_ = false;
+    bool previewDigestValid_ = false;
     std::optional<chipcae::desktop::MeshOptions> previewMeshOptions_;
     QAction* writePreviewToCaseAction_ = nullptr;
     void clearPreviewMeshOptions();

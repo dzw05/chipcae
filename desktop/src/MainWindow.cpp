@@ -50,6 +50,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     writePreviewToCaseAction_->setEnabled(false);
     connect(preview_, &chipcae::desktop::PreviewController::finished, this, [this](bool success) {
         if (success) {
+            previewDigestValid_ = true;
             previewMeshOptions_ = document_.meshOptions();
             writePreviewToCaseAction_->setEnabled(true);
         } else {
@@ -466,6 +467,7 @@ bool MainWindow::writePreviewToCaseEnabled() const {
     return previewMeshOptions_.has_value();
 }
 void MainWindow::clearPreviewMeshOptions() {
+    previewDigestValid_ = false;
     previewMeshOptions_.reset();
     writePreviewToCaseAction_->setEnabled(false);
 }
@@ -479,7 +481,8 @@ bool MainWindow::openResultsPath(const QString& manifestPath) {
     if (!view->loadStep(*session, session->steps().first().toObject()["n"].toInteger()))
         return false;
     const auto& digest = preview_->digest();
-    const QString hash = digest ? QString::fromStdString(digest->mesh_sha256) : QString();
+    const QString hash =
+        previewDigestValid_ && digest ? QString::fromStdString(digest->mesh_sha256) : QString();
     lastMeshDigestCompare_ = session->comparePreviewMeshSha256(hash, &lastMeshDigestDetail_);
     using chipcae::desktop::MeshSha256Compare;
     if (lastMeshDigestCompare_ == MeshSha256Compare::PreviewMissing)

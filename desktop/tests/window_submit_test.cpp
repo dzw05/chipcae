@@ -625,57 +625,70 @@ int main(int argc, char** argv) {
         });
     }
     for (auto replacement : {"case", "handwritten stack", "import"}) {
-        test((QString("document replacement invalidates preview cache: ") + replacement)
-                 .toUtf8()
-                 .constData(),
-             [&] {
-                 Fixture f(argv[1]);
-                 MainWindow w;
-                 f.openCase(w);
-                 successfulPreview(w, f);
-                 auto* action = writeAction(w);
-                 check(w.writePreviewToCaseEnabled() && action->isEnabled(),
-                       "completed preview enables write before replacement");
-                 check(!w.openCase(f.temp.filePath("missing-case.json")) &&
-                           !w.loadHandwrittenStack(f.temp.filePath("missing-stack.json")),
-                       "failed document replacements are rejected");
-                 check(w.writePreviewToCaseEnabled() && action->isEnabled(),
-                       "failed replacements preserve completed preview cache");
-                 if (QString(replacement) == "case") {
-                     f.openCase(w);
-                 } else if (QString(replacement) == "handwritten stack") {
-                     check(w.loadHandwrittenStack(), "replace handwritten stack");
-                 } else {
-                     ImportRequest request;
-                     request.input = f.temp.filePath("fixture.xml");
-                     request.output = f.temp.filePath("import.stack.json");
-                     request.materialMap = f.temp.filePath("material-map.json");
-                     request.polyset = f.temp.filePath("import.polyset");
-                     request.report = f.temp.filePath("defects.json");
-                     request.program = PYTHON_EXECUTABLE;
-                     request.prefix = {QString(CHIPCAE_REPOSITORY) +
-                                       "/desktop/tools/mock_import.py"};
-                     write(request.input, "success");
-                     write(request.materialMap, "{}");
-                     QObject receiver;
-                     bool finished = false, replaced = false;
-                     QObject::connect(w.importController(),
-                                      &ImportController::finished,
-                                      &receiver,
-                                      [&](bool ok) {
-                                          finished = true;
-                                          replaced = ok;
-                                      });
-                     check(w.importController()->start(request), "start replacement import");
-                     check(waitFor([&] { return finished; }) && replaced,
-                           "import successfully replaces document");
-                 }
-                 check(!w.writePreviewToCaseEnabled() && !action->isEnabled(),
-                       "successful document replacement disables stale preview write");
-                 auto before = w.document()->toJson();
-                 check(!w.writePreviewToCase() && w.document()->toJson() == before,
-                       "stale preview options cannot mutate replacement document");
-             });
+        test(
+            (QString("document replacement invalidates preview cache: ") + replacement)
+                .toUtf8()
+                .constData(),
+            [&] {
+                Fixture f(argv[1]);
+                MainWindow w;
+                f.openCase(w);
+                auto hash = successfulPreview(w, f);
+                auto resultPath = digestResult(f, differentHash(hash));
+                w.setMeshDigestDialogChoice(Choice::Cancel);
+                auto* action = writeAction(w);
+                check(w.writePreviewToCaseEnabled() && action->isEnabled(),
+                      "completed preview enables write before replacement");
+                check(!w.openCase(f.temp.filePath("missing-case.json")) &&
+                          !w.loadHandwrittenStack(f.temp.filePath("missing-stack.json")),
+                      "failed document replacements are rejected");
+                check(w.writePreviewToCaseEnabled() && action->isEnabled(),
+                      "failed replacements preserve completed preview cache");
+                check(!w.openResultsPath(resultPath) && w.lastOpenCancelledForMeshDigest(),
+                      "failed replacements preserve current document digest warning");
+                checkComparison(w, resultPath, hash, MeshSha256Compare::Mismatch);
+                if (QString(replacement) == "case") {
+                    f.openCase(w);
+                } else if (QString(replacement) == "handwritten stack") {
+                    check(w.loadHandwrittenStack(), "replace handwritten stack");
+                } else {
+                    ImportRequest request;
+                    request.input = f.temp.filePath("fixture.xml");
+                    request.output = f.temp.filePath("import.stack.json");
+                    request.materialMap = f.temp.filePath("material-map.json");
+                    request.polyset = f.temp.filePath("import.polyset");
+                    request.report = f.temp.filePath("defects.json");
+                    request.program = PYTHON_EXECUTABLE;
+                    request.prefix = {QString(CHIPCAE_REPOSITORY) +
+                                      "/desktop/tools/mock_import.py"};
+                    write(request.input, "success");
+                    write(request.materialMap, "{}");
+                    QObject receiver;
+                    bool finished = false, replaced = false;
+                    QObject::connect(
+                        w.importController(), &ImportController::finished, &receiver, [&](bool ok) {
+                            finished = true;
+                            replaced = ok;
+                        });
+                    check(w.importController()->start(request), "start replacement import");
+                    check(waitFor([&] { return finished; }) && replaced,
+                          "import successfully replaces document");
+                }
+                check(!w.writePreviewToCaseEnabled() && !action->isEnabled(),
+                      "successful document replacement disables stale preview write");
+                auto before = w.document()->toJson();
+                check(!w.writePreviewToCase() && w.document()->toJson() == before,
+                      "stale preview options cannot mutate replacement document");
+                check(w.openResultsPath(resultPath),
+                      "replacement results open despite stale digest and Cancel choice");
+                check(w.lastMeshDigestCompare() == MeshSha256Compare::PreviewMissing &&
+                          w.lastMeshDigestDetail().isEmpty() && !w.lastOpenCancelledForMeshDigest(),
+                      "replacement invalidates preview digest without warning or cancellation");
+                hash = successfulPreview(w, f);
+                check(!w.openResultsPath(resultPath) && w.lastOpenCancelledForMeshDigest(),
+                      "new successful preview restores digest warnings for current document");
+                checkComparison(w, resultPath, hash, MeshSha256Compare::Mismatch);
+            });
     }
     test("busy rejected preview preserves completed write cache", [&] {
         Fixture f(argv[1]);
