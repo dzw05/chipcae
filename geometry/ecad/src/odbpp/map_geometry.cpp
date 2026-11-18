@@ -3,7 +3,11 @@
 #include <algorithm>
 #include <clipper2/clipper.h>
 #include <cmath>
+#include <cstdint>
+#include <map>
 #include <numbers>
+#include <numeric>
+#include <set>
 #include <stdexcept>
 #include <tuple>
 #include <utility>
@@ -13,32 +17,348 @@ namespace {
 using namespace detail;
 using namespace Clipper2Lib;
 constexpr double pi = std::numbers::pi;
-// Validate integer contour and output edges, including collinear overlaps and
-// non-adjacent endpoint contacts introduced by input geometry or rounding.
-bool simple_ring(const Path64& path) {
-    auto on_segment = [](const Point64& a, const Point64& b, const Point64& p) {
-        return CrossProductSign(a, b, p) == 0 && p.x >= std::min(a.x, b.x) &&
-               p.x <= std::max(a.x, b.x) && p.y >= std::min(a.y, b.y) && p.y <= std::max(a.y, b.y);
-    };
+bool on_segment(const Point64& a, const Point64& b, const Point64& p) {
+    return CrossProductSign(a, b, p) == 0 && p.x >= std::min(a.x, b.x) &&
+           p.x <= std::max(a.x, b.x) && p.y >= std::min(a.y, b.y) && p.y <= std::max(a.y, b.y);
+}
+bool valid_vertices(const Path64& path) {
     for (std::size_t i = 0; i < path.size(); ++i) {
         const auto& a = path[i];
         const auto& b = path[(i + 1) % path.size()];
         const auto& prev = path[(i + path.size() - 1) % path.size()];
         if (a == b || on_segment(prev, a, b) || on_segment(a, b, prev))
             return false;
-        for (std::size_t j = i + 2; j < path.size(); ++j) {
-            if (i == 0 && j + 1 == path.size())
-                continue;
+    }
+    return true;
+}
+struct EdgeBox {
+    std::int64_t xmin, xmax, ymin, ymax;
+};
+// Static centered interval tree with dynamic membership. Each active interval
+// lives at the first center it spans, indexed by both ends. Querying one side
+// scans only matching intervals; vertically separated edges never need a flat
+// active-set scan. Subtree counts also prune empty portions of the tree.
+class ActiveEdges {
+    using Entry = std::pair<std::int64_t, std::size_t>;
+    struct Node {
+        std::set<Entry> lower, upper;
+        std::size_t count = 0;
+    };
+    std::vector<std::int64_t> centers;
+    std::vector<Node> nodes;
+
+    template <typename Visit>
+    bool query(const EdgeBox& box, std::size_t lo, std::size_t hi, Visit& visit) const {
+        if (lo == hi)
+            return true;
+        const auto mid = lo + (hi - lo) / 2;
+        const auto& node = nodes[mid];
+        if (!node.count)
+            return true;
+        if (box.ymax < centers[mid]) {
+            for (const auto& [y, index] : node.lower) {
+                if (y > box.ymax)
+                    break;
+                if (!visit(index))
+                    return false;
+            }
+            return query(box, lo, mid, visit);
+        }
+        if (box.ymin > centers[mid]) {
+            for (auto it = node.upper.rbegin(); it != node.upper.rend(); ++it) {
+                if (it->first < box.ymin)
+                    break;
+                if (!visit(it->second))
+                    return false;
+            }
+            return query(box, mid + 1, hi, visit);
+        }
+        for (const auto& [y, index] : node.lower) {
+            (void)y;
+            if (!visit(index))
+                return false;
+        }
+        return query(box, lo, mid, visit) && query(box, mid + 1, hi, visit);
+    }
+
+public:
+    explicit ActiveEdges(const std::vector<EdgeBox>& boxes) {
+        centers.reserve(boxes.size());
+        for (const auto& box : boxes)
+            centers.push_back(box.ymin);
+        std::sort(centers.begin(), centers.end());
+        centers.erase(std::unique(centers.begin(), centers.end()), centers.end());
+        nodes.resize(centers.size());
+    }
+    void update(const EdgeBox& box, std::size_t index, bool insert) {
+        std::size_t lo = 0, hi = centers.size();
+        while (lo < hi) {
+            const auto mid = lo + (hi - lo) / 2;
+            auto& node = nodes[mid];
+            if (insert)
+                ++node.count;
+            else
+                --node.count;
+            if (box.ymax < centers[mid])
+                hi = mid;
+            else if (box.ymin > centers[mid])
+                lo = mid + 1;
+            else {
+                if (insert) {
+                    node.lower.emplace(box.ymin, index);
+                    node.upper.emplace(box.ymax, index);
+                } else {
+                    node.lower.erase({box.ymin, index});
+                    node.upper.erase({box.ymax, index});
+                }
+                return;
+            }
+        }
+    }
+    template <typename Visit>
+    bool query(const EdgeBox& box, Visit visit) const {
+        return query(box, 0, centers.size(), visit);
+    }
+};
+// Enumerate closed bounding-box overlaps, preserving original edge indices and
+// adjacency exclusions. Dense overlapping boxes can still yield O(n^2) pairs.
+template <typename Visit>
+bool edge_candidates(const Path64& path, Visit visit) {
+    std::vector<EdgeBox> boxes;
+    boxes.reserve(path.size());
+    for (std::size_t i = 0; i < path.size(); ++i) {
+        const auto& a = path[i];
+        const auto& b = path[(i + 1) % path.size()];
+        boxes.push_back(
+            {std::min(a.x, b.x), std::max(a.x, b.x), std::min(a.y, b.y), std::max(a.y, b.y)});
+    }
+    std::vector<std::size_t> starts(path.size());
+    std::iota(starts.begin(), starts.end(), std::size_t{0});
+    auto ends = starts;
+    std::sort(starts.begin(), starts.end(), [&](auto i, auto j) {
+        return std::tie(boxes[i].xmin, i) < std::tie(boxes[j].xmin, j);
+    });
+    std::sort(ends.begin(), ends.end(), [&](auto i, auto j) {
+        return std::tie(boxes[i].xmax, i) < std::tie(boxes[j].xmax, j);
+    });
+    ActiveEdges active(boxes);
+    std::size_t expired = 0;
+    for (auto index : starts) {
+        const auto& box = boxes[index];
+        // Strict expiration keeps contacts at equal x coordinates eligible.
+        while (expired < ends.size() && boxes[ends[expired]].xmax < box.xmin) {
+            auto end = ends[expired++];
+            active.update(boxes[end], end, false);
+        }
+        if (!active.query(box, [&](auto other) {
+                const auto i = std::min(index, other), j = std::max(index, other);
+                return j == i + 1 || (i == 0 && j + 1 == path.size()) || visit(i, j);
+            }))
+            return false;
+        active.update(box, index, true);
+    }
+    return true;
+}
+// Validate integer contour and output edges using the original predicates.
+bool simple_ring(const Path64& path) {
+    if (!valid_vertices(path))
+        return false;
+    return edge_candidates(path, [&](auto i, auto j) {
+        const auto& a = path[i];
+        const auto& b = path[(i + 1) % path.size()];
+        const auto& c = path[j];
+        const auto& d = path[(j + 1) % path.size()];
+        const int ab_c = CrossProductSign(a, b, c), ab_d = CrossProductSign(a, b, d);
+        const int cd_a = CrossProductSign(c, d, a), cd_b = CrossProductSign(c, d, b);
+        if ((ab_c * ab_d < 0 && cd_a * cd_b < 0) || on_segment(a, b, c) || on_segment(a, b, d) ||
+            on_segment(c, d, a) || on_segment(c, d, b))
+            return false;
+        return true;
+    });
+}
+
+// Exact signed shoelace sum, accumulated as separate positive and negative
+// magnitudes. Clipper supplies full-width unsigned products; checked carries
+// extend the sum instead of overflowing or imposing a new coordinate limit.
+class ExactArea {
+    using Words = std::vector<std::uint64_t>;
+    Words positive, negative;
+    static void add(Words& words, std::size_t index, std::uint64_t value) {
+        while (value) {
+            if (index == words.size())
+                words.push_back(0);
+            const auto old = words[index];
+            words[index] += value;
+            value = words[index++] < old ? 1 : 0;
+        }
+    }
+    void product(std::int64_t a, std::int64_t b, bool subtract) {
+        auto magnitude = [](std::int64_t v) {
+            const auto u = static_cast<std::uint64_t>(v);
+            return v < 0 ? std::uint64_t{0} - u : u;
+        };
+        const auto p = MultiplyUInt64(magnitude(a), magnitude(b));
+        auto& words = ((a < 0) != (b < 0)) != subtract ? negative : positive;
+        add(words, 0, p.lo);
+        // A zero low word may not have allocated the first limb.
+        if (p.hi && words.empty())
+            words.push_back(0);
+        add(words, 1, p.hi);
+    }
+
+public:
+    void append(const Path64& path) {
+        for (std::size_t i = 0; i < path.size(); ++i) {
+            const auto& a = path[i];
+            const auto& b = path[(i + 1) % path.size()];
+            product(a.x, b.y, false);
+            product(b.x, a.y, true);
+        }
+    }
+    Words magnitude() const {
+        auto less = [](const Words& a, const Words& b) {
+            return a.size() != b.size()
+                       ? a.size() < b.size()
+                       : std::lexicographical_compare(a.rbegin(), a.rend(), b.rbegin(), b.rend());
+        };
+        const bool reversed = less(positive, negative);
+        auto result = reversed ? negative : positive;
+        const auto& sub = reversed ? positive : negative;
+        std::uint64_t borrow = 0;
+        for (std::size_t i = 0; i < result.size(); ++i) {
+            const auto word = i < sub.size() ? sub[i] : 0;
+            const auto old = result[i];
+            result[i] -= word;
+            const bool underflow = old < word;
+            const auto next = result[i];
+            result[i] -= borrow;
+            borrow = underflow || next < borrow ? 1 : 0;
+        }
+        while (!result.empty() && !result.back())
+            result.pop_back();
+        return result;
+    }
+};
+
+bool bridged_ring(const Path64& path) {
+    if (!valid_vertices(path))
+        return false;
+    auto point_less = [](const Point64& a, const Point64& b) {
+        return std::tie(a.x, a.y) < std::tie(b.x, b.y);
+    };
+    auto key = [&](std::size_t i) {
+        auto a = path[i], b = path[(i + 1) % path.size()];
+        if (point_less(b, a))
+            std::swap(a, b);
+        return std::tuple{a.x, a.y, b.x, b.y};
+    };
+    std::vector<std::size_t> edges(path.size());
+    std::iota(edges.begin(), edges.end(), std::size_t{0});
+    std::sort(edges.begin(), edges.end(), [&](auto i, auto j) {
+        return std::tuple{key(i), i} < std::tuple{key(j), j};
+    });
+    std::vector<bool> bridge(path.size(), false);
+    for (std::size_t begin = 0; begin < edges.size();) {
+        auto end = begin + 1;
+        while (end < edges.size() && key(edges[begin]) == key(edges[end]))
+            ++end;
+        // Original vertex validation has already excluded adjacent reversals.
+        // Pair opposite directions one-to-one in original occurrence order.
+        std::vector<std::size_t> forward, reverse;
+        for (auto at = begin; at < end; ++at) {
+            auto i = edges[at];
+            (point_less(path[i], path[(i + 1) % path.size()]) ? forward : reverse).push_back(i);
+        }
+        for (std::size_t at = 0; at < std::min(forward.size(), reverse.size()); ++at)
+            bridge[forward[at]] = bridge[reverse[at]] = true;
+        begin = end;
+    }
+    if (!edge_candidates(path, [&](auto i, auto j) {
+            if (bridge[i] && bridge[j])
+                return true;
+            const auto& a = path[i];
+            const auto& b = path[(i + 1) % path.size()];
             const auto& c = path[j];
             const auto& d = path[(j + 1) % path.size()];
             const int ab_c = CrossProductSign(a, b, c), ab_d = CrossProductSign(a, b, d);
             const int cd_a = CrossProductSign(c, d, a), cd_b = CrossProductSign(c, d, b);
-            if ((ab_c * ab_d < 0 && cd_a * cd_b < 0) || on_segment(a, b, c) ||
-                on_segment(a, b, d) || on_segment(c, d, a) || on_segment(c, d, b))
+            if (ab_c * ab_d < 0 && cd_a * cd_b < 0)
                 return false;
+            // Shared endpoints are legal; contacts on an edge interior are not.
+            if ((c != a && c != b && on_segment(a, b, c)) ||
+                (d != a && d != b && on_segment(a, b, d)) ||
+                (a != c && a != d && on_segment(c, d, a)) ||
+                (b != c && b != d && on_segment(c, d, b)))
+                return false;
+            // Equal segments have no endpoint in the other's interior but still
+            // overlap over positive length (including same-direction duplicates).
+            return !((a == c && b == d) || (a == d && b == c));
+        }))
+        return false;
+    ExactArea input, output;
+    input.append(path);
+    const auto magnitude = input.magnitude();
+    if (magnitude.empty())
+        return false;
+    for (const auto& ring : Union(Paths64{path}, FillRule::NonZero))
+        output.append(ring);
+    return magnitude == output.magnitude();
+}
+// Clipper preserves collinear bridge feet and may join touching islands at a
+// repeated vertex. Normalize only newly accepted surfaces to the independent
+// boundary loops, before the existing layer union and output-ring validation.
+Paths64 surface_rings(const Paths64& paths) {
+    Paths64 result;
+    for (const auto& path : paths) {
+        if (path.empty())
+            continue;
+        std::map<std::pair<std::int64_t, std::int64_t>, std::size_t> positions;
+        Path64 pending;
+        for (std::size_t i = 0; i <= path.size(); ++i) {
+            const auto& point = path[i % path.size()];
+            const auto key = std::pair{point.x, point.y};
+            const auto [at, inserted] = positions.emplace(key, pending.size());
+            if (inserted) {
+                pending.push_back(point);
+                continue;
+            }
+            const auto begin = at->second;
+            result.push_back(TrimCollinear(Path64(
+                pending.begin() + static_cast<Path64::difference_type>(begin), pending.end())));
+            for (auto j = begin + 1; j < pending.size(); ++j)
+                positions.erase({pending[j].x, pending[j].y});
+            pending.resize(begin + 1);
         }
     }
-    return true;
+    return result;
+}
+// Clipper's AEL is a linked list. A comb with many edges on the same Y scanline
+// makes even a union of one simple ring quadratic. Estimate peak active edges
+// along each axis and choose the less crowded scan direction for that case.
+bool transpose_simple_surface(const Path64& path) {
+    auto peak = [&](bool x_axis) {
+        std::vector<std::pair<std::int64_t, int>> events;
+        events.reserve(2 * path.size());
+        for (std::size_t i = 0; i < path.size(); ++i) {
+            const auto& a = path[i];
+            const auto& b = path[(i + 1) % path.size()];
+            const auto u = x_axis ? a.x : a.y, v = x_axis ? b.x : b.y;
+            events.emplace_back(std::min(u, v), -1);
+            events.emplace_back(std::max(u, v), 1);
+        }
+        std::sort(events.begin(), events.end());
+        std::size_t active = 0, maximum = 0;
+        for (const auto& [coordinate, end] : events) {
+            (void)coordinate;
+            if (end < 0)
+                maximum = std::max(maximum, ++active);
+            else
+                --active;
+        }
+        return maximum;
+    };
+    // Avoid extra work for small inputs and nearly equal scan directions.
+    return path.size() > 4096 && peak(false) / 4 > peak(true) && simple_ring(path);
 }
 struct Mapper {
     const OdbJob& job;
@@ -75,7 +395,9 @@ struct Mapper {
         }
         path.push_back(point(e));
     }
-    Path64 contour(const OdbContour& c) const {
+    Path64 contour(const OdbContour& c,
+                   bool allow_bridges = false,
+                   bool* normalized_surface = nullptr) const {
         Path64 p{point(c.start)};
         auto s = c.start;
         for (const auto& seg : c.segs) {
@@ -85,15 +407,25 @@ struct Mapper {
                 p.push_back(point(seg.end));
             s = seg.end;
         }
+        auto original_size = p.size();
         if (p.size() > 1 && p.front() == p.back())
+            --original_size;
+        if (allow_bridges)
+            StripDuplicates(p, true);
+        else if (p.size() > 1 && p.front() == p.back())
             p.pop_back();
         auto distinct = p;
         std::sort(distinct.begin(), distinct.end(), [](const auto& a, const auto& b) {
             return std::tie(a.x, a.y) < std::tie(b.x, b.y);
         });
         distinct.erase(std::unique(distinct.begin(), distinct.end()), distinct.end());
-        if (distinct.size() < 3 || Area(p) == 0 || !simple_ring(p))
+        if (distinct.size() < 3 || Area(p) == 0)
             return {};
+        const bool simple = simple_ring(p);
+        if (!simple && !(allow_bridges && bridged_ring(p)))
+            return {};
+        if (normalized_surface && (!simple || p.size() != original_size))
+            *normalized_surface = true;
         if ((Area(p) > 0) == c.is_hole)
             std::reverse(p.begin(), p.end());
         return p;
@@ -200,20 +532,35 @@ struct Mapper {
     }
     void copper(EcadLayer& layer, const OdbFeatures& f) {
         Paths64 positive, negative;
+        bool transposed = false;
         auto add = [&](Paths64 paths, bool polarity) {
             auto& dst = polarity ? positive : negative;
             dst.insert(dst.end(), paths.begin(), paths.end());
         };
         for (const auto& surface : f.surfaces) {
             Paths64 paths;
+            bool normalized_surface = false;
             for (const auto& c : surface.contours) {
-                auto path = contour(c);
+                auto path = contour(c, true, &normalized_surface);
                 if (path.empty() && !c.segs.empty())
                     throw std::runtime_error("invalid or degenerate contour: " + layer.name);
                 if (!path.empty())
                     paths.push_back(std::move(path));
             }
-            add(Union(paths, FillRule::NonZero), surface.positive);
+            // With one positive simple contour and no other features, none of
+            // these booleans creates intersections. Axis exchange is therefore
+            // exact, including the integer output vertices; no rounding changes.
+            if (f.surfaces.size() == 1 && surface.positive && paths.size() == 1 && f.pads.empty() &&
+                f.lines.empty() && f.arcs.empty() && transpose_simple_surface(paths.front())) {
+                transposed = true;
+                for (auto& point : paths.front())
+                    std::swap(point.x, point.y);
+                std::reverse(paths.front().begin(), paths.front().end());
+            }
+            auto rings = Union(paths, FillRule::NonZero);
+            if (normalized_surface)
+                rings = surface_rings(rings);
+            add(std::move(rings), surface.positive);
         }
         for (const auto& p : f.pads) {
             auto s = symbol(f, p.sym);
@@ -246,6 +593,12 @@ struct Mapper {
         if (!clipper.Execute(ClipType::Difference, FillRule::NonZero, rings))
             throw std::runtime_error("copper boolean failed: " + layer.name);
         append_rings(layer, rings);
+        if (transposed)
+            for (auto& polygon : layer.polygons) {
+                for (auto& point : polygon.points)
+                    std::swap(point[0], point[1]);
+                std::reverse(polygon.points.begin(), polygon.points.end());
+            }
     }
     void append_rings(EcadLayer& layer, const PolyPath64& parent) {
         for (const auto& ring : parent) {

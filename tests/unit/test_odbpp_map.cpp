@@ -2067,6 +2067,41 @@ void bridged_surface() {
                                 1,
                                 2);
          }},
+        {"wide exact area and reversed winding",
+         [] {
+             auto reference = board();
+             reference.features["TOP"].surfaces = {
+                 {true, {square(8), hole_square(1, 1), hole_square(5, 1)}}};
+             const auto expected = mapped(reference);
+             // 2^32 dbu makes some coordinate products exactly 2^64.
+             // Both signs and windings exercise exact cancellation beyond int64.
+             for (double x : {-4294967.296, 4294967.296})
+                 for (double y : {-4294967.296, 4294967.296})
+                     for (bool reverse : {false, true}) {
+                         auto c = two_bridged_holes();
+                         if (reverse) {
+                             std::vector<OdbPoint> vertices{c.start};
+                             for (std::size_t i = 0; i + 1 < c.segs.size(); ++i)
+                                 vertices.push_back(c.segs[i].end);
+                             std::reverse(vertices.begin(), vertices.end());
+                             c = polygon_contour(vertices);
+                         }
+                         auto j = board();
+                         j.profile.contours = {shifted(square(10), x, y)};
+                         j.features["TOP"].surfaces = {{true, {shifted(c, x, y)}}};
+                         auto actual = mapped(j);
+                         // Compare in local coordinates so test-only area helpers
+                         // need neither overflowing int64 products nor cancellation
+                         // of rounded double products at the translated origin.
+                         for (auto& polygon : actual.layers.front().polygons)
+                             for (auto& point : polygon.points) {
+                                 point[0] -= std::llround(x * 1000);
+                                 point[1] -= std::llround(y * 1000);
+                             }
+                         near(area(actual), 56e6, 0);
+                         same_polygon_rings(actual, expected, 1, 2);
+                     }
+         }},
         {"repeated bridge pairs",
          [] {
              equivalent_surface(repeated_bridge(),
@@ -2229,6 +2264,24 @@ void large_contour_perf() {
     j.features["TOP"].surfaces = {{true, {polygon_contour(points)}}};
     const auto m = timed_mapping(j, "odbpp_map_large_contour_perf");
     require(m.layers.front().polygons.size() == 1, "comb remains one copper ring");
+    std::vector<std::array<std::int64_t, 2>> expected;
+    for (const auto& point : points)
+        expected.push_back({std::llround(point.x * 1000), std::llround(point.y * 1000)});
+    std::int64_t twice_area = 0;
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        const auto& a = expected[i];
+        const auto& b = expected[(i + 1) % expected.size()];
+        twice_area += a[0] * b[1] - b[0] * a[1];
+    }
+    near(area(m), static_cast<double>(twice_area) / 2, 0);
+    auto actual = m.layers.front().polygons.front().points;
+    std::sort(expected.begin(), expected.end());
+    std::sort(actual.begin(), actual.end());
+    require(actual == expected, "boolean scan direction preserves every integer comb vertex");
+    require(m.outline.points ==
+                std::vector<std::array<std::int64_t, 2>>{
+                    {0, 0}, {1000000, 0}, {1000000, 1000000}, {0, 1000000}},
+            "boolean scan direction leaves the profile unchanged");
 }
 void large_bridged_perf() {
     constexpr int side = 140;
