@@ -55,6 +55,18 @@ def _number(field, value):
         f'{field}: expected a finite number or null')
 
 
+def _require_finite(value, path=''):
+    """Reject nested non-finite floats without converting integers or copying values."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _require_finite(item, f'{path}.{key}' if path else key)
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _require_finite(item, f'{path}[{index}]')
+    elif isinstance(value, float):
+        _require(math.isfinite(value), f'{path}: expected a finite number')
+
+
 def _value_object(field, value):
     _require(isinstance(value, dict) and 'value' in value,
              f'{field}: expected an object with value')
@@ -115,6 +127,7 @@ def result_json_from_summary(
                          ('src_dirty', src_dirty)):
         if value is not None and (field != 'notes' or value):
             obj[field] = value
+    _require_finite(obj)
     return obj
 
 

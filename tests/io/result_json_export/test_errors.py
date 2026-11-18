@@ -94,6 +94,30 @@ class Errors(ExportCase):
                         option.update(type='解析', source='synthetic')
                     self.assert_api_invalid(field, **{field: option})
 
+    def test_constructor_rejects_nested_nonfinite_qoi_values(self):
+        summary = summarize(self.run)
+        for field in ('blocks', 'temperature', 'warpage', 'manifest_summary'):
+            for sequence in (list, tuple):
+                for value in (float('nan'), float('inf'), -float('inf')):
+                    with self.subTest(field=field, sequence=sequence, value=value):
+                        invalid = copy.deepcopy(summary)
+                        invalid[field]['extra'] = {'samples': sequence([{'value': value}])}
+                        with self.assertRaises(exporter.ResultJsonError) as caught:
+                            self.object(invalid)
+                        self.assertEqual(caught.exception.code, 14)
+                        self.assertEqual(caught.exception.name, 'INPUT_INVALID')
+                        self.assertIn(f'qoi.{field}', str(caught.exception))
+
+    def test_constructor_rejects_nested_nonfinite_optional_extras(self):
+        for field in ('reference', 'error', 'tolerance'):
+            for sequence in (list, tuple):
+                for value in (float('nan'), float('inf'), -float('inf')):
+                    with self.subTest(field=field, sequence=sequence, value=value):
+                        option = {'value': 1, 'extra': {'samples': sequence([{'value': value}])}}
+                        if field == 'reference':
+                            option.update(type='解析', source='synthetic')
+                        self.assert_api_invalid(field, **{field: option})
+
     def test_missing_qoi_key_reports_field_as_protocol_error(self):
         summary = summarize(self.run)
         for key in QOI_KEYS:

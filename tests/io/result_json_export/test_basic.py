@@ -98,6 +98,24 @@ class Basic(ExportCase):
         self.assertEqual(obj['qoi'], qoi)
         self.assertEqual(summary, original)
 
+    def test_constructor_preserves_finite_nested_values_and_ignores_uncopied_fields(self):
+        summary = summarize(self.run)
+        extra = {'samples': [None, True, False, 10**1000, .125, {'values': (0, -.5)}]}
+        summary['temperature']['extra'] = copy.deepcopy(extra)
+        summary['future_summary_key'] = float('nan')
+        reference = dict(value=None, type='解析', source='synthetic', extra=extra)
+        error = dict(value=0, extra=extra)
+        tolerance = dict(value=.125, extra=extra)
+        original = copy.deepcopy(summary['temperature'])
+        obj = self.object(summary, reference=reference, error=error, tolerance=tolerance)
+        self.assertEqual(obj['qoi']['temperature'], original)
+        self.assertEqual(summary['temperature'], original)
+        self.assertNotIn('future_summary_key', obj['qoi'])
+        self.assertEqual(obj['reference'], reference)
+        self.assertEqual(obj['error'], error)
+        self.assertEqual(obj['tolerance'], tolerance)
+        self.assertEqual(obj['qoi']['temperature']['extra'], extra)
+
     def test_nulls_from_real_reader_survive_export(self):
         with h5py.File(self.step, 'r+') as data:
             for name in ('hex', 'cut'):
