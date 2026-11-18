@@ -33,9 +33,8 @@ def main():
             result = subprocess.run([str(arg) for arg in args], cwd=root, capture_output=True, text=True, timeout=600)
             assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
 
-        # Exercise the CLI fixture's material ids through the solver's material schema.
-        material_map = SOURCE / 'tests/integration/import_cli/material_map.json'
-        run([importer, SOURCE / 'tests/integration/ecad/data/board_2layer.xml', '-o', 'stack.json', '--polyset', 'stack.polyset', '--report', 'defects.json', '--material-map', material_map])
+        write('material_map.json', {'FR4': 'fr4_eq', 'copper': 'cu'})
+        run([importer, SOURCE / 'tests/integration/ecad/data/board_2layer.xml', '-o', 'stack.json', '--polyset', 'stack.polyset', '--report', 'defects.json', '--material-map', 'material_map.json'])
         run([sys.executable, SOURCE / 'tools/stack/copper_fraction.py', 'stack.json', '-o', 'solve.stack.json', '--report', 'cf.json'])
         report = json.loads((root / 'cf.json').read_text())
         fractions = {entry['layer']: entry['fraction'] for entry in report['layers']}
