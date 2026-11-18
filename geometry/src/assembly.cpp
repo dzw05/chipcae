@@ -37,6 +37,73 @@ bool valid_ring(const Ring& r) {
                return std::isfinite(p[0]) && std::isfinite(p[1]);
            });
 }
+// Exact predicates preserve small valid features; normalization handles roundoff later.
+bool on_segment(Point a, Point b, Point p) {
+    return cross(a, b, p) == 0 && p[0] >= std::min(a[0], b[0]) && p[0] <= std::max(a[0], b[0]) &&
+           p[1] >= std::min(a[1], b[1]) && p[1] <= std::max(a[1], b[1]);
+}
+bool segments_meet(Point a, Point b, Point c, Point d) {
+    const Real ac = cross(a, b, c), ad = cross(a, b, d);
+    const Real ca = cross(c, d, a), cb = cross(c, d, b);
+    return (((ac < 0 && ad > 0) || (ac > 0 && ad < 0)) &&
+            ((ca < 0 && cb > 0) || (ca > 0 && cb < 0))) ||
+           on_segment(a, b, c) || on_segment(a, b, d) || on_segment(c, d, a) || on_segment(c, d, b);
+}
+Polygon topology_ring(Polygon p) {
+    p.erase(std::unique(p.begin(), p.end()), p.end());
+    if (p.size() > 1 && p.front() == p.back())
+        p.pop_back();
+    return p;
+}
+bool simple_ring(const Polygon& p) {
+    for (size_t i = 0; i < p.size(); ++i) {
+        const auto a = p[i], b = p[(i + 1) % p.size()], c = p[(i + 2) % p.size()];
+        // Adjacent edges may be collinear, but must not double back.
+        if (cross(a, b, c) == 0 && (on_segment(a, b, c) || on_segment(b, c, a)))
+            return false;
+        for (size_t j = i + 1; j < p.size(); ++j) {
+            if (j == i + 1 || (i == 0 && j + 1 == p.size()))
+                continue;
+            if (segments_meet(a, b, p[j], p[(j + 1) % p.size()]))
+                return false;
+        }
+    }
+    return true;
+}
+bool rings_meet(const Polygon& a, const Polygon& b) {
+    for (size_t i = 0; i < a.size(); ++i)
+        for (size_t j = 0; j < b.size(); ++j)
+            if (segments_meet(a[i], a[(i + 1) % a.size()], b[j], b[(j + 1) % b.size()]))
+                return true;
+    return false;
+}
+bool inside_ring(const Polygon& p, Point v) {
+    bool inside = false;
+    for (size_t i = 0, j = p.size() - 1; i < p.size(); j = i++) {
+        const auto a = p[i], b = p[j];
+        if ((a[1] > v[1]) != (b[1] > v[1]) &&
+            v[0] < a[0] + (v[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1]))
+            inside = !inside;
+    }
+    return inside;
+}
+bool valid_topology(const SlabSection& section) {
+    const auto outer = topology_ring(section.outer.pts);
+    if (!simple_ring(outer))
+        return false;
+    std::vector<Polygon> holes;
+    for (const auto& ring : section.holes) {
+        auto hole = topology_ring(ring.pts);
+        if (!simple_ring(hole) || rings_meet(outer, hole) || !inside_ring(outer, hole.front()))
+            return false;
+        for (const auto& prior : holes)
+            if (rings_meet(prior, hole) || inside_ring(prior, hole.front()) ||
+                inside_ring(hole, prior.front()))
+                return false;
+        holes.push_back(std::move(hole));
+    }
+    return true;
+}
 bool valid_slabs(const std::vector<Slab>& slabs) {
     if (slabs.empty())
         return false;
@@ -45,7 +112,8 @@ bool valid_slabs(const std::vector<Slab>& slabs) {
             return false;
         for (const auto& section : s.sections)
             if (!valid_ring(section.outer) ||
-                !std::all_of(section.holes.begin(), section.holes.end(), valid_ring))
+                !std::all_of(section.holes.begin(), section.holes.end(), valid_ring) ||
+                !valid_topology(section))
                 return false;
     }
     return true;
@@ -178,6 +246,11 @@ std::vector<Footprint> footprints(const SlabSection& section, Polygon& prior, st
     std::vector<Polygon> rings{normalize(section.outer.pts)};
     for (const auto& h : section.holes)
         rings.push_back(normalize(h.pts));
+    auto degenerate = [](const Polygon& r) { return r.size() < 3 || !(area(r) > 0); };
+    if (std::any_of(rings.begin(), rings.end(), degenerate)) {
+        reason = "degenerate section";
+        return {};
+    }
     bool ortho = std::all_of(rings.begin(), rings.end(), rectilinear);
     if (!ortho) {
         if (rings.size() > 1) {
@@ -218,6 +291,10 @@ std::vector<Footprint> footprints(const SlabSection& section, Polygon& prior, st
                 p[axis] = *std::prev(hi);
             }
     }
+    if (std::any_of(rings.begin(), rings.end(), degenerate)) {
+        reason = "degenerate section";
+        return {};
+    }
     std::vector<Real> xs;
     for (const auto& r : rings)
         for (auto p : r)
@@ -236,6 +313,8 @@ std::vector<Footprint> footprints(const SlabSection& section, Polygon& prior, st
             }
         std::sort(ys.begin(), ys.end());
         for (size_t i = 1; i < ys.size(); i += 2) {
+            if (ys[i - 1] >= ys[i])
+                continue;
             auto found = std::find_if(out.begin(), out.end(), [&](const auto& f) {
                 return f.box[2] == x0 && f.box[1] == ys[i - 1] && f.box[3] == ys[i];
             });
@@ -248,6 +327,8 @@ std::vector<Footprint> footprints(const SlabSection& section, Polygon& prior, st
             }
         }
     }
+    if (out.empty())
+        reason = "degenerate section";
     std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) { return a.box < b.box; });
     return out;
 }
