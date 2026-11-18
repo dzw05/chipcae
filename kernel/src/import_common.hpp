@@ -1,12 +1,8 @@
 #pragma once
 
-#include "chipcae/geometry/diagnostics.hpp"
-
 #include <filesystem>
-#include <istream>
 #include <optional>
 #include <string>
-#include <vector>
 
 // Private to chipcae-import; this header is not an installed public API.
 namespace chipcae::importer {
@@ -34,15 +30,7 @@ std::string ecad_help();
 std::string step_help();
 void write_defects(const std::filesystem::path& file,
                    const std::string& code,
-                   const std::string& message,
-                   const std::vector<geometry::Defect>& defects = {});
-std::string import_failure_message(const std::string& code, const std::string& message);
-#if defined(CHIPCAE_ENABLE_JSONCONS)
-std::optional<int> protocol_error_code(const std::string& name, std::istream& input);
-int protocol_error_exit(const std::string& message, std::istream& input);
-std::vector<std::string> read_acceptance_list(const ImportOptions& options,
-                                              const std::filesystem::path& directory);
-#endif
+                   const std::string& message);
 void derive_output_paths(ImportOptions& options);
 std::filesystem::path import_report_directory(const std::filesystem::path& output);
 } // namespace chipcae::importer

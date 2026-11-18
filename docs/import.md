@@ -24,9 +24,8 @@ Part ID `void` is reserved (exit 14). Geometry threshold error prefixes map
 through `protocol/errors.yaml`; unknown prefixes return INTERNAL (1).
 STEP parts require an OCCT-enabled build; otherwise each part produces a
 C-tier `OCCT_UNAVAILABLE` diagnostic. JSON support and ECAD support must be
-configured for assembly imports. JSON-enabled builds also require a local yaml-cpp
-package (or an existing `yaml-cpp::yaml-cpp`/`yaml-cpp` target); configure never
-downloads yaml-cpp. Set `yaml-cpp_DIR` or `CMAKE_PREFIX_PATH` for a custom install.
+configured for assembly imports. Error mapping reads the protocol scalar records
+without adding a YAML library dependency to JSON-enabled builds.
 
 This checkout still contains the SP0 throwing implementations of slicing,
 placement and merge. Assembly currently treats those exact placeholder errors
@@ -46,13 +45,11 @@ Until E-ODB-3 supplies an implemented reader, ODB++ assembly boards reject with
 `odbpp reader not yet available`. Implementation owners declare support through
 `CHIPCAE_ODBPP_AVAILABLE` on the linked ECAD target and
 `CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE` on the linked geometry target. Until those
-implementations land, CMake recognizes the frozen SP0 stub sources by digest
-and reports support as OFF. Changed implementations without a target declaration,
-missing capability sources on a target, declarations enabling a known stub, and
-contradictory `-DCHIPCAE_ASSEMBLY_*_AVAILABLE` values are configuration errors.
-The detected values are normal CMake variables, not forced cache entries;
-implementation changes trigger reconfiguration. ODB++ assembly support also
-requires ECAD to be enabled.
+implementations land, support defaults to OFF. Integration builds can explicitly
+set `CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE` or
+`CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE` as CMake cache options. Source changes do
+not block configuration or require unrelated reader files to be linked.
+ODB++ assembly support also requires ECAD to be enabled.
 Imported product names also enforce the display-only
 `NOT_CAE_GEOMETRY` rejection, including for ordinary STEP filenames and
 unmapped bodies in `parts_from_step`.

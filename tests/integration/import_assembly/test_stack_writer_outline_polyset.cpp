@@ -33,9 +33,19 @@ int main() {
         auto base = load_stack(dir / "original.json", schema);
         require(bool(base), base ? "" : base.error().reason);
         require(base.value().outline.polygon.empty(), "fixture must require outline inlining");
+        auto no_refs = json;
+        no_refs.erase("external_refs");
+        std::ofstream(dir / "no-refs.json") << no_refs;
+        auto without_outline = base.value();
+        require(bool(chipcae::importer::inline_assembly_outline_references(without_outline,
+                                                                           dir / "no-refs.json")),
+                "no references need no sidecar");
+        require(without_outline.outline.polygon.empty(), "no outline reference preserves box");
         auto sidecar = read_polyset(dir / "outline.polyset");
         require(bool(sidecar), "read outline fixture");
-        auto inlined = chipcae::importer::inline_assembly_outline(base.value(), sidecar.value());
+        // Resolve the recorded path, independently of any CLI polyset default.
+        auto inlined = chipcae::importer::inline_assembly_outline_references(base.value(),
+                                                                             dir / "original.json");
         require(bool(inlined), "single ring outline must inline successfully");
         require(base.value().outline.polygon.size() == 5,
                 "assembly load must inline all five polyset outline points before merge");

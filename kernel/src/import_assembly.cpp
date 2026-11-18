@@ -5,9 +5,11 @@
 
 #include <algorithm>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <map>
 #include <random>
+#include <regex>
 #include <set>
 #include <sstream>
 #if defined(CHIPCAE_ENABLE_JSONCONS)
@@ -16,6 +18,130 @@
 namespace chipcae::importer {
 namespace {
 using namespace geometry;
+#if defined(CHIPCAE_ENABLE_JSONCONS)
+// Read the protocol's list of scalar error records (flow or block style).
+// Only code/name are consumed; comments and quoted scalars are accepted.
+inline std::optional<int> protocol_error_code(const std::string& name, std::istream& input) {
+    const std::regex field(R"re((code|name)\s*:\s*["']?([A-Za-z_0-9]+)["']?)re");
+    std::string line, record;
+    auto lookup = [&]() -> std::optional<int> {
+        std::string entry_name, code;
+        for (auto it = std::sregex_iterator(record.begin(), record.end(), field);
+             it != std::sregex_iterator();
+             ++it) {
+            if ((*it)[1] == "name")
+                entry_name = (*it)[2];
+            else
+                code = (*it)[2];
+        }
+        if (entry_name == name && !code.empty()) {
+            try {
+                std::size_t used = 0;
+                const int value = std::stoi(code, &used);
+                if (used == code.size())
+                    return value;
+            } catch (const std::exception&) {
+            }
+        }
+        return std::nullopt;
+    };
+    while (std::getline(input, line)) {
+        // Protocol scalar values do not contain '#'.
+        line.erase(line.find('#') == std::string::npos ? line.size() : line.find('#'));
+        const auto first = line.find_first_not_of(" \t");
+        if (first != std::string::npos && line[first] == '-') {
+            if (auto found = lookup())
+                return found;
+            record.clear();
+        }
+        record += line + '\n';
+    }
+    return lookup();
+}
+#endif
+inline std::string defect_json_quote(const std::string& s) {
+    std::ostringstream out;
+    out << '"';
+    for (unsigned char c : s) {
+        if (c == '"' || c == '\\')
+            out << '\\' << c;
+        else if (c < 0x20)
+            out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << unsigned(c);
+        else
+            out << c;
+    }
+    out << '"';
+    return out.str();
+}
+
+inline void write_defect(std::ostream& out, const geometry::Defect& d) {
+    const auto id = geometry::defect_id(d), tier = geometry::tier_name(d.tier);
+    out << "{\"defect_id\":" << defect_json_quote(id) << ",\"tier\":" << defect_json_quote(tier)
+        << ",\"kind\":" << defect_json_quote(d.kind)
+        << ",\"reason\":" << static_cast<unsigned>(d.reason)
+        << ",\"dimension\":" << defect_json_quote(d.dimension)
+        << ",\"size\":" << std::setprecision(17) << d.size
+        << ",\"suggestion\":" << defect_json_quote(d.suggestion)
+        << ",\"action\":" << defect_json_quote(d.action)
+        << ",\"rejection_reason\":" << defect_json_quote(d.rejection_reason)
+        << ",\"material_ambiguous\":" << (d.material_ambiguous ? "true" : "false");
+    out << '}';
+}
+inline void write_defects_json(std::ostream& out,
+                               const std::string& code,
+                               const std::string& message,
+                               const std::vector<geometry::Defect>& defects) {
+    out << "{\"code\":" << defect_json_quote(code) << ",\"message\":" << defect_json_quote(message)
+        << ",\"defects\":[";
+    bool first = true;
+    for (const auto& d : defects) {
+        if (!first)
+            out << ',';
+        first = false;
+        write_defect(out, d);
+    }
+    out << "]}\n";
+}
+
+inline void write_assembly_defects(const std::filesystem::path& file,
+                                   const std::string& code,
+                                   const std::string& message,
+                                   const std::vector<geometry::Defect>& defects) {
+    if (file.empty())
+        return;
+    std::ofstream out(file);
+    write_defects_json(out, code, message, defects);
+    out.close();
+    if (!out)
+        throw std::runtime_error("cannot write defects output");
+}
+
+inline std::string import_failure_message(const std::string& code, const std::string& message) {
+    return std::regex_search(message, std::regex("^[A-Z_]+: ")) ? message : code + ": " + message;
+}
+#if defined(CHIPCAE_ENABLE_JSONCONS)
+inline int protocol_error_exit(const std::string& message, std::istream& in) {
+    return protocol_error_code(message.substr(0, message.find(':')), in).value_or(1);
+}
+inline std::vector<std::string> read_acceptance_list(const ImportOptions& options,
+                                                     const std::filesystem::path& directory) {
+    auto file = options.accept_file;
+    if (file.empty() && !options.accept_b_tier) {
+        auto candidate = directory / "import.accept.json";
+        if (std::filesystem::exists(candidate))
+            file = candidate;
+    }
+    std::vector<std::string> accepted;
+    if (!file.empty()) {
+        std::ifstream input(file);
+        auto document = jsoncons::json::parse(input);
+        for (const auto& item : document["accept"].array_range())
+            accepted.push_back(item["defect_id"].as<std::string>());
+    }
+    return accepted;
+}
+#endif
+
 // Private assembly report extension.
 struct ImportReportParts {
     std::map<std::string, std::vector<std::string>> split_layers;
@@ -186,6 +312,29 @@ mesh::Expected<bool> inline_assembly_outline(mesh::StackModel& stack, const mesh
     }
     return true;
 }
+#if defined(CHIPCAE_ENABLE_JSONCONS)
+inline mesh::Expected<bool>
+inline_assembly_outline_references(mesh::StackModel& stack,
+                                   const std::filesystem::path& board_path) {
+    if (!stack.outline.polygon.empty())
+        return true;
+    std::ifstream input(board_path);
+    const auto board = jsoncons::json::parse(input);
+    if (!board.contains("external_refs"))
+        return true;
+    for (const auto& ref : board["external_refs"].array_range()) {
+        auto poly = mesh::read_polyset(board_path.parent_path() / ref["path"].as<std::string>());
+        if (!poly)
+            return poly.error();
+        auto outline = inline_assembly_outline(stack, poly.value());
+        if (!outline)
+            return outline.error();
+        if (!stack.outline.polygon.empty())
+            break;
+    }
+    return true;
+}
+#endif
 std::vector<std::string> interface_rewrite_targets(const std::vector<std::string>& lower,
                                                    const std::vector<std::string>& upper) {
     std::vector<std::string> targets;
@@ -264,6 +413,11 @@ assembly_placement_result(geometry::Expected<geometry::PlacedPart> result,
 }
 #if defined(CHIPCAE_ENABLE_JSONCONS)
 int assembly_error_exit(const std::string& message) {
+    const auto name = message.substr(0, message.find(':'));
+    if (name == "IMPORT_CONFIRMATION_REQUIRED")
+        return CliExit::import_confirmation_required;
+    if (name == "IMPORT_REJECTED")
+        return CliExit::import_rejected;
     std::ifstream in(assembly_root() / "protocol/errors.yaml");
     return protocol_error_exit(message, in);
 }
@@ -285,14 +439,14 @@ int run_assembly(const ImportOptions& options) {
     using namespace geometry;
     using J = jsoncons::json;
     std::vector<Defect> defects;
-    ImportReportHeader header;
+    ImportReportHeader header{};
     ImportReportParts parts;
     auto reports = [&](const std::string& code, const std::string& message) {
         std::string error;
         const auto dir = import_report_directory(options.output);
         if (!write_assembly_report(dir, header, defects, &error, &parts))
             throw std::runtime_error(error);
-        write_defects(options.report, code, message, defects);
+        write_assembly_defects(options.report, code, message, defects);
     };
     auto fail = [&](const std::string& code, const std::string& message) {
         const auto full = import_failure_message(code, message);
@@ -419,12 +573,11 @@ int run_assembly(const ImportOptions& options) {
         if (!loaded)
             return fail("INPUT_INVALID", loaded.error().reason);
         auto base = loaded.value();
-        auto poly = mesh::read_polyset(options.polyset);
-        if (!poly)
-            return fail("INPUT_INVALID", poly.error().reason);
-        auto outline = inline_assembly_outline(base, poly.value());
+        auto outline = inline_assembly_outline_references(base, temp);
         if (!outline)
-            return fail("CUT_UNSUPPORTED", outline.error().reason);
+            return fail(outline.error().reason.starts_with("CUT_UNSUPPORTED:") ? "CUT_UNSUPPORTED"
+                                                                               : "INPUT_INVALID",
+                        outline.error().reason);
         ImportScales scales;
         scales.L = std::max(base.outline.box[2] - base.outline.box[0],
                             base.outline.box[3] - base.outline.box[1]);
@@ -434,7 +587,7 @@ int run_assembly(const ImportOptions& options) {
         for (const auto& l : base.layers)
             scales.t_min = std::min(scales.t_min, l.thickness);
         scales.h_xy = scales.L / 100;
-        scales.dbu_m = poly.value().dbu_m;
+        scales.dbu_m = board.model.dbu_m;
         auto tol = compute_tolerances(scales, {});
         if (!tol)
             return fail("IMPORT_REJECTED", tol.error().message);

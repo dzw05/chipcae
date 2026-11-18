@@ -1,7 +1,4 @@
 set(assembly_test_libs chipcae::geometry chipcae_mesh_cut)
-if(CHIPCAE_ENABLE_JSONCONS)
-    list(APPEND assembly_test_libs yaml-cpp::yaml-cpp)
-endif()
 chipcae_auto_tests(LIBS ${assembly_test_libs} LABELS tierA TIMEOUT 60)
 
 # Match the production writer's configured JSON support in its test translation units.
@@ -12,4 +9,11 @@ if(CHIPCAE_ENABLE_JSONCONS)
         target_link_libraries(chipcae_autotest_tests_integration_import_assembly_${test}
             PRIVATE jsoncons)
     endforeach()
+endif()
+
+if(CHIPCAE_ENABLE_JSONCONS AND CHIPCAE_ENABLE_ECAD)
+    set(confirmation_test chipcae_autotest_tests_integration_import_assembly_assembly_confirmation_cli)
+    target_compile_definitions(${confirmation_test} PRIVATE
+        CHIPCAE_ASSEMBLY_CLI=1 CHIPCAE_ENABLE_JSONCONS=1 CHIPCAE_ENABLE_ECAD=1)
+    target_link_libraries(${confirmation_test} PRIVATE chipcae::geometry_ecad chipcae_stack jsoncons)
 endif()
