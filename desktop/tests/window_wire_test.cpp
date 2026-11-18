@@ -30,6 +30,11 @@ void wiring(Window& w, const QString& samples) {
             "selector filters");
     QTemporaryDir dir;
     require(dir.isValid(), "temporary directory");
+    for (auto suffix : {"xml", "tgz", "zip", "step", "stp", "txt"}) {
+        QFile source(dir.filePath(QString("input.") + suffix));
+        require(source.open(QIODevice::WriteOnly), "create source fixture");
+        source.close();
+    }
     for (auto suffix : {"xml", "tgz", "zip"})
         require(ImportSourceDialog::isSupportedImportPath(dir.filePath(QString("input.") + suffix)),
                 "supported source");
@@ -55,6 +60,10 @@ void wiring(Window& w, const QString& samples) {
     require(w.document()->stackJson().at("layers")[0].at("name").template as<std::string>() ==
                 "edited_substrate",
             "stack edit reaches document");
+    QFile materialMap(dir.filePath("material map.json"));
+    require(materialMap.open(QIODevice::WriteOnly), "create material map fixture");
+    require(materialMap.write("{}") == 2, "write material map fixture");
+    materialMap.close();
     auto run = [&](const QByteArray& mode, bool cancel) {
         QFile input(dir.filePath("fixture.xml"));
         require(input.open(QIODevice::WriteOnly | QIODevice::Truncate), "write input");
@@ -70,8 +79,13 @@ void wiring(Window& w, const QString& samples) {
                 loop.quit();
             });
         QTimer::singleShot(5000, &loop, &QEventLoop::quit);
-        require(w.importEcadPath(input.fileName(), PYTHON_EXECUTABLE, {MOCK_SCRIPT}),
-                "start import");
+        ImportRequest request;
+        request.input = input.fileName();
+        request.output = dir.filePath("import.stack.json");
+        request.materialMap = materialMap.fileName();
+        request.program = PYTHON_EXECUTABLE;
+        request.prefix = {MOCK_SCRIPT};
+        require(w.importController()->start(request), "start mapped import");
         require(w.importController()->busy(), "controller running");
         if (cancel) {
             require(!w.loadHandwrittenStack() && w.document()->stackJson() == before,
@@ -94,6 +108,15 @@ void wiring(Window& w, const QString& samples) {
     };
     require(w.openCase(QString(CHIPCAE_REPOSITORY) + "/schema/examples/fcbga_demo.case.json"),
             "load case and materials for validated import");
+    const auto beforeLegacy = w.document()->stackJson();
+    require(!w.importEcadPath(dir.filePath("input.xml"), PYTHON_EXECUTABLE, {MOCK_SCRIPT}),
+            "legacy import rejects missing material map");
+    require(w.importController()->error() == "material map required" &&
+                w.importController()->outcome() == ImportOutcome::Failed &&
+                !w.importController()->busy() &&
+                !w.importController()->needsMaterialMapReselect() &&
+                w.document()->stackJson() == beforeLegacy,
+            "legacy rejection preserves document without starting import");
     run("hang", true);
     run("success", false);
     require(w.openResultsPath(samples + "/default/manifest.json"), "open results");
