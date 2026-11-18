@@ -201,6 +201,39 @@ def _version(block):
              f"{block.name}: expected Version [2, 8]")
 
 
+def _type(block, expected):
+    message = f'{block.name.lstrip("/")}: expected scalar fixed-byte ASCII Type {expected}'
+    _require('Type' in block.attrs, message)
+    attr = block.attrs.get_id('Type')
+    _require(attr.shape == () and attr.dtype.kind == 'S', message)
+    try:
+        value = bytes(block.attrs['Type']).rstrip(b'\0').decode('ascii')
+    except UnicodeDecodeError:
+        _require(False, message)
+    _require(value == expected, message)
+
+
+def _index(block, expected):
+    message = f'{block.name.lstrip("/")}: expected scalar integer Index {expected}'
+    _require('Index' in block.attrs, message)
+    _require(block.attrs.get_id('Index').shape == (), message)
+    value = block.attrs['Index']
+    _require(isinstance(value, (int, np.integer))
+             and not isinstance(value, (bool, np.bool_)), message)
+    _require(int(value) == expected, message)
+
+
+def _optional_type_index(block, expected_index):
+    # Legacy optional blocks may omit the pair, but partial metadata is invalid.
+    has_type, has_index = 'Type' in block.attrs, 'Index' in block.attrs
+    if not has_type and not has_index:
+        return
+    _require(has_type and has_index,
+             f'{block.name.lstrip("/")}: incomplete Type/Index')
+    _type(block, 'PolyData')
+    _index(block, expected_index)
+
+
 def _counts(values):
     keys, counts = np.unique(values, return_counts=True)
     return {str(int(k)): int(n) for k, n in zip(keys, counts)}
@@ -208,12 +241,15 @@ def _counts(values):
 
 def _read(root):
     _version(root)
+    _type(root, 'PartitionedDataSetCollection')
     blocks, data, temperatures = {}, [], []
-    for name in ('hex', 'cut'):
+    for index, name in enumerate(('hex', 'cut')):
         _require(name in root and isinstance(root[name], h5py.Group),
                  f'{root.name}/{name}: required group missing or invalid')
         block = root[name]
         _version(block)
+        _type(block, 'UnstructuredGrid')
+        _index(block, index)
         n = _count(block, 'NumberOfPoints')
         c = _count(block, 'NumberOfCells')
         _require(block['NumberOfPoints'].shape == block['NumberOfCells'].shape,
@@ -249,6 +285,7 @@ def _read(root):
         blocks['eb_surface'] = dict(points=0, polygons=0)
     else:
         _version(eb)
+        _optional_type_index(eb, 2)
         n = _count(eb, 'NumberOfPoints')
         c = _count(eb, 'Polygons/NumberOfCells')
         _require(eb['NumberOfPoints'].shape == eb['Polygons/NumberOfCells'].shape,
@@ -256,6 +293,9 @@ def _read(root):
         _array(eb, 'Points', (n, 3), 'float64')
         _partitions(eb, 'Polygons/NumberOfCells')
         blocks['eb_surface'] = dict(points=n, polygons=c)
+    particles = root.get('particles')
+    if particles is not None:
+        _optional_type_index(particles, 3)
     names = []
     for field in ('layer_names', 'material_names'):
         path = 'FieldData/' + field
