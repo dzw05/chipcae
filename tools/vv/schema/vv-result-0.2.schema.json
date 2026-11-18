@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "chipcae.vv_result/0.2",
+  "type": "object",
+  "required": ["schema", "case_id", "data_class", "label", "date", "commit", "qoi", "verdict"],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {"const": "chipcae.vv_result/0.2"},
+    "case_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$(?![\\s\\S])"},
+    "data_class": {"enum": ["synthetic", "public", "real"]},
+    "label": {"enum": ["实测", "参考值", "计划值"]},
+    "date": {"type": "string", "pattern": "^[0-9]{8}$(?![\\s\\S])"},
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{7,40}$(?![\\s\\S])"},
+    "qoi": {"type": "object"},
+    "verdict": {"enum": ["pass", "fail", "需讨论", "skip"]},
+    "reference": {
+      "type": ["null", "object"],
+      "required": ["value", "type", "source"],
+      "properties": {
+        "value": {"type": ["number", "null"]},
+        "type": {"enum": ["解析", "独立代码", "原型", "回归"]},
+        "source": {"type": "string", "minLength": 1}
+      }
+    },
+    "error": {"$ref": "#/$defs/error_or_tolerance"},
+    "tolerance": {"$ref": "#/$defs/error_or_tolerance"},
+    "timing": {"$ref": "#/$defs/nullable_object"},
+    "memory": {"$ref": "#/$defs/nullable_object"},
+    "machine": {"$ref": "#/$defs/nullable_object"},
+    "build": {"$ref": "#/$defs/nullable_object"},
+    "run": {"$ref": "#/$defs/nullable_object"},
+    "iterations": {"$ref": "#/$defs/nullable_object"},
+    "caps": {"$ref": "#/$defs/nullable_object"},
+    "cap_checks": {"$ref": "#/$defs/nullable_object"},
+    "notes": {"type": "array", "items": {"type": "string"}},
+    "src_dirty": {"type": "boolean"}
+  },
+  "$defs": {
+    "error_or_tolerance": {
+      "type": ["null", "object"],
+      "required": ["value"],
+      "properties": {
+        "value": {"type": ["number", "null"]},
+        "metric": {"type": "string"}
+      }
+    },
+    "nullable_object": {"type": ["null", "object"]}
+  }
+}

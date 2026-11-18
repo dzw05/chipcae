@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "chipcae.stackprep.copper_fraction/0.1",
+  "title": "Whole-layer average copper fraction report",
+  "description": "Layers appear in stack order and include only converted polygon copper layers. Areas are in square metres; copper area is the signed sum of rings. Fraction is copper area / outline area, clamped to [0, 1] within tolerance 1e-12.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "method",
+    "layers"
+  ],
+  "properties": {
+    "schema": {
+      "const": "chipcae.stackprep.copper_fraction/0.1"
+    },
+    "method": {
+      "const": "layer-average"
+    },
+    "layers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "layer",
+          "copper_area_m2",
+          "outline_area_m2",
+          "fraction"
+        ],
+        "properties": {
+          "layer": {
+            "type": "string"
+          },
+          "copper_area_m2": {
+            "type": "number"
+          },
+          "outline_area_m2": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "fraction": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      }
+    }
+  }
+}

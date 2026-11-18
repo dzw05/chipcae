@@ -17,3 +17,6 @@ if(CHIPCAE_ENABLE_PRECICE)
 endif()
 
 target_sources(chipcae_coupling PRIVATE src/step_loop.cpp)
+
+target_sources(chipcae_coupling PRIVATE src/control_channel.cpp)
+target_link_libraries(chipcae_coupling PUBLIC chipcae::io)

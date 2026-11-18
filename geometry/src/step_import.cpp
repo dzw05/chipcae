@@ -50,17 +50,6 @@
 #include <unordered_set>
 
 namespace chipcae::geometry {
-namespace detail {
-struct StepShape {
-    TopoDS_Shape shape;
-    TopTools_IndexedMapOfShape faces;
-    Handle(ShapeBuild_ReShape) history = new ShapeBuild_ReShape;
-    Handle(TDocStd_Document) document;
-    Handle(XSControl_WorkSession) session;
-    std::vector<std::string> entities;
-    std::vector<std::string> names;
-};
-} // namespace detail
 namespace {
 // OCCT 7.6 normally calls ShapeFix internally during STEP transfer. Override
 // its documented exchange algorithm hook so detection sees the unhealed BRep.

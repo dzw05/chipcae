@@ -1,0 +1,78 @@
+{
+  "schema": "chipcae.case/1.0",
+  "stack": {
+    "ref": "stack.json"
+  },
+  "materials": {
+    "ref": "materials.json"
+  },
+  "mesh": {
+    "type": "aligned_cartesian_cut",
+    "nx": 4,
+    "ny": 4,
+    "levels": 1,
+    "max_ratio": 10,
+    "cut": {
+      "stabilization": "ghost_penalty",
+      "quad_degree": 6,
+      "gamma_g": 0.1
+    }
+  },
+  "physics": [
+    {
+      "id": "thermal",
+      "solver": "fem.conduction",
+      "mode": "steady"
+    },
+    {
+      "id": "mech",
+      "solver": "fem.solid",
+      "temp_from": "thermal",
+      "T_ref": 298.15,
+      "nonlinear": {
+        "geometric": false
+      }
+    }
+  ],
+  "loads": [
+    {
+      "type": "fixed_temperature",
+      "target": "face:zmin",
+      "T": 298.15
+    },
+    {
+      "type": "heat_source",
+      "target": "layer:die_layer",
+      "power": 10
+    },
+    {
+      "type": "convection",
+      "target": "face:zmax",
+      "h": 10,
+      "T_inf": 298.15
+    }
+  ],
+  "constraints": {
+    "rigid": "3-2-1"
+  },
+  "solver": {
+    "linear": {
+      "preconditioner": "direct"
+    }
+  },
+  "output": {
+    "format": "vtkhdf",
+    "warpage": {
+      "standard": "JESD22-B112",
+      "remove_rigid": "best_fit_plane"
+    },
+    "fields": [
+      "T",
+      "U",
+      "layer_id",
+      "material_id",
+      "cell_kind",
+      "elem_gid"
+    ]
+  }
+}

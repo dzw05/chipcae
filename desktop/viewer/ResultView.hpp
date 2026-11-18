@@ -17,12 +17,28 @@ struct VolumeResult {
     double integral = 0;
     QString error;
 };
+enum class ResultColorField { Temperature, DisplacementMagnitude, WarpageUz };
+struct ColorRange {
+    double min = 0;
+    double max = 0;
+    bool valid = false;
+    QString unit;
+};
 class ResultView : public QWidget {
     Q_OBJECT
 public:
     explicit ResultView(QWidget* parent = nullptr);
     ~ResultView() override;
     bool loadStep(ResultSession& session, qint64 step);
+    void setColorField(ResultColorField field);
+    ResultColorField colorField() const;
+    ColorRange colorRange() const;
+    QString colorBarTitle() const;
+    QString tmaxText() const;
+    bool setProvenance(const QJsonObject& provenance);
+    void clearProvenance();
+    QString provenanceWatermark() const;
+    QString provenanceBanner() const;
     void setWarpageScale(double scale);
     void setBlockVisible(const QString& block, bool visible);
     void setLayer(int id); // 0 = all; ResultSession layer ids start at 1.
@@ -45,6 +61,7 @@ public:
                                  std::array<double, 3> normal = {1, 0, 0});
 
 signals:
+    void displayChanged();
     void elementPicked(const QString& gid);
 
 private:
