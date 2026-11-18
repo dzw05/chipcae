@@ -1,0 +1,310 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Zhiwei Duan
+"""Validate and summarize the first step of a chipcae results directory.
+
+Duplicate coordinates use the first stored displacement and temperature
+(hex before cut, then partition/storage order), even if copies differ.
+Temperature is all-or-nothing across hex and cut, including zero-point blocks.
+Partial coverage is an input error. Each T array must match its block's point
+count. When both blocks omit T, the temperature field is null.
+Numeric field types accept either byte order, retaining the required kind and
+width.
+Collinear top geometry fits along its centered principal axis (constant fit
+when x/y have rank zero), using the shared plane fitter for residuals.
+"""
+import argparse
+from fractions import Fraction
+import json
+from pathlib import Path
+import sys
+
+import h5py
+import numpy as np
+
+# Direct CLI execution needs the repository root to import the shared VV helper.
+if __name__ == '__main__':
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from tools.vv.warpage_qoi import best_fit_plane
+
+SCHEMA = "chipcae.vv.result_summary/0.1"
+
+
+class ResultSummaryError(Exception):
+    def __init__(self, code: int, name: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.name = name
+
+
+def _require(condition, message):
+    if not condition:
+        raise ResultSummaryError(14, "INPUT_INVALID", message)
+
+
+def _count(block, path):
+    source = block[path]
+    _require(isinstance(source, h5py.Dataset)
+             and source.ndim == 1
+             and source.dtype.newbyteorder('=') == np.dtype('int64'),
+             f"{block.name}/{path}: expected int64 partition counts")
+    values = source[...]
+    _require(values.ndim == 1
+             and np.all(values >= 0), f"{block.name}/{path}: invalid partition counts")
+    return sum(int(v) for v in values)
+
+
+def _array(block, path, shape, dtype):
+    _require(path in block, f"{block.name}/{path}: required field missing")
+    source = block[path]
+    _require(isinstance(source, h5py.Dataset) and source.shape == shape, f"{block.name}/{path}: expected shape {shape}")
+    values = source[...]
+    _require(values.dtype.newbyteorder('=') == np.dtype(dtype),
+             f"{block.name}/{path}: expected {dtype}")
+    if values.dtype.kind == 'f':
+        _require(np.all(np.isfinite(values)), f"{block.name}/{path}: nonfinite values")
+    return values
+
+
+def _partitions(block, cells_path='NumberOfCells'):
+    """Check rank-local topology against the allocations used by all fields.
+
+    Points and fields share concatenated tuple slices, with no independent
+    per-field partition metadata. Topology provides the independent check:
+    offsets restart at zero and connectivity IDs are local to each point slice.
+    Minimal field-only inputs can omit topology altogether.
+    """
+    topology = block if cells_path == 'NumberOfCells' else block['Polygons']
+    paths = ('NumberOfConnectivityIds', 'Offsets', 'Connectivity')
+    if not any(path in topology for path in paths):
+        return
+    _require(all(path in topology for path in paths),
+             f'{topology.name}: incomplete partition topology')
+    total = _count(topology, 'NumberOfConnectivityIds')
+    pc = block['NumberOfPoints'][...]
+    cc = block[cells_path][...]
+    nc = topology['NumberOfConnectivityIds'][...]
+    _require(nc.shape == pc.shape, f'{topology.name}: partition count mismatch')
+    offsets = _array(topology, 'Offsets', (sum(int(c) + 1 for c in cc),), 'int64')
+    ids = _array(topology, 'Connectivity', (total,), 'int64')
+    oi = ci = 0
+    for rank, (points, cells, connections) in enumerate(zip(pc, cc, nc)):
+        points, cells, connections = int(points), int(cells), int(connections)
+        off = offsets[oi:oi + cells + 1]
+        local_ids = ids[ci:ci + connections]
+        _require(off[0] == 0 and off[-1] == connections
+                 and np.all(off[1:] >= off[:-1])
+                 and np.all((local_ids >= 0) & (local_ids < points)),
+                 f'{topology.name}: partition {rank} geometry/field allocation mismatch')
+        oi += cells + 1
+        ci += connections
+
+
+def _version(block):
+    _require(isinstance(block, h5py.Group), f"{block.name}: expected VTKHDF group")
+    _require(np.array_equal(block.attrs.get('Version'), [2, 8]),
+             f"{block.name}: expected Version [2, 8]")
+
+
+def _counts(values):
+    keys, counts = np.unique(values, return_counts=True)
+    return {str(int(k)): int(n) for k, n in zip(keys, counts)}
+
+
+def _read(root):
+    _version(root)
+    blocks, data, temperatures = {}, [], []
+    for name in ('hex', 'cut'):
+        _require(name in root and isinstance(root[name], h5py.Group),
+                 f'{root.name}/{name}: required group missing or invalid')
+        block = root[name]
+        _version(block)
+        n = _count(block, 'NumberOfPoints')
+        c = _count(block, 'NumberOfCells')
+        _require(block['NumberOfPoints'].shape == block['NumberOfCells'].shape,
+                 f"{name}: partition count mismatch")
+        points = _array(block, 'Points', (n, 3), 'float64')
+        u = (_array(block, 'PointData/U', (n, 3), 'float64')
+             if n or 'PointData/U' in block else np.empty((0, 3)))
+        if 'PointData/T' in block:
+            temperatures.append(_array(block, 'PointData/T', (n,), 'float64'))
+        fields = {}
+        for field in ('layer_id', 'material_id', 'cell_kind', 'elem_gid'):
+            path = 'CellData/' + field
+            if c or path in block:
+                fields[field] = _array(block, path, (c,),
+                                       'int64' if field == 'elem_gid' else 'int32')
+        types = _array(block, 'Types', (c,), 'uint8')
+        expected_type = 12 if name == 'hex' else 42
+        _require(np.all(types == expected_type),
+                 f'{block.name}/Types: expected cell type {expected_type}')
+        if name == 'hex':
+            counts = _counts(fields.get('cell_kind', np.array([], dtype='int32')))
+            blocks[name] = dict(points=n, cells=c, cell_kind_counts=counts)
+        else:
+            blocks[name] = dict(points=n, cells=c, type_counts=_counts(types))
+        _partitions(block)
+        data.append((points, u))
+    _require(len(temperatures) in (0, len(data)),
+             'PointData/T must be present in both hex and cut or absent from both')
+    eb = root.get('eb_surface')
+    if eb is None:
+        blocks['eb_surface'] = dict(points=0, polygons=0)
+    else:
+        _version(eb)
+        n = _count(eb, 'NumberOfPoints')
+        c = _count(eb, 'Polygons/NumberOfCells')
+        _require(eb['NumberOfPoints'].shape == eb['Polygons/NumberOfCells'].shape,
+                 'eb_surface: partition count mismatch')
+        _array(eb, 'Points', (n, 3), 'float64')
+        _partitions(eb, 'Polygons/NumberOfCells')
+        blocks['eb_surface'] = dict(points=n, polygons=c)
+    names = []
+    for field in ('layer_names', 'material_names'):
+        path = 'FieldData/' + field
+        # The writer repeats these global tables in each block.
+        table = None
+        for block in ('hex', 'cut'):
+            if path not in root[block]:
+                continue
+            source = root[block][path]
+            _require(isinstance(source, h5py.Dataset) and source.ndim == 1
+                     and h5py.check_string_dtype(source.dtype) is not None,
+                     f"{source.name}: expected a string vector")
+            current = source.asstr()[...].tolist()
+            _require(table is None or current == table,
+                     f"{source.name}: conflicting {field} tables in hex and cut")
+            table = current
+        names.append(table if table is not None else [])
+    return blocks, data, temperatures, names
+
+
+def _summarize(run_dir, top_rel_tol):
+    _require(np.isfinite(top_rel_tol) and top_rel_tol >= 0, 'top_rel_tol must be finite and nonnegative')
+    try:
+        content = (run_dir / 'manifest.json').read_text(encoding='utf-8')
+    except UnicodeDecodeError as exc:
+        raise ResultSummaryError(14, 'INPUT_INVALID', 'manifest.json: invalid UTF-8') from exc
+    except OSError as exc:
+        raise ResultSummaryError(12, 'INPUT_REFERENCE_MISSING', str(exc)) from exc
+    try:
+        manifest = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ResultSummaryError(14, 'INPUT_INVALID', f'manifest.json: {exc}') from exc
+    _require(isinstance(manifest, dict), 'manifest must be an object')
+    _require(manifest.get('schema_version') == 'chipcae.results/1.0',
+             'expected manifest schema chipcae.results/1.0')
+    steps = manifest.get('steps')
+    _require(isinstance(steps, list) and len(steps) > 0 and isinstance(steps[0], dict)
+             and isinstance(steps[0].get('file'), str) and steps[0]['file'],
+             'expected nonempty steps[0].file string')
+    step_file = steps[0]['file']
+    summary = {}
+    pv = None
+    entries = manifest.get('summary', [])
+    _require(isinstance(entries, list), 'summary must be a list')
+    for index, entry in enumerate(entries):
+        _require(isinstance(entry, dict) and isinstance(entry.get('name'), str)
+                 and entry['name'] and 'value' in entry, 'invalid summary entry')
+        name, value = entry['name'], entry['value']
+        _require(name not in summary, f'summary[{index}].name: duplicate summary name: {name}')
+        _require(not isinstance(value, bool) and isinstance(value, (int, float))
+                 and (isinstance(value, int) or np.isfinite(value)),
+                 f'summary[{index}].value ({name}): expected finite numeric value')
+        summary[name] = value
+        if name == 'warpage_pv':
+            _require(entry.get('unit') == 'm',
+                     f'summary[{index}].unit (warpage_pv): expected "m"')
+            pv = value
+    mesh = manifest.get('mesh', {})
+    _require(isinstance(mesh, dict), 'mesh must be an object')
+    path = Path(step_file)
+    if not path.is_absolute():
+        path = run_dir / path
+    try:
+        step = h5py.File(path, 'r')
+    except (OSError, RuntimeError, EOFError) as exc:
+        raise ResultSummaryError(12, 'INPUT_REFERENCE_MISSING', str(exc)) from exc
+    with step as f:
+        _require('VTKHDF' in f and isinstance(f['VTKHDF'], h5py.Group),
+                 '/VTKHDF: required group missing or invalid')
+        blocks, data, temperatures, names = _read(f['VTKHDF'])
+    points = np.concatenate([d[0] for d in data])
+    u = np.concatenate([d[1] for d in data])
+    top = np.array([], dtype=int)
+    if len(points):
+        z = points[:, 2]
+        indices = np.flatnonzero(z >= z.max() - top_rel_tol * (z.max() - z.min()))
+        _, first = np.unique(points[indices], axis=0, return_index=True)
+        top = indices[first]
+    w = None
+    if len(top) >= 3:
+        xy = points[top, :2]
+        centered = xy - xy[0]
+        if np.linalg.matrix_rank(centered) < 2:
+            # span{along, 1} equals span{x, y, 1} on a line, so residuals agree.
+            # Plane slopes are not unique on a line; its fitted values are.
+            # Remove the redundant direction explicitly, retaining the shared
+            # least-squares API and avoiding large absolute coordinate offsets.
+            _, _, axes = np.linalg.svd(centered, full_matrices=False)
+            along = centered @ axes[0]
+            _, residual = best_fit_plane(along, np.zeros_like(along), u[top, 2])
+        else:
+            _, residual = best_fit_plane(xy[:, 0], xy[:, 1], u[top, 2])
+        w = float(np.ptp(residual))
+    temperature = None
+    if temperatures:
+        all_t = np.concatenate(temperatures)
+        tt = all_t[top]
+        temperature = dict(min=float(all_t.min()) if len(all_t) else None,
+                           max=float(all_t.max()) if len(all_t) else None,
+                           top_min=float(tt.min()) if len(tt) else None,
+                           top_max=float(tt.max()) if len(tt) else None,
+                           top_mean=float(tt.mean()) if len(tt) else None)
+    rel_diff = None
+    if w is not None and pv not in (None, 0):
+        # JSON integers may exceed float range. Convert only the final ratio,
+        # preserving the signed denominator required by the summary contract.
+        rel_diff = float(abs(Fraction(w) - pv) / pv) if isinstance(pv, int) else abs(w-pv)/pv
+    return dict(schema=SCHEMA, step_file=step_file, mesh_sha256=mesh.get('mesh_sha256'),
+                blocks=blocks, layer_names=names[0], material_names=names[1],
+                temperature=temperature,
+                warpage=dict(manifest_warpage_pv_m=pv, w_bfp_m=w,
+                             rel_diff=rel_diff,
+                             n_top_points=len(top)), manifest_summary=summary)
+
+
+def summarize(run_dir: Path, top_rel_tol: float = 1e-12) -> dict:
+    """Return the frozen summary, raising protocol errors for invalid input."""
+    try:
+        return _summarize(Path(run_dir), top_rel_tol)
+    except ResultSummaryError:
+        raise
+    except (OSError, RuntimeError, EOFError, ValueError, TypeError, KeyError, IndexError, AttributeError,
+            OverflowError, np.linalg.LinAlgError) as exc:
+        raise ResultSummaryError(14, 'INPUT_INVALID', str(exc)) from exc
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('run_dir', type=Path)
+    parser.add_argument('-o', type=Path)
+    parser.add_argument('--top-rel-tol', type=float, default=1e-12)
+    args = parser.parse_args(argv)
+    try:
+        result = summarize(args.run_dir, args.top_rel_tol)
+        content = json.dumps(result, indent=2, sort_keys=False, ensure_ascii=False, allow_nan=False) + '\n'
+        if args.o is None:
+            sys.stdout.write(content)
+        else:
+            args.o.write_text(content, encoding='utf-8')
+    except (ResultSummaryError, OSError) as exc:
+        name = exc.name if isinstance(exc, ResultSummaryError) else 'INPUT_INVALID'
+        reason = ' '.join(str(exc).splitlines())
+        print(f'result_summary: {name}: {reason}', file=sys.stderr)
+        return exc.code if isinstance(exc, ResultSummaryError) else 14
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
