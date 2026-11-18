@@ -151,6 +151,15 @@ if(CHIPCAE_MATERIAL_ENABLE_TESTS)
 endif()
 
 if(CHIPCAE_MATERIAL_ENABLE_TESTS)
+    add_executable(material_table_paths tests/table_paths.cpp)
+    target_link_libraries(material_table_paths PRIVATE chipcae_material)
+    add_test(NAME material_table_paths COMMAND material_table_paths
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+    set_tests_properties(material_table_paths PROPERTIES LABELS tierA TIMEOUT 60
+        ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
+endif()
+
+if(CHIPCAE_MATERIAL_ENABLE_TESTS)
     add_library(acceptance_cases OBJECT tests/acceptance.cpp)
     target_link_libraries(acceptance_cases PRIVATE chipcae_material)
     foreach(id IN ITEMS T1 T2 T4 T5 T6 T7 T8 T9 T10 T11 T12 T13 T15 T16 T17 T18 T19 T20 T21 T22 T23 T24pt)
