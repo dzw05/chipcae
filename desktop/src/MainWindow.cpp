@@ -62,6 +62,11 @@ MainWindow::MainWindow(const QStringList& args,
     if (schemaDirectory_.isEmpty())
         schemaDirectory_ = QString(CHIPCAE_REPOSITORY) + "/schema";
     preview_ = new chipcae::desktop::PreviewController(this);
+    auto* previewOptionsDock = new QDockWidget(tr("Preview options"), this);
+    previewOptionsPanel_ = new chipcae::desktop::PreviewOptionsPanel(previewOptionsDock);
+    previewOptionsPanel_->setObjectName("previewOptionsPanel");
+    previewOptionsDock->setWidget(previewOptionsPanel_);
+    addDockWidget(Qt::RightDockWidgetArea, previewOptionsDock);
     chipcae::desktop::SubmitDialog defaults;
     profile_ = defaults.profile();
     auto* menu = menuBar()->addMenu(tr("File"));
@@ -626,11 +631,22 @@ bool MainWindow::workBusy() const {
         return false;
     }
 }
+chipcae::desktop::PreviewOptionsPanel* MainWindow::previewOptionsPanel() const {
+    return previewOptionsPanel_;
+}
 chipcae::desktop::PreviewView* MainWindow::previewView() const {
     return qobject_cast<chipcae::desktop::PreviewView*>(centralWidget());
 }
 bool MainWindow::previewDisplayStale() const {
     return previewDisplayStale_;
+}
+bool MainWindow::previewMesh(const QString& program, const QStringList& prefix) {
+    const auto message = previewOptionsPanel_->validationMessage();
+    if (!message.isEmpty()) {
+        statusBar()->showMessage(message);
+        return false;
+    }
+    return previewMesh(program, prefix, previewOptionsPanel_->options());
 }
 bool MainWindow::previewMesh(const QString& program,
                              const QStringList& prefix,
