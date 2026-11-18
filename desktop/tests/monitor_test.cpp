@@ -3,6 +3,7 @@
 
 #include <QApplication>
 #include <QDateTime>
+#include <QDebug>
 #include <QDockWidget>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -16,6 +17,9 @@
 #include <QTimer>
 #include <QUuid>
 #include <QtEndian>
+#include <cmath>
+#include <limits>
+#include <optional>
 #include <stdexcept>
 #include <vtkChartXY.h>
 #include <vtkContextScene.h>
@@ -43,6 +47,126 @@ public:
 void check(bool value, const char* message) {
     if (!value)
         throw std::runtime_error(message);
+}
+class AcceptanceChecks {
+public:
+    void run(const auto& test) {
+        try {
+            test();
+        } catch (const std::runtime_error& error) {
+            qCritical("%s", error.what());
+            failed_ = true;
+        }
+    }
+
+    bool failed() const { return failed_; }
+
+private:
+    bool failed_ = false;
+};
+bool matchesLogEntry(const MonitorLogEntry& entry,
+                     qint32 level,
+                     qint32 rank,
+                     const QByteArray& message,
+                     bool diagnostic) {
+    return entry.level == level && entry.rank == rank && entry.message.toUtf8() == message &&
+           entry.diagnostic == diagnostic;
+}
+void logPanel(std::vector<MonitorLogEntry> entries,
+              const QByteArray& mixedMessage,
+              AcceptanceChecks& acceptance) {
+    entries.push_back({0, 2, QString::fromUtf8(mixedMessage), false});
+    const QByteArray diagnosticText = "[diag] CAELOG1 bad CRC-32/IEEE";
+    const QByteArray nonnegativeText = diagnosticText + "\nlevel=0 rank=2 MiXeD 日志";
+    const QByteArray defaultText = "level=-7 rank=1 log\n" + nonnegativeText;
+
+    MonitorLogPanel panel;
+    acceptance.run([&] { check(panel.isReadOnly(), "monitor log panel is read-only"); });
+    acceptance.run([&] { check(panel.minimumLevel() == std::nullopt, "panel starts unfiltered"); });
+    const auto verify = [&](std::optional<int> level, const QByteArray& text, const char* message) {
+        acceptance.run([&] {
+            check(panel.minimumLevel() == level && panel.displayedText().toUtf8() == text, message);
+        });
+    };
+    panel.setEntries(entries);
+    verify(std::nullopt, defaultText, "unfiltered panel displays all entries in order");
+    panel.setEntries(entries);
+    verify(std::nullopt, defaultText, "repeated panel input keeps the exact text");
+    panel.setMinimumLevel(0);
+    verify(0, nonnegativeText, "level zero keeps the diagnostic and the level-zero log");
+    panel.setMinimumLevel(1);
+    verify(1, diagnosticText, "level one keeps only the diagnostic");
+    panel.setMinimumLevel(-10);
+    verify(-10, defaultText, "level minus ten restores the negative-level log");
+    panel.clearLevelFilter();
+    verify(std::nullopt, defaultText, "clearing the level filter restores the default text");
+    panel.setEntries({});
+    verify(std::nullopt, {}, "empty panel input clears the text");
+}
+void checkRawSamples(const std::vector<ResidualSample>& actual,
+                     const std::vector<ResidualSample>& expected) {
+    check(actual.size() == expected.size(), "chart retains all raw residual samples");
+    for (size_t i = 0; i < expected.size(); ++i) {
+        const auto& sample = actual[i];
+        const auto& input = expected[i];
+        check(sample.solver == input.solver && sample.field == input.field &&
+                  sample.window == input.window && sample.time == input.time &&
+                  sample.iteration == input.iteration && sample.flags == input.flags,
+              "chart retains raw residual sample metadata and order");
+        if (std::isnan(input.norm))
+            check(std::isnan(sample.norm), "chart retains a raw NaN residual");
+        else if (std::isinf(input.norm))
+            check(std::isinf(sample.norm) && std::signbit(sample.norm) == std::signbit(input.norm),
+                  "chart retains the sign of a raw infinite residual");
+        else
+            check(sample.norm == input.norm, "chart retains the exact raw finite residual");
+    }
+}
+void residualFiltering(AcceptanceChecks& acceptance) {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+    const std::vector<ResidualSample> mixed = {{"s", "f", 2, 1.5, 1, 0.25, 0},
+                                               {"s", "f", 2, 1.5, 2, nan, 16},
+                                               {"s", "f", 3, 1.5, 3, inf, 32}};
+    ResidualChart chart;
+    chart.setSamples(mixed);
+    acceptance.run([&] {
+        checkRawSamples(chart.samples(), mixed);
+        check(chart.chart()->GetNumberOfPlots() == 1 && chart.seriesCount() == 1,
+              "mixed residuals create one plot for the group with the finite sample");
+        auto* plot = chart.chart()->GetPlot(0);
+        check(plot && QByteArray(plot->GetClassName()) == "vtkPlotPoints",
+              "one surviving residual produces a POINTS plot");
+        auto* table = plot->GetInput();
+        check(table && table->GetNumberOfRows() == 1 && table->GetNumberOfColumns() == 3,
+              "the mixed residual table contains only the finite row and three columns");
+        check(QByteArray(table->GetColumnName(0)) == "iteration" &&
+                  QByteArray(table->GetColumnName(1)) == "norm" &&
+                  QByteArray(table->GetColumnName(2)) == "flags",
+              "the mixed residual table columns are iteration, norm, and flags");
+        check(table->GetValue(0, 0).ToDouble() == 1.0 && table->GetValue(0, 1).ToDouble() == 0.25 &&
+                  table->GetValue(0, 2).ToUnsignedInt() == 0,
+              "the mixed residual table retains the exact finite sample values");
+    });
+
+    const std::vector<ResidualSample> allInvalid = {{"s", "f", 2, 1.5, 1, nan, 0},
+                                                    {"s", "f", 2, 1.5, 2, inf, 16},
+                                                    {"s", "f", 2, 1.5, 3, -inf, 32}};
+    chart.setSamples(allInvalid);
+    acceptance.run([&] {
+        checkRawSamples(chart.samples(), allInvalid);
+        check(chart.chart()->GetNumberOfPlots() == 0 && chart.seriesCount() == 0,
+              "a group of only NaN and signed infinities creates no plots");
+    });
+
+    chart.setSamples({mixed.front()});
+    check(chart.chart()->GetNumberOfPlots() == 1, "finite sample repopulates chart");
+    chart.setSamples({});
+    acceptance.run([&] {
+        check(chart.chart()->GetNumberOfPlots() == 0 && chart.seriesCount() == 0 &&
+                  chart.samples().empty(),
+              "empty residual input clears plots and raw samples");
+    });
 }
 void write(const QString& path, const QByteArray& bytes, bool append = false) {
     QFile f(path);
@@ -86,17 +210,25 @@ void brokerLifetime() {
     check(dock && stop && timer && timer->isActive(),
           "STOP safely returns after broker destruction");
 }
-void invalidManifestRepetition() {
+bool invalidManifestRepetition() {
     QTemporaryDir dir;
     check(dir.isValid(), "manifest temporary directory");
     write(dir.filePath("manifest.json"), "{invalid");
     RunMonitor monitor(dir.path(), EventFormat::LegacyCaelog1);
+    AcceptanceChecks acceptance;
     for (quint64 seq = 1; seq <= 3; ++seq) {
         monitor.consume({seq, 0, chipcae::io::OutputAvailable{2, 1.5, "untrusted", ""}});
         check(monitor.manifestLookups == seq, "each output event reads invalid manifest");
         check(monitor.diagnostics.count("invalid output manifest") == 1,
               "repeated invalid manifest diagnostic is deduplicated");
+        acceptance.run([&] {
+            const auto& entries = monitor.logEntries();
+            check(entries.size() == 1 &&
+                      matchesLogEntry(entries.front(), 0, 0, "invalid output manifest", true),
+                  "invalid manifest has one structured diagnostic after each output event");
+        });
     }
+    return acceptance.failed();
 }
 int main(int argc, char** argv) {
     const bool present = qEnvironmentVariableIsSet("CHIPCAE_MONITOR_PRESENT");
@@ -109,10 +241,9 @@ int main(int argc, char** argv) {
         brokerLifetime();
         return 0;
     }
-    if (app.arguments().contains("--invalid-manifest")) {
-        invalidManifestRepetition();
-        return 0;
-    }
+    if (app.arguments().contains("--invalid-manifest"))
+        return invalidManifestRepetition();
+    AcceptanceChecks acceptance;
     vtkNew<RenderErrors> renderErrors;
     vtkOutputWindow::SetInstance(renderErrors);
     QTemporaryDir dir;
@@ -197,6 +328,33 @@ int main(int argc, char** argv) {
     check(prefixResult.events.size() == 9 && prefixResult.offset == quint64(bytes.size()) &&
               prefixResult.diagnostic.contains("CRC"),
           "valid prefix before bad record");
+    RunMonitor prefixMonitor(dir.path(), EventFormat::LegacyCaelog1, "prefix-bad");
+    const auto verifyPrefixLogs = [&] {
+        check(prefixMonitor.diagnostics.size() == 1 &&
+                  prefixMonitor.diagnostics.count("CAELOG1 bad CRC-32/IEEE") == 1,
+              "CRC diagnostic appears once in legacy diagnostics");
+        const auto& entries = prefixMonitor.logEntries();
+        check(entries.size() == 2 && matchesLogEntry(entries[0], -7, 1, "log", false) &&
+                  matchesLogEntry(entries[1], 0, 0, "CAELOG1 bad CRC-32/IEEE", true),
+              "prefix poll records the log before the CRC diagnostic without duplicates");
+    };
+    prefixMonitor.poll();
+    acceptance.run(verifyPrefixLogs);
+    prefixMonitor.poll();
+    acceptance.run(verifyPrefixLogs);
+
+    const QByteArray mixedMessage = "MiXeD 日志";
+    logPanel(prefixMonitor.logEntries(), mixedMessage, acceptance);
+    RunMonitor utf8Monitor(dir.path(), EventFormat::LegacyCaelog1);
+    utf8Monitor.consume({1, 0, chipcae::io::LogLine{0, 2, mixedMessage.toStdString(), "", 0}});
+    check(utf8Monitor.logs.size() == 1 &&
+              utf8Monitor.logs.front().toUtf8() == "level=0 rank=2 MiXeD 日志",
+          "legacy log preserves exact mixed-case UTF-8 bytes");
+    acceptance.run([&] {
+        const auto& entries = utf8Monitor.logEntries();
+        check(entries.size() == 1 && matchesLogEntry(entries.front(), 0, 2, mixedMessage, false),
+              "structured log preserves exact mixed-case UTF-8 bytes");
+    });
     auto malformedMagic = bytes;
     malformedMagic[0] = 'X';
     write(dir.filePath("magic"), malformedMagic);
@@ -241,6 +399,7 @@ int main(int argc, char** argv) {
               stateMonitor.diagnostics.contains("invalid state value"),
           "invalid state preserves label and reports diagnostic");
     RunMonitor monitor(dir.path(), EventFormat::LegacyCaelog1);
+    check(monitor.logs.empty() && monitor.logEntries().empty(), "log collections start empty");
     monitor.trackStop(1, "id");
     monitor.checkTimeout(30000);
     check(monitor.stopStatus == "Pending" && !monitor.ack, "timeout pending");
@@ -248,6 +407,16 @@ int main(int argc, char** argv) {
     monitor.consume({11, 0, chipcae::io::ControlAck{2, "id", 1, 2, "", 1.5}});
     check(!monitor.ack, "both identifiers");
     monitor.poll();
+    check(monitor.logs.size() == 1 && monitor.logs.front().toUtf8() == "level=-7 rank=1 log",
+          "legacy log retains the exact negative-level line");
+    acceptance.run([&] {
+        const auto& entries = monitor.logEntries();
+        check(entries.size() == 2 &&
+                  matchesLogEntry(
+                      entries[0], 0, 0, "STOP ACK timeout; request remains pending", true) &&
+                  matchesLogEntry(entries[1], -7, 1, "log", false),
+              "first poll retains the STOP timeout followed by the structured negative-level log");
+    });
     check(monitor.stopStatus == "APPLIED" && monitor.ack->effective_step == 2, "matching ack");
     check(monitor.state != "Completed", "kernel alone");
     monitor.processExited(0);
@@ -316,6 +485,7 @@ int main(int argc, char** argv) {
                   controlled.ack->effective_time == 2.5,
               "ACK status");
     }
+    residualFiltering(acceptance);
     ResidualChart chart;
     chart.setSamples(monitor.residuals);
     check(chart.samples().size() == 2 && chart.samples()[0].iteration == 3 &&
@@ -379,6 +549,6 @@ int main(int argc, char** argv) {
     check(QFileInfo("desktop-monitor.png").size() > 0, "capture artifact");
     check(renderErrors->errors == 0, "no VTK rendering errors");
     brokerLifetime();
-    invalidManifestRepetition();
-    return 0;
+    const bool manifestFailed = invalidManifestRepetition();
+    return acceptance.failed() || manifestFailed;
 }
