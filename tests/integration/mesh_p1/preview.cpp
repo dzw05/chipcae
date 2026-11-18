@@ -1,6 +1,7 @@
 #ifdef CHIPCAE_ENABLE_KOKKOS
 #include <Kokkos_Core.hpp>
 #endif
+#include "../../../preview/src/mesh_digest.hpp"
 #include "../../../schema/src/sha256.hpp"
 #include "support.hpp"
 
@@ -9,6 +10,7 @@
 #include <hdf5.h>
 #include <iostream>
 #include <jsoncons/json.hpp>
+#include <sstream>
 #include <sys/wait.h>
 using k1::expect;
 namespace fs = std::filesystem;
@@ -30,12 +32,23 @@ int main(int argc, char** argv) {
     try {
         auto fixture = fs::path(K1_ROOT) / "schema/examples/fcbga_demo.stack.json";
         auto output = dir / "grid";
-        auto invoke = [&](const std::string& args, int expected_code) {
-            auto prefix = argc == 4 ? shell(argv[2]) + " " + argv[3] + " " : "";
+        auto invoke = [&](const std::string& args,
+                          int expected_code,
+                          int expected_levels = -1,
+                          std::string expected_n0 = "",
+                          bool use_mpi = true,
+                          std::string expected_error_path = "") {
+            jsoncons::json summary;
+            auto prefix = argc == 4 && use_mpi ? shell(argv[2]) + " " + argv[3] + " " : "";
             auto command = prefix + shell(argv[1]) + " " + args + " >" +
                            shell((dir / "stdout").string()) + " 2>" +
                            shell((dir / "stderr").string());
             int code = std::system(command.c_str());
+            if (!WIFEXITED(code) || WEXITSTATUS(code) != expected_code) {
+                std::ifstream diagnostic(dir / "stderr");
+                std::cerr << "Expected exit " << expected_code << ", actual status " << code << ": "
+                          << diagnostic.rdbuf();
+            }
             expect(WIFEXITED(code) && WEXITSTATUS(code) == expected_code, "CLI exact exit status");
             std::ifstream stream(dir / "stdout");
             std::string line, last;
@@ -48,15 +61,26 @@ int main(int argc, char** argv) {
                 last = event.at("stage").as<std::string>();
                 if (last == "success" || last == "error")
                     ++terminal;
+                if (last == "error" && !expected_error_path.empty())
+                    expect(event.at("message").as<std::string>().starts_with(expected_error_path +
+                                                                             ": "),
+                           "terminal mesh error path");
                 if (last == "success") {
                     auto params = jsoncons::json::parse(event.at("message").as<std::string>());
                     expect(params.at("grid").is_string(), "effective grid");
                     expect(params.at("max_ratio").as<double>() ==
                                (args.find("--max-ratio 12.5") != std::string::npos ? 12.5 : 10),
                            "effective max ratio");
-                    expect(params.at("L").as<int>() == (argc == 4 ? 0 : 1) &&
-                               params.at("n0").as<std::string>() == (argc == 4 ? "9x9" : "5x5"),
-                           "effective hierarchy");
+                    expect(
+                        params.at("L").as<int>() ==
+                                (expected_levels < 0 ? (argc == 4 ? 0 : 1) : expected_levels) &&
+                            params.at("n0").as<std::string>() ==
+                                (expected_n0.empty() ? (argc == 4 ? "9x9" : "5x5") : expected_n0),
+                        "effective hierarchy");
+                    for (const auto& field : params.object_range())
+                        expect(event.at(field.key()) == field.value(),
+                               "top-level and success.message summaries agree");
+                    summary = params;
                 }
                 ++count;
             }
@@ -65,6 +89,7 @@ int main(int argc, char** argv) {
                        "exactly one terminal and rank-zero progress events");
             expect(count > 0 && last == (expected_code == 0 ? "success" : "error"),
                    "terminal JSON event");
+            return summary;
         };
         auto base = shell(fixture.string()) + " --nx 2 --ny 2 --levels 0";
         invoke(base + " -o " + shell(output.string()), 0);
@@ -89,6 +114,17 @@ int main(int argc, char** argv) {
         options.ranks = argc == 4 ? 2 : 1;
         auto mesh = chipcae::mesh::build_tensor_grid(stack.value(), options);
         expect(bool(mesh), "fixture mesh");
+        for (int axis : {0, 1}) {
+            auto invalid_mesh = mesh.value();
+            invalid_mesh.grid_report.padding[axis] = invalid_mesh.axes[axis].size();
+            bool rejected = false;
+            try {
+                chipcae::preview::detail::digest(invalid_mesh);
+            } catch (const std::invalid_argument& error) {
+                rejected = std::string(error.what()) == "mesh padding exceeds axis cell count";
+            }
+            expect(rejected, "digest rejects padding beyond either axis cell count");
+        }
         expect(static_cast<std::size_t>(nc) == mesh.value().attribute.size(), "cell coverage");
         std::map<std::string, std::int32_t> layers;
         for (const auto& entry : mesh.value().attr_table.entries)
@@ -242,6 +278,114 @@ int main(int argc, char** argv) {
         std::ofstream(invalid) << "{\"bad\": true}";
         invoke(shell(invalid.string()) + " -o " + shell(bad.string()), 1);
         expect(!fs::exists(bad.string() + ".vtkhdf"), "no invalid stack output");
+        auto tiny = dir / "tiny.stack.json";
+        const std::string tiny_input = R"({"id":"tiny","unit":"m","outline":{"box":[0,0,7,5]},
+"symmetry":"none","package_type":"FCBGA","layers":[{"name":"solid","thickness":1,
+"kind":"Homogenized","material":"solid_eq","n_elem_min":1,"grading":1}]}
+)";
+        std::ofstream(tiny) << tiny_input;
+        // Captured on unmodified origin/main aafc877142d5ebe2d16befe80f8c830384beeb49,
+        // using the exact input above and --nx 7 --ny 5 --levels 2, serial and two ranks.
+        // Both: nx0=4, ny0=3, L=1, nz=1, nodes=126, cells=48, padded_cells=2.
+        // The same input with --nx 50001 --ny 1 --levels 1 exited 1 (cell_budget).
+        // These retrospective pre-change captures were verified on 2026-11-18.
+        expect(chipcae::mesh::sha256(tiny_input) ==
+                   "94c3f4d3cbae4df796d749c1649d7bbe6941c7736aca3a17813d1ac6d7f71063",
+               "baseline input SHA");
+        int acceptance_failures = 0;
+        auto acceptance = [&](const char* name, auto check) {
+            try {
+                check();
+            } catch (const std::exception& error) {
+                ++acceptance_failures;
+                std::cerr << name << ": " << error.what() << '\n';
+            }
+        };
+        auto stderr_contains = [&](const char* path) {
+            std::ifstream diagnostic(dir / "stderr");
+            std::string message((std::istreambuf_iterator<char>(diagnostic)), {});
+            expect(message.find(path) != std::string::npos, "mesh error path in stderr");
+        };
+        for (bool use_mpi : (argc == 4 ? std::vector<bool>{false, true} : std::vector<bool>{false}))
+            acceptance(use_mpi ? "tiny padding and SHA MPI" : "tiny padding and SHA serial", [&] {
+                constexpr int nx_req = 7, ny_req = 5;
+                auto summary =
+                    invoke(shell(tiny.string()) + " --nx " + std::to_string(nx_req) + " --ny " +
+                               std::to_string(ny_req) + " --levels 2 -o " +
+                               shell((dir / (use_mpi ? "padded-mpi" : "padded-serial")).string()),
+                           0,
+                           1,
+                           "4x3",
+                           use_mpi);
+                for (auto [key, value] : {std::pair{"nx0", 4}, {"ny0", 3}, {"L", 1}, {"nz", 1}})
+                    expect(summary.at(key).is_int64() && summary.at(key).as<int>() == value,
+                           "tiny hierarchy integer summary");
+                // Verified against pre-change aafc877142d5ebe2d16befe80f8c830384beeb49.
+                expect(summary.at("mesh_sha256").as<std::string>() ==
+                           "31ccb0783121d620d23890e5bab6e87fa6f86cc4cc8bc521ff9138c715ac49a6",
+                       "padded mesh SHA matches pre-change baseline");
+                const auto& padded = summary.at("padded_cells");
+                expect(padded.is_int64() && padded.as<int>() == 13 && padded.as<int>() > 0,
+                       "padded_cells is integer 13 and positive");
+                const auto scale = 1LL << summary.at("L").as<int>();
+                const auto expected_padding =
+                    (summary.at("nx0").as<int>() * scale * summary.at("ny0").as<int>() * scale -
+                     nx_req * ny_req) *
+                    summary.at("nz").as<int>();
+                expect(padded.as<int64_t>() == expected_padding,
+                       "padded_cells matches reported hierarchy dimensions and request");
+            });
+        auto multi = jsoncons::json::parse(tiny_input);
+        multi["layers"][0]["n_elem_min"] = 3;
+        auto second_layer = multi["layers"][0];
+        second_layer["name"] = "second";
+        multi["layers"].push_back(second_layer);
+        auto multi_path = dir / "multi.stack.json";
+        std::ofstream(multi_path) << multi;
+        for (bool use_mpi :
+             (argc == 4 ? std::vector<bool>{false, true} : std::vector<bool>{false})) {
+            auto summary =
+                invoke(shell(multi_path.string()) + " --nx 7 --ny 4 --levels 2 -o " +
+                           shell((dir / (use_mpi ? "multi-mpi" : "multi-serial")).string()),
+                       0,
+                       1,
+                       "4x2",
+                       use_mpi);
+            expect(summary.at("nz").as<int>() == 6, "two layers with three z cells each");
+            // Finest grid is 8x4; padding is (1,0), so four cells per z slice.
+            expect(summary.at("padded_cells").is_int64() &&
+                       summary.at("padded_cells").as<int>() == 24,
+                   "asymmetric padding includes every z slice");
+        }
+        invoke(base + " --polyset " + shell((dir / "missing.poly").string()) + " -o " +
+                   shell((dir / "missing-polyset").string()),
+               1,
+               -1,
+               "",
+               false);
+        fs::create_directory(dir / "blocked.vtkhdf");
+        invoke(base + " -o " + shell((dir / "blocked").string()), 1, -1, "", false);
+        acceptance("tiny cell budget", [&] {
+            invoke(shell(tiny.string()) + " --nx 50001 --ny 1 --levels 1 -o " +
+                       shell((dir / "budget").string()),
+                   14,
+                   -1,
+                   "",
+                   false);
+            stderr_contains("cell_budget");
+        });
+        if (argc == 4)
+            acceptance("tiny hierarchy alias", [&] {
+                invoke(shell(tiny.string()) + " --nx 2 --ny 2 --levels 2 -o " +
+                           shell((dir / "hierarchy").string()),
+                       4,
+                       -1,
+                       "",
+                       true,
+                       "hierarchy/levels");
+                stderr_contains("hierarchy/levels");
+            });
+        expect(acceptance_failures == 0, "preview acceptance cases");
         fs::remove_all(dir);
     } catch (...) {
         std::cerr << "Preview artifacts: " << dir << '\n';

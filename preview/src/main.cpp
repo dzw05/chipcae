@@ -105,12 +105,17 @@ struct MeshFailure : std::runtime_error {
     explicit MeshFailure(const chipcae::mesh::Error& value)
         : std::runtime_error(value.path + ": " + value.reason), error(value) {}
 };
+// Unsupported cuts are not reachable through the pre-P2 CLI. Pin the contract
+// value here until end-to-end cut coverage is available.
+static_assert(static_cast<int>(chipcae::ErrorCode::CUT_UNSUPPORTED) == 13);
 int exit_code(const chipcae::mesh::Error& error) {
     if (error.path == "COLUMN_SPLIT_ACROSS_RANKS")
-        return 3;
-    if (error.path == "HIERARCHY_INVALID")
-        return 4;
-    return chipcae::ErrorCode::INTERNAL;
+        return static_cast<int>(chipcae::ErrorCode::COLUMN_SPLIT_ACROSS_RANKS);
+    if (error.path == "HIERARCHY_INVALID" || error.path == "hierarchy/levels")
+        return static_cast<int>(chipcae::ErrorCode::HIERARCHY_INVALID);
+    if (error.path == "CUT_UNSUPPORTED" || error.path == "outline.unsupported")
+        return static_cast<int>(chipcae::ErrorCode::CUT_UNSUPPORTED);
+    return static_cast<int>(chipcae::ErrorCode::INPUT_INVALID);
 }
 bool same_path(const std::filesystem::path& a, const std::filesystem::path& b) {
     if (std::filesystem::weakly_canonical(a) == std::filesystem::weakly_canonical(b))
@@ -122,6 +127,12 @@ template <class T>
 T checked(chipcae::mesh::Expected<T> result) {
     if (!result)
         throw MeshFailure(result.error());
+    return std::move(result.value());
+}
+template <class T>
+T checked_io(chipcae::mesh::Expected<T> result) {
+    if (!result)
+        throw std::runtime_error(result.error().path + ": " + result.error().reason);
     return std::move(result.value());
 }
 int run(int argc, char** argv) {
@@ -183,7 +194,7 @@ int run(int argc, char** argv) {
     if (!surface.empty() && same_path(surface, grid_path))
         throw std::runtime_error("surface and grid paths must differ");
     event("load", 0, "Loading stack 0.2");
-    auto stack = checked(load_stack(input, chipcae::data_path(CHIPCAE_PREVIEW_SCHEMA)));
+    auto stack = checked_io(load_stack(input, chipcae::data_path(CHIPCAE_PREVIEW_SCHEMA)));
     for (const auto& warning : stack.warnings)
         std::cerr << warning << '\n';
     std::set<std::filesystem::path> sidecars;
@@ -196,7 +207,7 @@ int run(int argc, char** argv) {
     Polyset polygons;
     std::set<std::string> polygon_names;
     for (const auto& path : sidecars) {
-        auto part = checked(read_polyset(path));
+        auto part = checked_io(read_polyset(path));
         if (polygons.dbu_m != 0 && polygons.dbu_m != part.dbu_m)
             throw std::runtime_error("polysets must use the same database unit");
         polygons.dbu_m = part.dbu_m;
@@ -210,7 +221,7 @@ int run(int argc, char** argv) {
     auto mesh = sidecars.empty() ? checked(build_tensor_grid(stack, options))
                                  : checked(build_tensor_grid(stack, options, polygons));
     event("write", 0.8, "Writing VTKHDF");
-    auto files = checked(write_vtkhdf(stem, mesh, nullptr, chipcae::Communicator::world()));
+    auto files = checked_io(write_vtkhdf(stem, mesh, nullptr, chipcae::Communicator::world()));
     int rank = 0;
 #ifdef CHIPCAE_ENABLE_MPI
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
