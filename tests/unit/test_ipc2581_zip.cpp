@@ -340,11 +340,14 @@ int main(int argc, char** argv) {
                     zip(archive, {{"broken.xml", xml}}, deflate);
                     auto a = ecad::read_ipc2581(xml), b = ecad::read_ipc2581_zip(archive);
                     require(!a && !b, "both malformed XML imports must fail");
+                    require(b.error.starts_with("IMPORT_REJECTED: "),
+                            "ZIP XML failure must have the rejection prefix");
                     const auto category = [](const std::string& error) {
                         const auto colon = error.find(':');
                         return error.substr(0, colon == std::string::npos ? colon : colon + 1);
                     };
-                    require(category(a.error) == category(b.error),
+                    require(category(a.error) ==
+                                category(b.error.substr(std::string("IMPORT_REJECTED: ").size())),
                             "XML diagnostics differ: direct=" + a.error + " ZIP=" + b.error);
                 }
             }
@@ -363,8 +366,9 @@ int main(int argc, char** argv) {
                         "board.xml", [](std::string_view) { return true; }, expected),
                     "incorrect CRC must fail the archive read");
             require(!expected.empty(), "CRC failure must provide an archive diagnostic");
-            require(ecad::read_ipc2581_zip(archive).error == expected,
-                    "archive read error must propagate verbatim");
+            const auto result = ecad::read_ipc2581_zip(archive);
+            rejected(result, {});
+            require(result.error == expected, "archive read error must propagate verbatim");
         } else if (test == "ipc_zip_unsupported") {
             zip(archive, {{"unsupported.xml", fixture}});
             auto data = bytes(archive);

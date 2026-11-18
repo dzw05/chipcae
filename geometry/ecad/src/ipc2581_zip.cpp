@@ -83,6 +83,9 @@ ImportResult read_ipc2581_zip(const std::filesystem::path& file) {
             error = "IMPORT_REJECTED: archive read failed: " + name;
         return rejected(std::move(error));
     }
-    return parser.finish();
+    auto result = parser.finish();
+    if (!result)
+        result.error = "IMPORT_REJECTED: " + result.error;
+    return result;
 }
 } // namespace chipcae::geometry::ecad
