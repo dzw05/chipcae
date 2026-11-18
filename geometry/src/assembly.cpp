@@ -201,13 +201,8 @@ bool same_polygon(const Polygon& a, const Polygon& b) {
 // This helper never constructs output regions or bridges holes.
 std::vector<Polygon> fragments(const SlabSection& section) {
     std::vector<const Ring*> rings{&section.outer};
-    std::vector<const Ring*> holes;
-    auto anchor = [](const Ring* r) { return *std::min_element(r->pts.begin(), r->pts.end()); };
     for (const auto& h : section.holes)
-        holes.push_back(&h);
-    std::stable_sort(
-        holes.begin(), holes.end(), [&](auto a, auto b) { return anchor(a) < anchor(b); });
-    rings.insert(rings.end(), holes.begin(), holes.end());
+        rings.push_back(&h);
     std::vector<Real> heights;
     for (auto r : rings)
         for (Point p : r->pts)
