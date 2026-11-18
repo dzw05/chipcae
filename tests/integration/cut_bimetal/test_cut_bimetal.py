@@ -41,8 +41,8 @@ POLYGONS = {
     "B": [[.1, 0], [.9, 0], [1, .1], [1, .9], [.9, 1], [.1, 1], [0, .9], [0, .1]],
     "C": [[0, 0], [.9, 0], [.9, .9], [0, .9]],
 }
-# N=4 leaves only nine exported interior vertices; N=7 is the smallest
-# background grid with >=20 distinct vertices for both outlines (A: 25, B: 36).
+# Revised V-INT-4 brief: N=7 is the smallest grid with >=20 eligible
+# exported vertices for both outlines (A: 25, B: 36; N=4 gives only nine).
 MESHES = ((7, 1), (8, 2), (16, 4))
 
 
@@ -147,8 +147,7 @@ def fit_curvature(blocks, polygon):
     # Count/rank acceptance is collected by run_case, allowing remaining solves
     # and numerical comparisons to run. An undersampled fit never passes.
     return {"count": count, "rank": int(rank), "coefficients": coefficients.tolist(),
-            # Timoshenko uses the mean through-thickness strain curvature: with
-            # epsilon_x(z) = epsilon_x(0) - z*w_xx, it is -(d+e).
+            # Signed strain-curvature convention: see the revised V-INT-4 brief.
             "kappa_h": float(-(coefficients[3] + coefficients[4]))}
 
 
