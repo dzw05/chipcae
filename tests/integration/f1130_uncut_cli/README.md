@@ -7,17 +7,18 @@ chain by default. Missing executable environment or numpy/h5py still returns
 77. The separately runnable `f1130_uncut_cli_records` retains the assertion
 and verdict regressions; passing them alone does not establish E2E acceptance.
 
-The supplied review's V&V rulings are implemented in the inputs and
-comparisons below.
-**Full acceptance remains blocked by the material-library ID contract:** both
-solver runs reject the required `mat.cu` ID before solving. This is a failing
-acceptance result, and the required negative/restored experiment is incomplete.
+The supplied review's V&V rulings and the later 03:55 material-ID supplement
+are implemented in the inputs and comparisons below. The supplement supersedes
+the earlier dotted IDs; the material schema remains unchanged.
+**Numerical acceptance remains blocked:** both solves now complete, but their
+temperatures disagree with the required FR4-matrix reference. See Verification
+for the normal, perturbed and restored measurements.
 
 ## Inputs and chain
 
 Input: `tests/integration/ecad/data/board_4layer.xml`, the unchanged public
 synthetic 5 mm square board. Import uses this directory's [material_map.json](material_map.json):
-`{"FR4":"mat.fr4_eq","copper":"mat.cu"}`.
+`{"FR4":"fr4_eq","copper":"cu"}`.
 
 ```text
 chipcae-import <repo>/tests/integration/ecad/data/board_4layer.xml
@@ -27,7 +28,7 @@ chipcae-import <repo>/tests/integration/ecad/data/board_4layer.xml
 
 The golden-generation map was `{"FR4":"mat.fr4","copper":"mat.cu"}`.
 Only a deep copy of the golden is normalized with
-`{"mat.fr4":"mat.fr4_eq"}` before comparing layer names, order, materials and
+`{"mat.fr4":"fr4_eq","mat.cu":"cu"}` before comparing layer names, order, materials and
 thicknesses. The original XML, import CLI map and golden remain unchanged.
 
 ```text
@@ -63,11 +64,11 @@ reference uses `reference.value: null`; `date` is runtime YYYYMMDD metadata.
   positive hex count must directly equal preview's cell_count.
 - Hex point temperatures must match the independent 1D series-resistance
   reference within 1e-8 K. Illustrative properties retain copper k=390 W/(m K)
-  and FR4 k=0.3 W/(m K), with material identities `mat.cu` and `mat.fr4_eq`.
+  and FR4 k=0.3 W/(m K), with material identities `cu` and `fr4_eq`.
   Boundary conditions remain zmin=298.15 K and zmax convection h=1000 W/(m² K),
   T_inf=348.15 K, with 3-2-1 mechanical constraints.
   The analytic copper-layer conductivity uses
-  `k_eff=1/(f/k_metal+(1-f)/conductivity['mat.fr4_eq'])`, including f=0.
+  `k_eff=1/(f/k_metal+(1-f)/conductivity['fr4_eq'])`, including f=0.
   Then `q=50/(sum(thickness/k_eff)+1/1000)` and
   `T(z)=298.15+q*sum(clipped_layer_depth(z)/k_eff)`.
 - warpage_pv and U_mag_max must be finite and positive; T_max must be finite.
@@ -108,61 +109,83 @@ Python 3.10 or newer is required by the strict zip comparisons.
 
 ## Verification (2026-11-19)
 
-Release configure and build succeed with ECAD, JSONCONS, MFEM, MPI and HDF5
-available and optional Kokkos disabled. The revised regressions first failed
-against the old comparisons, IDs, mesh and gate. After correction, all 12
-regressions pass. CTest registration retains the executable injection, labels,
-timeout and dependency-only skip path, with no fixture gate.
-The optional-backend Release configure/build also succeed; its records test
-passes and its E2E returns 77 because executable injection is unavailable.
+Release configure and build both exit 0, with tests, ECAD, JSONCONS, MFEM,
+MPI and HDF5 enabled and optional Kokkos disabled:
 
-The initial normal command was
-`ctest --test-dir "$build" -V -R '^f1130_'`: exit 8 (records pass; E2E fails).
-实测 import 0.414621 s, fraction conversion 0.055050 s, preview 1.512144 s,
-serial solve command 1.575522 s, MPI solve command 2.074719 s, total chain
-5.634468 s. Import matches the normalized golden. 实测 F.Cu fraction is
-0.012313399999999997; the other three copper fractions are zero. Preview
-succeeds and reports 80 cells. Both solve commands exit 14:
-
-```text
-chipcae-solve: material mat.cu /id: String 'mat.cu' does not match pattern '^[a-z0-9_-]+$'.
+```sh
+cmake -S . -B "$build" -DCMAKE_BUILD_TYPE=Release
+cmake --build "$build" -j2
 ```
 
-The [material schema](../../../material/schema/material.v1.schema.json) forbids
-dots in IDs; the supplied review requires `mat.cu` and `mat.fr4_eq`. Changing
-the schema or solver is outside the brief's permitted files. No solver output, temperature
-error, readback or parallel agreement is claimed. Both emitted fail records
-pass the data-class gate.
+The updated regression expectations first fail against the old implementation:
+the library still emits dotted IDs, the golden copy retains `mat.cu`, and the
+conductivity lookup cannot inspect `cu`/`fr4_eq` layers. After the fix, all 12
+regressions pass. The local map, generated library, analytical conductivity
+keys and regression inputs now use the schema-valid IDs `cu`/`fr4_eq`.
+Only the golden copy is normalized; the golden file is unchanged on disk.
 
-The architect's later 03:55 supplement to the PR #139 ruling instead prescribes
-`cu` and `fr4_eq`, keeping the schema unchanged. That conflicts with the supplied
-review's explicit IDs; this revision retains the requested IDs pending clarification.
-The supplement also leaves the matrix contract below for a separate signed change.
+The normal command is `ctest --test-dir "$build" -V -R '^f1130_'`.
+It exits 8: the records test passes, and the E2E fails at temperature check (c)
+after **both serial and MPI solves/readbacks complete successfully**. There is
+no material-ID-pattern error. 实测 import 0.472369 s, fraction conversion
+0.127180 s, preview 1.627135 s, serial solve/readback 2.245632/0.356207 s,
+MPI solve/readback 2.542167/0.237694 s, total chain 7.619526 s.
 
-Static follow-up: the [solver mixture](../../../apps/chipcae-solve/src/pipeline.cpp)
-uses each layer's material as its matrix. Imported copper layers retain
-`mat.cu`, while the ruled analytic reference requires an FR4 matrix even at
-f=0. The solve-stack matrix identity and solver contract also need agreement
-before numerical acceptance; the current run stops before exercising this path.
+All three real-chain runs below use the unchanged public synthetic fixture.
+Import matches the normalized golden. 实测 F.Cu fraction is
+0.012313399999999997; In1.Cu, In2.Cu and B.Cu fractions are zero.
+Both runs have 80 hex cells, matching preview's 80 cells, zero cut cells and
+zero hex cell_kind values. 实测 serial and MPI QoIs are identical:
+`warpage_pv=8.118595078914043e-06 m`, `U_mag_max=8.150512393406987e-06 m`,
+`T_max=318.1548915099446 K`. Readback relative error and all three parallel
+relative errors are zero. Independent `w_bfp_m=8.118595078858583e-06 m` is
+printed without gating. Both failing result records pass `check_file()`.
 
-A local, uncommitted experiment temporarily multiplied the real chain's
-reference heat flux by 1.01, leaving the separate harness checks unchanged.
-Negative and restored commands were both
-`ctest --test-dir "$build" -V -R '^f1130_uncut_cli_e2e$'`.
-Both exit 8 on the same solver input error, before temperature inspection.
-The source was restored byte for byte. These attempts do **not** satisfy the
-required post-solve temperature failure and restored passing run; that merge
-condition remains open.
+For the local negative experiment, only the real chain's reference heat flux
+was temporarily multiplied by 1.01; the independent regression fixtures were
+unchanged. Negative and restored runs both use:
+
+```sh
+ctest --test-dir "$build" -V -R '^f1130_uncut_cli_e2e$'
+```
+
+| Run | CTest exit | Solve/readback ranks 1 and 2 | 实测 maximum temperature error (both ranks) | 实测 total chain |
+| --- | --- | --- | --- | --- |
+| Normal | 8 | Completed, all commands exit 0 | 5.22503105806652 K | 7.619526 s |
+| Reference heat flux ×1.01 | 8 | Completed, all commands exit 0 | 5.4773302837454025 K | 6.314309 s |
+| Original source restored byte for byte | 8 | Completed, all commands exit 0 | 5.22503105806652 K | 6.049460 s |
+
+The negative run now demonstrates a post-solve failure at (c). However, the
+restored run also fails the unchanged 1e-8 K limit: the required restored
+passing run and full numerical acceptance remain **blocked**.
+
+The remaining mismatch is the Patterned-layer matrix contract explicitly
+deferred by the architect's 03:55 supplement. The importer and fraction
+conversion retain `material: cu` and `copper.metal: cu` for copper layers.
+The [solver mixture](../../../apps/chipcae-solve/src/pipeline.cpp) selects
+`materials.at(id)` for the layer's material as its matrix. Its through-thickness
+formula uses copper conductivity for both constituents, including at f=0.
+The required independent reference instead uses `fr4_eq` as its matrix.
+Changing that reference, rewriting converted material identities, altering
+properties or increasing the tolerance would hide the unresolved contract.
+This needs the separate signed I1/M1/M3 matrix-semantics change; product,
+schema, conversion-tool, original-golden and legacy-test files are outside
+this task's permitted scope.
 
 The full numerical Release command
-`ctest --test-dir "$build" --output-on-failure -j2` exits 8 after 1148.95 s:
-**232 total, 222 passed, 8 skipped, 2 failed**. The failures are
-`f1130_uncut_cli_e2e` (the ID-pattern error above) and the unchanged
-`chain_ipc_uncut_chain` (line 53 expects `mat.fr4` but converted F.Cu retains
-`mat.cu`). The latter is outside this brief's permitted files and is assigned
-to the separate `fix-import-eq-maps` follow-up. `event_log` passes with a fresh
-private `TMPDIR`; `solve_ghost_scan` passes in 237.41 s with its original
-300 second timeout. Full-suite acceptance is not achieved.
+`ctest --test-dir "$build" --output-on-failure -j2` exits 8 after 1177.45 s:
+**232 total, 222 passed, 8 skipped, 2 failed**. The failures are:
+
+- `f1130_uncut_cli_e2e`: both completed runs fail (c) with the matrix mismatch
+  documented above. All 12 assertion/verdict regressions pass, including the
+  separately registered records test.
+- Unchanged `chain_ipc_uncut_chain`: line 53 expects `mat.fr4` while imported
+  F.Cu retains `mat.cu`. The supplement assigns this migration to the separate
+  `fix-import-eq-maps` follow-up; that test is outside this task's scope.
+
+The suite uses a fresh private `TMPDIR` and one thread per numerical library.
+`event_log` passes in 0.72 s; `solve_ghost_scan` passes in 258.00 s with its
+original 300 second timeout. Full-suite acceptance is not achieved.
 
 `git diff --check` is clean. Pinned clang-format is 23.1.5; this revision
 changes no C/C++ files.

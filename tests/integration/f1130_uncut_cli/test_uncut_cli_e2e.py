@@ -70,7 +70,7 @@ def run_command(stage, args, root, timings):
 
 def compare_import(imported, golden):
     actual, expected = imported['layers'], deepcopy(golden)['layers']
-    material_ids = {'mat.fr4': 'mat.fr4_eq'}
+    material_ids = {'mat.fr4': 'fr4_eq', 'mat.cu': 'cu'}
     for layer in expected:
         layer['material'] = material_ids.get(layer['material'], layer['material'])
     assert len(actual) == len(expected), (
@@ -120,8 +120,8 @@ def compare_fractions(report, converted, imported, measurements):
 def write_solver_inputs(root):
     # Illustrative definitions and case fields copied from test_ipc_uncut_chain.py.
     materials = []
-    for name, E, nu, alpha, k in [('mat.cu', 110e9, .34, 17e-6, 390),
-                                 ('mat.fr4_eq', 25e9, .3, 1e-5, .3)]:
+    for name, E, nu, alpha, k in [('cu', 110e9, .34, 17e-6, 390),
+                                 ('fr4_eq', 25e9, .3, 1e-5, .3)]:
         def table(columns):
             return dict(temperatures=[298.15],
                         columns={key: [value] for key, value in columns.items()},
@@ -162,14 +162,14 @@ def inspect_run(run_dir, stack, preview_count, measurements, np, h5py):
         if key != 'T_max':
             assert summary[key] > 0, (key, summary)
     measurements['qoi'] = {key: summary[key] for key in QOIS}
-    conductivity = {'mat.cu': 390, 'mat.fr4_eq': .3}
+    conductivity = {'cu': 390, 'fr4_eq': .3}
     layers = []
     for layer in stack['layers']:
         k = conductivity[layer['material']]
         if 'copper' in layer:
             copper = layer['copper']
             f = copper['fraction']
-            k = 1 / (f / conductivity[copper['metal']] + (1 - f) / conductivity['mat.fr4_eq'])
+            k = 1 / (f / conductivity[copper['metal']] + (1 - f) / conductivity['fr4_eq'])
         layers.append((layer['thickness'], k))
     heat_flux = 50 / (sum(t / k for t, k in layers) + 1 / 1000)
     with h5py.File(artifact(run_dir / 'out/step-0.vtkhdf'), 'r') as file:
@@ -398,15 +398,14 @@ class AcceptanceRecords(unittest.TestCase):
             self.assertEqual(case['mesh'], dict(type='aligned_cartesian_cut', nx=4, ny=4,
                                                 levels=0, max_ratio=100, min_elems_per_layer=1))
             materials = read_json(root / 'materials.json')['materials']
-            self.assertEqual([material['id'] for material in materials], ['mat.cu', 'mat.fr4_eq'])
+            self.assertEqual([material['id'] for material in materials], ['cu', 'fr4_eq'])
 
     def test_import_normalizes_golden_copy_and_rejects_unmapped_material_id(self):
         golden = read_json(SOURCE / 'tests/integration/import_cli/golden/board_4layer/stack.json')
         original = json.dumps(golden)
         imported = json.loads(original)
         for layer in imported['layers']:
-            if layer['material'] == 'mat.fr4':
-                layer['material'] = 'mat.fr4_eq'
+            layer['material'] = {'mat.fr4': 'fr4_eq', 'mat.cu': 'cu'}[layer['material']]
         compare_import(imported, golden)
         imported['layers'][0]['material'] = 'mat_cu'
         with self.assertRaisesRegex(AssertionError, 'material:'):
@@ -415,12 +414,16 @@ class AcceptanceRecords(unittest.TestCase):
 
     def test_fixture_fractions_accept_empty_inner_and_bottom_copper_only(self):
         imported = read_json(SOURCE / 'tests/integration/import_cli/golden/board_4layer/stack.json')
+        for layer in imported['layers']:
+            layer['material'] = {'mat.fr4': 'fr4_eq', 'mat.cu': 'cu'}[layer['material']]
+            if 'copper' in layer:
+                layer['copper']['metal'] = 'cu'
         converted = json.loads(json.dumps(imported))
         entries = []
         for layer in converted['layers']:
             if 'copper' in layer:
                 fraction = .0123134 if layer['name'] == 'F.Cu' else 0.0
-                layer['copper'] = dict(metal='mat.cu', fraction=fraction)
+                layer['copper'] = dict(metal='cu', fraction=fraction)
                 entries.append(dict(layer=layer['name'], fraction=fraction))
         measurements = {}
         with redirect_stdout(StringIO()):
@@ -563,13 +566,13 @@ class AcceptanceRecords(unittest.TestCase):
         # 50% copper in FR4: R=1301/780000, q=39000000/2081;
         # T(mid/top)=298.15+(32525/2081, 65050/2081). A copper matrix is wrong.
         cases = [
-            (dict(material='mat.fr4_eq', thickness=.001),
+            (dict(material='fr4_eq', thickness=.001),
              [298.15, 317.3807692307692, 336.61153846153843]),
-            (dict(material='mat.cu', thickness=.001,
-                  copper=dict(metal='mat.cu', fraction=0)),
+            (dict(material='cu', thickness=.001,
+                  copper=dict(metal='cu', fraction=0)),
              [298.15, 317.3807692307692, 336.61153846153843]),
-            (dict(material='mat.cu', thickness=.001,
-                  copper=dict(metal='mat.cu', fraction=.5)),
+            (dict(material='cu', thickness=.001,
+                  copper=dict(metal='cu', fraction=.5)),
              [298.15, 313.7795050456511, 329.40901009130225]),
         ]
         for layer, reference in cases:
