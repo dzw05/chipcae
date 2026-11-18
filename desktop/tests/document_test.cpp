@@ -292,7 +292,8 @@ void testReadOnlyImportChecks() {
     ImportFixture fixture;
     auto& document = fixture.document;
     auto library = document.materialLibrary();
-    library["materials"].push_back(library.at("materials").at(0));
+    const auto duplicate = library.at("materials").at(0);
+    library["materials"].push_back(duplicate);
     require(!document.setMaterialLibrary(library), "seed prior material validation errors");
     require(!document.errors().empty(), "prior errors available for comparison");
 
@@ -306,20 +307,68 @@ void testReadOnlyImportChecks() {
     require(document.errors().empty(), "successful import clears previous errors");
 }
 
-void testMissingCaseReference() {
+void testMissingCaseReference(const char* caseReference, const QString& externalRefs) {
     ImportFixture fixture;
     auto& document = fixture.document;
-    const auto materials = document.toJson().at("materials").at("ref").as<std::string>();
-    require(QFile::remove(fixture.root.filePath(QString::fromStdString(materials))),
-            "remove the loaded case's materials file");
+    const auto reference = document.toJson().at(caseReference).at("ref").as<std::string>();
+    require(QFile::remove(fixture.root.filePath(QString::fromStdString(reference))),
+            "remove the loaded case's reference file");
+    if (externalRefs == "absent")
+        fixture.stack.erase("external_refs");
+    else if (externalRefs == "empty")
+        fixture.stack["external_refs"] = Json::array();
 
     const auto issues =
         requireRejectedImport(document, fixture.stack, fixture.source.absolutePath());
     require(issues.size() == 1 && issues.front().code == "INPUT_REF_MISSING" &&
                 issues.front().source == "case",
             "preflight reports the missing case reference");
+    if (externalRefs != "nonempty")
+        require(sameErrors(requireRejectedImport(document, fixture.stack), issues),
+                "missing case reference is rejected without an explicit sourceDir");
     require(!stackDirectory(document, fixture.casePath).exists("polyset.bin"),
             "a missing case reference prevents sidecar relocation");
+}
+
+void testSaveChangedSidecar(const QString& change) {
+    ImportFixture fixture;
+    auto& document = fixture.document;
+    require(document.replaceImportedStack(fixture.stack, fixture.source.absolutePath()),
+            "import sidecar before saving a loaded case");
+    require(document.save(fixture.casePath) && document.load(fixture.casePath),
+            "save and reload the sidecar case before changing its asset");
+    const auto destination = stackDirectory(document, fixture.casePath);
+    const auto asset = destination.filePath("polyset.bin");
+    require(QFile::remove(asset), "remove the loaded sidecar");
+    if (change == "symlink") {
+        const auto outside = fixture.root.filePath("outside.bin");
+        writeBytes(outside, fixture.payload);
+        require(QFile::link(outside, asset), "replace loaded sidecar with an escaping symlink");
+    } else if (change == "hash") {
+        writeBytes(asset, "changed sidecar bytes");
+    }
+    const auto previousCase = document.toJson();
+    const auto previousStack = document.stackJson();
+    const auto previousHash = document.contentHash();
+    const auto previousBytes = readBytes(fixture.casePath);
+    const QDir root(fixture.root.path());
+    const auto previousEntries = root.entryList(QDir::AllEntries | QDir::NoDotAndDotDot);
+    const auto issues = document.validate();
+    const auto code = change == "symlink" ? "INPUT_REF_INVALID"
+                      : change == "hash"  ? "INPUT_HASH_MISMATCH"
+                                          : "INPUT_REF_MISSING";
+    require(issues.size() == 1 && issues.front().code == code,
+            "validation identifies the changed loaded sidecar");
+    for (const auto& path : {fixture.casePath, fixture.root.filePath("save-as.json")}) {
+        require(!document.save(path), "save rejects a changed loaded sidecar");
+        require(sameErrors(document.errors(), issues), "save preserves source validation errors");
+        require(document.toJson() == previousCase && document.stackJson() == previousStack &&
+                    document.contentHash() == previousHash && !document.isDirty(),
+                "failed save preserves the document snapshot");
+        require(readBytes(fixture.casePath) == previousBytes &&
+                    root.entryList(QDir::AllEntries | QDir::NoDotAndDotDot) == previousEntries,
+                "failed save preserves case bytes and creates no bundle or Save As file");
+    }
 }
 
 void testDuplicatesAndCollision() {
@@ -355,6 +404,26 @@ void testDuplicatesAndCollision() {
     require(document.stackJson() == relocated, "repeat import keeps the selected names");
     require(destination.entryList(QDir::Files | QDir::Hidden) == files,
             "repeat import creates no additional assets");
+
+    const auto previousCase = document.toJson();
+    const auto previousHash = document.contentHash();
+    const auto previousBytes = readBytes(fixture.casePath);
+    const QDir root(fixture.root.path());
+    const auto entries = root.entryList(QDir::AllEntries | QDir::NoDotAndDotDot);
+    for (const auto& path : {fixture.casePath, fixture.root.filePath("save-as.json")}) {
+        require(!document.save(path), "save retains baseline failure for duplicate ref paths");
+        require(
+            document.errors().size() == 1 && document.errors().front().code == "DOCUMENT_ERROR" &&
+                document.errors().front().message.contains("Cannot copy stack external reference"),
+            "duplicate save retains the baseline copy error");
+        require(document.toJson() == previousCase && document.stackJson() == relocated &&
+                    document.contentHash() == previousHash && document.isDirty(),
+                "duplicate save failure preserves document state");
+        require(readBytes(fixture.casePath) == previousBytes &&
+                    root.entryList(QDir::AllEntries | QDir::NoDotAndDotDot) == entries &&
+                    destination.entryList(QDir::Files | QDir::Hidden) == files,
+                "duplicate save failure preserves existing files and rolls back its bundle");
+    }
 }
 
 void testConflictingRefs() {
@@ -509,7 +578,14 @@ bool runImportAcceptance() {
     }
     run("escaping asset symlink", testEscapingAssetSymlink);
     run("read-only queries and failure parity", testReadOnlyImportChecks);
-    run("missing existing case reference", testMissingCaseReference);
+    for (const auto* caseReference : {"stack", "materials"})
+        for (const auto* externalRefs : {"absent", "empty", "nonempty"})
+            run("missing existing " + QString::fromLatin1(caseReference) + " with " + externalRefs +
+                    " external refs",
+                [=] { testMissingCaseReference(caseReference, externalRefs); });
+    for (const auto* change : {"symlink", "hash", "missing"})
+        run("save changed sidecar " + QString::fromLatin1(change),
+            [=] { testSaveChangedSidecar(change); });
     run("duplicates, collision, and retry", testDuplicatesAndCollision);
     run("conflicting refs", testConflictingRefs);
     run("copy rollback", testCopyRollback);

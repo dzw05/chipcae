@@ -320,7 +320,7 @@ CaseDocument::StackImport CaseDocument::preflightImportedStack(const Json& stack
             validateExternalAssets(stack, QDir(result.sourceRoot), result.assets);
             candidate.validateContents(result.issues);
         }
-        if (result.issues.empty() && !path_.isEmpty() && !result.assets.empty())
+        if (result.issues.empty() && !path_.isEmpty())
             validateCaseReferences(data_, QFileInfo(path_).absoluteDir());
     } catch (const std::exception& e) {
         result.issues.push_back(exceptionError(e));
@@ -604,6 +604,11 @@ bool CaseDocument::save(const QString& path) {
             const QDir assetDir(targetDir.filePath(bundle));
             created.directories.append(assetDir.absolutePath());
             const auto assets = externalAssets(stack_);
+            // Save historically failed when a second reference copied to the same path.
+            // Import deduplicates those paths, but save must retain that failure.
+            for (const auto& asset : assets)
+                if (asset.indices.size() > 1)
+                    throw std::runtime_error("Cannot copy stack external reference");
             if (!assets.empty()) {
                 if (path_.isEmpty() && importedStackSourceRoot_.isEmpty())
                     throw std::runtime_error("Missing original stack location");
