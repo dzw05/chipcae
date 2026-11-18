@@ -20,6 +20,8 @@ class RunMonitor;
 class PreviewController;
 class PreviewView;
 class ImportController;
+struct ImportRequest;
+enum class ImportKind;
 class ResultView;
 class LocalJobService;
 } // namespace chipcae::desktop
@@ -78,6 +80,8 @@ private:
     chipcae::desktop::CaseDocument document_;
     chipcae::desktop::ImportController* importer_ = nullptr;
     std::unique_ptr<QTemporaryDir> importOutput_;
+    std::optional<chipcae::desktop::ImportKind> currentImportKind_;
+    bool startImportRequest(const chipcae::desktop::ImportRequest& request);
     std::unique_ptr<chipcae::desktop::ResultSession> session_;
     chipcae::desktop::ResultView* resultView_ = nullptr;
     QDockWidget* resultDock_ = nullptr;

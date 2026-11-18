@@ -663,6 +663,9 @@ int main(int argc, char** argv) {
               "imported assembly preview starts");
         check(waitFor([&] { return finished; }) && success, "assembly preview finished(true)");
         check(w.previewView() && w.previewView()->displayed(), "assembly preview displays mesh");
+        // The fixture key is only for the preview CLI; finalize validates the stack schema.
+        stack.erase("mock");
+        w.document()->applyStackJson(stack);
         check(w.writePreviewToCase(), "write assembly preview into case");
         w.setMeshDigestDialogChoice(Choice::Accept);
         check(w.submitCurrentCase(), "assembly case submits");

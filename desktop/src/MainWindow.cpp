@@ -1,5 +1,6 @@
 #include "MainWindow.hpp"
 
+#include "AssemblyImport.hpp"
 #include "CaseTreeView.hpp"
 #include "DefectsDialog.hpp"
 #include "DesktopConfig.hpp"
@@ -20,7 +21,9 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -115,6 +118,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         if (!path.isEmpty() && !importEcadPath(path))
             statusBar()->showMessage(tr("Cannot start import"));
     });
+    menu->addAction(tr("Import assembly…"), this, [this] {
+        QFileDialog dialog(this, tr("Import assembly"));
+        dialog.setOption(QFileDialog::DontUseNativeDialog);
+        dialog.setFileMode(QFileDialog::ExistingFile);
+        dialog.setNameFilters(chipcae::desktop::assemblyNameFilters());
+        if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty())
+            return;
+        const auto path = dialog.selectedFiles().first();
+        if (chipcae::desktop::isAssemblyPath(path) && !importAssemblyPath(path))
+            statusBar()->showMessage(tr("Cannot start import"));
+    });
     menu->addAction(tr("Open Results…"), this, [this] {
         const auto path =
             QFileDialog::getOpenFileName(this, tr("Open Results"), {}, "Manifest (*.json)");
@@ -154,6 +168,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             &chipcae::desktop::ImportController::finished,
             this,
             [this, cancel, logTimer, appendLog](bool replaced) {
+                if (replaced && currentImportKind_ == chipcae::desktop::ImportKind::Assembly) {
+                    const auto report = QJsonDocument::fromJson(importer_->reportBytes()).object();
+                    if (auto* model = findChild<chipcae::desktop::CaseTreeModel*>())
+                        model->applyPartSummary(report.value("parts").toArray());
+                }
+                if (importer_->outcome() != chipcae::desktop::ImportOutcome::NeedsConfirmation)
+                    currentImportKind_.reset();
                 if (replaced)
                     clearPreviewMeshOptions();
                 appendLog();
@@ -397,14 +418,14 @@ bool MainWindow::openCase(const QString& path) {
 bool MainWindow::importEcadPath(const QString& input,
                                 const QString& program,
                                 const QStringList& prefix) {
-    if (importer_->busy() || !chipcae::desktop::ImportSourceDialog::isSupportedImportPath(input))
+    if (importer_->busy() || chipcae::desktop::isAssemblyPath(input) ||
+        !chipcae::desktop::ImportSourceDialog::isSupportedImportPath(input))
         return false;
     auto output = std::make_unique<QTemporaryDir>();
     if (!output->isValid())
         return false;
     const auto path = output->filePath("import.stack.json");
     importOutput_ = std::move(output);
-    beginImportUi_();
     const auto& entry = chipcae::desktop::DesktopConfig::current().importEntry();
     chipcae::desktop::ImportRequest request;
     request.input = input;
@@ -412,12 +433,10 @@ bool MainWindow::importEcadPath(const QString& input,
     request.materialMap = entry.materialMap;
     request.polyset = importOutput_->filePath("import.polyset");
     request.report = importOutput_->filePath("defects.json");
-    request.kind = input.endsWith(".json", Qt::CaseInsensitive)
-                       ? chipcae::desktop::ImportKind::Assembly
-                       : chipcae::desktop::ImportKind::Ecad;
+    request.kind = chipcae::desktop::ImportKind::Ecad;
     request.program = program == "chipcae-import" ? entry.program : program;
     request.prefix = prefix.isEmpty() && program == "chipcae-import" ? entry.prefix : prefix;
-    connect(
+    const auto connection = connect(
         importer_,
         &chipcae::desktop::ImportController::finished,
         this,
@@ -427,16 +446,43 @@ bool MainWindow::importEcadPath(const QString& input,
             auto path = chipcae::desktop::MaterialMapMissingDialog::prompt(this);
             if (!path.isEmpty()) {
                 request.materialMap = path;
-                beginImportUi_();
-                importer_->start(request);
+                startImportRequest(request);
             }
         },
         Qt::SingleShotConnection);
-    return importer_->start(request);
+    const bool started = startImportRequest(request);
+    if (!started)
+        disconnect(connection);
+    return started;
 }
-// TEST-FIRST stub: keep acceptance tests buildable until assembly wiring is implemented.
-bool MainWindow::importAssemblyPath(const QString&, const QString&, const QStringList&) {
-    return false;
+bool MainWindow::importAssemblyPath(const QString& input,
+                                    const QString& program,
+                                    const QStringList& prefix) {
+    if (importer_->busy() || !chipcae::desktop::isAssemblyPath(input))
+        return false;
+    auto output = std::make_unique<QTemporaryDir>();
+    if (!output->isValid())
+        return false;
+    importOutput_ = std::move(output);
+    const auto& entry = chipcae::desktop::DesktopConfig::current().importEntry();
+    chipcae::desktop::ImportRequest request;
+    request.kind = chipcae::desktop::ImportKind::Assembly;
+    request.input = input;
+    request.output = importOutput_->filePath("import.stack.json");
+    request.report = importOutput_->filePath("defects.json");
+    request.program = program == "chipcae-import" ? entry.program : program;
+    request.prefix = prefix.isEmpty() && program == "chipcae-import" ? entry.prefix : prefix;
+    return startImportRequest(request);
+}
+bool MainWindow::startImportRequest(const chipcae::desktop::ImportRequest& request) {
+    currentImportKind_ = request.kind;
+    if (!importer_->start(request)) {
+        currentImportKind_.reset();
+        importOutput_.reset();
+        return false;
+    }
+    beginImportUi_();
+    return true;
 }
 void MainWindow::cancelImport() {
     importer_->cancel();
