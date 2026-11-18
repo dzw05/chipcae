@@ -15,9 +15,10 @@ import sys
 import tempfile
 import time
 import unittest
+import xml.etree.ElementTree as ET
 from unittest.mock import patch
 
-SOURCE = Path(sys.argv[1]).resolve()
+SOURCE = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(SOURCE))
 
 TEMPERATURE_ATOL = 1e-8
@@ -81,6 +82,25 @@ def compare_import(imported, golden):
             f'expected={want["thickness"]!r}')
 
 
+def write_populated_fixture(root):
+    """Populate the public board without changing its outline or layer stack."""
+    tree = ET.parse(SOURCE / 'tests/integration/ecad/data/board_4layer.xml')
+    step = tree.getroot().find('./Ecad/CadData/Step')
+    assert step is not None
+    # Keep F.Cu's original trace; add rectangles with areas 3, 6, 9 mm²
+    # inside the original 25 mm² outline. All stack dimensions stay intact.
+    for name, top in [('In1.Cu', '1.5'), ('In2.Cu', '2.5'), ('B.Cu', '3.5')]:
+        feature = ET.SubElement(step, 'LayerFeature', layerRef=name)
+        polygon = ET.SubElement(ET.SubElement(feature, 'Set'), 'Polygon')
+        ET.SubElement(polygon, 'PolyBegin', x='1', y='0.5')
+        for x, y in [('4', '0.5'), ('4', top), ('1', top)]:
+            ET.SubElement(polygon, 'PolyStepSegment', x=x, y=y)
+    tree.write(root / 'populated_board_4layer.xml', encoding='utf-8', xml_declaration=True)
+    # Material library IDs permit lowercase letters, digits, underscores and
+    # hyphens; stack validation also requires Homogenized IDs to end in _eq.
+    write_json(root / 'solver_material_map.json', {'FR4': 'mat_fr4_eq', 'copper': 'mat_cu'})
+
+
 def compare_fractions(report, converted, imported, measurements):
     copper_names = ['F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu']
     entries = report['layers']
@@ -98,13 +118,13 @@ def compare_fractions(report, converted, imported, measurements):
         assert layer['material'] == original['material'], f'converted layer[{index}] material changed'
         if layer['name'] in fractions:
             copper = layer['copper']
-            assert copper['metal'] == 'mat.cu', layer
+            assert copper['metal'] == 'mat_cu', layer
             assert 'polygons' not in copper, layer
             assert math.isclose(copper['fraction'], fractions[layer['name']],
                                 rel_tol=1e-12, abs_tol=0), layer
-    # Saved golden F.Cu polygon area: 0.307835 mm² / 25 mm² board area.
-    # The mandated fixture has no geometry on the other copper layers.
-    for name, expected in zip(copper_names, (.0123134, 0., 0., 0.), strict=True):
+    # Original F.Cu golden area: 0.307835 mm² / 25 mm² = 0.0123134.
+    # Supplemented rectangles: 3, 6, 9 mm² / 25 mm² board area.
+    for name, expected in zip(copper_names, (.0123134, .12, .24, .36), strict=True):
         fraction = fractions[name]
         assert math.isfinite(fraction) and 0 < fraction <= 1, (
             f'M1 copper fraction {name}: actual={fraction!r} expected 0 < fraction <= 1; '
@@ -116,8 +136,8 @@ def compare_fractions(report, converted, imported, measurements):
 def write_solver_inputs(root):
     # Illustrative definitions and case fields copied from test_ipc_uncut_chain.py.
     materials = []
-    for name, E, nu, alpha, k in [('mat.cu', 110e9, .34, 17e-6, 390),
-                                 ('mat.fr4', 25e9, .3, 1e-5, .3)]:
+    for name, E, nu, alpha, k in [('mat_cu', 110e9, .34, 17e-6, 390),
+                                 ('mat_fr4_eq', 25e9, .3, 1e-5, .3)]:
         def table(columns):
             return dict(temperatures=[298.15],
                         columns={key: [value] for key, value in columns.items()},
@@ -158,7 +178,7 @@ def inspect_run(run_dir, stack, preview_count, measurements, np, h5py):
         if key != 'T_max':
             assert summary[key] > 0, (key, summary)
     measurements['qoi'] = {key: summary[key] for key in QOIS}
-    conductivity = {'mat.cu': 390, 'mat.fr4': .3}
+    conductivity = {'mat_cu': 390, 'mat_fr4_eq': .3}
     layers = []
     for layer in stack['layers']:
         k = conductivity[layer['material']]
@@ -288,6 +308,26 @@ def main():
             imported = read_json(root / 'stack.json')
             golden = read_json(SOURCE / 'tests/integration/import_cli/golden/board_4layer/stack.json')
             compare_import(imported, golden)
+            # First lock the original importer contract to the untouched golden.
+            # Then import a documented populated variant for numerical acceptance.
+            write_populated_fixture(root)
+            run_command('import populated board', [importer, 'populated_board_4layer.xml',
+                        '-o', 'stack.json', '--polyset', 'stack.polyset',
+                        '--report', 'defects.json', '--material-map', 'solver_material_map.json'],
+                        root, timings)
+            artifact(root / 'stack.polyset')
+            artifact(root / 'defects.json')
+            populated = read_json(root / 'stack.json')
+            expected = json.loads(json.dumps(golden))
+            material_ids = {'mat.cu': 'mat_cu', 'mat.fr4': 'mat_fr4_eq'}
+            for layer in expected['layers']:
+                layer['material'] = material_ids[layer['material']]
+            compare_import(populated, expected)
+            assert populated['outline'] == imported['outline'], 'M1 outline changed'
+            imported = populated
+            notes.append('Numerical fixture: original F.Cu trace plus 3/6/9 mm² rectangles '
+                         'on In1.Cu/In2.Cu/B.Cu; map FR4=mat_fr4_eq, copper=mat_cu. '
+                         'Original fixture/map separately matched the untouched golden.')
             setup_checks['import'] = True
             run_command('fraction conversion', [sys.executable, SOURCE / 'tools/stack/copper_fraction.py',
                                                'stack.json', '-o', 'solve.stack.json',
@@ -391,9 +431,6 @@ def main():
     return 0
 
 
-CHECKS = ('import', 'fractions', 'preview', 'solve_readback', 'inputs_unchanged', 'numerical')
-
-
 class AcceptanceRecords(unittest.TestCase):
     def test_import_rejects_changed_literal_material_id(self):
         golden = read_json(SOURCE / 'tests/integration/import_cli/golden/board_4layer/stack.json')
@@ -417,9 +454,9 @@ class AcceptanceRecords(unittest.TestCase):
     def test_each_missing_acceptance_check_prevents_pass(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for missing in CHECKS:
+            for missing in ACCEPTANCE_CHECKS:
                 with self.subTest(missing=missing):
-                    checks = {name: True for name in CHECKS if name != missing}
+                    checks = {name: True for name in ACCEPTANCE_CHECKS if name != missing}
                     result = self.write_record(root, checks)
                     self.assertEqual(result['verdict'], 'fail')
                     self.assertTrue(any(missing in note for note in result['notes']))
@@ -435,14 +472,14 @@ class AcceptanceRecords(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             for ranks in (1, 2):
                 with self.subTest(ranks=ranks):
-                    result = self.write_record(Path(directory), dict.fromkeys(CHECKS, True),
+                    result = self.write_record(Path(directory), dict.fromkeys(ACCEPTANCE_CHECKS, True),
                                                ranks=ranks, parallel_required=True)
                     self.assertEqual(result['verdict'], 'fail')
 
     def test_failed_run_does_not_change_another_runs_verdict(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            checks = dict.fromkeys(CHECKS, True)
+            checks = dict.fromkeys(ACCEPTANCE_CHECKS, True)
             for failure in ('temperature error', 'readback mismatch', 'invalid QoI'):
                 with self.subTest(failure=failure):
                     failed = self.write_record(root, checks, [failure])
@@ -495,7 +532,7 @@ class AcceptanceRecords(unittest.TestCase):
                     top = 336.61153846153843 + (.001 if failure == 'temperature' else 0)
                     file['VTKHDF/hex/PointData/T'] = [298.15, top]
                 measurements = dict(acceptance_checks={})
-                stack = dict(layers=[dict(material='mat.fr4', thickness=.001)])
+                stack = dict(layers=[dict(material='mat_fr4_eq', thickness=.001)])
                 with redirect_stdout(StringIO()):
                     if failure is None:
                         inspect_run(root, stack, 1, measurements, np, h5py)
