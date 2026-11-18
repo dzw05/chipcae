@@ -1,6 +1,23 @@
 #include "assembly_test_support.hpp"
 int main() {
     return run([] {
+        for (double value : {double(0),
+                             double(-1),
+                             std::numeric_limits<double>::infinity(),
+                             std::numeric_limits<double>::quiet_NaN()}) {
+            for (int field = 0; field < 3; ++field) {
+                auto opt = options();
+                if (field == 0)
+                    opt.t_min = value;
+                else if (field == 1)
+                    opt.eps_weld = value;
+                else
+                    opt.tau_a = value;
+                invalid_input(merge_parts(base(), {}, opt), "invalid MergeOptions");
+                invalid_input(merge_parts({}, {}, opt), "invalid MergeOptions");
+                invalid_input(merge_parts(base(), {part()}, opt), "invalid MergeOptions");
+            }
+        }
         auto b = base();
         b.unit = "m";
         b.symmetry = "none";
@@ -26,6 +43,7 @@ int main() {
                   identity.layers[0].regions[0].name == "seed" &&
                   identity.layers[0].regions[0].body == "seed-body",
               "identity preserves layer and region fields");
+        // Brief, boundary cases: empty parts returns base unchanged, including no layers.
         b.layers.clear();
         auto empty = merge_parts(b, {}, options());
         check(bool(empty), "empty parts accepts base without layers");

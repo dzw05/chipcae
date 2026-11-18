@@ -6,6 +6,11 @@ int main() {
         b.layers[0].regions.push_back({"lid.bond", "glue", "", {{0, 0, .001, .001}, {}}});
         invalid_input(merge_parts(b, {part()}, options()), "part id collides with lid.bond");
         b = base();
+        b.layers[0].regions.push_back({"R", "seed", "other-body", {{0, 0, .001, .001}, {}}});
+        invalid_input(merge_parts(b, {part("R")}, options()), "part id collides with R");
+        b.layers[0].regions[0].name = "lid.bond";
+        invalid_input(merge_parts(b, {part()}, options()), "part id collides with lid.bond");
+        b = base();
         auto l = b.layers[0];
         l.name = "Core#0";
         b.layers.push_back(l);

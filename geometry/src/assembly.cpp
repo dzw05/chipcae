@@ -385,15 +385,15 @@ place(std::vector<Slab> local, const Placement& placement, const StackModel& bas
 
 Expected<MergeResult>
 merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOptions& options) {
+    if (!std::isfinite(options.t_min) || !std::isfinite(options.eps_weld) ||
+        !std::isfinite(options.tau_a) || options.eps_weld <= 0 || options.t_min <= 0 ||
+        options.tau_a <= 0)
+        return invalid("invalid MergeOptions");
     MergeResult result{base, {}, 0};
     if (parts.empty())
         return result;
     if (base.layers.empty())
         return invalid("base has no layers");
-    if (!std::isfinite(options.t_min) || !std::isfinite(options.eps_weld) ||
-        !std::isfinite(options.tau_a) || options.eps_weld <= 0 || options.t_min <= 0 ||
-        options.tau_a <= 0)
-        return invalid("invalid MergeOptions");
     std::set<std::string> ids, layer_names;
     std::vector<Real> boundaries{0};
     for (const auto& l : base.layers) {
