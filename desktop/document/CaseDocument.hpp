@@ -33,8 +33,10 @@ class CaseDocument : public QObject {
 public:
     explicit CaseDocument(QObject* parent = nullptr);
     bool load(const QString& path);
-    bool checkImportedStack(const Json& stack) const;
-    bool replaceImportedStack(const Json& stack);
+    bool checkImportedStack(const Json& stack, const QString& sourceDir = QString()) const;
+    bool replaceImportedStack(const Json& stack, const QString& sourceDir = QString());
+    DocumentErrors importedStackIssues(const Json& stack,
+                                       const QString& sourceDir = QString()) const;
     bool save(const QString& path);
     DocumentErrors validate() const;
     bool isDirty() const { return dirty_; }

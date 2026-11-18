@@ -104,7 +104,7 @@ MeshDigest MeshDigest::fromJson(const Json& v) {
     return d;
 }
 CaseDocument::CaseDocument(QObject* parent) : QObject(parent) {}
-bool CaseDocument::checkImportedStack(const Json& stack) const {
+bool CaseDocument::checkImportedStack(const Json& stack, const QString&) const {
     // External asset relocation awaits the real importer contract.
     if (stack.empty() || stack.contains("external_refs"))
         return false;
@@ -114,12 +114,15 @@ bool CaseDocument::checkImportedStack(const Json& stack) const {
     candidate.stack_ = stack;
     return candidate.validate().empty();
 }
-bool CaseDocument::replaceImportedStack(const Json& stack) {
-    if (!checkImportedStack(stack))
+bool CaseDocument::replaceImportedStack(const Json& stack, const QString& sourceDir) {
+    if (!checkImportedStack(stack, sourceDir))
         return false;
     stack_ = stack;
     markDirty();
     return true;
+}
+DocumentErrors CaseDocument::importedStackIssues(const Json&, const QString&) const {
+    return {};
 }
 void CaseDocument::markDirty() {
     if (!dirty_) {
