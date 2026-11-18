@@ -31,7 +31,8 @@ The JSON layout is an internal test format, not a new I5 exchange contract.
 
 The deterministic acceptance test also constructs a region/void input by hand:
 dense column 0 is missing, column 1 retains one hex with `elem_gid=1`, and
-attribute 2 relates it to its region, material, and body. The sample includes
+attribute 2 selects the second `attr_table.entries` record using the frozen
+consumer's 1-based indexing, relating it to its region, material, and body. The sample includes
 boundary groups, pending cuts, copper data, frames, and nondefault reports.
 This is a field stub for solver input tests; it neither generates cut geometry
 nor validates SP5 or the real cutting pipeline. Solver integration belongs to

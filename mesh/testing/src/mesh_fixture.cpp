@@ -3,7 +3,6 @@
 #include "../../../preview/src/mesh_digest.hpp"
 
 #include <algorithm>
-#include <bit>
 #include <charconv>
 #include <cmath>
 #include <cstddef>
@@ -258,10 +257,13 @@ void reject_duplicate_fields(const std::string& text) {
         const auto& e = cursor.current();
         if (e.event_type() == jsoncons::staj_event_type::begin_object)
             objects.emplace_back();
-        else if (e.event_type() == jsoncons::staj_event_type::end_object)
+        else if (e.event_type() == jsoncons::staj_event_type::end_object) {
+            check(!objects.empty(), "unexpected object end");
             objects.pop_back();
-        else if (e.event_type() == jsoncons::staj_event_type::key)
+        } else if (e.event_type() == jsoncons::staj_event_type::key) {
+            check(!objects.empty(), "object field outside object");
             check(objects.back().insert(e.get<std::string>()).second, "duplicate object field");
+        }
     }
 }
 bool validate(const HexMeshArrays& m) {

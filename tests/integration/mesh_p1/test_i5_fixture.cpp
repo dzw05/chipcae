@@ -29,6 +29,7 @@ std::string bytes(const fs::path& p) {
 void write(const fs::path& p, const std::string& s) {
     std::ofstream out(p, std::ios::binary);
     out << s;
+    out.close();
     require(bool(out), "write " + p.string());
 }
 // Independent test projection: bit mode compares every Real by its IEEE bits;
@@ -181,6 +182,7 @@ HexMeshArrays decorated() {
     HexMeshArrays m;
     m.vertices = {1, 0, -0.0, 2, 0, 0, 2, 1, 0, 1, 1, 0, 1, 0, 1, 2, 0, 1, 2, 1, 1, 1, 1, 1};
     m.hex = {0, 1, 2, 3, 4, 5, 6, 7};
+    // Attribute IDs are 1-based indices into attr_table.entries (see upload()).
     m.attribute = {2};
     m.elem_gid = {1};
     m.node_gid = {0, 1, 2, 3, 4, 5, 6, 7};
@@ -190,6 +192,7 @@ HexMeshArrays decorated() {
     m.copper_layer_of_layer = {0, -1};
     m.copper_phi = {0.25, 0.75};
     m.axes = {{{0, 1, 2}, {0, 1}, {0, 1}}};
+    m.grid_report.levels = 1;
     m.grid_report.level_axes = {{{m.axes[0], m.axes[1]}}};
     m.grid_report.column_ranks = {{0, 0}};
     m.grid_report.N_L = 2;
@@ -260,6 +263,10 @@ void rejects_bad(const fs::path& dir) {
     }
     reject("missing file", "", true);
     reject("non JSON", "{broken");
+    reject("unmatched object end", "}");
+    reject("key outside object", "\"mesh\":{}");
+    reject("extra object end", base.to_string() + "}");
+    reject("unfinished nested object", "{\"mesh\":{\"order\":1");
     auto mutate = [&](const std::string& label, auto edit) {
         auto j = base;
         edit(j);
