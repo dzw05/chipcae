@@ -3,10 +3,8 @@
 #include <algorithm>
 #include <initializer_list>
 #include <regex>
-#include <spawn.h>
 #include <utility>
 
-extern char** environ;
 using namespace crashdiag_test;
 
 namespace {
@@ -62,26 +60,14 @@ std::string body(const std::string& source, const std::regex& signature) {
     throw std::runtime_error("unterminated signal-path function");
 }
 
-void rg_forbidden(const fs::path& file) {
-    std::string pattern =
+void forbid_tokens(const std::string& code) {
+    constexpr auto pattern =
         R"(\b(new|malloc|calloc|realloc|free|printf|fprintf|sprintf|snprintf|throw|mutex|on_error|flush|fsync)\b|std\s*::\s*(string|filesystem|cout|cerr)\b|\.(lock|unlock)\s*\()";
-    auto name = file.string();
-    std::array<char*, 6> args{const_cast<char*>("rg"),
-                              const_cast<char*>("-n"),
-                              const_cast<char*>("-e"),
-                              pattern.data(),
-                              name.data(),
-                              nullptr};
-    pid_t child = -1;
-    check(::posix_spawnp(&child, "rg", nullptr, nullptr, args.data(), environ) == 0,
-          "could not run required rg signal-safety inspection");
-    const int status = wait_child(child);
-    check(WIFEXITED(status) && WEXITSTATUS(status) == 1,
-          "rg found forbidden signal-path operations or inspection failed");
+    static const std::regex forbidden(pattern);
+    std::smatch match;
+    if (std::regex_search(code, match, forbidden))
+        throw std::runtime_error("forbidden signal-path token: " + match.str());
 }
-
-// Test-first stub: the in-process token checker is not implemented yet.
-void forbid_tokens(const std::string&) {}
 
 void check_calls(const std::string& code, std::initializer_list<std::string_view> allowed) {
     const std::regex call(R"(\b((?:[A-Za-z_]\w*\s*(?:::|\.)\s*)*[A-Za-z_]\w*)\s*\()");
@@ -185,13 +171,6 @@ int main() {
         check_calls(helper, {"write", "_exit"});
         check(std::regex_search(helper, std::regex(R"(\bwrite\s*\()")),
               "signal writer never calls write");
-        TempDir tmp;
-        const auto handler_file = tmp.path / "handler.cpp";
-        const auto helper_file = tmp.path / "helper.cpp";
-        std::ofstream(handler_file) << handler;
-        std::ofstream(helper_file) << helper;
-        rg_forbidden(handler_file);
-        rg_forbidden(helper_file);
     });
     return result;
 }
