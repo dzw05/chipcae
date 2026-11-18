@@ -712,6 +712,171 @@ def odb_skipped(b):
     check(any(d['tier'] == 'B' and d['suggestion'] == 'solder mask not modeled' for d in ds),
           'ODB soldermask must be reported as B')
 
+@case('odb_norm_bridged_surface')
+def odb_norm_bridged_surface(b):
+    import time
+    started = time.monotonic()
+    from fractions import Fraction
+
+    def twice_area(ring):
+        return sum(x*v-u*y for (x,y),(u,v) in zip(ring, ring[1:]+ring[:1]))
+
+    def orient(a, b, c):
+        return (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0])
+
+    def on_segment(a, b, p):
+        return (orient(a,b,p) == 0 and
+                min(a[0],b[0]) <= p[0] <= max(a[0],b[0]) and
+                min(a[1],b[1]) <= p[1] <= max(a[1],b[1]))
+
+    def intersects(a, b, c, d):
+        return ((orient(a,b,c)*orient(a,b,d) < 0 and
+                 orient(c,d,a)*orient(c,d,b) < 0) or
+                on_segment(a,b,c) or on_segment(a,b,d) or
+                on_segment(c,d,a) or on_segment(c,d,b))
+
+    def valid_ring(ring, label):
+        check(len(ring) >= 3, f'{label}: fewer than three vertices: {ring}')
+        check(twice_area(ring) != 0, f'{label}: zero signed area: {ring}')
+        edges = list(zip(ring, ring[1:]+ring[:1]))
+        for i,(a,c) in enumerate(edges):
+            check(a != c, f'{label}: duplicate adjacent vertices at edge {i}: {ring}')
+            d = ring[(i+2) % len(ring)]
+            dot = (c[0]-a[0])*(d[0]-c[0]) + (c[1]-a[1])*(d[1]-c[1])
+            check(not (orient(a,c,d) == 0 and dot < 0),
+                  f'{label}: adjacent edges retrace at vertex {(i+1) % len(ring)}: {ring}')
+            for j in range(i+1, len(edges)):
+                if j == i+1 or (i == 0 and j == len(edges)-1):
+                    continue
+                check(not intersects(a,c,*edges[j]),
+                      f'{label}: nonadjacent edges {i}/{j} intersect or touch: {ring}')
+
+    def strictly_inside(p, ring):
+        inside = False
+        for a,c in zip(ring, ring[1:]+ring[:1]):
+            if on_segment(a,c,p):
+                return False
+            # Half-open Y intervals count a ray/vertex crossing once. The cross
+            # product locates the crossing without division or float rounding.
+            if (a[1] > p[1]) != (c[1] > p[1]):
+                if (orient(a,c,p) > 0) == (c[1] > a[1]):
+                    inside = not inside
+        return inside
+
+    features = b.job/'steps/pcb/layers/f.cu/features'
+    # One island follows two clockwise holes through coincident return bridges.
+    features.write_text('''UNITS=MM
+S P 0
+OB 20 -30 I
+OS 22 -30
+OS 22 -28
+OS 22 -26
+OS 24 -26
+OS 24 -28
+OS 22 -28
+OS 22 -30
+OS 26 -30
+OS 26 -28
+OS 26 -26
+OS 28 -26
+OS 28 -28
+OS 26 -28
+OS 26 -30
+OS 30 -30
+OS 30 -20
+OS 20 -20
+OS 20 -30
+OE
+SE
+''')
+    a1,_,_ = b.run(name='a1')
+    a2,_,_ = b.run(name='a2')
+    features.write_text('''UNITS=MM
+S P 0
+OB 20 -30 I
+OS 30 -30
+OS 30 -20
+OS 20 -20
+OS 20 -30
+OE
+OB 22 -28 H
+OS 22 -26
+OS 24 -26
+OS 24 -28
+OS 22 -28
+OE
+OB 26 -28 H
+OS 26 -26
+OS 28 -26
+OS 28 -28
+OS 26 -28
+OE
+SE
+''')
+    explicit,_,_ = b.run(name='b')
+
+    results = {}
+    for name,out in (('a1',a1),('a2',a2),('b',explicit)):
+        stack = load(out/'board.stack.json')
+        names = [layer['name'] for layer in stack['layers']]
+        check('F.CU' in names, f'{name}: F.CU absent from stack; layers={names}')
+        polyset = read_polyset(out/'board.stack.polyset')
+        names = [layer.name for layer in polyset.layers]
+        layer = next((layer for layer in polyset.layers if layer.name == 'F.CU'), None)
+        check(layer is not None, f'{name}: F.CU absent from polyset; layers={names}')
+        rings = layer.rings
+        check(rings, f'{name}: F.CU has no rings; layers={names}')
+        for i,ring in enumerate(rings):
+            valid_ring(ring, f'{name} F.CU ring {i}')
+        signed = sorted(twice_area(ring) for ring in rings)
+        outer = [ring for ring in rings if twice_area(ring) > 0]
+        holes = [ring for ring in rings if twice_area(ring) < 0]
+        check(len(rings) == 3 and len(outer) == 1 and len(holes) == 2,
+              f'{name}: expected one CCW exterior and two CW holes; twice_areas={signed}')
+        for i,hole in enumerate(holes):
+            check(all(strictly_inside(p,outer[0]) for p in hole),
+                  f'{name}: hole {i} must lie strictly inside the exterior: {hole}')
+
+        # Decimal rational DBU conversion keeps the expected integer area exact.
+        dbu = Fraction(str(polyset.dbu_m))
+        def expected_twice(mm2):
+            value = 2 * Fraction(mm2, 1000000) / (dbu * dbu)
+            check(value.denominator == 1,
+                  f'{name}: {mm2} mm^2 is not an integer twice-area at dbu_m={dbu}')
+            return value.numerator
+
+        expected = sorted(expected_twice(mm2) for mm2 in (100,-4,-4))
+        actual_m2 = [value * 0.5 * polyset.dbu_m**2 for value in signed]
+        expected_m2 = [-4e-6,-4e-6,100e-6]
+        check(signed == expected,
+              f'{name}: twice_areas={signed}, expected={expected}; dbu_m={polyset.dbu_m}; '
+              f'areas_m2={actual_m2}, expected_m2={expected_m2}')
+        check(sum(signed) == expected_twice(92),
+              f'{name}: net twice-area={sum(signed)}, expected={expected_twice(92)}')
+        for actual,want in zip(actual_m2,expected_m2):
+            check(abs(actual-want) <= 1e-12 * abs(want),
+                  f'{name}: area_m2={actual}, expected={want}, relative tolerance=1e-12')
+        net_m2 = sum(signed) * 0.5 * polyset.dbu_m**2
+        check(abs(net_m2-92e-6) <= 1e-12 * 92e-6,
+              f'{name}: net area_m2={net_m2}, expected=92e-6, relative tolerance=1e-12')
+        results[name] = (polyset.dbu_m, len(rings), signed)
+
+    for name in ('a1','a2'):
+        check(same_double(results[name][0],results['b'][0]),
+              f'{name}/b: dbu_m differs: {results[name][0]} vs {results["b"][0]}')
+        check(results[name][1:] == results['b'][1:],
+              f'{name}/b: bridged and explicit-hole ring counts/areas differ: '
+              f'{results[name][1:]} vs {results["b"][1:]}')
+    for name in ('board.stack.json','board.stack.polyset','import_layers.json',
+                 'import_report.json','import_report.csv','defects.json'):
+        check((a1/name).is_file() and (a2/name).is_file(),
+              f'a1/a2: missing determinism artifact: {name}')
+        check((a1/name).read_bytes() == (a2/name).read_bytes(),
+              f'a1/a2: nondeterministic artifact: {name}')
+    elapsed = time.monotonic() - started
+    print(f'MEASURE odb_norm_bridged_surface seconds={elapsed:.6f}')
+    check(elapsed <= 5, f'odb_norm_bridged_surface took {elapsed:.6f}s; limit=5s')
+
 @case('via_plating_missing','ipc')
 def plating(b):
     out,_,_ = b.run(data/'kicad_like/via_plating_mixed.xml',expected=6)
