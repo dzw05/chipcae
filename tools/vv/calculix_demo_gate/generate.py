@@ -972,7 +972,7 @@ def main():
         package = f"{meta['name']} {meta['version']} {meta.get('build','')}"
     result = {
         "SPDX-License-Identifier": "Apache-2.0",
-        "schema_version": "chipcae.vv.reference/0.1",
+        "schema_version": "chipcae.vv.demo_gate.reference/0.1",
         "kind": "REFERENCE",
         "case": "DEMO-GATE",
         "reference_type": "独立代码",

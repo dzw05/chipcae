@@ -20,16 +20,43 @@ import copy
 import hashlib
 import json
 import math
+import os
 import re
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[3]
 ARTIFACT_DIR = ROOT / "tools/vv/calculix_demo_gate"
 QOIS = ("W_bfp_m", "T_max_K", "T_top_min_K")
 T_REF = 298.15
+
+
+class ArtifactAvailabilityTest(unittest.TestCase):
+    def test_missing_and_invalid_artifacts_fail(self):
+        check = DemoGateReferenceTest().load_artifact
+        with tempfile.TemporaryDirectory() as directory, patch(
+            __name__ + ".ARTIFACT_DIR", Path(directory)
+        ):
+            try:
+                with self.assertRaises(AssertionError):
+                    check()
+            except unittest.SkipTest:
+                self.fail("a missing reference must fail acceptance, never skip")
+            path = Path(directory) / "REFERENCE.json"
+            path.mkdir()
+            with self.assertRaises(AssertionError):
+                check()
+            path.rmdir()
+            path.write_text("{", encoding="utf-8")
+            with self.assertRaises(json.JSONDecodeError):
+                check()
+            path.write_text('{"status": "参考不合格"}', encoding="utf-8")
+            with self.assertRaises(AssertionError):
+                DemoGateReferenceTest().validate_artifact(check())
 
 
 class DemoGateReferenceTest(unittest.TestCase):
@@ -122,7 +149,7 @@ class DemoGateReferenceTest(unittest.TestCase):
         for forbidden in ("/" + "workspace", "/" + "home", "demo-1214"):
             self.assertNotIn(forbidden, serialized)
         for key, value in {
-            "SPDX-License-Identifier": "Apache-2.0", "schema_version": "chipcae.vv.reference/0.1",
+            "SPDX-License-Identifier": "Apache-2.0", "schema_version": "chipcae.vv.demo_gate.reference/0.1",
             "kind": "REFERENCE", "case": "DEMO-GATE", "reference_type": "独立代码",
             "model_scope": "quarter",
         }.items():
@@ -164,8 +191,9 @@ class DemoGateReferenceTest(unittest.TestCase):
         self.assertEqual(len(data["levels"]), 3)
         for level in data["levels"]:
             self.fields(level, ("name", "h_m", "n_elem_z_per_layer", "n_elements", "n_nodes",
-                                "elements_by_type", "max_aspect_ratio", "decks", "W_bfp_nodes_m"), "level")
+                                "element_type", "elements_by_type", "max_aspect_ratio", "decks", "W_bfp_nodes_m"), "level")
             self.text(level["name"], "level name")
+            self.assertEqual(level["element_type"], data["element_type"])
         self.assertCountEqual([level["name"] for level in data["levels"]], ["L1", "L2", "L3"])
         levels = {level["name"]: level for level in data["levels"]}
         heat_ok = True
@@ -265,8 +293,6 @@ class DemoGateReferenceTest(unittest.TestCase):
 
     def load_artifact(self):
         path = ARTIFACT_DIR / "REFERENCE.json"
-        if not path.exists():
-            self.skipTest("qualified DEMO-GATE REFERENCE.json has not been published")
         self.assertTrue(path.is_file(), "missing required DEMO-GATE artifact: tools/vv/calculix_demo_gate/REFERENCE.json")
         return json.loads(path.read_text(encoding="utf-8"))
 
@@ -332,8 +358,116 @@ class DemoGateReferenceTest(unittest.TestCase):
             self.validate_artifact(bad)
 
 
+class ValidatorContractTest(DemoGateReferenceTest):
+    """Exercise the complete validator with synthetic in-memory data, never a reference.
+
+    Binary-exact differences give hand-derived p=2, U=3*step and Richardson
+    limits (2**-17 m, 308.15 K, 303.15 K). Temporary placeholder deck bytes
+    exercise archive hashing; they are deliberately not CalculiX input decks.
+    """
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(prefix="demo-gate-validator-")
+        self.addCleanup(directory.cleanup)
+        self.directory = Path(directory.name)
+        patcher = patch(__name__ + ".ARTIFACT_DIR", self.directory)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        levels = []
+        for name, h, nz, count, nodes, wedges, factor in (
+            ("L1", 0.001, 2, 594, 3046, 12, 16),
+            ("L2", 0.0005, 4, 4728, 21487, 48, 4),
+            ("L3", 0.00025, 8, 37728, 161005, 192, 1),
+        ):
+            decks = []
+            for kind in ("thermal", "mech"):
+                filename = f"{name}_quarter_{kind}.inp"
+                placeholder = b"Synthetic validator fixture; NOT a CalculiX deck.\n"
+                if name == "L1":
+                    (self.directory / filename).write_bytes(placeholder)
+                decks.append({"file": filename, "sha256": hashlib.sha256(placeholder).hexdigest()})
+            levels.append({
+                "name": name, "h_m": h, "n_elem_z_per_layer": [nz] * 3,
+                "n_elements": count, "n_nodes": nodes,
+                "elements_by_type": {"C3D20R": count - wedges, "C3D15": wedges},
+                "element_type": "C3D20R + C3D15", "max_aspect_ratio": 28.28427125,
+                "decks": decks, "W_bfp_m": 2**-17 + factor * 2**-32,
+                "W_bfp_nodes_m": 2**-17, "T_max_K": 308.15 + factor / 1024,
+                "T_top_min_K": 303.15 + factor / 1024,
+                "resources": {"label": "实测", "peak_rss_KiB": 1, "wall_seconds": 1},
+                "heat_source": {"die_volume_m3": 4.9e-8, "q_W_per_m3": 10 / 1.96e-7,
+                                "integrated_power_W": 2.5, "relative_error": 0},
+                "temperature_transfer": {"n_nodes": nodes, "max_abs_delta_K": 0},
+                "thermal_balance": {"bottom_outward_W": 2.4, "top_outward_W": 0.1,
+                                    "relative_error": 0},
+            })
+        symmetry = copy.deepcopy(levels[0])
+        symmetry.update(n_elements=2376, n_nodes=11345)
+        symmetry["temperature_transfer"]["n_nodes"] = 11345
+        symmetry["heat_source"].update(die_volume_m3=1.96e-7, integrated_power_W=10)
+        symmetry["thermal_balance"].update(bottom_outward_W=9.6, top_outward_W=0.4)
+        cross = copy.deepcopy(levels[2])
+        cross["element_type"] = "C3D20 + C3D15"
+        for check in (symmetry, cross):
+            check["relative_difference"] = dict.fromkeys(QOIS, 0)
+        self.data = {
+            "SPDX-License-Identifier": "Apache-2.0",
+            "schema_version": "chipcae.vv.demo_gate.reference/0.1",
+            "kind": "REFERENCE", "case": "DEMO-GATE", "reference_type": "独立代码",
+            "label": "Synthetic validator fixture: CalculiX 独立参考值，不是实测，不是解析解",
+            "calculix_version": "This is Version 2.23", "ccx_package": "unknown",
+            "host": "synthetic fixture", "model_scope": "quarter",
+            "element_type": "C3D20R + C3D15",
+            "inputs_sha256": {
+                name: hashlib.sha256((ROOT / "examples/demo_gate" / f"{name}.json").read_bytes()).hexdigest()
+                for name in ("case", "stack", "materials", "profile")
+            },
+            "materials_at_T_ref": {
+                name: dict(zip(("E_Pa", "nu", "alpha_1_per_K", "conductivity_W_per_mK"), values))
+                for name, values in {
+                    "organic_eq": (24.1975e9, 0.30321, 15.4815e-6, 3.1),
+                    "sac305_ball_eq": (43.5555e9, 0.35321, 22.7062e-6, 58),
+                    "underfill": (7.7432e9, 0.32321, 30.963e-6, 0.5),
+                    "silicon": (125.827e9, 0.28321, 2.68346e-6, 148),
+                }.items()
+            },
+            "levels": levels, "symmetry_check": symmetry, "element_cross": cross,
+            "observed_order": dict.fromkeys(QOIS, 2),
+            "selected": dict.fromkeys(QOIS, "richardson"),
+            "U_ref": {"W_bfp_m": 3 * 2**-32, "T_max_K": 3 / 1024, "T_top_min_K": 3 / 1024},
+            "reference": {"W_bfp_m": 2**-17, "T_max_K": 308.15, "T_top_min_K": 303.15},
+            "status": "合格",
+        }
+
+    def load_artifact(self):
+        return copy.deepcopy(self.data)
+
+    def test_trilayer_schema_identifier_is_rejected(self):
+        data = self.load_artifact()
+        self.validate_artifact(data)
+        data["schema_version"] = "chipcae.vv.reference/0.1"
+        with self.assertRaisesRegex(AssertionError, "schema_version"):
+            self.validate_artifact(data)
+
+
 if __name__ == "__main__":
     # chipcae_auto_tests passes the source directory as argv[1].
     if len(sys.argv) == 2 and Path(sys.argv[1]).is_dir():
         sys.argv.pop()
+    mode = os.environ.get("CHIPCAE_DEMO_GATE_TEST_MODE", "reference")
+    if mode == "generator":
+        print("SCOPE: generator/validator only; qualified reference delivery and acceptance are deferred.",
+              flush=True)
+        suite = unittest.TestSuite(
+            unittest.defaultTestLoader.loadTestsFromTestCase(case)
+            for case in (ArtifactAvailabilityTest, ValidatorContractTest)
+        )
+        path = ARTIFACT_DIR / "REFERENCE.json"
+        # Even generator mode must reject an invalid artifact if someone adds one.
+        if path.exists() or path.is_symlink():
+            suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(DemoGateReferenceTest))
+        result = unittest.TextTestRunner(verbosity=2).run(suite)
+        raise SystemExit(0 if result.wasSuccessful() else 1)
+    if mode != "reference":
+        raise SystemExit(f"invalid DEMO-GATE test mode: {mode}")
     unittest.main(verbosity=2)

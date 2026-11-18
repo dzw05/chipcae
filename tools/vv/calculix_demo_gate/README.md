@@ -1,16 +1,35 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# DEMO-GATE CalculiX independent reference generator
+# DEMO-GATE CalculiX generator and validator
 
-**Qualification blocked; no reference artifact is published.** The generator and
-failure regressions are implemented, but the prescribed run did not produce a
-qualified independent reference. Artifact acceptance checks skip while
-`REFERENCE.json` is unpublished; generator regressions still run when their
-dependencies are available. Present artifacts must pass every existing assertion;
-mesh levels and numerical thresholds are unchanged.
+**PR #179 scope amendment: generator and validator only.** This uses the explicit
+descope remedy in CodeBuddy MUST 1 supplied with the review-fix task. Qualified
+`REFERENCE.json`, archived L1 decks, published W_bfp/T_max/T_top_min reference
+values, and real-reference acceptance are deferred to a follow-up qualification
+card. This replaces the original brief's artifact-delivery and mandatory-reference
+acceptance requirements for this PR; the original V-INT-6 reference card remains
+incomplete. The numerical criteria (a)–(f), meshes, and all archived-reference
+assertions are retained. Green generator tests do not qualify a reference.
+
+Exactly two CTests remain registered: `vvccx_reference_json` and `vvccx_regen_l1`.
+The default `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=OFF` explicitly selects
+generator/validator scope in CMake and prints that scope in configuration and test
+output. The JSON test runs the full validator and its negative mutations against
+synthetic in-memory fixtures, including the archived-deck hash checks against
+temporary placeholder bytes. These fixtures are unit-test inputs, not solver
+results or published references. The optional solver test runs real L1 generation,
+checks deck determinism without publishing a reference, and exercises the parser,
+solver-failure, resource-guard and assessment regressions.
+
+With `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=ON`, the original real-artifact
+acceptance methods also run: a missing reference fails, never skips. Direct script
+invocations default to this strict mode. Even generator mode runs those methods
+if an artifact is present, so malformed or unqualified artifacts cannot be hidden
+by the scope setting. Missing optional solver dependencies or a version mismatch
+still return 77 for `vvccx_regen_l1`; the standard-library JSON test has no skip path.
 The numbers below are **参考值（独立代码）候选，未合格**; they must
 not be used to judge chipcae results.
 
-The attempted archive is `runs/20261119_7a00f37/DEMO-GATE/reference/` under the
+The historical attempted archive is `runs/20261119_7a00f37/DEMO-GATE/reference/` under the
 local task archive root. It contains the generated decks, solver logs, FRD,
 version, available QoI JSON/CSV, and generator snapshot. L2/L3 decks and solver
 outputs stay outside Git. In accordance with the brief, neither an unqualified
@@ -121,9 +140,12 @@ A complete run computes p from all three raw QoIs; p in [1.5,4.5] selects
 Richardson, otherwise L3. It records `U_ref=|Q3−Q2|`, evaluates (a)–(f), and
 writes a candidate JSON **only to the chosen work directory**. Invalid numerical
 criteria are retained as `参考不合格` or `需讨论`; only `合格` may subsequently be
-published. Operational failures do not write a final JSON. Schema users must
-check both `schema_version` and `case`; the version string is shared with the
-trilayer reference but the field sets differ.
+published. Operational failures do not write a final JSON. The unpublished
+DEMO-GATE contract now uses `schema_version: "chipcae.vv.demo_gate.reference/0.1"`
+and `case: "DEMO-GATE"`. This distinct identifier replaces the original brief's
+reuse of the incompatible trilayer identifier `chipcae.vv.reference/0.1`.
+The generator and independent validator agree on it; trilayer artifacts and
+consumers are unchanged.
 
 Heat balance is reported, not used as a qualification gate. Bottom outward
 heat is minus the *NODE PRINT bottom RFL total. Top outward heat is the exact
@@ -184,31 +206,35 @@ plain command names, and at most two build jobs. This box retains the available
 JSONCONS/HDF5 dependencies from the preceding acceptance-test pass:
 
 ```sh
-cmake -S . -B build-vvccx -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_BUILD_TESTS=ON
+cmake -S . -B build-vvccx -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_BUILD_TESTS=ON -DCHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=OFF
 cmake --build build-vvccx -j2
 ctest --test-dir build-vvccx -R '^vvccx_(reference_json|regen_l1)$' --output-on-failure
 ctest --test-dir build-vvccx --output-on-failure -j2
 ```
 
-The direct optional script runs eleven methods: eight cover fixed-width
-parsing, malformed records, result separation, solver failures, version query,
-failure resources, memory guard, and assessment status; the real L1 acceptance
-method skips until a reference is published. Two additional methods check the
-artifact availability and dependency skip/failure matrix. The standard-library JSON script
-likewise skips its three artifact checks while the reference is absent, retaining
-all original positive and negative assertions for a present artifact. The
-availability regression checks that absent artifacts skip and that directories
-and malformed JSON fail. Without a valid
-archived reference the requested on-disk L3 +1% mutation followed by restore to
-green cannot be performed; this verification remains outstanding, alongside
-L3 mechanics, element cross-check, valid Richardson/reference selection and
-artifact publication. During the original implementation, Release configure and
-build both exited 0. Focused CTest exited 8 (both
-DEMO-GATE tests fail). Full CTest exited 8: 209 total, 196 passed, 11 skipped,
-2 failed; the only failures are `vvccx_reference_json` and `vvccx_regen_l1`.
-The full suite took 45.66 s, with an isolated temporary directory for event-log
-tests. No C/C++ files changed; clang-format 23.1.5 has an empty applicable file
-list. Detailed command output is in the task handoff log.
+To run the deferred real-reference acceptance after publishing a qualified JSON
+and its L1 decks, configure with `-DCHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=ON`
+and rerun the same two CTests. Without those artifacts that mode must fail.
+The on-disk real-artifact L3 +1% mutation/restore check remains part of the
+follow-up card, alongside L3 mechanics, the element cross-check, and qualified
+Richardson/reference selection. The same negative mutation already runs against
+the synthetic validator fixture in generator mode.
+
+Review-fix verification (2026-11-19, the generator-only configuration above):
+Release configure and build exited 0. Focused CTest passed 2/2 (11.83 s), with
+five standard-library validator checks and twelve generator regressions, including
+a real L1 solve. Full CTest exited 0: 209 registered, 198 passed, 11 existing
+skips, zero failures (45.31 s). Neither DEMO-GATE CTest skipped. No C/C++ files
+changed; clang-format 23.1.5 has an empty applicable file list, and whitespace
+checks passed.
+
+Negative checks were also run and restored: configuring reference acceptance ON
+made both original CTests fail on the missing artifact (exit 8, expected).
+With acceptance OFF, temporarily creating a malformed `REFERENCE.json` still
+made `vvccx_reference_json` fail (exit 8, expected); removing it restored the
+2/2 pass. These checks establish the failure paths, not reference qualification.
+The earlier implementation's failed CTests are historical. Detailed commands,
+exit codes and logs are retained in the task handoff log.
 
 This card does not change the night driver, chipcae's comparison postprocessing,
 or product code. Loading a qualified reference in the night driver and aligning

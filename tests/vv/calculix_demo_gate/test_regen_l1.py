@@ -3,7 +3,7 @@
 """Optional real L1 regeneration plus FRD/solver failure regressions.
 
 Only absent ccx, absent numpy/scipy, or a different ccx version returns 77.
-An unpublished reference skips only the real L1 artifact comparison.
+Missing reference artifacts fail the real L1 artifact comparison.
 Internal parser contract used by these tests: parse_results(path) returns
 {nodes: {id: (x,y,z)}, temperature_blocks: [{id: T}, ...],
 displacement_blocks: [{id: (ux,uy,uz)}, ...]}. Blocks remain separate and in
@@ -15,6 +15,7 @@ No production stub is necessary: missing generator is an explicit assertion.
 
 from __future__ import annotations
 
+import copy
 import importlib
 import importlib.util
 import json
@@ -68,7 +69,52 @@ def dependencies():
 
 
 class DemoGateRegenTest(unittest.TestCase):
-    def test_artifact_absence_skips_acceptance_but_invalid_artifacts_fail(self):
+    def test_l1_generator_is_deterministic_without_publishing_reference(self):
+        module = self.generator()
+        with tempfile.TemporaryDirectory(prefix="chipcae-demo-gate-generator-") as directory:
+            work = Path(directory)
+            result = subprocess.run(
+                [sys.executable, str(GENERATOR), "--levels", "L1", "--work", str(work)],
+                cwd=ROOT, capture_output=True, text=True, timeout=480,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertNotIn("*ERROR", (result.stdout + result.stderr).upper())
+            self.assertFalse((work / "REFERENCE.json").exists())
+            candidate = json.loads((work / "L1_quarter.json").read_text())
+            inputs = module.load_inputs()
+            regenerated = work / "regenerated"
+            regenerated.mkdir()
+            decks = module.write_decks(regenerated, "L1_quarter",
+                                       module.build_mesh(inputs, "L1"), inputs)
+            for deck in decks:
+                self.assertEqual(deck.read_bytes(), (work / deck.name).read_bytes(), deck.name)
+            self.assertEqual(candidate["n_nodes"], 3046)
+            self.assertEqual(candidate["n_elements"], 594)
+            self.assertLessEqual(candidate["heat_source"]["relative_error"], 1e-10)
+            self.assertLessEqual(candidate["temperature_transfer"]["max_abs_delta_K"], 1e-3)
+            for key, lower in (("W_bfp_m", 0), ("T_max_K", 298.15), ("T_top_min_K", 298.15)):
+                self.assertTrue(math.isfinite(candidate[key]))
+                self.assertGreater(candidate[key], lower)
+
+    def test_generated_artifact_matches_distinct_validator_schema(self):
+        from tests.vv.calculix_demo_gate.test_reference_json import ValidatorContractTest
+
+        fixture = ValidatorContractTest()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        data = fixture.load_artifact()
+        module = self.generator()
+        # Replace only the expensive external-model solves. Input loading,
+        # assessment, provenance, serialization and independent validation are real.
+        models = data["levels"] + [data["symmetry_check"], data["element_cross"]]
+        with patch.object(sys, "argv", [str(GENERATOR), "--work", str(fixture.directory)]), patch.object(
+            module, "ccx_version", return_value="This is Version 2.23"
+        ), patch.object(module, "run_model", side_effect=copy.deepcopy(models)):
+            module.main()
+        artifact = json.loads((fixture.directory / "REFERENCE.json").read_text())
+        fixture.validate_artifact(artifact)
+
+    def test_missing_and_invalid_artifacts_fail(self):
         spec = importlib.util.spec_from_file_location(
             "demo_gate_reference", Path(__file__).with_name("test_reference_json.py"))
         reference = importlib.util.module_from_spec(spec)
@@ -82,8 +128,11 @@ class DemoGateRegenTest(unittest.TestCase):
             ):
                 for check in checks:
                     with self.subTest(check=check.__name__, artifact="absent"):
-                        with self.assertRaises(unittest.SkipTest):
-                            check()
+                        try:
+                            with self.assertRaises(AssertionError):
+                                check()
+                        except unittest.SkipTest:
+                            self.fail("a missing reference must fail acceptance, never skip")
                 path = artifact_dir / "REFERENCE.json"
                 path.mkdir()
                 for check in checks:
@@ -331,8 +380,6 @@ class DemoGateRegenTest(unittest.TestCase):
 
     def test_l1_deck_bytes_and_recomputed_qois(self):
         path = ARTIFACT_DIR / "REFERENCE.json"
-        if not path.exists():
-            self.skipTest("qualified DEMO-GATE REFERENCE.json has not been published")
         self.assertTrue(path.is_file(), "missing required DEMO-GATE REFERENCE.json")
         artifact = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(VERSION, artifact["calculix_version"])
@@ -406,4 +453,17 @@ if __name__ == "__main__":
         raise SystemExit(77)
     if len(sys.argv) == 2 and Path(sys.argv[1]).is_dir():
         sys.argv.pop()
+    mode = os.environ.get("CHIPCAE_DEMO_GATE_TEST_MODE", "reference")
+    if mode == "generator":
+        print("SCOPE: generator regressions and real L1 generation; archived-reference acceptance is deferred.",
+              flush=True)
+        path = ARTIFACT_DIR / "REFERENCE.json"
+        methods = unittest.defaultTestLoader.getTestCaseNames(DemoGateRegenTest)
+        suite = unittest.TestSuite(DemoGateRegenTest(method) for method in methods if
+                                  method != "test_l1_deck_bytes_and_recomputed_qois" or
+                                  path.exists() or path.is_symlink())
+        result = unittest.TextTestRunner(verbosity=2).run(suite)
+        raise SystemExit(0 if result.wasSuccessful() else 1)
+    if mode != "reference":
+        raise SystemExit(f"invalid DEMO-GATE test mode: {mode}")
     unittest.main(verbosity=2)
