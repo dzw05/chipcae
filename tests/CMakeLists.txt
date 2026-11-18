@@ -178,15 +178,6 @@ if(CHIPCAE_ENABLE_ECAD)
     set_tests_properties(odbpp_skeleton_stub odbpp_map_placeholder odbpp_fixture_present ipc_fixture_present
         PROPERTIES LABELS "tierA" TIMEOUT 60)
 
-    # Keep full-board prerequisites visible without claiming cross-format acceptance.
-    # The driver matches each known diagnostic and fails on XPASS or unrelated errors.
-    foreach(scenario cross_ipc dir_and_zip extension.TgZ extension.TaR.Gz extension.ZiP
-                     odb_skipped_layers_reported override_ipc override_empty_ipc report_and_preview)
-        add_test(NAME odbpp_xfail_${scenario} COMMAND odbpp_e2e xfail:${scenario})
-        set_tests_properties(odbpp_xfail_${scenario}
-            PROPERTIES LABELS "tierA;ecad;known_failure" TIMEOUT 60)
-    endforeach()
-
     add_executable(chipcae_test_ipc2581_e11 unit/test_ipc2581_e11.cpp)
     target_link_libraries(chipcae_test_ipc2581_e11 PRIVATE chipcae::geometry_ecad)
     chipcae_set_warnings(chipcae_test_ipc2581_e11)

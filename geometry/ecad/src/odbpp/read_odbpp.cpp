@@ -108,6 +108,8 @@ ImportResult read_odbpp(const std::filesystem::path& path,
             if (!entry.element.starts_with("SkippedLayer:"))
                 continue;
             const auto end = entry.element.rfind(':');
+            if (end == std::string::npos || end <= 13)
+                continue;
             const auto layer = entry.element.substr(13, end - 13);
             const auto found = functions.find(layer);
             if (found != functions.end() && !found->second.empty())

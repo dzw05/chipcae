@@ -116,10 +116,12 @@ originals have `odb_value_m`; equal and missing originals do not. The top-level
 `source` text is present only when supplied. `warnings` contains override and
 acceptance warnings; the same messages are printed to stderr.
 
-ODB function spelling is recovered from the source matrix when available. Missing
-report-only lookups retain the mapper's normalized function and do not reject the
-import. Thickness records must match the retained layer count and order before
-the CLI consumes their provenance; a mismatch returns 7.
+ODB function spelling is recovered by a best-effort second read of
+`matrix/matrix`. Missing report-only lookups retain the mapper's normalized
+function and do not reject the import. Inputs with an `odb/` archive root fail
+the initial parser read; they do not reach this metadata recovery step. Thickness
+records must match the retained layer count and order before the CLI consumes
+their provenance; a mismatch returns 7.
 
 Stack, binary polyset and layer reports are staged before publication. The layer
 report is published last; publication failures restore previous output files.
@@ -148,9 +150,12 @@ input is rejected for an invalid/degenerate `F.CU` contour, and its IPC export
 reports unsupported board geometry. The preview smoke material map uses `mat.fr4`,
 while the stack loader requires homogenized material IDs to end in `_eq`.
 
-CTest keeps these nine scenarios separate from passing CLI acceptance:
+The existing CTest entries `odbpp_fixture_present` and `ipc_fixture_present`
+run all scenarios in their respective `odb` and `ipc` groups. The nine scenarios
+below are ordinary acceptance tests with success expectations. A prerequisite
+failure fails the containing CTest entry; no expected-failure gate is applied.
 
-| CTest name (prefix `odbpp_xfail_`) | Known prerequisite failure |
+| Scenario | Current prerequisite failure |
 | --- | --- |
 | `cross_ipc` | Archive root |
 | `dir_and_zip` | ODB copper contour |
@@ -159,18 +164,16 @@ CTest keeps these nine scenarios separate from passing CLI acceptance:
 | `override_ipc`, `override_empty_ipc` | IPC board geometry |
 | `report_and_preview` | Preview material ID |
 
-Each is labeled `known_failure` and runs the original scenario with its original
-geometry, assertions and thresholds. The driver reports `XFAIL` only for the
-listed diagnostic; any other failure or an unexpected pass fails CTest. Once a
-prerequisite is fixed, remove its gate to restore ordinary acceptance. The `odb`
-and `ipc` selectors run the remaining CLI scenarios and fixture checks; those
-focused CLI tests use isolated geometry and do not establish full-board
-cross-format consistency. The supported four-layer IPC fixture additionally
-checks exact override thickness and empty-override output equality.
+The frozen baseline dispatcher also rejects `--accept` and `--stack-override`
+before calling `run_ecad`, even though it parses their paths into `ImportOptions`.
+The ECAD implementation consumes these fields, but the corresponding CLI tests
+remain failing until the dispatcher prerequisite is resolved upstream. Restoring
+its baseline behavior is required by this card's file freeze.
 
-For strict investigation, run `odbpp_e2e all` or any original named selector
-(e.g. `odbpp_e2e odbpp_e2e_cross_ipc`). These retain success expectations, without
-the expected-failure gate. Full-board cross-format acceptance remains pending.
+Run `odbpp_e2e all` or any named selector (e.g.
+`odbpp_e2e odbpp_e2e_cross_ipc`) to inspect failures individually. All original
+geometry, assertions and thresholds remain enforced. Full-board cross-format
+acceptance is not complete while these ordinary regression tests fail.
 
 All examples are synthetic. Customer data, surveys and real-board measurements
 must stay outside this repository.

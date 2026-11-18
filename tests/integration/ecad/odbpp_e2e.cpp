@@ -134,25 +134,6 @@ fixture = data / 'odbpp'
 sys.path.insert(0, str(source / 'tools/stack'))
 from polyset import read_polyset, layer_area_m2
 
-# Each prerequisite is tracked separately. Raw named selectors and 'all' remain strict.
-# Expected-failure selectors reject unrelated failures and unexpected passes.
-KNOWN_FAILURES = {
-    'cross_ipc': 'IMPORT_REJECTED: missing file matrix/matrix',
-    'dir_and_zip': 'IMPORT_REJECTED: invalid or degenerate contour: F.CU',
-    'extension.TgZ': 'IMPORT_REJECTED: missing file matrix/matrix',
-    'extension.TaR.Gz': 'IMPORT_REJECTED: missing file matrix/matrix',
-    'extension.ZiP': 'IMPORT_REJECTED: missing file matrix/matrix',
-    'odb_skipped_layers_reported': 'IMPORT_REJECTED: invalid or degenerate contour: F.CU',
-    'override_ipc': 'IMPORT_REJECTED: unsupported board geometry',
-    'override_empty_ipc': 'IMPORT_REJECTED: unsupported board geometry',
-    'report_and_preview': 'homogenized material must end with _eq',
-}
-expected_failure = selector.removeprefix('xfail:') if selector.startswith('xfail:') else None
-if expected_failure is not None:
-    if expected_failure not in KNOWN_FAILURES:
-        raise AssertionError('unknown expected-failure scenario: '+expected_failure)
-    selector = expected_failure
-
 CASES = []
 def case(name, group='odb'):
     def register(fn):
@@ -737,31 +718,19 @@ selected = [(n,g,f) for n,g,f in CASES if (selector in ('all',g,n) or
             (selector == 'odbpp_e2e_dir_and_zip' and n == 'dir_and_zip') or
             (selector == 'corrupt' and n.startswith('corrupt_')) or
             (selector == 'override_bad' and n.startswith('override_bad_')) or
-            (selector == 'unsupported_tiers' and n.startswith('unsupported_tiers_'))) and
-            (selector not in ('odb','ipc') or n not in KNOWN_FAILURES)]
+            (selector == 'unsupported_tiers' and n.startswith('unsupported_tiers_')))]
 check(selected, f'unknown scenario {selector}; choose: '+', '.join(n for n,_,_ in CASES))
 failures = 0
 for name,_,fn in selected:
     with tempfile.TemporaryDirectory(prefix='chipcae-odbpp-cli-') as directory:
         try:
             fn(Board(Path(directory)))
-        except AssertionError as error:
-            if expected_failure == name and KNOWN_FAILURES[name] in str(error):
-                print('XFAIL '+name+': '+KNOWN_FAILURES[name],flush=True)
-            else:
-                failures += 1
-                print('FAIL '+name,flush=True)
-                traceback.print_exc(file=sys.stdout)
         except Exception:
             failures += 1
             print('FAIL '+name,flush=True)
             traceback.print_exc(file=sys.stdout)
         else:
-            if expected_failure == name:
-                failures += 1
-                print('XPASS '+name+': remove the expected-failure gate',flush=True)
-            else:
-                print('PASS '+name,flush=True)
+            print('PASS '+name,flush=True)
 print(f'{len(selected)} scenarios, {failures} failed',flush=True)
 sys.exit(bool(failures))
 )ODBCLI";
