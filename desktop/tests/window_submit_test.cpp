@@ -920,6 +920,146 @@ int main(int argc, char** argv) {
         check(w.centralWidget() == w.resultView() && w.resultView()->error().isEmpty(),
               "completed assembly results support warpage scaling");
     });
+    test("preview options panel belongs to window and has valid defaults", [&] {
+        MainWindow w;
+        auto* panel = w.previewOptionsPanel();
+        check(panel != nullptr, "window must expose a preview options panel");
+        check(w.isAncestorOf(panel), "preview options panel is owned by this window");
+        const auto options = panel->options();
+        check(!options.nx && !options.ny, "panel defaults leave nx and ny automatic");
+        check(options.levels == 0, "panel defaults select automatic refinement");
+        // The brief requires exact option forwarding; 10 is exactly representable.
+        check(options.maxRatio == 10, "panel defaults preserve max_ratio=10 exactly");
+        check(options.surface.isEmpty(), "panel defaults leave surface empty");
+        check(panel->validationMessage().isEmpty(), "default preview panel is valid");
+    });
+    for (bool specified : {false, true}) {
+        test(specified ? "two-argument preview forwards current nondefault panel options"
+                       : "two-argument preview accepts default panel options",
+             [&] {
+                 Fixture f(argv[1]);
+                 MainWindow w;
+                 f.openCase(w);
+                 auto* panel = w.previewOptionsPanel();
+                 check(panel != nullptr, "window must expose a preview options panel");
+                 auto options = specified ? specifiedOptions() : PreviewOptions{};
+                 if (specified) {
+                     options.surface = f.temp.filePath("panel surface mesh with spaces.vtkhdf");
+                     panel->setOptions(options);
+                 }
+                 check(panel->validationMessage().isEmpty(), "preview panel options are valid");
+                 auto* controller = previewController(w);
+                 QObject receiver;
+                 int completions = 0;
+                 bool success = false;
+                 QObject::connect(
+                     controller, &PreviewController::finished, &receiver, [&](bool ok) {
+                         ++completions;
+                         success = ok;
+                     });
+                 check(w.previewMesh(PYTHON_EXECUTABLE, {f.previewScript()}),
+                       "two-argument preview starts with valid panel options");
+                 check(waitFor([&] { return completions != 0; }) && success,
+                       "panel preview emits finished(true)");
+                 check(completions == 1 && !controller->running(),
+                       "panel preview completes once and becomes idle");
+                 checkPreviewArguments(f, options);
+             });
+    }
+    test("two-argument preview rereads invalid panel after completed preview", [&] {
+        Fixture f(argv[1]);
+        MainWindow w;
+        f.openCase(w);
+        auto* panel = w.previewOptionsPanel();
+        check(panel != nullptr, "window must expose a preview options panel");
+        panel->setOptions(specifiedOptions());
+        check(panel->validationMessage().isEmpty(), "first preview has valid panel options");
+        auto* controller = previewController(w);
+        QObject receiver;
+        int completions = 0;
+        bool success = false;
+        QObject::connect(controller, &PreviewController::finished, &receiver, [&](bool ok) {
+            ++completions;
+            success = ok;
+        });
+        const auto script = f.previewScript();
+        check(w.previewMesh(PYTHON_EXECUTABLE, {script}), "valid panel preview starts first");
+        check(waitFor([&] { return completions != 0; }) && success,
+              "valid panel preview emits finished(true) before invalid edit");
+        check(completions == 1 && !controller->running(),
+              "preview is idle before testing invalid panel rejection");
+        PreviewOptions invalid;
+        invalid.nx = 8;
+        panel->setOptions(invalid);
+        check(!panel->validationMessage().isEmpty(), "nx without ny makes panel invalid");
+        check(!w.previewMesh(PYTHON_EXECUTABLE, {script}), "invalid panel preview is rejected");
+        check(!controller->running(), "invalid panel must not start the preview controller");
+        check(w.statusBar()->currentMessage().toUtf8() == panel->validationMessage().toUtf8(),
+              "status bar preserves exact panel validation message bytes");
+        check(!waitFor([&] { return completions != 1; }, 100) && !controller->running(),
+              "invalid panel emits no additional completion and leaves controller idle");
+    });
+    test("explicit preview options override an invalid panel", [&] {
+        Fixture f(argv[1]);
+        MainWindow w;
+        f.openCase(w);
+        auto* panel = w.previewOptionsPanel();
+        check(panel != nullptr, "window must expose a preview options panel");
+        PreviewOptions invalid;
+        invalid.nx = 8;
+        panel->setOptions(invalid);
+        check(!panel->validationMessage().isEmpty(), "panel remains invalid for explicit preview");
+        auto options = specifiedOptions();
+        options.surface = f.temp.filePath("explicit surface mesh with spaces.vtkhdf");
+        auto* controller = previewController(w);
+        QObject receiver;
+        int completions = 0;
+        bool success = false;
+        QObject::connect(controller, &PreviewController::finished, &receiver, [&](bool ok) {
+            ++completions;
+            success = ok;
+        });
+        check(w.previewMesh(PYTHON_EXECUTABLE, {f.previewScript()}, options),
+              "explicit valid options start despite invalid panel");
+        check(waitFor([&] { return completions != 0; }) && success,
+              "explicit preview with invalid panel emits finished(true)");
+        check(completions == 1 && !controller->running(),
+              "explicit preview completes once and becomes idle");
+        checkPreviewArguments(f, options);
+        check(!panel->validationMessage().isEmpty(), "explicit preview leaves panel invalid");
+    });
+    test("two-argument panel preview rejects a second start while running", [&] {
+        Fixture f(argv[1]);
+        MainWindow w;
+        f.openCase(w);
+        auto* panel = w.previewOptionsPanel();
+        check(panel != nullptr, "window must expose a preview options panel");
+        const auto options = specifiedOptions();
+        panel->setOptions(options);
+        check(panel->validationMessage().isEmpty(), "busy rejection uses valid panel options");
+        auto* controller = previewController(w);
+        QObject receiver;
+        int completions = 0;
+        bool success = false;
+        QObject::connect(controller, &PreviewController::finished, &receiver, [&](bool ok) {
+            ++completions;
+            success = ok;
+        });
+        const auto gate = f.temp.filePath("panel-preview-release");
+        const auto script = f.previewScript(gate);
+        check(w.previewMesh(PYTHON_EXECUTABLE, {script}), "first panel preview starts");
+        check(waitFor([&] { return QFile::exists(gate + ".ready"); }), "preview reaches gate");
+        check(controller->running() && completions == 0, "gate holds first panel preview running");
+        check(!w.previewMesh(PYTHON_EXECUTABLE, {script}), "second panel preview is rejected");
+        check(controller->running() && completions == 0,
+              "busy rejection keeps first preview running");
+        write(gate, "go");
+        check(waitFor([&] { return completions != 0; }) && success,
+              "released panel preview emits finished(true)");
+        check(completions == 1 && !controller->running(),
+              "busy rejection creates no second preview");
+        checkPreviewArguments(f, options);
+    });
     test("preview display defaults and no case rejection", [&] {
         MainWindow w;
         auto* central = w.centralWidget();

@@ -68,9 +68,13 @@ public:
                     const QString& runId = {},
                     const QString& eventFile = "events.caelog");
 
-    bool previewMesh(const QString& program = "chipcae-preview",
-                     const QStringList& prefix = {},
-                     const chipcae::desktop::PreviewOptions& options = {});
+    // 使用 previewOptionsPanel()->options()。面板 validationMessage() 非空时不得启动，返回 false。
+    bool previewMesh(const QString& program = "chipcae-preview", const QStringList& prefix = {});
+    // 使用传入的 options，不读面板、不因面板非法而拒绝（与现有三参数调用一致）。
+    bool previewMesh(const QString& program,
+                     const QStringList& prefix,
+                     const chipcae::desktop::PreviewOptions& options);
+    chipcae::desktop::PreviewOptionsPanel* previewOptionsPanel() const;
     chipcae::desktop::PreviewView* previewView() const;
     bool previewDisplayStale() const;
     bool submitCurrentCase();
@@ -109,6 +113,7 @@ private:
     chipcae::desktop::Provenance provenance_;
     chipcae::desktop::LocalJobService* service_ = nullptr;
     chipcae::desktop::PreviewController* preview_ = nullptr;
+    chipcae::desktop::PreviewOptionsPanel* previewOptionsPanel_ = nullptr;
     std::unique_ptr<QTemporaryDir> previewOutput_;
     MeshDigestDialogChoice meshDigestDialogChoice_ = MeshDigestDialogChoice::Unset;
     chipcae::desktop::MeshSha256Compare lastMeshDigestCompare_ =
