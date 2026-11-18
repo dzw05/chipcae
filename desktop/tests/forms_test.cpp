@@ -1,12 +1,20 @@
 #include "CaseOutline.hpp"
+#include "DesktopConfig.hpp"
 
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QLineEdit>
+#include <QProcessEnvironment>
 #include <QPushButton>
+#include <QStringList>
+#include <QTemporaryDir>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 
 using namespace chipcae::desktop;
 void require(bool condition, const char* message) {
@@ -22,6 +30,214 @@ bool hasPath(const QList<FieldError>& errors, const QString& path) {
     }
     return false;
 }
+
+void schemaPathTests(const QString& root) {
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "valid schema path fixture directory");
+    const QProcessEnvironment emptyEnv;
+    const auto makeDir = [&](const QString& relative) {
+        const auto path = temporary.filePath(relative);
+        require(QDir().mkpath(path), "create schema path fixture directory");
+        return path;
+    };
+    const auto writeSchema = [](const QString& path) {
+        QFile file(path);
+        require(file.open(QIODevice::WriteOnly), "open schema path fixture");
+        require(file.write("{}") == 2, "write complete schema path fixture");
+    };
+    const auto makeSchema = [&](const QString& relative) {
+        const auto path = makeDir(relative);
+        writeSchema(path + "/case-1.0.schema.json");
+        return path;
+    };
+    const auto repositorySchema = makeSchema("repository/schema");
+    const auto repository = temporary.filePath("repository");
+    const auto cli = makeSchema("cli/schema");
+    const auto envSchema = makeSchema("env/schema");
+    const auto bin = makeDir("prefix/bin");
+    const auto installed = makeSchema("prefix/share/chipcae/schema");
+    const auto fallback = makeSchema("fallback/schema");
+    const auto unmarked = makeDir("unmarked/schema");
+    const auto missing = temporary.filePath("missing/schema");
+    const QStringList cliArgs{"desktop", "--schema-dir", cli + "/./"};
+    QProcessEnvironment schemaEnv;
+    schemaEnv.insert("CHIPCAE_SCHEMA_DIR", envSchema);
+
+    int failures = 0;
+    int scenarios = 0;
+    const auto run = [&](const std::string& scenario, auto operation) {
+        ++scenarios;
+        try {
+            operation();
+        } catch (const std::exception& error) {
+            ++failures;
+            std::cerr << scenario << ": " << error.what() << '\n';
+        }
+    };
+    run("single-argument repository regression", [&] {
+        const auto legacy = root + "/schema/case.schema.json";
+        require(SchemaForm::caseSchemaPath(root) ==
+                    (QFileInfo::exists(legacy) ? legacy : root + "/schema/case-1.0.schema.json"),
+                "single-argument case repository path");
+        require(SchemaForm::resultSchemaPath(root) == root + "/schema/result.schema.json",
+                "single-argument result repository path");
+        require(SchemaForm::caseSchemaPath(repository) ==
+                    repositorySchema + "/case-1.0.schema.json",
+                "single-argument case uses versioned schema when legacy is absent");
+    });
+    writeSchema(repositorySchema + "/case.schema.json");
+    run("single-argument legacy and raw path regression", [&] {
+        const auto rawRepository = repository + "/./";
+        require(SchemaForm::caseSchemaPath(repository) == repositorySchema + "/case.schema.json",
+                "single-argument case prefers legacy schema");
+        require(SchemaForm::caseSchemaPath(rawRepository) ==
+                    rawRepository + "/schema/case.schema.json",
+                "single-argument case preserves raw concatenation");
+        require(!QFileInfo::exists(repositorySchema + "/result.schema.json"),
+                "repository result fixture must be absent");
+        require(SchemaForm::resultSchemaPath(rawRepository) ==
+                    rawRepository + "/schema/result.schema.json",
+                "single-argument result preserves raw path even when absent");
+    });
+
+    struct PathMethod {
+        const char* name;
+        const char* fileName;
+        QString (*legacy)(const QString&);
+        QString (*locate)(const QString&,
+                          const QStringList&,
+                          const QProcessEnvironment&,
+                          const QString&,
+                          const QString&);
+    };
+    const PathMethod methods[]{
+        {"case", "case-1.0.schema.json", &SchemaForm::caseSchemaPath, &SchemaForm::caseSchemaPath},
+        {"result",
+         "result.schema.json",
+         &SchemaForm::resultSchemaPath,
+         &SchemaForm::resultSchemaPath}};
+    const auto runtimeError = [](auto operation) {
+        try {
+            operation();
+        } catch (const std::runtime_error& error) {
+            return std::string(error.what());
+        }
+        throw std::runtime_error("expected std::runtime_error for invalid schema override");
+    };
+    for (const auto& method : methods) {
+        const auto test = [&](const char* scenario, auto operation) {
+            run(std::string(method.name) + " " + scenario, operation);
+        };
+        const auto expectLocated = [&](const QStringList& args,
+                                       const QProcessEnvironment& env,
+                                       const QString& executableDir,
+                                       const QString& compileFallback,
+                                       const QString& expectedDir) {
+            const auto expected = DesktopConfig::locateSchemaFile(
+                method.fileName, args, env, executableDir, compileFallback);
+            require(!expected.isEmpty(), "fixture must produce a locator hit");
+            require(expected == QFileInfo(expectedDir).canonicalFilePath() + "/" + method.fileName,
+                    "locator must choose the intended fixture directory and basename");
+            require(method.locate(root, args, env, executableDir, compileFallback) == expected,
+                    "runtime schema path must equal DesktopConfig::locateSchemaFile");
+            require(expected != method.legacy(root), "located schema must differ from repository");
+        };
+        test("CLI hit with normalized path and marker only", [&] {
+            require(!QFileInfo::exists(cli + "/result.schema.json"),
+                    "CLI result fixture must be absent");
+            expectLocated(cliArgs, emptyEnv, {}, {}, cli);
+        });
+        test("environment hit", [&] { expectLocated({}, schemaEnv, {}, {}, envSchema); });
+        test("CLI precedence over environment, install and fallback",
+             [&] { expectLocated(cliArgs, schemaEnv, bin, fallback, cli); });
+        test("executable directory forwarding",
+             [&] { expectLocated({}, emptyEnv, bin, {}, installed); });
+        test("compile-time fallback forwarding",
+             [&] { expectLocated({}, emptyEnv, {}, fallback, fallback); });
+        test("implicit miss preserves raw repository fallback", [&] {
+            require(DesktopConfig::locateSchemaFile(method.fileName, {}, emptyEnv).isEmpty(),
+                    "empty inputs must produce a locator miss");
+            for (const auto& source : {root, repository + "/./", QString()}) {
+                require(method.locate(source, {}, emptyEnv, {}, {}) == method.legacy(source),
+                        "implicit miss must equal single-argument path including empty repository");
+            }
+        });
+        const auto expectRejected = [&](const QStringList& args, const QProcessEnvironment& env) {
+            const auto expected =
+                runtimeError([&] { DesktopConfig::locateSchemaFile(method.fileName, args, env); });
+            const auto actual = runtimeError([&] { method.locate(repository, args, env, {}, {}); });
+            require(actual == expected,
+                    "invalid override must preserve runtime_error what() exactly");
+        };
+        test("missing CLI override rejects valid repository",
+             [&] { expectRejected({"desktop", "--schema-dir", missing}, emptyEnv); });
+        test("unmarked CLI override rejects valid repository",
+             [&] { expectRejected({"desktop", "--schema-dir", unmarked}, emptyEnv); });
+        for (const auto& value : {QString(), missing, unmarked}) {
+            run(std::string(method.name) + " invalid environment override [" + value.toStdString() +
+                    "]",
+                [&] {
+                    QProcessEnvironment invalid;
+                    invalid.insert("CHIPCAE_SCHEMA_DIR", value);
+                    expectRejected({}, invalid);
+                });
+        }
+        test("repeated calls are stable", [&] {
+            const auto expected =
+                DesktopConfig::locateSchemaFile(method.fileName, cliArgs, emptyEnv);
+            require(!expected.isEmpty(), "repeat fixture must produce a locator hit");
+            for (int i = 0; i < 2; ++i) {
+                require(method.locate(root, cliArgs, emptyEnv, {}, {}) == expected,
+                        "repeated calls must return the located path");
+            }
+        });
+        test("valid A invalid valid B A does not cache result or error", [&] {
+            const auto first = method.locate(root, cliArgs, emptyEnv, {}, {});
+            bool rejected = false;
+            try {
+                method.locate(repository, {"desktop", "--schema-dir", missing}, emptyEnv, {}, {});
+            } catch (const std::runtime_error&) {
+                rejected = true;
+            }
+            const auto second = method.locate(root, {}, schemaEnv, {}, {});
+            const auto again = method.locate(root, cliArgs, emptyEnv, {}, {});
+            require(first == DesktopConfig::locateSchemaFile(method.fileName, cliArgs, emptyEnv),
+                    "initial A lookup must match locator");
+            require(rejected, "invalid lookup between valid calls must throw");
+            require(second == DesktopConfig::locateSchemaFile(method.fileName, {}, schemaEnv),
+                    "valid B lookup must recover after error");
+            require(again == first && again != second, "returning to A must not reuse B");
+        });
+#ifdef Q_OS_LINUX
+        test("lowercase environment name is ignored", [&] {
+            QProcessEnvironment lowercase;
+            lowercase.insert("chipcae_schema_dir", cli);
+            require(DesktopConfig::locateSchemaFile(method.fileName, {}, lowercase).isEmpty(),
+                    "lowercase variable must not produce a locator hit");
+            require(method.locate(root, {}, lowercase, {}, {}) == method.legacy(root),
+                    "lowercase variable must fall back to single-argument path");
+        });
+        test("wrong-case marker rejects valid repository", [&] {
+            const auto wrongCase = makeDir(QString(method.name) + "/wrong-case");
+            writeSchema(wrongCase + "/Case-1.0.schema.json");
+            expectRejected({"desktop", "--schema-dir", wrongCase}, emptyEnv);
+        });
+#endif
+    }
+    run("default executable directory and fallback arguments", [&] {
+        require(DesktopConfig::locateSchemaFile("case-1.0.schema.json", {}, emptyEnv).isEmpty(),
+                "default-argument fixture must produce a locator miss");
+        require(SchemaForm::caseSchemaPath(root, {}, emptyEnv) == SchemaForm::caseSchemaPath(root),
+                "case default arguments must preserve repository fallback");
+        require(SchemaForm::resultSchemaPath(root, {}, emptyEnv) ==
+                    SchemaForm::resultSchemaPath(root),
+                "result default arguments must preserve repository fallback");
+    });
+    std::cout << "Schema path scenarios: " << scenarios - failures << " passed, " << failures
+              << " failed\n";
+    require(failures == 0, "schema path acceptance failures");
+}
+
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     try {
@@ -178,6 +394,7 @@ int main(int argc, char** argv) {
         require(!stale, "rebuilt editor must drop discarded input errors");
         std::cout
             << "Schema forms: sample, refs, enum, required, extra, nested, conditional and UI OK\n";
+        schemaPathTests(root);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
