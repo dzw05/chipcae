@@ -4,8 +4,10 @@
 #include <cctype>
 #include <charconv>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <numbers>
+#include <numeric>
 #include <sstream>
 
 namespace chipcae::geometry::ecad::detail {
@@ -175,6 +177,144 @@ bool contains(const std::vector<Edge>& ring, OdbPoint p) {
     }
     return inside;
 }
+// Bounds only select candidates; the original predicates decide every intersection.
+struct Bounds {
+    double xmin, ymin, xmax, ymax;
+    bool overlaps(const Bounds& b) const {
+        return xmin <= b.xmax && b.xmin <= xmax && ymin <= b.ymax && b.ymin <= ymax;
+    }
+    bool includes(OdbPoint p) const {
+        return xmin <= p.x && p.x <= xmax && ymin <= p.y && p.y <= ymax;
+    }
+    void include(const Bounds& b) {
+        xmin = std::min(xmin, b.xmin);
+        ymin = std::min(ymin, b.ymin);
+        xmax = std::max(xmax, b.xmax);
+        ymax = std::max(ymax, b.ymax);
+    }
+};
+constexpr double infinity = std::numeric_limits<double>::infinity();
+Bounds bounds(const Edge& e) {
+    constexpr double padding = 1e-9;
+    const double r = e.arc ? e.radius() : 0;
+    const double scale = std::max({std::abs(e.a.x),
+                                   std::abs(e.a.y),
+                                   std::abs(e.b.x),
+                                   std::abs(e.b.y),
+                                   e.arc ? std::abs(e.c.x) : 0,
+                                   e.arc ? std::abs(e.c.y) : 0,
+                                   r});
+    // At extreme scales the fixed padding cannot cover radius-relative on() tolerance
+    // or arithmetic roundoff (including contains()'s ray calculation). Subnormal
+    // line y spans can also underflow in that ray calculation. Keep all pairs
+    // in that case, also avoiding overflow in center +/- radius. This is only a
+    // conservative broad-phase fallback, not a new geometry tolerance.
+    const double dy = std::abs(e.b.y - e.a.y);
+    if (!std::isfinite(scale) || scale * std::numeric_limits<double>::epsilon() > padding / 32 ||
+        (e.arc && 1e-12 * r > padding / 4) ||
+        (!e.arc && dy > 0 && dy < std::numeric_limits<double>::min()))
+        return {-infinity, -infinity, infinity, infinity};
+    Bounds b = e.arc ? Bounds{e.c.x - r, e.c.y - r, e.c.x + r, e.c.y + r}
+                     : Bounds{std::min(e.a.x, e.b.x),
+                              std::min(e.a.y, e.b.y),
+                              std::max(e.a.x, e.b.x),
+                              std::max(e.a.y, e.b.y)};
+    // Round outwards even when adding the padding rounds to an existing endpoint.
+    return {std::nextafter(b.xmin - padding, -infinity),
+            std::nextafter(b.ymin - padding, -infinity),
+            std::nextafter(b.xmax + padding, infinity),
+            std::nextafter(b.ymax + padding, infinity)};
+}
+std::vector<Bounds> edge_bounds(const std::vector<Edge>& ring) {
+    std::vector<Bounds> boxes;
+    boxes.reserve(ring.size());
+    for (const auto& e : ring)
+        boxes.push_back(bounds(e));
+    return boxes;
+}
+Bounds contour_bounds(const std::vector<Bounds>& boxes) {
+    Bounds result{infinity, infinity, -infinity, -infinity};
+    for (const auto& box : boxes)
+        result.include(box);
+    return result;
+}
+// Fixed (ymin, original index) ranks let the tree prune intervals below the query
+// without scanning all x-active edges. Inactive leaves have maximum ymax = -inf.
+class ActiveIntervals {
+public:
+    explicit ActiveIntervals(const std::vector<Bounds>& boxes)
+        : boxes_(boxes), order_(boxes.size()) {
+        std::iota(order_.begin(), order_.end(), std::size_t{0});
+        std::sort(order_.begin(), order_.end(), [&](std::size_t a, std::size_t b) {
+            return boxes[a].ymin < boxes[b].ymin || (boxes[a].ymin == boxes[b].ymin && a < b);
+        });
+        rank_.resize(boxes.size());
+        for (std::size_t i = 0; i < order_.size(); ++i)
+            rank_[order_[i]] = i;
+        while (leaves_ < boxes.size())
+            leaves_ *= 2;
+        maximum_.assign(2 * leaves_, -infinity);
+    }
+    void set(std::size_t index, bool active) {
+        auto node = leaves_ + rank_[index];
+        maximum_[node] = active ? boxes_[index].ymax : -infinity;
+        while (node > 1) {
+            node /= 2;
+            maximum_[node] = std::max(maximum_[2 * node], maximum_[2 * node + 1]);
+        }
+    }
+    template <typename Visit>
+    bool query(const Bounds& box, Visit&& visit) const {
+        const auto end = std::upper_bound(
+            order_.begin(), order_.end(), box.ymax, [&](double y, std::size_t index) {
+                return y < boxes_[index].ymin;
+            });
+        const auto limit = static_cast<std::size_t>(end - order_.begin());
+        const auto search =
+            [&](auto&& self, std::size_t node, std::size_t left, std::size_t right) -> bool {
+            if (left >= limit || maximum_[node] == -infinity || maximum_[node] < box.ymin)
+                return true;
+            if (right - left == 1)
+                return visit(order_[left]);
+            const auto middle = left + (right - left) / 2;
+            return self(self, 2 * node, left, middle) && self(self, 2 * node + 1, middle, right);
+        };
+        return search(search, 1, 0, leaves_);
+    }
+
+private:
+    const std::vector<Bounds>& boxes_;
+    std::vector<std::size_t> order_, rank_;
+    std::size_t leaves_ = 1;
+    std::vector<double> maximum_;
+};
+// Query before insertion: each unordered pair is visited once. Returning false
+// from the callback terminates the sweep immediately. Storage is linear in edges;
+// dense box overlap can still require quadratic candidate work.
+template <typename Visit>
+bool overlapping_pairs(const std::vector<Bounds>& boxes, Visit&& visit) {
+    if (boxes.size() < 2)
+        return true;
+    std::vector<std::size_t> starts(boxes.size()), ends(boxes.size());
+    std::iota(starts.begin(), starts.end(), std::size_t{0});
+    std::iota(ends.begin(), ends.end(), std::size_t{0});
+    std::sort(starts.begin(), starts.end(), [&](std::size_t a, std::size_t b) {
+        return boxes[a].xmin < boxes[b].xmin || (boxes[a].xmin == boxes[b].xmin && a < b);
+    });
+    std::sort(ends.begin(), ends.end(), [&](std::size_t a, std::size_t b) {
+        return boxes[a].xmax < boxes[b].xmax || (boxes[a].xmax == boxes[b].xmax && a < b);
+    });
+    ActiveIntervals active(boxes);
+    std::size_t expired = 0;
+    for (const auto index : starts) {
+        while (expired < ends.size() && boxes[ends[expired]].xmax < boxes[index].xmin)
+            active.set(ends[expired++], false);
+        if (!active.query(boxes[index], [&](std::size_t other) { return visit(index, other); }))
+            return false;
+        active.set(index, true);
+    }
+    return true;
+}
 bool valid_ring(const OdbContour& contour) {
     const auto ring = edges(contour);
     long double area = 0;
@@ -192,44 +332,64 @@ bool valid_ring(const OdbContour& contour) {
     }
     if (!std::isfinite(area) || area == 0)
         return false;
-    for (std::size_t i = 0; i < ring.size(); ++i)
-        for (std::size_t j = i + 1; j < ring.size(); ++j)
-            for (auto p : intersections(ring[i], ring[j])) {
-                const auto same = [](OdbPoint a, OdbPoint b) {
-                    return std::hypot(a.x - b.x, a.y - b.y) <= 1e-12;
-                };
-                // Consecutive edges, including the synthetic closure, share a vertex.
-                if ((j == i + 1 && same(p, ring[i].b)) ||
-                    (i == 0 && j + 1 == ring.size() && same(p, ring[i].a)))
-                    continue;
-                // ODB exports use retraced bridges to join boundary loops. Shared
-                // vertices and collinear bridges are valid; transverse crossings are not.
-                if (same(p, ring[i].a) || same(p, ring[i].b) || same(p, ring[j].a) ||
-                    same(p, ring[j].b))
-                    continue;
-                if (!ring[i].arc && !ring[j].arc &&
-                    cross(sub(ring[i].b, ring[i].a), sub(ring[j].b, ring[j].a)) == 0)
-                    continue;
-                return false;
-            }
-    return true;
+    return overlapping_pairs(edge_bounds(ring), [&](std::size_t i, std::size_t j) {
+        if (j < i)
+            std::swap(i, j);
+        for (auto p : intersections(ring[i], ring[j])) {
+            const auto same = [](OdbPoint a, OdbPoint b) {
+                return std::hypot(a.x - b.x, a.y - b.y) <= 1e-12;
+            };
+            // Consecutive edges, including the synthetic closure, share a vertex.
+            if ((j == i + 1 && same(p, ring[i].b)) ||
+                (i == 0 && j + 1 == ring.size() && same(p, ring[i].a)))
+                continue;
+            // ODB exports use retraced bridges to join boundary loops. Shared
+            // vertices and collinear bridges are valid; transverse crossings are not.
+            if (same(p, ring[i].a) || same(p, ring[i].b) || same(p, ring[j].a) ||
+                same(p, ring[j].b))
+                continue;
+            if (!ring[i].arc && !ring[j].arc &&
+                cross(sub(ring[i].b, ring[i].a), sub(ring[j].b, ring[j].a)) == 0)
+                continue;
+            return false;
+        }
+        return true;
+    });
 }
+
 bool valid_topology(const std::vector<OdbContour>& contours) {
     if (contours.empty())
         return false;
     std::vector<std::vector<Edge>> rings;
-    for (const auto& c : contours)
+    std::vector<std::vector<Bounds>> boxes;
+    std::vector<Bounds> overall;
+    rings.reserve(contours.size());
+    boxes.reserve(contours.size());
+    overall.reserve(contours.size());
+    for (const auto& c : contours) {
         rings.push_back(edges(c));
+        boxes.push_back(edge_bounds(rings.back()));
+        overall.push_back(contour_bounds(boxes.back()));
+    }
     for (std::size_t i = 0; i < rings.size(); ++i) {
         std::size_t parents = 0;
         for (std::size_t j = 0; j < rings.size(); ++j) {
             if (i == j)
                 continue;
-            for (const auto& e : rings[i])
-                for (const auto& f : rings[j])
-                    if (!intersections(e, f).empty())
-                        return false;
-            if (contains(rings[j], contours[i].start)) {
+            if (overall[i].overlaps(overall[j])) {
+                auto combined = boxes[i];
+                combined.insert(combined.end(), boxes[j].begin(), boxes[j].end());
+                const auto split = rings[i].size();
+                if (!overlapping_pairs(combined, [&](std::size_t a, std::size_t b) {
+                        if (a >= split)
+                            std::swap(a, b);
+                        if (a >= split || b < split)
+                            return true;
+                        return intersections(rings[i][a], rings[j][b - split]).empty();
+                    }))
+                    return false;
+            }
+            if (overall[j].includes(contours[i].start) && contains(rings[j], contours[i].start)) {
                 if (contours[j].is_hole || !contours[i].is_hole)
                     return false;
                 ++parents;
