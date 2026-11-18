@@ -126,7 +126,20 @@ chipcae-solve: material mat.cu /id: String 'mat.cu' does not match pattern '^[a-
 brief and used by the existing chain test. This is a runtime material-contract
 failure (M3/material), after successful imports, averaging, comparisons and
 preview, not a compilation error or missing backend. No product files or material
-IDs were changed to hide it. No production stubs were needed.
+IDs were changed to hide it. No production stubs were needed. The implementation
+recheck at acceptance commit `77eece190c1f8a56dd2d6c3f7a7e083d97bcbf17`
+reproduces the same exit 14 after successful comparisons and 864-cell preview.
+Fresh normal, reference-flux ×1.01, and byte-for-byte restored CTest runs each
+exit 8 at solve exit 14, before any temperature error exists. The requested green
+solve and completed-solve mutation remain blocked by this contract conflict under
+the brief's four-file scope.
+
+Product handoffs: [M3/material #168](https://github.com/dzw05/chipcae/issues/168)
+tracks dotted material IDs; [M1 #169](https://github.com/dzw05/chipcae/issues/169)
+tracks the pinned copper thickness discrepancy. The latter preserves the prior
+[#82](https://github.com/dzw05/chipcae/issues/82) ruling that `copper_weight` is
+not a thickness source. Issue filing is part of the implementation handoff; no
+importer, solver, public interface or existing test assertions were changed.
 
 Dependency checks measure exit 77 for each missing executable variable and for
 missing numpy. Configured nonexistent executables fail with exit 1. A backend-off
@@ -136,7 +149,18 @@ odbpp_map_placeholder (60 s timeout), ipc_fixture_present, solve_inputs,
 chain_ipc_uncut_chain and ecaddiff_import_pair. event_log passes on an isolated
 TMPDIR repeat; its original run encountered shared temporary salvage files.
 Exact machine-local commands/output and failure details are recorded in the
-external TDD task log. This test-first delivery keeps the acceptance red.
+external TDD task log.
+
+The implementation recheck uses the same Release cache and a fresh TMPDIR with
+OMP_NUM_THREADS=2. Configure, the three-target build and full build exit 0. The
+full CTest run exits 8: 250 passed, 6 failed, 5 skipped (261 total; 1312.01 s).
+Failures are `odbcli_odbpp_cli_e2e`, `odbpp_map_placeholder` (60.10 s timeout),
+`ipc_fixture_present`, `chain_ipc_uncut_chain`, `ecaddiff_import_pair`, and
+`vtkhdf_results_mpi_2` (25 s subprocess timeout during injected H5Dwrite failure).
+`event_log` and `solve_inputs` pass in this run. An isolated MPI writer repeat
+with fresh TMPDIR and OMP_NUM_THREADS=1 exits 0 (1/1 passed, 35.90 s); the
+fault-injection timeout does not reproduce there. The new acceptance remains red;
+no product fix is claimed under the brief's explicit product-code prohibition.
 
 ## Limits
 
