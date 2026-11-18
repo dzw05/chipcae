@@ -4,7 +4,7 @@ endif()
 add_library(chipcae_mesh_fixture src/mesh_fixture.cpp)
 target_include_directories(chipcae_mesh_fixture PUBLIC include
   ${PROJECT_SOURCE_DIR}/mesh/background/include ${PROJECT_SOURCE_DIR}/schema/include)
-target_link_libraries(chipcae_mesh_fixture PUBLIC chipcae::core)
+target_link_libraries(chipcae_mesh_fixture PUBLIC chipcae::core PRIVATE jsoncons)
 if(CHIPCAE_BUILD_TESTS)
   add_executable(i5_fixture_tests ${PROJECT_SOURCE_DIR}/tests/integration/mesh_p1/test_i5_fixture.cpp)
   target_link_libraries(i5_fixture_tests PRIVATE chipcae_mesh_fixture chipcae_mesh_background chipcae_stack jsoncons)
