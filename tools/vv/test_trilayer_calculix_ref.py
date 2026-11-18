@@ -150,6 +150,14 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             with self.assertRaises(AssertionError, msg=f"missing={field}"):
                 self.validate_artifact(invalid)
         variants = []
+        for mesh_index in range(len(data["meshes"])):
+            for value in ("invalid", True, None, float("nan"), float("inf"), -float("inf")):
+                invalid = copy.deepcopy(data)
+                invalid["meshes"][mesh_index]["W_bfp_m"] = value
+                with self.assertRaises(
+                    AssertionError, msg=f"mesh={mesh_index} W_bfp_m={value!r}"
+                ):
+                    self.validate_artifact(invalid)
         for field, values in {
             "schema_version": ("chipcae.vv.reference/0.2",),
             "label": (123, "参考值（原型计算值）", "不是实测，不是解析解"),
