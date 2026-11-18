@@ -325,7 +325,9 @@ int main(int argc, char** argv) {
         };
         for (bool use_mpi : (argc == 4 ? std::vector<bool>{false, true} : std::vector<bool>{false}))
             acceptance(use_mpi ? "tiny padding and SHA MPI" : "tiny padding and SHA serial", [&] {
-                auto summary = invoke(shell(tiny.string()) + " --nx 7 --ny 5 --levels 2 -o " +
+                constexpr int nx_req = 7, ny_req = 5;
+                auto summary = invoke(shell(tiny.string()) + " --nx " + std::to_string(nx_req) +
+                                          " --ny " + std::to_string(ny_req) + " --levels 2 -o " +
                                           shell((dir / "padded").string()),
                                       0,
                                       1,
@@ -343,6 +345,13 @@ int main(int argc, char** argv) {
                 std::cerr << "tiny padded_cells=" << padded << "; expected 13\n";
                 expect(padded.is_int64() && padded.as<int>() == 13 && padded.as<int>() > 0,
                        "padded_cells is integer 13 and positive");
+                const auto scale = 1LL << summary.at("L").as<int>();
+                const auto expected_padding =
+                    (summary.at("nx0").as<int>() * scale * summary.at("ny0").as<int>() * scale -
+                     nx_req * ny_req) *
+                    summary.at("nz").as<int>();
+                expect(padded.as<int64_t>() == expected_padding,
+                       "padded_cells matches reported hierarchy dimensions and request");
             });
         acceptance("tiny cell budget", [&] {
             auto old_code = std::stoi(read(baseline / "budget.exit-code.txt"));
