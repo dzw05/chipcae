@@ -5,91 +5,15 @@
 
 #include <algorithm>
 #include <fstream>
-#include <iomanip>
 #include <iostream>
 #include <map>
 #include <random>
-#include <regex>
 #include <set>
 #include <sstream>
 #if defined(CHIPCAE_ENABLE_JSONCONS)
 #include <jsoncons/json.hpp>
-#include <yaml-cpp/yaml.h>
 #endif
 namespace chipcae::importer {
-#if defined(CHIPCAE_ENABLE_JSONCONS)
-std::optional<int> protocol_error_code(const std::string& name, std::istream& input) {
-    try {
-        const auto document = YAML::Load(input);
-        for (const auto& entry : document["errors"])
-            if (entry["name"].as<std::string>() == name)
-                return entry["code"].as<int>();
-    } catch (const YAML::Exception&) {
-    }
-    return std::nullopt;
-}
-
-#endif
-
-namespace {
-std::string defect_json_quote(const std::string& s) {
-    std::ostringstream out;
-    out << '"';
-    for (unsigned char c : s) {
-        if (c == '"' || c == '\\')
-            out << '\\' << c;
-        else if (c < 0x20)
-            out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << unsigned(c);
-        else
-            out << c;
-    }
-    out << '"';
-    return out.str();
-}
-
-void write_defect(std::ostream& out, const geometry::Defect& d) {
-    const auto id = geometry::defect_id(d), tier = geometry::tier_name(d.tier);
-    out << "{\"defect_id\":" << defect_json_quote(id) << ",\"tier\":" << defect_json_quote(tier)
-        << ",\"kind\":" << defect_json_quote(d.kind)
-        << ",\"reason\":" << static_cast<unsigned>(d.reason)
-        << ",\"dimension\":" << defect_json_quote(d.dimension)
-        << ",\"size\":" << std::setprecision(17) << d.size
-        << ",\"suggestion\":" << defect_json_quote(d.suggestion)
-        << ",\"action\":" << defect_json_quote(d.action)
-        << ",\"rejection_reason\":" << defect_json_quote(d.rejection_reason)
-        << ",\"material_ambiguous\":" << (d.material_ambiguous ? "true" : "false");
-    out << '}';
-}
-void write_defects_json(std::ostream& out,
-                        const std::string& code,
-                        const std::string& message,
-                        const std::vector<geometry::Defect>& defects) {
-    out << "{\"code\":" << defect_json_quote(code) << ",\"message\":" << defect_json_quote(message)
-        << ",\"defects\":[";
-    bool first = true;
-    for (const auto& d : defects) {
-        if (!first)
-            out << ',';
-        first = false;
-        write_defect(out, d);
-    }
-    out << "]}\n";
-}
-} // namespace
-
-void write_assembly_defects(const std::filesystem::path& file,
-                            const std::string& code,
-                            const std::string& message,
-                            const std::vector<geometry::Defect>& defects) {
-    if (file.empty())
-        return;
-    std::ofstream out(file);
-    write_defects_json(out, code, message, defects);
-    out.close();
-    if (!out)
-        throw std::runtime_error("cannot write defects output");
-}
-
 namespace {
 using namespace geometry;
 // Private assembly report extension.
@@ -338,16 +262,10 @@ assembly_placement_result(geometry::Expected<geometry::PlacedPart> result,
     part.material = material;
     return part;
 }
-std::string assembly_failure_message(const std::string& code, const std::string& message) {
-    return std::regex_search(message, std::regex("^[A-Z_]+: ")) ? message : code + ": " + message;
-}
 #if defined(CHIPCAE_ENABLE_JSONCONS)
-int assembly_error_exit(const std::string& message, std::istream& in) {
-    return protocol_error_code(message.substr(0, message.find(':')), in).value_or(1);
-}
 int assembly_error_exit(const std::string& message) {
     std::ifstream in(assembly_root() / "protocol/errors.yaml");
-    return assembly_error_exit(message, in);
+    return protocol_error_exit(message, in);
 }
 #endif
 } // namespace chipcae::importer
@@ -374,10 +292,10 @@ int run_assembly(const ImportOptions& options) {
         const auto dir = import_report_directory(options.output);
         if (!write_assembly_report(dir, header, defects, &error, &parts))
             throw std::runtime_error(error);
-        write_assembly_defects(options.report, code, message, defects);
+        write_defects(options.report, code, message, defects);
     };
     auto fail = [&](const std::string& code, const std::string& message) {
-        const auto full = assembly_failure_message(code, message);
+        const auto full = import_failure_message(code, message);
         const auto exit = assembly_error_exit(full);
         const auto prefix = exit == 1 ? "INTERNAL" : full.substr(0, full.find(':'));
         reports(prefix, full);
@@ -457,21 +375,10 @@ int run_assembly(const ImportOptions& options) {
                             "IMPORT_REJECTED: display-only geometry NOT_CAE_GEOMETRY");
         }
         std::vector<std::string> accepted;
-        auto accept = options.accept_file;
-        if (accept.empty() && !options.accept_b_tier) {
-            auto candidate = root / "import.accept.json";
-            if (std::filesystem::exists(candidate))
-                accept = candidate;
-        }
-        if (!accept.empty()) {
-            try {
-                std::ifstream in(accept);
-                auto a = J::parse(in);
-                for (const auto& item : a["accept"].array_range())
-                    accepted.push_back(item["defect_id"].as<std::string>());
-            } catch (const std::exception& e) {
-                return fail("INPUT_INVALID", std::string("accept: ") + e.what());
-            }
+        try {
+            accepted = read_acceptance_list(options, root);
+        } catch (const std::exception& e) {
+            return fail("INPUT_INVALID", std::string("accept: ") + e.what());
         }
 #ifndef CHIPCAE_ENABLE_ECAD
         return fail("IMPORT_REJECTED", "ECAD support disabled");
@@ -544,7 +451,7 @@ int run_assembly(const ImportOptions& options) {
                     throw std::runtime_error("display-only geometry");
                 return result;
             } catch (const std::exception& e) {
-                throw std::runtime_error(std::string("IMPORT_REJECTED: ") + e.what());
+                throw std::runtime_error(import_failure_message("IMPORT_REJECTED", e.what()));
             }
         };
         std::vector<J> all_parts;

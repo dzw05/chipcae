@@ -33,7 +33,8 @@ with tempfile.TemporaryDirectory() as tmp:
         if declaration:
             config += ('set_property(TARGET implementation PROPERTY OWNER_AVAILABLE '
                        + declaration + ')\n')
-        config += ('chipcae_assembly_capability(DETECTED implementation OWNER_AVAILABLE '
+        config += 'add_library(chipcae::geometry ALIAS implementation)\n'
+        config += ('chipcae_assembly_capability(DETECTED chipcae::geometry OWNER_AVAILABLE '
                    'implementation.cpp=' + digest + ')\n')
         config += ('if(NOT DETECTED STREQUAL "' + (declaration or 'OFF') + '")\n'
                    'message(FATAL_ERROR "wrong detected capability")\nendif()\n')
@@ -52,3 +53,25 @@ with tempfile.TemporaryDirectory() as tmp:
                 'missing_link': 'does not link capability source',
             }[name]
             assert reason in result.stderr, (name, result.stderr)
+
+# The dependency branch must work with an existing target and fail explicitly
+# without a package, even on a machine that has yaml-cpp installed elsewhere.
+start = text.index('if(CHIPCAE_ENABLE_JSONCONS)\n    if(NOT TARGET yaml-cpp::yaml-cpp')
+dependency = text[start:text.index('\nchipcae_assembly_capability(', start)]
+with tempfile.TemporaryDirectory() as tmp:
+    for available in (False, True):
+        case = Path(tmp) / str(available)
+        case.mkdir()
+        config = ('cmake_minimum_required(VERSION 3.24)\nproject(local_yaml NONE)\n'
+                  'set(CHIPCAE_ENABLE_JSONCONS ON)\n'
+                  'set(CMAKE_DISABLE_FIND_PACKAGE_yaml-cpp ON)\n'
+                  'add_library(chipcae-import INTERFACE)\n')
+        if available:
+            config += 'add_library(yaml-cpp::yaml-cpp INTERFACE IMPORTED)\n'
+        config += dependency.replace('PRIVATE yaml-cpp::yaml-cpp', 'INTERFACE yaml-cpp::yaml-cpp')
+        (case / 'CMakeLists.txt').write_text(config)
+        result = subprocess.run(['cmake', '-G', 'Ninja', '-S', str(case), '-B', str(case / 'build')],
+                                capture_output=True, text=True)
+        assert (result.returncode == 0) == available, (result.stdout, result.stderr)
+        if not available:
+            assert 'no network fetch' in result.stderr, result.stderr

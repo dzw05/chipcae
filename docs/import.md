@@ -24,7 +24,9 @@ Part ID `void` is reserved (exit 14). Geometry threshold error prefixes map
 through `protocol/errors.yaml`; unknown prefixes return INTERNAL (1).
 STEP parts require an OCCT-enabled build; otherwise each part produces a
 C-tier `OCCT_UNAVAILABLE` diagnostic. JSON support and ECAD support must be
-configured for assembly imports.
+configured for assembly imports. JSON-enabled builds also require a local yaml-cpp
+package (or an existing `yaml-cpp::yaml-cpp`/`yaml-cpp` target); configure never
+downloads yaml-cpp. Set `yaml-cpp_DIR` or `CMAKE_PREFIX_PATH` for a custom install.
 
 This checkout still contains the SP0 throwing implementations of slicing,
 placement and merge. Assembly currently treats those exact placeholder errors

@@ -6,12 +6,22 @@
 int main() {
 #if defined(CHIPCAE_ENABLE_JSONCONS)
     using chipcae::importer::assembly_error_exit;
-    const auto prefixed = chipcae::importer::assembly_failure_message(
-        "INPUT_INVALID", "CUT_UNSUPPORTED: outline needs one ring");
+    using chipcae::importer::protocol_error_exit;
+    for (const auto& message :
+         {"INPUT_INVALID: bad STEP", "CUT_UNSUPPORTED: STEP", "BOGUS: STEP"}) {
+        const auto preserved =
+            chipcae::importer::import_failure_message("IMPORT_REJECTED", message);
+        if (preserved != message || assembly_error_exit(preserved) != assembly_error_exit(message))
+            return 1;
+    }
+    if (chipcae::importer::import_failure_message("IMPORT_REJECTED", "invalid STEP") !=
+        "IMPORT_REJECTED: invalid STEP")
+        return 1;
+    const auto prefixed = chipcae::importer::import_failure_message(
+        "IMPORT_REJECTED", "CUT_UNSUPPORTED: outline needs one ring");
     if (prefixed != "CUT_UNSUPPORTED: outline needs one ring" ||
         assembly_error_exit(prefixed) != 13 ||
-        assembly_error_exit(chipcae::importer::assembly_failure_message("INPUT_INVALID", "x")) !=
-            14)
+        assembly_error_exit(chipcae::importer::import_failure_message("INPUT_INVALID", "x")) != 14)
         return 1;
     if (assembly_error_exit("IMPORT_CONFIRMATION_REQUIRED: synthetic B-tier defect") != 6)
         return 1;
@@ -35,9 +45,9 @@ int main() {
           "errors:\n  - {code: 14, name: INPUT_INVALID}\n  - {name: "
           "CUT_UNSUPPORTED, code: 13}\n"}) {
         std::istringstream input(yaml), cut(yaml), unknown(yaml);
-        if (assembly_error_exit("INPUT_INVALID: x", input) != 14 ||
-            assembly_error_exit("CUT_UNSUPPORTED: x", cut) != 13 ||
-            assembly_error_exit("BOGUS: x", unknown) != 1)
+        if (protocol_error_exit("INPUT_INVALID: x", input) != 14 ||
+            protocol_error_exit("CUT_UNSUPPORTED: x", cut) != 13 ||
+            protocol_error_exit("BOGUS: x", unknown) != 1)
             return 1;
     }
 #else
