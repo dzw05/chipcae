@@ -1,0 +1,11 @@
+{
+  "schema": "chipcae.vv_result/0.2",
+  "case_id": "fabricated-synthetic",
+  "data_class": "synthetic",
+  "label": "计划值",
+  "date": "20261118",
+  "commit": "0123abc",
+  "qoi": {"example": 1.25},
+  "verdict": "pass",
+  "notes": "x"
+}

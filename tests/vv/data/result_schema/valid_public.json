@@ -1,0 +1,15 @@
+{
+  "schema": "chipcae.vv_result/0.2",
+  "case_id": "fabricated-public",
+  "data_class": "public",
+  "label": "参考值",
+  "date": "20261118",
+  "commit": "0123abc",
+  "qoi": {"example": 2},
+  "verdict": "需讨论",
+  "reference": {"value": 2, "type": "解析", "source": "Fabricated example"},
+  "error": {"value": 0, "metric": "absolute"},
+  "tolerance": {"value": 0.1},
+  "notes": ["Fabricated fixture"],
+  "src_dirty": false
+}
