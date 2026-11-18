@@ -20,6 +20,7 @@ Python symbols and other diagnostic prose have no compatibility guarantee.
 Output paths that are symlinks are rejected with INPUT_INVALID.
 """
 import argparse
+from decimal import Decimal
 import hashlib
 import json
 import math
@@ -336,7 +337,7 @@ def _diff(odb, ipc, delta):
             'signed ring areas summed; relative difference uses larger area, zero versus nonzero is 100%', grade)
     # Accumulate exact binary ratios before converting to report numbers. This
     # preserves small differences even when either positive sum exceeds float
-    # range. Such totals are emitted as JSON integers (with sub-unit rounding).
+    # range. Overflowing fractional totals retain exact decimal JSON numbers.
     ratios_a = [l['thickness'].as_integer_ratio() for l in a]
     ratios_b = [l['thickness'].as_integer_ratio() for l in b]
     denominator = max((d for _, d in ratios_a + ratios_b), default=1)
@@ -347,11 +348,20 @@ def _diff(odb, ipc, delta):
         try:
             return numerator / denominator
         except OverflowError:
-            return (numerator + denominator // 2) // denominator
+            whole, remainder = divmod(numerator, denominator)
+            if not remainder:
+                return whole
+            # Binary denominators are powers of two, hence terminate in decimal.
+            places = denominator.bit_length() - 1
+            fraction = str(remainder * 5 ** places).zfill(places).rstrip('0')
+            return Decimal(f'{whole}.{fraction}')
 
-    difference = report_number(abs(total_a - total_b))
+    exact_difference = abs(total_a - total_b)
+    delta_n, delta_d = delta.as_integer_ratio()
+    exceeds = exact_difference * delta_d > delta_n * denominator
+    difference = report_number(exact_difference)
     add('total_thickness', 'stack', report_number(total_a), report_number(total_b),
-        difference, delta, reason, 'hard' if difference > delta else 'info')
+        difference, delta, reason, 'hard' if exceeds else 'info')
     p = max(ga['perimeter'], gb['perimeter'])
     d = abs(ga['area'] - gb['area'])
     hard = d > delta * p or any(abs(x - y) > delta for x, y in zip(ga['box'], gb['box']))
@@ -365,6 +375,25 @@ def _diff(odb, ipc, delta):
     return dict(schema=SCHEMA, delta_m=delta, inputs=dict(odb=str(odb), ipc=str(ipc)),
                 entries=entries, summary={g: sum(e['grade'] == g for e in entries)
                                           for g in ('hard', 'discuss', 'info')})
+
+
+def _report_json(value, level=0):
+    """Match json.dumps(indent=2), with exact finite decimal numeric tokens."""
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError('nonfinite report number')
+        return str(value)
+    if isinstance(value, (dict, list)) and value:
+        pad = '  ' * (level + 1)
+        if isinstance(value, dict):
+            opening, closing = '{', '}'
+            parts = [json.dumps(k, ensure_ascii=False) + ': ' + _report_json(v, level + 1)
+                     for k, v in value.items()]
+        else:
+            opening, closing = '[', ']'
+            parts = [_report_json(v, level + 1) for v in value]
+        return opening + '\n' + pad + (',\n' + pad).join(parts) + '\n' + '  ' * level + closing
+    return json.dumps(value, ensure_ascii=False, allow_nan=False)
 
 
 def write_report(result: dict, out_dir: Path) -> None:
@@ -387,7 +416,7 @@ def write_report(result: dict, out_dir: Path) -> None:
     if not details:
         lines.append('| 无 | | | | | | |')
     try:
-        payload = json.dumps(result, indent=2, ensure_ascii=False, allow_nan=False)
+        payload = _report_json(result)
     except ValueError as exc:
         _invalid(str(exc))
     created = not out.exists()

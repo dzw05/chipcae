@@ -1,5 +1,7 @@
 """Regressions for empty copper and transactional report failures."""
 import hashlib
+from decimal import Decimal
+from fractions import Fraction
 import json
 import os
 import subprocess
@@ -96,7 +98,9 @@ def main():
         assert json.loads((root / 'huge-reports/diff.json').read_text()) == huge_result
         normal_path = save(root / 'normal.json', board())
         total = entry(diff_stacks(huge_path, normal_path), 'total_thickness')
-        assert total['grade'] == 'hard' and total['delta'] == 3 * int(1e308)
+        assert total['grade'] == 'hard'
+        expected = 3 * Fraction(1e308) - sum(Fraction(l['thickness']) for l in board()['layers'])
+        assert Fraction(total['delta']) == expected
         # Cancellation must happen before rounding overflowing totals for JSON.
         huge['layers'][2]['thickness'] = 1e-8
         huge_path = save(root / 'huge.json', huge)
@@ -108,6 +112,44 @@ def main():
         for left, right in ((huge_path, other_path), (other_path, huge_path)):
             total = entry(diff_stacks(left, right), 'total_thickness')
             assert total['grade'] == 'hard' and total['delta'] == 1e-8
+        # Overflowing totals keep fractional meters in API, JSON and Markdown.
+        for left, right in ((huge_path, other_path), (other_path, huge_path),
+                            (huge_path, normal_path), (huge_path, huge_path)):
+            report = diff_stacks(left, right)
+            total = entry(report, 'total_thickness')
+            sums = [sum(Fraction(l['thickness']) for l in json.loads(p.read_text())['layers'])
+                    for p in (left, right)]
+            for field, expected in (('odb', sums[0]), ('ipc', sums[1]),
+                                    ('delta', abs(sums[0] - sums[1]))):
+                if isinstance(total[field], float):
+                    assert total[field] == float(expected)
+                else:
+                    assert Fraction(total[field]) == expected
+            assert total['grade'] == ('hard' if abs(sums[0] - sums[1]) > Fraction(DELTA) else 'info')
+            destination = root / 'exact-reports'
+            write_report(report, destination)
+            first = [(destination / name).read_bytes() for name in ('diff.json', 'diff.md')]
+            parsed = json.loads(first[0], parse_float=Decimal)
+            exact = entry(parsed, 'total_thickness')
+            for field in ('odb', 'ipc', 'delta'):
+                if isinstance(total[field], float):
+                    assert exact[field] == Decimal(str(total[field]))
+                else:
+                    assert Fraction(exact[field]) == Fraction(total[field])
+            if total['grade'] == 'hard':
+                assert str(total['delta']) in first[1].decode()
+            write_report(report, destination)
+            assert first == [(destination / name).read_bytes() for name in ('diff.json', 'diff.md')]
+        # Exact total difference exceeds δ even if its float report rounds to δ.
+        near_a, near_b = board(), board()
+        for layer, value in zip(near_a['layers'], (1.0, 2.0 ** -54, 2.0 ** -54)):
+            layer['thickness'] = value
+        for layer, value in zip(near_b['layers'], (2.0, 2.0 ** -53, 2.0 ** -54)):
+            layer['thickness'] = value
+        near_paths = (save(root / 'near-a.json', near_a), save(root / 'near-b.json', near_b))
+        for left, right in (near_paths, near_paths[::-1]):
+            total = entry(diff_stacks(left, right, 1.0), 'total_thickness')
+            assert total['delta'] == 1.0 and total['grade'] == 'hard'
         out = root / 'reports'
         for existing in (False, True):
             if existing:
