@@ -10,6 +10,11 @@
 #include <iostream>
 #include <stdexcept>
 using namespace chipcae::desktop;
+namespace chipcae::desktop {
+struct CaseDocumentTestAccess {
+    static void seedUnsavedCase(CaseDocument& document, const Json& data) { document.data_ = data; }
+};
+} // namespace chipcae::desktop
 void require(bool condition, const char* message) {
     if (!condition)
         throw std::runtime_error(message);
@@ -255,25 +260,17 @@ void testMissingRefField(const char* property) {
     fixture.stack["external_refs"][0].erase(property);
     const auto issues =
         requireRejectedImport(fixture.document, fixture.stack, fixture.source.absolutePath());
-    require(std::ranges::any_of(issues,
-                                [](const DocumentError& issue) {
-                                    return issue.code == "STACK_SCHEMA_INVALID" ||
-                                           issue.code == "INPUT_REF_INVALID";
-                                }),
-            "missing ref field reports STACK_SCHEMA_INVALID or INPUT_REF_INVALID");
+    require(issues.size() == 1, "missing required field produces one schema issue");
+    requireIssueAt(issues, "STACK_SCHEMA_INVALID", "/external_refs/0");
 }
 
-void testInvalidAssetPath(const char* name) {
+void testInvalidAssetPath(const char* name, const char* code) {
     ImportFixture fixture;
     fixture.stack["external_refs"][0]["path"] = name;
     const auto issues =
         requireRejectedImport(fixture.document, fixture.stack, fixture.source.absolutePath());
-    require(std::ranges::any_of(issues,
-                                [](const DocumentError& issue) {
-                                    return issue.code == "STACK_SCHEMA_INVALID" ||
-                                           issue.code == "INPUT_REF_INVALID";
-                                }),
-            "invalid path reports STACK_SCHEMA_INVALID or INPUT_REF_INVALID");
+    require(issues.size() == 1, "invalid path produces one issue");
+    requireIssueAt(issues, code, "/external_refs/0/path");
 }
 
 void testEscapingAssetSymlink() {
@@ -323,11 +320,16 @@ void testMissingCaseReference(const char* caseReference, const QString& external
     require(issues.size() == 1 && issues.front().code == "INPUT_REF_MISSING" &&
                 issues.front().source == "case",
             "preflight reports the missing case reference");
-    if (externalRefs != "nonempty")
-        require(sameErrors(requireRejectedImport(document, fixture.stack), issues),
-                "missing case reference is rejected without an explicit sourceDir");
     require(!stackDirectory(document, fixture.casePath).exists("polyset.bin"),
             "a missing case reference prevents sidecar relocation");
+    if (externalRefs != "nonempty") {
+        require(document.importedStackIssues(fixture.stack).empty() &&
+                    document.checkImportedStack(fixture.stack),
+                "one-argument preflight validates the candidate without reading case files");
+        require(document.replaceImportedStack(fixture.stack) &&
+                    document.stackJson() == fixture.stack && document.errors().empty(),
+                "one-argument replace retains the no-sidecar success path");
+    }
 }
 
 void testSaveChangedSidecar(const QString& change) {
@@ -405,25 +407,100 @@ void testDuplicatesAndCollision() {
     require(destination.entryList(QDir::Files | QDir::Hidden) == files,
             "repeat import creates no additional assets");
 
-    const auto previousCase = document.toJson();
-    const auto previousHash = document.contentHash();
-    const auto previousBytes = readBytes(fixture.casePath);
-    const QDir root(fixture.root.path());
-    const auto entries = root.entryList(QDir::AllEntries | QDir::NoDotAndDotDot);
     for (const auto& path : {fixture.casePath, fixture.root.filePath("save-as.json")}) {
-        require(!document.save(path), "save retains baseline failure for duplicate ref paths");
-        require(
-            document.errors().size() == 1 && document.errors().front().code == "DOCUMENT_ERROR" &&
-                document.errors().front().message.contains("Cannot copy stack external reference"),
-            "duplicate save retains the baseline copy error");
-        require(document.toJson() == previousCase && document.stackJson() == relocated &&
-                    document.contentHash() == previousHash && document.isDirty(),
-                "duplicate save failure preserves document state");
-        require(readBytes(fixture.casePath) == previousBytes &&
-                    root.entryList(QDir::AllEntries | QDir::NoDotAndDotDot) == entries &&
-                    destination.entryList(QDir::Files | QDir::Hidden) == files,
-                "duplicate save failure preserves existing files and rolls back its bundle");
+        require(document.save(path), "save accepts matching duplicate references");
+        CaseDocument reloaded;
+        require(reloaded.load(path) && reloaded.validate().empty(),
+                "reload saved duplicate references");
+        const auto savedDir = stackDirectory(reloaded, path);
+        requireRelocatedAssets(fixture.stack, reloaded.stackJson(), fixture.source, savedDir);
+        const auto savedStack = reloaded.stackJson();
+        const auto& savedRefs = savedStack.at("external_refs");
+        require(savedRefs.at(0).at("path") == savedRefs.at(2).at("path"),
+                "saved duplicate references share one asset");
+        require(savedDir.entryList(QDir::Files).size() == 4,
+                "bundle contains two unique sidecars, stack and materials");
     }
+}
+
+void seedUnsavedDocument(CaseDocument& document, const ImportFixture& fixture) {
+    // Public applyJson deliberately refuses to change references before load. Seed only the
+    // case data here so the import/save API can be exercised with a genuinely empty path_.
+    CaseDocumentTestAccess::seedUnsavedCase(document, fixture.document.toJson());
+    require(document.setMaterialLibrary(fixture.document.materialLibrary()),
+            "seed unsaved material library");
+    require(document.setStackJson(fixture.document.stackJson()), "seed unsaved stack");
+    require(document.validate().empty(), "unsaved document has valid case data");
+}
+
+void testUnsavedImportAndSave() {
+    ImportFixture fixture;
+    CaseDocument document;
+    document.applyJson(fixture.document.toJson());
+    require(document.toJson().empty() && !document.errors().empty(),
+            "public applyJson still rejects reference changes before load");
+    seedUnsavedDocument(document, fixture);
+    writeBytes(fixture.source.filePath("first.polyset"), fixture.payload);
+    writeBytes(fixture.source.filePath("second.polyset"), "second-polyset-fixture");
+    auto stack = fixture.stack;
+    stack["external_refs"][0]["path"] = "first.polyset";
+    stack["external_refs"].push_back(
+        externalRef("second.polyset", sha256("second-polyset-fixture")));
+    stack["external_refs"].push_back(externalRef("first.polyset", fixture.hash.toUpper()));
+    const auto source = fixture.source.absolutePath();
+    require(document.replaceImportedStack(stack, source), "import multiple polysets before save");
+    document.applyJson(document.toJson());
+    document.applyStackJson(document.stackJson());
+    require(document.setStackJson(document.stackJson()), "unchanged stack preserves import root");
+    require(!document.setStackJson(Json::object()), "invalid stack replacement is rejected");
+    requireRejectedImport(document, stack, fixture.root.filePath("nonexistent"));
+    require(!document.save(fixture.source.filePath("polyset.bin/blocked.json")),
+            "failed save preserves the pending source root");
+    auto verificationSource = fixture.source;
+    for (const auto* name : {"first/case.json", "second/case.json"}) {
+        const auto path = fixture.root.filePath(name);
+        require(document.save(path), "save imported assets from an unsaved document");
+        CaseDocument reloaded;
+        require(reloaded.load(path) && reloaded.validate().empty(),
+                "reload multiple polysets from the saved bundle");
+        requireRelocatedAssets(
+            stack, reloaded.stackJson(), verificationSource, stackDirectory(reloaded, path));
+        if (QString::fromLatin1(name).startsWith("first")) {
+            verificationSource = stackDirectory(reloaded, path);
+            require(QDir(source).removeRecursively(),
+                    "remove the original source after the first successful save");
+        }
+    }
+}
+
+void testImportThenReplacement(const QString& replacement) {
+    ImportFixture fixture;
+    CaseDocument document;
+    seedUnsavedDocument(document, fixture);
+    require(document.replaceImportedStack(fixture.stack, fixture.source.absolutePath()),
+            "import before replacing unsaved document contents");
+    if (replacement == "applyJson") {
+        auto data = document.toJson();
+        data["x-replacement"] = true;
+        document.applyJson(data);
+        require(document.toJson() == data, "replace case data");
+    } else if (replacement == "renameLayer") {
+        require(document.renameLayer("substrate", "replacement"), "replace a layer name");
+    } else {
+        auto stack = document.stackJson();
+        stack["id"] = "replacement";
+        if (replacement == "setStackJson")
+            require(document.setStackJson(stack), "replace stack through setStackJson");
+        else
+            document.applyStackJson(stack);
+        require(document.stackJson() == stack, "replace stack contents");
+    }
+    const auto path = fixture.root.filePath("replacement.json");
+    require(!document.save(path), "replacement cannot reuse the old import's source directory");
+    require(document.errors().size() == 1 &&
+                document.errors().front().message.contains("Missing original stack location"),
+            "replacement clears the pending import location");
+    require(!QFileInfo::exists(path), "failed replacement save creates no case file");
 }
 
 void testConflictingRefs() {
@@ -573,9 +650,12 @@ bool runImportAcceptance() {
                            "/external_refs/0/path");
         });
     }
-    for (const auto* name : {"/tmp/x.bin", R"(..\escape.bin)", "../outside.bin"}) {
-        run("invalid asset path " + QString::fromLatin1(name), [=] { testInvalidAssetPath(name); });
+    for (const auto* name : {"/tmp/x.bin", R"(..\escape.bin)", "../outside.bin", "C:/x.bin"}) {
+        run("invalid asset path " + QString::fromLatin1(name),
+            [=] { testInvalidAssetPath(name, "STACK_SCHEMA_INVALID"); });
     }
+    run("colon in asset path",
+        [] { testInvalidAssetPath("asset:polyset.bin", "INPUT_REF_INVALID"); });
     run("escaping asset symlink", testEscapingAssetSymlink);
     run("read-only queries and failure parity", testReadOnlyImportChecks);
     for (const auto* caseReference : {"stack", "materials"})
@@ -587,6 +667,10 @@ bool runImportAcceptance() {
         run("save changed sidecar " + QString::fromLatin1(change),
             [=] { testSaveChangedSidecar(change); });
     run("duplicates, collision, and retry", testDuplicatesAndCollision);
+    run("unsaved import and Save As with multiple polysets", testUnsavedImportAndSave);
+    for (const auto* replacement : {"applyJson", "setStackJson", "applyStackJson", "renameLayer"})
+        run("import then " + QString::fromLatin1(replacement),
+            [=] { testImportThenReplacement(replacement); });
     run("conflicting refs", testConflictingRefs);
     run("copy rollback", testCopyRollback);
     run("escaping destination ancestor", testEscapingDestinationAncestor);

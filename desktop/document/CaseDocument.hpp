@@ -69,6 +69,7 @@ signals:
     void editStarted();
 
 private:
+    friend struct CaseDocumentTestAccess;
     struct StackImport;
     StackImport preflightImportedStack(const Json& stack, const QString& sourceDir) const;
     void validateSchemas(DocumentErrors& result) const;
