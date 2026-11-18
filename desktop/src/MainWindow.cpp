@@ -42,6 +42,13 @@
 #include <vtkNew.h>
 #include <vtkPolyDataMapper.h>
 #include <vtkRenderer.h>
+// TEST-FIRST compile stubs: retain the existing constructor and its hard-coded schema wiring.
+MainWindow::MainWindow(
+    const QStringList&, const QProcessEnvironment&, const QString&, const QString&, QWidget* parent)
+    : MainWindow(parent) {}
+QString MainWindow::schemaDirectory() const {
+    return QString(CHIPCAE_REPOSITORY) + "/schema";
+}
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     preview_ = new chipcae::desktop::PreviewController(this);
     chipcae::desktop::SubmitDialog defaults;

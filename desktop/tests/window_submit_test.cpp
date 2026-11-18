@@ -1,5 +1,6 @@
 #include "AssemblyImport.hpp"
 #include "CaseTreeModel.hpp"
+#include "CaseTreeView.hpp"
 #include "DesktopConfig.hpp"
 #include "ImportController.hpp"
 #include "LocalJobService.hpp"
@@ -7,6 +8,7 @@
 #include "PreviewController.hpp"
 #include "ResultControls.hpp"
 #include "ResultView.hpp"
+#include "SchemaForm.hpp"
 #include "StackEditor.hpp"
 #include "SubmitDialog.hpp"
 
@@ -24,9 +26,11 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QPointer>
+#include <QProcessEnvironment>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QStatusBar>
+#include <QStringList>
 #include <QSurfaceFormat>
 #include <QTemporaryDir>
 #include <QThread>
@@ -56,6 +60,54 @@ void check(bool ok, const char* why) {
 void write(const QString& path, const QByteArray& bytes) {
     QFile f(path);
     check(f.open(QIODevice::WriteOnly) && f.write(bytes) == bytes.size(), "fixture write");
+}
+// These fixtures exercise the window's locator inputs, not the process environment.
+QString
+schemaFixture(const QTemporaryDir& temp, const QString& relative, const QByteArray& schema = "{}") {
+    check(temp.isValid(), "schema temporary directory");
+    const auto directory = temp.filePath(relative);
+    check(QDir().mkpath(directory), "schema fixture directory");
+    write(directory + "/case-1.0.schema.json", schema);
+    return directory;
+}
+void checkSchemaHit(const MainWindow& window,
+                    const QString& expectedDirectory,
+                    const QStringList& args,
+                    const QProcessEnvironment& env,
+                    const QString& executableDir = {},
+                    const QString& fallback = {}) {
+    const auto expected = QFileInfo(expectedDirectory).canonicalFilePath();
+    check(!expected.isEmpty(), "expected schema fixture has a canonical directory");
+    check(window.schemaDirectory() == expected,
+          "window must use expected canonical schema directory");
+    check(window.schemaDirectory() ==
+              DesktopConfig::locateSchemaDir(args, env, executableDir, fallback),
+          "window must preserve locator result exactly");
+}
+void checkSchemaError(const QStringList& args,
+                      const QProcessEnvironment& env,
+                      const QString& fallback,
+                      const QString& overrideName) {
+    bool locatorThrew = false, windowThrew = false;
+    QByteArray locatorError, windowError;
+    try {
+        DesktopConfig::locateSchemaDir(args, env, {}, fallback);
+    } catch (const std::runtime_error& error) {
+        locatorThrew = true;
+        locatorError = error.what();
+    }
+    try {
+        MainWindow window(args, env, {}, fallback);
+    } catch (const std::runtime_error& error) {
+        windowThrew = true;
+        windowError = error.what();
+    }
+    // Keep assertions outside the catches so a failed check cannot masquerade as rejection.
+    check(locatorThrew, "invalid fixture must be rejected by locator");
+    check(windowThrew, "window must propagate invalid schema override instead of falling back");
+    check(windowError == locatorError, "window must preserve complete locator error bytes");
+    check(QString::fromUtf8(windowError).contains(overrideName),
+          "schema error must identify the invalid override");
 }
 QByteArray read(const QString& path) {
     QFile f(path);
@@ -549,6 +601,194 @@ int main(int argc, char** argv) {
         }
     };
     using Choice = MainWindow::MeshDigestDialogChoice;
+    test("schema default constructor uses process locator inputs", [&] {
+        const auto source = QString(CHIPCAE_REPOSITORY) + "/schema";
+        const auto args = QCoreApplication::arguments();
+        const auto env = QProcessEnvironment::systemEnvironment();
+        const auto executableDir = QCoreApplication::applicationDirPath();
+        MainWindow w;
+        check(w.schemaDirectory() ==
+                  DesktopConfig::locateSchemaDir(args, env, executableDir, source),
+              "default window forwards process args, environment, executable and source fallback");
+        check(QFileInfo(w.schemaDirectory() + "/case-1.0.schema.json").isFile(),
+              "default window schema directory contains marker file");
+        if (DesktopConfig::locateSchemaDir(args, env, executableDir, {}).isEmpty())
+            check(w.schemaDirectory() == QFileInfo(source).canonicalFilePath(),
+                  "default window uses canonical source directory when implicit candidates miss");
+    });
+    test("schema constructor preserves QWidget parent compatibility", [&] {
+        QWidget parent;
+        MainWindow w(&parent);
+        check(w.parentWidget() == &parent, "existing parent constructor preserves ownership");
+    });
+    test("schema CLI override selects temporary directory", [&] {
+        QTemporaryDir temp;
+        const auto directory = schemaFixture(temp, "cli/schema");
+        const QStringList args{"app", "--schema-dir", directory};
+        const QProcessEnvironment env;
+        MainWindow w(args, env);
+        checkSchemaHit(w, directory, args, env);
+        check(w.schemaDirectory() !=
+                  QFileInfo(QString(CHIPCAE_REPOSITORY) + "/schema").canonicalFilePath(),
+              "CLI override differs from source schema directory");
+    });
+    test("schema environment override selects temporary directory", [&] {
+        QTemporaryDir temp;
+        const auto directory = schemaFixture(temp, "environment/schema");
+        const QStringList args{"app"};
+        QProcessEnvironment env;
+        env.insert("CHIPCAE_SCHEMA_DIR", directory);
+        MainWindow w(args, env);
+        checkSchemaHit(w, directory, args, env);
+    });
+    for (const bool validEnvironment : {true, false}) {
+        test(validEnvironment ? "schema CLI takes priority over valid environment"
+                              : "schema CLI takes priority over invalid environment",
+             [&] {
+                 QTemporaryDir temp;
+                 const auto cli = schemaFixture(temp, "cli/schema");
+                 const auto other = schemaFixture(temp, "other/schema");
+                 const QStringList args{"app", "--schema-dir", cli};
+                 QProcessEnvironment env;
+                 env.insert("CHIPCAE_SCHEMA_DIR",
+                            validEnvironment ? other : temp.filePath("missing"));
+                 MainWindow w(args, env);
+                 checkSchemaHit(w, cli, args, env);
+             });
+    }
+    // Isolated layouts catch a missing executableDir argument or a source-only fallback.
+    for (const auto& layout :
+         {QStringList{
+              "macOS Resources", "App.app/Contents/MacOS", "App.app/Contents/Resources/schema"},
+          QStringList{"installed prefix", "prefix/bin", "prefix/share/chipcae/schema"},
+          QStringList{"adjacent schema", "bin", "bin/schema"}}) {
+        test(("schema implicit layout: " + layout[0]).toUtf8().constData(), [&] {
+            QTemporaryDir temp;
+            const auto directory = schemaFixture(temp, layout[2]);
+            const auto executableDir = temp.filePath(layout[1]);
+            check(QDir().mkpath(executableDir), "fixture executable directory");
+            const QStringList args{"app"};
+            const QProcessEnvironment env;
+            MainWindow w(args, env, executableDir);
+            checkSchemaHit(w, directory, args, env, executableDir);
+        });
+    }
+    test("schema compile time fallback uses supplied directory", [&] {
+        QTemporaryDir temp;
+        const auto directory = schemaFixture(temp, "fallback/schema");
+        const QStringList args{"app"};
+        const QProcessEnvironment env;
+        MainWindow w(args, env, {}, directory);
+        checkSchemaHit(w, directory, args, env, {}, directory);
+    });
+    test("schema all empty locator inputs fall back to source directory", [&] {
+        const QStringList args;
+        const QProcessEnvironment env;
+        check(DesktopConfig::locateSchemaDir(args, env, {}, {}).isEmpty(),
+              "all empty locator inputs return no candidate");
+        MainWindow w(args, env);
+        const auto source = QString(CHIPCAE_REPOSITORY) + "/schema";
+        check(w.schemaDirectory() == source,
+              "empty locator result uses source schema concatenation");
+        check(QFileInfo(w.schemaDirectory()).canonicalFilePath() ==
+                  QFileInfo(source).canonicalFilePath(),
+              "source fallback points at source schema directory");
+    });
+    for (const auto* invalid :
+         {"missing argument", "empty argument", "nonexistent", "no marker", "duplicate"}) {
+        test((QString("schema rejects CLI override: ") + invalid).toUtf8().constData(), [&] {
+            QTemporaryDir temp;
+            const auto fallback = schemaFixture(temp, "valid-fallback/schema");
+            const auto unmarked = temp.filePath("unmarked");
+            check(QDir().mkpath(unmarked), "unmarked fixture directory");
+            QStringList args{"app", "--schema-dir"};
+            const QString mode = invalid;
+            if (mode == "empty argument")
+                args << "";
+            else if (mode == "nonexistent")
+                args << temp.filePath("missing");
+            else if (mode == "no marker")
+                args << unmarked;
+            else if (mode == "duplicate")
+                args << fallback << "--schema-dir" << fallback;
+            checkSchemaError(args, QProcessEnvironment{}, fallback, "--schema-dir");
+        });
+    }
+    for (const auto* invalid : {"empty", "nonexistent", "no marker"}) {
+        test((QString("schema rejects environment override: ") + invalid).toUtf8().constData(),
+             [&] {
+                 QTemporaryDir temp;
+                 const auto fallback = schemaFixture(temp, "valid-fallback/schema");
+                 const auto unmarked = temp.filePath("unmarked");
+                 check(QDir().mkpath(unmarked), "unmarked fixture directory");
+                 const QString mode = invalid;
+                 QProcessEnvironment env;
+                 env.insert("CHIPCAE_SCHEMA_DIR",
+                            mode == "empty"         ? QString()
+                            : mode == "nonexistent" ? temp.filePath("missing")
+                                                    : unmarked);
+                 checkSchemaError({"app"}, env, fallback, "CHIPCAE_SCHEMA_DIR");
+             });
+    }
+    test("schema directory is stable across construction and cached after marker removal", [&] {
+        QTemporaryDir temp;
+        const auto directory = schemaFixture(temp, "cached/schema");
+        const QStringList args{"app", "--schema-dir", directory};
+        const QProcessEnvironment env;
+        MainWindow first(args, env), second(args, env);
+        checkSchemaHit(first, directory, args, env);
+        checkSchemaHit(second, directory, args, env);
+        const auto cached = first.schemaDirectory();
+        check(first.schemaDirectory() == second.schemaDirectory(),
+              "same inputs locate same schema");
+        check(QFile::remove(directory + "/case-1.0.schema.json"), "remove cached schema marker");
+        check(first.schemaDirectory() == cached && second.schemaDirectory() == cached,
+              "accessors retain constructed directory without locating again");
+    });
+#ifdef Q_OS_LINUX
+    test("schema lowercase environment key is ignored on Linux", [&] {
+        QTemporaryDir temp;
+        const auto fallback = schemaFixture(temp, "fallback/schema");
+        const auto other = schemaFixture(temp, "other/schema");
+        QProcessEnvironment env;
+        env.insert("chipcae_schema_dir", other);
+        const QStringList args{"app"};
+        MainWindow w(args, env, {}, fallback);
+        checkSchemaHit(w, fallback, args, env, {}, fallback);
+    });
+    test("schema marker filename is case sensitive on Linux", [&] {
+        QTemporaryDir temp;
+        const auto fallback = schemaFixture(temp, "valid-fallback/schema");
+        const auto wrongCase = temp.filePath("wrong-case");
+        check(QDir().mkpath(wrongCase), "wrong-case fixture directory");
+        write(wrongCase + "/Case-1.0.schema.json", "{}");
+        checkSchemaError(
+            {"app", "--schema-dir", wrongCase}, QProcessEnvironment{}, fallback, "--schema-dir");
+    });
+#endif
+    test("schema selected directory drives case tree form validation and reload", [&] {
+        QTemporaryDir temp;
+        const auto directory = schemaFixture(temp, "wired/schema", R"({"type":"string"})");
+        MainWindow w({"app", "--schema-dir", directory}, QProcessEnvironment{});
+        check(w.openCase(QString(CHIPCAE_REPOSITORY) + "/schema/examples/fcbga_demo.case.json"),
+              "open case for schema wiring");
+        auto* tree = w.findChild<CaseTreeView*>();
+        auto* form = w.findChild<SchemaForm*>();
+        auto* model = w.findChild<CaseTreeModel*>();
+        check(tree && form && model, "window owns case tree model, view and schema form");
+        // The case has section nodes rather than a single case root; each binds the whole JSON.
+        const auto section = model->locate("/loads", "case");
+        check(section.isValid(), "case loads node exists");
+        tree->setCurrentIndex(section);
+        check(form->document() == w.document()->toJson(),
+              "case selection binds full case document");
+        check(!form->errors().empty(), "temporary string schema rejects object case document");
+        write(directory + "/case-1.0.schema.json", "{}");
+        tree->cancelEdit();
+        check(form->document() == w.document()->toJson(), "cancel reload preserves case document");
+        check(form->errors().empty(),
+              "cancel reloads updated permissive schema from selected directory");
+    });
     test("File menu exposes distinct assembly import", [&] {
         MainWindow w;
         QMenu* file = nullptr;

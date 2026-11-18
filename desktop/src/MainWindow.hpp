@@ -7,7 +7,9 @@
 
 #include <QJsonObject>
 #include <QMainWindow>
+#include <QProcessEnvironment>
 #include <QSet>
+#include <QStringList>
 class QAction;
 class QLabel;
 #include <QTemporaryDir>
@@ -28,6 +30,12 @@ class LocalJobService;
 class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(QWidget* parent = nullptr);
+    MainWindow(const QStringList& args,
+               const QProcessEnvironment& env,
+               const QString& executableDir = QString(),
+               const QString& compileTimeFallback = QString(),
+               QWidget* parent = nullptr);
+    QString schemaDirectory() const;
     chipcae::desktop::CaseDocument* document() { return &document_; }
     bool openCase(const QString& path);
     bool saveCase(const QString& path) { return document_.save(path); }
