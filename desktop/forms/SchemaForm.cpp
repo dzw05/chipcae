@@ -1,5 +1,7 @@
 #include "SchemaForm.hpp"
 
+#include "DesktopConfig.hpp"
+
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFileInfo>
@@ -71,20 +73,23 @@ QString SchemaForm::caseSchemaPath(const QString& repository) {
 QString SchemaForm::resultSchemaPath(const QString& repository) {
     return repository + "/schema/result.schema.json";
 }
-// Test-first stubs: keep repository-only behavior until runtime lookup is implemented.
 QString SchemaForm::caseSchemaPath(const QString& repository,
-                                   const QStringList&,
-                                   const QProcessEnvironment&,
-                                   const QString&,
-                                   const QString&) {
-    return caseSchemaPath(repository);
+                                   const QStringList& args,
+                                   const QProcessEnvironment& env,
+                                   const QString& executableDir,
+                                   const QString& compileTimeFallback) {
+    const auto path = DesktopConfig::locateSchemaFile(
+        "case-1.0.schema.json", args, env, executableDir, compileTimeFallback);
+    return path.isEmpty() ? caseSchemaPath(repository) : path;
 }
 QString SchemaForm::resultSchemaPath(const QString& repository,
-                                     const QStringList&,
-                                     const QProcessEnvironment&,
-                                     const QString&,
-                                     const QString&) {
-    return resultSchemaPath(repository);
+                                     const QStringList& args,
+                                     const QProcessEnvironment& env,
+                                     const QString& executableDir,
+                                     const QString& compileTimeFallback) {
+    const auto path = DesktopConfig::locateSchemaFile(
+        "result.schema.json", args, env, executableDir, compileTimeFallback);
+    return path.isEmpty() ? resultSchemaPath(repository) : path;
 }
 bool SchemaForm::load(const QString& schemaFile, const Json& document) {
     validator_.reset();
