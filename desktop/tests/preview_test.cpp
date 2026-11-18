@@ -1,4 +1,5 @@
 #include "PreviewController.hpp"
+#include "PreviewOptions.hpp"
 
 #include <QApplication>
 #include <QCryptographicHash>
@@ -9,12 +10,14 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLineEdit>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <vtkCellData.h>
 #include <vtkCellType.h>
@@ -39,13 +42,14 @@ void write(const QString& path, const QByteArray& bytes) {
 // Keep acceptance failures separate so every existing mock mode and the optional real CLI
 // regression still run during this test-first pass. Failed expectations always fail the test.
 struct Acceptance {
+    const char* label = "D10b-1";
     int failures = 0;
     int expectations = 0;
     void expect(bool value, const QString& message) {
         ++expectations;
         if (!value) {
             ++failures;
-            std::cerr << "FAIL [D10b-1] " << message.toStdString() << '\n';
+            std::cerr << "FAIL [" << label << "] " << message.toStdString() << '\n';
         }
     }
     void defaults(const PreviewOptions& options, const QString& context) {
@@ -80,6 +84,208 @@ struct Acceptance {
                    context + ": cell order at " + QString::number(i));
     }
 };
+// Catch lost optional presence, clamped invalid values, rounded ratios and rewritten paths.
+void panelOptionsEqual(Acceptance& a,
+                       const PreviewOptions& actual,
+                       const PreviewOptions& expected,
+                       const QString& context) {
+    a.expect(actual.nx == expected.nx, context + ": nx including optional presence");
+    a.expect(actual.ny == expected.ny, context + ": ny including optional presence");
+    a.expect(actual.levels == expected.levels, context + ": levels");
+    if (std::isnan(expected.maxRatio)) {
+        a.expect(std::isnan(actual.maxRatio), context + ": NaN ratio");
+    } else if (std::isinf(expected.maxRatio)) {
+        a.expect(std::isinf(actual.maxRatio) &&
+                     std::signbit(actual.maxRatio) == std::signbit(expected.maxRatio),
+                 context + ": infinity ratio and sign");
+    } else if (expected.maxRatio == 10 || expected.maxRatio == 12) {
+        // The brief requires exact equality for these exactly representable acceptance values.
+        a.expect(actual.maxRatio == expected.maxRatio, context + ": exact ratio");
+    } else {
+        // One relative machine epsilon catches decimal rounding of fractional input.
+        const double tolerance =
+            std::numeric_limits<double>::epsilon() * (std::abs(expected.maxRatio) + 1);
+        a.expect(std::isfinite(actual.maxRatio) &&
+                     std::abs(actual.maxRatio - expected.maxRatio) <= tolerance,
+                 context + ": ratio within one relative machine epsilon");
+    }
+    a.expect(actual.surface == expected.surface, context + ": verbatim surface");
+}
+void panelValidation(Acceptance& a,
+                     const PreviewOptionsPanel& panel,
+                     bool valid,
+                     const QString& context) {
+    const auto options = panel.options();
+    a.expect(options.validate().isEmpty() == valid, context + ": options validity");
+    a.expect(panel.validationMessage() == options.validate(),
+             context + ": validation uses the existing English message verbatim");
+}
+void panelAcceptance(Acceptance& a) {
+    PreviewOptionsPanel panel;
+    int edits = 0;
+    QObject::connect(&panel, &PreviewOptionsPanel::optionsEdited, &panel, [&] { ++edits; });
+    panelOptionsEqual(a, panel.options(), PreviewOptions{}, "default construction");
+    panelValidation(a, panel, true, "default construction");
+
+    const PreviewOptions explicitValues{8, 9, 3, 12, "/tmp/s.vtkhdf"};
+    auto set = [&](const PreviewOptions& options, const QString& context) {
+        const int before = edits;
+        panel.setOptions(options);
+        panelOptionsEqual(a, panel.options(), options, context);
+        panelValidation(a, panel, options.validate().isEmpty(), context);
+        a.expect(edits == before, context + ": setOptions emits no optionsEdited");
+    };
+    set(explicitValues, "valid round trip");
+    set(explicitValues, "consecutive identical setOptions");
+    set({8, 9, 3, 12.345678901234567, " MiXeD Dir/Surface File.VtkHdf "},
+        "fractional ratio and mixed-case spaced path");
+    set({std::numeric_limits<int>::max(),
+         std::numeric_limits<int>::max(),
+         std::numeric_limits<int>::max(),
+         12,
+         {}},
+        "INT_MAX round trip");
+
+    // Invalid setOptions must preserve the offending fields without emitting edit signals.
+    set({8, std::nullopt, 0, 10, {}}, "set nx only");
+    set({std::nullopt, 9, 0, 10, {}}, "set ny only");
+    set({0, 9, 0, 10, {}}, "set zero nx");
+    set({8, 0, 0, 10, {}}, "set zero ny");
+    set({-8, 9, 0, 10, {}}, "set negative nx");
+    set({8, -9, 0, 10, {}}, "set negative ny");
+    set({std::numeric_limits<int>::min(),
+         std::numeric_limits<int>::min(),
+         std::numeric_limits<int>::min(),
+         10,
+         {}},
+        "INT_MIN round trip");
+    set({std::nullopt, std::nullopt, -1, 10, {}}, "set negative levels");
+    for (double ratio : {0.0,
+                         0.5,
+                         std::numeric_limits<double>::quiet_NaN(),
+                         std::numeric_limits<double>::infinity(),
+                         -std::numeric_limits<double>::infinity()}) {
+        set({8, 9, 0, ratio, " Invalid Surface.VTKHDF "},
+            "set invalid ratio " + QString::number(ratio));
+    }
+    set({}, "restore automatic defaults");
+
+    auto* nx = panel.findChild<QLineEdit*>("nx");
+    auto* ny = panel.findChild<QLineEdit*>("ny");
+    auto* levels = panel.findChild<QLineEdit*>("levels");
+    auto* ratio = panel.findChild<QLineEdit*>("max_ratio");
+    auto* surface = panel.findChild<QLineEdit*>("surface");
+    a.expect(nx != nullptr, "editable nx input exists");
+    a.expect(ny != nullptr, "editable ny input exists");
+    a.expect(levels != nullptr, "editable levels input exists");
+    a.expect(ratio != nullptr, "editable max_ratio input exists");
+    a.expect(surface != nullptr, "editable surface input exists");
+    if (!nx || !ny || !levels || !ratio || !surface)
+        return; // Report missing editors as assertions while allowing existing regressions to run.
+
+    auto edit = [&](QLineEdit* editor, const QString& text, const QString& context) {
+        const int before = edits;
+        editor->setText(text);
+        a.expect(edits > before, context + ": editing emits optionsEdited at least once");
+    };
+    PreviewOptions expected;
+    edit(nx, "8", "edit nx");
+    expected.nx = 8;
+    panelOptionsEqual(a, panel.options(), expected, "nx only remains unpaired");
+    panelValidation(a, panel, false, "nx only");
+    edit(ny, "9", "edit ny");
+    expected.ny = 9;
+    panelOptionsEqual(a, panel.options(), expected, "paired dimensions");
+    panelValidation(a, panel, true, "paired dimensions");
+    edit(levels, "3", "edit levels");
+    expected.levels = 3;
+    panelOptionsEqual(a, panel.options(), expected, "edited levels");
+    edit(ratio, "12", "edit max_ratio");
+    expected.maxRatio = 12;
+    panelOptionsEqual(a, panel.options(), expected, "edited max_ratio");
+    edit(surface, " MiXeD Dir/Surface File.VtkHdf ", "edit surface");
+    expected.surface = " MiXeD Dir/Surface File.VtkHdf ";
+    panelOptionsEqual(a, panel.options(), expected, "edited surface");
+    const auto withSurface = panel.options().arguments("stack.json", "out.vtkhdf");
+    const auto surfaceFlag = withSurface.indexOf("--surface");
+    a.expect(surfaceFlag >= 0 && surfaceFlag + 1 < withSurface.size() &&
+                 withSurface[surfaceFlag + 1] == expected.surface,
+             "arguments receives the verbatim surface path");
+    edit(surface, "", "clear surface");
+    expected.surface.clear();
+    panelOptionsEqual(a, panel.options(), expected, "empty surface");
+    a.expect(!panel.options().arguments("stack.json", "out.vtkhdf").contains("--surface"),
+             "empty surface omits --surface");
+
+    edit(levels, "-1", "negative levels");
+    expected.levels = -1;
+    panelOptionsEqual(a, panel.options(), expected, "negative levels preserved");
+    panelValidation(a, panel, false, "negative levels");
+    edit(levels, "0", "automatic levels");
+    expected.levels = 0;
+    edit(ratio, "0", "zero ratio");
+    expected.maxRatio = 0;
+    panelOptionsEqual(a, panel.options(), expected, "zero ratio preserved");
+    panelValidation(a, panel, false, "zero ratio");
+    for (const auto& text : {"nan", "inf", "-inf"}) {
+        edit(ratio, text, "nonfinite ratio " + QString(text));
+        expected.maxRatio = QString(text) == "nan"   ? std::numeric_limits<double>::quiet_NaN()
+                            : QString(text) == "inf" ? std::numeric_limits<double>::infinity()
+                                                     : -std::numeric_limits<double>::infinity();
+        panelOptionsEqual(a, panel.options(), expected, "nonfinite ratio " + QString(text));
+        panelValidation(a, panel, false, "nonfinite ratio " + QString(text));
+    }
+    edit(ratio, "10", "restore default ratio");
+    expected.maxRatio = 10;
+    edit(nx, "", "clear nx");
+    expected.nx.reset();
+    panelOptionsEqual(a, panel.options(), expected, "ny only remains unpaired");
+    panelValidation(a, panel, false, "ny only");
+    edit(ny, "", "clear ny");
+    expected.ny.reset();
+    panelOptionsEqual(a, panel.options(), expected, "cleared automatic dimensions");
+    panelValidation(a, panel, true, "restored automatic defaults");
+    edit(nx, "   ", "whitespace nx is unset");
+    edit(ny, "\t ", "whitespace ny is unset");
+    panelOptionsEqual(a, panel.options(), expected, "trimmed empty dimensions");
+    panelValidation(a, panel, true, "trimmed empty dimensions");
+    edit(nx, " 8 ", "trimmed positive nx");
+    expected.nx = 8;
+    panelOptionsEqual(a, panel.options(), expected, "trimmed nx only");
+    panelValidation(a, panel, false, "trimmed nx only");
+    edit(ny, " 9 ", "trimmed positive ny");
+    expected.ny = 9;
+    panelOptionsEqual(a, panel.options(), expected, "trimmed positive pair");
+    panelValidation(a, panel, true, "trimmed positive pair");
+
+    // The plan's malformed-input policy keeps validation authoritative through sentinels.
+    for (auto* dimension : {nx, ny}) {
+        for (const auto& text : {"abc", "2147483648", "-2147483649", "1.5"}) {
+            set(explicitValues, "reset before malformed dimension");
+            edit(dimension, text, "malformed dimension " + QString(text));
+            auto malformed = explicitValues;
+            (dimension == nx ? malformed.nx : malformed.ny) = 0;
+            panelOptionsEqual(a, panel.options(), malformed, "malformed dimension is present zero");
+            panelValidation(a, panel, false, "malformed dimension");
+        }
+    }
+    for (const auto& text : {"abc", "", "2147483648", "-2147483649", "1.5"}) {
+        set(explicitValues, "reset before malformed levels");
+        edit(levels, text, "malformed levels " + QString(text));
+        auto malformed = explicitValues;
+        malformed.levels = -1;
+        panelOptionsEqual(a, panel.options(), malformed, "malformed levels is minus one");
+        panelValidation(a, panel, false, "malformed levels");
+    }
+    for (const auto& text : {"abc", "", "1,5", "1e9999"}) {
+        set(explicitValues, "reset before malformed ratio");
+        edit(ratio, text, "malformed ratio " + QString(text));
+        auto malformed = explicitValues;
+        malformed.maxRatio = std::numeric_limits<double>::quiet_NaN();
+        panelOptionsEqual(a, panel.options(), malformed, "malformed ratio is NaN");
+        panelValidation(a, panel, false, "malformed ratio");
+    }
+}
 void addCells(vtkDataSet* data, const char* name, const QList<int>& values) {
     vtkNew<vtkIntArray> array;
     array->SetName(name);
@@ -396,7 +602,12 @@ void controllerViewAcceptance(Acceptance& a, const PreviewController& controller
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     Acceptance acceptance;
+    Acceptance panelTests;
+    panelTests.label = "D10b-3";
     try {
+        panelAcceptance(panelTests);
+        std::cout << "D10b-3 panel acceptance: " << panelTests.expectations << " expectations, "
+                  << panelTests.failures << " failures\n";
         QTemporaryDir temporary;
         check(temporary.isValid(), "temporary directory");
         QDir dir(temporary.path());
@@ -659,7 +870,7 @@ int main(int argc, char** argv) {
         viewAcceptance(acceptance);
         std::cout << "D10b-1 acceptance: " << acceptance.expectations << " expectations, "
                   << acceptance.failures << " failures\n";
-        return acceptance.failures == 0 ? 0 : 1;
+        return acceptance.failures == 0 && panelTests.failures == 0 ? 0 : 1;
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;

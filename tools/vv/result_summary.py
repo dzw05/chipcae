@@ -239,9 +239,38 @@ def _counts(values):
     return {str(int(k)): int(n) for k, n in zip(keys, counts)}
 
 
+def _assembly(root):
+    if 'Assembly' not in root:
+        return
+    assembly = root.get('Assembly')
+    prefix = 'VTKHDF/Assembly'
+    _require(isinstance(assembly, h5py.Group), f'{prefix}: expected group')
+    categories = ('volume', 'boundary', 'lagrangian')
+    members = set(assembly)
+    for category in categories:
+        _require(category in members, f'{prefix}: missing category {category}')
+    for name in sorted(members - set(categories)):
+        _require(False, f'{prefix}: unexpected member {name}')
+    for category in categories:
+        _require(isinstance(assembly.get(category), h5py.Group),
+                 f'{prefix}/{category}: expected group')
+    for path, target in (
+            ('volume/hex', '/VTKHDF/hex'),
+            ('volume/cut', '/VTKHDF/cut'),
+            ('boundary/eb_surface', '/VTKHDF/eb_surface'),
+            ('lagrangian/particles', '/VTKHDF/particles')):
+        link = assembly.get(path, getlink=True)
+        _require(isinstance(link, h5py.SoftLink) and not isinstance(link, h5py.ExternalLink),
+                 f'{prefix}/{path}: expected soft link')
+        _require(link.path == target, f'{prefix}/{path}: expected {target}')
+        _require(isinstance(root.file.get(link.path), h5py.Group),
+                 f'{prefix}/{path}: dangling soft link')
+
+
 def _read(root):
     _version(root)
     _type(root, 'PartitionedDataSetCollection')
+    _assembly(root)
     blocks, data, temperatures = {}, [], []
     for index, name in enumerate(('hex', 'cut')):
         _require(name in root and isinstance(root[name], h5py.Group),

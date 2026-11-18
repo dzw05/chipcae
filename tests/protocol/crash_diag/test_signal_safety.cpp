@@ -3,9 +3,8 @@
 #include <algorithm>
 #include <initializer_list>
 #include <regex>
-#include <spawn.h>
+#include <utility>
 
-extern char** environ;
 using namespace crashdiag_test;
 
 namespace {
@@ -61,22 +60,13 @@ std::string body(const std::string& source, const std::regex& signature) {
     throw std::runtime_error("unterminated signal-path function");
 }
 
-void rg_forbidden(const fs::path& file) {
-    std::string pattern =
+void forbid_tokens(const std::string& code) {
+    constexpr auto pattern =
         R"(\b(new|malloc|calloc|realloc|free|printf|fprintf|sprintf|snprintf|throw|mutex|on_error|flush|fsync)\b|std\s*::\s*(string|filesystem|cout|cerr)\b|\.(lock|unlock)\s*\()";
-    auto name = file.string();
-    std::array<char*, 6> args{const_cast<char*>("rg"),
-                              const_cast<char*>("-n"),
-                              const_cast<char*>("-e"),
-                              pattern.data(),
-                              name.data(),
-                              nullptr};
-    pid_t child = -1;
-    check(::posix_spawnp(&child, "rg", nullptr, nullptr, args.data(), environ) == 0,
-          "could not run required rg signal-safety inspection");
-    const int status = wait_child(child);
-    check(WIFEXITED(status) && WEXITSTATUS(status) == 1,
-          "rg found forbidden signal-path operations or inspection failed");
+    static const std::regex forbidden(pattern);
+    std::smatch match;
+    if (std::regex_search(code, match, forbidden))
+        throw std::runtime_error("forbidden signal-path token: " + match.str());
 }
 
 void check_calls(const std::string& code, std::initializer_list<std::string_view> allowed) {
@@ -95,7 +85,61 @@ void check_calls(const std::string& code, std::initializer_list<std::string_view
 } // namespace
 
 int main() {
-    return run([] {
+    int result = run([] {
+        const auto test_source = read(fs::path(CHIPCAE_TEST_SOURCE_DIR) /
+                                      "tests/protocol/crash_diag/test_signal_safety.cpp");
+        check(test_source.find("posix_"
+                               "spawnp") == std::string::npos,
+              "signal-safety inspection still depends on external process creation");
+        check(test_source.find("rg_"
+                               "forbidden") == std::string::npos,
+              "signal-safety inspection still contains the legacy file checker");
+    });
+
+    const auto expect_forbidden = [](const std::string& code, const std::string& matched) {
+        const auto expected = "forbidden signal-path token: " + matched;
+        const auto missing = "token checker accepted forbidden input: " + code;
+        expect_throw<std::runtime_error>(
+            [&] {
+                try {
+                    forbid_tokens(code);
+                } catch (const std::runtime_error& error) {
+                    // A message mismatch must escape expect_throw's runtime_error catch.
+                    if (std::string(error.what()) != expected)
+                        throw std::logic_error("unexpected token-check message for " + code + ": " +
+                                               error.what());
+                    throw;
+                }
+            },
+            missing.c_str());
+    };
+    const std::pair<const char*, const char*> forbidden[] = {
+        {"malloc(", "malloc"},
+        {"throw", "throw"},
+        {"std::string", "std::string"},
+        {"std::filesystem", "std::filesystem"},
+        {".lock()", ".lock("},
+        {"printf(", "printf"},
+        {"std :: string", "std :: string"},
+        {".unlock ()", ".unlock ("},
+    };
+    for (const auto& [code, matched] : forbidden)
+        result |= run([&] { expect_forbidden(code, matched); });
+    result |= run([&] { expect_forbidden("malloc(", "malloc"); });
+
+    const std::string valid_handler =
+        "if (!handling.test_and_set()) { published.load(); write_signal_line(sig); } "
+        "::_exit(128 + sig);";
+    result |= run([&] {
+        forbid_tokens(valid_handler);
+        for (const auto* allowed :
+             {"::write(fd, bytes, count); ::_exit(1);", "", " \t\r\n", "Malloc("})
+            forbid_tokens(allowed);
+        const auto fixture = code_only("void fixture() { /* malloc */ // malloc\n \"malloc\"; }");
+        forbid_tokens(body(fixture, std::regex(R"(\bvoid\s+fixture\s*\(\s*\)\s*\{)")));
+    });
+
+    result |= run([&] {
         const auto source =
             code_only(read(fs::path(CHIPCAE_SOURCE_DIR) / "core/src/crash_diag.cpp"));
         const auto handler =
@@ -103,13 +147,9 @@ int main() {
         const auto helper =
             body(source,
                  std::regex(R"(\bstatic\s+void\s+write_signal_line\s*\(\s*int\s+sig\s*\)\s*\{)"));
-        TempDir tmp;
-        const auto handler_file = tmp.path / "handler.cpp";
-        const auto helper_file = tmp.path / "helper.cpp";
-        std::ofstream(handler_file) << handler;
-        std::ofstream(helper_file) << helper;
-        rg_forbidden(handler_file);
-        rg_forbidden(helper_file);
+        forbid_tokens(handler);
+        forbid_tokens(handler);
+        forbid_tokens(helper);
         check(handler.find("write_signal_line") != std::string::npos,
               "on_signal must use the inspected signal writer");
         // Metadata is allowed only on the known, always-lock-free atomic objects.
@@ -117,8 +157,7 @@ int main() {
             check_calls(code,
                         {"handling.test_and_set", "published.load", "write_signal_line", "_exit"});
         };
-        check_handler("if (!handling.test_and_set()) { published.load(); write_signal_line(sig); } "
-                      "::_exit(128 + sig);");
+        check_handler(valid_handler);
         for (const auto* forbidden : {"::raise(sig);",
                                       "::kill(1, sig);",
                                       "std::terminate();",
@@ -133,4 +172,5 @@ int main() {
         check(std::regex_search(helper, std::regex(R"(\bwrite\s*\()")),
               "signal writer never calls write");
     });
+    return result;
 }
