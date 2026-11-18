@@ -38,6 +38,41 @@ int main() {
         }
         invalid_input(place({}, FramePlacement{}, b));
         invalid_input(merge_parts({}, {part()}, options()), "base has no layers");
+        for (bool region : {false, true}) {
+            for (const auto& footprint : std::vector<Footprint>{
+                     Footprint{{0, 0, 0, 1}, {}},
+                     Footprint{{0, 0, std::numeric_limits<double>::quiet_NaN(), 1}, {}},
+                     Footprint{{0, 0, 1, std::numeric_limits<double>::infinity()}, {}},
+                     Footprint{{}, {{0, 0}, {1, 0}}},
+                     Footprint{{}, {{0, 0}, {1, 1}, {0, 1}, {1, 0}, {2, 0}}},
+                     Footprint{{},
+                               {{0, 0}, {1, 0}, {0, std::numeric_limits<double>::quiet_NaN()}}}}) {
+                auto bad = b;
+                if (region) {
+                    Inclusion inclusion;
+                    inclusion.name = "bad";
+                    inclusion.footprint = footprint;
+                    bad.layers[0].regions.push_back(inclusion);
+                } else
+                    bad.outline = footprint;
+                invalid_input(merge_parts(bad, {part()}, options()));
+                invalid_input(merge_parts(bad, {}, options()));
+            }
+        }
+        // A polygon is authoritative even when the unused box is degenerate.
+        for (bool clockwise : {false, true}) {
+            auto polygon_base = b;
+            auto polygon = rect(0, 0, .02, .02).outer.pts;
+            if (clockwise)
+                std::reverse(polygon.begin(), polygon.end());
+            polygon_base.outline = Footprint{{}, polygon};
+            Inclusion inclusion;
+            inclusion.name = "valid";
+            inclusion.footprint = Footprint{{}, rect(.01, .01).outer.pts};
+            polygon_base.layers[0].regions.push_back(inclusion);
+            check(bool(merge_parts(polygon_base, {part()}, options())),
+                  "valid polygon outlines and regions remain accepted");
+        }
         auto empty = part();
         empty.slabs.clear();
         invalid_input(merge_parts(b, {empty}, options()));

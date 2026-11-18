@@ -2,10 +2,11 @@
 
 int main() {
     return run([] {
-        // A closer source interface must not steal an endpoint from the base.
+        // Within eps_weld, a closer source interface must not steal an endpoint from the base.
         for (bool above : {false, true}) {
-            const double start = above ? .001009 : .000991;
-            auto neighbor = part("neighbor", above ? .001012 : .000988, .002);
+            const double direction = above ? 1 : -1;
+            const double start = .001 + direction * .9 * options().eps_weld;
+            auto neighbor = part("neighbor", .001 + direction * 1.2 * options().eps_weld, .002);
             auto subject = part("subject", start, .002);
             for (bool reverse : {false, true}) {
                 auto m = merge(base(),

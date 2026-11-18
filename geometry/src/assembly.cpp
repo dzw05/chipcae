@@ -70,6 +70,12 @@ bool simple_ring(const Polygon& p) {
     }
     return true;
 }
+bool valid_footprint(const Footprint& f) {
+    if (!f.polygon.empty())
+        return valid_ring(Ring{f.polygon}) && simple_ring(topology_ring(f.polygon));
+    return std::all_of(f.box.begin(), f.box.end(), [](Real v) { return std::isfinite(v); }) &&
+           f.box[0] < f.box[2] && f.box[1] < f.box[3];
+}
 bool rings_meet(const Polygon& a, const Polygon& b) {
     for (size_t i = 0; i < a.size(); ++i)
         for (size_t j = 0; j < b.size(); ++j)
@@ -481,18 +487,23 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
         !std::isfinite(options.tau_a) || options.eps_weld <= 0 || options.t_min <= 0 ||
         options.tau_a <= 0)
         return invalid("invalid MergeOptions");
+    if (base.layers.empty() && !parts.empty())
+        return invalid("base has no layers");
+    if (!valid_footprint(base.outline))
+        return invalid("invalid base outline");
     MergeResult result{base, {}, 0};
     std::set<std::string> ids, layer_names;
     std::vector<Real> boundaries{0};
     for (const auto& l : base.layers) {
         if (!std::isfinite(l.thickness) || l.thickness <= 0 || !layer_names.insert(l.name).second)
             return invalid("invalid base layer thickness or duplicate name");
+        for (const auto& r : l.regions)
+            if (!valid_footprint(r.footprint))
+                return invalid("invalid base region footprint");
         boundaries.push_back(boundaries.back() + l.thickness);
     }
     if (parts.empty())
         return result;
-    if (base.layers.empty())
-        return invalid("base has no layers");
     std::set<std::string> base_names, reserved;
     for (const auto& l : base.layers) {
         base_names.insert(l.name);
@@ -559,21 +570,51 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
                 candidates.insert(source.lo);
                 candidates.insert(source.hi);
             }
+    const std::set<Real> base_interfaces(boundaries.begin(), boundaries.end());
+    std::set<Real> weld_interfaces = base_interfaces;
     for (Real z : candidates) {
-        Real target = nearest(z, interfaces);
-        if (std::abs(z - target) >= options.t_min)
+        if (std::abs(z - nearest(z, weld_interfaces)) >= options.eps_weld)
+            weld_interfaces.insert(z);
+        if (std::abs(z - nearest(z, interfaces)) >= options.t_min)
             interfaces.insert(z);
     }
-    const std::set<Real> base_interfaces(boundaries.begin(), boundaries.end());
+    auto weld_aligned = [&](Real z) {
+        Real target = nearest(z, base_interfaces);
+        if (std::abs(z - target) < options.eps_weld)
+            return target;
+        target = nearest(z, weld_interfaces);
+        return std::abs(z - target) < options.eps_weld ? target : z;
+    };
+    // t_min applies only to intervals inside supported sources. An external
+    // gap between eps_weld and t_min must remain a gap, not become a weld.
+    std::set<Real> original_interfaces = candidates;
+    original_interfaces.insert(boundaries.begin(), boundaries.end());
+    std::set<Real> thin_endpoints;
+    for (const auto& slabs : sources)
+        for (const auto& source : slabs)
+            if (!source.regions.empty()) {
+                Real previous = source.lo;
+                for (Real z : original_interfaces) {
+                    if (z <= source.lo || z > source.hi)
+                        continue;
+                    if (z - previous < options.t_min) {
+                        thin_endpoints.insert(previous);
+                        thin_endpoints.insert(z);
+                    }
+                    previous = z;
+                }
+            }
     auto aligned = [&](Real z) {
+        if (!thin_endpoints.count(z))
+            return weld_aligned(z);
         Real target = nearest(z, base_interfaces);
         if (std::abs(z - target) < options.t_min)
             return target;
         target = nearest(z, interfaces);
-        return std::abs(z - target) < options.t_min ? target : z;
+        return std::abs(z - target) < options.t_min ? target : weld_aligned(z);
     };
-    // Count every surviving snap under the same t_min rule used by aligned().
-    // Shared exact endpoints also weld; solitary new endpoints do not.
+    // Count weld coincidence independently of thin-layer alignment. Shared
+    // exact endpoints also weld; solitary new endpoints do not.
     std::map<Real, size_t> endpoint_counts;
     for (Real z : boundaries)
         ++endpoint_counts[z];
@@ -585,15 +626,13 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
             }
     std::set<Real> snapped_interfaces;
     for (Real z : candidates) {
-        Real target = aligned(z);
+        Real target = weld_aligned(z);
         if (endpoint_counts[z] > 0 && (target != z || endpoint_counts[z] > 1))
             snapped_interfaces.insert(target);
     }
     result.welded_interfaces = static_cast<std::int64_t>(snapped_interfaces.size());
     // Unsupported slabs contribute neither alignment candidates nor provenance cuts.
     // Retain supported pre-alignment endpoints for stable thin interval numbering.
-    std::set<Real> original_interfaces = candidates;
-    original_interfaces.insert(boundaries.begin(), boundaries.end());
     for (size_t p_index = 0; p_index < parts.size(); ++p_index) {
         const auto& p = parts[p_index];
         size_t thin_index = 0;

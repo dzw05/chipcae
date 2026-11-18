@@ -19,11 +19,21 @@ int main() {
         check(stacked.welded_interfaces == 2 && stacked.defects.empty(),
               "exact part coincidence and base coincidence each count once");
         auto nonweld = merge(base(), {part("aligned", .001 + 2 * options().eps_weld, .002)});
-        check(nonweld.welded_interfaces == 1 && nonweld.defects.empty(),
-              "alignment within t_min counts as a weld");
+        check(nonweld.welded_interfaces == 0 && nonweld.defects.empty(),
+              "gap beyond eps_weld is not a weld");
         near(nonweld.stack.layers.front().thickness, .001);
-        check(nonweld.stack.layers.back().regions.size() == 1, "snapped part retains material");
-        near(nonweld.stack.layers.back().thickness, .001);
+        check(nonweld.stack.layers.back().regions.size() == 1, "separated part retains material");
+        near(nonweld.stack.layers.back().thickness, .001 - 2 * options().eps_weld);
+        check(nonweld.stack.layers.size() == 3 && nonweld.stack.layers[1].regions.empty(),
+              "gap beyond eps_weld retains a void layer");
+        auto thin = merge(base(), {part("thin", .000995, .002)});
+        check(thin.welded_interfaces == 0 && thin.defects.size() == 1 &&
+                  thin.defects[0].tier == Tier::B &&
+                  thin.defects[0].reason == DefectReason::THIN_LAYER_MERGED &&
+                  thin.defects[0].defect_id == "thin/thin#0",
+              "t_min alignment reports thin material without counting a weld");
+        near(thin.stack.layers.front().thickness, .001);
+        near(thin.stack.layers.back().thickness, .001);
         auto m = merge(base(), {part("lid", .001 + options().eps_weld / 2, .002)});
         near(m.stack.layers.front().thickness, .001);
         near(m.stack.layers.back().thickness, .001);
