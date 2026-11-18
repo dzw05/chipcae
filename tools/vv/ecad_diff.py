@@ -20,7 +20,6 @@ Python symbols and other diagnostic prose have no compatibility guarantee.
 Output paths that are symlinks are rejected with INPUT_INVALID.
 """
 import argparse
-from decimal import Decimal
 import hashlib
 import json
 import math
@@ -31,6 +30,14 @@ import tempfile
 
 SCHEMA = 'chipcae.vv.ecad_diff/0.1'
 DEFAULT_DELTA_M = 1e-9
+
+
+class _ExactDecimal(str):
+    """Exact terminating numeric token, constructed only from integer ratios.
+
+    A distinct type lets the report writer emit a JSON number while ordinary
+    strings remain quoted. No decimal arithmetic or context is needed.
+    """
 
 
 class EcadDiffError(Exception):
@@ -372,7 +379,7 @@ def _diff(odb, ipc, delta):
             # Binary denominators are powers of two, hence terminate in decimal.
             places = denominator.bit_length() - 1
             fraction = str(remainder * 5 ** places).zfill(places).rstrip('0')
-            return Decimal(f'{whole}.{fraction}')
+            return _ExactDecimal(f'{whole}.{fraction}')
 
     exact_difference = abs(total_a - total_b)
     delta_n, delta_d = delta.as_integer_ratio()
@@ -397,9 +404,7 @@ def _diff(odb, ipc, delta):
 
 def _report_json(value, level=0):
     """Match json.dumps(indent=2), with exact finite decimal numeric tokens."""
-    if isinstance(value, Decimal):
-        if not value.is_finite():
-            raise ValueError('nonfinite report number')
+    if isinstance(value, _ExactDecimal):
         return str(value)
     if isinstance(value, (dict, list)) and value:
         pad = '  ' * (level + 1)

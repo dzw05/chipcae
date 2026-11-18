@@ -1,4 +1,5 @@
 """Regressions for empty copper and transactional report failures."""
+import ast
 import hashlib
 from decimal import Decimal
 from fractions import Fraction
@@ -14,6 +15,14 @@ from test_identical import board, save, diff_stacks, entry, number, polyset, wri
 
 
 def main():
+    # Decimal arithmetic must not become a production dependency again.
+    source = Path(diff_stacks.__code__.co_filename).read_text()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            assert all(alias.name != 'decimal' for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            assert node.module != 'decimal'
+
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         # A copper sidecar still requires a valid reference digest.
