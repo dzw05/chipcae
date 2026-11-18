@@ -5,6 +5,13 @@ Golden source: `1607ad5fde6641a92fb7da7a0a66f456e4ec4adf`, the 11/17
 exactly this revision when the Release binaries were built; only tests and their
 registration had been added, and no production sources were changed.
 
+Following the 2026-11-19 03:55 supplemental ruling for #139, material id
+strings in the ten scoped `stack.json` goldens were migrated by exact text
+replacement: `"mat.fr4"` to `"fr4_eq"` and `"mat.cu"` to `"cu"`. All other
+bytes remain the output of baseline `1607ad5`, including the polyset files and
+their SHA-256 references. Future regeneration must also use the updated
+`material_map.json` with `FR4` mapped to `fr4_eq` and `copper` mapped to `cu`.
+
 Generation commands, run from the repository root (replace the build-directory
 placeholders with local paths):
 

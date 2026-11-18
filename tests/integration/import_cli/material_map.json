@@ -1,4 +1,4 @@
 {
-  "FR4": "mat.fr4",
-  "copper": "mat.cu"
+  "FR4": "fr4_eq",
+  "copper": "cu"
 }
