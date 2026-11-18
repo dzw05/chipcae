@@ -1,4 +1,8 @@
-"""Public synthetic four-layer IPC → uncut CLI chain, serial/MPI, analytic T."""
+"""Manual blocked IPC → uncut CLI diagnostic; CTest runs AcceptanceRecords only.
+
+See README.md for the fixture/product contracts required before registering the
+full chain as acceptance coverage. All strict comparisons remain active here.
+"""
 
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
