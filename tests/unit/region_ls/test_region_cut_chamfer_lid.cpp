@@ -138,7 +138,7 @@ int main() {
                 std::transform(name.begin(), name.end(), lower.begin(), [](unsigned char c) {
                     return static_cast<char>(std::tolower(c));
                 });
-                require(lower == name || (lower != "lid" && lower != "ring"),
+                require(name == "lid" || name == "ring" || (lower != "lid" && lower != "ring"),
                         "lid region: ring and lid names have exact capitalization");
             }
             const auto pending = sorted(original.pending_cut);
@@ -190,6 +190,17 @@ int main() {
                             std::abs(hy[0] - 1) <= 1e-12 && std::abs(hy[1] - 1) <= 1e-12,
                         "lid region: B has four unit corner intervals");
 
+            // A has one interval per chamfer leg; B has two unit intervals per leg.
+            const std::size_t corner_intervals = coarse ? 1 : 2;
+            require(x.size() > corner_intervals && y.size() > corner_intervals,
+                    "lid region: axes span each chamfer corner");
+            const std::array corner_x{std::array{x.front(), x[corner_intervals]},
+                                      std::array{x[x.size() - 1 - corner_intervals], x.back()}};
+            const std::array corner_y{std::array{y.front(), y[corner_intervals]},
+                                      std::array{y[y.size() - 1 - corner_intervals], y.back()}};
+            // Polygon edges at southwest, northwest, southeast and northeast corners.
+            constexpr std::array<std::size_t, 4> corner_edges{7, 5, 1, 3};
+
             std::set<std::pair<Real, Real>> lid_columns;
             std::size_t lid_cells = 0;
             std::vector<Local> expected_cuts;
@@ -201,14 +212,23 @@ int main() {
                 const auto* hi = vertex(original, e, 6);
                 lid_columns.emplace(lo[0], lo[1]);
                 bool crossed = false;
-                for (const auto xc : {0., 56.})
-                    for (const auto yc : {0., 44.}) {
-                        // Each diagonal lies at Manhattan distance 2 from an outline corner.
-                        const auto near = std::min(std::abs(lo[0] - xc), std::abs(hi[0] - xc)) +
-                                          std::min(std::abs(lo[1] - yc), std::abs(hi[1] - yc));
-                        const auto far = std::max(std::abs(lo[0] - xc), std::abs(hi[0] - xc)) +
-                                         std::max(std::abs(lo[1] - yc), std::abs(hi[1] - yc));
-                        crossed = crossed || (near < 2 && 2 < far);
+                for (std::size_t i = 0; i < corner_x.size(); ++i)
+                    for (std::size_t j = 0; j < corner_y.size(); ++j) {
+                        if (lo[0] < corner_x[i][0] || hi[0] > corner_x[i][1] ||
+                            lo[1] < corner_y[j][0] || hi[1] > corner_y[j][1])
+                            continue;
+                        const auto plane = diagonal(corner_edges[2 * i + j]);
+                        Real minimum = 0, maximum = 0;
+                        for (std::size_t node = 0; node < 8; ++node) {
+                            const auto* p = vertex(original, e, node);
+                            const auto phi = plane.n[0] * p[0] + plane.n[1] * p[1] - plane.d;
+                            if (node == 0)
+                                minimum = maximum = phi;
+                            minimum = std::min(minimum, phi);
+                            maximum = std::max(maximum, phi);
+                        }
+                        crossed =
+                            crossed || (minimum < -options.snap_phi && maximum > options.snap_phi);
                     }
                 if (crossed)
                     expected_cuts.push_back(static_cast<Local>(e));
@@ -240,6 +260,8 @@ int main() {
                 require(!route.cut_elem.empty(), "lid region: cut parents exist");
                 require(route.cut_elem.size() == (coarse ? 4 : 8) * nz_lid,
                         "lid region: cut parent count matches corner crossings");
+                require(route.sub_volfrac.size() == (coarse ? 4 : 8) * nz_lid,
+                        "lid region: total cut subcell count matches corner crossings");
                 require(route.cut_elem_gid.size() == route.cut_elem.size() &&
                             mesh.elem_gid.size() == mesh.attribute.size(),
                         "lid region: parent GID arrays have matching sizes");
@@ -259,8 +281,8 @@ int main() {
                                 body_of(mesh, mesh.attribute[e]) == lid_id,
                             "lid region: cut parent belongs to lid and was pending");
                     const auto begin = route.sub_off[i], end = route.sub_off[i + 1];
-                    require(coarse ? end - begin == 1 : end > begin,
-                            "lid region: each cut parent has the expected subcells");
+                    require(end - begin == 1,
+                            "lid region: each cut parent has one retained solid subcell");
                     const auto* lo = vertex(mesh, e, 0);
                     const auto expected = coarse ? 1 - 2 / (hx[lo[0] > 28] * hy[lo[1] > 22]) : .5;
                     const auto jac = jacobian(mesh, e);
@@ -327,33 +349,37 @@ int main() {
             check_remapping(compact, compact_cut, cut);
             check_remapping(manual_compact, manual_compact_cut, manual_cut);
 
-            if (!coarse) {
+            {
                 const std::set<Local> cuts(cut.cut_elem.begin(), cut.cut_elem.end());
                 const std::set<Local> voids(cut.void_elem.begin(), cut.void_elem.end());
-                for (const auto x0 : {0., 55.})
-                    for (const auto y0 : {0., 43.}) {
+                const std::array substrate_x{std::array{x.front(), x[1]},
+                                             std::array{x[x.size() - 2], x.back()}};
+                const std::array substrate_y{std::array{y.front(), y[1]},
+                                             std::array{y[y.size() - 2], y.back()}};
+                for (const auto& xi : substrate_x)
+                    for (const auto& yi : substrate_y) {
                         bool found_substrate = false;
                         for (std::size_t e = 0; e < original.attribute.size(); ++e) {
                             const auto* lo = vertex(original, e, 0);
                             const auto* hi = vertex(original, e, 6);
-                            if (std::abs(lo[0] - x0) > 1e-12 ||
-                                std::abs(hi[0] - (x0 + 1)) > 1e-12 ||
-                                std::abs(lo[1] - y0) > 1e-12 || std::abs(hi[1] - (y0 + 1)) > 1e-12)
+                            if (std::abs(lo[0] - xi[0]) > 1e-12 ||
+                                std::abs(hi[0] - xi[1]) > 1e-12 ||
+                                std::abs(lo[1] - yi[0]) > 1e-12 || std::abs(hi[1] - yi[1]) > 1e-12)
                                 continue;
                             const auto body = body_of(original, original.attribute[e]);
-                            require(body != lid_id && body != ring_id,
+                            require(coarse || (body != lid_id && body != ring_id),
                                     "lid region: B corner columns contain no lid or ring cells");
                             if (body != substrate_id)
                                 continue;
                             require(std::abs(lo[2]) <= 1e-12 && std::abs(hi[2] - 1) <= 1e-12,
-                                    "lid region: B substrate corner spans z zero to one");
+                                    "lid region: substrate corner spans z zero to one");
                             found_substrate = true;
                             const auto local = static_cast<Local>(e);
                             require(!std::binary_search(pending.begin(), pending.end(), local) &&
                                         !cuts.contains(local) && !voids.contains(local),
-                                    "lid region: B substrate corner remains a full uncut cell");
+                                    "lid region: substrate corner remains a full uncut cell");
                         }
-                        require(found_substrate, "lid region: B substrate corner box exists");
+                        require(found_substrate, "lid region: substrate corner box exists");
                     }
             }
 
