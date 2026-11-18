@@ -114,8 +114,14 @@ if(_solve_backend AND TARGET chipcae-solve AND MFEM_USE_PETSC)
     add_test(NAME solve_column_gmg_unsupported COMMAND chipcae_test_column_gmg unsupported)
     add_test(NAME solve_column_gmg_fcbga COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/test_column_gmg.py
-        $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE} ${PROJECT_SOURCE_DIR})
+        $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE} ${PROJECT_SOURCE_DIR}
+        --coverage reference)
+    add_test(NAME solve_column_gmg_fcbga_scaling COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_column_gmg.py
+        $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE} ${PROJECT_SOURCE_DIR}
+        --coverage scaling)
     set_tests_properties(solve_column_gmg_prolongation solve_column_gmg_unsupported
         PROPERTIES TIMEOUT 120 LABELS "gmg;numerical")
-    set_tests_properties(solve_column_gmg_fcbga PROPERTIES TIMEOUT 900 LABELS "gmg;numerical")
+    set_tests_properties(solve_column_gmg_fcbga solve_column_gmg_fcbga_scaling
+        PROPERTIES TIMEOUT 900 LABELS "gmg;numerical")
 endif()

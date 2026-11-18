@@ -1,5 +1,6 @@
 """Column GMG acceptance through CLI events and independent VTKHDF readback."""
 
+import argparse
 import json
 import math
 from pathlib import Path
@@ -7,7 +8,6 @@ import re
 import shutil
 import struct
 import subprocess
-import sys
 import tempfile
 import time
 import zlib
@@ -156,33 +156,49 @@ def compare(reference, gmg):
 
 
 def main():
-    exe, mpiexec, source = sys.argv[1:]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('exe')
+    parser.add_argument('mpiexec')
+    parser.add_argument('source', type=Path)
+    parser.add_argument('--coverage', choices=('reference', 'scaling'), default='reference')
+    args = parser.parse_args()
+    exe, mpiexec, source = args.exe, args.mpiexec, args.source
+    # Feature-aligned subdivision makes the original 8/16 requests 34x34/68x68.
+    # Keep those GMG grids, but bound LU (including the replicated np=2 fallback)
+    # with 2/4 requests. Both pairs retain two/three levels and the full FCBGA stack.
+    sizes = (8, 16) if args.coverage == 'scaling' else (2, 4)
     with tempfile.TemporaryDirectory(prefix='chipcae-column-gmg-') as tmp:
         root = Path(tmp)
         iterations = []
         references = []
         gmgs = []
-        for size, levels, label in ((8, 2, 'coarse'), (16, 3, 'fine')):
-            gmg = run(exe, mpiexec, Path(source), root, label + '-gmg',
+        for size, levels, label in zip(sizes, (2, 3), ('coarse', 'fine')):
+            label = args.coverage + '-' + label
+            gmg = run(exe, mpiexec, source, root, label + '-gmg',
                       size, size, levels, 'column_gmg')
             iterations.append(gmg_stats(gmg))
-            direct = run(exe, mpiexec, Path(source), root, label + '-direct',
-                         size, size, levels, 'direct')
-            lu_stats(direct)
-            compare(direct, gmg)
-            references.append(direct)
             gmgs.append(gmg)
+            if args.coverage == 'reference':
+                direct = run(exe, mpiexec, source, root, label + '-direct',
+                             size, size, levels, 'direct')
+                lu_stats(direct)
+                compare(direct, gmg)
+                references.append(direct)
         assert gmgs[1]['levels'] == gmgs[0]['levels'] + 1, 'fine hierarchy must add one level'
+        assert gmgs[1]['finest'] == tuple(2 * n for n in gmgs[0]['finest']), \
+            'fine grid must double both axes'
         assert iterations[1] <= math.ceil(1.3 * iterations[0]), ('iteration growth', iterations)
-        fallback = run(exe, mpiexec, Path(source), root, 'fine-gmg-np2',
-                       16, 16, 3, 'column_gmg', ranks=2)
+        if args.coverage == 'scaling':
+            return
+        fallback = run(exe, mpiexec, source, root, 'reference-fine-gmg-np2',
+                       sizes[1], sizes[1], 3, 'column_gmg', ranks=2)
         expected = b'not yet available (NOT_IMPLEMENTED: column_gmg unsupported: np=2)'
         assert any(expected in log for log in fallback['logs']), fallback['logs']
         assert not any(b'U column_gmg L=' in log for log in fallback['logs']), fallback['logs']
         lu_stats(fallback)
         assert fallback['hash'] == references[1]['hash'], 'np=2 must preserve the mesh'
         pv_error = abs(fallback['pv'] - references[1]['pv']) / abs(references[1]['pv'])
-        print(f'实测 fine-gmg-np2: relative_PV={pv_error}', flush=True)
+        print(f"实测 {fallback['name']}: relative_PV={pv_error}", flush=True)
         assert pv_error <= 1e-8, ('np=2 fallback relative PV', pv_error)
 
 
