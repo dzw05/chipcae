@@ -241,3 +241,20 @@ endif()
 target_sources(chipcae_desktop_ui PRIVATE jobs/SubmitDialog.cpp provenance/Provenance.cpp)
 target_include_directories(chipcae_desktop_ui PUBLIC provenance)
 target_link_libraries(chipcae_desktop_ui PUBLIC chipcae_desktop_config chipcae_desktop_preview chipcae_local_jobs)
+# D16 assembly helpers and acceptance tests.
+target_sources(chipcae_desktop_ui PRIVATE assembly/AssemblyImport.cpp assembly/AssemblyImport.hpp)
+target_include_directories(chipcae_desktop_ui PUBLIC assembly)
+if(CHIPCAE_BUILD_TESTS)
+    target_compile_definitions(desktop_tree PRIVATE
+        ASSEMBLY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/assembly")
+    add_executable(desktop_assembly_import tests/assembly_import_test.cpp)
+    target_link_libraries(desktop_assembly_import PRIVATE chipcae_desktop_ui)
+    target_compile_definitions(desktop_assembly_import PRIVATE
+        ASSEMBLY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/assembly"
+        CASE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../schema/examples"
+        MOCK_ASSEMBLY_SCRIPT="${CMAKE_CURRENT_SOURCE_DIR}/tools/mock_assembly_import.py"
+        PYTHON_EXECUTABLE="${CHIPCAE_IMPORT_PYTHON}")
+    add_test(NAME desktop_assembly_import COMMAND desktop_assembly_import)
+    set_tests_properties(desktop_assembly_import PROPERTIES TIMEOUT 30
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()

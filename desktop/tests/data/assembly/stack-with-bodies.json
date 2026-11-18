@@ -1,0 +1,139 @@
+{
+  "id": "fcbga_demo",
+  "unit": "m",
+  "outline": {
+    "box": [
+      0,
+      0,
+      0.02,
+      0.02
+    ]
+  },
+  "symmetry": "none",
+  "package_type": "FCBGA",
+  "layers": [
+    {
+      "name": "assembly0",
+      "thickness": 0.0005,
+      "kind": "Explicit",
+      "material": "underfill",
+      "n_elem_min": 2,
+      "grading": 1,
+      "regions": [
+        {
+          "name": "r0_0",
+          "material": "silicon",
+          "footprint": {
+            "box": [
+              0.001,
+              0.005,
+              0.002,
+              0.015
+            ]
+          },
+          "body": "lid"
+        },
+        {
+          "name": "r0_1",
+          "material": "silicon",
+          "footprint": {
+            "box": [
+              0.003,
+              0.005,
+              0.004,
+              0.015
+            ]
+          },
+          "body": "lid"
+        },
+        {
+          "name": "r0_2",
+          "material": "silicon",
+          "footprint": {
+            "box": [
+              0.005,
+              0.005,
+              0.006,
+              0.015
+            ]
+          },
+          "body": "lid.bond"
+        },
+        {
+          "name": "r0_3",
+          "material": "silicon",
+          "footprint": {
+            "box": [
+              0.007,
+              0.005,
+              0.008,
+              0.015
+            ]
+          },
+          "body": "cap"
+        },
+        {
+          "name": "r0_4",
+          "material": "silicon",
+          "footprint": {
+            "box": [
+              0.009,
+              0.005,
+              0.01,
+              0.015
+            ]
+          },
+          "body": "Lid"
+        },
+        {
+          "name": "r0_5",
+          "material": "silicon",
+          "footprint": {
+            "box": [
+              0.011,
+              0.005,
+              0.012,
+              0.015
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "assembly1",
+      "thickness": 0.0005,
+      "kind": "Explicit",
+      "material": "underfill",
+      "n_elem_min": 2,
+      "grading": 1,
+      "regions": [
+        {
+          "name": "r1_0",
+          "material": "silicon",
+          "footprint": {
+            "box": [
+              0.001,
+              0.005,
+              0.002,
+              0.015
+            ]
+          },
+          "body": "lid"
+        },
+        {
+          "name": "r1_1",
+          "material": "silicon",
+          "footprint": {
+            "box": [
+              0.003,
+              0.005,
+              0.004,
+              0.015
+            ]
+          },
+          "body": "cap"
+        }
+      ]
+    }
+  ]
+}

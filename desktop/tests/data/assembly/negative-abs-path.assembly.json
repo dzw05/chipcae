@@ -1,0 +1,43 @@
+{
+  "schema": "chipcae.assembly/0.1",
+  "board": {
+    "path": "board.xml",
+    "format": "ipc2581",
+    "material_map": "map.json"
+  },
+  "materials": "lib.materials.json",
+  "parts": [
+    {
+      "id": "lid",
+      "step": "/tmp/lid.step",
+      "material": "silicon",
+      "material_approx": true,
+      "placement": {
+        "attach": "layer:substrate@top",
+        "xy": [
+          0,
+          0
+        ],
+        "rot_z": 0,
+        "bond": {
+          "material": "underfill",
+          "thickness": 5e-05
+        }
+      }
+    },
+    {
+      "id": "cap",
+      "step": "cap.step",
+      "material": "silicon",
+      "placement": {
+        "attach": "layer:substrate@top",
+        "gap": 0,
+        "xy": [
+          0,
+          0
+        ],
+        "rot_z": 0
+      }
+    }
+  ]
+}

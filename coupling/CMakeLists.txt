@@ -20,3 +20,4 @@ target_sources(chipcae_coupling PRIVATE src/step_loop.cpp)
 
 target_sources(chipcae_coupling PRIVATE src/control_channel.cpp)
 target_link_libraries(chipcae_coupling PUBLIC chipcae::io)
+target_sources(chipcae_coupling PRIVATE src/run_control.cpp)
