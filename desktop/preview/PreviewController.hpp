@@ -69,6 +69,7 @@ public:
     ~PreviewView() override;
     using QWidget::show;
     bool show(const PreviewController& controller);
+    // An empty blocks list requests a valid empty display even when mesh has cells.
     bool show(vtkDataObject* mesh,
               const QStringList& layerNames,
               const QStringList& materialNames,
