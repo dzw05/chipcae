@@ -286,16 +286,36 @@ int main(int argc, char** argv) {
                         "ArchiveReader rejection must propagate verbatim");
             }
         } else if (test == "ipc_zip_bad_xml") {
-            for (const auto& data :
-                 {std::string(), bytes(fixture).substr(0, bytes(fixture).size() / 2)}) {
-                write(xml, data);
-                zip(archive, {{"broken.xml", xml}});
-                auto a = ecad::read_ipc2581(xml), b = ecad::read_ipc2581_zip(archive);
-                require(!a && !b, "both malformed XML imports must fail");
-                require(a.error.substr(0, a.error.find(':')) ==
-                            b.error.substr(0, b.error.find(':')),
-                        "XML error categories differ");
+            for (bool deflate : {false, true}) {
+                for (const auto& data : {std::string(),
+                                         bytes(fixture).substr(0, bytes(fixture).size() / 2),
+                                         std::string("<IPC-2581>\n</wrong>\n"),
+                                         std::string("<IPC-2581>\n</wrong>")}) {
+                    write(xml, data);
+                    zip(archive, {{"broken.xml", xml}}, deflate);
+                    auto a = ecad::read_ipc2581(xml), b = ecad::read_ipc2581_zip(archive);
+                    require(!a && !b, "both malformed XML imports must fail");
+                    require(a.error == b.error,
+                            "XML diagnostics differ: direct=" + a.error + " ZIP=" + b.error);
+                }
             }
+            // Valid XML with an incorrect CRC must retain the archive diagnostic,
+            // even though finalizing the partially delivered XML can also fail.
+            zip(archive, {{"board.xml", fixture}});
+            auto data = bytes(archive);
+            auto central = data.find(std::string("PK\1\2", 4));
+            require(central != std::string::npos, "ZIP central directory");
+            data[14] ^= 1;
+            data[central + 16] ^= 1;
+            write(archive, data);
+            ecad::detail::ArchiveReader reader(archive);
+            std::string expected;
+            require(!reader.for_each_line(
+                        "board.xml", [](std::string_view) { return true; }, expected),
+                    "incorrect CRC must fail the archive read");
+            require(!expected.empty(), "CRC failure must provide an archive diagnostic");
+            require(ecad::read_ipc2581_zip(archive).error == expected,
+                    "archive read error must propagate verbatim");
         } else if (test == "ipc_zip_unsupported") {
             zip(archive, {{"unsupported.xml", fixture}});
             auto data = bytes(archive);

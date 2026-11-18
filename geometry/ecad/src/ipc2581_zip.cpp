@@ -60,18 +60,22 @@ ImportResult read_ipc2581_zip(const std::filesystem::path& file) {
     }
     detail::Ipc2581StreamParser parser;
     bool first = true;
+    bool feed_failed = false;
     std::string error;
     const bool streamed = archive.for_each_line(
         name,
         [&](std::string_view line) {
-            if (!first && !parser.feed("\n"))
+            if (!first && !parser.feed("\n")) {
+                feed_failed = true;
                 return false;
+            }
             first = false;
-            return parser.feed(line);
+            feed_failed = !parser.feed(line);
+            return !feed_failed;
         },
         error);
     auto result = parser.finish();
-    if (!streamed && !error.empty())
+    if (!feed_failed && !streamed && !error.empty())
         return rejected(std::move(error));
     return result;
 }
