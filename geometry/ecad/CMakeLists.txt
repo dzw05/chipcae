@@ -31,3 +31,6 @@ endif()
 target_link_libraries(chipcae_geometry_ecad PRIVATE ${_chipcae_miniz_target})
 unset(_chipcae_miniz_target)
 unset(_chipcae_miniz_type)
+
+# Test-first API placeholder.
+target_sources(chipcae_geometry_ecad PRIVATE src/ipc2581_zip.cpp)
