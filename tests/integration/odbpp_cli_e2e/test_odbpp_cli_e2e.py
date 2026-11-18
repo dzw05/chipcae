@@ -308,12 +308,25 @@ def check_run(run_dir, mesh_stack, materials, fractions, preview_cells):
         print(f'实测 {run_dir.name}: cells={cells}, cut_cells={cut_count}, '
               f'T_max_abs_error_K={error:.17g}, QoI={summary}', flush=True)
         assert math.isfinite(error) and error <= 1e-8, f'T_max_abs_error_K={error:.17g} > 1e-8'
+        # The manifest samples Q2 nodes; result_summary fits the exported mesh
+        # vertices. Validate each quantity against its own sampling definition.
+        points = hexes['Points'][:]
+        _, unique = np.unique(points, axis=0, return_index=True)
+        points = points[unique]
+        displacement = hexes['PointData/U'][:][unique]
+        top = np.abs(points[:, 2] - float(np.max(z))) <= 1e-12
+        plane = np.column_stack((np.ones(np.count_nonzero(top)), points[top, :2]))
+        w = displacement[top, 2]
+        coefficients = np.linalg.lstsq(plane, w, rcond=None)[0]
+        readback_warpage = float(np.ptp(w - plane @ coefficients))
     run_step(f'{run_dir.name}/result_summary',
              [sys.executable, SOURCE / 'tools/vv/result_summary.py', run_dir,
               '-o', run_dir / 'summary.json'], run_dir.parent)
     nonempty(run_dir / 'summary.json')
-    relative(load(run_dir / 'summary.json')['warpage']['w_bfp_m'],
-             summary['warpage_pv'], 1e-12, 'readback warpage')
+    warpage = load(run_dir / 'summary.json')['warpage']
+    relative(warpage['manifest_warpage_pv_m'], summary['warpage_pv'], 1e-12, 'manifest warpage')
+    assert math.isfinite(readback_warpage) and readback_warpage > 0, readback_warpage
+    relative(warpage['w_bfp_m'], readback_warpage, 1e-12, 'readback warpage')
     return dict(T_max_abs_error_K=error, **{name: summary[name]
                                          for name in ('warpage_pv', 'U_mag_max', 'T_max')})
 
@@ -411,7 +424,9 @@ def main():
         case = dict(
             schema='chipcae.case/1.0', stack=dict(ref='odb/mesh.stack.json'),
             materials=dict(ref='materials.json'),
-            mesh=dict(type='aligned_cartesian_cut', nx=4, ny=4, levels=0, max_ratio=100),
+            # Honor mesh.stack.json's explicit per-layer counts in both CLIs.
+            mesh=dict(type='aligned_cartesian_cut', nx=4, ny=4, levels=0, max_ratio=100,
+                      min_elems_per_layer=1),
             physics=[dict(id='thermal', solver='fem.conduction', mode='steady'),
                      dict(id='mech', solver='fem.solid', temp_from='thermal', T_ref=298.15)],
             loads=[dict(type='fixed_temperature', target='face:zmin', T=298.15),

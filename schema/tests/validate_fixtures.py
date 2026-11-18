@@ -275,6 +275,20 @@ for material_id, baseline in PINNED_MATERIALS.items():
 
 assert library.get("x-note") == PINNED_LIBRARY_NOTE, "fcbga material library x-note changed"
 library_validator.validate(library)
+
+# ECAD mappings use dotted material IDs; validate through the library reference
+# as the solver does, while retaining the existing character restrictions.
+for material_id in ("mat.cu", "mat.fr4_eq", "cu", "fr4_eq", "cu-1"):
+    card = dict(materials_by_id["copper"], id=material_id)
+    library_validator.validate({"schema": "chipcae.material_library/1", "materials": [card]})
+for material_id in ("", "Mat.cu", "mat/cu", "mat\\cu", "mat cu", "mat:cu"):
+    card = dict(materials_by_id["copper"], id=material_id)
+    errors = list(library_validator.iter_errors(
+        {"schema": "chipcae.material_library/1", "materials": [card]}))
+    assert any(list(error.absolute_path) == ["materials", 0, "id"] for error in errors), (
+        f"invalid material ID accepted: {material_id!r}"
+    )
+
 stack = json.loads((root / "schema/examples/fcbga_demo.stack.json").read_text(encoding="utf-8"))
 known_material_ids = set(material_ids)
 for layer in stack.get("layers", []):

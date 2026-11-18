@@ -45,7 +45,9 @@ must agree to 1e-6 relative. No absolute slack is added to relative comparisons.
 
 The original imported and averaged stacks are preserved. Only `mesh.stack.json`
 sets `n_elem_min=ceil(thickness/min_thickness)`. Preview and solves use nx=ny=4,
-levels=0, max_ratio=100. The same case, stack and material bytes feed both solves;
+levels=0, max_ratio=100. The case explicitly sets `min_elems_per_layer=1` so
+the solver preserves these counts instead of applying its default minimum of two.
+The same case, stack and material bytes feed both solves;
 profiles differ only in ranks. The first available mpiexec, then mpirun, is used.
 A configured executable or launcher failure fails the test. Exit 77 is reserved
 for absent executable environment variables or absent numpy/h5py.
@@ -60,7 +62,7 @@ has no dependence on copper fraction; the geometry assertions remain independent
 
 ## Validation and measurements
 
-Measured (实测) on 2026-11-19, baseline commit `b703d573f332b7716487deceea0cbe603383ba0f`,
+Measured (实测) on 2026-11-19, review fix based on commit `236e4400b47fcc533f5bfe89106009dde3f840c0`,
 Release, ECAD + JSONcons + MPI + parallel HDF5 + PETSc-enabled MFEM. The three
 CLI targets built successfully. Empty dielectric features were accepted; no
 fallback features were necessary.
@@ -92,11 +94,36 @@ no unexpected names and exactly the four copper names as known deviations.
 The negative thickness comparison reports only `dielectric_2`; the swapped
 fraction comparison reports only `in1.cu`, `in2.cu`.
 
-The mesh counts are `[1,7,1,36,1,7,1]` in layer order. Preview measures 864 cells.
-`mpiexec` is available (first-choice launcher). Serial solve is blocked before
-numerical execution, so ranks=2, temperatures, warpage, result_summary and the
-result.json gate have **not** been measured. Acceptance assertions for those
-stages are present and remain enabled.
+The mesh counts are `[1,7,1,36,1,7,1]` in layer order. Preview and both
+solves measure 864 regular cells and zero cut cells. `mpiexec` is available
+(first-choice launcher). Both ranks=1 and ranks=2 complete solve, VTKHDF checks,
+`result_summary.py`, and the per-run `result.json` 0.2 `check_file` gate.
+
+| Quantity (实测) | ranks=1 | ranks=2 |
+|---|---:|---:|
+| Maximum absolute temperature error K | 9.366658559883945e-10 | 9.366658559883945e-10 |
+| Manifest warpage PV m | 0.00011369859140462488 | 0.00011369859140462488 |
+| Maximum displacement magnitude m | 0.00011400375798343959 | 0.00011400375798343959 |
+| Maximum temperature K | 339.6277197011525 | 339.6277197011525 |
+
+The material schema now accepts dots alongside the existing lowercase letters,
+digits, underscores and hyphens. A schema regression validates `mat.cu` and
+`mat.fr4_eq` through the material-library reference and retains invalid-ID checks.
+The earlier acceptance and implementation runs stopped at solve exit 14 because
+this schema excluded dots; those runs did not measure numerical results.
+
+Running beyond that blocker exposed an internal interface attribute aliasing
+the top convection face. The solver now spaces per-layer boundary IDs using the
+full boundary attribute range, including aligned interfaces. Before this fix the
+unchanged temperature gate measured a 3.8645886088048087 K error; after it, both
+rank counts pass the original 1e-8 K gate. No material IDs, imported layer data,
+conductivities, load values or numerical tolerances were changed.
+
+Readback distinguishes the manifest's Q2 top-node warpage from the exported
+vertex best-fit-plane warpage. These use different sample sets. The driver checks
+manifest preservation and independently fits the exported displacement vertices,
+comparing each summary field with its matching reference at 1e-12 relative
+tolerance. It also requires a finite, positive exported-vertex warpage.
 
 Use a backend-enabled Release build, referenced here as `$build`. Configure with
 `CHIPCAE_ENABLE_ECAD`, `CHIPCAE_ENABLE_JSONCONS`, `CHIPCAE_ENABLE_MFEM`,
@@ -104,63 +131,46 @@ Use a backend-enabled Release build, referenced here as `$build`. Configure with
 solver support. Build and test commands (plain wrapped tool names):
 
 ```sh
-cmake --build "$build" --target chipcae-import chipcae-preview chipcae-solve -j2
-ctest --test-dir "$build" -R '^odbcli_odbpp_cli_e2e$' --output-on-failure
+cmake -S . -B "$build" -DCMAKE_BUILD_TYPE=Release
+cmake --build "$build" -j2
+OMP_NUM_THREADS=1 ctest --test-dir "$build" -R '^(case_run_schema_fixtures|odbcli_odbpp_cli_e2e)$' --output-on-failure -V
+OMP_NUM_THREADS=1 ctest --test-dir "$build" --output-on-failure -j2
 ```
 
-| Local check | Command | Exit | Maximum temperature error |
-|---|---|---:|---|
-| Normal | CTest command above | 8 | unavailable: solve exit 14 |
-| Reference heat flux temporarily ×1.01 | same CTest command | 8 | unavailable: solve exit 14 |
-| Reference restored byte for byte | same CTest command | 8 | unavailable: solve exit 14 |
+| Local check | CTest exit | Maximum temperature error K | Reached stage |
+|---|---:|---:|---|
+| Normal | 0 | 9.366658559883945e-10 | ranks=1/2 solve, readback, result.json |
+| Reference heat flux temporarily ×1.01 | 8 | 0.41477719793664392 | ranks=1 temperature assertion after solve exit 0 |
+| Reference restored byte for byte | 0 | 9.366658559883945e-10 | ranks=1/2 solve, readback, result.json |
 
-The mutation was removed and is not part of the committed driver. It cannot yet
-prove the temperature assertion: all three runs stop at the same earlier product
-contract conflict. The exact diagnostic is:
+Only the analytical reference flux was multiplied by 1.01; the case and solver
+inputs were unchanged. The mutation is absent from the final driver. Restoration
+was checked against the saved driver bytes before rerunning the same CTest.
+The normal targeted run passes 2/2 tests; the restored E2E run passes 1/1.
+Release configure and the full build exit 0. The touched C++ file was formatted
+with clang-format 23.1.5 using `-i`, followed by a clean `--dry-run --Werror`.
+Full Release CTest exits 8: 252 passed, 4 failed, 5 skipped (261 total;
+1174.62 s). The new acceptance passes within this suite. The four failures also
+appear in the pre-fix implementation record; this scoped review fix does not
+claim an all-green repository suite:
 
-```text
-chipcae-solve: material mat.cu /id: String 'mat.cu' does not match pattern '^[a-z0-9_-]+$'.
-```
+| Failed test | Observed failure |
+|---|---|
+| `odbpp_map_placeholder` | 60 s timeout in the large-contour performance case |
+| `ipc_fixture_present` | eight bare geometry-context classification assertions |
+| `chain_ipc_uncut_chain` | expects copper-layer material `mat.fr4`; importer returns `mat.cu` |
+| `ecaddiff_import_pair` | expects hard/discuss/info=11/0/5; receives 0/0/14 |
 
-`material/schema/material.v1.schema.json` rejects the dotted IDs mandated by this
-brief and used by the existing chain test. This is a runtime material-contract
-failure (M3/material), after successful imports, averaging, comparisons and
-preview, not a compilation error or missing backend. No product files or material
-IDs were changed to hide it. No production stubs were needed. The implementation
-recheck at acceptance commit `77eece190c1f8a56dd2d6c3f7a7e083d97bcbf17`
-reproduces the same exit 14 after successful comparisons and 864-cell preview.
-Fresh normal, reference-flux ×1.01, and byte-for-byte restored CTest runs each
-exit 8 at solve exit 14, before any temperature error exists. The requested green
-solve and completed-solve mutation remain blocked by this contract conflict under
-the brief's four-file scope.
+`event_log`, `vtkhdf_results_mpi_2`, and `solve_inputs` pass. The five skips are
+the two GPU tests and three optional assembly/STEP placeholders. No tests were
+excluded and no test timeout was increased.
 
 Product handoffs: [M3/material #168](https://github.com/dzw05/chipcae/issues/168)
-tracks dotted material IDs; [M1 #169](https://github.com/dzw05/chipcae/issues/169)
-tracks the pinned copper thickness discrepancy. The latter preserves the prior
+records the earlier dotted-ID blocker, addressed by this fix;
+[M1 #169](https://github.com/dzw05/chipcae/issues/169) tracks the pinned copper
+thickness discrepancy. The latter preserves the prior
 [#82](https://github.com/dzw05/chipcae/issues/82) ruling that `copper_weight` is
-not a thickness source. Issue filing is part of the implementation handoff; no
-importer, solver, public interface or existing test assertions were changed.
-
-Dependency checks measure exit 77 for each missing executable variable and for
-missing numpy. Configured nonexistent executables fail with exit 1. A backend-off
-CTest configuration is checked separately for the expected skip. Full Release build also exits 0. Full-suite CTest exits 8: 249 passed, 7 failed,
-5 skipped (261 total). Failures are the new acceptance, plus existing event_log,
-odbpp_map_placeholder (60 s timeout), ipc_fixture_present, solve_inputs,
-chain_ipc_uncut_chain and ecaddiff_import_pair. event_log passes on an isolated
-TMPDIR repeat; its original run encountered shared temporary salvage files.
-Exact machine-local commands/output and failure details are recorded in the
-external TDD task log.
-
-The implementation recheck uses the same Release cache and a fresh TMPDIR with
-OMP_NUM_THREADS=2. Configure, the three-target build and full build exit 0. The
-full CTest run exits 8: 250 passed, 6 failed, 5 skipped (261 total; 1312.01 s).
-Failures are `odbcli_odbpp_cli_e2e`, `odbpp_map_placeholder` (60.10 s timeout),
-`ipc_fixture_present`, `chain_ipc_uncut_chain`, `ecaddiff_import_pair`, and
-`vtkhdf_results_mpi_2` (25 s subprocess timeout during injected H5Dwrite failure).
-`event_log` and `solve_inputs` pass in this run. An isolated MPI writer repeat
-with fresh TMPDIR and OMP_NUM_THREADS=1 exits 0 (1/1 passed, 35.90 s); the
-fault-injection timeout does not reproduce there. The new acceptance remains red;
-no product fix is claimed under the brief's explicit product-code prohibition.
+not a thickness source. Importer policy and the known-deviation gates are unchanged.
 
 ## Limits
 
