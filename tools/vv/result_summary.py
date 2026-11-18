@@ -6,7 +6,7 @@
 Duplicate coordinates use the first stored displacement and temperature
 (hex before cut, then partition/storage order), even if copies differ.
 T is all-or-nothing; partial coverage is an input error. Empty blocks do not
-participate in this check. The temperature field is null without samples. Numeric
+participate in this check. The temperature field is null only when T is absent. Numeric
 field types accept either byte order, retaining the required kind and width.
 Collinear top geometry fits along its centered principal axis (constant fit
 when x/y have rank zero), using the shared plane fitter for residuals.
@@ -262,7 +262,7 @@ def _summarize(run_dir, top_rel_tol):
             _, residual = best_fit_plane(xy[:, 0], xy[:, 1], u[top, 2])
         w = float(np.ptp(residual))
     temperature = None
-    if np.any(np.isfinite(all_t)):
+    if any(t is not None for _, _, t in data):
         available_t = all_t[np.isfinite(all_t)]
         temperature = dict(min=float(available_t.min()) if len(available_t) else None,
                            max=float(available_t.max()) if len(available_t) else None,

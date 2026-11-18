@@ -79,6 +79,26 @@ class Edges(unittest.TestCase):
                         self.assertEqual(err.getvalue(), f'result_summary: INPUT_INVALID: {message}\n')
                 manifest['summary'][index]['value'] = 1.
 
+    def test_directory_step_reference(self):
+        for reference in ('.', 'step-directory'):
+            with self.subTest(reference=reference), tempfile.TemporaryDirectory() as tmp:
+                run = Path(tmp)
+                _, manifest = fixture(run)
+                if reference != '.':
+                    (run / reference).mkdir()
+                manifest['steps'][0]['file'] = reference
+                save(run, manifest)
+                with self.assertRaises(ResultSummaryError) as caught:
+                    summarize(run)
+                self.assertEqual(caught.exception.code, 12)
+                self.assertEqual(caught.exception.name, 'INPUT_REFERENCE_MISSING')
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    self.assertEqual(main([str(run)]), 12)
+                self.assertEqual(out.getvalue(), '')
+                self.assertTrue(err.getvalue().startswith('result_summary: INPUT_REFERENCE_MISSING:'))
+                self.assertEqual(len(err.getvalue().splitlines()), 1)
+
     def test_empty_step_reference(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)
@@ -509,7 +529,8 @@ class Edges(unittest.TestCase):
                         self.assertEqual(len(err.getvalue().splitlines()), 1)
                         continue
                     result = summarize(run)
-                    self.assertIsNone(result['temperature'])
+                    self.assertEqual(result['temperature'], dict.fromkeys(
+                        ('min', 'max', 'top_min', 'top_max', 'top_mean')))
                     fixed_keys(self, result)
                     self.assertEqual(result['warpage']['n_top_points'], 0 if empty_geometry else 9)
                     out = io.StringIO()
