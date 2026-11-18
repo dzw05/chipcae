@@ -1,9 +1,9 @@
 """Compare imported ECAD stacks using the frozen IMP-X tolerances.
 
-Compatibility contract for SCHEMA:
-The public symbols are SCHEMA, DEFAULT_DELTA_M, EcadDiffError (code/name),
-diff_stacks, write_report, and main, with the signatures defined below. CLI
-flags, successful-comparison exit status 0, protocol error codes/names, and
+The stable compatibility contract covers only CLI behavior and the
+chipcae.vv.ecad_diff/0.1 JSON report schema described below. All Python symbols
+and signatures are internal and have no compatibility guarantee. CLI flags,
+successful-comparison exit status 0, protocol error codes/names, and
 one-line ``ecad_diff: <NAME>: <reason>`` diagnostics are stable. Diagnostic
 reason text may gain context; callers should use codes/names, not parse it.
 
@@ -16,7 +16,8 @@ Markdown presentation may evolve. Both reports are deterministic for identical
 inputs within a tool version. tol_derivation is explanatory text except for
 specified sentinel reasons (identical, layer names differ, and not compared).
 Incompatible JSON or comparison-semantic changes require a new SCHEMA;
-private helpers and other diagnostic prose have no compatibility guarantee.
+Python symbols and other diagnostic prose have no compatibility guarantee.
+Output paths that are symlinks are rejected with INPUT_INVALID.
 """
 import argparse
 import hashlib

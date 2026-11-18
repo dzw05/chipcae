@@ -11,10 +11,11 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         directory = Path(tmp)
         a = board()
-        # Check the public default and an exactly representable equality boundary.
+        # Check the internal default and an exactly representable equality boundary.
         for delta, thickness in ((DELTA, 1e-3), (2.0 ** -30, 2.0 ** -10)):
             a['layers'][1]['thickness'] = thickness
             pa = save(directory / 'a.json', a)
+            assert entry(diff_stacks(pa, pa, delta), 'layers')['tol_derivation'] == 'identical'
             for scale, grade in ((0.5, 'info'), (1, 'info'), (2, 'hard')):
                 b = copy.deepcopy(a)
                 b['layers'][1]['thickness'] += scale * delta

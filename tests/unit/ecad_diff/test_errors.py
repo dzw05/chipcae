@@ -29,6 +29,9 @@ def main():
                     'used_offsets', 'used_negative', 'used_terminal',
                     'used_zero_terminal', 'used_trailing', 'used_duplicate', 'used_utf8')],
                 ('delta', 14, 'INPUT_INVALID'),
+                ('delta_nan', 14, 'INPUT_INVALID'),
+                ('delta_inf', 14, 'INPUT_INVALID'),
+                ('missing_polygon_layer', 14, 'INPUT_INVALID'),
                 ('derived_nonfinite', 14, 'INPUT_INVALID'),
                 ('copper_nonfinite', 14, 'INPUT_INVALID'),
                 *[(case, 14, 'INPUT_INVALID') for case in (
@@ -45,7 +48,8 @@ def main():
             b = copy.deepcopy(board())
             path = folder / 'stack.json'
             out = folder / 'reports'
-            delta = 0 if case == 'delta' else 1e-9
+            delta = {'delta': 0, 'delta_nan': float('nan'),
+                     'delta_inf': float('inf')}.get(case, 1e-9)
             if case == 'derived_nonfinite':
                 # Finite inputs can overflow δ × P without invalid geometry.
                 delta = 1e308
@@ -72,10 +76,12 @@ def main():
                 b['layers'][0]['copper'] = {'metal': 'mat.cu',
                     'polygons': {'file': 'huge.polyset', 'layer': 'F.Cu'}}
             if case in ('missing_polyset', 'hash', 'trailing',
-                        'duplicate_hash', 'duplicate_digest'):
+                        'duplicate_hash', 'duplicate_digest', 'missing_polygon_layer'):
                 p = polyset(folder, b, trailing=b'x' if case == 'trailing' else b'')
                 if case == 'missing_polyset':
                     p.unlink()
+                if case == 'missing_polygon_layer':
+                    b['layers'][0]['copper']['polygons']['layer'] = 'absent'
                 if case in ('duplicate_hash', 'duplicate_digest'):
                     ref = dict(b['external_refs'][0])
                     ref['sha256'] = '0' * 64 if case == 'duplicate_hash' else 'invalid'
@@ -211,6 +217,16 @@ def main():
                 assert proc.returncode == 14 and 'output' in proc.stderr, proc.stderr
             else:
                 assert not out.exists()
+
+        out = directory / 'nonnumeric_reports'
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / 'tools/vv/ecad_diff.py'),
+             '--odb', str(good), '--ipc', str(good), '-o', str(out),
+             '--delta-m', 'not-a-number'], capture_output=True, text=True)
+        assert proc.returncode == 14, proc.stderr
+        assert proc.stderr == (
+            'ecad_diff: INPUT_INVALID: delta must be a finite positive number\n')
+        assert not out.exists()
 
         # Without an explicit polygon, every reference is consulted for outline
         # discovery and must pass the same validation as copper sidecars.
