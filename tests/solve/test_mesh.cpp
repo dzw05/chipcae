@@ -70,6 +70,21 @@ bool mesh_error_acceptance() {
     } catch (const InputError& error) {
         check(false, std::string("repeated/empty columns: ") + error.what());
     }
+    const auto expect_invalid_dimensions = [&](std::size_t nz, const std::string& name) {
+        try {
+            chipcae::solve::validate_column_partition(mesh, nz);
+            check(false, name + ": expected InputError");
+        } catch (const InputError& error) {
+            check(error.code == ErrorCode::INPUT_INVALID, name + ": error code");
+        }
+    };
+    expect_invalid_dimensions(0, "zero column height");
+    mesh.partitioning = {0};
+    expect_invalid_dimensions(2, "extra partition rank");
+    mesh.elem_gid = {0};
+    expect_invalid_dimensions(0, "zero column height with elements");
+    mesh.partitioning.clear();
+    expect_invalid_dimensions(2, "missing partition rank");
     return passed;
 }
 } // namespace

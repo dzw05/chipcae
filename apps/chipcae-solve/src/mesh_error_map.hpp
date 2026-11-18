@@ -17,9 +17,13 @@ inline ErrorCode mesh_error_code(const mesh::Error& error) {
         return ErrorCode::CUT_UNSUPPORTED;
     return ErrorCode::INPUT_INVALID;
 }
-// Precondition: nz > 0; elem_gid and partitioning have equal lengths.
 // Generated element IDs enumerate each column's nz cells consecutively.
 inline void validate_column_partition(const mesh::HexMeshArrays& mesh, std::size_t nz) {
+    if (nz == 0)
+        throw InputError(ErrorCode::INPUT_INVALID, "column partition requires nz > 0");
+    if (mesh.elem_gid.size() != mesh.partitioning.size())
+        throw InputError(ErrorCode::INPUT_INVALID,
+                         "column partition requires equal elem_gid and partitioning lengths");
     std::unordered_map<Index, mesh::Local> column_ranks;
     for (std::size_t e = 0; e < mesh.elem_gid.size(); ++e) {
         const auto column = mesh.elem_gid[e] / static_cast<Index>(nz);
