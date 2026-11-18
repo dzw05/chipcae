@@ -62,7 +62,7 @@ class CLI(unittest.TestCase):
                 self.assertEqual(result.stderr,
                                  f'result_summary: {name}: {reason}\n'.encode('utf-8'))
 
-    def test_partial_temperature_failure(self):
+    def test_partial_temperature_available(self):
         for missing in ('hex', 'cut'):
             for write_output in (False, True):
                 with self.subTest(missing=missing, write_output=write_output), tempfile.TemporaryDirectory() as tmp:
@@ -75,12 +75,15 @@ class CLI(unittest.TestCase):
                     result = subprocess.run(
                         [sys.executable, str(SCRIPT), str(run)] + args,
                         cwd=tmp, capture_output=True, timeout=20)
-                    self.assertEqual(result.returncode, 14)
-                    self.assertEqual(result.stdout, b'')
-                    self.assertEqual(result.stderr,
-                                     b'result_summary: INPUT_INVALID: PointData/T: '
-                                     b'partial coverage across nonempty hex/cut blocks\n')
-                    self.assertFalse(output.exists())
+                    self.assertEqual(result.returncode, 0, result.stderr.decode())
+                    self.assertEqual(result.stderr, b'')
+                    if write_output:
+                        self.assertEqual(result.stdout, b'')
+                    content = output.read_bytes() if write_output else result.stdout
+                    expected = dict(min=100., max=999., top_min=999., top_max=999., top_mean=999.) if missing == 'hex' else dict(
+                        min=300., max=309., top_min=301., top_max=309., top_mean=305.)
+                    self.assertEqual(json.loads(content)['temperature'], expected)
+                    self.assertEqual(json.loads(content), summarize(run))
 
     def test_bytes_and_repeatability(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -5,8 +5,9 @@
 
 Duplicate coordinates use the first stored displacement and temperature
 (hex before cut, then partition/storage order), even if copies differ.
-T is all-or-nothing; partial coverage is an input error. Empty blocks do not
-participate in this check. The temperature field is null only when T is absent. Numeric
+Temperature uses available T samples; top temperatures use the global top
+surface and the first available sample per coordinate. The temperature field
+is null only when T is absent. Numeric
 field types accept either byte order, retaining the required kind and width.
 Collinear top geometry fits along its centered principal axis (constant fit
 when x/y have rank zero), using the shared plane fitter for residuals.
@@ -142,9 +143,6 @@ def _read(root):
             blocks[name] = dict(points=n, cells=c, type_counts=_counts(types))
         _partitions(block)
         data.append((points, u, t))
-    temperature_presence = {t is not None for points, _, t in data if len(points)}
-    _require(len(temperature_presence) <= 1,
-             'PointData/T: partial coverage across nonempty hex/cut blocks')
     eb = root.get('eb_surface')
     if eb is None:
         blocks['eb_surface'] = dict(points=0, polygons=0)
