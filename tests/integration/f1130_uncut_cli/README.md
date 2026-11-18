@@ -1,15 +1,15 @@
-# F-1130 uncut CLI diagnostic (not registered as acceptance)
+# F-1130 uncut CLI acceptance
 
-The full chain is a **manual, non-registered diagnostic**, with every required
-check active. It cannot establish acceptance on the mandated fixture until the
-[contract blockers](#contract-blockers-and-reactivation) are resolved outside
-this brief. The review explicitly permits this scope instead of a permanently
-failing acceptance CTest. No passing end-to-end result is claimed.
+CTest registers `f1130_uncut_cli_e2e` through `chipcae_auto_tests`, with labels
+`integration;numerical;vv`, timeout 1200 seconds and skip return code 77.
+The full import → fractions → preview → solve(np=1/2) → readback → result.json
+chain runs when the required numerical executables and Python dependencies are
+available. The mandated fixture currently fails a strict fraction check; this
+failure remains visible in CTest pending resolution by the owning module.
 
-CTest runs only `f1130_uncut_cli_records`, the nine existing assertion/verdict
-regression cases. That test does not claim to exercise the full CLI chain.
-`f1130_uncut_cli_e2e` is absent from CTest, including numerical builds; it is not
-disabled, marked expected-failure or turned into a passing/skip result.
+`f1130_uncut_cli_records` separately runs the 11 assertion/verdict regressions,
+including missing-launcher and incomplete-parallel-comparison failures.
+Passing those regressions does not establish end-to-end acceptance.
 
 ## Inputs and chain
 
@@ -82,12 +82,24 @@ cmake -S . -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCHIPCAE_ENABLE_JSONCONS=ON -DCHIPCAE_ENABLE_MFEM=ON \
   -DCHIPCAE_ENABLE_MPI=ON -DCHIPCAE_ENABLE_HDF5=ON
 cmake --build "$build" -j2
-ctest --test-dir "$build" -V -R '^f1130_uncut_cli_records$'
+ctest --test-dir "$build" -V -R '^f1130_'
 ctest --test-dir "$build" --output-on-failure -j2
 ```
 
-Run the full diagnostic explicitly from the repository root, supplying the
-executables from the same numerical build (locations depend on the build):
+CMake injects `CHIPCAE_IMPORT_EXE`, `CHIPCAE_PREVIEW_EXE` and
+`CHIPCAE_SOLVE_EXE` only when ECAD, MFEM, MPI and HDF5 are enabled and all three
+executable targets exist. Otherwise the acceptance test remains registered
+and returns 77 for missing executable environment. Missing numpy/h5py also
+returns 77. Configured commands that fail print their command, status and
+stdout/stderr and fail acceptance; each command has a 600 second timeout.
+
+The first available `mpiexec`, then `mpirun`, is used without retry.
+If neither exists, acceptance fails and writes a failing result record with
+an incomplete parallel check. Both ranks require a successful parallel
+comparison before their result record can pass. This follows the current
+review requirement, superseding the original brief's launcher-omission rule.
+
+For a direct invocation, supply the executables from the same numerical build:
 
 ```sh
 CHIPCAE_IMPORT_EXE="$build/kernel/chipcae-import" \
@@ -96,124 +108,67 @@ CHIPCAE_SOLVE_EXE="$build/apps/chipcae-solve/chipcae-solve" \
   python3 tests/integration/f1130_uncut_cli/test_uncut_cli_e2e.py
 ```
 
-CTest registers `f1130_uncut_cli_records`, labels `integration;vv`, timeout
-1200 seconds, using unittest discovery without executing the diagnostic's
-`main()`. It runs all nine existing regression cases. The manual diagnostic
-retains exit 77 for missing executable environment or numpy/h5py. A configured
-command's failure always fails the diagnostic with its command, exit status and
-stdout/stderr. Each command retains its 600 s timeout; the manual chain has no
-outer CTest timeout.
-The first available `mpiexec`, then `mpirun`, is used without retry. If neither
-exists, only ranks=2 and its comparisons are omitted with an explicit message.
-Nine regression cases also check input generation, literal material matching,
-zero-fraction rejection, result completeness, per-run verdicts and numerical
-failures. A readback discrepancy of 6.8e-12 must fail even when the summary's
-copied manifest value matches exactly.
+## Verification (2026-11-19)
 
-## Historical verification and blockers (2026-11-18–19)
+The two added regressions failed before the correction: a serial record with
+no parallel comparison was accepted, and missing launchers did not cause the
+required launcher failure. After the correction, all 11 regressions pass.
+CTest discovery verifies the full script command, three executable environment
+variables, labels, timeout 1200 and skip return code 77 in the numerical build.
+Release configure and build succeed with ECAD, JSONCONS, MFEM, MPI and HDF5
+available and optional Kokkos disabled.
 
-Release configure/build succeeded with ECAD, JSONCONS, MFEM, MPI and HDF5
-available and optional Kokkos disabled. All nine regression cases pass.
+`ctest --test-dir "$build" -V -R '^f1130_'` exits 8: the E2E test fails on
+In1.Cu=0 after import/conversion, while `f1130_uncut_cli_records` passes all 11
+regressions. The same configure and CTest commands in a Release build without
+the numerical backends exit 0: E2E skips with code 77, and the records test
+passes. No fixture or threshold was changed to obtain these results.
 
-The full `ctest --test-dir "$build" --output-on-failure -j2` run exited 8
-after 1795.40 s: **231 total, 220 passed, 8 skipped, 3 failed**:
+The full `ctest --test-dir "$build" --output-on-failure -j2` run exits 8 after
+1277.24 seconds: **232 total, 221 passed, 8 skipped, 3 failed**:
 
-- `f1130_uncut_cli_e2e`: the zero-fraction failure described below.
-- `chain_ipc_uncut_chain`: expects copper-layer base `mat.fr4`, while the
-  converted stack preserves imported `mat.cu` (existing test line 53).
-- `solve_ghost_scan`: reached its unchanged 300 s timeout.
+- `f1130_uncut_cli_e2e`: In1.Cu=0, as described below.
+- `chain_ipc_uncut_chain`: its unchanged line 53 expects `mat.fr4`, while
+  conversion preserves imported `mat.cu` on F.Cu.
+- `event_log`: the shared temporary directory contains 10,000 salvage files
+  at offset 364, exhausting the event log's salvage-name limit.
 
-`event_log` and `k1_preview_mpi_surface` both passed this run. That suite run was
-not green; the brief forbids edits to the existing chain test/product code.
-An isolated `ctest --test-dir "$build" -V -j1 -R '^solve_ghost_scan$'` rerun
-passed in 280.26 s with its original 300 s timeout (CTest exit 0).
+An isolated `TMPDIR="$fresh_tmp" ctest --test-dir "$build" -V -j1 -R '^event_log$'`
+rerun with a newly created temporary directory exits 0 (1/1 passed, 0.57 seconds).
+The original full-suite failure remains recorded above.
 
-Before this correction, the target CTest reproduced the reviewed readback
-failure: 实测 manifest warpage_pv=8.118595078913672e-6 m versus readback
-8.118595078858198e-6 m, relative difference 6.8329410744551444e-12. CTest exited
-8 (script exit 1). That run used the rejected populated fixture and extra mesh
-parameter, so it provides diagnostic evidence only.
+`solve_ghost_scan` passes in 251.76 seconds with its unchanged 300 second
+timeout. The suite is not green; the mandated input/golden, existing tests and
+product sources remain unchanged.
 
-After restoring the mandated inputs, the same CTest command exits 8 (script
-exit 1): import and conversion exit 0, and the import matches the original
-golden. 实测 fractions are F.Cu=0.012313399999999997 and
-In1.Cu=In2.Cu=B.Cu=0. The strict positive-fraction assertion fails on In1.Cu;
-the failing result record passes the data-class gate. The original XML has
-artwork only on F.Cu. The script does not substitute another board to proceed.
+## Fixture and downstream blockers
 
-Separate diagnostics on this exact converted stack, without changing its
-contents, also establish that preview exits 1 and solve exits 14:
-`$/layers/2/material: homogenized material must end with _eq`.
-The golden Core material is `mat.fr4`. Further contract conflicts are visible
-in the existing code: material IDs disallow dots in
-`material/schema/material.v1.schema.json`, and solve defaults to at least two
-elements per layer in `apps/chipcae-solve/src/case_loader.cpp`, whereas the
-imported stack minima are one. Downstream numerical acceptance cannot be
-established until these input/contract conflicts are resolved.
+On the mandated public input, import and fraction conversion succeed, and the
+import matches the original golden. 实测 fractions are
+F.Cu=0.012313399999999997 and In1.Cu=In2.Cu=B.Cu=0. The strict `(0,1]` assertion
+fails on In1.Cu before preview or solving. The failure record passes the
+data-class gate. The XML has artwork only on F.Cu; the test preserves the
+specified fixture, golden and positive-fraction requirement.
 
-Readback remains independently blocked: `apps/chipcae-solve/src/pipeline.cpp`
-fits Q2 top nodes for manifest warpage, while `tools/vv/result_summary.py`
-fits exported vertices. Comparing `manifest_warpage_pv_m` instead would compare
-a copied manifest value with its source and lose the independent readback
-check. The 1e-12 gate remains unchanged. Both current OAI MUST items and both
-current CodeBuddy MUST items are valid; this revision uses their permitted
-non-registered diagnostic scope and links the remaining blockers below.
+The required normal / reference heat-flux ×1.01 negative / restored passing
+experiment cannot be completed on this fixture because it fails before
+solving. No passing end-to-end result is claimed.
 
-The required reference heat-flux ×1.01 negative experiment and passing restored
-run cannot be demonstrated on the mandated fixture: it fails before solving.
-Earlier experiments using substitute fixtures do not establish acceptance.
+Earlier diagnostic runs also identified the following downstream conflicts.
+They are historical evidence, not stages reached by the current failing chain:
 
-## Diagnostic-scope verification (2026-11-19)
-
-With the same Release build and ECAD, JSONCONS, MFEM, MPI and HDF5 enabled:
-
-- `cmake -S . -B "$build" -DCMAKE_BUILD_TYPE=Release` and
-  `cmake --build "$build" -j2` both exit 0.
-- `ctest --test-dir "$build" -V -R '^f1130_'` exits 0: only
-  `f1130_uncut_cli_records` runs, with all nine regression cases passing.
-- `ctest --test-dir "$build" --show-only=json-v1` confirms that the full
-  `f1130_uncut_cli_e2e` diagnostic is absent from registration.
-- `ctest --test-dir "$build" --output-on-failure -j2` exits 8 after
-  1087.93 s: **231 total, 222 passed, 8 skipped, 1 failed**. The sole failure is
-  the existing [chain test](../import_solve_chain/test_ipc_uncut_chain.py), line
-  53: it expects copper-layer base `mat.fr4` but conversion preserves `mat.cu`.
-  That test and the product implementation are outside the allowed file scope;
-  the full suite is not green. `solve_ghost_scan` passes in 278.43 s with its
-  original 300 s timeout, and the F-1130 records CTest passes in 0.42 s.
-- The explicit Python diagnostic command above exits 1 after import and
-  conversion. Its nine regressions pass, the original zero-fraction assertion
-  fails, and the failing result record passes the data-class gate. No downstream
-  acceptance or restored passing run is claimed.
-- In-memory mutations allowing zero fractions or raising the readback tolerance
-  to 1e-10 each trigger the corresponding existing regression failure. The source
-  remains unchanged, with strict positivity and relative 1e-12 readback checks.
-- `git diff --check` passes. The pinned clang-format is 23.1.5; this revision
-  changes no C/C++ files, so no C/C++ formatting is required.
-
-## Contract blockers and reactivation
-
-These are unresolved dependencies, not waived acceptance checks. Source links
-identify the owning contracts so that future work can resolve them without
-changing this brief's fixture, golden or thresholds:
-
-| Blocker | Owner and source | Required resolution before acceptance registration |
+| Blocker | Owner and source | Required resolution |
 | --- | --- | --- |
-| Three zero copper fractions violate `(0,1]` | M1: [mandated artwork](../ecad/data/board_4layer.xml) and [golden stack](../import_cli/golden/board_4layer/stack.json) | Contract ruling and compatible public input/golden with all four fractions positive. |
+| Three zero copper fractions violate `(0,1]` | M1: [mandated artwork](../ecad/data/board_4layer.xml) and [golden stack](../import_cli/golden/board_4layer/stack.json) | Resolve the input/acceptance contract with all four fractions positive. |
 | Core `mat.fr4` violates the homogenized `_eq` suffix | M1/M2/M3: [stack validator](../../../schema/src/stack.cpp) and [golden stack](../import_cli/golden/board_4layer/stack.json) | Agree on a material identity accepted by import, preview and solve. |
 | Illustrative `mat.cu`/`mat.fr4` IDs contain forbidden dots | M3/material: [material schema](../../../material/schema/material.v1.schema.json) | Align the specified material IDs with the material-library contract. |
 | Preview uses imported minimum 1; solve defaults to minimum 2 | M2/M3: [case loader](../../../apps/chipcae-solve/src/case_loader.cpp) and [golden stack](../import_cli/golden/board_4layer/stack.json) | Identical specified mesh settings must yield identical positive cell counts. |
 | Independent readback exceeds relative 1e-12 | M3/M5: [Q2 manifest warpage](../../../apps/chipcae-solve/src/pipeline.cpp) and [vertex readback](../../../tools/vv/result_summary.py) | Align independent sampling/fit contracts while retaining the 1e-12 gate. |
 
-The readback field was checked against `result_summary.py`: `warpage.w_bfp_m`
-is independently computed; `warpage.manifest_warpage_pv_m` is copied. The script
-keeps the former, with a regression that rejects a 6.8e-12 discrepancy.
-
-After the owning modules resolve these contracts, run the exact diagnostic
-through comparisons (a)–(g), demonstrate normal / heat-flux ×1.01 failure /
-restored passing runs, and record fresh measurements. Only then restore
-`chipcae_auto_tests(PREFIX f1130_ LABELS "integration;numerical;vv" TIMEOUT 1200)`
-and its original gated executable environment. A passing records CTest alone
-does not authorize registering or claiming full acceptance.
+The independent readback field is `warpage.w_bfp_m`;
+`warpage.manifest_warpage_pv_m` copies the manifest. The regression rejects a
+6.8e-12 discrepancy even if the copied value matches exactly. Temperature,
+readback and MPI thresholds remain 1e-8 K, 1e-12 and 1e-8 respectively.
 
 ## Coverage limits
 

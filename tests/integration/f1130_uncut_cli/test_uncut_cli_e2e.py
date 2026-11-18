@@ -1,8 +1,4 @@
-"""Manual blocked IPC → uncut CLI diagnostic; CTest runs AcceptanceRecords only.
-
-See README.md for the fixture/product contracts required before registering the
-full chain as acceptance coverage. All strict comparisons remain active here.
-"""
+"""IPC → uncut CLI acceptance chain and strict assertion/verdict regressions."""
 
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
@@ -29,7 +25,7 @@ READBACK_RTOL = 1e-12
 PARALLEL_RTOL = 1e-8
 QOIS = ('warpage_pv', 'U_mag_max', 'T_max')
 ACCEPTANCE_CHECKS = ('import', 'fractions', 'preview', 'solve_readback',
-                     'inputs_unchanged', 'numerical')
+                     'inputs_unchanged', 'numerical', 'parallel')
 
 
 def write_json(path, obj):
@@ -226,11 +222,8 @@ def write_result(run_dir, ranks, measurements, timings, notes, failures):
 
     notes = list(notes)
     failures = list(failures)
-    required = list(ACCEPTANCE_CHECKS)
-    if ranks == 2 or measurements.get('parallel_required', False):
-        required.append('parallel')
     checks = measurements.get('acceptance_checks', {})
-    failures += [f'acceptance check incomplete: {name}' for name in required
+    failures += [f'acceptance check incomplete: {name}' for name in ACCEPTANCE_CHECKS
                  if checks.get(name) is not True]
     commit = get_commit(notes)
     notes += [f'实测 {stage}: {seconds:.6f} s' for stage, seconds in timings.items()]
@@ -279,6 +272,8 @@ def main():
                        completed=False, failures=[])}
         setup_checks = runs[1]['measurements']['acceptance_checks']
         try:
+            launcher = shutil.which('mpiexec') or shutil.which('mpirun')
+            assert launcher, 'ranks=2: launcher not found (mpiexec/mpirun); acceptance requires MPI'
             material_map = SOURCE / 'tests/integration/import_cli/material_map.json'
             run_command('import', [importer, SOURCE / 'tests/integration/ecad/data/board_4layer.xml',
                                   '-o', 'stack.json', '--polyset', 'stack.polyset',
@@ -311,17 +306,10 @@ def main():
             shared = {name: (root / name).read_bytes() for name in
                       ('solve.stack.json', 'case.json', 'materials.json',
                        'profile_r1.json', 'profile_r2.json')}
-            launcher = shutil.which('mpiexec') or shutil.which('mpirun')
-            if launcher:
-                run2 = root / 'ranks2'
-                run2.mkdir()
-                runs[2] = dict(path=run2, measurements=dict(
-                    acceptance_checks=dict(setup_checks)), completed=False, failures=[])
-                for run in runs.values():
-                    run['measurements']['parallel_required'] = True
-            else:
-                print('SKIP ranks=2: launcher not found', flush=True)
-                notes.append('SKIP ranks=2: launcher not found; serial acceptance retained.')
+            run2 = root / 'ranks2'
+            run2.mkdir()
+            runs[2] = dict(path=run2, measurements=dict(
+                acceptance_checks=dict(setup_checks)), completed=False, failures=[])
             for ranks, run in runs.items():
                 args = [solver, '--case', 'case.json', '--profile', f'profile_r{ranks}.json',
                         '--out', run['path']]
@@ -429,9 +417,9 @@ class AcceptanceRecords(unittest.TestCase):
         self.assertTrue(math.isclose(measurements['copper_fractions']['In1.Cu'], 0.0,
                                      rel_tol=0, abs_tol=1e-15))
 
-    def write_record(self, root, checks, failures=(), ranks=1, parallel_required=False):
+    def write_record(self, root, checks, failures=(), ranks=1):
         measurements = dict(
-            acceptance_checks=checks, parallel_required=parallel_required,
+            acceptance_checks=checks,
             qoi=dict(warpage_pv=1e-6, U_mag_max=2e-6, T_max=318.15),
             max_temperature_error_K=1e-10)
         with redirect_stdout(StringIO()):
@@ -455,12 +443,39 @@ class AcceptanceRecords(unittest.TestCase):
             result = json.loads((root / 'result.json').read_text(encoding='utf-8'))
             self.assertEqual(result['verdict'], 'fail')
 
+    def test_serial_record_without_parallel_comparison_cannot_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            checks = dict.fromkeys(ACCEPTANCE_CHECKS, True)
+            checks.pop('parallel', None)
+            result = self.write_record(Path(directory), checks)
+            self.assertEqual(result['verdict'], 'fail')
+            self.assertIn('acceptance check incomplete: parallel', result['notes'])
+
+    def test_missing_launcher_fails_main_and_result_record(self):
+        try:
+            import numpy  # noqa: F401
+            import h5py  # noqa: F401
+        except ImportError:
+            self.skipTest('main requires numpy/h5py')
+        output = StringIO()
+        env = dict(CHIPCAE_IMPORT_EXE='unused-importer', CHIPCAE_PREVIEW_EXE='unused-previewer',
+                   CHIPCAE_SOLVE_EXE='unused-solver')
+        # Launcher discovery is an external dependency; keep verdict generation real.
+        with patch.dict(os.environ, env), patch.object(shutil, 'which', return_value=None), \
+                redirect_stdout(output), redirect_stderr(StringIO()):
+            with self.assertRaisesRegex(AssertionError, 'launcher not found'):
+                main()
+        record = json.loads(output.getvalue().split('RESULT ranks1/result.json\n', 1)[1])
+        self.assertEqual(record['verdict'], 'fail')
+        self.assertIn('acceptance check incomplete: parallel', record['notes'])
+
     def test_parallel_comparison_is_required_for_both_available_runs(self):
         with tempfile.TemporaryDirectory() as directory:
+            checks = dict.fromkeys(ACCEPTANCE_CHECKS, True)
+            checks.pop('parallel')
             for ranks in (1, 2):
                 with self.subTest(ranks=ranks):
-                    result = self.write_record(Path(directory), dict.fromkeys(ACCEPTANCE_CHECKS, True),
-                                               ranks=ranks, parallel_required=True)
+                    result = self.write_record(Path(directory), checks, ranks=ranks)
                     self.assertEqual(result['verdict'], 'fail')
 
     def test_failed_run_does_not_change_another_runs_verdict(self):
