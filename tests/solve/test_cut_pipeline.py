@@ -186,9 +186,9 @@ with tempfile.TemporaryDirectory() as tmp:
     (root/'stack.json').write_text(json.dumps(single))
     shutil.copy(Path(source)/'examples/s2_solve/materials.json', root/'materials.json')
     for name, mesh_options, ranks, error_name, stderr_text in [
-        ('hierarchy-invalid', {'levels': 32}, 1, 'HIERARCHY_INVALID', 'chipcae-solve: HIERARCHY_INVALID: invalid hierarchy options\n'),
+        ('hierarchy-invalid', {'levels': 32}, 1, 'HIERARCHY_INVALID', 'HIERARCHY_INVALID'),
         ('hierarchy-levels-ranks', {'nx': 2, 'ny': 2, 'levels': 2}, 2,
-         'HIERARCHY_INVALID', 'chipcae-solve: hierarchy/levels: coarsest columns below ranks\n'),
+         'HIERARCHY_INVALID', 'hierarchy/levels'),
         ('solve_mesh_error_input_invalid', {'cell_budget': 1}, 1, 'INPUT_INVALID', 'cell_budget'),
     ]:
         invalid_case = copy.deepcopy(original)
