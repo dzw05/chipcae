@@ -13,6 +13,7 @@ import math
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -104,7 +105,12 @@ def result_json_from_summary(
     notes: list[str] | None = None,
     src_dirty: bool | None = None,
 ) -> dict:
-    """Validate caller metadata and assemble the frozen top-level field order."""
+    """Validate caller metadata and recursively reject non-finite values.
+
+    Assemble top-level fields in a stable order for serialization. JSON object
+    members are unordered; this order is a serialization convention, not an
+    interface semantic. For the CLI's default date, 本工具使用进程本地日历日.
+    """
     _pattern('case_id', case_id, r'[A-Za-z0-9][A-Za-z0-9_.-]*')
     _enum('data_class', data_class, ('synthetic', 'public', 'real'))
     _enum('label', label, ('实测', '参考值', '计划值'))
@@ -145,11 +151,20 @@ def write_result_json(path: Path, obj: dict) -> None:
     temporary = None
     try:
         path = Path(path)
+        try:
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+        except FileNotFoundError:
+            old = os.umask(0)
+            try:
+                mode = 0o666 & ~old
+            finally:
+                os.umask(old)
         with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', newline='\n',
                                          dir=path.parent, prefix='.result-json-',
                                          suffix='.tmp', delete=False) as stream:
             temporary = Path(stream.name)
             stream.write(content)
+        os.chmod(temporary, mode)
         os.replace(temporary, path)
         temporary = None
     except (OSError, ValueError, TypeError) as exc:
