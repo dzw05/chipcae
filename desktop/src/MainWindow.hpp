@@ -1,6 +1,7 @@
 #pragma once
 #include "CaseDocument.hpp"
 #include "EventCodec.hpp"
+#include "PreviewOptions.hpp"
 #include "Provenance.hpp"
 #include "ResultSession.hpp"
 
@@ -17,6 +18,7 @@ class QLabel;
 namespace chipcae::desktop {
 class RunMonitor;
 class PreviewController;
+class PreviewView;
 class ImportController;
 class ResultView;
 class LocalJobService;
@@ -53,7 +55,11 @@ public:
                     const QString& runId = {},
                     const QString& eventFile = "events.caelog");
 
-    bool previewMesh(const QString& program = "chipcae-preview", const QStringList& prefix = {});
+    bool previewMesh(const QString& program = "chipcae-preview",
+                     const QStringList& prefix = {},
+                     const chipcae::desktop::PreviewOptions& options = {});
+    chipcae::desktop::PreviewView* previewView() const;
+    bool previewDisplayStale() const;
     bool submitCurrentCase();
     void setSubmitProfile(const QJsonObject& p) { profile_ = p; }
     QJsonObject submitProfile() const { return profile_; }
@@ -94,6 +100,8 @@ private:
     QString lastMeshDigestDetail_;
     bool lastOpenCancelledForMeshDigest_ = false;
     bool previewDigestValid_ = false;
+    bool previewDisplayed_ = false;
+    bool previewDisplayStale_ = false;
     std::optional<chipcae::desktop::MeshOptions> previewMeshOptions_;
     QAction* writePreviewToCaseAction_ = nullptr;
     void clearPreviewMeshOptions();
