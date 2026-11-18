@@ -214,7 +214,8 @@ HexMeshArrays decorated() {
     m.attr_table.bodies = {{"BodyA", 23}, {"BodyB", 24}};
     m.attr_table.boundary_names = {{1, "Case"}, {2147483647, "case"}};
     m.face_sets = {{"Case", {1, 2}}, {"case", {2, 1}}};
-    m.pending_cut = {1};
+    m.pending_cut = {0};
+    m.nodes = m.vertices;
     // Large global IDs are opaque identifiers; preserve their exact integer type.
     m.node_gid.back() = 9007199254740993LL;
     return m;
@@ -291,6 +292,26 @@ void rejects_bad(const fs::path& dir) {
          {"partitioning", "node_layer", "node_column", "attr_frame", "copper_phi"}) {
         mutate("nonempty optional shape " + field, [&](J& j) { j["mesh"][field].push_back(0); });
     }
+    // These fields are outside the digest, so semantic validation must reject
+    // them even when the original geometry digest still matches.
+    mutate("negative pending cut", [](J& j) { j["mesh"]["pending_cut"] = J::parse("[-1]"); });
+    mutate("pending cut upper bound", [](J& j) {
+        j["mesh"]["pending_cut"] = J::array();
+        j["mesh"]["pending_cut"].push_back(j["mesh"]["elem_gid"].size());
+    });
+    mutate("incomplete node coordinates", [](J& j) { j["mesh"]["nodes"] = J::parse("[0,1]"); });
+    mutate("invalid snap axis", [](J& j) {
+        j["mesh"]["snapped"] = J::parse(R"([{"axis":"q","from":0,"to":1,"displacement":1}])");
+    });
+    mutate("inconsistent snap displacement", [](J& j) {
+        j["mesh"]["snapped"] = J::parse(R"([{"axis":"x","from":0,"to":1,"displacement":0}])");
+    });
+    mutate("empty face set name", [](J& j) { j["mesh"]["face_sets"] = J::parse(R"([["",[1]]])"); });
+    for (int a : {-1, 0})
+        mutate("nonpositive face set attribute " + std::to_string(a), [&](J& j) {
+            j["mesh"]["face_sets"] = J::parse(R"([["cut",[]]])");
+            j["mesh"]["face_sets"][0][1].push_back(a);
+        });
     mutate("wrong integer element type", [](J& j) { j["mesh"]["hex"][0] = "0"; });
     mutate("wrong real element type", [](J& j) { j["mesh"]["vertices"][0] = "0"; });
     mutate("wrong bool type", [](J& j) { j["mesh"]["internal_interfaces"] = 1; });
@@ -354,6 +375,43 @@ void rejects_bad(const fs::path& dir) {
             ++failures;
         }
     }
+    auto reject_mesh = [&](const std::string& label, auto edit) {
+        auto m = decorated();
+        edit(m);
+        auto r = save_mesh_fixture(m, dir / "invalid-mesh.json");
+        if (r || r.error().path != "INPUT_INVALID") {
+            std::cerr << "FAIL save " << label << ": expected INPUT_INVALID\n";
+            ++failures;
+        }
+        reject(label, document(m).to_string());
+    };
+    reject_mesh("pending cut index", [](auto& m) { m.pending_cut = {-1}; });
+    reject_mesh("pending cut upper bound", [](auto& m) { m.pending_cut = {1}; });
+    reject_mesh("nodes shape", [](auto& m) { m.nodes.push_back(0); });
+    reject_mesh("snap axis", [](auto& m) { m.snapped[0].axis = 'q'; });
+    reject_mesh("snap displacement", [](auto& m) { m.snapped[0].displacement = 0; });
+    reject_mesh("face set name", [](auto& m) { m.face_sets[""] = {1}; });
+    reject_mesh("face set attribute", [](auto& m) { m.face_sets["cut"] = {0}; });
+    for (const Real invalid : {std::numeric_limits<Real>::infinity(),
+                               -std::numeric_limits<Real>::infinity(),
+                               std::numeric_limits<Real>::quiet_NaN()}) {
+        for (int field = 0; field < 4; ++field) {
+            auto m = decorated();
+            if (field == 0)
+                m.nodes[0] = invalid;
+            else if (field == 1)
+                m.snapped[0].from = invalid;
+            else if (field == 2)
+                m.snapped[0].to = invalid;
+            else
+                m.snapped[0].displacement = invalid;
+            auto r = save_mesh_fixture(m, dir / "nonfinite-optional.json");
+            if (r || r.error().path != "INPUT_INVALID") {
+                std::cerr << "FAIL save nonfinite optional field " << field << '\n';
+                ++failures;
+            }
+        }
+    }
     require(failures == 0,
             std::to_string(failures) +
                 " independent invalid-input/positive-control assertions failed");
@@ -393,6 +451,12 @@ int main(int argc, char** argv) {
             auto extra_frame = m;
             extra_frame.attr_frame.insert(extra_frame.attr_frame.end(), 9, 0.0);
             roundtrip(extra_frame, dir / "extra-frame.json");
+            auto curved = m;
+            curved.order = 2;
+            curved.nodes.insert(curved.nodes.end(), {1.5, 0.5, 0.5});
+            curved.face_sets["cut"] = {99}; // No matching linear boundary quad is required.
+            curved.snapped.push_back({'z', 0.0, 0.5, 0.5});
+            roundtrip(curved, dir / "curved-nodes.json");
             auto json = J::parse(first);
             require(json["mesh"]["attr_table"]["boundary_names"][0][0].is_int64() ||
                         json["mesh"]["attr_table"]["boundary_names"][0][0].is_uint64(),

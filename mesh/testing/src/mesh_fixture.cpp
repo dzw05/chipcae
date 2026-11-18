@@ -269,6 +269,26 @@ bool validate(const HexMeshArrays& m) {
         check(i >= 0 && static_cast<std::size_t>(i) < n, "hex connectivity");
     for (auto i : m.bdr_quad)
         check(i >= 0 && static_cast<std::size_t>(i) < n, "boundary connectivity");
+    for (auto i : m.pending_cut)
+        check(i >= 0 && static_cast<std::size_t>(i) < c, "pending cut index");
+    // Reserved curved-node storage contains 3D coordinates, independently of
+    // the linear vertex count (higher orders can introduce additional nodes).
+    check(m.nodes.size() % 3 == 0, "nodes coordinate length");
+    for (auto x : m.nodes)
+        check(std::isfinite(x), "nonfinite node coordinate");
+    for (const auto& snap : m.snapped) {
+        check(snap.axis == 'x' || snap.axis == 'y' || snap.axis == 'z', "snap axis");
+        check(std::isfinite(snap.from) && std::isfinite(snap.to) &&
+                  std::isfinite(snap.displacement),
+              "nonfinite snap report");
+        check(snap.displacement == snap.to - snap.from, "snap displacement");
+    }
+    for (const auto& [name, attributes] : m.face_sets) {
+        check(!name.empty(), "empty face set name");
+        // Cut-face attributes need not occur in bdr_attribute.
+        for (auto a : attributes)
+            check(a > 0, "face set attribute");
+    }
     auto optional = [](std::size_t actual, std::size_t expected) {
         check(actual == 0 || actual == expected, "optional array length");
     };
