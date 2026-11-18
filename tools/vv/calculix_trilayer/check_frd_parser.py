@@ -62,6 +62,27 @@ class FrdParserTest(unittest.TestCase):
                     self.assertEqual(result.stdout, log.read_text(encoding="utf-8"))
                     self.assertFalse((Path(directory) / "reports/v-ccx-delta.md").exists())
 
+    def test_missing_reference_does_not_report(self):
+        from tools.vv import test_trilayer_calculix_ref as comparison
+
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "REFERENCE.json"
+            suite = unittest.defaultTestLoader.loadTestsFromTestCase(
+                comparison.TrilayerCalculixRefTest
+            )
+            output = io.StringIO()
+            with patch.object(comparison, "REF", missing), \
+                    patch.object(Path, "write_text") as write:
+                with redirect_stdout(output):
+                    result = unittest.TestResult()
+                    suite.run(result)
+            self.assertFalse(result.wasSuccessful())
+            self.assertEqual(len(result.failures), 1)
+            self.assertEqual(result.errors, [])
+            self.assertIn(f"missing required artifact: {missing}", result.failures[0][1])
+            self.assertEqual(output.getvalue(), "")
+            write.assert_not_called()
+
     def test_failed_rejection_checks_do_not_report(self):
         from tools.vv.test_trilayer_calculix_ref import TrilayerCalculixRefTest
 
