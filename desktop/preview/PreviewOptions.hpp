@@ -1,5 +1,6 @@
 #pragma once
 #include <QStringList>
+#include <QWidget>
 #include <optional>
 
 namespace chipcae::desktop {
@@ -14,5 +15,17 @@ struct PreviewOptions {
     arguments(const QString& stack, const QString& output, const QString& polyset = {}) const;
     bool save(const QString& path) const;
     static PreviewOptions load(const QString& path);
+};
+
+// Test-first stub: the independent options editor is not implemented yet.
+class PreviewOptionsPanel : public QWidget {
+    Q_OBJECT
+public:
+    explicit PreviewOptionsPanel(QWidget* parent = nullptr);
+    void setOptions(const PreviewOptions& options);
+    PreviewOptions options() const;
+    QString validationMessage() const;
+signals:
+    void optionsEdited();
 };
 } // namespace chipcae::desktop

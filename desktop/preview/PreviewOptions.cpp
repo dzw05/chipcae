@@ -8,6 +8,16 @@
 #include <stdexcept>
 
 namespace chipcae::desktop {
+// Minimal linkable stubs keep the acceptance tests red without implementing panel behavior.
+PreviewOptionsPanel::PreviewOptionsPanel(QWidget* parent) : QWidget(parent) {}
+void PreviewOptionsPanel::setOptions(const PreviewOptions&) {}
+PreviewOptions PreviewOptionsPanel::options() const {
+    return {};
+}
+QString PreviewOptionsPanel::validationMessage() const {
+    return {};
+}
+
 QString PreviewOptions::validate() const {
     if (nx.has_value() != ny.has_value() || (nx && (*nx <= 0 || *ny <= 0)))
         return "nx and ny must be paired positive integers";
