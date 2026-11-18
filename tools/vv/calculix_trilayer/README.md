@@ -87,9 +87,8 @@ Run `python3 -m unittest tools.vv.test_trilayer_calculix_ref` after generation.
 The comparison test uses only the standard library.
 Only passing validation prints the single delta report in the brief's fixed
 field order. The prototype is the 参考值（原型计算值） described above.
-When `CHIPCAE_VV_LOG_DIR` is set to a nonempty directory path, the passing
-comparison also creates that directory if needed and overwrites
-`$CHIPCAE_VV_LOG_DIR/v-ccx-delta.md` with exactly that single report line.
-When unset or empty, it writes no report file; stdout is always emitted on success.
-The manual parser regression configures a temporary log directory and compares
-the file there with stdout, and also checks the unconfigured case.
+The passing comparison creates `/workspace/tasks/logs` if needed and overwrites
+`/workspace/tasks/logs/v-ccx-delta.md` with exactly that single report line.
+The manual parser regression compares this file with stdout, including when
+`CHIPCAE_VV_LOG_DIR` is unset, empty, or set to another directory; the required
+report path is fixed and does not depend on that variable.

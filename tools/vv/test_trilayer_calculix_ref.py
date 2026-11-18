@@ -12,7 +12,6 @@ from __future__ import annotations
 import copy
 import json
 import math
-import os
 import unittest
 from pathlib import Path
 
@@ -196,11 +195,9 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             f"rel_delta={rel_delta} mesh=fine element=C3D20 "
             f"ccx={data.get('calculix_version', 'unknown')}"
         )
-        log_dir = os.environ.get("CHIPCAE_VV_LOG_DIR")
-        if log_dir:
-            log = Path(log_dir) / "v-ccx-delta.md"
-            log.parent.mkdir(parents=True, exist_ok=True)
-            log.write_text(line + "\n", encoding="utf-8")
+        log = Path("/workspace/tasks/logs/v-ccx-delta.md")
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(line + "\n", encoding="utf-8")
         print(line)
 
 

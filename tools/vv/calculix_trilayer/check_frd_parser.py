@@ -44,12 +44,14 @@ class FrdParserTest(unittest.TestCase):
 
     def test_comparison_stdout_and_log(self):
         with tempfile.TemporaryDirectory() as directory:
-            for configured in (False, True):
+            for configured in (None, "", str(Path(directory) / "reports")):
                 with self.subTest(configured=configured):
                     env = dict(os.environ)
                     env.pop("CHIPCAE_VV_LOG_DIR", None)
-                    if configured:
-                        env["CHIPCAE_VV_LOG_DIR"] = str(Path(directory) / "reports")
+                    if configured is not None:
+                        env["CHIPCAE_VV_LOG_DIR"] = configured
+                    log = Path("/workspace/tasks/logs/v-ccx-delta.md")
+                    log.unlink(missing_ok=True)
                     result = subprocess.run(
                         [sys.executable, "-m", "unittest", "tools.vv.test_trilayer_calculix_ref"],
                         cwd=Path(__file__).resolve().parents[3], capture_output=True, text=True,
@@ -57,11 +59,8 @@ class FrdParserTest(unittest.TestCase):
                     )
                     self.assertEqual(len(result.stdout.splitlines()), 1)
                     self.assertTrue(result.stdout.startswith("W_bfp="))
-                    log = Path(directory) / "reports/v-ccx-delta.md"
-                    if configured:
-                        self.assertEqual(result.stdout, log.read_text(encoding="utf-8"))
-                    else:
-                        self.assertFalse(log.exists())
+                    self.assertEqual(result.stdout, log.read_text(encoding="utf-8"))
+                    self.assertFalse((Path(directory) / "reports/v-ccx-delta.md").exists())
 
     def test_failed_rejection_checks_do_not_report(self):
         from tools.vv.test_trilayer_calculix_ref import TrilayerCalculixRefTest
