@@ -241,4 +241,39 @@ void PreviewController::inspect(vtkDataObject* object) {
         blocks_ << block;
     }
 }
+// TEST-FIRST compilation stubs only. The acceptance tests intentionally remain red;
+// snapshot capture, data extraction, coloring and rendering are not implemented here.
+PreviewOptions PreviewController::effectiveOptions() const {
+    return {};
+}
+PreviewView::PreviewView(QWidget* parent) : QWidget(parent) {}
+bool PreviewView::show(const PreviewController&) {
+    return false;
+}
+bool PreviewView::show(vtkDataObject*,
+                       const QStringList&,
+                       const QStringList&,
+                       const QList<PreviewBlock>&,
+                       const PreviewOptions&) {
+    return false;
+}
+void PreviewView::setColorMode(PreviewColorMode) {}
+PreviewColorMode PreviewView::colorMode() const {
+    return PreviewColorMode::Layer;
+}
+QString PreviewView::summaryText() const {
+    return {};
+}
+QString PreviewView::colorBarTitle() const {
+    return {};
+}
+QString PreviewView::scalarArrayName() const {
+    return {};
+}
+vtkDataSet* PreviewView::displayed() const {
+    return nullptr;
+}
+int PreviewView::highlightedCount() const {
+    return 0;
+}
 } // namespace chipcae::desktop
