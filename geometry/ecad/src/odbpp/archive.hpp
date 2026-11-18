@@ -22,6 +22,8 @@ struct ArchiveLimits {
     std::uint64_t file_bytes = 512ULL * 1024 * 1024;
     std::uint64_t entry_count = 200000;
     double ratio = 200;
+    // Accept validated ZIPs with no non-directory entries.
+    bool allow_empty_zip = false;
 };
 class ArchiveReader {
     struct State;

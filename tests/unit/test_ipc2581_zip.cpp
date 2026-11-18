@@ -232,6 +232,8 @@ int main(int argc, char** argv) {
             zip(archive, {});
             rejected(ecad::read_ipc2581_zip(archive), {"no .xml entry"});
             write(xml, "");
+            zip(archive, {{"folder/", xml}});
+            rejected(ecad::read_ipc2581_zip(archive), {"no .xml entry"});
             zip(archive, {{"folder/", xml}, {"__MACOSX/x.xml", fixture}, {"._a.xml", fixture}});
             rejected(ecad::read_ipc2581_zip(archive), {"no .xml entry"});
             zip(archive,
@@ -337,11 +339,22 @@ int main(int argc, char** argv) {
         } else if (test == "ipc_zip_invalid_input") {
             rejected(ecad::read_ipc2581_zip(fixture), {});
             rejected(ecad::read_ipc2581_zip(dir), {});
-            write(archive, "PK truncated");
-            ecad::detail::ArchiveReader reader(archive);
-            require(!reader.open_error().empty(), "corrupt ZIP fixture");
-            require(ecad::read_ipc2581_zip(archive).error == reader.open_error(),
-                    "corrupt ZIP error must propagate");
+            zip(archive, {});
+            auto empty_zip = bytes(archive);
+            zip(archive, {{"folder/", fixture}});
+            auto damaged_directory_zip = bytes(archive);
+            damaged_directory_zip[0] = 'X';
+            for (const auto& data : {std::string(),
+                                     std::string("not a ZIP"),
+                                     std::string("PK truncated"),
+                                     empty_zip.substr(0, empty_zip.size() - 1),
+                                     damaged_directory_zip}) {
+                write(archive, data);
+                ecad::detail::ArchiveReader reader(archive);
+                require(!reader.open_error().empty(), "invalid ZIP fixture");
+                require(ecad::read_ipc2581_zip(archive).error == reader.open_error(),
+                        "invalid ZIP error must propagate verbatim");
+            }
         } else if (test == "ipc_zip_streaming") {
             auto data = bytes(fixture);
             auto end = data.rfind("</IPC-2581>");

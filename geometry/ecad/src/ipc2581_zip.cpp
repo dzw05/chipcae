@@ -23,10 +23,10 @@ std::string lower(std::string value) {
 ImportResult read_ipc2581_zip(const std::filesystem::path& file) {
     if (lower(file.extension().string()) != ".zip" || std::filesystem::is_directory(file))
         return rejected("IMPORT_REJECTED: IPC ZIP reader requires a .zip file");
-    detail::ArchiveReader archive(file);
-    // ArchiveReader treats a valid empty archive as an error. IPC selection still
-    // needs to report the absence of XML (including directory-only archives).
-    if (!archive.open_error().empty() && archive.open_error() != "IMPORT_REJECTED: empty input")
+    detail::ArchiveLimits limits;
+    limits.allow_empty_zip = true;
+    detail::ArchiveReader archive(file, limits);
+    if (!archive.open_error().empty())
         return rejected(archive.open_error());
     std::vector<std::string> matches;
     for (const auto& entry : archive.entries()) {

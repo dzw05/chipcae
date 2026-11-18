@@ -310,7 +310,8 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& input, const ArchiveLi
                 s.unsupported.push_back(
                     {"IMPORT_UNSUPPORTED_ELEMENT", entry.path + ": .Z compression", 0});
         }
-        if (std::none_of(
+        if (!(s.zipped && limits.allow_empty_zip) &&
+            std::none_of(
                 s.entries.begin(), s.entries.end(), [](const auto& e) { return !e.is_dir; }))
             fail("empty input");
     } catch (const std::exception& e) {
