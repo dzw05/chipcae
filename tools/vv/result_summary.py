@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Zhiwei Duan
-"""Validate and summarize the first step of a chipcae results directory.
+"""Validate and summarize a selected step of a chipcae results directory.
+
+By default select the first manifest step; an integer selects its n, and "last"
+selects the maximum n. Summaries include legacy entries without a step tag and
+entries tagged with the selected n, in manifest encounter order.
 
 Duplicate coordinates use the first stored displacement and temperature
 (hex before cut, then partition/storage order), even if copies differ.
@@ -179,8 +183,12 @@ def _read(root):
     return blocks, data, temperatures, names
 
 
-def _summarize(run_dir, top_rel_tol):
+def _summarize(run_dir, top_rel_tol, step):
     _require(np.isfinite(top_rel_tol) and top_rel_tol >= 0, 'top_rel_tol must be finite and nonnegative')
+    _require(step is None
+             or (isinstance(step, int) and not isinstance(step, bool) and step >= 0)
+             or (isinstance(step, str) and step == 'last'),
+             'step must be a nonnegative integer or "last"')
     try:
         content = (run_dir / 'manifest.json').read_text(encoding='utf-8')
     except UnicodeDecodeError as exc:
@@ -198,7 +206,27 @@ def _summarize(run_dir, top_rel_tol):
     _require(isinstance(steps, list) and len(steps) > 0 and isinstance(steps[0], dict)
              and isinstance(steps[0].get('file'), str) and steps[0]['file'],
              'expected nonempty steps[0].file string')
-    step_file = steps[0]['file']
+    step_indices = {}
+    for index, record in enumerate(steps):
+        _require(isinstance(record, dict), f'steps[{index}]: expected object')
+        _require(isinstance(record.get('file'), str) and record['file'],
+                 f'expected nonempty steps[{index}].file string')
+        n = record.get('n')
+        _require(isinstance(n, int) and not isinstance(n, bool) and n >= 0,
+                 f'steps[{index}].n: expected nonnegative integer')
+        _require(n not in step_indices, f'steps[{index}].n: duplicate step n: {n}')
+        step_indices[n] = index
+    selected_index = 0
+    if step == 'last':
+        selected_index = step_indices[max(step_indices)]
+    elif step is not None:
+        if step not in step_indices:
+            raise ResultSummaryError(12, 'INPUT_REFERENCE_MISSING', f'step {step}: not found')
+        selected_index = step_indices[step]
+    selected = steps[selected_index]
+    step_file = selected.get('file')
+    _require(isinstance(step_file, str) and step_file,
+             f'expected nonempty steps[{selected_index}].file string')
     summary = {}
     pv = None
     entries = manifest.get('summary', [])
@@ -207,14 +235,21 @@ def _summarize(run_dir, top_rel_tol):
         _require(isinstance(entry, dict) and isinstance(entry.get('name'), str)
                  and entry['name'] and 'value' in entry, 'invalid summary entry')
         name, value = entry['name'], entry['value']
-        _require(name not in summary, f'summary[{index}].name: duplicate summary name: {name}')
         _require(not isinstance(value, bool) and isinstance(value, (int, float))
                  and (isinstance(value, int) or np.isfinite(value)),
                  f'summary[{index}].value ({name}): expected finite numeric value')
-        summary[name] = value
         if name == 'warpage_pv':
             _require(entry.get('unit') == 'm',
                      f'summary[{index}].unit (warpage_pv): expected "m"')
+        if 'step' in entry:
+            owner = entry['step']
+            _require(isinstance(owner, int) and not isinstance(owner, bool) and owner >= 0,
+                     f'summary[{index}].step: expected nonnegative integer')
+            if owner != selected['n']:
+                continue
+        _require(name not in summary, f'summary[{index}].name: duplicate summary name: {name}')
+        summary[name] = value
+        if name == 'warpage_pv':
             pv = value
     mesh = manifest.get('mesh', {})
     _require(isinstance(mesh, dict), 'mesh must be an object')
@@ -274,10 +309,10 @@ def _summarize(run_dir, top_rel_tol):
                              n_top_points=len(top)), manifest_summary=summary)
 
 
-def summarize(run_dir: Path, top_rel_tol: float = 1e-12) -> dict:
+def summarize(run_dir: Path, top_rel_tol: float = 1e-12, step: int | str | None = None) -> dict:
     """Return the frozen summary, raising protocol errors for invalid input."""
     try:
-        return _summarize(Path(run_dir), top_rel_tol)
+        return _summarize(Path(run_dir), top_rel_tol, step)
     except ResultSummaryError:
         raise
     except (OSError, RuntimeError, EOFError, ValueError, TypeError, KeyError, IndexError, AttributeError,
@@ -290,9 +325,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('run_dir', type=Path)
     parser.add_argument('-o', type=Path)
     parser.add_argument('--top-rel-tol', type=float, default=1e-12)
+    parser.add_argument('--step', help='select a nonnegative step n or "last" (default: first step)')
     args = parser.parse_args(argv)
     try:
-        result = summarize(args.run_dir, args.top_rel_tol)
+        step = args.step
+        if step is not None and step != 'last':
+            _require(step.isascii() and step.isdecimal(),
+                     'step must be a nonnegative decimal integer or "last"')
+            try:
+                step = int(step)
+            except ValueError as exc:
+                raise ResultSummaryError(14, 'INPUT_INVALID', str(exc)) from exc
+        result = summarize(args.run_dir, args.top_rel_tol, step)
         content = json.dumps(result, indent=2, sort_keys=False, ensure_ascii=False, allow_nan=False) + '\n'
         if args.o is None:
             sys.stdout.write(content)
