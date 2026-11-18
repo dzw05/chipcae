@@ -21,6 +21,7 @@
 #include <vtkDataArray.h>
 #include <vtkDataObject.h>
 #include <vtkDataSet.h>
+#include <vtkDoubleArray.h>
 #include <vtkIntArray.h>
 #include <vtkMultiBlockDataSet.h>
 #include <vtkNew.h>
@@ -233,11 +234,17 @@ void viewAcceptance(Acceptance& a) {
         auto shown = view.displayed();
         auto layer = shown ? shown->GetCellData()->GetArray("layer_id") : nullptr;
         auto material = shown ? shown->GetCellData()->GetArray("material_id") : nullptr;
+        a.expect(vtkDoubleArray::SafeDownCast(layer) != nullptr,
+                 "layer name lookup returns the normalized double array");
+        a.expect(vtkDoubleArray::SafeDownCast(material) != nullptr,
+                 "material name lookup returns the normalized double array");
         a.expect(layer && layer->GetNumberOfTuples() == 4 && layer->GetComponent(0, 0) == 1 &&
-                     layer->GetComponent(1, 0) == 2 && std::isnan(layer->GetComponent(2, 0)),
+                     layer->GetComponent(1, 0) == 2 && std::isnan(layer->GetComponent(2, 0)) &&
+                     std::isnan(layer->GetComponent(3, 0)),
                  "known layer ids survive append and missing ids remain unknown");
         a.expect(material && material->GetNumberOfTuples() == 4 &&
                      std::isnan(material->GetComponent(0, 0)) &&
+                     std::isnan(material->GetComponent(1, 0)) &&
                      material->GetComponent(2, 0) == 1 && material->GetComponent(3, 0) == 1,
                  "known material ids survive append and missing ids remain unknown");
         a.expect(view.colorBarTitle().contains("die"), "partial layer names remain available");

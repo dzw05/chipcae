@@ -345,6 +345,7 @@ append(std::vector<vtkSmartPointer<vtkUnstructuredGrid>>& pieces) {
                               source && i < source->GetNumberOfTuples()
                                   ? source->GetComponent(i, 0)
                                   : std::numeric_limits<double>::quiet_NaN());
+            piece->GetCellData()->RemoveArray(name);
             piece->GetCellData()->AddArray(ids);
         }
     }
