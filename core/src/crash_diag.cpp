@@ -6,6 +6,7 @@
 #include <charconv>
 #include <cmath>
 #include <csignal>
+#include <cstdlib>
 #include <fcntl.h>
 #include <limits>
 #include <stdexcept>
@@ -17,12 +18,13 @@
 namespace chipcae::core {
 namespace {
 constexpr std::array fatal_signals{SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGFPE};
+constexpr std::size_t fatal_signal_count = fatal_signals.size();
 constexpr std::size_t line_capacity = 64;
 struct Snapshot {
     std::uint64_t window{};
     double time{};
-    char lines[5][line_capacity]{};
-    std::size_t lengths[5]{};
+    char lines[fatal_signal_count][line_capacity]{};
+    std::size_t lengths[fatal_signal_count]{};
 };
 // The first handler announces acquisition through handling before loading the
 // publication. The single ordinary-code writer checks that flag before loading
@@ -38,7 +40,7 @@ int pinned_slot = 0;
 int signal_fd = -1;
 std::atomic<bool> active{false};
 static_assert(std::atomic<bool>::is_always_lock_free);
-std::array<struct sigaction, 5> previous_actions{};
+std::array<struct sigaction, fatal_signal_count> previous_actions{};
 std::size_t saved_actions = 0;
 std::filesystem::path signal_path;
 std::filesystem::path json_path;
@@ -82,10 +84,10 @@ void format_snapshot(Snapshot& snapshot, std::uint64_t window, double time) {
 
 // BEGIN SIGNAL WRITER: only preformatted bytes and bounded write attempts.
 static void write_signal_line(int sig) {
-    unsigned int index = 0;
-    while (index < 5 && fatal_signals[index] != sig)
+    std::size_t index = 0;
+    while (index < fatal_signal_count && fatal_signals[index] != sig)
         ++index;
-    if (index == 5 || signal_fd < 0)
+    if (index == fatal_signal_count || signal_fd < 0)
         return;
     const auto& snapshot = slots[pinned_slot];
     const char* bytes = snapshot.lines[index];

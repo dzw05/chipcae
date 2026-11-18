@@ -1,11 +1,10 @@
 #include "support.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <initializer_list>
 #include <regex>
-#include <spawn.h>
 
-extern char** environ;
 using namespace crashdiag_test;
 
 namespace {
@@ -61,22 +60,10 @@ std::string body(const std::string& source, const std::regex& signature) {
     throw std::runtime_error("unterminated signal-path function");
 }
 
-void rg_forbidden(const fs::path& file) {
-    std::string pattern =
-        R"(\b(new|malloc|calloc|realloc|free|printf|fprintf|sprintf|snprintf|throw|mutex|on_error|flush|fsync)\b|std\s*::\s*(string|filesystem|cout|cerr)\b|\.(lock|unlock)\s*\()";
-    auto name = file.string();
-    std::array<char*, 6> args{const_cast<char*>("rg"),
-                              const_cast<char*>("-n"),
-                              const_cast<char*>("-e"),
-                              pattern.data(),
-                              name.data(),
-                              nullptr};
-    pid_t child = -1;
-    check(::posix_spawnp(&child, "rg", nullptr, nullptr, args.data(), environ) == 0,
-          "could not run required rg signal-safety inspection");
-    const int status = wait_child(child);
-    check(WIFEXITED(status) && WEXITSTATUS(status) == 1,
-          "rg found forbidden signal-path operations or inspection failed");
+void check_forbidden(const std::string& code) {
+    const std::regex pattern(
+        R"(\b(new|malloc|calloc|realloc|free|printf|fprintf|sprintf|snprintf|throw|mutex|on_error|flush|fsync)\b|std\s*::\s*(string|filesystem|cout|cerr)\b|\.(lock|unlock)\s*\()");
+    check(!std::regex_search(code, pattern), "found forbidden signal-path operations");
 }
 
 void check_calls(const std::string& code, std::initializer_list<std::string_view> allowed) {
@@ -96,6 +83,8 @@ void check_calls(const std::string& code, std::initializer_list<std::string_view
 
 int main() {
     return run([] {
+        // Source inspection must work even when no external tools are on PATH.
+        check(::setenv("PATH", "", 1) == 0, "could not isolate inspection from external tools");
         const auto source =
             code_only(read(fs::path(CHIPCAE_SOURCE_DIR) / "core/src/crash_diag.cpp"));
         const auto handler =
@@ -103,13 +92,17 @@ int main() {
         const auto helper =
             body(source,
                  std::regex(R"(\bstatic\s+void\s+write_signal_line\s*\(\s*int\s+sig\s*\)\s*\{)"));
-        TempDir tmp;
-        const auto handler_file = tmp.path / "handler.cpp";
-        const auto helper_file = tmp.path / "helper.cpp";
-        std::ofstream(handler_file) << handler;
-        std::ofstream(helper_file) << helper;
-        rg_forbidden(handler_file);
-        rg_forbidden(helper_file);
+        check_forbidden("const char* bytes = snapshot.lines[index]; ::write(fd, bytes, length);");
+        for (const auto* forbidden :
+             {"new int",     "malloc(1)",   "calloc(1, 1)",    "realloc(ptr, 1)",
+              "free(ptr)",   "printf()",    "fprintf()",       "sprintf()",
+              "snprintf()",  "throw error", "mutex m",         "on_error(error)",
+              "flush()",     "fsync(fd)",   "std :: string s", "std :: filesystem :: path p",
+              "std :: cout", "std :: cerr", "m.lock ()",       "m.unlock ()"})
+            expect_throw<std::runtime_error>([&] { check_forbidden(forbidden); },
+                                             "inspection accepted a forbidden operation");
+        check_forbidden(handler);
+        check_forbidden(helper);
         check(handler.find("write_signal_line") != std::string::npos,
               "on_signal must use the inspected signal writer");
         // Metadata is allowed only on the known, always-lock-free atomic objects.
