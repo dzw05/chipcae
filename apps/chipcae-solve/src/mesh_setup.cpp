@@ -1,4 +1,5 @@
 #include "chipcae/solve/case_loader.hpp"
+#include "mesh_error_map.hpp"
 
 #include <cmath>
 namespace chipcae::solve {
@@ -16,16 +17,16 @@ mesh::HexMeshArrays build_mesh(const RunInputs& inputs,
     auto stack = inputs.stack;
     stack.outline.polygon.clear();
     auto result = mesh::build_tensor_grid(stack, inputs.grid);
-    if (!result)
-        throw InputError(ErrorCode::INPUT_INVALID,
-                         result.error().path + ": " + result.error().reason);
+    if (!result) {
+        const auto& err = result.error();
+        const auto code = mesh_error_code(err);
+        throw InputError(code.code(), err.path + ": " + err.reason);
+    }
     auto mesh = std::move(result.value());
     if (!mesh.pending_cut.empty())
         throw InputError(ErrorCode::CUT_UNSUPPORTED, "internal material cuts are not supported");
     const auto nz = mesh.axes[2].size() - 1;
-    for (std::size_t e = 0; e < mesh.partitioning.size(); ++e)
-        if (mesh.partitioning[e] != mesh.partitioning[(e / nz) * nz])
-            throw InputError(ErrorCode::COLUMN_SPLIT_ACROSS_RANKS, "Column spans multiple ranks");
+    validate_column_partition(mesh, nz);
     if (cut)
         cut->reset();
     auto ring = inputs.stack.outline.polygon;
