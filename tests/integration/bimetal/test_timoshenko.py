@@ -109,12 +109,31 @@ with tempfile.TemporaryDirectory(prefix="bimetal-") as tmp:
             points = fields["VTKHDF/hex/Points"][:]
             displacement = fields["VTKHDF/hex/PointData/U"][:]
         assert points.shape == displacement.shape and points.shape[1] == 3
+        assert np.all(np.isfinite(displacement)), "non-finite displacement evidence"
         for point, first_component in (((0, 0, 0), 0), ((1, 0, 0), 1), ((0, 1, 0), 2)):
             selected = np.all(np.isclose(points, point, rtol=0, atol=1e-14), axis=1)
             assert np.any(selected), f"missing anchor vertex {point}"
             constrained = displacement[selected, first_component:]
-            assert np.all(np.isfinite(constrained)) and np.all(np.abs(constrained) <= 1e-12), (
-                point, constrained)
+            assert np.all(np.abs(constrained) <= 1e-12), (point, constrained)
+        # Under the solver's axis-aligned 3-2-1 contract, each selected vertex
+        # must have these zero components. Require a unique possible selection,
+        # rather than merely checking that the expected vertices happen to vanish.
+        # np.unique removes shared points repeated by output partitions.
+        zero = np.abs(displacement) <= 1e-12
+        anchor_candidates = np.unique(points[np.all(zero, axis=1)], axis=0)
+        assert anchor_candidates.shape == (1, 3), ("ambiguous A", anchor_candidates)
+        anchor = anchor_candidates[0]
+        assert np.allclose(anchor, (0, 0, 0), rtol=0, atol=1e-14), anchor
+        for axis, first_component, expected in ((0, 1, (1, 0, 0)), (1, 2, (0, 1, 0))):
+            other_axes = [component for component in range(3) if component != axis]
+            on_axis = np.all(np.isclose(points[:, other_axes], anchor[other_axes],
+                                       rtol=0, atol=1e-14), axis=1)
+            eligible = (on_axis & (points[:, axis] > anchor[axis] + 1e-14)
+                        & np.all(zero[:, first_component:], axis=1))
+            candidates = np.unique(points[eligible], axis=0)
+            assert candidates.shape == (1, 3), ("ambiguous B/C", axis, candidates)
+            assert np.allclose(candidates[0], expected, rtol=0, atol=1e-14), candidates
+        print("unique displacement evidence: A=(0,0,0), B=(1,0,0), C=(0,1,0)", flush=True)
         error = abs(measured - W_ref) / W_ref
         write(work / "result.json", {
             "schema": "chipcae.vv_result/0.2", "case_id": name,

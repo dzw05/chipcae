@@ -34,8 +34,16 @@ partners becomes A; scanning retains the last qualifying B and C. The
 `GetVertexVDofs` loop constrains A ux/uy/uz, B uy/uz, C uz, sorts and checks
 exactly six DOFs, and emits `3-2-1 constrained_dofs=6 (3+2+1)` in `solve/events.bin` (required by
 the test). The test checks the existing VTKHDF hex points and displacement
-field: A/B/C must be present and A ux/uy/uz, B uy/uz, C uz must be finite
-and zero within 1e-12 m, on every grid and rank run.
+field to establish a unique selection consistent with that inspected contract.
+All displacements must be finite. Exactly one distinct output point may have
+all three components zero within 1e-12 m: A=(0,0,0). Among positive-x points
+on A's axis, exactly one may have uy/uz zero: B=(1,0,0). Among positive-y
+points on A's axis, exactly one may have uz zero: C=(0,1,0). Shared points
+repeated by partitions are deduplicated. These checks run on every grid and
+rank run and fail if another selection is possible within the tolerance.
+The event establishes the six-DOF count; it does not report coordinates.
+Coordinate evidence comes from uniqueness in the displacement artifact,
+combined with the inspected axis-aligned selection contract.
 `mesh/background/src/tensor_grid.cpp` orders node columns by Morton
 order and z ascending. For this full square (all regular cells), selection is
 A=(0,0,0), B=(1,0,0), C=(0,1,0), for every tested grid and both rank counts.
@@ -145,8 +153,19 @@ Final Release suite:
 returned 0: 172 tests, zero failures, nine expected optional-backend/placeholder
 skips, total 898.22 s. Bimetal passed in 80.68 s during this suite.
 Full output: `/workspace/tasks/logs/v-int-bimetal-review-all.log`.
-The review fix adds a coordinate event in `pipeline.cpp` so the test checks
-the actual selected A/B/C points. That file was formatted with clang-format
-23.1.5 (`-i`, then `--dry-run --Werror`). Python syntax and `git diff --check`
-are clean. The documented negative/restoration command was rerun after these
-assertions were added: exits 8 and 0, respectively.
+The current test uses the existing displacement artifact to identify the unique
+A/B/C selection consistent with the inspected solver contract; no coordinate
+event or product-code change is required.
+
+Review validation (2026-11-18): Release `cmake --build
+/workspace/build-v-int-bimetal-release -j2` exited 0. The full command
+`ctest --test-dir /workspace/build-v-int-bimetal-release --output-on-failure -j2`
+exited 0: 172 tests, zero failures, nine expected skips, 856.15 s; the revised
+bimetal test passed in 50.53 s. Commands used the shim-first PATH and MPI/thread
+environment recorded above. Logs: `/workspace/tasks/logs/v-int-bimetal-selection-build.log`
+and `/workspace/tasks/logs/v-int-bimetal-selection-all.log`.
+Constructed displacement artifacts retaining the expected zero components but
+adding an alternative A, B, or C were each rejected by the uniqueness assertions.
+clang-format 23.1.5 `--dry-run --Werror` passed on the inspected pipeline file;
+this change touches only Python and Markdown. Python syntax and
+`git diff --check` passed. No numerical tolerance was changed.
