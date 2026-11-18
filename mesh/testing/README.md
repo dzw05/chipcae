@@ -42,3 +42,14 @@ The frozen v0.3.2 header defines `Expected` in `chipcae::mesh`, unlike the brief
 Save returns `Expected<void>` with a default-constructed success result. The
 fixture header supplies the void specialization without changing the frozen
 primary template.
+
+The fixture computes the schema/README mesh hash byte protocol locally and reuses
+schema's SHA-256 helper, without including preview implementation headers. The
+acceptance test independently compares against preview's digest implementation.
+Nonempty copper layer maps have one entry per `attr_table.layers` entry; an empty
+map remains permitted for meshes without this optional metadata.
+
+Test-first evidence is commit `6129bd3e46f4e42668d812f9c9df855f5d321d62`,
+which supplied NOT_IMPLEMENTED save/load stubs. Runtime failures are recorded in
+`/workspace/tasks/logs/i5-fixture-red.log`; the implementation followed in
+`d06d8382610b26d49820677b50fdcc65ab2a98ed`.

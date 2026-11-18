@@ -7,6 +7,8 @@ target_include_directories(chipcae_mesh_fixture PUBLIC include
 target_link_libraries(chipcae_mesh_fixture PUBLIC chipcae::core PRIVATE jsoncons)
 if(CHIPCAE_BUILD_TESTS)
   add_executable(i5_fixture_tests ${PROJECT_SOURCE_DIR}/tests/integration/mesh_p1/test_i5_fixture.cpp)
+  # The generator test loads the demo via load_stack (schema/src/stack.cpp).
+  # Keep this dependency on the test only; the fixture and smoke do not use it.
   target_link_libraries(i5_fixture_tests PRIVATE chipcae_mesh_fixture chipcae_mesh_background chipcae_stack)
   target_compile_definitions(i5_fixture_tests PRIVATE I5_ROOT="${PROJECT_SOURCE_DIR}")
   foreach(case roundtrip digest rejects_bad empty deterministic)

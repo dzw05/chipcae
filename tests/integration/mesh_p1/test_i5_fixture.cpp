@@ -387,6 +387,12 @@ void rejects_bad(const fs::path& dir) {
     };
     reject_mesh("pending cut index", [](auto& m) { m.pending_cut = {-1}; });
     reject_mesh("pending cut upper bound", [](auto& m) { m.pending_cut = {1}; });
+    reject_mesh("short copper layer map", [](auto& m) { m.copper_layer_of_layer.pop_back(); });
+    reject_mesh("long copper layer map", [](auto& m) { m.copper_layer_of_layer.push_back(-1); });
+    for (const auto& path : {dir, dir / "missing-parent" / "mesh.json", fs::path("/dev/full")}) {
+        auto r = save_mesh_fixture(decorated(), path);
+        require(!r && r.error().path == "$", "write failure uses I/O convention");
+    }
     reject_mesh("nodes shape", [](auto& m) { m.nodes.push_back(0); });
     reject_mesh("snap axis", [](auto& m) { m.snapped[0].axis = 'q'; });
     reject_mesh("snap displacement", [](auto& m) { m.snapped[0].displacement = 0; });
