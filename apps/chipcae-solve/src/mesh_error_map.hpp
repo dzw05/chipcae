@@ -4,6 +4,10 @@
 #include <unordered_map>
 
 namespace chipcae::solve {
+// B-C3 coverage: COLUMN_SPLIT_ACROSS_RANKS is unit-tested in solve_mesh.
+// The CLI generator partitions whole columns, so valid CLI/MPI inputs cannot
+// deliberately trigger this path. The post-generation check below throws
+// InputError directly; it does not exercise this mapper branch end to end.
 inline ErrorCode mesh_error_code(const mesh::Error& error) {
     if (error.path == "COLUMN_SPLIT_ACROSS_RANKS")
         return ErrorCode::COLUMN_SPLIT_ACROSS_RANKS;

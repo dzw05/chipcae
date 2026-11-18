@@ -18,6 +18,11 @@ bool mesh_error_acceptance() {
             passed = false;
         }
     };
+    // B-C3 acceptance is unit-only: the table tests the mesh-error mapping,
+    // while the synthetic split below tests the production validator's direct
+    // InputError (code and diagnostic). Neither asserts CLI/MPI exit coverage
+    // for split columns: the generator assigns whole columns to ranks, and the
+    // brief forbids modifying it or adding an input contract to force a split.
     // The contract enumerates five distinct recognized paths (not six).
     const std::pair<const char*, ErrorCode::Value> mappings[] = {
         {"COLUMN_SPLIT_ACROSS_RANKS", ErrorCode::COLUMN_SPLIT_ACROSS_RANKS},
