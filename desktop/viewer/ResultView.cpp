@@ -210,6 +210,16 @@ QString ResultView::colorBarTitle() const {
         return "|U| (m)";
     case ResultColorField::WarpageUz:
         return "U_z (m)";
+    case ResultColorField::LayerId:
+    case ResultColorField::MaterialId: {
+        const bool layer = d->field == ResultColorField::LayerId;
+        const int id = static_cast<int>(d->range.min);
+        auto name = d->session ? (layer ? d->session->layerName(id) : d->session->materialName(id))
+                               : QString{};
+        if (name.isEmpty())
+            name = QString("%1 %2").arg(layer ? "layer" : "material").arg(id);
+        return QString("%1: %2").arg(layer ? "layer_id" : "material_id", name);
+    }
     }
     return {};
 }
@@ -391,9 +401,22 @@ void ResultView::rebuild() {
         vtkNew<vtkDataSetMapper> mapper;
         mapper->SetInputData(b.shown);
         vtkDataArray* scalar = nullptr;
-        if (d->field == ResultColorField::Temperature)
+        const bool cellField =
+            d->field == ResultColorField::LayerId || d->field == ResultColorField::MaterialId;
+        switch (d->field) {
+        case ResultColorField::Temperature:
             scalar = b.shown->GetPointData()->GetArray("T");
-        else if (u && u->GetNumberOfComponents() == 3) {
+            break;
+        case ResultColorField::LayerId:
+            scalar = b.shown->GetCellData()->GetArray("layer_id");
+            break;
+        case ResultColorField::MaterialId:
+            scalar = b.shown->GetCellData()->GetArray("material_id");
+            break;
+        case ResultColorField::DisplacementMagnitude:
+        case ResultColorField::WarpageUz: {
+            if (!u || u->GetNumberOfComponents() != 3)
+                break;
             vtkNew<vtkDoubleArray> derived;
             derived->SetName(d->field == ResultColorField::DisplacementMagnitude ? "Result_U_mag"
                                                                                  : "Result_U_z");
@@ -406,19 +429,29 @@ void ResultView::rebuild() {
             }
             b.shown->GetPointData()->AddArray(derived);
             scalar = derived;
+            break;
         }
-        if (visible && scalar && b.shown->GetNumberOfCells() && b.shown->GetNumberOfPoints()) {
-            for (vtkIdType i = 0; i < b.shown->GetNumberOfPoints(); ++i) {
+        }
+        const auto count = cellField ? b.shown->GetNumberOfCells() : b.shown->GetNumberOfPoints();
+        if (visible && scalar && b.shown->GetNumberOfCells() && count) {
+            for (vtkIdType i = 0; i < count; ++i) {
                 const double value = scalar->GetComponent(i, 0);
                 if (!d->range.valid) {
-                    d->range = {
-                        value, value, true, d->field == ResultColorField::Temperature ? "K" : "m"};
+                    d->range = {value,
+                                value,
+                                true,
+                                cellField                                   ? ""
+                                : d->field == ResultColorField::Temperature ? "K"
+                                                                            : "m"};
                 } else {
                     d->range.min = std::min(d->range.min, value);
                     d->range.max = std::max(d->range.max, value);
                 }
             }
-            mapper->SetScalarModeToUsePointFieldData();
+            if (cellField)
+                mapper->SetScalarModeToUseCellFieldData();
+            else
+                mapper->SetScalarModeToUsePointFieldData();
             mapper->SelectColorArray(scalar->GetName());
             mapper->SetLookupTable(lut);
         } else

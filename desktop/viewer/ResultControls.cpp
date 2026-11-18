@@ -15,7 +15,11 @@ ResultControls::ResultControls(ResultView& view, ResultSession& session, QWidget
     : QWidget(parent) {
     auto layout = new QFormLayout(this);
     auto field = new QComboBox(this);
-    field->addItems({QStringLiteral("温度"), QStringLiteral("位移幅值"), QStringLiteral("翘曲")});
+    field->addItems({QStringLiteral("温度"),
+                     QStringLiteral("位移幅值"),
+                     QStringLiteral("翘曲"),
+                     QStringLiteral("叠层"),
+                     QStringLiteral("材料")});
     field->setCurrentIndex(static_cast<int>(view.colorField()));
     layout->addRow("Field", field);
     connect(field, &QComboBox::currentIndexChanged, &view, [&view](int index) {
