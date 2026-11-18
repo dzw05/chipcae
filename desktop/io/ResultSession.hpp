@@ -10,6 +10,7 @@
 
 class vtkDataObject;
 namespace chipcae::desktop {
+enum class MeshSha256Compare { Match, PreviewMissing, ManifestMissing, Mismatch };
 struct EventLogResult {
     std::vector<chipcae::io::Event> events;
     quint64 validatedBytes = 0;
@@ -28,6 +29,8 @@ public:
     QJsonArray blocks() const;
     QJsonArray summary() const;
     QJsonObject meshDigest() const;
+    MeshSha256Compare comparePreviewMeshSha256(const QString& previewSha256,
+                                               QString* detail = nullptr) const;
     const QStringList& warnings() const { return warnings_; }
     const QString& error() const { return error_; }
     const QMap<QString, QStringList>& nameTables() const { return names_; }

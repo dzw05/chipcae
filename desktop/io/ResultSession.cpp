@@ -320,6 +320,10 @@ QJsonObject ResultSession::meshDigest() const {
             out[key] = manifest_[key];
     return out;
 }
+MeshSha256Compare ResultSession::comparePreviewMeshSha256(const QString&, QString*) const {
+    // TEST-FIRST stub: keep acceptance assertions red until the comparison is implemented.
+    return MeshSha256Compare::Mismatch;
+}
 bool ResultSession::preflight(const QString& path) {
     Handle file{H5Fopen(path.toUtf8().constData(), H5F_ACC_RDONLY, H5P_DEFAULT), H5Fclose};
     if (file.id < 0) {
