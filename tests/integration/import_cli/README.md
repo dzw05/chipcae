@@ -27,9 +27,13 @@ Each invocation uses a fresh working directory and relative output `stack.json`.
 This preserves the baseline's `stack.polyset` reference without rewriting any
 output bytes. Tests compare numeric exit codes and the five named artifacts
 (`stack.json`, `stack.polyset`, `defects.json`, `import_report.json`, and
-`import_report.csv`), including whether each artifact exists. There is no sorting,
-JSON parsing, normalization, or comparison of unrelated artifacts. Never format
-the goldens. STEP and ECAD-disabled tests compare defects and exit 7; STEP also freezes stdout/stderr.
+`import_report.csv`), including whether each artifact exists. Unchanged cases use
+byte comparisons without sorting or normalization. The unsupported IPC fixture
+now requires exit 6, no geometry/layer artifacts, and complete B defects in JSON
+and CSV; its old successful-import golden is retained only as the unchanged
+report-header baseline. Help checks the original usage bytes plus the exact ECAD
+help extension. Never format the goldens. STEP and ECAD-disabled tests compare
+defects and exit 7; STEP also freezes stdout/stderr.
 
 CTest selects `import_cli_refactor_noop` in ECAD ON builds and
 `import_cli_refactor_noop_ecad_off` in ECAD OFF builds; run both configurations.
