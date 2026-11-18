@@ -15,6 +15,7 @@
 #include "StackEditor.hpp"
 #include "SubmitDialog.hpp"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QDockWidget>
 #include <QElapsedTimer>
@@ -42,7 +43,24 @@
 #include <vtkNew.h>
 #include <vtkPolyDataMapper.h>
 #include <vtkRenderer.h>
-MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
+MainWindow::MainWindow(QWidget* parent)
+    : MainWindow(QCoreApplication::arguments(),
+                 QProcessEnvironment::systemEnvironment(),
+                 QCoreApplication::applicationDirPath(),
+                 QString(CHIPCAE_REPOSITORY) + "/schema",
+                 parent) {}
+QString MainWindow::schemaDirectory() const {
+    return schemaDirectory_;
+}
+MainWindow::MainWindow(const QStringList& args,
+                       const QProcessEnvironment& env,
+                       const QString& executableDir,
+                       const QString& compileTimeFallback,
+                       QWidget* parent)
+    : QMainWindow(parent), schemaDirectory_(chipcae::desktop::DesktopConfig::locateSchemaDir(
+                               args, env, executableDir, compileTimeFallback)) {
+    if (schemaDirectory_.isEmpty())
+        schemaDirectory_ = QString(CHIPCAE_REPOSITORY) + "/schema";
     preview_ = new chipcae::desktop::PreviewController(this);
     chipcae::desktop::SubmitDialog defaults;
     profile_ = defaults.profile();
@@ -221,8 +239,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     auto* split = new QSplitter(dock);
     auto* form = new chipcae::desktop::SchemaForm(split);
     auto* model = new chipcae::desktop::CaseTreeModel(&document_, split);
-    const QString repository = CHIPCAE_REPOSITORY;
-    auto* outline = new chipcae::desktop::CaseTreeView(model, form, repository + "/schema", split);
+    auto* outline = new chipcae::desktop::CaseTreeView(model, form, schemaDirectory_, split);
     split->insertWidget(0, outline);
     dock->setWindowTitle("Case");
     dock->setWidget(split);
