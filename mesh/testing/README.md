@@ -39,7 +39,6 @@ sp6; this library adds no solver or grid-generation API.
 
 The frozen v0.3.2 header defines `Expected` in `chipcae::mesh`, unlike the brief's
 `chipcae::Expected` spelling. These declarations retain the frozen namespace.
-Because the primary template stores `variant<T, Error>`, the fixture header
-supplies its `void` specialization with default success and error construction.
-No schema declaration, namespace alias, or frozen contract is changed. The
-namespace discrepancy should be reviewed by the interface architect.
+Save returns `Expected<bool>` with `true` on success, following the existing
+status-operation convention supported by the frozen template. No specialization
+or frozen contract change is needed.

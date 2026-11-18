@@ -99,6 +99,7 @@ struct Reader {
     std::size_t count = 0;
     template <class T>
     void operator()(const char* name, T& x) {
+        check(j.contains(name), "missing required field");
         decode(j.at(name), x);
         ++count;
     }
@@ -274,7 +275,7 @@ bool validate(const HexMeshArrays& m) {
     optional(m.partitioning.size(), c);
     optional(m.node_layer.size(), n);
     optional(m.node_column.size(), n);
-    optional(m.attr_frame.size(), 9 * m.attr_table.entries.size());
+    check(m.attr_frame.size() % 9 == 0, "attribute frame length");
     if (n == 0 && c == 0) {
         std::string actual, defaults;
         encode(actual, m);
@@ -294,6 +295,7 @@ bool validate(const HexMeshArrays& m) {
                 check(a[i] > a[i - 1], "axis ordering");
         }
     };
+    check(m.axes.size() == 3, "axes shape");
     for (const auto& a : m.axes)
         axis(a);
     for (const auto& level : m.grid_report.level_axes)
@@ -317,7 +319,7 @@ bool validate(const HexMeshArrays& m) {
     return false;
 }
 } // namespace
-Expected<void> save_mesh_fixture(const HexMeshArrays& mesh, const std::filesystem::path& path) {
+Expected<bool> save_mesh_fixture(const HexMeshArrays& mesh, const std::filesystem::path& path) {
     std::string text;
     try {
         const bool empty = validate(mesh);
@@ -337,7 +339,7 @@ Expected<void> save_mesh_fixture(const HexMeshArrays& mesh, const std::filesyste
     out.close();
     if (!out)
         return Error{"$", "cannot write mesh fixture"};
-    return {};
+    return true;
 }
 Expected<HexMeshArrays> load_mesh_fixture(const std::filesystem::path& path) {
     try {

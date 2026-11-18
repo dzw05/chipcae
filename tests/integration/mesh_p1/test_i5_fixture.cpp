@@ -313,6 +313,8 @@ void rejects_bad(const fs::path& dir) {
         reject("int64 range " + token, s);
     }
     mutate("size underflow", [](J& j) { j["mesh"]["grid_report"]["N_L"] = -1; });
+    mutate("too few axes", [](J& j) { j["mesh"]["axes"] = J::array(); });
+    mutate("too many axes", [](J& j) { j["mesh"]["axes"].push_back(J::array()); });
     mutate("missing digest axes", [](J& j) { j["mesh"]["axes"][2] = J::array(); });
     mutate("missing level axes", [](J& j) { j["mesh"]["grid_report"]["level_axes"] = J::array(); });
     mutate("malformed digest", [](J& j) { j["mesh_sha256"] = "ABC"; });
@@ -386,6 +388,9 @@ int main(int argc, char** argv) {
             const auto first = bytes(p);
             roundtrip(m, p);
             require(first == bytes(p), "same-path saves produce identical bytes");
+            auto extra_frame = m;
+            extra_frame.attr_frame.insert(extra_frame.attr_frame.end(), 9, 0.0);
+            roundtrip(extra_frame, dir / "extra-frame.json");
             auto json = J::parse(first);
             require(json["mesh"]["attr_table"]["boundary_names"][0][0].is_int64() ||
                         json["mesh"]["attr_table"]["boundary_names"][0][0].is_uint64(),
