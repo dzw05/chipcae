@@ -1,6 +1,7 @@
 #ifdef CHIPCAE_ENABLE_KOKKOS
 #include <Kokkos_Core.hpp>
 #endif
+#include "../../../preview/src/mesh_digest.hpp"
 #include "../../../schema/src/sha256.hpp"
 #include "support.hpp"
 
@@ -35,7 +36,8 @@ int main(int argc, char** argv) {
                           int expected_code,
                           int expected_levels = -1,
                           std::string expected_n0 = "",
-                          bool use_mpi = true) {
+                          bool use_mpi = true,
+                          std::string expected_error_path = "") {
             jsoncons::json summary;
             auto prefix = argc == 4 && use_mpi ? shell(argv[2]) + " " + argv[3] + " " : "";
             auto command = prefix + shell(argv[1]) + " " + args + " >" +
@@ -59,6 +61,10 @@ int main(int argc, char** argv) {
                 last = event.at("stage").as<std::string>();
                 if (last == "success" || last == "error")
                     ++terminal;
+                if (last == "error" && !expected_error_path.empty())
+                    expect(event.at("message").as<std::string>().starts_with(expected_error_path +
+                                                                             ": "),
+                           "terminal mesh error path");
                 if (last == "success") {
                     auto params = jsoncons::json::parse(event.at("message").as<std::string>());
                     expect(params.at("grid").is_string(), "effective grid");
@@ -108,6 +114,17 @@ int main(int argc, char** argv) {
         options.ranks = argc == 4 ? 2 : 1;
         auto mesh = chipcae::mesh::build_tensor_grid(stack.value(), options);
         expect(bool(mesh), "fixture mesh");
+        for (int axis : {0, 1}) {
+            auto invalid_mesh = mesh.value();
+            invalid_mesh.grid_report.padding[axis] = invalid_mesh.axes[axis].size();
+            bool rejected = false;
+            try {
+                chipcae::preview::detail::digest(invalid_mesh);
+            } catch (const std::invalid_argument& error) {
+                rejected = std::string(error.what()) == "mesh padding exceeds axis cell count";
+            }
+            expect(rejected, "digest rejects padding beyond either axis cell count");
+        }
         expect(static_cast<std::size_t>(nc) == mesh.value().attribute.size(), "cell coverage");
         std::map<std::string, std::int32_t> layers;
         for (const auto& entry : mesh.value().attr_table.entries)
@@ -372,7 +389,11 @@ int main(int argc, char** argv) {
             acceptance("tiny hierarchy alias", [&] {
                 invoke(shell(tiny.string()) + " --nx 2 --ny 2 --levels 2 -o " +
                            shell((dir / "hierarchy").string()),
-                       4);
+                       4,
+                       -1,
+                       "",
+                       true,
+                       "hierarchy/levels");
                 stderr_contains("hierarchy/levels");
             });
         expect(acceptance_failures == 0, "preview acceptance cases");

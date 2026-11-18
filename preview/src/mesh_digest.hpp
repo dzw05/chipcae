@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -54,6 +55,8 @@ inline MeshDigest digest(const chipcae::mesh::HexMeshArrays& mesh) {
         for (int n = 0; n < 8; ++n)
             append_i64(bytes, mesh.node_gid[mesh.hex[8 * i + n]]);
     const auto nx = mesh.axes[0].size() - 1, ny = mesh.axes[1].size() - 1;
+    if (report.padding[0] > nx || report.padding[1] > ny)
+        throw std::invalid_argument("mesh padding exceeds axis cell count");
     const auto padded_cells = (nx * ny - (nx - report.padding[0]) * (ny - report.padding[1])) * nz;
     return {nx0,
             ny0,
