@@ -9,7 +9,7 @@ if(CHIPCAE_BUILD_TESTS)
   add_executable(i5_fixture_tests ${PROJECT_SOURCE_DIR}/tests/integration/mesh_p1/test_i5_fixture.cpp)
   # The generator test loads the demo via load_stack (schema/src/stack.cpp).
   # Keep this dependency on the test only; the fixture and smoke do not use it.
-  target_link_libraries(i5_fixture_tests PRIVATE chipcae_mesh_fixture chipcae_mesh_background chipcae_stack)
+  target_link_libraries(i5_fixture_tests PRIVATE chipcae_mesh_fixture chipcae_mesh_background chipcae_stack jsoncons)
   target_compile_definitions(i5_fixture_tests PRIVATE I5_ROOT="${PROJECT_SOURCE_DIR}")
   foreach(case roundtrip digest rejects_bad empty deterministic)
     add_test(NAME i5_fixture_${case} COMMAND i5_fixture_tests ${case})
@@ -65,7 +65,7 @@ if(CHIPCAE_BUILD_TESTS)
     file(GENERATE OUTPUT "${PROJECT_BINARY_DIR}/i5-links-$<CONFIG>.cmake" CONTENT "${graph}")
   endfunction()
   cmake_language(DEFER DIRECTORY "${PROJECT_SOURCE_DIR}" CALL i5_generate_link_graph)
-  add_test(NAME i5_fixture_no_cut_link COMMAND cmake
+  add_test(NAME i5_fixture_no_cut_link COMMAND "${CMAKE_COMMAND}"
     -DGRAPH=${PROJECT_BINARY_DIR}/i5-links-$<CONFIG>.cmake
     -DSMOKE=$<TARGET_FILE:i5_fixture_load_smoke>
     -DFIXTURE=${PROJECT_SOURCE_DIR}/tests/fixtures/mesh/i5_fcbga_small.mesh.json

@@ -38,11 +38,10 @@ This is a field stub for solver input tests; it neither generates cut geometry
 nor validates SP5 or the real cutting pipeline. Solver integration belongs to
 sp6; this library adds no solver or grid-generation API.
 
-The frozen v0.3.2 header defines `Expected` in `chipcae::mesh`, unlike the brief's
-`chipcae::Expected` spelling. These declarations retain the frozen namespace.
-Save returns `Expected<void>` with a default-constructed success result. The
-fixture header supplies the void specialization without changing the frozen
-primary template.
+The shared schema header owns `Expected`, including its void specialization,
+and exposes `chipcae::Expected` as the same template as `chipcae::mesh::Expected`.
+The fixture API uses `chipcae::Expected` as registered. Save returns
+`Expected<void>` with a default-constructed success result.
 
 The fixture directly reuses the inline digest in `preview/src/mesh_digest.hpp`
 and its schema SHA-256 helper after validating connectivity and axis lengths.

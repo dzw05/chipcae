@@ -224,7 +224,7 @@ HexMeshArrays decorated() {
     return m;
 }
 void roundtrip(const HexMeshArrays& m, const fs::path& p) {
-    static_assert(std::is_same_v<decltype(save_mesh_fixture(m, p)), Expected<void>>);
+    static_assert(std::is_same_v<decltype(save_mesh_fixture(m, p)), chipcae::Expected<void>>);
     auto saved = save_mesh_fixture(m, p);
     require(bool(saved), saved ? "" : "save succeeds: " + saved.error().reason);
     auto loaded = load_mesh_fixture(p);
@@ -310,15 +310,7 @@ void rejects_bad(const fs::path& dir) {
     mutate("invalid snap axis", [](J& j) {
         j["mesh"]["snapped"] = J::parse(R"([{"axis":"q","from":0,"to":1,"displacement":1}])");
     });
-    mutate("inconsistent snap displacement", [](J& j) {
-        j["mesh"]["snapped"] = J::parse(R"([{"axis":"x","from":0,"to":1,"displacement":0}])");
-    });
     mutate("empty face set name", [](J& j) { j["mesh"]["face_sets"] = J::parse(R"([["",[1]]])"); });
-    for (int a : {-1, 0})
-        mutate("nonpositive face set attribute " + std::to_string(a), [&](J& j) {
-            j["mesh"]["face_sets"] = J::parse(R"([["cut",[]]])");
-            j["mesh"]["face_sets"][0][1].push_back(a);
-        });
     mutate("wrong integer element type", [](J& j) { j["mesh"]["hex"][0] = "0"; });
     mutate("wrong real element type", [](J& j) { j["mesh"]["vertices"][0] = "0"; });
     mutate("wrong bool type", [](J& j) { j["mesh"]["internal_interfaces"] = 1; });
@@ -410,9 +402,7 @@ void rejects_bad(const fs::path& dir) {
     }
     reject_mesh("nodes shape", [](auto& m) { m.nodes.push_back(0); });
     reject_mesh("snap axis", [](auto& m) { m.snapped[0].axis = 'q'; });
-    reject_mesh("snap displacement", [](auto& m) { m.snapped[0].displacement = 0; });
     reject_mesh("face set name", [](auto& m) { m.face_sets[""] = {1}; });
-    reject_mesh("face set attribute", [](auto& m) { m.face_sets["cut"] = {0}; });
     for (const Real invalid : {std::numeric_limits<Real>::infinity(),
                                -std::numeric_limits<Real>::infinity(),
                                std::numeric_limits<Real>::quiet_NaN()}) {
@@ -469,6 +459,12 @@ int main(int argc, char** argv) {
             const auto first = bytes(p);
             roundtrip(m, p);
             require(first == bytes(p), "same-path saves produce identical bytes");
+            // Reports preserve supplied values; displacement may be rounded independently.
+            auto reports = m;
+            reports.snapped.push_back({'x', 0.1, 0.3, 0.2});
+            reports.snapped.push_back({'y', 0.0, 1.0, 0.0});
+            reports.face_sets["cut"] = {-1, 0, 99};
+            roundtrip(reports, dir / "report-values.json");
             auto extra_frame = m;
             extra_frame.attr_frame.insert(extra_frame.attr_frame.end(), 9, 0.0);
             roundtrip(extra_frame, dir / "extra-frame.json");

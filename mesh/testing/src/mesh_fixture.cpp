@@ -289,13 +289,9 @@ bool validate(const HexMeshArrays& m) {
         check(std::isfinite(snap.from) && std::isfinite(snap.to) &&
                   std::isfinite(snap.displacement),
               "nonfinite snap report");
-        check(snap.displacement == snap.to - snap.from, "snap displacement");
     }
     for (const auto& [name, attributes] : m.face_sets) {
         check(!name.empty(), "empty face set name");
-        // Cut-face attributes need not occur in bdr_attribute.
-        for (auto a : attributes)
-            check(a > 0, "face set attribute");
     }
     auto optional = [](std::size_t actual, std::size_t expected) {
         check(actual == 0 || actual == expected, "optional array length");
