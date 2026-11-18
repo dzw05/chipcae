@@ -209,6 +209,8 @@ def _summarize(run_dir, top_rel_tol, step):
     step_indices = {}
     for index, record in enumerate(steps):
         _require(isinstance(record, dict), f'steps[{index}]: expected object')
+        _require(isinstance(record.get('file'), str) and record['file'],
+                 f'expected nonempty steps[{index}].file string')
         n = record.get('n')
         _require(isinstance(n, int) and not isinstance(n, bool) and n >= 0,
                  f'steps[{index}].n: expected nonnegative integer')

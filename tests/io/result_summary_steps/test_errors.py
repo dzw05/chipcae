@@ -185,6 +185,26 @@ class Errors(unittest.TestCase):
                     save(run, manifest)
                     self.assert_failure(run, args=('--step', '1'))
 
+    def test_nonselected_file_must_be_nonempty_string(self):
+        records = [{}] + [dict(file=value)
+                          for value in (None, '', 1, 1., True, False, [], {})]
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            original = steps_fixture(run)
+            for position in range(3):
+                for record in records:
+                    manifest = copy.deepcopy(original)
+                    manifest['steps'][position] = dict(n=position, **record)
+                    save(run, manifest)
+                    for args, selector, selected in [((), None, 0),
+                                                      (('--step', '1'), 1, 1),
+                                                      (('--step', 'last'), 'last', 2)]:
+                        if position == selected:
+                            continue
+                        with self.subTest(position=position, record=record, args=args):
+                            self.assert_failure(run, args=args)
+                            self.assert_api_failure(run, selector)
+
     def test_no_matching_summaries(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)
