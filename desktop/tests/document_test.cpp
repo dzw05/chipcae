@@ -82,8 +82,7 @@ void requireRelocatedAssets(const Json& original,
                             const QDir& source,
                             const QDir& destination) {
     require(relocated.contains("external_refs"), "relocated stack retains external_refs");
-    require(withoutExternalPaths(relocated) == withoutExternalPaths(original),
-            "relocation changes only external_refs paths");
+    auto expected = withoutExternalPaths(original);
     const auto& originalRefs = original.at("external_refs");
     const auto& relocatedRefs = relocated.at("external_refs");
     require(relocatedRefs.size() == originalRefs.size(), "relocation preserves array length");
@@ -104,13 +103,15 @@ void requireRelocatedAssets(const Json& original,
         const auto relocatedBytes = readBytes(destinationPath);
         const auto expectedHash =
             QByteArray::fromStdString(originalRef.at("sha256").as<std::string>()).toLower();
-        require(QByteArray::fromStdString(relocatedRef.at("sha256").as<std::string>()).toLower() ==
-                    expectedHash,
-                "relocation preserves digest at each array index");
+        require(relocatedRef.at("sha256") == sha256(relocatedBytes).toStdString(),
+                "stored digest matches the relocated file's lowercase SHA-256");
         require(relocatedBytes == originalBytes, "relocated asset retains exact bytes");
         require(sha256(originalBytes) == expectedHash && sha256(relocatedBytes) == expectedHash,
                 "both files match the declared SHA-256");
+        expected["external_refs"][i]["sha256"] = expectedHash.toStdString();
     }
+    require(withoutExternalPaths(relocated) == expected,
+            "relocation changes only external_refs paths and hash casing");
 }
 
 bool sameErrors(const DocumentErrors& actual, const DocumentErrors& expected) {
@@ -170,23 +171,24 @@ void testMissingSource() {
 void testLoadedImportAndSaveAs() {
     ImportFixture fixture;
     auto& document = fixture.document;
+    auto stack = fixture.stack;
+    stack["external_refs"][0]["sha256"] = fixture.hash.toUpper().toStdString();
     const auto source = fixture.source.absolutePath();
     const auto relativeSource = QDir::current().relativeFilePath(source);
     require(QDir::isRelativePath(relativeSource), "construct a relative sourceDir");
-    require(document.checkImportedStack(fixture.stack, source),
+    require(document.checkImportedStack(stack, source),
             "check accepts external_refs when sourceDir contains the sidecar");
-    require(document.importedStackIssues(fixture.stack, source).empty(),
-            "valid import has no issues");
-    require(document.checkImportedStack(fixture.stack, relativeSource),
+    require(document.importedStackIssues(stack, source).empty(), "valid import has no issues");
+    require(document.checkImportedStack(stack, relativeSource),
             "relative sourceDir resolves from the current directory");
-    require(document.replaceImportedStack(fixture.stack, relativeSource),
+    require(document.replaceImportedStack(stack, relativeSource),
             "loaded document imports the sidecar");
     require(document.errors().empty() && document.validate().empty(),
             "imported document validates");
     require(document.isDirty(), "successful import marks the document dirty");
     const auto imported = document.stackJson();
     requireRelocatedAssets(
-        fixture.stack, imported, fixture.source, stackDirectory(document, fixture.casePath));
+        stack, imported, fixture.source, stackDirectory(document, fixture.casePath));
     require(imported.at("external_refs").at(0).at("path") == "polyset.bin",
             "import preserves an available sidecar name");
 
@@ -205,9 +207,13 @@ void testLoadedImportAndSaveAs() {
     for (const auto* ref : {"stack", "materials"})
         require(reloadedCase.at(ref).at("ref").as<std::string>().starts_with(bundlePrefix),
                 "Save As case references resolve into the new asset bundle");
-    const auto reloadedStack = reloaded.stackJson();
-    requireRelocatedAssets(fixture.stack, reloadedStack, fixture.source, savedDir);
-    require(withoutExternalPaths(reloadedStack) == withoutExternalPaths(imported),
+    const auto stackRef =
+        QString::fromStdString(reloadedCase.at("stack").at("ref").as<std::string>());
+    const auto savedStackPath = QFileInfo(saveAs).absoluteDir().filePath(stackRef);
+    const auto savedStack = Json::parse(readBytes(savedStackPath).toStdString());
+    requireRelocatedAssets(stack, savedStack, fixture.source, savedDir);
+    require(reloaded.stackJson() == savedStack, "reload preserves the saved stack");
+    require(withoutExternalPaths(savedStack) == withoutExternalPaths(imported),
             "Save As round-trips the imported stack apart from ref paths");
 }
 

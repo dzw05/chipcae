@@ -346,6 +346,11 @@ bool CaseDocument::replaceImportedStack(const Json& stack, const QString& source
                                    import.assets,
                                    created);
         }
+        for (const auto& asset : import.assets) {
+            const auto hash = asset.hash.toStdString();
+            for (const auto index : asset.indices)
+                staged["external_refs"][index]["sha256"] = hash;
+        }
         stack_ = std::move(staged);
         importedStackSourceRoot_ = path_.isEmpty() ? std::move(import.sourceRoot) : QString();
         created.keep();
