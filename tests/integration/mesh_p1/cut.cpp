@@ -1,9 +1,11 @@
+#include "chipcae/mesh/cut/outline_cut.hpp"
 #include "chipcae/mesh/cut/plane_cut.hpp"
 #include "support.hpp"
 
 #include <algorithm>
 #include <bit>
 #include <cctype>
+#include <cstring>
 #include <iomanip>
 #include <iostream>
 #include <numeric>
@@ -437,6 +439,252 @@ static void chamfer_lid_route() {
     }
 }
 
+// Contract comparisons include every array, preserve order and compare floating-point bits.
+template <class T>
+void same_bits(const std::vector<T>& a, const std::vector<T>& b) {
+    expect(a.size() == b.size(), "array size differs");
+    if (!a.empty())
+        expect(std::memcmp(a.data(), b.data(), a.size() * sizeof(T)) == 0, "array bits differ");
+}
+template <class T, std::size_t N>
+void same_bits(const std::array<std::vector<T>, N>& a, const std::array<std::vector<T>, N>& b) {
+    for (std::size_t i = 0; i < N; ++i)
+        same_bits(a[i], b[i]);
+}
+void same_mesh(const HexMeshArrays& a, const HexMeshArrays& b) {
+    same_bits(a.vertices, b.vertices);
+    same_bits(a.hex, b.hex);
+    same_bits(a.attribute, b.attribute);
+    same_bits(a.bdr_quad, b.bdr_quad);
+    same_bits(a.bdr_attribute, b.bdr_attribute);
+    same_bits(a.elem_gid, b.elem_gid);
+    same_bits(a.node_gid, b.node_gid);
+    same_bits(a.partitioning, b.partitioning);
+    same_bits(a.node_layer, b.node_layer);
+    same_bits(a.copper_layer_of_layer, b.copper_layer_of_layer);
+    same_bits(a.copper_phi, b.copper_phi);
+    same_bits(a.node_column, b.node_column);
+    same_bits(a.attr_frame, b.attr_frame);
+    same_bits(a.nodes, b.nodes);
+    same_bits(a.pending_cut, b.pending_cut);
+    same_bits(a.axes, b.axes);
+    expect(a.order == b.order && a.internal_interfaces == b.internal_interfaces,
+           "mesh scalar metadata differs");
+    expect(a.snapped.size() == b.snapped.size(), "snap report size");
+    for (std::size_t i = 0; i < a.snapped.size(); ++i) {
+        expect(a.snapped[i].axis == b.snapped[i].axis, "snap axis");
+        same_bits(
+            std::vector<double>{a.snapped[i].from, a.snapped[i].to, a.snapped[i].displacement},
+            std::vector<double>{b.snapped[i].from, b.snapped[i].to, b.snapped[i].displacement});
+    }
+    expect(a.preparation_report.size() == b.preparation_report.size(), "preparation report size");
+    for (std::size_t i = 0; i < a.preparation_report.size(); ++i) {
+        const auto& x = a.preparation_report[i];
+        const auto& y = b.preparation_report[i];
+        expect(x.name == y.name && x.side_a_bodies == y.side_a_bodies &&
+                   x.side_b_bodies == y.side_b_bodies && x.aligned_faces == y.aligned_faces &&
+                   x.cut_faces == y.cut_faces,
+               "preparation metadata");
+        same_bits(std::vector<double>{x.aligned_area, x.cut_area},
+                  std::vector<double>{y.aligned_area, y.cut_area});
+    }
+    const auto& x = a.grid_report;
+    const auto& y = b.grid_report;
+    expect(x.levels == y.levels && x.rule == y.rule && x.N_L == y.N_L &&
+               x.auto_selected == y.auto_selected && x.padding == y.padding &&
+               x.warnings == y.warnings && x.void_cells == y.void_cells,
+           "grid metadata");
+    same_bits(std::vector<double>{x.partition_imbalance},
+              std::vector<double>{y.partition_imbalance});
+    same_bits(x.max_aspect_ratio, y.max_aspect_ratio);
+    expect(x.level_axes.size() == y.level_axes.size() &&
+               x.column_ranks.size() == y.column_ranks.size(),
+           "hierarchy sizes");
+    for (std::size_t i = 0; i < x.level_axes.size(); ++i)
+        same_bits(x.level_axes[i], y.level_axes[i]);
+    for (std::size_t i = 0; i < x.column_ranks.size(); ++i)
+        same_bits(x.column_ranks[i], y.column_ranks[i]);
+    expect(a.face_sets == b.face_sets && a.attr_table.bodies == b.attr_table.bodies &&
+               a.attr_table.layers == b.attr_table.layers &&
+               a.attr_table.materials == b.attr_table.materials &&
+               a.attr_table.references == b.attr_table.references &&
+               a.attr_table.boundary_names == b.attr_table.boundary_names,
+           "mesh metadata differs");
+    expect(a.attr_table.entries.size() == b.attr_table.entries.size(), "attribute table size");
+    for (std::size_t i = 0; i < a.attr_table.entries.size(); ++i) {
+        const auto& x = a.attr_table.entries[i];
+        const auto& y = b.attr_table.entries[i];
+        expect(x.layer == y.layer && x.region == y.region && x.material == y.material &&
+                   x.body == y.body,
+               "attribute record differs");
+    }
+}
+void same_cut(const CutLayerArrays& a, const CutLayerArrays& b) {
+    same_bits(a.cut_elem, b.cut_elem);
+    same_bits(a.sub_off, b.sub_off);
+    same_bits(a.sub_attribute, b.sub_attribute);
+    same_bits(a.sub_volfrac, b.sub_volfrac);
+    same_bits(a.vq_off, b.vq_off);
+    same_bits(a.bq_off, b.bq_off);
+    same_bits(a.vq_xi, b.vq_xi);
+    same_bits(a.bq_xi, b.bq_xi);
+    same_bits(a.bq_n, b.bq_n);
+    same_bits(a.vq_w, b.vq_w);
+    same_bits(a.bq_w, b.bq_w);
+    same_bits(a.bq_bdr_attr, b.bq_bdr_attr);
+    same_bits(a.gp_elem_gid, b.gp_elem_gid);
+    same_bits(a.gp_face, b.gp_face);
+    same_bits(a.gp_face_gid, b.gp_face_gid);
+    same_bits(a.gp_face_minus, b.gp_face_minus);
+    same_bits(a.gp_face_plus, b.gp_face_plus);
+    same_bits(a.gp_owner_rank, b.gp_owner_rank);
+    same_bits(a.eb_points, b.eb_points);
+    same_bits(a.eb_xi, b.eb_xi);
+    same_bits(a.eb_normals, b.eb_normals);
+    same_bits(a.eb_parent_elem, b.eb_parent_elem);
+    same_bits(a.sq_off, b.sq_off);
+    same_bits(a.sq_side, b.sq_side);
+    same_bits(a.sq_xi, b.sq_xi);
+    same_bits(a.sq_w, b.sq_w);
+    same_bits(a.cut_elem_gid, b.cut_elem_gid);
+    same_bits(a.void_elem, b.void_elem);
+    same_bits(a.small_subs, b.small_subs);
+    same_bits(a.exterior_area_vector, b.exterior_area_vector);
+    expect(a.face_sets == b.face_sets && a.void_attribute == b.void_attribute,
+           "cut metadata differs");
+    expect(a.level_sets.size() == b.level_sets.size(), "level set count");
+    for (std::size_t i = 0; i < a.level_sets.size(); ++i) {
+        expect(a.level_sets[i].body == b.level_sets[i].body, "level set body");
+        same_bits(a.level_sets[i].phi, b.level_sets[i].phi);
+    }
+    expect(a.polyhedra.has_value() == b.polyhedra.has_value(), "polyhedra presence");
+    if (a.polyhedra) {
+        same_bits(a.polyhedra->points, b.polyhedra->points);
+        same_bits(a.polyhedra->point_xi, b.polyhedra->point_xi);
+        same_bits(a.polyhedra->point_parent_elem, b.polyhedra->point_parent_elem);
+        same_bits(a.polyhedra->face_conn, b.polyhedra->face_conn);
+        same_bits(a.polyhedra->face_off, b.polyhedra->face_off);
+        same_bits(a.polyhedra->poly_faces, b.polyhedra->poly_faces);
+        same_bits(a.polyhedra->poly_off, b.polyhedra->poly_off);
+        same_bits(a.polyhedra->parent_elem_gid, b.polyhedra->parent_elem_gid);
+        same_bits(a.polyhedra->body, b.polyhedra->body);
+        same_bits(a.polyhedra->layer_id, b.polyhedra->layer_id);
+        same_bits(a.polyhedra->material_id, b.polyhedra->material_id);
+        same_bits(a.polyhedra->cell_kind, b.polyhedra->cell_kind);
+        same_bits(a.polyhedra->volume, b.polyhedra->volume);
+        same_bits(a.polyhedra->volfrac_ref, b.polyhedra->volfrac_ref);
+    }
+}
+HexMeshArrays outline_mesh() {
+    auto s = k1::stack();
+    auto opt = k1::options();
+    opt.nx = 8;
+    opt.ny = 8;
+    opt.levels = 1;
+    return build_tensor_grid(s, opt).value();
+}
+Footprint chamfer_outline() {
+    return {{0, 0, 1, 1},
+            {{.25, 0}, {.75, 0}, {1, .25}, {1, .75}, {.75, 1}, {.25, 1}, {0, .75}, {0, .25}}};
+}
+void outline_cut_api() {
+    const auto original = outline_mesh();
+    auto mesh = original;
+    Footprint empty{{0, 0, 1, 1}, {}};
+    auto none = apply_outline_cut(mesh, empty, {});
+    expect(bool(none) && !none.value(), "empty outline must return nullopt");
+    same_mesh(mesh, original);
+    auto outline = chamfer_outline();
+    auto reference_mesh = original;
+    auto reference = apply_outline_cut(reference_mesh, outline, {});
+    expect(bool(reference) && reference.value().has_value(), "outline clipping API missing");
+    expect(!reference.value()->cut_elem.empty(), "chamfer must cut cells");
+    std::reverse(outline.polygon.begin(), outline.polygon.end());
+    auto reversed_mesh = original;
+    auto reversed = apply_outline_cut(reversed_mesh, outline, {});
+    expect(bool(reversed) && reversed.value().has_value(), "clockwise clipping failed");
+    same_mesh(reference_mesh, reversed_mesh);
+    same_cut(*reference.value(), *reversed.value());
+    outline = chamfer_outline();
+    outline.polygon.push_back(outline.polygon.front());
+    auto closed_mesh = original;
+    auto closed = apply_outline_cut(closed_mesh, outline, {});
+    expect(bool(closed) && closed.value().has_value(), "closed clipping failed");
+    same_mesh(reference_mesh, closed_mesh);
+    same_cut(*reference.value(), *closed.value());
+    outline.polygon[0][0] = -0.1;
+    auto invalid_mesh = original;
+    auto invalid = apply_outline_cut(invalid_mesh, outline, {});
+    expect(!invalid && invalid.error().path == "outline", "out-of-box error category");
+}
+void outline_cut_extra_planes() {
+    const auto original = outline_mesh();
+    Footprint empty{{0, 0, 1, 1}, {}};
+    auto mesh = original;
+    auto none = apply_outline_cut(mesh, empty, {}, {});
+    expect(bool(none) && !none.value(), "empty extra must return nullopt");
+    same_mesh(mesh, original);
+    const auto body = original.attr_table.bodies.at("cap");
+    CutGeometry extra{{{body, {1, 0, 0}, .7},
+                       {body, {-1, 0, 0}, -.3},
+                       {body, {0, 1, 0}, .7},
+                       {body, {0, -1, 0}, -.3}}};
+    CutOptions options;
+    options.export_polyhedra = true;
+    options.keep_void = false;
+    auto direct_mesh = original;
+    auto direct = build_cut_layer(direct_mesh, extra, options);
+    expect(bool(direct) && !direct.value().cut_elem.empty(), "direct extra fixture failed");
+    auto result = apply_outline_cut(mesh, empty, {}, extra);
+    expect(bool(result) && result.value().has_value(), "extra-only clipping API missing");
+    same_mesh(mesh, direct_mesh);
+    same_cut(*result.value(), direct.value());
+    // Other bodies retain all original GIDs and attributes despite the target-body cut.
+    std::vector<chipcae::Index> before, after;
+    for (std::size_t e = 0; e < original.attribute.size(); ++e)
+        if (original.attr_table.entries.at(original.attribute[e] - 1).body != body)
+            before.push_back(original.elem_gid[e]);
+    for (std::size_t e = 0; e < mesh.attribute.size(); ++e)
+        if (mesh.attr_table.entries.at(mesh.attribute[e] - 1).body != body)
+            after.push_back(mesh.elem_gid[e]);
+    expect(!before.empty(), "fixture must exercise another body");
+    same_bits(before, after);
+
+    auto outline = chamfer_outline();
+    CutGeometry combined;
+    // Analytic half spaces of the octagon, in edge order, then body-map order.
+    const double r = .25 / std::hypot(.25, .25);
+    const std::array<std::array<double, 3>, 8> planes{{{0, -1, 0},
+                                                       {r, -r, .75 * r},
+                                                       {1, 0, 1},
+                                                       {r, r, r + .75 * r},
+                                                       {0, 1, 1},
+                                                       {-r, r, r - .25 * r},
+                                                       {-1, 0, 0},
+                                                       {-r, -r, -.25 * r}}};
+    for (const auto& p : planes)
+        for (const auto& [name, id] : original.attr_table.bodies) {
+            (void)name;
+            combined.planes.push_back({id, {p[0], p[1], 0}, p[2]});
+        }
+    combined.planes.insert(combined.planes.end(), extra.planes.begin(), extra.planes.end());
+    direct_mesh = original;
+    direct = build_cut_layer(direct_mesh, combined, options);
+    expect(bool(direct), "combined direct fixture failed");
+    mesh = original;
+    result = apply_outline_cut(mesh, outline, {}, extra);
+    expect(bool(result) && result.value().has_value(), "combined clipping failed");
+    same_mesh(mesh, direct_mesh);
+    same_cut(*result.value(), direct.value());
+    mesh = original;
+    auto other_mesh = original;
+    result = apply_outline_cut(mesh, outline, {});
+    auto other = apply_outline_cut(other_mesh, outline, {}, {});
+    expect(bool(result) && result.value() && bool(other) && other.value(), "overload clipping");
+    same_mesh(mesh, other_mesh);
+    same_cut(*result.value(), *other.value());
+}
+
 int main(int argc, char** argv) {
 #ifdef CHIPCAE_ENABLE_KOKKOS
     Kokkos::ScopeGuard guard(argc, argv);
@@ -444,6 +692,15 @@ int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
 #endif
+    if (argc == 2) {
+        if (std::string(argv[1]) == "outline_cut_api")
+            outline_cut_api();
+        else if (std::string(argv[1]) == "outline_cut_extra_planes")
+            outline_cut_extra_planes();
+        else
+            return 2;
+        return 0;
+    }
     auto s = k1::stack();
     s.activation_groups.clear();
     s.layers.resize(1);
