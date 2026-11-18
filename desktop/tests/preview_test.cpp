@@ -5,9 +5,12 @@
 #include <QDir>
 #include <QEventLoop>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QProcess>
+#include <QProcessEnvironment>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <iostream>
@@ -21,6 +24,115 @@ void check(bool value, const char* message) {
 void write(const QString& path, const QByteArray& bytes) {
     QFile f(path);
     check(f.open(QIODevice::WriteOnly) && f.write(bytes) == bytes.size(), "write fixture");
+}
+// Exercise the test executable as a black box. The probe keeps the existing mock
+// assertions and leaves the optional real-preview branch for the implementation pass.
+void checkOptionalPreviewAcceptance(const QString& fixtures, const QDir& dir) {
+    enum class Expected { Unexecuted, InvalidPath, FailedProgram, RealSuccess };
+    const QByteArray unexecuted = "CHIPCAE_PREVIEW: 未执行";
+    const QByteArray realSuccess = "D10 real preview tests passed";
+    const auto inherited = QProcessEnvironment::systemEnvironment();
+    auto environment = inherited;
+    environment.remove("CHIPCAE_PREVIEW");
+    environment.remove("chipcae_preview");
+    const auto failedProgram = dir.filePath("failed preview");
+    write(failedProgram, "#!/bin/sh\nprintf 'called\\n' >> \"${0}.calls\"\nexit 23\n");
+    check(QFile::setPermissions(failedProgram,
+                                QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                                    QFileDevice::ExeOwner),
+          "executable failure fixture");
+    const auto nonexecutable = dir.filePath("nonexecutable preview");
+    write(nonexecutable, "not an executable\n");
+    check(QFile::setPermissions(nonexecutable, QFileDevice::ReadOwner | QFileDevice::WriteOwner),
+          "nonexecutable fixture permissions");
+    int failures = 0;
+    const auto run = [&](const char* name, const QProcessEnvironment& env, Expected expected) {
+        QProcess probe;
+        probe.setProcessEnvironment(env);
+        probe.setWorkingDirectory(dir.path());
+        probe.start(QCoreApplication::applicationFilePath(),
+                    {fixtures, "--d10b0-acceptance-probe"});
+        try {
+            check(probe.waitForStarted(), "acceptance probe launch");
+            check(probe.waitForFinished(55000), "acceptance probe timed out");
+            const auto output = probe.readAllStandardOutput();
+            const auto error = probe.readAllStandardError();
+            const auto lines = output.split('\n');
+            check(probe.exitStatus() == QProcess::NormalExit, "acceptance probe crashed");
+            if (expected == Expected::Unexecuted) {
+                check(probe.exitCode() == 0, "unset/blank CHIPCAE_PREVIEW must succeed");
+                check(lines.count("D10 preview tests passed") == 1, "existing mock suite passes");
+                check(lines.count(unexecuted) == 1 && output.count(unexecuted + '\n') == 1,
+                      "missing byte-exact CHIPCAE_PREVIEW: 未执行 line");
+                check(!output.contains(realSuccess),
+                      "unexecuted preview cannot claim real success");
+                check(!QFileInfo::exists(failedProgram + ".calls"),
+                      "unset/blank/lowercase CHIPCAE_PREVIEW must not launch real program");
+            } else {
+                check(!output.contains(unexecuted),
+                      "configured CHIPCAE_PREVIEW must not report 未执行");
+                if (expected == Expected::RealSuccess) {
+                    check(probe.exitCode() == 0, "real CHIPCAE_PREVIEW must succeed");
+                    check(lines.count("D10 preview tests passed") == 1,
+                          "existing mock suite passes");
+                    check(lines.count(realSuccess) == 1,
+                          "missing distinct real-preview success line");
+                } else {
+                    check(probe.exitCode() != 0, "invalid CHIPCAE_PREVIEW must fail");
+                    check(!output.contains(realSuccess),
+                          "failed preview cannot claim real success");
+                    if (expected == Expected::InvalidPath)
+                        check(error.contains("CHIPCAE_PREVIEW"),
+                              "path failure diagnostic must contain CHIPCAE_PREVIEW");
+                    else {
+                        check(error.toLower().contains("preview"),
+                              "failed preview must print error()");
+                        QFile calls(failedProgram + ".calls");
+                        check(calls.open(QIODevice::ReadOnly) && calls.readAll() == "called\n",
+                              "configured executable must run exactly once");
+                    }
+                }
+            }
+            std::cout << "D10b-0 acceptance: " << name << " passed\n";
+        } catch (const std::exception& e) {
+            ++failures;
+            std::cerr << "D10b-0 acceptance: " << name << ": " << e.what() << '\n';
+        }
+    };
+    run("unset", environment, Expected::Unexecuted);
+    for (const auto& value : {QString(""), QString(" \t\n ")}) {
+        auto env = environment;
+        env.insert("CHIPCAE_PREVIEW", value);
+        run(value.isEmpty() ? "empty" : "whitespace", env, Expected::Unexecuted);
+    }
+    auto lowercase = environment;
+    lowercase.insert("chipcae_preview", failedProgram);
+    run("lowercase only", lowercase, Expected::Unexecuted);
+    for (const auto& path : {dir.filePath("missing preview"), dir.path(), nonexecutable}) {
+        auto env = environment;
+        env.insert("CHIPCAE_PREVIEW", path);
+        run(qPrintable(path), env, Expected::InvalidPath);
+    }
+    auto failing = environment;
+    failing.insert("CHIPCAE_PREVIEW", failedProgram);
+    run("executable exits 23", failing, Expected::FailedProgram);
+
+    const auto program = inherited.value("CHIPCAE_PREVIEW");
+    if (!program.trimmed().isEmpty()) {
+        const auto absolute = QFileInfo(program).absoluteFilePath();
+        check(QFileInfo(absolute).isFile() && QFileInfo(absolute).isExecutable(),
+              "CHIPCAE_PREVIEW real acceptance fixture must be an executable file");
+        const auto spaced = dir.filePath(" real preview ");
+        check(QFile::link(absolute, spaced), "real executable link with spaces");
+        for (const auto& path : {absolute, dir.relativeFilePath(absolute), spaced}) {
+            auto env = environment;
+            env.insert("CHIPCAE_PREVIEW", path);
+            run(qPrintable(path), env, Expected::RealSuccess);
+        }
+    } else {
+        std::cout << "D10b-0 acceptance: real executable 未执行\n";
+    }
+    check(failures == 0, "D10b-0 optional real preview acceptance failed");
 }
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
@@ -164,6 +276,8 @@ int main(int argc, char** argv) {
                 check(before == document.toJson(), "failed run must not change case");
             }
         }
+        if (!app.arguments().contains("--d10b0-acceptance-probe"))
+            checkOptionalPreviewAcceptance(QFileInfo(argv[1]).absoluteFilePath(), dir);
         std::cout << "D10 preview tests passed\n";
         return 0;
     } catch (const std::exception& e) {
