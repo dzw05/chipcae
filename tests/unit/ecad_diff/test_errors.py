@@ -169,7 +169,8 @@ def main():
                 out.write_text('existing file', encoding='utf-8')
             try:
                 result = diff_stacks(good, path, delta)
-                assert case not in ('derived_nonfinite', 'copper_nonfinite'), (case, result)
+                assert case not in ('derived_nonfinite', 'copper_nonfinite',
+                                    'relative_nonfinite'), (case, result)
                 write_report(result, out)
             except EcadDiffError as exc:
                 assert exc.code == code and exc.name == name, (case, exc)
@@ -226,6 +227,52 @@ def main():
         assert proc.returncode == 14, proc.stderr
         assert proc.stderr == (
             'ecad_diff: INPUT_INVALID: delta must be a finite positive number\n')
+        assert not out.exists()
+
+        # Decimal exponent overflow converts to infinity in CPython; it must
+        # still follow the protocol error path without creating reports.
+        for exponent in ('1e999999999999999999999999', '-1e999999999999999999999999'):
+            proc = subprocess.run(
+                [sys.executable, str(ROOT / 'tools/vv/ecad_diff.py'),
+                 '--odb', str(good), '--ipc', str(good), '-o', str(out),
+                 '--delta-m=' + exponent], capture_output=True, text=True)
+            assert proc.returncode == 14, proc.stderr
+            assert len(proc.stderr.splitlines()) == 1, proc.stderr
+            assert proc.stderr.startswith('ecad_diff: INPUT_INVALID: '), proc.stderr
+            assert not out.exists()
+
+        # Opposite signed finite copper sums can overflow their subtraction.
+        sides = []
+        for clockwise in (False, True):
+            points = ((0, 0, 0, 1, 1, 1, 1, 0) if clockwise else
+                      (0, 0, 1, 0, 1, 1, 0, 1))
+            data = (b'CCPOLY01' + struct.pack('<dII', 8e153, 1, 4) + b'F.Cu'
+                    + struct.pack('<I3q', 2, 0, 4, 8)
+                    + struct.pack('<8q', *points) * 2)
+            filename = f'signed_{clockwise}.polyset'
+            (directory / filename).write_bytes(data)
+            b = board()
+            b['external_refs'] = [{'path': filename,
+                                   'sha256': hashlib.sha256(data).hexdigest()}]
+            b['layers'][0]['copper'] = {'metal': 'mat.cu',
+                'polygons': {'file': filename, 'layer': 'F.Cu'}}
+            sides.append(save(directory / f'signed_{clockwise}.json', b))
+            # Prove the input and each derived copper sum are valid in isolation.
+            result = diff_stacks(sides[-1], sides[-1])
+            assert result['summary']['hard'] == result['summary']['discuss'] == 0
+        try:
+            diff_stacks(*sides)
+        except EcadDiffError as exc:
+            assert (exc.code, exc.name) == (14, 'INPUT_INVALID'), exc
+        else:
+            raise AssertionError('API accepted overflowing copper difference')
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / 'tools/vv/ecad_diff.py'),
+             '--odb', str(sides[0]), '--ipc', str(sides[1]), '-o', str(out)],
+            capture_output=True, text=True)
+        assert proc.returncode == 14, proc.stderr
+        assert len(proc.stderr.splitlines()) == 1, proc.stderr
+        assert proc.stderr.startswith('ecad_diff: INPUT_INVALID: '), proc.stderr
         assert not out.exists()
 
         # Required metadata is checked for consulted references only.

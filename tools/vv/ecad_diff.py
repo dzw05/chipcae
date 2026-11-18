@@ -324,11 +324,12 @@ def _diff(odb, ipc, delta):
             f'δ = {delta}; exact material and copper metal identity', 'info' if mx == my else 'hard')
         ax, px = ca[i] or (0, 0)
         ay, py = cb[i] or (0, 0)
-        d, p = abs(ax - ay), max(px, py)
+        d, p = _number(abs(ax - ay)), max(px, py)
+        tolerance = _number(delta * p)
         relative = _number(d / max(ax, ay) if max(ax, ay) else 0)
         grade = ('hard' if relative > 0.01 else
-                 'discuss' if d > delta * p else 'info')
-        add('copper_area', key, ax, ay, d, delta * p,
+                 'discuss' if d > tolerance else 'info')
+        add('copper_area', key, ax, ay, d, tolerance,
             f'δ = {delta}; P_layer = {p} (maximum area-error coefficient: polygon total ring '
             'perimeter or fraction × P_outline; fixed fraction propagates '
             'outline area tolerance, no copper perimeter inferred); '
@@ -432,7 +433,7 @@ def main(argv: list[str] | None = None) -> int:
             _invalid('output path is an existing ordinary file')
         try:
             delta = float(args.delta_m)
-        except ValueError:
+        except (ValueError, OverflowError):
             _invalid('delta must be a finite positive number')
         write_report(diff_stacks(args.odb, args.ipc, delta), args.o)
     except EcadDiffError as exc:
