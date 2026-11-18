@@ -79,6 +79,13 @@ int main(int argc, char** argv) {
             caught = std::string(e.what()).find("window mismatch") != std::string::npos;
         }
         collective_expect(caught, "all ranks must catch window mismatch");
+        caught = false;
+        try {
+            (void)channel.poll({4u, rank == 1 ? -0.0 : 0.0});
+        } catch (const std::runtime_error& e) {
+            caught = std::string(e.what()).find("window mismatch") != std::string::npos;
+        }
+        collective_expect(caught, "all ranks must catch time bit mismatch");
         MPI_Barrier(MPI_COMM_WORLD);
         if (rank == 0)
             std::filesystem::remove_all(std::filesystem::path(path).parent_path());

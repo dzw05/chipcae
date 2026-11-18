@@ -180,6 +180,10 @@ std::vector<io::ControlCommand> ControlChannel::poll(const WindowMark& completed
             length[i] = static_cast<std::uint8_t>(local_size >> (8 * i));
         check(MPI_Bcast(length.data(), 8, MPI_BYTE, 0, MPI_COMM_WORLD));
         const auto size = Decoder(length).get(8);
+        int oversized = size > INT_MAX;
+        check(MPI_Allreduce(MPI_IN_PLACE, &oversized, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD));
+        if (oversized)
+            throw std::runtime_error("control channel payload too large");
         // Coordinate allocation failures before entering the payload collective.
         int allocation_failed = 0;
         try {
