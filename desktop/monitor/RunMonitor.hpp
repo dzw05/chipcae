@@ -14,6 +14,12 @@ struct ResidualSample {
     double norm;
     quint32 flags;
 };
+struct MonitorLogEntry {
+    qint32 level = 0;
+    qint32 rank = 0;
+    QString message;
+    bool diagnostic = false;
+};
 class RunMonitor {
 public:
     RunMonitor(QString directory, EventFormat format, QString eventFile = "events.caelog");
@@ -23,6 +29,11 @@ public:
     void stop(LocalJobService& broker, const QString& runId);
     void trackStop(quint64 sequence, QString requestId);
     void checkTimeout(qint64 elapsedMs);
+    // Test-first stub. Structured entries are populated by the D18 implementation.
+    const std::vector<MonitorLogEntry>& logEntries() const {
+        static const std::vector<MonitorLogEntry> empty;
+        return empty;
+    }
     QString directory;
     EventFormat format;
     QString state = "Waiting", stopStatus = "Idle";
