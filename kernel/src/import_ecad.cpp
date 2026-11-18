@@ -108,12 +108,38 @@ std::vector<Defect> classify_unsupported(const ecad::ImportReport& report,
                                                     "Circle",
                                                     "StandardPrimitiveRef",
                                                     "selected step"};
+        static const std::set<std::string> geometry{"Arc",
+                                                    "Contour",
+                                                    "Copper",
+                                                    "Cutout",
+                                                    "Line",
+                                                    "Outline",
+                                                    "Oval",
+                                                    "Pad",
+                                                    "Polygon",
+                                                    "PolyStepCurve",
+                                                    "Profile",
+                                                    "ProfileHole",
+                                                    "RectCenter",
+                                                    "RectCham",
+                                                    "RectCorner",
+                                                    "RectRound",
+                                                    "Slot",
+                                                    "Symbol",
+                                                    "Trace",
+                                                    "UserPrimitiveRef",
+                                                    "UserSpecial",
+                                                    "Via",
+                                                    "ViaGeometry",
+                                                    "ViaSpan",
+                                                    "ViaToolAmbiguous",
+                                                    "ViaToolUnsupported"};
         const bool text_record = text.find(": unsupported record T") != std::string::npos;
         const bool metadata_path = text.find("/components") != std::string::npos ||
                                    text.starts_with("misc/") || text.starts_with("selected step ");
-        if (metadata.contains(tag) || colon == std::string::npos || text_record || metadata_path) {
-            // Named mapper geometry diagnostics without ':' are explicitly C.
-            defect.tier = tag == "ProfileHole" ? Tier::C : Tier::B;
+        if (!geometry.contains(tag) && (metadata.contains(tag) || colon == std::string::npos ||
+                                        text_record || metadata_path)) {
+            defect.tier = Tier::B;
             defect.suggestion = "confirm omitted metadata, components or text";
         }
         if (text.starts_with("SolderMask:"))

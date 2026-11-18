@@ -360,6 +360,35 @@ for mode in ('text','symbol','C_then_B','B_then_C'):
             if '_then_' in mode:
                 check(any(d['tier'] == 'B' for d in ds), 'mixed fixture did not report B')
 
+for tag,context in (('PolyStepCurve','profile'), ('Cutout','profile'),
+                    ('ProfileHole','profile'), ('Contour','copper'), ('Oval','copper'),
+                    ('RectCenter','copper'), ('Symbol','copper'), ('Trace','copper'),
+                    ('Slot','copper'), ('ViaGeometry','copper'),
+                    ('VendorExtension','metadata'), ('CopperVendorExtension','metadata'),
+                    ('OutlineVendorExtension','metadata')):
+    @case('ipc_bare_diagnostic_'+tag,'ipc')
+    def ipc_bare_diagnostic(b, tag=tag, context=context):
+        xml = (data/'board_4layer.xml').read_text()
+        if context == 'profile':
+            xml = xml.replace('</Polygon></Profile>', f'<{tag}/></Polygon></Profile>')
+        elif context == 'copper':
+            xml = xml.replace('<Set>', f'<Set><{tag}/>')
+        else:
+            xml = xml.replace('<Ecad>', f'<{tag}/><Ecad>')
+        path = b.root/'bare.xml'
+        path.write_text(xml)
+        geometry = context != 'metadata'
+        for accepted in (False,True):
+            wanted = 7 if geometry else (0 if accepted else 6)
+            out,_,_ = b.run(path, ['--accept-b-tier'] if accepted else [], expected=wanted,
+                            name=f'out{accepted}', prior=wanted != 0)
+            ds = b.defect_rows(out)
+            check(len(ds) == 1 and ds[0]['tier'] == ('C' if geometry else 'B'),
+                  f'bare {tag} must be classified by geometry context')
+            if geometry:
+                check(ds[0]['suggestion'] == 'unsupported geometry must be modeled before import',
+                      'geometry loss must retain geometry remediation')
+
 @case('ipc_unsupported_now_reported','ipc')
 def ipc_unsupported(b):
     out,_,_ = b.run(data/'unsupported.xml', expected=6, prior=True)
