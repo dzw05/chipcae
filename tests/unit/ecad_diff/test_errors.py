@@ -38,7 +38,7 @@ def main():
                     'empty', 'root', 'missing_unit', 'missing_layers', 'missing_outline',
                     'bad_layers', 'bad_outline', 'bad_layer', 'missing_thickness',
                     'missing_material', 'bad_copper', 'missing_metal', 'bad_polygons',
-                    'missing_polygon_file', 'bad_ref', 'missing_representation',
+                    'missing_polygon_file', 'missing_representation',
                     'both_representations')],
                 ('unit', 14, 'INPUT_INVALID'),
                 ('utf8', 14, 'INPUT_INVALID'),
@@ -154,8 +154,6 @@ def main():
             if case == 'both_representations':
                 b['layers'][0]['copper']['polygons'] = {
                     'file': 'missing.polyset', 'layer': 'F.Cu'}
-            if case == 'bad_ref':
-                b['external_refs'] = [None]
             if case != 'missing_stack':
                 save(path, b)
             if case == 'directory_stack':
@@ -283,7 +281,13 @@ def main():
                     folder.mkdir()
                     b = board()
                     fixture = b if representation == 'copper' else board()
-                    polyset(folder, fixture)
+                    sidecar = polyset(folder, fixture)
+                    if representation == 'discovery':
+                        data = sidecar.read_bytes().replace(
+                            struct.pack('<I', 4) + b'F.Cu',
+                            struct.pack('<I', 7) + b'outline')
+                        sidecar.write_bytes(data)
+                        fixture['external_refs'][0]['sha256'] = hashlib.sha256(data).hexdigest()
                     b['external_refs'] = copy.deepcopy(fixture['external_refs'])
                     if representation == 'explicit_outline':
                         b['outline']['polygon'] = [[0, 0], [0.01, 0], [0.01, 0.005], [0, 0.005]]
@@ -294,7 +298,8 @@ def main():
                         ref[field] = value
                     path = save(folder / 'stack.json', b)
                     out = folder / 'reports'
-                    if representation == 'explicit_outline':
+                    if (representation == 'explicit_outline' or
+                            (representation == 'discovery' and field == 'path')):
                         result = diff_stacks(good, path)
                         assert result['summary']['hard'] == result['summary']['discuss'] == 0
                         proc = subprocess.run(
@@ -331,8 +336,39 @@ def main():
             result = diff_stacks(good, path)
             assert result['summary']['hard'] == result['summary']['discuss'] == 0
 
-        # Without an explicit polygon, every reference is consulted for outline
-        # discovery and must pass the same validation as copper sidecars.
+        # Box fallback and a discovered outline both ignore unrelated metadata.
+        for with_outline in (False, True):
+            folder = directory / f'unrelated_discovery_{with_outline}'
+            folder.mkdir()
+            b = board()
+            used = polyset(folder, b)
+            unused = folder / 'unused.polyset'
+            unused.write_bytes(used.read_bytes())  # Valid polyset with no outline.
+            if with_outline:
+                data = used.read_bytes().replace(struct.pack('<I', 4) + b'F.Cu',
+                                                  struct.pack('<I', 7) + b'outline')
+                (folder / 'outline.polyset').write_bytes(data)
+                b['external_refs'].append({'path': 'outline.polyset',
+                                          'sha256': hashlib.sha256(data).hexdigest()})
+            for unrelated in (None, {}, {'path': None}, {'path': ''}, {'path': 123},
+                              {'path': 'unused.polyset'},
+                              {'path': 'unused.polyset', 'sha256': 'invalid'},
+                              {'path': 'unused.polyset', 'sha256': '0' * 64}):
+                variant = copy.deepcopy(b)
+                variant['external_refs'].append(unrelated)
+                path = save(folder / 'stack.json', variant)
+                result = diff_stacks(good, path)
+                assert result['summary']['hard'] == result['summary']['discuss'] == 0
+                out = folder / 'reports'
+                proc = subprocess.run(
+                    [sys.executable, str(ROOT / 'tools/vv/ecad_diff.py'),
+                     '--odb', str(good), '--ipc', str(path), '-o', str(out)],
+                    capture_output=True, text=True)
+                assert proc.returncode == 0, proc.stderr
+                assert (out / 'diff.json').exists() and (out / 'diff.md').exists()
+
+        # Discovery still rejects unreadable, malformed or escaping candidates;
+        # an actual outline must also pass digest validation.
         for kind, code, name in (
                 ('missing', 12, 'INPUT_REFERENCE_MISSING'),
                 ('malformed', 14, 'INPUT_INVALID'),
@@ -346,6 +382,10 @@ def main():
             fixture = board()
             sidecar = polyset(folder, fixture)
             data = sidecar.read_bytes()
+            if kind == 'hash':
+                data = data.replace(struct.pack('<I', 4) + b'F.Cu',
+                                    struct.pack('<I', 7) + b'outline')
+                sidecar.write_bytes(data)
             reference = sidecar.name
             digest = hashlib.sha256(data).hexdigest()
             if kind == 'missing':

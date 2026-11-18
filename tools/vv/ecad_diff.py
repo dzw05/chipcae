@@ -168,10 +168,20 @@ def _load(path):
             _invalid('invalid SHA-256 digest')
     polysets = {}
 
-    def load_polyset(file):
+    def polyset_path(file):
         _string(file)
         if Path(file).is_absolute() or '..' in Path(file).parts or '\\' in file or '://' in file:
             _invalid('polyset path must be relative')
+        try:
+            stack_directory = Path(path).parent.resolve()
+            resolved_path = (stack_directory / file).resolve()
+        except (OSError, RuntimeError) as exc:
+            raise EcadDiffError(12, 'INPUT_REFERENCE_MISSING', str(exc)) from exc
+        if not resolved_path.is_relative_to(stack_directory):
+            _invalid('polyset path must remain within the stack directory')
+        return resolved_path
+
+    def load_polyset(file):
         if file not in polysets:
             matching_refs = [r for r in refs
                              if isinstance(r, dict) and r.get('path') == file]
@@ -179,14 +189,7 @@ def _load(path):
                 raise EcadDiffError(12, 'INPUT_REFERENCE_MISSING', 'polyset absent from external_refs')
             for ref in matching_refs:
                 validate_ref(ref)
-            try:
-                stack_directory = Path(path).parent.resolve()
-                polyset_path = (stack_directory / file).resolve()
-            except (OSError, RuntimeError) as exc:
-                raise EcadDiffError(12, 'INPUT_REFERENCE_MISSING', str(exc)) from exc
-            if not polyset_path.is_relative_to(stack_directory):
-                _invalid('polyset path must remain within the stack directory')
-            data = _bytes(polyset_path, 'cannot read polyset')
+            data = _bytes(polyset_path(file), 'cannot read polyset')
             actual_digest = hashlib.sha256(data).hexdigest()
             for ref in matching_refs:
                 digest = ref['sha256']
@@ -218,10 +221,15 @@ def _load(path):
         geometry = _geometry(outline['polygon'])
     else:
         # Outline-only sidecars have no explicit file field in stack/0.2.
-        # Validate each consulted reference before inspecting its layers.
+        # Inspect layers before requiring digest metadata: only outline
+        # suppliers and used copper sidecars need reference validation.
         for ref in refs:
-            validate_ref(ref)
-            load_polyset(ref['path'])
+            file = ref.get('path') if isinstance(ref, dict) else None
+            if not isinstance(file, str) or not file or file in polysets:
+                continue
+            candidate = _read_polyset(_bytes(polyset_path(file), 'cannot read polyset'))
+            if 'outline' in candidate:
+                load_polyset(file)
         candidates = [p['outline'] for p in polysets.values() if 'outline' in p]
         if len(candidates) > 1:
             _invalid('multiple polysets supply an outline')
