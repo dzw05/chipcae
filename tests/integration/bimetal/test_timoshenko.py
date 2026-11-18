@@ -103,11 +103,18 @@ with tempfile.TemporaryDirectory(prefix="bimetal-") as tmp:
         assert all(type(v) is int for v in counts) and counts == (nx, nx, nz), counts
         events = (work / "solve/events.bin").read_bytes()
         assert b"3-2-1 constrained_dofs=6 (3+2+1)" in events, "missing six-DOF event evidence"
-        assert (b"3-2-1 points A=(0.000000,0.000000,0.000000) "
-                b"B=(1.000000,0.000000,0.000000) "
-                b"C=(0.000000,1.000000,0.000000)") in events, "unexpected A/B/C selection"
         # Exact constraints equality above excludes fixed edge/surface/layer targets.
-        assert (work / "solve/out/step-0.vtkhdf").is_file(), "missing VTKHDF artifact"
+        # Check existing output without adding solver instrumentation.
+        with h5py.File(work / "solve/out/step-0.vtkhdf", "r") as fields:
+            points = fields["VTKHDF/hex/Points"][:]
+            displacement = fields["VTKHDF/hex/PointData/U"][:]
+        assert points.shape == displacement.shape and points.shape[1] == 3
+        for point, first_component in (((0, 0, 0), 0), ((1, 0, 0), 1), ((0, 1, 0), 2)):
+            selected = np.all(np.isclose(points, point, rtol=0, atol=1e-14), axis=1)
+            assert np.any(selected), f"missing anchor vertex {point}"
+            constrained = displacement[selected, first_component:]
+            assert np.all(np.isfinite(constrained)) and np.all(np.abs(constrained) <= 1e-12), (
+                point, constrained)
         error = abs(measured - W_ref) / W_ref
         write(work / "result.json", {
             "schema": "chipcae.vv_result/0.2", "case_id": name,

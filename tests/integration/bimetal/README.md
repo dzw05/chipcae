@@ -33,7 +33,10 @@ candidate set. The first vertex with same-plane positive-x and positive-y
 partners becomes A; scanning retains the last qualifying B and C. The
 `GetVertexVDofs` loop constrains A ux/uy/uz, B uy/uz, C uz, sorts and checks
 exactly six DOFs, and emits `3-2-1 constrained_dofs=6 (3+2+1)` in `solve/events.bin` (required by
-the test). It also emits the selected A/B/C coordinates, which the test asserts. `mesh/background/src/tensor_grid.cpp` orders node columns by Morton
+the test). The test checks the existing VTKHDF hex points and displacement
+field: A/B/C must be present and A ux/uy/uz, B uy/uz, C uz must be finite
+and zero within 1e-12 m, on every grid and rank run.
+`mesh/background/src/tensor_grid.cpp` orders node columns by Morton
 order and z ascending. For this full square (all regular cells), selection is
 A=(0,0,0), B=(1,0,0), C=(0,1,0), for every tested grid and both rank counts.
 The pipeline builds the same global mesh on each rank before this selection.
