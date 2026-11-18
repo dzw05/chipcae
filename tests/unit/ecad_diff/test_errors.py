@@ -367,14 +367,41 @@ def main():
                 assert proc.returncode == 0, proc.stderr
                 assert (out / 'diff.json').exists() and (out / 'diff.md').exists()
 
-        # Discovery still rejects unreadable, malformed or escaping candidates;
-        # an actual outline must also pass digest validation.
+        # Broken unrelated sidecars cannot hide a valid outline in either order.
+        folder = directory / 'broken_unrelated'
+        folder.mkdir()
+        fixture = board()
+        sidecar = polyset(folder, fixture)
+        copper_data = sidecar.read_bytes()
+        data = copper_data.replace(struct.pack('<I', 4) + b'F.Cu',
+                                   struct.pack('<I', 7) + b'outline')
+        (folder / 'outline.polyset').write_bytes(data)
+        for payload in (None, b'not a polyset', copper_data + b'trailing'):
+            b = board()
+            broken = folder / 'broken.polyset'
+            if payload is not None:
+                broken.write_bytes(payload)
+            elif broken.exists():
+                broken.unlink()
+            outline_ref = {'path': 'outline.polyset',
+                           'sha256': hashlib.sha256(data).hexdigest()}
+            broken_ref = {'path': broken.name, 'sha256': '0' * 64}
+            for refs in ([broken_ref, outline_ref], [outline_ref, broken_ref]):
+                b['external_refs'] = refs
+                path = save(folder / 'broken_unrelated.json', b)
+                result = diff_stacks(good, path)
+                assert result['summary']['hard'] == result['summary']['discuss'] == 0
+
+        # Unusable unrelated discovery candidates do not supply geometry;
+        # an actual outline must still pass digest validation.
         for kind, code, name in (
-                ('missing', 12, 'INPUT_REFERENCE_MISSING'),
-                ('malformed', 14, 'INPUT_INVALID'),
-                ('symlink', 14, 'INPUT_INVALID'),
-                ('directory_symlink', 14, 'INPUT_INVALID'),
+                ('missing', 0, None),
+                ('malformed', 0, None),
+                ('symlink', 0, None),
+                ('directory_symlink', 0, None),
                 ('hash', 10, 'INPUT_HASH_MISMATCH'),
+                ('outline_truncated', 14, 'INPUT_INVALID'),
+                ('outline_trailing', 14, 'INPUT_INVALID'),
                 ('valid', 0, None)):
             folder = directory / ('discovery_' + kind)
             folder.mkdir()
@@ -382,9 +409,15 @@ def main():
             fixture = board()
             sidecar = polyset(folder, fixture)
             data = sidecar.read_bytes()
-            if kind == 'hash':
+            if kind in ('hash', 'outline_truncated', 'outline_trailing'):
                 data = data.replace(struct.pack('<I', 4) + b'F.Cu',
                                     struct.pack('<I', 7) + b'outline')
+                sidecar.write_bytes(data)
+            if kind == 'outline_truncated':
+                data = data[:-1]
+                sidecar.write_bytes(data)
+            elif kind == 'outline_trailing':
+                data += b'trailing'
                 sidecar.write_bytes(data)
             reference = sidecar.name
             digest = hashlib.sha256(data).hexdigest()

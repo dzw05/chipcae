@@ -65,7 +65,7 @@ def _string(value):
     return value
 
 
-def _read_polyset(data):
+def _read_polyset(data, discovered_layers=None):
     position = 0
 
     def take(size):
@@ -89,6 +89,8 @@ def _read_polyset(data):
             name = take(unpack('<I')[0]).decode('utf-8')
         except UnicodeDecodeError:
             _invalid('invalid polyset utf-8')
+        if discovered_layers is not None:
+            discovered_layers.add(name)
         if name in layers:
             _invalid('duplicate polyset layer name')
         rings = unpack('<I')[0]
@@ -221,13 +223,21 @@ def _load(path):
         geometry = _geometry(outline['polygon'])
     else:
         # Outline-only sidecars have no explicit file field in stack/0.2.
-        # Inspect layers before requiring digest metadata: only outline
-        # suppliers and used copper sidecars need reference validation.
+        # Probe references without letting unrelated broken sidecars fail the
+        # comparison. Once an outline layer is identified, all parsing and
+        # reference validation errors remain fatal, as for used copper.
         for ref in refs:
             file = ref.get('path') if isinstance(ref, dict) else None
             if not isinstance(file, str) or not file or file in polysets:
                 continue
-            candidate = _read_polyset(_bytes(polyset_path(file), 'cannot read polyset'))
+            discovered_layers = set()
+            try:
+                candidate = _read_polyset(
+                    _bytes(polyset_path(file), 'cannot read polyset'), discovered_layers)
+            except EcadDiffError:
+                if 'outline' in discovered_layers:
+                    raise
+                continue
             if 'outline' in candidate:
                 load_polyset(file)
         candidates = [p['outline'] for p in polysets.values() if 'outline' in p]
