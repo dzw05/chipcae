@@ -18,8 +18,11 @@
 #include <limits>
 #include <stdexcept>
 #include <vector>
+#include <vtkActor.h>
+#include <vtkActorCollection.h>
 #include <vtkCellData.h>
 #include <vtkDataSet.h>
+#include <vtkDataSetMapper.h>
 #include <vtkDoubleArray.h>
 #include <vtkNew.h>
 #include <vtkPointData.h>
@@ -102,6 +105,28 @@ void checkRange(ResultView& view, ResultColorField field) {
         auto array =
             block->GetPointData()->GetArray(field == ResultColorField::Temperature ? "T" : "U");
         require(array, "fixture missing selected point array");
+        vtkDataSetMapper* mapper = nullptr;
+        auto actors = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetActors();
+        actors->InitTraversal();
+        while (auto actor = actors->GetNextActor()) {
+            auto candidate = vtkDataSetMapper::SafeDownCast(actor->GetMapper());
+            if (candidate && candidate->GetInput() == block)
+                mapper = candidate;
+        }
+        require(mapper && mapper->GetScalarVisibility(), "selected scalar mapper missing");
+        require(mapper->GetScalarMode() == VTK_SCALAR_MODE_USE_POINT_FIELD_DATA &&
+                    mapper->GetArrayAccessMode() == VTK_GET_ARRAY_BY_NAME,
+                "mapper does not select point field by name");
+        const char* expected = field == ResultColorField::Temperature             ? "T"
+                               : field == ResultColorField::DisplacementMagnitude ? "Result_U_mag"
+                                                                                  : "Result_U_z";
+        require(mapper->GetArrayName() && QString(mapper->GetArrayName()) == expected,
+                "mapper selected wrong field array");
+        auto selected = block->GetPointData()->GetArray(mapper->GetArrayName());
+        require(selected && selected->GetNumberOfComponents() == 1 &&
+                    (mapper->GetArrayComponent() == 0 || mapper->GetArrayComponent() == -1) &&
+                    selected->GetNumberOfTuples() == block->GetNumberOfPoints(),
+                "mapper selected wrong scalar component or tuple count");
         for (vtkIdType i = 0; i < block->GetNumberOfPoints(); ++i) {
             double value = array->GetComponent(i, 0);
             if (field == ResultColorField::WarpageUz)
@@ -111,6 +136,7 @@ void checkRange(ResultView& view, ResultColorField field) {
                 array->GetTuple(i, u);
                 value = std::sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
             }
+            near(selected->GetComponent(i, 0), value);
             low = std::min(low, value);
             high = std::max(high, value);
         }
@@ -292,6 +318,7 @@ int acceptance(const QDir& root) {
                 entry["region_id"] = "lower-priority";
                 entry["position"] = QJsonArray{1.0, 2.0, 3.0};
                 entry["xyz"] = QJsonArray{4.0, 5.0, 6.0};
+                entry["location"] = "die top surface";
                 summary[i] = entry;
                 modified = true;
             }
@@ -317,6 +344,7 @@ int acceptance(const QDir& root) {
                                   .arg(2.0, 0, 'g', 16)
                                   .arg(3.0, 0, 'g', 16)),
                 "position formatting or precedence");
+        require(text.contains(" location=die top surface"), "string location formatting");
     });
     for (const auto& source : {QString("mock"),
                                QString("precomputed"),
@@ -325,45 +353,53 @@ int acceptance(const QDir& root) {
                                QString("REAL"),
                                QString("invalid"),
                                QString()}) {
-        run(qPrintable("provenance " + source), [&] {
-            ResultSession session;
-            require(session.open(root.filePath("default")), qPrintable(session.error()));
-            ResultView view;
-            require(view.loadStep(session, 0), qPrintable(view.error()));
-            QJsonObject object;
-            if (!source.isEmpty())
-                object = {{"schema", "chipcae.provenance/0.1"}, {"source", source}};
-            bool valid = source == "mock" || source == "precomputed" || source == "real";
-            require(view.setProvenance(object) == valid, "provenance return value");
-            auto banner = view.provenanceBanner();
-            const QString watermark = source == "real"          ? ""
-                                      : source == "precomputed" ? "预计算"
-                                                                : "MOCK";
-            require(view.provenanceWatermark() == watermark, "provenance watermark");
-            QLabel* bannerLabel = nullptr;
-            if (source == "real")
-                require(banner.isEmpty(), "real banner");
-            else {
-                require(banner.contains(valid ? watermark : QStringLiteral("来源未知")) &&
-                            !banner.contains(QStringLiteral("真实计算")),
-                        "unsafe provenance banner");
-                for (auto label : view.findChildren<QLabel*>())
-                    if (label->text() == banner)
-                        bannerLabel = label;
-                require(bannerLabel && !bannerLabel->isHidden() && bannerLabel->isVisibleTo(&view),
-                        "provenance banner hidden");
-                require(bannerLabel->findChildren<QAbstractButton*>().isEmpty() &&
+        for (bool degraded : {false, true}) {
+            run(qPrintable("provenance " + source + (degraded ? " degraded" : "")), [&] {
+                ResultSession session;
+                require(session.open(root.filePath("default")), qPrintable(session.error()));
+                ResultView view;
+                require(view.loadStep(session, 0), qPrintable(view.error()));
+                QJsonObject object;
+                if (!source.isEmpty())
+                    object = {{"schema", "chipcae.provenance/0.1"}, {"source", source}};
+                if (degraded)
+                    object["degraded"] = true;
+                bool valid = source == "mock" || source == "precomputed" || source == "real";
+                require(view.setProvenance(object) == valid, "provenance return value");
+                auto banner = view.provenanceBanner();
+                if (source == "real" && degraded)
+                    require(banner.contains(QStringLiteral("降级")), "degraded real banner");
+                const QString watermark = source == "real" && !degraded ? ""
+                                          : source == "precomputed"     ? "预计算"
+                                                                        : "MOCK";
+                require(view.provenanceWatermark() == watermark, "provenance watermark");
+                QLabel* bannerLabel = nullptr;
+                if (source == "real" && !degraded)
+                    require(banner.isEmpty(), "real banner");
+                else {
+                    require(banner.contains(valid ? watermark : QStringLiteral("来源未知")) &&
+                                !banner.contains(QStringLiteral("真实计算")),
+                            "unsafe provenance banner");
+                    for (auto label : view.findChildren<QLabel*>())
+                        if (label->text() == banner)
+                            bannerLabel = label;
+                    require(bannerLabel && !bannerLabel->isHidden() &&
+                                bannerLabel->isVisibleTo(&view),
+                            "provenance banner hidden");
+                    require(
+                        bannerLabel->findChildren<QAbstractButton*>().isEmpty() &&
                             bannerLabel->parentWidget()->findChildren<QAbstractButton*>().isEmpty(),
                         "banner close button");
-            }
-            require(view.setProvenance(object) == valid && view.provenanceBanner() == banner &&
-                        view.provenanceWatermark() == watermark,
-                    "repeated provenance changed");
-            view.clearProvenance();
-            require(view.provenanceBanner().isEmpty() && view.provenanceWatermark().isEmpty(),
-                    "clear provenance text");
-            require(!bannerLabel || bannerLabel->isHidden(), "cleared banner visible");
-        });
+                }
+                require(view.setProvenance(object) == valid && view.provenanceBanner() == banner &&
+                            view.provenanceWatermark() == watermark,
+                        "repeated provenance changed");
+                view.clearProvenance();
+                require(view.provenanceBanner().isEmpty() && view.provenanceWatermark().isEmpty(),
+                        "clear provenance text");
+                require(!bannerLabel || bannerLabel->isHidden(), "cleared banner visible");
+            });
+        }
     }
     run("provenance viewport and capture", [&] {
         ResultSession session;
