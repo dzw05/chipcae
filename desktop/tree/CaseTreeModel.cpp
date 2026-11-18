@@ -122,8 +122,6 @@ void CaseTreeModel::refresh() {
                key == std::string("output") ? "Results / output" : key);
 }
 void CaseTreeModel::applyPartSummary(const QJsonArray& parts) {
-    if (parts.isEmpty())
-        return;
     QMap<QString, bool> approximate;
     for (const auto& part : parts) {
         const auto object = part.toObject();

@@ -122,9 +122,10 @@ static void assemblyTreeAcceptance() {
     }
     tree.applyPartSummary(QJsonArray{QJsonObject{{"id", "lid"}, {"material_approx", true}}});
     tree.applyPartSummary(QJsonArray{});
-    check(lid.data().toString() == "lid （近似材料）" &&
-              lid.data(CaseTreeModel::BodyAnnotationRole) == "近似材料",
-          "empty summary preserves label and annotation");
+    check(lid.data().toString() == "lid" &&
+              lid.data(CaseTreeModel::BodyAnnotationRole).toString().isEmpty(),
+          "empty summary clears label and annotation");
+    tree.applyPartSummary(QJsonArray{QJsonObject{{"id", "lid"}, {"material_approx", true}}});
     tree.applyPartSummary(QJsonArray{QJsonObject{{"id", "lid"}, {"material_approx", false}}});
     auto cleanLid = childNamed(tree, tree.locate("", "bodies-index"), "lid");
     check(cleanLid.isValid() &&
