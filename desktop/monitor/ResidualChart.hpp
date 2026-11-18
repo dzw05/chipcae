@@ -9,15 +9,20 @@ class vtkChartXY;
 class vtkContextView;
 class vtkTable;
 namespace chipcae::desktop {
-// Test-first stub for the public panel interface.
 class MonitorLogPanel : public QPlainTextEdit {
 public:
-    explicit MonitorLogPanel(QWidget* parent = nullptr) : QPlainTextEdit(parent) {}
-    void setEntries(const std::vector<MonitorLogEntry>&) {}
-    void setMinimumLevel(int) {}
-    void clearLevelFilter() {}
-    std::optional<int> minimumLevel() const { return std::nullopt; }
-    QString displayedText() const { return {}; }
+    explicit MonitorLogPanel(QWidget* parent = nullptr);
+    void setEntries(const std::vector<MonitorLogEntry>& entries);
+    void setMinimumLevel(int level);
+    void clearLevelFilter();
+    std::optional<int> minimumLevel() const { return minimumLevel_; }
+    QString displayedText() const { return displayedText_; }
+
+private:
+    void rebuildText();
+    std::vector<MonitorLogEntry> entries_;
+    std::optional<int> minimumLevel_ = std::nullopt;
+    QString displayedText_;
 };
 class ResidualChart : public QVTKOpenGLNativeWidget {
 public:
@@ -26,7 +31,7 @@ public:
     void setSamples(const std::vector<ResidualSample>& samples);
     vtkChartXY* chart() const;
     const std::vector<ResidualSample>& samples() const { return samples_; }
-    int seriesCount() const { return 0; } // Test-first stub.
+    int seriesCount() const;
 
 private:
     vtkSmartPointer<vtkContextView> view_;

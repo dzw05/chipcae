@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QStringList>
 #include <optional>
+#include <vector>
 namespace chipcae::desktop {
 struct ResidualSample {
     std::string solver, field;
@@ -29,11 +30,7 @@ public:
     void stop(LocalJobService& broker, const QString& runId);
     void trackStop(quint64 sequence, QString requestId);
     void checkTimeout(qint64 elapsedMs);
-    // Test-first stub. Structured entries are populated by the D18 implementation.
-    const std::vector<MonitorLogEntry>& logEntries() const {
-        static const std::vector<MonitorLogEntry> empty;
-        return empty;
-    }
+    const std::vector<MonitorLogEntry>& logEntries() const;
     QString directory;
     EventFormat format;
     QString state = "Waiting", stopStatus = "Idle";
@@ -48,8 +45,10 @@ public:
     QString pendingRequest;
 
 private:
+    void appendDiagnostic(const QString& text);
     void reconcile();
     EventTailer tailer_;
+    std::vector<MonitorLogEntry> logEntries_;
     quint64 commandOffset_ = 0, commandSequence_ = 0;
     std::optional<int> processCode_;
     std::optional<io::KernelExit> exit_;

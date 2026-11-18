@@ -1,5 +1,7 @@
 #include "ResidualChart.hpp"
 
+#include <QStringList>
+#include <cmath>
 #include <map>
 #include <vtkAxis.h>
 #include <vtkChartXY.h>
@@ -12,6 +14,34 @@
 #include <vtkPlotPoints.h>
 #include <vtkTable.h>
 namespace chipcae::desktop {
+MonitorLogPanel::MonitorLogPanel(QWidget* parent) : QPlainTextEdit(parent) {
+    setReadOnly(true);
+}
+void MonitorLogPanel::setEntries(const std::vector<MonitorLogEntry>& entries) {
+    entries_ = entries;
+    rebuildText();
+}
+void MonitorLogPanel::setMinimumLevel(int level) {
+    minimumLevel_ = level;
+    rebuildText();
+}
+void MonitorLogPanel::clearLevelFilter() {
+    minimumLevel_.reset();
+    rebuildText();
+}
+void MonitorLogPanel::rebuildText() {
+    QStringList lines;
+    for (const auto& entry : entries_) {
+        if (entry.diagnostic)
+            lines.append("[diag] " + entry.message);
+        else if (!minimumLevel_ || entry.level >= *minimumLevel_)
+            lines.append(
+                QString("level=%1 rank=%2 %3").arg(entry.level).arg(entry.rank).arg(entry.message));
+    }
+    displayedText_ = lines.join('\n');
+    setPlainText(displayedText_);
+}
+
 ResidualChart::ResidualChart(QWidget* parent) : QVTKOpenGLNativeWidget(parent) {
     vtkNew<vtkGenericOpenGLRenderWindow> window;
     setRenderWindow(window);
@@ -28,12 +58,17 @@ ResidualChart::~ResidualChart() = default;
 vtkChartXY* ResidualChart::chart() const {
     return chart_;
 }
+int ResidualChart::seriesCount() const {
+    return chart_->GetNumberOfPlots();
+}
 void ResidualChart::setSamples(const std::vector<ResidualSample>& samples) {
     samples_ = samples;
     chart_->ClearPlots();
     tables_.clear();
     std::map<QString, std::vector<ResidualSample>> groups;
-    for (const auto& s : samples) {
+    for (const auto& s : samples_) {
+        if (!std::isfinite(s.norm))
+            continue;
         auto key = QString::fromStdString(s.solver) + "/" + QString::fromStdString(s.field) +
                    " window=" + QString::number(s.window);
         if (s.time)
