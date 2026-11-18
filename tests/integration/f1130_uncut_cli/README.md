@@ -169,6 +169,68 @@ passed (1/1, 0.80 s). All failed test names and full output are retained in the
 external task evidence log. These existing tests and production code are
 unchanged; this delivery does not claim an all-green suite.
 
+## Implementation follow-up, 2026-11-18
+
+Fresh verification at acceptance-test commit `5661508` reproduced the two
+blockers above. The existing four files already implement the requested test
+chain. Making acceptance green requires a fixture/requirement decision from
+M1 and the brief owner, plus resolution of the Core import/preview contract
+by M1/M2. The allowed four test files cannot repair either discrepancy while
+preserving the required input, golden comparison, material IDs and assertions.
+This follow-up changes documentation only; no executable, assertion, fixture
+or golden was changed. The task remains blocked on numerical acceptance.
+
+The existing dedicated Release build was reconfigured with all six requested
+features enabled (tests, ECAD, JSONCONS, MFEM, MPI, HDF5), plus Kokkos. These
+commands exited 0, with the build-slot wrapper first in PATH throughout:
+
+```sh
+cmake -S . -B "$build"
+cmake --build "$build" --target chipcae-import chipcae-preview chipcae-solve -j2
+ctest --test-dir "$build" -N -V -R '^f1130_uncut_cli_e2e$'
+cmake --build "$build" -j2
+```
+
+Registration again showed exactly one acceptance test with all three
+executables, the required labels, timeout 1200 and skip code 77. The normal,
+local reference ×1.01, and byte-for-byte restored runs each used
+`ctest --test-dir "$build" -V -R '^f1130_uncut_cli_e2e$'`:
+
+| Fresh run | CTest / script exit | 实测 import / fraction / preview / total (s) | Max T error |
+| --- | --- | --- | --- |
+| Normal | 8 / 1 | 0.415350 / 0.078846 / 1.542734 / 2.039356 | Unmeasured |
+| Reference ×1.01 | 8 / 1 | 0.453048 / 0.109006 / 1.615932 / 2.179870 | Unmeasured |
+| Restored | 8 / 1 | 0.418705 / 0.196793 / 1.569926 / 2.186876 | Unmeasured |
+
+Import matched every golden layer; fractions were unchanged. All three runs
+retained the positive-fraction failure, then preview exited 1 with the `_eq`
+error. None reached solving, so these runs do **not** demonstrate the required
+numerical mutation proof. Cell counts, temperature errors, QoIs, readback and
+MPI differences remain unmeasured. Generated failure records passed the
+existing result gate. The temporary reference mutation was fully restored.
+
+Fresh boundary checks returned 77 for each missing executable variable and
+for missing numpy/h5py separately. A configured nonexistent executable failed
+with both diagnostic stream labels and a schema-valid failure record. A real
+child exiting 13 failed with both captured streams. Valid commit environment
+values and fallback to git were checked. The backend-disabled configuration
+again registered the test and skipped it (CTest exit 0, script exit 77).
+No-launcher serial success remains blocked before launcher selection.
+A real child exceeding a locally shortened timeout also failed with both
+captured streams and a measured stage duration.
+
+The fresh full-suite command
+`ctest --test-dir "$build" --output-on-failure -j2` exited 8: **189 passed,
+8 skipped, 35 failed**, 232 total, 371.48 s. Alongside the original 31 failures
+listed in the test-first evidence, this run also reported `k1_preview` and
+`k1_public_headers_kokkos` CTest timeouts, an MPI child timeout in
+`vtkhdf_results_mpi_2`, and `k1_preview_mpi_surface` aborting with
+`jsoncons::ser_error: Invalid number at line 1 and column 2`. These are observed
+failures; their causes have not been repaired or attributed to this change.
+The external task summary lists every failure and the corresponding full log.
+Python byte compilation and whitespace checks passed. The requested pinned
+clang-format 23.1.5 format and dry-run filters had no changed C/C++ inputs.
+
 ## Coverage limits
 
 This card excludes ODB++, cut-cell solving, desktop I3 and CalculiX reference
