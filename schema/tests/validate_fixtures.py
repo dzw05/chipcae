@@ -29,196 +29,6 @@ for layer in stack.get("layers", []):
     referenced = {layer.get("material")}
     referenced.update(region.get("material") for region in layer.get("regions", []))
     assert referenced <= known_material_ids, "MATERIAL_MAPPING_MISSING: stack material is absent from library"
-# Compare legacy material content by id; JSON key and material array order are incidental.
-expected_legacy_materials = {
-    "organic_eq": {
-        "id": "organic_eq",
-        "schema_version": "1",
-        "unit_system": "SI",
-        "density": 1000,
-        "model": "thermo_elastic",
-        "provenance": {
-            "source_type": "illustrative",
-            "confidence": "illustrative",
-        },
-        "elastic": {
-            "symmetry": "isotropic",
-            "table": {
-                "temperatures": [250, 400],
-                "columns": {
-                    "E": [25000000000.0, 22500000000.0],
-                    "nu": [0.3, 0.31],
-                },
-                "interpolation": "linear",
-                "extrapolation": "clamp",
-            },
-        },
-        "thermal_expansion": {
-            "cte_type": "tangent",
-            "symmetry": "isotropic",
-            "stress_free_temperature": 298.15,
-            "table": {
-                "temperatures": [250, 400],
-                "columns": {
-                    "alpha": [1.5e-05, 1.65e-05],
-                },
-                "interpolation": "linear",
-                "extrapolation": "clamp",
-            },
-        },
-    },
-    "sac305_ball_eq": {
-        "id": "sac305_ball_eq",
-        "schema_version": "1",
-        "unit_system": "SI",
-        "density": 1000,
-        "model": "thermo_elastic",
-        "provenance": {
-            "source_type": "illustrative",
-            "confidence": "illustrative",
-        },
-        "elastic": {
-            "symmetry": "isotropic",
-            "table": {
-                "temperatures": [250, 400],
-                "columns": {
-                    "E": [45000000000.0, 40500000000.0],
-                    "nu": [0.35, 0.36],
-                },
-                "interpolation": "linear",
-                "extrapolation": "clamp",
-            },
-        },
-        "thermal_expansion": {
-            "cte_type": "tangent",
-            "symmetry": "isotropic",
-            "stress_free_temperature": 298.15,
-            "table": {
-                "temperatures": [250, 400],
-                "columns": {
-                    "alpha": [2.2e-05, 2.4200000000000002e-05],
-                },
-                "interpolation": "linear",
-                "extrapolation": "clamp",
-            },
-        },
-    },
-    "underfill": {
-        "id": "underfill",
-        "schema_version": "1",
-        "unit_system": "SI",
-        "density": 1000,
-        "model": "thermo_elastic",
-        "provenance": {
-            "source_type": "illustrative",
-            "confidence": "illustrative",
-        },
-        "elastic": {
-            "symmetry": "isotropic",
-            "table": {
-                "temperatures": [250, 400],
-                "columns": {
-                    "E": [8000000000.0, 7200000000.0],
-                    "nu": [0.32, 0.33],
-                },
-                "interpolation": "linear",
-                "extrapolation": "clamp",
-            },
-        },
-        "thermal_expansion": {
-            "cte_type": "tangent",
-            "symmetry": "isotropic",
-            "stress_free_temperature": 298.15,
-            "table": {
-                "temperatures": [250, 400],
-                "columns": {
-                    "alpha": [3e-05, 3.3e-05],
-                },
-                "interpolation": "linear",
-                "extrapolation": "clamp",
-            },
-        },
-    },
-    "silicon": {
-        "id": "silicon",
-        "schema_version": "1",
-        "unit_system": "SI",
-        "density": 1000,
-        "model": "thermo_elastic",
-        "provenance": {
-            "source_type": "illustrative",
-            "confidence": "illustrative",
-        },
-        "elastic": {
-            "symmetry": "isotropic",
-            "table": {
-                "temperatures": [250, 400],
-                "columns": {
-                    "E": [130000000000.0, 117000000000.0],
-                    "nu": [0.28, 0.29000000000000004],
-                },
-                "interpolation": "linear",
-                "extrapolation": "clamp",
-            },
-        },
-        "thermal_expansion": {
-            "cte_type": "tangent",
-            "symmetry": "isotropic",
-            "stress_free_temperature": 298.15,
-            "table": {
-                "temperatures": [250, 400],
-                "columns": {
-                    "alpha": [2.6e-06, 2.86e-06],
-                },
-                "interpolation": "linear",
-                "extrapolation": "clamp",
-            },
-        },
-    },
-}
-materials_by_id = {item["id"]: item for item in library["materials"]}
-for material_id, expected in expected_legacy_materials.items():
-    assert materials_by_id.get(material_id) == expected, f"pre-existing material content changed: {material_id}"
-
-copper_entries = [item for item in library["materials"] if item["id"] == "copper"]
-assert len(copper_entries) == 1, "materials library must contain exactly one copper entry"
-copper = copper_entries[0]
-assert copper["provenance"]["reference"].strip(), "copper reference must be non-empty"
-assert copper["provenance"]["source_type"] == "literature", "copper source_type must be literature"
-assert copper["provenance"]["confidence"] == "medium", "copper confidence must be medium"
-assert (
-    "近似材料：多晶纯铜室温值，用于 PACKAGE_BULK_PARTS 的 lid；未按实际盖板合金和工艺标定"
-    == copper["provenance"]["notes"]
-), "copper notes must equal the required approximation statement"
-assert copper["schema_version"] == "1"
-assert copper["model"] == "thermo_elastic"
-assert copper["unit_system"] == "SI"
-assert 8800 <= copper["density"] <= 9000, "copper density must be in kg/m³"
-assert 350 <= copper["conductivity"] <= 420, "copper conductivity must be in W/(m·K)"
-for property_name in ("elastic", "thermal_expansion"):
-    assert copper[property_name]["symmetry"] == "isotropic"
-    table = copper[property_name]["table"]
-    assert table["temperatures"] == [250, 400]
-    assert table["interpolation"] == "linear"
-    assert table["extrapolation"] == "clamp"
-for property_name, column, lower, upper in (
-    ("elastic", "E", 100e9, 140e9),
-    ("elastic", "nu", 0.30, 0.37),
-    ("thermal_expansion", "alpha", 15e-6, 18e-6),
-):
-    values = copper[property_name]["table"]["columns"][column]
-    assert len(values) == 2, f"copper {column} must have two table values"
-    assert all(lower <= value <= upper for value in values), f"copper {column} outside SI bounds"
-assert copper["thermal_expansion"]["cte_type"] == "tangent"
-assert copper["thermal_expansion"]["stress_free_temperature"] == 298.15
-
-assembly = json.loads((examples / "assembly/package_bulk_parts.assembly.json").read_text(encoding="utf-8"))
-lid_parts = [part for part in assembly["parts"] if part["id"] == "lid"]
-assert len(lid_parts) == 1, "package bulk parts assembly must contain exactly one lid"
-lid_material = lid_parts[0]["material"]
-assert lid_material == "copper", "package bulk parts lid material must be exactly copper"
-assert lid_material in known_material_ids, "MATERIAL_MAPPING_MISSING: lid copper is absent from library"
-
 for invalid_library in (root / "material/schema/examples/negative-library-missing-schema.json",
                         root / "material/schema/examples/negative-library-invalid-material.json"):
     try:
@@ -261,4 +71,269 @@ for schema_file, valid, invalid_prefix in [
         except jsonschema.ValidationError:
             continue
         raise AssertionError(f"negative fixture unexpectedly validated: {invalid}")
+# The brief freezes the original entries' serialized bytes and array positions.
+# These snapshots come from the SP0 baseline, including whitespace and key order.
+expected_legacy_serializations = (
+    """{
+      "id": "organic_eq",
+      "schema_version": "1",
+      "unit_system": "SI",
+      "density": 1000,
+      "model": "thermo_elastic",
+      "provenance": {
+        "source_type": "illustrative",
+        "confidence": "illustrative"
+      },
+      "elastic": {
+        "symmetry": "isotropic",
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "E": [
+              25000000000.0,
+              22500000000.0
+            ],
+            "nu": [
+              0.3,
+              0.31
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      },
+      "thermal_expansion": {
+        "cte_type": "tangent",
+        "symmetry": "isotropic",
+        "stress_free_temperature": 298.15,
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "alpha": [
+              1.5e-05,
+              1.65e-05
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      }
+    }""",
+    """{
+      "id": "sac305_ball_eq",
+      "schema_version": "1",
+      "unit_system": "SI",
+      "density": 1000,
+      "model": "thermo_elastic",
+      "provenance": {
+        "source_type": "illustrative",
+        "confidence": "illustrative"
+      },
+      "elastic": {
+        "symmetry": "isotropic",
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "E": [
+              45000000000.0,
+              40500000000.0
+            ],
+            "nu": [
+              0.35,
+              0.36
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      },
+      "thermal_expansion": {
+        "cte_type": "tangent",
+        "symmetry": "isotropic",
+        "stress_free_temperature": 298.15,
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "alpha": [
+              2.2e-05,
+              2.4200000000000002e-05
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      }
+    }""",
+    """{
+      "id": "underfill",
+      "schema_version": "1",
+      "unit_system": "SI",
+      "density": 1000,
+      "model": "thermo_elastic",
+      "provenance": {
+        "source_type": "illustrative",
+        "confidence": "illustrative"
+      },
+      "elastic": {
+        "symmetry": "isotropic",
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "E": [
+              8000000000.0,
+              7200000000.0
+            ],
+            "nu": [
+              0.32,
+              0.33
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      },
+      "thermal_expansion": {
+        "cte_type": "tangent",
+        "symmetry": "isotropic",
+        "stress_free_temperature": 298.15,
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "alpha": [
+              3e-05,
+              3.3e-05
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      }
+    }""",
+    """{
+      "id": "silicon",
+      "schema_version": "1",
+      "unit_system": "SI",
+      "density": 1000,
+      "model": "thermo_elastic",
+      "provenance": {
+        "source_type": "illustrative",
+        "confidence": "illustrative"
+      },
+      "elastic": {
+        "symmetry": "isotropic",
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "E": [
+              130000000000.0,
+              117000000000.0
+            ],
+            "nu": [
+              0.28,
+              0.29000000000000004
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      },
+      "thermal_expansion": {
+        "cte_type": "tangent",
+        "symmetry": "isotropic",
+        "stress_free_temperature": 298.15,
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "alpha": [
+              2.6e-06,
+              2.86e-06
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      }
+    }""",
+)
+library_text = (examples / "fcbga_demo.materials.json").read_bytes().decode("utf-8")
+position = library_text.index("[", library_text.index('"materials"')) + 1
+decoder = json.JSONDecoder()
+for expected in expected_legacy_serializations:
+    while library_text[position].isspace() or library_text[position] == ",":
+        position += 1
+    _, end = decoder.raw_decode(library_text, position)
+    assert library_text[position:end].encode("utf-8") == expected.encode("utf-8"), (
+        f"pre-existing material serialization or position changed: {json.loads(expected)['id']}"
+    )
+    position = end
+
+copper_entries = [item for item in library["materials"] if item["id"] == "copper"]
+assert len(copper_entries) == 1, "materials library must contain exactly one copper entry"
+copper = copper_entries[0]
+assert copper["provenance"]["reference"].strip(), "copper reference must be non-empty"
+assert copper["provenance"]["source_type"] == "literature", "copper source_type must be literature"
+assert copper["provenance"]["confidence"] == "medium", "copper confidence must be medium"
+assert (
+    "近似材料：多晶纯铜室温值，用于 PACKAGE_BULK_PARTS 的 lid；未按实际盖板合金和工艺标定"
+    == copper["provenance"]["notes"]
+), "copper notes must equal the required approximation statement"
+assert copper["schema_version"] == "1"
+assert copper["model"] == "thermo_elastic"
+assert copper["unit_system"] == "SI"
+assert 8800 <= copper["density"] <= 9000, "copper density must be in kg/m³"
+assert 350 <= copper["conductivity"] <= 420, "copper conductivity must be in W/(m·K)"
+for property_name in ("elastic", "thermal_expansion"):
+    assert copper[property_name]["symmetry"] == "isotropic"
+    table = copper[property_name]["table"]
+    assert table["temperatures"] == [250, 400]
+    assert table["interpolation"] == "linear"
+    assert table["extrapolation"] == "clamp"
+for property_name, column, lower, upper in (
+    ("elastic", "E", 100e9, 140e9),
+    ("elastic", "nu", 0.30, 0.37),
+    ("thermal_expansion", "alpha", 15e-6, 18e-6),
+):
+    values = copper[property_name]["table"]["columns"][column]
+    assert len(values) == 2, f"copper {column} must have two table values"
+    assert all(lower <= value <= upper for value in values), f"copper {column} outside SI bounds"
+assert copper["thermal_expansion"]["cte_type"] == "tangent"
+assert copper["thermal_expansion"]["stress_free_temperature"] == 298.15
+
+# This read-only mapping is an explicit MAT-CU acceptance requirement after SP0 (#87).
+assembly_path = examples / "assembly/package_bulk_parts.assembly.json"
+assert assembly_path.is_file(), (
+    "SP0 (#87) prerequisite missing: schema/examples/assembly/package_bulk_parts.assembly.json; "
+    "stop and report the base mismatch; do not create the fixture"
+)
+assembly = json.loads(assembly_path.read_text(encoding="utf-8"))
+lid_parts = [part for part in assembly["parts"] if part["id"] == "lid"]
+assert len(lid_parts) == 1, "package bulk parts assembly must contain exactly one lid"
+lid_material = lid_parts[0]["material"]
+assert lid_material == "copper", "package bulk parts lid material must be exactly copper"
+assert lid_material in known_material_ids, "MATERIAL_MAPPING_MISSING: lid copper is absent from library"
+
 print("case/run profile fixtures OK")
