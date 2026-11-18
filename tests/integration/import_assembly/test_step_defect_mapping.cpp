@@ -42,17 +42,29 @@ int main() {
         require(mapped[0].defect_id == "lid/shell#1" && mapped[1].defect_id == "lid/face#1" &&
                     mapped[2].defect_id == "lid/face#1#InspectionIncomplete",
                 "status suffix must only be added for duplicate IDs");
+        auto other = open;
+        other.body_name = "solid/other";
+        auto global = face;
+        global.body_name.clear();
+        const auto filtered = importer::map_step_defects("lid", {open, other, global}, "solid/lid");
+        require(filtered.size() == 2, "shared STEP defects must match body or be global");
+        require(filtered[0].details.find("body=solid/lid;") != std::string::npos &&
+                    filtered[1].details.find("body=;") != std::string::npos,
+                "wrong body diagnostic survived filtering");
+        const auto repeated = importer::map_step_defects("lid", {face, incomplete, incomplete});
+        require(repeated[1].defect_id != repeated[2].defect_id,
+                "repeated statuses must still have unique IDs");
         const auto dir =
             std::filesystem::temp_directory_path() /
             ("sp4-mapping-" +
              std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         std::filesystem::create_directories(dir);
-        geometry::ImportReportParts parts;
+        importer::ImportReportParts parts;
         const std::string special = "layer\"\\\n";
         parts.split_layers[special] = {special + "#0", special + "#1"};
         parts.rewrite_targets.emplace_back("layer:" + special, parts.split_layers[special]);
         parts.material_approx.push_back(special);
-        require(geometry::write_import_report(dir, {}, mapped, nullptr, &parts),
+        require(importer::write_assembly_report(dir, {}, mapped, nullptr, &parts),
                 "report write failed");
 #ifdef SP4_HAS_JSONCONS
         const auto json = jsoncons::json::parse(sp4_test::bytes(dir / "import_report.json"));

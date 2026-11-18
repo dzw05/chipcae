@@ -1,6 +1,7 @@
 import tempfile
 from assembly_test_support import Assembly, CACHE, check, require
 
+require('JSONCONS')
 require('ECAD')
 if 'CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE:BOOL=ON' in CACHE:
     print('SKIP: implemented ODB++ reader is enabled')

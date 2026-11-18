@@ -78,8 +78,14 @@ foreach(asset schema/assembly-0.1.schema.json schema/stack-0.2.schema.json proto
 endforeach()
 # Installed schemas/protocol are already packaged by ChipcaeInstall.cmake.
 
-# E-ODB-3 may enable this once the public reader is implemented, rather than a stub.
-option(CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE "Assembly can use the implemented E-ODB-3 reader" OFF)
-if(CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE)
-    target_compile_definitions(chipcae-import PRIVATE CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE=1)
+# E-ODB-3 initially supplied a stub. Enable the assembly reader automatically
+# once its implementation replaces that placeholder.
+set(CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE OFF CACHE BOOL "Implemented assembly ODB++ reader detected" FORCE)
+set(_odbpp_reader "${PROJECT_SOURCE_DIR}/geometry/ecad/src/odbpp/read_odbpp.cpp")
+if(CHIPCAE_ENABLE_ECAD AND EXISTS "${_odbpp_reader}")
+    file(READ "${_odbpp_reader}" _odbpp_source)
+    if(NOT _odbpp_source MATCHES "IMPORT_REJECTED: not implemented")
+        set(CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE ON CACHE BOOL "Implemented assembly ODB++ reader detected" FORCE)
+        target_compile_definitions(chipcae-import PRIVATE CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE=1)
+    endif()
 endif()

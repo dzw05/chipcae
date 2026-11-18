@@ -3,9 +3,7 @@
 #include "chipcae/geometry/import_thresholds.hpp"
 
 #include <filesystem>
-#include <map>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace chipcae::geometry {
@@ -15,13 +13,6 @@ struct ImportReportHeader {
     Real t_min = 0;
     ImportTolerances tolerances;
     bool b_tier_accepted_all = false;
-};
-
-// Optional assembly extension, serialized by the same writer as common fields.
-struct ImportReportParts {
-    std::map<std::string, std::vector<std::string>> split_layers;
-    std::vector<std::pair<std::string, std::vector<std::string>>> rewrite_targets;
-    std::vector<std::string> material_approx;
 };
 
 enum class ImportResult { Success, ConfirmationRequired, Rejected };
@@ -37,8 +28,7 @@ RepairPolicyResult apply_repair_policy(std::vector<Defect> defects,
 bool write_import_report(const std::filesystem::path& directory,
                          const ImportReportHeader& header,
                          const std::vector<Defect>& defects,
-                         std::string* error = nullptr,
-                         const ImportReportParts* parts = nullptr);
+                         std::string* error = nullptr);
 std::string tier_name(Tier tier);
 std::string defect_id(const Defect& defect);
 

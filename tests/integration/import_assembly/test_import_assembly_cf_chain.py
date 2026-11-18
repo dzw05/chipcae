@@ -8,6 +8,7 @@ script = SOURCE / 'tools/stack/copper_fraction.py'
 if not script.is_file():
     print('SKIP: CKPT-CF copper_fraction.py absent')
     raise SystemExit(77)
+require('JSONCONS')
 require('ECAD')
 with tempfile.TemporaryDirectory() as tmp:
     a = Assembly(tmp)

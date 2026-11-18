@@ -3,6 +3,7 @@
 #include "../../schema/src/sha256.hpp"
 
 #include <fstream>
+#include <iterator>
 #include <set>
 #if __has_include(<jsoncons/json.hpp>)
 #include <jsoncons/json.hpp>

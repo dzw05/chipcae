@@ -1,6 +1,8 @@
 import copy
 import tempfile
-from assembly_test_support import Assembly, check
+from assembly_test_support import Assembly, check, require
+
+require("JSONCONS")
 
 with tempfile.TemporaryDirectory() as tmp:
     a = Assembly(tmp)

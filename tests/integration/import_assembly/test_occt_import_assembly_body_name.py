@@ -1,6 +1,7 @@
 import tempfile
 from assembly_test_support import Assembly, check, require
 
+require('JSONCONS')
 require('ECAD')
 with tempfile.TemporaryDirectory() as tmp:
     a = Assembly(tmp)

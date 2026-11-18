@@ -4,6 +4,7 @@ from assembly_test_support import Assembly, enabled, check, require
 if enabled('OCCT'):
     print('SKIP: OCCT-on build')
     raise SystemExit(77)
+require('JSONCONS')
 require('ECAD')
 with tempfile.TemporaryDirectory() as tmp:
     a = Assembly(tmp)

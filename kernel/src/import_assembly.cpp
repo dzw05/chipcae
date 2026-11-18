@@ -4,14 +4,151 @@
 
 #include <algorithm>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <map>
 #include <regex>
 #include <set>
+#include <sstream>
 namespace chipcae::importer {
 namespace {
+using namespace geometry;
+// Private assembly report extension.
+struct ImportReportParts {
+    std::map<std::string, std::vector<std::string>> split_layers;
+    std::vector<std::pair<std::string, std::vector<std::string>>> rewrite_targets;
+    std::vector<std::string> material_approx;
+};
+
+namespace {
+std::string quote(const std::string& s) {
+    std::string out = "\"";
+    for (char c : s) {
+        if (c == '"')
+            out += '"';
+        out += c;
+    }
+    return out + '"';
+}
+std::string json_quote(const std::string& s) {
+    std::ostringstream out;
+    out << '"';
+    for (unsigned char c : s) {
+        if (c == '"' || c == '\\')
+            out << '\\' << c;
+        else if (c < 0x20)
+            out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << unsigned(c);
+        else
+            out << c;
+    }
+    out << '"';
+    return out.str();
+}
+void strings(std::ostream& out, const std::vector<std::string>& values) {
+    out << '[';
+    bool first = true;
+    for (const auto& value : values) {
+        if (!first)
+            out << ',';
+        first = false;
+        out << json_quote(value);
+    }
+    out << ']';
+}
+} // namespace
+inline bool write_assembly_report(const std::filesystem::path& dir,
+                                  const ImportReportHeader& h,
+                                  const std::vector<Defect>& ds,
+                                  std::string* error,
+                                  const ImportReportParts* parts) {
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (ec) {
+        if (error)
+            *error = ec.message();
+        return false;
+    }
+    unsigned counts[4]{};
+    for (const auto& d : ds)
+        ++counts[static_cast<unsigned>(d.tier)];
+    std::ofstream j(dir / "import_report.json"), c(dir / "import_report.csv");
+    if (!j || !c) {
+        if (error)
+            *error = "cannot open report output";
+        return false;
+    }
+    j << std::setprecision(17) << "{\"L\":" << h.L << ",\"t_min\":" << h.t_min
+      << ",\"eps_weld\":" << h.tolerances.eps_weld << ",\"tau_A\":" << h.tolerances.tau_A
+      << ",\"tau_B\":" << h.tolerances.tau_B << ",\"delta_f\":" << h.tolerances.delta_f
+      << ",\"tier_counts\":{\"Weld\":" << counts[0] << ",\"A\":" << counts[1]
+      << ",\"B\":" << counts[2] << ",\"C\":" << counts[3]
+      << "},\"b_tier_accepted\":" << (h.b_tier_accepted_all ? "\"all\"" : "null")
+      << ",\"defects\":[";
+    c << "defect_id,tier,kind,reason,dimension,size,suggestion,action,rejection_reason,material_"
+         "ambiguous\n";
+    bool first = true;
+    for (const auto& d : ds) {
+        const auto id = defect_id(d), tier = tier_name(d.tier);
+        if (!first)
+            j << ',';
+        first = false;
+        j << "{\"defect_id\":" << json_quote(id) << ",\"tier\":" << json_quote(tier)
+          << ",\"kind\":" << json_quote(d.kind) << ",\"reason\":" << static_cast<unsigned>(d.reason)
+          << ",\"dimension\":" << json_quote(d.dimension) << ",\"size\":" << std::setprecision(17)
+          << d.size << ",\"suggestion\":" << json_quote(d.suggestion)
+          << ",\"action\":" << json_quote(d.action)
+          << ",\"rejection_reason\":" << json_quote(d.rejection_reason)
+          << ",\"material_ambiguous\":" << (d.material_ambiguous ? "true" : "false");
+        if (parts || !d.details.empty())
+            j << ",\"details\":" << json_quote(d.details);
+        j << '}';
+        c << quote(id) << ',' << quote(tier) << ',' << quote(d.kind) << ','
+          << static_cast<unsigned>(d.reason) << ',' << quote(d.dimension) << ','
+          << std::setprecision(17) << d.size << ',' << quote(d.suggestion) << ',' << quote(d.action)
+          << ',' << quote(d.rejection_reason) << ',' << (d.material_ambiguous ? "true" : "false")
+          << '\n';
+    }
+    j << ']';
+    if (parts) {
+        j << ",\"parts\":{\"split_layers\":{";
+        bool first = true;
+        for (const auto& [name, targets] : parts->split_layers) {
+            if (!first)
+                j << ',';
+            first = false;
+            j << json_quote(name) << ':';
+            strings(j, targets);
+        }
+        j << "},\"rewrite_targets\":[";
+        first = true;
+        for (const auto& [from, targets] : parts->rewrite_targets) {
+            if (!first)
+                j << ',';
+            first = false;
+            j << "{\"from\":" << json_quote(from) << ",\"to\":";
+            strings(j, targets);
+            j << '}';
+        }
+        j << "],\"material_approx\":[";
+        first = true;
+        for (const auto& id : parts->material_approx) {
+            if (!first)
+                j << ',';
+            first = false;
+            j << "{\"id\":" << json_quote(id)
+              << ",\"material_approx\":true,\"label\":\"近似材料\"}";
+        }
+        j << "]}";
+    }
+    j << "}\n";
+    return static_cast<bool>(j) && static_cast<bool>(c);
+}
+
 std::filesystem::path assembly_root() {
     // Linux runtime packaging uses /proc/self/exe to locate assets independently of cwd.
-    auto dir = std::filesystem::read_symlink("/proc/self/exe").parent_path();
+    std::error_code ec;
+    auto executable = std::filesystem::read_symlink("/proc/self/exe", ec);
+    auto dir = ec ? std::filesystem::current_path() : executable.parent_path();
     const auto installed = dir / "../share/chipcae";
     if (std::filesystem::exists(installed / "protocol/errors.yaml"))
         return installed;
@@ -52,11 +189,15 @@ const char* step_kind(geometry::StepDefectKind k) {
     return "InvalidGeometry";
 }
 } // namespace
-std::vector<geometry::Defect> map_step_defects(const std::string& part,
-                                               const std::vector<geometry::StepDefect>& input) {
+std::vector<geometry::Defect>
+map_step_defects(const std::string& part,
+                 const std::vector<geometry::StepDefect>& input,
+                 const std::optional<std::string>& body = std::nullopt) {
     std::vector<geometry::Defect> out;
     std::set<std::string> ids;
     for (const auto& s : input) {
+        if (body && !s.body_name.empty() && s.body_name != *body)
+            continue;
         geometry::Defect d{};
         d.tier = s.tier;
         d.reason = geometry::DefectReason::TOLERANCE_RANGE_UNSUPPORTED;
@@ -66,6 +207,9 @@ std::vector<geometry::Defect> map_step_defects(const std::string& part,
         d.defect_id = part + "/" + s.defect_id;
         if (ids.contains(d.defect_id) && !s.status.empty())
             d.defect_id += "#" + s.status;
+        const auto candidate = d.defect_id;
+        for (unsigned suffix = 2; ids.contains(d.defect_id); ++suffix)
+            d.defect_id = candidate + "#" + std::to_string(suffix);
         ids.insert(d.defect_id);
         d.action = s.action;
         d.details = "step_entity=" + s.step_entity + ";body=" + s.body_name +
@@ -130,27 +274,12 @@ int assembly_error_exit(const std::string& message) {
 #include <jsoncons_ext/jsonschema/jsonschema.hpp>
 #ifdef CHIPCAE_ENABLE_ECAD
 #include "chipcae/geometry/ecad/ipc2581.hpp"
+#ifdef CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE
 #include "chipcae/geometry/ecad/odbpp.hpp"
+#endif
 #endif
 namespace chipcae::importer {
 int run_assembly(const ImportOptions& options) {
-    if (options.output.empty()) {
-        std::cerr << "unknown argument: --assembly\n";
-        return CliExit::usage;
-    }
-    if (options.accept_b_tier &&
-        std::find(options.deferred_options.begin(), options.deferred_options.end(), "--accept") !=
-            options.deferred_options.end())
-        return CliExit::usage;
-    for (const auto& option : options.deferred_options)
-        if (option != "--assembly" && option != "--accept") {
-            std::cerr << "not implemented yet: " << option << '\n';
-            return CliExit::usage;
-        }
-    if (!options.input.empty()) {
-        std::cerr << "not implemented yet: --assembly with positional input\n";
-        return CliExit::usage;
-    }
     using namespace geometry;
     using J = jsoncons::json;
     std::vector<Defect> defects;
@@ -159,7 +288,7 @@ int run_assembly(const ImportOptions& options) {
     auto reports = [&](const std::string& code, const std::string& message) {
         std::string error;
         const auto dir = import_report_directory(options.output);
-        if (!write_import_report(dir, header, defects, &error, &parts))
+        if (!write_assembly_report(dir, header, defects, &error, &parts))
             throw std::runtime_error(error);
         std::ifstream common(dir / "import_report.json");
         const auto report = J::parse(common);
@@ -173,8 +302,12 @@ int run_assembly(const ImportOptions& options) {
             throw std::runtime_error("cannot write assembly reports");
     };
     auto fail = [&](int exit, const std::string& code, const std::string& message) {
-        reports(code, message);
-        std::cerr << message << '\n';
+        const auto full =
+            message.starts_with(code + ": ") || std::regex_search(message, std::regex("^[A-Z_]+: "))
+                ? message
+                : code + ": " + message;
+        reports(code, full);
+        std::cerr << full << '\n';
         return exit;
     };
     try {
@@ -443,8 +576,6 @@ int run_assembly(const ImportOptions& options) {
                 return;
             }
             auto step = shared ? *shared : read_step(p);
-            auto mapped = map_step_defects(id, step.defects);
-            defects.insert(defects.end(), mapped.begin(), mapped.end());
             std::set<std::string> names;
             for (const auto& n : step.body_names) {
                 if (n.find("NOT_CAE_GEOMETRY") != std::string::npos)
@@ -461,6 +592,8 @@ int run_assembly(const ImportOptions& options) {
                 "body", step.body_names.empty() ? "" : step.body_names.front());
             if (!names.contains(body))
                 throw std::runtime_error("IMPORT_REJECTED: unknown body name " + body);
+            auto mapped = map_step_defects(id, step.defects, body);
+            defects.insert(defects.end(), mapped.begin(), mapped.end());
             SliceResult sliced;
             try {
                 sliced = slice_prismatic(
@@ -587,12 +720,20 @@ int run_assembly(const ImportOptions& options) {
         if (std::any_of(
                 defects.begin(), defects.end(), [](const Defect& d) { return d.tier == Tier::C; }))
             return fail(7, "IMPORT_REJECTED", "IMPORT_REJECTED: C-tier defects");
+        if (policy.result == ImportResult::Rejected)
+            return fail(7, "IMPORT_REJECTED", "IMPORT_REJECTED: repair policy rejected import");
         if (policy.result == ImportResult::ConfirmationRequired)
-            return fail(6, "IMPORT_CONFIRMATION_REQUIRED", "IMPORT_CONFIRMATION_REQUIRED");
+            return fail(6,
+                        "IMPORT_CONFIRMATION_REQUIRED",
+                        "IMPORT_CONFIRMATION_REQUIRED: B-tier defects require acceptance");
         Cleanup output_cleanup{options.output};
         auto written = write_stack(merged, options.output);
         if (!written)
             return fail(14, "INPUT_INVALID", written.error().reason);
+        auto validated =
+            mesh::load_stack(options.output, assembly_root() / "schema/stack-0.2.schema.json");
+        if (!validated)
+            return fail(14, "INPUT_INVALID", validated.error().reason);
         reports("OK", "");
         output_cleanup.p.clear();
         return 0;
@@ -613,7 +754,7 @@ int run_assembly(const ImportOptions& options) {
 #else
 namespace chipcae::importer {
 int run_assembly(const ImportOptions& options) {
-    write_defects(options.report, "IMPORT_REJECTED", "JSON support disabled");
+    write_defects(options.report, "IMPORT_REJECTED", "IMPORT_REJECTED: JSON support disabled");
     return 7;
 }
 } // namespace chipcae::importer

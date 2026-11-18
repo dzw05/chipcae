@@ -8,6 +8,9 @@ with tempfile.TemporaryDirectory() as tmp:
     empty = a.accept([])
     check(a.run('--accept', empty, '--accept-b-tier'), 2)
     check(a.run('--accept-b-tier', '--accept', empty), 2)
+    check(subprocess.run([str(BUILD / 'kernel/chipcae-import'), '--assembly',
+                          str(a.root / 'assembly.json')], capture_output=True, text=True), 2)
+    require('JSONCONS')
     require('ECAD')
     result = subprocess.run([str(BUILD / 'kernel/chipcae-import'), '--accept', str(empty),
                              '--assembly', str(a.root / 'assembly.json'), '-o', str(a.output)],

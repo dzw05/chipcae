@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 from assembly_test_support import Assembly, BUILD, check, require
 
+require('JSONCONS')
 require('ECAD')
 with tempfile.TemporaryDirectory() as tmp:
     a = Assembly(tmp)
@@ -29,6 +30,19 @@ with tempfile.TemporaryDirectory() as tmp:
     assert {'parts', 'L', 'tier_counts', 'defects'} <= report.keys(), report
     assert (a.root / 'import_report.csv').is_file()
     assert (staging / 'partial').read_text() == 'interrupted report'
+    # The writer emits resolved body names; board to_stack omits them. Reject
+    # that final-only field to prove the serialized output is schema validated.
+    stack_schema_path = assets / 'schema/stack-0.2.schema.json'
+    saved_stack_schema = stack_schema_path.read_text()
+    stack_schema = json.loads(saved_stack_schema)
+    stack_schema['properties']['layers']['items']['properties']['body'] = {'not': {}}
+    stack_schema_path.write_text(json.dumps(stack_schema))
+    a.output.unlink()
+    check(run(), 14)
+    assert a.defects()['code'] == 'INPUT_INVALID'
+    assert a.defects()['message'].startswith('INPUT_INVALID: ')
+    assert not a.output.exists()
+    stack_schema_path.write_text(saved_stack_schema)
     # Changing only the packaged schema proves it is the runtime schema owner.
     schema_path = assets / 'schema/assembly-0.1.schema.json'
     schema = json.loads(schema_path.read_text())

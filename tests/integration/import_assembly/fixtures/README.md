@@ -14,6 +14,6 @@ in its own temporary directory. No vendor geometry is stored here.
 
 The C++ tests use private orchestration helpers `map_step_defects`,
 `assembly_error_exit`, and `inline_assembly_outline` in the importer namespace.
-Until SP4 supplies them, test-local fallbacks return empty results, exit zero,
-and an unchanged outline, respectively. The writer fallback returns an error.
-These deliberately fail behavioral assertions and never alter the CLI.
+The tests include the production implementation directly; missing helpers fail
+compilation. No fallback replaces production behavior. The writer tests cover
+external_refs hashes and missing sidecars; CLI tests cover split/rewrite reports.
