@@ -1,5 +1,20 @@
 # Synthetic ODB++ / IPC-2581 CLI acceptance
 
+Current status after the scope review: the product solver, material schema and
+schema-test changes from `0c3bb0a` have been reverted. Only the four files in this
+directory remain in the branch diff against its merge base with main (`b703d57`).
+The acceptance driver and its assertions are unchanged by that revert. The restored
+material schema rejects the required `mat.cu` ID, so numerical acceptance is blocked at
+solve input validation (exit 14); it requires a separately authorized product
+fix, tracked by [M3/material #168](https://github.com/dzw05/chipcae/issues/168).
+The required dotted IDs and the frozen schema conflict; resolving that contract
+requires an owner decision and a separate scope, rather than a schema relaxation
+in this test-only PR. The boundary-attribute fix likewise needs a separate solver
+change. The acceptance test remains failing until these prerequisites are resolved.
+The measurements below are historical results from before the scope correction,
+when the reverted product fixes were present; they do not establish acceptance
+for the current checkout.
+
 `odbcli_odbpp_cli_e2e` is a test-first acceptance driver, labelled
 `integration;numerical;vv`, with a 1200 second CTest timeout. All input is public
 synthetic data. The illustrative material cards are not calibrated board data.
@@ -60,7 +75,55 @@ bottom temperature 298.15 K and ambient 348.15 K, heat flux is
 Acceptance is maximum absolute error ≤1e-8 K. If both IDs are mat.cu, this formula
 has no dependence on copper fraction; the geometry assertions remain independent.
 
-## Validation and measurements
+## Scope-review verification
+
+Release configure and full build exit 0 after restoring the solver, material
+schema and schema tests to the branch baseline. clang-format 23.1.5 `-i` followed
+by `--dry-run --Werror` leaves the restored C++ file unchanged and exits 0.
+The acceptance script, CMake registration and empty marker are unchanged by this
+scope correction; no acceptance assertion or threshold was weakened.
+
+The fresh targeted command is:
+
+```sh
+OMP_NUM_THREADS=1 ctest --test-dir "$build" -R '^(case_run_schema_fixtures|odbcli_odbpp_cli_e2e)$' --output-on-failure -V
+```
+
+It exits 8: schema fixtures pass, E2E fails (1 passed / 1 failed). Both normal
+imports, copper averaging, geometry/material checks, negative comparisons and
+preview succeed. Preview measures 864 cells with layer counts
+`[1,7,1,36,1,7,1]`. The serial solver then exits 14:
+
+```text
+material mat.cu /id: String 'mat.cu' does not match pattern '^[a-z0-9_-]+$'.
+```
+
+Ranks=2, numerical temperature checks and readback are consequently not reached
+in this checkout. The historical successful runs below do not replace current
+acceptance evidence.
+
+The full Release command `OMP_NUM_THREADS=1 ctest --test-dir "$build"
+--output-on-failure -j2` exits 8: 251 passed, 5 failed, 5 skipped (261 total;
+1465.10 seconds). This was the same-checkout suite already running during the
+scope review, allowed to finish without interruption. In addition to the E2E
+schema blocker, it reproduces the four failures in the historical table below:
+`odbpp_map_placeholder` (60-second large-contour timeout), `ipc_fixture_present`
+(eight geometry-context diagnostic assertions), `chain_ipc_uncut_chain`
+(`mat.fr4` expected, `mat.cu` imported), and `ecaddiff_import_pair` (11/0/5
+expected, 0/0/14 received). The five skips are unchanged optional GPU and
+assembly/STEP tests. No tests were excluded or timeouts increased. The current
+checkout does not satisfy all-CTest-green acceptance.
+
+Review dispositions: the CodeBuddy scope MUST is confirmed and the three
+out-of-scope changes are removed. Missing-launcher ranks=2 skipping is explicitly
+required by the brief. The fraction-blind thermal reference follows the brief's
+mandated material IDs; changing the base material needs an owner decision. The
+30/35 µm copper-thickness exception is also mandated and remains pinned at
+1e-12 relative tolerance. The removed stride code operated on a serial
+`mfem::Mesh` constructed from the global arrays on each rank, rather than a
+`ParMesh`; the suggested rank-local-stride scenario does not apply to that path.
+
+## Historical validation and measurements (before scope correction)
 
 Measured (实测) on 2026-11-19, review fix based on commit `236e4400b47fcc533f5bfe89106009dde3f840c0`,
 Release, ECAD + JSONcons + MPI + parallel HDF5 + PETSc-enabled MFEM. The three
@@ -106,17 +169,19 @@ solves measure 864 regular cells and zero cut cells. `mpiexec` is available
 | Maximum displacement magnitude m | 0.00011400375798343959 | 0.00011400375798343959 |
 | Maximum temperature K | 339.6277197011525 | 339.6277197011525 |
 
-The material schema now accepts dots alongside the existing lowercase letters,
-digits, underscores and hyphens. A schema regression validates `mat.cu` and
-`mat.fr4_eq` through the material-library reference and retains invalid-ID checks.
+At the historical revision, the material schema accepted dots alongside lowercase
+letters, digits, underscores and hyphens. A schema regression validated `mat.cu`
+and `mat.fr4_eq` through the material-library reference and retained invalid-ID checks.
+Both out-of-scope changes have since been reverted.
 The earlier acceptance and implementation runs stopped at solve exit 14 because
 this schema excluded dots; those runs did not measure numerical results.
 
 Running beyond that blocker exposed an internal interface attribute aliasing
-the top convection face. The solver now spaces per-layer boundary IDs using the
-full boundary attribute range, including aligned interfaces. Before this fix the
+the top convection face. The historical solver fix spaced per-layer boundary IDs
+using the full boundary attribute range, including aligned interfaces. That
+out-of-scope fix has since been reverted. Before that fix the
 unchanged temperature gate measured a 3.8645886088048087 K error; after it, both
-rank counts pass the original 1e-8 K gate. No material IDs, imported layer data,
+rank counts passed the original 1e-8 K gate. No material IDs, imported layer data,
 conductivities, load values or numerical tolerances were changed.
 
 Readback distinguishes the manifest's Q2 top-node warpage from the exported
@@ -166,7 +231,7 @@ the two GPU tests and three optional assembly/STEP placeholders. No tests were
 excluded and no test timeout was increased.
 
 Product handoffs: [M3/material #168](https://github.com/dzw05/chipcae/issues/168)
-records the earlier dotted-ID blocker, addressed by this fix;
+records the dotted-ID blocker, which still requires a separately scoped fix;
 [M1 #169](https://github.com/dzw05/chipcae/issues/169) tracks the pinned copper
 thickness discrepancy. The latter preserves the prior
 [#82](https://github.com/dzw05/chipcae/issues/82) ruling that `copper_weight` is

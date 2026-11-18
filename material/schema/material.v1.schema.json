@@ -15,8 +15,7 @@
   "properties": {
     "id": {
       "type": "string",
-      "pattern": "^[a-z0-9_.-]+$",
-      "description": "Lowercase material ID; letters, digits, underscores, hyphens and dots (e.g. mat.cu)."
+      "pattern": "^[a-z0-9_-]+$"
     },
     "schema_version": {
       "const": "1"
