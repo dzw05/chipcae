@@ -40,13 +40,15 @@ ValidationResult validate_material_file(const std::string& path,
                                         bool customer_delivery = false,
                                         ImportOptions options = {});
 
-// Library acceptance API; definitions are deliberately unimplemented TDD stubs.
+// Validate the chipcae.material_library/1 envelope and every material card.
 ValidationResult validate_material_library_json(std::string_view json,
                                                 bool customer_delivery = false,
                                                 ImportOptions options = {});
+// Parse the library in input order; any validation issue throws std::runtime_error.
 std::vector<MaterialParams> parse_material_library_json(std::string_view json,
                                                         bool customer_delivery = false,
                                                         ImportOptions options = {});
+// Read a file and validate it as a library.
 ValidationResult validate_material_library_file(const std::string& path,
                                                 bool customer_delivery = false,
                                                 ImportOptions options = {});

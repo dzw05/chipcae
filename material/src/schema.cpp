@@ -9,8 +9,10 @@
 #include <limits>
 #include <map>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 namespace chipcae::material {
 namespace {
 struct Json {
@@ -20,6 +22,8 @@ struct Json {
     std::string path = "material";
     std::vector<Json> array;
     std::map<std::string, Json> object;
+    std::size_t begin = 0;
+    std::size_t end = 0;
     const Json& at(const std::string& key) const {
         auto it = object.find(key);
         if (kind != Object || it == object.end())
@@ -116,11 +120,14 @@ struct Reader {
         if (pos == s.size())
             throw std::runtime_error("unexpected JSON end");
         Json j;
+        j.begin = pos;
         if (s[pos] == '{') {
             ++pos;
             j.kind = Json::Object;
-            if (eat('}'))
+            if (eat('}')) {
+                j.end = pos;
                 return j;
+            }
             do {
                 auto key = string();
                 expect(':');
@@ -131,8 +138,10 @@ struct Reader {
         } else if (s[pos] == '[') {
             ++pos;
             j.kind = Json::Array;
-            if (eat(']'))
+            if (eat(']')) {
+                j.end = pos;
                 return j;
+            }
             do {
                 j.array.push_back(value(depth + 1));
             } while (eat(','));
@@ -185,6 +194,7 @@ struct Reader {
                 throw std::runtime_error("invalid finite JSON number");
             j.kind = Json::Number;
         }
+        j.end = pos;
         return j;
     }
     Json read() {
@@ -584,14 +594,119 @@ validate_material_file(const std::string& path, bool customer_delivery, ImportOp
     return validate_material_json(s.str(), customer_delivery, options);
 }
 
-// TEST-FIRST stubs only: no envelope parsing, card validation, or file handling yet.
-ValidationResult validate_material_library_json(std::string_view, bool, ImportOptions) {
-    return {false, {{"material_library", "not implemented (TDD stub)"}}};
+namespace {
+ValidationIssue exception_issue(const std::exception& e) {
+    std::string message = e.what();
+    const auto colon = message.find(':');
+    return {colon == std::string::npos ? "material" : message.substr(0, colon), message};
 }
-std::vector<MaterialParams> parse_material_library_json(std::string_view, bool, ImportOptions) {
-    throw std::runtime_error("material library parsing not implemented (TDD stub)");
+
+struct LibraryResult {
+    ValidationResult validation;
+    std::vector<MaterialParams> materials;
+};
+
+LibraryResult
+process_library(std::string_view json, bool customer_delivery, ImportOptions options) {
+    LibraryResult result;
+    auto& issues = result.validation.issues;
+    try {
+        const auto root = Reader{json}.read();
+        if (!root.has("schema") || root.at("schema").kind != Json::String ||
+            root.at("schema").string != "chipcae.material_library/1")
+            issues.push_back({"schema", "expected chipcae.material_library/1"});
+        for (const auto& [key, value] : root.object) {
+            if (key != "schema" && key != "materials" && !key.starts_with("x-"))
+                issues.push_back({key, "unknown library field"});
+        }
+        if (!root.has("materials") || root.at("materials").kind != Json::Array) {
+            issues.push_back({"materials", "expected nonempty array"});
+        } else {
+            const auto& cards = root.at("materials").array;
+            if (cards.empty())
+                issues.push_back({"materials", "expected nonempty array"});
+            std::set<std::string> ids;
+            for (std::size_t i = 0; i < cards.size(); ++i) {
+                const auto& card = cards[i];
+                const auto path = "materials[" + std::to_string(i) + "]";
+                // Register ids independently of semantic validation so invalid cards still
+                // participate in duplicate detection.
+                if (card.kind == Json::Object && card.has("id") &&
+                    card.at("id").kind == Json::String && !ids.insert(card.at("id").string).second)
+                    issues.push_back({path + ".id", "duplicate material id"});
+                try {
+                    // Keep the original card text for the existing parser and parameter hash.
+                    auto params = parse_material_json(
+                        json.substr(card.begin, card.end - card.begin), customer_delivery, options);
+                    auto& warnings = result.validation.warning_codes;
+                    warnings.insert(
+                        warnings.end(), params.warning_codes.begin(), params.warning_codes.end());
+                    result.materials.push_back(std::move(params));
+                } catch (const std::exception& e) {
+                    auto issue = exception_issue(e);
+                    if (issue.field_path == "material")
+                        issue.field_path = path;
+                    else if (issue.field_path.starts_with("material."))
+                        issue.field_path.replace(0, std::string_view("material").size(), path);
+                    else
+                        issue.field_path = path + "." + issue.field_path;
+                    issues.push_back(std::move(issue));
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        issues.push_back(exception_issue(e));
+    }
+    result.validation.ok = issues.empty();
+    return result;
 }
-ValidationResult validate_material_library_file(const std::string&, bool, ImportOptions) {
-    return {false, {{"material_library", "not implemented (TDD stub)"}}};
+} // namespace
+
+ValidationResult validate_material_library_json(std::string_view json,
+                                                bool customer_delivery,
+                                                ImportOptions options) {
+    return process_library(json, customer_delivery, options).validation;
 }
+std::vector<MaterialParams>
+parse_material_library_json(std::string_view json, bool customer_delivery, ImportOptions options) {
+    auto result = process_library(json, customer_delivery, options);
+    if (!result.validation.ok) {
+        const auto& issue = result.validation.issues.front();
+        throw std::runtime_error(issue.field_path + ": " + issue.message);
+    }
+    return std::move(result.materials);
+}
+ValidationResult validate_material_library_file(const std::string& path,
+                                                bool customer_delivery,
+                                                ImportOptions options) {
+    std::ifstream f(path);
+    if (!f)
+        return {false, {{path, "cannot open file"}}};
+    std::ostringstream s;
+    s << f.rdbuf();
+    return validate_material_library_json(s.str(), customer_delivery, options);
+}
+
+namespace detail {
+// CLI-only dispatch using the same Reader as the public validation entry points.
+ValidationResult validate_material_or_library_file(const std::string& path,
+                                                   bool customer_delivery) {
+    std::ifstream f(path);
+    if (!f)
+        return {false, {{path, "cannot open file"}}};
+    std::ostringstream s;
+    s << f.rdbuf();
+    const auto json = s.str();
+    try {
+        const auto root = Reader{json}.read();
+        if (root.has("materials") ||
+            (root.has("schema") && root.at("schema").kind == Json::String &&
+             root.at("schema").string == "chipcae.material_library/1"))
+            return validate_material_library_json(json, customer_delivery);
+        return validate_material_json(json, customer_delivery);
+    } catch (const std::exception& e) {
+        return {false, {exception_issue(e)}};
+    }
+}
+} // namespace detail
 } // namespace chipcae::material
