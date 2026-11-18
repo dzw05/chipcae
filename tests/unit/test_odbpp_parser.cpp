@@ -9,6 +9,8 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <initializer_list>
+#include <iomanip>
 #include <iostream>
 #include <iterator>
 #include <limits>
@@ -186,6 +188,152 @@ void minimal(const fs::path& root) {
     write(root / "steps/pcb/profile",
           "UNITS=MM\nS P 0\nOB 0 0 I\nOS 1 0\nOS 1 1\nOS 0 1\nOS 0 0\nOE\nSE\n");
 }
+OdbContour polygon(OdbPoint start, std::initializer_list<OdbPoint> ends, bool hole = false) {
+    OdbContour contour{hole, start, {}};
+    for (const auto end : ends)
+        contour.segs.push_back({end, false, {}, false});
+    return contour;
+}
+void write_surface(const fs::path& root, const std::vector<OdbContour>& contours) {
+    minimal(root);
+    std::ostringstream out;
+    out << std::setprecision(17) << "UNITS=MM\nS P 0\n";
+    for (const auto& contour : contours) {
+        out << "OB " << contour.start.x << ' ' << contour.start.y
+            << (contour.is_hole ? " H\n" : " I\n");
+        for (const auto& segment : contour.segs) {
+            out << (segment.is_arc ? "OC " : "OS ") << segment.end.x << ' ' << segment.end.y;
+            if (segment.is_arc)
+                out << ' ' << segment.center.x << ' ' << segment.center.y
+                    << (segment.cw ? " Y" : " N");
+            out << '\n';
+        }
+        out << "OE\n";
+    }
+    out << "SE\n";
+    write(root / "steps/pcb/layers/top/features", out.str());
+}
+void unchanged_surface(const OdbJob& parsed, const std::vector<OdbContour>& contours) {
+    // Independently specified metadata from minimal(); compare every frozen field,
+    // including segment order, centers, flags, and coordinates without rounding.
+    OdbJob expected;
+    expected.step = "pcb";
+    expected.layers.push_back({"top", "", "signal", "", 1, "", ""});
+    expected.profile.contours.push_back(polygon({0, 0}, {{1, 0}, {1, 1}, {0, 1}, {0, 0}}));
+    expected.features["top"].surfaces.push_back({true, contours});
+    require(Snapshot{}.take(parsed) == Snapshot{}.take(expected),
+            "all frozen fields and ordered surface geometry unchanged");
+}
+struct TimedRead {
+    OdbJob parsed;
+    ImportResult result;
+    double seconds = 0;
+};
+TimedRead timed_read(const fs::path& root, const std::string& name) {
+    TimedRead read;
+    // Fixtures and expected geometry are complete before the watchdog starts.
+    std::cout << "START " << name << '\n' << std::flush;
+    const auto start = std::chrono::steady_clock::now();
+    read.result = read_odbpp_job(root, read.parsed);
+    read.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    std::cout << "MEASURE " << name << " seconds=" << std::setprecision(9) << read.seconds << '\n';
+    return read;
+}
+void within_contour_budget(const TimedRead& read, const std::string& name) {
+    require(read.seconds <= 5.0,
+            name + ": read_odbpp_job seconds <= 5.0 (measured " + std::to_string(read.seconds) +
+                ")");
+}
+OdbContour large_zigzag() {
+    constexpr std::size_t count = 200000;
+    OdbContour contour{false, {1, 1}, {}};
+    contour.segs.reserve(count);
+    contour.segs.push_back({{50, 1}, false, {}, false});
+    contour.segs.push_back({{50, 10}, false, {}, false});
+    for (std::size_t i = 1; i <= count - 3; ++i)
+        contour.segs.push_back(
+            {{50.0 - 49.0 * static_cast<double>(i) / static_cast<double>(count - 3),
+              i % 2 ? 11.0 : 10.0},
+             false,
+             {},
+             false});
+    contour.segs.push_back({contour.start, false, {}, false});
+    require(contour.segs.size() == count, "exactly 200000 generated segments");
+    return contour;
+}
+void introduce_late_crossing(OdbContour& contour) {
+    const auto n = contour.segs.size();
+    // One-based segments N-10 and N-3. Move only the latter's endpoint;
+    // the explicit last closing segment stays untouched.
+    const auto a = contour.segs[n - 12].end, b = contour.segs[n - 11].end;
+    const auto c = contour.segs[n - 5].end;
+    const OdbPoint d{a.x + (a.x - b.x), 11};
+    contour.segs[n - 4].end = d;
+    const auto cross = [](OdbPoint u, OdbPoint v) {
+        return static_cast<long double>(u.x) * v.y - static_cast<long double>(u.y) * v.x;
+    };
+    const OdbPoint u{b.x - a.x, b.y - a.y}, v{d.x - c.x, d.y - c.y}, w{c.x - a.x, c.y - a.y};
+    const auto det = cross(u, v);
+    require(det != 0, "late crossing is transverse");
+    const auto t = cross(w, v) / det, s = cross(w, u) / det;
+    require(t > 0 && t < 1 && s > 0 && s < 1, "late crossing strictly inside both segments");
+    require(contour.segs.back().end.x == contour.start.x &&
+                contour.segs.back().end.y == contour.start.y,
+            "late crossing preserves explicit closure");
+    long double area = 0;
+    auto previous = contour.start;
+    for (const auto& segment : contour.segs) {
+        area += cross(previous, segment.end);
+        previous = segment.end;
+    }
+    require(std::isfinite(area) && area != 0, "crossing fixture has nonzero signed area");
+}
+OdbContour bridged_grid(int columns, int rows) {
+    OdbContour contour{false, {0, 0}, {}};
+    const auto line = [&](double x, double y) {
+        contour.segs.push_back({{x, y}, false, {}, false});
+    };
+    for (int column = 0; column < columns; ++column) {
+        const double x = 1.0 + 0.4 * column;
+        line(x, 0); // Split the outer bottom edge at every bridge foot.
+        const std::function<void(int)> visit = [&](int row) {
+            const double y = 1.0 + 0.4 * row;
+            line(x, y);      // Bridge from the frame or the preceding hole's top-left.
+            line(x, y + .2); // Clockwise hole; the frame is counterclockwise.
+            if (row + 1 < rows) {
+                visit(row + 1);
+                line(x, y + .2); // Retrace only the gap to the next hole.
+            }
+            line(x + .2, y + .2);
+            line(x + .2, y);
+            line(x, y);
+        };
+        visit(0);
+        line(x, 0);
+    }
+    line(60, 0);
+    line(60, 60);
+    line(0, 60);
+    line(0, 0);
+    // Four edges per hole, two edges per retraced bridge, columns+4 frame edges.
+    require(contour.segs.size() == static_cast<std::size_t>(6 * columns * rows + columns + 4),
+            "bridged grid generated segment count");
+    return contour;
+}
+std::vector<OdbContour> many_holes(bool crossing) {
+    std::vector<OdbContour> contours;
+    contours.push_back(polygon({0, 0}, {{70, 0}, {70, 60}, {0, 60}, {0, 0}}));
+    for (int row = 0; row < 50; ++row)
+        for (int column = 0; column < 60; ++column) {
+            double x = 1.0 + column;
+            const double y = 1.0 + row;
+            if (crossing && row == 49 && column == 59)
+                x -= .75; // Overlap the preceding hole strictly inside the frame.
+            contours.push_back(
+                polygon({x, y}, {{x, y + .5}, {x + .5, y + .5}, {x + .5, y}, {x, y}}, true));
+        }
+    return contours;
+}
 #ifdef __linux__
 void measure_streaming_memory(const fs::path& p) {
     rusage before{}, after{};
@@ -219,6 +367,14 @@ int main(int argc, char** argv) {
     }
 #endif
 
+    std::string selected;
+    if (argc == 3 && std::string_view(argv[1]) == "--case")
+        selected = argv[2];
+    else if (argc != 1) {
+        std::cerr << "usage: test_odbpp_parser [--case <name>] [--streaming-memory <path>]\n";
+        return 2;
+    }
+    bool matched = false;
     const auto source = fs::path(__FILE__).parent_path().parent_path().parent_path();
     const auto fixture = source / "tests/integration/ecad/data/odbpp/kicad4l";
     const auto temp =
@@ -240,6 +396,9 @@ int main(int argc, char** argv) {
     }
     int failed = 0;
     const auto test = [&](const std::string& name, const std::function<void()>& fn) {
+        if (argc != 1 && name != selected)
+            return;
+        matched = true;
         try {
             fn();
             std::cout << "PASS " << name << '\n';
@@ -1853,7 +2012,143 @@ int main(int argc, char** argv) {
         std::cout << "SKIP odbpp_streaming_memory: Linux ru_maxrss required\n";
 #endif
     });
+    test("odbpp_large_contour_perf", [&] {
+        const auto p = temp / "large-contour";
+        const std::vector<OdbContour> contours{large_zigzag()};
+        write_surface(p, contours);
+        const auto read = timed_read(p, "odbpp_large_contour_perf");
+        require(bool(read.result) && read.result.error.empty(),
+                "valid large contour: " + read.result.error);
+        const auto& surfaces = read.parsed.features.at("top").surfaces;
+        require(surfaces.size() == 1 && surfaces[0].contours.size() == 1 &&
+                    !surfaces[0].contours[0].is_hole &&
+                    surfaces[0].contours[0].segs.size() == 200000,
+                "one island with exactly 200000 ordered segments");
+        unchanged_surface(read.parsed, contours);
+        within_contour_budget(read, "odbpp_large_contour_perf");
+    });
+    test("odbpp_large_bridged_contour", [&] {
+        const auto p = temp / "large-bridged-contour";
+        const std::vector<OdbContour> contours{bridged_grid(140, 140)};
+        require(contours[0].segs.size() == 117744, "19600 holes in one bridged contour");
+        write_surface(p, contours);
+        const auto read = timed_read(p, "odbpp_large_bridged_contour");
+        require(bool(read.result) && read.result.error.empty(),
+                "valid bridged contour: " + read.result.error);
+        const auto& surfaces = read.parsed.features.at("top").surfaces;
+        require(surfaces.size() == 1 && surfaces[0].contours.size() == 1 &&
+                    !surfaces[0].contours[0].is_hole &&
+                    surfaces[0].contours[0].segs.size() == 117744,
+                "one island retains every bridge and clockwise hole edge");
+        unchanged_surface(read.parsed, contours);
+        within_contour_budget(read, "odbpp_large_bridged_contour");
+    });
+    test("odbpp_large_contour_crossing_rejected", [&] {
+        const auto p = temp / "large-crossing";
+        auto contour = large_zigzag();
+        introduce_late_crossing(contour);
+        write_surface(p, {contour});
+        const auto read = timed_read(p, "odbpp_large_contour_crossing_rejected");
+        require(!read.result && read.result.error ==
+                                    "IMPORT_REJECTED: degenerate or self-intersecting contour "
+                                    "steps/pcb/layers/top/features",
+                "exact late-crossing rejection: " + read.result.error);
+        within_contour_budget(read, "odbpp_large_contour_crossing_rejected");
+    });
+    // Separate registrations let the baseline watchdog exercise both calls even
+    // when the first times out. Unfiltered execution still runs both variants.
+    for (bool crossing : {false, true}) {
+        const std::string name =
+            crossing ? "odbpp_many_holes_topology_crossing" : "odbpp_many_holes_topology";
+        test(name, [&, crossing] {
+            const auto p = temp / (crossing ? "many-holes-crossing" : "many-holes");
+            const auto contours = many_holes(crossing);
+            require(contours.size() == 3001 && !contours[0].is_hole &&
+                        std::count_if(contours.begin(),
+                                      contours.end(),
+                                      [](const auto& contour) { return contour.is_hole; }) ==
+                            3000 &&
+                        std::all_of(contours.begin(),
+                                    contours.end(),
+                                    [](const auto& contour) { return contour.segs.size() == 4; }),
+                    "one outer and 3000 four-segment holes in row-major order");
+            write_surface(p, contours);
+            const std::string measurement =
+                crossing ? "odbpp_many_holes_topology_crossing" : "odbpp_many_holes_topology_valid";
+            const auto read = timed_read(p, measurement);
+            if (crossing)
+                require(!read.result && read.result.error ==
+                                            "IMPORT_REJECTED: invalid surface topology "
+                                            "steps/pcb/layers/top/features",
+                        "exact crossing-hole topology rejection: " + read.result.error);
+            else {
+                require(bool(read.result) && read.result.error.empty(),
+                        "separated holes accepted: " + read.result.error);
+                unchanged_surface(read.parsed, contours);
+            }
+            within_contour_budget(read, measurement);
+        });
+    }
+    struct GeometryCase {
+        std::string name;
+        std::vector<OdbContour> contours;
+        std::string error;
+    };
+    const std::string topology_error =
+        "IMPORT_REJECTED: invalid surface topology steps/pcb/layers/top/features";
+    const std::string ring_error =
+        "IMPORT_REJECTED: degenerate or self-intersecting contour steps/pcb/layers/top/features";
+    auto repeated_bridge = bridged_grid(1, 1);
+    const auto circuit = repeated_bridge.segs;
+    repeated_bridge.segs.insert(repeated_bridge.segs.end(), circuit.begin(), circuit.end());
+    const std::vector<GeometryCase> geometry_cases{
+        {"reversed_bridges", {bridged_grid(2, 2)}, ""},
+        {"same_direction_bridges", {repeated_bridge}, ""},
+        {"vertical_horizontal", {polygon({0, 0}, {{4, 0}, {4, 3}, {0, 3}, {0, 0}})}, ""},
+        {"touching_boxes",
+         {polygon({0, 0}, {{1, 0}, {1, 1}, {0, 1}, {0, 0}}),
+          polygon({1, 1}, {{2, 1}, {2, 2}, {1, 2}, {1, 1}})},
+         topology_error},
+        {"nearby_boxes",
+         {polygon({0, 0}, {{1, 0}, {1, 1}, {0, 1}, {0, 0}}),
+          polygon({1.0000000001, 0}, {{2, 0}, {2, 1}, {1.0000000001, 1}, {1.0000000001, 0}})},
+         ""},
+        {"line_arc_tangency",
+         {{false, {1, 0}, {{{1, 0}, true, {0, 0}, false}}},
+          polygon({1, -.5}, {{2, -.5}, {2, .5}, {1, .5}, {1, -.5}})},
+         topology_error},
+        {"arc_arc_tangency",
+         {{false, {1, 0}, {{{1, 0}, true, {0, 0}, false}}},
+          {false, {3, 0}, {{{3, 0}, true, {2, 0}, true}}}},
+         topology_error},
+        {"full_circle", {{false, {3, 2}, {{{3, 2}, true, {2, 2}, true}}}}, ""},
+        {"coincident_full_circles",
+         {{false, {1, 0}, {{{1, 0}, true, {0, 0}, false}, {{1, 0}, true, {0, 0}, false}}}},
+         ring_error},
+        {"large_coordinates",
+         {polygon({1e12, 1e12},
+                  {{1e12 + 4, 1e12}, {1e12 + 4, 1e12 + 3}, {1e12, 1e12 + 3}, {1e12, 1e12}})},
+         ""},
+        {"overflowing_arc_box", {{false, {0, 0}, {{{0, 0}, true, {1e308, 0}, false}}}}, ""},
+        {"tolerant_closure",
+         {polygon({0, 0}, {{10, 0}, {10, 10}, {0, 10}, {-.0000005, -.0000005}})},
+         ""}};
+    for (const auto& example : geometry_cases)
+        test("odbpp_contour_equivalence_" + example.name, [&] {
+            const auto p = temp / example.name;
+            write_surface(p, example.contours);
+            OdbJob parsed;
+            const auto result = read_odbpp_job(p, parsed);
+            require(bool(result) == example.error.empty() && result.error == example.error,
+                    example.name + ": exact baseline success/error: " + result.error);
+            if (result)
+                unchanged_surface(parsed, example.contours);
+        });
     fs::remove_all(temp);
+    if (!matched) {
+        std::cerr << "unknown test case: " << selected << '\n';
+        return 2;
+    }
     std::cout << failed << " acceptance cases failed\n";
     return failed ? 1 : 0;
 }
