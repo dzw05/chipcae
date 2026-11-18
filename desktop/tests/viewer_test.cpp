@@ -10,7 +10,6 @@
 #include <QImage>
 #include <QJsonDocument>
 #include <QLabel>
-#include <QProcess>
 #include <QSurfaceFormat>
 #include <QTemporaryDir>
 #include <QVTKOpenGLNativeWidget.h>
@@ -23,9 +22,13 @@
 #include <vtkActor.h>
 #include <vtkActorCollection.h>
 #include <vtkCellData.h>
+#include <vtkCompositeDataIterator.h>
+#include <vtkCompositeDataSet.h>
 #include <vtkDataSet.h>
 #include <vtkDataSetMapper.h>
 #include <vtkDoubleArray.h>
+#include <vtkHDFWriter.h>
+#include <vtkIdList.h>
 #include <vtkNew.h>
 #include <vtkPointData.h>
 #include <vtkPoints.h>
@@ -194,6 +197,30 @@ void checkSummaryLabel(ResultControls& controls, ResultView& view) {
     }
     require(found, "controls summary missing official T_max, range or existing QoIs");
 }
+// Read through the production session and write a temporary VTKHDF fixture. Mutations
+// use VTK arrays and cell connectivity rather than HDF paths or point ordering.
+template <typename Mutate>
+void writeFixture(const QDir& root, const QString& path, Mutate mutate) {
+    ResultSession source;
+    require(source.open(root.filePath("viewer_mixed")), qPrintable(source.error()));
+    auto data = source.loadStep(0);
+    require(data != nullptr, qPrintable(source.error()));
+    auto composite = vtkCompositeDataSet::SafeDownCast(data);
+    require(composite != nullptr, "expected composite synthetic fixture");
+    auto iterator = vtkSmartPointer<vtkCompositeDataIterator>::Take(composite->NewIterator());
+    int grids = 0;
+    for (iterator->InitTraversal(); !iterator->IsDoneWithTraversal(); iterator->GoToNextItem()) {
+        if (auto grid = vtkUnstructuredGrid::SafeDownCast(iterator->GetCurrentDataObject())) {
+            mutate(grid);
+            ++grids;
+        }
+    }
+    require(grids > 0, "synthetic fixture has no grids");
+    vtkNew<vtkHDFWriter> writer;
+    writer->SetFileName(path.toUtf8().constData());
+    writer->SetInputData(data);
+    require(writer->Write() == 1, "write temporary VTKHDF fixture");
+}
 int acceptance(const QDir& root) {
     int failures = 0;
     auto run = [&](const char* name, auto test) {
@@ -208,20 +235,18 @@ int acceptance(const QDir& root) {
     run("independent extreme void range", [&] {
         QTemporaryDir temp;
         require(temp.isValid(), "void fixture directory");
-        require(QFile::copy(root.filePath("viewer_mixed/out/step.vtkhdf"),
-                            temp.filePath("step.vtkhdf")),
-                "copy void fixture");
-        // Modify only a temporary copy of the existing synthetic fixture. Its three
-        // disjoint cells have cell_kind [2, 1, 0], with eight private points each.
-        QProcess edit;
-        edit.start("python3",
-                   {"-c",
-                    "import h5py,sys; f=h5py.File(sys.argv[1],'r+'); "
-                    "t=f['VTKHDF/hex/PointData/T']; t[:8]=1e12; t[8:16]=300; t[16:]=400; f.close()",
-                    temp.filePath("step.vtkhdf")});
-        require(edit.waitForFinished() && edit.exitStatus() == QProcess::NormalExit &&
-                    edit.exitCode() == 0,
-                "write extreme void temperatures");
+        writeFixture(root, temp.filePath("step.vtkhdf"), [](vtkUnstructuredGrid* grid) {
+            auto kinds = grid->GetCellData()->GetArray("cell_kind");
+            auto t = grid->GetPointData()->GetArray("T");
+            require(kinds && t, "synthetic fixture requires cell_kind and T");
+            vtkNew<vtkIdList> points;
+            for (vtkIdType cell = 0; cell < grid->GetNumberOfCells(); ++cell) {
+                const double kind = kinds->GetComponent(cell, 0);
+                grid->GetCellPoints(cell, points);
+                for (vtkIdType i = 0; i < points->GetNumberOfIds(); ++i)
+                    t->SetComponent(points->GetId(i), 0, kind == 2 ? 1e12 : kind == 1 ? 300 : 400);
+            }
+        });
         ResultSession session;
         require(session.open(temp.filePath("step.vtkhdf")), qPrintable(session.error()));
         ResultView view;
@@ -252,19 +277,20 @@ int acceptance(const QDir& root) {
             QTemporaryDir temp;
             require(temp.isValid(), "missing U fixture directory");
             const auto path = temp.filePath("step.vtkhdf");
-            require(QFile::copy(root.filePath("viewer_mixed/out/step.vtkhdf"), path),
-                    "copy U fixture");
-            QProcess edit;
-            edit.start("python3",
-                       {"-c",
-                        "import h5py,sys; f=h5py.File(sys.argv[1],'r+'); "
-                        "p=f['VTKHDF/hex/PointData']; u=p['U'][:,:2]; del p['U']; "
-                        "p.create_dataset('U',data=u) if sys.argv[2]=='2' else None; f.close()",
-                        path,
-                        QString::number(components)});
-            require(edit.waitForFinished() && edit.exitStatus() == QProcess::NormalExit &&
-                        edit.exitCode() == 0,
-                    "prepare missing or short U");
+            writeFixture(root, path, [=](vtkUnstructuredGrid* grid) {
+                auto original = grid->GetPointData()->GetArray("U");
+                require(original && original->GetNumberOfComponents() == 3,
+                        "synthetic fixture requires three-component U");
+                vtkNew<vtkDoubleArray> shortU;
+                shortU->SetName("U");
+                shortU->SetNumberOfComponents(2);
+                for (vtkIdType i = 0; i < original->GetNumberOfTuples(); ++i)
+                    shortU->InsertNextTuple2(original->GetComponent(i, 0),
+                                             original->GetComponent(i, 1));
+                grid->GetPointData()->RemoveArray("U");
+                if (components == 2)
+                    grid->GetPointData()->AddArray(shortU);
+            });
             ResultSession session;
             require(session.open(path), qPrintable(session.error()));
             ResultView view;
@@ -664,16 +690,16 @@ int acceptance(const QDir& root) {
                                     {"effective_source", "mock"}}),
                 "effective source rejected");
         require(view.provenanceWatermark() == "MOCK", "effective source precedence");
-        require(view.setProvenance({{"schema", "chipcae.provenance/0.1"},
-                                    {"source", "mock"},
-                                    {"effective_source", "real"}}) &&
-                    view.provenanceWatermark().isEmpty() && view.provenanceBanner().isEmpty(),
-                "effective real source ignored for mock");
-        require(view.setProvenance({{"schema", "chipcae.provenance/0.1"},
-                                    {"source", "precomputed"},
-                                    {"effective_source", "real"}}) &&
-                    view.provenanceWatermark().isEmpty() && view.provenanceBanner().isEmpty(),
-                "effective real source ignored for precomputed");
+        for (const auto source : {"mock", "precomputed"}) {
+            require(!view.setProvenance({{"schema", "chipcae.provenance/0.1"},
+                                         {"source", source},
+                                         {"effective_source", "real"}}),
+                    "trust upgrade accepted");
+            require(view.provenanceWatermark() == "MOCK" &&
+                        view.provenanceBanner().contains(QStringLiteral("来源未知")) &&
+                        !view.provenanceBanner().contains(QStringLiteral("真实计算")),
+                    "trust upgrade hid synthetic provenance");
+        }
         for (auto object :
              {QJsonObject{{"schema", "chipcae.provenance/0.1"}, {"effective_source", "real"}},
               QJsonObject{{"schema", "chipcae.provenance/0.1"},

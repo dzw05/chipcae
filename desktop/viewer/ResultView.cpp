@@ -264,8 +264,8 @@ bool ResultView::setProvenance(const QJsonObject& provenance) {
     const int effectiveRank = provenance.contains("effective_source")
                                   ? severity(provenance["effective_source"])
                                   : sourceRank;
-    const bool valid =
-        provenance["schema"] == "chipcae.provenance/0.1" && sourceRank >= 0 && effectiveRank >= 0;
+    const bool valid = provenance["schema"] == "chipcae.provenance/0.1" && sourceRank >= 0 &&
+                       effectiveRank >= sourceRank;
     const int rank = effectiveRank;
     d->watermark.clear();
     d->banner.clear();
@@ -287,7 +287,7 @@ bool ResultView::setProvenance(const QJsonObject& provenance) {
     const auto viewportText = d->watermark == QStringLiteral("预计算") ? QString("PRECOMPUTED")
                               : d->watermark == QStringLiteral("降级") ? QString("DEGRADED")
                                                                        : d->watermark;
-    d->overlay->SetInput(viewportText.toUtf8());
+    d->overlay->SetInput(viewportText.toUtf8().constData());
     rebuild();
     return valid;
 }
@@ -449,7 +449,7 @@ void ResultView::rebuild() {
         lut->SetRange(d->range.min, d->range.max);
         vtkNew<vtkScalarBarActor> bar;
         bar->SetLookupTable(lut);
-        bar->SetTitle(colorBarTitle().toUtf8());
+        bar->SetTitle(colorBarTitle().toUtf8().constData());
         d->renderer->AddViewProp(bar);
     }
     emit displayChanged();
