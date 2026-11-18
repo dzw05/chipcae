@@ -12,6 +12,7 @@ class QLabel;
 #include <QTemporaryDir>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 namespace chipcae::desktop {
 class RunMonitor;
@@ -33,6 +34,14 @@ public:
                         const QStringList& prefix = {});
     void cancelImport();
     bool openResultsPath(const QString& manifestPath);
+    enum class MeshDigestDialogChoice { Unset, Accept, Cancel };
+    void setMeshDigestDialogChoice(MeshDigestDialogChoice choice);
+    MeshDigestDialogChoice meshDigestDialogChoice() const;
+    chipcae::desktop::MeshSha256Compare lastMeshDigestCompare() const;
+    QString lastMeshDigestDetail() const;
+    bool lastOpenCancelledForMeshDigest() const;
+    bool writePreviewToCase();
+    bool writePreviewToCaseEnabled() const;
     bool loadHandwrittenStack(const QString& path = {});
     chipcae::desktop::ImportController* importController() const { return importer_; }
     chipcae::desktop::ResultView* resultView() const { return resultView_; }
@@ -79,4 +88,13 @@ private:
     chipcae::desktop::LocalJobService* service_ = nullptr;
     chipcae::desktop::PreviewController* preview_ = nullptr;
     std::unique_ptr<QTemporaryDir> previewOutput_;
+    MeshDigestDialogChoice meshDigestDialogChoice_ = MeshDigestDialogChoice::Unset;
+    chipcae::desktop::MeshSha256Compare lastMeshDigestCompare_ =
+        chipcae::desktop::MeshSha256Compare::PreviewMissing;
+    QString lastMeshDigestDetail_;
+    bool lastOpenCancelledForMeshDigest_ = false;
+    bool previewDigestValid_ = false;
+    std::optional<chipcae::desktop::MeshOptions> previewMeshOptions_;
+    QAction* writePreviewToCaseAction_ = nullptr;
+    void clearPreviewMeshOptions();
 };
