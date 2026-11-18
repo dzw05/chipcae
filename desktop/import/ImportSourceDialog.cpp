@@ -4,6 +4,8 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFileSystemModel>
+#include <QGridLayout>
+#include <QLabel>
 #include <QPushButton>
 #include <QSortFilterProxyModel>
 namespace chipcae::desktop {
@@ -22,10 +24,10 @@ public:
 };
 } // namespace
 QStringList ImportSourceDialog::nameFilters() {
-    return {"ECAD / STEP B 档 (disabled) (*.xml *.tgz *.zip *.step *.stp)",
+    return {"IPC-2581 / ODB++ (*.xml *.tgz *.zip)",
             "IPC-2581 (*.xml)",
             "ODB++ (*.tgz *.zip)",
-            "STEP B 档 (disabled) (*.step *.stp)"};
+            "STEP (*.step *.stp) — B 档 (disabled)"};
 }
 bool ImportSourceDialog::isSupportedImportPath(const QString& path) {
     if (path.isEmpty())
@@ -34,7 +36,7 @@ bool ImportSourceDialog::isSupportedImportPath(const QString& path) {
     if (file.isDir())
         return true;
     const auto suffix = file.suffix().toLower();
-    return suffix == "xml" || suffix == "tgz" || suffix == "zip";
+    return file.isFile() && (suffix == "xml" || suffix == "tgz" || suffix == "zip");
 }
 QString ImportSourceDialog::getImportPath(QWidget* parent,
                                           const QString& caption,
@@ -43,9 +45,17 @@ QString ImportSourceDialog::getImportPath(QWidget* parent,
         parent, caption.isEmpty() ? QStringLiteral("Import ECAD") : caption, startDir);
     dialog.setOption(QFileDialog::DontUseNativeDialog);
     dialog.setFileMode(QFileDialog::ExistingFile);
-    dialog.setNameFilters(nameFilters());
-    dialog.setProxyModel(new SourceModel(&dialog));
+    auto filters = nameFilters();
+    const auto disclosure = filters.takeLast();
+    dialog.setNameFilters(filters);
+    auto* layout = qobject_cast<QGridLayout*>(dialog.layout());
     auto* buttons = dialog.findChild<QDialogButtonBox*>();
+    // QFileDialog's internal widget structure may vary between Qt versions.
+    // Cancel safely if the custom disclosure and directory action cannot be added.
+    if (!layout || !buttons)
+        return {};
+    layout->addWidget(new QLabel(disclosure, &dialog), layout->rowCount(), 0, 1, -1);
+    dialog.setProxyModel(new SourceModel(&dialog));
     auto* directory = buttons->addButton(QStringLiteral("Select current ODB++ directory"),
                                          QDialogButtonBox::ActionRole);
     QString chosenDirectory;
@@ -60,5 +70,17 @@ QString ImportSourceDialog::getImportPath(QWidget* parent,
     const auto selected = dialog.selectedFiles();
     return !selected.isEmpty() && isSupportedImportPath(selected.first()) ? selected.first()
                                                                           : QString{};
+}
+QString ImportSourceDialog::getMaterialMapPath(QWidget* parent, const QString& startDir) {
+    QFileDialog dialog(parent, QStringLiteral("选择材料映射"), startDir);
+    dialog.setOption(QFileDialog::DontUseNativeDialog);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setNameFilters({"JSON (*.json)"});
+    if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty())
+        return {};
+    const auto path = dialog.selectedFiles().first();
+    const QFileInfo file(path);
+    return file.isFile() && file.suffix().compare("json", Qt::CaseInsensitive) == 0 ? path
+                                                                                    : QString{};
 }
 } // namespace chipcae::desktop

@@ -47,6 +47,7 @@ def _require(condition, message):
 
 
 def _count(block, path):
+    _require(path in block, f"{block.name}/{path}: required field missing")
     source = block[path]
     _require(isinstance(source, h5py.Dataset)
              and source.ndim == 1
@@ -104,10 +105,133 @@ def _partitions(block, cells_path='NumberOfCells'):
         ci += connections
 
 
+def _polyhedra(block):
+    """Validate partition-local, exclusively owned faces and signed cell volumes."""
+    paths = ('FaceConnectivity', 'FaceOffsets', 'PolyhedronToFaces',
+             'PolyhedronOffsets', 'NumberOfFaces', 'NumberOfFaceConnectivityIds',
+             'NumberOfPolyhedronToFaceIds')
+    if not any(path in block for path in paths):
+        return
+    for path in paths:
+        _require(path in block, f'{block.name}/{path}: incomplete polyhedron topology')
+
+    pc = block['NumberOfPoints'][...]
+    cc = block['NumberOfCells'][...]
+    totals, counts = [], []
+    for path in paths[4:]:
+        totals.append(_count(block, path))
+        counts.append(_array(block, path, (len(pc),), 'int64'))
+    nf, nfc, npf = counts
+    face_ids = _array(block, 'FaceConnectivity', (totals[1],), 'int64')
+    face_offsets = _array(block, 'FaceOffsets', (totals[0] + len(pc),), 'int64')
+    poly_faces = _array(block, 'PolyhedronToFaces', (totals[2],), 'int64')
+    total_cells = sum(int(c) for c in cc)
+    poly_offsets = _array(block, 'PolyhedronOffsets', (total_cells + len(pc),), 'int64')
+    points = _array(block, 'Points', (sum(int(p) for p in pc), 3), 'float64')
+    volumes = (_array(block, 'CellData/volume', (total_cells,), 'float64')
+               if 'CellData/volume' in block else None)
+
+    point_cursor = cell_cursor = face_offset_cursor = poly_offset_cursor = 0
+    face_id_cursor = face_ref_cursor = 0
+    for rank, allocation in enumerate(zip(pc, cc, nf, nfc, npf)):
+        point_count, cells, faces, connections, references = map(int, allocation)
+        fo = face_offsets[face_offset_cursor:face_offset_cursor + faces + 1]
+        po = poly_offsets[poly_offset_cursor:poly_offset_cursor + cells + 1]
+        ids = face_ids[face_id_cursor:face_id_cursor + connections]
+        refs = poly_faces[face_ref_cursor:face_ref_cursor + references]
+        local_points = points[point_cursor:point_cursor + point_count]
+        # Validate endpoints and ordering before subtracting offsets or indexing.
+        for path, offsets, terminal, minimum in (
+                ('FaceOffsets', fo, connections, 3),
+                ('PolyhedronOffsets', po, references, 4)):
+            _require(offsets[0] == 0 and offsets[-1] == terminal
+                     and np.all(offsets[1:] >= offsets[:-1]),
+                     f'{block.name}/{path}: partition {rank} invalid offsets')
+            _require(np.all(offsets[1:] - offsets[:-1] >= minimum),
+                     f'{block.name}/{path}: partition {rank} '
+                     f'each list requires at least {minimum} IDs')
+        _require(np.all((ids >= 0) & (ids < point_count)),
+                 f'{block.name}/FaceConnectivity: partition {rank} point ID out of bounds')
+        _require(np.all((refs >= 0) & (refs < faces)),
+                 f'{block.name}/PolyhedronToFaces: partition {rank} face ID out of bounds')
+        _require(references == faces
+                 and np.array_equal(np.sort(refs), np.arange(faces, dtype='int64')),
+                 f'{block.name}/PolyhedronToFaces: partition {rank} '
+                 'each face must be referenced exactly once')
+
+        for cell in range(cells):
+            rings = [ids[int(fo[face]):int(fo[face + 1])]
+                     for face in refs[int(po[cell]):int(po[cell + 1])]]
+            vertices = local_points[np.unique(np.concatenate(rings))]
+            # Overflow and invalid derived arithmetic become protocol errors below.
+            # Keep face/triangle accumulation in deterministic stored order.
+            with np.errstate(all='ignore'):
+                center = vertices.mean(axis=0)
+                volume = np.float64(0.)
+                for ring in rings:
+                    coords = local_points[ring] - center
+                    for i in range(1, len(coords) - 1):
+                        volume += np.dot(coords[0], np.cross(coords[i], coords[i + 1])) / 6.
+            _require(np.isfinite(volume) and volume > 0,
+                     f'{block.name}/PolyhedronToFaces: partition {rank} cell {cell} '
+                     f'nonpositive polyhedron volume (computed={volume})')
+            if volumes is not None:
+                reference = volumes[cell_cursor + cell]
+                with np.errstate(all='ignore'):
+                    bbox_volume = np.prod(vertices.max(axis=0) - vertices.min(axis=0))
+                    tolerance = 1e-9 * max(abs(reference), bbox_volume)
+                    difference = abs(volume - reference)
+                _require(reference > 0 and np.isfinite(bbox_volume)
+                         and np.isfinite(tolerance) and np.isfinite(difference)
+                         and difference <= tolerance,
+                         f'{block.name}/CellData/volume: volume mismatch, '
+                         f'partition {rank} cell {cell} computed={volume} '
+                         f'reference={reference} bbox_volume={bbox_volume}')
+        point_cursor += point_count
+        cell_cursor += cells
+        face_offset_cursor += faces + 1
+        poly_offset_cursor += cells + 1
+        face_id_cursor += connections
+        face_ref_cursor += references
+
+
 def _version(block):
     _require(isinstance(block, h5py.Group), f"{block.name}: expected VTKHDF group")
     _require(np.array_equal(block.attrs.get('Version'), [2, 8]),
              f"{block.name}: expected Version [2, 8]")
+
+
+def _type(block, expected):
+    message = f'{block.name.lstrip("/")}: expected scalar fixed-byte ASCII Type {expected}'
+    _require('Type' in block.attrs, message)
+    attr = block.attrs.get_id('Type')
+    _require(attr.shape == () and attr.dtype.kind == 'S', message)
+    try:
+        value = bytes(block.attrs['Type']).rstrip(b'\0').decode('ascii')
+    except UnicodeDecodeError:
+        _require(False, message)
+    _require(value == expected, message)
+
+
+def _index(block, expected):
+    message = f'{block.name.lstrip("/")}: expected scalar integer Index {expected}'
+    _require('Index' in block.attrs, message)
+    _require(block.attrs.get_id('Index').shape == (), message)
+    value = block.attrs['Index']
+    _require(isinstance(value, (int, np.integer))
+             and not isinstance(value, (bool, np.bool_)), message)
+    _require(int(value) == expected, message)
+
+
+def _optional_type_index(block, expected_index):
+    # Legacy optional blocks may omit the pair, but partial metadata is invalid.
+    has_type, has_index = 'Type' in block.attrs, 'Index' in block.attrs
+    if not has_type and not has_index:
+        return
+    _require(has_type and has_index,
+             f'{block.name.lstrip("/")}: incomplete Type/Index')
+    _type(block, 'PolyData')
+    _index(block, expected_index)
 
 
 def _counts(values):
@@ -117,12 +241,15 @@ def _counts(values):
 
 def _read(root):
     _version(root)
+    _type(root, 'PartitionedDataSetCollection')
     blocks, data, temperatures = {}, [], []
-    for name in ('hex', 'cut'):
+    for index, name in enumerate(('hex', 'cut')):
         _require(name in root and isinstance(root[name], h5py.Group),
                  f'{root.name}/{name}: required group missing or invalid')
         block = root[name]
         _version(block)
+        _type(block, 'UnstructuredGrid')
+        _index(block, index)
         n = _count(block, 'NumberOfPoints')
         c = _count(block, 'NumberOfCells')
         _require(block['NumberOfPoints'].shape == block['NumberOfCells'].shape,
@@ -148,6 +275,8 @@ def _read(root):
         else:
             blocks[name] = dict(points=n, cells=c, type_counts=_counts(types))
         _partitions(block)
+        if name == 'cut':
+            _polyhedra(block)
         data.append((points, u))
     _require(len(temperatures) in (0, len(data)),
              'PointData/T must be present in both hex and cut or absent from both')
@@ -156,6 +285,7 @@ def _read(root):
         blocks['eb_surface'] = dict(points=0, polygons=0)
     else:
         _version(eb)
+        _optional_type_index(eb, 2)
         n = _count(eb, 'NumberOfPoints')
         c = _count(eb, 'Polygons/NumberOfCells')
         _require(eb['NumberOfPoints'].shape == eb['Polygons/NumberOfCells'].shape,
@@ -163,6 +293,9 @@ def _read(root):
         _array(eb, 'Points', (n, 3), 'float64')
         _partitions(eb, 'Polygons/NumberOfCells')
         blocks['eb_surface'] = dict(points=n, polygons=c)
+    particles = root.get('particles')
+    if particles is not None:
+        _optional_type_index(particles, 3)
     names = []
     for field in ('layer_names', 'material_names'):
         path = 'FieldData/' + field
@@ -181,6 +314,18 @@ def _read(root):
             table = current
         names.append(table if table is not None else [])
     return blocks, data, temperatures, names
+
+
+def _require_finite(value, path=''):
+    """Check computed floats in output order without converting JSON integers."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _require_finite(item, f'{path}.{key}' if path else key)
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _require_finite(item, f'{path}[{index}]')
+    elif isinstance(value, float):
+        _require(np.isfinite(value), f'{path}: non-finite computed value')
 
 
 def _summarize(run_dir, top_rel_tol, step):
@@ -253,6 +398,8 @@ def _summarize(run_dir, top_rel_tol, step):
             pv = value
     mesh = manifest.get('mesh', {})
     _require(isinstance(mesh, dict), 'mesh must be an object')
+    if 'mesh_sha256' in mesh:
+        _require(isinstance(mesh['mesh_sha256'], str), 'mesh.mesh_sha256: expected string')
     path = Path(step_file)
     if not path.is_absolute():
         path = run_dir / path
@@ -274,39 +421,44 @@ def _summarize(run_dir, top_rel_tol, step):
         top = indices[first]
     w = None
     if len(top) >= 3:
-        xy = points[top, :2]
-        centered = xy - xy[0]
-        if np.linalg.matrix_rank(centered) < 2:
-            # span{along, 1} equals span{x, y, 1} on a line, so residuals agree.
-            # Plane slopes are not unique on a line; its fitted values are.
-            # Remove the redundant direction explicitly, retaining the shared
-            # least-squares API and avoiding large absolute coordinate offsets.
-            _, _, axes = np.linalg.svd(centered, full_matrices=False)
-            along = centered @ axes[0]
-            _, residual = best_fit_plane(along, np.zeros_like(along), u[top, 2])
-        else:
-            _, residual = best_fit_plane(xy[:, 0], xy[:, 1], u[top, 2])
-        w = float(np.ptp(residual))
+        with np.errstate(over='ignore', invalid='ignore'):
+            xy = points[top, :2]
+            centered = xy - xy[0]
+            if np.linalg.matrix_rank(centered) < 2:
+                # span{along, 1} equals span{x, y, 1} on a line, so residuals agree.
+                # Plane slopes are not unique on a line; its fitted values are.
+                # Remove the redundant direction explicitly, retaining the shared
+                # least-squares API and avoiding large absolute coordinate offsets.
+                _, _, axes = np.linalg.svd(centered, full_matrices=False)
+                along = centered @ axes[0]
+                _, residual = best_fit_plane(along, np.zeros_like(along), u[top, 2])
+            else:
+                _, residual = best_fit_plane(xy[:, 0], xy[:, 1], u[top, 2])
+            w = float(np.ptp(residual))
     temperature = None
     if temperatures:
         all_t = np.concatenate(temperatures)
         tt = all_t[top]
-        temperature = dict(min=float(all_t.min()) if len(all_t) else None,
-                           max=float(all_t.max()) if len(all_t) else None,
-                           top_min=float(tt.min()) if len(tt) else None,
-                           top_max=float(tt.max()) if len(tt) else None,
-                           top_mean=float(tt.mean()) if len(tt) else None)
+        with np.errstate(over='ignore', invalid='ignore'):
+            temperature = dict(min=float(all_t.min()) if len(all_t) else None,
+                               max=float(all_t.max()) if len(all_t) else None,
+                               top_min=float(tt.min()) if len(tt) else None,
+                               top_max=float(tt.max()) if len(tt) else None,
+                               top_mean=float(tt.mean()) if len(tt) else None)
     rel_diff = None
-    if w is not None and pv not in (None, 0):
+    # Leave non-finite w for the final traversal so earlier output fields win.
+    if w is not None and np.isfinite(w) and pv not in (None, 0):
         # JSON integers may exceed float range. Convert only the final ratio,
         # preserving the signed denominator required by the summary contract.
         rel_diff = float(abs(Fraction(w) - pv) / pv) if isinstance(pv, int) else abs(w-pv)/pv
-    return dict(schema=SCHEMA, step_file=step_file, mesh_sha256=mesh.get('mesh_sha256'),
-                blocks=blocks, layer_names=names[0], material_names=names[1],
-                temperature=temperature,
-                warpage=dict(manifest_warpage_pv_m=pv, w_bfp_m=w,
-                             rel_diff=rel_diff,
-                             n_top_points=len(top)), manifest_summary=summary)
+    result = dict(schema=SCHEMA, step_file=step_file, mesh_sha256=mesh.get('mesh_sha256'),
+                  blocks=blocks, layer_names=names[0], material_names=names[1],
+                  temperature=temperature,
+                  warpage=dict(manifest_warpage_pv_m=pv, w_bfp_m=w,
+                               rel_diff=rel_diff,
+                               n_top_points=len(top)), manifest_summary=summary)
+    _require_finite(result)
+    return result
 
 
 def summarize(run_dir: Path, top_rel_tol: float = 1e-12, step: int | str | None = None) -> dict:
@@ -342,7 +494,7 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.write(content)
         else:
             args.o.write_text(content, encoding='utf-8')
-    except (ResultSummaryError, OSError) as exc:
+    except (ResultSummaryError, OSError, ValueError) as exc:
         name = exc.name if isinstance(exc, ResultSummaryError) else 'INPUT_INVALID'
         reason = ' '.join(str(exc).splitlines())
         print(f'result_summary: {name}: {reason}', file=sys.stderr)

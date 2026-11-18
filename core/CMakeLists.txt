@@ -39,3 +39,5 @@ target_sources(chipcae_core PRIVATE
     src/par/halo_plan.cpp
     src/par/column_extrude_partitioner.cpp
     src/par/gpu_aware.cpp)
+
+target_sources(chipcae_core PRIVATE src/crash_diag.cpp)

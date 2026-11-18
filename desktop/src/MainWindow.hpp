@@ -1,16 +1,22 @@
 #pragma once
 #include "CaseDocument.hpp"
 #include "EventCodec.hpp"
+#include "Provenance.hpp"
 #include "ResultSession.hpp"
 
+#include <QJsonObject>
 #include <QMainWindow>
+#include <QSet>
 class QAction;
+class QLabel;
 #include <QTemporaryDir>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 namespace chipcae::desktop {
 class RunMonitor;
+class PreviewController;
 class ImportController;
 class ResultView;
 class LocalJobService;
@@ -28,6 +34,14 @@ public:
                         const QStringList& prefix = {});
     void cancelImport();
     bool openResultsPath(const QString& manifestPath);
+    enum class MeshDigestDialogChoice { Unset, Accept, Cancel };
+    void setMeshDigestDialogChoice(MeshDigestDialogChoice choice);
+    MeshDigestDialogChoice meshDigestDialogChoice() const;
+    chipcae::desktop::MeshSha256Compare lastMeshDigestCompare() const;
+    QString lastMeshDigestDetail() const;
+    bool lastOpenCancelledForMeshDigest() const;
+    bool writePreviewToCase();
+    bool writePreviewToCaseEnabled() const;
     bool loadHandwrittenStack(const QString& path = {});
     chipcae::desktop::ImportController* importController() const { return importer_; }
     chipcae::desktop::ResultView* resultView() const { return resultView_; }
@@ -39,6 +53,18 @@ public:
                     const QString& runId = {},
                     const QString& eventFile = "events.caelog");
 
+    bool previewMesh(const QString& program = "chipcae-preview", const QStringList& prefix = {});
+    bool submitCurrentCase();
+    void setSubmitProfile(const QJsonObject& p) { profile_ = p; }
+    QJsonObject submitProfile() const { return profile_; }
+    bool caseIsOpen() const;
+    QString sourceBadgeText() const;
+    QString sourceBannerText() const;
+    QString provenanceWatermark() const;
+    QString summaryWithSource(const QString&) const;
+    QString monitorStatusText() const { return monitorStatus_; }
+    bool captureResults(const QString&);
+
 private:
     chipcae::desktop::CaseDocument document_;
     chipcae::desktop::ImportController* importer_ = nullptr;
@@ -49,4 +75,26 @@ private:
     std::function<void()> beginImportUi_;
     std::vector<QAction*> importBlockedActions_;
     bool importBusy() const;
+    bool workBusy() const;
+    void refreshSourceUi();
+    QLabel* sourceLabel_ = nullptr;
+    QLabel* watermarkLabel_ = nullptr;
+    QSet<QString> monitoredRuns_;
+    QJsonObject profile_;
+    QString casePath_, runId_, runDir_, monitorStatus_;
+    bool manualStack_ = false, fallback_ = false;
+    int meshNx_ = 4;
+    chipcae::desktop::Provenance provenance_;
+    chipcae::desktop::LocalJobService* service_ = nullptr;
+    chipcae::desktop::PreviewController* preview_ = nullptr;
+    std::unique_ptr<QTemporaryDir> previewOutput_;
+    MeshDigestDialogChoice meshDigestDialogChoice_ = MeshDigestDialogChoice::Unset;
+    chipcae::desktop::MeshSha256Compare lastMeshDigestCompare_ =
+        chipcae::desktop::MeshSha256Compare::PreviewMissing;
+    QString lastMeshDigestDetail_;
+    bool lastOpenCancelledForMeshDigest_ = false;
+    bool previewDigestValid_ = false;
+    std::optional<chipcae::desktop::MeshOptions> previewMeshOptions_;
+    QAction* writePreviewToCaseAction_ = nullptr;
+    void clearPreviewMeshOptions();
 };

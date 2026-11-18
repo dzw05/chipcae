@@ -5,7 +5,11 @@
 #include "ResultSession.hpp"
 
 #include <QPointer>
+#include <QWidget>
+#include <memory>
 #include <vtkType.h>
+
+class vtkDataSet;
 
 namespace chipcae::desktop {
 struct PreviewBlock {
@@ -33,6 +37,7 @@ public:
     vtkSmartPointer<vtkDataObject> surface() const { return surfaceMesh_; }
     const QList<PreviewBlock>& blocks() const { return blocks_; }
     const std::optional<MeshDigest>& digest() const { return digest_; }
+    PreviewOptions effectiveOptions() const;
 signals:
     void progress(const QString& stage, double fraction, const QString& message);
     void diagnostic(const QByteArray& line);
@@ -52,5 +57,34 @@ private:
     bool running_ = false, success_ = false, cancelled_ = false;
     int nx_ = 0, ny_ = 0, finest_ = 0;
     double ratio_ = 10;
+    PreviewOptions effective_;
+};
+
+enum class PreviewColorMode { Layer, Material };
+
+class PreviewView : public QWidget {
+    Q_OBJECT
+public:
+    explicit PreviewView(QWidget* parent = nullptr);
+    ~PreviewView() override;
+    using QWidget::show;
+    bool show(const PreviewController& controller);
+    // An empty blocks list requests a valid empty display even when mesh has cells.
+    bool show(vtkDataObject* mesh,
+              const QStringList& layerNames,
+              const QStringList& materialNames,
+              const QList<PreviewBlock>& blocks,
+              const PreviewOptions& effective);
+    void setColorMode(PreviewColorMode mode);
+    PreviewColorMode colorMode() const;
+    QString summaryText() const;
+    QString colorBarTitle() const;
+    QString scalarArrayName() const;
+    vtkDataSet* displayed() const;
+    int highlightedCount() const;
+
+private:
+    struct State;
+    std::unique_ptr<State> d;
 };
 } // namespace chipcae::desktop

@@ -5,7 +5,9 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
+#include <QTemporaryDir>
 #include <cmath>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <stdexcept>
@@ -27,11 +29,231 @@
 #include <vtkStringArray.h>
 #include <vtkVersion.h>
 #include <vtkXOpenGLRenderWindow.h>
+using chipcae::desktop::MeshSha256Compare;
 using chipcae::desktop::ResultSession;
 void require(bool ok, const QString& message) {
     if (!ok)
         throw std::runtime_error(message.toStdString());
 }
+namespace {
+void copyResultFixture(const QDir& source, const QDir& destination) {
+    require(source.exists(), "digest fixture directory missing");
+    require(QDir().mkpath(destination.absolutePath()), "cannot create fixture copy directory");
+    for (const auto& entry :
+         source.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden)) {
+        const auto target = destination.filePath(entry.fileName());
+        if (entry.isDir())
+            copyResultFixture(QDir(entry.absoluteFilePath()), QDir(target));
+        else
+            require(QFile::copy(entry.absoluteFilePath(), target), "cannot copy " + target);
+    }
+}
+
+void withDigestManifest(const QDir& source,
+                        const std::function<void(QJsonObject&)>& edit,
+                        const std::function<void(const ResultSession&)>& verify) {
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "cannot create temporary digest fixture");
+    const QDir copy(QDir(temporary.path()).filePath("digest"));
+    copyResultFixture(source, copy);
+    QFile manifest(copy.filePath("manifest.json"));
+    require(manifest.open(QIODevice::ReadOnly), "cannot read copied manifest");
+    QJsonParseError parse;
+    const auto document = QJsonDocument::fromJson(manifest.readAll(), &parse);
+    require(manifest.error() == QFileDevice::NoError, "cannot read complete copied manifest");
+    require(parse.error == QJsonParseError::NoError && document.isObject(),
+            "copied manifest is not a JSON object");
+    manifest.close();
+    auto object = document.object();
+    edit(object);
+    const auto bytes = QJsonDocument(object).toJson();
+    require(manifest.open(QIODevice::WriteOnly | QIODevice::Truncate),
+            "cannot rewrite copied manifest");
+    require(manifest.write(bytes) == bytes.size(), "incomplete copied manifest write");
+    require(manifest.flush(), "cannot flush copied manifest");
+    manifest.close();
+    ResultSession session;
+    const bool opened = session.open(copy.absolutePath());
+    require(opened, "modified digest fixture must open: " + session.error());
+    verify(session);
+}
+
+void requireComparison(const ResultSession& session,
+                       const QString& preview,
+                       MeshSha256Compare expected,
+                       const QString& manifestSha = {}) {
+    QString detail = "old detail must be overwritten";
+    const auto actual = session.comparePreviewMeshSha256(preview, &detail);
+    require(actual == expected,
+            QString("unexpected mesh SHA-256 comparison status: expected %1, got %2")
+                .arg(static_cast<int>(expected))
+                .arg(static_cast<int>(actual)));
+    if (expected == MeshSha256Compare::Match) {
+        require(detail.isEmpty(), "matching digest must clear detail");
+    } else {
+        require(!detail.isEmpty(), "non-match digest must provide detail");
+        if (expected == MeshSha256Compare::PreviewMissing)
+            require(detail.contains("preview"), "missing preview detail must contain preview");
+        else if (expected == MeshSha256Compare::ManifestMissing)
+            require(detail.contains("manifest"), "missing manifest detail must contain manifest");
+        else
+            require(detail.contains(preview.trimmed()) && detail.contains(manifestSha),
+                    "mismatch detail must contain both trimmed hashes");
+    }
+    QString repeated = "different stale detail";
+    require(session.comparePreviewMeshSha256(preview, &repeated) == expected && repeated == detail,
+            "repeated comparison must preserve status and overwrite detail deterministically");
+    require(session.comparePreviewMeshSha256(preview, nullptr) == expected,
+            "comparison with nullptr detail must preserve status");
+    require(session.comparePreviewMeshSha256(preview) == expected,
+            "comparison with omitted detail must preserve status");
+}
+
+void meshSha256Comparison(const ResultSession& session, const QDir& fixture) {
+    const QString sha = session.meshDigest().value("mesh_sha256").toString();
+    require(sha.size() == 64, "digest fixture must contain a 64-character SHA-256");
+    requireComparison(session, sha, MeshSha256Compare::Match);
+    requireComparison(session, sha + " ", MeshSha256Compare::Match);
+    requireComparison(session, " \t" + sha + "\n", MeshSha256Compare::Match);
+
+    QString mutated = sha;
+    mutated[0] = sha[0] == QChar('a') ? QChar('b') : QChar('a');
+    requireComparison(session, mutated, MeshSha256Compare::Mismatch, sha);
+    requireComparison(session, " \t" + mutated + "\n", MeshSha256Compare::Mismatch, sha);
+
+    QString internalSpace(64, 'a');
+    internalSpace[31] = ' ';
+    const QStringList invalidPreviews{"",
+                                      " \t\n",
+                                      QString(63, 'a'),
+                                      QString(65, 'a'),
+                                      QString(64, 'A'),
+                                      QString(64, 'g'),
+                                      "0x" + sha,
+                                      internalSpace};
+    for (const auto& preview : invalidPreviews)
+        requireComparison(session, preview, MeshSha256Compare::PreviewMissing);
+
+    ResultSession unopened;
+    requireComparison(unopened, sha, MeshSha256Compare::ManifestMissing);
+    requireComparison(unopened, "", MeshSha256Compare::PreviewMissing);
+
+    withDigestManifest(
+        fixture,
+        [](QJsonObject& manifest) {
+            auto mesh = manifest.value("mesh").toObject();
+            mesh.remove("mesh_sha256");
+            manifest["mesh"] = mesh;
+            manifest.remove("mesh_sha256");
+        },
+        [&](const ResultSession& missing) {
+            requireComparison(missing, sha, MeshSha256Compare::ManifestMissing);
+            for (const auto& preview : invalidPreviews)
+                requireComparison(missing, preview, MeshSha256Compare::PreviewMissing);
+        });
+
+    const QJsonArray invalidManifestHashes{"",
+                                           " \t\n",
+                                           QString(63, 'a'),
+                                           QString(65, 'a'),
+                                           QString(64, 'A'),
+                                           QString(64, 'g'),
+                                           "0x" + sha,
+                                           internalSpace,
+                                           QJsonValue(QJsonValue::Null),
+                                           42};
+    for (const auto& invalid : invalidManifestHashes) {
+        withDigestManifest(
+            fixture,
+            [&](QJsonObject& manifest) {
+                auto mesh = manifest.value("mesh").toObject();
+                mesh["mesh_sha256"] = invalid;
+                manifest["mesh"] = mesh;
+                manifest.remove("mesh_sha256");
+            },
+            [&](const ResultSession& invalidManifest) {
+                requireComparison(invalidManifest, sha, MeshSha256Compare::ManifestMissing);
+            });
+    }
+
+    // The existing merge falls back only for absent nested keys, including non-string values.
+    for (const auto& invalid : invalidManifestHashes) {
+        withDigestManifest(
+            fixture,
+            [&](QJsonObject& manifest) {
+                auto mesh = manifest.value("mesh").toObject();
+                mesh["mesh_sha256"] = invalid;
+                manifest["mesh"] = mesh;
+                manifest["mesh_sha256"] = sha;
+            },
+            [&](const ResultSession& invalidNested) {
+                requireComparison(invalidNested, sha, MeshSha256Compare::ManifestMissing);
+            });
+    }
+
+    for (const auto& fallback : {sha, " \t" + sha + "\n"}) {
+        withDigestManifest(
+            fixture,
+            [&](QJsonObject& manifest) {
+                auto mesh = manifest.value("mesh").toObject();
+                mesh.remove("mesh_sha256");
+                manifest["mesh"] = mesh;
+                manifest["mesh_sha256"] = fallback;
+            },
+            [&](const ResultSession& topLevel) {
+                requireComparison(topLevel, sha, MeshSha256Compare::Match);
+            });
+    }
+    withDigestManifest(
+        fixture,
+        [&](QJsonObject& manifest) {
+            auto mesh = manifest.value("mesh").toObject();
+            mesh["mesh_sha256"] = " \t" + sha + "\n";
+            manifest["mesh"] = mesh;
+        },
+        [&](const ResultSession& padded) {
+            requireComparison(padded, sha, MeshSha256Compare::Match);
+        });
+    withDigestManifest(
+        fixture,
+        [&](QJsonObject& manifest) {
+            auto mesh = manifest.value("mesh").toObject();
+            mesh["mesh_sha256"] = mutated;
+            manifest["mesh"] = mesh;
+            manifest["mesh_sha256"] = sha;
+        },
+        [&](const ResultSession& nested) {
+            requireComparison(nested, mutated, MeshSha256Compare::Match);
+            requireComparison(nested, sha, MeshSha256Compare::Mismatch, mutated);
+        });
+    withDigestManifest(
+        fixture,
+        [](QJsonObject& manifest) {
+            auto mesh = manifest.value("mesh").toObject();
+            for (const auto* key : {"nx0", "ny0", "L", "padded_cells", "nz"})
+                mesh[key] = mesh.value(key).toInt() + 1;
+            manifest["mesh"] = mesh;
+        },
+        [&](const ResultSession& dimensionsChanged) {
+            requireComparison(dimensionsChanged, sha, MeshSha256Compare::Match);
+        });
+
+    QString missingDetail = "previous detail";
+    require(session.comparePreviewMeshSha256("", &missingDetail) ==
+                MeshSha256Compare::PreviewMissing,
+            "missing preview must report PreviewMissing");
+    QString detail = "stale detail";
+    require(session.comparePreviewMeshSha256(mutated, &detail) == MeshSha256Compare::Mismatch &&
+                !detail.isEmpty() && detail.contains(sha) && detail.contains(mutated),
+            "mismatch must overwrite detail with both hashes");
+    require(session.comparePreviewMeshSha256(sha, &detail) == MeshSha256Compare::Match &&
+                detail.isEmpty(),
+            "match after mismatch must clear detail");
+    require(session.comparePreviewMeshSha256("", &detail) == MeshSha256Compare::PreviewMissing &&
+                !detail.isEmpty() && detail.contains("preview") && detail == missingDetail,
+            "missing preview after match must replace detail rather than append");
+}
+} // namespace
 vtkDataSet* first(vtkDataObject* object) {
     if (auto pdc = vtkPartitionedDataSetCollection::SafeDownCast(object))
         return pdc->GetPartitionedDataSet(0)->GetPartition(0);
@@ -174,6 +396,7 @@ int main(int argc, char** argv) {
         require(s.meshDigest()["nx0"].toInt() == 4 &&
                     s.meshDigest()["mesh_sha256"].toString().size() == 64,
                 "mesh digest lost");
+        meshSha256Comparison(s, QDir(root.filePath("digest")));
         require(s.open(root.filePath("temporal.json")), s.error());
         double base = 0;
         for (int n : {0, 1, 2, 0}) {

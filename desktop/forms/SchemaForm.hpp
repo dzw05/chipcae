@@ -1,6 +1,8 @@
 #pragma once
 #include "SchemaValidator.hpp"
 
+#include <QProcessEnvironment>
+#include <QStringList>
 #include <QWidget>
 class QVBoxLayout;
 class QListWidget;
@@ -19,6 +21,16 @@ public:
     bool setValue(const QString& pointer, const Json& value);
     static QString caseSchemaPath(const QString& repository);
     static QString resultSchemaPath(const QString& repository);
+    static QString caseSchemaPath(const QString& repository,
+                                  const QStringList& args,
+                                  const QProcessEnvironment& env,
+                                  const QString& executableDir = QString(),
+                                  const QString& compileTimeFallback = QString());
+    static QString resultSchemaPath(const QString& repository,
+                                    const QStringList& args,
+                                    const QProcessEnvironment& env,
+                                    const QString& executableDir = QString(),
+                                    const QString& compileTimeFallback = QString());
 signals:
     void documentChanged();
     void validationChanged();

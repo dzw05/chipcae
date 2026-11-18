@@ -47,7 +47,7 @@ struct RegionLSOptions {
 //
 // 不追溯来源：输出里不保留层号和 region 名，下游只按 body 使用。需要层或 region 来源的调用方
 //   自己用上面的定义从 stack 重新推导。BodyLevelSet 不加字段（它属于 mesh/cut，
-//   cut_layer 的 to_device 按 body 为主序打包）。
+//   cut_layer 的 to_device 按条目顺序打包）。不是切割输入，切割平面见 region_cut.hpp。
 //
 // 留给 SP5（不在 SP0 范围）：sd2 的数值实现和精度；inside_tol_rel 的具体用法
 //   （在边界附近把 |phi| 很小的值归零或钳位）；带孔、自交或退化多边形（本函数假定

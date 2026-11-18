@@ -3,10 +3,19 @@
 #include "PreviewWorker.hpp"
 
 #include <QTemporaryDir>
+#include <functional>
 #include <memory>
 
 namespace chipcae::desktop {
-// Reports currently use {"grade":"A|B|C", "defects":[...]}; raw bytes are retained.
+enum class ImportKind { Ecad, Assembly };
+enum class ImportOutcome { None, Running, Accepted, NeedsConfirmation, Rejected, Failed };
+struct ImportRequest {
+    QString input, output, materialMap, polyset, report;
+    bool acceptBTier = false;
+    ImportKind kind = ImportKind::Ecad;
+    QString program = "chipcae-import";
+    QStringList prefix;
+};
 class ImportController : public QObject {
     Q_OBJECT
 public:
@@ -19,6 +28,11 @@ public:
                const QString& report = {},
                const QString& program = "chipcae-import",
                const QStringList& prefix = {});
+    bool start(const ImportRequest& request);
+    ImportOutcome outcome() const { return outcome_; }
+    QString reportCode() const { return reportCode_; }
+    bool restartAccepted();
+    bool needsMaterialMapReselect() const;
     void cancel();
     bool busy() const { return busy_; }
     int exitCode() const { return exitCode_; }
@@ -31,18 +45,23 @@ public slots:
     void confirmDefects();
 signals:
     void defectsReady();
-    void userConfirmed(); // Notification only: no continue CLI contract exists yet.
+    void userConfirmed();
     void finished(bool replaced);
 
 private:
+    friend struct ImportControllerTestAccess;
+    static QStringList argumentsFor(const ImportRequest& request);
+    std::function<bool(const QString&, const QString&)> copyOutput_;
     void complete(int code, QProcess::ExitStatus status);
     CaseDocument& document_;
     std::unique_ptr<QTemporaryDir> staging_;
     PreviewWorker worker_;
     QStringList staged_, destinations_;
     QByteArray stderr_, report_;
-    QString error_, grade_;
-    bool busy_ = false, cancelled_ = false, awaitingConfirmation_ = false;
+    QString error_, grade_, reportCode_;
+    ImportRequest request_;
+    ImportOutcome outcome_ = ImportOutcome::None;
+    bool busy_ = false, cancelled_ = false;
     int exitCode_ = -1;
     QProcess::ExitStatus exitStatus_ = QProcess::NormalExit;
 };
