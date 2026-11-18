@@ -1,4 +1,7 @@
-"""Convert polygon copper maps to whole-layer average fractions (整层平均)."""
+"""Convert polygon copper maps to whole-layer average fractions (整层平均).
+
+Report contract: tools/stack/copper_fraction-report-0.1.schema.json.
+"""
 import argparse
 import copy
 import hashlib
@@ -11,7 +14,7 @@ import tempfile
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from tools.stack.polyset import StackPrepError, read_polyset, layer_area_m2, ring_area_m2
+from tools.stack.polyset import StackPrepError, parse_polyset, layer_area_m2, ring_area_m2
 
 
 def invalid(message):
@@ -81,6 +84,9 @@ def _homogenize(stack, stack_dir):
         path, digest = ref['path'], ref['sha256']
         if not isinstance(path, str) or not path or not isinstance(digest, str):
             raise invalid('invalid reference path or hash')
+        local = Path(path)
+        if local.is_absolute() or '..' in local.parts:
+            raise invalid('reference path must stay within the stack directory')
         if path in refs and refs[path] != digest:
             raise StackPrepError(10, 'INPUT_HASH_MISMATCH', 'conflicting reference hashes')
         refs[path] = digest
@@ -99,13 +105,15 @@ def _homogenize(stack, stack_dir):
             raise StackPrepError(12, 'INPUT_REFERENCE_MISSING', 'sidecar absent from external_refs')
         if path not in polysets:
             source = stack_dir / path
+            if not source.resolve().is_relative_to(stack_dir.resolve()):
+                raise invalid('reference path resolves outside the stack directory')
             try:
                 data = source.read_bytes()
             except OSError as exc:
                 raise StackPrepError(12, 'INPUT_REFERENCE_MISSING', str(exc)) from exc
             if hashlib.sha256(data).hexdigest() != refs[path]:
                 raise StackPrepError(10, 'INPUT_HASH_MISMATCH', 'sidecar SHA-256 mismatch')
-            polysets[path] = read_polyset(source)
+            polysets[path] = parse_polyset(data)
     outline_ring = None
     for polyset in polysets.values():
         for layer in polyset.layers:
@@ -142,7 +150,7 @@ def _homogenize(stack, stack_dir):
         polyset = polysets[polygons['file']]
         found = next((item for item in polyset.layers if item.name == polygons['layer']), None)
         if found is None:
-            raise invalid('copper layer not found')
+            raise invalid(f"copper layer {polygons['layer']!r} not found in {polygons['file']!r}")
         copper_area = layer_area_m2(found, polyset.dbu_m)
         fraction = copper_area / area
         if not math.isfinite(fraction) or not -1e-12 <= fraction <= 1 + 1e-12:

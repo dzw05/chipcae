@@ -1,13 +1,11 @@
 """Every rejected input must fail with its protocol code, before writing."""
 import unittest
 from unittest.mock import patch
-from contextlib import redirect_stderr
-import io
 from test_fraction import *
 
 
 class Errors(unittest.TestCase):
-    def test_polyset_read_race(self):
+    def test_verified_payload_is_read_once(self):
         from tools.stack.copper_fraction import main
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -15,30 +13,55 @@ class Errors(unittest.TestCase):
             source, output = root / 'input.json', root / 'output.json'
             source.write_text(json.dumps(stack))
             read_bytes = Path.read_bytes
+            reads = 0
 
-            for failure in (FileNotFoundError, PermissionError):
-                with self.subTest(failure=failure):
-                    reads = 0
+            def changing(path):
+                nonlocal reads
+                data = read_bytes(path)
+                if path == root / 'copper.polyset':
+                    reads += 1
+                    path.write_bytes(b'changed after verification read')
+                return data
 
-                    def disappearing(path):
-                        nonlocal reads
-                        if path == root / 'copper.polyset':
-                            reads += 1
-                            if reads == 2:
-                                raise failure('sidecar became unreadable')
-                        return read_bytes(path)
+            with patch.object(Path, 'read_bytes', changing):
+                code = main([str(source), '-o', str(output)])
+            self.assertEqual(reads, 1)
+            self.assertEqual(code, 0)
+            self.assertTrue(math.isclose(json.loads(output.read_text())['layers'][0]['copper']['fraction'],
+                                         .06, rel_tol=1e-12))
 
-                    stderr = io.StringIO()
-                    with patch.object(Path, 'read_bytes', disappearing), redirect_stderr(stderr):
-                        code = main([str(source), '-o', str(output)])
-                    self.assertEqual(reads, 2)
-                    self.assertEqual(code, 12)
-                    self.assertIn('copper_fraction: INPUT_REFERENCE_MISSING:', stderr.getvalue())
-                    self.assertEqual(len(stderr.getvalue().splitlines()), 1)
-                    self.assertFalse(output.exists())
+    def test_nonlocal_references(self):
+        from tools.stack.copper_fraction import homogenize_copper, StackPrepError
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for path in ('/absolute.polyset', '../outside.polyset',
+                         'nested/../../outside.polyset', 'nested/../copper.polyset'):
+                with self.subTest(path=path):
+                    stack = fixture(root)
+                    stack['external_refs'][0]['path'] = path
+                    stack['layers'][0]['copper']['polygons']['file'] = path
+                    with patch.object(Path, 'read_bytes', side_effect=AssertionError('must reject before read')):
+                        with self.assertRaises(StackPrepError) as caught:
+                            homogenize_copper(stack, root)
+                    self.assertEqual(caught.exception.code, 14)
+            stack_for_symlink = fixture(root)
+            outside = root.parent / (root.name + '-outside.polyset')
+            try:
+                outside.write_bytes(b'outside')
+                (root / 'copper.polyset').unlink()
+                (root / 'copper.polyset').symlink_to(outside)
+                with self.assertRaises(StackPrepError) as caught:
+                    homogenize_copper(stack_for_symlink, root)
+                self.assertEqual(caught.exception.code, 14)
+            finally:
+                outside.unlink(missing_ok=True)
 
     def test_protocol_errors(self):
-        names = {10: 'INPUT_HASH_MISMATCH', 12: 'INPUT_REFERENCE_MISSING', 13: 'CUT_UNSUPPORTED', 14: 'INPUT_INVALID'}
+        import re
+        protocol = (SOURCE / 'protocol/errors.yaml').read_text(encoding='utf-8')
+        names = {int(code): name for code, name in
+                 re.findall(r'\{code:\s*(\d+),\s*name:\s*([A-Z_]+)', protocol)}
+        self.assertTrue({10, 12, 13, 14} <= names.keys())
         cases = ['missing_stack', 'missing_sidecar', 'missing_reference', 'hash', 'conflicting_hash',
                  'magic', 'offsets', 'negative_offset', 'oversized_offset', 'short_ring', 'trailing', 'truncated', 'empty_sidecar', 'utf8',
                  'zero_dbu', 'nan_dbu', 'first_offset', 'empty_first_offset', 'case', 'missing_layer', 'duplicates',

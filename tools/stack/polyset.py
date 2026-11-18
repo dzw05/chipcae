@@ -29,6 +29,11 @@ def read_polyset(path: Path) -> Polyset:
         data = path.read_bytes()
     except OSError as exc:
         raise StackPrepError(12, 'INPUT_REFERENCE_MISSING', str(exc)) from exc
+    return parse_polyset(data)
+
+
+def parse_polyset(data: bytes) -> Polyset:
+    """Parse one immutable payload, including bytes already verified by SHA-256."""
     position = 0
 
     def take(size):
