@@ -11,6 +11,23 @@ from tools.vv.result_summary import summarize
 
 
 class CLI(unittest.TestCase):
+    def test_output_write_failure(self):
+        # Code 12 is reserved for unreadable manifest/step input references.
+        # Use deterministic write failures, including when running as root.
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / 'run'
+            fixture(run)
+            for output in (Path(tmp), Path(tmp) / 'missing' / 'summary.json'):
+                with self.subTest(output=output):
+                    result = subprocess.run(
+                        [sys.executable, str(SCRIPT), str(run), '-o', str(output)],
+                        cwd=tmp, capture_output=True, timeout=20)
+                    self.assertEqual(result.returncode, 14)
+                    self.assertEqual(result.stdout, b'')
+                    self.assertTrue(result.stderr.startswith(b'result_summary: INPUT_INVALID: '))
+                    self.assertEqual(len(result.stderr.splitlines()), 1)
+                    self.assertIn(str(output).encode('utf-8'), result.stderr)
+
     def test_large_manifest_integer_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp) / 'run'
