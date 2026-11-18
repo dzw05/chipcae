@@ -1,6 +1,8 @@
 #include "chipcae/geometry/ecad/ipc2581.hpp"
 
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -10,6 +12,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
 
 // Reserve a private directory so concurrent test processes never share map files.
 struct ScopedMap {
@@ -606,6 +609,69 @@ int main() {
     const double analytic_trace_area = (3.0 * 0.1 + std::acos(-1.0) * 0.05 * 0.05) * 1e-6;
     if (std::abs(trace_area - analytic_trace_area) / analytic_trace_area > 1e-4)
         return 10;
+    int four_layer_failures = 0;
+    auto check_four_layer = [&](bool ok, const std::string& detail) {
+        if (!ok) {
+            ++four_layer_failures;
+            std::cerr << "FAIL board_4layer: " << detail << '\n';
+        }
+    };
+    const char* layer_names[] = {"F.Cu", "In1.Cu", "Core", "In2.Cu", "B.Cu"};
+    const bool copper_flags[] = {true, true, false, true, true};
+    const double thicknesses[] = {35e-6, 18e-6, 200e-6, 18e-6, 35e-6};
+    const std::vector<std::array<std::int64_t, 2>> outline_points = {
+        {0, 0}, {5000, 0}, {5000, 5000}, {0, 5000}};
+    check_four_layer(b.model.outline.points == outline_points, "outline vertices unchanged");
+    const double outline_area = area(b.model.outline, b.model.dbu_m);
+    check_four_layer(std::isfinite(outline_area) && std::abs(outline_area - 25e-6) <= 1e-12,
+                     "outline area equals 25e-6 m^2 (absolute tolerance 1e-12 m^2)");
+    std::array<double, 5> layer_areas{};
+    for (std::size_t i = 0; i < b.model.layers.size(); ++i) {
+        const auto& layer = b.model.layers[i];
+        const std::string name = layer_names[i];
+        check_four_layer(layer.name == name, "layer " + std::to_string(i) + " name is " + name);
+        check_four_layer(layer.copper == copper_flags[i], name + " copper flag");
+        check_four_layer(std::abs(layer.thickness_m - thicknesses[i]) <= 1e-15,
+                         name + " thickness (absolute tolerance 1e-15 m)");
+        if (!copper_flags[i]) {
+            check_four_layer(layer.polygons.empty(), "Core has no polygons");
+            continue;
+        }
+        for (const auto& polygon : layer.polygons) {
+            layer_areas[i] += area(polygon, b.model.dbu_m);
+            for (const auto& point : polygon.points)
+                check_four_layer(point[0] > 0 && point[0] < 5000 && point[1] > 0 && point[1] < 5000,
+                                 name + " vertex strictly inside outline");
+        }
+        const double fraction = layer_areas[i] / outline_area;
+        check_four_layer(std::isfinite(layer_areas[i]) && std::isfinite(fraction) && fraction > 0 &&
+                             fraction <= 1,
+                         name + " finite copper area / outline area in (0, 1]");
+    }
+    const struct {
+        std::size_t layer;
+        double area_m2;
+        std::vector<std::array<std::int64_t, 2>> points;
+    } rectangles[] = {{1, 2.25e-6, {{500, 500}, {2000, 500}, {2000, 2000}, {500, 2000}}},
+                      {3, 3e-6, {{2500, 500}, {4500, 500}, {4500, 2000}, {2500, 2000}}},
+                      {4, 7e-6, {{500, 2500}, {4000, 2500}, {4000, 4500}, {500, 4500}}}};
+    for (const auto& rectangle : rectangles) {
+        const auto& layer = b.model.layers[rectangle.layer];
+        check_four_layer(layer.polygons.size() == 1,
+                         layer.name + " has exactly one rectangle; actual polygons=" +
+                             std::to_string(layer.polygons.size()));
+        if (layer.polygons.size() == 1)
+            check_four_layer(layer.polygons.front().points == rectangle.points,
+                             layer.name + " has four exact vertices in counterclockwise order");
+        std::ostringstream detail;
+        detail << layer.name << " area expected=" << rectangle.area_m2
+               << " actual=" << layer_areas[rectangle.layer]
+               << " m^2 (absolute tolerance 1e-12 m^2)";
+        check_four_layer(std::abs(layer_areas[rectangle.layer] - rectangle.area_m2) <= 1e-12,
+                         detail.str());
+    }
+    if (four_layer_failures != 0)
+        return 14;
     auto c = ecad::read_ipc2581(root / "board_arc.xml");
     if (!c || c.model.layers.size() != 1 || c.model.layers[0].polygons.empty())
         return 5;
