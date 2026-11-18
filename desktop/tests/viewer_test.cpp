@@ -1,13 +1,23 @@
 #include "ResultControls.hpp"
 #include "ResultView.hpp"
 
+#include <QAbstractButton>
 #include <QApplication>
+#include <QComboBox>
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonDocument>
+#include <QLabel>
 #include <QSurfaceFormat>
+#include <QTemporaryDir>
 #include <QVTKOpenGLNativeWidget.h>
+#include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
+#include <vector>
 #include <vtkCellData.h>
 #include <vtkDataSet.h>
 #include <vtkDoubleArray.h>
@@ -63,6 +73,314 @@ vtkSmartPointer<vtkUnstructuredGrid> sheet() {
     kind->InsertNextValue(1);
     g->GetCellData()->AddArray(kind);
     return g;
+}
+using Coordinates = std::vector<std::vector<std::array<double, 3>>>;
+const QStringList displayedBlocks = {"hex", "cut", "eb_surface", "particles"};
+Coordinates coordinates(ResultView& view) {
+    Coordinates out;
+    for (const auto& name : displayedBlocks) {
+        out.emplace_back();
+        if (auto block = view.displayed(name))
+            for (vtkIdType i = 0; i < block->GetNumberOfPoints(); ++i) {
+                std::array<double, 3> point;
+                block->GetPoint(i, point.data());
+                out.back().push_back(point);
+            }
+    }
+    return out;
+}
+void checkRange(ResultView& view, ResultColorField field) {
+    double low = std::numeric_limits<double>::infinity();
+    double high = -low;
+    for (const auto& name : displayedBlocks) {
+        auto block = view.displayed(name);
+        if (!block || !block->GetNumberOfCells())
+            continue;
+        auto array =
+            block->GetPointData()->GetArray(field == ResultColorField::Temperature ? "T" : "U");
+        require(array, "fixture missing selected point array");
+        for (vtkIdType i = 0; i < block->GetNumberOfPoints(); ++i) {
+            double value = array->GetComponent(i, 0);
+            if (field == ResultColorField::WarpageUz)
+                value = array->GetComponent(i, 2);
+            if (field == ResultColorField::DisplacementMagnitude) {
+                double u[3];
+                array->GetTuple(i, u);
+                value = std::sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+            }
+            low = std::min(low, value);
+            high = std::max(high, value);
+        }
+    }
+    require(std::isfinite(low), "fixture has no displayed points");
+    const auto range = view.colorRange();
+    require(range.valid, "selected field range unavailable");
+    require(range.min == low && range.max == high, "displayed point range differs");
+    require(range.unit == (field == ResultColorField::Temperature ? "K" : "m"), "range unit");
+}
+void checkUnavailable(ResultView& view) {
+    const auto range = view.colorRange();
+    require(!range.valid && range.min == 0 && range.max == 0 && range.unit.isEmpty(),
+            "invalid range defaults");
+    require(view.colorBarTitle().isEmpty(), "unavailable field title");
+    require(view.tmaxText() == "T_max: unavailable", "unavailable official T_max");
+    require(view.error().isEmpty(), "unavailable field set error");
+}
+void checkSummaryLabel(ResultControls& controls, ResultView& view) {
+    auto range = view.colorRange();
+    bool found = false;
+    for (auto label : controls.findChildren<QLabel*>()) {
+        const auto text = label->text();
+        found |=
+            text.contains(view.tmaxText()) && text.contains(QString::number(range.min, 'g', 16)) &&
+            text.contains(QString::number(range.max, 'g', 16)) &&
+            text.contains(view.summary("warpage_pv")) && text.contains(view.summary("U_mag_max"));
+    }
+    require(found, "controls summary missing official T_max, range or existing QoIs");
+}
+int acceptance(const QDir& root) {
+    int failures = 0;
+    auto run = [&](const char* name, auto test) {
+        try {
+            test();
+            std::cout << "PASS " << name << '\n';
+        } catch (const std::exception& e) {
+            ++failures;
+            std::cerr << "FAIL " << name << ": " << e.what() << '\n';
+        }
+    };
+    run("empty and mesh-only state", [&] {
+        ResultView view;
+        checkUnavailable(view);
+        ResultSession session;
+        require(session.open(root.filePath("viewer_mesh")), qPrintable(session.error()));
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        view.setColorField(ResultColorField::Temperature);
+        checkUnavailable(view);
+    });
+    for (auto field : {ResultColorField::Temperature,
+                       ResultColorField::DisplacementMagnitude,
+                       ResultColorField::WarpageUz}) {
+        run(field == ResultColorField::Temperature             ? "Temperature"
+            : field == ResultColorField::DisplacementMagnitude ? "DisplacementMagnitude"
+                                                               : "WarpageUz",
+            [&] {
+                ResultSession session;
+                require(session.open(root.filePath("default")), qPrintable(session.error()));
+                ResultView view;
+                require(view.loadStep(session, 0), qPrintable(view.error()));
+                require(view.colorField() == ResultColorField::Temperature, "default field");
+                view.setColorField(field);
+                require(view.colorField() == field, "field selection ignored");
+                require(view.colorBarTitle() == (field == ResultColorField::Temperature ? "T (K)"
+                                                 : field == ResultColorField::DisplacementMagnitude
+                                                     ? "|U| (m)"
+                                                     : "U_z (m)"),
+                        "selected color bar title missing");
+                checkRange(view, field);
+                const auto points = coordinates(view);
+                const auto range = view.colorRange();
+                view.setColorField(field);
+                require(coordinates(view) == points, "repeated selection moves points");
+                require(view.colorRange().min == range.min && view.colorRange().max == range.max,
+                        "repeated range differs");
+                checkRange(view, field);
+                view.setLayer(1);
+                checkRange(view, field);
+                view.setLayer(0);
+                view.setShowVoid(true);
+                checkRange(view, field);
+                view.setClip(true, {0.2, 0, 0}, {1, 0, 0});
+                checkRange(view, field);
+                for (const auto& block : displayedBlocks)
+                    view.setBlockVisible(block, false);
+                require(!view.colorRange().valid && view.colorBarTitle().isEmpty(),
+                        "hidden blocks still contribute range");
+            });
+    }
+    run("geometry invariance", [&] {
+        ResultSession session;
+        require(session.open(root.filePath("default")), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        auto original = coordinates(view);
+        require(!original.empty(), "empty coordinate snapshot");
+        auto switchFields = [&] {
+            auto before = coordinates(view);
+            for (auto field : {ResultColorField::DisplacementMagnitude,
+                               ResultColorField::WarpageUz,
+                               ResultColorField::Temperature}) {
+                view.setColorField(field);
+                require(coordinates(view) == before, "field selection changed coordinates");
+            }
+        };
+        switchFields();
+        view.setWarpageScale(100);
+        require(coordinates(view) != original, "warpage scale did not move points");
+        switchFields();
+    });
+    run("summary and controls", [&] {
+        ResultSession session;
+        require(session.open(root.filePath("default")), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        for (auto value : session.summary()) {
+            auto entry = value.toObject();
+            auto name = entry["name"].toString();
+            if (entry["step"].toInteger() == 0 && (name == "warpage_pv" || name == "U_mag_max"))
+                require(view.summary(name) == QString("%1: %2 %3")
+                                                  .arg(name)
+                                                  .arg(entry["value"].toDouble(), 0, 'g', 16)
+                                                  .arg(entry["unit"].toString()),
+                        "official summary regression");
+        }
+        require(view.tmaxText() == view.summary("T_max"), "T_max does not use official summary");
+        ResultControls controls(view, session);
+        QComboBox* fields = nullptr;
+        int magnitude = -1;
+        for (auto combo : controls.findChildren<QComboBox*>()) {
+            bool temperature = false, warpage = false;
+            int candidate = -1;
+            for (int i = 0; i < combo->count(); ++i) {
+                temperature |= combo->itemText(i).contains(QStringLiteral("温度"));
+                warpage |= combo->itemText(i).contains(QStringLiteral("翘曲"));
+                if (combo->itemText(i).contains(QStringLiteral("位移幅值")))
+                    candidate = i;
+            }
+            if (temperature && warpage && candidate >= 0) {
+                fields = combo;
+                magnitude = candidate;
+            }
+        }
+        require(fields, "field combo with all three labels missing");
+        fields->setCurrentIndex(magnitude);
+        require(view.colorField() == ResultColorField::DisplacementMagnitude,
+                "controls did not select magnitude");
+        checkSummaryLabel(controls, view);
+        for (auto combo : controls.findChildren<QComboBox*>())
+            if (combo != fields && combo->count() > 1 && combo->itemText(0) == "0" &&
+                combo->itemText(1) == "1") {
+                combo->setCurrentIndex(1);
+                checkSummaryLabel(controls, view);
+            }
+    });
+    run("optional T_max location", [&] {
+        ResultSession source;
+        require(source.open(root.filePath("default")), qPrintable(source.error()));
+        QTemporaryDir temp;
+        require(temp.isValid(), "temporary directory");
+        auto manifest = source.manifest();
+        // Preserve relative step pointers and copy existing synthetic step files into the temp run.
+        for (auto value : manifest["steps"].toArray()) {
+            const auto relative = value.toObject()["file"].toString();
+            const auto target = temp.filePath(relative);
+            require(QDir().mkpath(QFileInfo(target).absolutePath()), "temporary step directory");
+            if (!QFileInfo::exists(target))
+                require(
+                    QFile::copy(QDir(root.filePath("default")).absoluteFilePath(relative), target),
+                    "temporary step copy");
+        }
+        auto summary = manifest["summary"].toArray();
+        bool modified = false;
+        for (int i = 0; i < summary.size(); ++i) {
+            auto entry = summary[i].toObject();
+            if (entry["name"] == "T_max" && entry["step"].toInteger() == 0) {
+                entry["region"] = "die";
+                entry["region_id"] = "lower-priority";
+                entry["position"] = QJsonArray{1.0, 2.0, 3.0};
+                entry["xyz"] = QJsonArray{4.0, 5.0, 6.0};
+                summary[i] = entry;
+                modified = true;
+            }
+        }
+        require(modified, "fixture T_max missing");
+        manifest["summary"] = summary;
+        QFile file(temp.filePath("manifest.json"));
+        require(file.open(QIODevice::WriteOnly), "temporary manifest open");
+        auto bytes = QJsonDocument(manifest).toJson();
+        require(file.write(bytes) == bytes.size(), "temporary manifest write");
+        file.close();
+        ResultSession session;
+        require(session.open(temp.path()), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        const auto text = view.tmaxText();
+        require(text.startsWith(view.summary("T_max")),
+                "optional location replaced official value");
+        require(text.contains("region=die") && !text.contains("lower-priority"),
+                "region precedence");
+        require(text.contains(QString("at=(%1,%2,%3)")
+                                  .arg(1.0, 0, 'g', 16)
+                                  .arg(2.0, 0, 'g', 16)
+                                  .arg(3.0, 0, 'g', 16)),
+                "position formatting or precedence");
+    });
+    for (const auto& source : {QString("mock"),
+                               QString("precomputed"),
+                               QString("real"),
+                               QString("Mock"),
+                               QString("REAL"),
+                               QString("invalid"),
+                               QString()}) {
+        run(qPrintable("provenance " + source), [&] {
+            ResultSession session;
+            require(session.open(root.filePath("default")), qPrintable(session.error()));
+            ResultView view;
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            QJsonObject object;
+            if (!source.isEmpty())
+                object = {{"schema", "chipcae.provenance/0.1"}, {"source", source}};
+            bool valid = source == "mock" || source == "precomputed" || source == "real";
+            require(view.setProvenance(object) == valid, "provenance return value");
+            auto banner = view.provenanceBanner();
+            const QString watermark = source == "real"          ? ""
+                                      : source == "precomputed" ? "预计算"
+                                                                : "MOCK";
+            require(view.provenanceWatermark() == watermark, "provenance watermark");
+            QLabel* bannerLabel = nullptr;
+            if (source == "real")
+                require(banner.isEmpty(), "real banner");
+            else {
+                require(banner.contains(valid ? watermark : QStringLiteral("来源未知")) &&
+                            !banner.contains(QStringLiteral("真实计算")),
+                        "unsafe provenance banner");
+                for (auto label : view.findChildren<QLabel*>())
+                    if (label->text() == banner)
+                        bannerLabel = label;
+                require(bannerLabel && !bannerLabel->isHidden() && bannerLabel->isVisibleTo(&view),
+                        "provenance banner hidden");
+                require(bannerLabel->findChildren<QAbstractButton*>().isEmpty() &&
+                            bannerLabel->parentWidget()->findChildren<QAbstractButton*>().isEmpty(),
+                        "banner close button");
+            }
+            require(view.setProvenance(object) == valid && view.provenanceBanner() == banner &&
+                        view.provenanceWatermark() == watermark,
+                    "repeated provenance changed");
+            view.clearProvenance();
+            require(view.provenanceBanner().isEmpty() && view.provenanceWatermark().isEmpty(),
+                    "clear provenance text");
+            require(!bannerLabel || bannerLabel->isHidden(), "cleared banner visible");
+        });
+    }
+    run("effective source and schema validation", [&] {
+        ResultView view;
+        require(view.setProvenance({{"schema", "chipcae.provenance/0.1"},
+                                    {"source", "real"},
+                                    {"effective_source", "mock"}}),
+                "effective source rejected");
+        require(view.provenanceWatermark() == "MOCK", "effective source precedence");
+        for (auto object : {QJsonObject{{"source", "real"}},
+                            QJsonObject{{"schema", "wrong"}, {"source", "real"}},
+                            QJsonObject{{"schema", "chipcae.provenance/0.1"},
+                                        {"source", "real"},
+                                        {"effective_source", "REAL"}}}) {
+            require(!view.setProvenance(object), "invalid provenance accepted");
+            require(view.provenanceWatermark() == "MOCK" &&
+                        view.provenanceBanner().contains(QStringLiteral("来源未知")),
+                    "invalid provenance treated as real");
+        }
+    });
+    return failures;
 }
 int main(int argc, char** argv) {
     QSurfaceFormat::setDefaultFormat(QVTKOpenGLNativeWidget::defaultFormat());
@@ -220,7 +538,8 @@ int main(int argc, char** argv) {
         ResultView legacy;
         require(legacy.loadStep(s, 0), qPrintable(legacy.error()));
         require(legacy.summary("warpage_pv").contains("unavailable"), "missing summary fallback");
-        std::cout << "viewer checks passed\n";
+        std::cout << "existing viewer checks passed\n";
+        return acceptance(root) ? 1 : 0;
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;
