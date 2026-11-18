@@ -71,6 +71,21 @@ QString SchemaForm::caseSchemaPath(const QString& repository) {
 QString SchemaForm::resultSchemaPath(const QString& repository) {
     return repository + "/schema/result.schema.json";
 }
+// Test-first stubs: keep repository-only behavior until runtime lookup is implemented.
+QString SchemaForm::caseSchemaPath(const QString& repository,
+                                   const QStringList&,
+                                   const QProcessEnvironment&,
+                                   const QString&,
+                                   const QString&) {
+    return caseSchemaPath(repository);
+}
+QString SchemaForm::resultSchemaPath(const QString& repository,
+                                     const QStringList&,
+                                     const QProcessEnvironment&,
+                                     const QString&,
+                                     const QString&) {
+    return resultSchemaPath(repository);
+}
 bool SchemaForm::load(const QString& schemaFile, const Json& document) {
     validator_.reset();
     document_ = document;
