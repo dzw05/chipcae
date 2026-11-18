@@ -361,6 +361,27 @@ for mode in ('text','symbol','C_then_B','B_then_C'):
             if '_then_' in mode:
                 check(any(d['tier'] == 'B' for d in ds), 'mixed fixture did not report B')
 
+# Unknown ODB records and component-like path substrings must never be accepted as B.
+for loss in ('feature_TT', 'profile_T', 'misc_unknown', 'components_substring'):
+    @case('odb_unknown_geometry_'+loss)
+    def unknown_odb_geometry(b, loss=loss):
+        if loss == 'feature_TT':
+            path = b.job/'steps/pcb/layers/f.cu/features'
+            path.write_text(path.read_text()+'TT vendor geometry\n')
+        elif loss == 'profile_T':
+            path = b.job/'steps/pcb/profile'
+            path.write_text(path.read_text()+'T vendor profile geometry\n')
+        else:
+            path = b.job/('misc/unknown_geometry.Z' if loss == 'misc_unknown' else
+                          'steps/pcb/layers/f.cu/components_geometry.Z')
+            path.write_bytes(b'unmodeled compressed content')
+        for accepted in (False, True):
+            out,_,_ = b.run(extra=['--accept-b-tier'] if accepted else [], expected=7,
+                            name=f'out{accepted}', prior=True)
+            ds = b.defect_rows(out)
+            check(ds and all(d['tier'] == 'C' for d in ds),
+                  'unknown ODB geometry must remain C regardless of acceptance')
+
 for tag,context in (('PolyStepCurve','profile'), ('Cutout','profile'),
                     ('ProfileHole','profile'), ('Contour','copper'), ('Oval','copper'),
                     ('RectCenter','copper'), ('Circle','copper'), ('Symbol','copper'), ('Trace','copper'),
@@ -783,6 +804,40 @@ def dispatcher_values(b):
               result.stderr == 'not implemented yet: '+option+'\n', 'STEP reserved behavior changed')
         check(not (b.root/'part.json').exists(), 'reserved STEP option published a stack')
 
+# Registered fixture groups assert the current prerequisite outcomes. Strict
+# success selectors below remain available unchanged for the upstream follow-up.
+for fmt in ('odb', 'ipc'):
+    @case('dispatcher_prerequisites_'+fmt, fmt)
+    def dispatcher_prerequisites(b):
+        for option in ('--accept', '--stack-override'):
+            _,result,_ = b.run(data/'board_4layer.xml', [option,b.root/'missing.json'],
+                              expected=2, name=option[2:], prior=True)
+            check(result.stdout == '' and result.stderr == 'not implemented yet: '+option+'\n',
+                  'dispatcher prerequisite changed; enable strict flag selectors')
+
+    @case('full_board_rejected_'+fmt, fmt)
+    def full_board_rejected(b, fmt=fmt):
+        input = fixture/'kicad4l' if fmt == 'odb' else b.ipc
+        for accepted in (False, True):
+            out,_,d = b.run(input, ['--accept-b-tier'] if accepted else [], expected=7,
+                            name=f'full{accepted}', prior=True)
+            check(load(d)['code'] == 'IMPORT_REJECTED', 'full-board rejection code')
+            ds = b.defect_rows(out)
+            check(any(d['tier'] == 'C' for d in ds), 'full-board geometry loss must remain C')
+            if fmt == 'odb':
+                check(any(d['defect_id'].startswith('board/Slot%3A') for d in ds),
+                      'full-board oval slot diagnostic disappeared')
+
+@case('archive_root_rejected')
+def archive_root_rejected(b):
+    for extension in ('.TgZ', '.TaR.Gz', '.ZiP'):
+        path = b.root/('board'+extension)
+        shutil.copyfile(fixture/('kicad4l.zip' if extension == '.ZiP' else 'kicad4l.tgz'),path)
+        _,_,d = b.run(path, ['--accept-b-tier'], expected=7, name=extension[1:], prior=True)
+        summary = load(d)
+        check(summary['code'] == 'IMPORT_REJECTED' and 'matrix/matrix' in summary['message'],
+              'archive root prerequisite changed; enable strict archive selectors')
+
 selected = [(n,g,f) for n,g,f in CASES if (selector in ('all',g,n) or
             (selector == 'stack_override_fill' and n in ('override_fill','override_fill_missing')) or
             (selector == 'stack_override_conflict' and n in ('override_conflict','override_equal')) or
@@ -793,6 +848,23 @@ selected = [(n,g,f) for n,g,f in CASES if (selector in ('all',g,n) or
             (selector == 'corrupt' and n.startswith('corrupt_')) or
             (selector == 'override_bad' and n.startswith('override_bad_')) or
             (selector == 'unsupported_tiers' and n.startswith('unsupported_tiers_')))]
+# Only the registered fixture groups are gated. 'all' and named acceptance
+# selectors still run the original strict success assertions and tolerances.
+if selector in ('odb', 'ipc'):
+    def follow_up(name):
+        if (name.startswith('override_') and name != 'override_fill_missing') or name in (
+                'acceptance', 'dispatcher_values'):
+            return 'dispatcher forwarding of --accept/--stack-override'
+        if name in ('cross_ipc', 'dir_and_zip', 'odb_skipped_layers_reported'):
+            return 'full-board geometry/model support and archive root handling'
+        if name.startswith('extension.'):
+            return 'archive common-root handling'
+        return None
+    for name,_,_ in selected:
+        reason = follow_up(name)
+        if reason:
+            print(f'FOLLOW-UP {name}: {reason}', flush=True)
+    selected = [(n,g,f) for n,g,f in selected if follow_up(n) is None]
 check(selected, f'unknown scenario {selector}; choose: '+', '.join(n for n,_,_ in CASES))
 failures = 0
 for name,_,fn in selected:

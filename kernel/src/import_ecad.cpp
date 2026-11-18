@@ -69,8 +69,8 @@ bool odb_input(const std::filesystem::path& input) {
 struct SkippedRow {
     std::string name, function;
 };
-std::vector<Defect> classify_unsupported(const ecad::ImportReport& report,
-                                         std::vector<SkippedRow>& skipped) {
+std::vector<Defect>
+classify_unsupported(const ecad::ImportReport& report, std::vector<SkippedRow>& skipped, bool odb) {
     std::vector<Defect> defects;
     std::map<std::string, unsigned> occurrences;
     for (const auto& entry : report.unsupported) {
@@ -90,8 +90,8 @@ std::vector<Defect> classify_unsupported(const ecad::ImportReport& report,
         defect.defect_id = "board/" + id_component(text) + "/" + std::to_string(entry.line);
         const auto colon = text.find(':');
         const auto tag = text.substr(0, colon);
-        // See docs/geometry/odbpp-import.md. Unknown geometry stays C; bare
-        // XML extension names lack geometry context and require B confirmation.
+        // Unknown ODB diagnostics stay C. Only IPC can supply bare XML
+        // extension names without geometry context.
         static const std::set<std::string> metadata{"SolderMask",
                                                     "LayerFunction",
                                                     "Component",
@@ -132,11 +132,25 @@ std::vector<Defect> classify_unsupported(const ecad::ImportReport& report,
                                                     "ViaSpan",
                                                     "ViaToolAmbiguous",
                                                     "ViaToolUnsupported"};
-        const bool text_record = text.find(": unsupported record T") != std::string::npos;
-        const bool metadata_path = text.find("/components") != std::string::npos ||
-                                   text.starts_with("misc/") || text.starts_with("selected step ");
-        if (!geometry.contains(tag) && (metadata.contains(tag) || colon == std::string::npos ||
-                                        text_record || metadata_path)) {
+        // Match complete ODB paths and records, not substrings that can also
+        // occur in unknown geometry diagnostics (for example record TT).
+        auto path = tag;
+        if (path.ends_with(".Z") || path.ends_with(".z"))
+            path.resize(path.size() - 2);
+        std::vector<std::string> parts;
+        for (const auto& part : std::filesystem::path(path))
+            parts.push_back(part.string());
+        const bool layer_file = parts.size() == 5 && parts[0] == "steps" && !parts[1].empty() &&
+                                parts[2] == "layers" && !parts[3].empty();
+        const bool text_record = odb && colon != std::string::npos && layer_file &&
+                                 parts[4] == "features" &&
+                                 text.substr(colon) == ": unsupported record T";
+        const bool metadata_path =
+            odb && ((layer_file && parts[4] == "components") || path == "misc/info" ||
+                    path == "misc/attrlist" || text.starts_with("selected step "));
+        const bool ipc_extension = !odb && colon == std::string::npos;
+        if (!geometry.contains(tag) &&
+            (metadata.contains(tag) || ipc_extension || text_record || metadata_path)) {
             defect.tier = Tier::B;
             defect.suggestion = "confirm omitted metadata, components or text";
         }
@@ -406,7 +420,7 @@ int run_ecad(const ImportOptions& options) {
                                       : model.layers[i].material;
 
         std::vector<SkippedRow> skipped;
-        auto defects = classify_unsupported(model.report, skipped);
+        auto defects = classify_unsupported(model.report, skipped, odb);
         std::vector<std::string> accepted;
         if (!options.accept_file.empty()) {
             const auto list =

@@ -54,6 +54,8 @@ thicknesses, as required by the import comparison contract. A one-ULP difference
 (including values produced by different arithmetic expressions) is intentional
 provenance information, not numerical noise to discard with a tolerance. Equal
 source and override doubles produce no original-value field or conflict warning.
+IPC conflict warnings instead use relative difference greater than `1e-9`; the
+selected override value and its provenance are retained regardless of that threshold.
 
 Material maps contain source-material-name to library-ID string mappings.
 An explicit per-layer override material bypasses material mapping for that layer.
@@ -78,10 +80,11 @@ archive paths, never the input filesystem path, in their deterministic IDs.
 | `LayerFunction:*` | B |
 | `ViaPlatingMissing:<start>:<end>:<count>` | B; size is the count |
 | ODB `ViaPlatingMissing:<drill-layer>` | B; size 1, because the diagnostic supplies no count or span |
-| Known metadata, attributes, component/package references and text | B |
-| ODB feature record `T` | B |
+| `Component`, `Package`, `PackageRef`, `Text`, `Attribute`, `Property`, `Material`, `Spec`, `EntryStandard`, `StandardPrimitiveRef` | B |
+| ODB `misc/info`, `misc/attrlist`, `steps/<step>/layers/<layer>/components` (including `.Z` variants), and selected-step notices | B |
+| Exact ODB `unsupported record T` diagnostic in `steps/<step>/layers/<layer>/features` | B |
 | Copper symbols, traces, slots, via geometry, profile holes and other geometry losses | C |
-| Unknown records inside ODB features or profile paths | C, conservatively |
+| All other unknown ODB diagnostics, including bare names, feature/profile records and unlisted paths | C, conservatively |
 | Bare IPC extension names without geometry context | B; the reader supplies no spatial context |
 
 Generic IDs use `board/<percent-encoded-diagnostic>/<source-line>`, with a
@@ -167,13 +170,24 @@ different layer-name spelling (`F.CU` versus `F.Cu`), and their independently
 rounded copper coordinates cannot satisfy exact sidecar hash equality while
 preserving the source geometry and names.
 
-CTest entries `odbpp_fixture_present` and `ipc_fixture_present` run every
-scenario in their respective `odb` and `ipc` groups. All selectors, including
-`all` and named scenarios, require their original success assertions. There are
-no prerequisite gates or expected-failure conversions: unsupported geometry and
-unreachable CLI flags fail CTest. The public `full_board_reader` selector checks
-directory reader composition separately and requires the unsupported slot
-diagnostic to remain observable; it does not establish CLI acceptance.
+CTest entries `odbpp_fixture_present` and `ipc_fixture_present` check fixture
+presence and run the currently supported scenarios in their respective `odb`
+and `ipc` groups. They also assert the current prerequisite outcomes: full-board
+geometry is rejected with C defects and exit 7 even with B acceptance; archives
+with a common root directory are rejected with a missing `matrix/matrix`; and
+unforwarded `--accept` / `--stack-override` flags return usage exit 2 without
+publishing geometry or changing a previous layer report. Unexpected outcomes
+fail CTest.
+
+The registered groups print `FOLLOW-UP` for strict success selectors that depend
+on these prerequisites. Override scenarios (except `override_fill_missing`),
+`acceptance` and `dispatcher_values` await dispatcher forwarding. `cross_ipc`,
+`dir_and_zip` and `odb_skipped_layers_reported` await full-board geometry/model
+support and archive root handling; `extension.*` awaits archive root handling.
+These are separate upstream follow-ups, not accepted CTest failures. No CMake
+registration changes are needed. The public `full_board_reader` checks directory
+reader composition separately and requires the unsupported slot diagnostic to
+remain observable; it does not establish CLI acceptance.
 
 The `report_and_preview` smoke test runs normally. Its material map supplies the
 required homogenized dielectric ID `mat.fr4_eq`. For meshing, a separate preview
@@ -181,7 +195,8 @@ stack refines layer element counts to the thinnest layer's spacing; imported
 geometry, thicknesses and artifacts are preserved. The preview's default cell-size
 ratio limit is unchanged.
 
-Run `odbpp_e2e all` or a named selector (for example,
+The unregistered `all` and named selectors retain every original success
+assertion, including the blocked scenarios. Run `odbpp_e2e all` or a named selector (for example,
 `odbpp_e2e odbpp_e2e_cross_ipc`) to inspect strict acceptance. Original geometry,
 assertions and numerical thresholds remain enforced. Passing full-board
 acceptance requires upstream model/reader work and a dispatcher brief amendment.
