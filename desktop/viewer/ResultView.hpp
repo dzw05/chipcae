@@ -30,16 +30,15 @@ public:
     explicit ResultView(QWidget* parent = nullptr);
     ~ResultView() override;
     bool loadStep(ResultSession& session, qint64 step);
-    // Inert test-first API stubs; acceptance tests intentionally remain red.
-    void setColorField(ResultColorField) {}
-    ResultColorField colorField() const { return ResultColorField::Temperature; }
-    ColorRange colorRange() const { return {}; }
-    QString colorBarTitle() const { return {}; }
-    QString tmaxText() const { return "T_max: unavailable"; }
-    bool setProvenance(const QJsonObject&) { return false; }
-    void clearProvenance() {}
-    QString provenanceWatermark() const { return {}; }
-    QString provenanceBanner() const { return {}; }
+    void setColorField(ResultColorField field);
+    ResultColorField colorField() const;
+    ColorRange colorRange() const;
+    QString colorBarTitle() const;
+    QString tmaxText() const;
+    bool setProvenance(const QJsonObject& provenance);
+    void clearProvenance();
+    QString provenanceWatermark() const;
+    QString provenanceBanner() const;
     void setWarpageScale(double scale);
     void setBlockVisible(const QString& block, bool visible);
     void setLayer(int id); // 0 = all; ResultSession layer ids start at 1.
@@ -62,6 +61,7 @@ public:
                                  std::array<double, 3> normal = {1, 0, 0});
 
 signals:
+    void displayChanged();
     void elementPicked(const QString& gid);
 
 private:

@@ -24,9 +24,12 @@
 #include <vtkNew.h>
 #include <vtkPointData.h>
 #include <vtkPoints.h>
+#include <vtkPropCollection.h>
 #include <vtkRenderWindow.h>
 #include <vtkRenderer.h>
 #include <vtkRendererCollection.h>
+#include <vtkTextActor.h>
+#include <vtkTextProperty.h>
 #include <vtkUnstructuredGrid.h>
 using namespace chipcae::desktop;
 void require(bool ok, const char* message) {
@@ -362,6 +365,36 @@ int acceptance(const QDir& root) {
             require(!bannerLabel || bannerLabel->isHidden(), "cleared banner visible");
         });
     }
+    run("provenance viewport and capture", [&] {
+        ResultSession session;
+        require(session.open(root.filePath("default")), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        QTemporaryDir temp;
+        require(temp.isValid(), "capture temporary directory");
+        for (auto source : {"mock", "precomputed"}) {
+            require(view.setProvenance({{"schema", "chipcae.provenance/0.1"}, {"source", source}}),
+                    "capture provenance");
+            auto props = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetViewProps();
+            vtkTextActor* overlay = nullptr;
+            props->InitTraversal();
+            while (auto prop = props->GetNextProp())
+                if (auto text = vtkTextActor::SafeDownCast(prop))
+                    overlay = text;
+            require(overlay && QString::fromUtf8(overlay->GetInput()) == view.provenanceWatermark(),
+                    "viewport watermark text");
+            require(overlay->GetTextProperty()->GetOpacity() > 0 &&
+                        overlay->GetTextProperty()->GetOpacity() < 1,
+                    "watermark opacity");
+            require(overlay->GetTextProperty()->GetOrientation() == 30, "diagonal watermark");
+            require(view.capture(temp.filePath(QString(source) + ".png")), "watermarked capture");
+        }
+        view.clearProvenance();
+        auto props = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetViewProps();
+        props->InitTraversal();
+        while (auto prop = props->GetNextProp())
+            require(!vtkTextActor::SafeDownCast(prop), "cleared viewport watermark");
+    });
     run("effective source and schema validation", [&] {
         ResultView view;
         require(view.setProvenance({{"schema", "chipcae.provenance/0.1"},

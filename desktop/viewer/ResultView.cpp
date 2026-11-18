@@ -1,6 +1,8 @@
 #include "ResultView.hpp"
 
 #include <QFileInfo>
+#include <QLabel>
+#include <QStandardPaths>
 #include <QVBoxLayout>
 #include <QVTKOpenGLNativeWidget.h>
 #include <cmath>
@@ -16,6 +18,7 @@
 #include <vtkCompositeDataSet.h>
 #include <vtkDataSetMapper.h>
 #include <vtkDataSetTriangleFilter.h>
+#include <vtkDoubleArray.h>
 #include <vtkExtractCells.h>
 #include <vtkGenericOpenGLRenderWindow.h>
 #include <vtkInformation.h>
@@ -33,6 +36,8 @@
 #include <vtkRenderWindowInteractor.h>
 #include <vtkRenderer.h>
 #include <vtkScalarBarActor.h>
+#include <vtkTextActor.h>
+#include <vtkTextProperty.h>
 #include <vtkUnstructuredGrid.h>
 #include <vtkVariant.h>
 #include <vtkWindowToImageFilter.h>
@@ -94,6 +99,11 @@ struct ResultView::State {
     std::vector<Block> blocks;
     ResultSession* session = nullptr;
     qint64 step = 0;
+    ResultColorField field = ResultColorField::Temperature;
+    ColorRange range;
+    QString watermark, banner;
+    QLabel* bannerLabel = nullptr;
+    vtkSmartPointer<vtkTextActor> overlay = vtkSmartPointer<vtkTextActor>::New();
     double scale = 1;
     int layer = 0;
     bool showVoid = false, clip = false;
@@ -108,7 +118,24 @@ ResultView::ResultView(QWidget* parent) : QWidget(parent), d(std::make_unique<St
     auto widget = new QVTKOpenGLNativeWidget(this);
     auto layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
+    d->bannerLabel = new QLabel(this);
+    d->bannerLabel->setWordWrap(true);
+    d->bannerLabel->hide();
+    layout->addWidget(d->bannerLabel);
     layout->addWidget(widget);
+    d->overlay->GetPositionCoordinate()->SetCoordinateSystemToNormalizedViewport();
+    d->overlay->SetPosition(0.25, 0.3);
+    d->overlay->GetTextProperty()->SetFontSize(64);
+    d->overlay->GetTextProperty()->SetOrientation(30);
+    d->overlay->GetTextProperty()->SetOpacity(0.3);
+    // VTK's built-in Latin fonts do not contain the precomputed watermark glyphs.
+    const auto cjkFont = QStandardPaths::locate(QStandardPaths::GenericDataLocation,
+                                                "fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+    if (!cjkFont.isEmpty()) {
+        d->overlay->GetTextProperty()->SetFontFamily(VTK_FONT_FILE);
+        d->overlay->GetTextProperty()->SetFontFile(cjkFont.toUtf8());
+    }
+    d->overlay->PickableOff();
     widget->setRenderWindow(d->window);
     d->window->AddRenderer(d->renderer);
     d->renderer->SetBackground(0.12, 0.14, 0.18);
@@ -170,6 +197,102 @@ bool ResultView::loadStep(ResultSession& session, qint64 step) {
     d->renderer->ResetCamera();
     return d->error.isEmpty();
 }
+void ResultView::setColorField(ResultColorField field) {
+    d->field = field;
+    rebuild();
+}
+ResultColorField ResultView::colorField() const {
+    return d->field;
+}
+ColorRange ResultView::colorRange() const {
+    return d->range;
+}
+QString ResultView::colorBarTitle() const {
+    if (!d->range.valid)
+        return {};
+    switch (d->field) {
+    case ResultColorField::Temperature:
+        return "T (K)";
+    case ResultColorField::DisplacementMagnitude:
+        return "|U| (m)";
+    case ResultColorField::WarpageUz:
+        return "U_z (m)";
+    }
+    return {};
+}
+QString ResultView::tmaxText() const {
+    if (d->session)
+        for (auto value : d->session->summary()) {
+            const auto entry = value.toObject();
+            if (entry["name"] != "T_max" || entry["step"].toInteger(-1) != d->step ||
+                !entry["value"].isDouble())
+                continue;
+            QString text = summary("T_max");
+            for (auto key : {"region", "region_id", "body"}) {
+                auto region = entry[key].toString();
+                if (!region.isEmpty()) {
+                    text += " region=" + region;
+                    break;
+                }
+            }
+            for (auto key : {"position", "xyz", "location"}) {
+                auto xyz = entry[key].toArray();
+                if (xyz.size() == 3 && xyz[0].isDouble() && xyz[1].isDouble() &&
+                    xyz[2].isDouble()) {
+                    text += QString(" at=(%1,%2,%3)")
+                                .arg(xyz[0].toDouble(), 0, 'g', 16)
+                                .arg(xyz[1].toDouble(), 0, 'g', 16)
+                                .arg(xyz[2].toDouble(), 0, 'g', 16);
+                    break;
+                }
+            }
+            if (!entry["location"].toString().isEmpty())
+                text += " location=" + entry["location"].toString();
+            return text;
+        }
+    return "T_max: unavailable";
+}
+bool ResultView::setProvenance(const QJsonObject& provenance) {
+    const auto source = provenance.contains("effective_source")
+                            ? provenance["effective_source"].toString()
+                            : provenance["source"].toString();
+    const bool valid = provenance["schema"] == "chipcae.provenance/0.1" &&
+                       (source == "real" || source == "mock" || source == "precomputed");
+    d->watermark.clear();
+    d->banner.clear();
+    if (!valid) {
+        d->watermark = "MOCK";
+        d->banner = QStringLiteral("来源未知 — MOCK");
+    } else if (source == "mock") {
+        d->watermark = "MOCK";
+        d->banner = QStringLiteral("MOCK 合成数据");
+    } else if (source == "precomputed") {
+        d->watermark = QStringLiteral("预计算");
+        d->banner = QStringLiteral("预计算数据");
+    } else if (provenance["degraded"].toBool()) {
+        d->watermark = "MOCK";
+        d->banner = QStringLiteral("降级数据 — MOCK");
+    }
+    d->bannerLabel->setText(d->banner);
+    d->bannerLabel->setVisible(!d->banner.isEmpty());
+    d->overlay->SetInput(d->watermark.toUtf8());
+    rebuild();
+    return valid;
+}
+void ResultView::clearProvenance() {
+    d->watermark.clear();
+    d->banner.clear();
+    d->bannerLabel->clear();
+    d->bannerLabel->hide();
+    d->overlay->SetInput("");
+    rebuild();
+}
+QString ResultView::provenanceWatermark() const {
+    return d->watermark;
+}
+QString ResultView::provenanceBanner() const {
+    return d->banner;
+}
 void ResultView::setWarpageScale(double v) {
     d->scale = v;
     rebuild();
@@ -207,22 +330,16 @@ QString ResultView::summary(const QString& name) const {
 void ResultView::rebuild() {
     d->error.clear();
     d->renderer->RemoveAllViewProps();
+    d->range = {};
+    if (!d->watermark.isEmpty())
+        d->renderer->AddViewProp(d->overlay);
     if (d->clip && vtkMath::Norm(d->normal.data()) == 0) {
         d->error = "Clip normal must be nonzero";
         return;
     }
-    bool temperature = false;
     vtkNew<vtkLookupTable> lut;
     lut->SetHueRange(0.667, 0);
     lut->Build();
-    double range[2] = {VTK_DOUBLE_MAX, -VTK_DOUBLE_MAX};
-    for (auto& b : d->blocks)
-        if (auto t = b.raw->GetPointData()->GetArray("T")) {
-            double r[2];
-            t->GetRange(r);
-            range[0] = std::min(range[0], r[0]);
-            range[1] = std::max(range[1], r[1]);
-        }
     for (auto& b : d->blocks) {
         vtkNew<vtkIdList> ids;
         auto kinds = b.raw->GetCellData()->GetArray("cell_kind");
@@ -258,12 +375,37 @@ void ResultView::rebuild() {
             }
         vtkNew<vtkDataSetMapper> mapper;
         mapper->SetInputData(b.shown);
-        if (b.shown->GetPointData()->HasArray("T")) {
+        vtkDataArray* scalar = nullptr;
+        if (d->field == ResultColorField::Temperature)
+            scalar = b.shown->GetPointData()->GetArray("T");
+        else if (u && u->GetNumberOfComponents() == 3) {
+            vtkNew<vtkDoubleArray> derived;
+            derived->SetName(d->field == ResultColorField::DisplacementMagnitude ? "Result_U_mag"
+                                                                                 : "Result_U_z");
+            for (vtkIdType i = 0; i < b.shown->GetNumberOfPoints(); ++i) {
+                const double x = u->GetComponent(i, 0), y = u->GetComponent(i, 1),
+                             z = u->GetComponent(i, 2);
+                derived->InsertNextValue(d->field == ResultColorField::DisplacementMagnitude
+                                             ? std::sqrt(x * x + y * y + z * z)
+                                             : z);
+            }
+            b.shown->GetPointData()->AddArray(derived);
+            scalar = derived;
+        }
+        if (scalar && b.shown->GetNumberOfPoints()) {
+            for (vtkIdType i = 0; i < b.shown->GetNumberOfPoints(); ++i) {
+                const double value = scalar->GetComponent(i, 0);
+                if (!d->range.valid) {
+                    d->range = {
+                        value, value, true, d->field == ResultColorField::Temperature ? "K" : "m"};
+                } else {
+                    d->range.min = std::min(d->range.min, value);
+                    d->range.max = std::max(d->range.max, value);
+                }
+            }
             mapper->SetScalarModeToUsePointFieldData();
-            mapper->SelectColorArray("T");
+            mapper->SelectColorArray(scalar->GetName());
             mapper->SetLookupTable(lut);
-            mapper->SetScalarRange(range);
-            temperature = true;
         } else
             mapper->ScalarVisibilityOff();
         b.actor = vtkSmartPointer<vtkActor>::New();
@@ -287,12 +429,17 @@ void ResultView::rebuild() {
         ha->GetProperty()->SetLineWidth(2);
         d->renderer->AddActor(ha);
     }
-    if (temperature) {
+    for (auto& b : d->blocks)
+        if (b.actor)
+            b.actor->GetMapper()->SetScalarRange(d->range.min, d->range.max);
+    if (d->range.valid) {
+        lut->SetRange(d->range.min, d->range.max);
         vtkNew<vtkScalarBarActor> bar;
         bar->SetLookupTable(lut);
-        bar->SetTitle("T (K)");
+        bar->SetTitle(colorBarTitle().toUtf8());
         d->renderer->AddViewProp(bar);
     }
+    emit displayChanged();
     d->renderer->ResetCameraClippingRange();
     if (isVisible())
         d->window->Render();
