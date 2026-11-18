@@ -103,8 +103,13 @@ automatically discovered. Supplying both flags returns 2. C defects always retur
 returns 6. Import rejection returns 7; success returns 0 after output publication.
 
 The frozen main dispatcher currently rejects `--accept` and `--stack-override`
-with usage exit 2 before calling the ECAD importer. Their ECAD implementation is
-present but unreachable until the dispatcher owner enables forwarding.
+with usage exit 2 before calling the ECAD importer. It does parse their values
+into `ImportOptions`, but its subsequent `reserved_argument` guard prints
+`not implemented yet` and returns before dispatch. This differs from the brief's
+assumption that parsing these options also enables forwarding. Their ECAD
+implementation is present but unreachable through these CLI flags until the
+dispatcher owner enables forwarding; changing that guard is outside this card's
+frozen file scope.
 `--accept-b-tier` already reaches the importer. `--t-min` and `--assembly` remain
 unimplemented.
 
@@ -172,18 +177,33 @@ preserving the source geometry and names.
 
 CTest entries `odbpp_fixture_present` and `ipc_fixture_present` check fixture
 presence and run the currently supported scenarios in their respective `odb`
-and `ipc` groups. They also assert the current prerequisite outcomes: full-board
-geometry is rejected with C defects and exit 7 even with B acceptance; archives
-with a common root directory are rejected with a missing `matrix/matrix`; and
+and `ipc` groups. These registered groups already include success coverage:
+
+- `report_and_preview` imports a supported ODB directory with exit 0, checks
+  material IDs and thicknesses against the published stack through the layer
+  report, checks custom report placement, and runs the preview smoke test.
+- `unsupported_tiers_text` checks exit 6 without confirmation and exit 0 with
+  `--accept-b-tier`; the IPC bare metadata cases check the same transition.
+- `kicad_skipped_layers_reported` checks successful IPC layer-report output,
+  including source function spelling, skipped-layer fields and absent defects.
+- `via_plating_missing` checks IPC confirmation and successful B acceptance with
+  stable defect IDs. The ODB group also runs native public-reader override and
+  provenance assertions independently of the dispatcher.
+
+They also assert the current prerequisite outcomes: full-board geometry is
+rejected with C defects and exit 7 even with B acceptance; archives with a common
+root directory are rejected with a missing `matrix/matrix`; and
 unforwarded `--accept` / `--stack-override` flags return usage exit 2 without
 publishing geometry or changing a previous layer report. Unexpected outcomes
 fail CTest.
 
-The registered groups print `FOLLOW-UP` for strict success selectors that depend
-on these prerequisites. Override scenarios (except `override_fill_missing`),
-`acceptance` and `dispatcher_values` await dispatcher forwarding. `cross_ipc`,
-`dir_and_zip` and `odb_skipped_layers_reported` await full-board geometry/model
-support and archive root handling; `extension.*` awaits archive root handling.
+The registered groups print `FOLLOW-UP` only for strict success selectors that
+depend on these prerequisites; the success cases listed above are executed.
+`override_fill_missing` checks aggregate rejection, not successful override filling.
+All other override scenarios, `acceptance` and `dispatcher_values` await
+dispatcher forwarding. `cross_ipc`, `dir_and_zip` and `odb_skipped_layers_reported`
+await full-board geometry/model support and archive root handling; `extension.*`
+awaits archive root handling.
 These are separate upstream follow-ups, not accepted CTest failures. No CMake
 registration changes are needed. The public `full_board_reader` checks directory
 reader composition separately and requires the unsupported slot diagnostic to
