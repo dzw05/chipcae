@@ -1,5 +1,5 @@
 import tempfile
-from assembly_test_support import Assembly, check, require
+from assembly_test_support import Assembly, b_ids, check, enabled, require
 
 require('ECAD')
 with tempfile.TemporaryDirectory() as tmp:
@@ -16,3 +16,15 @@ with tempfile.TemporaryDirectory() as tmp:
     default.write_text('{"accept":[]}')
     check(a.run(), 0)
     a.stack()
+    # The empty-board fixture above has no B-tier defects. Exercise confirmation
+    # with actual thin-layer defects as well.
+    if enabled('OCCT'):
+        a.output.unlink()
+        a.boxes(thin=True)
+        check(a.run(), 6)
+        assert not a.output.exists()
+        ids = b_ids(a.import_report())
+        assert ids
+        default.write_text(a.accept(ids).read_text())
+        check(a.run(), 0)
+        a.stack()

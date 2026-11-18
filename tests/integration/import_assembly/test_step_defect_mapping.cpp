@@ -47,9 +47,22 @@ int main() {
             ("sp4-mapping-" +
              std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         std::filesystem::create_directories(dir);
-        require(geometry::write_import_report(dir, {}, mapped), "report write failed");
+        geometry::ImportReportParts parts;
+        const std::string special = "layer\"\\\n";
+        parts.split_layers[special] = {special + "#0", special + "#1"};
+        parts.rewrite_targets.emplace_back("layer:" + special, parts.split_layers[special]);
+        parts.material_approx.push_back(special);
+        require(geometry::write_import_report(dir, {}, mapped, nullptr, &parts),
+                "report write failed");
 #ifdef SP4_HAS_JSONCONS
         const auto json = jsoncons::json::parse(sp4_test::bytes(dir / "import_report.json"));
+        require(json["parts"]["split_layers"][special].as<std::vector<std::string>>() ==
+                    parts.split_layers[special],
+                "split layer extension roundtrip");
+        require(json["parts"]["rewrite_targets"][0]["from"].as<std::string>() == "layer:" + special,
+                "rewrite extension roundtrip");
+        require(json["parts"]["material_approx"][0]["id"].as<std::string>() == special,
+                "material extension roundtrip");
         require(json.at("defects").size() == 3, "report roundtrip count");
         for (std::size_t i = 0; i < mapped.size(); ++i) {
             const auto& d = json.at("defects").at(i);

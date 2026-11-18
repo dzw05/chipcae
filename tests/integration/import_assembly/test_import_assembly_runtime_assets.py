@@ -20,11 +20,15 @@ with tempfile.TemporaryDirectory() as tmp:
                                '-o', str(a.output)], cwd=package, text=True,
                               capture_output=True, timeout=25)
 
+    # An interrupted older importer may have left its staging directory behind.
+    staging = a.root / 'assembly-report.tmp'
+    staging.mkdir()
+    (staging / 'partial').write_text('interrupted report')
     check(run(), 0)
     report = a.import_report()
     assert {'parts', 'L', 'tier_counts', 'defects'} <= report.keys(), report
     assert (a.root / 'import_report.csv').is_file()
-    assert not (a.root / 'assembly-report.tmp').exists()
+    assert (staging / 'partial').read_text() == 'interrupted report'
     # Changing only the packaged schema proves it is the runtime schema owner.
     schema_path = assets / 'schema/assembly-0.1.schema.json'
     schema = json.loads(schema_path.read_text())
@@ -41,3 +45,24 @@ with tempfile.TemporaryDirectory() as tmp:
                                                     'code: 41, name: INPUT_INVALID'))
     check(run(), 41)
     assert a.defects()['code'] == 'INPUT_INVALID'
+
+    # Normal block-style YAML must use the packaged mapping too.
+    protocol.write_text('errors:\n  - code: 1\n    name: INTERNAL\n'
+                        '  - name: INPUT_INVALID\n    code: 42\n')
+    check(run(), 42)
+    assert a.defects()['code'] == 'INPUT_INVALID'
+    a.document['parts'] = []
+    a.save()
+    a.output.unlink(missing_ok=True)
+    for asset in (schema_path, assets / 'schema/stack-0.2.schema.json', protocol):
+        saved = asset.read_text()
+        for corrupt in (False, True):
+            if corrupt:
+                asset.write_text('{corrupt runtime asset')
+            else:
+                asset.unlink()
+            check(run(), 7)
+            assert a.defects()['code'] == 'IMPORT_REJECTED'
+            assert 'runtime assets' in a.defects()['message']
+            assert not a.output.exists()
+            asset.write_text(saved)

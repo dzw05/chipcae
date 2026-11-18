@@ -10,7 +10,7 @@
 namespace chipcae::importer {
 namespace {
 std::filesystem::path assembly_root() {
-    // Build and installed executables carry their own runtime assets.
+    // Linux runtime packaging uses /proc/self/exe to locate assets independently of cwd.
     auto dir = std::filesystem::read_symlink("/proc/self/exe").parent_path();
     const auto installed = dir / "../share/chipcae";
     if (std::filesystem::exists(installed / "protocol/errors.yaml"))
@@ -77,30 +77,50 @@ std::vector<geometry::Defect> map_step_defects(const std::string& part,
 mesh::Expected<bool> inline_assembly_outline(mesh::StackModel& stack, const mesh::Polyset& poly) {
     if (!stack.outline.polygon.empty())
         return true;
+    const decltype(poly.layers)::value_type* outline = nullptr;
     for (const auto& l : poly.layers)
         if (l.name == "outline") {
-            if (l.ring_offsets.size() != 2)
+            if (outline || l.ring_offsets.size() != 2)
                 return mesh::Error{"$/outline", "CUT_UNSUPPORTED: outline needs one ring"};
-            for (auto i = l.ring_offsets[0]; i < l.ring_offsets[1]; ++i)
-                stack.outline.polygon.push_back(
-                    {static_cast<double>(l.coordinates.at(static_cast<std::size_t>(2 * i))) *
-                         poly.dbu_m,
-                     static_cast<double>(l.coordinates.at(static_cast<std::size_t>(2 * i + 1))) *
-                         poly.dbu_m});
+            outline = &l;
         }
+    if (outline)
+        for (auto i = outline->ring_offsets[0]; i < outline->ring_offsets[1]; ++i)
+            stack.outline.polygon.push_back(
+                {static_cast<double>(outline->coordinates.at(static_cast<std::size_t>(2 * i))) *
+                     poly.dbu_m,
+                 static_cast<double>(outline->coordinates.at(static_cast<std::size_t>(2 * i + 1))) *
+                     poly.dbu_m});
     return true;
 }
-int assembly_error_exit(const std::string& message) {
-    const auto name = message.substr(0, message.find(':'));
-    std::ifstream in(assembly_root() / "protocol/errors.yaml");
-    std::string line;
-    const std::regex entry(R"(code:\s*([0-9]+),\s*name:\s*([A-Z_]+))");
+// The protocol uses a sequence of scalar mappings, in flow or block style.
+std::optional<int> assembly_protocol_code(const std::string& name, std::istream& in) {
+    std::string line, entry_name;
+    int code = -1;
+    const std::regex code_field(R"(\bcode:\s*([0-9]+))");
+    const std::regex name_field(R"re(\bname:\s*["']?([A-Z_]+)["']?)re");
+    const std::regex entry_start(R"(^\s*-\s)");
     while (std::getline(in, line)) {
+        if (std::regex_search(line, entry_start)) {
+            code = -1;
+            entry_name.clear();
+        }
         std::smatch match;
-        if (std::regex_search(line, match, entry) && match[2] == name)
-            return std::stoi(match[1]);
+        if (std::regex_search(line, match, code_field))
+            code = std::stoi(match[1]);
+        if (std::regex_search(line, match, name_field))
+            entry_name = match[1];
+        if (entry_name == name && code >= 0)
+            return code;
     }
-    return 1;
+    return std::nullopt;
+}
+int assembly_error_exit(const std::string& message, std::istream& in) {
+    return assembly_protocol_code(message.substr(0, message.find(':')), in).value_or(1);
+}
+int assembly_error_exit(const std::string& message) {
+    std::ifstream in(assembly_root() / "protocol/errors.yaml");
+    return assembly_error_exit(message, in);
 }
 } // namespace chipcae::importer
 #ifdef CHIPCAE_ASSEMBLY_CLI
@@ -114,49 +134,42 @@ int assembly_error_exit(const std::string& message) {
 #endif
 namespace chipcae::importer {
 int run_assembly(const ImportOptions& options) {
+    if (options.output.empty()) {
+        std::cerr << "unknown argument: --assembly\n";
+        return CliExit::usage;
+    }
+    if (options.accept_b_tier &&
+        std::find(options.deferred_options.begin(), options.deferred_options.end(), "--accept") !=
+            options.deferred_options.end())
+        return CliExit::usage;
+    for (const auto& option : options.deferred_options)
+        if (option != "--assembly" && option != "--accept") {
+            std::cerr << "not implemented yet: " << option << '\n';
+            return CliExit::usage;
+        }
+    if (!options.input.empty()) {
+        std::cerr << "not implemented yet: --assembly with positional input\n";
+        return CliExit::usage;
+    }
     using namespace geometry;
     using J = jsoncons::json;
     std::vector<Defect> defects;
     ImportReportHeader header;
-    J parts;
-    parts["split_layers"] = J::object();
-    parts["rewrite_targets"] = J::array();
-    parts["material_approx"] = J::array();
+    ImportReportParts parts;
     auto reports = [&](const std::string& code, const std::string& message) {
         std::string error;
         const auto dir = import_report_directory(options.output);
-        // The geometry writer owns the common JSON/CSV contract. Stage its output,
-        // then publish the assembly extension once, preserving every common field.
-        auto staging = dir / "assembly-report.tmp";
-        if (!std::filesystem::create_directory(staging))
-            throw std::runtime_error("cannot create assembly report staging directory");
-        struct ReportCleanup {
-            std::filesystem::path dir;
-            ~ReportCleanup() {
-                std::error_code ec;
-                std::filesystem::remove(dir / "import_report.json", ec);
-                std::filesystem::remove(dir / "import_report.csv", ec);
-                std::filesystem::remove(dir, ec);
-            }
-        } cleanup{staging};
-        if (!write_import_report(staging, header, defects, &error))
+        if (!write_import_report(dir, header, defects, &error, &parts))
             throw std::runtime_error(error);
-        std::ifstream common(staging / "import_report.json");
-        J report = J::parse(common);
-        // Assembly diagnostics add provenance to the shared defect records.
-        for (std::size_t i = 0; i < defects.size(); ++i)
-            report["defects"][i]["details"] = defects[i].details;
-        std::filesystem::rename(staging / "import_report.csv", dir / "import_report.csv");
-        report["parts"] = parts;
-        std::ofstream out(dir / "import_report.json");
-        out << report << '\n';
+        std::ifstream common(dir / "import_report.json");
+        const auto report = J::parse(common);
         J d;
         d["code"] = code;
         d["message"] = message;
         d["defects"] = report["defects"];
         std::ofstream dest(options.report);
         dest << d << '\n';
-        if (!out || !dest)
+        if (!dest)
             throw std::runtime_error("cannot write assembly reports");
     };
     auto fail = [&](int exit, const std::string& code, const std::string& message) {
@@ -183,14 +196,30 @@ int run_assembly(const ImportOptions& options) {
                         "INPUT_INVALID: assembly=" + options.assembly.string() +
                             "; json_path=$: " + e.what());
         }
-        std::ifstream spec(assembly_root() / "schema/assembly-0.1.schema.json");
-        auto validator = jsoncons::jsonschema::make_json_schema(J::parse(spec));
         std::string invalid;
-        validator.validate(doc, [&](const jsoncons::jsonschema::validation_message& m) {
-            if (invalid.empty())
-                invalid = "json_path=$" + m.instance_location().string() + ": " + m.message();
-            return jsoncons::jsonschema::walk_result::advance;
-        });
+        try {
+            for (const auto& asset : {"schema/assembly-0.1.schema.json",
+                                      "schema/stack-0.2.schema.json",
+                                      "protocol/errors.yaml"}) {
+                std::ifstream file(assembly_root() / asset);
+                if (!file)
+                    throw std::runtime_error(std::string("cannot open runtime asset ") + asset);
+                if (std::string(asset).ends_with(".json"))
+                    (void)jsoncons::jsonschema::make_json_schema(J::parse(file));
+                else if (assembly_protocol_code("INTERNAL", file) != std::optional<int>(1))
+                    throw std::runtime_error("invalid runtime asset protocol/errors.yaml");
+            }
+            std::ifstream spec(assembly_root() / "schema/assembly-0.1.schema.json");
+            auto validator = jsoncons::jsonschema::make_json_schema(J::parse(spec));
+            validator.validate(doc, [&](const jsoncons::jsonschema::validation_message& m) {
+                if (invalid.empty())
+                    invalid = "json_path=$" + m.instance_location().string() + ": " + m.message();
+                return jsoncons::jsonschema::walk_result::advance;
+            });
+        } catch (const std::exception& e) {
+            return fail(
+                7, "IMPORT_REJECTED", std::string("IMPORT_REJECTED: runtime assets: ") + e.what());
+        }
         if (!invalid.empty())
             return fail(7, "IMPORT_REJECTED", invalid);
         const auto root = options.assembly.parent_path();
@@ -424,11 +453,7 @@ int run_assembly(const ImportOptions& options) {
                     throw std::runtime_error("IMPORT_REJECTED: duplicate body name " + n);
             }
             if (p.get_value_or<bool>("material_approx", false)) {
-                J approx;
-                approx["id"] = id;
-                approx["material_approx"] = true;
-                approx["label"] = "近似材料";
-                parts["material_approx"].push_back(approx);
+                parts.material_approx.push_back(id);
             }
             if (!p.contains("body") && step.body_names.size() > 1)
                 throw std::runtime_error("IMPORT_REJECTED: body is required for multi-body STEP");
@@ -519,10 +544,7 @@ int run_assembly(const ImportOptions& options) {
         auto rewrite = [&](const std::string& from, const std::vector<std::string>& targets) {
             if (targets.empty())
                 return;
-            J r;
-            r["from"] = from;
-            r["to"] = targets;
-            parts["rewrite_targets"].push_back(r);
+            parts.rewrite_targets.emplace_back(from, targets);
         };
         std::map<std::string, std::vector<std::string>> layer_targets;
         for (const auto& l : base.layers) {
@@ -535,7 +557,7 @@ int run_assembly(const ImportOptions& options) {
                 }
             layer_targets[l.name] = targets;
             if (!split.empty()) {
-                parts["split_layers"][l.name] = split;
+                parts.split_layers[l.name] = split;
                 rewrite("layer:" + l.name, targets);
             }
             for (const auto& r : l.regions) {

@@ -167,13 +167,13 @@ def run_case(binary, case, generate=False):
             check(not generate, "reserved diagnostics are assertions, not baseline goldens")
             failures = []
             result = invoke(binary, ["--assembly", "assembly.json", "-o", "out.stack.json"], directory)
-            check(result.returncode == 2 and b"not implemented yet" in result.stderr and
-                  b"--assembly" in result.stderr, "assembly invocation: diagnostic differs")
+            check(result.returncode == 14 and b"INPUT_INVALID: assembly=" in result.stderr and
+                  b"json_path=$" in result.stderr, "assembly invocation must reach mode validation")
             result = invoke(binary, ["-o", "stack.json", "--assembly", "xyz"], directory)
-            check(result.returncode == 2 and result.stdout == b"" and
-                  b"not implemented yet" in result.stderr and
-                  b"--assembly" in result.stderr, "assembly output-first: diagnostic differs")
-            # With no input, assembly determines the diagnostic in either option order.
+            check(result.returncode == 14 and result.stdout == b"" and
+                  b"INPUT_INVALID: assembly=" in result.stderr,
+                  "assembly output-first must reach mode validation")
+            # Assembly validates its supported/reserved options after mode selection.
             for option in ("--accept", "--t-min", "--stack-override"):
                 for output_option in ("-o", "--out"):
                     groups = ((output_option, "stack.json"), (option, "xyz"),
@@ -181,9 +181,14 @@ def run_case(binary, case, generate=False):
                     for ordering in itertools.permutations(groups):
                         args = [arg for group in ordering for arg in group]
                         result = invoke(binary, args, directory)
-                        check(result.returncode == 2 and result.stdout == b"" and
-                              b"not implemented yet" in result.stderr and b"--assembly" in result.stderr,
-                              f"mixed assembly {args}: diagnostic differs: {result.stderr!r}")
+                        if option == "--accept":
+                            check(result.returncode == 14 and result.stdout == b"" and
+                                  b"INPUT_INVALID: assembly=" in result.stderr,
+                                  f"assembly accept order {args}: {result.stderr!r}")
+                        else:
+                            check(result.returncode == 2 and result.stdout == b"" and
+                                  b"not implemented yet" in result.stderr and option.encode() in result.stderr,
+                                  f"assembly reserved option {args}: {result.stderr!r}")
             for value in ("xyz", "1e9999", "1e-5", ""):
                 result = invoke(binary, ["a.xml", "-o", "stack.json", "--t-min", value], directory)
                 check(result.returncode == 2 and b"not implemented yet" in result.stderr and

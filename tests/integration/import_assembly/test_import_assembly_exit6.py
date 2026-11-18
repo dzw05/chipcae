@@ -16,8 +16,5 @@ with tempfile.TemporaryDirectory() as tmp:
     a.stack()
     a.output.unlink()
     result = a.run('--accept', a.accept(b_ids(a.import_report())))
-    if result.returncode == 2 and 'not implemented yet: --accept' in result.stderr:
-        print('XFAIL: I-ACCEPT absent; explicit accept-list subcase only')
-    else:
-        check(result, 0)
-        a.stack()
+    check(result, 0)
+    a.stack()

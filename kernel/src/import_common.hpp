@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 // Private to chipcae-import; this header is not an installed public API.
 namespace chipcae::importer {
@@ -20,8 +21,10 @@ struct ImportOptions {
     std::filesystem::path accept_file;
     std::optional<double> t_min;
     std::filesystem::path stack_override, assembly;
+    std::vector<std::string> deferred_options;
 };
 
+int run_import(ImportOptions options, void (*help)());
 int run_ecad(const ImportOptions& options);
 int run_step(const ImportOptions& options);
 int run_assembly(const ImportOptions& options);

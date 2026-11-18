@@ -59,6 +59,11 @@ int main() {
         invalid.layers[0].ring_offsets = {0, 3, 5};
         require(!chipcae::importer::inline_assembly_outline(base.value(), invalid),
                 "multiple rings must return CUT_UNSUPPORTED");
+        invalid = poly;
+        invalid.layers.push_back(poly.layers.front());
+        require(!chipcae::importer::inline_assembly_outline(base.value(), invalid),
+                "multiple outline layers must return CUT_UNSUPPORTED");
+        require(base.value().outline.polygon.empty(), "invalid outlines must not mutate the stack");
 #else
         require(false, "outline acceptance requires jsoncons headers");
 #endif
