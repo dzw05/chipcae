@@ -90,32 +90,45 @@ int main() {
         require(bool(chipcae::importer::write_stack(model, output)), "second write failed");
         require(first == sp4_test::bytes(output), "serialization must be deterministic");
         require(before == sp4_test::bytes(dir / "copper.polyset"), "writer modified sidecar");
-        // Reject references outside the output root before creating an output file.
+        // The writer preserves paths and hashes relative to the output directory;
+        // only the assembly CLI constrains its --polyset output location.
+        std::filesystem::create_directories(dir / "nested");
+        const auto nested_output = dir / "nested" / "out.json";
+        for (const auto& file :
+             {std::string("../copper.polyset"), (dir / "copper.polyset").string()}) {
+            auto referenced = model;
+            for (auto& layer : referenced.layers)
+                if (layer.copper && layer.copper->polygons)
+                    layer.copper->polygons->file = file;
+            const auto written = chipcae::importer::write_stack(referenced, nested_output);
+            require(bool(written), "existing external sidecar must be writable");
+            const auto external = jsoncons::json::parse(sp4_test::bytes(nested_output));
+            require(external["external_refs"].size() == 1, "deduplicate external sidecar");
+            require(external["external_refs"][0]["path"].as<std::string>() == file,
+                    "external path spelling changed");
+            require(external["external_refs"][0]["sha256"] == json["external_refs"][0]["sha256"],
+                    "external sidecar digest changed");
+            for (std::size_t i = 0; i < 2; ++i)
+                require(external["layers"][i]["copper"]["polygons"]["file"].as<std::string>() ==
+                            file,
+                        "copper path spelling changed");
+        }
         const auto rejected = dir / "rejected.json";
+        // Missing external references still fail before creating output.
         for (const auto& file : {std::string("../outside.polyset"),
                                  (dir.parent_path() / "outside.polyset").string()}) {
             auto invalid = model;
             invalid.layers[0].copper->polygons->file = file;
             require(!chipcae::importer::write_stack(invalid, rejected),
-                    "invalid sidecar reference must be rejected");
-            require(!std::filesystem::exists(rejected), "invalid reference created output");
+                    "missing external sidecar must be rejected");
+            require(!std::filesystem::exists(rejected), "missing reference created output");
         }
-        auto absolute = model;
-        for (auto& layer : absolute.layers)
-            if (layer.copper && layer.copper->polygons)
-                layer.copper->polygons->file = (dir / "copper.polyset").string();
-        require(bool(chipcae::importer::write_stack(absolute, rejected)),
-                "absolute sidecar failed");
-        const auto absolute_json = jsoncons::json::parse(sp4_test::bytes(rejected));
-        require(absolute_json["external_refs"][0]["path"].as<std::string>() ==
-                    (dir / "copper.polyset").string(),
-                "absolute spelling changed");
-        std::filesystem::remove(rejected);
         std::filesystem::create_symlink(dir.parent_path(), dir / "escape");
         auto invalid = model;
         invalid.layers[0].copper->polygons->file = "escape/outside.polyset";
-        require(!chipcae::importer::write_stack(invalid, rejected), "reject symlink escape");
-        require(!std::filesystem::exists(rejected), "symlink escape created output");
+        require(!chipcae::importer::write_stack(invalid, rejected),
+                "reject missing symlink target");
+        require(!std::filesystem::exists(rejected), "missing symlink target created output");
         std::filesystem::remove(dir / "copper.polyset");
         require(!chipcae::importer::write_stack(model, output), "missing sidecar must be an error");
         require(first == sp4_test::bytes(output), "missing sidecar changed existing output");

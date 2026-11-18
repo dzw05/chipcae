@@ -11,6 +11,12 @@ are resolved relative to the assembly file. IPC-2581 and ODB++ use the public
 ECAD readers. The output retains copper polygons for later copper-fraction
 conversion. The polyset must share the output directory; its default name is
 obtained by replacing the output's final extension with `.polyset`.
+The standalone stack writer preserves existing copper reference paths verbatim,
+including absolute paths and parent-directory references. It resolves relative
+paths from the stack output directory only to read and hash the sidecar; the
+same-directory requirement applies to the assembly CLI's `--polyset` output.
+The stack loader independently enforces its case-root restrictions when loading
+external references.
 
 Reports (`import_report.json`, `import_report.csv`, and the selected defects
 file) are written before confirmation. Unconfirmed B-tier defects return 6
