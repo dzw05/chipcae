@@ -44,7 +44,8 @@ with tempfile.TemporaryDirectory(prefix='solve-preview-digest-') as tmp:
         'solver': {'linear': {'preconditioner': 'direct'}},
         'output': {'format': 'vtkhdf'}}
     (root / 'case.json').write_text(json.dumps(case))
-    # Recorded from production baseline 6aefb473ede6e4bd6422a689cf92346563a7e323.
+    # Verified with Release solver and preview builds of baseline
+    # a1510a95fc5c96a4fe37b6a512b948671832b515 at np=1 and np=2.
     baseline_digests = {
         1: b'6245600b72b8cd0d9dc213a905a417f09bd9039a5f478dba3805ee70db628e1e',
         2: b'6245600b72b8cd0d9dc213a905a417f09bd9039a5f478dba3805ee70db628e1e',

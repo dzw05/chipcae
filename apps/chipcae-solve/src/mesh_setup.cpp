@@ -20,8 +20,7 @@ mesh::HexMeshArrays build_mesh(const RunInputs& inputs,
     if (!result) {
         const auto& err = result.error();
         const auto code = mesh_error_code(err);
-        throw InputError(code.code(),
-                         std::string(code.name()) + ": " + err.path + ": " + err.reason);
+        throw InputError(code.code(), err.path + ": " + err.reason);
     }
     auto mesh = std::move(result.value());
     if (!mesh.pending_cut.empty())
