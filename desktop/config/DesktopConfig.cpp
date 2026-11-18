@@ -82,6 +82,20 @@ DesktopConfig::DesktopConfig() : runRoot_(QDir::current().absoluteFilePath("runs
     preview_.program = "chipcae-preview";
     solve_.program = "chipcae-solve";
 }
+// Stubs for the test-first schema path acceptance checks.
+QString DesktopConfig::locateSchemaDir(const QStringList&,
+                                       const QProcessEnvironment&,
+                                       const QString&,
+                                       const QString&) {
+    return {};
+}
+QString DesktopConfig::locateSchemaFile(const QString&,
+                                        const QStringList&,
+                                        const QProcessEnvironment&,
+                                        const QString&,
+                                        const QString&) {
+    return {};
+}
 DesktopConfig DesktopConfig::load(const QStringList& args, const QProcessEnvironment& env) {
     DesktopConfig result;
     QString path;
