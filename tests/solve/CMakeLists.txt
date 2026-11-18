@@ -106,6 +106,8 @@ endif()
 
 if(_solve_backend AND TARGET chipcae-solve AND MFEM_USE_PETSC)
     add_executable(chipcae_test_column_gmg column_gmg_unit.cpp)
+    target_include_directories(chipcae_test_column_gmg PRIVATE
+        ${PROJECT_SOURCE_DIR}/solvers/fem/src ${PROJECT_SOURCE_DIR}/apps/chipcae-solve/src)
     target_link_libraries(chipcae_test_column_gmg PRIVATE chipcae::fem mfem MPI::MPI_CXX)
     chipcae_set_warnings(chipcae_test_column_gmg)
     add_test(NAME solve_column_gmg_prolongation COMMAND chipcae_test_column_gmg prolongation)

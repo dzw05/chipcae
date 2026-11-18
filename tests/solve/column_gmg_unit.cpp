@@ -1,6 +1,8 @@
 #include "chipcae/mesh/background/tensor_grid.hpp"
 #include "chipcae/mesh/cut/plane_cut.hpp"
 #include "chipcae/solvers/fem/column_gmg.hpp"
+#include "column_gmg_assembly.hpp"
+#include "column_gmg_checks.hpp"
 
 #include <algorithm>
 #include <array>
@@ -454,6 +456,118 @@ void check_setup_error(bool singular_block) {
     throw std::runtime_error("expected setup error: " + expected);
 }
 
+void check_diagonal_only_operator(double diagonal) {
+    struct Matrix {
+        Mat value = nullptr;
+        ~Matrix() { MatDestroy(&value); }
+    } a;
+    require(MatCreateShell(PETSC_COMM_SELF, 2, 2, 2, 2, &diagonal, &a.value) == 0,
+            "create diagonal-only shell operator");
+    const auto get_diagonal = +[](Mat matrix, Vec values) -> PetscErrorCode {
+        double* value = nullptr;
+        PetscCall(MatShellGetContext(matrix, &value));
+        PetscCall(VecSet(values, *value));
+        return 0;
+    };
+    require(MatShellSetOperation(
+                a.value, MATOP_GET_DIAGONAL, reinterpret_cast<void (*)()>(get_diagonal)) == 0,
+            "install shell diagonal operation");
+    fem::ColumnGmgLevel level;
+    level.col_off = {0, 2};
+    PetscBool get_values = PETSC_TRUE;
+    require(MatHasOperation(a.value, MATOP_GET_VALUES, &get_values) == 0 && !get_values,
+            "fixture must lack MatGetValues support");
+    const bool positive = std::isfinite(diagonal) && diagonal > 0.;
+    try {
+        fem::detail::verify_operator(a.value, level, 2, true);
+    } catch (const std::runtime_error& e) {
+        require(!positive &&
+                    std::string(e.what()) == "column_gmg: coarse operator level 2 not positive",
+                "diagonal-only operator diagnostic: " + std::string(e.what()));
+        return;
+    }
+    require(positive, "nonpositive or nonfinite diagonal must be rejected");
+}
+
+void check_invalid_column_permutation(std::vector<std::int64_t> order) {
+    fem::ColumnGmgLevel level;
+    level.x = level.y = {0.};
+    level.col_off = {0, 3};
+    level.col_dof = std::move(order);
+    level.essential = {0, 0, 0};
+    try {
+        fem::detail::verify_layout(level, 3, 3);
+    } catch (const std::runtime_error& e) {
+        require(std::string(e.what()).find("column DOF permutation") != std::string::npos,
+                "invalid column permutation diagnostic: " + std::string(e.what()));
+        return;
+    }
+    throw std::runtime_error("invalid column DOF permutation was accepted");
+}
+
+void check_true_vector_size() {
+    Fixture f(2, 3);
+    struct DifferentTrueSize : mfem::FiniteElementSpace {
+        using mfem::FiniteElementSpace::FiniteElementSpace;
+        int GetTrueVSize() const override { return GetVSize() - 1; }
+    } space(&f.grid, &f.collection, 3);
+    try {
+        (void)fem::build_column_gmg_hierarchy(f.arrays, false, 1, space, f.essential);
+    } catch (const std::runtime_error& e) {
+        require(std::string(e.what()).find("true/vector DOF count mismatch") != std::string::npos,
+                "independent true-vector size diagnostic: " + std::string(e.what()));
+        return;
+    }
+    throw std::runtime_error("nonidentity true-vector size was accepted");
+}
+
+void check_gmg_assembly(int levels, bool has_cut, int np, bool nonregular = false) {
+    Fixture f(levels, 1);
+    if (nonregular)
+        f.arrays.elem_gid[1] = f.arrays.elem_gid[0];
+    mfem::ConstantCoefficient mass(7.);
+    mfem::BilinearForm direct(&f.space), fallback(&f.space);
+    direct.AddDomainIntegrator(new mfem::MassIntegrator(mass));
+    fallback.AddDomainIntegrator(new mfem::MassIntegrator(mass));
+    bool unsupported = false;
+    try {
+        solve::prepare_column_gmg(f.arrays, has_cut, np, fallback, f.essential);
+    } catch (const fem::ColumnGmgUnsupported&) {
+        unsupported = true;
+    }
+    require(unsupported == (levels == 1 || has_cut || np != 1 || nonregular),
+            "assembly fixture support decision");
+    mfem::GridFunction field(&f.space);
+    field = 3.;
+    mfem::Vector rhs(f.space.GetVSize());
+    rhs = 1.;
+    mfem::Vector direct_rhs(rhs), fallback_rhs(rhs);
+    mfem::SparseMatrix a, b;
+    mfem::Vector xa, ba, xb, bb;
+    const auto assemble = [&](mfem::BilinearForm& form,
+                              mfem::Vector& load,
+                              mfem::SparseMatrix& matrix,
+                              mfem::Vector& x,
+                              mfem::Vector& formed_load) {
+        form.Assemble();
+        form.Finalize(0);
+        form.FormLinearSystem(f.essential, field, load, matrix, x, formed_load);
+    };
+    assemble(direct, direct_rhs, a, xa, ba);
+    assemble(fallback, fallback_rhs, b, xb, bb);
+    for (int r = 0; r < a.Height(); ++r) {
+        const bool unit_diagonal = !unsupported && f.essential.Find(r) >= 0;
+        require(a.GetI()[r + 1] == b.GetI()[r + 1], "fallback CSR row structure changed");
+        for (int j = a.GetI()[r]; j < a.GetI()[r + 1]; ++j) {
+            const double expected = unit_diagonal && a.GetJ()[j] == r ? 1. : a.GetData()[j];
+            require(a.GetJ()[j] == b.GetJ()[j] && std::abs(expected - b.GetData()[j]) <= 1e-14,
+                    "only supported GMG may change Direct essential diagonals");
+        }
+        require(std::abs((unit_diagonal ? 3. : ba[r]) - bb[r]) <= 1e-14,
+                "only supported GMG may change Direct essential RHS scaling");
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -480,6 +594,21 @@ int main(int argc, char** argv) {
                     [=] { check_prolongation(levels, 3, ordering); });
         }
     } else if (mode == "unsupported") {
+        run("diagonal-only positive operator", [] { check_diagonal_only_operator(2.); });
+        for (double diagonal : {0.,
+                                -1.,
+                                std::numeric_limits<double>::infinity(),
+                                std::numeric_limits<double>::quiet_NaN()})
+            run("diagonal-only invalid operator", [=] { check_diagonal_only_operator(diagonal); });
+        run("duplicate column DOF", [] { check_invalid_column_permutation({0, 0, 2}); });
+        run("out-of-range column DOF", [] { check_invalid_column_permutation({0, 1, 3}); });
+        run("negative column DOF", [] { check_invalid_column_permutation({0, 1, -1}); });
+        run("independent true-vector size", check_true_vector_size);
+        run("supported GMG unit diagonal assembly", [] { check_gmg_assembly(2, false, 1); });
+        run("single-level fallback assembly", [] { check_gmg_assembly(1, false, 1); });
+        run("cut fallback assembly", [] { check_gmg_assembly(2, true, 1); });
+        run("MPI fallback assembly", [] { check_gmg_assembly(2, false, 2); });
+        run("nonregular fallback assembly", [] { check_gmg_assembly(2, false, 1, true); });
         run("real const-overload cut", [] {
             Fixture f(2, 1);
             mesh::cut::CutGeometry geometry;

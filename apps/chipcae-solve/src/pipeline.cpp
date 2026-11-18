@@ -4,6 +4,7 @@
 #include "chipcae/solve/mixture.hpp"
 #include "chipcae/solvers/fem/column_gmg.hpp"
 #include "chipcae/solvers/fem/cut_fem.hpp"
+#include "column_gmg_assembly.hpp"
 #include "cut_convection.hpp"
 #include "cut_output.hpp"
 #include "sha256.hpp"
@@ -500,9 +501,23 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                          Array<int>& essential,
                          const std::string& name) {
             auto assembly_start = std::chrono::steady_clock::now();
-            const bool use_gmg = inputs.linear.preconditioner == "column_gmg";
-            if (use_gmg)
-                form.SetDiagonalPolicy(Operator::DIAG_ONE);
+            bool use_gmg = inputs.linear.preconditioner == "column_gmg";
+            int np = 1;
+            if (use_gmg) {
+                MPI_Comm_size(MPI_COMM_WORLD, &np);
+                try {
+                    prepare_column_gmg(arrays, clipped.has_value(), np, form, essential);
+                } catch (const fem::ColumnGmgUnsupported& e) {
+                    use_gmg = false;
+                    emit(
+                        io::LogLine{2,
+                                    rank,
+                                    std::string("column_gmg not yet available (NOT_IMPLEMENTED: ") +
+                                        e.what() + "); falling back to PETSc direct LU",
+                                    "",
+                                    0});
+                }
+            }
             form.Assemble();
             rhs.Assemble();
             form.Finalize(0);
@@ -518,40 +533,28 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             std::uint32_t iterations = 0;
             std::string method = "PETSc.LU";
             if (use_gmg) {
-                int np = 1;
-                MPI_Comm_size(MPI_COMM_WORLD, &np);
-                try {
-                    const auto stats = fem::solve_column_gmg(
-                        arrays,
-                        clipped.has_value(),
-                        np,
-                        *form.FESpace(),
-                        *matrix,
-                        essential,
-                        b,
-                        x,
-                        {.rtol = inputs.linear.rtol, .max_iter = inputs.linear.max_iter});
-                    residual = stats.relative_residual;
-                    iterations = stats.iterations;
-                    method = "PETSc.ColumnGMG";
-                    solved = true;
-                    std::ostringstream line;
-                    line.precision(17);
-                    line << name << " column_gmg L=" << stats.level_rows.size() - 1
-                         << " iterations=" << stats.iterations
-                         << " relative_residual=" << stats.relative_residual
-                         << " setup_seconds=" << stats.setup_seconds
-                         << " solve_seconds=" << stats.solve_seconds;
-                    emit(io::LogLine{1, rank, line.str(), "", 0});
-                } catch (const fem::ColumnGmgUnsupported& e) {
-                    emit(
-                        io::LogLine{2,
-                                    rank,
-                                    std::string("column_gmg not yet available (NOT_IMPLEMENTED: ") +
-                                        e.what() + "); falling back to PETSc direct LU",
-                                    "",
-                                    0});
-                }
+                const auto stats = fem::solve_column_gmg(
+                    arrays,
+                    clipped.has_value(),
+                    np,
+                    *form.FESpace(),
+                    *matrix,
+                    essential,
+                    b,
+                    x,
+                    {.rtol = inputs.linear.rtol, .max_iter = inputs.linear.max_iter});
+                residual = stats.relative_residual;
+                iterations = stats.iterations;
+                method = "PETSc.ColumnGMG";
+                solved = true;
+                std::ostringstream line;
+                line.precision(17);
+                line << name << " column_gmg L=" << stats.level_rows.size() - 1
+                     << " iterations=" << stats.iterations
+                     << " relative_residual=" << stats.relative_residual
+                     << " setup_seconds=" << stats.setup_seconds
+                     << " solve_seconds=" << stats.solve_seconds;
+                emit(io::LogLine{1, rank, line.str(), "", 0});
             }
             if (!solved) {
                 Direct direct;

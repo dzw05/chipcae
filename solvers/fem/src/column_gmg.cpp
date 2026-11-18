@@ -1,6 +1,7 @@
 #include "chipcae/solvers/fem/column_gmg.hpp"
 
 #include "chipcae/mesh/background/column_hierarchy.hpp"
+#include "column_gmg_checks.hpp"
 
 #include <algorithm>
 #include <array>
@@ -19,6 +20,8 @@
 namespace chipcae::fem {
 namespace {
 using Clock = std::chrono::steady_clock;
+using detail::verify_layout;
+using detail::verify_operator;
 
 void require(bool condition, const std::string& message) {
     if (!condition)
@@ -208,6 +211,8 @@ std::vector<Stencil> interpolation(const std::vector<double>& coarse,
     return result;
 }
 
+} // namespace
+namespace detail {
 void verify_layout(const ColumnGmgLevel& level, int slots, int rows) {
     const int blocks = product(level.x.size(), level.y.size());
     require(level.col_off.size() == static_cast<std::size_t>(blocks) + 1 &&
@@ -216,7 +221,15 @@ void verify_layout(const ColumnGmgLevel& level, int slots, int rows) {
                 level.essential.size() == static_cast<std::size_t>(product(blocks, slots)),
             "operator/block layout mismatch");
     require(std::is_sorted(level.col_off.begin(), level.col_off.end()), "invalid block offsets");
+    std::vector<std::uint8_t> seen(level.essential.size(), 0);
+    for (const auto dof : level.col_dof) {
+        require(dof >= 0 && static_cast<std::size_t>(dof) < seen.size() && !seen[dof],
+                "invalid column DOF permutation");
+        seen[dof] = 1;
+    }
 }
+} // namespace detail
+namespace {
 
 template <class To, class From>
 const To* csr_input(const From* source, std::size_t count, std::vector<To>& converted) {
@@ -289,19 +302,35 @@ mfem::SparseMatrix permute(const mfem::SparseMatrix& a, const std::vector<std::i
     return result;
 }
 
+} // namespace
+namespace detail {
 void verify_operator(Mat a, const ColumnGmgLevel& level, int k, bool positive) {
     PetscInt rows, columns;
     check(MatGetSize(a, &rows, &columns));
     require(rows == columns && rows == level.col_off.back(), "Galerkin layout mismatch");
-    if (positive)
-        for (PetscInt i = 0; i < rows; ++i) {
-            PetscScalar diagonal;
-            check(MatGetValues(a, 1, &i, 1, &i, &diagonal));
-            if (!std::isfinite(diagonal) || !(diagonal > 0))
-                throw std::runtime_error("column_gmg: coarse operator level " + std::to_string(k) +
-                                         " not positive");
-        }
+    if (!positive)
+        return;
+    struct Diagonal {
+        Vec value = nullptr;
+        ~Diagonal() { VecDestroy(&value); }
+    } diagonal;
+    check(MatCreateVecs(a, nullptr, &diagonal.value));
+    check(MatGetDiagonal(a, diagonal.value));
+    PetscInt count;
+    check(VecGetLocalSize(diagonal.value, &count));
+    require(count == rows, "coarse diagonal size mismatch");
+    const PetscScalar* values;
+    check(VecGetArrayRead(diagonal.value, &values));
+    const bool valid = std::all_of(values, values + count, [](PetscScalar value) {
+        return std::isfinite(value) && value > 0;
+    });
+    check(VecRestoreArrayRead(diagonal.value, &values));
+    if (!valid)
+        throw std::runtime_error("column_gmg: coarse operator level " + std::to_string(k) +
+                                 " not positive");
 }
+} // namespace detail
+namespace {
 
 struct ColumnBlocks {
     struct Block {
@@ -478,9 +507,11 @@ ColumnGmgHierarchy build_column_gmg_hierarchy(const mesh::HexMeshArrays& m,
     }
     auto& finest = h.levels.back();
     const auto& lattice = lattices.back();
-    require(finest.essential.size() == static_cast<std::size_t>(fes.GetTrueVSize()) &&
-                product(lattice.xy.size(), z.size()) == fes.GetNDofs(),
-            "Q2 lattice DOF count mismatch");
+    require(product(lattice.xy.size(), z.size()) == fes.GetNDofs(),
+            "Q2 lattice scalar DOF count mismatch");
+    require(finest.essential.size() == static_cast<std::size_t>(fes.GetVSize()),
+            "Q2 lattice vector DOF count mismatch");
+    require(fes.GetTrueVSize() == fes.GetVSize(), "true/vector DOF count mismatch");
     finest.col_dof.assign(finest.essential.size(), -1);
     std::vector<std::uint8_t> essential(fes.GetTrueVSize(), 0);
     for (int tdof : essential_tdofs) {
