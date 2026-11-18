@@ -41,19 +41,25 @@ ImportResult read_ipc2581_zip(const std::filesystem::path& file) {
         std::string error = matches.empty() ? "IMPORT_REJECTED: no .xml entry: "
                                             : "IMPORT_REJECTED: multiple .xml entries: ";
         const auto count = matches.empty() ? archive.entries().size() : matches.size();
-        for (std::size_t i = 0; i < std::min<std::size_t>(20, count); ++i) {
+        const auto listed = matches.empty() ? std::min<std::size_t>(20, count) : count;
+        for (std::size_t i = 0; i < listed; ++i) {
             if (i)
                 error += ", ";
             error += matches.empty() ? archive.entries()[i].path : matches[i];
         }
-        if (count > 20)
+        if (!matches.empty())
+            error += " （共 " + std::to_string(count) + " 个）";
+        else if (count > 20)
             error += " …（共 " + std::to_string(count) + " 个）";
         return rejected(std::move(error));
     }
     const auto& name = matches.front();
     if (!archive.is_supported(name)) {
         std::string error;
-        archive.for_each_line(name, [](std::string_view) { return true; }, error);
+        const bool streamed =
+            archive.for_each_line(name, [](std::string_view) { return true; }, error);
+        if (streamed || error.empty())
+            error = "IMPORT_REJECTED: unsupported entry: " + name;
         return rejected(std::move(error));
     }
     detail::Ipc2581StreamParser parser;
@@ -72,8 +78,11 @@ ImportResult read_ipc2581_zip(const std::filesystem::path& file) {
             return !feed_failed;
         },
         error);
-    if (!feed_failed && !streamed && !error.empty())
+    if (!feed_failed && !streamed) {
+        if (error.empty())
+            error = "IMPORT_REJECTED: archive read failed: " + name;
         return rejected(std::move(error));
+    }
     return parser.finish();
 }
 } // namespace chipcae::geometry::ecad

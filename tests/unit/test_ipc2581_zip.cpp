@@ -32,7 +32,10 @@ struct Temporary {
             dir = fs::temp_directory_path() / ("ipc-zip-" + std::to_string(r()));
         } while (!fs::create_directory(dir));
     }
-    ~Temporary() { fs::remove_all(dir); }
+    ~Temporary() {
+        std::error_code error;
+        fs::remove_all(dir, error);
+    }
 };
 static std::string bytes(const fs::path& p) {
     std::ifstream in(p, std::ios::binary);
@@ -281,9 +284,22 @@ int main(int argc, char** argv) {
         } else if (test == "ipc_zip_two_xml") {
             zip(archive, {{"out/first.XML", fixture}, {"second.Xml", fixture}});
             auto r = ecad::read_ipc2581_zip(archive);
-            rejected(r, {"out/first.XML", "second.Xml"});
+            rejected(r, {"out/first.XML", "second.Xml", "共 2 个"});
             require(r.error.find("out/first.XML") < r.error.find("second.Xml"),
                     "matching archive order");
+            std::vector<std::pair<std::string, fs::path>> entries;
+            for (int i = 0; i < 25; ++i)
+                entries.emplace_back("out/match-" + std::to_string(i) + ".xml", fixture);
+            zip(archive, entries);
+            r = ecad::read_ipc2581_zip(archive);
+            rejected(r, {"multiple .xml entries", "共 25 个"});
+            std::size_t previous = 0;
+            for (const auto& [name, path] : entries) {
+                const auto pos = r.error.find(name);
+                require(pos != std::string::npos && pos >= previous,
+                        "all matching names in archive order");
+                previous = pos + name.size();
+            }
         } else if (test == "ipc_zip_filtered_entries") {
             write(xml, "");
             zip(archive,
