@@ -15,7 +15,7 @@ with tempfile.TemporaryDirectory() as tmp:
         ('default', '', '', 'OFF'),
         ('owner_enabled', 'ON', '', 'ON'),
         ('explicit_enabled', '', 'ON', 'ON'),
-        ('explicit_disabled', 'ON', 'OFF', 'OFF'),
+        ('explicit_disabled', 'ON', 'OFF', 'ON'),
     ):
         case = root / name
         case.mkdir()
@@ -35,3 +35,16 @@ with tempfile.TemporaryDirectory() as tmp:
             args.append('-DDETECTED=' + override)
         result = subprocess.run(args, capture_output=True, text=True)
         assert result.returncode == 0, (name, result.stdout, result.stderr)
+
+    # Reuse the same cache across an owner implementation becoming available.
+    case = root / 'default'
+    config = (case / 'CMakeLists.txt').read_text()
+    config = config.replace('add_library(chipcae::geometry ALIAS implementation)',
+                            'set_property(TARGET implementation PROPERTY OWNER_AVAILABLE ON)\n'
+                            'add_library(chipcae::geometry ALIAS implementation)')
+    config = config.replace('STREQUAL "OFF"', 'STREQUAL "ON"')
+    (case / 'CMakeLists.txt').write_text(config)
+    result = subprocess.run(['cmake', '-S', str(case), '-B', str(case / 'build')],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert 'cached OFF' in result.stderr, result.stderr

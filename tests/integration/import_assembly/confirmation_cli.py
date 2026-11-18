@@ -32,10 +32,15 @@ with tempfile.TemporaryDirectory() as tmp:
     check(run('--accept', str(a.accept(['unmapped/unmapped-body']))), 0)
     a.stack()
 
-    # An imported body must never disappear silently when SP2/SP3 are absent.
+    # SP0 placeholder slicing is an empty result until SP2/SP3 land.
     a.output.unlink()
     a.document.pop('parts_from_step')
     a.part('lid', body='unmapped-body')
-    check(run('--accept-b-tier'), 7)
+    check(run('--accept-b-tier'), 0)
+    a.stack()
+    assert a.defects()['code'] == 'OK'
+
+    # Assembly alone translates report publication failure to INTERNAL.
+    a.output.unlink()
+    check(run('--accept-b-tier', '--report', str(a.root)), 1)
     assert not a.output.exists()
-    assert 'unavailable' in a.defects()['message']

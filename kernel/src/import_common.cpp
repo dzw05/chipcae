@@ -6,7 +6,9 @@ namespace chipcae::importer {
 void write_defects(const std::filesystem::path& file,
                    const std::string& code,
                    const std::string& message) {
-    write_defects(file, code, message, {});
+    std::ofstream out(file);
+    if (out)
+        out << "{\"code\":\"" << code << "\",\"message\":\"" << message << "\",\"defects\":[]}\n";
 }
 void derive_output_paths(ImportOptions& options) {
     auto& output = options.output;

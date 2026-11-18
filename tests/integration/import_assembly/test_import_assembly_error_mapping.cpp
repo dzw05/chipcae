@@ -5,6 +5,35 @@
 
 int main() {
 #if defined(CHIPCAE_ENABLE_JSONCONS)
+    // The legacy ECAD/STEP report writer ignores unavailable output paths.
+    try {
+        chipcae::importer::write_defects(std::filesystem::path(CHIPCAE_SOURCE_DIR), "X", "x");
+    } catch (...) {
+        std::cerr << "legacy report writer must not throw on output failure\n";
+        return 1;
+    }
+#ifndef CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE
+    // SP0 merge leaves the original board intact; unrelated failures propagate.
+    chipcae::geometry::StackModel board;
+    board.id = "original-board";
+    auto merged = chipcae::importer::assembly_placeholder_result(
+        [&] { return chipcae::geometry::merge_parts(board, {}, {}); },
+        chipcae::geometry::Expected<chipcae::geometry::MergeResult>{
+            chipcae::geometry::MergeResult{board, {}}},
+        "not implemented: merge_parts");
+    if (!merged || merged.value().stack.id != "original-board")
+        return 1;
+    try {
+        chipcae::importer::assembly_placeholder_result(
+            []() -> int { throw std::logic_error("unexpected geometry failure"); },
+            0,
+            "not implemented: slice_prismatic");
+        return 1;
+    } catch (const std::logic_error& error) {
+        if (std::string(error.what()) != "unexpected geometry failure")
+            return 1;
+    }
+#endif
     using chipcae::importer::assembly_error_exit;
     using chipcae::importer::protocol_error_exit;
     for (const auto& message :

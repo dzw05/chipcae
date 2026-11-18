@@ -28,8 +28,9 @@ configured for assembly imports. Error mapping reads the protocol scalar records
 without adding a YAML library dependency to JSON-enabled builds.
 
 This checkout still contains the SP0 throwing implementations of slicing,
-placement and merge. Assembly currently treats those exact placeholder errors
-as empty results, as permitted by the SP4 brief; it cannot produce part regions
+placement and merge. Until the linked geometry target advertises support, assembly
+treats the exact slicing/merge placeholder errors as empty results and skips
+placement for empty slices, as permitted by the SP4 brief; it cannot produce part regions
 or real slicing/merge diagnostics until SP2/SP3 land. All other errors propagate.
 
 Assembly reports preserve the shared geometry report fields and CSV contract.
