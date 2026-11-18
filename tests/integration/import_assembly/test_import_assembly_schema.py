@@ -64,3 +64,37 @@ with tempfile.TemporaryDirectory() as tmp:
     a.save()
     check(a.run(), 14)
     assert 'json_path=$/board/path' in a.defects()['message']
+
+# The frozen schema applies the same lexical path rule to every input.
+for field in ('path', 'material_map', 'step'):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        nested = root / 'assemblies'
+        nested.mkdir()
+        a = Assembly(nested)
+        shared = root / 'shared-input'
+        shared.write_bytes((nested / 'board.xml').read_bytes())
+        for path in ('../shared-input', str(shared)):
+            if field == 'step':
+                a.document['parts'] = []
+                a.part(step=path)
+            else:
+                a.document['board'][field] = path
+                a.save()
+            check(a.run(), 14)
+            assert 'json_path' in a.defects()['message']
+            assert not a.output.exists()
+
+# Schema-valid symlinks can resolve to shared inputs outside the assembly directory.
+if enabled('ECAD'):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        nested = root / 'assemblies'
+        nested.mkdir()
+        a = Assembly(nested)
+        for name in ('board.xml', 'map.json'):
+            (nested / name).rename(root / name)
+            (nested / name).symlink_to(Path('..') / name)
+        check(a.run(), 0)
+        a.stack()
+        assert a.defects()['code'] == 'OK'

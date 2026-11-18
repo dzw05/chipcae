@@ -65,3 +65,8 @@ fixtures fail the tests. Repair-policy and synthetic split/rewrite report tests
 remain active without OCCT or SP2/SP3.
 Expanded `parts_from_step` identities use the body name; the schema-required
 `bodies` mapping `id` value does not rename a body.
+
+Assembly board, material-map, and STEP input paths all follow the frozen
+assembly schema: they are relative to the assembly file and cannot contain
+`..` components or be absolute paths. Schema-valid paths may resolve through
+symlinks to shared files outside the assembly directory.

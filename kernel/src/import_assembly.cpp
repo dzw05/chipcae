@@ -544,10 +544,9 @@ int run_assembly(const ImportOptions& options) {
         if (board_format != "ipc2581" && board_format != "odbpp")
             return fail("INPUT_INVALID", "json_path=$/board/format: unsupported board format");
         const auto resolved_board = std::filesystem::weakly_canonical(root / board_path);
-        const auto relative_board = resolved_board.lexically_relative(
-            std::filesystem::weakly_canonical(root.empty() ? "." : root));
-        if (board_path.empty() || board_path.is_absolute() || relative_board.empty() ||
-            *relative_board.begin() == ".." ||
+        // The assembly schema applies the same lexical path rule to board,
+        // material-map and STEP inputs. Do not add board-only symlink confinement.
+        if (board_path.empty() ||
             (board_format == "ipc2581" ? !std::filesystem::is_regular_file(resolved_board)
                                        : !std::filesystem::exists(resolved_board)))
             return fail("INPUT_INVALID", "json_path=$/board/path: invalid or missing board path");
