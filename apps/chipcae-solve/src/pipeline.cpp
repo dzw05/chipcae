@@ -2,7 +2,9 @@
 #include "chipcae/io/vtkhdf_results.hpp"
 #include "chipcae/solve/case_loader.hpp"
 #include "chipcae/solve/mixture.hpp"
+#include "chipcae/solvers/fem/column_gmg.hpp"
 #include "chipcae/solvers/fem/cut_fem.hpp"
+#include "column_gmg_assembly.hpp"
 #include "cut_convection.hpp"
 #include "cut_output.hpp"
 #include "sha256.hpp"
@@ -19,6 +21,7 @@
 #include <numeric>
 #include <petscksp.h>
 #include <set>
+#include <sstream>
 #include <tuple>
 
 namespace chipcae::solve {
@@ -492,15 +495,29 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                 mixtures.push_back(mixture(m, m, 0));
         }
         state(io::State::Value::running);
-        if (inputs.linear.preconditioner == "column_gmg")
-            emit(io::LogLine{
-                2, 0, "column_gmg not yet available; falling back to PETSc direct LU", "", 0});
         auto solve = [&](BilinearForm& form,
                          LinearForm& rhs,
                          GridFunction& field,
                          Array<int>& essential,
                          const std::string& name) {
             auto assembly_start = std::chrono::steady_clock::now();
+            bool use_gmg = inputs.linear.preconditioner == "column_gmg";
+            int np = 1;
+            if (use_gmg) {
+                MPI_Comm_size(MPI_COMM_WORLD, &np);
+                try {
+                    prepare_column_gmg(arrays, clipped.has_value(), np, form, essential);
+                } catch (const fem::ColumnGmgUnsupported& e) {
+                    use_gmg = false;
+                    emit(
+                        io::LogLine{2,
+                                    rank,
+                                    std::string("column_gmg not yet available (NOT_IMPLEMENTED: ") +
+                                        e.what() + "); falling back to PETSc direct LU",
+                                    "",
+                                    0});
+                }
+            }
             form.Assemble();
             rhs.Assemble();
             form.Finalize(0);
@@ -511,24 +528,56 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             if (!matrix)
                 throw std::runtime_error("expected serial sparse matrix");
             auto solve_start = std::chrono::steady_clock::now();
-            Direct direct;
-            double residual = direct.solve(*matrix, b, x, inputs.linear);
-            auto solve_end = std::chrono::steady_clock::now();
-            emit(io::LogLine{
-                1,
-                rank,
-                name + " assembly_seconds=" +
-                    std::to_string(
-                        std::chrono::duration<double>(solve_start - assembly_start).count()) +
-                    " PETSc_CSR_seconds=" + std::to_string(direct.assembly_seconds) +
-                    " factor_seconds=" + std::to_string(direct.factor_seconds) +
-                    " LU_solve_seconds=" +
-                    std::to_string(std::chrono::duration<double>(solve_end - solve_start).count()),
-                "",
-                0});
+            bool solved = false;
+            double residual = 0;
+            std::uint32_t iterations = 0;
+            std::string method = "PETSc.LU";
+            if (use_gmg) {
+                const auto stats = fem::solve_column_gmg(
+                    arrays,
+                    clipped.has_value(),
+                    np,
+                    *form.FESpace(),
+                    *matrix,
+                    essential,
+                    b,
+                    x,
+                    {.rtol = inputs.linear.rtol, .max_iter = inputs.linear.max_iter});
+                residual = stats.relative_residual;
+                iterations = stats.iterations;
+                method = "PETSc.ColumnGMG";
+                solved = true;
+                std::ostringstream line;
+                line.precision(17);
+                line << name << " column_gmg L=" << stats.level_rows.size() - 1
+                     << " iterations=" << stats.iterations
+                     << " relative_residual=" << stats.relative_residual
+                     << " setup_seconds=" << stats.setup_seconds
+                     << " solve_seconds=" << stats.solve_seconds;
+                emit(io::LogLine{1, rank, line.str(), "", 0});
+            }
+            if (!solved) {
+                Direct direct;
+                residual = direct.solve(*matrix, b, x, inputs.linear);
+                iterations = direct.iterations;
+                auto solve_end = std::chrono::steady_clock::now();
+                emit(io::LogLine{
+                    1,
+                    rank,
+                    name + " assembly_seconds=" +
+                        std::to_string(
+                            std::chrono::duration<double>(solve_start - assembly_start).count()) +
+                        " PETSc_CSR_seconds=" + std::to_string(direct.assembly_seconds) +
+                        " factor_seconds=" + std::to_string(direct.factor_seconds) +
+                        " LU_solve_seconds=" +
+                        std::to_string(
+                            std::chrono::duration<double>(solve_end - solve_start).count()),
+                    "",
+                    0});
+            }
             form.RecoverFEMSolution(x, rhs, field);
             ++window;
-            emit(io::Residual{"PETSc.LU", name, window, direct.iterations, residual, 64, "", 0});
+            emit(io::Residual{method, name, window, iterations, residual, 64, "", 0});
             emit(io::Progress{window, 0, 0, name == "T" ? 0.5 : 1.0, name + " complete"});
         };
         if (inputs.thermal) {
