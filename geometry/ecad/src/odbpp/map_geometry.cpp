@@ -35,9 +35,9 @@ struct EdgeBox {
     std::int64_t xmin, xmax, ymin, ymax;
 };
 // Static centered interval tree with dynamic membership. Each active interval
-// lives at the first center it spans, indexed by both ends. Querying one side
-// scans only matching intervals; vertically separated edges never need a flat
-// active-set scan. Subtree counts also prune empty portions of the tree.
+// lives at the first center it spans during binary search, indexed by both ends.
+// Querying one side scans only matching intervals; vertically separated edges
+// never need a flat active-set scan. Subtree counts also prune empty portions.
 class ActiveEdges {
     using Entry = std::pair<std::int64_t, std::size_t>;
     struct Node {

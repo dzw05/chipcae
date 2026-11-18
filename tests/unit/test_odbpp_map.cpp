@@ -2222,6 +2222,37 @@ void bridge_rejections() {
              std::reverse(points.begin(), points.end());
              reject_surface(polygon_contour(points));
          }},
+        {"horizontal and vertical bridge pairs crossing",
+         [&] {
+             // The vertical bridge (3,0)-(3,7) crosses the horizontal
+             // bridge (0,4)-(6,4). Neither bridge intersects a boundary loop.
+             std::vector<OdbPoint> points{{0, 0},
+                                          {3, 0},
+                                          {3, 7},
+                                          {2, 7},
+                                          {2, 8},
+                                          {3, 8},
+                                          {3, 7},
+                                          {3, 0},
+                                          {10, 0},
+                                          {10, 10},
+                                          {0, 10},
+                                          {0, 4},
+                                          {6, 4},
+                                          {6, 5},
+                                          {7, 5},
+                                          {7, 4},
+                                          {6, 4},
+                                          {0, 4}};
+             for (bool reverse : {false, true}) {
+                 if (reverse)
+                     std::reverse(points.begin(), points.end());
+                 for (std::size_t start = 0; start < points.size(); ++start) {
+                     reject_surface(polygon_contour(points));
+                     std::rotate(points.begin(), points.begin() + 1, points.end());
+                 }
+             }
+         }},
         {"opposite-winding exterior figure-eight",
          [&] {
              reject_surface(
