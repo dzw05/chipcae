@@ -85,6 +85,7 @@ public:
     bool captureResults(const QString&);
 
 private:
+    QString schemaDirectory_;
     chipcae::desktop::CaseDocument document_;
     chipcae::desktop::ImportController* importer_ = nullptr;
     std::unique_ptr<QTemporaryDir> importOutput_;
