@@ -54,5 +54,23 @@ int main() {
         rejected = true;
     }
     expect(rejected, "window rollback must throw invalid_argument");
+    const auto failure_path = dir / "failure.jsonl";
+    {
+        std::ofstream out(failure_path);
+        out << "{\"cmd_seq\":\"7\",\"action\":\"PAUSE\"}\n"
+               "{\"cmd_seq\":\"8\",\"action\":\"invalid\"}\n";
+    }
+    chipcae::coupling::ControlChannel failing(failure_path, [](const std::string&) {
+        throw std::runtime_error("injected warning failure");
+    });
+    bool caught = false;
+    try {
+        (void)failing.poll({1, 0.1});
+    } catch (const std::runtime_error&) {
+        caught = true;
+    }
+    expect(caught && failing.last_sequence() == 7, "failure must preserve consumed sequence");
+    expect(failing.poll({0, 0.0}).empty(),
+           "failed poll must not advance window or replay commands");
     std::filesystem::remove_all(dir);
 }

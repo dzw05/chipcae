@@ -162,10 +162,13 @@ std::vector<io::ControlCommand> ControlChannel::poll(const WindowMark& completed
             failure = std::current_exception();
             status = 1;
         }
+        last_sequence_ = reader_->last_sequence();
     }
 #ifdef CHIPCAE_ENABLE_MPI
-    if (distributed)
+    if (distributed) {
+        check(MPI_Bcast(&last_sequence_, 1, MPI_UINT64_T, 0, MPI_COMM_WORLD));
         check(MPI_Bcast(&status, 1, MPI_INT, 0, MPI_COMM_WORLD));
+    }
 #endif
     if (status) {
         if (failure)
@@ -199,12 +202,23 @@ std::vector<io::ControlCommand> ControlChannel::poll(const WindowMark& completed
 #else
     (void)distributed;
 #endif
-    auto commands = detail::decode_commands(bytes);
-    if (reader_)
-        last_sequence_ = reader_->last_sequence();
-    else
-        for (const auto& command : commands)
-            last_sequence_ = command.cmd_seq;
+    std::vector<io::ControlCommand> commands;
+    int decode_failed = 0;
+    try {
+        commands = detail::decode_commands(bytes);
+    } catch (...) {
+        failure = std::current_exception();
+        decode_failed = 1;
+    }
+#ifdef CHIPCAE_ENABLE_MPI
+    if (distributed)
+        check(MPI_Allreduce(MPI_IN_PLACE, &decode_failed, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD));
+#endif
+    if (decode_failed) {
+        if (failure)
+            std::rethrow_exception(failure);
+        throw std::runtime_error("control channel decode failed on another rank");
+    }
     previous_window_ = completed.window;
     return commands;
 }

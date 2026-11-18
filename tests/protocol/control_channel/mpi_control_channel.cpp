@@ -9,6 +9,7 @@
 #include <stdexcept>
 
 namespace {
+bool corrupt_payload = false;
 void collective_expect(bool ok, const char* why) {
     int bad = ok ? 0 : 1;
     int any_bad = 0;
@@ -17,6 +18,18 @@ void collective_expect(bool ok, const char* why) {
         throw std::runtime_error(why);
 }
 } // namespace
+// Use MPI's profiling interface to inject a rank-local malformed payload.
+extern "C" int MPI_Bcast(void* buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm) {
+    const int result = PMPI_Bcast(buffer, count, datatype, root, comm);
+    int local_rank = 0;
+    PMPI_Comm_rank(comm, &local_rank);
+    if (result == MPI_SUCCESS && corrupt_payload && local_rank == 1 && datatype == MPI_BYTE &&
+        count > 8) {
+        static_cast<std::uint8_t*>(buffer)[0] = 255;
+        corrupt_payload = false;
+    }
+    return result;
+}
 int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
     int rank = 0;
@@ -37,9 +50,13 @@ int main(int argc, char** argv) {
         path.resize(static_cast<std::size_t>(length));
         MPI_Bcast(path.data(), length, MPI_CHAR, 0, MPI_COMM_WORLD);
         int warnings = 0;
+        bool fail_warning = false;
         chipcae::coupling::ControlChannel channel(
-            rank == 0 ? path : "/nonexistent/chipcae-ctlch/control.jsonl",
-            [&](const std::string&) { ++warnings; });
+            rank == 0 ? path : "/nonexistent/chipcae-ctlch/control.jsonl", [&](const std::string&) {
+                ++warnings;
+                if (fail_warning)
+                    throw std::runtime_error("injected warning failure");
+            });
         collective_expect(channel.last_sequence() == 0, "initial MPI sequence");
         const std::array<const char*, 3> actions{"PAUSE", "RESUME", "STOP"};
         for (int round = 0; round < 3; ++round) {
@@ -86,6 +103,39 @@ int main(int argc, char** argv) {
             caught = std::string(e.what()).find("window mismatch") != std::string::npos;
         }
         collective_expect(caught, "all ranks must catch time bit mismatch");
+        if (rank == 0) {
+            std::ofstream out(path, std::ios::app);
+            out << "{\"cmd_seq\":\"4\",\"action\":\"PAUSE\"}\n"
+                   "{\"cmd_seq\":\"5\",\"action\":\"invalid\"}\n";
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
+        fail_warning = true;
+        caught = false;
+        try {
+            (void)channel.poll({4, 0.4});
+        } catch (const std::runtime_error&) {
+            caught = true;
+        }
+        collective_expect(caught && channel.last_sequence() == 4,
+                          "read failure must synchronize consumed sequence");
+        fail_warning = false;
+        if (rank == 0) {
+            std::ofstream out(path, std::ios::app);
+            out << "{\"cmd_seq\":\"5\",\"action\":\"STOP\"}\n";
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
+        corrupt_payload = true;
+        caught = false;
+        try {
+            (void)channel.poll({4, 0.4});
+        } catch (const std::runtime_error&) {
+            caught = true;
+        }
+        corrupt_payload = false;
+        collective_expect(caught && channel.last_sequence() == 5,
+                          "local decode failure must fail all ranks and preserve sequence");
+        collective_expect(channel.poll({3, 0.3}).empty() && channel.last_sequence() == 5,
+                          "failed polls must not advance window or replay consumed commands");
         MPI_Barrier(MPI_COMM_WORLD);
         if (rank == 0)
             std::filesystem::remove_all(std::filesystem::path(path).parent_path());
