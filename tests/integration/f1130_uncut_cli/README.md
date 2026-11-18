@@ -1,26 +1,34 @@
 # F-1130 uncut CLI acceptance
 
-This test uses the dedicated public synthetic `board_4layer.xml` beside the
-script. The five physical layers are F.Cu, In1.Cu, Core, In2.Cu and B.Cu.
-The centered 1 mm square board has copper rectangles of 0.12, 0.24, 0.36
-and 0.48 mm², giving independently checked fractions 0.12, 0.24, 0.36 and
-0.48. Every copper layer
-must still have a finite fraction in `(0,1]`. The footprint keeps cell aspect
-ratios modest (below 14) for the strict plane-fit readback comparison, and
-centering avoids unnecessary coordinate offsets in the plane fits.
+Current acceptance status: blocked. The required fixture fails the positive
+copper-fraction check, and preview rejects its original Core material ID.
+Serial/MPI numerical acceptance and the reference-mutation proof remain
+incomplete; the required assertions remain in place.
 
-The original ECAD fixture has three empty copper layers and cannot satisfy
-that requirement. It and the import CLI golden remain unchanged. The new
-fixture retains the golden's layer order and thicknesses. Import uses the
-explicit material map `{"FR4":"mat_fr4_eq","copper":"mat_cu"}` so Core
-satisfies preview's existing Homogenized material naming contract, and both
-IDs satisfy the material schema's alphanumeric/underscore restriction. Import
-metadata is compared to the original golden with these declared ID
-mappings applied in memory. Converted layers must retain the imported IDs;
-no post-import material or kind rewriting is performed.
+The input is the existing public synthetic
+`tests/integration/ecad/data/board_4layer.xml`, a 5 mm square board with
+five physical layers: F.Cu, In1.Cu, Core, In2.Cu and B.Cu. Import uses the
+existing `tests/integration/import_cli/material_map.json` verbatim:
+`{"FR4":"mat.fr4","copper":"mat.cu"}`. These are the fixture and map
+used by the import CLI's `board_4layer` golden-generation case.
+
+The actual import arguments, relative to the repository and temporary
+working directory respectively, are:
 
 ```text
-board_4layer.xml → chipcae-import → stack.json + stack.polyset + defects.json
+chipcae-import <repo>/tests/integration/ecad/data/board_4layer.xml
+  -o stack.json --polyset stack.polyset --report defects.json
+  --material-map <repo>/tests/integration/import_cli/material_map.json
+```
+
+The test compares layer order, names, thicknesses (relative tolerance 1e-12)
+and literal material IDs against
+`tests/integration/import_cli/golden/board_4layer/stack.json`. Neither the
+golden nor imported IDs are rewritten. Illustrative materials and the
+analytic reference also use `mat.cu` and `mat.fr4`.
+
+```text
+existing board_4layer.xml → chipcae-import → stack.json + stack.polyset + defects.json
 stack.json → tools/stack/copper_fraction.py → solve.stack.json + cf.json
 solve.stack.json → chipcae-preview → preview.vtkhdf + JSON cell_count
 shared case/stack/materials → chipcae-solve directly → ranks1/
@@ -31,10 +39,15 @@ analytic T(z), mesh/QoI/readback/MPI comparisons → result.json → check_file(
 
 Each invocation uses a fresh temporary directory and prints commands, stage
 wall times and result records before cleanup. Material properties are
-illustrative, using the same values as `test_ipc_uncut_chain.py`. Result
-records use `data_class: synthetic` and `label: 实测`.
+illustrative, copied from `test_ipc_uncut_chain.py`. Result records use
+`data_class: synthetic` and `label: 实测`.
 
-Copper layers retain `material: mat_cu`, as emitted by the converter.
+Each of the four copper layers must have a finite fraction in `(0,1]` and
+retain its imported material ID. The converted `copper.metal` must be
+`mat.cu`; its fraction must match the report (relative tolerance 1e-12).
+Exact fraction references use the saved golden's F.Cu polygon area
+0.307835 mm² / 25 mm² = 0.0123134 and zero for the three empty layers;
+the mandatory positive-fraction check still rejects those empty layers.
 Conductivities are 390 W/(m K) for copper and 0.3 W/(m K) for FR4, with
 series mixing `k_eff = 1/(f/k_metal + (1-f)/k_matrix)`. Boundary conditions
 are 298.15 K at zmin and convection to 348.15 K at zmax, h=1000 W/(m² K).
@@ -42,25 +55,24 @@ The independent reference is `q=50/(sum(thickness/k_eff)+1/1000)` and
 `T(z)=298.15+q*sum(clipped_layer_depth(z)/k_eff)`.
 
 Preview and solve use nx=4, ny=4, levels=0, max_ratio=100. The case explicitly
-sets `min_elems_per_layer=1` to match preview's imported layer minima, rather
-than solve's default of two. Acceptance requires zero cut cells, all hex
-cell_kind=0, positive hex count equal to preview's
-cell_count, matching z-extents, finite temperatures with maximum absolute
-reference error ≤1e-8 K, positive finite warpage_pv and U_mag_max, finite
-T_max, readback warpage relative error ≤1e-12, and ranks=2/1 QoI relative
-errors ≤1e-8 using the absolute ranks=1 value as denominator. Profiles differ
-only in ranks; shared input bytes are checked after each solve/readback.
-Both available solves/readbacks finish before numerical inspection starts.
+sets `min_elems_per_layer=1` to match preview's imported layer minima.
+Acceptance requires zero cut cells, all hex cell_kind=0, positive hex count
+equal to preview's cell_count, matching z-extents, finite temperatures with
+maximum absolute reference error ≤1e-8 K, positive finite warpage_pv and
+U_mag_max, finite T_max, readback warpage relative error ≤1e-12, and ranks=2/1
+QoI relative errors ≤1e-8 using the absolute ranks=1 value as denominator.
+Profiles differ only in ranks; shared input bytes are checked after each
+solve/readback. Both available solves/readbacks finish before numerical
+inspection starts.
 
 Each result's `run.acceptance_checks` records its completed import, fraction,
 preview, solve/readback, unchanged-input and numerical checks. Numerical
 completion is recorded only after every inspection assertion passes. When
 MPI is available, both records also require the parallel comparison. A
 missing check makes that record fail, including when no assertion message
-was accumulated. Each run has its own failures; a serial failure does not
-assign the MPI verdict. Shared setup and parallel-comparison failures apply
-to both runs. All records are written and gated before accumulated failures
-are raised, ensuring a nonzero process exit.
+was accumulated. Each run has its own failures. Shared setup and
+parallel-comparison failures apply to both runs. All records are written
+and gated before accumulated failures are raised, ensuring a nonzero exit.
 
 ## Running
 
@@ -80,51 +92,63 @@ ctest --test-dir "$build" -V -R '^f1130_'
 ctest --test-dir "$build" --output-on-failure -j2
 ```
 
-CTest registers `f1130_uncut_cli_e2e` and the bookkeeping regression test
-`f1130_acceptance_records`, with labels `integration;numerical;vv`, timeout
-1200 seconds and skip code 77. Executable variables are injected for the E2E
-test only when ECAD, the three CLI targets, MFEM, MPI and HDF5 are enabled.
-JSONCONS must also be enabled for functional preview/solve backends.
-Missing executable variables or numpy/h5py return 77. Configured commands
-that cannot run, time out or exit nonzero fail with captured diagnostics.
-The first available `mpiexec`, then `mpirun`, is used without retry. If neither
-exists, the MPI run/comparison is explicitly omitted with
-`SKIP ranks=2: launcher not found`; full serial acceptance remains mandatory.
+CTest registers exactly `f1130_uncut_cli_e2e`, with labels
+`integration;numerical;vv`, timeout 1200 seconds and skip code 77. The same
+script runs seven regression cases before the CLI chain: the six existing
+bookkeeping cases plus literal material-ID rejection. No additional fixture
+or test file is introduced. The bookkeeping checks cover missing acceptance
+checks, empty numerical records, required MPI comparison, independent
+per-run verdicts, temperature/readback/QoI inspection failures, and raising
+after result writing and gating.
 
-The bookkeeping regressions exercise missing acceptance checks, empty
-numerical records, required MPI comparison, independent per-run verdicts,
-inspection failures for temperature/readback/QoI, and raising accumulated
-failures after result writing and gating.
+Executable variables are injected only when ECAD, the three CLI targets,
+MFEM, MPI and HDF5 are enabled. JSONCONS must also be enabled for functional
+preview/solve backends. Missing executable variables or numpy/h5py return
+77. Configured commands that cannot run, time out or exit nonzero fail with
+captured diagnostics. The first available `mpiexec`, then `mpirun`, is used
+without retry. If neither exists, the MPI run/comparison is explicitly
+omitted with `SKIP ranks=2: launcher not found`; full serial acceptance
+remains mandatory.
 
 ## Verification (2026-11-18)
 
-A complete Release build with ECAD, JSONCONS, MFEM, MPI and HDF5 enabled,
-and the optional Kokkos execution backend disabled, succeeded. Both F-1130
-CTest targets passed, including all six bookkeeping regression cases.
-The reference-mutation experiment used the real CLI chain at both ranks:
+A Release build with ECAD, JSONCONS, MFEM, MPI and HDF5 enabled and the
+optional core Kokkos backend disabled succeeded. Discovery found exactly
+one F-1130 CTest target. All seven in-script regression cases passed.
+A local check invoking the real importer rejected the previous dedicated
+fixture/map and passed after restoring the required fixture/map and
+comparison with the untouched golden.
 
-| Reference | CTest exit | Serial / MPI verdict | Maximum temperature error |
-| --- | --- | --- | --- |
-| Normal | 0 | pass / pass | 1.61436e-10 K |
-| Heat flux multiplied by 1.01 locally | 8 | fail / fail | 0.200049 K |
-| Source restored byte for byte | 0 | pass / pass | 1.61436e-10 K |
+The targeted CTest command above returned 8 (script exit 1). The imported
+layers matched the golden, including literal material IDs. 实测 copper
+fractions were F.Cu=0.012313399999999997, In1.Cu=0, In2.Cu=0 and B.Cu=0.
+The existing XML supplies geometry only for F.Cu. The unchanged positive
+fraction assertion therefore fails at In1.Cu. The failing result record
+passes the existing data-class gate; it records import completion and the
+incomplete downstream checks, with no fabricated QoIs or temperature error.
+实测 stage times were import 0.450491 s, conversion 0.079964 s and total
+0.531376 s.
 
-Each run had 80 hex cells, zero cut cells and a matching preview count.
-Normal/restored readback relative error was 5.19369e-14; every serial/MPI QoI
-relative difference was zero. All acceptance flags were completed in both
-passing records. The mutation completed both solves/readbacks and wrote and
-gated both failing records before raising the temperature assertions. The
-mutation is absent from the committed source. No tolerance was relaxed.
+A separate diagnostic using the same unmodified import/conversion outputs
+also confirmed that preview exits 1: Core has `kind: Homogenized` and
+`material: mat.fr4`, while the stack parser requires an `_eq` suffix.
+The acceptance test stops at the fraction assertion before preview.
+Serial/MPI solves, readback and the reference-flux ×1.01 negative experiment
+are blocked for the mandated fixture. Earlier successful numerical and
+mutation measurements used the removed custom fixture and remapped IDs;
+they do not validate this required chain. No tolerance or required positive
+fraction check was relaxed. Product code, existing fixtures and golden
+files remain unchanged, as required by the brief.
 
-The full suite returned CTest exit 8: 232 total, 220 passed, 8 skipped and
-4 failed. Its F-1130 cell-count setup failure was subsequently fixed and the
-final normal/mutation/restored evidence above uses the completed fixture.
-The initial `k1_preview_mpi_surface` JSON abort passed on an isolated rerun.
-Two unchanged tests remain failing: `solve_ghost_scan` times out at 300 s
-(including a rerun with BLAS limited to one thread), and
-`chain_ipc_uncut_chain` expects `mat.fr4` where the converter preserves
-`mat.cu`. The full suite is not green; these tests and product code were not
-changed as part of the three confirmed review fixes.
+The full Release suite (`ctest --test-dir "$build" --output-on-failure -j2`)
+returned 8: 231 total, 221 passed, 8 skipped and 2 failed, in 1230.46 s.
+The failures were `f1130_uncut_cli_e2e` (the zero copper fractions above)
+and the unchanged `chain_ipc_uncut_chain` (line 53 expects `mat.fr4` on
+copper layers, while conversion preserves `mat.cu`). The full suite is
+not green. In this run `solve_ghost_scan` passed in 268.92 s and
+`k1_preview_mpi_surface` passed in 46.37 s; their earlier failures do not
+describe this verification. Tests and product sources outside the brief's
+allowlist were not changed.
 
 ## Coverage limits
 

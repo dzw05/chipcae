@@ -1,6 +1,8 @@
 """Public synthetic four-layer IPC → uncut CLI chain, serial/MPI, analytic T."""
 
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
+from io import StringIO
 import json
 import math
 import os
@@ -12,6 +14,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import unittest
+from unittest.mock import patch
 
 SOURCE = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(SOURCE))
@@ -94,12 +98,13 @@ def compare_fractions(report, converted, imported, measurements):
         assert layer['material'] == original['material'], f'converted layer[{index}] material changed'
         if layer['name'] in fractions:
             copper = layer['copper']
-            assert copper['metal'] == 'mat_cu', layer
+            assert copper['metal'] == 'mat.cu', layer
             assert 'polygons' not in copper, layer
             assert math.isclose(copper['fraction'], fractions[layer['name']],
                                 rel_tol=1e-12, abs_tol=0), layer
-    # Independent rectangle areas / 1 mm² board area in this dedicated fixture.
-    for name, expected in zip(copper_names, (.12, .24, .36, .48), strict=True):
+    # Saved golden F.Cu polygon area: 0.307835 mm² / 25 mm² board area.
+    # The mandated fixture has no geometry on the other copper layers.
+    for name, expected in zip(copper_names, (.0123134, 0., 0., 0.), strict=True):
         fraction = fractions[name]
         assert math.isfinite(fraction) and 0 < fraction <= 1, (
             f'M1 copper fraction {name}: actual={fraction!r} expected 0 < fraction <= 1; '
@@ -111,8 +116,8 @@ def compare_fractions(report, converted, imported, measurements):
 def write_solver_inputs(root):
     # Illustrative definitions and case fields copied from test_ipc_uncut_chain.py.
     materials = []
-    for name, E, nu, alpha, k in [('mat_cu', 110e9, .34, 17e-6, 390),
-                                 ('mat_fr4_eq', 25e9, .3, 1e-5, .3)]:
+    for name, E, nu, alpha, k in [('mat.cu', 110e9, .34, 17e-6, 390),
+                                 ('mat.fr4', 25e9, .3, 1e-5, .3)]:
         def table(columns):
             return dict(temperatures=[298.15],
                         columns={key: [value] for key, value in columns.items()},
@@ -153,7 +158,7 @@ def inspect_run(run_dir, stack, preview_count, measurements, np, h5py):
         if key != 'T_max':
             assert summary[key] > 0, (key, summary)
     measurements['qoi'] = {key: summary[key] for key in QOIS}
-    conductivity = {'mat_cu': 390, 'mat_fr4_eq': .3}
+    conductivity = {'mat.cu': 390, 'mat.fr4': .3}
     layers = []
     for layer in stack['layers']:
         k = conductivity[layer['material']]
@@ -273,19 +278,15 @@ def main():
                        completed=False, failures=[])}
         setup_checks = runs[1]['measurements']['acceptance_checks']
         try:
-            write_json(root / 'material_map.json', {'FR4': 'mat_fr4_eq', 'copper': 'mat_cu'})
-            run_command('import', [importer, Path(__file__).with_name('board_4layer.xml'),
+            material_map = SOURCE / 'tests/integration/import_cli/material_map.json'
+            run_command('import', [importer, SOURCE / 'tests/integration/ecad/data/board_4layer.xml',
                                   '-o', 'stack.json', '--polyset', 'stack.polyset',
-                                  '--report', 'defects.json', '--material-map', 'material_map.json'],
+                                  '--report', 'defects.json', '--material-map', material_map],
                         root, timings)
             artifact(root / 'stack.polyset')
             artifact(root / 'defects.json')
             imported = read_json(root / 'stack.json')
             golden = read_json(SOURCE / 'tests/integration/import_cli/golden/board_4layer/stack.json')
-            # Same physical stack, with explicit schema-compatible material IDs.
-            material_ids = {'mat.cu': 'mat_cu', 'mat.fr4': 'mat_fr4_eq'}
-            for layer in golden['layers']:
-                layer['material'] = material_ids[layer['material']]
             compare_import(imported, golden)
             setup_checks['import'] = True
             run_command('fraction conversion', [sys.executable, SOURCE / 'tools/stack/copper_fraction.py',
@@ -390,5 +391,123 @@ def main():
     return 0
 
 
+CHECKS = ('import', 'fractions', 'preview', 'solve_readback', 'inputs_unchanged', 'numerical')
+
+
+class AcceptanceRecords(unittest.TestCase):
+    def test_import_rejects_changed_literal_material_id(self):
+        golden = read_json(SOURCE / 'tests/integration/import_cli/golden/board_4layer/stack.json')
+        original = json.dumps(golden)
+        imported = json.loads(original)
+        compare_import(imported, golden)
+        imported['layers'][0]['material'] = 'mat_cu'
+        with self.assertRaisesRegex(AssertionError, 'material:'):
+            compare_import(imported, golden)
+        self.assertEqual(json.dumps(golden), original)
+
+    def write_record(self, root, checks, failures=(), ranks=1, parallel_required=False):
+        measurements = dict(
+            acceptance_checks=checks, parallel_required=parallel_required,
+            qoi=dict(warpage_pv=1e-6, U_mag_max=2e-6, T_max=318.15),
+            max_temperature_error_K=1e-10)
+        with redirect_stdout(StringIO()):
+            write_result(root, ranks, measurements, {}, [], list(failures))
+        return json.loads((root / 'result.json').read_text(encoding='utf-8'))
+
+    def test_each_missing_acceptance_check_prevents_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for missing in CHECKS:
+                with self.subTest(missing=missing):
+                    checks = {name: True for name in CHECKS if name != missing}
+                    result = self.write_record(root, checks)
+                    self.assertEqual(result['verdict'], 'fail')
+                    self.assertTrue(any(missing in note for note in result['notes']))
+
+    def test_empty_numerical_record_cannot_pass(self):
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(StringIO()):
+            root = Path(directory)
+            write_result(root, 1, {}, {}, [], [])
+            result = json.loads((root / 'result.json').read_text(encoding='utf-8'))
+            self.assertEqual(result['verdict'], 'fail')
+
+    def test_parallel_comparison_is_required_for_both_available_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for ranks in (1, 2):
+                with self.subTest(ranks=ranks):
+                    result = self.write_record(Path(directory), dict.fromkeys(CHECKS, True),
+                                               ranks=ranks, parallel_required=True)
+                    self.assertEqual(result['verdict'], 'fail')
+
+    def test_failed_run_does_not_change_another_runs_verdict(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checks = dict.fromkeys(CHECKS, True)
+            for failure in ('temperature error', 'readback mismatch', 'invalid QoI'):
+                with self.subTest(failure=failure):
+                    failed = self.write_record(root, checks, [failure])
+                    passed = self.write_record(root, checks)
+                    self.assertEqual(failed['verdict'], 'fail')
+                    self.assertEqual(passed['verdict'], 'pass')
+
+    def test_main_raises_accumulated_failures_after_writing_gated_results(self):
+        try:
+            import numpy  # noqa: F401
+            import h5py  # noqa: F401
+        except ImportError:
+            self.skipTest('main requires numpy/h5py')
+        output = StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            absent = str(Path(directory) / 'absent-executable')
+            env = dict(CHIPCAE_IMPORT_EXE=absent, CHIPCAE_PREVIEW_EXE=absent,
+                       CHIPCAE_SOLVE_EXE=absent)
+            with patch.dict(os.environ, env), redirect_stdout(output), redirect_stderr(StringIO()):
+                with self.assertRaises(AssertionError):
+                    main()
+        record = json.loads(output.getvalue().split('RESULT ranks1/result.json\n', 1)[1])
+        self.assertEqual(record['verdict'], 'fail')
+        self.assertEqual(record['qoi'], {})
+
+    def test_numerical_check_completes_only_after_all_inspection_assertions(self):
+        try:
+            import numpy as np
+            import h5py
+        except ImportError:
+            self.skipTest('inspection requires numpy/h5py')
+        # One 1 mm FR4 layer: R=1/300+1/1000, q=150000/13 W/m².
+        # T(top)=298.15+500/13 K, independently evaluated here as a literal.
+        for failure in (None, 'temperature', 'readback', 'qoi'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / 'out').mkdir()
+                warpage = -1e-6 if failure == 'qoi' else 1e-6
+                write_json(root / 'manifest.json', dict(
+                    schema_version='chipcae.results/1.0', summary=[
+                        dict(name='warpage_pv', value=warpage),
+                        dict(name='U_mag_max', value=2e-6), dict(name='T_max', value=336.62)]))
+                write_json(root / 'summary.json', dict(
+                    warpage=dict(w_bfp_m=1.01e-6 if failure == 'readback' else 1e-6)))
+                with h5py.File(root / 'out/step-0.vtkhdf', 'w') as file:
+                    file['VTKHDF/cut/NumberOfCells'] = [0]
+                    file['VTKHDF/hex/NumberOfCells'] = [1]
+                    file['VTKHDF/hex/CellData/cell_kind'] = [0]
+                    file['VTKHDF/hex/Points'] = [[0., 0., 0.], [.001, .001, .001]]
+                    top = 336.61153846153843 + (.001 if failure == 'temperature' else 0)
+                    file['VTKHDF/hex/PointData/T'] = [298.15, top]
+                measurements = dict(acceptance_checks={})
+                stack = dict(layers=[dict(material='mat.fr4', thickness=.001)])
+                with redirect_stdout(StringIO()):
+                    if failure is None:
+                        inspect_run(root, stack, 1, measurements, np, h5py)
+                    else:
+                        with self.assertRaises(AssertionError):
+                            inspect_run(root, stack, 1, measurements, np, h5py)
+                self.assertEqual(measurements['acceptance_checks'].get('numerical', False),
+                                 failure is None)
+
+
 if __name__ == '__main__':
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(AcceptanceRecords)
+    if not unittest.TextTestRunner().run(suite).wasSuccessful():
+        raise SystemExit(1)
     raise SystemExit(main())
