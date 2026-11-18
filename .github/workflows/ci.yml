@@ -6,7 +6,7 @@ name: CI
 # Draft pull requests run lint (and ci-ok); build-test waits until the PR is marked ready.
 # Docs-only pull requests skip the build.
 # Build-and-test can move later by setting the TIER_A_RUNNER repository variable
-# to a single runner label. Leave it unset to stay on ubuntu-latest.
+# to a single runner label. Unset variables and fork PRs use ubuntu-latest.
 # The only hard merge gate is the aggregate job "CI / ci-ok" (ADR-0006).
 # Branch protection is not enabled and must not be turned on. See docs/ci.md.
 
@@ -182,7 +182,8 @@ jobs:
     if: |
       (github.event_name == 'push' || github.event.pull_request.draft == false) &&
       needs.lint.result == 'success' &&
-      needs.lint.outputs.code == 'true'
+      needs.lint.outputs.code == 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.TIER_A_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 30
     permissions:
@@ -353,7 +354,8 @@ jobs:
       github.event_name == 'pull_request' &&
       github.event.pull_request.draft == false &&
       needs.lint.result == 'success' &&
-      needs.lint.outputs.mesh == 'true'
+      needs.lint.outputs.mesh == 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     uses: ./.github/workflows/mesh.yml
     permissions:
       contents: read
