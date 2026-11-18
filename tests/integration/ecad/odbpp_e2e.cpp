@@ -212,7 +212,7 @@ class Board:
         path.write_text(json.dumps(dict(schema='chipcae.stack_override/0.1', layers=layers, **keys)))
         return path
 
-    def rows(self, out):
+    def rows(self, out, material_overrides=()):
         report = load(out / 'import_layers.json')
         rows = report['layers']
         check(isinstance(rows, list), 'layers must be an array')
@@ -243,7 +243,8 @@ class Board:
                 layer = next(l for l in stack['layers'] if l['name'] == row['name'])
                 check(same_double(row['thickness_m'], layer['thickness']),
                       'layer report differs from written stack thickness')
-                check(row['material_id'] == layer['material'] if row['material_key']
+                check(row['material_id'] == layer['material']
+                      if row['material_key'] or row['name'] in material_overrides
                       else row['material_id'] == '', 'report material ID/empty-source rule')
         return report, rows
 
@@ -541,33 +542,49 @@ def unknown_layer(b):
     check(len(warnings) == 1 and 'NoSuchLayer' in warnings[0], 'unknown override must warn once')
     check(warnings[0] in result.stderr, 'unknown-layer warning missing from stderr')
 
-for fmt, mapped in ((f,m) for f in ('odb','ipc') for m in (False,True)):
-    @case('override_material_'+fmt+('_mapped' if mapped else '_unmapped'),fmt)
-    def material(b, fmt=fmt, mapped=mapped):
+for fmt, source_material in ((f,m) for f in ('odb','ipc')
+                             for m in ('unmapped','mapped','empty_source')):
+    @case('override_material_'+fmt+'_'+source_material,fmt)
+    def material(b, fmt=fmt, source_material=source_material):
+        key = '' if source_material == 'empty_source' else 'unique_core'
         mapping = json.loads(b.map.read_text())
         mapping.pop('layer:DIELECTRIC_1',None)
-        if mapped: mapping['unique_core'] = 'mat.wrong'
+        if source_material == 'mapped': mapping[key] = 'mat.wrong'
         # Only the overridden layer lacks a map entry: IPC's per-layer source key is explicit.
         if fmt == 'ipc':
             # Use owned minimal IPC below to ensure no shared source material key masks precedence.
             input = b.root/'material.xml'
             input.write_text('<IPC-2581><Ecad><CadData><Layer name="Core" layerFunction="DIELECTRIC"/>'
                 '<Layer name="Cu" layerFunction="SIGNAL"/>'
-                '<Stackup><StackupGroup name="S"><StackupLayer layerOrGroupRef="Core" matDes="unique_core" thickness="0.2"/>'
+                '<Stackup><StackupGroup name="S"><StackupLayer layerOrGroupRef="Core" matDes="'+key+'" thickness="0.2"/>'
                 '<StackupLayer layerOrGroupRef="Cu" matDes="copper" thickness="0.035"/>'
                 '</StackupGroup></Stackup><Step name="b"><Profile><Polygon><PolyBegin x="0" y="0"/>'
                 '<PolyStepSegment x="1" y="0"/><PolyStepSegment x="0" y="1"/>'
                 '</Polygon></Profile></Step></CadData></Ecad></IPC-2581>')
-            layer,original,key = 'Core',0.0002,'unique_core'
+            layer,original = 'Core',0.0002
         else:
             input = b.job
             attr = b.job/'steps/pcb/layers/dielectric_1/attrlist'
-            attr.write_text(attr.read_text().replace('.material=fr4','.material=unique_core'))
-            layer,original,key = 'DIELECTRIC_1',0.0002,'unique_core'
+            attr.write_text(attr.read_text().replace('.material=fr4','.material='+key))
+            layer,original = 'DIELECTRIC_1',0.0002
+        if source_material == 'empty_source':
+            # A fallback map without an override retains the existing empty report ID rule.
+            mapping['layer:'+layer] = 'mat.fr4'
+            b.map.write_text(json.dumps(mapping))
+            base,_,_ = b.run(input,['--accept-b-tier'],name='base')
+            _,base_rows = b.rows(base)
+            r = next(r for r in base_rows if r['name'] == layer)
+            check(r['material_key'] == r['material_id'] == '',
+                  'empty source without a material override must keep empty report strings')
+            check(next(l for l in load(base/'board.stack.json')['layers']
+                       if l['name'] == layer)['material'] == 'mat.fr4', 'fallback material ID')
+            del mapping['layer:'+layer]
         b.map.write_text(json.dumps(mapping))
         path = b.override([dict(name=layer,thickness_m=original,material='mat.special')])
         out,_,_ = b.run(input,['--stack-override',path,'--accept-b-tier'])
-        _,rows = b.rows(out)
+        check(next(l for l in load(out/'board.stack.json')['layers']
+                   if l['name'] == layer)['material'] == 'mat.special', 'override stack material ID')
+        _,rows = b.rows(out,material_overrides=(layer,))
         if fmt == 'ipc':
             check([l['name'] for l in load(out/'board.stack.json')['layers']] == ['Core','Cu'],
                   'partial IPC material override reordered layers')

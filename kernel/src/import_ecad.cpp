@@ -381,14 +381,16 @@ int run_ecad(const ImportOptions& options) {
         // layers with the shared mapper, then merge IDs in the original order.
         ecad::EcadModel remaining;
         std::vector<std::size_t> indices;
+        std::vector<bool> material_overridden(model.layers.size(), false);
         for (std::size_t i = 0; i < model.layers.size(); ++i) {
             const auto found = std::find_if(
                 overrides.materials.begin(), overrides.materials.end(), [&](const auto& entry) {
                     return fold_layer_name(entry.first) == fold_layer_name(model.layers[i].name);
                 });
-            if (found != overrides.materials.end())
+            if (found != overrides.materials.end()) {
                 model.layers[i].material = found->second;
-            else {
+                material_overridden[i] = true;
+            } else {
                 indices.push_back(i);
                 remaining.layers.push_back(model.layers[i]);
             }
@@ -399,7 +401,9 @@ int run_ecad(const ImportOptions& options) {
         for (std::size_t i = 0; i < indices.size(); ++i)
             model.layers[indices[i]].material = remaining.layers[i].material;
         for (std::size_t i = 0; i < rows.size(); ++i)
-            rows[i].material_id = rows[i].material_key.empty() ? "" : model.layers[i].material;
+            rows[i].material_id = rows[i].material_key.empty() && !material_overridden[i]
+                                      ? ""
+                                      : model.layers[i].material;
 
         std::vector<SkippedRow> skipped;
         auto defects = classify_unsupported(model.report, skipped);

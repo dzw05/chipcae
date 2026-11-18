@@ -5,9 +5,12 @@ stack conversion and binary polyset writer serve both formats.
 
 ```sh
 chipcae-import board.tgz -o out/board.stack.json --material-map materials.json
-chipcae-import board.xml -o out/board.stack.json --material-map materials.json \
-  --stack-override thickness.json --accept-b-tier
+chipcae-import board.xml -o out/board.stack.json --material-map materials.json --accept-b-tier
 ```
+
+`--stack-override` and `--accept` are pending dispatcher integration and currently
+return usage exit 2. The sections below describe their implementation in the
+ECAD importer; these flags cannot yet be used through `chipcae-import`.
 
 ODB++ inputs are directories containing `matrix/matrix`, or files ending in
 `.tgz`, `.tar.gz` or `.zip`, with ASCII case-insensitive extensions. Other ECAD
@@ -55,7 +58,9 @@ source and override doubles produce no original-value field or conflict warning.
 Material maps contain source-material-name to library-ID string mappings.
 An explicit per-layer override material bypasses material mapping for that layer.
 All other layers go through the existing material mapper. The report retains the
-source material key independently of the selected ID. Unmapped materials return 9.
+source material key independently of the selected ID. An explicit material override
+is reported even when the source material key is empty. Without a material override,
+an empty source key retains an empty report ID. Unmapped materials return 9.
 
 The override parser is schema-specific and has no optional JSON library dependency.
 Explicit accept-file support uses the shared `read_accept_file`, which requires
@@ -96,9 +101,9 @@ returns 6. Import rejection returns 7; success returns 0 after output publicatio
 
 The frozen main dispatcher currently rejects `--accept` and `--stack-override`
 with usage exit 2 before calling the ECAD importer. Their ECAD implementation is
-present but unreachable until the dispatcher owner enables forwarding. The CLI
-examples using these flags describe that pending integration. `--accept-b-tier`
-already reaches the importer. `--t-min` and `--assembly` remain unimplemented.
+present but unreachable until the dispatcher owner enables forwarding.
+`--accept-b-tier` already reaches the importer. `--t-min` and `--assembly` remain
+unimplemented.
 
 ## Reports and output publication
 
