@@ -1,19 +1,10 @@
 # Synthetic ODB++ / IPC-2581 CLI acceptance
 
-Current status after the scope review: the product solver, material schema and
-schema-test changes from `0c3bb0a` have been reverted. Only the four files in this
-directory remain in the branch diff against its merge base with main (`b703d57`).
-The acceptance driver and its assertions are unchanged by that revert. The restored
-material schema rejects the required `mat.cu` ID, so numerical acceptance is blocked at
-solve input validation (exit 14); it requires a separately authorized product
-fix, tracked by [M3/material #168](https://github.com/dzw05/chipcae/issues/168).
-The required dotted IDs and the frozen schema conflict; resolving that contract
-requires an owner decision and a separate scope, rather than a schema relaxation
-in this test-only PR. The boundary-attribute fix likewise needs a separate solver
-change. The acceptance test remains failing until these prerequisites are resolved.
-The measurements below are historical results from before the scope correction,
-when the reverted product fixes were present; they do not establish acceptance
-for the current checkout.
+The fixture uses schema-valid material IDs `cu` and `fr4_eq`, consistently in
+mapping values, material cards and assertions. The illustrative card values are
+unchanged: copper E=110e9 Pa, ν=0.34, α=17e-6 K⁻¹, k=390 W/(m·K);
+dielectric E=25e9 Pa, ν=0.3, α=1e-5 K⁻¹, k=0.3 W/(m·K).
+The frozen material schema is unchanged.
 
 `odbcli_odbpp_cli_e2e` is a test-first acceptance driver, labelled
 `integration;numerical;vv`, with a 1200 second CTest timeout. All input is public
@@ -72,63 +63,24 @@ conductivities read from the illustrative cards, and fractions from cf.json.
 Each layer uses `1/(f/k_metal+(1-f)/k_layer)` when copper is present. With h=1000,
 bottom temperature 298.15 K and ambient 348.15 K, heat flux is
 `50/(sum(t/k)+1/h)` and temperature follows cumulative 1D resistance.
-Acceptance is maximum absolute error ≤1e-8 K. If both IDs are mat.cu, this formula
+Acceptance is maximum absolute error ≤1e-8 K. If both IDs are cu, this formula
 has no dependence on copper fraction; the geometry assertions remain independent.
 
-## Scope-review verification
+## Solver regression coverage
 
-Release configure and full build exit 0 after restoring the solver, material
-schema and schema tests to the branch baseline. clang-format 23.1.5 `-i` followed
-by `--dry-run --Werror` leaves the restored C++ file unchanged and exits 0.
-The acceptance script, CMake registration and empty marker are unchanged by this
-scope correction; no acceptance assertion or threshold was weakened.
+The E2E's layered 1D temperature check covers boundary-attribute aliasing in
+`apps/chipcae-solve/src/pipeline.cpp`. Aligned interfaces receive original
+boundary attributes above 6. A per-layer stride of 6 can give an interface the
+same remapped ID as an exterior face, applying the top convection load to that
+interface too. The solver must space per-layer IDs using the maximum original
+boundary attribute. Each MPI rank constructs the same global serial `mfem::Mesh`,
+so this stride has the same value on both ranks.
 
-The fresh targeted command is:
+## Measured acceptance (实测)
 
-```sh
-OMP_NUM_THREADS=1 ctest --test-dir "$build" -R '^(case_run_schema_fixtures|odbcli_odbpp_cli_e2e)$' --output-on-failure -V
-```
-
-It exits 8: schema fixtures pass, E2E fails (1 passed / 1 failed). Both normal
-imports, copper averaging, geometry/material checks, negative comparisons and
-preview succeed. Preview measures 864 cells with layer counts
-`[1,7,1,36,1,7,1]`. The serial solver then exits 14:
-
-```text
-material mat.cu /id: String 'mat.cu' does not match pattern '^[a-z0-9_-]+$'.
-```
-
-Ranks=2, numerical temperature checks and readback are consequently not reached
-in this checkout. The historical successful runs below do not replace current
-acceptance evidence.
-
-The full Release command `OMP_NUM_THREADS=1 ctest --test-dir "$build"
---output-on-failure -j2` exits 8: 251 passed, 5 failed, 5 skipped (261 total;
-1465.10 seconds). This was the same-checkout suite already running during the
-scope review, allowed to finish without interruption. In addition to the E2E
-schema blocker, it reproduces the four failures in the historical table below:
-`odbpp_map_placeholder` (60-second large-contour timeout), `ipc_fixture_present`
-(eight geometry-context diagnostic assertions), `chain_ipc_uncut_chain`
-(`mat.fr4` expected, `mat.cu` imported), and `ecaddiff_import_pair` (11/0/5
-expected, 0/0/14 received). The five skips are unchanged optional GPU and
-assembly/STEP tests. No tests were excluded or timeouts increased. The current
-checkout does not satisfy all-CTest-green acceptance.
-
-Review dispositions: the CodeBuddy scope MUST is confirmed and the three
-out-of-scope changes are removed. Missing-launcher ranks=2 skipping is explicitly
-required by the brief. The fraction-blind thermal reference follows the brief's
-mandated material IDs; changing the base material needs an owner decision. The
-30/35 µm copper-thickness exception is also mandated and remains pinned at
-1e-12 relative tolerance. The removed stride code operated on a serial
-`mfem::Mesh` constructed from the global arrays on each rank, rather than a
-`ParMesh`; the suggested rank-local-stride scenario does not apply to that path.
-
-## Historical validation and measurements (before scope correction)
-
-Measured (实测) on 2026-11-19, review fix based on commit `236e4400b47fcc533f5bfe89106009dde3f840c0`,
-Release, ECAD + JSONcons + MPI + parallel HDF5 + PETSc-enabled MFEM. The three
-CLI targets built successfully. Empty dielectric features were accepted; no
-fallback features were necessary.
+Measured on 2026-11-19 in a backend-enabled Release build (ECAD, JSONcons, MPI,
+parallel HDF5 and MFEM with PETSc/direct solver support). Empty dielectric
+features were accepted; no fallback features were needed.
 
 | Layer (ASCII folded) | ODB thickness m (实测) | IPC thickness m (实测) | IPC − ODB m |
 |---|---:|---:|---:|
@@ -140,8 +92,6 @@ fallback features were necessary.
 | dielectric_3 | 0.0002 | 0.0002 | 0 |
 | b.cu | 0.000030 | 0.000035000000000000004 | 0.000005 |
 
-Copper differences are the pinned “已知偏差，待裁定” (M1), not a relaxed tolerance.
-
 | Copper layer | ODB fraction (实测) | IPC fraction (实测) |
 |---|---:|---:|
 | f.cu | 0.08333333333333331 | 0.08333333333333331 |
@@ -150,17 +100,17 @@ Copper differences are the pinned “已知偏差，待裁定” (M1), not a rel
 | b.cu | 0.7499999999999999 | 0.7499999999999999 |
 
 Both reports measure outline area `0.0012000000000000001` m² and F.CU copper area
-`9.999999999999999e-05` m². Independent polyset decoding passes the F.CU area gate.
-Both formats map each copper layer's `material` and `copper.metal` to `mat.cu`;
-all three dielectric materials are `mat.fr4_eq`. Normal thickness comparison has
-no unexpected names and exactly the four copper names as known deviations.
-The negative thickness comparison reports only `dielectric_2`; the swapped
-fraction comparison reports only `in1.cu`, `in2.cu`.
+`9.999999999999999e-05` m²; independent polyset decoding passes the area gate.
+Both formats map each copper layer's `material` and `copper.metal` to `cu`;
+all dielectric materials are `fr4_eq`. The normal comparison reports no
+unexpected thickness differences and exactly four known copper deviations.
+Negative comparisons report only `dielectric_2` for thickness and only
+`in1.cu`, `in2.cu` for swapped fractions.
 
-The mesh counts are `[1,7,1,36,1,7,1]` in layer order. Preview and both
-solves measure 864 regular cells and zero cut cells. `mpiexec` is available
-(first-choice launcher). Both ranks=1 and ranks=2 complete solve, VTKHDF checks,
-`result_summary.py`, and the per-run `result.json` 0.2 `check_file` gate.
+The per-layer counts are `[1,7,1,36,1,7,1]`. Preview and both solves measure
+864 regular cells and zero cut cells. The first-choice `mpiexec` launcher is
+available. Both ranks complete solve, VTKHDF checks, `result_summary.py` and
+per-run `result.json` 0.2 validation.
 
 | Quantity (实测) | ranks=1 | ranks=2 |
 |---|---:|---:|
@@ -169,31 +119,15 @@ solves measure 864 regular cells and zero cut cells. `mpiexec` is available
 | Maximum displacement magnitude m | 0.00011400375798343959 | 0.00011400375798343959 |
 | Maximum temperature K | 339.6277197011525 | 339.6277197011525 |
 
-At the historical revision, the material schema accepted dots alongside lowercase
-letters, digits, underscores and hyphens. A schema regression validated `mat.cu`
-and `mat.fr4_eq` through the material-library reference and retained invalid-ID checks.
-Both out-of-scope changes have since been reverted.
-The earlier acceptance and implementation runs stopped at solve exit 14 because
-this schema excluded dots; those runs did not measure numerical results.
+Readback checks preserve the manifest's Q2 top-node warpage and independently
+fit the exported displacement vertices, comparing each summary field to its
+matching reference at 1e-12 relative tolerance. Exported-vertex warpage must also
+be finite and positive.
 
-Running beyond that blocker exposed an internal interface attribute aliasing
-the top convection face. The historical solver fix spaced per-layer boundary IDs
-using the full boundary attribute range, including aligned interfaces. That
-out-of-scope fix has since been reverted. Before that fix the
-unchanged temperature gate measured a 3.8645886088048087 K error; after it, both
-rank counts passed the original 1e-8 K gate. No material IDs, imported layer data,
-conductivities, load values or numerical tolerances were changed.
+## Verification
 
-Readback distinguishes the manifest's Q2 top-node warpage from the exported
-vertex best-fit-plane warpage. These use different sample sets. The driver checks
-manifest preservation and independently fits the exported displacement vertices,
-comparing each summary field with its matching reference at 1e-12 relative
-tolerance. It also requires a finite, positive exported-vertex warpage.
-
-Use a backend-enabled Release build, referenced here as `$build`. Configure with
-`CHIPCAE_ENABLE_ECAD`, `CHIPCAE_ENABLE_JSONCONS`, `CHIPCAE_ENABLE_MFEM`,
-`CHIPCAE_ENABLE_MPI`, `CHIPCAE_ENABLE_HDF5`, and MFEM built with PETSc/direct
-solver support. Build and test commands (plain wrapped tool names):
+Use a backend-enabled Release build, referenced here as `$build`, with the
+dependencies listed above. Plain wrapped build/test commands:
 
 ```sh
 cmake -S . -B "$build" -DCMAKE_BUILD_TYPE=Release
@@ -202,40 +136,56 @@ OMP_NUM_THREADS=1 ctest --test-dir "$build" -R '^(case_run_schema_fixtures|odbcl
 OMP_NUM_THREADS=1 ctest --test-dir "$build" --output-on-failure -j2
 ```
 
-| Local check | CTest exit | Maximum temperature error K | Reached stage |
+Release configure and full build exit 0. clang-format 23.1.5 `-i` followed by
+`--dry-run --Werror` passes for the solver file, and `git diff --check` is clean.
+The normal targeted CTest exits 0: 2/2 tests pass, including material schema
+fixtures and the E2E (14.70 s).
+
+For the negative and restored checks, the command is:
+
+```sh
+OMP_NUM_THREADS=1 ctest --test-dir "$build" -R '^odbcli_odbpp_cli_e2e$' --output-on-failure -V
+```
+
+| Local check (实测) | CTest exit | Maximum temperature error K | Reached stage |
 |---|---:|---:|---|
-| Normal | 0 | 9.366658559883945e-10 | ranks=1/2 solve, readback, result.json |
-| Reference heat flux temporarily ×1.01 | 8 | 0.41477719793664392 | ranks=1 temperature assertion after solve exit 0 |
+| Original dotted fixture IDs | 8 | not reached | solve rejects the ID, exit 14 |
+| Valid IDs, original stride of 6 | 8 | 3.8645886088048087 | solve exits 0, temperature assertion fails |
+| Normal, valid IDs and corrected stride | 0 | 9.366658559883945e-10 | ranks=1/2 solve, readback, result.json |
+| Reference heat flux temporarily ×1.01 | 8 | 0.41477719793664392 | ranks=1 solve exits 0, temperature assertion fails |
 | Reference restored byte for byte | 0 | 9.366658559883945e-10 | ranks=1/2 solve, readback, result.json |
 
-Only the analytical reference flux was multiplied by 1.01; the case and solver
-inputs were unchanged. The mutation is absent from the final driver. Restoration
-was checked against the saved driver bytes before rerunning the same CTest.
-The normal targeted run passes 2/2 tests; the restored E2E run passes 1/1.
-Release configure and the full build exit 0. The touched C++ file was formatted
-with clang-format 23.1.5 using `-i`, followed by a clean `--dry-run --Werror`.
-Full Release CTest exits 8: 252 passed, 4 failed, 5 skipped (261 total;
-1174.62 s). The new acceptance passes within this suite. The four failures also
-appear in the pre-fix implementation record; this scoped review fix does not
-claim an all-green repository suite:
+Only the analytical reference flux was multiplied by 1.01. The mutation is
+absent from the committed driver; restoration was checked byte for byte before
+the successful rerun (15.11 s). No assertion, numerical threshold, timeout or
+skip policy was weakened. The cross-format fraction limit remains the brief's
+1e-3; each format independently meets the 1e-6 analytical fraction gate.
 
-| Failed test | Observed failure |
+Full Release CTest exits 8: **250 passed, 6 failed, 5 skipped** (261 total;
+1423.45 s). E2E passes within this run (14.38 s). No test was excluded and no
+timeout was increased. The four previously recorded failures reproduce:
+
+| Test | Observed failure |
 |---|---|
 | `odbpp_map_placeholder` | 60 s timeout in the large-contour performance case |
 | `ipc_fixture_present` | eight bare geometry-context classification assertions |
 | `chain_ipc_uncut_chain` | expects copper-layer material `mat.fr4`; importer returns `mat.cu` |
 | `ecaddiff_import_pair` | expects hard/discuss/info=11/0/5; receives 0/0/14 |
 
-`event_log`, `vtkhdf_results_mpi_2`, and `solve_inputs` pass. The five skips are
-the two GPU tests and three optional assembly/STEP placeholders. No tests were
-excluded and no test timeout was increased.
-
-Product handoffs: [M3/material #168](https://github.com/dzw05/chipcae/issues/168)
-records the dotted-ID blocker, which still requires a separately scoped fix;
-[M1 #169](https://github.com/dzw05/chipcae/issues/169) tracks the pinned copper
-thickness discrepancy. The latter preserves the prior
-[#82](https://github.com/dzw05/chipcae/issues/82) ruling that `copper_weight` is
-not a thickness source. Importer policy and the known-deviation gates are unchanged.
+Two additional failures occur in this full run: `solve_ghost_scan` reaches its
+300 s timeout, and `k1_preview_mpi_surface` aborts while parsing JSON. The latter's
+retained stdout starts with a solder-material warning before the first JSON
+event; its unchanged isolated retry passes in 44.34 s. Neither test executes the
+modified solver pipeline. The unchanged FEM scan retry exits 8 after 177.23 s with a NumPy
+`ValueError` reading a ragged matrix array (525 rows expected); it does not time
+out on retry. After removing this run's 2.5 GB temporary matrix left by the timeout, a further
+unchanged scan retry passes in 241.92 s under the original 300 s limit. That
+retry records at least 3.96 GB free disk space and a peak matrix size of 2.66 GB;
+disk pressure is a possible cause of the earlier ragged read, not a confirmed
+code diagnosis. Its matrix generator and Python reader are outside this change.
+The five skips are the two optional GPU tests and three assembly/STEP
+placeholders. `event_log`, `solve_inputs`, `vtkhdf_results_mpi_2`, installation
+and package checks pass. All-CTest-green acceptance remains unmet.
 
 ## Limits
 
@@ -243,3 +193,10 @@ This test excludes whole-board slots/holes, `--stack-override` thickness overrid
 cut geometry, and real boards. It does not change the whole-board rejection
 expectations or importer policy. Backend-enabled self-hosted/nightly builds run
 the numerical chain; hosted builds without the gated dependencies skip it.
+
+The copper-thickness discrepancy remains [M1 #169](https://github.com/dzw05/chipcae/issues/169),
+with the 30/35 µm exception pinned at relative 1e-12. The prior
+[#82](https://github.com/dzw05/chipcae/issues/82) ruling excludes `copper_weight`
+as a thickness source. The earlier dotted-ID blocker tracked in
+[M3/material #168](https://github.com/dzw05/chipcae/issues/168) is addressed here
+by using valid fixture IDs; no schema relaxation is needed.

@@ -242,8 +242,8 @@ def check_geometry(output, stack, report):
 def material_cards():
     # Same illustrative cards and physical model as test_ipc_uncut_chain.py.
     materials = []
-    for name, E, nu, alpha, k in [('mat.cu', 110e9, .34, 17e-6, 390),
-                                 ('mat.fr4_eq', 25e9, .3, 1e-5, .3)]:
+    for name, E, nu, alpha, k in [('cu', 110e9, .34, 17e-6, 390),
+                                 ('fr4_eq', 25e9, .3, 1e-5, .3)]:
         def table(columns):
             return dict(temperatures=[298.15], columns={key: [value] for key, value in columns.items()},
                         interpolation='constant', extrapolation='clamp')
@@ -363,9 +363,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix='odbcli-') as directory:
         root = Path(directory)
         mapping = root / 'map.json'
-        write(mapping, {'copper': 'mat.cu', 'Copper': 'mat.cu', 'COPPER': 'mat.cu',
-                        'FR4': 'mat.fr4_eq', 'fr4': 'mat.fr4_eq',
-                        'layer:DIELECTRIC_1': 'mat.fr4_eq'})
+        write(mapping, {'copper': 'cu', 'Copper': 'cu', 'COPPER': 'cu',
+                        'FR4': 'fr4_eq', 'fr4': 'fr4_eq',
+                        'layer:DIELECTRIC_1': 'fr4_eq'})
         odb = import_board(importer, generate_odb(root / 'job'), root / 'odb', mapping)
         ipc = import_board(importer, generate_ipc(root / 'board.xml'), root / 'ipc', mapping, ipc=True)
         odb_average, odb_cf = average(root / 'odb')
@@ -376,10 +376,10 @@ def main():
         for name in ORDER:
             a, b = left[name], right[name]
             assert ('copper' in a) == ('copper' in b) == (name in COPPER), (name, a, b)
-            assert a['material'] == b['material'] == ('mat.cu' if name in COPPER else 'mat.fr4_eq'), (
+            assert a['material'] == b['material'] == ('cu' if name in COPPER else 'fr4_eq'), (
                 f'M1 material discrepancy: {name}', a, b)
             if name in COPPER:
-                assert a['copper']['metal'] == b['copper']['metal'] == 'mat.cu', (name, a, b)
+                assert a['copper']['metal'] == b['copper']['metal'] == 'cu', (name, a, b)
         unexpected, known = compare_thickness(odb, ipc)
         print(f'已知偏差，待裁定 (M1): {known}; unexpected={unexpected}', flush=True)
         assert unexpected == [] and known == COPPER, (unexpected, known)

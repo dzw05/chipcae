@@ -413,6 +413,9 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                   3);
         mesh.Finalize(false, false);
         // Distinct physical-face/layer attributes make layer and face targets exact.
+        // Include aligned interface attributes (>6) in the stride so they cannot
+        // alias an exterior face in another layer.
+        const int boundary_stride = mesh.bdr_attributes.Max();
         for (int b = 0; b < mesh.GetNBE(); ++b) {
             int e, info;
             mesh.GetBdrElementAdjacentElement(b, e, info);
@@ -421,7 +424,7 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                                       inputs.stack.layers.end(),
                                       [&](const auto& value) { return value.name == name; });
             mesh.GetBdrElement(b)->SetAttribute(
-                6 * static_cast<int>(layer - inputs.stack.layers.begin()) +
+                boundary_stride * static_cast<int>(layer - inputs.stack.layers.begin()) +
                 arrays.bdr_attribute[b]);
         }
         mesh.SetAttributes();
