@@ -1,6 +1,7 @@
 #pragma once
 #include "CaseDocument.hpp"
 
+#include <QJsonArray>
 #include <QStandardItemModel>
 
 namespace chipcae::desktop {
@@ -8,7 +9,12 @@ namespace chipcae::desktop {
 class CaseTreeModel : public QStandardItemModel {
     Q_OBJECT
 public:
-    enum Role { PointerRole = Qt::UserRole + 1, SourceRole, IdentityRole };
+    enum Role {
+        PointerRole = Qt::UserRole + 1,
+        SourceRole,
+        IdentityRole,
+        BodyAnnotationRole = Qt::UserRole + 4
+    };
     explicit CaseTreeModel(CaseDocument* document, QObject* parent = nullptr);
     CaseDocument* document() const { return document_; }
     QModelIndex locate(const QString& pointer, const QString& source = "case") const;
@@ -18,6 +24,7 @@ public:
     bool edit(const QString& identity, Json value);
     void setThermalMode(bool thermal);
     void refresh();
+    void applyPartSummary(const QJsonArray& parts);
 
 private:
     CaseDocument* document_;

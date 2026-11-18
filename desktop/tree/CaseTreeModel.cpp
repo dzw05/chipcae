@@ -2,6 +2,8 @@
 
 #include "SchemaValidator.hpp"
 
+#include <QJsonObject>
+#include <QMap>
 #include <QUuid>
 #include <jsoncons_ext/jsonpointer/jsonpointer.hpp>
 
@@ -50,7 +52,67 @@ void CaseTreeModel::refresh() {
     clear();
     const auto data = document_->toJson();
     const auto stack = document_->stackJson();
-    append(invisibleRootItem(), stack, "", "stack", "Stack layers");
+    auto displayNode = [](QStandardItem* parent, const QString& label, const QString& source) {
+        auto* item = new QStandardItem(label);
+        item->setEditable(false);
+        item->setData(QString(), PointerRole);
+        item->setData(source, SourceRole);
+        item->setData(source + ":group:" + label, IdentityRole);
+        parent->appendRow(item);
+        return item;
+    };
+    auto* layers = displayNode(invisibleRootItem(), "Stack layers", "stack");
+    auto* bodies = displayNode(invisibleRootItem(), "Bodies", "bodies-index");
+    QMap<QString, QStandardItem*> indexGroups;
+    if (stack.is_object() && stack.contains("layers") && stack.at("layers").is_array()) {
+        const auto& values = stack.at("layers");
+        for (size_t i = 0; i < values.size(); ++i) {
+            const auto& layer = values.at(i);
+            const auto path = "/layers/" + QString::number(i);
+            const auto name = layer.contains("name") && layer.at("name").is_string()
+                                  ? QString::fromStdString(layer.at("name").as<std::string>())
+                                  : QString::number(i);
+            auto* node = displayNode(layers, name, "stack");
+            node->setData(path, PointerRole);
+            node->setData("stack:" + path, IdentityRole);
+            for (const auto& member : layer.object_range()) {
+                const auto key = QString::fromStdString(member.key());
+                if (key != "regions")
+                    append(node, member.value(), path + "/" + key, "stack", key);
+            }
+            if (!layer.contains("regions") || !layer.at("regions").is_array())
+                continue;
+            auto* regions = displayNode(node, "Regions", "stack");
+            regions->setData(path + "/regions", PointerRole);
+            QMap<QString, QStandardItem*> groups;
+            const auto& entries = layer.at("regions");
+            for (size_t j = 0; j < entries.size(); ++j) {
+                const auto& region = entries.at(j);
+                const auto body = region.contains("body") && region.at("body").is_string()
+                                      ? QString::fromStdString(region.at("body").as<std::string>())
+                                      : QString();
+                if (!groups.contains(body))
+                    groups[body] = displayNode(
+                        regions, body.isEmpty() ? QString("（无 body）") : "body:" + body, "stack");
+                const auto pointer = path + "/regions/" + QString::number(j);
+                const auto label = region.contains("name") && region.at("name").is_string()
+                                       ? QString::fromStdString(region.at("name").as<std::string>())
+                                       : QString::number(j);
+                append(groups[body], region, pointer, "stack", label);
+                if (!body.isEmpty()) {
+                    if (!indexGroups.contains(body)) {
+                        indexGroups[body] = displayNode(bodies, body, "bodies-index");
+                        indexGroups[body]->setData("bodies-index:body:" + body, IdentityRole);
+                    }
+                    // Index rows deliberately have no JSON property children.
+                    auto* row = displayNode(
+                        indexGroups[body], label + " （layer=" + name + "）", "bodies-index");
+                    row->setData(pointer, PointerRole);
+                    row->setData("bodies-index:" + pointer, IdentityRole);
+                }
+            }
+        }
+    }
     append(invisibleRootItem(), document_->materialLibrary(), "", "materials", "Materials");
     for (const auto* key : {"loads", "constraints", "solver", "mesh", "physics", "output"})
         append(invisibleRootItem(),
@@ -58,6 +120,28 @@ void CaseTreeModel::refresh() {
                "/" + QString(key),
                "case",
                key == std::string("output") ? "Results / output" : key);
+}
+void CaseTreeModel::applyPartSummary(const QJsonArray& parts) {
+    QMap<QString, bool> approximate;
+    for (const auto& part : parts) {
+        const auto object = part.toObject();
+        if (object.value("id").isString()) {
+            const auto id = object.value("id").toString();
+            approximate[id] =
+                approximate.value(id) || object.value("material_approx").toBool(false);
+        }
+    }
+    auto* bodies = itemFromIndex(locate("", "bodies-index"));
+    if (!bodies)
+        return;
+    for (int i = 0; i < bodies->rowCount(); ++i) {
+        auto* group = bodies->child(i);
+        const auto body =
+            group->data(IdentityRole).toString().mid(QString("bodies-index:body:").size());
+        const auto annotation = approximate.value(body) ? QString("近似材料") : QString();
+        group->setText(body + (annotation.isEmpty() ? QString() : " （" + annotation + "）"));
+        group->setData(annotation, BodyAnnotationRole);
+    }
 }
 QModelIndex CaseTreeModel::locate(const QString& pointer, const QString& source) const {
     QModelIndex best;
