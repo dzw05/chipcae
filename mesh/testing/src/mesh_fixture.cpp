@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
+#include <iterator>
 #include <jsoncons/json.hpp>
 #include <jsoncons/json_cursor.hpp>
 #include <limits>
@@ -15,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace chipcae::mesh::testing {
@@ -292,6 +294,8 @@ bool validate(const HexMeshArrays& m) {
     }
     for (const auto& [name, attributes] : m.face_sets) {
         check(!name.empty(), "empty face set name");
+        for (auto i : attributes)
+            check(i >= 0 && static_cast<std::size_t>(i) < m.bdr_quad.size() / 4, "face set index");
     }
     auto optional = [](std::size_t actual, std::size_t expected) {
         check(actual == 0 || actual == expected, "optional array length");
@@ -338,7 +342,8 @@ bool validate(const HexMeshArrays& m) {
     auto columns = (m.axes[0].size() - 1) * (m.axes[1].size() - 1);
     std::size_t copper = 0;
     for (auto i : m.copper_layer_of_layer) {
-        check(i >= -1, "copper layer index");
+        check(i >= -1 && (i == -1 || static_cast<std::size_t>(i) < m.attr_table.layers.size()),
+              "copper layer index");
         if (i >= 0)
             copper = std::max(copper, static_cast<std::size_t>(i) + 1);
     }

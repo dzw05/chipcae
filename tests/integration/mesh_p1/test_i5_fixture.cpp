@@ -4,12 +4,15 @@
 
 #include <bit>
 #include <chrono>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <jsoncons/json.hpp>
 #include <limits>
 #include <stdexcept>
 #include <type_traits>
+#include <utility>
 
 using namespace chipcae;
 using namespace chipcae::mesh;
@@ -67,24 +70,34 @@ struct Projection {
         return a;
     }
     J value(const AttributeRecord& x) const {
+        const auto& [layer, region, material, body] = x;
         J j;
-        j["layer"] = x.layer;
-        j["region"] = x.region;
-        j["material"] = x.material;
-        j["body"] = x.body;
+        j["layer"] = layer;
+        j["region"] = region;
+        j["material"] = material;
+        j["body"] = body;
         return j;
     }
     J value(const SnapReport& x) const {
+        const auto& [axis, from, to, displacement] = x;
         J j;
-        j["axis"] = std::string(1, x.axis);
-        j["from"] = value(x.from);
-        j["to"] = value(x.to);
-        j["displacement"] = value(x.displacement);
+        j["axis"] = std::string(1, axis);
+        j["from"] = value(from);
+        j["to"] = value(to);
+        j["displacement"] = value(displacement);
         return j;
     }
     J value(const HexMeshArrays::InterfaceReport& x) const {
+        // Aggregate decomposition makes omitted/new members a compile error.
+        const auto& [name,
+                     side_a_bodies,
+                     side_b_bodies,
+                     aligned_faces,
+                     cut_faces,
+                     aligned_area,
+                     cut_area] = x;
         J j;
-#define FIELD(name) j[#name] = value(x.name)
+#define FIELD(name) j[#name] = value(name)
         FIELD(name);
         FIELD(side_a_bodies);
         FIELD(side_b_bodies);
@@ -95,6 +108,17 @@ struct Projection {
         return j;
     }
     J value(const HexMeshArrays::GridReport& x) const {
+        // Aggregate decomposition makes omitted/new members a compile error.
+        const auto& [levels,
+                     rule,
+                     N_L,
+                     auto_selected,
+                     padding,
+                     max_aspect_ratio,
+                     level_axes,
+                     column_ranks,
+                     warnings,
+                     partition_imbalance] = x;
         J j;
         FIELD(levels);
         FIELD(rule);
@@ -109,6 +133,8 @@ struct Projection {
         return j;
     }
     J value(const AttributeTable& x) const {
+        // Aggregate decomposition makes omitted/new members a compile error.
+        const auto& [layers, entries, references, materials, bodies, boundary_names] = x;
         J j;
         FIELD(layers);
         FIELD(entries);
@@ -119,6 +145,30 @@ struct Projection {
         return j;
     }
     J value(const HexMeshArrays& x) const {
+        // Aggregate decomposition makes omitted/new members a compile error.
+        const auto& [vertices,
+                     hex,
+                     attribute,
+                     bdr_quad,
+                     bdr_attribute,
+                     elem_gid,
+                     node_gid,
+                     partitioning,
+                     node_layer,
+                     copper_layer_of_layer,
+                     copper_phi,
+                     node_column,
+                     attr_frame,
+                     nodes,
+                     internal_interfaces,
+                     order,
+                     preparation_report,
+                     grid_report,
+                     attr_table,
+                     face_sets,
+                     pending_cut,
+                     snapped,
+                     axes] = x;
         J j;
         FIELD(vertices);
         FIELD(hex);
@@ -216,7 +266,7 @@ HexMeshArrays decorated() {
     m.attr_table.materials = {{"Case", 17}, {"case", 18}};
     m.attr_table.bodies = {{"BodyA", 23}, {"BodyB", 24}};
     m.attr_table.boundary_names = {{1, "Case"}, {2147483647, "case"}};
-    m.face_sets = {{"Case", {1, 2}}, {"case", {2, 1}}};
+    m.face_sets = {{"Case", {0, 1}}, {"case", {1, 0}}};
     m.pending_cut = {0};
     m.nodes = m.vertices;
     // Large global IDs are opaque identifiers; preserve their exact integer type.
@@ -253,6 +303,21 @@ void rejects_bad(const fs::path& dir) {
             ++failures;
         }
     };
+    // Exercise the shared validation through save as well as load, including
+    // the exact upper bound and the permitted endpoints in decorated().
+    for (const Local index : {-1, 2}) {
+        auto m = decorated();
+        m.face_sets["invalid"] = {index};
+        const auto result = save_mesh_fixture(m, dir / "bad-save.json");
+        require(!result && result.error().path == "INPUT_INVALID", "save rejects face index");
+    }
+    for (const Local index : {-2, 2}) {
+        auto m = decorated();
+        m.copper_phi.clear();
+        m.copper_layer_of_layer[0] = index;
+        const auto result = save_mesh_fixture(m, dir / "bad-save.json");
+        require(!result && result.error().path == "INPUT_INVALID", "save rejects copper index");
+    }
     const auto base = document(generated());
     // Positive control prevents a loader that rejects everything from satisfying the test.
     write(dir / "valid.json", base.to_string());
@@ -311,6 +376,20 @@ void rejects_bad(const fs::path& dir) {
         j["mesh"]["snapped"] = J::parse(R"([{"axis":"q","from":0,"to":1,"displacement":1}])");
     });
     mutate("empty face set name", [](J& j) { j["mesh"]["face_sets"] = J::parse(R"([["",[1]]])"); });
+    mutate("negative face index",
+           [](J& j) { j["mesh"]["face_sets"] = J::parse(R"([["side",[-1]]])"); });
+    mutate("face index upper bound", [](J& j) {
+        j["mesh"]["face_sets"] = J::parse(R"([["side",[0]]])");
+        j["mesh"]["face_sets"][0][1][0] = j["mesh"]["bdr_quad"].size() / 4;
+    });
+    for (const int index : {-2, 2147483647})
+        mutate("copper index bounds", [index](J& j) {
+            auto& m = j["mesh"];
+            m["copper_phi"] = J::array();
+            m["copper_layer_of_layer"] = J::array();
+            for (std::size_t i = 0; i < m["attr_table"]["layers"].size(); ++i)
+                m["copper_layer_of_layer"].push_back(index);
+        });
     mutate("wrong integer element type", [](J& j) { j["mesh"]["hex"][0] = "0"; });
     mutate("wrong real element type", [](J& j) { j["mesh"]["vertices"][0] = "0"; });
     mutate("wrong bool type", [](J& j) { j["mesh"]["internal_interfaces"] = 1; });
@@ -463,7 +542,7 @@ int main(int argc, char** argv) {
             auto reports = m;
             reports.snapped.push_back({'x', 0.1, 0.3, 0.2});
             reports.snapped.push_back({'y', 0.0, 1.0, 0.0});
-            reports.face_sets["cut"] = {-1, 0, 99};
+            reports.face_sets["cut"] = {0, 1};
             roundtrip(reports, dir / "report-values.json");
             auto extra_frame = m;
             extra_frame.attr_frame.insert(extra_frame.attr_frame.end(), 9, 0.0);
@@ -471,7 +550,7 @@ int main(int argc, char** argv) {
             auto curved = m;
             curved.order = 2;
             curved.nodes.insert(curved.nodes.end(), {1.5, 0.5, 0.5});
-            curved.face_sets["cut"] = {99}; // No matching linear boundary quad is required.
+            curved.face_sets["cut"] = {1};
             curved.snapped.push_back({'z', 0.0, 0.5, 0.5});
             roundtrip(curved, dir / "curved-nodes.json");
             auto json = J::parse(first);

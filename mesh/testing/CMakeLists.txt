@@ -15,6 +15,11 @@ if(CHIPCAE_BUILD_TESTS)
     add_test(NAME i5_fixture_${case} COMMAND i5_fixture_tests ${case})
     set_tests_properties(i5_fixture_${case} PROPERTIES TIMEOUT 60 LABELS "mesh;i5")
   endforeach()
+  add_test(NAME i5_fixture_rejects_missing_link_graph COMMAND "${CMAKE_COMMAND}"
+    -DCHECK=${CMAKE_CURRENT_SOURCE_DIR}/check_links.cmake
+    -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/bad-link-graphs
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/test_check_links.cmake)
+  set_tests_properties(i5_fixture_rejects_missing_link_graph PROPERTIES TIMEOUT 60 LABELS "mesh;i5")
   add_executable(i5_fixture_load_smoke load_smoke.cpp)
   target_link_libraries(i5_fixture_load_smoke PRIVATE chipcae_mesh_fixture)
   # Defer until all targets exist. Resolve aliases before evaluating both link
@@ -70,4 +75,5 @@ if(CHIPCAE_BUILD_TESTS)
     -DSMOKE=$<TARGET_FILE:i5_fixture_load_smoke>
     -DFIXTURE=${PROJECT_SOURCE_DIR}/tests/fixtures/mesh/i5_fcbga_small.mesh.json
     -P ${CMAKE_CURRENT_SOURCE_DIR}/check_links.cmake)
+  set_tests_properties(i5_fixture_no_cut_link PROPERTIES TIMEOUT 60 LABELS "mesh;i5")
 endif()

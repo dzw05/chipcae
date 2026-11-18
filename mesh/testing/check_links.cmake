@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 include("${GRAPH}")
+if(NOT DEFINED links_chipcae_mesh_fixture OR "${links_chipcae_mesh_fixture}" STREQUAL "")
+  message(FATAL_ERROR "Missing or empty fixture link graph")
+endif()
 function(visit target)
   if("${target}" MATCHES "\\$<")
     message(FATAL_ERROR "Unresolved generator expression: ${target}")

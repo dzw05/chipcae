@@ -6,7 +6,6 @@
 #include <map>
 #include <optional>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 namespace chipcae::mesh {
@@ -24,21 +23,6 @@ public:
     T& value() { return std::get<T>(data_); }
     const T& value() const { return std::get<T>(data_); }
     const Error& error() const { return std::get<Error>(data_); }
-};
-// Status result for fixture writes; the shared primary template stores a value.
-template <>
-class Expected<void> {
-    std::optional<Error> error_;
-
-public:
-    Expected() = default;
-    Expected(Error error) : error_(std::move(error)) {}
-    explicit operator bool() const { return !error_; }
-    void value() const {
-        if (error_)
-            throw std::bad_variant_access{};
-    }
-    const Error& error() const { return error_.value(); }
 };
 using Local = std::int32_t;
 struct Footprint {
@@ -87,8 +71,3 @@ struct Polyset {
 Expected<Polyset> read_polyset(const std::filesystem::path& file);
 Expected<bool> write_polyset(const std::filesystem::path& file, const Polyset& polyset);
 } // namespace chipcae::mesh
-
-namespace chipcae {
-// Shared result spelling; the mesh namespace remains source-compatible.
-using mesh::Expected;
-} // namespace chipcae

@@ -38,8 +38,9 @@ This is a field stub for solver input tests; it neither generates cut geometry
 nor validates SP5 or the real cutting pipeline. Solver integration belongs to
 sp6; this library adds no solver or grid-generation API.
 
-The shared schema header owns `Expected`, including its void specialization,
-and exposes `chipcae::Expected` as the same template as `chipcae::mesh::Expected`.
+The frozen schema header owns the primary `chipcae::mesh::Expected` template.
+The fixture header supplies its void specialization and the `chipcae::Expected`
+alias locally to the testing API.
 The fixture API uses `chipcae::Expected` as registered. Save returns
 `Expected<void>` with a default-constructed success result.
 
