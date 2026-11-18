@@ -29,8 +29,9 @@ std::string read_source(const std::filesystem::path& relative) {
     return source;
 }
 
-std::string without_comments(const std::string& source) {
-    // Keep quoted strings intact, including comment markers inside them.
+std::string without_comments(const std::string& source, bool mask_strings = false) {
+    // Keep quoted strings intact by default, including comment markers inside them.
+    // Mask tokens with spaces to preserve offsets into the original source.
     const std::regex token(R"re("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|//[^\n]*|/\*[\s\S]*?\*/)re");
     std::string result;
     std::size_t cursor = 0;
@@ -40,7 +41,7 @@ std::string without_comments(const std::string& source) {
         const auto position = static_cast<std::size_t>(match->position());
         result.append(source, cursor, position - cursor);
         const auto text = match->str();
-        result += text.front() == '/' ? std::string(text.size(), ' ') : text;
+        result += text.front() == '/' || mask_strings ? std::string(text.size(), ' ') : text;
         cursor = position + text.size();
     }
     result.append(source, cursor, std::string::npos);
@@ -48,14 +49,15 @@ std::string without_comments(const std::string& source) {
 }
 
 std::string block_body(const std::string& source, const std::regex& opening, const char* name) {
+    const auto masked = without_comments(source, /*mask_strings=*/true);
     std::smatch match;
-    require(std::regex_search(source, match, opening), std::string(name) + " must exist");
+    require(std::regex_search(masked, match, opening), std::string(name) + " must exist");
     const auto begin = static_cast<std::size_t>(match.position() + match.length());
     std::size_t depth = 1;
-    for (auto cursor = begin; cursor < source.size(); ++cursor) {
-        if (source[cursor] == '{')
+    for (auto cursor = begin; cursor < masked.size(); ++cursor) {
+        if (masked[cursor] == '{')
             ++depth;
-        else if (source[cursor] == '}' && --depth == 0)
+        else if (masked[cursor] == '}' && --depth == 0)
             return source.substr(begin, cursor - begin);
     }
     throw std::runtime_error(std::string(name) + " has no closing brace");
@@ -109,6 +111,46 @@ std::map<std::string, std::uint32_t> parse_status(const std::string& source) {
 
 int main() {
     Suite suite;
+    for (const auto& [name, declaration] : {
+             std::pair{"block matching ignores double-quoted closing braces",
+                       R"proto(option (note) = "}";)proto"},
+             std::pair{"block matching ignores double-quoted opening braces",
+                       R"proto(option (note) = "{";)proto"},
+             std::pair{"block matching ignores single-quoted closing braces",
+                       R"proto(option (note) = '}';)proto"},
+             std::pair{"block matching ignores single-quoted opening braces",
+                       R"proto(option (note) = '{';)proto"},
+             std::pair{"block matching ignores line-comment closing braces", "// }"},
+             std::pair{"block matching ignores line-comment opening braces", "// {"},
+             std::pair{"block matching ignores block-comment closing braces", "/* } */"},
+             std::pair{"block matching ignores block-comment opening braces", "/* { */"},
+             std::pair{"block matching handles escaped double quotes and comment markers",
+                       R"proto(option (note) = "escaped \" } // /*";)proto"},
+             std::pair{"block matching handles escaped single quotes and comment markers",
+                       R"proto(option (note) = 'escaped \' { // /*';)proto"},
+         }) {
+        suite.run(name, [&] {
+            const auto body = std::string("\n") + declaration + "\nmessage Nested {}\n";
+            const auto source = "message ControlAck {" + body + "}\nmessage After {}\n";
+            require(block_body(source,
+                               std::regex(R"(\bmessage\s+ControlAck\s*\{)"),
+                               "ControlAck message") == body,
+                    "return the complete original body, including nested blocks");
+        });
+    }
+    suite.run("block matching ignores declarations in strings and comments", [] {
+        const std::string source = R"proto(
+// message ControlAck { line comment }
+/* message ControlAck { block comment } */
+option (note) = "message ControlAck { double-quoted string }";
+option (note) = 'message ControlAck { single-quoted string }';
+message ControlAck { uint64 cmd_seq = 1; }
+)proto";
+        require(block_body(source,
+                           std::regex(R"(\bmessage\s+ControlAck\s*\{)"),
+                           "ControlAck message") == " uint64 cmd_seq = 1; ",
+                "only an unquoted, uncommented declaration opens a block");
+    });
     suite.run("four named acknowledgment statuses match frozen proto twice", [] {
         const auto source = without_comments(read_source("protocol/chipcae/run/v1/run.proto"));
         const auto first = parse_status(source);
