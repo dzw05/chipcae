@@ -1,5 +1,6 @@
-"""Gated IPC → uncut CLI acceptance and strict assertion/verdict regressions."""
+"""IPC → uncut CLI acceptance and strict assertion/verdict regressions."""
 
+from copy import deepcopy
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from io import StringIO
@@ -68,7 +69,10 @@ def run_command(stage, args, root, timings):
 
 
 def compare_import(imported, golden):
-    actual, expected = imported['layers'], golden['layers']
+    actual, expected = imported['layers'], deepcopy(golden)['layers']
+    material_ids = {'mat.fr4': 'mat.fr4_eq'}
+    for layer in expected:
+        layer['material'] = material_ids.get(layer['material'], layer['material'])
     assert len(actual) == len(expected), (
         f'M1 layer count: actual={len(actual)} expected={len(expected)}')
     for index, (got, want) in enumerate(zip(actual, expected, strict=True)):
@@ -104,8 +108,10 @@ def compare_fractions(report, converted, imported, measurements):
                                 rel_tol=1e-12, abs_tol=0), layer
     for name in copper_names:
         fraction = fractions[name]
-        assert math.isfinite(fraction) and 0 < fraction <= 1, (
-            f'M1 copper fraction {name}: actual={fraction!r} expected 0 < fraction <= 1; '
+        valid = 0 < fraction <= 1 if name == 'F.Cu' else fraction == 0
+        assert math.isfinite(fraction) and valid, (
+            f'M1 copper fraction {name}: actual={fraction!r} '
+            f'expected {"0 < fraction <= 1" if name == "F.Cu" else "fraction == 0"}; '
             f'all fractions={fractions!r}')
     # Independent trace-area reference: 0.307835 mm² / 25 mm².
     assert math.isclose(fractions['F.Cu'], .0123134, rel_tol=1e-12, abs_tol=0), fractions
@@ -115,7 +121,7 @@ def write_solver_inputs(root):
     # Illustrative definitions and case fields copied from test_ipc_uncut_chain.py.
     materials = []
     for name, E, nu, alpha, k in [('mat.cu', 110e9, .34, 17e-6, 390),
-                                 ('mat.fr4', 25e9, .3, 1e-5, .3)]:
+                                 ('mat.fr4_eq', 25e9, .3, 1e-5, .3)]:
         def table(columns):
             return dict(temperatures=[298.15],
                         columns={key: [value] for key, value in columns.items()},
@@ -131,7 +137,8 @@ def write_solver_inputs(root):
     write_json(root / 'case.json', dict(
         schema='chipcae.case/1.0', stack=dict(ref='solve.stack.json'),
         materials=dict(ref='materials.json'),
-        mesh=dict(type='aligned_cartesian_cut', nx=4, ny=4, levels=0, max_ratio=100),
+        mesh=dict(type='aligned_cartesian_cut', nx=4, ny=4, levels=0, max_ratio=100,
+                  min_elems_per_layer=1),
         physics=[dict(id='thermal', solver='fem.conduction', mode='steady'),
                  dict(id='mech', solver='fem.solid', temp_from='thermal', T_ref=298.15)],
         loads=[dict(type='fixed_temperature', target='face:zmin', T=298.15),
@@ -155,14 +162,14 @@ def inspect_run(run_dir, stack, preview_count, measurements, np, h5py):
         if key != 'T_max':
             assert summary[key] > 0, (key, summary)
     measurements['qoi'] = {key: summary[key] for key in QOIS}
-    conductivity = {'mat.cu': 390, 'mat.fr4': .3}
+    conductivity = {'mat.cu': 390, 'mat.fr4_eq': .3}
     layers = []
     for layer in stack['layers']:
         k = conductivity[layer['material']]
         if 'copper' in layer:
             copper = layer['copper']
             f = copper['fraction']
-            k = 1 / (f / conductivity[copper['metal']] + (1 - f) / conductivity['mat.fr4'])
+            k = 1 / (f / conductivity[copper['metal']] + (1 - f) / conductivity['mat.fr4_eq'])
         layers.append((layer['thickness'], k))
     heat_flux = 50 / (sum(t / k for t, k in layers) + 1 / 1000)
     with h5py.File(artifact(run_dir / 'out/step-0.vtkhdf'), 'r') as file:
@@ -189,7 +196,9 @@ def inspect_run(run_dir, stack, preview_count, measurements, np, h5py):
         error = float(np.max(np.abs(temperatures - expected)))
         assert math.isfinite(error), 'M3 nonfinite temperature error'
         measurements['max_temperature_error_K'] = error
-    readback = read_json(run_dir / 'summary.json')['warpage']['w_bfp_m']
+    warpage = read_json(run_dir / 'summary.json')['warpage']
+    print(f'实测 {run_dir.name} w_bfp_m={warpage["w_bfp_m"]!r}', flush=True)
+    readback = warpage['manifest_warpage_pv_m']
     assert readback is not None and math.isfinite(readback), f'M5 readback warpage={readback!r}'
     relative = abs(readback - summary['warpage_pv']) / abs(summary['warpage_pv'])
     measurements.update(readback_warpage_m=readback, readback_relative_error=relative)
@@ -233,7 +242,7 @@ def write_result(run_dir, ranks, measurements, timings, notes, failures):
         data_class='synthetic', label='实测', date=datetime.now().strftime('%Y%m%d'),
         commit=commit, verdict='fail' if failures else 'pass',
         reference=dict(value=None, type='解析', source='1D 串联热阻，test_ipc_uncut_chain.py 同口径'),
-        qoi=measurements.get('qoi', {}), run=dict(ranks=ranks, **measurements),
+        qoi=measurements.get('qoi', {}), run={**measurements, 'ranks': ranks},
         error=dict(value=measurements.get('max_temperature_error_K'), metric='max_abs_temperature_K'),
         tolerance=dict(value=TEMPERATURE_ATOL, metric='max_abs_temperature_K',
                        readback_relative=READBACK_RTOL, parallel_relative=PARALLEL_RTOL),
@@ -248,12 +257,6 @@ def write_result(run_dir, ranks, measurements, timings, notes, failures):
 
 
 def main():
-    if os.environ.get('CHIPCAE_F1130_RUN_BLOCKED_ACCEPTANCE') == '0':
-        print('GATED: F1130 fixture/acceptance contract unresolved (three zero copper fractions); '
-              'see tests/integration/f1130_uncut_cli/README.md. '
-              'Enable CHIPCAE_F1130_RUN_BLOCKED_ACCEPTANCE for strict diagnostics; '
-              'no end-to-end acceptance is claimed.')
-        return 77
     importer = os.environ.get('CHIPCAE_IMPORT_EXE')
     previewer = os.environ.get('CHIPCAE_PREVIEW_EXE')
     solver = os.environ.get('CHIPCAE_SOLVE_EXE')
@@ -280,7 +283,7 @@ def main():
         try:
             launcher = shutil.which('mpiexec') or shutil.which('mpirun')
             assert launcher, 'ranks=2: launcher not found (mpiexec/mpirun); acceptance requires MPI'
-            material_map = SOURCE / 'tests/integration/import_cli/material_map.json'
+            material_map = Path(__file__).resolve().with_name('material_map.json')
             run_command('import', [importer, SOURCE / 'tests/integration/ecad/data/board_4layer.xml',
                                   '-o', 'stack.json', '--polyset', 'stack.polyset',
                                   '--report', 'defects.json', '--material-map', material_map],
@@ -387,27 +390,30 @@ def main():
 
 
 class AcceptanceRecords(unittest.TestCase):
-    def test_solver_inputs_retain_specified_mesh_and_golden_material_ids(self):
+    def test_solver_inputs_use_preview_minimum_and_equivalent_fr4(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             write_solver_inputs(root)
             case = read_json(root / 'case.json')
             self.assertEqual(case['mesh'], dict(type='aligned_cartesian_cut', nx=4, ny=4,
-                                                levels=0, max_ratio=100))
+                                                levels=0, max_ratio=100, min_elems_per_layer=1))
             materials = read_json(root / 'materials.json')['materials']
-            self.assertEqual([material['id'] for material in materials], ['mat.cu', 'mat.fr4'])
+            self.assertEqual([material['id'] for material in materials], ['mat.cu', 'mat.fr4_eq'])
 
-    def test_import_rejects_changed_literal_material_id(self):
+    def test_import_normalizes_golden_copy_and_rejects_unmapped_material_id(self):
         golden = read_json(SOURCE / 'tests/integration/import_cli/golden/board_4layer/stack.json')
         original = json.dumps(golden)
         imported = json.loads(original)
+        for layer in imported['layers']:
+            if layer['material'] == 'mat.fr4':
+                layer['material'] = 'mat.fr4_eq'
         compare_import(imported, golden)
         imported['layers'][0]['material'] = 'mat_cu'
         with self.assertRaisesRegex(AssertionError, 'material:'):
             compare_import(imported, golden)
         self.assertEqual(json.dumps(golden), original)
 
-    def test_zero_copper_fraction_cannot_be_accepted(self):
+    def test_fixture_fractions_accept_empty_inner_and_bottom_copper_only(self):
         imported = read_json(SOURCE / 'tests/integration/import_cli/golden/board_4layer/stack.json')
         converted = json.loads(json.dumps(imported))
         entries = []
@@ -417,11 +423,25 @@ class AcceptanceRecords(unittest.TestCase):
                 layer['copper'] = dict(metal='mat.cu', fraction=fraction)
                 entries.append(dict(layer=layer['name'], fraction=fraction))
         measurements = {}
-        with redirect_stdout(StringIO()), self.assertRaisesRegex(
-                AssertionError, 'copper fraction In1.Cu: actual=0.0'):
+        with redirect_stdout(StringIO()):
             compare_fractions(dict(layers=entries), converted, imported, measurements)
         self.assertTrue(math.isclose(measurements['copper_fractions']['In1.Cu'], 0.0,
                                      rel_tol=0, abs_tol=1e-15))
+        for entry in entries:
+            invalid_fractions = ((-.01, 0, .5, 1.01, float('nan'), float('inf'))
+                                 if entry['layer'] == 'F.Cu'
+                                 else (-.01, .01, float('nan'), float('inf')))
+            for invalid in invalid_fractions:
+                with self.subTest(layer=entry['layer'], invalid=invalid):
+                    original_fraction = entry['fraction']
+                    entry['fraction'] = invalid
+                    layer = next(layer for layer in converted['layers']
+                                 if layer['name'] == entry['layer'])
+                    layer['copper']['fraction'] = invalid
+                    with redirect_stdout(StringIO()), self.assertRaises(AssertionError):
+                        compare_fractions(dict(layers=entries), converted, imported, {})
+                    entry['fraction'] = original_fraction
+                    layer['copper']['fraction'] = original_fraction
 
     def write_record(self, root, checks, failures=(), ranks=1):
         measurements = dict(
@@ -464,8 +484,7 @@ class AcceptanceRecords(unittest.TestCase):
         except ImportError:
             self.skipTest('main requires numpy/h5py')
         output = StringIO()
-        env = dict(CHIPCAE_F1130_RUN_BLOCKED_ACCEPTANCE='1',
-                   CHIPCAE_IMPORT_EXE='unused-importer', CHIPCAE_PREVIEW_EXE='unused-previewer',
+        env = dict(CHIPCAE_IMPORT_EXE='unused-importer', CHIPCAE_PREVIEW_EXE='unused-previewer',
                    CHIPCAE_SOLVE_EXE='unused-solver')
         # Launcher discovery is an external dependency; keep verdict generation real.
         with patch.dict(os.environ, env), patch.object(shutil, 'which', return_value=None), \
@@ -496,7 +515,7 @@ class AcceptanceRecords(unittest.TestCase):
                     self.assertEqual(failed['verdict'], 'fail')
                     self.assertEqual(passed['verdict'], 'pass')
 
-    def test_main_raises_accumulated_failures_after_writing_gated_results(self):
+    def test_main_raises_accumulated_failures_after_writing_results(self):
         try:
             import numpy  # noqa: F401
             import h5py  # noqa: F401
@@ -505,8 +524,7 @@ class AcceptanceRecords(unittest.TestCase):
         output = StringIO()
         with tempfile.TemporaryDirectory() as directory:
             absent = str(Path(directory) / 'absent-executable')
-            env = dict(CHIPCAE_F1130_RUN_BLOCKED_ACCEPTANCE='1',
-                       CHIPCAE_IMPORT_EXE=absent, CHIPCAE_PREVIEW_EXE=absent,
+            env = dict(CHIPCAE_IMPORT_EXE=absent, CHIPCAE_PREVIEW_EXE=absent,
                        CHIPCAE_SOLVE_EXE=absent)
             with patch.dict(os.environ, env), redirect_stdout(output), redirect_stderr(StringIO()):
                 with self.assertRaises(AssertionError):
@@ -515,17 +533,23 @@ class AcceptanceRecords(unittest.TestCase):
         self.assertEqual(record['verdict'], 'fail')
         self.assertEqual(record['qoi'], {})
 
-    def test_fixture_contract_gate_skips_without_claiming_acceptance(self):
+    def test_retired_fixture_gate_does_not_skip_configured_backends(self):
+        try:
+            import numpy  # noqa: F401
+            import h5py  # noqa: F401
+        except ImportError:
+            self.skipTest('main requires numpy/h5py')
         output = StringIO()
-        # Even configured backends must not run or emit a passing result while gated.
-        env = dict(CHIPCAE_F1130_RUN_BLOCKED_ACCEPTANCE='0',
-                   CHIPCAE_IMPORT_EXE='unused-importer', CHIPCAE_PREVIEW_EXE='unused-previewer',
-                   CHIPCAE_SOLVE_EXE='unused-solver')
-        with patch.dict(os.environ, env), redirect_stdout(output):
-            self.assertEqual(main(), 77)
-        self.assertIn('GATED:', output.getvalue())
-        self.assertNotIn('COMMAND ', output.getvalue())
-        self.assertNotIn('RESULT ', output.getvalue())
+        with tempfile.TemporaryDirectory() as directory:
+            absent = str(Path(directory) / 'absent-executable')
+            env = dict(CHIPCAE_F1130_RUN_BLOCKED_ACCEPTANCE='0',
+                       CHIPCAE_IMPORT_EXE=absent, CHIPCAE_PREVIEW_EXE=absent,
+                       CHIPCAE_SOLVE_EXE=absent)
+            with patch.dict(os.environ, env), redirect_stdout(output), redirect_stderr(StringIO()):
+                with self.assertRaises(AssertionError):
+                    main()
+        self.assertNotIn('GATED:', output.getvalue())
+        self.assertIn('RESULT ranks1/result.json', output.getvalue())
 
     def test_numerical_check_completes_only_after_all_inspection_assertions(self):
         try:
@@ -534,11 +558,15 @@ class AcceptanceRecords(unittest.TestCase):
         except ImportError:
             self.skipTest('inspection requires numpy/h5py')
         # Hand-derived reference points for a 1 mm layer at z=0, 0.5 and 1 mm.
-        # FR4: R=1/300, q=150000/13; T(mid/top)=298.15+(250/13, 500/13).
+        # FR4 (also f=0 copper): R=1/300, q=150000/13;
+        # T(mid/top)=298.15+(250/13, 500/13).
         # 50% copper in FR4: R=1301/780000, q=39000000/2081;
         # T(mid/top)=298.15+(32525/2081, 65050/2081). A copper matrix is wrong.
         cases = [
-            (dict(material='mat.fr4', thickness=.001),
+            (dict(material='mat.fr4_eq', thickness=.001),
+             [298.15, 317.3807692307692, 336.61153846153843]),
+            (dict(material='mat.cu', thickness=.001,
+                  copper=dict(metal='mat.cu', fraction=0)),
              [298.15, 317.3807692307692, 336.61153846153843]),
             (dict(material='mat.cu', thickness=.001,
                   copper=dict(metal='mat.cu', fraction=.5)),
@@ -546,7 +574,7 @@ class AcceptanceRecords(unittest.TestCase):
         ]
         for layer, reference in cases:
             for failure in (None, 'temperature', 'readback', 'qoi'):
-                with self.subTest(material=layer['material'], failure=failure), \
+                with self.subTest(layer=layer, failure=failure), \
                         tempfile.TemporaryDirectory() as directory:
                     root = Path(directory)
                     (root / 'out').mkdir()
@@ -556,8 +584,9 @@ class AcceptanceRecords(unittest.TestCase):
                             dict(name='warpage_pv', value=warpage),
                             dict(name='U_mag_max', value=2e-6), dict(name='T_max', value=336.62)]))
                     write_json(root / 'summary.json', dict(
-                        warpage=dict(manifest_warpage_pv_m=warpage,
-                                     w_bfp_m=1e-6 * (1 + 6.8e-12) if failure == 'readback' else 1e-6)))
+                        warpage=dict(manifest_warpage_pv_m=(
+                            warpage * (1 + 6.8e-12) if failure == 'readback' else warpage),
+                            w_bfp_m=2e-6)))
                     with h5py.File(root / 'out/step-0.vtkhdf', 'w') as file:
                         file['VTKHDF/cut/NumberOfCells'] = [0]
                         file['VTKHDF/hex/NumberOfCells'] = [1]
