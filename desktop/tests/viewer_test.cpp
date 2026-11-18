@@ -120,12 +120,16 @@ void checkScalarBar(ResultView& view) {
     }
     require(count == (view.colorRange().valid ? 1 : 0), "scalar bar presence");
 }
-void checkRange(ResultView& view, ResultColorField field) {
+void checkRange(ResultView& view, ResultColorField field, const QStringList& hidden = {}) {
     checkScalarBar(view);
     double low = std::numeric_limits<double>::infinity();
     double high = -low;
     for (const auto& name : displayedBlocks) {
         auto block = view.displayed(name);
+        if (hidden.contains(name)) {
+            require(!block || !block->GetNumberOfCells(), "hidden block still displayed");
+            continue;
+        }
         if (!block || !block->GetNumberOfCells())
             continue;
         auto array =
@@ -239,13 +243,20 @@ int acceptance(const QDir& root) {
             auto kinds = grid->GetCellData()->GetArray("cell_kind");
             auto t = grid->GetPointData()->GetArray("T");
             require(kinds && t, "synthetic fixture requires cell_kind and T");
+            // Shared points take the lowest non-void temperature; only private void
+            // points get the extreme value, independently of cell iteration order.
+            std::vector<double> temperatures(grid->GetNumberOfPoints(), 1e12);
             vtkNew<vtkIdList> points;
             for (vtkIdType cell = 0; cell < grid->GetNumberOfCells(); ++cell) {
                 const double kind = kinds->GetComponent(cell, 0);
                 grid->GetCellPoints(cell, points);
-                for (vtkIdType i = 0; i < points->GetNumberOfIds(); ++i)
-                    t->SetComponent(points->GetId(i), 0, kind == 2 ? 1e12 : kind == 1 ? 300 : 400);
+                for (vtkIdType i = 0; i < points->GetNumberOfIds(); ++i) {
+                    auto& temperature = temperatures[points->GetId(i)];
+                    temperature = std::min(temperature, kind == 2 ? 1e12 : kind == 1 ? 300 : 400);
+                }
             }
+            for (vtkIdType i = 0; i < grid->GetNumberOfPoints(); ++i)
+                t->SetComponent(i, 0, temperatures[i]);
         });
         ResultSession session;
         require(session.open(temp.filePath("step.vtkhdf")), qPrintable(session.error()));
@@ -336,7 +347,7 @@ int acceptance(const QDir& root) {
                         "repeated range differs");
                 checkRange(view, field);
                 view.setBlockVisible("hex", false);
-                checkRange(view, field);
+                checkRange(view, field, {"hex"});
                 view.setBlockVisible("hex", true);
                 checkRange(view, field);
                 view.setLayer(1);
@@ -426,12 +437,16 @@ int acceptance(const QDir& root) {
             unavailable |= label->text().contains("Field: unavailable");
         require(unavailable, "invalid clip left summary range stale");
         view.setClip(false);
+        QComboBox* steps = nullptr;
         for (auto combo : controls.findChildren<QComboBox*>())
             if (combo != fields && combo->count() > 1 && combo->itemText(0) == "0" &&
-                combo->itemText(1) == "1") {
-                combo->setCurrentIndex(1);
-                checkSummaryLabel(controls, view);
-            }
+                combo->itemText(1) == "1")
+                steps = combo;
+        require(steps, "step combo missing");
+        const auto previousTmax = view.tmaxText();
+        steps->setCurrentIndex(1);
+        require(view.tmaxText() != previousTmax, "step combo did not load the next step");
+        checkSummaryLabel(controls, view);
     });
     run("optional T_max location", [&] {
         ResultSession source;
@@ -604,47 +619,74 @@ int acceptance(const QDir& root) {
             });
         }
     }
-    for (const auto& degraded : {QJsonValue("true"),
-                                 QJsonValue(1),
-                                 QJsonValue(QJsonValue::Null),
-                                 QJsonValue(QJsonArray{}),
-                                 QJsonValue(QJsonObject{})}) {
-        run("malformed degraded provenance", [&] {
-            ResultSession session;
-            require(session.open(root.filePath("default")), qPrintable(session.error()));
-            ResultView view;
-            require(view.loadStep(session, 0), qPrintable(view.error()));
-            // Start clean so rejection must restore all non-real markings.
-            require(view.setProvenance({{"schema", "chipcae.provenance/0.1"},
-                                        {"source", "real"},
-                                        {"degraded", false}}),
-                    "boolean false degraded rejected");
-            require(view.provenanceWatermark().isEmpty() && view.provenanceBanner().isEmpty(),
-                    "boolean false degraded marked");
-            require(!view.setProvenance({{"schema", "chipcae.provenance/0.1"},
-                                         {"source", "real"},
-                                         {"degraded", degraded}}),
-                    "non-boolean degraded accepted");
-            require(view.provenanceWatermark() == "MOCK" &&
-                        view.provenanceBanner().contains(QStringLiteral("来源未知")) &&
-                        !view.provenanceBanner().contains(QStringLiteral("真实计算")),
-                    "malformed degraded suppressed provenance markings");
-            bool visibleBanner = false;
-            for (auto label : view.findChildren<QLabel*>())
-                if (label->text() == view.provenanceBanner())
-                    visibleBanner = !label->isHidden() && label->isVisibleTo(&view);
-            require(visibleBanner, "malformed degraded banner hidden");
-            int overlays = 0;
-            auto props = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetViewProps();
-            props->InitTraversal();
-            while (auto prop = props->GetNextProp())
-                if (auto text = vtkTextActor::SafeDownCast(prop)) {
-                    ++overlays;
-                    require(text->GetVisibility() && QString(text->GetInput()) == "MOCK",
-                            "malformed degraded viewport marking suppressed");
-                }
-            require(overlays == 1, "malformed degraded viewport overlay missing");
-        });
+    for (const auto& origin :
+         {QJsonObject{{"source", "real"}},
+          QJsonObject{{"source", "real"}, {"effective_source", "real"}},
+          QJsonObject{{"source", "real"}, {"effective_source", "precomputed"}},
+          QJsonObject{{"source", "real"}, {"effective_source", "mock"}},
+          QJsonObject{{"source", "precomputed"}},
+          QJsonObject{{"source", "precomputed"}, {"effective_source", "precomputed"}},
+          QJsonObject{{"source", "precomputed"}, {"effective_source", "mock"}},
+          QJsonObject{{"source", "mock"}},
+          QJsonObject{{"source", "mock"}, {"effective_source", "mock"}}}) {
+        for (const auto& degraded : {QJsonValue("true"),
+                                     QJsonValue(1),
+                                     QJsonValue(QJsonValue::Null),
+                                     QJsonValue(QJsonArray{}),
+                                     QJsonValue(QJsonObject{})}) {
+            const auto name = "malformed degraded provenance " + origin["source"].toString() + "/" +
+                              origin["effective_source"].toString() +
+                              " type=" + QString::number(degraded.type());
+            run(qPrintable(name), [&] {
+                ResultSession session;
+                require(session.open(root.filePath("default")), qPrintable(session.error()));
+                ResultView view;
+                require(view.loadStep(session, 0), qPrintable(view.error()));
+                // Start clean so rejection must restore all non-real markings.
+                require(view.setProvenance({{"schema", "chipcae.provenance/0.1"},
+                                            {"source", "real"},
+                                            {"degraded", false}}),
+                        "boolean false degraded rejected");
+                require(view.provenanceWatermark().isEmpty() && view.provenanceBanner().isEmpty(),
+                        "boolean false degraded marked");
+                auto malformed = origin;
+                malformed["schema"] = "chipcae.provenance/0.1";
+                malformed["degraded"] = degraded;
+                require(!view.setProvenance(malformed), "non-boolean degraded accepted");
+                require(view.provenanceWatermark() == "MOCK" &&
+                            view.provenanceBanner().contains(QStringLiteral("来源未知")) &&
+                            !view.provenanceBanner().contains(QStringLiteral("真实计算")),
+                        "malformed degraded suppressed provenance markings");
+                bool visibleBanner = false;
+                for (auto label : view.findChildren<QLabel*>())
+                    if (label->text() == view.provenanceBanner())
+                        visibleBanner = !label->isHidden() && label->isVisibleTo(&view);
+                require(visibleBanner, "malformed degraded banner hidden");
+                int overlays = 0;
+                auto props =
+                    view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetViewProps();
+                props->InitTraversal();
+                while (auto prop = props->GetNextProp())
+                    if (auto text = vtkTextActor::SafeDownCast(prop)) {
+                        ++overlays;
+                        require(text->GetVisibility() && QString(text->GetInput()) == "MOCK",
+                                "malformed degraded viewport marking suppressed");
+                    }
+                require(overlays == 1, "malformed degraded viewport overlay missing");
+                require(view.setProvenance({{"schema", "chipcae.provenance/0.1"},
+                                            {"source", "real"},
+                                            {"degraded", false}}),
+                        "clean provenance rejected after malformed degraded");
+                require(view.provenanceWatermark().isEmpty() && view.provenanceBanner().isEmpty(),
+                        "clean provenance retained malformed markings");
+                for (auto label : view.findChildren<QLabel*>())
+                    require(label->isHidden(), "clean provenance retained malformed banner");
+                props->InitTraversal();
+                while (auto prop = props->GetNextProp())
+                    require(!vtkTextActor::SafeDownCast(prop),
+                            "clean provenance retained malformed viewport overlay");
+            });
+        }
     }
     run("mock real mock transition", [&] {
         ResultSession session;
@@ -688,27 +730,31 @@ int acceptance(const QDir& root) {
         require(view.capture(baselinePath), "baseline capture");
         const QImage baseline(baselinePath);
         require(!baseline.isNull(), "baseline image decode");
-        for (auto source : {"mock", "precomputed", "real"}) {
-            require(
-                view.setProvenance(
-                    {{"schema", "chipcae.provenance/0.1"}, {"source", source}, {"degraded", true}}),
-                "capture provenance");
+        for (auto object : {QJsonObject{{"source", "mock"}, {"degraded", true}},
+                            QJsonObject{{"source", "precomputed"}, {"degraded", true}},
+                            QJsonObject{{"source", "real"}, {"degraded", true}},
+                            QJsonObject{{"source", "real"}, {"degraded", "true"}}}) {
+            object["schema"] = "chipcae.provenance/0.1";
+            const auto source = object["source"].toString();
+            const bool malformed = !object["degraded"].isBool();
+            require(view.setProvenance(object) == !malformed, "capture provenance");
             auto props = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetViewProps();
             vtkTextActor* overlay = nullptr;
             props->InitTraversal();
             while (auto prop = props->GetNextProp())
                 if (auto text = vtkTextActor::SafeDownCast(prop))
                     overlay = text;
-            const QString expected = QString(source) == "precomputed" ? "PRECOMPUTED"
-                                     : QString(source) == "real"      ? "DEGRADED"
-                                                                      : "MOCK";
+            const QString expected = malformed                 ? "MOCK"
+                                     : source == "precomputed" ? "PRECOMPUTED"
+                                     : source == "real"        ? "DEGRADED"
+                                                               : "MOCK";
             require(overlay && QString::fromUtf8(overlay->GetInput()) == expected,
                     "viewport watermark text");
             require(overlay->GetTextProperty()->GetOpacity() > 0 &&
                         overlay->GetTextProperty()->GetOpacity() < 1,
                     "watermark opacity");
             require(overlay->GetTextProperty()->GetOrientation() == 30, "diagonal watermark");
-            const auto path = temp.filePath(QString(source) + ".png");
+            const auto path = temp.filePath(source + (malformed ? "-malformed.png" : ".png"));
             require(view.capture(path), "watermarked capture");
             const QImage marked(path);
             require(!marked.isNull() && marked.size() == baseline.size(),
