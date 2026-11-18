@@ -54,3 +54,22 @@ PY
 ```
 
 Output grid paths vary with `-o`; they do not participate in the mesh digest.
+
+## Cell-budget red phase
+
+The same unmodified pre-change Release executable was run with this fixture and
+`--nx 50001 --ny 1 --levels 1 -o /tmp/tiny-budget-red` on 2026-11-18.
+`budget.stdout.jsonl`, `budget.stderr.txt`, and `budget.exit-code.txt` capture
+its output and exit status. It exits **1**, so the acceptance requirement
+`exit_code == 14` evaluates false; stderr identifies `cell_budget`.
+The test validates these records before requiring exit 14 from the current CLI.
+
+Reproduce after the build above:
+
+```sh
+export OMP_NUM_THREADS=1 OMP_PROC_BIND=false
+"$preview" "$fixture" --nx 50001 --ny 1 --levels 1 -o /tmp/tiny-budget-red > /tmp/tiny-budget-red.stdout.jsonl 2> /tmp/tiny-budget-red.stderr.txt
+code=$?
+test "$code" -eq 1
+test "$code" -ne 14
+```
