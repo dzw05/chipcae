@@ -10,6 +10,14 @@ int main() {
         invalid_input(merge_parts(b, {part("R")}, options()), "part id collides with R");
         b.layers[0].regions[0].name = "lid.bond";
         invalid_input(merge_parts(b, {part()}, options()), "part id collides with lid.bond");
+        for (const auto& name : {"lid#0#0", "lid#0#0#0", "lid.bond#0#0"})
+            for (bool body : {false, true}) {
+                b = base();
+                b.layers[0].regions.push_back(
+                    {body ? "seed" : name, "seed", body ? name : "", {{0, 0, .001, .001}, {}}});
+                invalid_input(merge_parts(b, {part("lid", .0005, .0015)}, options()),
+                              std::string("part id collides with ") + name);
+            }
         b = base();
         auto l = b.layers[0];
         l.name = "Core#0";

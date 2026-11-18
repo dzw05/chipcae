@@ -16,6 +16,11 @@ void unsupported(PlacedPart p, const std::string& reason, size_t slab = 0) {
                   "unsupported reason detail");
         }
     check(count == 1, "exactly one unsupported cut defect");
+    if (p.slabs.size() == 1) {
+        check(r.value().stack.layers.size() == 1 && r.value().stack.layers[0].name == "Core" &&
+                  r.value().stack.layers[0].thickness == .001,
+              "unsupported source cannot split or extend base");
+    }
     for (auto& l : r.value().stack.layers)
         for (auto& r : l.regions)
             check(!r.name.starts_with(p.id + "#" + std::to_string(slab) + "#"),
@@ -33,6 +38,10 @@ int main() {
             auto placed = place(p.slabs, a, base());
             check(bool(placed), "rotate negative fixture");
             p.slabs = placed.value().slabs;
+            auto interior = p;
+            interior.slabs[0].z0 = .0003;
+            interior.slabs[0].z1 = .0007;
+            unsupported(interior, hole ? "holed non-rectilinear section" : "non-convex section");
             unsupported(p, hole ? "holed non-rectilinear section" : "non-convex section");
         }
         SlabSection chamfer{Ring{{{.002, 0},

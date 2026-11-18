@@ -59,6 +59,10 @@ inline bool covers(const Footprint& f, double x, double y) {
     return in;
 }
 inline void invariants(const MergeResult& r, double total) {
+    for (const auto& d : r.defects)
+        check(d.size == 0 && d.dimension.empty() && d.suggestion.empty() && d.kind.empty() &&
+                  d.action.empty() && d.rejection_reason.empty() && !d.material_ambiguous,
+              "diagnostic ancillary fields retain defaults");
     std::set<std::string> names;
     double sum = 0;
     std::set<std::string> regions;

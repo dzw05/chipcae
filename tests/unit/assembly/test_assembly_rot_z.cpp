@@ -28,6 +28,10 @@ int main() {
         auto rectangle = p.value().slabs;
         rectangle[0].sections.resize(1);
         auto m = merge(base(), {{"lid", "metal", rectangle}});
+        auto contained_base = base();
+        contained_base.outline.box = {-.02, -.02, .02, .02};
+        auto contained = merge(contained_base, {{"contained", "metal", rectangle}});
+        check(contained.defects.empty(), "contained rotated prism has no defects");
         for (auto& v : m.stack.layers.back().regions) {
             auto& q = v.footprint.polygon;
             check(!q.empty(), "rotated polygon");

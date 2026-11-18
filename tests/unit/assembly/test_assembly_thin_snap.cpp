@@ -40,6 +40,11 @@ int main() {
                 }
                 near(z, .001);
             }
+        auto interior = merge(base(), {part("interior", .0005, .000505)}, .001);
+        check(interior.stack.layers.size() == 1 && interior.stack.layers[0].name == "Core" &&
+                  interior.stack.layers[0].thickness == .001 &&
+                  interior.stack.layers[0].regions.empty(),
+              "collapsed interior source cannot split base");
         auto remote = merge(base(), {part("remote", .002, .002005)}, .001);
         check(remote.stack.layers.size() == 1 && remote.stack.layers[0].regions.empty(),
               "eliminated remote source cannot extend stack with phantom void");

@@ -285,14 +285,12 @@ Real intersection(const Footprint& a, const Footprint& b) {
             sum += convex_intersection(x, y);
     return sum;
 }
-Defect diagnostic(
-    Tier tier, DefectReason reason, const std::string& id, Real size, const std::string& details) {
+Defect
+diagnostic(Tier tier, DefectReason reason, const std::string& id, const std::string& details) {
     Defect d{};
     d.tier = tier;
     d.reason = reason;
     d.defect_id = id;
-    d.size = size;
-    d.dimension = reason == DefectReason::THIN_LAYER_MERGED ? "thickness" : "area";
     d.details = details;
     return d;
 }
@@ -417,8 +415,9 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
             return invalid("duplicate part id " + p.id);
         if (p.id.empty() || !valid_slabs(p.slabs))
             return invalid("empty slabs or invalid geometry");
-        for (const auto& name : {p.id, p.id + ".bond"})
-            if (reserved.count(name))
+        for (const auto& name : reserved)
+            if (name == p.id || name == p.id + ".bond" || name.starts_with(p.id + "#") ||
+                name.starts_with(p.id + ".bond#"))
                 return invalid("part id collides with " + name);
     }
     std::set<Real> interfaces(boundaries.begin(), boundaries.end());
@@ -481,7 +480,6 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
                 result.defects.push_back(diagnostic(Tier::B,
                                                     DefectReason::THIN_LAYER_MERGED,
                                                     p.id + "/thin#" + std::to_string(thin_index),
-                                                    before,
                                                     details.str()));
             };
             for (size_t i = 1; i < cuts.size(); ++i) {
@@ -507,7 +505,6 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
                     diagnostic(Tier::C,
                                DefectReason::PART_NOT_PRISMATIC,
                                p.id + "/cut_unsupported#" + std::to_string(slabs.size()),
-                               0,
                                "cut_unsupported: " + reason));
             } else
                 prior_polygon = std::move(candidate_polygon);
@@ -518,20 +515,16 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
         }
         sources.push_back(std::move(slabs));
     }
-    // Eliminated sources must not leave a remote interface that extends the
-    // stack with a phantom void layer. Keep the base extent and the extents of
-    // surviving sources, including genuine void gaps between them.
-    Real bottom = 0, top = boundaries.back();
+    // Only surviving geometry may split or extend the base stack. Keep the
+    // original Source entries so slab indices in diagnostics and names survive.
+    std::set<Real> surviving_interfaces(boundaries.begin(), boundaries.end());
     for (const auto& part_sources : sources)
         for (const auto& source : part_sources)
-            if (source.lo < source.hi) {
-                bottom = std::min(bottom, source.lo);
-                top = std::max(top, source.hi);
+            if (source.lo < source.hi && !source.regions.empty()) {
+                surviving_interfaces.insert(source.lo);
+                surviving_interfaces.insert(source.hi);
             }
-    std::vector<Real> zs;
-    for (Real z : interfaces)
-        if (z >= bottom && z <= top)
-            zs.push_back(z);
+    std::vector<Real> zs(surviving_interfaces.begin(), surviving_interfaces.end());
     result.stack.layers.clear();
     std::vector<size_t> split_counts(base.layers.size(), 0), split_indices(base.layers.size(), 0);
     auto owner = [&](Real midpoint) -> size_t {
@@ -652,7 +645,6 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
                                                             DefectReason::PART_OVERLAP,
                                                             parts[p].id + "#" + std::to_string(s) +
                                                                 "/overlap/" + overlap.name,
-                                                            overlap.area,
                                                             "overlap with " + overlap.body));
                 for (size_t f = 0; f < src.regions.size(); ++f) {
                     Inclusion region{parts[p].id + "#" + std::to_string(s) + "#" +
@@ -671,11 +663,17 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
                         region.name += "#" + std::to_string(index);
                     Real a = area(polygon(region.footprint));
                     Real inside = intersection(region.footprint, base.outline);
-                    if (a - inside > 0)
+                    // Exact containment in a box avoids subtracting independently
+                    // rounded areas, without hiding even a one-ULP outside sliver.
+                    const auto& box = region.footprint.box;
+                    const auto& outline = base.outline;
+                    bool contained = outline.polygon.empty() && box[0] >= outline.box[0] &&
+                                     box[1] >= outline.box[1] && box[2] <= outline.box[2] &&
+                                     box[3] <= outline.box[3];
+                    if (!contained && a - inside > 0)
                         result.defects.push_back(diagnostic(Tier::C,
                                                             DefectReason::PART_OUTSIDE_OUTLINE,
                                                             region.name + "/outside",
-                                                            a - inside,
                                                             "region outside fixed outline"));
                     l.regions.push_back(std::move(region));
                 }
