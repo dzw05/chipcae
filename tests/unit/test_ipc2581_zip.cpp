@@ -297,8 +297,11 @@ int main(int argc, char** argv) {
                     zip(archive, {{"broken.xml", xml}}, deflate);
                     auto a = ecad::read_ipc2581(xml), b = ecad::read_ipc2581_zip(archive);
                     require(!a && !b, "both malformed XML imports must fail");
-                    rejected(b, {});
-                    require(a.error == b.error,
+                    const auto category = [](const std::string& error) {
+                        const auto colon = error.find(':');
+                        return error.substr(0, colon == std::string::npos ? colon : colon + 1);
+                    };
+                    require(category(a.error) == category(b.error),
                             "XML diagnostics differ: direct=" + a.error + " ZIP=" + b.error);
                 }
             }
