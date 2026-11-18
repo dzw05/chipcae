@@ -16,32 +16,6 @@
 #include <utility>
 #include <vector>
 
-// Compile-only stubs live in the test executable, never in chipcae_fem. The implementation's
-// public feature definition disables them, so real GMG code must satisfy every assertion below.
-#ifndef CHIPCAE_FEM_COLUMN_GMG
-namespace chipcae::fem {
-ColumnGmgHierarchy build_column_gmg_hierarchy(const mesh::HexMeshArrays&,
-                                              bool,
-                                              int,
-                                              const mfem::FiniteElementSpace&,
-                                              const mfem::Array<int>&) {
-    return {};
-}
-
-ColumnGmgStats solve_column_gmg(const mesh::HexMeshArrays&,
-                                bool,
-                                int,
-                                const mfem::FiniteElementSpace&,
-                                const mfem::SparseMatrix&,
-                                const mfem::Array<int>&,
-                                const mfem::Vector&,
-                                mfem::Vector&,
-                                const ColumnGmgOptions&) {
-    return {};
-}
-} // namespace chipcae::fem
-#endif
-
 namespace {
 using namespace chipcae;
 
@@ -445,6 +419,41 @@ void check_divergence() {
     throw std::runtime_error("max_iter=1 must throw an ordinary solver runtime_error");
 }
 
+void check_setup_error(bool singular_block) {
+    Fixture f(2, 1);
+    mfem::Vector diagonal(f.space.GetTrueVSize());
+    diagonal = singular_block ? 1. : -1.;
+    for (int tdof : f.essential)
+        diagonal[tdof] = 1.;
+    if (singular_block) {
+        int zero_diagonals = 0;
+        for (int s = 0; s < f.space.GetNDofs(); ++s) {
+            const auto p = f.point(s);
+            if (std::abs(p[0]) < 1e-13 && std::abs(p[1]) < 1e-13 && std::abs(p[2] - .5) < 1e-13) {
+                diagonal[f.space.DofToVDof(s, 0)] = 0.;
+                ++zero_diagonals;
+            }
+        }
+        require(zero_diagonals == 1, "singular-block fixture must zero one free diagonal");
+    }
+    mfem::SparseMatrix a(diagonal);
+    mfem::Vector b(diagonal.Size()), x;
+    b = 1.;
+    const std::string expected = singular_block
+                                     ? "column_gmg: singular column block level 1 block 0"
+                                     : "column_gmg: coarse operator level 0 not positive";
+    try {
+        (void)fem::solve_column_gmg(f.arrays, false, 1, f.space, a, f.essential, b, x);
+    } catch (const fem::ColumnGmgUnsupported& e) {
+        throw std::runtime_error(std::string("setup error must not trigger fallback: ") + e.what());
+    } catch (const std::runtime_error& e) {
+        require(std::string(e.what()) == expected,
+                "callback diagnostic must reach C++ boundary: " + std::string(e.what()));
+        return;
+    }
+    throw std::runtime_error("expected setup error: " + expected);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -518,6 +527,8 @@ int main(int argc, char** argv) {
         run("zero RHS", check_zero_rhs);
         run("SPD solve and duplicate essential indices", check_solve_and_duplicates);
         run("max_iter divergence is not unsupported", check_divergence);
+        run("coarse nonpositive diagonal", [] { check_setup_error(false); });
+        run("singular column callback diagnostic", [] { check_setup_error(true); });
     } else {
         std::cerr << "expected prolongation or unsupported\n";
         ++failures;

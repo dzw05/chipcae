@@ -16,3 +16,8 @@ if(CHIPCAE_ENABLE_MFEM)
     target_link_libraries(chipcae_fem PUBLIC mfem chipcae_mesh_cut)
     target_compile_definitions(chipcae_fem PUBLIC CHIPCAE_ENABLE_MFEM=1)
 endif()
+
+if(CHIPCAE_ENABLE_MFEM AND MFEM_USE_PETSC)
+    target_sources(chipcae_fem PRIVATE src/column_gmg.cpp)
+    target_compile_definitions(chipcae_fem PUBLIC CHIPCAE_FEM_COLUMN_GMG=1)
+endif()
