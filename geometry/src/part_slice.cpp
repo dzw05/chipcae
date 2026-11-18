@@ -104,7 +104,10 @@ Real area(const Ring& r) {
 void canonical(Ring& r, bool positive) {
     if ((area(r) > 0) != positive)
         std::reverse(r.pts.begin(), r.pts.end());
-    std::rotate(r.pts.begin(), std::min_element(r.pts.begin(), r.pts.end()), r.pts.end());
+    const auto first = std::min_element(r.pts.begin(), r.pts.end(), [](Point a, Point b) {
+        return a[0] < b[0] || (a[0] == b[0] && a[1] < b[1]);
+    });
+    std::rotate(r.pts.begin(), first, r.pts.end());
 }
 bool inside(Point p, const Ring& r) {
     bool yes = false;
@@ -224,11 +227,12 @@ std::vector<SlabSection> sections(std::vector<Ring> rings) {
         else {
             auto hole = rings[i];
             canonical(hole, false);
-            for (auto it = out.rbegin(); it != out.rend(); ++it)
-                if (inside(hole.pts.front(), it->outer)) {
-                    it->holes.push_back(std::move(hole));
-                    break;
-                }
+            const auto parent = std::find_if(out.rbegin(), out.rend(), [&](const auto& section) {
+                return inside(hole.pts.front(), section.outer);
+            });
+            if (parent == out.rend())
+                throw std::runtime_error("section hole has no containing outer");
+            parent->holes.push_back(std::move(hole));
         }
     }
     const auto less = [](const Ring& a, const Ring& b) { return a.pts < b.pts; };
