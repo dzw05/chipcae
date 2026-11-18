@@ -315,13 +315,6 @@ void testMissingCaseReference(const char* caseReference, const QString& external
     else if (externalRefs == "empty")
         fixture.stack["external_refs"] = Json::array();
 
-    const auto issues =
-        requireRejectedImport(document, fixture.stack, fixture.source.absolutePath());
-    require(issues.size() == 1 && issues.front().code == "INPUT_REF_MISSING" &&
-                issues.front().source == "case",
-            "preflight reports the missing case reference");
-    require(!stackDirectory(document, fixture.casePath).exists("polyset.bin"),
-            "a missing case reference prevents sidecar relocation");
     if (externalRefs != "nonempty") {
         require(document.importedStackIssues(fixture.stack).empty() &&
                     document.checkImportedStack(fixture.stack),
@@ -330,6 +323,57 @@ void testMissingCaseReference(const char* caseReference, const QString& external
                     document.stackJson() == fixture.stack && document.errors().empty(),
                 "one-argument replace retains the no-sidecar success path");
     }
+    const auto previousStack = document.stackJson();
+    const auto previousDirty = document.isDirty();
+    const auto previousErrors = document.errors();
+    const auto source = fixture.source.absolutePath();
+    const auto destination = stackDirectory(document, fixture.casePath);
+    const auto entries = destination.entryList(QDir::AllEntries | QDir::NoDotAndDotDot);
+    require(document.importedStackIssues(fixture.stack, source).empty() &&
+                document.checkImportedStack(fixture.stack, source),
+            "explicit-source preflight validates cached case data without reading old files");
+    require(document.stackJson() == previousStack && document.isDirty() == previousDirty &&
+                sameErrors(document.errors(), previousErrors) &&
+                destination.entryList(QDir::AllEntries | QDir::NoDotAndDotDot) == entries,
+            "successful preflight preserves document state and destination files");
+    require(document.replaceImportedStack(fixture.stack, source) &&
+                document.stackJson() == fixture.stack && document.errors().empty(),
+            "explicit-source replace accepts a valid import with a missing old case file");
+    if (externalRefs == "nonempty")
+        requireRelocatedAssets(fixture.stack, document.stackJson(), fixture.source, destination);
+    require(!QFileInfo::exists(fixture.root.filePath(QString::fromStdString(reference))),
+            "import does not recreate unrelated case reference files");
+    require(!document.save(fixture.root.filePath("save-as.json")) &&
+                document.errors().size() == 1 && document.errors().front().code == "DOCUMENT_ERROR",
+            "save still validates missing case references with the legacy error code");
+}
+
+void testLegacyCaseReferenceErrors(const char* caseReference, const QString& change) {
+    ImportFixture fixture;
+    auto& document = fixture.document;
+    const auto previousCase = document.toJson();
+    const auto previousStack = document.stackJson();
+    const auto previousMaterials = document.materialLibrary();
+    const auto previousHash = document.contentHash();
+    auto invalid = previousCase;
+    if (change == "hash")
+        invalid[caseReference]["sha256"] = std::string(64, '0');
+    else
+        invalid[caseReference]["ref"] = change == "missing" ? "missing.json" : "../outside.json";
+    const auto code = change == "hash" ? "INPUT_HASH_MISMATCH" : "DOCUMENT_ERROR";
+
+    document.applyJson(invalid);
+    require(document.errors().size() == 1 && document.errors().front().code == code,
+            "applyJson preserves legacy reference error codes");
+    const auto path = fixture.root.filePath("invalid.case.json");
+    writeBytes(path, QByteArray::fromStdString(invalid.to_string()));
+    require(!document.load(path) && document.errors().size() == 1 &&
+                document.errors().front().code == code,
+            "load preserves legacy reference error codes");
+    require(document.toJson() == previousCase && document.stackJson() == previousStack &&
+                document.materialLibrary() == previousMaterials &&
+                document.contentHash() == previousHash && !document.isDirty(),
+            "failed legacy reference changes preserve the document snapshot");
 }
 
 void testSaveChangedSidecar(const QString& change) {
@@ -356,9 +400,7 @@ void testSaveChangedSidecar(const QString& change) {
     const QDir root(fixture.root.path());
     const auto previousEntries = root.entryList(QDir::AllEntries | QDir::NoDotAndDotDot);
     const auto issues = document.validate();
-    const auto code = change == "symlink" ? "INPUT_REF_INVALID"
-                      : change == "hash"  ? "INPUT_HASH_MISMATCH"
-                                          : "INPUT_REF_MISSING";
+    const auto code = change == "hash" ? "INPUT_HASH_MISMATCH" : "DOCUMENT_ERROR";
     require(issues.size() == 1 && issues.front().code == code,
             "validation identifies the changed loaded sidecar");
     for (const auto& path : {fixture.casePath, fixture.root.filePath("save-as.json")}) {
@@ -666,6 +708,10 @@ bool runImportAcceptance() {
     for (const auto* change : {"symlink", "hash", "missing"})
         run("save changed sidecar " + QString::fromLatin1(change),
             [=] { testSaveChangedSidecar(change); });
+    for (const auto* caseReference : {"stack", "materials"})
+        for (const auto* change : {"invalid", "hash", "missing"})
+            run("legacy " + QString::fromLatin1(caseReference) + " reference " + change,
+                [=] { testLegacyCaseReferenceErrors(caseReference, change); });
     run("duplicates, collision, and retry", testDuplicatesAndCollision);
     run("unsaved import and Save As with multiple polysets", testUnsavedImportAndSave);
     for (const auto* replacement : {"applyJson", "setStackJson", "applyStackJson", "renameLayer"})

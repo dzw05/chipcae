@@ -103,10 +103,21 @@ Json reference(const Json& ref,
                            source);
     return parse ? Json::parse(raw.toStdString()) : Json::object();
 }
-DocumentError exceptionError(const std::exception& e) {
+enum class ErrorContext { Document, StackImport };
+
+DocumentError exceptionError(const std::exception& e,
+                             ErrorContext context = ErrorContext::Document) {
     const auto message = QString::fromUtf8(e.what());
-    if (const auto* located = dynamic_cast<const LocatedError*>(&e))
-        return {located->code, message, located->pointer, located->source};
+    if (const auto* located = dynamic_cast<const LocatedError*>(&e)) {
+        // Detailed input-reference codes belong to the import entry. Existing document APIs
+        // retain their legacy mapping, including the explicit hash and material errors.
+        const auto code = context == ErrorContext::StackImport ||
+                                  located->code == "MATERIAL_ID_DUPLICATE" ||
+                                  located->code == "INPUT_HASH_MISMATCH"
+                              ? located->code
+                              : QStringLiteral("DOCUMENT_ERROR");
+        return {code, message, located->pointer, located->source};
+    }
     return {"DOCUMENT_ERROR", message, {}};
 }
 
@@ -322,10 +333,8 @@ CaseDocument::StackImport CaseDocument::preflightImportedStack(const Json& stack
             validateExternalAssets(stack, QDir(result.sourceRoot), result.assets);
             candidate.validateContents(result.issues);
         }
-        if (result.issues.empty() && !sourceDir.isEmpty() && !path_.isEmpty())
-            validateCaseReferences(data_, QFileInfo(path_).absoluteDir());
     } catch (const std::exception& e) {
-        result.issues.push_back(exceptionError(e));
+        result.issues.push_back(exceptionError(e, ErrorContext::StackImport));
     }
     return result;
 }
@@ -358,7 +367,7 @@ bool CaseDocument::replaceImportedStack(const Json& stack, const QString& source
             path_.isEmpty() && !import.assets.empty() ? std::move(import.sourceRoot) : QString();
         created.keep();
     } catch (const std::exception& e) {
-        errors_ = {exceptionError(e)};
+        errors_ = {exceptionError(e, ErrorContext::StackImport)};
         return false;
     }
     markDirty();
