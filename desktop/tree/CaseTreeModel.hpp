@@ -24,8 +24,7 @@ public:
     bool edit(const QString& identity, Json value);
     void setThermalMode(bool thermal);
     void refresh();
-    // TEST-FIRST stub: annotation behavior intentionally absent.
-    void applyPartSummary(const QJsonArray&) {}
+    void applyPartSummary(const QJsonArray& parts);
 
 private:
     CaseDocument* document_;

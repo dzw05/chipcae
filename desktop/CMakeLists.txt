@@ -224,7 +224,7 @@ if(CHIPCAE_BUILD_TESTS)
     target_link_libraries(desktop_config PRIVATE chipcae_desktop_config)
 endif()
 
-# D16 assembly acceptance (TEST-FIRST stubs only).
+# D16 assembly helpers and acceptance tests.
 target_sources(chipcae_desktop_ui PRIVATE assembly/AssemblyImport.cpp assembly/AssemblyImport.hpp)
 target_include_directories(chipcae_desktop_ui PUBLIC assembly)
 if(CHIPCAE_BUILD_TESTS)
