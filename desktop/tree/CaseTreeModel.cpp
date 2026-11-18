@@ -49,6 +49,7 @@ void CaseTreeModel::append(QStandardItem* parent,
     }
 }
 void CaseTreeModel::refresh() {
+    // Report annotations live on items; reapply the summary after refresh or document changes.
     clear();
     const auto data = document_->toJson();
     const auto stack = document_->stackJson();
@@ -122,6 +123,7 @@ void CaseTreeModel::refresh() {
                key == std::string("output") ? "Results / output" : key);
 }
 void CaseTreeModel::applyPartSummary(const QJsonArray& parts) {
+    // Every summary replaces the annotations, including an empty summary clearing all bodies.
     QMap<QString, bool> approximate;
     for (const auto& part : parts) {
         const auto object = part.toObject();

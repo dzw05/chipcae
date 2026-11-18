@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QTemporaryDir>
 #include <QUrl>
@@ -120,11 +121,25 @@ static void assemblyTreeAcceptance() {
                   lid.data(CaseTreeModel::BodyAnnotationRole) == "近似材料",
               "duplicate false or missing approximation retains earlier true");
     }
-    tree.applyPartSummary(QJsonArray{QJsonObject{{"id", "lid"}, {"material_approx", true}}});
+    const QStringList bodyNames{"lid", "lid.bond", "cap", "Lid"};
+    QJsonArray allApproximate;
+    for (const auto& body : bodyNames)
+        allApproximate.append(QJsonObject{{"id", body}, {"material_approx", true}});
+    tree.applyPartSummary(allApproximate);
+    for (const auto& body : bodyNames) {
+        const auto group = childNamed(tree, bodies, body + " （近似材料）");
+        check(group.isValid() && group.data(CaseTreeModel::BodyAnnotationRole) == "近似材料",
+              "all body groups annotated before empty summary");
+    }
     tree.applyPartSummary(QJsonArray{});
     check(lid.data().toString() == "lid" &&
               lid.data(CaseTreeModel::BodyAnnotationRole).toString().isEmpty(),
           "empty summary clears label and annotation");
+    for (const auto& body : bodyNames) {
+        const auto group = childNamed(tree, bodies, body);
+        check(group.isValid() && group.data(CaseTreeModel::BodyAnnotationRole).toString().isEmpty(),
+              "empty summary restores every body label and clears every annotation");
+    }
     tree.applyPartSummary(QJsonArray{QJsonObject{{"id", "lid"}, {"material_approx", true}}});
     tree.applyPartSummary(QJsonArray{QJsonObject{{"id", "lid"}, {"material_approx", false}}});
     auto cleanLid = childNamed(tree, tree.locate("", "bodies-index"), "lid");
