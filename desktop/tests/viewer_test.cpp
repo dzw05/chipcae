@@ -29,6 +29,7 @@
 #include <vtkDoubleArray.h>
 #include <vtkHDFWriter.h>
 #include <vtkIdList.h>
+#include <vtkIntArray.h>
 #include <vtkNew.h>
 #include <vtkPointData.h>
 #include <vtkPoints.h>
@@ -189,6 +190,102 @@ void checkUnavailable(ResultView& view) {
     require(view.tmaxText() == "T_max: unavailable", "unavailable official T_max");
     require(view.error().isEmpty(), "unavailable field set error");
 }
+const char* idArrayName(ResultColorField field) {
+    require(field == ResultColorField::LayerId || field == ResultColorField::MaterialId,
+            "expected ID color field");
+    return field == ResultColorField::LayerId ? "layer_id" : "material_id";
+}
+void checkIdRange(ResultView& view, ResultSession& session, ResultColorField field) {
+    require(view.colorField() == field, "ID field selection ignored");
+    const auto name = idArrayName(field);
+    int low = std::numeric_limits<int>::max();
+    int high = std::numeric_limits<int>::min();
+    bool titleMatches = false;
+    bool nonempty = false;
+    const auto range = view.colorRange();
+    for (const auto& blockName : displayedBlocks) {
+        auto block = view.displayed(blockName);
+        if (!block || !block->GetNumberOfCells())
+            continue;
+        nonempty = true;
+        auto ids = block->GetCellData()->GetArray(name);
+        require(ids && QString::fromUtf8(ids->GetName()) == name,
+                "displayed ID cell array missing or incorrectly named");
+        require(ids->GetNumberOfComponents() == 1 &&
+                    ids->GetNumberOfTuples() == block->GetNumberOfCells(),
+                "ID array component or tuple count");
+        vtkDataSetMapper* mapper = nullptr;
+        auto actors = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetActors();
+        actors->InitTraversal();
+        while (auto actor = actors->GetNextActor()) {
+            auto candidate = vtkDataSetMapper::SafeDownCast(actor->GetMapper());
+            if (candidate && candidate->GetInput() == block)
+                mapper = candidate;
+        }
+        require(mapper && mapper->GetScalarVisibility(), "ID scalar mapper missing");
+        require(mapper->GetScalarMode() == VTK_SCALAR_MODE_USE_CELL_FIELD_DATA &&
+                    mapper->GetArrayAccessMode() == VTK_GET_ARRAY_BY_NAME,
+                "ID mapper must select cell field by name");
+        require(mapper->GetArrayName() && QString::fromUtf8(mapper->GetArrayName()) == name,
+                "ID mapper selected wrong array");
+        require(mapper->GetScalarRange()[0] == range.min &&
+                    mapper->GetScalarRange()[1] == range.max,
+                "ID mapper range differs from color range");
+        auto lut = mapper->GetLookupTable();
+        require(lut && lut->GetRange()[0] == range.min && lut->GetRange()[1] == range.max,
+                "ID mapper LUT range differs from color range");
+        for (vtkIdType cell = 0; cell < block->GetNumberOfCells(); ++cell) {
+            const double value = ids->GetComponent(cell, 0);
+            const int id = static_cast<int>(value);
+            require(value == static_cast<double>(id), "fixture ID is not integral");
+            low = std::min(low, id);
+            high = std::max(high, id);
+            auto label = field == ResultColorField::LayerId ? session.layerName(id)
+                                                            : session.materialName(id);
+            if (label.isEmpty())
+                label = QString("%1 %2")
+                            .arg(field == ResultColorField::LayerId ? "layer" : "material")
+                            .arg(id);
+            titleMatches |= view.colorBarTitle().contains(label);
+        }
+    }
+    require(nonempty, "ID fixture has no displayed cells");
+    require(range.valid, "ID color range unavailable");
+    require(range.unit.isEmpty(), "ID color range must have no unit");
+    // IDs are integers; the acceptance contract requires exact double equality.
+    require(range.min == static_cast<double>(low) && range.max == static_cast<double>(high),
+            "ID range differs from visible cell IDs");
+    require(titleMatches, "ID title lacks a visible session name or fallback");
+    checkScalarBar(view);
+}
+void checkIdBounds(ResultView& view, double low, double high) {
+    const auto range = view.colorRange();
+    require(range.valid && range.unit.isEmpty() && range.min == low && range.max == high,
+            "ID range differs from independent fixture bounds");
+}
+void checkIdUnavailable(ResultView& view, ResultColorField field) {
+    require(view.colorField() == field, "unavailable ID field selection ignored");
+    require(!view.colorRange().valid, "unavailable ID retained a color range");
+    require(view.colorBarTitle().isEmpty(), "unavailable ID retained a title");
+    require(view.error().isEmpty(), "unavailable ID set an error");
+    checkScalarBar(view);
+    auto actors = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetActors();
+    actors->InitTraversal();
+    while (auto actor = actors->GetNextActor())
+        require(!actor->GetMapper()->GetScalarVisibility(), "unavailable ID scalar coloring");
+}
+void addMaterialIds(vtkUnstructuredGrid* grid) {
+    auto layers = grid->GetCellData()->GetArray("layer_id");
+    require(layers, "material fixture requires layer IDs");
+    vtkNew<vtkIntArray> materials;
+    materials->SetName("material_id");
+    for (vtkIdType cell = 0; cell < grid->GetNumberOfCells(); ++cell) {
+        const int layer = static_cast<int>(layers->GetComponent(cell, 0));
+        require(layer >= 1 && layer <= 3, "unexpected synthetic layer ID");
+        materials->InsertNextValue(10 * layer);
+    }
+    grid->GetCellData()->AddArray(materials);
+}
 void checkSummaryLabel(ResultControls& controls, ResultView& view) {
     auto range = view.colorRange();
     bool found = false;
@@ -236,6 +333,227 @@ int acceptance(const QDir& root) {
             std::cerr << "FAIL " << name << ": " << e.what() << '\n';
         }
     };
+    run("ID enum indices", [&] {
+        const std::array fields = {ResultColorField::Temperature,
+                                   ResultColorField::DisplacementMagnitude,
+                                   ResultColorField::WarpageUz,
+                                   ResultColorField::LayerId,
+                                   ResultColorField::MaterialId};
+        for (int index = 0; index < 5; ++index)
+            require(static_cast<int>(fields[index]) == index, "color field index changed");
+    });
+    run("five field controls and bidirectional synchronization", [&] {
+        ResultSession session;
+        require(session.open(root.filePath("default")), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        ResultControls controls(view, session);
+        QComboBox* fields = nullptr;
+        for (auto combo : controls.findChildren<QComboBox*>())
+            if (combo->itemText(0) == QStringLiteral("温度"))
+                fields = combo;
+        require(fields, "field combo missing");
+        require(fields->count() == 5, "field combo must contain five choices");
+        const QStringList labels = {QStringLiteral("温度"),
+                                    QStringLiteral("位移幅值"),
+                                    QStringLiteral("翘曲"),
+                                    QStringLiteral("叠层"),
+                                    QStringLiteral("材料")};
+        for (int index = 0; index < 5; ++index)
+            require(fields->itemText(index) == labels[index], "field combo label or order");
+        fields->setCurrentIndex(3);
+        require(view.colorField() == ResultColorField::LayerId, "controls did not select LayerId");
+        view.setColorField(ResultColorField::MaterialId);
+        require(fields->currentIndex() == 4, "MaterialId left field combo stale");
+        for (int round = 0; round < 2; ++round)
+            for (int index = 0; index < 5; ++index) {
+                fields->setCurrentIndex(index);
+                require(view.colorField() == static_cast<ResultColorField>(index),
+                        "field combo did not update view");
+                view.setColorField(static_cast<ResultColorField>((index + 1) % 5));
+                require(fields->currentIndex() == (index + 1) % 5,
+                        "displayChanged did not synchronize field combo");
+            }
+    });
+    for (auto field : {ResultColorField::LayerId, ResultColorField::MaterialId}) {
+        const QString label = idArrayName(field);
+        run(qPrintable(label + " named session coloring and step change"), [&] {
+            ResultSession session;
+            require(session.open(root.filePath("default")), qPrintable(session.error()));
+            ResultView view;
+            for (qint64 step : {0, 1}) {
+                require(view.loadStep(session, step), qPrintable(view.error()));
+                require(!(field == ResultColorField::LayerId ? session.layerNames()
+                                                             : session.materialNames())
+                             .isEmpty(),
+                        "default fixture must have ID names");
+                view.setColorField(field);
+                checkIdRange(view, session, field);
+                view.setColorField(ResultColorField::Temperature);
+                checkRange(view, ResultColorField::Temperature);
+                require(view.colorBarTitle() == "T (K)", "temperature title after ID coloring");
+            }
+        });
+        for (int stage : {0, 1, 2}) {
+            run(qPrintable(label + " visible bounds stage " + QString::number(stage)), [&] {
+                QTemporaryDir temp;
+                require(temp.isValid(), "ID fixture directory");
+                const bool material = field == ResultColorField::MaterialId;
+                const auto path = temp.filePath("step.vtkhdf");
+                if (material)
+                    writeFixture(root, path, addMaterialIds);
+                ResultSession session;
+                require(session.open(material ? path : root.filePath("viewer_mixed")),
+                        qPrintable(session.error()));
+                ResultView view;
+                require(view.loadStep(session, 0), qPrintable(view.error()));
+                require(session.layerNames().isEmpty() && session.materialNames().isEmpty(),
+                        "mixed ID fixture must have empty name tables");
+                view.setColorField(field);
+                if (stage >= 1)
+                    view.setShowVoid(true);
+                if (stage == 2)
+                    view.setLayer(2);
+                const double factor = material ? 10 : 1;
+                checkIdBounds(view, (stage == 1 ? 1 : 2) * factor, (stage == 2 ? 2 : 3) * factor);
+                checkIdRange(view, session, field);
+                require(view.colorBarTitle().contains(
+                            material ? (stage == 1 ? "material 10" : "material 20")
+                                     : (stage == 1 ? "layer 1" : "layer 2")),
+                        "ID title missing fallback for representative visible ID");
+                if (stage == 2)
+                    for (const auto& blockName : displayedBlocks)
+                        if (auto block = view.displayed(blockName)) {
+                            auto layers = block->GetCellData()->GetArray("layer_id");
+                            for (vtkIdType cell = 0; cell < block->GetNumberOfCells(); ++cell)
+                                require(layers && layers->GetComponent(cell, 0) == 2,
+                                        "ID coloring ignored layer filter");
+                        }
+            });
+        }
+        for (bool hideBlocks : {false, true}) {
+            run(qPrintable(label + (hideBlocks ? " all blocks hidden" : " absent layer")), [&] {
+                ResultSession session;
+                require(session.open(root.filePath("default")), qPrintable(session.error()));
+                ResultView view;
+                require(view.loadStep(session, 0), qPrintable(view.error()));
+                view.setColorField(field);
+                if (hideBlocks)
+                    for (const auto& block : displayedBlocks)
+                        view.setBlockVisible(block, false);
+                else
+                    view.setLayer(999);
+                checkIdUnavailable(view, field);
+            });
+        }
+        for (bool keepU : {false, true}) {
+            run(qPrintable(label + (keepU ? " missing array with U" : " missing array T-only")),
+                [&] {
+                    QTemporaryDir temp;
+                    require(temp.isValid(), "missing ID fixture directory");
+                    const auto path = temp.filePath("step.vtkhdf");
+                    writeFixture(root, path, [=](vtkUnstructuredGrid* grid) {
+                        grid->GetCellData()->RemoveArray("layer_id");
+                        grid->GetCellData()->RemoveArray("material_id");
+                        if (!keepU)
+                            grid->GetPointData()->RemoveArray("U");
+                    });
+                    ResultSession session;
+                    require(session.open(path), qPrintable(session.error()));
+                    ResultView view;
+                    require(view.loadStep(session, 0), qPrintable(view.error()));
+                    checkRange(view, ResultColorField::Temperature);
+                    bool nonempty = false;
+                    for (const auto& name : displayedBlocks)
+                        if (auto block = view.displayed(name); block && block->GetNumberOfCells()) {
+                            nonempty = true;
+                            require(!block->GetCellData()->HasArray("layer_id") &&
+                                        !block->GetCellData()->HasArray("material_id"),
+                                    "missing ID fixture retained ID arrays");
+                            require(block->GetPointData()->HasArray("T") &&
+                                        bool(block->GetPointData()->HasArray("U")) == keepU,
+                                    "missing ID fixture point arrays");
+                        }
+                    require(nonempty, "missing ID fixture is empty");
+                    view.setColorField(field);
+                    checkIdUnavailable(view, field);
+                });
+        }
+        run(qPrintable(label + " clipping and repeated selection preserve coordinates"), [&] {
+            QTemporaryDir temp;
+            require(temp.isValid(), "clipped ID fixture directory");
+            const auto path = temp.filePath("step.vtkhdf");
+            writeFixture(root, path, addMaterialIds);
+            ResultSession session;
+            require(session.open(path), qPrintable(session.error()));
+            ResultView view;
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            view.setLayer(2);
+            view.setClip(true, {2.5, 0, 0}, {1, 0, 0});
+            require(view.error().isEmpty(), qPrintable(view.error()));
+            const auto points = coordinates(view);
+            for (int round = 0; round < 2; ++round) {
+                view.setColorField(field);
+                require(coordinates(view) == points, "ID selection moved clipped points");
+                checkIdRange(view, session, field);
+                const double id = field == ResultColorField::LayerId ? 2 : 20;
+                checkIdBounds(view, id, id);
+                view.setColorField(ResultColorField::Temperature);
+                checkRange(view, ResultColorField::Temperature);
+                require(coordinates(view) == points, "temperature selection moved clipped points");
+            }
+        });
+        run(qPrintable(label + " session replacement drops old names"), [&] {
+            QTemporaryDir temp;
+            require(temp.isValid(), "replacement ID fixture directory");
+            const auto path = temp.filePath("step.vtkhdf");
+            writeFixture(root, path, addMaterialIds);
+            ResultSession named, unnamed;
+            require(named.open(root.filePath("default")), qPrintable(named.error()));
+            require(unnamed.open(path), qPrintable(unnamed.error()));
+            ResultView view;
+            require(view.loadStep(named, 0), qPrintable(view.error()));
+            require(!named.layerNames().isEmpty() && !named.materialNames().isEmpty(),
+                    "initial session must have names");
+            view.setColorField(field);
+            require(view.loadStep(unnamed, 0), qPrintable(view.error()));
+            require(unnamed.layerNames().isEmpty() && unnamed.materialNames().isEmpty(),
+                    "replacement session must have no names");
+            require(view.colorField() == field, "session replacement lost ID field selection");
+            require(view.colorBarTitle().contains(
+                        field == ResultColorField::LayerId ? "layer 2" : "material 20"),
+                    "replacement session title did not use fallback name");
+            checkIdRange(view, unnamed, field);
+        });
+    }
+    run("five field repeated switching", [&] {
+        ResultSession session;
+        require(session.open(root.filePath("default")), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        const auto points = coordinates(view);
+        for (int round = 0; round < 2; ++round)
+            for (auto field : {ResultColorField::Temperature,
+                               ResultColorField::DisplacementMagnitude,
+                               ResultColorField::WarpageUz,
+                               ResultColorField::LayerId,
+                               ResultColorField::MaterialId,
+                               ResultColorField::Temperature}) {
+                view.setColorField(field);
+                require(view.colorField() == field, "repeated field selection ignored");
+                require(coordinates(view) == points, "five field switching moved points");
+                if (field == ResultColorField::LayerId || field == ResultColorField::MaterialId)
+                    checkIdRange(view, session, field);
+                else {
+                    checkRange(view, field);
+                    require(view.colorBarTitle() ==
+                                (field == ResultColorField::Temperature             ? "T (K)"
+                                 : field == ResultColorField::DisplacementMagnitude ? "|U| (m)"
+                                                                                    : "U_z (m)"),
+                            "original field title after repeated ID switching");
+                }
+            }
+    });
     run("independent extreme void range", [&] {
         QTemporaryDir temp;
         require(temp.isValid(), "void fixture directory");

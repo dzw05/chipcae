@@ -17,7 +17,7 @@ struct VolumeResult {
     double integral = 0;
     QString error;
 };
-enum class ResultColorField { Temperature, DisplacementMagnitude, WarpageUz };
+enum class ResultColorField { Temperature, DisplacementMagnitude, WarpageUz, LayerId, MaterialId };
 struct ColorRange {
     double min = 0;
     double max = 0;
