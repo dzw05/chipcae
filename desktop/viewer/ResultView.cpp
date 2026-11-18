@@ -215,41 +215,42 @@ QString ResultView::colorBarTitle() const {
 }
 QString ResultView::tmaxText() const {
     if (d->session)
-        for (auto value : d->session->summary()) {
-            const auto entry = value.toObject();
-            if (entry["name"] != "T_max" ||
-                (entry.contains("step") && entry["step"].toInteger(-1) != d->step) ||
-                !entry["value"].isDouble())
-                continue;
-            QString text = QString("T_max: %1 %2")
-                               .arg(entry["value"].toDouble(), 0, 'g', 16)
-                               .arg(entry["unit"].toString());
-            for (auto key : {"region", "region_id", "body"}) {
-                auto region = entry[key].toString();
-                if (!region.isEmpty()) {
-                    text += " region=" + region;
-                    break;
-                }
-            }
-            bool selectedLocationArray = false;
-            for (auto key : {"position", "xyz", "location"}) {
-                if (!entry[key].isArray())
+        for (bool exactStep : {true, false})
+            for (auto value : d->session->summary()) {
+                const auto entry = value.toObject();
+                if (entry.contains("step") != exactStep || entry["name"] != "T_max" ||
+                    (entry.contains("step") && entry["step"].toInteger(-1) != d->step) ||
+                    !entry["value"].isDouble())
                     continue;
-                selectedLocationArray = true;
-                auto xyz = entry[key].toArray();
-                if (xyz.size() == 3 && xyz[0].isDouble() && xyz[1].isDouble() &&
-                    xyz[2].isDouble()) {
-                    text += QString(" at=(%1,%2,%3)")
-                                .arg(xyz[0].toDouble(), 0, 'g', 16)
-                                .arg(xyz[1].toDouble(), 0, 'g', 16)
-                                .arg(xyz[2].toDouble(), 0, 'g', 16);
+                QString text = QString("T_max: %1 %2")
+                                   .arg(entry["value"].toDouble(), 0, 'g', 16)
+                                   .arg(entry["unit"].toString());
+                for (auto key : {"region", "region_id", "body"}) {
+                    auto region = entry[key].toString();
+                    if (!region.isEmpty()) {
+                        text += " region=" + region;
+                        break;
+                    }
                 }
-                break;
+                bool selectedLocationArray = false;
+                for (auto key : {"position", "xyz", "location"}) {
+                    if (!entry[key].isArray())
+                        continue;
+                    auto xyz = entry[key].toArray();
+                    if (xyz.size() == 3 && xyz[0].isDouble() && xyz[1].isDouble() &&
+                        xyz[2].isDouble()) {
+                        selectedLocationArray = true;
+                        text += QString(" at=(%1,%2,%3)")
+                                    .arg(xyz[0].toDouble(), 0, 'g', 16)
+                                    .arg(xyz[1].toDouble(), 0, 'g', 16)
+                                    .arg(xyz[2].toDouble(), 0, 'g', 16);
+                        break;
+                    }
+                }
+                if (!selectedLocationArray && !entry["location"].toString().isEmpty())
+                    text += " location=" + entry["location"].toString();
+                return text;
             }
-            if (!selectedLocationArray && !entry["location"].toString().isEmpty())
-                text += " location=" + entry["location"].toString();
-            return text;
-        }
     return "T_max: unavailable";
 }
 bool ResultView::setProvenance(const QJsonObject& provenance) {
@@ -265,7 +266,7 @@ bool ResultView::setProvenance(const QJsonObject& provenance) {
                                   : sourceRank;
     const bool valid =
         provenance["schema"] == "chipcae.provenance/0.1" && sourceRank >= 0 && effectiveRank >= 0;
-    const int rank = std::max(sourceRank, effectiveRank);
+    const int rank = effectiveRank;
     d->watermark.clear();
     d->banner.clear();
     if (!valid) {

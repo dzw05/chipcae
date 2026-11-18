@@ -33,6 +33,8 @@
 #include <vtkRenderWindow.h>
 #include <vtkRenderer.h>
 #include <vtkRendererCollection.h>
+#include <vtkScalarBarActor.h>
+#include <vtkScalarsToColors.h>
 #include <vtkTextActor.h>
 #include <vtkTextProperty.h>
 #include <vtkUnstructuredGrid.h>
@@ -97,7 +99,26 @@ Coordinates coordinates(ResultView& view) {
     }
     return out;
 }
+void checkScalarBar(ResultView& view) {
+    auto props = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetViewProps();
+    int count = 0;
+    props->InitTraversal();
+    while (auto prop = props->GetNextProp()) {
+        auto bar = vtkScalarBarActor::SafeDownCast(prop);
+        if (!bar)
+            continue;
+        ++count;
+        require(view.colorRange().valid, "unavailable field has scalar bar");
+        require(QString::fromUtf8(bar->GetTitle()) == view.colorBarTitle(), "scalar bar title");
+        auto lut = bar->GetLookupTable();
+        require(lut && lut->GetRange()[0] == view.colorRange().min &&
+                    lut->GetRange()[1] == view.colorRange().max,
+                "scalar bar LUT range");
+    }
+    require(count == (view.colorRange().valid ? 1 : 0), "scalar bar presence");
+}
 void checkRange(ResultView& view, ResultColorField field) {
+    checkScalarBar(view);
     double low = std::numeric_limits<double>::infinity();
     double high = -low;
     for (const auto& name : displayedBlocks) {
@@ -153,6 +174,7 @@ void checkRange(ResultView& view, ResultColorField field) {
     require(range.unit == (field == ResultColorField::Temperature ? "K" : "m"), "range unit");
 }
 void checkUnavailable(ResultView& view) {
+    checkScalarBar(view);
     const auto range = view.colorRange();
     require(!range.valid && range.min == 0 && range.max == 0 && range.unit.isEmpty(),
             "invalid range defaults");
@@ -225,6 +247,41 @@ int acceptance(const QDir& root) {
         view.setColorField(ResultColorField::Temperature);
         checkUnavailable(view);
     });
+    for (int components : {0, 2}) {
+        run(components == 0 ? "T-only derived fields" : "two-component U derived fields", [&] {
+            QTemporaryDir temp;
+            require(temp.isValid(), "missing U fixture directory");
+            const auto path = temp.filePath("step.vtkhdf");
+            require(QFile::copy(root.filePath("viewer_mixed/out/step.vtkhdf"), path),
+                    "copy U fixture");
+            QProcess edit;
+            edit.start("python3",
+                       {"-c",
+                        "import h5py,sys; f=h5py.File(sys.argv[1],'r+'); "
+                        "p=f['VTKHDF/hex/PointData']; u=p['U'][:,:2]; del p['U']; "
+                        "p.create_dataset('U',data=u) if sys.argv[2]=='2' else None; f.close()",
+                        path,
+                        QString::number(components)});
+            require(edit.waitForFinished() && edit.exitStatus() == QProcess::NormalExit &&
+                        edit.exitCode() == 0,
+                    "prepare missing or short U");
+            ResultSession session;
+            require(session.open(path), qPrintable(session.error()));
+            ResultView view;
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            checkRange(view, ResultColorField::Temperature);
+            for (auto field :
+                 {ResultColorField::DisplacementMagnitude, ResultColorField::WarpageUz}) {
+                view.setColorField(field);
+                checkUnavailable(view);
+                auto actors = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetActors();
+                actors->InitTraversal();
+                while (auto actor = actors->GetNextActor())
+                    require(!actor->GetMapper()->GetScalarVisibility(),
+                            "missing U scalar coloring");
+            }
+        });
+    }
     for (auto field : {ResultColorField::Temperature,
                        ResultColorField::DisplacementMagnitude,
                        ResultColorField::WarpageUz}) {
@@ -267,7 +324,9 @@ int acceptance(const QDir& root) {
                     view.setBlockVisible(block, false);
                 require(!view.colorRange().valid && view.colorBarTitle().isEmpty(),
                         "hidden blocks still contribute range");
+                checkScalarBar(view);
                 view.setClip(false);
+                checkScalarBar(view);
                 require(!view.colorRange().valid && view.colorBarTitle().isEmpty(),
                         "hidden unclipped blocks still contribute range");
             });
@@ -428,10 +487,25 @@ int acceptance(const QDir& root) {
         checkLocation({{"position", QJsonArray{1, "invalid", 3}},
                        {"xyz", QJsonArray{4, 5, 6}},
                        {"location", "surface"}},
-                      "");
-        checkLocation({{"position", QJsonArray{1, 2}}, {"xyz", QJsonArray{4, 5, 6}}}, "");
+                      " at=(4,5,6)");
+        checkLocation({{"position", QJsonArray{1, 2}}, {"xyz", QJsonArray{4, 5, 6}}},
+                      " at=(4,5,6)");
+        checkLocation({{"position", QJsonArray{1, 2}}, {"location", "surface"}},
+                      " location=surface");
         checkLocation({{"location", "surface"}}, " location=surface");
         checkLocation({{"location", QJsonArray{7, 8, 9}}}, " at=(7,8,9)");
+        auto globalFirst = summary;
+        globalFirst.prepend(QJsonObject{{"name", "T_max"}, {"value", -123}, {"unit", "K"}});
+        manifest["summary"] = globalFirst;
+        require(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "mixed summary open");
+        const auto mixedBytes = QJsonDocument(manifest).toJson();
+        require(file.write(mixedBytes) == mixedBytes.size(), "mixed summary write");
+        file.close();
+        ResultSession mixed;
+        require(mixed.open(temp.path()), qPrintable(mixed.error()));
+        ResultView mixedView;
+        require(mixedView.loadStep(mixed, 0), qPrintable(mixedView.error()));
+        require(mixedView.tmaxText() == text, "global T_max shadows exact step");
         manifest["summary"] = QJsonArray{
             QJsonObject{{"name", "T_max"}, {"value", 987.5}, {"unit", "K"}, {"region", "global"}}};
         require(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "global manifest open");
@@ -504,6 +578,37 @@ int acceptance(const QDir& root) {
             });
         }
     }
+    run("mock real mock transition", [&] {
+        ResultSession session;
+        require(session.open(root.filePath("default")), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        QLabel* banner = nullptr;
+        for (auto source : {"mock", "real", "mock"}) {
+            const bool mock = QString(source) == "mock";
+            require(view.setProvenance({{"schema", "chipcae.provenance/0.1"}, {"source", source}}),
+                    "transition provenance rejected");
+            require(view.provenanceWatermark() == (mock ? "MOCK" : ""), "transition watermark");
+            require(mock ? view.provenanceBanner().contains("MOCK")
+                         : view.provenanceBanner().isEmpty(),
+                    "transition banner text");
+            if (!banner)
+                for (auto label : view.findChildren<QLabel*>())
+                    if (label->text() == view.provenanceBanner())
+                        banner = label;
+            require(banner && banner->isHidden() != mock, "transition banner visibility");
+            int count = 0;
+            auto props = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetViewProps();
+            props->InitTraversal();
+            while (auto prop = props->GetNextProp())
+                if (auto text = vtkTextActor::SafeDownCast(prop)) {
+                    ++count;
+                    require(text->GetVisibility() && QString(text->GetInput()) == "MOCK",
+                            "transition actor");
+                }
+            require(count == (mock ? 1 : 0), "transition renderer watermark count");
+        }
+    });
     run("provenance viewport and capture", [&] {
         ResultSession session;
         require(session.open(root.filePath("default")), qPrintable(session.error()));
@@ -562,13 +667,13 @@ int acceptance(const QDir& root) {
         require(view.setProvenance({{"schema", "chipcae.provenance/0.1"},
                                     {"source", "mock"},
                                     {"effective_source", "real"}}) &&
-                    view.provenanceWatermark() == "MOCK",
-                "effective source downgraded mock");
+                    view.provenanceWatermark().isEmpty() && view.provenanceBanner().isEmpty(),
+                "effective real source ignored for mock");
         require(view.setProvenance({{"schema", "chipcae.provenance/0.1"},
                                     {"source", "precomputed"},
                                     {"effective_source", "real"}}) &&
-                    view.provenanceWatermark() == QStringLiteral("预计算"),
-                "effective source downgraded precomputed");
+                    view.provenanceWatermark().isEmpty() && view.provenanceBanner().isEmpty(),
+                "effective real source ignored for precomputed");
         for (auto object :
              {QJsonObject{{"schema", "chipcae.provenance/0.1"}, {"effective_source", "real"}},
               QJsonObject{{"schema", "chipcae.provenance/0.1"},
