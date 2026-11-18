@@ -340,6 +340,14 @@ void rejects_bad(const fs::path& dir) {
     mutate("too many axes", [](J& j) { j["mesh"]["axes"].push_back(J::array()); });
     mutate("missing digest axes", [](J& j) { j["mesh"]["axes"][2] = J::array(); });
     mutate("missing level axes", [](J& j) { j["mesh"]["grid_report"]["level_axes"] = J::array(); });
+    mutate("one-axis level", [](J& j) { j["mesh"]["grid_report"]["level_axes"][0].resize(1); });
+    mutate("zero-axis level", [](J& j) { j["mesh"]["grid_report"]["level_axes"][0] = J::array(); });
+    for (std::size_t axis = 0; axis < 2; ++axis) {
+        mutate("empty level axis",
+               [axis](J& j) { j["mesh"]["grid_report"]["level_axes"][0][axis] = J::array(); });
+        mutate("one-point level axis",
+               [axis](J& j) { j["mesh"]["grid_report"]["level_axes"][0][axis].resize(1); });
+    }
     mutate("malformed digest", [](J& j) { j["mesh_sha256"] = "ABC"; });
     mutate("uppercase digest", [](J& j) { j["mesh_sha256"] = std::string(64, 'A'); });
     mutate("mismatched digest", [](J& j) { j["mesh_sha256"] = std::string(64, '0'); });

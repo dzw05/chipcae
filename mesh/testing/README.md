@@ -43,9 +43,9 @@ Save returns `Expected<void>` with a default-constructed success result. The
 fixture header supplies the void specialization without changing the frozen
 primary template.
 
-The fixture computes the schema/README mesh hash byte protocol locally and reuses
-schema's SHA-256 helper, without including preview implementation headers. The
-acceptance test independently compares against preview's digest implementation.
+The fixture directly reuses the inline digest in `preview/src/mesh_digest.hpp`
+and its schema SHA-256 helper after validating connectivity and axis lengths.
+This header inclusion does not link the preview implementation.
 Nonempty copper layer maps have one entry per `attr_table.layers` entry; an empty
 map remains permitted for meshes without this optional metadata.
 

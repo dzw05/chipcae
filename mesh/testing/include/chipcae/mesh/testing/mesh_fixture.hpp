@@ -1,6 +1,11 @@
 #pragma once
 #include "chipcae/mesh/background/hex_mesh_arrays.hpp"
 
+#include <filesystem>
+#include <optional>
+#include <utility>
+#include <variant>
+
 namespace chipcae::mesh {
 // Status result for fixture writes; the shared primary template stores a value.
 template <>

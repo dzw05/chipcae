@@ -1,11 +1,12 @@
 #include "chipcae/mesh/testing/mesh_fixture.hpp"
 
-#include "../../../schema/src/sha256.hpp"
+#include "../../../preview/src/mesh_digest.hpp"
 
 #include <algorithm>
 #include <bit>
 #include <charconv>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <jsoncons/json.hpp>
@@ -13,52 +14,12 @@
 #include <limits>
 #include <set>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
+#include <vector>
 
 namespace chipcae::mesh::testing {
 namespace {
-// schema/README mesh hash byte protocol; independent of preview implementation.
-// Call only after validate has checked digest indexing and axis preconditions.
-inline void append_i64(std::string& bytes, std::int64_t value) {
-    auto bits = static_cast<std::uint64_t>(value);
-    for (int i = 0; i < 8; ++i)
-        bytes.push_back(static_cast<char>(bits >> (8 * i)));
-}
-inline void append_f64(std::string& bytes, double value) {
-    auto bits = std::bit_cast<std::uint64_t>(value);
-    for (int i = 0; i < 8; ++i)
-        bytes.push_back(static_cast<char>(bits >> (8 * i)));
-}
-std::string mesh_digest(const chipcae::mesh::HexMeshArrays& mesh) {
-    const auto& report = mesh.grid_report;
-    const auto& coarse = report.level_axes.front();
-    const auto nx0 = coarse[0].size() - 1, ny0 = coarse[1].size() - 1;
-    const auto nz = mesh.axes[2].size() - 1;
-    const auto nodes = mesh.node_gid.size(), cells = mesh.elem_gid.size();
-    std::string bytes;
-    bytes.reserve(48 + nodes * 24 + cells * 64);
-    for (auto v : {nx0, ny0, static_cast<std::size_t>(report.levels - 1), nz, nodes, cells})
-        append_i64(bytes, static_cast<std::int64_t>(v));
-    std::vector<std::size_t> order(nodes);
-    for (std::size_t i = 0; i < nodes; ++i)
-        order[i] = i;
-    std::sort(order.begin(), order.end(), [&](auto a, auto b) {
-        return mesh.node_gid[a] < mesh.node_gid[b];
-    });
-    for (auto i : order)
-        for (int d = 0; d < 3; ++d)
-            append_f64(bytes, mesh.vertices[3 * i + d]);
-    order.resize(cells);
-    for (std::size_t i = 0; i < cells; ++i)
-        order[i] = i;
-    std::sort(order.begin(), order.end(), [&](auto a, auto b) {
-        return mesh.elem_gid[a] < mesh.elem_gid[b];
-    });
-    for (auto i : order)
-        for (int n = 0; n < 8; ++n)
-            append_i64(bytes, mesh.node_gid[mesh.hex[8 * i + n]]);
-    return chipcae::mesh::sha256(bytes);
-}
 using J = jsoncons::json;
 void check(bool ok, const char* message) {
     if (!ok)
@@ -363,9 +324,11 @@ bool validate(const HexMeshArrays& m) {
     check(m.axes.size() == 3, "axes shape");
     for (const auto& a : m.axes)
         axis(a);
-    for (const auto& level : m.grid_report.level_axes)
+    for (const auto& level : m.grid_report.level_axes) {
+        check(level.size() == 2, "level axes count");
         for (const auto& a : level)
             axis(a);
+    }
     optional(m.grid_report.max_aspect_ratio.size(), m.grid_report.level_axes.size());
     optional(m.grid_report.column_ranks.size(), m.grid_report.level_axes.size());
     for (std::size_t i = 0; i < m.grid_report.column_ranks.size(); ++i) {
@@ -395,7 +358,7 @@ Expected<void> save_mesh_fixture(const HexMeshArrays& mesh, const std::filesyste
         if (empty)
             text += "null";
         else
-            encode(text, mesh_digest(mesh));
+            encode(text, chipcae::preview::detail::digest(mesh).sha256);
         text += "}\n";
     } catch (const std::exception& e) {
         return Error{"INPUT_INVALID", e.what()};
@@ -434,7 +397,7 @@ Expected<HexMeshArrays> load_mesh_fixture(const std::filesystem::path& path) {
             auto s = hash.as<std::string>();
             check(s.size() == 64 && s.find_first_not_of("0123456789abcdef") == std::string::npos,
                   "digest format");
-            check(s == mesh_digest(mesh), "digest mismatch");
+            check(s == chipcae::preview::detail::digest(mesh).sha256, "digest mismatch");
         }
         return mesh;
     } catch (const std::exception& e) {
