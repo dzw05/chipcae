@@ -26,7 +26,8 @@ def main():
                 ('trailing', 14, 'INPUT_INVALID'),
                 *[(case, 14, 'INPUT_INVALID') for case in (
                     'used_magic', 'used_truncated', 'used_dbu',
-                    'used_offsets', 'used_negative', 'used_terminal',
+                    'used_offsets', 'used_decreasing', 'used_equal',
+                    'used_negative', 'used_terminal',
                     'used_zero_terminal', 'used_trailing', 'used_duplicate', 'used_utf8')],
                 ('delta', 14, 'INPUT_INVALID'),
                 ('delta_nan', 14, 'INPUT_INVALID'),
@@ -113,6 +114,13 @@ def main():
                     'used_offsets': (b'CCPOLY01' + struct.pack('<dI', 1e-9, 1)
                                        + layer[:12] + struct.pack('<qq', 0, 2)
                                        + struct.pack('<qqqq', 0, 0, 1, 0)),
+                    # A minimum adjacent difference of three also enforces
+                    # monotonicity, including the review's [0, 4, 3] case.
+                    **{name: (b'CCPOLY01' + struct.pack('<dI', 1e-9, 1)
+                              + layer[:8] + struct.pack('<I3q', 2, *offsets)
+                              + struct.pack('<6q', 0, 0, 1, 0, 0, 1))
+                       for name, offsets in (('used_decreasing', (0, 4, 3)),
+                                             ('used_equal', (0, 3, 3)))},
                     'used_negative': (b'CCPOLY01' + struct.pack('<dI', 1e-9, 1)
                                         + layer[:12] + struct.pack('<qq', 0, -3)),
                     'used_terminal': (b'CCPOLY01' + struct.pack('<dI', 1e-9, 1)
