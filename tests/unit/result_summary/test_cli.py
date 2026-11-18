@@ -39,6 +39,26 @@ class CLI(unittest.TestCase):
                 self.assertEqual(result.stderr,
                                  f'result_summary: {name}: {reason}\n'.encode('utf-8'))
 
+    def test_partial_temperature_failure(self):
+        for missing in ('hex', 'cut'):
+            for write_output in (False, True):
+                with self.subTest(missing=missing, write_output=write_output), tempfile.TemporaryDirectory() as tmp:
+                    run = Path(tmp) / 'run'
+                    step, _ = fixture(run, cut=True)
+                    with h5py.File(step, 'r+') as f:
+                        del f[f'VTKHDF/{missing}/PointData/T']
+                    output = Path(tmp) / 'summary.json'
+                    args = ['-o', str(output)] if write_output else []
+                    result = subprocess.run(
+                        [sys.executable, str(SCRIPT), str(run)] + args,
+                        cwd=tmp, capture_output=True, timeout=20)
+                    self.assertEqual(result.returncode, 14)
+                    self.assertEqual(result.stdout, b'')
+                    self.assertEqual(result.stderr,
+                                     b'result_summary: INPUT_INVALID: PointData/T: '
+                                     b'partial coverage across nonempty hex/cut blocks\n')
+                    self.assertFalse(output.exists())
+
     def test_bytes_and_repeatability(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)/'run'
