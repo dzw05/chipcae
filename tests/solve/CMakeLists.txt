@@ -29,6 +29,44 @@ if(TARGET chipcae_solve_inputs)
     set_tests_properties(solve_mesh PROPERTIES
         ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
 endif()
+
+# Exercise the app's real configure guard without requiring another MFEM installation.
+# Dependency targets only let configuration reach the guard; no sources are built here.
+set(_gmg_no_petsc_check "${CMAKE_CURRENT_BINARY_DIR}/column_gmg_no_petsc")
+file(MAKE_DIRECTORY "${_gmg_no_petsc_check}/source")
+file(WRITE "${_gmg_no_petsc_check}/source/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.20)
+project(column_gmg_no_petsc LANGUAGES NONE)
+add_library(chipcae::core INTERFACE IMPORTED)
+add_library(mfem INTERFACE IMPORTED)
+add_library(yaml-cpp::yaml-cpp INTERFACE IMPORTED)
+set(CMAKE_DISABLE_FIND_PACKAGE_yaml-cpp ON)
+function(chipcae_set_warnings)
+endfunction()
+set(CHIPCAE_ENABLE_JSONCONS ON)
+set(CHIPCAE_ENABLE_MFEM ON)
+set(CHIPCAE_ENABLE_MPI ON)
+set(CHIPCAE_ENABLE_HDF5 ON)
+set(MFEM_USE_PETSC OFF)
+add_subdirectory("${CHIPCAE_SOURCE_DIR}/apps/chipcae-solve" solve)
+]=])
+file(WRITE "${_gmg_no_petsc_check}/check.cmake" [=[
+execute_process(COMMAND cmake -G "${CHECK_GENERATOR}"
+    -S "${CHECK_SOURCE_DIR}" -B "${CHECK_BINARY_DIR}"
+    "-DCHIPCAE_SOURCE_DIR=${CHIPCAE_SOURCE_DIR}"
+    RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
+if(result EQUAL 0 OR NOT error MATCHES "chipcae-solve requires MFEM built with PETSc support")
+    message(FATAL_ERROR "Expected the PETSc backend configure rejection; got ${result}:\n${output}\n${error}")
+endif()
+]=])
+add_test(NAME solve_column_gmg_requires_petsc COMMAND cmake
+    "-DCHECK_GENERATOR=${CMAKE_GENERATOR}"
+    "-DCHECK_SOURCE_DIR=${_gmg_no_petsc_check}/source"
+    "-DCHECK_BINARY_DIR=${_gmg_no_petsc_check}/build"
+    "-DCHIPCAE_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${_gmg_no_petsc_check}/check.cmake")
+set_tests_properties(solve_column_gmg_requires_petsc PROPERTIES
+    TIMEOUT 120 LABELS "gmg;configuration")
 if(_solve_backend)
     add_test(NAME solve_pipeline COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/test_pipeline.py $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE})
