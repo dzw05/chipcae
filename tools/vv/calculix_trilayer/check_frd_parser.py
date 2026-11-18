@@ -6,6 +6,7 @@ import sys
 import io
 from contextlib import redirect_stdout
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -42,15 +43,25 @@ class FrdParserTest(unittest.TestCase):
                                  Path(__file__).with_name(f"{name}.inp").read_bytes())
 
     def test_comparison_stdout_and_log(self):
-        result = subprocess.run(
-            [sys.executable, "-m", "unittest", "tools.vv.test_trilayer_calculix_ref"],
-            cwd=Path(__file__).resolve().parents[3], capture_output=True, text=True,
-            check=True,
-        )
-        self.assertEqual(len(result.stdout.splitlines()), 1)
-        self.assertTrue(result.stdout.startswith("W_bfp="))
-        self.assertEqual(result.stdout,
-                         Path("/workspace/tasks/logs/v-ccx-delta.md").read_text())
+        with tempfile.TemporaryDirectory() as directory:
+            for configured in (False, True):
+                with self.subTest(configured=configured):
+                    env = dict(os.environ)
+                    env.pop("CHIPCAE_VV_LOG_DIR", None)
+                    if configured:
+                        env["CHIPCAE_VV_LOG_DIR"] = str(Path(directory) / "reports")
+                    result = subprocess.run(
+                        [sys.executable, "-m", "unittest", "tools.vv.test_trilayer_calculix_ref"],
+                        cwd=Path(__file__).resolve().parents[3], capture_output=True, text=True,
+                        check=True, env=env,
+                    )
+                    self.assertEqual(len(result.stdout.splitlines()), 1)
+                    self.assertTrue(result.stdout.startswith("W_bfp="))
+                    log = Path(directory) / "reports/v-ccx-delta.md"
+                    if configured:
+                        self.assertEqual(result.stdout, log.read_text(encoding="utf-8"))
+                    else:
+                        self.assertFalse(log.exists())
 
     def test_failed_rejection_checks_do_not_report(self):
         from tools.vv.test_trilayer_calculix_ref import TrilayerCalculixRefTest

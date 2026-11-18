@@ -12,6 +12,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+import os
 import unittest
 from pathlib import Path
 
@@ -23,17 +24,18 @@ REF = DIR / "REFERENCE.json"
 
 class TrilayerCalculixRefTest(unittest.TestCase):
     def validate_artifact(self, data):
-        required = {"kind", "label", "W_bfp_m", "element_type", "geometry",
+        required = {"schema_version", "kind", "label", "W_bfp_m", "element_type", "geometry",
                     "meshes", "selected_mesh", "prototype_W_bfp_m",
                     "abs_delta_m", "rel_delta"}
         self.assertIsInstance(data, dict)
         self.assertTrue(required <= data.keys(), "missing required top-level fields")
-        for field in ("kind", "element_type", "selected_mesh"):
+        for field in ("schema_version", "kind", "element_type", "selected_mesh"):
             self.assertIsInstance(data[field], str)
             self.assertTrue(data[field].strip())
         for field in ("W_bfp_m", "prototype_W_bfp_m", "abs_delta_m", "rel_delta"):
             self.assertIn(type(data[field]), (int, float))
             self.assertTrue(math.isfinite(data[field]))
+        self.assertEqual(data["schema_version"], "chipcae.vv.reference/0.1")
         self.assertEqual(data["kind"], "REFERENCE")
         self.assertEqual(data["element_type"], "C3D20")
         self.assertEqual(data["selected_mesh"], "fine")
@@ -141,7 +143,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         )
         with self.assertRaises(AssertionError):
             self.validate_artifact(changed_prototype)
-        for field in ("kind", "label", "W_bfp_m", "element_type", "geometry",
+        for field in ("schema_version", "kind", "label", "W_bfp_m", "element_type", "geometry",
                       "meshes", "selected_mesh", "prototype_W_bfp_m",
                       "abs_delta_m", "rel_delta"):
             invalid = copy.deepcopy(data)
@@ -150,13 +152,14 @@ class TrilayerCalculixRefTest(unittest.TestCase):
                 self.validate_artifact(invalid)
         variants = []
         for field, values in {
+            "schema_version": ("chipcae.vv.reference/0.2",),
             "label": (123, "参考值（原型计算值）", "不是实测，不是解析解"),
             "W_bfp_m": ("invalid", True, float("nan")),
             "selected_mesh": ("", "unknown", "coarse"),
         }.items():
             variants.extend(dict(data, **{field: value}) for value in values)
         for value in (123, "", "   ", None, True):
-            for field in ("kind", "element_type", "selected_mesh"):
+            for field in ("schema_version", "kind", "element_type", "selected_mesh"):
                 variants.append(dict(data, **{field: value}))
         for names in (("coarse", "coarse"), ("fine", "fine"),
                       ("coarse", "unknown"), ("coarse", "fine", "fine")):
@@ -193,9 +196,11 @@ class TrilayerCalculixRefTest(unittest.TestCase):
             f"rel_delta={rel_delta} mesh=fine element=C3D20 "
             f"ccx={data.get('calculix_version', 'unknown')}"
         )
-        log = Path("/workspace/tasks/logs/v-ccx-delta.md")
-        log.parent.mkdir(parents=True, exist_ok=True)
-        log.write_text(line + "\n", encoding="utf-8")
+        log_dir = os.environ.get("CHIPCAE_VV_LOG_DIR")
+        if log_dir:
+            log = Path(log_dir) / "v-ccx-delta.md"
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text(line + "\n", encoding="utf-8")
         print(line)
 
 

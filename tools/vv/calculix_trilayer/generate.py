@@ -311,6 +311,7 @@ def main():
     rel = abs_delta / PROTOTYPE
     ver = ccx_version()
     payload = {
+        "schema_version": "chipcae.vv.reference/0.1",
         "host": f"{platform.node()} {platform.system()} {platform.machine()}",
         "kind": "REFERENCE",
         "label": "参考值（原型计算值）对照用的独立 CalculiX 结果，不是实测，不是解析解",

@@ -53,7 +53,13 @@ computed with `tools.vv.warpage_qoi.interp_grid`
 and `qoi_surface` on an 81×81 grid in millimetres, then converted back to metres.
 
 The comparison test reads only `REFERENCE.json` and checks required normative
-fields, model, refinement, and delta arithmetic. Optional runtime provenance
+fields, model, refinement, and delta arithmetic. Schema version 0.1 requires
+`schema_version` to be exactly `"chipcae.vv.reference/0.1"`. Required top-level
+fields are `schema_version`, `kind`, `label`, `element_type`, `geometry`,
+`meshes`, `selected_mesh`, `W_bfp_m`, `prototype_W_bfp_m`, `abs_delta_m`, and
+`rel_delta`. The required `geometry` fields are `L_m`, `thicknesses_m`, `E_Pa`,
+`nu`, `alpha_1_per_K`, and `dT_K`; each mesh requires `name`, `n_elem_xyz`,
+`n_elem_z_per_layer`, and `W_bfp_m`. Optional runtime provenance
 (`calculix_version` and `host`) does not affect validation; unknown extension
 fields are allowed at the top level and in geometry and mesh objects.
 `REFERENCE.json` is distributed under Apache-2.0. Source and deck headers also
@@ -81,5 +87,9 @@ Run `python3 -m unittest tools.vv.test_trilayer_calculix_ref` after generation.
 The comparison test uses only the standard library.
 Only passing validation prints the single delta report in the brief's fixed
 field order. The prototype is the 参考值（原型计算值） described above.
-The passing comparison test also overwrites `/workspace/tasks/logs/v-ccx-delta.md`
-with exactly that single report line.
+When `CHIPCAE_VV_LOG_DIR` is set to a nonempty directory path, the passing
+comparison also creates that directory if needed and overwrites
+`$CHIPCAE_VV_LOG_DIR/v-ccx-delta.md` with exactly that single report line.
+When unset or empty, it writes no report file; stdout is always emitted on success.
+The manual parser regression configures a temporary log directory and compares
+the file there with stdout, and also checks the unconfigured case.
