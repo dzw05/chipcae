@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cctype>
 #include <iostream>
 #include <numeric>
 #include <random>
@@ -86,6 +87,317 @@ void check_poly(const CutPolyhedra& p, double snap) {
                "export matches quadrature fraction");
     }
 }
+
+static void chamfer_lid_route() {
+    using chipcae::BodyId;
+    using chipcae::Real;
+    auto stack = k1::stack();
+    stack.activation_groups.clear();
+    stack.outline = {{0, 0, 56, 44}, {}};
+    const auto& [xmin, ymin, xmax, ymax] = stack.outline.box;
+    stack.layers.resize(1);
+    auto& substrate = stack.layers.front();
+    substrate.name = "substrate";
+    substrate.regions.clear();
+    const auto material = substrate.material;
+
+    Layer ring;
+    ring.name = "ring_layer";
+    ring.kind = "Explicit";
+    ring.regions = {{"ring_s", material, "ring", {{10, 10, 46, 14}, {}}},
+                    {"ring_n", material, "ring", {{10, 30, 46, 34}, {}}},
+                    {"ring_w", material, "ring", {{10, 14, 14, 30}, {}}},
+                    {"ring_e", material, "ring", {{42, 14, 46, 30}, {}}}};
+    Layer lid;
+    lid.name = "lid_layer";
+    lid.kind = "Explicit";
+    const std::vector<std::array<Real, 2>> polygon{
+        {2, 0}, {54, 0}, {56, 2}, {56, 42}, {54, 44}, {2, 44}, {0, 42}, {0, 2}};
+    lid.regions = {{"lid", material, "lid", {stack.outline.box, polygon}}};
+    stack.layers.push_back(std::move(ring));
+    stack.layers.push_back(std::move(lid));
+    for (auto& layer : stack.layers) {
+        layer.thickness = 1;
+        layer.n_elem_min = 1;
+    }
+
+    CutOptions options;
+    options.quad_degree = 6;
+    options.export_polyhedra = true;
+    options.keep_void = false;
+    options.snap_phi = k1::threshold("snap_phi");
+    options.small_sub_vf = k1::threshold("small_sub_vf");
+    const auto volume_tolerance = k1::threshold("cut_volume_relative");
+    const auto body_of = [](const HexMeshArrays& mesh, Local attr) {
+        expect(attr > 0 && static_cast<std::size_t>(attr) <= mesh.attr_table.entries.size(),
+               "lid route: valid attribute ID");
+        return mesh.attr_table.entries[attr - 1].body;
+    };
+    const auto vertex = [](const HexMeshArrays& mesh, std::size_t e, int node) {
+        return &mesh.vertices[3 * mesh.hex[8 * e + node]];
+    };
+    const auto jacobian = [&](const HexMeshArrays& mesh, std::size_t e) {
+        const auto* lo = vertex(mesh, e, 0);
+        const auto* hi = vertex(mesh, e, 6);
+        return (hi[0] - lo[0]) * (hi[1] - lo[1]) * (hi[2] - lo[2]);
+    };
+    const auto check_subcells = [](const CutLayerArrays& cut) {
+        expect(cut.sub_attribute.size() == cut.sub_volfrac.size() &&
+                   cut.sub_off.size() == cut.cut_elem.size() + 1 && cut.sub_off.front() == 0 &&
+                   static_cast<std::size_t>(cut.sub_off.back()) == cut.sub_volfrac.size() &&
+                   std::is_sorted(cut.sub_off.begin(), cut.sub_off.end()),
+               "lid route: subcell arrays and offsets");
+    };
+    const auto build_grid = [&](char name, Local nx, Local ny) {
+        auto grid_options = k1::options();
+        grid_options.nx = nx;
+        grid_options.ny = ny;
+        grid_options.levels = 1;
+        auto grid = build_tensor_grid(stack, grid_options);
+        if (!grid)
+            std::cerr << "lid route " << name << " (nx=" << nx << ", ny=" << ny
+                      << ", levels=" << grid_options.levels
+                      << ", budget=" << grid_options.cell_budget
+                      << ", max_ratio=" << grid_options.max_ratio << "): " << grid.error().path
+                      << ": " << grid.error().reason << '\n';
+        return grid;
+    };
+    // Attempt both resolutions so the test reports both grid errors if setup fails.
+    const std::array grids{build_grid('A', 20, 16), build_grid('B', 56, 44)};
+    for (std::size_t resolution = 0; resolution < grids.size(); ++resolution) {
+        const bool coarse = resolution == 0;
+        const auto& grid = grids[resolution];
+        expect(bool(grid), "lid route: build_tensor_grid succeeds");
+        const auto& original = grid.value();
+        const auto& bodies = original.attr_table.bodies;
+        expect(bodies.contains("substrate") && bodies.contains("ring") && bodies.contains("lid"),
+               "lid route: expected body names");
+        const auto substrate_id = bodies.at("substrate");
+        const auto ring_id = bodies.at("ring");
+        const auto lid_id = bodies.at("lid");
+        expect(substrate_id != 0 && ring_id != 0 && lid_id != 0 && substrate_id != ring_id &&
+                   substrate_id != lid_id && ring_id != lid_id,
+               "lid route: distinct nonzero body IDs");
+        for (const auto& [name, id] : bodies) {
+            auto lower = name;
+            std::transform(name.begin(), name.end(), lower.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            expect(lower == name || (lower != "ring" && lower != "lid"),
+                   "lid route: exact capitalization for ring and lid");
+        }
+        auto pending = original.pending_cut;
+        expect(!pending.empty(), "lid route: pending cuts exist");
+        std::sort(pending.begin(), pending.end());
+        for (auto e : pending)
+            expect(e >= 0 && static_cast<std::size_t>(e) < original.attribute.size() &&
+                       body_of(original, original.attribute[e]) == lid_id,
+                   "lid route: pending cut belongs to lid");
+
+        const auto diagonal = [&](std::size_t edge) {
+            const auto& a = polygon[edge];
+            const auto& b = polygon[(edge + 1) % polygon.size()];
+            const auto dx = b[0] - a[0], dy = b[1] - a[1];
+            const auto length = std::hypot(dx, dy);
+            const std::array<Real, 3> normal{dy / length, -dx / length, 0};
+            return Plane{lid_id, normal, normal[0] * a[0] + normal[1] * a[1]};
+        };
+        const CutGeometry geometry{{{lid_id, {0, -1, 0}, 0},
+                                    diagonal(1),
+                                    {lid_id, {1, 0, 0}, 56},
+                                    diagonal(3),
+                                    {lid_id, {0, 1, 0}, 44},
+                                    diagonal(5),
+                                    {lid_id, {-1, 0, 0}, 0},
+                                    diagonal(7)}};
+
+        const auto& x = original.axes[0];
+        const auto& y = original.axes[1];
+        expect(x.size() >= 2 && x.front() == xmin && x.back() == xmax && y.size() >= 2 &&
+                   y.front() == ymin && y.back() == ymax,
+               "lid route: axes span the outline");
+        const std::array hx{x[1] - x.front(), x.back() - x[x.size() - 2]};
+        const std::array hy{y[1] - y.front(), y.back() - y[y.size() - 2]};
+        if (coarse)
+            expect(hx[0] > 2 && hx[1] > 2 && hy[0] > 2 && hy[1] > 2,
+                   "lid route: A corner widths exceed chamfer legs");
+        else
+            expect(hx[0] == 1 && hx[1] == 1 && hy[0] == 1 && hy[1] == 1,
+                   "lid route: B axes have four unit corner boxes");
+
+        std::set<std::pair<Real, Real>> lid_columns;
+        std::size_t lid_cells = 0;
+        std::vector<Local> expected_cuts;
+        for (std::size_t e = 0; e < original.attribute.size(); ++e) {
+            if (body_of(original, original.attribute[e]) != lid_id)
+                continue;
+            ++lid_cells;
+            const auto* lo = vertex(original, e, 0);
+            const auto* hi = vertex(original, e, 6);
+            lid_columns.emplace(lo[0], lo[1]);
+            bool crossed = false;
+            for (auto x_corner : {xmin, xmax})
+                for (auto y_corner : {ymin, ymax}) {
+                    // Each diagonal is at Manhattan distance 2 from its outline corner.
+                    const auto dx_lo = std::abs(lo[0] - x_corner);
+                    const auto dx_hi = std::abs(hi[0] - x_corner);
+                    const auto dy_lo = std::abs(lo[1] - y_corner);
+                    const auto dy_hi = std::abs(hi[1] - y_corner);
+                    const auto near = std::min(dx_lo, dx_hi) + std::min(dy_lo, dy_hi);
+                    const auto far = std::max(dx_lo, dx_hi) + std::max(dy_lo, dy_hi);
+                    if (!coarse)
+                        expect(near != 0, "lid route: B omits unit corner lid cells");
+                    crossed = crossed || (near < 2 && 2 < far);
+                }
+            if (crossed)
+                expected_cuts.push_back(static_cast<Local>(e));
+        }
+        expect(!lid_columns.empty() && lid_cells % lid_columns.size() == 0,
+               "lid route: lid cells divide into XY columns");
+        const auto nz_lid = lid_cells / lid_columns.size();
+
+        const auto result = build_cut_layer(original, geometry, options);
+        expect(bool(result), "lid route: const plane cut succeeds");
+        const auto& cut = result.value();
+        expect(!cut.cut_elem.empty(), "lid route: cut parents exist");
+        auto cut_indices = cut.cut_elem;
+        std::sort(cut_indices.begin(), cut_indices.end());
+        expect(cut_indices == expected_cuts, "lid route: only diagonal interior crossings cut");
+        expect(cut.cut_elem.size() == (coarse ? 4 : 8) * nz_lid, "lid route: cut parent count");
+        if (coarse)
+            expect(cut.void_elem.empty(), "lid route: A has no void elements");
+        check_subcells(cut);
+
+        expect(cut.polyhedra && cut.polyhedra->volume.size() == cut.sub_volfrac.size() &&
+                   cut.polyhedra->volfrac_ref.size() == cut.sub_volfrac.size(),
+               "lid route: export for every subcell");
+        expect(cut.vq_off.size() == cut.sub_volfrac.size() + 1 && cut.vq_off.front() == 0 &&
+                   static_cast<std::size_t>(cut.vq_off.back()) == cut.vq_w.size() &&
+                   std::is_sorted(cut.vq_off.begin(), cut.vq_off.end()),
+               "lid route: volume quadrature offsets");
+        const auto& poly = *cut.polyhedra;
+        auto physical_poly = poly;
+        for (std::size_t i = 0; i < cut.cut_elem.size(); ++i) {
+            const auto e = cut.cut_elem[i];
+            expect(std::binary_search(pending.begin(), pending.end(), e) &&
+                       body_of(original, original.attribute[e]) == lid_id,
+                   "lid route: cut parent belongs to lid and was pending");
+            const auto begin = cut.sub_off[i], end = cut.sub_off[i + 1];
+            expect(coarse ? end - begin == 1 : end > begin, "lid route: subcells per cut parent");
+            const auto* lo = vertex(original, e, 0);
+            const auto expected = coarse ? 1 - 2 / (hx[lo[0] != xmin] * hy[lo[1] != ymin]) : .5;
+            const auto jac = jacobian(original, e);
+            for (auto sub = begin; sub < end; ++sub) {
+                expect(body_of(original, cut.sub_attribute[sub]) == lid_id,
+                       "lid route: cut subcell belongs to lid");
+                const auto vf = cut.sub_volfrac[sub];
+                expect(std::abs(vf - expected) <= 1e-12, "lid route: chamfer volume fraction");
+                const auto weight = std::accumulate(cut.vq_w.begin() + cut.vq_off[sub],
+                                                    cut.vq_w.begin() + cut.vq_off[sub + 1],
+                                                    0.0);
+                expect(std::abs(weight - vf) <= 1e-12 * vf, "lid route: volume quadrature sum");
+                const auto volume = jac * vf;
+                expect(std::abs(poly.volume[sub] - volume) <= 1e-12 * volume,
+                       "lid route: exported volume matches subcell");
+                physical_poly.volfrac_ref[sub] *= jac;
+            }
+        }
+        check_poly(physical_poly, options.snap_phi);
+        for (auto sub : cut.small_subs)
+            expect(sub >= 0 && static_cast<std::size_t>(sub) < cut.sub_volfrac.size() &&
+                       cut.sub_volfrac[sub] < options.small_sub_vf,
+                   "lid route: small subcell below threshold");
+
+        const std::set<Local> void_indices(cut.void_elem.begin(), cut.void_elem.end());
+        const auto check_volumes = [&](const HexMeshArrays& mesh, const CutLayerArrays& route) {
+            const std::set<Local> voids(route.void_elem.begin(), route.void_elem.end());
+            std::map<BodyId, long double> volumes;
+            for (std::size_t e = 0; e < mesh.attribute.size(); ++e) {
+                const auto local = static_cast<Local>(e);
+                if (voids.contains(local))
+                    continue;
+                const auto jac = jacobian(mesh, e);
+                const auto parent = std::find(route.cut_elem.begin(), route.cut_elem.end(), local);
+                if (parent == route.cut_elem.end()) {
+                    volumes[body_of(mesh, mesh.attribute[e])] += jac;
+                } else {
+                    const auto i = parent - route.cut_elem.begin();
+                    for (auto sub = route.sub_off[i]; sub < route.sub_off[i + 1]; ++sub) {
+                        const auto body = body_of(mesh, route.sub_attribute[sub]);
+                        expect(body == lid_id, "lid route: volume belongs to lid subcell");
+                        volumes[body] += jac * route.sub_volfrac[sub];
+                    }
+                }
+            }
+            expect(std::abs(volumes[substrate_id] - 2464) <= volume_tolerance * 2464,
+                   "lid route: substrate total volume");
+            expect(std::abs(volumes[ring_id] - 416) <= volume_tolerance * 416,
+                   "lid route: ring total volume");
+            expect(std::abs(volumes[lid_id] - 2456) <= volume_tolerance * 2456,
+                   "lid route: lid total volume");
+        };
+        check_volumes(original, cut);
+        auto compact = original;
+        const auto compact_result = build_cut_layer(compact, geometry, options);
+        expect(bool(compact_result), "lid route: mutable plane cut succeeds");
+        const auto& compact_cut = compact_result.value();
+        expect(compact_cut.void_elem.empty() &&
+                   compact.attribute.size() + cut.void_elem.size() == original.attribute.size(),
+               "lid route: mutable cut removes voids");
+        std::vector<chipcae::Index> retained_gids;
+        for (std::size_t e = 0; e < original.elem_gid.size(); ++e)
+            if (!void_indices.contains(static_cast<Local>(e)))
+                retained_gids.push_back(original.elem_gid[e]);
+        expect(compact.elem_gid == retained_gids, "lid route: exact retained element GID sequence");
+        expect(compact_cut.cut_elem_gid == cut.cut_elem_gid &&
+                   compact_cut.cut_elem.size() == compact_cut.cut_elem_gid.size() &&
+                   cut.cut_elem.size() == cut.cut_elem_gid.size(),
+               "lid route: both overloads preserve cut GIDs");
+        for (std::size_t i = 0; i < compact_cut.cut_elem.size(); ++i) {
+            const auto e = compact_cut.cut_elem[i];
+            expect(e >= 0 && static_cast<std::size_t>(e) < compact.elem_gid.size() &&
+                       compact.elem_gid[e] == compact_cut.cut_elem_gid[i] &&
+                       original.elem_gid[cut.cut_elem[i]] == cut.cut_elem_gid[i],
+                   "lid route: cut indices resolve to parent GIDs");
+        }
+        check_subcells(compact_cut);
+        check_volumes(compact, compact_cut);
+
+        const auto replay = build_cut_layer(original, geometry, options);
+        expect(bool(replay), "lid route: const replay succeeds");
+        const auto same_bits = [](const auto& a, const auto& b, const char* message) {
+            expect(a.size() == b.size(), message);
+            for (std::size_t i = 0; i < a.size(); ++i)
+                expect(std::bit_cast<std::uint64_t>(a[i]) == std::bit_cast<std::uint64_t>(b[i]),
+                       message);
+        };
+        same_bits(replay.value().vq_w, cut.vq_w, "lid route: replay quadrature weight bits");
+        same_bits(replay.value().sub_volfrac, cut.sub_volfrac, "lid route: replay fraction bits");
+
+        auto reverse_geometry = geometry;
+        std::reverse(reverse_geometry.planes.begin(), reverse_geometry.planes.end());
+        const auto reversed = build_cut_layer(original, reverse_geometry, options);
+        expect(bool(reversed), "lid route: reversed plane cut succeeds");
+        const auto& reverse_cut = reversed.value();
+        auto reverse_indices = reverse_cut.cut_elem;
+        std::sort(reverse_indices.begin(), reverse_indices.end());
+        expect(reverse_indices == cut_indices, "lid route: reversed planes cut the same parents");
+        check_subcells(reverse_cut);
+        for (std::size_t i = 0; i < cut.cut_elem.size(); ++i) {
+            const auto it = std::find(
+                reverse_cut.cut_elem.begin(), reverse_cut.cut_elem.end(), cut.cut_elem[i]);
+            const auto j = it - reverse_cut.cut_elem.begin();
+            const auto count = cut.sub_off[i + 1] - cut.sub_off[i];
+            expect(count == reverse_cut.sub_off[j + 1] - reverse_cut.sub_off[j],
+                   "lid route: reversed planes preserve parent subcell count");
+            for (Local offset = 0; offset < count; ++offset)
+                expect(std::abs(cut.sub_volfrac[cut.sub_off[i] + offset] -
+                                reverse_cut.sub_volfrac[reverse_cut.sub_off[j] + offset]) <= 1e-15,
+                       "lid route: reversed planes preserve subcell fractions");
+        }
+    }
+}
+
 int main(int argc, char** argv) {
 #ifdef CHIPCAE_ENABLE_KOKKOS
     Kokkos::ScopeGuard guard(argc, argv);
@@ -533,6 +845,7 @@ int main(int argc, char** argv) {
     expect(std::is_sorted(cache.value().hashes.begin(), cache.value().hashes.end()),
            "cache hashes ordered");
     expect(c.gp_face.size() == brute, "default GP arrays");
+    chamfer_lid_route();
     std::cout << "P1 random200 max_conservation_error=" << max_conservation_error
               << " max_fraction_error=" << max_fraction_error << '\n';
     std::cout << "G1 random=1000 degeneracies=6 cut-element ratio=" << double(cut_count) / 1006
