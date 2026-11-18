@@ -5,11 +5,9 @@
 
 Duplicate coordinates use the first stored displacement and temperature
 (hex before cut, then partition/storage order), even if copies differ.
-Temperature uses available T samples: a populated block may omit T even when
-the other block provides it, but every present T array must match its block's
-point count. Top temperatures use the global top surface and the first
-available sample per coordinate; missing samples do not contribute to extrema
-or means. The temperature field is null only when T is absent from both blocks.
+Temperature is all-or-nothing across hex and cut, including zero-point blocks.
+Partial coverage is an input error. Each T array must match its block's point
+count. When both blocks omit T, the temperature field is null.
 Numeric field types accept either byte order, retaining the required kind and
 width.
 Collinear top geometry fits along its centered principal axis (constant fit
@@ -115,7 +113,7 @@ def _counts(values):
 
 def _read(root):
     _version(root)
-    blocks, data = {}, []
+    blocks, data, temperatures = {}, [], []
     for name in ('hex', 'cut'):
         _require(name in root and isinstance(root[name], h5py.Group),
                  f'{root.name}/{name}: required group missing or invalid')
@@ -128,8 +126,8 @@ def _read(root):
         points = _array(block, 'Points', (n, 3), 'float64')
         u = (_array(block, 'PointData/U', (n, 3), 'float64')
              if n or 'PointData/U' in block else np.empty((0, 3)))
-        t = (_array(block, 'PointData/T', (n,), 'float64')
-             if 'PointData/T' in block else None)
+        if 'PointData/T' in block:
+            temperatures.append(_array(block, 'PointData/T', (n,), 'float64'))
         fields = {}
         for field in ('layer_id', 'material_id', 'cell_kind', 'elem_gid'):
             path = 'CellData/' + field
@@ -146,7 +144,9 @@ def _read(root):
         else:
             blocks[name] = dict(points=n, cells=c, type_counts=_counts(types))
         _partitions(block)
-        data.append((points, u, t))
+        data.append((points, u))
+    _require(len(temperatures) in (0, len(data)),
+             'PointData/T must be present in both hex and cut or absent from both')
     eb = root.get('eb_surface')
     if eb is None:
         blocks['eb_surface'] = dict(points=0, polygons=0)
@@ -176,7 +176,7 @@ def _read(root):
                      f"{source.name}: conflicting {field} tables in hex and cut")
             table = current
         names.append(table if table is not None else [])
-    return blocks, data, names
+    return blocks, data, temperatures, names
 
 
 def _summarize(run_dir, top_rel_tol):
@@ -228,26 +228,15 @@ def _summarize(run_dir, top_rel_tol):
     with step as f:
         _require('VTKHDF' in f and isinstance(f['VTKHDF'], h5py.Group),
                  '/VTKHDF: required group missing or invalid')
-        blocks, data, names = _read(f['VTKHDF'])
+        blocks, data, temperatures, names = _read(f['VTKHDF'])
     points = np.concatenate([d[0] for d in data])
     u = np.concatenate([d[1] for d in data])
-    all_t = np.full(len(points), np.nan, dtype='float64')
-    offset = 0
-    for p, _, t in data:
-        if t is not None:
-            all_t[offset:offset + len(p)] = t
-        offset += len(p)
     top = np.array([], dtype=int)
-    tt = np.array([], dtype='float64')
     if len(points):
         z = points[:, 2]
         indices = np.flatnonzero(z >= z.max() - top_rel_tol * (z.max() - z.min()))
         _, first = np.unique(points[indices], axis=0, return_index=True)
         top = indices[first]
-        available = indices[np.isfinite(all_t[indices])]
-        if len(available):
-            _, first_t = np.unique(points[available], axis=0, return_index=True)
-            tt = all_t[available[first_t]]
     w = None
     if len(top) >= 3:
         xy = points[top, :2]
@@ -264,10 +253,11 @@ def _summarize(run_dir, top_rel_tol):
             _, residual = best_fit_plane(xy[:, 0], xy[:, 1], u[top, 2])
         w = float(np.ptp(residual))
     temperature = None
-    if any(t is not None for _, _, t in data):
-        available_t = all_t[np.isfinite(all_t)]
-        temperature = dict(min=float(available_t.min()) if len(available_t) else None,
-                           max=float(available_t.max()) if len(available_t) else None,
+    if temperatures:
+        all_t = np.concatenate(temperatures)
+        tt = all_t[top]
+        temperature = dict(min=float(all_t.min()) if len(all_t) else None,
+                           max=float(all_t.max()) if len(all_t) else None,
                            top_min=float(tt.min()) if len(tt) else None,
                            top_max=float(tt.max()) if len(tt) else None,
                            top_mean=float(tt.mean()) if len(tt) else None)

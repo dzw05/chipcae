@@ -246,6 +246,9 @@ class Edges(unittest.TestCase):
                     cut = f['VTKHDF/cut']
                     cut['Points'][...] = [[0., 0., 0.], [2., 0., 1.]]
                     cut['PointData/T'][...] = [100., 999.]
+                if not empty_t:
+                    self.assert_invalid_temperature(run)
+                    continue
                 result = summarize(run)
                 self.assertEqual(result['blocks']['hex']['points'], 0)
                 self.assertEqual(result['blocks']['cut']['points'], 2)
@@ -278,6 +281,9 @@ class Edges(unittest.TestCase):
                     populated['PointData/U'] = np.zeros((2, 3), dtype='float64')
                     populated['Points'] = [[0., 0., 0.], [2., 0., 1.]]
                     populated['PointData/T'] = [100., 999.]
+                if not empty_t:
+                    self.assert_invalid_temperature(run)
+                    continue
                 result = summarize(run)
                 self.assertEqual(result['blocks']['cut']['points'], 0)
                 self.assertEqual(result['blocks']['hex']['points'], 2)
@@ -462,17 +468,21 @@ class Edges(unittest.TestCase):
                         for field in block['CellData'].values():
                             self.assertEqual(field.shape, (count,))
 
-    def test_partial_temperature(self):
-        for missing in ('hex', 'cut'):
+    def test_temperature_coverage(self):
+        for missing in ((), ('hex',), ('cut',), ('hex', 'cut')):
             with self.subTest(missing=missing), tempfile.TemporaryDirectory() as tmp:
                 run = Path(tmp)
                 step, _ = fixture(run, cut=True)
                 with h5py.File(step, 'r+') as f:
-                    del f[f'VTKHDF/{missing}/PointData/T']
-                self.assert_available_temperature(run, dict(
-                    min=100., max=999., top_min=999., top_max=999., top_mean=999.)
-                    if missing == 'hex' else dict(
-                    min=300., max=309., top_min=301., top_max=309., top_mean=305.))
+                    for block in missing:
+                        del f[f'VTKHDF/{block}/PointData/T']
+                if len(missing) == 1:
+                    self.assert_invalid_temperature(run)
+                elif missing:
+                    self.assertIsNone(summarize(run)['temperature'])
+                else:
+                    self.assertEqual(summarize(run)['temperature'], dict(
+                        min=100., max=999., top_min=301., top_max=999., top_mean=374.4))
 
     def test_duplicate_with_temperature_only_in_cut(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -483,9 +493,7 @@ class Edges(unittest.TestCase):
                 cut = f['VTKHDF/cut']
                 cut['Points'][0] = [0., 0., 1.]
                 cut['PointData/U'][0] = [0., 0., .125]
-            self.assert_available_temperature(run, dict(
-                min=100., max=999., top_min=999., top_max=999., top_mean=999.))
-            self.assertEqual(summarize(run)['warpage']['n_top_points'], 9)
+            self.assert_invalid_temperature(run)
 
     def test_temperature_below_global_top(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -494,18 +502,20 @@ class Edges(unittest.TestCase):
             with h5py.File(step, 'r+') as f:
                 del f['VTKHDF/hex/PointData/T']
                 f['VTKHDF/cut/Points'][...] = [[2., 0., .5], [0., 0., 0.]]
-            self.assert_available_temperature(run, dict(
-                min=100., max=999., top_min=None, top_max=None, top_mean=None))
-            self.assertEqual(summarize(run)['warpage']['n_top_points'], 9)
+            self.assert_invalid_temperature(run)
 
-    def assert_available_temperature(self, run, expected):
-        result = summarize(run)
-        self.assertEqual(result['temperature'], expected)
+    def assert_invalid_temperature(self, run):
+        with self.assertRaises(ResultSummaryError) as caught:
+            summarize(run)
+        self.assertEqual(caught.exception.code, 14)
+        self.assertEqual(caught.exception.name, 'INPUT_INVALID')
+        self.assertIn('PointData/T', str(caught.exception))
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            self.assertEqual(main([str(run)]), 0)
-        self.assertEqual(err.getvalue(), '')
-        self.assertEqual(json.loads(out.getvalue()), result)
+            self.assertEqual(main([str(run)]), 14)
+        self.assertEqual(out.getvalue(), '')
+        self.assertEqual(err.getvalue().splitlines(), [
+            f'result_summary: INPUT_INVALID: {caught.exception}'])
 
     def test_byte_order(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -545,7 +555,7 @@ class Edges(unittest.TestCase):
 
     def test_empty_temperature_datasets(self):
         for empty_geometry in (False, True):
-            for temperature_blocks in (('cut',), ('hex', 'cut')) if empty_geometry else (('cut',), ('hex',), ('hex', 'cut')):
+            for temperature_blocks in (('cut',), ('hex',), ('hex', 'cut')):
                 with self.subTest(empty_geometry=empty_geometry, temperature_blocks=temperature_blocks), tempfile.TemporaryDirectory() as tmp:
                     run = Path(tmp)
                     step, _ = fixture(run)
@@ -558,31 +568,20 @@ class Edges(unittest.TestCase):
                             block['Types'] = np.empty(0, dtype='uint8')
                             block['NumberOfPoints'][...] = 0
                             block['NumberOfCells'][...] = 0
-                        else:
-                            del f['VTKHDF/hex/PointData/T']
                         for name in ('hex', 'cut'):
                             block = f['VTKHDF/' + name]
                             if 'PointData/T' in block:
                                 del block['PointData/T']
                             if name in temperature_blocks:
                                 block['PointData/T'] = np.empty(0, dtype='float64')
-                    if not empty_geometry and 'hex' in temperature_blocks:
-                        with self.assertRaises(ResultSummaryError) as caught:
-                            summarize(run)
-                        self.assertEqual(caught.exception.code, 14)
-                        self.assertEqual(caught.exception.name, 'INPUT_INVALID')
-                        out, err = io.StringIO(), io.StringIO()
-                        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                            self.assertEqual(main([str(run)]), 14)
-                        self.assertEqual(out.getvalue(), '')
-                        self.assertTrue(err.getvalue().startswith('result_summary: INPUT_INVALID:'))
-                        self.assertEqual(len(err.getvalue().splitlines()), 1)
+                    if not empty_geometry or len(temperature_blocks) == 1:
+                        self.assert_invalid_temperature(run)
                         continue
                     result = summarize(run)
                     self.assertEqual(result['temperature'], dict.fromkeys(
                         ('min', 'max', 'top_min', 'top_max', 'top_mean')))
                     fixed_keys(self, result)
-                    self.assertEqual(result['warpage']['n_top_points'], 0 if empty_geometry else 9)
+                    self.assertEqual(result['warpage']['n_top_points'], 0)
                     out = io.StringIO()
                     with contextlib.redirect_stdout(out):
                         self.assertEqual(main([str(run)]), 0)
