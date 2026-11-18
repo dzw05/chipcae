@@ -5,10 +5,13 @@
 
 Duplicate coordinates use the first stored displacement and temperature
 (hex before cut, then partition/storage order), even if copies differ.
-Temperature uses available T samples; top temperatures use the global top
-surface and the first available sample per coordinate. The temperature field
-is null only when T is absent. Numeric
-field types accept either byte order, retaining the required kind and width.
+Temperature uses available T samples: a populated block may omit T even when
+the other block provides it, but every present T array must match its block's
+point count. Top temperatures use the global top surface and the first
+available sample per coordinate; missing samples do not contribute to extrema
+or means. The temperature field is null only when T is absent from both blocks.
+Numeric field types accept either byte order, retaining the required kind and
+width.
 Collinear top geometry fits along its centered principal axis (constant fit
 when x/y have rank zero), using the shared plane fitter for residuals.
 """

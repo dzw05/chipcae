@@ -60,6 +60,28 @@ class CLI(unittest.TestCase):
                         content = output.read_bytes() if write_output else result.stdout
                         self.assertEqual(json.loads(content), summary)
 
+    def test_signed_warpage_relative_difference(self):
+        # The frozen brief divides by pv, including its sign, not abs(pv).
+        for value in (-2, -0.25, 2, 0.25):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as tmp:
+                run = Path(tmp) / 'run'
+                _, manifest = fixture(run)
+                entry = next(e for e in manifest['summary'] if e['name'] == 'warpage_pv')
+                entry['value'] = value
+                save(run, manifest)
+                summary = summarize(run)
+                warpage = summary['warpage']
+                expected = abs(warpage['w_bfp_m'] - value) / value
+                self.assertEqual(warpage['manifest_warpage_pv_m'], value)
+                self.assertLessEqual(abs(warpage['rel_diff'] / expected - 1.), 1e-12)
+                self.assertEqual(warpage['rel_diff'] > 0, value > 0)
+                result = subprocess.run(
+                    [sys.executable, str(SCRIPT), str(run)], cwd=tmp,
+                    capture_output=True, timeout=20)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertEqual(result.stderr, b'')
+                self.assertEqual(json.loads(result.stdout), summary)
+
     def test_failure_stderr_contract(self):
         for case in ('invalid_manifest', 'missing_manifest', 'invalid_tolerance'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:

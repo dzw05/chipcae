@@ -11,6 +11,19 @@ from tools.vv.result_summary import ResultSummaryError, main, summarize
 
 
 class Errors(unittest.TestCase):
+    def test_partial_temperature_still_validates_present_array(self):
+        for missing, present in (('hex', 'cut'), ('cut', 'hex')):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as tmp:
+                run = Path(tmp)
+                step, _ = fixture(run, cut=True)
+                with h5py.File(step, 'r+') as f:
+                    del f[f'VTKHDF/{missing}/PointData/T']
+                    path = f'VTKHDF/{present}/PointData/T'
+                    values = f[path][...]
+                    del f[path]
+                    f[path] = values[:-1]
+                self.assert_invalid(run, f'{present}/PointData/T: expected shape')
+
     def assert_invalid(self, run, message):
         with self.assertRaises(ResultSummaryError) as caught:
             summarize(run)
