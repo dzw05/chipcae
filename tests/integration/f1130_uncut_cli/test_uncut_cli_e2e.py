@@ -1,4 +1,4 @@
-"""IPC → uncut CLI acceptance chain and strict assertion/verdict regressions."""
+"""Gated IPC → uncut CLI acceptance and strict assertion/verdict regressions."""
 
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
@@ -162,7 +162,7 @@ def inspect_run(run_dir, stack, preview_count, measurements, np, h5py):
         if 'copper' in layer:
             copper = layer['copper']
             f = copper['fraction']
-            k = 1 / (f / conductivity[copper['metal']] + (1 - f) / k)
+            k = 1 / (f / conductivity[copper['metal']] + (1 - f) / conductivity['mat.fr4'])
         layers.append((layer['thickness'], k))
     heat_flux = 50 / (sum(t / k for t, k in layers) + 1 / 1000)
     with h5py.File(artifact(run_dir / 'out/step-0.vtkhdf'), 'r') as file:
@@ -248,6 +248,12 @@ def write_result(run_dir, ranks, measurements, timings, notes, failures):
 
 
 def main():
+    if os.environ.get('CHIPCAE_F1130_RUN_BLOCKED_ACCEPTANCE') == '0':
+        print('GATED: F1130 fixture/acceptance contract unresolved (three zero copper fractions); '
+              'see tests/integration/f1130_uncut_cli/README.md. '
+              'Enable CHIPCAE_F1130_RUN_BLOCKED_ACCEPTANCE for strict diagnostics; '
+              'no end-to-end acceptance is claimed.')
+        return 77
     importer = os.environ.get('CHIPCAE_IMPORT_EXE')
     previewer = os.environ.get('CHIPCAE_PREVIEW_EXE')
     solver = os.environ.get('CHIPCAE_SOLVE_EXE')
@@ -458,7 +464,8 @@ class AcceptanceRecords(unittest.TestCase):
         except ImportError:
             self.skipTest('main requires numpy/h5py')
         output = StringIO()
-        env = dict(CHIPCAE_IMPORT_EXE='unused-importer', CHIPCAE_PREVIEW_EXE='unused-previewer',
+        env = dict(CHIPCAE_F1130_RUN_BLOCKED_ACCEPTANCE='1',
+                   CHIPCAE_IMPORT_EXE='unused-importer', CHIPCAE_PREVIEW_EXE='unused-previewer',
                    CHIPCAE_SOLVE_EXE='unused-solver')
         # Launcher discovery is an external dependency; keep verdict generation real.
         with patch.dict(os.environ, env), patch.object(shutil, 'which', return_value=None), \
@@ -498,7 +505,8 @@ class AcceptanceRecords(unittest.TestCase):
         output = StringIO()
         with tempfile.TemporaryDirectory() as directory:
             absent = str(Path(directory) / 'absent-executable')
-            env = dict(CHIPCAE_IMPORT_EXE=absent, CHIPCAE_PREVIEW_EXE=absent,
+            env = dict(CHIPCAE_F1130_RUN_BLOCKED_ACCEPTANCE='1',
+                       CHIPCAE_IMPORT_EXE=absent, CHIPCAE_PREVIEW_EXE=absent,
                        CHIPCAE_SOLVE_EXE=absent)
             with patch.dict(os.environ, env), redirect_stdout(output), redirect_stderr(StringIO()):
                 with self.assertRaises(AssertionError):
@@ -507,43 +515,69 @@ class AcceptanceRecords(unittest.TestCase):
         self.assertEqual(record['verdict'], 'fail')
         self.assertEqual(record['qoi'], {})
 
+    def test_fixture_contract_gate_skips_without_claiming_acceptance(self):
+        output = StringIO()
+        # Even configured backends must not run or emit a passing result while gated.
+        env = dict(CHIPCAE_F1130_RUN_BLOCKED_ACCEPTANCE='0',
+                   CHIPCAE_IMPORT_EXE='unused-importer', CHIPCAE_PREVIEW_EXE='unused-previewer',
+                   CHIPCAE_SOLVE_EXE='unused-solver')
+        with patch.dict(os.environ, env), redirect_stdout(output):
+            self.assertEqual(main(), 77)
+        self.assertIn('GATED:', output.getvalue())
+        self.assertNotIn('COMMAND ', output.getvalue())
+        self.assertNotIn('RESULT ', output.getvalue())
+
     def test_numerical_check_completes_only_after_all_inspection_assertions(self):
         try:
             import numpy as np
             import h5py
         except ImportError:
             self.skipTest('inspection requires numpy/h5py')
-        # One 1 mm FR4 layer: R=1/300+1/1000, q=150000/13 W/m².
-        # T(top)=298.15+500/13 K, independently evaluated here as a literal.
-        for failure in (None, 'temperature', 'readback', 'qoi'):
-            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                (root / 'out').mkdir()
-                warpage = -1e-6 if failure == 'qoi' else 1e-6
-                write_json(root / 'manifest.json', dict(
-                    schema_version='chipcae.results/1.0', summary=[
-                        dict(name='warpage_pv', value=warpage),
-                        dict(name='U_mag_max', value=2e-6), dict(name='T_max', value=336.62)]))
-                write_json(root / 'summary.json', dict(
-                    warpage=dict(manifest_warpage_pv_m=warpage,
-                                 w_bfp_m=1e-6 * (1 + 6.8e-12) if failure == 'readback' else 1e-6)))
-                with h5py.File(root / 'out/step-0.vtkhdf', 'w') as file:
-                    file['VTKHDF/cut/NumberOfCells'] = [0]
-                    file['VTKHDF/hex/NumberOfCells'] = [1]
-                    file['VTKHDF/hex/CellData/cell_kind'] = [0]
-                    file['VTKHDF/hex/Points'] = [[0., 0., 0.], [.001, .001, .001]]
-                    top = 336.61153846153843 + (.001 if failure == 'temperature' else 0)
-                    file['VTKHDF/hex/PointData/T'] = [298.15, top]
-                measurements = dict(acceptance_checks={})
-                stack = dict(layers=[dict(material='mat.fr4', thickness=.001)])
-                with redirect_stdout(StringIO()):
-                    if failure is None:
-                        inspect_run(root, stack, 1, measurements, np, h5py)
-                    else:
-                        with self.assertRaises(AssertionError):
+        # Hand-derived reference points for a 1 mm layer at z=0, 0.5 and 1 mm.
+        # FR4: R=1/300, q=150000/13; T(mid/top)=298.15+(250/13, 500/13).
+        # 50% copper in FR4: R=1301/780000, q=39000000/2081;
+        # T(mid/top)=298.15+(32525/2081, 65050/2081). A copper matrix is wrong.
+        cases = [
+            (dict(material='mat.fr4', thickness=.001),
+             [298.15, 317.3807692307692, 336.61153846153843]),
+            (dict(material='mat.cu', thickness=.001,
+                  copper=dict(metal='mat.cu', fraction=.5)),
+             [298.15, 313.7795050456511, 329.40901009130225]),
+        ]
+        for layer, reference in cases:
+            for failure in (None, 'temperature', 'readback', 'qoi'):
+                with self.subTest(material=layer['material'], failure=failure), \
+                        tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    (root / 'out').mkdir()
+                    warpage = -1e-6 if failure == 'qoi' else 1e-6
+                    write_json(root / 'manifest.json', dict(
+                        schema_version='chipcae.results/1.0', summary=[
+                            dict(name='warpage_pv', value=warpage),
+                            dict(name='U_mag_max', value=2e-6), dict(name='T_max', value=336.62)]))
+                    write_json(root / 'summary.json', dict(
+                        warpage=dict(manifest_warpage_pv_m=warpage,
+                                     w_bfp_m=1e-6 * (1 + 6.8e-12) if failure == 'readback' else 1e-6)))
+                    with h5py.File(root / 'out/step-0.vtkhdf', 'w') as file:
+                        file['VTKHDF/cut/NumberOfCells'] = [0]
+                        file['VTKHDF/hex/NumberOfCells'] = [1]
+                        file['VTKHDF/hex/CellData/cell_kind'] = [0]
+                        file['VTKHDF/hex/Points'] = [[0., 0., 0.], [.001, .001, .0005],
+                                                   [.001, .001, .001]]
+                        temperatures = list(reference)
+                        if failure == 'temperature':
+                            temperatures[1] += .001
+                        file['VTKHDF/hex/PointData/T'] = temperatures
+                    measurements = dict(acceptance_checks={})
+                    stack = dict(layers=[layer])
+                    with redirect_stdout(StringIO()):
+                        if failure is None:
                             inspect_run(root, stack, 1, measurements, np, h5py)
-                self.assertEqual(measurements['acceptance_checks'].get('numerical', False),
-                                 failure is None)
+                        else:
+                            with self.assertRaises(AssertionError):
+                                inspect_run(root, stack, 1, measurements, np, h5py)
+                    self.assertEqual(measurements['acceptance_checks'].get('numerical', False),
+                                     failure is None)
 
 
 if __name__ == '__main__':

@@ -3,13 +3,25 @@
 CTest registers `f1130_uncut_cli_e2e` through `chipcae_auto_tests`, with labels
 `integration;numerical;vv`, timeout 1200 seconds and skip return code 77.
 The full import → fractions → preview → solve(np=1/2) → readback → result.json
-chain runs when the required numerical executables and Python dependencies are
-available. The mandated fixture currently fails a strict fraction check; this
-failure remains visible in CTest pending resolution by the owning module.
+chain is behind the explicit CMake gate `CHIPCAE_F1130_RUN_BLOCKED_ACCEPTANCE`
+(default **OFF**). Configure prints `F1130 E2E acceptance GATED`; CTest keeps the
+E2E registered and returns 77 with a `GATED:` explanation before any CLI stage
+or result record. This is the review-requested fixture/spec gate, not a passing
+acceptance result. The owning modules must resolve the contracts listed below
+before this test can establish end-to-end acceptance.
 
-`f1130_uncut_cli_records` separately runs the 11 assertion/verdict regressions,
-including missing-launcher and incomplete-parallel-comparison failures.
-Passing those regressions does not establish end-to-end acceptance.
+With the option ON, the original strict chain executes when the numerical
+executables and Python dependencies are available. It currently fails on the
+mandated fixture's zero copper fractions. No fractions, fixtures, checks or
+numerical tolerances are changed by the gate. A passing gated CTest invocation
+must not be reported as satisfying criteria (a)–(g).
+
+`f1130_uncut_cli_records` always runs the 12 assertion/verdict regressions,
+including a copper-layer temperature reference, fixture-gate behavior,
+missing-launcher and incomplete-parallel-comparison failures. It uses the
+Python interpreter already found by `chipcae_auto_tests`, with no additional
+Python discovery requirement. Passing these regressions establishes only the
+assertion/verdict behavior, not end-to-end acceptance.
 
 ## Inputs and chain
 
@@ -62,7 +74,8 @@ YYYYMMDD format; it is intentionally runtime metadata.
   from `test_ipc_uncut_chain.py`: copper k=390 W/(m K), FR4 k=0.3 W/(m K),
   zmin=298.15 K, zmax convection h=1000 W/(m² K), T_inf=348.15 K and 3-2-1
   mechanical constraints. For each layer,
-  `k_eff=1/(f/k_metal+(1-f)/k_matrix)`,
+  `k_eff=1/(f/k_metal+(1-f)/k_matrix)` with FR4 as the matrix even when
+  the imported layer material is `mat.cu`,
   `q=50/(sum(thickness/k_eff)+1/1000)` and
   `T(z)=298.15+q*sum(clipped_layer_depth(z)/k_eff)`.
 - warpage_pv and U_mag_max are finite and positive; T_max is finite.
@@ -80,17 +93,26 @@ with dependency locations supplied through the appropriate CMake options:
 cmake -S . -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCHIPCAE_BUILD_TESTS=ON -DCHIPCAE_ENABLE_ECAD=ON \
   -DCHIPCAE_ENABLE_JSONCONS=ON -DCHIPCAE_ENABLE_MFEM=ON \
-  -DCHIPCAE_ENABLE_MPI=ON -DCHIPCAE_ENABLE_HDF5=ON
+  -DCHIPCAE_ENABLE_MPI=ON -DCHIPCAE_ENABLE_HDF5=ON \
+  -DCHIPCAE_F1130_RUN_BLOCKED_ACCEPTANCE=OFF
 cmake --build "$build" -j2
 ctest --test-dir "$build" -V -R '^f1130_'
 ctest --test-dir "$build" --output-on-failure -j2
 ```
 
+To reproduce the unresolved fixture failure with every strict check active:
+
+```sh
+cmake -S . -B "$build" -DCHIPCAE_F1130_RUN_BLOCKED_ACCEPTANCE=ON
+ctest --test-dir "$build" -V -R '^f1130_uncut_cli_e2e$'
+# Restore the explicit gate after diagnostics.
+cmake -S . -B "$build" -DCHIPCAE_F1130_RUN_BLOCKED_ACCEPTANCE=OFF
+```
+
 CMake injects `CHIPCAE_IMPORT_EXE`, `CHIPCAE_PREVIEW_EXE` and
 `CHIPCAE_SOLVE_EXE` only when ECAD, MFEM, MPI and HDF5 are enabled and all three
-executable targets exist. Otherwise the acceptance test remains registered
-and returns 77 for missing executable environment. Missing numpy/h5py also
-returns 77. Configured commands that fail print their command, status and
+executable targets exist. With strict execution enabled (option ON), missing
+executable environment or missing numpy/h5py returns 77. Configured commands that fail print their command, status and
 stdout/stderr and fail acceptance; each command has a 600 second timeout.
 
 The first available `mpiexec`, then `mpirun`, is used without retry.
@@ -99,9 +121,13 @@ an incomplete parallel check. Both ranks require a successful parallel
 comparison before their result record can pass. This follows the current
 review requirement, superseding the original brief's launcher-omission rule.
 
-For a direct invocation, supply the executables from the same numerical build:
+The CMake option injects the environment variable of the same name as `0` or
+`1`. Direct invocation without that variable runs the strict diagnostic; set it
+to `1` explicitly to override an inherited gate and supply executables from the
+same numerical build:
 
 ```sh
+CHIPCAE_F1130_RUN_BLOCKED_ACCEPTANCE=1 \
 CHIPCAE_IMPORT_EXE="$build/kernel/chipcae-import" \
 CHIPCAE_PREVIEW_EXE="$build/preview/chipcae-preview" \
 CHIPCAE_SOLVE_EXE="$build/apps/chipcae-solve/chipcae-solve" \
@@ -110,36 +136,42 @@ CHIPCAE_SOLVE_EXE="$build/apps/chipcae-solve/chipcae-solve" \
 
 ## Verification (2026-11-19)
 
-The two added regressions failed before the correction: a serial record with
-no parallel comparison was accepted, and missing launchers did not cause the
-required launcher failure. After the correction, all 11 regressions pass.
-CTest discovery verifies the full script command, three executable environment
-variables, labels, timeout 1200 and skip return code 77 in the numerical build.
+The new gate regression and expanded numerical regression failed before the
+fix: the gate attempted import instead of skipping, and the copper-layer
+reference differed by 31.131132853450652 K. With the fixes, all 12 regressions
+pass, including the existing FR4, temperature-error, readback and QoI cases.
+The copper regression uses hand-derived temperatures at the bottom, midpoint
+and top of a 1 mm, 50% copper / 50% FR4 layer, rather than evaluating the
+implementation's formula to generate expected values.
+
 Release configure and build succeed with ECAD, JSONCONS, MFEM, MPI and HDF5
-available and optional Kokkos disabled.
+available and optional Kokkos disabled. CTest discovery confirms that the E2E
+remains registered with all three executable paths, the fixture gate, original
+labels, timeout 1200 and skip return code 77. The regression test is registered
+independently.
 
-`ctest --test-dir "$build" -V -R '^f1130_'` exits 8: the E2E test fails on
-In1.Cu=0 after import/conversion, while `f1130_uncut_cli_records` passes all 11
-regressions. The same configure and CTest commands in a Release build without
-the numerical backends exit 0: E2E skips with code 77, and the records test
-passes. No fixture or threshold was changed to obtain these results.
+Strict direct execution with `CHIPCAE_F1130_RUN_BLOCKED_ACCEPTANCE=1` still
+matches the original import golden and fails on In1.Cu=0 after conversion;
+it writes a failing result record, not a passing one. Preview and solve are
+not reached. The required normal / heat-flux ×1.01 negative / restored passing
+E2E experiment remains blocked; the synthetic regression is not a substitute.
+Configuring the CMake option ON and running
+`ctest --test-dir "$build" -V -R '^f1130_uncut_cli_e2e$'` likewise exits 8 on
+the strict In1.Cu assertion. The option is restored to OFF after this check.
 
-The full `ctest --test-dir "$build" --output-on-failure -j2` run exits 8 after
-1277.24 seconds: **232 total, 221 passed, 8 skipped, 3 failed**:
+With the default gate, `ctest --test-dir "$build" -V -R '^f1130_'` exits 0:
+one regression test passes (12 unittest cases), and the E2E explicitly skips.
+The same targeted check exits 0 in the Release configuration without numerical
+backends; its configure and build also succeed.
 
-- `f1130_uncut_cli_e2e`: In1.Cu=0, as described below.
-- `chain_ipc_uncut_chain`: its unchanged line 53 expects `mat.fr4`, while
-  conversion preserves imported `mat.cu` on F.Cu.
-- `event_log`: the shared temporary directory contains 10,000 salvage files
-  at offset 364, exhausting the event log's salvage-name limit.
-
-An isolated `TMPDIR="$fresh_tmp" ctest --test-dir "$build" -V -j1 -R '^event_log$'`
-rerun with a newly created temporary directory exits 0 (1/1 passed, 0.57 seconds).
-The original full-suite failure remains recorded above.
-
-`solve_ghost_scan` passes in 251.76 seconds with its unchanged 300 second
-timeout. The suite is not green; the mandated input/golden, existing tests and
-product sources remain unchanged.
+The full numerical Release command
+`ctest --test-dir "$build" --output-on-failure -j2` exits 8 after 1126.13 seconds:
+**232 total, 222 passed, 9 skipped, 1 failed**. The sole failure is the unchanged
+`chain_ipc_uncut_chain`: line 53 expects `mat.fr4`, but conversion preserves
+`mat.cu` on F.Cu. That test and converter are outside this brief's allowed files.
+`event_log` passes with a fresh private `TMPDIR`; `solve_ghost_scan` passes in
+295.79 seconds with its unchanged 300 second timeout. The full suite is not
+green, and this gate does not waive the legacy chain failure.
 
 ## Fixture and downstream blockers
 
@@ -169,6 +201,21 @@ The independent readback field is `warpage.w_bfp_m`;
 `warpage.manifest_warpage_pv_m` copies the manifest. The regression rejects a
 6.8e-12 discrepancy even if the copied value matches exactly. Temperature,
 readback and MPI thresholds remain 1e-8 K, 1e-12 and 1e-8 respectively.
+
+## Gate removal and acceptance ownership
+
+The gate is scoped to F1130 only. M1 owns the mandated artwork/fraction
+mismatch; M1/M2/M3 own the material and mesh contracts; M3/M5 own independent
+readback consistency (see the linked sources above). Their resolutions must
+preserve the strict positive fractions and the numerical thresholds.
+
+Before removing the gate or enabling acceptance in nightly execution, run the
+original fixture through all stages and satisfy (a)–(g) for ranks 1 and 2.
+Record the normal passing run, the temporary reference heat-flux ×1.01 run
+that fails specifically on temperature after solving, and the restored passing
+run. Enable the default only after this evidence is available. Until then,
+this PR delivers gated acceptance infrastructure and assertion regressions;
+it does not claim F-1130 end-to-end acceptance.
 
 ## Coverage limits
 
