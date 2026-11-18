@@ -412,6 +412,34 @@ def fill_missing(b):
         for name in ('DIELECTRIC_1','DIELECTRIC_2'):
             check(name in report['message'], f'aggregate missing thickness omits {name}: {r.stderr}')
 
+for invalid in ('0.0', '-0.1', 'inf', 'nan', 'missing'):
+    @case('invalid_retained_thickness_'+invalid)
+    def invalid_retained_thickness(b, invalid=invalid):
+        for name in ('DIELECTRIC_1','DIELECTRIC_2'):
+            if invalid == 'missing':
+                path = b.job / f'steps/pcb/layers/{name.lower()}/attrlist'
+                path.write_text(re.sub(r'(?m)^\.layer_dielectric=.*\n?', '', path.read_text()))
+            else:
+                b.set_thickness(name, invalid)
+        out = b.root / 'existing'
+        out.mkdir()
+        paths = [out/'board.stack.json', out/'board.stack.polyset', out/'import_layers.json']
+        sentinels = [b'previous stack\x00\n', b'previous polyset\x00\n', b'previous layers\x00\n']
+        for path, sentinel in zip(paths, sentinels):
+            path.write_bytes(sentinel)
+        result = subprocess.run([str(b.cli), str(b.job), '-o', str(paths[0]),
+                                 '--material-map', str(b.map)],
+                                cwd=b.root, capture_output=True, text=True, timeout=20)
+        check(result.returncode == 7, f'invalid retained thickness must reject: {result.stderr}')
+        report = load(out/'defects.json')
+        check(report['code'] == 'IMPORT_REJECTED', 'invalid thickness rejection code')
+        for name in ('DIELECTRIC_1','DIELECTRIC_2'):
+            check(name in report['message'] and name in result.stderr,
+                  f'aggregate invalid thickness omits {name}: {result.stderr}')
+        for path, sentinel in zip(paths, sentinels):
+            check(path.read_bytes() == sentinel, f'invalid thickness changed {path.name}')
+        check(not list(out.glob('.chipcae-import-*')), 'invalid thickness leaked staging output')
+
 @case('override_fill')
 def fill(b):
     values = {'DIELECTRIC_1':0.00028123456789,'DIELECTRIC_2':0.00106123456789}

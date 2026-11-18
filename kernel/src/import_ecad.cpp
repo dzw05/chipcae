@@ -354,9 +354,9 @@ int run_ecad(const ImportOptions& options) {
                     layer.thickness_m = match->second;
                     source = "override";
                 }
-                if (!std::isfinite(layer.thickness_m) || layer.thickness_m <= 0)
-                    missing_thickness.push_back(layer.name);
             }
+            if (!std::isfinite(layer.thickness_m) || layer.thickness_m <= 0)
+                missing_thickness.push_back(layer.name);
             if (source == "override")
                 source += ":" + options.stack_override.filename().string();
             rows.push_back({layer.name, layer.material, "", source});
