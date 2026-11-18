@@ -24,11 +24,11 @@ REF = DIR / "REFERENCE.json"
 class TrilayerCalculixRefTest(unittest.TestCase):
     def validate_artifact(self, data):
         required = {"schema_version", "kind", "label", "W_bfp_m", "element_type", "geometry",
-                    "meshes", "selected_mesh", "prototype_W_bfp_m",
+                    "meshes", "selected_mesh", "prototype_W_bfp_m", "calculix_version", "host",
                     "abs_delta_m", "rel_delta"}
         self.assertIsInstance(data, dict)
         self.assertTrue(required <= data.keys(), "missing required top-level fields")
-        for field in ("schema_version", "kind", "element_type", "selected_mesh"):
+        for field in ("schema_version", "kind", "element_type", "selected_mesh", "calculix_version", "host"):
             self.assertIsInstance(data[field], str)
             self.assertTrue(data[field].strip())
         for field in ("W_bfp_m", "prototype_W_bfp_m", "abs_delta_m", "rel_delta"):
@@ -143,7 +143,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         with self.assertRaises(AssertionError):
             self.validate_artifact(changed_prototype)
         for field in ("schema_version", "kind", "label", "W_bfp_m", "element_type", "geometry",
-                      "meshes", "selected_mesh", "prototype_W_bfp_m",
+                      "meshes", "selected_mesh", "prototype_W_bfp_m", "calculix_version", "host",
                       "abs_delta_m", "rel_delta"):
             invalid = copy.deepcopy(data)
             del invalid[field]
@@ -158,17 +158,13 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         }.items():
             variants.extend(dict(data, **{field: value}) for value in values)
         for value in (123, "", "   ", None, True):
-            for field in ("schema_version", "kind", "element_type", "selected_mesh"):
+            for field in ("schema_version", "kind", "element_type", "selected_mesh", "calculix_version", "host"):
                 variants.append(dict(data, **{field: value}))
         for names in (("coarse", "coarse"), ("fine", "fine"),
                       ("coarse", "unknown"), ("coarse", "fine", "fine")):
             invalid = copy.deepcopy(data)
             invalid["meshes"] = [dict(data["meshes"][0], name=name) for name in names]
             variants.append(invalid)
-        without_provenance = copy.deepcopy(data)
-        for field in ("host", "calculix_version"):
-            del without_provenance[field]
-        self.validate_artifact(without_provenance)
         self.validate_artifact(dict(data, host="another host", calculix_version="ccx custom build"))
         changed_layers = copy.deepcopy(data)
         for mesh in changed_layers["meshes"]:
@@ -193,7 +189,7 @@ class TrilayerCalculixRefTest(unittest.TestCase):
         line = (
             f"W_bfp={w} prototype=4.269532769e-3 abs_delta={abs_delta} "
             f"rel_delta={rel_delta} mesh=fine element=C3D20 "
-            f"ccx={data.get('calculix_version', 'unknown')}"
+            f"ccx={data['calculix_version']}"
         )
         log = Path("/workspace/tasks/logs/v-ccx-delta.md")
         log.parent.mkdir(parents=True, exist_ok=True)

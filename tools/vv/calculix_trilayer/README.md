@@ -55,13 +55,12 @@ and `qoi_surface` on an 81×81 grid in millimetres, then converted back to metre
 The comparison test reads only `REFERENCE.json` and checks required normative
 fields, model, refinement, and delta arithmetic. Schema version 0.1 requires
 `schema_version` to be exactly `"chipcae.vv.reference/0.1"`. Required top-level
-fields are `schema_version`, `kind`, `label`, `element_type`, `geometry`,
-`meshes`, `selected_mesh`, `W_bfp_m`, `prototype_W_bfp_m`, `abs_delta_m`, and
+fields are `schema_version`, `kind`, `label`, `element_type`, `calculix_version`,
+`host`, `geometry`, `meshes`, `selected_mesh`, `W_bfp_m`, `prototype_W_bfp_m`, `abs_delta_m`, and
 `rel_delta`. The required `geometry` fields are `L_m`, `thicknesses_m`, `E_Pa`,
 `nu`, `alpha_1_per_K`, and `dT_K`; each mesh requires `name`, `n_elem_xyz`,
-`n_elem_z_per_layer`, and `W_bfp_m`. Optional runtime provenance
-(`calculix_version` and `host`) does not affect validation; unknown extension
-fields are allowed at the top level and in geometry and mesh objects.
+`n_elem_z_per_layer`, and `W_bfp_m`. Runtime provenance (`calculix_version`
+and `host`) must be nonempty strings; unknown extension fields are allowed at the top level and in geometry and mesh objects.
 `REFERENCE.json` is distributed under Apache-2.0. Source and deck headers also
 record Apache-2.0.
 
@@ -92,3 +91,6 @@ The passing comparison creates `/workspace/tasks/logs` if needed and overwrites
 The manual parser regression compares this file with stdout, including when
 `CHIPCAE_VV_LOG_DIR` is unset, empty, or set to another directory; the required
 report path is fixed and does not depend on that variable.
+
+`REFERENCE.json` includes `SPDX-License-Identifier: Apache-2.0` as JSON metadata;
+the generator preserves this license identifier.

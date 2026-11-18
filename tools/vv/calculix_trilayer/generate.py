@@ -311,6 +311,7 @@ def main():
     rel = abs_delta / PROTOTYPE
     ver = ccx_version()
     payload = {
+        "SPDX-License-Identifier": "Apache-2.0",
         "schema_version": "chipcae.vv.reference/0.1",
         "host": f"{platform.node()} {platform.system()} {platform.machine()}",
         "kind": "REFERENCE",
