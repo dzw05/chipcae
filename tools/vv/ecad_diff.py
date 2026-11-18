@@ -157,7 +157,13 @@ def _load(path):
     for ref in refs:
         if not isinstance(ref, dict):
             _invalid('external reference must be an object')
-        _string(ref.get('path'))
+        for field in ('path', 'sha256'):
+            if not isinstance(ref.get(field), str) or not ref[field]:
+                raise EcadDiffError(12, 'INPUT_REFERENCE_MISSING',
+                                    f'external reference missing usable {field}')
+        digest = ref['sha256']
+        if len(digest) != 64 or any(c not in '0123456789abcdefABCDEF' for c in digest):
+            _invalid('invalid SHA-256 digest')
     polysets = {}
 
     def load_polyset(file):
@@ -181,9 +187,7 @@ def _load(path):
             data = _bytes(polyset_path, 'cannot read polyset')
             actual_digest = hashlib.sha256(data).hexdigest()
             for ref in matching_refs:
-                digest = _string(ref['sha256'])
-                if len(digest) != 64 or any(c not in '0123456789abcdefABCDEF' for c in digest):
-                    _invalid('invalid SHA-256 digest')
+                digest = ref['sha256']
                 if actual_digest != digest.lower():
                     raise EcadDiffError(10, 'INPUT_HASH_MISMATCH', 'polyset SHA-256 differs')
             polysets[file] = _read_polyset(data)

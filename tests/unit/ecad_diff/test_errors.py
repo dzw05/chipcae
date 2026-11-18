@@ -228,6 +228,42 @@ def main():
             'ecad_diff: INPUT_INVALID: delta must be a finite positive number\n')
         assert not out.exists()
 
+        # Required reference metadata is checked before either copper loading
+        # or outline discovery, including when an explicit outline is present.
+        for representation in ('discovery', 'copper', 'explicit_outline'):
+            for field in ('path', 'sha256'):
+                for value in ('absent', None, '', 123):
+                    folder = directory / f'ref_{representation}_{field}_{value}'
+                    folder.mkdir()
+                    b = board()
+                    fixture = b if representation == 'copper' else board()
+                    polyset(folder, fixture)
+                    b['external_refs'] = copy.deepcopy(fixture['external_refs'])
+                    if representation == 'explicit_outline':
+                        b['outline']['polygon'] = [[0, 0], [0.01, 0], [0.01, 0.005], [0, 0.005]]
+                    ref = b['external_refs'][0]
+                    if value == 'absent':
+                        del ref[field]
+                    else:
+                        ref[field] = value
+                    path = save(folder / 'stack.json', b)
+                    out = folder / 'reports'
+                    try:
+                        diff_stacks(good, path)
+                    except EcadDiffError as exc:
+                        assert (exc.code, exc.name) == (12, 'INPUT_REFERENCE_MISSING'), (
+                            representation, field, value, exc)
+                    else:
+                        raise AssertionError('API accepted incomplete external reference')
+                    proc = subprocess.run(
+                        [sys.executable, str(ROOT / 'tools/vv/ecad_diff.py'),
+                         '--odb', str(good), '--ipc', str(path), '-o', str(out)],
+                        capture_output=True, text=True)
+                    assert proc.returncode == 12, proc.stderr
+                    assert len(proc.stderr.splitlines()) == 1, proc.stderr
+                    assert proc.stderr.startswith('ecad_diff: INPUT_REFERENCE_MISSING: '), proc.stderr
+                    assert not out.exists()
+
         # Without an explicit polygon, every reference is consulted for outline
         # discovery and must pass the same validation as copper sidecars.
         for kind, code, name in (

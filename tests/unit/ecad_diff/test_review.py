@@ -18,7 +18,7 @@ def main():
         data = (b'CCPOLY01' + struct.pack('<dII', 1e-9, 1, 4) + b'F.Cu'
                 + struct.pack('<Iq', 0, 0))
         (root / 'unused.polyset').write_bytes(data)
-        for digest, code in ((None, 14), ('invalid', 14), ('0' * 64, 10)):
+        for digest, code in ((None, 12), ('invalid', 14), ('0' * 64, 10)):
             unused = board()
             ref = {'path': 'unused.polyset'}
             if digest is not None:
