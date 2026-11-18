@@ -1,0 +1,3 @@
+{"id":"tiny","unit":"m","outline":{"box":[0,0,7,5]},
+"symmetry":"none","package_type":"FCBGA","layers":[{"name":"solid","thickness":1,
+"kind":"Homogenized","material":"solid_eq","n_elem_min":1,"grading":1}]}

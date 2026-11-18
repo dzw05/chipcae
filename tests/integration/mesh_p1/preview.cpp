@@ -260,9 +260,9 @@ int main(int argc, char** argv) {
         invoke(shell(invalid.string()) + " -o " + shell(bad.string()), 1);
         expect(!fs::exists(bad.string() + ".vtkhdf"), "no invalid stack output");
         auto tiny = dir / "tiny.stack.json";
-        std::ofstream(tiny) << R"({"id":"tiny","unit":"m","outline":{"box":[0,0,7,5]},
-"symmetry":"none","package_type":"FCBGA","layers":[{"name":"solid","thickness":1,
-"kind":"Homogenized","material":"solid_eq","n_elem_min":1,"grading":1}]})";
+        fs::copy_file(fs::path(K1_ROOT) /
+                          "tests/integration/mesh_p1/baselines/tiny-padding/tiny.stack.json",
+                      tiny);
         int acceptance_failures = 0;
         auto acceptance = [&](const char* name, auto check) {
             try {
@@ -286,8 +286,8 @@ int main(int argc, char** argv) {
             for (auto [key, value] : {std::pair{"nx0", 4}, {"ny0", 3}, {"L", 1}, {"nz", 1}})
                 expect(summary.at(key).is_int64() && summary.at(key).as<int>() == value,
                        "tiny hierarchy integer summary");
-            // Pre-change baseline aafc877142d5ebe2d16befe80f8c830384beeb49; tiny box=[0,0,7,5],
-            // nx=7, ny=5, levels=2.
+            // Verified against pre-change aafc877142d5ebe2d16befe80f8c830384beeb49.
+            // Input, captured output and reproduction: baselines/tiny-padding/README.md.
             expect(summary.at("mesh_sha256").as<std::string>() ==
                        "31ccb0783121d620d23890e5bab6e87fa6f86cc4cc8bc521ff9138c715ac49a6",
                    "padded mesh SHA matches pre-change baseline");

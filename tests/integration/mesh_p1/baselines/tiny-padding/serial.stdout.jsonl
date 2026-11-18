@@ -1,0 +1,4 @@
+{"stage":"load","progress":0,"message":"Loading stack 0.2"}
+{"stage":"mesh","progress":0.3,"message":"Building tensor grid"}
+{"stage":"write","progress":0.8,"message":"Writing VTKHDF"}
+{"stage":"success","progress":1,"grid":"/workspace/tasks/artifacts/fix-gmg-m2-preview/review-baseline-serial.vtkhdf","max_ratio":10,"n0":"4x3","nx0":4,"ny0":3,"L":1,"padded_cells":2,"void_cells":0,"nz":1,"node_count":126,"cell_count":48,"mesh_sha256":"31ccb0783121d620d23890e5bab6e87fa6f86cc4cc8bc521ff9138c715ac49a6","message":"{\"grid\":\"/workspace/tasks/artifacts/fix-gmg-m2-preview/review-baseline-serial.vtkhdf\",\"max_ratio\":10,\"n0\":\"4x3\",\"nx0\":4,\"ny0\":3,\"L\":1,\"padded_cells\":2,\"void_cells\":0,\"nz\":1,\"node_count\":126,\"cell_count\":48,\"mesh_sha256\":\"31ccb0783121d620d23890e5bab6e87fa6f86cc4cc8bc521ff9138c715ac49a6\"}"}
