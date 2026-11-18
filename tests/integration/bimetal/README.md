@@ -33,7 +33,7 @@ candidate set. The first vertex with same-plane positive-x and positive-y
 partners becomes A; scanning retains the last qualifying B and C. The
 `GetVertexVDofs` loop constrains A ux/uy/uz, B uy/uz, C uz, sorts and checks
 exactly six DOFs, and emits `3-2-1 constrained_dofs=6 (3+2+1)` in `solve/events.bin` (required by
-the test). `mesh/background/src/tensor_grid.cpp` orders node columns by Morton
+the test). It also emits the selected A/B/C coordinates, which the test asserts. `mesh/background/src/tensor_grid.cpp` orders node columns by Morton
 order and z ascending. For this full square (all regular cells), selection is
 A=(0,0,0), B=(1,0,0), C=(0,1,0), for every tested grid and both rank counts.
 The pipeline builds the same global mesh on each rank before this selection.
@@ -77,6 +77,38 @@ Observed p = 0.75720017743645762 and 0.49256641415483837 (diagnostic).
 MPI relative difference = 0. Full command, per-run command arrays, exits,
 stdout/stderr and errors: `/workspace/tasks/logs/v-int-bimetal-acceptance.log`.
 
+The following command reproduces the temporary 10× reference change, captures
+CTest's exit and error output, restores the source even on failure, and runs
+the restored reference (using the environment above):
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+import subprocess
+
+path = Path("tests/integration/bimetal/test_timoshenko.py")
+original = path.read_text()
+expression = "W_ref = abs(timoshenko(100e9, .02, 5e-6, 200e9, .02, 15e-6, -100)) * 1**2 / 4"
+assert original.count(expression) == 1
+command = ["ctest", "--test-dir", "/workspace/build-v-int-bimetal-release",
+           "-R", "^bimetal_timoshenko$", "-V"]
+try:
+    path.write_text(original.replace(expression, expression + " * 10"))
+    with open("/workspace/tasks/logs/v-int-bimetal-negative-final.log", "w") as log:
+        print(f"command={command!r}", file=log, flush=True)
+        negative = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT)
+        print(f"exit={negative.returncode}", file=log)
+finally:
+    path.write_text(original)
+with open("/workspace/tasks/logs/v-int-bimetal-restored-final.log", "w") as log:
+    print(f"command={command!r}", file=log, flush=True)
+    restored = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT)
+    print(f"exit={restored.returncode}", file=log)
+assert negative.returncode == 8, negative.returncode
+assert restored.returncode == 0, restored.returncode
+PY
+```
+
 Negative validation used the same CTest command, temporarily changing only
 this test working copy's W_ref expression to multiply by 10. All four solves
 completed (each exit 0), mesh/artifact/event checks passed, and four result.json
@@ -92,7 +124,7 @@ The temporary multiplier was restored in a finally block and is not committed.
 No production behavior was changed. The baseline already satisfies these
 acceptance assertions; a normal failing accuracy result would be inaccurate.
 
-Restored-reference rerun: same CTest command, exit 0 (56.05 s); all four
+Restored-reference rerun: same CTest command, exit 0 (51.07 s); all four
 solves completed, values and errors identical to the normal table above.
 Full command, solver exits, stdout/stderr, mesh summaries and errors:
 `/workspace/tasks/logs/v-int-bimetal-restored-final.log`.
@@ -108,7 +140,10 @@ Kokkos-OFF configuration.
 Final Release suite:
 `ctest --test-dir /workspace/build-v-int-bimetal-release --output-on-failure -j2`
 returned 0: 172 tests, zero failures, nine expected optional-backend/placeholder
-skips, total 1006.15 s. Bimetal passed in 58.77 s during this suite.
-Full output: `/workspace/tasks/logs/v-int-bimetal-all-final.log`.
-No C/C++ files were added or changed; clang-format 23.1.5 has no applicable
-files here. Python syntax and `git diff --check` are clean.
+skips, total 898.22 s. Bimetal passed in 80.68 s during this suite.
+Full output: `/workspace/tasks/logs/v-int-bimetal-review-all.log`.
+The review fix adds a coordinate event in `pipeline.cpp` so the test checks
+the actual selected A/B/C points. That file was formatted with clang-format
+23.1.5 (`-i`, then `--dry-run --Werror`). Python syntax and `git diff --check`
+are clean. The documented negative/restoration command was rerun after these
+assertions were added: exits 8 and 0, respectively.

@@ -688,6 +688,17 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             if (essential.Size() != 6)
                 throw InputError(ErrorCode::INPUT_INVALID, "3-2-1 must constrain exactly six DOFs");
             emit(io::LogLine{1, rank, "3-2-1 constrained_dofs=6 (3+2+1)", "", 0});
+            const auto point = [&](int vertex) {
+                const double* p = mesh.GetVertex(vertex);
+                return "(" + std::to_string(p[0]) + "," + std::to_string(p[1]) + "," +
+                       std::to_string(p[2]) + ")";
+            };
+            emit(io::LogLine{1,
+                             rank,
+                             "3-2-1 points A=" + point(anchor) + " B=" + point(along_x) +
+                                 " C=" + point(along_y),
+                             "",
+                             0});
         } else {
             Array<int> all(mesh.bdr_attributes.Max());
             all = 0;

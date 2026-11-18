@@ -48,6 +48,30 @@ with tempfile.TemporaryDirectory(prefix="bimetal-") as tmp:
         work = Path(tmp) / name
         shutil.copytree(Path(__file__).parent / "data", work)
         case = read(work / "case.json")
+        assert case["stack"] == {"ref": "stack.json"}
+        assert case["materials"] == {"ref": "materials.json"}
+        stack = read(work / case["stack"]["ref"])
+        assert stack["unit"] == "m"
+        assert stack["outline"] == {"box": [0, 0, 1, 1],
+                                    "polygon": [[0, 0], [1, 0], [1, 1], [0, 1]]}
+        assert stack["symmetry"] == "none"
+        assert stack["layers"] == [
+            {"name": name, "kind": "Explicit", "material": name, "thickness": .02,
+             "n_elem_min": 1, "grading": 1} for name in ("base", "top")]
+        materials = read(work / case["materials"]["ref"])["materials"]
+        assert [material["id"] for material in materials] == ["base", "top"]
+        for material, E, alpha in zip(materials, (100e9, 200e9), (5e-6, 15e-6)):
+            assert material["unit_system"] == "SI"
+            assert material["model"] == "thermo_elastic"
+            assert material["elastic"] == {
+                "symmetry": "isotropic", "table": {
+                    "temperatures": [300], "columns": {"E": [E], "nu": [0]},
+                    "interpolation": "constant", "extrapolation": "clamp"}}
+            assert material["thermal_expansion"] == {
+                "symmetry": "isotropic", "cte_type": "tangent",
+                "stress_free_temperature": 400, "table": {
+                    "temperatures": [300], "columns": {"alpha": [alpha]},
+                    "interpolation": "constant", "extrapolation": "clamp"}}
         case["mesh"].update(nx=nx, ny=nx, min_elems_per_layer=nz // 2)
         assert case["constraints"] == {"rigid": "3-2-1"}
         assert case["loads"] == [{"type": "uniform_temperature", "T_ref": 400, "T_target": 300}]
@@ -79,6 +103,10 @@ with tempfile.TemporaryDirectory(prefix="bimetal-") as tmp:
         assert all(type(v) is int for v in counts) and counts == (nx, nx, nz), counts
         events = (work / "solve/events.bin").read_bytes()
         assert b"3-2-1 constrained_dofs=6 (3+2+1)" in events, "missing six-DOF event evidence"
+        assert (b"3-2-1 points A=(0.000000,0.000000,0.000000) "
+                b"B=(1.000000,0.000000,0.000000) "
+                b"C=(0.000000,1.000000,0.000000)") in events, "unexpected A/B/C selection"
+        # Exact constraints equality above excludes fixed edge/surface/layer targets.
         assert (work / "solve/out/step-0.vtkhdf").is_file(), "missing VTKHDF artifact"
         error = abs(measured - W_ref) / W_ref
         write(work / "result.json", {
