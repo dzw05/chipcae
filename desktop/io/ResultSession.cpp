@@ -23,6 +23,14 @@
 
 namespace chipcae::desktop {
 namespace {
+bool validMeshSha256(const QString& sha) {
+    if (sha.size() != 64)
+        return false;
+    for (const QChar ch : sha)
+        if (!((ch >= QChar('0') && ch <= QChar('9')) || (ch >= QChar('a') && ch <= QChar('f'))))
+            return false;
+    return true;
+}
 struct Handle {
     hid_t id;
     herr_t (*close)(hid_t);
@@ -320,8 +328,28 @@ QJsonObject ResultSession::meshDigest() const {
             out[key] = manifest_[key];
     return out;
 }
-MeshSha256Compare ResultSession::comparePreviewMeshSha256(const QString&, QString*) const {
-    // TEST-FIRST stub: keep acceptance assertions red until the comparison is implemented.
+MeshSha256Compare ResultSession::comparePreviewMeshSha256(const QString& previewSha256,
+                                                          QString* detail) const {
+    const QString preview = previewSha256.trimmed();
+    if (!validMeshSha256(preview)) {
+        if (detail)
+            *detail = "preview mesh SHA-256 is missing or invalid";
+        return MeshSha256Compare::PreviewMissing;
+    }
+    const QString manifestSha = meshDigest().value("mesh_sha256").toString().trimmed();
+    if (!validMeshSha256(manifestSha)) {
+        if (detail)
+            *detail = "manifest mesh SHA-256 is missing or invalid";
+        return MeshSha256Compare::ManifestMissing;
+    }
+    if (preview == manifestSha) {
+        if (detail)
+            detail->clear();
+        return MeshSha256Compare::Match;
+    }
+    if (detail)
+        *detail = QString("preview mesh SHA-256 %1 differs from manifest mesh SHA-256 %2")
+                      .arg(preview, manifestSha);
     return MeshSha256Compare::Mismatch;
 }
 bool ResultSession::preflight(const QString& path) {
