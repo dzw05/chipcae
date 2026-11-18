@@ -221,13 +221,18 @@ TemperatureTable table(const Json& j,
     auto interpolation = j.at("interpolation").str();
     if (interpolation != "linear")
         throw std::runtime_error(
-            "interpolation: v0 only supports linear (pchip NotImplemented; constant forbidden)");
+            j.path +
+            ".interpolation: v0 only supports linear (pchip NotImplemented; constant forbidden)");
     auto extrap = j.at("extrapolation").str();
     if (extrap != "error" && extrap != "clamp")
-        throw std::runtime_error("extrapolation: invalid value");
+        throw std::runtime_error(j.path + ".extrapolation: invalid value");
     std::vector<std::vector<Real>> columns;
-    for (const auto& name : names)
-        columns.push_back(numbers(j.at("columns").at(name)));
+    for (const auto& name : names) {
+        const Json& col = j.at("columns").at(name);
+        if (col.kind != Json::Array)
+            throw std::runtime_error(col.path + ": expected array");
+        columns.push_back(numbers(col));
+    }
     try {
         auto temperatures = numbers(j.at("temperatures"));
         // Validate the source first: descending knots and runs of >2 equal knots
