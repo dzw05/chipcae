@@ -17,3 +17,7 @@ if(CHIPCAE_ENABLE_ECAD AND CHIPCAE_ENABLE_JSONCONS)
         ${CMAKE_CURRENT_SOURCE_DIR}/test_ecad_stack.py ${PROJECT_SOURCE_DIR} $<TARGET_FILE:chipcae_contract_ecad_stack>)
     set_tests_properties(contract_ecad_stack PROPERTIES LABELS "contract" TIMEOUT 120)
 endif()
+
+add_test(NAME contract_assembly_schema COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/validate_assembly.py ${PROJECT_SOURCE_DIR})
+set_tests_properties(contract_assembly_schema PROPERTIES LABELS "contract" SKIP_RETURN_CODE 77)

@@ -3,6 +3,7 @@
 #include "PreviewWorker.hpp"
 
 #include <QTemporaryDir>
+#include <functional>
 #include <memory>
 
 namespace chipcae::desktop {
@@ -48,6 +49,9 @@ signals:
     void finished(bool replaced);
 
 private:
+    friend struct ImportControllerTestAccess;
+    static QStringList argumentsFor(const ImportRequest& request);
+    std::function<bool(const QString&, const QString&)> copyOutput_;
     void complete(int code, QProcess::ExitStatus status);
     CaseDocument& document_;
     std::unique_ptr<QTemporaryDir> staging_;

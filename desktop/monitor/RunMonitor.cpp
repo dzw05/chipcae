@@ -10,18 +10,26 @@
 namespace chipcae::desktop {
 RunMonitor::RunMonitor(QString dir, EventFormat mode, QString eventFile)
     : directory(std::move(dir)), format(mode), tailer_(QDir(directory).filePath(eventFile), mode) {}
+const std::vector<MonitorLogEntry>& RunMonitor::logEntries() const {
+    return logEntries_;
+}
+void RunMonitor::appendDiagnostic(const QString& text) {
+    if (diagnostics.contains(text))
+        return;
+    diagnostics.append(text);
+    logEntries_.push_back({0, 0, text, true});
+}
 void RunMonitor::poll() {
     auto result = tailer_.poll();
-    if (!result.diagnostic.isEmpty() && !diagnostics.contains(result.diagnostic))
-        diagnostics.append(result.diagnostic);
     for (const auto& event : result.events)
         consume(event);
+    if (!result.diagnostic.isEmpty())
+        appendDiagnostic(result.diagnostic);
     QFile file(QDir(directory).filePath("control.jsonl"));
     if (!file.exists())
         return;
     if (!file.open(QIODevice::ReadOnly)) {
-        if (!diagnostics.contains("cannot read control.jsonl"))
-            diagnostics.append("cannot read control.jsonl");
+        appendDiagnostic("cannot read control.jsonl");
         return;
     }
     if (quint64(file.size()) < commandOffset_)
@@ -45,7 +53,7 @@ void RunMonitor::poll() {
             error.error != QJsonParseError::NoError || !doc.isObject() || !ok || !seq ||
             obj.value("client_request_id").toString().isEmpty() ||
             obj.value("action").toString().isEmpty()) {
-            diagnostics.append("malformed complete control.jsonl line");
+            appendDiagnostic("malformed complete control.jsonl line");
             continue;
         }
         if (seq <= commandSequence_)
@@ -65,7 +73,7 @@ void RunMonitor::consume(const io::Event& event) {
                     "Unspecified", "Starting", "Running", "Paused", "Completed", "Failed"};
                 const auto value = static_cast<unsigned>(x.value);
                 if (value >= sizeof(names) / sizeof(names[0])) {
-                    diagnostics.append("invalid state value");
+                    appendDiagnostic("invalid state value");
                     return;
                 }
                 state = names[value];
@@ -82,12 +90,11 @@ void RunMonitor::consume(const io::Event& event) {
                                          point.iteration,
                                          point.norm,
                                          point.flags});
-            } else if constexpr (std::is_same_v<T, io::LogLine>)
-                logs.append(QString("level=%1 rank=%2 %3")
-                                .arg(x.level)
-                                .arg(x.rank)
-                                .arg(QString::fromStdString(x.message)));
-            else if constexpr (std::is_same_v<T, io::ControlAck>) {
+            } else if constexpr (std::is_same_v<T, io::LogLine>) {
+                const auto message = QString::fromStdString(x.message);
+                logs.append(QString("level=%1 rank=%2 %3").arg(x.level).arg(x.rank).arg(message));
+                logEntries_.push_back({x.level, x.rank, message, false});
+            } else if constexpr (std::is_same_v<T, io::ControlAck>) {
                 if (pendingSequence && x.cmd_seq == pendingSequence &&
                     x.client_request_id == pendingRequest.toStdString() && x.status >= 1 &&
                     x.status <= 3) {
@@ -105,8 +112,8 @@ void RunMonitor::consume(const io::Event& event) {
                     auto doc = QJsonDocument::fromJson(file.readAll(), &error);
                     if (error.error == QJsonParseError::NoError && doc.isObject())
                         manifest = doc.object();
-                    else if (!diagnostics.contains("invalid output manifest"))
-                        diagnostics.append("invalid output manifest");
+                    else
+                        appendDiagnostic("invalid output manifest");
                 }
             }
         },
@@ -143,16 +150,16 @@ void RunMonitor::stop(LocalJobService& broker, const QString& runId) {
             trackStop(reply.cmd_seq(), id);
         else {
             stopStatus = "Delivery rejected";
-            diagnostics.append(QString::fromStdString(reply.message()));
+            appendDiagnostic(QString::fromStdString(reply.message()));
         }
     } catch (const std::exception& e) {
-        diagnostics.append(QString::fromUtf8(e.what()));
+        appendDiagnostic(QString::fromUtf8(e.what()));
     }
 }
 void RunMonitor::checkTimeout(qint64 elapsedMs) {
     if (pendingSequence && !ack && elapsedMs >= 30000 && !timedOut_) {
         timedOut_ = true;
-        diagnostics.append("STOP ACK timeout; request remains pending");
+        appendDiagnostic("STOP ACK timeout; request remains pending");
     }
 }
 } // namespace chipcae::desktop

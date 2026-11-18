@@ -164,6 +164,7 @@ endif()
 if(CHIPCAE_ENABLE_ECAD)
     add_executable(test_odbpp_parser unit/test_odbpp_parser.cpp)
     add_executable(test_odbpp_map unit/test_odbpp_map.cpp)
+    target_include_directories(test_odbpp_map PRIVATE ${PROJECT_SOURCE_DIR}/geometry/ecad/src/odbpp)
     add_executable(odbpp_e2e integration/ecad/odbpp_e2e.cpp)
     foreach(target test_odbpp_parser test_odbpp_map odbpp_e2e)
         target_link_libraries(${target} PRIVATE chipcae::geometry_ecad)
@@ -212,6 +213,24 @@ add_test(NAME contract_public_headers COMMAND ${CMAKE_COMMAND}
 
 add_subdirectory(contract)
 add_subdirectory(vv)
+
+# Explicit registration required by the import CLI brief; the auto-scan skips added dirs.
+add_subdirectory(integration/import_cli)
+
+# I-IPC-ZIP-LIB acceptance (test-first).
+if(CHIPCAE_ENABLE_ECAD)
+    add_executable(chipcae_test_ipc2581_zip unit/test_ipc2581_zip.cpp)
+    target_link_libraries(chipcae_test_ipc2581_zip PRIVATE chipcae::geometry_ecad)
+    target_compile_definitions(chipcae_test_ipc2581_zip PRIVATE
+        CHIPCAE_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+        CHIPCAE_ZIP_PYTHON="${Python3_EXECUTABLE}")
+    chipcae_set_warnings(chipcae_test_ipc2581_zip)
+    foreach(case equals_xml line_endings no_xml two_xml filtered_entries limits bad_xml unsupported invalid_input streaming)
+        add_test(NAME ipc_zip_${case} COMMAND chipcae_test_ipc2581_zip ipc_zip_${case})
+        set_tests_properties(ipc_zip_${case} PROPERTIES LABELS "ecad" TIMEOUT 120)
+    endforeach()
+    set_tests_properties(ipc_zip_streaming PROPERTIES LABELS "ecad;heavy;nightly" TIMEOUT 600)
+endif()
 
 # Keep this the last line: auto-adds test subdirectories that call chipcae_auto_tests().
 chipcae_auto_test_subdirs()

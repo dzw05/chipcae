@@ -1,4 +1,4 @@
-#include "chipcae/geometry/ecad/ipc2581.hpp"
+#include "ipc2581_stream.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -647,32 +647,44 @@ struct Parser {
     static void XMLCALL on_end(void* u, const XML_Char* n) { static_cast<Parser*>(u)->end(n); }
 };
 } // namespace
-ImportResult read_ipc2581(const std::filesystem::path& file) {
-    ImportResult result;
-    std::ifstream in(file, std::ios::binary);
-    if (!in) {
-        result.error = "cannot open IPC-2581 file";
-        return result;
-    }
-    Parser state;
-    state.parser = XML_ParserCreateNS(nullptr, ':');
-    if (!state.parser) {
-        result.error = "cannot create Expat parser";
-        return result;
-    }
-    XML_SetUserData(state.parser, &state);
-    XML_SetElementHandler(state.parser, Parser::on_start, Parser::on_end);
-    char buffer[64 * 1024];
-    while (in) {
-        in.read(buffer, sizeof(buffer));
-        const auto got = in.gcount();
-        if (XML_Parse(state.parser, buffer, static_cast<int>(got), in.eof()) == XML_STATUS_ERROR) {
-            result.error = XML_ErrorString(XML_GetErrorCode(state.parser));
-            XML_ParserFree(state.parser);
-            return result;
+struct detail::Ipc2581StreamParser::State {
+    Parser parser;
+    std::string error;
+    State() {
+        parser.parser = XML_ParserCreateNS(nullptr, ':');
+        if (!parser.parser) {
+            error = "cannot create Expat parser";
+            return;
         }
+        XML_SetUserData(parser.parser, &parser);
+        XML_SetElementHandler(parser.parser, Parser::on_start, Parser::on_end);
     }
-    XML_ParserFree(state.parser);
+    ~State() {
+        if (parser.parser)
+            XML_ParserFree(parser.parser);
+    }
+};
+detail::Ipc2581StreamParser::Ipc2581StreamParser() : state_(std::make_unique<State>()) {}
+detail::Ipc2581StreamParser::~Ipc2581StreamParser() = default;
+bool detail::Ipc2581StreamParser::feed(std::string_view chunk) {
+    if (!state_->error.empty())
+        return false;
+    if (XML_Parse(state_->parser.parser, chunk.data(), static_cast<int>(chunk.size()), false) ==
+        XML_STATUS_ERROR) {
+        state_->error = XML_ErrorString(XML_GetErrorCode(state_->parser.parser));
+        return false;
+    }
+    return true;
+}
+ImportResult detail::Ipc2581StreamParser::finish() {
+    ImportResult result;
+    if (state_->error.empty() && XML_Parse(state_->parser.parser, "", 0, true) == XML_STATUS_ERROR)
+        state_->error = XML_ErrorString(XML_GetErrorCode(state_->parser.parser));
+    if (!state_->error.empty()) {
+        result.error = state_->error;
+        return result;
+    }
+    auto& state = state_->parser;
     state.resolve();
     result.model = std::move(state.model);
     for (auto& l : result.model.layers)
@@ -680,5 +692,21 @@ ImportResult read_ipc2581(const std::filesystem::path& file) {
             l.function.find("PLANE") != std::string::npos)
             l.copper = true;
     return result;
+}
+ImportResult read_ipc2581(const std::filesystem::path& file) {
+    std::ifstream in(file, std::ios::binary);
+    if (!in) {
+        ImportResult result;
+        result.error = "cannot open IPC-2581 file";
+        return result;
+    }
+    detail::Ipc2581StreamParser parser;
+    char buffer[64 * 1024];
+    while (in) {
+        in.read(buffer, sizeof(buffer));
+        if (!parser.feed(std::string_view(buffer, static_cast<std::size_t>(in.gcount()))))
+            break;
+    }
+    return parser.finish();
 }
 } // namespace chipcae::geometry::ecad

@@ -298,6 +298,12 @@ MaterialParams decode(Json j, bool customer_delivery = false, ImportOptions opti
     p.density = j.at("density").num();
     if (!(p.density > 0))
         throw std::runtime_error("density: must be positive");
+    if (j.has("conductivity")) {
+        const Real k = j.at("conductivity").num();
+        if (!(k > 0))
+            throw std::runtime_error("conductivity: must be positive");
+        p.conductivity = k;
+    }
     auto model = j.at("model").str();
     if (model != "thermo_elastic" && model != "prony_viscoelastic")
         throw std::runtime_error("model: unsupported");

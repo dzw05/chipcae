@@ -105,11 +105,15 @@ def main():
         "missing": ("OK", 1),
         "corrupt": ("OK", 1),
     }.get(mode, ("OK", 0))
+    if mode in ("confirm", "b") and args.accept_b_tier:
+        code, exit_code = "OK", 0
     report = {"code": code, "message": "Mock import: " + mode, "defects": []}
     if code in ("IMPORT_CONFIRMATION_REQUIRED", "IMPORT_REJECTED"):
         report["defects"] = [{"code": "MOCK_GAP", "reason": "Review fixture gap"}]
-    if args.report and mode != "missing":
-        pathlib.Path(args.report).write_text("{" if mode == "corrupt" else json.dumps(report))
+    report_path = (pathlib.Path(args.report) if args.report
+                   else pathlib.Path(args.o).parent / "defects.json")
+    if mode != "missing":
+        report_path.write_text("{" if mode == "corrupt" else json.dumps(report))
     return exit_code
 
 

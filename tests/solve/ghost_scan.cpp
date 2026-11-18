@@ -74,6 +74,7 @@ int main(int argc, char** argv) {
                         if (layered && position == 0) {
                             auto interface = cut;
                             interface.gp_face_gid.clear();
+                            interface.gp_owner_rank.clear();
                             interface.gp_elem_gid = {};
                             for (std::size_t f = 0; f < cut.gp_face_gid.size(); ++f) {
                                 auto a = std::find(arrays.elem_gid.begin(),
@@ -86,6 +87,7 @@ int main(int argc, char** argv) {
                                          arrays.elem_gid.begin();
                                 if (arrays.attribute[a] != arrays.attribute[b]) {
                                     interface.gp_face_gid.push_back(cut.gp_face_gid[f]);
+                                    interface.gp_owner_rank.push_back(cut.gp_owner_rank[f]);
                                     for (int side = 0; side < 2; ++side)
                                         interface.gp_elem_gid[side].push_back(
                                             cut.gp_elem_gid[side][f]);

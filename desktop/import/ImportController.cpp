@@ -17,7 +17,10 @@ QByteArray readFile(const QString& path) {
 }
 } // namespace
 ImportController::ImportController(CaseDocument& document, QObject* parent)
-    : QObject(parent), document_(document) {
+    : QObject(parent), copyOutput_([](const QString& source, const QString& destination) {
+          return QFile::copy(source, destination);
+      }),
+      document_(document) {
     connect(&worker_, &PreviewWorker::stderrLine, this, [this](const QByteArray& line) {
         stderr_ += line + '\n';
     });
@@ -70,10 +73,6 @@ bool ImportController::start(const ImportRequest& request) {
         error_ = "material map required";
         return false;
     }
-    if (request.kind == ImportKind::Ecad && !QFileInfo(request.materialMap).isFile()) {
-        error_ = "material map must be an existing file";
-        return false;
-    }
     if (input.isEmpty() ||
         (request.kind == ImportKind::Ecad ? !ImportSourceDialog::isSupportedImportPath(input)
                                           : !QFileInfo(input).isFile())) {
@@ -91,34 +90,32 @@ bool ImportController::start(const ImportRequest& request) {
         auto absolute = QFileInfo(path).absoluteFilePath();
         if (QFileInfo::exists(path) || paths.contains(absolute) ||
             absolute == QFileInfo(input).absoluteFilePath() ||
-            (!request.materialMap.isEmpty() &&
-             absolute == QFileInfo(request.materialMap).absoluteFilePath()))
+            (request.kind == ImportKind::Ecad && !request.materialMap.isEmpty() &&
+             absolute == QFileInfo(request.materialMap).absoluteFilePath())) {
+            error_ = "import destination already exists or collides with another path";
             return false;
+        }
         paths.insert(absolute);
     }
     staging_ = std::make_unique<QTemporaryDir>(
         QFileInfo(output).absoluteDir().filePath(".chipcae-import-XXXXXX"));
-    if (!staging_->isValid())
+    if (!staging_->isValid()) {
+        error_ = "import staging directory creation failed";
         return false;
+    }
     destinations_ = {output, polyset, report};
     staged_ = {staging_->filePath("out.stack.json"),
                staging_->filePath("out.polyset"),
                staging_->filePath("defects.json")};
-    QStringList arguments = request.prefix;
-    if (request.kind == ImportKind::Assembly) {
-        arguments << "--assembly" << input << "-o" << staged_[0];
-        arguments << "--report" << staged_[2];
-        if (!polyset.isEmpty())
-            arguments << "--polyset" << staged_[1];
-    } else {
-        arguments << input << "-o" << staged_[0] << "--material-map" << request.materialMap;
-        if (!polyset.isEmpty())
-            arguments << "--polyset" << staged_[1];
-        arguments << "--report" << staged_[2];
-    }
-    if (request.acceptBTier)
-        arguments << "--accept-b-tier";
-    request_ = request;
+    // Keep caller input and mapping paths unchanged; only generated artifacts
+    // belong in the private staging directory until validation succeeds.
+    auto stagedRequest = request;
+    stagedRequest.output = staged_[0];
+    stagedRequest.polyset = polyset.isEmpty() ? QString{} : staged_[1];
+    // Every import requests a private report explicitly; destinations_ alone
+    // controls whether it is exported to the caller.
+    stagedRequest.report = staged_[2];
+    const auto arguments = request.prefix + argumentsFor(stagedRequest);
     cancelled_ = false;
     busy_ = true;
     outcome_ = ImportOutcome::Running;
@@ -129,7 +126,29 @@ bool ImportController::start(const ImportRequest& request) {
         staging_.reset();
         return false;
     }
+    request_ = request;
     return true;
+}
+
+QStringList ImportController::argumentsFor(const ImportRequest& request) {
+    QStringList arguments;
+    if (request.kind == ImportKind::Assembly) {
+        arguments << "--assembly" << request.input << "-o" << request.output;
+        if (!request.report.isEmpty())
+            arguments << "--report" << request.report;
+        if (!request.polyset.isEmpty())
+            arguments << "--polyset" << request.polyset;
+    } else {
+        arguments << request.input << "-o" << request.output << "--material-map"
+                  << request.materialMap;
+        if (!request.polyset.isEmpty())
+            arguments << "--polyset" << request.polyset;
+        if (!request.report.isEmpty())
+            arguments << "--report" << request.report;
+    }
+    if (request.acceptBTier)
+        arguments << "--accept-b-tier";
+    return arguments;
 }
 
 void ImportController::cancel() {
@@ -144,13 +163,17 @@ bool ImportController::restartAccepted() {
     auto request = request_;
     request.acceptBTier = true;
     emit userConfirmed();
-    return start(request);
+    const bool started = start(request);
+    // Refresh the dialog on local rejection; finished belongs to process completion.
+    if (!started)
+        emit defectsReady();
+    return started;
 }
 void ImportController::confirmDefects() {
     restartAccepted();
 }
 bool ImportController::needsMaterialMapReselect() const {
-    return exitStatus_ == QProcess::NormalExit && exitCode_ == 9 &&
+    return !busy_ && exitStatus_ == QProcess::NormalExit && exitCode_ == 9 &&
            reportCode_ == "MATERIAL_MAPPING_MISSING";
 }
 void ImportController::complete(int code, QProcess::ExitStatus status) {
@@ -159,23 +182,35 @@ void ImportController::complete(int code, QProcess::ExitStatus status) {
     exitCode_ = code;
     exitStatus_ = status;
     report_ = readFile(staged_[2]);
+    reportCode_.clear();
+    grade_.clear();
     bool validReport = false;
     try {
         auto parsed = Json::parse(report_.toStdString());
-        reportCode_ = QString::fromStdString(parsed.at("code").as<std::string>());
+        if (!parsed.is_object() || !parsed.at("code").is_string() ||
+            !parsed.at("message").is_string() || !parsed.at("defects").is_array())
+            throw std::runtime_error("Invalid import report structure");
+        const auto reportCode = QString::fromStdString(parsed.at("code").as<std::string>());
+        QString grade;
         if (parsed.contains("grade") && parsed.at("grade").is_string())
-            grade_ = QString::fromStdString(parsed.at("grade").as<std::string>());
-        validReport = parsed.at("message").is_string() && parsed.at("defects").is_array();
+            grade = QString::fromStdString(parsed.at("grade").as<std::string>());
+        reportCode_ = reportCode;
+        grade_ = grade;
+        validReport = true;
     } catch (const std::exception&) {
     }
+    if (cancelled_ || status != QProcess::NormalExit) {
+        reportCode_.clear();
+        grade_.clear();
+    }
     outcome_ = ImportOutcome::Failed;
-    if (!cancelled_ && status == QProcess::NormalExit && validReport) {
-        if (code == 0 && reportCode_ == "OK")
+    if (!cancelled_ && status == QProcess::NormalExit) {
+        if (code == 0 && validReport && reportCode_ == "OK")
             outcome_ = ImportOutcome::Accepted;
-        else if (code == 6 && reportCode_ == "IMPORT_CONFIRMATION_REQUIRED")
+        else if (validReport && code == 6 && reportCode_ == "IMPORT_CONFIRMATION_REQUIRED")
             outcome_ = ImportOutcome::NeedsConfirmation;
-        else if ((code == 7 && reportCode_ == "IMPORT_REJECTED") ||
-                 (code == 9 && reportCode_ == "MATERIAL_MAPPING_MISSING"))
+        else if (validReport && ((code == 7 && reportCode_ == "IMPORT_REJECTED") ||
+                                 (code == 9 && reportCode_ == "MATERIAL_MAPPING_MISSING")))
             outcome_ = ImportOutcome::Rejected;
     }
     if (outcome_ == ImportOutcome::Failed && error_.isEmpty())
@@ -192,9 +227,23 @@ void ImportController::complete(int code, QProcess::ExitStatus status) {
             for (int i = 0; i < destinations_.size(); ++i) {
                 if (destinations_[i].isEmpty())
                     continue;
-                if (!QFile::copy(staged_[i], destinations_[i])) {
+                const QFileInfo destination(destinations_[i]);
+                const bool existed = destination.exists() || destination.isSymLink();
+                // Preflight cannot reserve paths while the importer runs. Never
+                // publish over a destination that has since appeared externally.
+                if (existed)
                     throw std::runtime_error("Cannot publish import outputs");
-                }
+                // Copy into an owned directory on the destination filesystem. A
+                // failed copy can only leave private partial data; the final rename
+                // refuses an external destination even if it appears during copying.
+                QTemporaryDir publication(
+                    destination.absoluteDir().filePath(".chipcae-import-publish-XXXXXX"));
+                if (!publication.isValid())
+                    throw std::runtime_error("Cannot publish import outputs");
+                const auto pending = publication.filePath("output");
+                if (!copyOutput_(staged_[i], pending) || !QFile::rename(pending, destinations_[i]))
+                    throw std::runtime_error("Cannot publish import outputs");
+                // Only a successful no-overwrite rename establishes ownership.
                 published << destinations_[i];
             }
             replaced = document_.replaceImportedStack(stack);

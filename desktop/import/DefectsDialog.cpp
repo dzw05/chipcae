@@ -19,8 +19,10 @@ DefectsDialog::DefectsDialog(ImportController& controller, QWidget* parent) : QD
     confirm_->setEnabled(false);
     layout->addWidget(buttons);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    connect(confirm_, &QPushButton::clicked, &controller, &ImportController::confirmDefects);
-    connect(confirm_, &QPushButton::clicked, this, [this] { confirm_->setEnabled(false); });
+    connect(confirm_, &QPushButton::clicked, this, [this, &controller] {
+        confirm_->setEnabled(false);
+        controller.confirmDefects();
+    });
     connect(&controller, &ImportController::defectsReady, this, [this, &controller] {
         text_->setPlainText(tr("Exit code: %1\n%2\n\n%3\n\n%4")
                                 .arg(controller.exitCode())

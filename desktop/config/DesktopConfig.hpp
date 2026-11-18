@@ -2,6 +2,7 @@
 #include "JobTypes.hpp"
 
 #include <QProcessEnvironment>
+#include <QStringList>
 
 namespace chipcae::desktop {
 struct DesktopEntrypoint {
@@ -20,6 +21,20 @@ public:
     static DesktopConfig
     load(const QStringList& args,
          const QProcessEnvironment& env = QProcessEnvironment::systemEnvironment());
+    // Independent of load() and current(). Returns an absolute directory containing the
+    // schema marker, or an empty string on an implicit miss. Invalid overrides throw.
+    static QString
+    locateSchemaDir(const QStringList& args,
+                    const QProcessEnvironment& env = QProcessEnvironment::systemEnvironment(),
+                    const QString& executableDir = QString(),
+                    const QString& compileTimeFallback = QString());
+    // Joins a basename to the located directory. Only the schema marker must exist.
+    static QString
+    locateSchemaFile(const QString& fileName,
+                     const QStringList& args,
+                     const QProcessEnvironment& env = QProcessEnvironment::systemEnvironment(),
+                     const QString& executableDir = QString(),
+                     const QString& compileTimeFallback = QString());
     static void setCurrent(const DesktopConfig& config);
     static const DesktopConfig& current();
     const DesktopEntrypoint& importEntry() const { return import_; }

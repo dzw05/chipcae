@@ -6,10 +6,12 @@
       "schema_version": "1",
       "unit_system": "SI",
       "density": 1000,
+      "conductivity": 3.1,
       "model": "thermo_elastic",
       "provenance": {
         "source_type": "illustrative",
-        "confidence": "illustrative"
+        "confidence": "illustrative",
+        "notes": "illustrative conductivity; equivalent through-thickness substrate value, ECTC 2005, https://doi.org/10.1109/ectc.2005.1442026"
       },
       "elastic": {
         "symmetry": "isotropic",
@@ -57,10 +59,12 @@
       "schema_version": "1",
       "unit_system": "SI",
       "density": 1000,
+      "conductivity": 58,
       "model": "thermo_elastic",
       "provenance": {
         "source_type": "illustrative",
-        "confidence": "illustrative"
+        "confidence": "illustrative",
+        "notes": "illustrative conductivity; SAC305 bulk value, Cynel TDS, https://www.tme.com/Document/be9dc599936f5899f2f2308663aa8b3c/SAC305_EN.pdf"
       },
       "elastic": {
         "symmetry": "isotropic",
@@ -108,10 +112,12 @@
       "schema_version": "1",
       "unit_system": "SI",
       "density": 1000,
+      "conductivity": 0.5,
       "model": "thermo_elastic",
       "provenance": {
         "source_type": "illustrative",
-        "confidence": "illustrative"
+        "confidence": "illustrative",
+        "notes": "illustrative conductivity; filled epoxy example, CoolTherm ME-531 TDS, https://exdron.com/Exdron-Pdf/COOLTHERM-ME-531-SYR-30CC-EFD-DATASHEET.pdf"
       },
       "elastic": {
         "symmetry": "isotropic",
@@ -159,10 +165,12 @@
       "schema_version": "1",
       "unit_system": "SI",
       "density": 1000,
+      "conductivity": 148,
       "model": "thermo_elastic",
       "provenance": {
         "source_type": "illustrative",
-        "confidence": "illustrative"
+        "confidence": "illustrative",
+        "notes": "illustrative conductivity; silicon at 300 K, Glassbrenner and Slack, Phys. Rev. 134, A1058 (1964), https://doi.org/10.1103/PhysRev.134.A1058"
       },
       "elastic": {
         "symmetry": "isotropic",
@@ -204,7 +212,61 @@
           "extrapolation": "clamp"
         }
       }
+    },
+    {
+      "id": "copper",
+      "schema_version": "1",
+      "unit_system": "SI",
+      "density": 8940,
+      "model": "thermo_elastic",
+      "provenance": {
+        "source_type": "literature",
+        "confidence": "medium",
+        "reference": "Aurubis Material Datasheet CuOFE, PNA 203, UNS C10100, EN_2024_11, p. 1 (density 8940 kg/m^3, Young modulus 127 GPa, conductivity 394 W/(m K)): https://www.aurubis.com/en/dam/jcr%3A7f1f3c64-448e-4b72-bf75-d0559fcea3ca/PNA%20203_CuOFE_C10100-EN-%5BBP%5D.pdf ; N. J. Simon, E. S. Drexler and R. P. Reed, NIST Monograph 177, Properties of Copper and Copper Alloys at Cryogenic Temperatures (1992), section 7, Table 7.5, p. 7-30 (C10100-C10200 annealed/cold-worked copper: measured tangent CTE 16.6e-6 1/K at 293 K, references 53 and 57; 293 K datum used at the 298.15 K reference and as a constant room-temperature approximation at both 250 K and 400 K, not measured values at those temperatures; temperature dependence is not modeled): https://ncsx.pppl.gov/NCSX_Engineering/Materials/CopperProperties/PB92172766.pdf ; eFunda, Properties of Copper Alloy UNS C10100, Mechanical Properties at 25 C (Poisson ratio 0.34): https://www.efunda.com/Materials/alloys/copper/show_copper.cfm?ID=UNS_C10100&Page_Title=UNS+C10100&show_prop=all",
+        "notes": "近似材料：多晶纯铜室温值，用于 PACKAGE_BULK_PARTS 的 lid；未按实际盖板合金和工艺标定"
+      },
+      "elastic": {
+        "symmetry": "isotropic",
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "E": [
+              127000000000,
+              127000000000
+            ],
+            "nu": [
+              0.34,
+              0.34
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      },
+      "thermal_expansion": {
+        "cte_type": "tangent",
+        "symmetry": "isotropic",
+        "stress_free_temperature": 298.15,
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "alpha": [
+              1.66e-05,
+              1.66e-05
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      },
+      "conductivity": 394
     }
   ],
-  "x-note": "illustrative, not measured or vendor data"
+  "x-note": "organic_eq, sac305_ball_eq, underfill and silicon are illustrative, not measured or vendor data; copper uses the literature sources and approximation stated in its provenance"
 }
