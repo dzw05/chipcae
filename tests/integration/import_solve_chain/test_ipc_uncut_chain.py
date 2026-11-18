@@ -33,8 +33,9 @@ def main():
             result = subprocess.run([str(arg) for arg in args], cwd=root, capture_output=True, text=True, timeout=600)
             assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
 
-        write('material_map.json', {'FR4': 'mat.fr4', 'copper': 'mat.cu'})
-        run([importer, SOURCE / 'tests/integration/ecad/data/board_2layer.xml', '-o', 'stack.json', '--polyset', 'stack.polyset', '--report', 'defects.json', '--material-map', 'material_map.json'])
+        # Exercise the CLI fixture's material ids through the solver's material schema.
+        material_map = SOURCE / 'tests/integration/import_cli/material_map.json'
+        run([importer, SOURCE / 'tests/integration/ecad/data/board_2layer.xml', '-o', 'stack.json', '--polyset', 'stack.polyset', '--report', 'defects.json', '--material-map', material_map])
         run([sys.executable, SOURCE / 'tools/stack/copper_fraction.py', 'stack.json', '-o', 'solve.stack.json', '--report', 'cf.json'])
         report = json.loads((root / 'cf.json').read_text())
         fractions = {entry['layer']: entry['fraction'] for entry in report['layers']}
@@ -49,10 +50,10 @@ def main():
             assert math.isclose(layer['thickness'], thickness, rel_tol=1e-12)
         for layer in stack['layers']:
             if layer['name'] in fractions:
-                assert layer['copper'] == {'metal': 'mat.cu', 'fraction': fractions[layer['name']]}, layer
-                assert layer['material'] == 'mat.fr4', layer
+                assert layer['copper'] == {'metal': 'cu', 'fraction': fractions[layer['name']]}, layer
+                assert layer['material'] == 'cu', layer
         materials = []
-        for name, E, nu, alpha, k in [('mat.cu', 110e9, .34, 17e-6, 390), ('mat.fr4', 25e9, .3, 1e-5, .3)]:
+        for name, E, nu, alpha, k in [('cu', 110e9, .34, 17e-6, 390), ('fr4_eq', 25e9, .3, 1e-5, .3)]:
             def table(columns):
                 return dict(temperatures=[298.15], columns={key: [value] for key, value in columns.items()}, interpolation='constant', extrapolation='clamp')
             materials.append(dict(id=name, schema_version='1', unit_system='SI', model='thermo_elastic', density=2000, conductivity=k,
@@ -74,7 +75,7 @@ def main():
             assert math.isfinite(summary[key]), (key, summary)
         for key in ('warpage_pv', 'U_mag_max'):
             assert summary[key] > 0, (key, summary)
-        conductivity = {'mat.cu': 390, 'mat.fr4': .3}
+        conductivity = {'cu': 390, 'fr4_eq': .3}
         layers = []
         for layer in stack['layers']:
             k = conductivity[layer['material']]

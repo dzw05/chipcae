@@ -402,20 +402,27 @@ class AcceptanceRecords(unittest.TestCase):
 
     def test_import_normalizes_golden_copy_and_rejects_unmapped_material_id(self):
         golden = read_json(SOURCE / 'tests/integration/import_cli/golden/board_4layer/stack.json')
-        original = json.dumps(golden)
-        imported = json.loads(original)
-        for layer in imported['layers']:
-            layer['material'] = {'mat.fr4': 'fr4_eq', 'mat.cu': 'cu'}[layer['material']]
-        compare_import(imported, golden)
-        imported['layers'][0]['material'] = 'mat_cu'
-        with self.assertRaisesRegex(AssertionError, 'material:'):
-            compare_import(imported, golden)
-        self.assertEqual(json.dumps(golden), original)
+        legacy = deepcopy(golden)
+        for layer in legacy['layers']:
+            layer['material'] = {'fr4_eq': 'mat.fr4', 'cu': 'mat.cu'}[layer['material']]
+        for expected in (golden, legacy):
+            with self.subTest(material=expected['layers'][0]['material']):
+                original = json.dumps(expected)
+                imported = json.loads(original)
+                for layer in imported['layers']:
+                    layer['material'] = {'mat.fr4': 'fr4_eq', 'mat.cu': 'cu'}.get(
+                        layer['material'], layer['material'])
+                compare_import(imported, expected)
+                imported['layers'][0]['material'] = 'mat_cu'
+                with self.assertRaisesRegex(AssertionError, 'material:'):
+                    compare_import(imported, expected)
+                self.assertEqual(json.dumps(expected), original)
 
     def test_fixture_fractions_accept_empty_inner_and_bottom_copper_only(self):
         imported = read_json(SOURCE / 'tests/integration/import_cli/golden/board_4layer/stack.json')
         for layer in imported['layers']:
-            layer['material'] = {'mat.fr4': 'fr4_eq', 'mat.cu': 'cu'}[layer['material']]
+            layer['material'] = {'mat.fr4': 'fr4_eq', 'mat.cu': 'cu'}.get(
+                layer['material'], layer['material'])
             if 'copper' in layer:
                 layer['copper']['metal'] = 'cu'
         converted = json.loads(json.dumps(imported))
