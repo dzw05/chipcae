@@ -422,6 +422,27 @@ bool MainWindow::loadHandwrittenStack(const QString& path) {
     }
 }
 
+// D12b-1 test-first compile stubs. Replace when implementing the feature.
+void MainWindow::setMeshDigestDialogChoice(MeshDigestDialogChoice) {}
+MainWindow::MeshDigestDialogChoice MainWindow::meshDigestDialogChoice() const {
+    return MeshDigestDialogChoice::Unset;
+}
+chipcae::desktop::MeshSha256Compare MainWindow::lastMeshDigestCompare() const {
+    return chipcae::desktop::MeshSha256Compare::PreviewMissing;
+}
+QString MainWindow::lastMeshDigestDetail() const {
+    return {};
+}
+bool MainWindow::lastOpenCancelledForMeshDigest() const {
+    return false;
+}
+bool MainWindow::writePreviewToCase() {
+    return false;
+}
+bool MainWindow::writePreviewToCaseEnabled() const {
+    return false;
+}
+
 bool MainWindow::openResultsPath(const QString& manifestPath) {
     auto session = std::make_unique<chipcae::desktop::ResultSession>();
     if (!session->open(manifestPath) || session->steps().isEmpty())

@@ -33,6 +33,14 @@ public:
                         const QStringList& prefix = {});
     void cancelImport();
     bool openResultsPath(const QString& manifestPath);
+    enum class MeshDigestDialogChoice { Unset, Accept, Cancel };
+    void setMeshDigestDialogChoice(MeshDigestDialogChoice choice);
+    MeshDigestDialogChoice meshDigestDialogChoice() const;
+    chipcae::desktop::MeshSha256Compare lastMeshDigestCompare() const;
+    QString lastMeshDigestDetail() const;
+    bool lastOpenCancelledForMeshDigest() const;
+    bool writePreviewToCase();
+    bool writePreviewToCaseEnabled() const;
     bool loadHandwrittenStack(const QString& path = {});
     chipcae::desktop::ImportController* importController() const { return importer_; }
     chipcae::desktop::ResultView* resultView() const { return resultView_; }
