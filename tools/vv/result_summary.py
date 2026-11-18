@@ -260,7 +260,8 @@ def _assembly(root):
             ('boundary/eb_surface', '/VTKHDF/eb_surface'),
             ('lagrangian/particles', '/VTKHDF/particles')):
         link = assembly.get(path, getlink=True)
-        _require(isinstance(link, h5py.SoftLink), f'{prefix}/{path}: expected soft link')
+        _require(isinstance(link, h5py.SoftLink) and not isinstance(link, h5py.ExternalLink),
+                 f'{prefix}/{path}: expected soft link')
         _require(link.path == target, f'{prefix}/{path}: expected {target}')
         _require(isinstance(root.file.get(link.path), h5py.Group),
                  f'{prefix}/{path}: dangling soft link')

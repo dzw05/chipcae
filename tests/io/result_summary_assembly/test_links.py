@@ -3,6 +3,7 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from assembly_fixtures import LINKS, add_assembly, fixture, h5py, invalid
 
 
@@ -51,6 +52,39 @@ class Links(unittest.TestCase):
                         elif case == 'external':
                             assembly[path] = h5py.ExternalLink('missing.vtkhdf', '/VTKHDF/cut')
                 invalid(self, run, 'VTKHDF/Assembly/' + path, 'expected soft link')
+
+    def test_external_links_are_rejected_even_when_target_exists_locally(self):
+        # Also exercise the inheritance reported by the review on h5py versions
+        # where ExternalLink and SoftLink are unrelated classes.
+        class InheritedExternalLink(h5py.ExternalLink, h5py.SoftLink):
+            pass
+
+        original_get = h5py.Group.get
+
+        def get_with_inherited_external_link(group, *args, **kwargs):
+            link = original_get(group, *args, **kwargs)
+            if isinstance(link, h5py.ExternalLink):
+                return InheritedExternalLink(link.filename, link.path)
+            return link
+
+        for path, target in LINKS:
+            for external_exists in (False, True):
+                with self.subTest(path=path, external_exists=external_exists), \
+                        tempfile.TemporaryDirectory() as tmp:
+                    run = Path(tmp) / 'run'
+                    step, _ = fixture(run)
+                    external = step.parent / 'external.vtkhdf'
+                    if external_exists:
+                        with h5py.File(external, 'w') as f:
+                            f.create_group(target)
+                    with h5py.File(step, 'r+') as f:
+                        root = f['VTKHDF']
+                        assembly = add_assembly(root)
+                        self.assertIsInstance(f[target], h5py.Group)
+                        del assembly[path]
+                        assembly[path] = h5py.ExternalLink(external.name, target)
+                    with patch.object(h5py.Group, 'get', get_with_inherited_external_link):
+                        invalid(self, run, 'VTKHDF/Assembly/' + path, 'expected soft link')
 
     def test_targets_require_literal_case_and_no_trailing_slash(self):
         cases = [
