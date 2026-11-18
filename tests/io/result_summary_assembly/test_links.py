@@ -63,10 +63,25 @@ class Links(unittest.TestCase):
             with self.subTest(path=path, target=target), tempfile.TemporaryDirectory() as tmp:
                 run = Path(tmp) / 'run'
                 step, _ = fixture(run)
+                # HDF5 normalizes trailing slashes during link creation. Store a
+                # same-length sentinel, then patch the legacy, unchecksummed heap
+                # after closing the file so this case really has the bad target.
+                stored_target = target[:-1] + '!' if target.endswith('/') else target
                 with h5py.File(step, 'r+') as f:
                     assembly = add_assembly(f['VTKHDF'])
                     del assembly[path]
-                    assembly[path] = h5py.SoftLink(target)
+                    assembly[path] = h5py.SoftLink(stored_target)
+                    if target.endswith('/'):
+                        self.assertEqual(h5py.h5o.get_info(assembly['volume'].id).hdr.version, 1)
+                if target.endswith('/'):
+                    data = step.read_bytes()
+                    marker = stored_target.encode('ascii') + b'\0'
+                    self.assertEqual(data.count(marker), 1)
+                    step.write_bytes(data.replace(marker, target.encode('ascii') + b'\0'))
+                with h5py.File(step, 'r') as f:
+                    link = f['VTKHDF/Assembly'].get(path, getlink=True)
+                    self.assertIsInstance(link, h5py.SoftLink)
+                    self.assertEqual(link.path, target)
                 invalid(self, run, 'VTKHDF/Assembly/' + path, 'expected ' + expected)
 
     def test_deleted_particles_target_is_dangling(self):
