@@ -2,6 +2,7 @@
 #include "writer_test_support.hpp"
 
 #include <chrono>
+#include <limits>
 #include <set>
 
 int main() {
@@ -110,6 +111,22 @@ int main() {
         require(defects_json["message"].as<std::string>() == special,
                 "assembly defects writer must escape messages");
         importer::write_assembly_defects({}, "OK", "", mapped);
+
+        std::vector<geometry::StepDefect> nonfinite;
+        for (const double measured : {std::numeric_limits<double>::quiet_NaN(),
+                                      std::numeric_limits<double>::infinity(),
+                                      -std::numeric_limits<double>::infinity()}) {
+            auto defect = open;
+            defect.measured = measured;
+            nonfinite.push_back(defect);
+        }
+        const auto nonfinite_mapped = importer::map_step_defects("lid", nonfinite);
+        importer::write_assembly_defects(
+            dir / "nonfinite.json", "IMPORT_REJECTED", "nonfinite measurement", nonfinite_mapped);
+        const auto nonfinite_json = jsoncons::json::parse(sp4_test::bytes(dir / "nonfinite.json"));
+        require(nonfinite_json["defects"].size() == 3, "nonfinite defects must be preserved");
+        for (const auto& defect : nonfinite_json["defects"].array_range())
+            require(defect["size"].is_null(), "nonfinite measurements must serialize as JSON null");
 
         for (std::size_t i = 0; i < mapped.size(); ++i) {
             const auto& d = json.at("defects").at(i);

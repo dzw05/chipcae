@@ -1,4 +1,4 @@
-"""Run the production CLI with only the STEP reader replaced by a test seam."""
+"""Run the production CLI with deterministic STEP and empty-slice seams."""
 import shutil
 import subprocess
 import sys
@@ -46,6 +46,23 @@ with tempfile.TemporaryDirectory() as tmp:
     assert a.defects()['code'] == 'IMPORT_REJECTED'
     assert any(d['tier'] == 'C' and d['reason'] == (3 if enabled('OCCT') else 8)
                and d['defect_id'].startswith('lid/') for d in a.import_report()['defects'])
+
+    # A slicer returning neither slabs nor defects must still reject the part.
+    a.document['parts'] = []
+    a.part('empty', step='empty.step', body='empty-body')
+    for args in ((), ('--accept-b-tier',),
+                 ('--accept', str(a.accept(['empty/no_slabs'])))):
+        check(run(*args), 7)
+        assert not a.output.exists()
+        defects = a.defects()
+        assert defects['code'] == 'IMPORT_REJECTED'
+        assert len(defects['defects']) == 1
+        assert defects['defects'][0]['defect_id'] == 'empty/no_slabs'
+        assert defects['defects'][0]['tier'] == 'C'
+        report = a.import_report()
+        assert len(report['defects']) == 1
+        assert report['defects'][0]['defect_id'] == 'empty/no_slabs'
+        assert report['defects'][0]['tier'] == 'C'
 
     # Assembly alone translates report publication failure to INTERNAL.
     check(run('--accept-b-tier', '--report', str(a.root)), 1)

@@ -4,6 +4,7 @@
 #include "import_common.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -38,9 +39,12 @@ inline void write_defect(std::ostream& out, const geometry::Defect& d) {
     out << "{\"defect_id\":" << defect_json_quote(id) << ",\"tier\":" << defect_json_quote(tier)
         << ",\"kind\":" << defect_json_quote(d.kind)
         << ",\"reason\":" << static_cast<unsigned>(d.reason)
-        << ",\"dimension\":" << defect_json_quote(d.dimension)
-        << ",\"size\":" << std::setprecision(17) << d.size
-        << ",\"suggestion\":" << defect_json_quote(d.suggestion)
+        << ",\"dimension\":" << defect_json_quote(d.dimension) << ",\"size\":";
+    if (std::isfinite(d.size))
+        out << std::setprecision(17) << d.size;
+    else
+        out << "null";
+    out << ",\"suggestion\":" << defect_json_quote(d.suggestion)
         << ",\"action\":" << defect_json_quote(d.action)
         << ",\"rejection_reason\":" << defect_json_quote(d.rejection_reason)
         << ",\"material_ambiguous\":" << (d.material_ambiguous ? "true" : "false");
@@ -772,8 +776,15 @@ int run_assembly(const ImportOptions& options) {
                 d.defect_id = id + "/" + d.defect_id;
                 defects.push_back(d);
             }
-            if (sliced.slabs.empty())
+            if (sliced.slabs.empty()) {
+                Defect d{};
+                d.tier = Tier::C;
+                d.reason = DefectReason::PART_NOT_PRISMATIC;
+                d.defect_id = id + "/no_slabs";
+                d.details = "slicing produced no slabs";
+                defects.push_back(d);
                 return;
+            }
             Placement placement;
             const auto& v = p["placement"];
             if (v.contains("attach")) {

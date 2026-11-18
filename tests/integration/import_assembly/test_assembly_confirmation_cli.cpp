@@ -2,7 +2,14 @@
 // The unmapped body produces a B-tier defect without requiring OCCT.
 #define import_step assembly_test_import_step
 #define step_import_available assembly_test_step_available
+#include "chipcae/geometry/part_slice.hpp"
+namespace chipcae::geometry {
+SliceResult
+assembly_test_slice_prismatic(const StepImportResult&, std::string_view, const SliceOptions&);
+} // namespace chipcae::geometry
+#define slice_prismatic assembly_test_slice_prismatic
 #include "assembly_seam_support.hpp"
+#undef slice_prismatic
 #undef import_step
 #undef step_import_available
 
@@ -11,10 +18,18 @@ namespace chipcae::geometry {
 bool assembly_test_step_available() noexcept {
     return true;
 }
-StepImportResult assembly_test_import_step(const std::filesystem::path&, const StepImportOptions&) {
+StepImportResult assembly_test_import_step(const std::filesystem::path& path,
+                                           const StepImportOptions&) {
     StepImportResult result;
-    result.body_names = {"unmapped-body"};
+    result.body_names = {path.filename() == "empty.step" ? "empty-body" : "unmapped-body"};
     return result;
+}
+SliceResult assembly_test_slice_prismatic(const StepImportResult& step,
+                                          std::string_view body,
+                                          const SliceOptions& options) {
+    if (body == "empty-body")
+        return {};
+    return slice_prismatic(step, body, options);
 }
 } // namespace chipcae::geometry
 
