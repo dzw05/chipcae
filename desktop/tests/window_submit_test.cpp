@@ -26,6 +26,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QPointer>
+#include <QProcess>
 #include <QProcessEnvironment>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -601,6 +602,41 @@ int main(int argc, char** argv) {
         }
     };
     using Choice = MainWindow::MeshDigestDialogChoice;
+    for (const auto* overrideName : {"--schema-dir", "CHIPCAE_SCHEMA_DIR"}) {
+        test((QString("startup reports invalid schema override: ") + overrideName)
+                 .toUtf8()
+                 .constData(),
+             [&] {
+                 QTemporaryDir temp;
+                 check(temp.isValid(), "startup schema temporary directory");
+                 QProcess process;
+                 auto env = QProcessEnvironment::systemEnvironment();
+                 for (const auto& key : env.keys()) {
+                     if (key.startsWith("CHIPCAE_"))
+                         env.remove(key);
+                 }
+                 env.insert("QT_QPA_PLATFORM", "offscreen");
+                 QStringList args;
+                 const auto missing = temp.filePath("missing-schema");
+                 if (QString(overrideName) == "--schema-dir")
+                     args << overrideName << missing;
+                 else
+                     env.insert(overrideName, missing);
+                 process.setProcessEnvironment(env);
+                 process.setWorkingDirectory(temp.path());
+                 process.start(
+                     QDir(QCoreApplication::applicationDirPath()).filePath("chipcae-desktop"),
+                     args);
+                 check(process.waitForStarted(), "desktop subprocess starts");
+                 check(process.waitForFinished(10000), "invalid schema startup exits promptly");
+                 check(process.exitStatus() == QProcess::NormalExit,
+                       "invalid schema startup must exit normally instead of aborting");
+                 check(process.exitCode() == 1, "invalid schema startup returns failure status");
+                 const auto error = process.readAllStandardError();
+                 check(error.contains(overrideName) && error.contains("case-1.0.schema.json"),
+                       "startup stderr identifies the invalid override and required schema marker");
+             });
+    }
     test("schema default constructor uses process locator inputs", [&] {
         const auto source = QString(CHIPCAE_REPOSITORY) + "/schema";
         const auto args = QCoreApplication::arguments();

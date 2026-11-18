@@ -12,13 +12,13 @@ int main(int argc, char** argv) {
         for (int i = 0; i < argc; ++i)
             args.append(QString::fromLocal8Bit(argv[i]));
         chipcae::desktop::DesktopConfig::setCurrent(chipcae::desktop::DesktopConfig::load(args));
+        QSurfaceFormat::setDefaultFormat(QVTKOpenGLNativeWidget::defaultFormat());
+        QApplication app(argc, argv);
+        MainWindow window;
+        window.show();
+        return app.exec();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
     }
-    QSurfaceFormat::setDefaultFormat(QVTKOpenGLNativeWidget::defaultFormat());
-    QApplication app(argc, argv);
-    MainWindow window;
-    window.show();
-    return app.exec();
 }
