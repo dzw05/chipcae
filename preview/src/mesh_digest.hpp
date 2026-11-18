@@ -53,13 +53,15 @@ inline MeshDigest digest(const chipcae::mesh::HexMeshArrays& mesh) {
     for (auto i : order)
         for (int n = 0; n < 8; ++n)
             append_i64(bytes, mesh.node_gid[mesh.hex[8 * i + n]]);
+    const auto nx = mesh.axes[0].size() - 1, ny = mesh.axes[1].size() - 1;
+    const auto padded_cells = (nx * ny - (nx - report.padding[0]) * (ny - report.padding[1])) * nz;
     return {nx0,
             ny0,
             static_cast<std::size_t>(report.levels - 1),
             nz,
             nodes,
             cells,
-            report.padding[0] + report.padding[1],
+            padded_cells,
             chipcae::mesh::sha256(bytes),
             static_cast<std::size_t>(report.void_cells)};
 }

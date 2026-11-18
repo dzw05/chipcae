@@ -107,10 +107,12 @@ struct MeshFailure : std::runtime_error {
 };
 int exit_code(const chipcae::mesh::Error& error) {
     if (error.path == "COLUMN_SPLIT_ACROSS_RANKS")
-        return 3;
-    if (error.path == "HIERARCHY_INVALID")
-        return 4;
-    return chipcae::ErrorCode::INTERNAL;
+        return static_cast<int>(chipcae::ErrorCode::COLUMN_SPLIT_ACROSS_RANKS);
+    if (error.path == "HIERARCHY_INVALID" || error.path == "hierarchy/levels")
+        return static_cast<int>(chipcae::ErrorCode::HIERARCHY_INVALID);
+    if (error.path == "CUT_UNSUPPORTED" || error.path == "outline.unsupported")
+        return static_cast<int>(chipcae::ErrorCode::CUT_UNSUPPORTED);
+    return static_cast<int>(chipcae::ErrorCode::INPUT_INVALID);
 }
 bool same_path(const std::filesystem::path& a, const std::filesystem::path& b) {
     if (std::filesystem::weakly_canonical(a) == std::filesystem::weakly_canonical(b))
@@ -183,7 +185,10 @@ int run(int argc, char** argv) {
     if (!surface.empty() && same_path(surface, grid_path))
         throw std::runtime_error("surface and grid paths must differ");
     event("load", 0, "Loading stack 0.2");
-    auto stack = checked(load_stack(input, chipcae::data_path(CHIPCAE_PREVIEW_SCHEMA)));
+    auto loaded_stack = load_stack(input, chipcae::data_path(CHIPCAE_PREVIEW_SCHEMA));
+    if (!loaded_stack)
+        throw std::runtime_error(loaded_stack.error().path + ": " + loaded_stack.error().reason);
+    auto stack = std::move(loaded_stack.value());
     for (const auto& warning : stack.warnings)
         std::cerr << warning << '\n';
     std::set<std::filesystem::path> sidecars;
