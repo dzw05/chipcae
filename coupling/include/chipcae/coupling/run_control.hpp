@@ -9,6 +9,10 @@
 #include <optional>
 
 namespace chipcae::coupling {
+namespace control_ack {
+inline constexpr std::uint32_t unspecified = 0, applied = 1, noop = 2, rejected = 3;
+} // namespace control_ack
+
 struct ControlCapabilities {
     bool set_output_interval = false;
     bool write_output_now = false;
