@@ -1,0 +1,6 @@
+{
+  "schema": "chipcae.run_profile/1.0",
+  "backend": "cpu",
+  "gpus": 0,
+  "ranks": 1
+}

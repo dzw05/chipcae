@@ -1,0 +1,99 @@
+{
+  "schema": "chipcae.material_library/1",
+  "materials": [
+    {
+      "id": "base",
+      "schema_version": "1",
+      "unit_system": "SI",
+      "model": "thermo_elastic",
+      "density": 2000,
+      "conductivity": 1,
+      "elastic": {
+        "symmetry": "isotropic",
+        "table": {
+          "temperatures": [
+            300
+          ],
+          "columns": {
+            "E": [
+              100000000000.0
+            ],
+            "nu": [
+              0
+            ]
+          },
+          "interpolation": "constant",
+          "extrapolation": "clamp"
+        }
+      },
+      "thermal_expansion": {
+        "symmetry": "isotropic",
+        "cte_type": "tangent",
+        "stress_free_temperature": 400,
+        "table": {
+          "temperatures": [
+            300
+          ],
+          "columns": {
+            "alpha": [
+              5e-06
+            ]
+          },
+          "interpolation": "constant",
+          "extrapolation": "clamp"
+        }
+      },
+      "provenance": {
+        "source_type": "illustrative",
+        "confidence": "illustrative"
+      }
+    },
+    {
+      "id": "top",
+      "schema_version": "1",
+      "unit_system": "SI",
+      "model": "thermo_elastic",
+      "density": 2000,
+      "conductivity": 10,
+      "elastic": {
+        "symmetry": "isotropic",
+        "table": {
+          "temperatures": [
+            300
+          ],
+          "columns": {
+            "E": [
+              200000000000.0
+            ],
+            "nu": [
+              0
+            ]
+          },
+          "interpolation": "constant",
+          "extrapolation": "clamp"
+        }
+      },
+      "thermal_expansion": {
+        "symmetry": "isotropic",
+        "cte_type": "tangent",
+        "stress_free_temperature": 400,
+        "table": {
+          "temperatures": [
+            300
+          ],
+          "columns": {
+            "alpha": [
+              1.5e-05
+            ]
+          },
+          "interpolation": "constant",
+          "extrapolation": "clamp"
+        }
+      },
+      "provenance": {
+        "source_type": "illustrative",
+        "confidence": "illustrative"
+      }
+    }
+  ]
+}
