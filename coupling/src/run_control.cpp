@@ -30,20 +30,20 @@ BoundaryDecision RunControl::at_boundary(const WindowMark& completed) {
     std::chrono::milliseconds waited{0};
     for (;;) {
         for (const auto& command : channel_.poll(completed)) {
-            std::uint32_t status = 1; // APPLIED
+            std::uint32_t status = control_ack::applied;
             std::string message;
             const bool was_paused = paused_;
             if (decision.stop || decision.checkpoint_and_stop) {
-                status = 3; // REJECTED
+                status = control_ack::rejected;
                 message = "run stopping";
             } else {
                 switch (command.action) {
                 case io::ControlAction::pause:
-                    status = paused_ ? 2 : 1; // NOOP / APPLIED
+                    status = paused_ ? control_ack::noop : control_ack::applied;
                     paused_ = true;
                     break;
                 case io::ControlAction::resume:
-                    status = paused_ ? 1 : 2;
+                    status = paused_ ? control_ack::applied : control_ack::noop;
                     paused_ = false;
                     break;
                 case io::ControlAction::stop:
@@ -52,7 +52,7 @@ BoundaryDecision RunControl::at_boundary(const WindowMark& completed) {
                     break;
                 case io::ControlAction::checkpoint_and_stop:
                     if (!capabilities_.checkpoint_and_stop) {
-                        status = 3;
+                        status = control_ack::rejected;
                         message = "unsupported";
                     } else {
                         decision.checkpoint_and_stop = true;
@@ -61,7 +61,7 @@ BoundaryDecision RunControl::at_boundary(const WindowMark& completed) {
                     break;
                 case io::ControlAction::write_output_now:
                     if (!capabilities_.write_output_now) {
-                        status = 3;
+                        status = control_ack::rejected;
                         message = "unsupported";
                     } else {
                         decision.write_output_now = true;
@@ -69,14 +69,14 @@ BoundaryDecision RunControl::at_boundary(const WindowMark& completed) {
                     break;
                 case io::ControlAction::set_output_interval:
                     if (!capabilities_.set_output_interval) {
-                        status = 3;
+                        status = control_ack::rejected;
                         message = "unsupported";
                     } else if (command.has_interval_steps == command.has_interval_time ||
                                (command.has_interval_steps && command.output_interval_steps == 0) ||
                                (command.has_interval_time &&
                                 (!std::isfinite(command.output_interval_time) ||
                                  command.output_interval_time <= 0))) {
-                        status = 3;
+                        status = control_ack::rejected;
                         message = "invalid interval";
                     } else if (command.has_interval_steps) {
                         decision.output_interval_steps = command.output_interval_steps;

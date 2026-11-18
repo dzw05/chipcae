@@ -107,9 +107,10 @@ def result_json_from_summary(
 ) -> dict:
     """Validate caller metadata and recursively reject non-finite values.
 
-    Assemble top-level fields in a stable order for serialization. JSON object
-    members are unordered; this order is a serialization convention, not an
-    interface semantic. For the CLI's default date, 本工具使用进程本地日历日.
+    Top-level field order is a frozen serialization stability guarantee,
+    checked byte-for-byte by tests. JSON object member order has no semantic
+    meaning. Changing this guarantee requires a schema version increase.
+    For the CLI's default date, 本工具使用进程本地日历日.
     """
     _pattern('case_id', case_id, r'[A-Za-z0-9][A-Za-z0-9_.-]*')
     _enum('data_class', data_class, ('synthetic', 'public', 'real'))
@@ -146,7 +147,14 @@ def _serialize(obj):
 
 
 def write_result_json(path: Path, obj: dict) -> None:
-    """Atomically replace path using a closed temporary file in its parent."""
+    """Atomically replace path using a closed temporary file in its parent.
+
+    For an existing target, preserve stat.S_IMODE(os.stat(path).st_mode).
+    For a new target, use mode 0o666 & ~umask. Reading the umask temporarily
+    changes the process-global umask, which can affect concurrent file creation.
+    A TOCTOU window exists between os.stat and os.replace. os.stat follows
+    symlinks; os.replace replaces the symlink itself with a regular file.
+    """
     content = _serialize(obj)
     temporary = None
     try:
