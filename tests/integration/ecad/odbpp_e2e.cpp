@@ -3,11 +3,14 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <limits>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -624,6 +627,31 @@ def report_preview(b):
     meshes = list(out.glob('mesh*.vtkhdf'))
     check(meshes and all(p.stat().st_size > 0 for p in meshes), 'preview generated no mesh')
 
+@case('publication_failure')
+def publication_failure(b):
+    out = b.root/'publish'
+    out.mkdir()
+    stack, polyset, layers = out/'board.stack.json', out/'board.stack.polyset', out/'import_layers.json'
+    # Force failure on the final publication, after both geometry files moved.
+    layers.mkdir()
+    (layers/'sentinel').write_bytes(b'previous layer directory')
+    for previous in (False, True):
+        if previous:
+            stack.write_bytes(b'previous stack')
+            polyset.write_bytes(b'previous polyset')
+        result = subprocess.run([str(b.cli), str(b.job), '-o', str(stack),
+                                 '--material-map', str(b.map)], capture_output=True, text=True)
+        check(result.returncode == 7, 'publication failure must reject')
+        check(load(out/'defects.json')['code'] == 'IMPORT_REJECTED', 'publication rejection code')
+        check((layers/'sentinel').read_bytes() == b'previous layer directory',
+              'publication failure changed previous layer destination')
+        if previous:
+            check(stack.read_bytes() == b'previous stack' and polyset.read_bytes() == b'previous polyset',
+                  'publication failure did not restore previous geometry files')
+        else:
+            check(not stack.exists() and not polyset.exists(), 'partial geometry publication survived failure')
+        check(not list(out.glob('.chipcae-import-*')), 'staging directories leaked')
+
 @case('help')
 def help_case(b):
     result = subprocess.run([str(b.cli),'--help'],capture_output=True,text=True)
@@ -656,6 +684,79 @@ print(f'{len(selected)} scenarios, {failures} failed',flush=True)
 sys.exit(bool(failures))
 )ODBCLI";
 
+// Exercise the public composition boundary independently of main's frozen guards.
+void public_api() {
+    using namespace chipcae::geometry::ecad;
+    auto pattern = (fs::temp_directory_path() / "chipcae-odbpp-api-XXXXXX").string();
+    require(::mkdtemp(pattern.data()) != nullptr, "cannot create public API temporary directory");
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() {
+            std::error_code ignored;
+            fs::remove_all(path, ignored);
+        }
+    } cleanup{pattern};
+    const fs::path root(pattern);
+    const auto write = [&](const fs::path& path, const std::string& text) {
+        fs::create_directories(path.parent_path());
+        std::ofstream out(path);
+        out << text;
+        require(out.good(), "cannot write public API fixture");
+    };
+    write(root / "matrix/matrix",
+          "UNITS=MM\nSTEP {\nNAME=pcb\n}\n"
+          "LAYER {\nROW=2\nNAME=Core\nTYPE=DiElEcTrIc\n}\n"
+          "LAYER {\nROW=1\nNAME=Top\nTYPE=SIGNAL\n}\n"
+          "LAYER {\nROW=3\nNAME=Silk\nTYPE=SiLk_ScReEn\n}\n");
+    write(root / "steps/pcb/profile",
+          "UNITS=MM\nS P 0\nOB 0 0 I\nOS 1 0\nOS 1 1\nOS 0 1\nOS 0 0\nOE\nSE\n");
+    write(root / "steps/pcb/layers/top/features", "UNITS=MM\nT 0 0 standard P 0 0 1 1 0 text\n");
+    write(root / "steps/pcb/layers/top/attrlist", ".layer_dielectric=0.035\n");
+    auto missing = read_odbpp(root);
+    require(!missing && missing.error.find("Core") != std::string::npos,
+            "one-argument ODB read must reject missing thickness");
+    const double thickness = 0.00028123456789;
+    std::vector<ThicknessRecord> records{{"stale", 1, "stale", {}}};
+    auto result = read_odbpp(root, {{{"cOrE", thickness}}}, &records);
+    require(bool(result), result.error);
+    require(records.size() == 2 && records[0].layer == "Top" && records[1].layer == "Core",
+            "records must replace caller contents in mapped stack order");
+    require(records[0].source == "odb" && records[1].source == "override" &&
+                !records[1].odb_value_m,
+            "public provenance must omit filename and zero original");
+    require(std::bit_cast<std::uint64_t>(records[1].thickness_m) ==
+                std::bit_cast<std::uint64_t>(thickness),
+            "public override must preserve the selected double bits");
+    require(result.model.layers[1].function == "DiElEcTrIc",
+            "retained function spelling must survive composition");
+    const auto& unsupported = result.model.report.unsupported;
+    require(std::any_of(unsupported.begin(),
+                        unsupported.end(),
+                        [](const auto& entry) {
+                            return entry.element.find("unsupported record T") != std::string::npos;
+                        }),
+            "parser unsupported entries must survive mapping");
+    require(std::any_of(
+                unsupported.begin(),
+                unsupported.end(),
+                [](const auto& entry) { return entry.element == "SkippedLayer:Silk:SiLk_ScReEn"; }),
+            "mapper skipped entries must survive with original function spelling");
+    for (const auto value : {0.0,
+                             -1.0,
+                             std::numeric_limits<double>::infinity(),
+                             std::numeric_limits<double>::quiet_NaN()}) {
+        auto invalid = read_odbpp(root, {{{"Core", value}}}, &records);
+        require(!invalid && records.empty(),
+                "invalid public overrides must reject and clear records");
+    }
+    records.push_back({"stale", 1, "stale", {}});
+    auto duplicate = read_odbpp(root, {{{"Core", thickness}, {"core", thickness}}}, &records);
+    require(!duplicate && records.empty(), "folded duplicate public overrides must reject");
+    records.push_back({"stale", 1, "stale", {}});
+    auto absent = read_odbpp(root / "absent", {}, &records);
+    require(!absent && records.empty(), "parser failure must clear caller records");
+    std::cout << "PASS public_api\n";
+}
 void cross_models(const fs::path& root, const fs::path& material_map) {
     auto odb = chipcae::geometry::ecad::read_odbpp(root / "kicad4l.tgz");
     auto ipc = chipcae::geometry::ecad::read_ipc2581(root / "kicad4l.ipc2581.xml");
@@ -715,6 +816,11 @@ int main(int argc, char** argv) {
         }
         require(argc == 2, "Expected exactly one acceptance selector");
         const std::string mode = argv[1];
+        if (mode == "odb" || mode == "all" || mode == "public_api") {
+            public_api();
+            if (mode == "public_api")
+                return 0;
+        }
         if (mode == "odb")
             odb_fixture(root);
         else if (mode == "ipc")
