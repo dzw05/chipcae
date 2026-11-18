@@ -319,7 +319,7 @@ bool validate(const HexMeshArrays& m) {
     return false;
 }
 } // namespace
-Expected<bool> save_mesh_fixture(const HexMeshArrays& mesh, const std::filesystem::path& path) {
+Expected<void> save_mesh_fixture(const HexMeshArrays& mesh, const std::filesystem::path& path) {
     std::string text;
     try {
         const bool empty = validate(mesh);
@@ -339,7 +339,7 @@ Expected<bool> save_mesh_fixture(const HexMeshArrays& mesh, const std::filesyste
     out.close();
     if (!out)
         return Error{"$", "cannot write mesh fixture"};
-    return true;
+    return {};
 }
 Expected<HexMeshArrays> load_mesh_fixture(const std::filesystem::path& path) {
     try {

@@ -39,6 +39,6 @@ sp6; this library adds no solver or grid-generation API.
 
 The frozen v0.3.2 header defines `Expected` in `chipcae::mesh`, unlike the brief's
 `chipcae::Expected` spelling. These declarations retain the frozen namespace.
-Save returns `Expected<bool>` with `true` on success, following the existing
-status-operation convention supported by the frozen template. No specialization
-or frozen contract change is needed.
+Save returns `Expected<void>` with a default-constructed success result. The
+fixture header supplies the void specialization without changing the frozen
+primary template.

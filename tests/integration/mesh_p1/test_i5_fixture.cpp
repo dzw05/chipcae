@@ -9,6 +9,7 @@
 #include <jsoncons/json.hpp>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
 
 using namespace chipcae;
 using namespace chipcae::mesh;
@@ -219,6 +220,7 @@ HexMeshArrays decorated() {
     return m;
 }
 void roundtrip(const HexMeshArrays& m, const fs::path& p) {
+    static_assert(std::is_same_v<decltype(save_mesh_fixture(m, p)), Expected<void>>);
     auto saved = save_mesh_fixture(m, p);
     require(bool(saved), saved ? "" : "save succeeds: " + saved.error().reason);
     auto loaded = load_mesh_fixture(p);
