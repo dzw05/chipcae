@@ -2,7 +2,6 @@
 
 #include <QFileInfo>
 #include <QLabel>
-#include <QStandardPaths>
 #include <QVBoxLayout>
 #include <QVTKOpenGLNativeWidget.h>
 #include <cmath>
@@ -128,13 +127,7 @@ ResultView::ResultView(QWidget* parent) : QWidget(parent), d(std::make_unique<St
     d->overlay->GetTextProperty()->SetFontSize(64);
     d->overlay->GetTextProperty()->SetOrientation(30);
     d->overlay->GetTextProperty()->SetOpacity(0.3);
-    // VTK's built-in Latin fonts do not contain the precomputed watermark glyphs.
-    const auto cjkFont = QStandardPaths::locate(QStandardPaths::GenericDataLocation,
-                                                "fonts/opentype/noto/NotoSansCJK-Regular.ttc");
-    if (!cjkFont.isEmpty()) {
-        d->overlay->GetTextProperty()->SetFontFamily(VTK_FONT_FILE);
-        d->overlay->GetTextProperty()->SetFontFile(cjkFont.toUtf8());
-    }
+    // ASCII viewport text uses VTK's built-in font on every supported system.
     d->overlay->PickableOff();
     widget->setRenderWindow(d->window);
     d->window->AddRenderer(d->renderer);
@@ -224,10 +217,13 @@ QString ResultView::tmaxText() const {
     if (d->session)
         for (auto value : d->session->summary()) {
             const auto entry = value.toObject();
-            if (entry["name"] != "T_max" || entry["step"].toInteger(-1) != d->step ||
+            if (entry["name"] != "T_max" ||
+                (entry.contains("step") && entry["step"].toInteger(-1) != d->step) ||
                 !entry["value"].isDouble())
                 continue;
-            QString text = summary("T_max");
+            QString text = QString("T_max: %1 %2")
+                               .arg(entry["value"].toDouble(), 0, 'g', 16)
+                               .arg(entry["unit"].toString());
             for (auto key : {"region", "region_id", "body"}) {
                 auto region = entry[key].toString();
                 if (!region.isEmpty()) {
@@ -257,20 +253,28 @@ QString ResultView::tmaxText() const {
     return "T_max: unavailable";
 }
 bool ResultView::setProvenance(const QJsonObject& provenance) {
-    const auto source = provenance.contains("effective_source")
-                            ? provenance["effective_source"].toString()
-                            : provenance["source"].toString();
-    const bool valid = provenance["schema"] == "chipcae.provenance/0.1" &&
-                       (source == "real" || source == "mock" || source == "precomputed");
+    auto severity = [](const QJsonValue& value) {
+        if (!value.isString())
+            return -1;
+        const auto text = value.toString();
+        return text == "real" ? 0 : text == "precomputed" ? 1 : text == "mock" ? 2 : -1;
+    };
+    const int sourceRank = severity(provenance["source"]);
+    const int effectiveRank = provenance.contains("effective_source")
+                                  ? severity(provenance["effective_source"])
+                                  : sourceRank;
+    const bool valid =
+        provenance["schema"] == "chipcae.provenance/0.1" && sourceRank >= 0 && effectiveRank >= 0;
+    const int rank = std::max(sourceRank, effectiveRank);
     d->watermark.clear();
     d->banner.clear();
     if (!valid) {
         d->watermark = "MOCK";
         d->banner = QStringLiteral("来源未知 — MOCK");
-    } else if (source == "mock") {
+    } else if (rank == 2) {
         d->watermark = "MOCK";
         d->banner = QStringLiteral("MOCK 合成数据");
-    } else if (source == "precomputed") {
+    } else if (rank == 1) {
         d->watermark = QStringLiteral("预计算");
         d->banner = QStringLiteral("预计算数据");
     } else if (provenance["degraded"].toBool()) {
@@ -279,7 +283,10 @@ bool ResultView::setProvenance(const QJsonObject& provenance) {
     }
     d->bannerLabel->setText(d->banner);
     d->bannerLabel->setVisible(!d->banner.isEmpty());
-    d->overlay->SetInput(d->watermark.toUtf8());
+    const auto viewportText = d->watermark == QStringLiteral("预计算") ? QString("PRECOMPUTED")
+                              : d->watermark == QStringLiteral("降级") ? QString("DEGRADED")
+                                                                       : d->watermark;
+    d->overlay->SetInput(viewportText.toUtf8());
     rebuild();
     return valid;
 }
@@ -339,6 +346,7 @@ void ResultView::rebuild() {
         d->renderer->AddViewProp(d->overlay);
     if (d->clip && vtkMath::Norm(d->normal.data()) == 0) {
         d->error = "Clip normal must be nonzero";
+        emit displayChanged();
         return;
     }
     vtkNew<vtkLookupTable> lut;

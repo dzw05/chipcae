@@ -9,6 +9,7 @@
 #include <QFormLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QSignalBlocker>
 namespace chipcae::desktop {
 ResultControls::ResultControls(ResultView& view, ResultSession& session, QWidget* parent)
     : QWidget(parent) {
@@ -19,6 +20,10 @@ ResultControls::ResultControls(ResultView& view, ResultSession& session, QWidget
     layout->addRow("Field", field);
     connect(field, &QComboBox::currentIndexChanged, &view, [&view](int index) {
         view.setColorField(static_cast<ResultColorField>(index));
+    });
+    connect(&view, &ResultView::displayChanged, field, [&view, field] {
+        const QSignalBlocker blocker(field);
+        field->setCurrentIndex(static_cast<int>(view.colorField()));
     });
     auto picked = new QLabel(QStringLiteral("未知"), this);
     layout->addRow("elem_gid", picked);
@@ -79,11 +84,10 @@ ResultControls::ResultControls(ResultView& view, ResultSession& session, QWidget
     layout->addRow(summary);
     auto refresh = [&view, summary] {
         const auto range = view.colorRange();
-        const auto fieldText = range.valid ? QString("%1: min=%2 max=%3 %4")
+        const auto fieldText = range.valid ? QString("%1: min=%2 max=%3")
                                                  .arg(view.colorBarTitle())
                                                  .arg(range.min, 0, 'g', 16)
                                                  .arg(range.max, 0, 'g', 16)
-                                                 .arg(range.unit)
                                            : QString("Field: unavailable");
         summary->setText(view.tmaxText() + "\n" + fieldText + "\n" + view.summary("warpage_pv") +
                          "\n" + view.summary("U_mag_max"));

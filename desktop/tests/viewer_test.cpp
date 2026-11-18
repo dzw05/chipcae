@@ -7,8 +7,10 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QImage>
 #include <QJsonDocument>
 #include <QLabel>
+#include <QProcess>
 #include <QSurfaceFormat>
 #include <QTemporaryDir>
 #include <QVTKOpenGLNativeWidget.h>
@@ -114,6 +116,9 @@ void checkRange(ResultView& view, ResultColorField field) {
                 mapper = candidate;
         }
         require(mapper && mapper->GetScalarVisibility(), "selected scalar mapper missing");
+        require(mapper->GetScalarRange()[0] == view.colorRange().min &&
+                    mapper->GetScalarRange()[1] == view.colorRange().max,
+                "mapper range differs from color range");
         require(mapper->GetScalarMode() == VTK_SCALAR_MODE_USE_POINT_FIELD_DATA &&
                     mapper->GetArrayAccessMode() == VTK_GET_ARRAY_BY_NAME,
                 "mapper does not select point field by name");
@@ -178,6 +183,39 @@ int acceptance(const QDir& root) {
             std::cerr << "FAIL " << name << ": " << e.what() << '\n';
         }
     };
+    run("independent extreme void range", [&] {
+        QTemporaryDir temp;
+        require(temp.isValid(), "void fixture directory");
+        require(QFile::copy(root.filePath("viewer_mixed/out/step.vtkhdf"),
+                            temp.filePath("step.vtkhdf")),
+                "copy void fixture");
+        // Modify only a temporary copy of the existing synthetic fixture. Its three
+        // disjoint cells have cell_kind [2, 1, 0], with eight private points each.
+        QProcess edit;
+        edit.start("python3",
+                   {"-c",
+                    "import h5py,sys; f=h5py.File(sys.argv[1],'r+'); "
+                    "t=f['VTKHDF/hex/PointData/T']; t[:8]=1e12; t[8:16]=300; t[16:]=400; f.close()",
+                    temp.filePath("step.vtkhdf")});
+        require(edit.waitForFinished() && edit.exitStatus() == QProcess::NormalExit &&
+                    edit.exitCode() == 0,
+                "write extreme void temperatures");
+        ResultSession session;
+        require(session.open(temp.filePath("step.vtkhdf")), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        auto check = [&](double maximum) {
+            const auto range = view.colorRange();
+            require(range.valid && range.unit == "K" && range.min == 300 && range.max == maximum,
+                    "void temperature contaminated independent range");
+            checkRange(view, ResultColorField::Temperature);
+        };
+        check(400);
+        view.setShowVoid(true);
+        check(1e12);
+        view.setShowVoid(false);
+        check(400);
+    });
     run("empty and mesh-only state", [&] {
         ResultView view;
         checkUnavailable(view);
@@ -293,6 +331,16 @@ int acceptance(const QDir& root) {
         require(view.colorField() == ResultColorField::DisplacementMagnitude,
                 "controls did not select magnitude");
         checkSummaryLabel(controls, view);
+        view.setColorField(ResultColorField::WarpageUz);
+        require(fields->currentIndex() == static_cast<int>(ResultColorField::WarpageUz),
+                "programmatic field change left combo stale");
+        view.setClip(true, {0, 0, 0}, {0, 0, 0});
+        require(!view.colorRange().valid, "invalid clip retained range");
+        bool unavailable = false;
+        for (auto label : controls.findChildren<QLabel*>())
+            unavailable |= label->text().contains("Field: unavailable");
+        require(unavailable, "invalid clip left summary range stale");
+        view.setClip(false);
         for (auto combo : controls.findChildren<QComboBox*>())
             if (combo != fields && combo->count() > 1 && combo->itemText(0) == "0" &&
                 combo->itemText(1) == "1") {
@@ -384,6 +432,20 @@ int acceptance(const QDir& root) {
         checkLocation({{"position", QJsonArray{1, 2}}, {"xyz", QJsonArray{4, 5, 6}}}, "");
         checkLocation({{"location", "surface"}}, " location=surface");
         checkLocation({{"location", QJsonArray{7, 8, 9}}}, " at=(7,8,9)");
+        manifest["summary"] = QJsonArray{
+            QJsonObject{{"name", "T_max"}, {"value", 987.5}, {"unit", "K"}, {"region", "global"}}};
+        require(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "global manifest open");
+        const auto globalBytes = QJsonDocument(manifest).toJson();
+        require(file.write(globalBytes) == globalBytes.size(), "global manifest write");
+        file.close();
+        ResultSession global;
+        require(global.open(temp.path()), qPrintable(global.error()));
+        ResultView globalView;
+        for (qint64 step : {0, 1}) {
+            require(globalView.loadStep(global, step), qPrintable(globalView.error()));
+            require(globalView.tmaxText() == "T_max: 987.5 K region=global",
+                    "global T_max missing or formatted from another entry");
+        }
     });
     for (const auto& source : {QString("mock"),
                                QString("precomputed"),
@@ -449,22 +511,40 @@ int acceptance(const QDir& root) {
         require(view.loadStep(session, 0), qPrintable(view.error()));
         QTemporaryDir temp;
         require(temp.isValid(), "capture temporary directory");
-        for (auto source : {"mock", "precomputed"}) {
-            require(view.setProvenance({{"schema", "chipcae.provenance/0.1"}, {"source", source}}),
-                    "capture provenance");
+        const auto baselinePath = temp.filePath("baseline.png");
+        require(view.capture(baselinePath), "baseline capture");
+        const QImage baseline(baselinePath);
+        require(!baseline.isNull(), "baseline image decode");
+        for (auto source : {"mock", "precomputed", "real"}) {
+            require(
+                view.setProvenance(
+                    {{"schema", "chipcae.provenance/0.1"}, {"source", source}, {"degraded", true}}),
+                "capture provenance");
             auto props = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetViewProps();
             vtkTextActor* overlay = nullptr;
             props->InitTraversal();
             while (auto prop = props->GetNextProp())
                 if (auto text = vtkTextActor::SafeDownCast(prop))
                     overlay = text;
-            require(overlay && QString::fromUtf8(overlay->GetInput()) == view.provenanceWatermark(),
+            const QString expected = QString(source) == "precomputed" ? "PRECOMPUTED"
+                                     : QString(source) == "real"      ? "DEGRADED"
+                                                                      : "MOCK";
+            require(overlay && QString::fromUtf8(overlay->GetInput()) == expected,
                     "viewport watermark text");
             require(overlay->GetTextProperty()->GetOpacity() > 0 &&
                         overlay->GetTextProperty()->GetOpacity() < 1,
                     "watermark opacity");
             require(overlay->GetTextProperty()->GetOrientation() == 30, "diagonal watermark");
-            require(view.capture(temp.filePath(QString(source) + ".png")), "watermarked capture");
+            const auto path = temp.filePath(QString(source) + ".png");
+            require(view.capture(path), "watermarked capture");
+            const QImage marked(path);
+            require(!marked.isNull() && marked.size() == baseline.size(),
+                    "watermarked image decode");
+            int changed = 0;
+            for (int y = 0; y < marked.height(); ++y)
+                for (int x = 0; x < marked.width(); ++x)
+                    changed += marked.pixel(x, y) != baseline.pixel(x, y);
+            require(changed > 100, "watermark did not visibly render into capture");
         }
         view.clearProvenance();
         auto props = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetViewProps();
@@ -479,11 +559,29 @@ int acceptance(const QDir& root) {
                                     {"effective_source", "mock"}}),
                 "effective source rejected");
         require(view.provenanceWatermark() == "MOCK", "effective source precedence");
-        for (auto object : {QJsonObject{{"source", "real"}},
-                            QJsonObject{{"schema", "wrong"}, {"source", "real"}},
-                            QJsonObject{{"schema", "chipcae.provenance/0.1"},
-                                        {"source", "real"},
-                                        {"effective_source", "REAL"}}}) {
+        require(view.setProvenance({{"schema", "chipcae.provenance/0.1"},
+                                    {"source", "mock"},
+                                    {"effective_source", "real"}}) &&
+                    view.provenanceWatermark() == "MOCK",
+                "effective source downgraded mock");
+        require(view.setProvenance({{"schema", "chipcae.provenance/0.1"},
+                                    {"source", "precomputed"},
+                                    {"effective_source", "real"}}) &&
+                    view.provenanceWatermark() == QStringLiteral("预计算"),
+                "effective source downgraded precomputed");
+        for (auto object :
+             {QJsonObject{{"schema", "chipcae.provenance/0.1"}, {"effective_source", "real"}},
+              QJsonObject{{"schema", "chipcae.provenance/0.1"},
+                          {"source", 42},
+                          {"effective_source", "real"}},
+              QJsonObject{{"schema", "chipcae.provenance/0.1"},
+                          {"source", "real"},
+                          {"effective_source", 42}},
+              QJsonObject{{"source", "real"}},
+              QJsonObject{{"schema", "wrong"}, {"source", "real"}},
+              QJsonObject{{"schema", "chipcae.provenance/0.1"},
+                          {"source", "real"},
+                          {"effective_source", "REAL"}}}) {
             require(!view.setProvenance(object), "invalid provenance accepted");
             require(view.provenanceWatermark() == "MOCK" &&
                         view.provenanceBanner().contains(QStringLiteral("来源未知")),
