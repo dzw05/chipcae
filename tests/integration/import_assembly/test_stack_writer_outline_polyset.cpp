@@ -43,6 +43,7 @@ int main() {
         require(without_outline.outline.polygon.empty(), "no outline reference preserves box");
         auto sidecar = read_polyset(dir / "outline.polyset");
         require(bool(sidecar), "read outline fixture");
+        base.value().outline.box = {};
         // Resolve the recorded path, independently of any CLI polyset default.
         auto inlined = chipcae::importer::inline_assembly_outline_references(base.value(),
                                                                              dir / "original.json");
@@ -54,6 +55,9 @@ int main() {
                 require(base.value().outline.polygon[i][j] ==
                             poly.layers[0].coordinates[2 * i + j] * 1e-6,
                         "outline coordinates must equal DBU coordinates times dbu_m exactly");
+        require(std::abs(base.value().outline.box[2] - 0.02) < 1e-15 &&
+                    std::abs(base.value().outline.box[3] - 0.02) < 1e-15,
+                "inlining must reconstruct nonzero outline bounds");
         auto result = chipcae::importer::write_stack(base.value(), dir / "rewritten.json");
         require(bool(result), "write inlined model");
         auto loaded = load_stack(dir / "rewritten.json", schema);

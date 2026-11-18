@@ -107,13 +107,12 @@ def require_assembly_geometry():
 
 
 def step_generator():
-    """Use an OCCT fixture tool prepared before CTest (see fixtures/README.md)."""
+    """Use the OCCT fixture tool built by the main test build."""
     require('OCCT')
     generator = Path(os.environ.get('SP4_FIXTURE_GENERATOR',
                                     BUILD / 'sp4-step-fixtures/sp4_step_fixtures'))
     if not generator.is_file():
-        print(f'SKIP: OCCT fixture tool is unavailable: {generator}')
-        raise SystemExit(77)
+        raise AssertionError(f'OCCT fixture tool is missing from the test build: {generator}')
     return str(generator)
 
 

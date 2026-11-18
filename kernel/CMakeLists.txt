@@ -100,3 +100,11 @@ chipcae_assembly_capability(CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE
     chipcae::geometry CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE)
 file(GENERATE OUTPUT "${PROJECT_BINARY_DIR}/import-assets/assembly-capabilities.json"
     CONTENT "{\"geometry\": \"${CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE}\"}\n")
+
+if(CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE)
+    target_compile_definitions(chipcae-import PRIVATE CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE=1)
+endif()
+if(CHIPCAE_BUILD_TESTS AND CHIPCAE_ENABLE_OCCT)
+    add_subdirectory("${PROJECT_SOURCE_DIR}/tests/integration/import_assembly/fixtures"
+        "${PROJECT_BINARY_DIR}/sp4-step-fixtures")
+endif()

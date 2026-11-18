@@ -31,3 +31,11 @@ with tempfile.TemporaryDirectory() as tmp:
     a.output.unlink()
     check(run('--accept', str(a.accept(['unmapped/unmapped-body']))), 0)
     a.stack()
+
+    # An imported body must never disappear silently when SP2/SP3 are absent.
+    a.output.unlink()
+    a.document.pop('parts_from_step')
+    a.part('lid', body='unmapped-body')
+    check(run('--accept-b-tier'), 7)
+    assert not a.output.exists()
+    assert 'unavailable' in a.defects()['message']

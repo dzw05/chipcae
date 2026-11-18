@@ -1,6 +1,3 @@
-cmake_minimum_required(VERSION 3.20)
-project(sp4_step_fixtures LANGUAGES CXX)
-find_package(OpenCASCADE REQUIRED COMPONENTS FoundationClasses ModelingData ModelingAlgorithms Visualization ApplicationFramework DataExchange)
 add_executable(sp4_step_fixtures step_fixtures.cpp)
 target_include_directories(sp4_step_fixtures SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 target_link_libraries(sp4_step_fixtures PRIVATE TKPrim TKBool TKSTEP TKXDESTEP TKXCAF)

@@ -59,63 +59,6 @@ inline std::optional<int> protocol_error_code(const std::string& name, std::istr
     return lookup();
 }
 #endif
-inline std::string defect_json_quote(const std::string& s) {
-    std::ostringstream out;
-    out << '"';
-    for (unsigned char c : s) {
-        if (c == '"' || c == '\\')
-            out << '\\' << c;
-        else if (c < 0x20)
-            out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << unsigned(c);
-        else
-            out << c;
-    }
-    out << '"';
-    return out.str();
-}
-
-inline void write_defect(std::ostream& out, const geometry::Defect& d) {
-    const auto id = geometry::defect_id(d), tier = geometry::tier_name(d.tier);
-    out << "{\"defect_id\":" << defect_json_quote(id) << ",\"tier\":" << defect_json_quote(tier)
-        << ",\"kind\":" << defect_json_quote(d.kind)
-        << ",\"reason\":" << static_cast<unsigned>(d.reason)
-        << ",\"dimension\":" << defect_json_quote(d.dimension)
-        << ",\"size\":" << std::setprecision(17) << d.size
-        << ",\"suggestion\":" << defect_json_quote(d.suggestion)
-        << ",\"action\":" << defect_json_quote(d.action)
-        << ",\"rejection_reason\":" << defect_json_quote(d.rejection_reason)
-        << ",\"material_ambiguous\":" << (d.material_ambiguous ? "true" : "false");
-    out << '}';
-}
-inline void write_defects_json(std::ostream& out,
-                               const std::string& code,
-                               const std::string& message,
-                               const std::vector<geometry::Defect>& defects) {
-    out << "{\"code\":" << defect_json_quote(code) << ",\"message\":" << defect_json_quote(message)
-        << ",\"defects\":[";
-    bool first = true;
-    for (const auto& d : defects) {
-        if (!first)
-            out << ',';
-        first = false;
-        write_defect(out, d);
-    }
-    out << "]}\n";
-}
-
-inline void write_assembly_defects(const std::filesystem::path& file,
-                                   const std::string& code,
-                                   const std::string& message,
-                                   const std::vector<geometry::Defect>& defects) {
-    if (file.empty())
-        return;
-    std::ofstream out(file);
-    write_defects_json(out, code, message, defects);
-    out.close();
-    if (!out)
-        throw std::runtime_error("cannot write defects output");
-}
-
 inline std::string import_failure_message(const std::string& code, const std::string& message) {
     return std::regex_search(message, std::regex("^[A-Z_]+: ")) ? message : code + ": " + message;
 }
@@ -123,25 +66,7 @@ inline std::string import_failure_message(const std::string& code, const std::st
 inline int protocol_error_exit(const std::string& message, std::istream& in) {
     return protocol_error_code(message.substr(0, message.find(':')), in).value_or(1);
 }
-inline std::vector<std::string> read_acceptance_list(const ImportOptions& options,
-                                                     const std::filesystem::path& directory) {
-    auto file = options.accept_file;
-    if (file.empty() && !options.accept_b_tier) {
-        auto candidate = directory / "import.accept.json";
-        if (std::filesystem::exists(candidate))
-            file = candidate;
-    }
-    std::vector<std::string> accepted;
-    if (!file.empty()) {
-        std::ifstream input(file);
-        auto document = jsoncons::json::parse(input);
-        for (const auto& item : document["accept"].array_range())
-            accepted.push_back(item["defect_id"].as<std::string>());
-    }
-    return accepted;
-}
 #endif
-
 // Private assembly report extension.
 struct ImportReportParts {
     std::map<std::string, std::vector<std::string>> split_layers;
@@ -310,6 +235,16 @@ mesh::Expected<bool> inline_assembly_outline(mesh::StackModel& stack, const mesh
             stack.outline.polygon.push_back({static_cast<double>(coordinates[i]) * poly.dbu_m,
                                              static_cast<double>(coordinates[i + 1]) * poly.dbu_m});
     }
+    if (!stack.outline.polygon.empty()) {
+        const auto& first = stack.outline.polygon.front();
+        stack.outline.box = {first[0], first[1], first[0], first[1]};
+        for (const auto& p : stack.outline.polygon) {
+            stack.outline.box[0] = std::min(stack.outline.box[0], p[0]);
+            stack.outline.box[1] = std::min(stack.outline.box[1], p[1]);
+            stack.outline.box[2] = std::max(stack.outline.box[2], p[0]);
+            stack.outline.box[3] = std::max(stack.outline.box[3], p[1]);
+        }
+    }
     return true;
 }
 #if defined(CHIPCAE_ENABLE_JSONCONS)
@@ -363,7 +298,10 @@ inline void summarize_assembly_parts(const mesh::StackModel& base,
         layer_targets[l.name] = targets;
         if (!split.empty()) {
             parts.split_layers[l.name] = split;
-            rewrite("layer:" + l.name, targets);
+            std::vector<std::string> qualified;
+            for (const auto& target : targets)
+                qualified.push_back("layer:" + target);
+            rewrite("layer:" + l.name, qualified);
         }
         for (const auto& r : l.regions) {
             std::vector<std::string> rt;
@@ -446,7 +384,7 @@ int run_assembly(const ImportOptions& options) {
         const auto dir = import_report_directory(options.output);
         if (!write_assembly_report(dir, header, defects, &error, &parts))
             throw std::runtime_error(error);
-        write_assembly_defects(options.report, code, message, defects);
+        write_defects(options.report, code, message, defects);
     };
     auto fail = [&](const std::string& code, const std::string& message) {
         const auto full = import_failure_message(code, message);
@@ -747,14 +685,12 @@ int run_assembly(const ImportOptions& options) {
                 throw std::runtime_error("IMPORT_REJECTED: unknown body name " + body);
             auto mapped = map_step_defects(id, step.defects, body);
             defects.insert(defects.end(), mapped.begin(), mapped.end());
-            SliceResult sliced;
-            try {
-                sliced = slice_prismatic(
-                    step, body, {tol.value().tau_A, tol.value().tau_A, tol.value().tau_B});
-            } catch (const std::logic_error& e) {
-                if (std::string(e.what()) != "not implemented: slice_prismatic")
-                    throw;
-            }
+#ifndef CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE
+            throw std::runtime_error(
+                "IMPORT_REJECTED: assembly slicing/placement/merge unavailable");
+#endif
+            auto sliced = slice_prismatic(
+                step, body, {tol.value().tau_A, tol.value().tau_A, tol.value().tau_B});
             for (auto d : sliced.defects) {
                 d.defect_id = id + "/" + d.defect_id;
                 defects.push_back(d);
@@ -792,17 +728,10 @@ int run_assembly(const ImportOptions& options) {
                 placement = a;
             } else
                 placement = FramePlacement{v["origin"].as<std::array<Real, 3>>()};
-            try {
-                auto pp = assembly_placement_result(place(sliced.slabs, placement, base),
-                                                    id,
-                                                    p["material"].as<std::string>(),
-                                                    defects);
-                if (pp)
-                    placed.push_back(*pp);
-            } catch (const std::logic_error& e) {
-                if (std::string(e.what()) != "not implemented: place")
-                    throw;
-            }
+            auto pp = assembly_placement_result(
+                place(sliced.slabs, placement, base), id, p["material"].as<std::string>(), defects);
+            if (pp)
+                placed.push_back(*pp);
         };
         for (const auto& p : ordered) {
             auto shared = shared_steps.find(p["id"].as<std::string>());
@@ -810,17 +739,12 @@ int run_assembly(const ImportOptions& options) {
         }
         auto merged = base;
         if (!placed.empty()) {
-            try {
-                auto m = merge_parts(
-                    base, placed, {scales.t_min, tol.value().eps_weld, tol.value().tau_A});
-                if (!m)
-                    return fail("INTERNAL", m.error().message);
-                merged = m.value().stack;
-                defects.insert(defects.end(), m.value().defects.begin(), m.value().defects.end());
-            } catch (const std::logic_error& e) {
-                if (std::string(e.what()) != "not implemented: merge_parts")
-                    throw;
-            }
+            auto m =
+                merge_parts(base, placed, {scales.t_min, tol.value().eps_weld, tol.value().tau_A});
+            if (!m)
+                return fail("INTERNAL", m.error().message);
+            merged = m.value().stack;
+            defects.insert(defects.end(), m.value().defects.begin(), m.value().defects.end());
         }
         summarize_assembly_parts(base, merged, parts);
         auto policy = apply_repair_policy(defects, accepted, options.accept_b_tier);

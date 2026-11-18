@@ -56,6 +56,11 @@ unmapped bodies in `parts_from_step`.
 
 Tests requiring SP2/SP3 geometry (thin-layer exit 6/acceptance, split reports,
 and merged STEP regions) skip with code 77 while those implementations are stubs.
-Repair-policy and synthetic defect tests remain active on this baseline.
+A STEP part requiring those operations is rejected with exit 7 and an explicit
+unavailable-capability diagnostic. Exceptions from advertised implementations
+propagate to the error report instead of discarding the part.
+The main OCCT test build includes the synthetic STEP fixture generator; missing
+fixtures fail the tests. Repair-policy and synthetic split/rewrite report tests
+remain active without OCCT or SP2/SP3.
 Expanded `parts_from_step` identities use the body name; the schema-required
 `bodies` mapping `id` value does not rename a body.
