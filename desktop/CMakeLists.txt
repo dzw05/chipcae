@@ -224,6 +224,23 @@ if(CHIPCAE_BUILD_TESTS)
     target_link_libraries(desktop_config PRIVATE chipcae_desktop_config)
 endif()
 
+if(CHIPCAE_BUILD_TESTS)
+    add_executable(desktop_window_submit tests/window_submit_test.cpp jobs/SubmitDialog.hpp)
+    target_link_libraries(desktop_window_submit PRIVATE chipcae_desktop_ui
+        chipcae_desktop_config chipcae_desktop_preview chipcae_local_jobs)
+    target_compile_definitions(desktop_window_submit PRIVATE
+        CHIPCAE_REPOSITORY="${CMAKE_CURRENT_SOURCE_DIR}/.."
+        PYTHON_EXECUTABLE="${CHIPCAE_IMPORT_PYTHON}"
+        PREVIEW_MOCK="${CMAKE_CURRENT_SOURCE_DIR}/tools/mock_preview.py")
+    vtk_module_autoinit(TARGETS desktop_window_submit MODULES ${VTK_LIBRARIES})
+    add_test(NAME desktop_window_submit COMMAND desktop_window_submit ${CMAKE_CURRENT_BINARY_DIR}/result-samples)
+    set_tests_properties(desktop_window_submit PROPERTIES FIXTURES_REQUIRED result_samples
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
+endif()
+
+target_sources(chipcae_desktop_ui PRIVATE jobs/SubmitDialog.cpp provenance/Provenance.cpp)
+target_include_directories(chipcae_desktop_ui PUBLIC provenance)
+target_link_libraries(chipcae_desktop_ui PUBLIC chipcae_desktop_config chipcae_desktop_preview chipcae_local_jobs)
 # D16 assembly helpers and acceptance tests.
 target_sources(chipcae_desktop_ui PRIVATE assembly/AssemblyImport.cpp assembly/AssemblyImport.hpp)
 target_include_directories(chipcae_desktop_ui PUBLIC assembly)

@@ -83,9 +83,12 @@ void wiring(Window& w, const QString& samples) {
         request.input = input.fileName();
         request.output = dir.filePath("import.stack.json");
         request.materialMap = materialMap.fileName();
+        request.polyset = dir.filePath("import.polyset");
+        request.report = dir.filePath("defects.json");
+        request.kind = ImportKind::Ecad;
         request.program = PYTHON_EXECUTABLE;
         request.prefix = {MOCK_SCRIPT};
-        require(w.importController()->start(request), "start mapped import");
+        require(w.importController()->start(request), "start ImportRequest");
         require(w.importController()->busy(), "controller running");
         if (cancel) {
             require(!w.loadHandwrittenStack() && w.document()->stackJson() == before,
@@ -145,11 +148,6 @@ int main(int argc, char** argv) {
         require(text.contains("Import ECAD"), "missing Import ECAD action");
         require(text.contains("Open Results"), "missing Open Results action");
         require(text.contains("handwritten", Qt::CaseInsensitive), "missing handwritten action");
-        require(!text.contains("Submit") && !text.contains("Preview"), "out of scope actions");
-        for (auto* child : w.findChildren<QObject*>())
-            require(QByteArray(child->metaObject()->className()) !=
-                        "chipcae::desktop::LocalJobService",
-                    "window owns job service");
         wiring(w, QString::fromLocal8Bit(argv[1]));
         std::cout << "window wiring checks passed\n";
     } catch (const std::exception& e) {
