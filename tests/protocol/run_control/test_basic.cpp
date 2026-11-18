@@ -4,6 +4,26 @@ using namespace runctl_test;
 
 int main() {
     Suite suite;
+    suite.run("nonpositive pause durations are rejected at construction", [] {
+        TempDirectory dir;
+        ControlChannel channel(dir.file());
+        for (auto duration : {0ms, -1ms}) {
+            for (bool poll : {false, true}) {
+                RunControlOptions options;
+                if (poll)
+                    options.pause_poll = duration;
+                else
+                    options.paused_heartbeat = duration;
+                bool caught = false;
+                try {
+                    RunControl control(channel, {}, {}, options);
+                } catch (const std::invalid_argument&) {
+                    caught = true;
+                }
+                require(caught, "nonpositive duration must throw invalid_argument");
+            }
+        }
+    });
     suite.run("empty boundary leaves missing control file absent", [] {
         TempDirectory dir;
         ControlChannel channel(dir.file());

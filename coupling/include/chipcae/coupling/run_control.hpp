@@ -25,19 +25,32 @@ struct BoundaryDecision {
 };
 
 struct RunControlOptions {
+    /// Both durations must be positive; otherwise construction throws std::invalid_argument.
     std::chrono::milliseconds pause_poll{200};
     std::chrono::milliseconds paused_heartbeat{5000};
     std::function<void(std::chrono::milliseconds)> sleep;
 };
 
-// TEST-FIRST scaffold only: dispatch and pause behavior are deliberately unimplemented.
+/// Collective over the same communicator as ControlChannel; callbacks must not disrupt
+/// collective progress. Capabilities and durations must agree across ranks.
 class RunControl {
 public:
     RunControl(ControlChannel& channel,
                ControlCapabilities capabilities,
                std::function<void(io::EventPayload)> emit,
                RunControlOptions options = {});
+    /// Process all commands, waiting while paused with the same completed mark.
+    /// Only rank 0 emits acknowledgements and state events. Poll exceptions propagate.
     BoundaryDecision at_boundary(const WindowMark& completed);
     bool paused() const noexcept;
+
+private:
+    void emit(io::EventPayload payload) const;
+
+    ControlChannel& channel_;
+    ControlCapabilities capabilities_;
+    std::function<void(io::EventPayload)> emit_;
+    RunControlOptions options_;
+    bool paused_ = false;
 };
 } // namespace chipcae::coupling
