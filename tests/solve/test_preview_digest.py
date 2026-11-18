@@ -44,6 +44,11 @@ with tempfile.TemporaryDirectory(prefix='solve-preview-digest-') as tmp:
         'solver': {'linear': {'preconditioner': 'direct'}},
         'output': {'format': 'vtkhdf'}}
     (root / 'case.json').write_text(json.dumps(case))
+    # Recorded from production baseline 6aefb473ede6e4bd6422a689cf92346563a7e323.
+    baseline_digests = {
+        1: b'6245600b72b8cd0d9dc213a905a417f09bd9039a5f478dba3805ee70db628e1e',
+        2: b'6245600b72b8cd0d9dc213a905a417f09bd9039a5f478dba3805ee70db628e1e',
+    }
     digests = []
     for ranks in (1, 2):
         launcher = [mpiexec, '-n', str(ranks)]
@@ -60,6 +65,7 @@ with tempfile.TemporaryDirectory(prefix='solve-preview-digest-') as tmp:
                     if json.loads(line)['stage'] == 'success']
         for key in ('nx0', 'ny0', 'L', 'nz', 'padded_cells', 'mesh_sha256'):
             assert kernel[key] == success[key], (ranks, key, kernel, success)
+        assert kernel['mesh_sha256'].encode('ascii') == baseline_digests[ranks], (ranks, kernel)
         digests.append(kernel['mesh_sha256'])
         print(f'np={ranks}: kernel == preview: {digests[-1]}', flush=True)
     assert digests[0] == digests[1], digests
@@ -77,6 +83,7 @@ with tempfile.TemporaryDirectory(prefix='solve-preview-digest-') as tmp:
              '--profile', str(profile), '--out', str(out)])
         mesh = json.loads((out / 'manifest.json').read_text())['mesh']
         nx0, ny0, level, nz = (mesh[key] for key in ('nx0', 'ny0', 'L', 'nz'))
+        assert level == case['mesh']['levels'] - 1, (ranks, mesh)
         expected = (nx0 * 2**level * ny0 * 2**level - 7 * 5) * nz
         assert mesh['padded_cells'] == expected, (ranks, mesh, expected)
         assert mesh['padded_cells'] > 0, (ranks, mesh)

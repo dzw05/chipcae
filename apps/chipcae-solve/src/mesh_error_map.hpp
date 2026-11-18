@@ -23,9 +23,8 @@ inline void validate_column_partition(const mesh::HexMeshArrays& mesh, std::size
         const auto [first, inserted] = column_ranks.emplace(column, rank);
         if (!inserted && first->second != rank)
             throw InputError(ErrorCode::COLUMN_SPLIT_ACROSS_RANKS,
-                             "column " + std::to_string(column) + " spans rank " +
-                                 std::to_string(first->second) + " and rank " +
-                                 std::to_string(rank));
+                             "column " + std::to_string(column) + " spans ranks " +
+                                 std::to_string(first->second) + " and " + std::to_string(rank));
     }
 }
 } // namespace chipcae::solve

@@ -51,7 +51,7 @@ bool mesh_error_acceptance() {
     } catch (const InputError& error) {
         check(error.code == ErrorCode::COLUMN_SPLIT_ACROSS_RANKS, "column split error code");
         const std::string message = error.what();
-        for (const auto* text : {"column 0", "rank 0", "rank 1"})
+        for (const auto* text : {"column 0", "spans ranks 0 and 1"})
             check(message.find(text) != std::string::npos,
                   std::string("column split message: ") + text);
     }
