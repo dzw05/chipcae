@@ -58,6 +58,8 @@ target_compile_definitions(k1_demo_gate_mesh PRIVATE K1_ROOT="${PROJECT_SOURCE_D
 chipcae_set_warnings(k1_demo_gate_mesh)
 add_test(NAME k1_demo_gate_mesh COMMAND k1_demo_gate_mesh)
 set_tests_properties(k1_demo_gate_mesh PROPERTIES LABELS "mesh;tierA" TIMEOUT 60)
+# The mesh workflow builds k1_cut_stats explicitly before running all mesh tests.
+add_dependencies(k1_cut_stats k1_demo_gate_mesh)
 if(CHIPCAE_ENABLE_MFEM)
   add_executable(k1_mfem_adapter mfem_adapter.cpp)
   target_link_libraries(k1_mfem_adapter PRIVATE chipcae_mesh_mfem)
