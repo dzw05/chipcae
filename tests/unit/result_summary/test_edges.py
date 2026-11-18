@@ -402,12 +402,7 @@ class Edges(unittest.TestCase):
                 step, _ = fixture(run, cut=True)
                 with h5py.File(step, 'r+') as f:
                     del f[f'VTKHDF/{missing}/PointData/T']
-                result = summarize(run)
-                expected = (dict(min=100., max=999., top_min=999., top_max=999., top_mean=999.)
-                            if missing == 'hex' else
-                            dict(min=300., max=309., top_min=301., top_max=309., top_mean=305.))
-                self.assertEqual(result['temperature'], expected)
-                self.assertEqual(result['warpage']['n_top_points'], 10)
+                self.assert_partial_temperature_invalid(run)
 
     def test_duplicate_with_temperature_only_in_cut(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -418,10 +413,7 @@ class Edges(unittest.TestCase):
                 cut = f['VTKHDF/cut']
                 cut['Points'][0] = [0., 0., 1.]
                 cut['PointData/U'][0] = [0., 0., .125]
-            result = summarize(run)
-            self.assertEqual(result['temperature'], dict(
-                min=100., max=999., top_min=999., top_max=999., top_mean=999.))
-            self.assertEqual(result['warpage']['n_top_points'], 9)
+            self.assert_partial_temperature_invalid(run)
 
     def test_temperature_below_global_top(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -430,10 +422,20 @@ class Edges(unittest.TestCase):
             with h5py.File(step, 'r+') as f:
                 del f['VTKHDF/hex/PointData/T']
                 f['VTKHDF/cut/Points'][...] = [[2., 0., .5], [0., 0., 0.]]
-            result = summarize(run)
-            self.assertEqual(result['temperature'], dict(
-                min=100., max=999., top_min=None, top_max=None, top_mean=None))
-            self.assertEqual(result['warpage']['n_top_points'], 9)
+            self.assert_partial_temperature_invalid(run)
+
+    def assert_partial_temperature_invalid(self, run):
+        message = 'PointData/T: partial coverage across nonempty hex/cut blocks'
+        with self.assertRaises(ResultSummaryError) as caught:
+            summarize(run)
+        self.assertEqual(caught.exception.code, 14)
+        self.assertEqual(caught.exception.name, 'INPUT_INVALID')
+        self.assertEqual(str(caught.exception), message)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            self.assertEqual(main([str(run)]), 14)
+        self.assertEqual(out.getvalue(), '')
+        self.assertEqual(err.getvalue(), f'result_summary: INPUT_INVALID: {message}\n')
 
     def test_byte_order(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -3,11 +3,10 @@
 # Copyright (c) 2026 Zhiwei Duan
 """Validate and summarize the first step of a chipcae results directory.
 
-Duplicate coordinates use the first stored displacement and first available
-temperature (hex before cut, then partition/storage order), even if copies differ.
-Temperature uses blocks providing T; top_* are null when no global top point
-provides T. The whole
-temperature field is null when no temperature samples are available. Numeric
+Duplicate coordinates use the first stored displacement and temperature
+(hex before cut, then partition/storage order), even if copies differ.
+T is all-or-nothing; partial coverage is an input error. Empty blocks do not
+participate in this check. The temperature field is null without samples. Numeric
 field types accept either byte order, retaining the required kind and width.
 Collinear top geometry fits along its centered principal axis (constant fit
 when x/y have rank zero), using the shared plane fitter for residuals.
@@ -143,6 +142,9 @@ def _read(root):
             blocks[name] = dict(points=n, cells=c, type_counts=_counts(types))
         _partitions(block)
         data.append((points, u, t))
+    temperature_presence = {t is not None for points, _, t in data if len(points)}
+    _require(len(temperature_presence) <= 1,
+             'PointData/T: partial coverage across nonempty hex/cut blocks')
     eb = root.get('eb_surface')
     if eb is None:
         blocks['eb_surface'] = dict(points=0, polygons=0)
@@ -249,6 +251,7 @@ def _summarize(run_dir, top_rel_tol):
         xy = points[top, :2]
         centered = xy - xy[0]
         if np.linalg.matrix_rank(centered) < 2:
+            # span{along, 1} equals span{x, y, 1} on a line, so residuals agree.
             # Plane slopes are not unique on a line; its fitted values are.
             # Remove the redundant direction explicitly, retaining the shared
             # least-squares API and avoiding large absolute coordinate offsets.
@@ -293,7 +296,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         result = summarize(args.run_dir, args.top_rel_tol)
-        content = json.dumps(result, indent=2, sort_keys=False, ensure_ascii=False) + '\n'
+        content = json.dumps(result, indent=2, sort_keys=False, ensure_ascii=False, allow_nan=False) + '\n'
         if args.o is None:
             sys.stdout.write(content)
         else:
