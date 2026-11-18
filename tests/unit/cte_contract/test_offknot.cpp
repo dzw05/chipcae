@@ -179,10 +179,16 @@ int main(int argc, char** argv) try {
                         if (temperature < knots[i] ||
                             (temperature >= knots[i + 1] && i + 2 < knots.size()))
                             continue;
-                        const Real slope =
-                            (probe.alpha[i + 1] - probe.alpha[i]) / (knots[i + 1] - knots[i]);
-                        const Real alpha = probe.alpha[i] + (temperature - knots[i]) * slope;
-                        expected = alpha + (temperature - reference) * slope;
+                        // The fixtures are integer multiples of 1e-5. Work in those
+                        // units so exact zero derivatives stay zero rather than a
+                        // cancellation residue subjected to a relative tolerance.
+                        constexpr Real unit = 1e-5;
+                        const Real alpha_left = probe.alpha[i] / unit;
+                        const Real delta = probe.alpha[i + 1] / unit - alpha_left;
+                        const Real width = knots[i + 1] - knots[i];
+                        expected = (alpha_left * width +
+                                    (2 * temperature - knots[i] - reference) * delta) /
+                                   width * unit;
                         break;
                     }
                 }
