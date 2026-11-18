@@ -27,17 +27,17 @@ Unknown IDs produce warnings. Explicit `--accept` conflicts with
 assembly is used if present. Accept-all skips that default file entirely.
 
 Part ID `void` is reserved (exit 14). Geometry threshold error prefixes map
-through `protocol/errors.yaml`; unknown prefixes return INTERNAL (1).
+through `protocol/errors.yaml`; `outline.unsupported` maps to `CUT_UNSUPPORTED`
+(exit 13), and unknown prefixes return INTERNAL (1). A missing assembly file
+rejects the import with exit 7; malformed JSON and schema errors return 14.
 STEP parts require an OCCT-enabled build; otherwise each part produces a
 C-tier `OCCT_UNAVAILABLE` diagnostic. JSON support and ECAD support must be
 configured for assembly imports. Error mapping reads the protocol scalar records
 without adding a YAML library dependency to JSON-enabled builds.
 
-This checkout still contains the SP0 throwing implementations of slicing,
-placement and merge. Until the linked geometry target advertises support, assembly
-treats the exact slicing/merge placeholder errors as empty results and skips
-placement for empty slices, as permitted by the SP4 brief; it cannot produce part regions
-or real slicing/merge diagnostics until SP2/SP3 land. All other errors propagate.
+Assembly calls the SP2 slicing and SP3 placement/merge implementations directly.
+Invalid or empty STEP shapes produce C-tier defects and reject the import even
+with `--accept-b-tier`. Accepted unmapped entities are skipped.
 
 Assembly reports preserve the shared geometry report fields and CSV contract.
 The assembly JSON extension adds `details` to each defect and a `parts` object
@@ -51,8 +51,8 @@ imports do not require the source checkout.
 Until E-ODB-3 supplies an implemented reader, ODB++ assembly boards reject with
 `odbpp reader not yet available`. Implementation owners declare support through
 `CHIPCAE_ODBPP_AVAILABLE` on the linked ECAD target and
-`CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE` on the linked geometry target. Until those
-implementations land, support defaults to OFF. Integration builds can explicitly
+`CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE` on the linked geometry target. Capability
+options default to OFF unless advertised by their owner. Integration builds can explicitly
 set `CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE` or
 `CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE` as CMake cache options. Source changes do
 not block configuration or require unrelated reader files to be linked.
@@ -61,14 +61,11 @@ Imported product names also enforce the display-only
 `NOT_CAE_GEOMETRY` rejection, including for ordinary STEP filenames and
 unmapped bodies in `parts_from_step`.
 
-Tests requiring SP2/SP3 geometry (thin-layer exit 6/acceptance, split reports,
-and merged STEP regions) skip with code 77 while those implementations are stubs.
-A STEP part requiring those operations is rejected with exit 7 and an explicit
-unavailable-capability diagnostic. Exceptions from advertised implementations
-propagate to the error report instead of discarding the part.
+Enable `CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE` for geometry acceptance tests
+(thin-layer exit 6/acceptance, split reports, and merged STEP regions).
 The main OCCT test build includes the synthetic STEP fixture generator; missing
 fixtures fail the tests. Repair-policy and synthetic split/rewrite report tests
-remain active without OCCT or SP2/SP3.
+remain active without OCCT.
 Expanded `parts_from_step` identities use the body name; the schema-required
 `bodies` mapping `id` value does not rename a body.
 

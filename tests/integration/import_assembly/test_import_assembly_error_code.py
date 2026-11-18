@@ -26,3 +26,16 @@ if enabled('OCCT') and enabled('ECAD'):
         d = a.defects()
         assert d['code'] == 'INPUT_INVALID', d
         assert d['message'] == 'INPUT_INVALID: part id collides with Core', d
+
+    # This generated-name collision passes the CLI's exact-name precheck and
+    # reaches merge_parts, so the report and exit must preserve its error.
+    with tempfile.TemporaryDirectory() as tmp:
+        a = Assembly(tmp)
+        a.boxes()
+        board = a.root / 'board.xml'
+        board.write_text(board.read_text().replace('Core', 'lid#0'))
+        check(a.run(), 14)
+        d = a.defects()
+        assert d['code'] == 'INPUT_INVALID', d
+        assert d['message'] == 'INPUT_INVALID: part id collides with lid#0', d
+        assert not a.output.exists()

@@ -1,5 +1,5 @@
 // Exercise the real CLI orchestration with a deterministic STEP reader seam.
-// The unmapped body produces a B-tier defect without SP2/SP3 or OCCT.
+// The unmapped body produces a B-tier defect without requiring OCCT.
 #define import_step assembly_test_import_step
 #define step_import_available assembly_test_step_available
 #include "assembly_seam_support.hpp"

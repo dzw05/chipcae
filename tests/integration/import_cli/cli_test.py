@@ -167,12 +167,12 @@ def run_case(binary, case, generate=False):
             check(not generate, "reserved diagnostics are assertions, not baseline goldens")
             failures = []
             result = invoke(binary, ["--assembly", "assembly.json", "-o", "out.stack.json"], directory)
-            check(result.returncode == 14 and b"INPUT_INVALID: assembly=" in result.stderr and
-                  b"json_path=$" in result.stderr, "assembly invocation must reach mode validation")
+            check(result.returncode == 7 and b"IMPORT_REJECTED: assembly=" in result.stderr and
+                  b"json_path=$" in result.stderr, "assembly invocation must reach the real handler")
             result = invoke(binary, ["-o", "stack.json", "--assembly", "xyz"], directory)
-            check(result.returncode == 14 and result.stdout == b"" and
-                  b"INPUT_INVALID: assembly=" in result.stderr,
-                  "assembly output-first must reach mode validation")
+            check(result.returncode == 7 and result.stdout == b"" and
+                  b"IMPORT_REJECTED: assembly=" in result.stderr,
+                  "assembly output-first must reach the real handler")
             # Assembly validates its supported/reserved options after mode selection.
             for option in ("--accept", "--t-min", "--stack-override"):
                 for output_option in ("-o", "--out"):
@@ -182,8 +182,8 @@ def run_case(binary, case, generate=False):
                         args = [arg for group in ordering for arg in group]
                         result = invoke(binary, args, directory)
                         if option == "--accept":
-                            check(result.returncode == 14 and result.stdout == b"" and
-                                  b"INPUT_INVALID: assembly=" in result.stderr,
+                            check(result.returncode == 7 and result.stdout == b"" and
+                                  b"IMPORT_REJECTED: assembly=" in result.stderr,
                                   f"assembly accept order {args}: {result.stderr!r}")
                         else:
                             check(result.returncode == 2 and result.stdout == b"" and

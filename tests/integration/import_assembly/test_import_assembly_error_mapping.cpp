@@ -12,30 +12,19 @@ int main() {
         std::cerr << "legacy report writer must not throw on output failure\n";
         return 1;
     }
-#ifndef CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE
-    // SP0 merge leaves the original board intact; unrelated failures propagate.
-    chipcae::geometry::StackModel board;
-    board.id = "original-board";
-    auto merged = chipcae::importer::assembly_placeholder_result(
-        [&] { return chipcae::geometry::merge_parts(board, {}, {}); },
-        chipcae::geometry::Expected<chipcae::geometry::MergeResult>{
-            chipcae::geometry::MergeResult{board, {}}},
-        "not implemented: merge_parts");
-    if (!merged || merged.value().stack.id != "original-board")
-        return 1;
-    try {
-        chipcae::importer::assembly_placeholder_result(
-            []() -> int { throw std::logic_error("unexpected geometry failure"); },
-            0,
-            "not implemented: slice_prismatic");
-        return 1;
-    } catch (const std::logic_error& error) {
-        if (std::string(error.what()) != "unexpected geometry failure")
-            return 1;
-    }
-#endif
     using chipcae::importer::assembly_error_exit;
     using chipcae::importer::protocol_error_exit;
+    // Real SP3 merge errors retain their message and protocol exit code.
+    const auto merged = chipcae::geometry::merge_parts({}, {}, {-1, 1e-6, 1e-6});
+    if (merged || merged.error().message != "INPUT_INVALID: invalid MergeOptions" ||
+        assembly_error_exit(merged.error().message) != 14)
+        return 1;
+    const std::string outline_error = "outline.unsupported: non-convex outline";
+    if (assembly_error_exit(outline_error) != 13 ||
+        chipcae::importer::import_failure_message("INTERNAL", outline_error) != outline_error) {
+        std::cerr << "unsupported merge outlines must preserve the message and map to exit 13\n";
+        return 1;
+    }
     for (const auto& message :
          {"INPUT_INVALID: bad STEP", "CUT_UNSUPPORTED: STEP", "BOGUS: STEP"}) {
         const auto preserved =

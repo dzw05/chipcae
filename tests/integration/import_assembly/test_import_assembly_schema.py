@@ -21,7 +21,7 @@ with tempfile.TemporaryDirectory() as tmp:
         check(result, 14)
         assert 'json_path' in result.stderr, result.stderr
         assert not a.output.exists()
-    # Malformed JSON and missing files are input errors.
+    # Malformed JSON remains INPUT_INVALID; missing files reject the import.
     for text in ('{broken',):
         (a.root / 'assembly.json').write_text(text)
         result = a.run()
@@ -31,7 +31,8 @@ with tempfile.TemporaryDirectory() as tmp:
         if text == '{broken':
             assert str(a.root / 'assembly.json') in a.defects()['message']
     (a.root / 'assembly.json').unlink()
-    check(a.run(), 14)
+    check(a.run(), 7)
+    assert a.defects()['code'] == 'IMPORT_REJECTED'
     assert str(a.root / 'assembly.json') in a.defects()['message']
 
 # Publishing replaces the output symlink itself; it must not open its target.

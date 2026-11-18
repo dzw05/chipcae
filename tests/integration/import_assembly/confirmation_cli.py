@@ -3,7 +3,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from assembly_test_support import Assembly, BUILD, check
+from assembly_test_support import Assembly, BUILD, check, enabled
 
 with tempfile.TemporaryDirectory() as tmp:
     a = Assembly(tmp)
@@ -26,21 +26,27 @@ with tempfile.TemporaryDirectory() as tmp:
     assert not a.output.exists()
     assert a.defects()['code'] == 'IMPORT_CONFIRMATION_REQUIRED'
     assert a.import_report()['defects'][0]['defect_id'] == 'unmapped/unmapped-body'
+    assert a.import_report()['defects'][0]['tier'] == 'B'
+    assert a.import_report()['defects'][0]['reason'] == 2  # PART_UNMAPPED
     check(run('--accept-b-tier'), 0)
-    a.stack()
+    stack = a.stack()
+    assert [layer['name'] for layer in stack['layers']] == ['F.Cu', 'Core', 'B.Cu']
+    assert not any(layer.get('regions') for layer in stack['layers'])
     a.output.unlink()
     check(run('--accept', str(a.accept(['unmapped/unmapped-body']))), 0)
     a.stack()
 
-    # SP0 placeholder slicing is an empty result until SP2/SP3 land.
+    # The reader seam has no shape: real slicing rejects the mapped body,
+    # and accepting B-tier defects cannot confirm this C-tier failure.
     a.output.unlink()
     a.document.pop('parts_from_step')
     a.part('lid', body='unmapped-body')
-    check(run('--accept-b-tier'), 0)
-    a.stack()
-    assert a.defects()['code'] == 'OK'
+    check(run('--accept-b-tier'), 7)
+    assert not a.output.exists()
+    assert a.defects()['code'] == 'IMPORT_REJECTED'
+    assert any(d['tier'] == 'C' and d['reason'] == (3 if enabled('OCCT') else 8)
+               and d['defect_id'].startswith('lid/') for d in a.import_report()['defects'])
 
     # Assembly alone translates report publication failure to INTERNAL.
-    a.output.unlink()
     check(run('--accept-b-tier', '--report', str(a.root)), 1)
     assert not a.output.exists()

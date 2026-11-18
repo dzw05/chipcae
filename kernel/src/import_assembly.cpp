@@ -136,33 +136,20 @@ inline std::optional<int> protocol_error_code(const std::string& name, std::istr
     return lookup();
 }
 #endif
+inline std::string assembly_error_name(const std::string& message) {
+    const auto name = message.substr(0, message.find(':'));
+    return name == "outline.unsupported" ? "CUT_UNSUPPORTED" : name;
+}
 inline std::string import_failure_message(const std::string& code, const std::string& message) {
-    return std::regex_search(message, std::regex("^[A-Z_]+: ")) ? message : code + ": " + message;
+    return std::regex_search(message, std::regex(R"(^([A-Z_]+|outline\.unsupported): )"))
+               ? message
+               : code + ": " + message;
 }
 #if defined(CHIPCAE_ENABLE_JSONCONS)
 inline int protocol_error_exit(const std::string& message, std::istream& in) {
-    return protocol_error_code(message.substr(0, message.find(':')), in).value_or(1);
+    return protocol_error_code(assembly_error_name(message), in).value_or(1);
 }
 #endif
-// SP0 throws explicit placeholders; only those errors become empty results.
-// Once the linked owner advertises support, all exceptions propagate normally.
-template <class Call, class Result>
-Result assembly_placeholder_result(Call call, Result empty, const char* placeholder) {
-#ifdef CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE
-    (void)empty;
-    (void)placeholder;
-    return call();
-#else
-    try {
-        return call();
-    } catch (const std::logic_error& error) {
-        if (std::string(error.what()) != placeholder)
-            throw;
-        return empty;
-    }
-#endif
-}
-
 // Private assembly report extension.
 struct ImportReportParts {
     std::map<std::string, std::vector<std::string>> split_layers;
@@ -447,7 +434,7 @@ assembly_placement_result(geometry::Expected<geometry::PlacedPart> result,
 }
 #if defined(CHIPCAE_ENABLE_JSONCONS)
 int assembly_error_exit(const std::string& message) {
-    const auto name = message.substr(0, message.find(':'));
+    const auto name = assembly_error_name(message);
     if (name == "IMPORT_CONFIRMATION_REQUIRED")
         return CliExit::import_confirmation_required;
     if (name == "IMPORT_REJECTED")
@@ -485,7 +472,7 @@ int run_assembly(const ImportOptions& options) {
     auto fail = [&](const std::string& code, const std::string& message) {
         const auto full = import_failure_message(code, message);
         const auto exit = assembly_error_exit(full);
-        const auto prefix = exit == 1 ? "INTERNAL" : full.substr(0, full.find(':'));
+        const auto prefix = exit == 1 ? "INTERNAL" : assembly_error_name(full);
         reports(prefix, full);
         std::cerr << full << '\n';
         return exit;
@@ -498,15 +485,14 @@ int run_assembly(const ImportOptions& options) {
                 options.output.parent_path().empty() ? "." : options.output.parent_path()))
             return fail("INPUT_INVALID", "INPUT_INVALID: polyset must be in output directory");
         J doc;
+        const auto assembly_location = "assembly=" + options.assembly.string() + "; json_path=$: ";
+        std::ifstream assembly_input(options.assembly);
+        if (!assembly_input)
+            return fail("IMPORT_REJECTED", assembly_location + "cannot open assembly");
         try {
-            std::ifstream in(options.assembly);
-            if (!in)
-                throw std::runtime_error("cannot open assembly");
-            doc = J::parse(in);
+            doc = J::parse(assembly_input);
         } catch (const std::exception& e) {
-            return fail("INPUT_INVALID",
-                        "INPUT_INVALID: assembly=" + options.assembly.string() +
-                            "; json_path=$: " + e.what());
+            return fail("INPUT_INVALID", assembly_location + e.what());
         }
         std::string invalid;
         try {
@@ -780,13 +766,8 @@ int run_assembly(const ImportOptions& options) {
                 throw std::runtime_error("IMPORT_REJECTED: unknown body name " + body);
             auto mapped = map_step_defects(id, step.defects, body);
             defects.insert(defects.end(), mapped.begin(), mapped.end());
-            auto sliced = assembly_placeholder_result(
-                [&] {
-                    return slice_prismatic(
-                        step, body, {tol.value().tau_A, tol.value().tau_A, tol.value().tau_B});
-                },
-                SliceResult{},
-                "not implemented: slice_prismatic");
+            auto sliced = slice_prismatic(
+                step, body, {tol.value().tau_A, tol.value().tau_A, tol.value().tau_B});
             for (auto d : sliced.defects) {
                 d.defect_id = id + "/" + d.defect_id;
                 defects.push_back(d);
@@ -837,15 +818,10 @@ int run_assembly(const ImportOptions& options) {
         }
         auto merged = base;
         if (!placed.empty()) {
-            auto m = assembly_placeholder_result(
-                [&] {
-                    return merge_parts(
-                        base, placed, {scales.t_min, tol.value().eps_weld, tol.value().tau_A});
-                },
-                Expected<MergeResult>{MergeResult{base, {}}},
-                "not implemented: merge_parts");
+            auto m =
+                merge_parts(base, placed, {scales.t_min, tol.value().eps_weld, tol.value().tau_A});
             if (!m)
-                return fail("INTERNAL", m.error().message);
+                return fail(assembly_error_name(m.error().message), m.error().message);
             merged = m.value().stack;
             defects.insert(defects.end(), m.value().defects.begin(), m.value().defects.end());
         }
