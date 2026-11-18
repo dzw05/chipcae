@@ -50,8 +50,7 @@ class FrdParserTest(unittest.TestCase):
                     env.pop("CHIPCAE_VV_LOG_DIR", None)
                     if configured is not None:
                         env["CHIPCAE_VV_LOG_DIR"] = configured
-                    log = Path("/workspace/tasks/logs/v-ccx-delta.md")
-                    log.unlink(missing_ok=True)
+                    log = Path(directory) / "reports/v-ccx-delta.md"
                     result = subprocess.run(
                         [sys.executable, "-m", "unittest", "tools.vv.test_trilayer_calculix_ref"],
                         cwd=Path(__file__).resolve().parents[3], capture_output=True, text=True,
@@ -59,8 +58,28 @@ class FrdParserTest(unittest.TestCase):
                     )
                     self.assertEqual(len(result.stdout.splitlines()), 1)
                     self.assertTrue(result.stdout.startswith("W_bfp="))
-                    self.assertEqual(result.stdout, log.read_text(encoding="utf-8"))
-                    self.assertFalse((Path(directory) / "reports/v-ccx-delta.md").exists())
+                    if configured:
+                        self.assertEqual(result.stdout, log.read_text(encoding="utf-8"))
+                    else:
+                        self.assertFalse(log.parent.exists())
+
+    def test_unconfigured_report_does_not_write(self):
+        from tools.vv.test_trilayer_calculix_ref import TrilayerCalculixRefTest
+
+        for configured in (None, ""):
+            with self.subTest(configured=configured):
+                env = dict(os.environ)
+                env.pop("CHIPCAE_VV_LOG_DIR", None)
+                if configured is not None:
+                    env["CHIPCAE_VV_LOG_DIR"] = configured
+                output = io.StringIO()
+                with patch.dict(os.environ, env, clear=True), redirect_stdout(output), \
+                        patch.object(Path, "mkdir", side_effect=AssertionError("unexpected mkdir")), \
+                        patch.object(Path, "write_text", side_effect=AssertionError("unexpected write")):
+                    case = TrilayerCalculixRefTest("test_reference_schema_and_report_delta")
+                    case.test_reference_schema_and_report_delta()
+                self.assertEqual(len(output.getvalue().splitlines()), 1)
+                self.assertTrue(output.getvalue().startswith("W_bfp="))
 
     def test_missing_reference_does_not_report(self):
         from tools.vv import test_trilayer_calculix_ref as comparison
