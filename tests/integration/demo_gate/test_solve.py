@@ -1,7 +1,6 @@
 """DEMO-GATE coupled cut solve and repeat, target-case, zero-source controls."""
 import copy
 from datetime import datetime
-import importlib.util
 import json
 import math
 import os
@@ -28,9 +27,6 @@ except Exception as error:
     sys.exit(77)
 
 source = Path(sys.argv[1]).resolve()
-spec = importlib.util.spec_from_file_location("warpage_qoi", source / "tools/vv/warpage_qoi.py")
-qoi = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(qoi)
 
 
 def read(path):
@@ -41,7 +37,8 @@ def fields(out):
     with h5py.File(out / "out/step-0.vtkhdf", "r") as file:
         return {name: {key: file["VTKHDF/" + name + "/" + key][:]
                        for key in ("Types", "Points", "PointData/T", "PointData/U",
-                                   "CellData/cell_kind")}
+                                   "CellData/cell_kind", "CellData/layer_id",
+                                   "CellData/material_id", "CellData/elem_gid")}
                 for name in ("hex", "cut")}
 
 
@@ -80,6 +77,12 @@ with tempfile.TemporaryDirectory(prefix="demogate-") as tmp:
     assert len(blocks["hex"]["Types"]) > 0
     assert np.all(blocks["hex"]["CellData/cell_kind"] == 0)
     for name, block in blocks.items():
+        n_cells = len(block["Types"])
+        for field in ("cell_kind", "layer_id", "material_id", "elem_gid"):
+            values = block["CellData/" + field]
+            assert values.shape == (n_cells,) and values.size > 0, (name, field, values.shape)
+            assert np.issubdtype(values.dtype, np.integer), (name, field, values.dtype)
+        assert np.all(block["CellData/cell_kind"] == (0 if name == "hex" else 1)), name
         points = block["Points"]
         assert np.all(np.isfinite(points)), name
         assert block["PointData/T"].shape == (len(points),)
@@ -96,19 +99,10 @@ with tempfile.TemporaryDirectory(prefix="demogate-") as tmp:
     assert temperatures.min() >= 298.15 - 1e-8, temperatures.min()
     assert 298.15 + 1e-6 < temperatures.max() < 400, temperatures.max()
     pv = warpage(manifest)
-    points = np.concatenate([b["Points"] for b in blocks.values()])
     displacement = np.concatenate([b["PointData/U"] for b in blocks.values()])
     assert np.all(np.isfinite(displacement))
-    zmax = points[:, 2].max()
-    height = zmax - points[:, 2].min()
-    assert height > 0
-    top = points[:, 2] >= zmax - 1e-12 * height
-    # First-occurrence indices follow the sorted unique vertices, preserving U pairing.
-    vertices, indices = np.unique(points[top], axis=0, return_index=True)
-    assert len(vertices) >= 3
-    _, residual = qoi.best_fit_plane(vertices[:, 0], vertices[:, 1], displacement[top][indices, 2])
-    wbfp = float(np.ptp(residual))
-    relative = abs(wbfp - pv) / pv
+    # VTKHDF vertices omit the solver's Q2 nodes and cut-face quadrature points.
+    # A vertex plane fit therefore cannot cross-check the solver's warpage QoI.
     mesh_hash = manifest["mesh"]["mesh_sha256"]
     assert isinstance(mesh_hash, str) and len(mesh_hash) == 64
     revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=source,
@@ -124,7 +118,6 @@ with tempfile.TemporaryDirectory(prefix="demogate-") as tmp:
           "counts", {n: {"cells": len(b["Types"]), "points": len(b["Points"])}
                      for n, b in blocks.items()},
           "T_max", float(temperatures.max()), "warpage_pv", pv,
-          "W_bfp", wbfp, "relative_difference", relative,
           "mesh_sha256", mesh_hash, "main_wall_seconds", elapsed, flush=True)
 
     repeated, _, _ = run("repeat", original)
@@ -140,3 +133,6 @@ with tempfile.TemporaryDirectory(prefix="demogate-") as tmp:
     zero_t = np.concatenate([b["PointData/T"] for b in zero_blocks.values()])
     assert np.all(np.isfinite(zero_t))
     assert np.max(np.abs(zero_t - 298.15)) <= 1e-8
+    zero_u = np.concatenate([b["PointData/U"] for b in zero_blocks.values()])
+    assert np.all(np.isfinite(zero_u))
+    assert np.max(np.linalg.norm(zero_u, axis=1)) <= 1e-12

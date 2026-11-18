@@ -7,7 +7,10 @@ if(TARGET chipcae-solve AND CHIPCAE_ENABLE_MFEM AND CHIPCAE_ENABLE_MPI AND CHIPC
 else()
     # The collector has no per-file filter; keep input validation without registering the solve.
     if(NOT Python3_EXECUTABLE)
-        find_package(Python3 COMPONENTS Interpreter REQUIRED)
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+    endif()
+    if(NOT Python3_EXECUTABLE)
+        return()
     endif()
     add_test(NAME demogate_inputs
         COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/test_inputs.py" "${PROJECT_SOURCE_DIR}")
