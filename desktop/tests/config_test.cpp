@@ -96,7 +96,7 @@ void schemaPathTests(const QTemporaryDir& dir, const QString& configPath) {
     const auto restoreCwd = qScopeGuard([&] { QDir::setCurrent(originalCwd); });
     check(QDir::setCurrent(cwdrel), "set schema fixture working directory");
 
-    // Run each check so the TDD stubs expose every failing scenario in CTest.
+    // Report every failing lookup scenario in one CTest run.
     int failures = 0;
     const auto run = [&](const char* scenario, auto operation) {
         try {
@@ -245,6 +245,7 @@ void schemaPathTests(const QTemporaryDir& dir, const QString& configPath) {
     rejectFile("parent directory as fileName", "..");
     rejectFile("double dot within fileName", "a..b");
     rejectFile("current directory as fileName", ".");
+    rejectFile("Qt resource path as fileName", ":schema.json");
     const QString missingFile = "missing.schema.json";
     expectFile("file lookup without schema directory", {}, missingFile, args, emptyEnv, {}, {});
     expectFile("file lookup only requires the marker",
