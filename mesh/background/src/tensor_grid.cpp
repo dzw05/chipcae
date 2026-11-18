@@ -80,6 +80,133 @@ Expected<std::vector<Local>> expand_column_partition(HexMeshArrays::GridReport& 
         return Error{"partition", e.what()};
     }
 }
+using Point = std::array<Real, 2>;
+using Polygon = std::vector<Point>;
+// Coordinate-scale roundoff tolerance, shared by contact and connector ties.
+Real tolerance(const Polygon& a, const Polygon& b) {
+    Real scale = 0;
+    for (const auto* poly : {&a, &b})
+        for (auto p : *poly)
+            scale = std::max({scale, std::abs(p[0]), std::abs(p[1])});
+    return 64 * std::numeric_limits<Real>::epsilon() * scale;
+}
+Real cross(Point a, Point b, Point c) {
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+}
+Real distance(Point p, Point a, Point b) {
+    const Real dx = b[0] - a[0], dy = b[1] - a[1], length = dx * dx + dy * dy;
+    const Real t =
+        length == 0
+            ? 0
+            : std::clamp(((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / length, Real(0), Real(1));
+    return std::hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy);
+}
+Real phi(Point p, const Polygon& poly) {
+    Real d = std::numeric_limits<Real>::infinity();
+    bool inside = false;
+    for (std::size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++) {
+        const auto a = poly[j], b = poly[i];
+        d = std::min(d, distance(p, a, b));
+        if ((a[1] > p[1]) != (b[1] > p[1]) &&
+            p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0])
+            inside = !inside;
+    }
+    // Closed polygon: roundoff-close edges and vertices have zero distance.
+    if (d <= tolerance(poly, Polygon{p}))
+        return 0;
+    return inside ? -d : d;
+}
+Real gap(const Polygon& a, const Polygon& b, bool containment = true) {
+    const Real tol = tolerance(a, b);
+    Real d = std::numeric_limits<Real>::infinity();
+    for (std::size_t i = 0; i < a.size(); ++i)
+        for (std::size_t j = 0; j < b.size(); ++j) {
+            auto p = a[i], q = a[(i + 1) % a.size()], r = b[j], s = b[(j + 1) % b.size()];
+            const Real candidate = std::min(
+                {distance(p, r, s), distance(q, r, s), distance(r, p, q), distance(s, p, q)});
+            if (candidate <= tol ||
+                (cross(p, q, r) * cross(p, q, s) < 0 && cross(r, s, p) * cross(r, s, q) < 0))
+                return 0;
+            d = std::min(d, candidate);
+        }
+    if (containment && (phi(a.front(), b) <= 0 || phi(b.front(), a) <= 0))
+        return 0;
+    return d;
+}
+// Shared boundary segments do not form a narrow gap to the outline.
+bool coincident_edge(const Polygon& polygon, Point a, Point b) {
+    const Real tol = tolerance(polygon, Polygon{a, b});
+    const Real length = std::hypot(b[0] - a[0], b[1] - a[1]);
+    for (std::size_t i = 0; i < polygon.size(); ++i) {
+        const auto p = polygon[i], q = polygon[(i + 1) % polygon.size()];
+        if (std::abs(cross(a, b, p)) > tol * length || std::abs(cross(a, b, q)) > tol * length)
+            continue;
+        const int axis = std::abs(b[0] - a[0]) >= std::abs(b[1] - a[1]) ? 0 : 1;
+        if (std::min(std::max(a[axis], b[axis]), std::max(p[axis], q[axis])) -
+                std::max(std::min(a[axis], b[axis]), std::min(p[axis], q[axis])) >
+            tol)
+            return true;
+    }
+    return false;
+}
+std::string body(const Inclusion& r) {
+    return r.body.empty() ? r.name : r.body;
+}
+// Cells touched by a shortest connector form the local distance band. Keeping
+// all tied connectors covers parallel facing edges on a graded tensor grid.
+Real local_h(const HexMeshArrays& mesh, Point p, Point q) {
+    Real h = 0;
+    for (int axis = 0; axis < 2; ++axis) {
+        const auto& x = mesh.axes[axis];
+        for (std::size_t i = 1; i < x.size(); ++i)
+            if (x[i] >= std::min(p[axis], q[axis]) && x[i - 1] <= std::max(p[axis], q[axis]))
+                h = std::max(h, x[i] - x[i - 1]);
+    }
+    return h;
+}
+Point projection(Point p, Point a, Point b) {
+    const Real dx = b[0] - a[0], dy = b[1] - a[1];
+    const Real norm = dx * dx + dy * dy;
+    const Real t =
+        norm == 0 ? 0
+                  : std::clamp(((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / norm, Real(0), Real(1));
+    return {a[0] + t * dx, a[1] + t * dy};
+}
+Real band_h(const HexMeshArrays& mesh, const Polygon& a, const Polygon& b) {
+    const Real tol = tolerance(a, b);
+    Real best = std::numeric_limits<Real>::infinity(), h = 0;
+    for (std::size_t i = 0; i < a.size(); ++i)
+        for (std::size_t j = 0; j < b.size(); ++j) {
+            const auto p = a[i], q = a[(i + 1) % a.size()];
+            const auto r = b[j], s = b[(j + 1) % b.size()];
+            const std::array<std::pair<Point, Point>, 4> connectors = {{{p, projection(p, r, s)},
+                                                                        {q, projection(q, r, s)},
+                                                                        {r, projection(r, p, q)},
+                                                                        {s, projection(s, p, q)}}};
+            Real pair_best = std::numeric_limits<Real>::infinity();
+            Point lo{}, hi{};
+            for (const auto& [u, v] : connectors) {
+                const Real d = std::hypot(u[0] - v[0], u[1] - v[1]);
+                if (d < pair_best - tol) {
+                    pair_best = d;
+                    lo = {std::min(u[0], v[0]), std::min(u[1], v[1])};
+                    hi = {std::max(u[0], v[0]), std::max(u[1], v[1])};
+                } else if (std::abs(d - pair_best) <= tol) {
+                    for (int axis = 0; axis < 2; ++axis) {
+                        lo[axis] = std::min({lo[axis], u[axis], v[axis]});
+                        hi[axis] = std::max({hi[axis], u[axis], v[axis]});
+                    }
+                }
+            }
+            if (pair_best < best - tol) {
+                best = pair_best;
+                h = local_h(mesh, lo, hi);
+            } else if (std::abs(pair_best - best) <= tol) {
+                h = std::max(h, local_h(mesh, lo, hi));
+            }
+        }
+    return h;
+}
 struct AxisSegments {
     std::vector<Real> lines;
     std::vector<std::size_t> counts;
@@ -127,17 +254,43 @@ bool pad_axis(AxisSegments& axis, std::size_t divisor, Real ratio) {
     return true;
 }
 bool contains(const Footprint& f, Real x, Real y) {
-    if (x < f.box[0] || y < f.box[1] || x > f.box[2] || y > f.box[3])
+    const Real tol = f.polygon.empty() ? 0 : tolerance(f.polygon, Polygon{{x, y}});
+    if (x < f.box[0] - tol || y < f.box[1] - tol || x > f.box[2] + tol || y > f.box[3] + tol)
         return false;
     if (f.polygon.empty())
         return true;
-    bool in = false;
-    for (std::size_t i = 0, j = f.polygon.size() - 1; i < f.polygon.size(); j = i++) {
-        auto a = f.polygon[i], b = f.polygon[j];
-        if ((a[1] > y) != (b[1] > y) && x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0])
-            in = !in;
-    }
-    return in;
+    return phi({x, y}, f.polygon) <= 0;
+}
+// Clip the polygon to the closed rectangle; only positive area retains a cell.
+bool polygon_crosses(const Footprint& f, Real x0, Real y0, Real x1, Real y1) {
+    if (f.polygon.empty())
+        return false;
+    Polygon clipped = f.polygon;
+    for (int axis = 0; axis < 2; ++axis)
+        for (int side = 0; side < 2; ++side) {
+            const Real bound = axis == 0 ? (side ? x1 : x0) : (side ? y1 : y0);
+            auto inside = [&](Point p) { return side ? p[axis] <= bound : p[axis] >= bound; };
+            Polygon next;
+            if (clipped.empty())
+                return false;
+            Point a = clipped.back();
+            for (Point b : clipped) {
+                if (inside(a) != inside(b)) {
+                    const Real t = (bound - a[axis]) / (b[axis] - a[axis]);
+                    Point q{a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])};
+                    q[axis] = bound;
+                    next.push_back(q);
+                }
+                if (inside(b))
+                    next.push_back(b);
+                a = b;
+            }
+            clipped = std::move(next);
+        }
+    Real area = 0;
+    for (std::size_t i = 1; i + 1 < clipped.size(); ++i)
+        area += cross(clipped[0], clipped[i], clipped[i + 1]);
+    return std::abs(area) > 0;
 }
 Expected<std::array<AxisSegments, 2>>
 plan_axes(const StackModel& s, const GridOptions& o, HexMeshArrays& m) {
@@ -406,6 +559,48 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
     for (const auto& warning : m.grid_report.warnings)
         std::clog << "warning: " << warning << '\n';
     auto nx = axes[0].size() - 1, ny = axes[1].size() - 1, nz = axes[2].size() - 1;
+    // Validate cut geometry before any cell ownership or attribute emission.
+    struct LayerPolygon {
+        const Inclusion* region;
+        std::size_t layer;
+    };
+    std::vector<LayerPolygon> polygons;
+    for (const auto& layer : s.layers)
+        for (const auto& r : layer.regions)
+            if (!r.footprint.polygon.empty()) {
+                if (!layer.material.empty())
+                    return Error{"CUT_UNSUPPORTED", r.name + ": polygon in material layer"};
+                polygons.push_back({&r, static_cast<std::size_t>(&layer - s.layers.data())});
+            }
+    std::stable_sort(polygons.begin(), polygons.end(), [](auto a, auto b) {
+        return a.region->name < b.region->name;
+    });
+    for (std::size_t i = 0; i < polygons.size(); ++i) {
+        const auto& r = *polygons[i].region;
+        for (std::size_t j = i + 1; j < polygons.size(); ++j) {
+            const auto& other = *polygons[j].region;
+            if (polygons[i].layer == polygons[j].layer && body(r) != body(other) &&
+                gap(r.footprint.polygon, other.footprint.polygon) +
+                        tolerance(r.footprint.polygon, other.footprint.polygon) <
+                    2 * band_h(m, r.footprint.polygon, other.footprint.polygon))
+                return Error{"CUT_UNSUPPORTED", r.name + " " + other.name + ": spacing < 2h"};
+        }
+        auto outline = s.outline.polygon;
+        if (outline.empty()) {
+            const auto& b = s.outline.box;
+            outline = {{b[0], b[1]}, {b[2], b[1]}, {b[2], b[3]}, {b[0], b[3]}};
+        }
+        for (std::size_t edge = 0; edge < outline.size(); ++edge) {
+            const auto a = outline[edge], b = outline[(edge + 1) % outline.size()];
+            if (coincident_edge(r.footprint.polygon, a, b))
+                continue;
+            const Polygon boundary{a, b};
+            if (gap(r.footprint.polygon, boundary, false) +
+                    tolerance(r.footprint.polygon, boundary) <
+                2 * band_h(m, r.footprint.polygon, boundary))
+                return Error{"CUT_UNSUPPORTED", r.name + " outline: spacing < 2h"};
+        }
+    }
     m.copper_layer_of_layer.assign(s.layers.size(), -1);
     std::size_t copper_layers = 0;
     for (std::size_t li = 0; li < s.layers.size(); ++li)
@@ -509,9 +704,32 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
             add(r.name, r.material, r.body);
         attrs.push_back(row);
     }
+    std::vector<std::size_t> retained;
     for (auto column : columns)
         for (std::size_t k = 0; k < nz; ++k) {
             auto x = column % nx, y = column / nx;
+            const auto& layer = s.layers[cell_layer[k]];
+            const Real cx = (axes[0][x] + axes[0][x + 1]) / 2;
+            const Real cy = (axes[1][y] + axes[1][y + 1]) / 2;
+            // Box coverage is resolved independently of polygon order, including
+            // cells straddling a box side moved by snapping.
+            auto box_covers = [&](const Footprint& f) {
+                return f.polygon.empty() && axes[0][x] < f.box[2] && axes[0][x + 1] > f.box[0] &&
+                       axes[1][y] < f.box[3] && axes[1][y + 1] > f.box[1];
+            };
+            // Retention is order-independent; ownership below is last-write with box priority.
+            bool covered = false, box_owned = false;
+            for (const auto& r : layer.regions) {
+                box_owned = box_owned || box_covers(r.footprint);
+                covered = covered || box_covers(r.footprint) || contains(r.footprint, cx, cy) ||
+                          polygon_crosses(
+                              r.footprint, axes[0][x], axes[1][y], axes[0][x + 1], axes[1][y + 1]);
+            }
+            if (layer.material.empty() && !covered) {
+                ++m.grid_report.void_cells;
+                continue;
+            }
+            retained.push_back(dense_index(nx0, ny0, L, x, y) * nz + k);
             std::array<Local, 8> h = {node(x, y, k),
                                       node(x + 1, y, k),
                                       node(x + 1, y + 1, k),
@@ -523,17 +741,31 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
             m.hex.insert(m.hex.end(), h.begin(), h.end());
             auto li = cell_layer[k];
             Local attr = attrs[li][0];
-            for (std::size_t ri = 0; ri < s.layers[li].regions.size(); ++ri) {
-                const auto& f = s.layers[li].regions[ri].footprint;
-                if (contains(
-                        f, (axes[0][x] + axes[0][x + 1]) / 2, (axes[1][y] + axes[1][y + 1]) / 2))
-                    attr = attrs[li][ri + 1];
-                if (!f.polygon.empty() && axes[0][x] < f.box[2] && axes[0][x + 1] > f.box[0] &&
-                    axes[1][y] < f.box[3] && axes[1][y + 1] > f.box[1])
-                    m.pending_cut.push_back(static_cast<Local>(m.attribute.size()));
+            bool pending = false;
+            for (std::size_t ri = 0; ri < layer.regions.size(); ++ri) {
+                const auto& f = layer.regions[ri].footprint;
+                const bool center_inside = contains(f, cx, cy);
+                if (layer.material.empty()) {
+                    const bool polygon_owned =
+                        !box_owned && !f.polygon.empty() &&
+                        (center_inside ||
+                         polygon_crosses(
+                             f, axes[0][x], axes[1][y], axes[0][x + 1], axes[1][y + 1]));
+                    if (box_covers(f) || polygon_owned)
+                        attr = attrs[li][ri + 1];
+                    pending = pending || polygon_owned;
+                } else {
+                    if (center_inside)
+                        attr = attrs[li][ri + 1];
+                    pending =
+                        pending ||
+                        polygon_crosses(f, axes[0][x], axes[1][y], axes[0][x + 1], axes[1][y + 1]);
+                }
             }
+            if (pending)
+                m.pending_cut.push_back(static_cast<Local>(m.attribute.size()));
             m.attribute.push_back(attr);
-            m.elem_gid.push_back(static_cast<Index>(m.elem_gid.size()));
+            m.elem_gid.push_back(static_cast<Index>(retained.back()));
             auto face = [&](std::array<int, 4> ids, Local a) {
                 for (int i : ids)
                     m.bdr_quad.push_back(h[i]);
@@ -616,7 +848,37 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
     auto part = expand_column_partition(m.grid_report, nx0, ny0, nz, o.ranks, weights);
     if (!part)
         return part.error();
-    m.partitioning = std::move(part.value());
+    for (auto e : retained)
+        m.partitioning.push_back(part.value()[e]);
+    // Prune unused nodes while preserving their original global IDs.
+    if (std::any_of(s.layers.begin(), s.layers.end(), [](const auto& layer) {
+            return layer.material.empty();
+        })) {
+        std::vector<bool> used(m.node_gid.size());
+        for (auto v : m.hex)
+            used[v] = true;
+        std::vector<Local> remap(used.size(), -1);
+        std::vector<Real> vertices;
+        std::vector<Local> layers;
+        std::vector<Index> cols, gids;
+        for (std::size_t v = 0; v < used.size(); ++v)
+            if (used[v]) {
+                remap[v] = static_cast<Local>(layers.size());
+                vertices.insert(
+                    vertices.end(), m.vertices.begin() + 3 * v, m.vertices.begin() + 3 * v + 3);
+                layers.push_back(m.node_layer[v]);
+                cols.push_back(m.node_column[v]);
+                gids.push_back(m.node_gid[v]);
+            }
+        for (auto& v : m.hex)
+            v = remap[v];
+        for (auto& v : m.bdr_quad)
+            v = remap[v];
+        m.vertices = std::move(vertices);
+        m.node_layer = std::move(layers);
+        m.node_column = std::move(cols);
+        m.node_gid = std::move(gids);
+    }
     // Every actual body transition receives a dedicated aligned interface attribute.
     constexpr int fi[6][4] = {
         {0, 3, 2, 1}, {0, 1, 5, 4}, {1, 2, 6, 5}, {2, 3, 7, 6}, {3, 0, 4, 7}, {4, 5, 6, 7}};

@@ -13,6 +13,7 @@ namespace chipcae::preview::detail {
 struct MeshDigest {
     std::size_t nx0, ny0, levels, nz, nodes, cells, padded_cells;
     std::string sha256;
+    std::size_t void_cells = 0;
 };
 inline void append_i64(std::string& bytes, std::int64_t value) {
     auto bits = static_cast<std::uint64_t>(value);
@@ -59,6 +60,7 @@ inline MeshDigest digest(const chipcae::mesh::HexMeshArrays& mesh) {
             nodes,
             cells,
             report.padding[0] + report.padding[1],
-            chipcae::mesh::sha256(bytes)};
+            chipcae::mesh::sha256(bytes),
+            static_cast<std::size_t>(report.void_cells)};
 }
 } // namespace chipcae::preview::detail
