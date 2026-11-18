@@ -6,10 +6,12 @@
       "schema_version": "1",
       "unit_system": "SI",
       "density": 1000,
+      "conductivity": 3.1,
       "model": "thermo_elastic",
       "provenance": {
         "source_type": "illustrative",
-        "confidence": "illustrative"
+        "confidence": "illustrative",
+        "notes": "illustrative conductivity; equivalent through-thickness substrate value, ECTC 2005, https://doi.org/10.1109/ectc.2005.1442026"
       },
       "elastic": {
         "symmetry": "isotropic",
@@ -57,10 +59,12 @@
       "schema_version": "1",
       "unit_system": "SI",
       "density": 1000,
+      "conductivity": 58,
       "model": "thermo_elastic",
       "provenance": {
         "source_type": "illustrative",
-        "confidence": "illustrative"
+        "confidence": "illustrative",
+        "notes": "illustrative conductivity; SAC305 bulk value, Cynel TDS, https://www.tme.com/Document/be9dc599936f5899f2f2308663aa8b3c/SAC305_EN.pdf"
       },
       "elastic": {
         "symmetry": "isotropic",
@@ -108,10 +112,12 @@
       "schema_version": "1",
       "unit_system": "SI",
       "density": 1000,
+      "conductivity": 0.5,
       "model": "thermo_elastic",
       "provenance": {
         "source_type": "illustrative",
-        "confidence": "illustrative"
+        "confidence": "illustrative",
+        "notes": "illustrative conductivity; filled epoxy example, CoolTherm ME-531 TDS, https://exdron.com/Exdron-Pdf/COOLTHERM-ME-531-SYR-30CC-EFD-DATASHEET.pdf"
       },
       "elastic": {
         "symmetry": "isotropic",
@@ -159,10 +165,12 @@
       "schema_version": "1",
       "unit_system": "SI",
       "density": 1000,
+      "conductivity": 148,
       "model": "thermo_elastic",
       "provenance": {
         "source_type": "illustrative",
-        "confidence": "illustrative"
+        "confidence": "illustrative",
+        "notes": "illustrative conductivity; silicon at 300 K, Glassbrenner and Slack, Phys. Rev. 134, A1058 (1964), https://doi.org/10.1103/PhysRev.134.A1058"
       },
       "elastic": {
         "symmetry": "isotropic",
