@@ -28,5 +28,14 @@ CHIPCAE_LAMINATE_INLINE void copper_laminate(double Em,
     th[2] =
         f * (ac - 2 * nc / (1 - nc) * (th[0] - ac)) + m * (am - 2 * nm / (1 - nm) * (th[0] - am));
 }
+
+// Conductivity in W/(m*K), output as (kxx, kyy, kzz), with z normal to the layers.
+// Preconditions: km > 0, kc > 0, 0 <= f <= 1, and k points to at least three doubles.
+CHIPCAE_LAMINATE_INLINE void
+copper_laminate_conductivity(double km, double kc, double f, double* k) {
+    const double m = 1 - f;
+    k[0] = k[1] = f * kc + m * km;
+    k[2] = 1 / (f / kc + m / km);
+}
 } // namespace chipcae::material
 #undef CHIPCAE_LAMINATE_INLINE
