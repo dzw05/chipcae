@@ -173,6 +173,9 @@ void testLoadedImportAndSaveAs() {
     auto& document = fixture.document;
     auto stack = fixture.stack;
     stack["external_refs"][0]["sha256"] = fixture.hash.toUpper().toStdString();
+    require(fixture.source.mkpath("assets/copper"), "create nested source asset directory");
+    writeBytes(fixture.source.filePath("assets/copper/nested.bin"), fixture.payload);
+    stack["external_refs"].push_back(externalRef("assets/copper/nested.bin", fixture.hash));
     const auto source = fixture.source.absolutePath();
     const auto relativeSource = QDir::current().relativeFilePath(source);
     require(QDir::isRelativePath(relativeSource), "construct a relative sourceDir");
@@ -191,6 +194,8 @@ void testLoadedImportAndSaveAs() {
         stack, imported, fixture.source, stackDirectory(document, fixture.casePath));
     require(imported.at("external_refs").at(0).at("path") == "polyset.bin",
             "import preserves an available sidecar name");
+    require(imported.at("external_refs").at(1).at("path") == "assets/copper/nested.bin",
+            "import preserves an available nested sidecar path");
 
     const auto saveAs = fixture.root.filePath("save-as/case.json");
     require(document.save(saveAs), "Save As writes a new case and sidecar bundle");
@@ -231,6 +236,11 @@ void testNoSidecars() {
     require(document.checkImportedStack(stack), "one-argument check accepts an empty refs array");
     require(document.replaceImportedStack(stack) && document.stackJson() == stack,
             "replace with an empty refs array preserves the input stack");
+    const auto source = fixture.source.absolutePath();
+    require(document.checkImportedStack(stack, source),
+            "check accepts an empty refs array with an explicit source directory");
+    require(document.replaceImportedStack(stack, source) && document.stackJson() == stack,
+            "replace accepts an empty refs array with an explicit source directory");
 }
 
 void testEmptyStack() {
@@ -294,6 +304,22 @@ void testReadOnlyImportChecks() {
                    "/external_refs/0/sha256");
     require(document.replaceImportedStack(fixture.stack, source), "valid import after a failure");
     require(document.errors().empty(), "successful import clears previous errors");
+}
+
+void testMissingCaseReference() {
+    ImportFixture fixture;
+    auto& document = fixture.document;
+    const auto materials = document.toJson().at("materials").at("ref").as<std::string>();
+    require(QFile::remove(fixture.root.filePath(QString::fromStdString(materials))),
+            "remove the loaded case's materials file");
+
+    const auto issues =
+        requireRejectedImport(document, fixture.stack, fixture.source.absolutePath());
+    require(issues.size() == 1 && issues.front().code == "INPUT_REF_MISSING" &&
+                issues.front().source == "case",
+            "preflight reports the missing case reference");
+    require(!stackDirectory(document, fixture.casePath).exists("polyset.bin"),
+            "a missing case reference prevents sidecar relocation");
 }
 
 void testDuplicatesAndCollision() {
@@ -483,6 +509,7 @@ bool runImportAcceptance() {
     }
     run("escaping asset symlink", testEscapingAssetSymlink);
     run("read-only queries and failure parity", testReadOnlyImportChecks);
+    run("missing existing case reference", testMissingCaseReference);
     run("duplicates, collision, and retry", testDuplicatesAndCollision);
     run("conflicting refs", testConflictingRefs);
     run("copy rollback", testCopyRollback);

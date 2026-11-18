@@ -320,6 +320,8 @@ CaseDocument::StackImport CaseDocument::preflightImportedStack(const Json& stack
             validateExternalAssets(stack, QDir(result.sourceRoot), result.assets);
             candidate.validateContents(result.issues);
         }
+        if (result.issues.empty() && !path_.isEmpty() && !result.assets.empty())
+            validateCaseReferences(data_, QFileInfo(path_).absoluteDir());
     } catch (const std::exception& e) {
         result.issues.push_back(exceptionError(e));
     }
@@ -338,21 +340,20 @@ bool CaseDocument::replaceImportedStack(const Json& stack, const QString& source
     CreatedAssets created;
     try {
         auto staged = stack;
-        if (!path_.isEmpty() && !import.assets.empty()) {
-            validateCaseReferences(data_, QFileInfo(path_).absoluteDir());
+        if (!path_.isEmpty() && !import.assets.empty())
             relocateExternalAssets(staged,
                                    QDir(import.sourceRoot),
                                    stackDirectory(path_, data_),
                                    import.assets,
                                    created);
-        }
         for (const auto& asset : import.assets) {
             const auto hash = asset.hash.toStdString();
             for (const auto index : asset.indices)
                 staged["external_refs"][index]["sha256"] = hash;
         }
         stack_ = std::move(staged);
-        importedStackSourceRoot_ = path_.isEmpty() ? std::move(import.sourceRoot) : QString();
+        importedStackSourceRoot_ =
+            path_.isEmpty() && !import.assets.empty() ? std::move(import.sourceRoot) : QString();
         created.keep();
     } catch (const std::exception& e) {
         errors_ = {exceptionError(e)};
