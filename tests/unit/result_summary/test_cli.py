@@ -11,6 +11,29 @@ from tools.vv.result_summary import summarize
 
 
 class CLI(unittest.TestCase):
+    def test_large_manifest_integer_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / 'run'
+            _, manifest = fixture(run)
+            # JSON integers need no float conversion, even beyond float64 range.
+            value = 10**400
+            manifest['summary'].append(dict(name='large_count', value=value))
+            save(run, manifest)
+            self.assertEqual(summarize(run)['manifest_summary']['large_count'], value)
+            command = [sys.executable, str(SCRIPT), str(run)]
+            for write_output in (False, True):
+                with self.subTest(write_output=write_output):
+                    output = Path(tmp) / 'summary.json'
+                    args = ['-o', str(output)] if write_output else []
+                    result = subprocess.run(command + args, cwd=tmp,
+                                            capture_output=True, timeout=20)
+                    self.assertEqual(result.returncode, 0, result.stderr.decode())
+                    self.assertEqual(result.stderr, b'')
+                    if write_output:
+                        self.assertEqual(result.stdout, b'')
+                    content = output.read_bytes() if write_output else result.stdout
+                    self.assertEqual(json.loads(content)['manifest_summary']['large_count'], value)
+
     def test_failure_stderr_contract(self):
         for case in ('invalid_manifest', 'missing_manifest', 'invalid_tolerance'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
