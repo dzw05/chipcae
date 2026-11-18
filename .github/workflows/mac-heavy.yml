@@ -32,7 +32,7 @@ env:
 jobs:
   build-test:
     name: Mac build and test
-    if: github.repository == 'dzw05/chipcae'
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.repository == 'dzw05/chipcae'
     runs-on: [self-hosted, macOS, ARM64, mac-heavy]
     timeout-minutes: 90
     defaults:
