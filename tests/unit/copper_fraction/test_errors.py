@@ -30,6 +30,25 @@ class Errors(unittest.TestCase):
             self.assertTrue(math.isclose(json.loads(output.read_text())['layers'][0]['copper']['fraction'],
                                          .06, rel_tol=1e-12))
 
+    def test_resource_errors_at_each_stage(self):
+        from contextlib import redirect_stderr
+        from io import StringIO
+        from tools.stack.copper_fraction import main
+        for stage in ('json.load', 'copy.deepcopy', 'json.dumps'):
+            for exception in (RecursionError, MemoryError):
+                with self.subTest(stage=stage, exception=exception), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    source, output, report = (root / name for name in ('input.json', 'output.json', 'report.json'))
+                    source.write_text(json.dumps(fixture(root)))
+                    stderr = StringIO()
+                    with patch('tools.stack.copper_fraction.' + stage, side_effect=exception('too deeply nested')), redirect_stderr(stderr):
+                        code = main([str(source), '-o', str(output), '--report', str(report)])
+                    self.assertEqual(code, 14)
+                    self.assertTrue(stderr.getvalue().startswith('copper_fraction: INPUT_INVALID:'))
+                    self.assertEqual(len(stderr.getvalue().splitlines()), 1)
+                    self.assertFalse(output.exists())
+                    self.assertFalse(report.exists())
+
     def test_nonlocal_references(self):
         from tools.stack.copper_fraction import homogenize_copper, StackPrepError
         with tempfile.TemporaryDirectory() as directory:
@@ -67,7 +86,7 @@ class Errors(unittest.TestCase):
                  'zero_dbu', 'nan_dbu', 'first_offset', 'empty_first_offset', 'case', 'missing_layer', 'duplicates',
                  'too_large', 'negative', 'unit', 'same_path', 'two_outlines', 'zero_outlines',
                  'zero_outline', 'zero_polygon', 'empty_json', 'invalid_json',
-                 'nan_json', 'infinity_json', 'negative_infinity_json', 'overflow_json',
+                 'deep_json', 'deep_copy', 'nan_json', 'infinity_json', 'negative_infinity_json', 'overflow_json',
                  'inline_two_outlines', 'inline_zero_outlines',
                  'missing_unit', 'missing_layers', 'missing_outline', 'bad_outline',
                  'empty_outline', 'polygon_outside_box', 'bad_box', 'bad_polygon', 'missing_refs',
@@ -157,6 +176,9 @@ class Errors(unittest.TestCase):
                     # Extension values also need strict JSON, even on the passthrough path.
                     stack['layers'] = []
                     source.write_text(json.dumps(stack)[:-1] + ', "x-number": ' + constants[case] + '}')
+                if case in ('deep_json', 'deep_copy'):
+                    depth = 2000 if case == 'deep_json' else 600
+                    source.write_text('{"unit":"m","layers":[],"x-deep":' + '[' * depth + '0' + ']' * depth + '}')
                 if case == 'missing_stack': source.unlink()
                 before = source.read_bytes() if source.exists() else None
                 if case == 'same_path': output = source

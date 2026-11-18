@@ -34,7 +34,7 @@ def required(obj, key):
 def homogenize_copper(stack: dict, stack_dir: Path) -> tuple[dict, list[dict]]:
     try:
         return _homogenize(stack, stack_dir)
-    except (KeyError, TypeError, ValueError, OverflowError, IndexError) as exc:
+    except (KeyError, TypeError, ValueError, OverflowError, IndexError, RecursionError, MemoryError) as exc:
         raise invalid(str(exc)) from exc
 
 
@@ -210,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except SystemExit as exc:
         return 0 if exc.code == 0 else 14
-    except OSError as exc:
+    except (OSError, RecursionError, MemoryError) as exc:
         error = invalid(str(exc))
     except StackPrepError as exc:
         error = exc

@@ -47,6 +47,10 @@ def main():
         assert [layer['name'] for layer in stack['layers']] == ['F.Cu', 'Core', 'B.Cu']
         for layer, thickness in zip(stack['layers'], [0.000035, 0.0016, 0.000035], strict=True):
             assert math.isclose(layer['thickness'], thickness, rel_tol=1e-12)
+        for layer in stack['layers']:
+            if layer['name'] in fractions:
+                assert layer['copper'] == {'metal': 'mat.cu', 'fraction': fractions[layer['name']]}, layer
+                assert layer['material'] == 'mat.fr4', layer
         materials = []
         for name, E, nu, alpha, k in [('mat.cu', 110e9, .34, 17e-6, 390), ('mat.fr4', 25e9, .3, 1e-5, .3)]:
             def table(columns):
@@ -68,6 +72,8 @@ def main():
         summary = {entry['name']: entry['value'] for entry in manifest['summary']}
         for key in ('warpage_pv', 'U_mag_max', 'T_max'):
             assert math.isfinite(summary[key]), (key, summary)
+        for key in ('warpage_pv', 'U_mag_max'):
+            assert summary[key] > 0, (key, summary)
         conductivity = {'mat.cu': 390, 'mat.fr4': .3}
         layers = []
         for layer in stack['layers']:
