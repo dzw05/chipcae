@@ -3,11 +3,13 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <initializer_list>
 #include <iostream>
 #include <numbers>
 #include <random>
@@ -17,6 +19,8 @@
 #include <string_view>
 #include <tuple>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 static_assert(std::is_same_v<decltype(chipcae::geometry::ecad::odbpp_detail::map_odb(
                                  std::declval<const chipcae::geometry::ecad::detail::OdbJob&>())),
@@ -1924,6 +1928,415 @@ void drill_rejections() {
                 m.report.unsupported.front().element == "ViaSpan:DRILL",
             "no default span");
 }
+
+OdbContour polygon_contour(const std::vector<OdbPoint>& vertices, bool hole = false) {
+    require(vertices.size() >= 3, "synthetic contour needs three vertices");
+    OdbContour c;
+    c.is_hole = hole;
+    c.start = vertices.front();
+    for (std::size_t i = 1; i < vertices.size(); ++i)
+        c.segs.push_back({vertices[i], false, {}, false});
+    c.segs.push_back({c.start, false, {}, false});
+    return c;
+}
+OdbContour shifted(OdbContour c, double x, double y) {
+    c.start.x += x;
+    c.start.y += y;
+    for (auto& s : c.segs) {
+        s.end.x += x;
+        s.end.y += y;
+        s.center.x += x;
+        s.center.y += y;
+    }
+    return c;
+}
+OdbContour hole_square(double x, double y) {
+    auto c = shifted(square(2), x, y);
+    c.is_hole = true;
+    return c;
+}
+OdbContour two_bridged_holes() {
+    // CCW exterior, CW holes; bridge feet split the lower exterior edge.
+    return polygon_contour({{0, 0},
+                            {1, 0},
+                            {1, 1},
+                            {1, 3},
+                            {3, 3},
+                            {3, 1},
+                            {1, 1},
+                            {1, 0},
+                            {5, 0},
+                            {5, 1},
+                            {5, 3},
+                            {7, 3},
+                            {7, 1},
+                            {5, 1},
+                            {5, 0},
+                            {8, 0},
+                            {8, 8},
+                            {0, 8}});
+}
+void same_polygon_rings(const EcadModel& actual,
+                        const EcadModel& expected,
+                        std::size_t positive,
+                        std::size_t negative) {
+    using Ring = std::vector<std::array<std::int64_t, 2>>;
+    auto canonical = [&](const EcadModel& model) {
+        std::vector<Ring> rings;
+        std::size_t ccw = 0, cw = 0;
+        for (const auto& polygon : model.layers.front().polygons) {
+            std::int64_t twice_area = 0;
+            const auto& points = polygon.points;
+            for (std::size_t i = 0; i < points.size(); ++i) {
+                const auto& a = points[i];
+                const auto& b = points[(i + 1) % points.size()];
+                twice_area += a[0] * b[1] - b[0] * a[1];
+            }
+            require(twice_area != 0, "output ring has nonzero signed area");
+            twice_area > 0 ? ++ccw : ++cw;
+            auto ring = points;
+            std::sort(ring.begin(), ring.end());
+            rings.push_back(std::move(ring));
+        }
+        require(ccw == positive && cw == negative, "exteriors CCW and holes CW");
+        std::sort(rings.begin(), rings.end());
+        return rings;
+    };
+    require(actual.layers.front().polygons.size() == positive + negative &&
+                actual.layers.front().polygons.size() == expected.layers.front().polygons.size(),
+            "equivalent polygon count");
+    require(canonical(actual) == canonical(expected), "equivalent integer polygon multisets");
+}
+void equivalent_surface(const OdbContour& contour,
+                        const std::vector<OdbContour>& independent,
+                        double expected_area,
+                        std::size_t positive,
+                        std::size_t negative) {
+    auto reference = board();
+    reference.features["TOP"].surfaces = {{true, independent}};
+    const auto expected = mapped(reference);
+    near(area(expected), expected_area, 0);
+    auto j = board();
+    j.features["TOP"].surfaces = {{true, {contour}}};
+    const auto actual = mapped(j);
+    near(area(actual), expected_area, 0);
+    near(area(actual), area(expected), 0);
+    same_polygon_rings(actual, expected, positive, negative);
+}
+void bridge_subcases(std::initializer_list<std::pair<const char*, std::function<void()>>> cases) {
+    std::string failures;
+    for (const auto& [name, test] : cases) {
+        try {
+            test();
+            std::cout << "PASS bridge subcase " << name << '\n';
+        } catch (const std::exception& e) {
+            const auto message = std::string(name) + ": " + e.what();
+            std::cerr << "FAIL bridge subcase " << message << '\n';
+            failures += message + "; ";
+        }
+    }
+    require(failures.empty(), failures);
+}
+OdbContour repeated_bridge() {
+    // Four CCW triangular islands, two at each endpoint of the same bridge.
+    // Each bridge direction occurs twice, with a boundary loop between visits.
+    return polygon_contour({{4, 4},
+                            {4, 6},
+                            {6, 6},
+                            {6, 8},
+                            {4, 6},
+                            {4, 4},
+                            {2, 4},
+                            {2, 2},
+                            {4, 4},
+                            {4, 6},
+                            {2, 8},
+                            {2, 6},
+                            {4, 6},
+                            {4, 4},
+                            {6, 2},
+                            {6, 4}});
+}
+void bridged_surface() {
+    bridge_subcases({
+        {"two holes",
+         [] {
+             equivalent_surface(two_bridged_holes(),
+                                {square(8), hole_square(1, 1), hole_square(5, 1)},
+                                56e6,
+                                1,
+                                2);
+         }},
+        {"wide exact area and reversed winding",
+         [] {
+             auto reference = board();
+             reference.features["TOP"].surfaces = {
+                 {true, {square(8), hole_square(1, 1), hole_square(5, 1)}}};
+             const auto expected = mapped(reference);
+             // 2^32 dbu makes some coordinate products exactly 2^64.
+             // Both signs and windings exercise exact cancellation beyond int64.
+             for (double x : {-4294967.296, 4294967.296})
+                 for (double y : {-4294967.296, 4294967.296})
+                     for (bool reverse : {false, true}) {
+                         auto c = two_bridged_holes();
+                         if (reverse) {
+                             std::vector<OdbPoint> vertices{c.start};
+                             for (std::size_t i = 0; i + 1 < c.segs.size(); ++i)
+                                 vertices.push_back(c.segs[i].end);
+                             std::reverse(vertices.begin(), vertices.end());
+                             c = polygon_contour(vertices);
+                         }
+                         auto j = board();
+                         j.profile.contours = {shifted(square(10), x, y)};
+                         j.features["TOP"].surfaces = {{true, {shifted(c, x, y)}}};
+                         auto actual = mapped(j);
+                         // Compare in local coordinates so test-only area helpers
+                         // need neither overflowing int64 products nor cancellation
+                         // of rounded double products at the translated origin.
+                         for (auto& polygon : actual.layers.front().polygons)
+                             for (auto& point : polygon.points) {
+                                 point[0] -= std::llround(x * 1000);
+                                 point[1] -= std::llround(y * 1000);
+                             }
+                         near(area(actual), 56e6, 0);
+                         same_polygon_rings(actual, expected, 1, 2);
+                     }
+         }},
+        {"repeated bridge pairs",
+         [] {
+             equivalent_surface(repeated_bridge(),
+                                {polygon_contour({{4, 4}, {2, 4}, {2, 2}}),
+                                 polygon_contour({{4, 4}, {6, 2}, {6, 4}}),
+                                 polygon_contour({{4, 6}, {6, 6}, {6, 8}}),
+                                 polygon_contour({{4, 6}, {2, 8}, {2, 6}})},
+                                8e6,
+                                4,
+                                0);
+         }},
+        {"same-winding touching islands without bridges",
+         [] {
+             equivalent_surface(
+                 polygon_contour({{0, 0}, {4, 0}, {4, 4}, {5, 4}, {5, 5}, {4, 5}, {4, 4}, {0, 4}}),
+                 {square(4), shifted(square(1), 4, 4)},
+                 17e6,
+                 2,
+                 0);
+         }},
+        {"negative surface",
+         [] {
+             auto reference = board();
+             reference.features["TOP"].surfaces = {
+                 {true, {square(10)}},
+                 {false, {shifted(square(8), 1, 1), hole_square(2, 2), hole_square(6, 2)}}};
+             const auto expected = mapped(reference);
+             near(area(expected), 44e6, 0);
+             auto j = board();
+             j.features["TOP"].surfaces = {{true, {square(10)}},
+                                           {false, {shifted(two_bridged_holes(), 1, 1)}}};
+             const auto actual = mapped(j);
+             near(area(actual), 44e6, 0);
+             near(area(actual), area(expected), 0);
+             same_polygon_rings(actual, expected, 3, 1);
+         }},
+        {"arc-discretized bridge",
+         [] {
+             auto c = polygon_contour({{0, 0},
+                                       {1, 0},
+                                       {2, 1},
+                                       {2, 3},
+                                       {4, 3},
+                                       {4, 1},
+                                       {2, 1},
+                                       {1, 0},
+                                       {8, 0},
+                                       {8, 8},
+                                       {0, 8}});
+             c.segs[1] = {{2, 1}, true, {1, 1}, false};
+             c.segs[6] = {{1, 0}, true, {1, 1}, true};
+             equivalent_surface(c, {square(8), hole_square(2, 1)}, 60e6, 1, 1);
+         }},
+    });
+}
+void bridged_hole_chain() {
+    const auto c = polygon_contour({{0, 0},
+                                    {1, 0},
+                                    {1, 1},
+                                    {1, 3},
+                                    {1, 5},
+                                    {1, 7},
+                                    {3, 7},
+                                    {3, 5},
+                                    {1, 5},
+                                    {1, 3},
+                                    {3, 3},
+                                    {3, 1},
+                                    {1, 1},
+                                    {1, 0},
+                                    {8, 0},
+                                    {8, 8},
+                                    {0, 8}});
+    equivalent_surface(c, {square(8), hole_square(1, 1), hole_square(1, 5)}, 56e6, 1, 2);
+}
+void bridge_rejections() {
+    auto reject_surface = [](const OdbContour& c) {
+        auto j = board();
+        j.features["TOP"].surfaces = {{true, {c}}};
+        rejected(j, {"degenerate contour", "TOP"});
+    };
+    bridge_subcases({
+        {"T contact",
+         [&] {
+             auto c = two_bridged_holes();
+             c.segs[2].end = {1, 8}; // Hole vertex inside the unsplit exterior upper edge.
+             reject_surface(c);
+         }},
+        {"bridge crossing a hole",
+         [&] {
+             reject_surface(polygon_contour({{0, 0}, {2, 0}, {2, 4}, {1, 1}, {1, 3}, {3, 3}, {3, 1},
+                                             {1, 1}, {2, 4}, {2, 0}, {5, 0}, {5, 1}, {5, 3}, {7, 3},
+                                             {7, 1}, {5, 1}, {5, 0}, {8, 0}, {8, 8}, {0, 8}}));
+         }},
+        {"distinct bridge pairs crossing",
+         [&] {
+             // Each diagonal is traversed in both directions and touches only
+             // its own hole. They cross at an interior point of both bridges.
+             std::vector<OdbPoint> points{{0, 0},
+                                          {2, 0},
+                                          {7, 6},
+                                          {7, 7},
+                                          {8, 7},
+                                          {8, 6},
+                                          {7, 6},
+                                          {2, 0},
+                                          {8, 0},
+                                          {3, 6},
+                                          {2, 6},
+                                          {2, 7},
+                                          {3, 7},
+                                          {3, 6},
+                                          {8, 0},
+                                          {10, 0},
+                                          {10, 10},
+                                          {0, 10}};
+             reject_surface(polygon_contour(points));
+             std::reverse(points.begin(), points.end());
+             reject_surface(polygon_contour(points));
+         }},
+        {"opposite-winding exterior figure-eight",
+         [&] {
+             reject_surface(
+                 polygon_contour({{0, 0}, {8, 0}, {8, 8}, {8, 9}, {9, 9}, {9, 8}, {8, 8}, {0, 8}}));
+         }},
+        {"unmatched bridge multiplicity",
+         [&] {
+             auto c = repeated_bridge();
+             // Replace one reverse traversal with a detour, leaving 2 forward / 1 reverse.
+             c.segs.insert(c.segs.begin() + 12, {{7, 5}, false, {}, false});
+             reject_surface(c);
+         }},
+        {"same-direction duplication",
+         [&] {
+             reject_surface(
+                 polygon_contour({{0, 0}, {8, 0}, {8, 8}, {0, 8}, {0, 0}, {8, 0}, {8, 8}, {0, 8}}));
+         }},
+        {"profile remains strict",
+         [] {
+             auto j = board();
+             j.profile.contours = {two_bridged_holes()};
+             rejected(j, {"degenerate contour"});
+         }},
+    });
+}
+void rounding_duplicates() {
+    std::vector<OdbPoint> points{{0, 0}};
+    for (int i = 1; i <= 40000; ++i)
+        points.push_back({static_cast<double>(i) * 0.0002, 0});
+    points.insert(points.end(), {{8, 8}, {0, 8}});
+    const auto c = polygon_contour(points);
+    auto j = board();
+    j.profile.contours = {c};
+    rejected(j, {"degenerate contour"});
+    equivalent_surface(c, {square(8)}, 64e6, 1, 0);
+}
+EcadModel timed_mapping(const OdbJob& j, const char* name) {
+    std::cout << "RUN " << name << std::endl;
+    const auto start = std::chrono::steady_clock::now();
+    auto result = map_odb(j);
+    const auto stop = std::chrono::steady_clock::now();
+    const double seconds = std::chrono::duration<double>(stop - start).count();
+    std::cout << "MEASURE " << name << " seconds=" << seconds << std::endl;
+    require(bool(result),
+            "expected mapping success; got " + (result ? std::string{} : result.error().message));
+    require(seconds <= 5.0, std::string(name) + " mapping exceeded 5.0 seconds");
+    return result.value();
+}
+void large_contour_perf() {
+    constexpr std::size_t count = 200000;
+    std::vector<OdbPoint> points{{10, 10}, {990, 10}};
+    points.reserve(count);
+    for (std::size_t i = 0; i < count - 2; ++i)
+        points.push_back({990.0 - 980.0 * static_cast<double>(i) / static_cast<double>(count - 3),
+                          i % 2 == 0 ? 500.0 : 501.0});
+    require(points.size() == count, "exactly 200000 contour vertices");
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        const auto& a = points[i];
+        const auto& b = points[(i + 1) % points.size()];
+        require(std::llround(a.x * 1000) != std::llround(b.x * 1000) ||
+                    std::llround(a.y * 1000) != std::llround(b.y * 1000),
+                "comb has no rounded duplicate neighbors");
+    }
+    auto j = board();
+    j.profile.contours = {square(1000)};
+    j.features["TOP"].surfaces = {{true, {polygon_contour(points)}}};
+    const auto m = timed_mapping(j, "odbpp_map_large_contour_perf");
+    require(m.layers.front().polygons.size() == 1, "comb remains one copper ring");
+    std::vector<std::array<std::int64_t, 2>> expected;
+    for (const auto& point : points)
+        expected.push_back({std::llround(point.x * 1000), std::llround(point.y * 1000)});
+    std::int64_t twice_area = 0;
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        const auto& a = expected[i];
+        const auto& b = expected[(i + 1) % expected.size()];
+        twice_area += a[0] * b[1] - b[0] * a[1];
+    }
+    near(area(m), static_cast<double>(twice_area) / 2, 0);
+    auto actual = m.layers.front().polygons.front().points;
+    std::sort(expected.begin(), expected.end());
+    std::sort(actual.begin(), actual.end());
+    require(actual == expected, "boolean scan direction preserves every integer comb vertex");
+    require(m.outline.points ==
+                std::vector<std::array<std::int64_t, 2>>{
+                    {0, 0}, {1000000, 0}, {1000000, 1000000}, {0, 1000000}},
+            "boolean scan direction leaves the profile unchanged");
+}
+void large_bridged_perf() {
+    constexpr int side = 140;
+    auto hole_y = [](int row) { return 11.0 + static_cast<double>(row) * 0.4; };
+    std::vector<OdbPoint> points{{10, 10}};
+    for (int column = 0; column < side; ++column) {
+        const double x = 11.0 + static_cast<double>(column) * 0.4;
+        points.push_back({x, 10});
+        for (int row = 0; row < side; ++row) {
+            const double y = hole_y(row);
+            points.push_back({x, y});
+            points.push_back({x, y + 0.2});
+        }
+        for (int row = side - 1; row >= 0; --row) {
+            const double y = hole_y(row);
+            points.insert(points.end(), {{x + 0.2, y + 0.2}, {x + 0.2, y}, {x, y}});
+            if (row > 0)
+                points.push_back({x, hole_y(row - 1) + 0.2});
+        }
+        points.push_back({x, 10});
+    }
+    points.insert(points.end(), {{90, 10}, {90, 90}, {10, 90}});
+    auto j = board();
+    j.profile.contours = {square(100)};
+    j.features["TOP"].surfaces = {{true, {polygon_contour(points)}}};
+    const auto m = timed_mapping(j, "odbpp_map_large_bridged_perf");
+    near(area(m), 5616000000.0, 0);
+    require(m.layers.front().polygons.size() == 19601, "exterior and 19600 holes retained");
+}
 } // namespace
 int main() {
     const std::pair<const char*, std::function<void()>> tests[] = {
@@ -1965,7 +2378,13 @@ int main() {
         {"odbpp_map_boolean_ring_invariants", boolean_ring_invariants},
         {"odbpp_map_unknown_drill_tools", unknown_drill_tools},
         {"odbpp_map_via_radii", via_radii},
-        {"odbpp_map_drill_rejections", drill_rejections}};
+        {"odbpp_map_drill_rejections", drill_rejections},
+        {"odbpp_map_bridged_surface", bridged_surface},
+        {"odbpp_map_bridged_hole_chain", bridged_hole_chain},
+        {"odbpp_map_bridge_rejections", bridge_rejections},
+        {"odbpp_map_rounding_duplicates", rounding_duplicates},
+        {"odbpp_map_large_bridged_perf", large_bridged_perf},
+        {"odbpp_map_large_contour_perf", large_contour_perf}};
     int failures = 0;
     for (const auto& [name, test] : tests) {
         try {
