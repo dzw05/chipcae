@@ -14,8 +14,6 @@ int main() {
         const auto polygon_before = s.layers[0].regions[0].footprint.polygon;
         const auto body = m.attr_table.bodies.at("square");
         const auto g = geometry(s, m, "axis-aligned square");
-        // Zero lower coordinates avoid the unresolved negative-normal offset
-        // wording. Nonzero negative offsets need the architect's ruling.
         const CutGeometry expected{{{body, {0, -1, 0}, 0},
                                     {body, {1, 0, 0}, x1},
                                     {body, {0, 1, 0}, y1},

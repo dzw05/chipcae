@@ -36,8 +36,7 @@ int main() {
                 normal[axis] = 1;
                 require(p.n == normal && p.d == c.selected, "exact nearest signed axis offset");
             }
-            // Both outward normal signs must snap. A selected coordinate of
-            // zero is unambiguous under both readings of the frozen d wording.
+            // Both outward normal signs must snap, including to exact zero.
             for (double coordinate : {0., tol, -tol, 2e-15}) {
                 auto s = stack();
                 auto r = square("negative-snap", 0, 0, .02, .02);
@@ -58,6 +57,29 @@ int main() {
                 std::array<Real, 3> normal{};
                 normal[axis] = -1;
                 require(p.n == normal && p.d == 0, "negative unit normal snaps to exact zero");
+            }
+            const std::vector<Case> negative = {{.01 + 2e-15, {.01 - 8e-15, .01}, .01},
+                                                {-.01 + 2e-15, {-.01 - 8e-15, -.01}, -.01},
+                                                {.01, {.01 + 4 * tol}, .01}};
+            for (const auto& c : negative) {
+                auto s = stack();
+                auto r = square("negative-offset-snap", 0, 0, .02, .02);
+                r.body = "lid";
+                for (auto& p : r.footprint.polygon)
+                    if (p[axis] == 0)
+                        p[axis] = c.coordinate;
+                s.layers[0].regions = {r};
+                auto m = registered_mesh();
+                m.axes[axis] = c.candidates;
+                const auto g = geometry(s, m, "negative-normal snapping at nonzero coordinate");
+                require(g.planes.size() == 4, "nonzero negative snap retains four edges");
+                const auto& p = g.planes[axis == 0 ? 3 : 0];
+                std::array<Real, 3> normal{};
+                normal[axis] = -1;
+                require(p.n == normal && p.d == -c.selected,
+                        "negative unit normal uses the negated nearest axis coordinate");
+                require(-.02 - p.d < 0 && -(-.02) - p.d > 0,
+                        "snapped negative-normal plane retains the larger coordinate side");
             }
         }
     });

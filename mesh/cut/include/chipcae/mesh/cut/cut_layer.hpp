@@ -46,7 +46,7 @@ struct CutLayerArrays {
 template <class MemSpace>
 struct CutLayerView {
     View1<BodyId, MemSpace> ls_body;
-    View1<Real, MemSpace> ls_phi; // body-major: ls_phi[body*nv+node]
+    View1<Real, MemSpace> ls_phi; // Entry order: ls_phi[k*nv+node], k indexes level_sets.
     View1<Local, MemSpace> cut_elem, sub_off, sub_attribute, vq_off, bq_off, bq_bdr_attr, gp_face,
         void_elem, small_subs;
     View1<Real, MemSpace> sub_volfrac, vq_w, bq_w;
