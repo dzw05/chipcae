@@ -225,6 +225,72 @@ Python syntax and staged whitespace checks passed. clang-format 23.1.5 was
 verified; there are no touched C/C++ files for its `-i` and
 `--dry-run --Werror` phases. Only these four test files are committed.
 
+## Implementation follow-up: unresolved acceptance contracts
+
+The follow-up to acceptance commit `4c363b5` inspected the complete brief and
+the existing output implementation before considering changes. The four allowed
+files already implement the requested harness. There is no permitted numerical
+implementation change that resolves its five failing assertions while preserving
+the specified inputs, exported samples, and signed comparison.
+
+For N=4, the original Cartesian coordinates are 0, .25, .5, .75, and 1.
+After clipping A or B and removing the 0.1 m boundary band, the only eligible
+top vertices are the nine pairs in `{.25,.5,.75} x {.25,.5,.75}`. New vertices
+introduced by clipping lie on polygon edges and are excluded. Changing M only
+adds z planes; it adds no top-plane x/y samples. Hex output uses mesh vertices
+(`apps/chipcae-solve/src/pipeline.cpp`, the `GetVertexDofs` output loop), and
+cut output samples the polyhedron vertices
+(`apps/chipcae-solve/src/cut_output.hpp`, `append_cut_output`). Counting repeated
+vertices, synthesizing samples, or changing N would violate the required fit.
+This is a sampling/output contract decision for M5 and the brief owner.
+
+The sign discrepancy also occurs for uncut control C, so it cannot be attributed
+to cut integration alone. Existing `tests/solve/test_pipeline.py` and
+`tests/solve/test_cut_pipeline.py` explicitly negate the quadratic coefficient
+sum when comparing to their analytic convention. This brief explicitly requires
+the positive sum `d+e` against the signed `timoshenko(...,-100)` reference.
+Changing either sign in this test would change its acceptance contract. The
+brief owner must reconcile the convention before a physical solver defect can
+be assigned to M3.
+
+The brief's prohibition on product/previous-test/tool changes and its instruction
+to keep failing tests red apply to this follow-up. All assertions, mesh inputs,
+material cards, formulas, and tolerances remain unchanged. Normal/restored green
+runs, an isolated green-to-red negative check, and an all-green CTest suite
+cannot be delivered under the current requirements. The previous three-run
+logs were inspected again: each completed nine solves and validated nine result
+records, and the negative run reached all three required 3% comparisons. No
+new negative reference mutation was needed for this documentation-only follow-up.
+
+The follow-up Release configure and `cmake --build "$build" -j2` both exited 0.
+The registered labels, timeout, skip code and solver environment were checked
+again. Backend-free CTest skipped as expected, and direct missing-solver and
+missing-Python-dependency checks both returned 77. Python syntax passed;
+clang-format 23.1.5 has no changed C/C++ files to format or check.
+
+The fresh full-suite command was
+`ctest --test-dir "$build" --output-on-failure -V -j2`, with an isolated temporary
+directory supplied through TMPDIR. Its `cutbim_cut_bimetal` entry failed after
+380.79 seconds with exactly the five assertions above. All nine solver exits
+were 0 and all nine result records validated. Every measured row exactly matched
+the original normal run, including the thermal maximum error, A/C difference,
+and zero MPI differences. The extracted numerical output is retained in the
+task log `v-int-cut-bimetal-impl-numerical.log`.
+
+This fresh full suite exited 8 in 1298.04 seconds: 215 tests, 203 passed,
+10 skipped, and two failed. In addition to `cutbim_cut_bimetal`, the unchanged
+`solve_ghost_scan` exceeded its existing 300-second timeout (300.01 seconds).
+It had passed in 286.74 seconds in the original suite. No cause is asserted
+from the timeout alone, and its test/timeout were not changed. The previously
+reported `event_log` and `k1_preview_mpi_surface` failures did not reproduce;
+both passed. Full output: task log `v-int-cut-bimetal-impl-all.log`.
+
+A subsequent isolated-TMPDIR rerun with
+`ctest --test-dir "$build" -R '^solve_ghost_scan$' -V` exited 0; the test passed
+in 266.42 seconds (266.54 seconds total). This does not erase the full-suite
+timeout or establish its cause. Output:
+`v-int-cut-bimetal-impl-ghost-isolated.log` in the task logs.
+
 ## Exclusions
 
 This synthetic benchmark does not cover STEP or assembly import, cavities or
