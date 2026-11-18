@@ -20,6 +20,17 @@ public:
     static DesktopConfig
     load(const QStringList& args,
          const QProcessEnvironment& env = QProcessEnvironment::systemEnvironment());
+    static QString
+    locateSchemaDir(const QStringList& args,
+                    const QProcessEnvironment& env = QProcessEnvironment::systemEnvironment(),
+                    const QString& executableDir = QString(),
+                    const QString& compileTimeFallback = QString());
+    static QString
+    locateSchemaFile(const QString& fileName,
+                     const QStringList& args,
+                     const QProcessEnvironment& env = QProcessEnvironment::systemEnvironment(),
+                     const QString& executableDir = QString(),
+                     const QString& compileTimeFallback = QString());
     static void setCurrent(const DesktopConfig& config);
     static const DesktopConfig& current();
     const DesktopEntrypoint& importEntry() const { return import_; }
