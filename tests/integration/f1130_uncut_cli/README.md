@@ -1,11 +1,23 @@
 # F-1130 uncut CLI acceptance
 
-This test uses the public synthetic `tests/integration/ecad/data/board_4layer.xml`.
-Its five physical layers are F.Cu, In1.Cu, Core, In2.Cu, B.Cu. Layer order,
-material IDs and thicknesses are checked against the existing
-`tests/integration/import_cli/golden/board_4layer/stack.json` without changing it.
-Material properties are illustrative, copied from `test_ipc_uncut_chain.py`;
-all generated V&V records use `data_class: synthetic` and `label: 实测`.
+This test uses the dedicated public synthetic `board_4layer.xml` beside the
+script. The five physical layers are F.Cu, In1.Cu, Core, In2.Cu and B.Cu.
+The centered 1 mm square board has copper rectangles of 0.12, 0.24, 0.36
+and 0.48 mm², giving independently checked fractions 0.12, 0.24, 0.36 and
+0.48. Every copper layer
+must still have a finite fraction in `(0,1]`. The footprint keeps cell aspect
+ratios modest (below 14) for the strict plane-fit readback comparison, and
+centering avoids unnecessary coordinate offsets in the plane fits.
+
+The original ECAD fixture has three empty copper layers and cannot satisfy
+that requirement. It and the import CLI golden remain unchanged. The new
+fixture retains the golden's layer order and thicknesses. Import uses the
+explicit material map `{"FR4":"mat_fr4_eq","copper":"mat_cu"}` so Core
+satisfies preview's existing Homogenized material naming contract, and both
+IDs satisfy the material schema's alphanumeric/underscore restriction. Import
+metadata is compared to the original golden with these declared ID
+mappings applied in memory. Converted layers must retain the imported IDs;
+no post-import material or kind rewriting is performed.
 
 ```text
 board_4layer.xml → chipcae-import → stack.json + stack.polyset + defects.json
@@ -17,227 +29,105 @@ each completed solve → tools/vv/result_summary.py → summary.json
 analytic T(z), mesh/QoI/readback/MPI comparisons → result.json → check_file()
 ```
 
-The actual import arguments, matching `import_cli/cli_test.py`, are:
+Each invocation uses a fresh temporary directory and prints commands, stage
+wall times and result records before cleanup. Material properties are
+illustrative, using the same values as `test_ipc_uncut_chain.py`. Result
+records use `data_class: synthetic` and `label: 实测`.
 
-```sh
-chipcae-import tests/integration/ecad/data/board_4layer.xml -o stack.json \
-  --polyset stack.polyset --report defects.json --material-map material_map.json
-```
-
-`material_map.json` contains `{"FR4":"mat.fr4","copper":"mat.cu"}`. Every
-invocation uses a fresh temporary directory. The script prints results before
-cleanup; it never adds generated results to the repository. An early chain
-failure also writes a failing serial record with empty QoIs and an explanation
-that solving did not complete.
-
-The converted copper layers retain `material: mat.cu`, as emitted by the
-existing converter. The test does not substitute FR4. Conductivities are
-390 W/(m K) for copper and 0.3 W/(m K) for FR4, with series mixing
-`k_eff = 1/(f/k_metal + (1-f)/k_matrix)`. The boundary conditions are
-298.15 K at zmin and convection to 348.15 K at zmax, h=1000 W/(m² K).
+Copper layers retain `material: mat_cu`, as emitted by the converter.
+Conductivities are 390 W/(m K) for copper and 0.3 W/(m K) for FR4, with
+series mixing `k_eff = 1/(f/k_metal + (1-f)/k_matrix)`. Boundary conditions
+are 298.15 K at zmin and convection to 348.15 K at zmax, h=1000 W/(m² K).
 The independent reference is `q=50/(sum(thickness/k_eff)+1/1000)` and
 `T(z)=298.15+q*sum(clipped_layer_depth(z)/k_eff)`.
 
-Both preview and solve use nx=4, ny=4, levels=0, max_ratio=100. Acceptance
-requires zero cut cells, all hex cell_kind=0, positive hex count equal to the
-reported preview count, matching z-extents, finite temperatures with maximum
-absolute reference error ≤1e-8 K, positive finite warpage_pv and U_mag_max,
-finite T_max, readback warpage relative error ≤1e-12, and ranks=2/1 QoI relative
-errors ≤1e-8 using the absolute ranks=1 value as denominator. The profiles
-differ only in ranks; shared input bytes are checked after each solve/readback.
-Both available solves/readbacks finish before numerical comparisons start.
+Preview and solve use nx=4, ny=4, levels=0, max_ratio=100. The case explicitly
+sets `min_elems_per_layer=1` to match preview's imported layer minima, rather
+than solve's default of two. Acceptance requires zero cut cells, all hex
+cell_kind=0, positive hex count equal to preview's
+cell_count, matching z-extents, finite temperatures with maximum absolute
+reference error ≤1e-8 K, positive finite warpage_pv and U_mag_max, finite
+T_max, readback warpage relative error ≤1e-12, and ranks=2/1 QoI relative
+errors ≤1e-8 using the absolute ranks=1 value as denominator. Profiles differ
+only in ranks; shared input bytes are checked after each solve/readback.
+Both available solves/readbacks finish before numerical inspection starts.
+
+Each result's `run.acceptance_checks` records its completed import, fraction,
+preview, solve/readback, unchanged-input and numerical checks. Numerical
+completion is recorded only after every inspection assertion passes. When
+MPI is available, both records also require the parallel comparison. A
+missing check makes that record fail, including when no assertion message
+was accumulated. Each run has its own failures; a serial failure does not
+assign the MPI verdict. Shared setup and parallel-comparison failures apply
+to both runs. All records are written and gated before accumulated failures
+are raised, ensuring a nonzero process exit.
 
 ## Running
 
-Use plain `cmake` and `ctest` commands through the build-slot wrappers supplied
-by the execution environment. Keep the wrapper directory first in PATH; allow
-queued commands to wait. In a dedicated build, configure Release, tests, ECAD,
-JSONCONS, MFEM, MPI, HDF5 and the installed Kokkos material dependency. Supply
-dependency locations through CMake options appropriate to the machine:
+Use plain `cmake` and `ctest` through the environment's build-slot wrappers.
+Keep the wrapper directory first in PATH and allow queued commands to wait.
+Configure Release, tests, ECAD, JSONCONS, MFEM, MPI and HDF5; provide dependency
+locations through the appropriate CMake options. Kokkos is optional.
 
 ```sh
 cmake -S . -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCHIPCAE_BUILD_TESTS=ON -DCHIPCAE_ENABLE_ECAD=ON \
   -DCHIPCAE_ENABLE_JSONCONS=ON -DCHIPCAE_ENABLE_MFEM=ON \
-  -DCHIPCAE_ENABLE_MPI=ON -DCHIPCAE_ENABLE_HDF5=ON -DCHIPCAE_ENABLE_KOKKOS=ON
-cmake --build "$build" --target chipcae-import chipcae-preview chipcae-solve -j2
-ctest --test-dir "$build" -N -V -R '^f1130_uncut_cli_e2e$'
-ctest --test-dir "$build" -V -R '^f1130_uncut_cli_e2e$'
-```
-
-CTest always registers the test, labels `integration;numerical;vv`, timeout
-1200 seconds and skip code 77. All three executable environment variables are
-injected only under the precise ECAD/target/MFEM/MPI/HDF5 condition in the brief.
-JSONCONS must additionally be enabled for functional preview/solve backends.
-An unset executable variable or missing numpy/h5py returns 77. An executable
-that is configured but fails to run is a failure. All nonzero command exits,
-including 13, fail with command, exit code, stdout and stderr; timeouts include
-captured diagnostics. The first available `mpiexec`, then `mpirun`, is used
-without retry. If neither exists, only the MPI run/comparisons are omitted,
-with `SKIP ranks=2: launcher not found`; serial acceptance remains mandatory.
-
-## Verification evidence and current blocker
-
-Evidence is recorded against checkout `b7bef7f`; this is a test-first delivery.
-The fixture has copper geometry only on F.Cu. Its other copper polygon sets
-are empty. The brief nevertheless requires every copper fraction in `(0,1]`.
-The assertion is retained; resolving this fixture/requirement conflict belongs
-to M1 and the brief owner. No fixture, golden, converter, or product behavior
-is changed here. The strict fraction assertion is collected as a failure while
-the unchanged stack continues downstream. Overall acceptance still requires a
-resolution from M1 and the brief owner; no zero fraction is accepted by this test.
-
-The Release CLI build exited 0. CTest registration showed the required labels,
-1200-second timeout, skip code 77, and all executable paths. The normal
-acceptance command was:
-
-```sh
-ctest --test-dir "$build" -V -R '^f1130_uncut_cli_e2e$'
-```
-
-It exited 8 (script exit 1). 实测: all five imported layers matched the golden;
-import took 0.414159 s, fraction conversion 0.112042 s, preview 1.604473 s,
-and the chain took 2.133184 s. The four measured fractions were F.Cu=0.012313399999999997,
-In1.Cu=0, In2.Cu=0, B.Cu=0. The assertion reported:
-
-```text
-M1 copper fraction In1.Cu: actual=0.0 expected 0 < fraction <= 1
-```
-
-The printed serial failure record passed `check_file() == []`, with
-`solve/readback completed: False`, null temperature error, and no invented
-QoIs. Import and conversion exited 0. Continuing after the recorded fraction
-failure reached preview, which exited 1 and reported:
-
-```text
-$/layers/2/material: homogenized material must end with _eq
-```
-
-The imported golden uses `kind: Homogenized`, `material: mat.fr4` for Core;
-preview's stack loader rejects this ID. This is a second M1/M2 integration
-incompatibility. Neither material IDs nor layer kinds are rewritten by the
-test. Solving, readback and numerical comparisons remain blocked, with no
-compilation or missing-symbol failure. They are not reported as passing.
-
-The three final experiment commands were:
-
-```sh
-# Normal reference
-ctest --test-dir "$build" -V -R '^f1130_uncut_cli_e2e$'
-# Local reference heat_flux multiplied by 1.01
-ctest --test-dir "$build" -V -R '^f1130_uncut_cli_e2e$'
-# Original script restored byte for byte
-ctest --test-dir "$build" -V -R '^f1130_uncut_cli_e2e$'
-```
-
-| Run | CTest exit | 实测 import / fraction / preview / total (s) | Max T error |
-| --- | --- | --- | --- |
-| Normal | 8 | 0.414159 / 0.112042 / 1.604473 / 2.133184 | Unmeasured |
-| Reference ×1.01 | 8 | 0.413680 / 0.072648 / 1.531766 / 2.019468 | Unmeasured |
-| Restored | 8 | 0.410094 / 0.060566 / 1.535927 / 2.008661 | Unmeasured |
-
-All three retain the fraction failure and then fail on preview's `_eq`
-requirement. No solve completed, so the intended temperature-error mutation
-proof and restored green run are **blocked**, rather than verified. The
-mutation was removed; it is absent from the committed test. Full serial/MPI
-readback agreement and the no-launcher serial-success path also remain
-unverified past preview. No acceptance tolerance is loosened.
-
-Boundary checks: removing each executable variable individually returned 77;
-controlled ImportError for numpy and h5py separately returned 77. A configured
-nonexistent executable returned 1, printed command/exit/stdout/stderr, and
-wrote a valid failure record. A real child exiting 13 produced a failure with
-both captured streams. With numerical backends disabled, CTest still
-registered this test and reported it skipped (CTest exit 0, script exit 77).
-
-The pinned clang-format reports version 23.1.5. This change contains no C/C++
-files to format. Python byte compilation and `git diff --check` exited 0.
-
-The complete Release build also exited 0. The full suite command was:
-
-```sh
+  -DCHIPCAE_ENABLE_MPI=ON -DCHIPCAE_ENABLE_HDF5=ON
 cmake --build "$build" -j2
+ctest --test-dir "$build" -N -V -R '^f1130_'
+ctest --test-dir "$build" -V -R '^f1130_'
 ctest --test-dir "$build" --output-on-failure -j2
 ```
 
-实测: 232 tests in 293.01 s, with 193 passed, 8 skipped and 31 failed (CTest
-exit 8). This includes the new acceptance failure, 28 existing tests reporting
-uninitialized Kokkos OpenMP, the existing `chain_ipc_uncut_chain` assertion
-expecting `mat.fr4` where the converter preserves `mat.cu`, and `event_log`
-reporting excessive salvage files. An isolated TMPDIR rerun of `event_log`
-passed (1/1, 0.80 s). All failed test names and full output are retained in the
-external task evidence log. These existing tests and production code are
-unchanged; this delivery does not claim an all-green suite.
+CTest registers `f1130_uncut_cli_e2e` and the bookkeeping regression test
+`f1130_acceptance_records`, with labels `integration;numerical;vv`, timeout
+1200 seconds and skip code 77. Executable variables are injected for the E2E
+test only when ECAD, the three CLI targets, MFEM, MPI and HDF5 are enabled.
+JSONCONS must also be enabled for functional preview/solve backends.
+Missing executable variables or numpy/h5py return 77. Configured commands
+that cannot run, time out or exit nonzero fail with captured diagnostics.
+The first available `mpiexec`, then `mpirun`, is used without retry. If neither
+exists, the MPI run/comparison is explicitly omitted with
+`SKIP ranks=2: launcher not found`; full serial acceptance remains mandatory.
 
-## Implementation follow-up, 2026-11-18
+The bookkeeping regressions exercise missing acceptance checks, empty
+numerical records, required MPI comparison, independent per-run verdicts,
+inspection failures for temperature/readback/QoI, and raising accumulated
+failures after result writing and gating.
 
-Fresh verification at acceptance-test commit `5661508` reproduced the two
-blockers above. The existing four files already implement the requested test
-chain. Making acceptance green requires a fixture/requirement decision from
-M1 and the brief owner, plus resolution of the Core import/preview contract
-by M1/M2. The allowed four test files cannot repair either discrepancy while
-preserving the required input, golden comparison, material IDs and assertions.
-This follow-up changes documentation only; no executable, assertion, fixture
-or golden was changed. The task remains blocked on numerical acceptance.
+## Verification (2026-11-18)
 
-The existing dedicated Release build was reconfigured with all six requested
-features enabled (tests, ECAD, JSONCONS, MFEM, MPI, HDF5), plus Kokkos. These
-commands exited 0, with the build-slot wrapper first in PATH throughout:
+A complete Release build with ECAD, JSONCONS, MFEM, MPI and HDF5 enabled,
+and the optional Kokkos execution backend disabled, succeeded. Both F-1130
+CTest targets passed, including all six bookkeeping regression cases.
+The reference-mutation experiment used the real CLI chain at both ranks:
 
-```sh
-cmake -S . -B "$build"
-cmake --build "$build" --target chipcae-import chipcae-preview chipcae-solve -j2
-ctest --test-dir "$build" -N -V -R '^f1130_uncut_cli_e2e$'
-cmake --build "$build" -j2
-```
-
-Registration again showed exactly one acceptance test with all three
-executables, the required labels, timeout 1200 and skip code 77. The normal,
-local reference ×1.01, and byte-for-byte restored runs each used
-`ctest --test-dir "$build" -V -R '^f1130_uncut_cli_e2e$'`:
-
-| Fresh run | CTest / script exit | 实测 import / fraction / preview / total (s) | Max T error |
+| Reference | CTest exit | Serial / MPI verdict | Maximum temperature error |
 | --- | --- | --- | --- |
-| Normal | 8 / 1 | 0.415350 / 0.078846 / 1.542734 / 2.039356 | Unmeasured |
-| Reference ×1.01 | 8 / 1 | 0.453048 / 0.109006 / 1.615932 / 2.179870 | Unmeasured |
-| Restored | 8 / 1 | 0.418705 / 0.196793 / 1.569926 / 2.186876 | Unmeasured |
+| Normal | 0 | pass / pass | 1.61436e-10 K |
+| Heat flux multiplied by 1.01 locally | 8 | fail / fail | 0.200049 K |
+| Source restored byte for byte | 0 | pass / pass | 1.61436e-10 K |
 
-Import matched every golden layer; fractions were unchanged. All three runs
-retained the positive-fraction failure, then preview exited 1 with the `_eq`
-error. None reached solving, so these runs do **not** demonstrate the required
-numerical mutation proof. Cell counts, temperature errors, QoIs, readback and
-MPI differences remain unmeasured. Generated failure records passed the
-existing result gate. The temporary reference mutation was fully restored.
+Each run had 80 hex cells, zero cut cells and a matching preview count.
+Normal/restored readback relative error was 5.19369e-14; every serial/MPI QoI
+relative difference was zero. All acceptance flags were completed in both
+passing records. The mutation completed both solves/readbacks and wrote and
+gated both failing records before raising the temperature assertions. The
+mutation is absent from the committed source. No tolerance was relaxed.
 
-Fresh boundary checks returned 77 for each missing executable variable and
-for missing numpy/h5py separately. A configured nonexistent executable failed
-with both diagnostic stream labels and a schema-valid failure record. A real
-child exiting 13 failed with both captured streams. Valid commit environment
-values and fallback to git were checked. The backend-disabled configuration
-again registered the test and skipped it (CTest exit 0, script exit 77).
-No-launcher serial success remains blocked before launcher selection.
-A real child exceeding a locally shortened timeout also failed with both
-captured streams and a measured stage duration.
-
-The fresh full-suite command
-`ctest --test-dir "$build" --output-on-failure -j2` exited 8: **189 passed,
-8 skipped, 35 failed**, 232 total, 371.48 s. Alongside the original 31 failures
-listed in the test-first evidence, this run also reported `k1_preview` and
-`k1_public_headers_kokkos` CTest timeouts, an MPI child timeout in
-`vtkhdf_results_mpi_2`, and `k1_preview_mpi_surface` aborting with
-`jsoncons::ser_error: Invalid number at line 1 and column 2`. These are observed
-failures; their causes have not been repaired or attributed to this change.
-The external task summary lists every failure and the corresponding full log.
-Python byte compilation and whitespace checks passed. The requested pinned
-clang-format 23.1.5 format and dry-run filters had no changed C/C++ inputs.
+The full suite returned CTest exit 8: 232 total, 220 passed, 8 skipped and
+4 failed. Its F-1130 cell-count setup failure was subsequently fixed and the
+final normal/mutation/restored evidence above uses the completed fixture.
+The initial `k1_preview_mpi_surface` JSON abort passed on an isolated rerun.
+Two unchanged tests remain failing: `solve_ghost_scan` times out at 300 s
+(including a rerun with BLAS limited to one thread), and
+`chain_ipc_uncut_chain` expects `mat.fr4` where the converter preserves
+`mat.cu`. The full suite is not green; these tests and product code were not
+changed as part of the three confirmed review fixes.
 
 ## Coverage limits
 
 This card excludes ODB++, cut-cell solving, desktop I3 and CalculiX reference
-solutions. Wall times are printed per stage and stored as 实测 in result notes;
-this card sets no performance gate. The existing 02:30 self-hosted nightly
-workflow owns numerical execution; this change does not edit CI files.
-Further observed discrepancies belong to M1 (import), M2 (preview), M3
-(solve), or M5 (readback). In particular, the manifest may use all top Q2
-nodes while readback fits exported vertices; the strict 1e-12 warpage check
-requires a numerical run and is not relaxed here.
+solutions. Stage times are measured and recorded without a performance gate.
+The existing nightly workflow owns numerical execution; no CI files change.

@@ -20,6 +20,8 @@ TEMPERATURE_ATOL = 1e-8
 READBACK_RTOL = 1e-12
 PARALLEL_RTOL = 1e-8
 QOIS = ('warpage_pv', 'U_mag_max', 'T_max')
+ACCEPTANCE_CHECKS = ('import', 'fractions', 'preview', 'solve_readback',
+                     'inputs_unchanged', 'numerical')
 
 
 def write_json(path, obj):
@@ -92,22 +94,25 @@ def compare_fractions(report, converted, imported, measurements):
         assert layer['material'] == original['material'], f'converted layer[{index}] material changed'
         if layer['name'] in fractions:
             copper = layer['copper']
-            assert copper['metal'] == 'mat.cu', layer
+            assert copper['metal'] == 'mat_cu', layer
             assert 'polygons' not in copper, layer
             assert math.isclose(copper['fraction'], fractions[layer['name']],
                                 rel_tol=1e-12, abs_tol=0), layer
-    # These are fixture requirements, including for empty inner/bottom geometry.
-    for name, fraction in fractions.items():
+    # Independent rectangle areas / 1 mm² board area in this dedicated fixture.
+    for name, expected in zip(copper_names, (.12, .24, .36, .48), strict=True):
+        fraction = fractions[name]
         assert math.isfinite(fraction) and 0 < fraction <= 1, (
             f'M1 copper fraction {name}: actual={fraction!r} expected 0 < fraction <= 1; '
             f'all fractions={fractions!r}')
+        assert math.isclose(fraction, expected, rel_tol=1e-12, abs_tol=0), (
+            f'M1 copper fraction {name}: actual={fraction!r} expected={expected}')
 
 
 def write_solver_inputs(root):
     # Illustrative definitions and case fields copied from test_ipc_uncut_chain.py.
     materials = []
-    for name, E, nu, alpha, k in [('mat.cu', 110e9, .34, 17e-6, 390),
-                                 ('mat.fr4', 25e9, .3, 1e-5, .3)]:
+    for name, E, nu, alpha, k in [('mat_cu', 110e9, .34, 17e-6, 390),
+                                 ('mat_fr4_eq', 25e9, .3, 1e-5, .3)]:
         def table(columns):
             return dict(temperatures=[298.15],
                         columns={key: [value] for key, value in columns.items()},
@@ -123,7 +128,8 @@ def write_solver_inputs(root):
     write_json(root / 'case.json', dict(
         schema='chipcae.case/1.0', stack=dict(ref='solve.stack.json'),
         materials=dict(ref='materials.json'),
-        mesh=dict(type='aligned_cartesian_cut', nx=4, ny=4, levels=0, max_ratio=100),
+        mesh=dict(type='aligned_cartesian_cut', nx=4, ny=4, levels=0, max_ratio=100,
+                  min_elems_per_layer=1),
         physics=[dict(id='thermal', solver='fem.conduction', mode='steady'),
                  dict(id='mech', solver='fem.solid', temp_from='thermal', T_ref=298.15)],
         loads=[dict(type='fixed_temperature', target='face:zmin', T=298.15),
@@ -147,7 +153,7 @@ def inspect_run(run_dir, stack, preview_count, measurements, np, h5py):
         if key != 'T_max':
             assert summary[key] > 0, (key, summary)
     measurements['qoi'] = {key: summary[key] for key in QOIS}
-    conductivity = {'mat.cu': 390, 'mat.fr4': .3}
+    conductivity = {'mat_cu': 390, 'mat_fr4_eq': .3}
     layers = []
     for layer in stack['layers']:
         k = conductivity[layer['material']]
@@ -191,6 +197,7 @@ def inspect_run(run_dir, stack, preview_count, measurements, np, h5py):
         f'M3 {run_dir.name} max temperature error={error:.17g} K > {TEMPERATURE_ATOL} K')
     assert relative <= READBACK_RTOL, (
         f'M3/M5 {run_dir.name} warpage readback relative error={relative:.17g} > {READBACK_RTOL}')
+    measurements['acceptance_checks']['numerical'] = True
 
 
 def get_commit(notes):
@@ -212,6 +219,13 @@ def write_result(run_dir, ranks, measurements, timings, notes, failures):
     from tools.vv.check_result_data_class import check_file
 
     notes = list(notes)
+    failures = list(failures)
+    required = list(ACCEPTANCE_CHECKS)
+    if ranks == 2 or measurements.get('parallel_required', False):
+        required.append('parallel')
+    checks = measurements.get('acceptance_checks', {})
+    failures += [f'acceptance check incomplete: {name}' for name in required
+                 if checks.get(name) is not True]
     commit = get_commit(notes)
     notes += [f'实测 {stage}: {seconds:.6f} s' for stage, seconds in timings.items()]
     notes += failures
@@ -231,6 +245,7 @@ def write_result(run_dir, ranks, measurements, timings, notes, failures):
     print(f'RESULT {run_dir.name}/result.json\n{path.read_text(encoding="utf-8")}', flush=True)
     violations = check_file(path)
     assert violations == [], f'result data_class gate: {violations}'
+    return failures
 
 
 def main():
@@ -254,28 +269,31 @@ def main():
         # Keep an auditable failure record even if import/conversion blocks solving.
         run1 = root / 'ranks1'
         run1.mkdir()
-        runs = {1: dict(path=run1, measurements={}, completed=False)}
+        runs = {1: dict(path=run1, measurements=dict(acceptance_checks={}),
+                       completed=False, failures=[])}
+        setup_checks = runs[1]['measurements']['acceptance_checks']
         try:
-            write_json(root / 'material_map.json', {'FR4': 'mat.fr4', 'copper': 'mat.cu'})
-            run_command('import', [importer, SOURCE / 'tests/integration/ecad/data/board_4layer.xml',
+            write_json(root / 'material_map.json', {'FR4': 'mat_fr4_eq', 'copper': 'mat_cu'})
+            run_command('import', [importer, Path(__file__).with_name('board_4layer.xml'),
                                   '-o', 'stack.json', '--polyset', 'stack.polyset',
                                   '--report', 'defects.json', '--material-map', 'material_map.json'],
                         root, timings)
             artifact(root / 'stack.polyset')
             artifact(root / 'defects.json')
             imported = read_json(root / 'stack.json')
-            compare_import(imported, read_json(
-                SOURCE / 'tests/integration/import_cli/golden/board_4layer/stack.json'))
+            golden = read_json(SOURCE / 'tests/integration/import_cli/golden/board_4layer/stack.json')
+            # Same physical stack, with explicit schema-compatible material IDs.
+            material_ids = {'mat.cu': 'mat_cu', 'mat.fr4': 'mat_fr4_eq'}
+            for layer in golden['layers']:
+                layer['material'] = material_ids[layer['material']]
+            compare_import(imported, golden)
+            setup_checks['import'] = True
             run_command('fraction conversion', [sys.executable, SOURCE / 'tools/stack/copper_fraction.py',
                                                'stack.json', '-o', 'solve.stack.json',
                                                '--report', 'cf.json'], root, timings)
             stack = read_json(root / 'solve.stack.json')
-            try:
-                compare_fractions(read_json(root / 'cf.json'), stack, imported, runs[1]['measurements'])
-            except AssertionError as exc:
-                # Retain failure while exercising the unchanged stack downstream.
-                failures.append(str(exc))
-                print(f'FAIL (continuing chain): {exc}', flush=True)
+            compare_fractions(read_json(root / 'cf.json'), stack, imported, runs[1]['measurements'])
+            setup_checks['fractions'] = True
             stdout = run_command('preview', [previewer, 'solve.stack.json', '-o', 'preview',
                                             '--nx', '4', '--ny', '4', '--levels', '0',
                                             '--max-ratio', '100'], root, timings)
@@ -286,6 +304,7 @@ def main():
             preview_count = success[-1].get('cell_count')
             assert type(preview_count) is int and preview_count > 0, success[-1]
             print(f'实测 preview cell_count={preview_count}', flush=True)
+            setup_checks['preview'] = True
             write_solver_inputs(root)
             shared = {name: (root / name).read_bytes() for name in
                       ('solve.stack.json', 'case.json', 'materials.json',
@@ -294,7 +313,10 @@ def main():
             if launcher:
                 run2 = root / 'ranks2'
                 run2.mkdir()
-                runs[2] = dict(path=run2, measurements={}, completed=False)
+                runs[2] = dict(path=run2, measurements=dict(
+                    acceptance_checks=dict(setup_checks)), completed=False, failures=[])
+                for run in runs.values():
+                    run['measurements']['parallel_required'] = True
             else:
                 print('SKIP ranks=2: launcher not found', flush=True)
                 notes.append('SKIP ranks=2: launcher not found; serial acceptance retained.')
@@ -312,20 +334,26 @@ def main():
                                  run['path'], '-o', run['path'] / 'summary.json'], root, timings)
                     artifact(run['path'] / 'summary.json')
                     run['completed'] = True
+                    run['measurements']['acceptance_checks']['solve_readback'] = True
                     print(f'COMPLETED solve/readback ranks={ranks}', flush=True)
                 except (AssertionError, OSError, ValueError, KeyError) as exc:
-                    failures.append(f'ranks={ranks}: {exc}')
+                    run['failures'].append(f'ranks={ranks}: {exc}')
                 finally:
-                    for name, content in shared.items():
-                        assert (root / name).read_bytes() == content, f'shared input changed: {name}'
+                    try:
+                        for name, content in shared.items():
+                            assert (root / name).read_bytes() == content, f'shared input changed: {name}'
+                        run['measurements']['acceptance_checks']['inputs_unchanged'] = True
+                    except (AssertionError, OSError) as exc:
+                        run['failures'].append(f'ranks={ranks}: {exc}')
             for ranks, run in runs.items():
                 if run['completed']:
                     try:
                         inspect_run(run['path'], stack, preview_count, run['measurements'], np, h5py)
                     except (AssertionError, OSError, ValueError, KeyError) as exc:
-                        failures.append(f'ranks={ranks}: {exc}')
+                        run['failures'].append(f'ranks={ranks}: {exc}')
             if len(runs) == 2 and all('qoi' in run['measurements'] for run in runs.values()):
                 differences = {}
+                parallel_failures = []
                 for key in QOIS:
                     serial = runs[1]['measurements']['qoi'][key]
                     parallel = runs[2]['measurements']['qoi'][key]
@@ -334,23 +362,32 @@ def main():
                     relative = abs(parallel - serial) / abs(serial)
                     differences[key] = relative
                     if relative > PARALLEL_RTOL:
-                        failures.append(f'M3 parallel {key} relative error={relative} > {PARALLEL_RTOL}')
+                        parallel_failures.append(
+                            f'M3 parallel {key} relative error={relative} > {PARALLEL_RTOL}')
                 for run in runs.values():
                     run['measurements']['parallel_relative_errors'] = differences
+                    run['failures'].extend(parallel_failures)
+                    if not parallel_failures:
+                        run['measurements']['acceptance_checks']['parallel'] = True
         except (AssertionError, OSError, ValueError, KeyError, TypeError) as exc:
             failures.append(str(exc))
         finally:
             timings['total'] = time.monotonic() - started
             print(f'实测 total: {timings["total"]:.6f} s', flush=True)
+            setup_failures = list(failures)
             for ranks, run in runs.items():
                 run_notes = notes + [f'solve/readback completed: {run["completed"]}']
                 try:
-                    write_result(run['path'], ranks, run['measurements'], timings, run_notes, failures)
+                    run_failures = write_result(run['path'], ranks, run['measurements'], timings,
+                                                run_notes, setup_failures + run['failures'])
+                    failures.extend(f'ranks={ranks}: {failure}' for failure in run_failures)
                 except (AssertionError, OSError, ValueError) as exc:
                     failures.append(f'ranks={ranks} result record: {exc}')
         for failure in failures:
             print(f'FAIL: {failure}', file=sys.stderr, flush=True)
-    return 1 if failures else 0
+        if failures:
+            raise AssertionError('\n'.join(failures))
+    return 0
 
 
 if __name__ == '__main__':
