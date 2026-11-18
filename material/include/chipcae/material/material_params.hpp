@@ -7,6 +7,7 @@
 
 #include <bit>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -44,6 +45,7 @@ struct MaterialParams {
     ModelKind kind = ModelKind::ThermoElastic;
     std::string model_id; // 如 "thermo_elastic@1"
     Real density = 0.0;
+    std::optional<Real> conductivity; // W/(m K), isotropic; empty when the card omits it
     std::uint64_t parameter_hash = 0; // 主机侧参数哈希（D13）
 };
 
