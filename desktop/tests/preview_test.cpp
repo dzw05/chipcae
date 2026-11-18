@@ -5,9 +5,12 @@
 #include <QDir>
 #include <QEventLoop>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QProcessEnvironment>
+#include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <iostream>
@@ -163,6 +166,70 @@ int main(int argc, char** argv) {
                 check(!result && !controller.error().isEmpty(), "invalid run rejected");
                 check(before == document.toJson(), "failed run must not change case");
             }
+        }
+        const auto program = QProcessEnvironment::systemEnvironment().value("CHIPCAE_PREVIEW");
+        if (program.trimmed().isEmpty()) {
+            std::cout << "CHIPCAE_PREVIEW: 未执行\n";
+        } else {
+            const auto absoluteProgram = QFileInfo(program).absoluteFilePath();
+            const QFileInfo executable(absoluteProgram);
+            check(executable.exists() && executable.isFile() && executable.isExecutable(),
+                  "CHIPCAE_PREVIEW must name an existing executable file");
+            const auto realStack = dir.filePath("real-stack.json");
+            const auto realOutput = dir.filePath("real-mesh.vtkhdf");
+            write(realStack,
+                  R"({"id":"d10b0_tiny","unit":"m","outline":{"box":[0,0,0.007,0.005]},
+                      "symmetry":"none","package_type":"FCBGA",
+                      "layers":[{"name":"solid","thickness":0.001,"kind":"Homogenized",
+                                 "material":"solid_eq","n_elem_min":1,"grading":1}]})");
+            CaseDocument document;
+            document.applyJson(Json::parse(R"({"mesh":{"levels":1,"cell_budget":50000}})"));
+            PreviewOptions realOptions;
+            realOptions.nx = 4;
+            realOptions.ny = 4;
+            realOptions.levels = 1;
+            realOptions.maxRatio = 10;
+            PreviewController controller;
+            QEventLoop loop;
+            bool done = false, result = false, timedOut = false;
+            QObject::connect(&controller, &PreviewController::finished, &loop, [&](bool ok) {
+                done = true;
+                result = ok;
+                loop.quit();
+            });
+            const bool started = controller.start(
+                &document, realStack, realOutput, realOptions, absoluteProgram, {});
+            if (!started)
+                std::cerr << controller.error().toStdString() << '\n';
+            check(started, "CHIPCAE_PREVIEW real preview launch failed");
+            QTimer timer;
+            timer.setSingleShot(true);
+            QObject::connect(&timer, &QTimer::timeout, &loop, [&] {
+                timedOut = true;
+                controller.cancel();
+                loop.quit();
+            });
+            timer.start(50000);
+            if (!done)
+                loop.exec();
+            timer.stop();
+            if (!result)
+                std::cerr << controller.error().toStdString() << '\n';
+            check(!timedOut, "CHIPCAE_PREVIEW real preview timed out");
+            check(done, "CHIPCAE_PREVIEW real preview did not finish");
+            check(result, "CHIPCAE_PREVIEW real preview finished unsuccessfully");
+            check(controller.error().isEmpty(), "real preview error must be empty");
+            check(controller.mesh() != nullptr, "real preview mesh must exist");
+            check(controller.digest().has_value(), "real preview digest must exist");
+            const auto& digest = *controller.digest();
+            const auto meshHash = QString::fromStdString(digest.mesh_sha256);
+            check(meshHash.size() == 64 &&
+                      QRegularExpression("^[0-9a-f]{64}$").match(meshHash).hasMatch(),
+                  "real preview digest hash must be 64 lowercase hexadecimal characters");
+            check(digest.nx0 >= 1 && digest.ny0 >= 1 && digest.nz >= 1 && digest.L >= 0 &&
+                      digest.padded_cells >= 0,
+                  "real preview digest integer bounds");
+            std::cout << "D10 real preview tests passed\n";
         }
         std::cout << "D10 preview tests passed\n";
         return 0;
