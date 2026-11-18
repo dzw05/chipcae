@@ -265,8 +265,8 @@ bool run_accept_tests() {
                 "inspection_error: fixture must fail inspection");
         std::string error;
         require(!read_accept_file(path, &error), "inspection_error: cannot load symlink loop");
-        require(error == "IMPORT_REJECTED: cannot open accept file",
-                "inspection_error: report open failure");
+        require(error == "IMPORT_REJECTED: cannot inspect accept file",
+                "inspection_error: report inspection failure");
     });
     const std::vector<std::string> invalid{"not JSON",
                                            R"({"accept":{}})",

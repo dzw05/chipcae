@@ -26,7 +26,10 @@ std::optional<AcceptList> read_accept_file(const std::filesystem::path& path,
         return std::nullopt;
     };
     std::error_code inspection_error;
-    if (!std::filesystem::exists(path, inspection_error) && !inspection_error)
+    const bool exists = std::filesystem::exists(path, inspection_error);
+    if (inspection_error)
+        return reject("cannot inspect accept file");
+    if (!exists)
         return std::nullopt;
 #if CHIPCAE_ACCEPT_JSONCONS
     try {
