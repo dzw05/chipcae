@@ -144,36 +144,41 @@ identical polygon discretization and ring representation. The frozen readers
 may discretize arcs differently; this conflicts with strict hash equality and
 cannot be resolved by silently weakening the acceptance assertions.
 
-The full integration fixture still needs upstream compatibility fixes. Its archives
-contain an `odb/` root directory that ArchiveReader does not strip. The directory
-input is rejected for an invalid/degenerate `F.CU` contour, and its IPC export
-reports unsupported board geometry. The preview smoke material map uses `mat.fr4`,
-while the stack loader requires homogenized material IDs to end in `_eq`.
+The full integration fixture still needs reader/mapper compatibility fixes. Its
+archives contain an `odb/` root directory that ArchiveReader does not strip. The
+directory input is rejected for an invalid/degenerate `F.CU` contour, and its IPC
+export reports unsupported board geometry.
 
-The existing CTest entries `odbpp_fixture_present` and `ipc_fixture_present`
-run all scenarios in their respective `odb` and `ipc` groups. The nine scenarios
-below are ordinary acceptance tests with success expectations. A prerequisite
-failure fails the containing CTest entry; no expected-failure gate is applied.
+The existing CTest entries `odbpp_fixture_present` and `ipc_fixture_present` run
+all scenarios in their respective `odb` and `ipc` groups. Eight full-board
+scenarios have explicit prerequisite gates:
 
-| Scenario | Current prerequisite failure |
+| Scenario | Required prerequisite diagnostic |
 | --- | --- |
-| `cross_ipc` | Archive root |
-| `dir_and_zip` | ODB copper contour |
-| `extension.TgZ`, `extension.TaR.Gz`, `extension.ZiP` | Archive root |
-| `odb_skipped_layers_reported` | ODB copper contour |
-| `override_ipc`, `override_empty_ipc` | IPC board geometry |
-| `report_and_preview` | Preview material ID |
+| `cross_ipc` | Missing archive `matrix/matrix` |
+| `dir_and_zip` | Invalid/degenerate ODB `F.CU` contour |
+| `extension.TgZ`, `extension.TaR.Gz`, `extension.ZiP` | Missing archive `matrix/matrix` |
+| `odb_skipped_layers_reported` | Invalid/degenerate ODB `F.CU` contour |
+| `override_ipc`, `override_empty_ipc` | Unsupported IPC board geometry |
 
-The frozen baseline dispatcher also rejects `--accept` and `--stack-override`
-before calling `run_ecad`, even though it parses their paths into `ImportOptions`.
-The ECAD implementation consumes these fields, but the corresponding CLI tests
-remain failing until the dispatcher prerequisite is resolved upstream. Restoring
-its baseline behavior is required by this card's file freeze.
+Each gated scenario still runs its original body and success assertions. The gate
+requires the expected CLI exit 7, empty stdout and exact stderr (including the
+expected thickness warning in `override_ipc`). It prints `GATED` for that known
+prerequisite rejection. Any other failure fails CTest. An unexpected success also
+fails CTest so the obsolete gate must be removed. Gated scenarios do not count as
+completed full-board acceptance.
 
-Run `odbpp_e2e all` or any named selector (e.g.
-`odbpp_e2e odbpp_e2e_cross_ipc`) to inspect failures individually. All original
-geometry, assertions and thresholds remain enforced. Full-board cross-format
-acceptance is not complete while these ordinary regression tests fail.
+The `report_and_preview` smoke test runs normally. Its material map supplies the
+required homogenized dielectric ID `mat.fr4_eq`. For meshing, a separate preview
+stack refines layer element counts to the thinnest layer's spacing; imported
+geometry, thicknesses and artifacts are preserved. The preview's default cell-size
+ratio limit is unchanged.
+
+Run `odbpp_e2e all` or any named selector (for example,
+`odbpp_e2e odbpp_e2e_cross_ipc`) for strict, ungated acceptance. Run
+`odbpp_e2e gate:cross_ipc` to inspect one prerequisite gate. All original geometry,
+assertions and numerical thresholds remain enforced. Full-board cross-format
+acceptance remains incomplete until those prerequisites pass without gates.
 
 All examples are synthetic. Customer data, surveys and real-board measurements
 must stay outside this repository.

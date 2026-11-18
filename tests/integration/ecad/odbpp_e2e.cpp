@@ -134,6 +134,26 @@ fixture = data / 'odbpp'
 sys.path.insert(0, str(source / 'tools/stack'))
 from polyset import read_polyset, layer_area_m2
 
+# Frozen reader/mapper prerequisites: run the original scenario and accept only
+# its exact first CLI rejection in CTest's group selectors. Named selectors and
+# 'all' remain strict. A newly passing prerequisite must have its gate removed.
+PREREQUISITE_GATES = {
+    'cross_ipc': 'IMPORT_REJECTED: missing file matrix/matrix',
+    'dir_and_zip': 'IMPORT_REJECTED: invalid or degenerate contour: F.CU',
+    'extension.TgZ': 'IMPORT_REJECTED: missing file matrix/matrix',
+    'extension.TaR.Gz': 'IMPORT_REJECTED: missing file matrix/matrix',
+    'extension.ZiP': 'IMPORT_REJECTED: missing file matrix/matrix',
+    'odb_skipped_layers_reported': 'IMPORT_REJECTED: invalid or degenerate contour: F.CU',
+    'override_ipc': ('thickness override conflicts with IPC layer DIELECTRIC_1\n'
+                     'IMPORT_REJECTED: unsupported board geometry'),
+    'override_empty_ipc': 'IMPORT_REJECTED: unsupported board geometry',
+}
+gate_selector = selector.removeprefix('gate:') if selector.startswith('gate:') else None
+if gate_selector is not None:
+    if gate_selector not in PREREQUISITE_GATES:
+        raise AssertionError('unknown prerequisite gate: '+gate_selector)
+    selector = gate_selector
+
 CASES = []
 def case(name, group='odb'):
     def register(fn):
@@ -362,7 +382,7 @@ for mode in ('text','symbol','C_then_B','B_then_C'):
 
 for tag,context in (('PolyStepCurve','profile'), ('Cutout','profile'),
                     ('ProfileHole','profile'), ('Contour','copper'), ('Oval','copper'),
-                    ('RectCenter','copper'), ('Symbol','copper'), ('Trace','copper'),
+                    ('RectCenter','copper'), ('Circle','copper'), ('Symbol','copper'), ('Trace','copper'),
                     ('Slot','copper'), ('ViaGeometry','copper'),
                     ('VendorExtension','metadata'), ('CopperVendorExtension','metadata'),
                     ('OutlineVendorExtension','metadata')):
@@ -690,6 +710,10 @@ def plating(b):
 
 @case('report_and_preview')
 def report_preview(b):
+    # The stack loader requires an explicit homogenized ID for dielectric layers.
+    mapping = load(b.map)
+    b.map.write_text(json.dumps({key: ('mat.fr4_eq' if value == 'mat.fr4' else value)
+                                for key,value in mapping.items()}))
     custom = b.root/'reports/custom.json'
     out,_,d = b.run(report=custom)
     check(load(d)['code'] == 'OK', 'custom defects report success code')
@@ -699,7 +723,15 @@ def report_preview(b):
           '--report moved layer/import report')
     preview = build/'preview/chipcae-preview'
     check(preview.is_file(), 'build chipcae-preview for smoke acceptance')
-    result = subprocess.run([str(preview),str(out/'board.stack.json'),'--nx','4','--ny','4',
+    # Refine Z counts for the thick core, preserving imported geometry and the
+    # preview's default max_ratio. Keep the original import artifacts untouched.
+    mesh_stack = load(out/'board.stack.json')
+    spacing = min(layer['thickness'] for layer in mesh_stack['layers'])
+    for layer in mesh_stack['layers']:
+        layer['n_elem_min'] = math.ceil(layer['thickness']/spacing)
+    mesh_input = out/'preview.stack.json'
+    mesh_input.write_text(json.dumps(mesh_stack))
+    result = subprocess.run([str(preview),str(mesh_input),'--nx','4','--ny','4',
                              '-o',str(out/'mesh')],capture_output=True,text=True,timeout=20)
     check(result.returncode == 0, f'preview exit {result.returncode}: {result.stdout}{result.stderr}')
     meshes = list(out.glob('mesh*.vtkhdf'))
@@ -737,6 +769,23 @@ def help_case(b):
     for token in ('ODB','--stack-override','--accept'):
         check(token in result.stdout, f'help omits {token}')
 
+@case('dispatcher_values')
+def dispatcher_values(b):
+    # Valued ECAD options consume flag-shaped paths and reach the importer.
+    for option in ('--accept','--stack-override'):
+        for i,value in enumerate(('missing.json','--accept-b-tier','--report','--help','-1e-5')):
+            _,result,_ = b.run(data/'board_4layer.xml', [option,value], expected=7,
+                                name=option[2:]+str(i), prior=True)
+            check(result.stdout == '' and 'not implemented yet' not in result.stderr,
+                  'ECAD option was rejected before importer validation')
+    # STEP and the remaining reserved switches retain their usage diagnostic.
+    for option in ('--accept','--stack-override','--t-min','--assembly'):
+        result = subprocess.run([str(b.cli),str(b.root/'part.step'),'-o',str(b.root/'part.json'),
+                                 option,'missing.json'],capture_output=True,text=True,timeout=20)
+        check(result.returncode == 2 and result.stdout == '' and
+              result.stderr == 'not implemented yet: '+option+'\n', 'STEP reserved behavior changed')
+        check(not (b.root/'part.json').exists(), 'reserved STEP option published a stack')
+
 selected = [(n,g,f) for n,g,f in CASES if (selector in ('all',g,n) or
             (selector == 'stack_override_fill' and n in ('override_fill','override_fill_missing')) or
             (selector == 'stack_override_conflict' and n in ('override_conflict','override_equal')) or
@@ -749,17 +798,33 @@ selected = [(n,g,f) for n,g,f in CASES if (selector in ('all',g,n) or
             (selector == 'unsupported_tiers' and n.startswith('unsupported_tiers_')))]
 check(selected, f'unknown scenario {selector}; choose: '+', '.join(n for n,_,_ in CASES))
 failures = 0
+gated = 0
 for name,_,fn in selected:
+    gate = PREREQUISITE_GATES.get(name) if selector in ('odb','ipc') or gate_selector else None
     with tempfile.TemporaryDirectory(prefix='chipcae-odbpp-cli-') as directory:
         try:
             fn(Board(Path(directory)))
+        except AssertionError as error:
+            # An unrelated assertion, return code, stdout or diagnostic must fail.
+            if (gate and str(error).startswith('CLI expected exit 0, got 7\ncommand: ') and
+                    str(error).endswith('\nstdout: \nstderr: '+gate+'\n')):
+                gated += 1
+                print('GATED '+name+': '+gate,flush=True)
+            else:
+                failures += 1
+                print('FAIL '+name,flush=True)
+                traceback.print_exc(file=sys.stdout)
         except Exception:
             failures += 1
             print('FAIL '+name,flush=True)
             traceback.print_exc(file=sys.stdout)
         else:
-            print('PASS '+name,flush=True)
-print(f'{len(selected)} scenarios, {failures} failed',flush=True)
+            if gate:
+                failures += 1
+                print('XPASS '+name+': prerequisite changed; remove its gate',flush=True)
+            else:
+                print('PASS '+name,flush=True)
+print(f'{len(selected)} scenarios, {gated} gated, {failures} failed',flush=True)
 sys.exit(bool(failures))
 )ODBCLI";
 

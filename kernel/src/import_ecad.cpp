@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -102,10 +103,10 @@ std::vector<Defect> classify_unsupported(const ecad::ImportReport& report,
                                                     "Material",
                                                     "Spec",
                                                     "EntryStandard",
-                                                    "Circle",
                                                     "StandardPrimitiveRef",
                                                     "selected step"};
         static const std::set<std::string> geometry{"Arc",
+                                                    "Circle",
                                                     "Contour",
                                                     "Copper",
                                                     "Cutout",

@@ -25,6 +25,7 @@ int main(int argc, char** argv) {
     auto& material_map = options.material_map;
     auto& accept_b = options.accept_b_tier;
     std::string reserved_argument;
+    std::string unimplemented_argument;
     bool has_accept = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
@@ -66,6 +67,8 @@ int main(int argc, char** argv) {
             // --t-min consumes a placeholder value; numeric parsing belongs to I-STEP-B.
             if (reserved_argument.empty())
                 reserved_argument = arg;
+            if ((arg == "--t-min" || arg == "--assembly") && unimplemented_argument.empty())
+                unimplemented_argument = arg;
             if (arg == "--accept")
                 has_accept = true;
             if (arg == "--accept") {
@@ -96,8 +99,15 @@ int main(int argc, char** argv) {
         // The conflict contract is a silent usage failure in either flag order.
         return chipcae::importer::CliExit::usage;
     }
-    if (!reserved_argument.empty()) {
-        std::cerr << "not implemented yet: " << reserved_argument << '\n';
+    const auto ext = input.extension().string();
+    const bool step_input = ext == ".step" || ext == ".stp";
+    // ECAD implements accept/override; preserve reserved diagnostics for STEP.
+    if (step_input && !reserved_argument.empty())
+        unimplemented_argument = reserved_argument;
+    if (!normal_parse_path && assembly_parse_path)
+        unimplemented_argument = "--assembly";
+    if (!unimplemented_argument.empty()) {
+        std::cerr << "not implemented yet: " << unimplemented_argument << '\n';
         return chipcae::importer::CliExit::usage;
     }
     if (input.empty() || output.empty()) {
@@ -105,8 +115,7 @@ int main(int argc, char** argv) {
         return chipcae::importer::CliExit::usage;
     }
     chipcae::importer::derive_output_paths(options);
-    const auto ext = input.extension().string();
-    if (ext == ".step" || ext == ".stp")
+    if (step_input)
         return chipcae::importer::run_step(options);
     return chipcae::importer::run_ecad(options);
 }

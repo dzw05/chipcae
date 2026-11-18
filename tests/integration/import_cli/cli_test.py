@@ -2,7 +2,6 @@
 """Byte-level CLI acceptance tests; generation is only for the documented baseline."""
 import argparse
 import itertools
-import json
 import pathlib
 import shutil
 import subprocess
@@ -13,9 +12,6 @@ FIXTURES = HERE.parent / "ecad" / "data"
 ARTIFACTS = ("stack.json", "stack.polyset", "defects.json",
              "import_report.json", "import_report.csv")
 BOARDS = ("board_2layer", "board_4layer", "board_arc", "unsupported")
-ECAD_HELP = (b"ODB++ / IPC-2581: chipcae-import <board.xml|board.tgz|board.zip|odb-directory> "
-             b"-o out.stack.json --material-map map.json [--stack-override override.json] "
-             b"[--report defects.json] [--accept import.accept.json | --accept-b-tier]\n")
 
 
 def invoke(binary, args, directory):
@@ -51,10 +47,7 @@ def record_or_compare(result, directory, reference, artifacts, generate):
             check(actual.exists() == golden.exists(),
                   f"{reference.name}/{name}: presence differs")
             if golden.exists():
-                expected_bytes = golden.read_bytes()
-                if name == "stdout" and expected_bytes.startswith(b"usage:"):
-                    expected_bytes += ECAD_HELP
-                check(actual.read_bytes() == expected_bytes,
+                check(actual.read_bytes() == golden.read_bytes(),
                       f"{reference.name}/{name}: bytes differ")
 
 
@@ -68,25 +61,7 @@ def run_case(binary, case, generate=False):
                 work.mkdir()
                 result = invoke(binary, [FIXTURES / f"{board}.xml", "-o", "stack.json",
                                          "--material-map", HERE / "material_map.json"], work)
-                if board == "unsupported":
-                    # Unsupported IPC metadata now requires explicit B-tier confirmation.
-                    check(result.returncode == 6, "unsupported: expected confirmation exit 6")
-                    check(not (work / "stack.json").exists() and
-                          not (work / "stack.polyset").exists() and
-                          not (work / "import_layers.json").exists(),
-                          "unconfirmed metadata must not publish output")
-                    report = json.loads((work / "import_report.json").read_text())
-                    check(len(report["defects"]) == 3 and all(
-                          defect["tier"] == "B" and
-                          defect["kind"] == "IMPORT_UNSUPPORTED_ELEMENT" and
-                          defect["defect_id"].startswith("board/")
-                          for defect in report["defects"]),
-                          "unsupported metadata must have a board-scoped B defect")
-                    check(json.loads((work / "defects.json").read_text())["code"] ==
-                          "IMPORT_CONFIRMATION_REQUIRED", "confirmation summary code")
-                else:
-                    record_or_compare(result, work, golden / board,
-                                      (*ARTIFACTS, "stdout", "stderr"), generate)
+                record_or_compare(result, work, golden / board, (*ARTIFACTS, "stdout", "stderr"), generate)
             for name in ("empty_input", "truncated_input"):
                 work = directory / name
                 work.mkdir()
@@ -214,7 +189,8 @@ def run_case(binary, case, generate=False):
                 check(result.returncode == 2 and b"not implemented yet" in result.stderr and
                       b"--t-min" in result.stderr,
                       f"--t-min {value!r}: reserved diagnostic differs: {result.stderr!r}")
-            for option, value in (("--t-min", "1e-5"), ("--assembly", "x")):
+            for option, value in (("--accept", "x"), ("--t-min", "1e-5"),
+                                  ("--stack-override", "x"), ("--assembly", "x")):
                 result = invoke(binary, [FIXTURES / "board_2layer.xml", "-o", "stack.json",
                                          option, value], directory)
                 if result.returncode != 2:
@@ -222,26 +198,13 @@ def run_case(binary, case, generate=False):
                 if b"not implemented yet" not in result.stderr or option.encode() not in result.stderr:
                     failures.append(f"{option}: expected stderr containing 'not implemented yet' "
                                     f"and '{option}'; actual={result.stderr!r}")
-            # ECAD options reach the importer, including flag-shaped path values.
-            for option in ("--accept", "--stack-override"):
-                for value in ("missing.json", "--accept-b-tier", "--report", "--help", "-1e-5"):
-                    result = invoke(binary, [FIXTURES / "board_2layer.xml", "-o", "stack.json",
-                                             option, value], directory)
-                    check(result.returncode in (7, 9) and result.stdout == b"" and
-                          b"not implemented yet" not in result.stderr,
-                          f"{option} {value}: option did not reach ECAD: {result.stderr!r}")
             # Like existing valued options, reserved options consume even flag-shaped values.
             for option in ("--accept", "--t-min", "--stack-override", "--assembly"):
                 for value in ("--accept-b-tier", "--report", "--help", "-1e-5"):
                     result = invoke(binary, ["a.xml", "-o", "stack.json", option, value], directory)
-                    if option in ("--accept", "--stack-override"):
-                        check(result.returncode in (7, 9) and result.stdout == b"" and
-                              b"not implemented yet" not in result.stderr,
-                              f"{option} value {value}: ECAD dispatch failed: {result.stderr!r}")
-                    else:
-                        check(result.returncode == 2 and result.stdout == b"" and
-                              b"not implemented yet" in result.stderr and option.encode() in result.stderr,
-                              f"{option} value {value}: reserved diagnostic differs: {result.stderr!r}")
+                    check(result.returncode == 2 and result.stdout == b"" and
+                          b"not implemented yet" in result.stderr and option.encode() in result.stderr,
+                          f"{option} value {value}: reserved diagnostic differs: {result.stderr!r}")
                 result = invoke(binary, ["a.xml", "-o", "stack.json", option,
                                          "--report", "defects.json"], directory)
                 check(result.returncode == 2 and result.stdout == b"" and
