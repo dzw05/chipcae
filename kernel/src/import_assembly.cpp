@@ -1,5 +1,6 @@
 #include "chipcae/geometry/assembly.hpp"
 #include "chipcae/geometry/import_report.hpp"
+#include "chipcae/geometry/step_import.hpp"
 #include "import_common.hpp"
 
 #include <algorithm>
@@ -311,6 +312,14 @@ std::vector<std::string> interface_rewrite_targets(const std::vector<std::string
             targets.push_back("interface:" + a + "|" + b);
     return targets;
 }
+bool assembly_display_only(const geometry::StepImportResult& result) {
+    return std::any_of(result.body_names.begin(), result.body_names.end(), [](const auto& name) {
+        return name.find("NOT_CAE_GEOMETRY") != std::string::npos;
+    });
+}
+std::string assembly_failure_message(const std::string& code, const std::string& message) {
+    return std::regex_search(message, std::regex("^[A-Z_]+: ")) ? message : code + ": " + message;
+}
 int assembly_error_exit(const std::string& message, std::istream& in) {
     return protocol_error_code(message.substr(0, message.find(':')), in).value_or(1);
 }
@@ -344,12 +353,10 @@ int run_assembly(const ImportOptions& options) {
             throw std::runtime_error(error);
         write_defects(options.report, code, message, defects);
     };
-    auto fail = [&](int exit, const std::string& code, const std::string& message) {
-        const auto full =
-            message.starts_with(code + ": ") || std::regex_search(message, std::regex("^[A-Z_]+: "))
-                ? message
-                : code + ": " + message;
-        const auto prefix = full.substr(0, full.find(':'));
+    auto fail = [&](const std::string& code, const std::string& message) {
+        const auto full = assembly_failure_message(code, message);
+        const auto exit = assembly_error_exit(full);
+        const auto prefix = exit == 1 ? "INTERNAL" : full.substr(0, full.find(':'));
         reports(prefix, full);
         std::cerr << full << '\n';
         return exit;
@@ -360,7 +367,7 @@ int run_assembly(const ImportOptions& options) {
                 options.polyset.parent_path().empty() ? "." : options.polyset.parent_path()) !=
             std::filesystem::weakly_canonical(
                 options.output.parent_path().empty() ? "." : options.output.parent_path()))
-            return fail(14, "INPUT_INVALID", "INPUT_INVALID: polyset must be in output directory");
+            return fail("INPUT_INVALID", "INPUT_INVALID: polyset must be in output directory");
         J doc;
         try {
             std::ifstream in(options.assembly);
@@ -368,8 +375,7 @@ int run_assembly(const ImportOptions& options) {
                 throw std::runtime_error("cannot open assembly");
             doc = J::parse(in);
         } catch (const std::exception& e) {
-            return fail(14,
-                        "INPUT_INVALID",
+            return fail("INPUT_INVALID",
                         "INPUT_INVALID: assembly=" + options.assembly.string() +
                             "; json_path=$: " + e.what());
         }
@@ -394,16 +400,20 @@ int run_assembly(const ImportOptions& options) {
                 return jsoncons::jsonschema::walk_result::advance;
             });
         } catch (const std::exception& e) {
-            return fail(
-                7, "IMPORT_REJECTED", std::string("IMPORT_REJECTED: runtime assets: ") + e.what());
+            // The protocol itself may be missing or invalid. Use the fixed
+            // bootstrap rejection rather than trying to read that asset again.
+            const auto message = std::string("IMPORT_REJECTED: runtime assets: ") + e.what();
+            reports("IMPORT_REJECTED", message);
+            std::cerr << message << '\n';
+            return CliExit::import_rejected;
         }
         if (!invalid.empty())
-            return fail(14, "INPUT_INVALID", invalid);
+            return fail("INPUT_INVALID", invalid);
         const auto root = options.assembly.parent_path();
         const auto board_format = doc["board"]["format"].as<std::string>();
         const auto board_path = std::filesystem::path(doc["board"]["path"].as<std::string>());
         if (board_format != "ipc2581" && board_format != "odbpp")
-            return fail(14, "INPUT_INVALID", "json_path=$/board/format: unsupported board format");
+            return fail("INPUT_INVALID", "json_path=$/board/format: unsupported board format");
         const auto resolved_board = std::filesystem::weakly_canonical(root / board_path);
         const auto relative_board = resolved_board.lexically_relative(
             std::filesystem::weakly_canonical(root.empty() ? "." : root));
@@ -411,18 +421,16 @@ int run_assembly(const ImportOptions& options) {
             *relative_board.begin() == ".." ||
             (board_format == "ipc2581" ? !std::filesystem::is_regular_file(resolved_board)
                                        : !std::filesystem::exists(resolved_board)))
-            return fail(
-                14, "INPUT_INVALID", "json_path=$/board/path: invalid or missing board path");
+            return fail("INPUT_INVALID", "json_path=$/board/path: invalid or missing board path");
         std::set<std::string> ids;
         for (const auto& p : doc["parts"].array_range()) {
             auto id = p["id"].as<std::string>();
             if (id == "void")
-                return fail(14, "INPUT_INVALID", "INPUT_INVALID: part id void is reserved");
+                return fail("INPUT_INVALID", "INPUT_INVALID: part id void is reserved");
             if (!ids.insert(id).second)
-                return fail(7, "IMPORT_REJECTED", "duplicate part id " + id);
+                return fail("IMPORT_REJECTED", "duplicate part id " + id);
             if (p["step"].as<std::string>().find("NOT_CAE_GEOMETRY") != std::string::npos)
-                return fail(7,
-                            "IMPORT_REJECTED",
+                return fail("IMPORT_REJECTED",
                             "IMPORT_REJECTED: display-only geometry NOT_CAE_GEOMETRY");
         }
         std::vector<std::string> accepted;
@@ -439,11 +447,11 @@ int run_assembly(const ImportOptions& options) {
                 for (const auto& item : a["accept"].array_range())
                     accepted.push_back(item["defect_id"].as<std::string>());
             } catch (const std::exception& e) {
-                return fail(14, "INPUT_INVALID", std::string("accept: ") + e.what());
+                return fail("INPUT_INVALID", std::string("accept: ") + e.what());
             }
         }
 #ifndef CHIPCAE_ENABLE_ECAD
-        return fail(7, "IMPORT_REJECTED", "ECAD support disabled");
+        return fail("IMPORT_REJECTED", "ECAD support disabled");
 #else
         const auto& b = doc["board"];
         auto read_board = [&]() -> ecad::ImportResult {
@@ -460,11 +468,11 @@ int run_assembly(const ImportOptions& options) {
         };
         auto board = read_board();
         if (!board)
-            return fail(7, "IMPORT_REJECTED", board.error);
+            return fail("IMPORT_REJECTED", board.error);
         std::string error;
         if (!ecad::apply_material_map(
                 board.model, root / b["material_map"].as<std::string>(), &error))
-            return fail(9, "MATERIAL_MAPPING_MISSING", error);
+            return fail("MATERIAL_MAPPING_MISSING", error);
         // Intermediate board JSON is removed before confirmation; the sidecar is retained.
         auto temp = options.output;
         temp += ".board.tmp";
@@ -476,22 +484,22 @@ int run_assembly(const ImportOptions& options) {
             }
         } cleanup{temp};
         if (!ecad::to_stack(board.model, temp, options.polyset, &error))
-            return fail(7, "IMPORT_REJECTED", error);
+            return fail("IMPORT_REJECTED", error);
         auto loaded = mesh::load_stack(temp, assembly_root() / "schema/stack-0.2.schema.json");
         if (!loaded)
-            return fail(14, "INPUT_INVALID", loaded.error().reason);
+            return fail("INPUT_INVALID", loaded.error().reason);
         auto base = loaded.value();
         auto poly = mesh::read_polyset(options.polyset);
         if (!poly)
-            return fail(14, "INPUT_INVALID", poly.error().reason);
+            return fail("INPUT_INVALID", poly.error().reason);
         auto outline = inline_assembly_outline(base, poly.value());
         if (!outline)
-            return fail(13, "CUT_UNSUPPORTED", outline.error().reason);
+            return fail("CUT_UNSUPPORTED", outline.error().reason);
         ImportScales scales;
         scales.L = std::max(base.outline.box[2] - base.outline.box[0],
                             base.outline.box[3] - base.outline.box[1]);
         if (base.layers.empty())
-            return fail(14, "INPUT_INVALID", "board has no layers");
+            return fail("INPUT_INVALID", "board has no layers");
         scales.t_min = base.layers.front().thickness;
         for (const auto& l : base.layers)
             scales.t_min = std::min(scales.t_min, l.thickness);
@@ -499,7 +507,7 @@ int run_assembly(const ImportOptions& options) {
         scales.dbu_m = poly.value().dbu_m;
         auto tol = compute_tolerances(scales, {});
         if (!tol)
-            return fail(7, "IMPORT_REJECTED", tol.error().message);
+            return fail("IMPORT_REJECTED", tol.error().message);
         header.L = scales.L;
         header.t_min = scales.t_min;
         header.tolerances = tol.value();
@@ -508,7 +516,10 @@ int run_assembly(const ImportOptions& options) {
             StepImportOptions io;
             io.tolerances = tol.value();
             try {
-                return import_step(root / p["step"].as<std::string>(), io);
+                auto result = import_step(root / p["step"].as<std::string>(), io);
+                if (assembly_display_only(result))
+                    throw std::runtime_error("display-only geometry");
+                return result;
             } catch (const std::exception& e) {
                 throw std::runtime_error(std::string("IMPORT_REJECTED: ") + e.what());
             }
@@ -522,12 +533,12 @@ int run_assembly(const ImportOptions& options) {
             for (const auto& kv : f["bodies"].object_range()) {
                 auto id = std::string(kv.key());
                 if (id == "void")
-                    return fail(14, "INPUT_INVALID", "INPUT_INVALID: part id void is reserved");
+                    return fail("INPUT_INVALID", "INPUT_INVALID: part id void is reserved");
                 if (!ids.insert(id).second)
-                    return fail(7, "IMPORT_REJECTED", "duplicate part id " + id);
+                    return fail("IMPORT_REJECTED", "duplicate part id " + id);
             }
             if (f["step"].as<std::string>().find("NOT_CAE_GEOMETRY") != std::string::npos)
-                return fail(7, "IMPORT_REJECTED", "IMPORT_REJECTED: display-only geometry");
+                return fail("IMPORT_REJECTED", "IMPORT_REJECTED: display-only geometry");
             std::optional<StepImportResult> imported;
             std::vector<std::string> names;
             if (step_import_available()) {
@@ -535,7 +546,7 @@ int run_assembly(const ImportOptions& options) {
                 std::set<std::string> unique;
                 for (const auto& name : imported->body_names) {
                     if (!unique.insert(name).second)
-                        return fail(7, "IMPORT_REJECTED", "duplicate body name " + name);
+                        return fail("IMPORT_REJECTED", "duplicate body name " + name);
                     if (!f["bodies"].contains(name)) {
                         Defect d{};
                         d.tier = Tier::B;
@@ -585,8 +596,7 @@ int run_assembly(const ImportOptions& options) {
                                          base.layers.end(),
                                          [&](const mesh::Layer& l) { return l.name == name; })) {
                             attachment_defect(id, "missing attach target " + target);
-                            return fail(7,
-                                        "IMPORT_REJECTED",
+                            return fail("IMPORT_REJECTED",
                                         "IMPORT_REJECTED: missing attach target " + target);
                         }
                     } else if (!done.contains(target.substr(5))) {
@@ -594,8 +604,7 @@ int run_assembly(const ImportOptions& options) {
                                 return part["id"].as<std::string>() == target.substr(5);
                             })) {
                             attachment_defect(id, "missing attach target " + target);
-                            return fail(7,
-                                        "IMPORT_REJECTED",
+                            return fail("IMPORT_REJECTED",
                                         "IMPORT_REJECTED: missing attach target " + target);
                         }
                         ++it;
@@ -612,7 +621,7 @@ int run_assembly(const ImportOptions& options) {
             if (!progress) {
                 attachment_defect(pending.front()["id"].as<std::string>(),
                                   "cyclic part attachments");
-                return fail(7, "IMPORT_REJECTED", "IMPORT_REJECTED: cyclic part attachments");
+                return fail("IMPORT_REJECTED", "IMPORT_REJECTED: cyclic part attachments");
             }
         }
         std::vector<PlacedPart> placed;
@@ -644,8 +653,6 @@ int run_assembly(const ImportOptions& options) {
             auto step = shared ? *shared : read_step(p);
             std::set<std::string> names;
             for (const auto& n : step.body_names) {
-                if (n.find("NOT_CAE_GEOMETRY") != std::string::npos)
-                    throw std::runtime_error("IMPORT_REJECTED: display-only geometry");
                 if (!names.insert(n).second)
                     throw std::runtime_error("IMPORT_REJECTED: duplicate body name " + n);
             }
@@ -725,11 +732,7 @@ int run_assembly(const ImportOptions& options) {
                 auto m = merge_parts(
                     base, placed, {scales.t_min, tol.value().eps_weld, tol.value().tau_A});
                 if (!m)
-                    return fail(assembly_error_exit(m.error().message),
-                                assembly_error_exit(m.error().message) == 1
-                                    ? "INTERNAL"
-                                    : m.error().message.substr(0, m.error().message.find(':')),
-                                m.error().message);
+                    return fail("INTERNAL", m.error().message);
                 merged = m.value().stack;
                 defects.insert(defects.end(), m.value().defects.begin(), m.value().defects.end());
             } catch (const std::logic_error& e) {
@@ -782,31 +785,28 @@ int run_assembly(const ImportOptions& options) {
         defects = policy.defects;
         if (std::any_of(
                 defects.begin(), defects.end(), [](const Defect& d) { return d.tier == Tier::C; }))
-            return fail(7, "IMPORT_REJECTED", "IMPORT_REJECTED: C-tier defects");
+            return fail("IMPORT_REJECTED", "IMPORT_REJECTED: C-tier defects");
         if (policy.result == ImportResult::Rejected)
-            return fail(7, "IMPORT_REJECTED", "IMPORT_REJECTED: repair policy rejected import");
+            return fail("IMPORT_REJECTED", "IMPORT_REJECTED: repair policy rejected import");
         if (policy.result == ImportResult::ConfirmationRequired)
-            return fail(6,
-                        "IMPORT_CONFIRMATION_REQUIRED",
+            return fail("IMPORT_CONFIRMATION_REQUIRED",
                         "IMPORT_CONFIRMATION_REQUIRED: B-tier defects require acceptance");
         Cleanup output_cleanup{options.output};
         auto written = write_stack(merged, options.output);
         if (!written)
-            return fail(14, "INPUT_INVALID", written.error().reason);
+            return fail("INPUT_INVALID", written.error().reason);
         auto validated =
             mesh::load_stack(options.output, assembly_root() / "schema/stack-0.2.schema.json");
         if (!validated)
-            return fail(14, "INPUT_INVALID", validated.error().reason);
+            return fail("INPUT_INVALID", validated.error().reason);
         reports("OK", "");
         output_cleanup.p.clear();
         return 0;
 #endif
     } catch (const std::exception& e) {
         auto message = std::string(e.what());
-        auto exit = assembly_error_exit(message);
         try {
-            return fail(
-                exit, exit == 1 ? "INTERNAL" : message.substr(0, message.find(':')), message);
+            return fail("INTERNAL", message);
         } catch (const std::exception& report_error) {
             std::cerr << report_error.what() << '\n';
             return 1;

@@ -50,7 +50,7 @@ int main(int argc, char** argv) {
     XCAFApp_Application::GetApplication()->NewDocument("MDTV-XCAF", document);
     auto tool = XCAFDoc_DocumentTool::ShapeTool(document->Main());
     auto mapped = tool->AddShape(BRepPrimAPI_MakeBox(gp_Pnt(1, 1, 0), 1, 1, .5).Shape(), false);
-    TDataStd_Name::Set(mapped, "lid");
+    TDataStd_Name::Set(mapped, mode == "display" ? "NOT_CAE_GEOMETRY" : "lid");
     auto unmapped = tool->AddShape(BRepPrimAPI_MakeBox(gp_Pnt(4, 1, 0), 1, 1, .5).Shape(), false);
     TDataStd_Name::Set(unmapped, "unmapped");
     STEPCAFControl_Writer bulk;

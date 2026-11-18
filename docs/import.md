@@ -42,7 +42,11 @@ The build copies assembly/stack schemas and the error protocol into
 imports do not require the source checkout.
 Until E-ODB-3 supplies an implemented reader, ODB++ assembly boards reject with
 `odbpp reader not yet available`. Integration builds may enable
-`CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE` once that implementation is present.
+`CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE=ON` once that implementation is present.
+This explicit option defaults to OFF; source diagnostic text does not determine
+reader capability. Imported product names also enforce the display-only
+`NOT_CAE_GEOMETRY` rejection, including for ordinary STEP filenames and
+unmapped bodies in `parts_from_step`.
 
 Tests requiring SP2/SP3 geometry (thin-layer exit 6/acceptance, split reports,
 and merged STEP regions) skip with code 77 while those implementations are stubs.
