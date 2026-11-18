@@ -103,5 +103,25 @@ int main() {
         CrashDiag::finalize();
         check(read(diagnostic(dir, 5, ".signal")) == "existing evidence\n",
               "finalize removed nonempty signal evidence");
+        expect_throw<std::exception>([&] { CrashDiag::install(dir, 5); },
+                                     "installation must preserve existing nonempty evidence");
+        check(!CrashDiag::installed(), "refused installation left diagnostics active");
+        check(read(diagnostic(dir, 5, ".signal")) == "existing evidence\n",
+              "installation destroyed existing signal evidence");
+        check(descriptor_count() == count, "refused installation leaked descriptors");
+        actions.expect_restored();
+
+        CrashDiag::install(dir, 6);
+        CrashDiag::set_window(7, 0.35);
+        for (const double time : {std::numeric_limits<double>::quiet_NaN(),
+                                  std::numeric_limits<double>::infinity(),
+                                  -std::numeric_limits<double>::infinity()}) {
+            expect_throw<std::invalid_argument>([&] { CrashDiag::set_window(99, time); },
+                                                "nonfinite time must be rejected");
+            CrashDiag::on_error({});
+            expect_json(parse(diagnostic(dir, 6, ".json")), 6, CrashError{}, 7, 0.35);
+        }
+        CrashDiag::finalize();
+        actions.expect_restored();
     });
 }
