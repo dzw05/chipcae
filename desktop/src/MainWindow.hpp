@@ -12,6 +12,7 @@ class QLabel;
 #include <QTemporaryDir>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 namespace chipcae::desktop {
 class RunMonitor;
@@ -87,4 +88,12 @@ private:
     chipcae::desktop::LocalJobService* service_ = nullptr;
     chipcae::desktop::PreviewController* preview_ = nullptr;
     std::unique_ptr<QTemporaryDir> previewOutput_;
+    MeshDigestDialogChoice meshDigestDialogChoice_ = MeshDigestDialogChoice::Unset;
+    chipcae::desktop::MeshSha256Compare lastMeshDigestCompare_ =
+        chipcae::desktop::MeshSha256Compare::PreviewMissing;
+    QString lastMeshDigestDetail_;
+    bool lastOpenCancelledForMeshDigest_ = false;
+    std::optional<chipcae::desktop::MeshOptions> previewMeshOptions_;
+    QAction* writePreviewToCaseAction_ = nullptr;
+    void clearPreviewMeshOptions();
 };

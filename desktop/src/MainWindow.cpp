@@ -45,6 +45,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     profile_ = defaults.profile();
     auto* menu = menuBar()->addMenu(tr("File"));
     menu->addAction(tr("Preview"), this, [this] { previewMesh(); });
+    writePreviewToCaseAction_ =
+        menu->addAction(QStringLiteral("写入 case"), this, &MainWindow::writePreviewToCase);
+    writePreviewToCaseAction_->setEnabled(false);
+    connect(preview_, &chipcae::desktop::PreviewController::finished, this, [this](bool success) {
+        if (success) {
+            previewMeshOptions_ = document_.meshOptions();
+            writePreviewToCaseAction_->setEnabled(true);
+        } else {
+            clearPreviewMeshOptions();
+        }
+    });
     menu->addAction(tr("Submit"), this, [this] {
         chipcae::desktop::SubmitDialog dialog(this);
         dialog.setProfile(profile_);
@@ -91,7 +102,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     menu->addAction(tr("Open Results…"), this, [this] {
         const auto path =
             QFileDialog::getOpenFileName(this, tr("Open Results"), {}, "Manifest (*.json)");
-        if (!path.isEmpty() && !openResultsPath(path))
+        if (!path.isEmpty() && !openResultsPath(path) && !lastOpenCancelledForMeshDigest())
             QMessageBox::warning(
                 this, tr("Open Results"), tr("Cannot open result manifest or first step"));
     });
@@ -127,6 +138,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             &chipcae::desktop::ImportController::finished,
             this,
             [this, cancel, logTimer, appendLog](bool replaced) {
+                if (replaced)
+                    clearPreviewMeshOptions();
                 appendLog();
                 logTimer->stop();
                 cancel->hide();
@@ -353,6 +366,7 @@ bool MainWindow::openCase(const QString& path) {
         return false;
     if (!document_.load(path))
         return false;
+    clearPreviewMeshOptions();
     casePath_ = path;
     manualStack_ = false;
     refreshSourceUi();
@@ -414,6 +428,7 @@ bool MainWindow::loadHandwrittenStack(const QString& path) {
     try {
         if (!document_.setStackJson(chipcae::desktop::Json::parse(file.readAll().toStdString())))
             return false;
+        clearPreviewMeshOptions();
         manualStack_ = true;
         refreshSourceUi();
         return true;
@@ -422,34 +437,68 @@ bool MainWindow::loadHandwrittenStack(const QString& path) {
     }
 }
 
-// D12b-1 test-first compile stubs. Replace when implementing the feature.
-void MainWindow::setMeshDigestDialogChoice(MeshDigestDialogChoice) {}
+void MainWindow::setMeshDigestDialogChoice(MeshDigestDialogChoice choice) {
+    meshDigestDialogChoice_ = choice;
+}
 MainWindow::MeshDigestDialogChoice MainWindow::meshDigestDialogChoice() const {
-    return MeshDigestDialogChoice::Unset;
+    return meshDigestDialogChoice_;
 }
 chipcae::desktop::MeshSha256Compare MainWindow::lastMeshDigestCompare() const {
-    return chipcae::desktop::MeshSha256Compare::PreviewMissing;
+    return lastMeshDigestCompare_;
 }
 QString MainWindow::lastMeshDigestDetail() const {
-    return {};
+    return lastMeshDigestDetail_;
 }
 bool MainWindow::lastOpenCancelledForMeshDigest() const {
-    return false;
+    return lastOpenCancelledForMeshDigest_;
 }
 bool MainWindow::writePreviewToCase() {
-    return false;
+    if (!previewMeshOptions_)
+        return false;
+    const auto options = *previewMeshOptions_;
+    document_.setMeshOptions(options);
+    const bool finalized = document_.finalizeMeshForSubmit();
+    if (!finalized && !document_.errors().empty())
+        statusBar()->showMessage(document_.errors().front().message);
+    return finalized;
 }
 bool MainWindow::writePreviewToCaseEnabled() const {
-    return false;
+    return previewMeshOptions_.has_value();
+}
+void MainWindow::clearPreviewMeshOptions() {
+    previewMeshOptions_.reset();
+    writePreviewToCaseAction_->setEnabled(false);
 }
 
 bool MainWindow::openResultsPath(const QString& manifestPath) {
+    lastOpenCancelledForMeshDigest_ = false;
     auto session = std::make_unique<chipcae::desktop::ResultSession>();
     if (!session->open(manifestPath) || session->steps().isEmpty())
         return false;
     auto view = std::make_unique<chipcae::desktop::ResultView>();
     if (!view->loadStep(*session, session->steps().first().toObject()["n"].toInteger()))
         return false;
+    const auto& digest = preview_->digest();
+    const QString hash = digest ? QString::fromStdString(digest->mesh_sha256) : QString();
+    lastMeshDigestCompare_ = session->comparePreviewMeshSha256(hash, &lastMeshDigestDetail_);
+    using chipcae::desktop::MeshSha256Compare;
+    if (lastMeshDigestCompare_ == MeshSha256Compare::PreviewMissing)
+        lastMeshDigestDetail_.clear();
+    if (lastMeshDigestCompare_ == MeshSha256Compare::Mismatch ||
+        lastMeshDigestCompare_ == MeshSha256Compare::ManifestMissing) {
+        const QString warning = tr("网格摘要不一致：\n%1").arg(lastMeshDigestDetail_);
+        setProperty("meshDigestWarningText", warning);
+        bool accept = meshDigestDialogChoice_ == MeshDigestDialogChoice::Accept;
+        if (meshDigestDialogChoice_ == MeshDigestDialogChoice::Unset)
+            accept = QMessageBox::warning(this,
+                                          QStringLiteral("网格摘要不一致"),
+                                          warning,
+                                          QMessageBox::Ok | QMessageBox::Cancel) == QMessageBox::Ok;
+        if (!accept) {
+            lastOpenCancelledForMeshDigest_ = true;
+            return false;
+        }
+    }
     delete resultDock_;
     watermarkLabel_ = nullptr;
     delete takeCentralWidget();
@@ -490,6 +539,7 @@ bool MainWindow::workBusy() const {
 bool MainWindow::previewMesh(const QString& program, const QStringList& prefix) {
     if (workBusy() || !caseIsOpen())
         return false;
+    clearPreviewMeshOptions();
     previewOutput_ = std::make_unique<QTemporaryDir>();
     // Saving a temporary bundle preserves external polyset references for preview.
     if (document_.toJson().contains("schema")) {
