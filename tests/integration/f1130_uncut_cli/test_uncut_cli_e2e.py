@@ -15,7 +15,6 @@ import sys
 import tempfile
 import time
 import unittest
-import xml.etree.ElementTree as ET
 from unittest.mock import patch
 
 SOURCE = Path(__file__).resolve().parents[3]
@@ -82,25 +81,6 @@ def compare_import(imported, golden):
             f'expected={want["thickness"]!r}')
 
 
-def write_populated_fixture(root):
-    """Populate the public board without changing its outline or layer stack."""
-    tree = ET.parse(SOURCE / 'tests/integration/ecad/data/board_4layer.xml')
-    step = tree.getroot().find('./Ecad/CadData/Step')
-    assert step is not None
-    # Keep F.Cu's original trace; add rectangles with areas 3, 6, 9 mm²
-    # inside the original 25 mm² outline. All stack dimensions stay intact.
-    for name, top in [('In1.Cu', '1.5'), ('In2.Cu', '2.5'), ('B.Cu', '3.5')]:
-        feature = ET.SubElement(step, 'LayerFeature', layerRef=name)
-        polygon = ET.SubElement(ET.SubElement(feature, 'Set'), 'Polygon')
-        ET.SubElement(polygon, 'PolyBegin', x='1', y='0.5')
-        for x, y in [('4', '0.5'), ('4', top), ('1', top)]:
-            ET.SubElement(polygon, 'PolyStepSegment', x=x, y=y)
-    tree.write(root / 'populated_board_4layer.xml', encoding='utf-8', xml_declaration=True)
-    # Material library IDs permit lowercase letters, digits, underscores and
-    # hyphens; stack validation also requires Homogenized IDs to end in _eq.
-    write_json(root / 'solver_material_map.json', {'FR4': 'mat_fr4_eq', 'copper': 'mat_cu'})
-
-
 def compare_fractions(report, converted, imported, measurements):
     copper_names = ['F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu']
     entries = report['layers']
@@ -118,26 +98,24 @@ def compare_fractions(report, converted, imported, measurements):
         assert layer['material'] == original['material'], f'converted layer[{index}] material changed'
         if layer['name'] in fractions:
             copper = layer['copper']
-            assert copper['metal'] == 'mat_cu', layer
+            assert copper['metal'] == original['copper']['metal'], layer
             assert 'polygons' not in copper, layer
             assert math.isclose(copper['fraction'], fractions[layer['name']],
                                 rel_tol=1e-12, abs_tol=0), layer
-    # Original F.Cu golden area: 0.307835 mm² / 25 mm² = 0.0123134.
-    # Supplemented rectangles: 3, 6, 9 mm² / 25 mm² board area.
-    for name, expected in zip(copper_names, (.0123134, .12, .24, .36), strict=True):
+    for name in copper_names:
         fraction = fractions[name]
         assert math.isfinite(fraction) and 0 < fraction <= 1, (
             f'M1 copper fraction {name}: actual={fraction!r} expected 0 < fraction <= 1; '
             f'all fractions={fractions!r}')
-        assert math.isclose(fraction, expected, rel_tol=1e-12, abs_tol=0), (
-            f'M1 copper fraction {name}: actual={fraction!r} expected={expected}')
+    # Independent trace-area reference: 0.307835 mm² / 25 mm².
+    assert math.isclose(fractions['F.Cu'], .0123134, rel_tol=1e-12, abs_tol=0), fractions
 
 
 def write_solver_inputs(root):
     # Illustrative definitions and case fields copied from test_ipc_uncut_chain.py.
     materials = []
-    for name, E, nu, alpha, k in [('mat_cu', 110e9, .34, 17e-6, 390),
-                                 ('mat_fr4_eq', 25e9, .3, 1e-5, .3)]:
+    for name, E, nu, alpha, k in [('mat.cu', 110e9, .34, 17e-6, 390),
+                                 ('mat.fr4', 25e9, .3, 1e-5, .3)]:
         def table(columns):
             return dict(temperatures=[298.15],
                         columns={key: [value] for key, value in columns.items()},
@@ -153,8 +131,7 @@ def write_solver_inputs(root):
     write_json(root / 'case.json', dict(
         schema='chipcae.case/1.0', stack=dict(ref='solve.stack.json'),
         materials=dict(ref='materials.json'),
-        mesh=dict(type='aligned_cartesian_cut', nx=4, ny=4, levels=0, max_ratio=100,
-                  min_elems_per_layer=1),
+        mesh=dict(type='aligned_cartesian_cut', nx=4, ny=4, levels=0, max_ratio=100),
         physics=[dict(id='thermal', solver='fem.conduction', mode='steady'),
                  dict(id='mech', solver='fem.solid', temp_from='thermal', T_ref=298.15)],
         loads=[dict(type='fixed_temperature', target='face:zmin', T=298.15),
@@ -178,7 +155,7 @@ def inspect_run(run_dir, stack, preview_count, measurements, np, h5py):
         if key != 'T_max':
             assert summary[key] > 0, (key, summary)
     measurements['qoi'] = {key: summary[key] for key in QOIS}
-    conductivity = {'mat_cu': 390, 'mat_fr4_eq': .3}
+    conductivity = {'mat.cu': 390, 'mat.fr4': .3}
     layers = []
     for layer in stack['layers']:
         k = conductivity[layer['material']]
@@ -308,26 +285,6 @@ def main():
             imported = read_json(root / 'stack.json')
             golden = read_json(SOURCE / 'tests/integration/import_cli/golden/board_4layer/stack.json')
             compare_import(imported, golden)
-            # First lock the original importer contract to the untouched golden.
-            # Then import a documented populated variant for numerical acceptance.
-            write_populated_fixture(root)
-            run_command('import populated board', [importer, 'populated_board_4layer.xml',
-                        '-o', 'stack.json', '--polyset', 'stack.polyset',
-                        '--report', 'defects.json', '--material-map', 'solver_material_map.json'],
-                        root, timings)
-            artifact(root / 'stack.polyset')
-            artifact(root / 'defects.json')
-            populated = read_json(root / 'stack.json')
-            expected = json.loads(json.dumps(golden))
-            material_ids = {'mat.cu': 'mat_cu', 'mat.fr4': 'mat_fr4_eq'}
-            for layer in expected['layers']:
-                layer['material'] = material_ids[layer['material']]
-            compare_import(populated, expected)
-            assert populated['outline'] == imported['outline'], 'M1 outline changed'
-            imported = populated
-            notes.append('Numerical fixture: original F.Cu trace plus 3/6/9 mm² rectangles '
-                         'on In1.Cu/In2.Cu/B.Cu; map FR4=mat_fr4_eq, copper=mat_cu. '
-                         'Original fixture/map separately matched the untouched golden.')
             setup_checks['import'] = True
             run_command('fraction conversion', [sys.executable, SOURCE / 'tools/stack/copper_fraction.py',
                                                'stack.json', '-o', 'solve.stack.json',
@@ -432,6 +389,16 @@ def main():
 
 
 class AcceptanceRecords(unittest.TestCase):
+    def test_solver_inputs_retain_specified_mesh_and_golden_material_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_solver_inputs(root)
+            case = read_json(root / 'case.json')
+            self.assertEqual(case['mesh'], dict(type='aligned_cartesian_cut', nx=4, ny=4,
+                                                levels=0, max_ratio=100))
+            materials = read_json(root / 'materials.json')['materials']
+            self.assertEqual([material['id'] for material in materials], ['mat.cu', 'mat.fr4'])
+
     def test_import_rejects_changed_literal_material_id(self):
         golden = read_json(SOURCE / 'tests/integration/import_cli/golden/board_4layer/stack.json')
         original = json.dumps(golden)
@@ -441,6 +408,22 @@ class AcceptanceRecords(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, 'material:'):
             compare_import(imported, golden)
         self.assertEqual(json.dumps(golden), original)
+
+    def test_zero_copper_fraction_cannot_be_accepted(self):
+        imported = read_json(SOURCE / 'tests/integration/import_cli/golden/board_4layer/stack.json')
+        converted = json.loads(json.dumps(imported))
+        entries = []
+        for layer in converted['layers']:
+            if 'copper' in layer:
+                fraction = .0123134 if layer['name'] == 'F.Cu' else 0.0
+                layer['copper'] = dict(metal='mat.cu', fraction=fraction)
+                entries.append(dict(layer=layer['name'], fraction=fraction))
+        measurements = {}
+        with redirect_stdout(StringIO()), self.assertRaisesRegex(
+                AssertionError, 'copper fraction In1.Cu: actual=0.0'):
+            compare_fractions(dict(layers=entries), converted, imported, measurements)
+        self.assertTrue(math.isclose(measurements['copper_fractions']['In1.Cu'], 0.0,
+                                     rel_tol=0, abs_tol=1e-15))
 
     def write_record(self, root, checks, failures=(), ranks=1, parallel_required=False):
         measurements = dict(
@@ -523,7 +506,8 @@ class AcceptanceRecords(unittest.TestCase):
                         dict(name='warpage_pv', value=warpage),
                         dict(name='U_mag_max', value=2e-6), dict(name='T_max', value=336.62)]))
                 write_json(root / 'summary.json', dict(
-                    warpage=dict(w_bfp_m=1.01e-6 if failure == 'readback' else 1e-6)))
+                    warpage=dict(manifest_warpage_pv_m=warpage,
+                                 w_bfp_m=1e-6 * (1 + 6.8e-12) if failure == 'readback' else 1e-6)))
                 with h5py.File(root / 'out/step-0.vtkhdf', 'w') as file:
                     file['VTKHDF/cut/NumberOfCells'] = [0]
                     file['VTKHDF/hex/NumberOfCells'] = [1]
@@ -532,7 +516,7 @@ class AcceptanceRecords(unittest.TestCase):
                     top = 336.61153846153843 + (.001 if failure == 'temperature' else 0)
                     file['VTKHDF/hex/PointData/T'] = [298.15, top]
                 measurements = dict(acceptance_checks={})
-                stack = dict(layers=[dict(material='mat_fr4_eq', thickness=.001)])
+                stack = dict(layers=[dict(material='mat.fr4', thickness=.001)])
                 with redirect_stdout(StringIO()):
                     if failure is None:
                         inspect_run(root, stack, 1, measurements, np, h5py)
