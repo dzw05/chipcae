@@ -681,7 +681,7 @@ ImportResult detail::Ipc2581StreamParser::finish() {
     if (state_->error.empty() && XML_Parse(state_->parser.parser, "", 0, true) == XML_STATUS_ERROR)
         state_->error = XML_ErrorString(XML_GetErrorCode(state_->parser.parser));
     if (!state_->error.empty()) {
-        result.error = state_->error;
+        result.error = "IMPORT_REJECTED: " + state_->error;
         return result;
     }
     auto& state = state_->parser;

@@ -297,6 +297,7 @@ int main(int argc, char** argv) {
                     zip(archive, {{"broken.xml", xml}}, deflate);
                     auto a = ecad::read_ipc2581(xml), b = ecad::read_ipc2581_zip(archive);
                     require(!a && !b, "both malformed XML imports must fail");
+                    rejected(b, {});
                     require(a.error == b.error,
                             "XML diagnostics differ: direct=" + a.error + " ZIP=" + b.error);
                 }
