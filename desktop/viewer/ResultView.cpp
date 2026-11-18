@@ -264,8 +264,10 @@ bool ResultView::setProvenance(const QJsonObject& provenance) {
     const int effectiveRank = provenance.contains("effective_source")
                                   ? severity(provenance["effective_source"])
                                   : sourceRank;
+    // A present degraded flag must be boolean; malformed flags use unknown/MOCK markings.
+    const bool validDegraded = !provenance.contains("degraded") || provenance["degraded"].isBool();
     const bool valid = provenance["schema"] == "chipcae.provenance/0.1" && sourceRank >= 0 &&
-                       effectiveRank >= sourceRank;
+                       effectiveRank >= sourceRank && validDegraded;
     const int rank = effectiveRank;
     d->watermark.clear();
     d->banner.clear();

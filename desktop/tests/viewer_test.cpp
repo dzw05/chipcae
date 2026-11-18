@@ -604,6 +604,48 @@ int acceptance(const QDir& root) {
             });
         }
     }
+    for (const auto& degraded : {QJsonValue("true"),
+                                 QJsonValue(1),
+                                 QJsonValue(QJsonValue::Null),
+                                 QJsonValue(QJsonArray{}),
+                                 QJsonValue(QJsonObject{})}) {
+        run("malformed degraded provenance", [&] {
+            ResultSession session;
+            require(session.open(root.filePath("default")), qPrintable(session.error()));
+            ResultView view;
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            // Start clean so rejection must restore all non-real markings.
+            require(view.setProvenance({{"schema", "chipcae.provenance/0.1"},
+                                        {"source", "real"},
+                                        {"degraded", false}}),
+                    "boolean false degraded rejected");
+            require(view.provenanceWatermark().isEmpty() && view.provenanceBanner().isEmpty(),
+                    "boolean false degraded marked");
+            require(!view.setProvenance({{"schema", "chipcae.provenance/0.1"},
+                                         {"source", "real"},
+                                         {"degraded", degraded}}),
+                    "non-boolean degraded accepted");
+            require(view.provenanceWatermark() == "MOCK" &&
+                        view.provenanceBanner().contains(QStringLiteral("来源未知")) &&
+                        !view.provenanceBanner().contains(QStringLiteral("真实计算")),
+                    "malformed degraded suppressed provenance markings");
+            bool visibleBanner = false;
+            for (auto label : view.findChildren<QLabel*>())
+                if (label->text() == view.provenanceBanner())
+                    visibleBanner = !label->isHidden() && label->isVisibleTo(&view);
+            require(visibleBanner, "malformed degraded banner hidden");
+            int overlays = 0;
+            auto props = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetViewProps();
+            props->InitTraversal();
+            while (auto prop = props->GetNextProp())
+                if (auto text = vtkTextActor::SafeDownCast(prop)) {
+                    ++overlays;
+                    require(text->GetVisibility() && QString(text->GetInput()) == "MOCK",
+                            "malformed degraded viewport marking suppressed");
+                }
+            require(overlays == 1, "malformed degraded viewport overlay missing");
+        });
+    }
     run("mock real mock transition", [&] {
         ResultSession session;
         require(session.open(root.filePath("default")), qPrintable(session.error()));
