@@ -154,7 +154,8 @@ def _load(path):
     refs = stack.get('external_refs', [])
     if not isinstance(refs, list):
         _invalid('invalid external_refs')
-    for ref in refs:
+
+    def validate_ref(ref):
         if not isinstance(ref, dict):
             _invalid('external reference must be an object')
         for field in ('path', 'sha256'):
@@ -171,12 +172,12 @@ def _load(path):
         if Path(file).is_absolute() or '..' in Path(file).parts or '\\' in file or '://' in file:
             _invalid('polyset path must be relative')
         if file not in polysets:
-            refs = stack.get('external_refs', [])
-            if not isinstance(refs, list):
-                _invalid('invalid external_refs')
-            matching_refs = [r for r in refs if r['path'] == file]
+            matching_refs = [r for r in refs
+                             if isinstance(r, dict) and r.get('path') == file]
             if not matching_refs:
                 raise EcadDiffError(12, 'INPUT_REFERENCE_MISSING', 'polyset absent from external_refs')
+            for ref in matching_refs:
+                validate_ref(ref)
             try:
                 stack_directory = Path(path).parent.resolve()
                 polyset_path = (stack_directory / file).resolve()
@@ -218,6 +219,7 @@ def _load(path):
         # Outline-only sidecars have no explicit file field in stack/0.2.
         # Validate each consulted reference before inspecting its layers.
         for ref in refs:
+            validate_ref(ref)
             load_polyset(ref['path'])
         candidates = [p['outline'] for p in polysets.values() if 'outline' in p]
         if len(candidates) > 1:

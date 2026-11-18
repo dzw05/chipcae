@@ -228,8 +228,7 @@ def main():
             'ecad_diff: INPUT_INVALID: delta must be a finite positive number\n')
         assert not out.exists()
 
-        # Required reference metadata is checked before either copper loading
-        # or outline discovery, including when an explicit outline is present.
+        # Required metadata is checked for consulted references only.
         for representation in ('discovery', 'copper', 'explicit_outline'):
             for field in ('path', 'sha256'):
                 for value in ('absent', None, '', 123):
@@ -248,6 +247,16 @@ def main():
                         ref[field] = value
                     path = save(folder / 'stack.json', b)
                     out = folder / 'reports'
+                    if representation == 'explicit_outline':
+                        result = diff_stacks(good, path)
+                        assert result['summary']['hard'] == result['summary']['discuss'] == 0
+                        proc = subprocess.run(
+                            [sys.executable, str(ROOT / 'tools/vv/ecad_diff.py'),
+                             '--odb', str(good), '--ipc', str(path), '-o', str(out)],
+                            capture_output=True, text=True)
+                        assert proc.returncode == 0, proc.stderr
+                        assert (out / 'diff.json').exists() and (out / 'diff.md').exists()
+                        continue
                     try:
                         diff_stacks(good, path)
                     except EcadDiffError as exc:
@@ -263,6 +272,17 @@ def main():
                     assert len(proc.stderr.splitlines()) == 1, proc.stderr
                     assert proc.stderr.startswith('ecad_diff: INPUT_REFERENCE_MISSING: '), proc.stderr
                     assert not out.exists()
+
+        # Unrelated metadata cannot invalidate a used, verified copper sidecar.
+        for unrelated in (None, {}, {'path': ''}, {'path': 'unused.polyset'},
+                          {'path': 'unused.polyset', 'sha256': 'invalid'}):
+            b = board()
+            polyset(directory, b)
+            b['outline']['polygon'] = [[0, 0], [0.01, 0], [0.01, 0.005], [0, 0.005]]
+            b['external_refs'].append(unrelated)
+            path = save(directory / 'unrelated.json', b)
+            result = diff_stacks(good, path)
+            assert result['summary']['hard'] == result['summary']['discuss'] == 0
 
         # Without an explicit polygon, every reference is consulted for outline
         # discovery and must pass the same validation as copper sidecars.
