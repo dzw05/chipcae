@@ -299,7 +299,11 @@ int run_ecad(const ImportOptions& options) {
     return CliExit::import_rejected;
 #else
     auto reject = [&](const std::string& message, bool missing = false) {
-        write_defects(report, missing ? "MATERIAL_MAPPING_MISSING" : "IMPORT_REJECTED", message);
+        // The shared summary writer inserts message bytes between JSON quotes.
+        const auto encoded = json_string(message);
+        write_defects(report,
+                      missing ? "MATERIAL_MAPPING_MISSING" : "IMPORT_REJECTED",
+                      encoded.substr(1, encoded.size() - 2));
         if (!message.starts_with("IMPORT_") && !message.starts_with("MATERIAL_"))
             std::cerr << (missing ? "MATERIAL_MAPPING_MISSING: " : "IMPORT_REJECTED: ");
         std::cerr << message << '\n';
