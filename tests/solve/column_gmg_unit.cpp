@@ -16,6 +16,32 @@
 #include <utility>
 #include <vector>
 
+// Compile-only stubs live in the test executable, never in chipcae_fem. The implementation's
+// public feature definition disables them, so real GMG code must satisfy every assertion below.
+#ifndef CHIPCAE_FEM_COLUMN_GMG
+namespace chipcae::fem {
+ColumnGmgHierarchy build_column_gmg_hierarchy(const mesh::HexMeshArrays&,
+                                              bool,
+                                              int,
+                                              const mfem::FiniteElementSpace&,
+                                              const mfem::Array<int>&) {
+    return {};
+}
+
+ColumnGmgStats solve_column_gmg(const mesh::HexMeshArrays&,
+                                bool,
+                                int,
+                                const mfem::FiniteElementSpace&,
+                                const mfem::SparseMatrix&,
+                                const mfem::Array<int>&,
+                                const mfem::Vector&,
+                                mfem::Vector&,
+                                const ColumnGmgOptions&) {
+    return {};
+}
+} // namespace chipcae::fem
+#endif
+
 namespace {
 using namespace chipcae;
 
@@ -46,7 +72,7 @@ mesh::HexMeshArrays regular_grid(int levels) {
     options.levels = levels;
     options.max_ratio = 100;
     auto result = mesh::build_tensor_grid(stack, options);
-    require(result.has_value(), "two-layer unit-box grid construction");
+    require(static_cast<bool>(result), "two-layer unit-box grid construction");
     auto arrays = std::move(result.value());
     require(arrays.grid_report.levels == levels, "fixture levels must match the requested levels");
     require(arrays.grid_report.level_axes.size() == static_cast<std::size_t>(levels),
@@ -318,7 +344,14 @@ struct SpdSystem {
         initial = 0.;
         mfem::Vector load(fixture.space.GetVSize());
         load = 0.;
-        form.FormLinearSystem(fixture.essential, initial, load, A, x, b);
+        mfem::Vector formed_x, formed_b;
+        form.FormLinearSystem(fixture.essential, initial, load, A, formed_x, formed_b);
+        // FormLinearSystem may alias its input vectors. Keep the solve buffers owned after
+        // the temporary GridFunction and load leave this constructor's scope.
+        x.SetSize(formed_x.Size());
+        x = 0.;
+        b.SetSize(formed_b.Size());
+        b = formed_b;
         mfem::Vector exact(A.Width());
         // Several frequencies prevent a one-step CG solve on this deterministic SPD operator.
         for (int i = 0; i < exact.Size(); ++i)
@@ -445,9 +478,9 @@ int main(int argc, char** argv) {
                 geometry.planes.push_back({body, {1, 0, 0}, .3});
             const auto cut = mesh::cut::build_cut_layer(
                 std::as_const(f.arrays), geometry, mesh::cut::CutOptions{});
-            require(cut.has_value() && !cut->cut_elem.empty(),
+            require(static_cast<bool>(cut) && !cut.value().cut_elem.empty(),
                     "cut fixture must contain actual cut elements");
-            expect_unsupported(f.arrays, cut.has_value(), 1, f, "cut mesh");
+            expect_unsupported(f.arrays, static_cast<bool>(cut), 1, f, "cut mesh");
         });
         run("pending cut", [] {
             Fixture f(2, 1);
@@ -477,8 +510,9 @@ int main(int argc, char** argv) {
         });
         run("R4 GID/geometry mismatch", [] {
             Fixture f(2, 1);
-            const auto nz = f.arrays.axes[2].size() - 1;
-            std::swap(f.arrays.elem_gid[0], f.arrays.elem_gid[nz]);
+            // Preserve unique/in-range GIDs and cell counts; only their z geometry is wrong.
+            // Both offending cells are in dense column 0, independent of traversal order.
+            std::swap(f.arrays.elem_gid[0], f.arrays.elem_gid[1]);
             expect_unsupported(f.arrays, false, 1, f, "non-regular column 0");
         });
         run("zero RHS", check_zero_rhs);

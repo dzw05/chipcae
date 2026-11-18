@@ -9,6 +9,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 import zlib
 
 import h5py
@@ -49,7 +50,41 @@ def run(exe, mpiexec, source, root, name, nx, ny, levels, preconditioner, ranks=
     command = [exe, '--case', str(case_path), '--profile', str(profile), '--out', str(out)]
     if ranks > 1:
         command = [mpiexec, '-np', str(ranks), *command]
-    result = subprocess.run(command, capture_output=True, text=True, timeout=840)
+    # A forbidden np=1 fallback is already a failure. Observe it before the old LU path
+    # consumes demo-scale memory; a working GMG path still must finish and pass readback.
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
+        deadline = time.monotonic() + 840
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, 840)
+                try:
+                    stdout, stderr = process.communicate(timeout=min(.25, remaining))
+                    break
+                except subprocess.TimeoutExpired as poll:
+                    if preconditioner == 'column_gmg' and ranks == 1:
+                        try:
+                            live = events(out / 'events.bin')
+                        except (FileNotFoundError, AssertionError, struct.error):
+                            # An event may be only partially written while the child runs.
+                            continue
+                        fallback = [payload for kind, payload in live
+                                    if kind == 20 and b'not yet available' in payload]
+                        if fallback:
+                            raise AssertionError((
+                                f'{name}: events are missing the U column_gmg L= line; '
+                                'np=1 selected the forbidden LU fallback', fallback, poll.stderr
+                            )) from None
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.communicate()
+        result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
     assert result.returncode == 0, (name, command, result.returncode, result.stdout, result.stderr)
     config = re.search(r'run_config levels=(\d+) n0=(\d+)x(\d+)', result.stderr)
     assert config, f'{name}: stderr is missing run_config: {result.stderr}'
@@ -125,12 +160,12 @@ def main():
         references = []
         gmgs = []
         for size, levels, label in ((8, 2, 'coarse'), (16, 3, 'fine')):
-            direct = run(exe, mpiexec, Path(source), root, label + '-direct',
-                         size, size, levels, 'direct')
             gmg = run(exe, mpiexec, Path(source), root, label + '-gmg',
                       size, size, levels, 'column_gmg')
-            lu_stats(direct)
             iterations.append(gmg_stats(gmg))
+            direct = run(exe, mpiexec, Path(source), root, label + '-direct',
+                         size, size, levels, 'direct')
+            lu_stats(direct)
             compare(direct, gmg)
             references.append(direct)
             gmgs.append(gmg)
