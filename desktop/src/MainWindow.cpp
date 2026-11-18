@@ -549,8 +549,11 @@ QString MainWindow::sourceBannerText() const {
         text = provenance_.label();
     if (manualStack_ || provenance_.degraded == "manual_stack")
         text += " 叠层为手写模板";
-    if (fallback_)
-        text.prepend("现场求解失败，显示预计算结果 " + provenance_.generatedAt + " ");
+    if (fallback_) {
+        const auto generatedAt =
+            provenance_.generatedAt.isEmpty() ? QString("生成时间未知") : provenance_.generatedAt;
+        text.prepend("现场求解失败，显示预计算结果 " + generatedAt + " ");
+    }
     return text;
 }
 QString MainWindow::provenanceWatermark() const {

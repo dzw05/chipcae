@@ -15,6 +15,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QPushButton>
+#include <QStatusBar>
 #include <QSurfaceFormat>
 #include <QTemporaryDir>
 #include <QThread>
@@ -149,6 +150,23 @@ struct Fixture {
                       .toJson());
         return dir;
     }
+    QString previewScript() {
+        // Adapt the CLI fixture outside the schema-validated document.
+        auto previewScript = temp.filePath("mock_window_preview.py");
+        auto fixtureStack = temp.filePath("preview-input.json");
+        write(fixtureStack,
+              QJsonDocument(
+                  QJsonObject{{"mock", QJsonObject{{"fixture", samples + "/legacy.vtkhdf"}}}})
+                  .toJson());
+        auto encoded = [](const QString& value) {
+            auto json = QJsonDocument(QJsonArray{value}).toJson(QJsonDocument::Compact);
+            return json.mid(1, json.size() - 2);
+        };
+        write(previewScript,
+              "import sys, runpy\nsys.argv[1] = " + encoded(fixtureStack) + "\nrunpy.run_path(" +
+                  encoded(PREVIEW_MOCK) + ", run_name='__main__')\n");
+        return previewScript;
+    }
     void openCase(MainWindow& w) {
         check(w.openCase(QString(CHIPCAE_REPOSITORY) + "/schema/examples/fcbga_demo.case.json"),
               "open case fixture");
@@ -167,6 +185,22 @@ QPushButton* button(MainWindow& w, const QString& text) {
         if (b->text().compare(text, Qt::CaseInsensitive) == 0)
             return b;
     return nullptr;
+}
+void checkCanRestart(MainWindow& w, Fixture& f) {
+    auto controllers = w.findChildren<PreviewController*>();
+    check(controllers.size() == 1, "window owns preview controller");
+    bool finished = false, success = false;
+    QObject receiver;
+    QObject::connect(controllers.first(), &PreviewController::finished, &receiver, [&](bool ok) {
+        finished = true;
+        success = ok;
+    });
+    check(w.previewMesh(PYTHON_EXECUTABLE, {f.previewScript()}),
+          "terminal job permits another preview");
+    check(waitFor([&] { return finished; }) && success && controllers.first()->mesh(),
+          "preview after terminal job produces mesh");
+    check(w.submitCurrentCase(), "terminal job permits another submit");
+    check(runDirectories(f.root()).size() == 2, "second submit creates a new service job");
 }
 void sourceChecks(MainWindow& w, const QString& source) {
     auto badge = w.sourceBadgeText(), banner = w.sourceBannerText();
@@ -311,26 +345,23 @@ int main(int argc, char** argv) {
         }
         check(runDirectories(f.root()).isEmpty(), "service has no persisted jobs");
     });
+    test("failed profile persistence prevents submission", [&] {
+        Fixture f(argv[1]);
+        f.configure();
+        check(QDir().mkpath(f.root() + "/submit-profile.json"),
+              "block profile file with directory");
+        MainWindow w;
+        f.openCase(w);
+        check(!w.submitCurrentCase(), "profile write failure rejects submission");
+        check(runDirectories(f.root()).isEmpty(), "profile write failure creates no service job");
+        check(!w.statusBar()->currentMessage().isEmpty(), "profile write failure is reported");
+    });
     test("preview finish and busy guards", [&] {
         Fixture f(argv[1]);
         f.configure();
         MainWindow w;
         f.openCase(w);
-        // Adapt the CLI fixture outside the schema-validated document.
-        auto previewScript = f.temp.filePath("mock_window_preview.py");
-        auto fixtureStack = f.temp.filePath("preview-input.json");
-        write(fixtureStack,
-              QJsonDocument(
-                  QJsonObject{
-                      {"mock", QJsonObject{{"fixture", QString(argv[1]) + "/legacy.vtkhdf"}}}})
-                  .toJson());
-        auto encoded = [](const QString& value) {
-            auto json = QJsonDocument(QJsonArray{value}).toJson(QJsonDocument::Compact);
-            return json.mid(1, json.size() - 2);
-        };
-        write(previewScript,
-              "import sys, runpy\nsys.argv[1] = " + encoded(fixtureStack) + "\nrunpy.run_path(" +
-                  encoded(PREVIEW_MOCK) + ", run_name='__main__')\n");
+        auto previewScript = f.previewScript();
         bool finished = false, success = false;
         // Controllers are QObject children; subscribe before start, including lazily created
         // controllers.
@@ -386,6 +417,7 @@ int main(int argc, char** argv) {
         check(w.resultView() == view, "result opened once");
         check(!w.openResultsPath(f.temp.filePath("missing.json")) && w.resultView() == view,
               "failed manifest preserves view");
+        checkCanRestart(w, f);
     });
     for (auto source : {"real", "mock", "precomputed", "missing", "REAL"}) {
         test((QString("provenance and screenshot ") + source).toUtf8().constData(), [&] {
@@ -399,13 +431,25 @@ int main(int argc, char** argv) {
             checkWatermark(png, w.provenanceWatermark().toUtf8());
         });
     }
-    for (auto source : {"precomputed", "missing", "unconfigured", "absent-manifest"}) {
+    for (auto source : {"precomputed",
+                        "missing",
+                        "missing-time",
+                        "invalid-time",
+                        "unconfigured",
+                        "absent-manifest"}) {
         test((QString("failed job fallback ") + source).toUtf8().constData(), [&] {
             Fixture f(argv[1]);
             QString fallback;
             if (QString(source) != "unconfigured")
                 fallback = QString(source) == "absent-manifest" ? f.temp.filePath("absent")
                                                                 : f.result(source);
+            if (QString(source) == "missing-time" || QString(source) == "invalid-time") {
+                QJsonObject provenance{{"schema", "chipcae.provenance/0.1"},
+                                       {"source", "precomputed"}};
+                if (QString(source) == "invalid-time")
+                    provenance["generated_at"] = "invalid timestamp";
+                write(fallback + "/provenance.json", QJsonDocument(provenance).toJson());
+            }
             f.configure(fallback, true);
             MainWindow w;
             f.openCase(w);
@@ -431,11 +475,22 @@ int main(int argc, char** argv) {
                     check(w.sourceBannerText().contains("2026-11-17") &&
                               w.sourceBannerText().contains("09:02:03"),
                           "generated_at in Shanghai time");
-                } else
+                } else if (QString(source) == "missing") {
                     check(w.sourceBadgeText().contains("来源未知") &&
                               w.provenanceWatermark() == "MOCK",
                           "missing fallback provenance");
+                    check(w.sourceBannerText().contains("生成时间未知"),
+                          "missing provenance explicitly reports unknown generation time");
+                } else {
+                    check(w.provenanceWatermark() == "预计算" &&
+                              w.sourceBadgeText().contains("预计算"),
+                          "invalid timestamp preserves precomputed source");
+                    check(w.sourceBannerText().contains("生成时间未知"),
+                          "missing or invalid timestamp is explicit in fallback banner");
+                }
             }
+            if (QString(source) == "precomputed")
+                checkCanRestart(w, f);
         });
     }
     test("monitor status format, filename and source", [&] {
@@ -509,6 +564,7 @@ int main(int argc, char** argv) {
         cancel->click();
         check(waitFor([&] { return persistedJob(f.root()).state() == jobs::JOB_STATE_CANCELLED; }),
               "Cancel API changes job state");
+        checkCanRestart(w, f);
     });
     std::cout << "Acceptance failures: " << failures << '\n';
     return failures ? 1 : 0;
