@@ -75,6 +75,23 @@ int main() {
                       "fully contained triangle has no polygon-outline outside defect");
             }
         }
+        for (bool stale : {false, true}) {
+            auto polygon_only = base();
+            polygon_only.outline.polygon = rect(0, 0, .02, .02).outer.pts;
+            polygon_only.outline.box =
+                stale ? std::array<double, 4>{1, 1, 2, 2} : std::array<double, 4>{};
+            check(!defect(merge(polygon_only, {part()}), DefectReason::PART_OUTSIDE_OUTLINE),
+                  "polygon outline overrides missing or stale box");
+            auto outside = part("outside");
+            outside.slabs[0].sections = {rect(.019, .019)};
+            check(defect(merge(polygon_only, {outside}), DefectReason::PART_OUTSIDE_OUTLINE),
+                  "polygon-only outline still detects outside material");
+            polygon_only.layers[0].regions.push_back(
+                {"polygon-seed", "different", "board", {{1, 1, 2, 2}, rect(.002, .002).outer.pts}});
+            check(defect(merge(polygon_only, {part("inside", .0005, .001)}, .001),
+                         DefectReason::PART_OVERLAP),
+                  "polygon base inclusion overrides stale bounds for overlap");
+        }
         auto seeded = base();
         seeded.layers[0].regions.push_back(
             {"seed", "different", "board", {{.002, .002, .006, .006}, {}}});

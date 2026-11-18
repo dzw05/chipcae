@@ -274,8 +274,9 @@ Real convex_intersection(Polygon subject, const Polygon& clip) {
     return area(subject);
 }
 Real intersection(const Footprint& a, const Footprint& b) {
-    if (a.box[0] >= b.box[2] || b.box[0] >= a.box[2] || a.box[1] >= b.box[3] ||
-        b.box[1] >= a.box[3])
+    const auto ab = a.polygon.empty() ? a.box : footprint(a.polygon, true).box;
+    const auto bbounds = b.polygon.empty() ? b.box : footprint(b.polygon, true).box;
+    if (ab[0] >= bbounds[2] || bbounds[0] >= ab[2] || ab[1] >= bbounds[3] || bbounds[1] >= ab[3])
         return 0;
     Real sum = 0;
     auto aa = fragments({Ring{polygon(a)}, {}});
@@ -342,9 +343,6 @@ place(std::vector<Slab> local, const Placement& placement, const StackModel& bas
             }
             if (!found)
                 return invalid("unknown attachment layer");
-        } else if (attach.target.rfind("part:", 0) == 0 && attach.target.size() > 5 &&
-                   attach.resolved_z) {
-            face = *attach.resolved_z;
         } else {
             return invalid("invalid or unresolved attachment target");
         }
@@ -420,15 +418,51 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
                 name.starts_with(p.id + ".bond#"))
                 return invalid("part id collides with " + name);
     }
+    struct Source {
+        Real lo, hi;
+        std::vector<Footprint> regions;
+    };
+    std::vector<std::vector<Source>> sources;
+    // Resolve support before any source may influence alignment.
+    for (const auto& p : parts) {
+        std::vector<Source> slabs;
+        Polygon prior_polygon;
+        for (const auto& s : p.slabs) {
+            Source source{s.z0, s.z1, {}};
+            std::string reason;
+            Polygon candidate_polygon = prior_polygon;
+            for (const auto& section : s.sections) {
+                auto fs = footprints(section, candidate_polygon, reason);
+                source.regions.insert(source.regions.end(), fs.begin(), fs.end());
+                if (!reason.empty())
+                    break;
+            }
+            if (!reason.empty()) {
+                source.regions.clear();
+                result.defects.push_back(
+                    diagnostic(Tier::C,
+                               DefectReason::PART_NOT_PRISMATIC,
+                               p.id + "/cut_unsupported#" + std::to_string(slabs.size()),
+                               "cut_unsupported: " + reason));
+            } else
+                prior_polygon = std::move(candidate_polygon);
+            std::stable_sort(source.regions.begin(),
+                             source.regions.end(),
+                             [](const auto& a, const auto& b) { return a.box < b.box; });
+            slabs.push_back(std::move(source));
+        }
+        sources.push_back(std::move(slabs));
+    }
     std::set<Real> interfaces(boundaries.begin(), boundaries.end());
     // Establish all ordinary candidate interfaces in sorted order, independent
     // of part precedence. Base interfaces always have priority over new ones.
     std::set<Real> candidates;
-    for (const auto& p : parts)
-        for (const auto& s : p.slabs) {
-            candidates.insert(s.z0);
-            candidates.insert(s.z1);
-        }
+    for (const auto& slabs : sources)
+        for (const auto& source : slabs)
+            if (!source.regions.empty()) {
+                candidates.insert(source.lo);
+                candidates.insert(source.hi);
+            }
     for (Real z : candidates) {
         Real target = nearest(z, interfaces);
         if (std::abs(z - target) >= options.t_min)
@@ -438,27 +472,29 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
         Real target = nearest(z, interfaces);
         return std::abs(z - target) < options.t_min ? target : z;
     };
-    struct Source {
-        Real lo, hi;
-        std::vector<Footprint> regions;
-    };
-    std::vector<std::vector<Source>> sources;
     std::set<Real> snapped_interfaces;
     for (Real z : candidates) {
         Real target = aligned(z);
-        if (target != z)
+        if (target != z && std::abs(z - target) < options.eps_weld)
             snapped_interfaces.insert(target);
     }
     result.welded_interfaces = static_cast<std::int64_t>(snapped_interfaces.size());
-    std::set<Real> original_interfaces = candidates;
+    std::set<Real> original_interfaces;
+    for (const auto& p : parts)
+        for (const auto& slab : p.slabs) {
+            original_interfaces.insert(slab.z0);
+            original_interfaces.insert(slab.z1);
+        }
     original_interfaces.insert(boundaries.begin(), boundaries.end());
-    for (const auto& p : parts) {
-        std::vector<Source> slabs;
+    for (size_t p_index = 0; p_index < parts.size(); ++p_index) {
+        const auto& p = parts[p_index];
         size_t thin_index = 0;
-        Polygon prior_polygon;
+        size_t slab_index = 0;
         bool bond = p.id.size() >= 5 && p.id.compare(p.id.size() - 5, 5, ".bond") == 0;
         for (const auto& s : p.slabs) {
-            Real lo = aligned(s.z0), hi = aligned(s.z1);
+            auto& source = sources[p_index][slab_index++];
+            source.lo = aligned(s.z0);
+            source.hi = aligned(s.z1);
             // Preserve per-source provenance for each retained interval before
             // alignment, including thin pieces created by a base boundary.
             std::vector<Real> cuts{s.z0};
@@ -484,36 +520,14 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
             };
             for (size_t i = 1; i < cuts.size(); ++i) {
                 Real t = cuts[i] - cuts[i - 1];
-                if (t < options.t_min && (bond || t >= options.eps_weld)) {
+                if (!source.regions.empty() && t < options.t_min &&
+                    (bond || t >= options.eps_weld)) {
                     Real after = std::max(Real(0), aligned(cuts[i]) - aligned(cuts[i - 1]));
                     report_thin(t, after);
                 }
                 ++thin_index;
             }
-            Source source{lo, hi, {}};
-            std::string reason;
-            Polygon candidate_polygon = prior_polygon;
-            for (const auto& section : s.sections) {
-                auto fs = footprints(section, candidate_polygon, reason);
-                source.regions.insert(source.regions.end(), fs.begin(), fs.end());
-                if (!reason.empty())
-                    break;
-            }
-            if (!reason.empty()) {
-                source.regions.clear();
-                result.defects.push_back(
-                    diagnostic(Tier::C,
-                               DefectReason::PART_NOT_PRISMATIC,
-                               p.id + "/cut_unsupported#" + std::to_string(slabs.size()),
-                               "cut_unsupported: " + reason));
-            } else
-                prior_polygon = std::move(candidate_polygon);
-            std::stable_sort(source.regions.begin(),
-                             source.regions.end(),
-                             [](const auto& a, const auto& b) { return a.box < b.box; });
-            slabs.push_back(std::move(source));
         }
-        sources.push_back(std::move(slabs));
     }
     // Only surviving geometry may split or extend the base stack. Keep the
     // original Source entries so slab indices in diagnostics and names survive.

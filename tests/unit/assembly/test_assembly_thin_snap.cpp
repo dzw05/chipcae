@@ -6,7 +6,8 @@ int main() {
                 auto p = part(bond ? "lid.bond" : "lid", .001, .001 + t);
                 auto r = merge_parts(base(), {p}, options());
                 check(bool(r), "thin merge succeeds");
-                check(r.value().welded_interfaces > 0, "thin interface aligned");
+                check(r.value().welded_interfaces == (t < options().eps_weld ? 1 : 0),
+                      "only sub-eps_weld alignment counts as a weld");
                 bool found = false;
                 for (auto& d : r.value().defects)
                     if (d.reason == DefectReason::THIN_LAYER_MERGED) {
