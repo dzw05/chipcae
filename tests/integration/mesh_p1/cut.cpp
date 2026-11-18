@@ -315,6 +315,8 @@ static void chamfer_lid_route() {
                 physical_poly.volfrac_ref[sub] *= jac;
             }
         }
+        expect(max_quadrature_error <= 1e-12, "lid route: maximum quadrature relative error");
+        expect(max_polyhedron_error <= 1e-12, "lid route: maximum polyhedron relative error");
         check_poly(physical_poly, options.snap_phi);
         for (auto sub : cut.small_subs)
             expect(sub >= 0 && static_cast<std::size_t>(sub) < cut.sub_volfrac.size() &&
@@ -377,6 +379,17 @@ static void chamfer_lid_route() {
                    "lid route: cut indices resolve to parent GIDs");
         }
         check_subcells(compact_cut);
+        expect(compact_cut.polyhedra &&
+                   compact_cut.polyhedra->volume.size() == compact_cut.sub_volfrac.size() &&
+                   compact_cut.polyhedra->volfrac_ref.size() == compact_cut.sub_volfrac.size(),
+               "lid route: mutable export for every subcell");
+        auto compact_physical_poly = *compact_cut.polyhedra;
+        for (std::size_t i = 0; i < compact_cut.cut_elem.size(); ++i) {
+            const auto jac = jacobian(compact, compact_cut.cut_elem[i]);
+            for (auto sub = compact_cut.sub_off[i]; sub < compact_cut.sub_off[i + 1]; ++sub)
+                compact_physical_poly.volfrac_ref[sub] *= jac;
+        }
+        check_poly(compact_physical_poly, options.snap_phi);
         const auto mutable_errors = check_volumes(compact, compact_cut);
 
         const auto replay = build_cut_layer(original, geometry, options);
