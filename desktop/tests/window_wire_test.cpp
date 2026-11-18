@@ -1,3 +1,4 @@
+#include "AssemblyImport.hpp"
 #include "ImportController.hpp"
 #include "ImportSourceDialog.hpp"
 #include "MainWindow.hpp"
@@ -10,6 +11,7 @@
 #include <QDir>
 #include <QEventLoop>
 #include <QFile>
+#include <QFileDialog>
 #include <QSurfaceFormat>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -135,6 +137,78 @@ void wiring(Window& w, const QString& samples) {
     require(!w.openResultsPath(samples + "/missing/manifest.json"), "invalid results rejected");
     require(w.centralWidget() == w.resultView(), "preserve results on failure");
 }
+void selectableEcadFilters(MainWindow& w) {
+    bool inspected = false, excludesStep = false, existingFile = false;
+    QTimer::singleShot(0, &w, [&] {
+        auto* dialog = w.findChild<QFileDialog*>();
+        if (!dialog)
+            return;
+        inspected = true;
+        const auto filters = dialog->nameFilters().join(' ');
+        excludesStep = !filters.contains("step", Qt::CaseInsensitive) &&
+                       !filters.contains("stp", Qt::CaseInsensitive);
+        existingFile = dialog->fileMode() == QFileDialog::ExistingFile &&
+                       dialog->testOption(QFileDialog::DontUseNativeDialog);
+        dialog->reject();
+    });
+    require(ImportSourceDialog::getImportPath(&w).isEmpty(), "cancel ECAD selector");
+    require(inspected && existingFile && excludesStep,
+            "selectable ECAD filters exclude STEP/STP and retain non-native ExistingFile mode");
+}
+void assemblyWiring(MainWindow& w) {
+    const auto input =
+        QString(CHIPCAE_REPOSITORY) + "/schema/examples/assembly/package_bulk_parts.assembly.json";
+    const auto mock = QString(CHIPCAE_REPOSITORY) + "/desktop/tools/mock_assembly_import.py";
+    require(isAssemblyPath(input), "I2 is an assembly path");
+    QTemporaryDir temp;
+    require(temp.isValid(), "assembly temporary directory");
+    QFile ordinary(temp.filePath("ordinary.json"));
+    require(ordinary.open(QIODevice::WriteOnly) && ordinary.write("{}") == 2,
+            "write ordinary JSON");
+    ordinary.close();
+    const auto before = w.document()->stackJson();
+    QObject receiver;
+    int completions = 0;
+    bool replaced = false;
+    QObject::connect(
+        w.importController(), &ImportController::finished, &receiver, [&](bool changed) {
+            ++completions;
+            replaced = changed;
+        });
+    require(!w.importEcadPath(input, PYTHON_EXECUTABLE, {mock}),
+            "ECAD hook rejects assembly input");
+    require(!w.importEcadPath(ordinary.fileName(), PYTHON_EXECUTABLE, {mock}) &&
+                !w.importAssemblyPath(ordinary.fileName(), PYTHON_EXECUTABLE, {mock}),
+            "both hooks reject ordinary JSON");
+    require(!w.importAssemblyPath({}, PYTHON_EXECUTABLE, {mock}) &&
+                !w.importAssemblyPath(temp.filePath("missing.json"), PYTHON_EXECUTABLE, {mock}),
+            "assembly hook rejects empty and missing paths");
+    QCoreApplication::processEvents();
+    require(completions == 0 && !w.importController()->busy() &&
+                w.document()->stackJson() == before,
+            "invalid import paths emit no completion and preserve idle document");
+    auto import = [&](const QString& path) {
+        const int previous = completions;
+        QEventLoop loop;
+        auto connection = QObject::connect(
+            w.importController(), &ImportController::finished, &loop, &QEventLoop::quit);
+        QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+        require(w.importAssemblyPath(path, PYTHON_EXECUTABLE, {mock}),
+                "assembly hook starts valid I2 input");
+        require(!w.importAssemblyPath(path, PYTHON_EXECUTABLE, {mock}),
+                "busy assembly hook rejects duplicate start");
+        if (completions == previous)
+            loop.exec();
+        QObject::disconnect(connection);
+        require(completions == previous + 1 && replaced && !w.importController()->busy() &&
+                    w.importController()->outcome() == ImportOutcome::Accepted,
+                "assembly completes once with replacement and Accepted outcome");
+    };
+    import(input);
+    const auto upper = temp.filePath("assembly.JSON");
+    require(QFile::copy(input, upper) && isAssemblyPath(upper), "uppercase assembly fixture");
+    import(upper);
+}
 int main(int argc, char** argv) {
     QSurfaceFormat::setDefaultFormat(QVTKOpenGLNativeWidget::defaultFormat());
     QApplication app(argc, argv);
@@ -149,6 +223,8 @@ int main(int argc, char** argv) {
         require(text.contains("Open Results"), "missing Open Results action");
         require(text.contains("handwritten", Qt::CaseInsensitive), "missing handwritten action");
         wiring(w, QString::fromLocal8Bit(argv[1]));
+        selectableEcadFilters(w);
+        assemblyWiring(w);
         std::cout << "window wiring checks passed\n";
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';

@@ -434,6 +434,10 @@ bool MainWindow::importEcadPath(const QString& input,
         Qt::SingleShotConnection);
     return importer_->start(request);
 }
+// TEST-FIRST stub: keep acceptance tests buildable until assembly wiring is implemented.
+bool MainWindow::importAssemblyPath(const QString&, const QString&, const QStringList&) {
+    return false;
+}
 void MainWindow::cancelImport() {
     importer_->cancel();
 }

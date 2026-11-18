@@ -34,6 +34,9 @@ public:
     bool importEcadPath(const QString& input,
                         const QString& program = "chipcae-import",
                         const QStringList& prefix = {});
+    bool importAssemblyPath(const QString& input,
+                            const QString& program = "chipcae-import",
+                            const QStringList& prefix = {});
     void cancelImport();
     bool openResultsPath(const QString& manifestPath);
     enum class MeshDigestDialogChoice { Unset, Accept, Cancel };
