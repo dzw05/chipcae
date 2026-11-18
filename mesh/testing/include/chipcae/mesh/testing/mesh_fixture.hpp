@@ -2,8 +2,11 @@
 #include "chipcae/mesh/background/hex_mesh_arrays.hpp"
 #include "chipcae/schema/stack.hpp"
 
+#include <exception>
 #include <filesystem>
+#include <optional>
 #include <utility>
+#include <variant>
 
 namespace chipcae::mesh {
 // Status result for fixture writes; the shared primary template stores a value.

@@ -273,6 +273,11 @@ bool validate(const HexMeshArrays& m) {
     check(m.vertices.size() / 3 == n && m.vertices.size() % 3 == 0, "vertices length");
     check(m.hex.size() / 8 == c && m.hex.size() % 8 == 0, "hex length");
     check(m.attribute.size() == c, "attribute length");
+    for (auto attribute : m.attribute)
+        check(attribute >= 1 && static_cast<std::size_t>(attribute) <= m.attr_table.entries.size(),
+              "attribute table reference");
+    for (auto attribute : m.bdr_attribute)
+        check(m.attr_table.boundary_names.contains(attribute), "boundary name reference");
     check(m.bdr_quad.size() % 4 == 0 && m.bdr_quad.size() / 4 == m.bdr_attribute.size(),
           "boundary length");
     for (auto i : m.hex)

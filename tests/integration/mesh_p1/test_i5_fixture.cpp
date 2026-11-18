@@ -265,7 +265,7 @@ HexMeshArrays decorated() {
     m.attr_table.references = {{"Case", {1, 2}}, {"case", {2, 1}}};
     m.attr_table.materials = {{"Case", 17}, {"case", 18}};
     m.attr_table.bodies = {{"BodyA", 23}, {"BodyB", 24}};
-    m.attr_table.boundary_names = {{1, "Case"}, {2147483647, "case"}};
+    m.attr_table.boundary_names = {{1, "Case"}, {2, "case"}, {2147483647, "case"}};
     m.face_sets = {{"Case", {0, 1}}, {"case", {1, 0}}};
     m.pending_cut = {0};
     m.nodes = m.vertices;
@@ -366,6 +366,11 @@ void rejects_bad(const fs::path& dir) {
     }
     // These fields are outside the digest, so semantic validation must reject
     // them even when the original geometry digest still matches.
+    for (const int attribute : {-1, 0, 5})
+        mutate("attribute reference bounds",
+               [attribute](J& j) { j["mesh"]["attribute"][0] = attribute; });
+    mutate("missing boundary reference", [](J& j) { j["mesh"]["bdr_attribute"][0] = 2147483647; });
+    mutate("nonpositive boundary reference", [](J& j) { j["mesh"]["bdr_attribute"][0] = 0; });
     mutate("negative pending cut", [](J& j) { j["mesh"]["pending_cut"] = J::parse("[-1]"); });
     mutate("pending cut upper bound", [](J& j) {
         j["mesh"]["pending_cut"] = J::array();
@@ -471,6 +476,10 @@ void rejects_bad(const fs::path& dir) {
         }
         reject(label, document(m).to_string());
     };
+    for (const int attribute : {-1, 0, 3})
+        reject_mesh("attribute table bounds", [attribute](auto& m) { m.attribute = {attribute}; });
+    reject_mesh("missing boundary name", [](auto& m) { m.bdr_attribute[0] = 3; });
+    reject_mesh("nonpositive boundary attribute", [](auto& m) { m.bdr_attribute[0] = 0; });
     reject_mesh("pending cut index", [](auto& m) { m.pending_cut = {-1}; });
     reject_mesh("pending cut upper bound", [](auto& m) { m.pending_cut = {1}; });
     reject_mesh("short copper layer map", [](auto& m) { m.copper_layer_of_layer.pop_back(); });

@@ -22,10 +22,15 @@ if (!loaded) {
 const auto& mesh = loaded.value(); // inject at the solver test's mesh input
 ```
 
-Save overwrites the requested path deterministically. Load validates all fields,
+Save overwrites the requested path deterministically. Load validates field types,
 connectivity, array dimensions, and the existing mesh digest before returning a
-complete mesh. Errors use `INPUT_INVALID`; write failures use the existing `$`
-I/O path convention. Default empty meshes carry a null digest. The digest covers
+complete mesh. Element attributes must be 1-based indices into `attr_table.entries`;
+every boundary attribute must have a key in `attr_table.boundary_names`.
+Face-set names are independent group labels: their membership in boundary names
+is not validated. Face-set values retain the existing boundary index checks.
+Optional `partitioning`, `node_layer`, and `node_column` arrays may be empty on
+nonempty meshes; when populated, their lengths must match cells or nodes.
+Errors use `INPUT_INVALID`; write failures use the existing `$` I/O path convention. Default empty meshes carry a null digest. The digest covers
 geometry and connectivity, so it is not a checksum of every attribute or report.
 The JSON layout is an internal test format, not a new I5 exchange contract.
 
@@ -49,8 +54,3 @@ and its schema SHA-256 helper after validating connectivity and axis lengths.
 This header inclusion does not link the preview implementation.
 Nonempty copper layer maps have one entry per `attr_table.layers` entry; an empty
 map remains permitted for meshes without this optional metadata.
-
-Test-first evidence is commit `6129bd3e46f4e42668d812f9c9df855f5d321d62`,
-which supplied NOT_IMPLEMENTED save/load stubs. Runtime failures are recorded in
-`/workspace/tasks/logs/i5-fixture-red.log`; the implementation followed in
-`d06d8382610b26d49820677b50fdcc65ab2a98ed`.

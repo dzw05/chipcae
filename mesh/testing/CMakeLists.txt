@@ -71,9 +71,9 @@ if(CHIPCAE_BUILD_TESTS)
   endfunction()
   cmake_language(DEFER DIRECTORY "${PROJECT_SOURCE_DIR}" CALL i5_generate_link_graph)
   add_test(NAME i5_fixture_no_cut_link COMMAND "${CMAKE_COMMAND}"
-    -DGRAPH=${PROJECT_BINARY_DIR}/i5-links-$<CONFIG>.cmake
-    -DSMOKE=$<TARGET_FILE:i5_fixture_load_smoke>
-    -DFIXTURE=${PROJECT_SOURCE_DIR}/tests/fixtures/mesh/i5_fcbga_small.mesh.json
+    "-DGRAPH=${PROJECT_BINARY_DIR}/i5-links-$<CONFIG>.cmake"
+    "-DSMOKE=$<TARGET_FILE:i5_fixture_load_smoke>"
+    "-DFIXTURE=${PROJECT_SOURCE_DIR}/tests/fixtures/mesh/i5_fcbga_small.mesh.json"
     -P ${CMAKE_CURRENT_SOURCE_DIR}/check_links.cmake)
   set_tests_properties(i5_fixture_no_cut_link PROPERTIES TIMEOUT 60 LABELS "mesh;i5")
 endif()
