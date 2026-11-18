@@ -290,6 +290,30 @@ class Edges(unittest.TestCase):
                         self.assertEqual(main([str(run)]), 0)
                     self.assertEqual(json.loads(out.getvalue()), expected)
 
+    def test_conflicting_duplicates_with_reversed_storage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run, cut=True)
+            with h5py.File(step, 'r+') as f:
+                for path in ('Points', 'PointData/U', 'PointData/T'):
+                    field = f['VTKHDF/hex/' + path]
+                    field[...] = field[...][::-1]
+                cut = f['VTKHDF/cut']
+                cut['Points'][0] = [0., 0., 1.]
+                # This later copy conflicts with hex in both point fields.
+                cut['PointData/U'][0] = [0., 0., 5000.]
+                cut['PointData/T'][0] = 5000.
+            result = summarize(run)
+            self.assertEqual(result['temperature'], dict(
+                min=100., max=5000., top_min=301., top_max=309., top_mean=305.))
+            self.assertEqual(result['warpage']['n_top_points'], 9)
+            self.assertLessEqual(abs(result['warpage']['w_bfp_m'] / .125 - 1.), 1e-12)
+            self.assertLessEqual(abs(result['warpage']['rel_diff'] / .25 - 1.), 1e-12)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(main([str(run)]), 0)
+            self.assertEqual(json.loads(out.getvalue()), result)
+
     def test_differing_duplicate_temperature_below_top(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)
