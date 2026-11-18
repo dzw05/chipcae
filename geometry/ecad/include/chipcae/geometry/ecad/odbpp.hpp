@@ -3,6 +3,8 @@
 
 #include <map>
 #include <optional>
+#include <string>
+#include <vector>
 
 namespace chipcae::geometry::ecad {
 using ThicknessOverrides = std::map<std::string, double>;

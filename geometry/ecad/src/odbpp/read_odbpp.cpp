@@ -3,6 +3,7 @@
 #include "parser.hpp"
 
 #include <algorithm>
+#include <clipper2/clipper.h>
 #include <cmath>
 #include <exception>
 #include <set>
@@ -22,6 +23,55 @@ ImportResult read_odbpp(const std::filesystem::path& path,
         auto result = detail::read_odbpp_job(path, job);
         if (!result)
             return result;
+        // The parser accepts retraced bridges between boundary loops. Resolve
+        // straight-sided surfaces into simple rings before the strict mapper,
+        // using its integer grid and winding rule. Curved contours stay intact.
+        const double grid = odbpp_detail::unit_m(job) / 1e-6;
+        for (auto& [layer, features] : job.features) {
+            for (auto& symbol : features.symbols) {
+                const auto& name = symbol.name;
+                if (name.size() > 1 && name[0] == 'r' && name[1] >= '0' && name[1] <= '9')
+                    symbol.name = "round" + name.substr(1);
+            }
+            for (auto& surface : features.surfaces) {
+                std::vector<detail::OdbContour> normalized;
+                for (const auto& contour : surface.contours) {
+                    if (std::any_of(contour.segs.begin(), contour.segs.end(), [](const auto& seg) {
+                            return seg.is_arc;
+                        })) {
+                        normalized.push_back(contour);
+                        continue;
+                    }
+                    Clipper2Lib::Path64 path;
+                    path.push_back({std::llround(contour.start.x * grid),
+                                    std::llround(contour.start.y * grid)});
+                    for (const auto& seg : contour.segs)
+                        path.push_back(
+                            {std::llround(seg.end.x * grid), std::llround(seg.end.y * grid)});
+                    Clipper2Lib::StripDuplicates(path, true);
+                    if ((Clipper2Lib::Area(path) > 0) == contour.is_hole)
+                        std::reverse(path.begin(), path.end());
+                    const auto rings = Clipper2Lib::Union(Clipper2Lib::Paths64{path},
+                                                          Clipper2Lib::FillRule::NonZero);
+                    if (rings.empty()) {
+                        result.error = "IMPORT_REJECTED: invalid or degenerate contour: " + layer;
+                        return result;
+                    }
+                    for (const auto& ring : rings) {
+                        detail::OdbContour simple;
+                        simple.is_hole = (Clipper2Lib::Area(ring) < 0) != contour.is_hole;
+                        simple.start = {ring.front().x / grid, ring.front().y / grid};
+                        for (std::size_t i = 1; i <= ring.size(); ++i) {
+                            const auto& point = ring[i % ring.size()];
+                            simple.segs.push_back(
+                                {{point.x / grid, point.y / grid}, false, {}, false});
+                        }
+                        normalized.push_back(std::move(simple));
+                    }
+                }
+                surface.contours = std::move(normalized);
+            }
+        }
         odbpp_detail::ThicknessOverrides overrides;
         std::set<std::string> names;
         for (const auto& [name, value] : options.overrides) {

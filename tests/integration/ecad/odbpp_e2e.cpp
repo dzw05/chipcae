@@ -134,26 +134,6 @@ fixture = data / 'odbpp'
 sys.path.insert(0, str(source / 'tools/stack'))
 from polyset import read_polyset, layer_area_m2
 
-# Frozen reader/mapper prerequisites: run the original scenario and accept only
-# its exact first CLI rejection in CTest's group selectors. Named selectors and
-# 'all' remain strict. A newly passing prerequisite must have its gate removed.
-PREREQUISITE_GATES = {
-    'cross_ipc': 'IMPORT_REJECTED: missing file matrix/matrix',
-    'dir_and_zip': 'IMPORT_REJECTED: invalid or degenerate contour: F.CU',
-    'extension.TgZ': 'IMPORT_REJECTED: missing file matrix/matrix',
-    'extension.TaR.Gz': 'IMPORT_REJECTED: missing file matrix/matrix',
-    'extension.ZiP': 'IMPORT_REJECTED: missing file matrix/matrix',
-    'odb_skipped_layers_reported': 'IMPORT_REJECTED: invalid or degenerate contour: F.CU',
-    'override_ipc': ('thickness override conflicts with IPC layer DIELECTRIC_1\n'
-                     'IMPORT_REJECTED: unsupported board geometry'),
-    'override_empty_ipc': 'IMPORT_REJECTED: unsupported board geometry',
-}
-gate_selector = selector.removeprefix('gate:') if selector.startswith('gate:') else None
-if gate_selector is not None:
-    if gate_selector not in PREREQUISITE_GATES:
-        raise AssertionError('unknown prerequisite gate: '+gate_selector)
-    selector = gate_selector
-
 CASES = []
 def case(name, group='odb'):
     def register(fn):
@@ -798,33 +778,17 @@ selected = [(n,g,f) for n,g,f in CASES if (selector in ('all',g,n) or
             (selector == 'unsupported_tiers' and n.startswith('unsupported_tiers_')))]
 check(selected, f'unknown scenario {selector}; choose: '+', '.join(n for n,_,_ in CASES))
 failures = 0
-gated = 0
 for name,_,fn in selected:
-    gate = PREREQUISITE_GATES.get(name) if selector in ('odb','ipc') or gate_selector else None
     with tempfile.TemporaryDirectory(prefix='chipcae-odbpp-cli-') as directory:
         try:
             fn(Board(Path(directory)))
-        except AssertionError as error:
-            # An unrelated assertion, return code, stdout or diagnostic must fail.
-            if (gate and str(error).startswith('CLI expected exit 0, got 7\ncommand: ') and
-                    str(error).endswith('\nstdout: \nstderr: '+gate+'\n')):
-                gated += 1
-                print('GATED '+name+': '+gate,flush=True)
-            else:
-                failures += 1
-                print('FAIL '+name,flush=True)
-                traceback.print_exc(file=sys.stdout)
         except Exception:
             failures += 1
             print('FAIL '+name,flush=True)
             traceback.print_exc(file=sys.stdout)
         else:
-            if gate:
-                failures += 1
-                print('XPASS '+name+': prerequisite changed; remove its gate',flush=True)
-            else:
-                print('PASS '+name,flush=True)
-print(f'{len(selected)} scenarios, {gated} gated, {failures} failed',flush=True)
+            print('PASS '+name,flush=True)
+print(f'{len(selected)} scenarios, {failures} failed',flush=True)
 sys.exit(bool(failures))
 )ODBCLI";
 
@@ -936,6 +900,40 @@ void public_api() {
     require(!absent && records.empty(), "parser failure must clear caller records");
     std::cout << "PASS public_api\n";
 }
+// Full-board reader composition stays testable even when the CLI must reject
+// unsupported slot geometry. Do not reinterpret that C-tier loss as success.
+void full_board_reader(const fs::path& root) {
+    using namespace chipcae::geometry::ecad;
+    auto directory = read_odbpp(root / "kicad4l");
+    require(bool(directory), "full-board directory reader: " + directory.error);
+    require(directory.model.layers.size() == 7, "full-board reader must retain seven layers");
+    require(!directory.model.layers.front().polygons.empty(),
+            "retraced copper contours must produce mapped polygons");
+    require(std::any_of(directory.model.layers.front().polygons.begin(),
+                        directory.model.layers.front().polygons.end(),
+                        [](const auto& polygon) {
+                            long double twice_area = 0;
+                            for (std::size_t i = 0; i < polygon.points.size(); ++i) {
+                                const auto& a = polygon.points[i];
+                                const auto& b = polygon.points[(i + 1) % polygon.points.size()];
+                                twice_area += static_cast<long double>(a[0]) * b[1] -
+                                              static_cast<long double>(a[1]) * b[0];
+                            }
+                            // The fixture has a 6 mm square hole. Preserve its
+                            // negative winding and area to one square DBU.
+                            return std::abs(twice_area / 2 + 36e6L) <= 1;
+                        }),
+            "retraced bridge must preserve the 6 mm square copper hole");
+    require(std::any_of(directory.model.report.unsupported.begin(),
+                        directory.model.report.unsupported.end(),
+                        [](const auto& e) { return e.element.starts_with("Slot:"); }),
+            "unsupported oval drill must remain observable");
+    require(std::none_of(directory.model.report.unsupported.begin(),
+                         directory.model.report.unsupported.end(),
+                         [](const auto& e) { return e.element.starts_with("Symbol:"); }),
+            "standard r apertures must map without symbol loss");
+    std::cout << "PASS full_board_reader\n";
+}
 void cross_models(const fs::path& root, const fs::path& material_map) {
     auto odb = chipcae::geometry::ecad::read_odbpp(root / "kicad4l.tgz");
     auto ipc = chipcae::geometry::ecad::read_ipc2581(root / "kicad4l.ipc2581.xml");
@@ -995,8 +993,13 @@ int main(int argc, char** argv) {
         }
         require(argc == 2, "Expected exactly one acceptance selector");
         const std::string mode = argv[1];
+        if (mode == "full_board_reader") {
+            full_board_reader(root);
+            return 0;
+        }
         if (mode == "odb" || mode == "all" || mode == "public_api") {
             public_api();
+            full_board_reader(root);
             if (mode == "public_api")
                 return 0;
         }
