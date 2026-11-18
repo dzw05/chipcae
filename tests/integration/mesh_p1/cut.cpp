@@ -4,10 +4,12 @@
 #include <algorithm>
 #include <bit>
 #include <cctype>
+#include <iomanip>
 #include <iostream>
 #include <numeric>
 #include <random>
 #include <set>
+#include <sstream>
 using namespace chipcae::mesh;
 using namespace chipcae::mesh::cut;
 using k1::expect;
@@ -148,14 +150,20 @@ static void chamfer_lid_route() {
                    std::is_sorted(cut.sub_off.begin(), cut.sub_off.end()),
                "lid route: subcell arrays and offsets");
     };
-    const auto build_grid = [&](char name, Local nx, Local ny) {
+    const auto build_grid = [&](char name, Local nominal_nx, Local nominal_ny) {
         auto grid_options = k1::options();
-        grid_options.nx = nx;
-        grid_options.ny = ny;
+        // The fixture specifies whole-outline resolutions. The planner takes a
+        // minimum count per feature interval, with 4 the shortest on both axes.
+        constexpr Real shortest_interval = 4;
+        grid_options.nx =
+            std::max(Local{1}, static_cast<Local>(shortest_interval * nominal_nx / (xmax - xmin)));
+        grid_options.ny =
+            std::max(Local{1}, static_cast<Local>(shortest_interval * nominal_ny / (ymax - ymin)));
         grid_options.levels = 1;
         auto grid = build_tensor_grid(stack, grid_options);
         if (!grid)
-            std::cerr << "lid route " << name << " (nx=" << nx << ", ny=" << ny
+            std::cerr << "lid route " << name << " (nominal=" << nominal_nx << 'x' << nominal_ny
+                      << ", nx=" << grid_options.nx << ", ny=" << grid_options.ny
                       << ", levels=" << grid_options.levels
                       << ", budget=" << grid_options.cell_budget
                       << ", max_ratio=" << grid_options.max_ratio << "): " << grid.error().path
@@ -277,6 +285,8 @@ static void chamfer_lid_route() {
                "lid route: volume quadrature offsets");
         const auto& poly = *cut.polyhedra;
         auto physical_poly = poly;
+        Real max_quadrature_error = 0;
+        Real max_polyhedron_error = 0;
         for (std::size_t i = 0; i < cut.cut_elem.size(); ++i) {
             const auto e = cut.cut_elem[i];
             expect(std::binary_search(pending.begin(), pending.end(), e) &&
@@ -299,6 +309,9 @@ static void chamfer_lid_route() {
                 const auto volume = jac * vf;
                 expect(std::abs(poly.volume[sub] - volume) <= 1e-12 * volume,
                        "lid route: exported volume matches subcell");
+                max_quadrature_error = std::max(max_quadrature_error, std::abs(weight - vf) / vf);
+                max_polyhedron_error =
+                    std::max(max_polyhedron_error, std::abs(poly.volume[sub] - volume) / volume);
                 physical_poly.volfrac_ref[sub] *= jac;
             }
         }
@@ -335,8 +348,11 @@ static void chamfer_lid_route() {
                    "lid route: ring total volume");
             expect(std::abs(volumes[lid_id] - 2456) <= volume_tolerance * 2456,
                    "lid route: lid total volume");
+            return std::array{std::abs(volumes[substrate_id] - 2464) / 2464,
+                              std::abs(volumes[ring_id] - 416) / 416,
+                              std::abs(volumes[lid_id] - 2456) / 2456};
         };
-        check_volumes(original, cut);
+        const auto const_errors = check_volumes(original, cut);
         auto compact = original;
         const auto compact_result = build_cut_layer(compact, geometry, options);
         expect(bool(compact_result), "lid route: mutable plane cut succeeds");
@@ -361,7 +377,7 @@ static void chamfer_lid_route() {
                    "lid route: cut indices resolve to parent GIDs");
         }
         check_subcells(compact_cut);
-        check_volumes(compact, compact_cut);
+        const auto mutable_errors = check_volumes(compact, compact_cut);
 
         const auto replay = build_cut_layer(original, geometry, options);
         expect(bool(replay), "lid route: const replay succeeds");
@@ -395,6 +411,16 @@ static void chamfer_lid_route() {
                                 reverse_cut.sub_volfrac[reverse_cut.sub_off[j] + offset]) <= 1e-15,
                        "lid route: reversed planes preserve subcell fractions");
         }
+        std::ostringstream diagnostics;
+        diagnostics << std::setprecision(17) << "lid route " << (coarse ? 'A' : 'B') << " 实测"
+                    << " xy_cells=" << x.size() - 1 << 'x' << y.size() - 1
+                    << " lid_slabs=" << nz_lid << " cut_subcells=" << cut.sub_volfrac.size()
+                    << " const_body_errors=" << const_errors[0] << ',' << const_errors[1] << ','
+                    << const_errors[2] << " mutable_body_errors=" << mutable_errors[0] << ','
+                    << mutable_errors[1] << ',' << mutable_errors[2]
+                    << " max_quadrature_error=" << max_quadrature_error
+                    << " max_polyhedron_error=" << max_polyhedron_error << '\n';
+        std::clog << diagnostics.str();
     }
 }
 
