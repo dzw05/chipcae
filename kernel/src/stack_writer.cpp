@@ -5,7 +5,7 @@
 #include <fstream>
 #include <iterator>
 #include <set>
-#if __has_include(<jsoncons/json.hpp>)
+#if defined(CHIPCAE_ENABLE_JSONCONS)
 #include <jsoncons/json.hpp>
 namespace chipcae::importer {
 mesh::Expected<bool> write_stack(const mesh::StackModel& model, const std::filesystem::path& path) {

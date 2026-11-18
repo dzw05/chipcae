@@ -18,7 +18,7 @@ with tempfile.TemporaryDirectory() as tmp:
         a.document = document
         a.save()
         result = a.run()
-        check(result, 7)
+        check(result, 14)
         assert 'json_path' in result.stderr, result.stderr
         assert not a.output.exists()
     # Malformed JSON and missing files are input errors.
@@ -49,3 +49,18 @@ if enabled('ECAD') and Path('/dev/full').exists():
         assert not a.output.exists()
         assert a.defects()['code'] == 'INPUT_INVALID'
         assert 'cannot write stack' in a.defects()['message']
+
+# Board input validation precedes material-map resolution and reader dispatch.
+with tempfile.TemporaryDirectory() as tmp:
+    a = Assembly(tmp)
+    a.document['board']['path'] = 'missing.xml'
+    a.document['board']['material_map'] = 'missing-map.json'
+    a.save()
+    check(a.run(), 14)
+    assert 'json_path=$/board/path' in a.defects()['message']
+    (a.root / 'board.xml').unlink()
+    (a.root / 'board.xml').mkdir()
+    a.document['board']['path'] = 'board.xml'
+    a.save()
+    check(a.run(), 14)
+    assert 'json_path=$/board/path' in a.defects()['message']

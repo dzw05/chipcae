@@ -13,3 +13,14 @@ for args in (
         ['--assembly', 'assembly.json', '-o', 'out.json', '--material-map', 'map.json'],
         ['input.xml', '--assembly', 'assembly.json', '-o', 'out.json']):
     check(subprocess.run([binary, *args], capture_output=True, text=True, timeout=25), 2)
+
+# Documented shared options reach assembly processing instead of usage rejection.
+import tempfile
+from assembly_test_support import Assembly, require
+require('JSONCONS')
+require('ECAD')
+with tempfile.TemporaryDirectory() as tmp:
+    assembly = Assembly(tmp)
+    check(assembly.run('--polyset', assembly.root / 'custom.polyset', '--accept-b-tier'), 0)
+    assert (assembly.root / 'custom.polyset').is_file()
+    assert assembly.report.is_file()

@@ -100,8 +100,8 @@ def b_ids(report):
 
 def require_assembly_geometry():
     """SP2 slicing and SP3 placement/merge are required for geometry expectations."""
-    sources = ('geometry/src/part_slice.cpp', 'geometry/src/assembly.cpp')
-    if any('not implemented:' in (SOURCE / path).read_text() for path in sources):
+    capabilities = json.loads((BUILD / 'import-assets/assembly-capabilities.json').read_text())
+    if capabilities['geometry'] != 'ON':
         print('SKIP: SP2/SP3 geometry implementations are not available')
         raise SystemExit(77)
 

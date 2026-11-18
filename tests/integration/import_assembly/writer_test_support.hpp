@@ -11,7 +11,7 @@
 // into this test TU, so these assertions always exercise the implementation.
 #include "../../../kernel/src/stack_writer.cpp"
 
-#if __has_include(<jsoncons/json.hpp>)
+#if defined(CHIPCAE_ENABLE_JSONCONS)
 #include "../../../schema/src/stack.cpp"
 #define SP4_HAS_JSONCONS 1
 #endif

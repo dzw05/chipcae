@@ -48,7 +48,7 @@ with tempfile.TemporaryDirectory() as tmp:
     schema = json.loads(schema_path.read_text())
     schema['properties']['schema']['const'] = 'packaged-schema-sentinel'
     schema_path.write_text(json.dumps(schema))
-    check(run(), 7)
+    check(run(), 14)
     assert 'json_path' in a.defects()['message']
     schema['properties']['schema']['const'] = 'chipcae.assembly/0.1'
     schema_path.write_text(json.dumps(schema))

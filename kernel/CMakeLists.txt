@@ -95,17 +95,20 @@ if(CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE)
     target_compile_definitions(chipcae-import PRIVATE CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE=1)
 endif()
 
-find_package(yaml-cpp QUIET)
-if(NOT TARGET yaml-cpp::yaml-cpp)
-    include(FetchContent)
-    set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(yaml-cpp URL https://github.com/jbeder/yaml-cpp/archive/refs/tags/0.8.0.tar.gz
-        URL_HASH SHA256=fbe74bbdcee21d656715688706da3c8becfd946d92cd44705cc6098bb23b3a16)
-    # yaml-cpp 0.8.0 declares cmake_minimum_required < 3.5, rejected by CMake 4 on CI.
-    set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
-    FetchContent_MakeAvailable(yaml-cpp)
-    unset(CMAKE_POLICY_VERSION_MINIMUM)
+# Prefer an existing dependency, including packages exporting the legacy target.
+if(NOT TARGET yaml-cpp::yaml-cpp AND NOT TARGET yaml-cpp)
+    find_package(yaml-cpp QUIET)
 endif()
-
+if(TARGET yaml-cpp AND NOT TARGET yaml-cpp::yaml-cpp)
+    add_library(yaml-cpp::yaml-cpp ALIAS yaml-cpp)
+endif()
+# With JSON enabled, apps/chipcae-solve supplies the shared YAML dependency.
+if(NOT CHIPCAE_ENABLE_JSONCONS AND NOT TARGET yaml-cpp::yaml-cpp)
+    find_package(yaml-cpp REQUIRED)
+endif()
 target_link_libraries(chipcae-import PRIVATE yaml-cpp::yaml-cpp)
+
+# SP2/SP3 are still stubs on this baseline. Enable explicitly when both land.
+option(CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE "SP2/SP3 assembly geometry implemented" OFF)
+file(GENERATE OUTPUT "${PROJECT_BINARY_DIR}/import-assets/assembly-capabilities.json"
+    CONTENT "{\"geometry\": \"${CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE}\"}\n")
