@@ -583,4 +583,15 @@ validate_material_file(const std::string& path, bool customer_delivery, ImportOp
     s << f.rdbuf();
     return validate_material_json(s.str(), customer_delivery, options);
 }
+
+// TEST-FIRST stubs only: no envelope parsing, card validation, or file handling yet.
+ValidationResult validate_material_library_json(std::string_view, bool, ImportOptions) {
+    return {false, {{"material_library", "not implemented (TDD stub)"}}};
+}
+std::vector<MaterialParams> parse_material_library_json(std::string_view, bool, ImportOptions) {
+    throw std::runtime_error("material library parsing not implemented (TDD stub)");
+}
+ValidationResult validate_material_library_file(const std::string&, bool, ImportOptions) {
+    return {false, {{"material_library", "not implemented (TDD stub)"}}};
+}
 } // namespace chipcae::material

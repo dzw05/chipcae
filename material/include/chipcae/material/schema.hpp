@@ -40,4 +40,15 @@ ValidationResult validate_material_file(const std::string& path,
                                         bool customer_delivery = false,
                                         ImportOptions options = {});
 
+// Library acceptance API; definitions are deliberately unimplemented TDD stubs.
+ValidationResult validate_material_library_json(std::string_view json,
+                                                bool customer_delivery = false,
+                                                ImportOptions options = {});
+std::vector<MaterialParams> parse_material_library_json(std::string_view json,
+                                                        bool customer_delivery = false,
+                                                        ImportOptions options = {});
+ValidationResult validate_material_library_file(const std::string& path,
+                                                bool customer_delivery = false,
+                                                ImportOptions options = {});
+
 } // namespace chipcae::material
