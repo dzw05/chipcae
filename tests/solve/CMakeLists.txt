@@ -103,3 +103,17 @@ if(TARGET chipcae_cut_bilayer)
     add_test(NAME solve_cut_bilayer_gamma COMMAND chipcae_cut_bilayer ${PROJECT_SOURCE_DIR}/examples/s2_solve --gamma-scan)
     set_tests_properties(solve_cut_bilayer_gamma PROPERTIES TIMEOUT 1200 LABELS "cut;numerical")
 endif()
+
+if(_solve_backend AND TARGET chipcae-solve AND MFEM_USE_PETSC)
+    add_executable(chipcae_test_column_gmg column_gmg_unit.cpp)
+    target_link_libraries(chipcae_test_column_gmg PRIVATE chipcae::fem mfem MPI::MPI_CXX)
+    chipcae_set_warnings(chipcae_test_column_gmg)
+    add_test(NAME solve_column_gmg_prolongation COMMAND chipcae_test_column_gmg prolongation)
+    add_test(NAME solve_column_gmg_unsupported COMMAND chipcae_test_column_gmg unsupported)
+    add_test(NAME solve_column_gmg_fcbga COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_column_gmg.py
+        $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE} ${PROJECT_SOURCE_DIR})
+    set_tests_properties(solve_column_gmg_prolongation solve_column_gmg_unsupported
+        PROPERTIES TIMEOUT 120 LABELS "gmg;numerical")
+    set_tests_properties(solve_column_gmg_fcbga PROPERTIES TIMEOUT 900 LABELS "gmg;numerical")
+endif()
