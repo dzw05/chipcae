@@ -163,3 +163,15 @@ if(_solve_backend AND TARGET chipcae-solve AND MFEM_USE_PETSC)
     set_tests_properties(solve_column_gmg_fcbga solve_column_gmg_fcbga_scaling
         PROPERTIES TIMEOUT 900 LABELS "gmg;numerical")
 endif()
+
+if(_solve_backend)
+    foreach(_outline_test IN ITEMS preview_outline_chamfer_differs preview_outline_volume
+            preview_solve_outline_digest preview_outline_nonconvex_rejected
+            preview_outline_external_polyset_rejected)
+        add_test(NAME ${_outline_test} COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_preview_outline.py
+            $<TARGET_FILE:chipcae-solve> $<TARGET_FILE:chipcae-preview>
+            ${MPIEXEC_EXECUTABLE} ${_outline_test})
+        set_tests_properties(${_outline_test} PROPERTIES TIMEOUT 600 LABELS "mesh;cut;preview;mpi;io")
+    endforeach()
+endif()

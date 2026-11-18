@@ -168,3 +168,8 @@ target_link_libraries(k1_mesh_digest PRIVATE chipcae_mesh_background)
 chipcae_set_warnings(k1_mesh_digest)
 add_test(NAME k1_mesh_digest COMMAND k1_mesh_digest)
 set_tests_properties(k1_mesh_digest PROPERTIES LABELS "mesh;tierA;preview" TIMEOUT 60)
+
+foreach(_outline_test IN ITEMS outline_cut_api outline_cut_extra_planes)
+  add_test(NAME ${_outline_test} COMMAND k1_cut ${_outline_test})
+  set_tests_properties(${_outline_test} PROPERTIES LABELS "mesh;cut;tierA" TIMEOUT 60)
+endforeach()
