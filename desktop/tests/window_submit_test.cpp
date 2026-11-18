@@ -1,3 +1,5 @@
+#include "AssemblyImport.hpp"
+#include "CaseTreeModel.hpp"
 #include "DesktopConfig.hpp"
 #include "ImportController.hpp"
 #include "LocalJobService.hpp"
@@ -19,6 +21,8 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLabel>
+#include <QMenu>
+#include <QMenuBar>
 #include <QPointer>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -198,6 +202,79 @@ struct Fixture {
               "open case fixture");
     }
 };
+QString assemblyInput() {
+    return QString(CHIPCAE_REPOSITORY) +
+           "/schema/examples/assembly/package_bulk_parts.assembly.json";
+}
+QString assemblyMock() {
+    return QString(CHIPCAE_REPOSITORY) + "/desktop/tools/mock_assembly_import.py";
+}
+void importAssembly(MainWindow& w,
+                    const QString& input,
+                    bool accepted = true,
+                    const QString& script = assemblyMock()) {
+    QObject receiver;
+    int completions = 0;
+    bool replaced = false;
+    QObject::connect(
+        w.importController(), &ImportController::finished, &receiver, [&](bool changed) {
+            ++completions;
+            replaced = changed;
+        });
+    check(w.importAssemblyPath(input, PYTHON_EXECUTABLE, {script}),
+          "assembly import must start valid schema input");
+    check(waitFor([&] { return completions != 0; }), "assembly emits finished within timeout");
+    check(completions == 1 && replaced == accepted && !w.importController()->busy(),
+          "assembly completion reports expected replacement and becomes idle");
+    check(w.importController()->outcome() ==
+              (accepted ? ImportOutcome::Accepted : ImportOutcome::Rejected),
+          "assembly has expected Accepted or Rejected outcome");
+}
+CaseTreeModel* assemblyTree(MainWindow& w) {
+    auto* tree = w.findChild<CaseTreeModel*>();
+    check(tree != nullptr, "window owns case tree");
+    return tree;
+}
+void checkAssembly(MainWindow& w, const QString& annotation) {
+    const auto stack = w.document()->stackJson();
+    check(stack.contains("layers") && stack.at("layers").is_array() &&
+              stack.at("layers").size() == 1,
+          "assembly mock installs exactly one layer");
+    auto* editor = w.findChild<StackEditor*>();
+    check(editor && editor->model()->rowCount() == 1, "assembly refreshes stack editor row");
+    const auto& regions = stack.at("layers")[0].at("regions");
+    check(regions.is_array() && regions.size() == 1 &&
+              regions[0].at("name").as<std::string>() == "lid" &&
+              regions[0].at("body").as<std::string>() == "lid",
+          "imported layer contains lid region");
+    auto* tree = assemblyTree(w);
+    auto indexed = tree->locate("/layers/0/regions/0", "bodies-index");
+    check(indexed.isValid() && indexed.parent().isValid(), "lid appears under Bodies index");
+    check(indexed.parent().data(CaseTreeModel::BodyAnnotationRole) == annotation,
+          "Bodies annotation equals top-level report part summary");
+    auto displayed = tree->locate("/layers/0/regions/0", "stack");
+    check(displayed.isValid() && displayed.parent().isValid() &&
+              displayed.parent().data(CaseTreeModel::BodyAnnotationRole).toString() == QString(""),
+          "stack display group has no body annotation");
+}
+// Keep the real importer and adapt only its report inside this test's temporary directory.
+QString assemblyReportAdapter(Fixture& f, bool nonArray) {
+    auto encoded = [](const QString& value) {
+        const auto json = QJsonDocument(QJsonArray{value}).toJson(QJsonDocument::Compact);
+        return json.mid(1, json.size() - 2);
+    };
+    auto script = f.temp.filePath("assembly-report.py");
+    write(script,
+          "import json, runpy, sys\nfrom pathlib import Path\nfixture = runpy.run_path(" +
+              encoded(assemblyMock()) +
+              ")\ncode = fixture['main']()\nif code: sys.exit(code)\n"
+              "path = Path(sys.argv[sys.argv.index('--report') + 1])\n"
+              "report = json.loads(path.read_text())\n"
+              "parts = report.pop('parts')\nreport['nested'] = {'parts': parts}\n" +
+              (nonArray ? QByteArray("report['parts'] = {'lid': True}\n") : QByteArray{}) +
+              "path.write_text(json.dumps(report))\n");
+    return script;
+}
 // Use the real controller and subscribe before starting: an idle process alone is not success.
 PreviewController* previewController(MainWindow& w) {
     auto controllers = w.findChildren<PreviewController*>();
@@ -472,6 +549,137 @@ int main(int argc, char** argv) {
         }
     };
     using Choice = MainWindow::MeshDigestDialogChoice;
+    test("File menu exposes distinct assembly import", [&] {
+        MainWindow w;
+        QMenu* file = nullptr;
+        for (auto* action : w.menuBar()->actions())
+            if (action->text() == "File")
+                file = action->menu();
+        check(file != nullptr, "File menu exists");
+        QAction* assembly = nullptr;
+        QAction* ecad = nullptr;
+        for (auto* action : file->actions()) {
+            if (action->text() == QStringLiteral("Import assembly…"))
+                assembly = action;
+            if (action->text() == QStringLiteral("Import ECAD…"))
+                ecad = action;
+        }
+        check(assembly && ecad && assembly != ecad, "File has distinct Import assembly… action");
+    });
+    test("assembly import annotates Bodies and refreshes stack editor", [&] {
+        Fixture f(argv[1]);
+        f.configure();
+        MainWindow w;
+        f.openCase(w);
+        importAssembly(w, assemblyInput());
+        checkAssembly(w, QString("近似材料"));
+    });
+    test("assembly reimport clears obsolete approximate material annotation", [&] {
+        Fixture f(argv[1]);
+        f.configure();
+        MainWindow w;
+        f.openCase(w);
+        importAssembly(w, assemblyInput());
+        checkAssembly(w, QString("近似材料"));
+        auto exact = QJsonDocument::fromJson(read(assemblyInput())).object();
+        auto parts = exact["parts"].toArray();
+        auto lid = parts[0].toObject();
+        lid["material_approx"] = false;
+        parts[0] = lid;
+        exact["parts"] = parts;
+        const auto path = f.temp.filePath("exact.assembly.json");
+        write(path, QJsonDocument(exact).toJson());
+        importAssembly(w, path);
+        checkAssembly(w, QString(""));
+    });
+    test("rejected assembly preserves stack and existing part summary", [&] {
+        Fixture f(argv[1]);
+        f.configure();
+        MainWindow w;
+        f.openCase(w);
+        importAssembly(w, assemblyInput());
+        checkAssembly(w, QString("近似材料"));
+        const auto before = w.document()->stackJson();
+        auto duplicate = QJsonDocument::fromJson(read(assemblyInput())).object();
+        auto parts = duplicate["parts"].toArray();
+        parts.append(parts[0]);
+        duplicate["parts"] = parts;
+        const auto path = f.temp.filePath("duplicate.assembly.json");
+        write(path, QJsonDocument(duplicate).toJson());
+        check(isAssemblyPath(path), "duplicate-ID fixture passes assembly schema detection");
+        importAssembly(w, path, false);
+        check(w.document()->stackJson() == before, "rejected assembly leaves stack unchanged");
+        checkAssembly(w, QString("近似材料"));
+    });
+    for (bool nonArray : {false, true}) {
+        test(nonArray ? "assembly report with non-array parts clears annotations"
+                      : "assembly report without parts clears annotations",
+             [&] {
+                 Fixture f(argv[1]);
+                 f.configure();
+                 MainWindow w;
+                 f.openCase(w);
+                 importAssembly(w, assemblyInput());
+                 checkAssembly(w, QString("近似材料"));
+                 importAssembly(w, assemblyInput(), true, assemblyReportAdapter(f, nonArray));
+                 checkAssembly(w, QString(""));
+             });
+    }
+    test("assembly to convection to preview to submit to completed results", [&] {
+        Fixture f(argv[1]);
+        f.configure();
+        MainWindow w;
+        f.openCase(w);
+        importAssembly(w, assemblyInput());
+        checkAssembly(w, QString("近似材料"));
+        // Convection is a thermal load; use the same mode switch as the Case menu.
+        assemblyTree(w)->setThermalMode(true);
+        check(!assemblyTree(w)
+                   ->addLoad(Json::parse(
+                       R"({"type":"convection","target":"face:zmax","h":2,"T_inf":298.15})"))
+                   .isEmpty(),
+              "add menu-equivalent convection load");
+        const auto document = w.document()->toJson();
+        check(document.contains("loads") && document.at("loads").is_array(), "case has loads");
+        bool convection = false;
+        for (const auto& load : document.at("loads").array_range())
+            if (load.at("type").as<std::string>() == "convection" &&
+                load.at("target").as<std::string>() == "face:zmax")
+                convection = true;
+        check(convection, "case contains exact convection type and face:zmax target strings");
+        auto stack = w.document()->stackJson();
+        stack["mock"] = Json::object();
+        stack["mock"]["fixture"] = (f.samples + "/legacy.vtkhdf").toStdString();
+        w.document()->applyStackJson(stack);
+        chipcae::desktop::PreviewOptions options{};
+        QObject receiver;
+        bool finished = false, success = false;
+        QObject::connect(
+            previewController(w), &PreviewController::finished, &receiver, [&](bool ok) {
+                finished = true;
+                success = ok;
+            });
+        check(w.previewMesh(PYTHON_EXECUTABLE, {PREVIEW_MOCK}, options),
+              "imported assembly preview starts");
+        check(waitFor([&] { return finished; }) && success, "assembly preview finished(true)");
+        check(w.previewView() && w.previewView()->displayed(), "assembly preview displays mesh");
+        // The fixture key is only for the preview CLI; finalize validates the stack schema.
+        stack.erase("mock");
+        w.document()->applyStackJson(stack);
+        check(w.writePreviewToCase(), "write assembly preview into case");
+        w.setMeshDigestDialogChoice(Choice::Accept);
+        check(w.submitCurrentCase(), "assembly case submits");
+        f.release();
+        check(waitFor([&] { return persistedJob(f.root()).state() == jobs::JOB_STATE_COMPLETED; }),
+              "assembly job persists COMPLETED state");
+        check(waitFor([&] { return w.resultView() != nullptr; }),
+              "assembly completion automatically opens results");
+        check(w.centralWidget() == w.resultView() && w.resultView()->error().isEmpty(),
+              "assembly workflow ends with central result view without errors");
+        w.resultView()->setWarpageScale(10.0);
+        check(w.centralWidget() == w.resultView() && w.resultView()->error().isEmpty(),
+              "completed assembly results support warpage scaling");
+    });
     test("preview display defaults and no case rejection", [&] {
         MainWindow w;
         auto* central = w.centralWidget();
