@@ -14,6 +14,7 @@
 #include <string>
 #include <sys/resource.h>
 #include <sys/wait.h>
+#include <type_traits>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -68,7 +69,7 @@ static void zip(const fs::path& output,
     auto pid = fork();
     require(pid >= 0, "fork zip generator");
     if (!pid) {
-        execv(argv[0], argv.data());
+        execvp(argv[0], argv.data());
         _exit(127);
     }
     int status = 0;
@@ -79,7 +80,14 @@ static std::string dump_model_for_golden(const ecad::EcadModel& m) {
     std::ostringstream o;
     auto d = [&](double v) { o << std::bit_cast<std::uint64_t>(v) << '\n'; };
     auto str = [&](const std::string& v) { o << std::quoted(v) << '\n'; };
-    auto pos = [&](const auto& p) { o << p[0] << '\n' << p[1] << '\n'; };
+    auto pos = [&](const auto& p) {
+        for (auto coordinate : p) {
+            if constexpr (std::is_floating_point_v<decltype(coordinate)>)
+                d(coordinate);
+            else
+                o << coordinate << '\n';
+        }
+    };
     auto poly = [&](const ecad::Polygon& p) {
         o << p.points.size() << '\n';
         for (auto& v : p.points)
@@ -297,7 +305,9 @@ int main(int argc, char** argv) {
                 auto expected = reader.open_error();
                 if (expected.empty())
                     reader.for_each_line(
-                        "bomb.xml", [](std::string_view) { return true; }, expected);
+                        path ? "../board.xml" : "bomb.xml",
+                        [](std::string_view) { return true; },
+                        expected);
                 require(expected.starts_with("IMPORT_REJECTED:"),
                         "ArchiveReader must reject test fixture");
                 rejected(ecad::read_ipc2581_zip(archive), {path ? "path" : "ratio"});
@@ -351,12 +361,14 @@ int main(int argc, char** argv) {
             ecad::detail::ArchiveReader reader(archive);
             require(reader.open_error().empty() && !reader.is_supported("unsupported.xml"),
                     "ArchiveReader must identify unsupported encrypted member");
-            std::string unused, expected;
+            std::string expected;
             reader.for_each_line(
                 "unsupported.xml", [](std::string_view) { return true; }, expected);
             require(expected.find("zip encryption") != std::string::npos,
                     "ArchiveReader encrypted reason");
-            rejected(ecad::read_ipc2581_zip(archive), {"unsupported.xml", "zip encryption"});
+            const auto result = ecad::read_ipc2581_zip(archive);
+            rejected(result, {"unsupported.xml", "zip encryption"});
+            require(result.error == expected, "unsupported entry error must propagate verbatim");
         } else if (test == "ipc_zip_invalid_input") {
             rejected(ecad::read_ipc2581_zip(fixture), {});
             rejected(ecad::read_ipc2581_zip(dir), {});

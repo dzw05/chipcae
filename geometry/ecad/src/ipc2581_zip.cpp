@@ -52,10 +52,9 @@ ImportResult read_ipc2581_zip(const std::filesystem::path& file) {
     }
     const auto& name = matches.front();
     if (!archive.is_supported(name)) {
-        for (const auto& reason : archive.unsupported())
-            if (reason.element.rfind(name + ": ", 0) == 0)
-                return rejected("IMPORT_REJECTED: " + reason.element);
-        return rejected("IMPORT_REJECTED: unsupported XML entry " + name);
+        std::string error;
+        archive.for_each_line(name, [](std::string_view) { return true; }, error);
+        return rejected(std::move(error));
     }
     detail::Ipc2581StreamParser parser;
     bool first = true;
