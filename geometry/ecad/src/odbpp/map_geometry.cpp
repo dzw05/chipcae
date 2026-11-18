@@ -335,6 +335,34 @@ Paths64 surface_rings(const Paths64& paths) {
     }
     return result;
 }
+// Clipper's AEL is a linked list. A comb with many edges on the same Y scanline
+// makes even a union of one simple ring quadratic. Estimate peak active edges
+// along each axis and choose the less crowded scan direction for that case.
+bool transpose_simple_surface(const Path64& path) {
+    auto peak = [&](bool x_axis) {
+        std::vector<std::pair<std::int64_t, int>> events;
+        events.reserve(2 * path.size());
+        for (std::size_t i = 0; i < path.size(); ++i) {
+            const auto& a = path[i];
+            const auto& b = path[(i + 1) % path.size()];
+            const auto u = x_axis ? a.x : a.y, v = x_axis ? b.x : b.y;
+            events.emplace_back(std::min(u, v), -1);
+            events.emplace_back(std::max(u, v), 1);
+        }
+        std::sort(events.begin(), events.end());
+        std::size_t active = 0, maximum = 0;
+        for (const auto& [coordinate, end] : events) {
+            (void)coordinate;
+            if (end < 0)
+                maximum = std::max(maximum, ++active);
+            else
+                --active;
+        }
+        return maximum;
+    };
+    // Avoid extra work for small inputs and nearly equal scan directions.
+    return path.size() > 4096 && peak(false) / 4 > peak(true) && simple_ring(path);
+}
 struct Mapper {
     const OdbJob& job;
     EcadModel& model;
@@ -507,6 +535,7 @@ struct Mapper {
     }
     void copper(EcadLayer& layer, const OdbFeatures& f) {
         Paths64 positive, negative;
+        bool transposed = false;
         auto add = [&](Paths64 paths, bool polarity) {
             auto& dst = polarity ? positive : negative;
             dst.insert(dst.end(), paths.begin(), paths.end());
@@ -520,6 +549,16 @@ struct Mapper {
                     throw std::runtime_error("invalid or degenerate contour: " + layer.name);
                 if (!path.empty())
                     paths.push_back(std::move(path));
+            }
+            // With one positive simple contour and no other features, none of
+            // these booleans creates intersections. Axis exchange is therefore
+            // exact, including the integer output vertices; no rounding changes.
+            if (f.surfaces.size() == 1 && surface.positive && paths.size() == 1 && f.pads.empty() &&
+                f.lines.empty() && f.arcs.empty() && transpose_simple_surface(paths.front())) {
+                transposed = true;
+                for (auto& point : paths.front())
+                    std::swap(point.x, point.y);
+                std::reverse(paths.front().begin(), paths.front().end());
             }
             auto rings = Union(paths, FillRule::NonZero);
             if (normalized_surface)
@@ -557,6 +596,12 @@ struct Mapper {
         if (!clipper.Execute(ClipType::Difference, FillRule::NonZero, rings))
             throw std::runtime_error("copper boolean failed: " + layer.name);
         append_rings(layer, rings);
+        if (transposed)
+            for (auto& polygon : layer.polygons) {
+                for (auto& point : polygon.points)
+                    std::swap(point[0], point[1]);
+                std::reverse(polygon.points.begin(), polygon.points.end());
+            }
     }
     void append_rings(EcadLayer& layer, const PolyPath64& parent) {
         for (const auto& ring : parent) {
@@ -599,7 +644,10 @@ struct Mapper {
             auto classification = [](const OdbTool& t) {
                 auto type = fold_ascii(t.type);
                 std::erase_if(type, [](char c) { return c == '-' || c == '_'; });
-                return type == "plated" ? 0 : type == "slot" ? 1 : type == "nonplated" ? 2 : 3;
+                return type == "plated" || type == "via" ? 0
+                       : type == "slot"                  ? 1
+                       : type == "nonplated"             ? 2
+                                                         : 3;
             };
             bool ambiguous = false;
             if (tools != job.tools.end())
@@ -625,13 +673,22 @@ struct Mapper {
             }
             if (tool && classification(*tool) == 2)
                 continue;
-            auto a = std::find_if(model.layers.begin(), model.layers.end(), [&](const auto& l) {
-                return l.name == layer.start_name;
-            });
-            auto b = std::find_if(model.layers.begin(), model.layers.end(), [&](const auto& l) {
-                return l.name == layer.end_name;
-            });
-            if (a == model.layers.end() || b == model.layers.end() || !a->copper || !b->copper) {
+            const auto start_name = fold_ascii(layer.start_name);
+            const auto end_name = fold_ascii(layer.end_name);
+            auto a = model.layers.end(), b = model.layers.end();
+            std::size_t start_matches = 0, end_matches = 0;
+            for (auto it = model.layers.begin(); it != model.layers.end(); ++it) {
+                const auto name = fold_ascii(it->name);
+                if (name == start_name) {
+                    a = it;
+                    ++start_matches;
+                }
+                if (name == end_name) {
+                    b = it;
+                    ++end_matches;
+                }
+            }
+            if (start_matches != 1 || end_matches != 1 || !a->copper || !b->copper) {
                 unsupported("ViaSpan:" + layer.name);
                 continue;
             }
@@ -658,8 +715,8 @@ struct Mapper {
             }
             Via v;
             v.id = layer.name + ":" + std::to_string(model.vias.size());
-            v.start_layer = layer.start_name;
-            v.end_layer = layer.end_name;
+            v.start_layer = a->name;
+            v.end_layer = b->name;
             auto pos = point(p.at);
             v.position = {pos.x, pos.y};
             v.outer_radius_dbu = static_cast<double>(diameter) / 2;
