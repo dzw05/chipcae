@@ -36,6 +36,208 @@ void require(bool ok, const QString& message) {
         throw std::runtime_error(message.toStdString());
 }
 namespace {
+void copyEventManifest(const QDir& root, const QTemporaryDir& temporary) {
+    require(temporary.isValid(), "cannot create temporary event-discovery fixture");
+    const auto target = QDir(temporary.path()).filePath("manifest.json");
+    require(QFile::copy(root.filePath("default/manifest.json"), target),
+            "cannot copy event-discovery manifest to " + target);
+}
+
+void copyEventLog(const QDir& root,
+                  const QString& source,
+                  const QDir& target,
+                  const QString& name) {
+    require(QFile::copy(root.filePath("events/" + source + ".caelog"), target.filePath(name)),
+            "cannot copy event fixture to " + target.filePath(name));
+}
+
+void requireSameEventLog(const chipcae::desktop::EventLogResult& actual,
+                         const chipcae::desktop::EventLogResult& expected) {
+    require(actual.events.size() == expected.events.size(),
+            QString("eventLog().events.size(): expected %1, got %2")
+                .arg(expected.events.size())
+                .arg(actual.events.size()));
+    require(actual.validatedBytes == expected.validatedBytes, "event validatedBytes mismatch");
+    require(actual.error.toUtf8() == expected.error.toUtf8(), "event error bytes mismatch");
+}
+
+void requireEventOpen(ResultSession& session,
+                      const QString& input,
+                      const QString& explicitLog = {}) {
+    const bool opened =
+        explicitLog.isEmpty() ? session.open(input) : session.open(input, {}, explicitLog);
+    require(opened, "event-discovery open failed: " + session.error());
+    require(session.error().isEmpty(), "event discovery must not set a session error");
+}
+
+void requireEmptyEventLog(const ResultSession& session, const QStringList& baselineWarnings) {
+    require(session.eventLog().events.empty(), "absent event log must have no events");
+    require(session.eventLog().validatedBytes == 0, "absent event log must validate zero bytes");
+    require(session.eventLog().error.isEmpty(), "absent event log must have no decoder error");
+    require(session.error().isEmpty(), "absent event log must have no session error");
+    require(session.warnings() == baselineWarnings,
+            "absent event log must preserve manifest warnings");
+}
+
+QStringList eventLogDiscovery(const QDir& root) {
+    // Pin the decoder fixtures independently of open's filename selection.
+    const auto valid = ResultSession::readEventLog(root.filePath("events/valid.caelog"));
+    const auto half = ResultSession::readEventLog(root.filePath("events/half.caelog"));
+    const auto badCrc = ResultSession::readEventLog(root.filePath("events/bad-crc.caelog"));
+    require(valid.events.size() == 2 && valid.error.isEmpty(), "invalid valid-event reference");
+    require(half.events.size() == 1 && !half.error.isEmpty(), "invalid half-event reference");
+    require(badCrc.events.size() == 1 && !badCrc.error.isEmpty(), "invalid CRC-event reference");
+
+    // Copy only the manifest: default's generated solver log must not leak into these cases.
+    QTemporaryDir manifestOnly;
+    copyEventManifest(root, manifestOnly);
+    const QDir empty(manifestOnly.path());
+    require(!QFileInfo::exists(empty.filePath("events.bin")) &&
+                !QFileInfo::exists(empty.filePath("events.caelog")),
+            "manifest-only fixture unexpectedly contains a default log");
+    ResultSession baseline;
+    requireEventOpen(baseline, manifestOnly.path());
+    const auto baselineWarnings = baseline.warnings();
+
+    QStringList failures;
+    const auto run = [&](const QString& name, const std::function<void()>& test) {
+        try {
+            test();
+            std::cout << "event discovery PASS: " << name.toStdString() << '\n';
+        } catch (const std::exception& error) {
+            const auto failure = name + ": " + QString::fromUtf8(error.what());
+            failures << failure;
+            std::cerr << "event discovery FAIL: " << failure.toStdString() << '\n';
+        }
+    };
+
+    for (const bool manifestInput : {false, true}) {
+        run(manifestInput ? "bin only, manifest input" : "bin only, directory input", [&] {
+            QTemporaryDir temporary;
+            copyEventManifest(root, temporary);
+            const QDir directory(temporary.path());
+            copyEventLog(root, "valid", directory, "events.bin");
+            require(!QFileInfo::exists(directory.filePath("events.caelog")),
+                    "bin-only fixture contains events.caelog");
+            ResultSession session;
+            requireEventOpen(
+                session, manifestInput ? directory.filePath("manifest.json") : temporary.path());
+            require(session.eventLog().error.isEmpty(), "valid bin must have no decoder error");
+            requireSameEventLog(session.eventLog(), valid);
+            require(session.warnings() == baselineWarnings, "valid bin must not add warnings");
+        });
+    }
+    run("caelog only", [&] {
+        QTemporaryDir temporary;
+        copyEventManifest(root, temporary);
+        const QDir directory(temporary.path());
+        copyEventLog(root, "valid", directory, "events.caelog");
+        require(!QFileInfo::exists(directory.filePath("events.bin")),
+                "caelog-only fixture contains events.bin");
+        ResultSession session;
+        requireEventOpen(session, temporary.path());
+        requireSameEventLog(session.eventLog(), valid);
+        require(session.warnings() == baselineWarnings, "valid caelog must not add warnings");
+    });
+    run("both present, bin wins", [&] {
+        QTemporaryDir temporary;
+        copyEventManifest(root, temporary);
+        const QDir directory(temporary.path());
+        copyEventLog(root, "valid", directory, "events.bin");
+        copyEventLog(root, "half", directory, "events.caelog");
+        ResultSession session;
+        requireEventOpen(session, temporary.path());
+        requireSameEventLog(session.eventLog(), valid);
+        require(!session.warnings().contains(half.error), "unselected half log must not warn");
+        require(session.warnings() == baselineWarnings, "valid selected bin must not add warnings");
+    });
+    run("explicit valid path overrides bin", [&] {
+        QTemporaryDir temporary;
+        copyEventManifest(root, temporary);
+        copyEventLog(root, "half", QDir(temporary.path()), "events.bin");
+        ResultSession session;
+        requireEventOpen(session,
+                         QDir(temporary.path()).filePath("manifest.json"),
+                         root.filePath("events/valid.caelog"));
+        requireSameEventLog(session.eventLog(), valid);
+        require(session.warnings() == baselineWarnings, "explicit valid log must not add warnings");
+    });
+    run("explicit corrupt path does not fall back", [&] {
+        QTemporaryDir temporary;
+        copyEventManifest(root, temporary);
+        copyEventLog(root, "valid", QDir(temporary.path()), "events.bin");
+        ResultSession session;
+        requireEventOpen(session,
+                         QDir(temporary.path()).filePath("manifest.json"),
+                         root.filePath("events/bad-crc.caelog"));
+        requireSameEventLog(session.eventLog(), badCrc);
+        require(session.warnings().contains(badCrc.error),
+                "explicit decoder error must warn verbatim");
+    });
+    run("explicit missing path does not fall back", [&] {
+        QTemporaryDir temporary;
+        copyEventManifest(root, temporary);
+        const QDir directory(temporary.path());
+        copyEventLog(root, "valid", directory, "events.bin");
+        const auto missing = directory.filePath("missing.caelog");
+        require(!QFileInfo::exists(missing), "explicit missing log unexpectedly exists");
+        ResultSession session;
+        requireEventOpen(session, directory.filePath("manifest.json"), missing);
+        requireEmptyEventLog(session, baselineWarnings);
+    });
+    run("neither default exists", [&] { requireEmptyEventLog(baseline, baselineWarnings); });
+    run("default filenames are case sensitive", [&] {
+        QTemporaryDir temporary;
+        copyEventManifest(root, temporary);
+        const QDir directory(temporary.path());
+        copyEventLog(root, "valid", directory, "Events.bin");
+        copyEventLog(root, "valid", directory, "EVENTS.CAELOG");
+        require(!QFileInfo::exists(directory.filePath("events.bin")) &&
+                    !QFileInfo::exists(directory.filePath("events.caelog")),
+                "case-sensitive fixture requires a case-sensitive filesystem");
+        ResultSession session;
+        requireEventOpen(session, temporary.path());
+        requireEmptyEventLog(session, baselineWarnings);
+    });
+
+    QTemporaryDir repeatedDirectory;
+    copyEventManifest(root, repeatedDirectory);
+    copyEventLog(root, "valid", QDir(repeatedDirectory.path()), "events.bin");
+    ResultSession repeated;
+    run("repeated bin open does not accumulate events", [&] {
+        requireEventOpen(repeated, repeatedDirectory.path());
+        const auto firstLog = repeated.eventLog();
+        requireEventOpen(repeated, repeatedDirectory.path());
+        requireSameEventLog(firstLog, valid);
+        requireSameEventLog(repeated.eventLog(), valid);
+        requireSameEventLog(repeated.eventLog(), firstLog);
+    });
+    run("manifest-only reopen clears events and decoder error", [&] {
+        requireEventOpen(repeated, manifestOnly.path());
+        requireEmptyEventLog(repeated, baselineWarnings);
+        // Seed a real decoder error as well, so clearing error is not a vacuous assertion.
+        requireEventOpen(
+            repeated, repeatedDirectory.path(), root.filePath("events/bad-crc.caelog"));
+        requireSameEventLog(repeated.eventLog(), badCrc);
+        require(repeated.warnings().contains(badCrc.error), "seeded decoder error must warn");
+        requireEventOpen(repeated, manifestOnly.path());
+        requireEmptyEventLog(repeated, baselineWarnings);
+    });
+    run("selected corrupt bin does not fall back to valid caelog", [&] {
+        QTemporaryDir temporary;
+        copyEventManifest(root, temporary);
+        const QDir directory(temporary.path());
+        copyEventLog(root, "bad-crc", directory, "events.bin");
+        copyEventLog(root, "valid", directory, "events.caelog");
+        ResultSession session;
+        requireEventOpen(session, temporary.path());
+        requireSameEventLog(session.eventLog(), badCrc);
+        require(session.warnings().contains(badCrc.error),
+                "selected bin decoder error must warn verbatim");
+    });
+    return failures;
+}
+
 void copyResultFixture(const QDir& source, const QDir& destination) {
     require(source.exists(), "digest fixture directory missing");
     require(QDir().mkpath(destination.absolutePath()), "cannot create fixture copy directory");
@@ -388,6 +590,7 @@ int main(int argc, char** argv) {
         require(
             !ResultSession::readEventLog(root.filePath("events/valid.caelog"), 2).error.isEmpty(),
             "format accepted");
+        const int eventDiscoveryStatus = eventLogDiscovery(root).isEmpty() ? 0 : 1;
         require(s.open(root.filePath("temporal_ug.vtkhdf")), s.error());
         require(s.loadStep(0) != nullptr, s.error());
         require(s.open(root.filePath("bad_checksum")), s.error());
@@ -477,7 +680,7 @@ int main(int argc, char** argv) {
         }
         if (s1.isEmpty()) {
             std::cout << "S1 fixture not present; skipping official S1 readback\n";
-            return 0;
+            return eventDiscoveryStatus;
         }
         require(s.open(s1), s.error());
         auto object = s.loadStep(0, "T");
@@ -504,13 +707,13 @@ int main(int argc, char** argv) {
         window->AddRenderer(renderer);
         if (!window->SupportsOpenGL()) {
             std::cout << "S1 IO OK; OpenGL unavailable, skip render\n";
-            return 0;
+            return eventDiscoveryStatus;
         }
         window->Render();
         require(window->GetNeverRendered() == 0, "S1 render failed");
         std::cout << "VTK " << vtkVersion::GetVTKVersion() << " S1 cells=" << ds->GetNumberOfCells()
                   << " points=" << ds->GetNumberOfPoints() << "\n";
-        return 0;
+        return eventDiscoveryStatus;
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;
