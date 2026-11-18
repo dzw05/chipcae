@@ -31,7 +31,8 @@ mesh::Expected<bool> write_stack(const mesh::StackModel& model, const std::files
             J v;
             v["name"] = l.name;
             v["kind"] = l.kind;
-            v["body"] = l.body;
+            if (!l.body.empty())
+                v["body"] = l.body;
             v["thickness"] = l.thickness;
             v["grading"] = l.grading;
             v["n_elem_min"] = l.n_elem_min;
@@ -42,7 +43,8 @@ mesh::Expected<bool> write_stack(const mesh::StackModel& model, const std::files
                 for (const auto& r : l.regions) {
                     J a;
                     a["name"] = r.name;
-                    a["body"] = r.body;
+                    if (!r.body.empty())
+                        a["body"] = r.body;
                     if (!r.material.empty())
                         a["material"] = r.material;
                     a["footprint"] = footprint(r.footprint);

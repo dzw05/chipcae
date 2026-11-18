@@ -12,6 +12,8 @@
 #include <XCAFDoc_DocumentTool.hxx>
 #include <XCAFDoc_ShapeTool.hxx>
 #include <filesystem>
+#include <gp_Ax2.hxx>
+#include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 #include <iostream>
 #include <string>
@@ -43,7 +45,9 @@ int main(int argc, char** argv) {
     if (mode == "draft") {
         // 0.5*tau_B over a side wall: tau_B=min(1e-4*L,.1*t_min).
         const double tau_b = .0035 < .001118033988749895 ? .0035 : .001118033988749895;
-        if (!write("lid.step", BRepPrimAPI_MakeWedge(1, 1, .5, 1 - .5 * tau_b).Shape()))
+        // The wedge tapers along local Y. Align it with global Z for slicing.
+        const gp_Ax2 axes(gp_Pnt(0, 1, 0), gp_Dir(0, -1, 0), gp_Dir(1, 0, 0));
+        if (!write("lid.step", BRepPrimAPI_MakeWedge(axes, 1, .5, 1, 1 - .5 * tau_b).Shape()))
             return 1;
     }
     Handle(TDocStd_Document) document;
