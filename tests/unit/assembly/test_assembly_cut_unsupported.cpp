@@ -44,31 +44,38 @@ int main() {
             unsupported(interior, hole ? "holed non-rectilinear section" : "non-convex section");
             unsupported(p, hole ? "holed non-rectilinear section" : "non-convex section");
         }
-        // Unsupported endpoints must not attract nearby supported interfaces.
+        // Unsupported endpoints must neither attract nor cut supported interfaces.
         auto supported = part("supported", .000405, .0008);
         auto ghost = part("ghost", .0004, .0009);
         ghost.slabs[0].sections = {
             {Ring{{{0, 0}, {.004, 0}, {.002, .001}, {.004, .004}, {0, .004}}}, {}}};
         auto alone = merge(base(), {supported}, .001);
-        for (bool reverse : {false, true}) {
-            auto combined = merge(base(),
-                                  reverse ? std::vector<PlacedPart>{supported, ghost}
-                                          : std::vector<PlacedPart>{ghost, supported},
-                                  .001);
-            check(combined.welded_interfaces == alone.welded_interfaces,
-                  "unsupported interface cannot affect weld count");
-            check(combined.stack.layers.size() == alone.stack.layers.size(),
-                  "unsupported interface cannot affect layer splits");
-            for (size_t i = 0; i < alone.stack.layers.size(); ++i) {
-                const auto& actual = combined.stack.layers[i];
-                const auto& expected = alone.stack.layers[i];
-                check(actual.name == expected.name && actual.thickness == expected.thickness &&
-                          actual.regions.size() == expected.regions.size(),
-                      "supported geometry unchanged by unsupported neighbor");
+        for (auto range :
+             {std::array{.0004, .0009}, std::array{.0004055, .0009}, std::array{.0003, .0007995}}) {
+            ghost.slabs[0].z0 = range[0];
+            ghost.slabs[0].z1 = range[1];
+            for (bool reverse : {false, true}) {
+                auto combined = merge(base(),
+                                      reverse ? std::vector<PlacedPart>{supported, ghost}
+                                              : std::vector<PlacedPart>{ghost, supported},
+                                      .001);
+                check(combined.welded_interfaces == alone.welded_interfaces,
+                      "unsupported interface cannot affect weld count");
+                check(combined.stack.layers.size() == alone.stack.layers.size(),
+                      "unsupported interface cannot affect layer splits");
+                for (size_t i = 0; i < alone.stack.layers.size(); ++i) {
+                    const auto& actual = combined.stack.layers[i];
+                    const auto& expected = alone.stack.layers[i];
+                    check(actual.name == expected.name && actual.thickness == expected.thickness &&
+                              actual.regions.size() == expected.regions.size(),
+                          "supported geometry unchanged by unsupported neighbor");
+                }
+                same_regions(combined, alone);
+                check(combined.defects.size() == 1 && combined.defects[0].tier == Tier::C &&
+                          combined.defects[0].reason == DefectReason::PART_NOT_PRISMATIC &&
+                          combined.defects[0].defect_id == "ghost/cut_unsupported#0",
+                      "unsupported neighbor produces only its cut defect");
             }
-            check(combined.defects.size() == 1 &&
-                      combined.defects[0].reason == DefectReason::PART_NOT_PRISMATIC,
-                  "unsupported neighbor produces only its cut defect");
         }
         SlabSection chamfer{Ring{{{.002, 0},
                                   {.054, 0},

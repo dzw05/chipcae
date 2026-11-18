@@ -15,7 +15,7 @@ int main() {
         auto m = merge(base(), {part("lid", .001 + options().eps_weld / 2, .002)});
         near(m.stack.layers.front().thickness, .001);
         near(m.stack.layers.back().thickness, .001);
-        check(m.welded_interfaces > 0 && m.defects.empty(), "weld only counts");
+        check(m.welded_interfaces == 1 && m.defects.empty(), "weld only counts");
         auto a = part("a", .001 + options().eps_weld / 4, .002);
         auto b = part("b", .001 + options().eps_weld / 2, .002);
         b.slabs[0].sections = {rect(.01, .01)};

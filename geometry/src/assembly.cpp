@@ -479,12 +479,9 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
             snapped_interfaces.insert(target);
     }
     result.welded_interfaces = static_cast<std::int64_t>(snapped_interfaces.size());
-    std::set<Real> original_interfaces;
-    for (const auto& p : parts)
-        for (const auto& slab : p.slabs) {
-            original_interfaces.insert(slab.z0);
-            original_interfaces.insert(slab.z1);
-        }
+    // Unsupported slabs contribute neither alignment candidates nor provenance cuts.
+    // Retain supported pre-alignment endpoints for stable thin interval numbering.
+    std::set<Real> original_interfaces = candidates;
     original_interfaces.insert(boundaries.begin(), boundaries.end());
     for (size_t p_index = 0; p_index < parts.size(); ++p_index) {
         const auto& p = parts[p_index];
