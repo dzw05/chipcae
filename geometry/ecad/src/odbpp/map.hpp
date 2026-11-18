@@ -17,7 +17,7 @@ struct ThicknessRecord {
     // contain no filename; E-ODB-3 must expand "override" to "override:<filename>"
     // when converting these records to its public report types.
     std::string source;
-    // Original positive ODB thickness when a conflicting override is applied.
+    // Reserved conflict provenance; empty under first-available thickness selection.
     std::optional<double> odb_value_m;
 };
 struct MapOptions {

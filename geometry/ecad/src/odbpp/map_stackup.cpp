@@ -84,18 +84,14 @@ void map_stackup(const OdbJob& j, const MapOptions& options, ImportResult& resul
         double selected = odb;
         std::string source = odb > 0 ? "odb" : "missing";
         std::optional<double> original;
-        if (options.overrides)
+        if (odb <= 0 && options.overrides)
             for (const auto& [key, value] : *options.overrides) {
                 if (fold_ascii(key) != fold_ascii(l.name))
                     continue;
                 if (!std::isfinite(value) || value <= 0)
                     throw std::runtime_error("invalid override thickness: " + key);
-                if (odb <= 0 || std::abs(value - odb) / odb > 1e-9) {
-                    selected = value;
-                    source = "override";
-                    if (odb > 0)
-                        original = odb;
-                }
+                selected = value;
+                source = "override";
             }
         if (selected <= 0)
             missing.push_back(l.name);
