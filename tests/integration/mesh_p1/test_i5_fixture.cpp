@@ -2,17 +2,22 @@
 #include "chipcae/mesh/background/tensor_grid.hpp"
 #include "chipcae/mesh/testing/mesh_fixture.hpp"
 
+#include <array>
 #include <bit>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
 #include <jsoncons/json.hpp>
 #include <limits>
+#include <map>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 using namespace chipcae;
 using namespace chipcae::mesh;
@@ -395,6 +400,19 @@ void rejects_bad(const fs::path& dir) {
             for (std::size_t i = 0; i < m["attr_table"]["layers"].size(); ++i)
                 m["copper_layer_of_layer"].push_back(index);
         });
+    auto copper_document = base;
+    auto& copper_mesh = copper_document["mesh"];
+    copper_mesh["copper_layer_of_layer"] = J::array();
+    for (std::size_t i = 0; i < copper_mesh["attr_table"]["layers"].size(); ++i)
+        copper_mesh["copper_layer_of_layer"].push_back(i == 0 ? 0 : -1);
+    const auto columns = (copper_mesh["axes"][0].size() - 1) * (copper_mesh["axes"][1].size() - 1);
+    copper_mesh["copper_phi"] = J::array();
+    for (std::size_t i = 0; i < columns; ++i)
+        copper_mesh["copper_phi"].push_back(0.5);
+    write(dir / "copper-valid.json", copper_document.to_string());
+    require(bool(load_mesh_fixture(dir / "copper-valid.json")), "valid copper load control");
+    copper_mesh["copper_phi"] = J::array();
+    reject("missing copper phi on load", copper_document.to_string());
     mutate("wrong integer element type", [](J& j) { j["mesh"]["hex"][0] = "0"; });
     mutate("wrong real element type", [](J& j) { j["mesh"]["vertices"][0] = "0"; });
     mutate("wrong bool type", [](J& j) { j["mesh"]["internal_interfaces"] = 1; });
@@ -482,6 +500,7 @@ void rejects_bad(const fs::path& dir) {
     reject_mesh("nonpositive boundary attribute", [](auto& m) { m.bdr_attribute[0] = 0; });
     reject_mesh("pending cut index", [](auto& m) { m.pending_cut = {-1}; });
     reject_mesh("pending cut upper bound", [](auto& m) { m.pending_cut = {1}; });
+    reject_mesh("missing copper phi", [](auto& m) { m.copper_phi.clear(); });
     reject_mesh("short copper layer map", [](auto& m) { m.copper_layer_of_layer.pop_back(); });
     reject_mesh("long copper layer map", [](auto& m) { m.copper_layer_of_layer.push_back(-1); });
     for (const auto& path : {dir, dir / "missing-parent" / "mesh.json", fs::path("/dev/full")}) {
@@ -534,6 +553,15 @@ int main(int argc, char** argv) {
         else if (test == "empty") {
             roundtrip(HexMeshArrays{}, p);
             require(J::parse(bytes(p)).at("mesh_sha256").is_null(), "empty mesh has null digest");
+            auto metadata = decorated();
+            HexMeshArrays empty;
+            empty.attr_table = metadata.attr_table;
+            empty.face_sets["unused"] = {};
+            empty.grid_report = metadata.grid_report;
+            empty.preparation_report = metadata.preparation_report;
+            roundtrip(empty, p);
+            require(J::parse(bytes(p)).at("mesh_sha256").is_null(),
+                    "nondefault empty mesh has null digest");
         } else if (test == "digest") {
             const auto fixture = fs::path(I5_ROOT) / "tests/fixtures/mesh/i5_fcbga_small.mesh.json";
             auto m = load_mesh_fixture(fixture);

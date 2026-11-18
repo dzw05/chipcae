@@ -13,3 +13,13 @@ foreach(case missing empty)
     message(FATAL_ERROR "${case} graph did not fail at graph validation: ${output}${error}")
   endif()
 endforeach()
+
+foreach(target chipcae_mesh_background chipcae_mesh_cut mfem preview)
+  set(graph "${TEST_DIR}/${target}.cmake")
+  file(WRITE "${graph}" "set(links_chipcae_mesh_fixture bridge)\nset(links_bridge ${target})\n")
+  execute_process(COMMAND cmake "-DGRAPH=${graph}" -P "${CHECK}"
+    RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
+  if(result EQUAL 0 OR NOT error MATCHES "Forbidden fixture dependency: ${target}")
+    message(FATAL_ERROR "${target} graph did not reject forbidden dependency: ${output}${error}")
+  endif()
+endforeach()

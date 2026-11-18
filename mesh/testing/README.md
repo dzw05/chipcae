@@ -30,7 +30,7 @@ Face-set names are independent group labels: their membership in boundary names
 is not validated. Face-set values retain the existing boundary index checks.
 Optional `partitioning`, `node_layer`, and `node_column` arrays may be empty on
 nonempty meshes; when populated, their lengths must match cells or nodes.
-Errors use `INPUT_INVALID`; write failures use the existing `$` I/O path convention. Default empty meshes carry a null digest. The digest covers
+Errors use `INPUT_INVALID`; write failures use the existing `$` I/O path convention. Empty meshes, including those carrying metadata, carry a null digest. The digest covers
 geometry and connectivity, so it is not a checksum of every attribute or report.
 The JSON layout is an internal test format, not a new I5 exchange contract.
 
@@ -54,3 +54,9 @@ and its schema SHA-256 helper after validating connectivity and axis lengths.
 This header inclusion does not link the preview implementation.
 Nonempty copper layer maps have one entry per `attr_table.layers` entry; an empty
 map remains permitted for meshes without this optional metadata.
+
+The deterministic test compares bytes from two saves to the same path; it does
+not compare serializer output with the checked-in fixture, whose object key order
+is immaterial. Regenerate that synthetic fixture with `i5_fixture_tests generate-reference`
+from the build tree. Copper metadata requires one phi value per copper layer and
+base-grid column.

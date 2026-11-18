@@ -309,13 +309,8 @@ bool validate(const HexMeshArrays& m) {
     optional(m.node_layer.size(), n);
     optional(m.node_column.size(), n);
     check(m.attr_frame.size() % 9 == 0, "attribute frame length");
-    if (n == 0 && c == 0) {
-        std::string actual, defaults;
-        encode(actual, m);
-        encode(defaults, HexMeshArrays{});
-        check(actual == defaults, "only default empty mesh permits null digest");
+    if (n == 0 && c == 0)
         return true;
-    }
     check(n > 0 && c > 0, "incomplete mesh");
     check(m.grid_report.levels > 0 &&
               m.grid_report.level_axes.size() == static_cast<std::size_t>(m.grid_report.levels),
@@ -352,7 +347,7 @@ bool validate(const HexMeshArrays& m) {
         if (i >= 0)
             copper = std::max(copper, static_cast<std::size_t>(i) + 1);
     }
-    optional(m.copper_phi.size(), copper * columns);
+    check(m.copper_phi.size() == copper * columns, "copper phi length");
     return false;
 }
 } // namespace
