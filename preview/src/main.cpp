@@ -23,7 +23,9 @@
 #ifdef CHIPCAE_PREVIEW_ENABLED
 #include "chipcae/mesh/background/tensor_grid.hpp"
 #include "chipcae/mesh/background/vtkhdf_writer.hpp"
+#include "chipcae/mesh/cut/outline_cut.hpp"
 #include "mesh_digest.hpp"
+#include "mesh_error_map.hpp"
 #ifdef CHIPCAE_ENABLE_MPI
 #include <mpi.h>
 #endif
@@ -105,17 +107,8 @@ struct MeshFailure : std::runtime_error {
     explicit MeshFailure(const chipcae::mesh::Error& value)
         : std::runtime_error(value.path + ": " + value.reason), error(value) {}
 };
-// Unsupported cuts are not reachable through the pre-P2 CLI. Pin the contract
-// value here until end-to-end cut coverage is available.
-static_assert(static_cast<int>(chipcae::ErrorCode::CUT_UNSUPPORTED) == 13);
 int exit_code(const chipcae::mesh::Error& error) {
-    if (error.path == "COLUMN_SPLIT_ACROSS_RANKS")
-        return static_cast<int>(chipcae::ErrorCode::COLUMN_SPLIT_ACROSS_RANKS);
-    if (error.path == "HIERARCHY_INVALID" || error.path == "hierarchy/levels")
-        return static_cast<int>(chipcae::ErrorCode::HIERARCHY_INVALID);
-    if (error.path == "CUT_UNSUPPORTED" || error.path == "outline.unsupported")
-        return static_cast<int>(chipcae::ErrorCode::CUT_UNSUPPORTED);
-    return static_cast<int>(chipcae::ErrorCode::INPUT_INVALID);
+    return chipcae::solve::mesh_error_code(error).code();
 }
 bool same_path(const std::filesystem::path& a, const std::filesystem::path& b) {
     if (std::filesystem::weakly_canonical(a) == std::filesystem::weakly_canonical(b))
@@ -217,11 +210,19 @@ int run(int argc, char** argv) {
             polygons.layers.push_back(std::move(layer));
         }
     }
+    if (stack.outline.polygon.empty() && polygon_names.contains("outline"))
+        throw MeshFailure(
+            {"outline.unsupported",
+             "external polyset outline is not supported; use an inline outline polygon"});
+    auto bounding_stack = stack;
+    bounding_stack.outline.polygon.clear();
     event("mesh", 0.3, "Building tensor grid");
-    auto mesh = sidecars.empty() ? checked(build_tensor_grid(stack, options))
-                                 : checked(build_tensor_grid(stack, options, polygons));
+    auto mesh = sidecars.empty() ? checked(build_tensor_grid(bounding_stack, options))
+                                 : checked(build_tensor_grid(bounding_stack, options, polygons));
+    auto cut = checked(cut::apply_outline_cut(mesh, stack.outline, {}));
     event("write", 0.8, "Writing VTKHDF");
-    auto files = checked_io(write_vtkhdf(stem, mesh, nullptr, chipcae::Communicator::world()));
+    auto files =
+        checked_io(write_vtkhdf(stem, mesh, cut ? &*cut : nullptr, chipcae::Communicator::world()));
     int rank = 0;
 #ifdef CHIPCAE_ENABLE_MPI
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -253,6 +254,7 @@ int run(int argc, char** argv) {
               << ",\"L\":" << summary.levels << ",\"padded_cells\":" << summary.padded_cells
               << ",\"void_cells\":" << summary.void_cells << ",\"nz\":" << summary.nz
               << ",\"node_count\":" << summary.nodes << ",\"cell_count\":" << summary.cells
+              << ",\"cut_cell_count\":" << (cut ? cut->cut_elem.size() : 0)
               << ",\"mesh_sha256\":" << quote(summary.sha256) << "}";
     event("success", 1, effective.str());
     return 0;
