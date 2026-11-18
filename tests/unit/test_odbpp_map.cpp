@@ -849,6 +849,101 @@ void via() {
                 negative_only.report.unsupported.empty(),
             "negative-only drills produce no vias, fraction cells, or diagnostics");
 }
+OdbJob via_acceptance_board() {
+    auto j = board();
+    OdbLayer drill;
+    drill.name = "DRILL";
+    drill.type = "drill";
+    drill.row = 5;
+    drill.start_name = "TOP";
+    drill.end_name = "BOTTOM";
+    j.layers.push_back(drill);
+    j.attrs.layer["DRILL"][".plating_thickness"] = "0.025";
+    j.tools["DRILL"] = {{1, "plated", 0.6}, {2, "slot", 0.8}};
+    auto& f = j.features["DRILL"];
+    f.symbols = {{"round600"}, {"round800"}};
+    f.pads = {{{2, 3}, 0, true}, {{6, 7}, 0, true}, {{8, 8}, 1, true}};
+    f.lines.push_back({{4, 4}, {5, 4}, 1, true});
+    return j;
+}
+void drill_diagnostics(const EcadModel& m, std::initializer_list<std::string_view> expected) {
+    require(m.report.unsupported.size() == expected.size(), "drill diagnostic count");
+    std::size_t i = 0;
+    for (const auto element : expected)
+        require(m.report.unsupported[i++].element == element, "drill diagnostic emission order");
+}
+void via_tool_type_via() {
+    auto j = via_acceptance_board();
+    const auto reference = mapped(j);
+    require(reference.vias.size() == 2, "PLATED reference has two circular holes");
+    require(!reference.via_fractions.empty(), "PLATED reference has via fractions");
+    drill_diagnostics(reference, {"Slot:DRILL", "Slot:DRILL"});
+    for (std::size_t i = 0; i < reference.vias.size(); ++i) {
+        const auto& v = reference.vias[i];
+        require(std::abs(v.position[0] - (i == 0 ? 2000 : 6000)) <= 1 &&
+                    std::abs(v.position[1] - (i == 0 ? 3000 : 7000)) <= 1,
+                "reference via position within one DBU");
+        near(v.outer_radius_dbu, 300, 1e-9);
+        near(v.inner_radius_dbu, 275, 1e-9);
+        require(v.start_layer == "TOP" && v.end_layer == "BOTTOM", "reference via span");
+        require(v.dielectric_layers == std::vector<std::size_t>{1}, "reference dielectric index");
+    }
+    for (const auto* type : {"VIA", "via", "Via"}) {
+        j.tools["DRILL"] = {{1, type, 0.6}, {2, "slot", 0.8}};
+        const auto actual = mapped(j);
+        require(actual.vias.size() == 2, std::string(type) + " must map two plated holes");
+        equal(reference, actual);
+    }
+    j.tools["DRILL"] = {{1, "plated", 0.6}, {2, "VIA", 0.6}, {3, "slot", 0.8}};
+    for (int order = 0; order < 2; ++order) {
+        equal(reference, mapped(j));
+        std::reverse(j.tools["DRILL"].begin(), j.tools["DRILL"].end());
+    }
+    for (const auto* conflict : {"NON_PLATED", "slot"}) {
+        j.tools["DRILL"] = {{1, "VIA", 0.6}, {2, conflict, 0.6}, {3, "slot", 0.8}};
+        for (int order = 0; order < 2; ++order) {
+            const auto actual = mapped(j);
+            require(actual.vias.empty() && actual.via_fractions.empty(),
+                    "ambiguous VIA tools produce no vias or fractions");
+            drill_diagnostics(
+                actual,
+                {"Slot:DRILL", "ViaToolAmbiguous:DRILL", "ViaToolAmbiguous:DRILL", "Slot:DRILL"});
+            std::reverse(j.tools["DRILL"].begin(), j.tools["DRILL"].end());
+        }
+    }
+}
+void via_span_case() {
+    const auto reference_job = via_acceptance_board();
+    const auto reference = mapped(reference_job);
+    require(reference.vias.size() == 2, "case-sensitive reference has two vias");
+    drill_diagnostics(reference, {"Slot:DRILL", "Slot:DRILL"});
+    for (const auto& [start, end] : {std::pair{"top", "bottom"}, std::pair{"Top", "BOTTOM"}}) {
+        auto j = reference_job;
+        j.layers.back().start_name = start;
+        j.layers.back().end_name = end;
+        const auto actual = mapped(j);
+        require(actual.vias.size() == 2, "case-insensitive span must map two vias");
+        for (const auto& v : actual.vias)
+            require(v.start_layer == "TOP" && v.end_layer == "BOTTOM",
+                    "span uses original model layer names");
+        equal(reference, actual);
+    }
+    for (const auto* name : {"top", "bottom"}) {
+        auto j = reference_job;
+        OdbLayer collision;
+        collision.name = name;
+        collision.type = "signal";
+        collision.row = 6;
+        j.layers.push_back(collision);
+        j.attrs.layer[name][".layer_dielectric"] = "0.035";
+        const auto actual = mapped(j);
+        require(actual.layers.size() == reference.layers.size() + 1,
+                "folded collision reaches drill mapping with a valid additional layer");
+        require(actual.vias.empty() && actual.via_fractions.empty(),
+                "folded duplicate span endpoint produces no vias or fractions");
+        drill_diagnostics(actual, {"Slot:DRILL", "ViaSpan:DRILL", "ViaSpan:DRILL", "Slot:DRILL"});
+    }
+}
 void via_region_initialization() {
     auto j = board();
     OdbLayer drill;
@@ -2270,6 +2365,60 @@ EcadModel timed_mapping(const OdbJob& j, const char* name) {
     require(seconds <= 5.0, std::string(name) + " mapping exceeded 5.0 seconds");
     return result.value();
 }
+void transpose_equivalence() {
+    constexpr std::size_t count = 6000;
+    std::vector<OdbPoint> points{{10, 10}, {990, 10}};
+    points.reserve(count);
+    for (std::size_t i = 0; i < count - 2; ++i)
+        points.push_back({990.0 - 980.0 * static_cast<double>(i) / static_cast<double>(count - 3),
+                          i % 2 == 0 ? 500.0 : 501.0});
+    require(points.size() == count, "exactly 6000 contour vertices");
+    using Ring = std::vector<std::array<std::int64_t, 2>>;
+    auto canonical = [](Ring ring) {
+        require(!ring.empty(), "canonical ring is nonempty");
+        std::rotate(ring.begin(), std::min_element(ring.begin(), ring.end()), ring.end());
+        return ring;
+    };
+    auto twice_area = [](const Ring& ring) {
+        std::int64_t sum = 0;
+        for (std::size_t i = 0; i < ring.size(); ++i) {
+            const auto& a = ring[i];
+            const auto& b = ring[(i + 1) % ring.size()];
+            sum += a[0] * b[1] - b[0] * a[1];
+        }
+        return sum;
+    };
+    Ring input;
+    for (const auto& point : points)
+        input.push_back({std::llround(point.x * 1000), std::llround(point.y * 1000)});
+    auto j = board();
+    j.profile.contours = {square(1000)};
+    j.features["TOP"].surfaces = {{true, {polygon_contour(points)}}};
+    const auto transposed = timed_mapping(j, "odbpp_map_transpose_equivalence_surface");
+    const auto& rings = transposed.layers.front().polygons;
+    require(rings.size() == 1, "single surface produces one comb ring");
+
+    // The isolated pad disables transposition without changing the comb geometry.
+    j.features["TOP"].symbols = {{"rect1000x1000"}};
+    j.features["TOP"].pads = {{{5, 5}, 0, true}};
+    const auto untransposed = timed_mapping(j, "odbpp_map_transpose_equivalence_pad");
+    auto other_rings = untransposed.layers.front().polygons;
+    require(other_rings.size() == 2, "comb and isolated pad produce two rings");
+    const Ring pad{{4500, 4500}, {5500, 4500}, {5500, 5500}, {4500, 5500}};
+    auto is_pad = [&](const auto& polygon) { return canonical(polygon.points) == pad; };
+    require(std::count_if(other_rings.begin(), other_rings.end(), is_pad) == 1,
+            "exactly one ring matches the isolated pad's integer square");
+    std::erase_if(other_rings, is_pad);
+    require(rings.size() == other_rings.size(), "scan directions preserve ring count");
+    for (std::size_t i = 0; i < rings.size(); ++i) {
+        require(canonical(rings[i].points) == canonical(other_rings[i].points),
+                "scan directions preserve cyclic integer sequence and winding");
+        require(twice_area(rings[i].points) == twice_area(other_rings[i].points),
+                "scan directions preserve signed integer twice-area");
+    }
+    require(twice_area(rings.front().points) == twice_area(input),
+            "comb output twice-area equals rounded input shoelace sum exactly");
+}
 void large_contour_perf() {
     constexpr std::size_t count = 200000;
     std::vector<OdbPoint> points{{10, 10}, {990, 10}};
@@ -2383,6 +2532,9 @@ int main() {
         {"odbpp_map_bridged_hole_chain", bridged_hole_chain},
         {"odbpp_map_bridge_rejections", bridge_rejections},
         {"odbpp_map_rounding_duplicates", rounding_duplicates},
+        {"odbpp_map_via_tool_type_via", via_tool_type_via},
+        {"odbpp_map_via_span_case", via_span_case},
+        {"odbpp_map_transpose_equivalence", transpose_equivalence},
         {"odbpp_map_large_bridged_perf", large_bridged_perf},
         {"odbpp_map_large_contour_perf", large_contour_perf}};
     int failures = 0;
