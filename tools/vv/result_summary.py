@@ -47,6 +47,7 @@ def _require(condition, message):
 
 
 def _count(block, path):
+    _require(path in block, f"{block.name}/{path}: required field missing")
     source = block[path]
     _require(isinstance(source, h5py.Dataset)
              and source.ndim == 1
@@ -183,6 +184,18 @@ def _read(root):
     return blocks, data, temperatures, names
 
 
+def _require_finite(value, path=''):
+    """Check computed floats in output order without converting JSON integers."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _require_finite(item, f'{path}.{key}' if path else key)
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _require_finite(item, f'{path}[{index}]')
+    elif isinstance(value, float):
+        _require(np.isfinite(value), f'{path}: non-finite computed value')
+
+
 def _summarize(run_dir, top_rel_tol, step):
     _require(np.isfinite(top_rel_tol) and top_rel_tol >= 0, 'top_rel_tol must be finite and nonnegative')
     _require(step is None
@@ -253,6 +266,8 @@ def _summarize(run_dir, top_rel_tol, step):
             pv = value
     mesh = manifest.get('mesh', {})
     _require(isinstance(mesh, dict), 'mesh must be an object')
+    if 'mesh_sha256' in mesh:
+        _require(isinstance(mesh['mesh_sha256'], str), 'mesh.mesh_sha256: expected string')
     path = Path(step_file)
     if not path.is_absolute():
         path = run_dir / path
@@ -274,39 +289,44 @@ def _summarize(run_dir, top_rel_tol, step):
         top = indices[first]
     w = None
     if len(top) >= 3:
-        xy = points[top, :2]
-        centered = xy - xy[0]
-        if np.linalg.matrix_rank(centered) < 2:
-            # span{along, 1} equals span{x, y, 1} on a line, so residuals agree.
-            # Plane slopes are not unique on a line; its fitted values are.
-            # Remove the redundant direction explicitly, retaining the shared
-            # least-squares API and avoiding large absolute coordinate offsets.
-            _, _, axes = np.linalg.svd(centered, full_matrices=False)
-            along = centered @ axes[0]
-            _, residual = best_fit_plane(along, np.zeros_like(along), u[top, 2])
-        else:
-            _, residual = best_fit_plane(xy[:, 0], xy[:, 1], u[top, 2])
-        w = float(np.ptp(residual))
+        with np.errstate(over='ignore', invalid='ignore'):
+            xy = points[top, :2]
+            centered = xy - xy[0]
+            if np.linalg.matrix_rank(centered) < 2:
+                # span{along, 1} equals span{x, y, 1} on a line, so residuals agree.
+                # Plane slopes are not unique on a line; its fitted values are.
+                # Remove the redundant direction explicitly, retaining the shared
+                # least-squares API and avoiding large absolute coordinate offsets.
+                _, _, axes = np.linalg.svd(centered, full_matrices=False)
+                along = centered @ axes[0]
+                _, residual = best_fit_plane(along, np.zeros_like(along), u[top, 2])
+            else:
+                _, residual = best_fit_plane(xy[:, 0], xy[:, 1], u[top, 2])
+            w = float(np.ptp(residual))
     temperature = None
     if temperatures:
         all_t = np.concatenate(temperatures)
         tt = all_t[top]
-        temperature = dict(min=float(all_t.min()) if len(all_t) else None,
-                           max=float(all_t.max()) if len(all_t) else None,
-                           top_min=float(tt.min()) if len(tt) else None,
-                           top_max=float(tt.max()) if len(tt) else None,
-                           top_mean=float(tt.mean()) if len(tt) else None)
+        with np.errstate(over='ignore', invalid='ignore'):
+            temperature = dict(min=float(all_t.min()) if len(all_t) else None,
+                               max=float(all_t.max()) if len(all_t) else None,
+                               top_min=float(tt.min()) if len(tt) else None,
+                               top_max=float(tt.max()) if len(tt) else None,
+                               top_mean=float(tt.mean()) if len(tt) else None)
     rel_diff = None
-    if w is not None and pv not in (None, 0):
+    # Leave non-finite w for the final traversal so earlier output fields win.
+    if w is not None and np.isfinite(w) and pv not in (None, 0):
         # JSON integers may exceed float range. Convert only the final ratio,
         # preserving the signed denominator required by the summary contract.
         rel_diff = float(abs(Fraction(w) - pv) / pv) if isinstance(pv, int) else abs(w-pv)/pv
-    return dict(schema=SCHEMA, step_file=step_file, mesh_sha256=mesh.get('mesh_sha256'),
-                blocks=blocks, layer_names=names[0], material_names=names[1],
-                temperature=temperature,
-                warpage=dict(manifest_warpage_pv_m=pv, w_bfp_m=w,
-                             rel_diff=rel_diff,
-                             n_top_points=len(top)), manifest_summary=summary)
+    result = dict(schema=SCHEMA, step_file=step_file, mesh_sha256=mesh.get('mesh_sha256'),
+                  blocks=blocks, layer_names=names[0], material_names=names[1],
+                  temperature=temperature,
+                  warpage=dict(manifest_warpage_pv_m=pv, w_bfp_m=w,
+                               rel_diff=rel_diff,
+                               n_top_points=len(top)), manifest_summary=summary)
+    _require_finite(result)
+    return result
 
 
 def summarize(run_dir: Path, top_rel_tol: float = 1e-12, step: int | str | None = None) -> dict:
@@ -342,7 +362,7 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.write(content)
         else:
             args.o.write_text(content, encoding='utf-8')
-    except (ResultSummaryError, OSError) as exc:
+    except (ResultSummaryError, OSError, ValueError) as exc:
         name = exc.name if isinstance(exc, ResultSummaryError) else 'INPUT_INVALID'
         reason = ' '.join(str(exc).splitlines())
         print(f'result_summary: {name}: {reason}', file=sys.stderr)
