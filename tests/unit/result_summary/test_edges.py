@@ -12,6 +12,29 @@ from tools.vv.result_summary import ResultSummaryError, main, summarize
 
 
 class Edges(unittest.TestCase):
+    def test_top_temperature_exact_duplicates_and_tolerance_boundary(self):
+        # Equal x/y alone does not make a duplicate: z must also match exactly.
+        tol = 1e-6
+        for dz, count, maximum, mean in ((0., 9, 309., 305.),
+                                         (.5 * tol, 10, 999., 374.4),
+                                         (2. * tol, 9, 309., 305.)):
+            with self.subTest(dz=dz), tempfile.TemporaryDirectory() as tmp:
+                run = Path(tmp)
+                step, _ = fixture(run, cut=True)
+                with h5py.File(step, 'r+') as f:
+                    # The first cut sample shares the hex center's x/y; its
+                    # conflicting T must count only for a distinct top point.
+                    f['VTKHDF/cut/Points'][0] = [0., 0., 1. - dz]
+                result = summarize(run, tol)
+                self.assertEqual(result['warpage']['n_top_points'], count)
+                self.assertEqual(result['temperature'], dict(
+                    min=100., max=999., top_min=301., top_max=maximum,
+                    top_mean=mean))
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    self.assertEqual(main([str(run), '--top-rel-tol', str(tol)]), 0)
+                self.assertEqual(json.loads(out.getvalue()), result)
+
     def test_partition_allocations(self):
         for name in ('hex', 'cut', 'eb_surface'):
             for invalid in ('valid', 'points', 'cells', 'field'):
