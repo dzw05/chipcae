@@ -1,0 +1,218 @@
+{
+  "schema": "chipcae.material_library/1",
+  "materials": [
+    {
+      "id": "organic_eq",
+      "schema_version": "1",
+      "unit_system": "SI",
+      "density": 1000,
+      "conductivity": 3.1,
+      "x-conductivity-source": "含过孔的高密度 FC-PBGA 有机基板，取等效厚度方向值，见 ECTC 2005 [doi:10.1109/ectc.2005.1442026](https://doi.org/10.1109/ectc.2005.1442026)。",
+      "model": "thermo_elastic",
+      "provenance": {
+        "source_type": "illustrative",
+        "confidence": "illustrative"
+      },
+      "elastic": {
+        "symmetry": "isotropic",
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "E": [
+              25000000000.0,
+              22500000000.0
+            ],
+            "nu": [
+              0.3,
+              0.31
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      },
+      "thermal_expansion": {
+        "cte_type": "tangent",
+        "symmetry": "isotropic",
+        "stress_free_temperature": 298.15,
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "alpha": [
+              1.5e-05,
+              1.65e-05
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      }
+    },
+    {
+      "id": "sac305_ball_eq",
+      "schema_version": "1",
+      "unit_system": "SI",
+      "density": 1000,
+      "conductivity": 58,
+      "x-conductivity-source": "SAC305 体材料的导热系数，见 [TME/Cynel SAC305 TDS](https://www.tme.com/Document/be9dc599936f5899f2f2308663aa8b3c/SAC305_EN.pdf)、[Solder Connection 合金表](https://www.solderconnection.com/wp-content/uploads/2023/03/Solder-Alloy-Technical-Specifications.pdf)。",
+      "model": "thermo_elastic",
+      "provenance": {
+        "source_type": "illustrative",
+        "confidence": "illustrative"
+      },
+      "elastic": {
+        "symmetry": "isotropic",
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "E": [
+              45000000000.0,
+              40500000000.0
+            ],
+            "nu": [
+              0.35,
+              0.36
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      },
+      "thermal_expansion": {
+        "cte_type": "tangent",
+        "symmetry": "isotropic",
+        "stress_free_temperature": 298.15,
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "alpha": [
+              2.2e-05,
+              2.4200000000000002e-05
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      }
+    },
+    {
+      "id": "underfill",
+      "schema_version": "1",
+      "unit_system": "SI",
+      "density": 1000,
+      "conductivity": 0.5,
+      "x-conductivity-source": "硅微粉填充的环氧底填，取典型值，见 [CoolTherm ME-531 TDS](https://exdron.com/Exdron-Pdf/COOLTHERM-ME-531-SYR-30CC-EFD-DATASHEET.pdf)（0.5 W/mK）。",
+      "model": "thermo_elastic",
+      "provenance": {
+        "source_type": "illustrative",
+        "confidence": "illustrative"
+      },
+      "elastic": {
+        "symmetry": "isotropic",
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "E": [
+              8000000000.0,
+              7200000000.0
+            ],
+            "nu": [
+              0.32,
+              0.33
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      },
+      "thermal_expansion": {
+        "cte_type": "tangent",
+        "symmetry": "isotropic",
+        "stress_free_temperature": 298.15,
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "alpha": [
+              3e-05,
+              3.3e-05
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      }
+    },
+    {
+      "id": "silicon",
+      "schema_version": "1",
+      "unit_system": "SI",
+      "density": 1000,
+      "conductivity": 148,
+      "x-conductivity-source": "单晶硅 300 K 下的导热系数，见 Glassbrenner & Slack, *Phys. Rev.* 134, A1058 (1964)。",
+      "model": "thermo_elastic",
+      "provenance": {
+        "source_type": "illustrative",
+        "confidence": "illustrative"
+      },
+      "elastic": {
+        "symmetry": "isotropic",
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "E": [
+              130000000000.0,
+              117000000000.0
+            ],
+            "nu": [
+              0.28,
+              0.29000000000000004
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      },
+      "thermal_expansion": {
+        "cte_type": "tangent",
+        "symmetry": "isotropic",
+        "stress_free_temperature": 298.15,
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "alpha": [
+              2.6e-06,
+              2.86e-06
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      }
+    }
+  ],
+  "x-note": "illustrative, not measured or vendor data"
+}
