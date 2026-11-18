@@ -3,6 +3,7 @@ import copy
 import struct
 import hashlib
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -13,6 +14,11 @@ import numpy as np
 import vtk
 
 exe, mpirun, source = sys.argv[1:]
+error_codes = {name: int(code) for code, name in re.findall(
+    r'code:\s*(\d+),\s*name:\s*(\w+)',
+    (Path(source) / 'protocol/errors.yaml').read_text())}
+assert {'HIERARCHY_INVALID', 'INPUT_INVALID'} <= error_codes.keys(), error_codes
+acceptance_failures = []
 names = ['hex', 'cut', 'eb_surface', 'particles']
 with tempfile.TemporaryDirectory() as tmp:
     root = Path(tmp)
@@ -29,7 +35,7 @@ with tempfile.TemporaryDirectory() as tmp:
         if ranks > 1: command = [mpirun, '-np', str(ranks), *command]
         result = subprocess.run(command, capture_output=True, text=True, timeout=240)
         if error:
-            assert result.returncode == error_code, result.stderr
+            assert result.returncode == error_code, (name, result.returncode, error_code, result.stderr)
             assert error in result.stderr, result.stderr
             return
         assert result.returncode == 0, result.stderr
@@ -173,3 +179,47 @@ with tempfile.TemporaryDirectory() as tmp:
     stack = package
     run('fcbga-polyset-one',demo)
     run('fcbga-polyset-two',demo,ranks=2)
+
+    # Minimal silicon fixture isolates mesh validation from physics and cuts.
+    stack = dict(id='digest', unit='m', outline=dict(box=[0, 0, 1, 1]),
+                 symmetry='none', package_type='FCBGA', layers=[
+                     dict(name='solid', kind='Explicit', material='silicon',
+                          thickness=.1, n_elem_min=1, grading=1)])
+    (root / 'stack.json').write_text(json.dumps(stack))
+    table = lambda columns: dict(temperatures=[300], columns=columns,
+                                 interpolation='constant', extrapolation='clamp')
+    material = dict(
+        id='silicon', schema_version='1', unit_system='SI', model='thermo_elastic',
+        density=2330, elastic=dict(symmetry='isotropic',
+                                  table=table({'E': [130e9], 'nu': [.3]})),
+        thermal_expansion=dict(symmetry='isotropic', cte_type='tangent',
+                               stress_free_temperature=300,
+                               table=table({'alpha': [2.6e-6]})),
+        provenance=dict(source_type='illustrative', confidence='illustrative'))
+    (root / 'materials.json').write_text(json.dumps(
+        {'schema': 'chipcae.material_library/1', 'materials': [material]}))
+    case = {
+        'schema': 'chipcae.case/1.0', 'stack': {'ref': 'stack.json'},
+        'materials': {'ref': 'materials.json'},
+        'mesh': {'type': 'aligned_cartesian_cut', 'nx': 4, 'ny': 2, 'levels': 1,
+                 'min_elems_per_layer': 1, 'max_ratio': 10},
+        'physics': [{'id': 'mech', 'solver': 'fem.solid'}],
+        'loads': [{'type': 'uniform_temperature', 'T_ref': 300, 'T_target': 300}],
+        'constraints': {'rigid': '3-2-1'},
+        'solver': {'linear': {'preconditioner': 'direct'}},
+        'output': {'format': 'vtkhdf'}}
+    for name, mesh_options, ranks, error_name, stderr_text in [
+        ('hierarchy-invalid', {'levels': 32}, 1, 'HIERARCHY_INVALID', 'HIERARCHY_INVALID'),
+        ('hierarchy-levels-ranks', {'nx': 2, 'ny': 2, 'levels': 2}, 2,
+         'HIERARCHY_INVALID', 'hierarchy/levels'),
+        ('solve_mesh_error_input_invalid', {'cell_budget': 1}, 1, 'INPUT_INVALID', 'cell_budget'),
+    ]:
+        invalid_case = copy.deepcopy(case)
+        invalid_case['mesh'].update(mesh_options)
+        try:
+            run(name, invalid_case, ranks=ranks, error=stderr_text,
+                error_code=error_codes[error_name])
+            print(f'{name}: exit={error_codes[error_name]}, stderr contains {stderr_text}', flush=True)
+        except (AssertionError, KeyError, subprocess.TimeoutExpired) as error:
+            acceptance_failures.append(f'{name}: {error}')
+    assert not acceptance_failures, '\n'.join(acceptance_failures)

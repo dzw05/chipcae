@@ -33,8 +33,10 @@ class CaseDocument : public QObject {
 public:
     explicit CaseDocument(QObject* parent = nullptr);
     bool load(const QString& path);
-    bool checkImportedStack(const Json& stack) const;
-    bool replaceImportedStack(const Json& stack);
+    bool checkImportedStack(const Json& stack, const QString& sourceDir = QString()) const;
+    bool replaceImportedStack(const Json& stack, const QString& sourceDir = QString());
+    DocumentErrors importedStackIssues(const Json& stack,
+                                       const QString& sourceDir = QString()) const;
     bool save(const QString& path);
     DocumentErrors validate() const;
     bool isDirty() const { return dirty_; }
@@ -67,10 +69,16 @@ signals:
     void editStarted();
 
 private:
+    friend struct CaseDocumentTestAccess;
+    struct StackImport;
+    StackImport preflightImportedStack(const Json& stack, const QString& sourceDir) const;
+    void validateSchemas(DocumentErrors& result) const;
+    void validateContents(DocumentErrors& result) const;
     void markDirty();
     Json data_ = Json::object(), materials_ = Json::object(), stack_ = Json::object();
     Json profile_ = Json::object();
     QString path_;
+    QString importedStackSourceRoot_;
     QByteArray hash_;
     bool dirty_ = false;
     DocumentErrors errors_;

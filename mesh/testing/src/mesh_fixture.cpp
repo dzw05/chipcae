@@ -62,6 +62,7 @@ void fields(HexMeshArrays::GridReport& x, F&& f) {
     f("column_ranks", x.column_ranks);
     f("warnings", x.warnings);
     f("partition_imbalance", x.partition_imbalance);
+    f("void_cells", x.void_cells);
 }
 template <class F>
 void fields(AttributeTable& x, F&& f) {

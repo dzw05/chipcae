@@ -2,7 +2,11 @@
 #include "chipcae/io/vtkhdf_results.hpp"
 #include "chipcae/mesh/cut/cut_layer.hpp"
 
+#include <map>
 #include <mfem.hpp>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
 namespace chipcae::solve {
 // Geometry and reference coordinates belong to the mesh; only Q2 field
 // evaluation belongs to this adapter. Every face ring is copied per cell.
@@ -51,6 +55,20 @@ inline void append_cut_output(io::ResultsStep& step,
         out.cell_kind.push_back(1);
         out.volume.push_back(p.volume[cell]);
     }
+    if (cut.eb_parent_elem.empty())
+        return;
+
+    std::unordered_map<Index, mesh::Local> poly_layer;
+    poly_layer.reserve(p.parent_elem_gid.size());
+    for (std::size_t cell = 0; cell < p.parent_elem_gid.size(); ++cell) {
+        const auto gid = p.parent_elem_gid[cell];
+        const auto layer = p.layer_id[cell];
+        const auto [it, inserted] = poly_layer.emplace(gid, layer);
+        if (!inserted && it->second != layer)
+            throw std::runtime_error("cut_output: parent gid " + std::to_string(gid) +
+                                     " has polyhedra in layers " + std::to_string(it->second) +
+                                     " and " + std::to_string(layer));
+    }
     for (std::size_t v = 0; v < cut.eb_parent_elem.size(); ++v) {
         int parent = cut.eb_parent_elem[v];
         if (m.partitioning[parent] != rank)
@@ -67,13 +85,22 @@ inline void append_cut_output(io::ResultsStep& step,
         for (int c = 0; c < 3; ++c)
             out.U.push_back(value[c]);
         if (v % 3 == 0) {
+            const auto gid = m.elem_gid[parent];
+            const auto layer = poly_layer.find(gid);
+            if (layer == poly_layer.end())
+                throw std::runtime_error("cut_output: EB triangle parent gid " +
+                                         std::to_string(gid) + " has no polyhedron");
             const auto& record = m.attr_table.entries[m.attribute[parent] - 1];
-            out.elem_gid.push_back(m.elem_gid[parent]);
+            const auto expected = m.attr_table.layers.find(record.layer);
+            if (expected != m.attr_table.layers.end() && layer->second != expected->second)
+                throw std::runtime_error("cut_output: EB triangle parent gid " +
+                                         std::to_string(gid) + " layer " +
+                                         std::to_string(layer->second) + " != attribute layer " +
+                                         std::to_string(expected->second));
+            out.elem_gid.push_back(gid);
             out.material_id.push_back(record.material);
             out.cell_kind.push_back(1);
-            auto it =
-                std::find(p.parent_elem_gid.begin(), p.parent_elem_gid.end(), m.elem_gid[parent]);
-            out.layer_id.push_back(p.layer_id.at(it - p.parent_elem_gid.begin()));
+            out.layer_id.push_back(layer->second);
         }
     }
 }

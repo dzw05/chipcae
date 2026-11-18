@@ -13,8 +13,19 @@
 namespace chipcae::desktop {
 namespace {
 std::optional<DesktopConfig> processConfig;
+constexpr auto schemaMarker = "case-1.0.schema.json";
 [[noreturn]] void fail(const QString& message) {
     throw std::runtime_error(("Desktop config: " + message).toStdString());
+}
+QString checkedSchemaDir(const QString& candidate) {
+    if (candidate.isEmpty())
+        return {};
+    const auto path = QDir::current().filePath(candidate);
+    const QFileInfo directory(path);
+    if (!directory.isDir() || !QFileInfo(QDir(path).filePath(schemaMarker)).isFile())
+        return {};
+    const auto canonical = directory.canonicalFilePath();
+    return canonical.isEmpty() ? QDir::cleanPath(directory.absoluteFilePath()) : canonical;
 }
 QString string(const QJsonObject& obj, const QString& key) {
     const auto value = obj.value(key);
@@ -81,6 +92,57 @@ DesktopConfig::DesktopConfig() : runRoot_(QDir::current().absoluteFilePath("runs
     import_.program = "chipcae-import";
     preview_.program = "chipcae-preview";
     solve_.program = "chipcae-solve";
+}
+QString DesktopConfig::locateSchemaDir(const QStringList& args,
+                                       const QProcessEnvironment& env,
+                                       const QString& executableDir,
+                                       const QString& compileTimeFallback) {
+    QString path;
+    for (qsizetype i = 1; i < args.size(); ++i) {
+        if (args[i] != "--schema-dir")
+            continue;
+        if (!path.isEmpty())
+            fail("--schema-dir may only be specified once");
+        if (++i >= args.size() || args[i].startsWith("--") || args[i].trimmed().isEmpty())
+            fail("--schema-dir requires a directory path");
+        path = args[i];
+    }
+
+    QString source;
+    if (!path.isEmpty()) {
+        source = "--schema-dir";
+    } else if (env.contains("CHIPCAE_SCHEMA_DIR")) {
+        source = "CHIPCAE_SCHEMA_DIR";
+        path = env.value(source);
+    }
+    if (!source.isEmpty()) {
+        const auto dir = checkedSchemaDir(path);
+        if (dir.isEmpty())
+            fail(source + " must point to a directory containing " + schemaMarker);
+        return dir;
+    }
+
+    if (!executableDir.isEmpty()) {
+        const QDir executable(executableDir);
+        for (const auto* relative : {"../Resources/schema", "../share/chipcae/schema", "schema"}) {
+            const auto dir = checkedSchemaDir(executable.filePath(relative));
+            if (!dir.isEmpty())
+                return dir;
+        }
+    }
+    return checkedSchemaDir(compileTimeFallback);
+}
+QString DesktopConfig::locateSchemaFile(const QString& fileName,
+                                        const QStringList& args,
+                                        const QProcessEnvironment& env,
+                                        const QString& executableDir,
+                                        const QString& compileTimeFallback) {
+    if (fileName.isEmpty() || fileName == "." || fileName.contains('/') ||
+        fileName.contains('\\') || fileName.contains("..") || QDir::isAbsolutePath(fileName))
+        fail("fileName must be a single schema file name");
+
+    const auto dir = locateSchemaDir(args, env, executableDir, compileTimeFallback);
+    return dir.isEmpty() ? QString() : QDir::cleanPath(QDir(dir).filePath(fileName));
 }
 DesktopConfig DesktopConfig::load(const QStringList& args, const QProcessEnvironment& env) {
     DesktopConfig result;

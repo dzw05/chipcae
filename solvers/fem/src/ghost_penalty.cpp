@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <stdexcept>
+#include <string>
 namespace chipcae::fem {
 GhostPenalty::GhostPenalty(const mesh::HexMeshArrays& m,
                            const mesh::cut::CutLayerArrays& c,
@@ -26,8 +28,6 @@ GhostPenalty::GhostPenalty(const mesh::HexMeshArrays& m,
                            double gamma,
                            int components)
     : scale_(scale), gamma_(gamma), components_(components) {
-    // faces_ stores local element numbers. Cross-rank ghost faces are unsupported:
-    // cut assembly uses PETSC_COMM_SELF. Use GID lookup before GMG/distributed use.
     constexpr int reference[8][3] = {
         {0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}, {0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1}};
     for (std::size_t e = 0; e < m.elem_gid.size(); ++e) {
@@ -47,8 +47,28 @@ GhostPenalty::GhostPenalty(const mesh::HexMeshArrays& m,
     std::map<Index, int> local;
     for (std::size_t e = 0; e < m.elem_gid.size(); ++e)
         local[m.elem_gid[e]] = e;
-    for (std::size_t f = 0; f < c.gp_face_gid.size(); ++f) {
-        int a = local.at(c.gp_elem_gid[0][f]), b = local.at(c.gp_elem_gid[1][f]);
+    const auto num_faces = c.gp_face_gid.size();
+    if (c.gp_owner_rank.size() != num_faces || c.gp_elem_gid[0].size() != num_faces ||
+        c.gp_elem_gid[1].size() != num_faces)
+        throw std::runtime_error("GhostPenalty: ghost face arrays size mismatch");
+    for (std::size_t f = 0; f < num_faces; ++f) {
+        auto local_element = [&](Index gid) {
+            const auto it = local.find(gid);
+            if (it == local.end())
+                throw std::runtime_error("GhostPenalty: ghost face " +
+                                         std::to_string(c.gp_face_gid[f]) +
+                                         " references element gid " + std::to_string(gid) +
+                                         " not on this process; distributed cut assembly is not "
+                                         "implemented (PETSC_COMM_SELF only)");
+            return it->second;
+        };
+        const int a = local_element(c.gp_elem_gid[0][f]);
+        const int b = local_element(c.gp_elem_gid[1][f]);
+        if (!m.partitioning.empty() && c.gp_owner_rank[f] != m.partitioning[a])
+            throw std::runtime_error("GhostPenalty: ghost face " +
+                                     std::to_string(c.gp_face_gid[f]) + " owner_rank " +
+                                     std::to_string(c.gp_owner_rank[f]) + " != partitioning " +
+                                     std::to_string(m.partitioning[a]));
         faces_.emplace(std::min(a, b), std::max(a, b));
     }
 }

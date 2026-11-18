@@ -1,6 +1,7 @@
 """Read-only documentation acceptance; never starts a numerical solver."""
 
 import json
+import math
 from pathlib import Path
 import re
 import shlex
@@ -113,13 +114,13 @@ def check(root):
         if case_path == "schema/examples/thermal.case.json":
             require(inputs["referenced_materials"],
                     f"{case_file}: no referenced thermal materials found")
-            # One missing material suffices for the documented unreadiness;
-            # adding conductivity to other materials is a legitimate improvement.
-            require(any("conductivity" not in material
-                        for material in inputs["materials"]["materials"]
-                        if material.get("id") in inputs["referenced_materials"]),
-                    f"{case_file}: all referenced materials now supply conductivity; "
-                    "revisit the guide's thermal limitation")
+            for material in inputs["materials"]["materials"]:
+                if material.get("id") not in inputs["referenced_materials"]:
+                    continue
+                conductivity = material.get("conductivity")
+                require(type(conductivity) in (int, float)
+                        and math.isfinite(conductivity) and conductivity > 0,
+                        f"{case_file}: {material['id']} must supply positive finite conductivity")
     # Scan explicit prose references in the guide's current top-level directories.
     # Case-relative inputs are checked above; they need not be listed in prose.
     documented = set(re.findall(
@@ -176,7 +177,7 @@ def check(root):
         "mesh evidence for loosening limits": r"(?:loosen|放宽).{0,100}(?:evidence|依据)",
         "uncut does not replace cut acceptance": r"uncut.{0,100}(?:does not|cannot|不).{0,80}(?:replace|替代).{0,80}cut[- ]cell",
         "positive conductivity": r"(?:positive.{0,50}conductivity|conductivity.{0,50}(?:positive|正))",
-        "thermal sample lacks conductivity": r"(?:lack|missing|缺).{0,100}conductivity|conductivity.{0,100}(?:lack|missing|缺)",
+        "thermal sample supplies illustrative conductivity": r"(?:all|every).{0,80}referenced material.{0,80}(?:suppl|has|have).{0,80}illustrative.{0,80}conductivity",
         "steady conduction limitation": r"thermal(?:\.case\.json| sample).{0,240}(?:not ready|cannot solve|not solvable|不能求解|未就绪)",
         "checked-in FCBGA temperature-table limitation": r"(?:checked-in|original|as[- ]is|as checked in|原样).{0,220}(?:multi[- ]knot|two.{0,15}(?:temperature )?knots|多(?:温度)?节点)",
         "original sample input error": r"(?:multi[- ]knot|two.{0,15}(?:temperature )?knots).{0,180}input_invalid\s*[/ :]\s*14",

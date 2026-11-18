@@ -123,7 +123,8 @@ struct Projection {
                      level_axes,
                      column_ranks,
                      warnings,
-                     partition_imbalance] = x;
+                     partition_imbalance,
+                     void_cells] = x;
         J j;
         FIELD(levels);
         FIELD(rule);
@@ -135,6 +136,7 @@ struct Projection {
         FIELD(column_ranks);
         FIELD(warnings);
         FIELD(partition_imbalance);
+        FIELD(void_cells);
         return j;
     }
     J value(const AttributeTable& x) const {
@@ -261,6 +263,7 @@ HexMeshArrays decorated() {
         {"Interface", {"BodyA", "bodya"}, {"BodyB"}, 9007199254740993LL, 7, -0.0, 0.3}};
     m.grid_report.warnings = {"Case", "case"};
     m.grid_report.partition_imbalance = 1.0000000000000002;
+    m.grid_report.void_cells = 9007199254740993LL;
     m.grid_report.auto_selected = true;
     m.grid_report.rule = 1;
     m.internal_interfaces = true;
@@ -536,6 +539,9 @@ void rejects_bad(const fs::path& dir) {
 }
 } // namespace
 int main(int argc, char** argv) {
+#ifdef CHIPCAE_ENABLE_KOKKOS
+    Kokkos::ScopeGuard guard;
+#endif
     fs::path dir;
     try {
         require(argc == 2, "one test case required");

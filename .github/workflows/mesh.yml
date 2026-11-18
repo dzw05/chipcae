@@ -80,7 +80,7 @@ jobs:
         run: |
           set -euo pipefail
           # Build every registered Tier A mesh test plus the import-threshold and repair-policy tests.
-          cmake --build build --target chipcae_test_ipc2581_e11 chipcae_test_copper_map k1_background k1_cut k1_mesh_digest chipcae_test_import_thresholds chipcae_test_repair_policy --parallel
+          cmake --build build --target chipcae_test_ipc2581_e11 chipcae_test_copper_map k1_background k1_cut k1_cut_stats k1_mesh_digest chipcae_test_import_thresholds chipcae_test_repair_policy --parallel
           ccache --show-stats
 
       - name: Run mesh tests

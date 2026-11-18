@@ -1,0 +1,616 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Zhiwei Duan
+"""Additional coverage for structural validation and documented edge policies."""
+import contextlib
+import io
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from fixtures import fixture, fixed_keys, save, h5py, np
+from tools.vv.result_summary import ResultSummaryError, main, summarize
+
+
+class Edges(unittest.TestCase):
+    def test_top_temperature_exact_duplicates_and_tolerance_boundary(self):
+        # Equal x/y alone does not make a duplicate: z must also match exactly.
+        tol = 1e-6
+        for dz, count, maximum, mean in ((0., 9, 309., 305.),
+                                         (.5 * tol, 10, 999., 374.4),
+                                         (2. * tol, 9, 309., 305.)):
+            with self.subTest(dz=dz), tempfile.TemporaryDirectory() as tmp:
+                run = Path(tmp)
+                step, _ = fixture(run, cut=True)
+                with h5py.File(step, 'r+') as f:
+                    # The first cut sample shares the hex center's x/y; its
+                    # conflicting T must count only for a distinct top point.
+                    f['VTKHDF/cut/Points'][0] = [0., 0., 1. - dz]
+                result = summarize(run, tol)
+                self.assertEqual(result['warpage']['n_top_points'], count)
+                self.assertEqual(result['temperature'], dict(
+                    min=100., max=999., top_min=301., top_max=maximum,
+                    top_mean=mean))
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    self.assertEqual(main([str(run), '--top-rel-tol', str(tol)]), 0)
+                self.assertEqual(json.loads(out.getvalue()), result)
+
+    def test_partition_allocations(self):
+        for name in ('hex', 'cut', 'eb_surface'):
+            for invalid in ('valid', 'points', 'cells', 'field'):
+                with self.subTest(block=name, invalid=invalid), tempfile.TemporaryDirectory() as tmp:
+                    run = Path(tmp)
+                    step, _ = fixture(run, cut=True)
+                    with h5py.File(step, 'r+') as f:
+                        block = f['VTKHDF/' + name]
+                        topology = block.require_group('Polygons') if name == 'eb_surface' else block
+                        pc = block['NumberOfPoints'][...]
+                        cc = topology['NumberOfCells'][...]
+                        # Each cell references every point allocated to its partition.
+                        topology['NumberOfConnectivityIds'] = pc * cc
+                        topology['Offsets'] = np.concatenate([
+                            np.arange(int(c) + 1, dtype='int64') * p for p, c in zip(pc, cc)])
+                        topology['Connectivity'] = np.concatenate([
+                            np.tile(np.arange(int(p), dtype='int64'), int(c)) for p, c in zip(pc, cc)])
+                        if invalid == 'points':
+                            block['NumberOfPoints'][...] = [int(pc[0]) - 1, int(pc[1]) + 1]
+                        elif invalid == 'cells':
+                            topology['NumberOfCells'][...] = [0, int(cc.sum())]
+                        elif invalid == 'field':
+                            path = 'Points' if name == 'eb_surface' else 'PointData/U'
+                            values = block[path][:-1]
+                            del block[path]
+                            block[path] = values
+                    if invalid == 'valid':
+                        self.assertEqual(summarize(run)['blocks']['hex']['points'], 11)
+                    else:
+                        with self.assertRaises(ResultSummaryError) as caught:
+                            summarize(run)
+                        self.assertEqual(caught.exception.code, 14)
+                        if invalid != 'field':
+                            self.assertIn('partition', str(caught.exception))
+
+    def test_manifest_numeric_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            _, manifest = fixture(run)
+            values = [0, -2, 3.5, 10**100]
+            manifest['summary'] += [dict(name=f'value_{i}', value=value)
+                                    for i, value in enumerate(values)]
+            save(run, manifest)
+            expected = {entry['name']: entry['value'] for entry in manifest['summary']}
+            self.assertEqual(summarize(run)['manifest_summary'], expected)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(main([str(run)]), 0)
+            self.assertEqual(json.loads(out.getvalue())['manifest_summary'], expected)
+            for index in (0, 1):
+                for value in (True, False, 'text', None, [1], {'nested': 1},
+                              float('inf'), -float('inf'), float('nan')):
+                    with self.subTest(index=index, value=value):
+                        manifest['summary'][index]['value'] = value
+                        save(run, manifest)
+                        with self.assertRaises(ResultSummaryError) as caught:
+                            summarize(run)
+                        self.assertEqual(caught.exception.code, 14)
+                        message = f'summary[{index}].value ({manifest["summary"][index]["name"]}): expected finite numeric value'
+                        self.assertEqual(str(caught.exception), message)
+                        err, out = io.StringIO(), io.StringIO()
+                        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+                            self.assertEqual(main([str(run)]), 14)
+                        self.assertEqual(out.getvalue(), '')
+                        self.assertEqual(err.getvalue(), f'result_summary: INPUT_INVALID: {message}\n')
+                manifest['summary'][index]['value'] = 1.
+
+    def test_directory_step_reference(self):
+        for reference in ('.', 'step-directory'):
+            with self.subTest(reference=reference), tempfile.TemporaryDirectory() as tmp:
+                run = Path(tmp)
+                _, manifest = fixture(run)
+                if reference != '.':
+                    (run / reference).mkdir()
+                manifest['steps'][0]['file'] = reference
+                save(run, manifest)
+                with self.assertRaises(ResultSummaryError) as caught:
+                    summarize(run)
+                self.assertEqual(caught.exception.code, 12)
+                self.assertEqual(caught.exception.name, 'INPUT_REFERENCE_MISSING')
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    self.assertEqual(main([str(run)]), 12)
+                self.assertEqual(out.getvalue(), '')
+                self.assertTrue(err.getvalue().startswith('result_summary: INPUT_REFERENCE_MISSING:'))
+                self.assertEqual(len(err.getvalue().splitlines()), 1)
+
+    def test_empty_step_reference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            _, manifest = fixture(run)
+            manifest['steps'][0]['file'] = ''
+            save(run, manifest)
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(main([str(run)]), 14)
+            self.assertEqual(err.getvalue(),
+                             'result_summary: INPUT_INVALID: expected nonempty steps[0].file string\n')
+
+    def test_partition_count_dtypes(self):
+        paths = ('hex/NumberOfPoints', 'hex/NumberOfCells',
+                 'cut/NumberOfPoints', 'cut/NumberOfCells',
+                 'eb_surface/NumberOfPoints', 'eb_surface/Polygons/NumberOfCells')
+        for path in paths:
+            for dtype in ('int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32',
+                          'uint64', 'float64', 'int64', '>i8'):
+                with self.subTest(path=path, dtype=dtype), tempfile.TemporaryDirectory() as tmp:
+                    run = Path(tmp)
+                    step, _ = fixture(run)
+                    with h5py.File(step, 'r+') as f:
+                        key = 'VTKHDF/' + path
+                        values = f[key][...].astype(dtype)
+                        del f[key]
+                        f[key] = values
+                    if np.dtype(dtype).newbyteorder('=') == np.dtype('int64'):
+                        self.assertEqual(summarize(run)['blocks']['hex']['points'], 11)
+                    else:
+                        err = io.StringIO()
+                        with contextlib.redirect_stderr(err):
+                            self.assertEqual(main([str(run)]), 14)
+                        self.assertIn(f'/{key}: expected int64 partition counts', err.getvalue())
+
+    def test_required_geometry(self):
+        for name in ('hex', 'cut', 'eb_surface'):
+            for empty in (False, True):
+                for invalid in ('missing', 'length', 'dtype', 'partitions'):
+                    with self.subTest(block=name, empty=empty, invalid=invalid), tempfile.TemporaryDirectory() as tmp:
+                        run = Path(tmp)
+                        step, _ = fixture(run, cut=True)
+                        with h5py.File(step, 'r+') as f:
+                            block = f['VTKHDF/' + name]
+                            cells = 'Polygons/NumberOfCells' if name == 'eb_surface' else 'NumberOfCells'
+                            if empty:
+                                block['NumberOfPoints'][...] = 0
+                                block[cells][...] = 0
+                            n = int(block['NumberOfPoints'][...].sum())
+                            del block['Points']
+                            if invalid != 'missing':
+                                block['Points'] = np.zeros((n + (invalid == 'length'), 3),
+                                                           dtype='float32' if invalid == 'dtype' else 'float64')
+                            if invalid == 'partitions':
+                                del block[cells]
+                                block[cells] = np.zeros(1, dtype='int64')
+                        with self.assertRaises(ResultSummaryError) as caught:
+                            summarize(run)
+                        self.assertEqual(caught.exception.code, 14)
+                        expected = {
+                            'partitions': 'partition count mismatch',
+                            'missing': '/Points',
+                            'length': '/Points: expected shape',
+                            'dtype': '/Points: expected float64',
+                        }[invalid]
+                        self.assertIn(expected, str(caught.exception))
+
+    def test_present_fields_on_empty_blocks_are_validated(self):
+        fields = {'PointData/T': 'float64', 'CellData/layer_id': 'int32',
+                  'CellData/material_id': 'int32', 'CellData/cell_kind': 'int32',
+                  'CellData/elem_gid': 'int64'}
+        for name in ('hex', 'cut'):
+            for path, dtype in fields.items():
+                for invalid in ('length', 'dtype'):
+                    with self.subTest(block=name, field=path, invalid=invalid), tempfile.TemporaryDirectory() as tmp:
+                        run = Path(tmp)
+                        step, _ = fixture(run, cut=True)
+                        with h5py.File(step, 'r+') as f:
+                            block = f['VTKHDF/' + name]
+                            for group in ('Points', 'PointData', 'CellData', 'Types'):
+                                del block[group]
+                            block['Points'] = np.empty((0, 3), dtype='float64')
+                            block['Types'] = np.empty(0, dtype='uint8')
+                            block['NumberOfPoints'][...] = 0
+                            block['NumberOfCells'][...] = 0
+                            # Only the empty block has T in the temperature
+                            # cases: validation must precede presence detection.
+                            if path == 'PointData/T':
+                                other = 'cut' if name == 'hex' else 'hex'
+                                del f[f'VTKHDF/{other}/PointData/T']
+                            block[path] = np.zeros(1 if invalid == 'length' else 0,
+                                                   dtype=dtype if invalid == 'length' else 'uint8')
+                        with self.assertRaises(ResultSummaryError) as caught:
+                            summarize(run)
+                        self.assertEqual(caught.exception.code, 14)
+                        self.assertEqual(caught.exception.name, 'INPUT_INVALID')
+                        self.assertIn(f'/VTKHDF/{name}/{path}: expected', str(caught.exception))
+                        err, out = io.StringIO(), io.StringIO()
+                        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+                            self.assertEqual(main([str(run)]), 14)
+                        self.assertEqual(out.getvalue(), '')
+                        self.assertIn(f'result_summary: INPUT_INVALID: /VTKHDF/{name}/{path}: expected', err.getvalue())
+                        self.assertEqual(len(err.getvalue().splitlines()), 1)
+
+    def test_empty_leading_block_temperature_alignment(self):
+        for empty_t in (False, True):
+            with self.subTest(empty_t=empty_t), tempfile.TemporaryDirectory() as tmp:
+                run = Path(tmp)
+                step, _ = fixture(run, cut=True)
+                with h5py.File(step, 'r+') as f:
+                    block = f['VTKHDF/hex']
+                    for path in ('Points', 'PointData', 'CellData', 'Types'):
+                        del block[path]
+                    block['Points'] = np.empty((0, 3), dtype='float64')
+                    block['Types'] = np.empty(0, dtype='uint8')
+                    block['NumberOfPoints'][...] = 0
+                    block['NumberOfCells'][...] = 0
+                    if empty_t:
+                        block['PointData/T'] = np.empty(0, dtype='float64')
+                    # Put the top point second so top indices differ from
+                    # indices into the subset of top temperatures.
+                    cut = f['VTKHDF/cut']
+                    cut['Points'][...] = [[0., 0., 0.], [2., 0., 1.]]
+                    cut['PointData/T'][...] = [100., 999.]
+                if not empty_t:
+                    self.assert_invalid_temperature(run)
+                    continue
+                result = summarize(run)
+                self.assertEqual(result['blocks']['hex']['points'], 0)
+                self.assertEqual(result['blocks']['cut']['points'], 2)
+                self.assertEqual(result['warpage']['n_top_points'], 1)
+                self.assertEqual(result['temperature'], dict(
+                    min=100., max=999., top_min=999., top_max=999., top_mean=999.))
+
+    def test_empty_trailing_block_temperature_alignment(self):
+        for empty_t in (False, True):
+            with self.subTest(empty_t=empty_t), tempfile.TemporaryDirectory() as tmp:
+                run = Path(tmp)
+                step, _ = fixture(run, cut=True)
+                with h5py.File(step, 'r+') as f:
+                    block = f['VTKHDF/cut']
+                    for path in ('Points', 'PointData', 'CellData', 'Types'):
+                        del block[path]
+                    block['Points'] = np.empty((0, 3), dtype='float64')
+                    block['Types'] = np.empty(0, dtype='uint8')
+                    block['NumberOfPoints'][...] = 0
+                    block['NumberOfCells'][...] = 0
+                    if empty_t:
+                        block['PointData/T'] = np.empty(0, dtype='float64')
+                    # Put the top point second so top indices differ from
+                    # indices into the subset of top temperatures.
+                    populated = f['VTKHDF/hex']
+                    del populated['Points']
+                    del populated['PointData/T']
+                    del populated['PointData/U']
+                    populated['NumberOfPoints'][...] = [1, 1]
+                    populated['PointData/U'] = np.zeros((2, 3), dtype='float64')
+                    populated['Points'] = [[0., 0., 0.], [2., 0., 1.]]
+                    populated['PointData/T'] = [100., 999.]
+                if not empty_t:
+                    self.assert_invalid_temperature(run)
+                    continue
+                result = summarize(run)
+                self.assertEqual(result['blocks']['cut']['points'], 0)
+                self.assertEqual(result['blocks']['hex']['points'], 2)
+                self.assertEqual(result['warpage']['n_top_points'], 1)
+                self.assertEqual(result['temperature'], dict(
+                    min=100., max=999., top_min=999., top_max=999., top_mean=999.))
+
+    def test_differing_duplicate_values_use_first_occurrence(self):
+        for across_blocks in (False, True):
+            for field in ('T', 'U'):
+                with self.subTest(across_blocks=across_blocks, field=field), tempfile.TemporaryDirectory() as tmp:
+                    run = Path(tmp)
+                    step, _ = fixture(run, cut=True)
+                    with h5py.File(step, 'r+') as f:
+                        block = f['VTKHDF/cut' if across_blocks else 'VTKHDF/hex']
+                        index = 0 if across_blocks else 6
+                        if across_blocks:
+                            block['Points'][index] = [0., 0., 1.]
+                            block['PointData/T'][index] = 305.
+                            block['PointData/U'][index] = [0., 0., .125]
+                    expected = summarize(run)
+                    with h5py.File(step, 'r+') as f:
+                        block = f['VTKHDF/cut' if across_blocks else 'VTKHDF/hex']
+                        block['PointData/' + field][index] = 5000.
+                    result = summarize(run)
+                    # Global extrema include all stored samples, while top
+                    # statistics and warpage count each coordinate once.
+                    if field == 'T':
+                        expected['temperature']['max'] = 5000.
+                    self.assertEqual(result, expected)
+                    out = io.StringIO()
+                    with contextlib.redirect_stdout(out):
+                        self.assertEqual(main([str(run)]), 0)
+                    self.assertEqual(json.loads(out.getvalue()), expected)
+
+    def test_conflicting_duplicates_with_reversed_storage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run, cut=True)
+            with h5py.File(step, 'r+') as f:
+                for path in ('Points', 'PointData/U', 'PointData/T'):
+                    field = f['VTKHDF/hex/' + path]
+                    field[...] = field[...][::-1]
+                cut = f['VTKHDF/cut']
+                cut['Points'][0] = [0., 0., 1.]
+                # This later copy conflicts with hex in both point fields.
+                cut['PointData/U'][0] = [0., 0., 5000.]
+                cut['PointData/T'][0] = 5000.
+            result = summarize(run)
+            self.assertEqual(result['temperature'], dict(
+                min=100., max=5000., top_min=301., top_max=309., top_mean=305.))
+            self.assertEqual(result['warpage']['n_top_points'], 9)
+            self.assertLessEqual(abs(result['warpage']['w_bfp_m'] / .125 - 1.), 1e-12)
+            self.assertLessEqual(abs(result['warpage']['rel_diff'] / .25 - 1.), 1e-12)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(main([str(run)]), 0)
+            self.assertEqual(json.loads(out.getvalue()), result)
+
+    def test_differing_duplicate_temperature_below_top(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run, cut=True)
+            expected = summarize(run)
+            with h5py.File(step, 'r+') as f:
+                f['VTKHDF/cut/Points'][1] = [0., 0., 0.]
+            self.assertEqual(summarize(run), expected)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(main([str(run)]), 0)
+            self.assertEqual(json.loads(out.getvalue()), expected)
+
+    def test_storage_order_independence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run, cut=True)
+            expected = summarize(run)
+            with h5py.File(step, 'r+') as f:
+                block = f['VTKHDF/hex']
+                for path in ('Points', 'PointData/T', 'PointData/U'):
+                    block[path][...] = block[path][...][::-1]
+            self.assertEqual(summarize(run), expected)
+
+    def test_matching_duplicate_across_blocks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run, cut=True)
+            with h5py.File(step, 'r+') as f:
+                # Reverse storage order so unique-coordinate order and first
+                # occurrence order differ, retaining paired point fields.
+                for path in ('Points', 'PointData/U', 'PointData/T'):
+                    field = f['VTKHDF/hex/' + path]
+                    field[...] = field[...][::-1]
+                cut = f['VTKHDF/cut']
+                cut['Points'][0] = [0., 0., 1.]
+                cut['PointData/T'][0] = 305.
+                cut['PointData/U'][0] = [0., 0., .125]
+            result = summarize(run)
+            self.assertEqual(result['temperature'], dict(
+                min=100., max=309., top_min=301., top_max=309., top_mean=305.))
+            self.assertEqual(result['warpage']['n_top_points'], 9)
+            self.assertLessEqual(abs(result['warpage']['w_bfp_m'] / .125 - 1.), 1e-12)
+            self.assertLessEqual(abs(result['warpage']['rel_diff'] / .25 - 1.), 1e-12)
+
+    def test_collinear_top_geometry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run)
+            with h5py.File(step, 'r+') as f:
+                points = f['VTKHDF/hex/Points'][...]
+                points[:, 1] = 0.
+                f['VTKHDF/hex/Points'][...] = points
+                f['VTKHDF/hex/PointData/T'][...] = 305. + points[:, 0]
+                u = np.zeros_like(points)
+                u[:, 2] = points[:, 0] ** 2
+                f['VTKHDF/hex/PointData/U'][...] = u
+            result = summarize(run)
+            self.assertEqual(result['warpage']['n_top_points'], 3)
+            self.assertAlmostEqual(result['warpage']['w_bfp_m'], 1., places=12)
+            self.assertAlmostEqual(result['warpage']['rel_diff'], 9., places=12)
+
+    def test_translated_oblique_collinear_top(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run)
+            with h5py.File(step, 'r+') as f:
+                block = f['VTKHDF/hex']
+                points = block['Points'][...]
+                x = points[:, 0].copy()
+                points[:, 0] = 1e12 + x
+                points[:, 1] = -1e12 + 2. * x
+                block['Points'][...] = points
+                block['PointData/T'][...] = 305. + x
+                u = np.zeros_like(points)
+                u[:, 2] = x ** 2 + 3. * x + 7.
+                block['PointData/U'][...] = u
+            result = summarize(run)
+            self.assertEqual(result['warpage']['n_top_points'], 3)
+            self.assertLessEqual(abs(result['warpage']['w_bfp_m'] - 1.), 1e-12)
+            self.assertLessEqual(abs(result['warpage']['rel_diff'] / 9. - 1.), 1e-12)
+
+    def test_duplicate_only_top(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run)
+            with h5py.File(step, 'r+') as f:
+                block = f['VTKHDF/hex']
+                block['Points'][...] = np.tile([2., 3., 1.], (len(block['Points']), 1))
+                block['PointData/T'][...] = 305.
+                block['PointData/U'][...] = 0.
+            result = summarize(run)
+            self.assertEqual(result['warpage']['n_top_points'], 1)
+            self.assertIsNone(result['warpage']['w_bfp_m'])
+            self.assertIsNone(result['warpage']['rel_diff'])
+            self.assertEqual(result['temperature']['top_mean'], 305.)
+
+    def test_required_groups(self):
+        for group in ('VTKHDF', 'VTKHDF/hex', 'VTKHDF/cut'):
+            for replacement in (False, True):
+                with self.subTest(group=group, replacement=replacement), tempfile.TemporaryDirectory() as tmp:
+                    run = Path(tmp)
+                    step, _ = fixture(run)
+                    with h5py.File(step, 'r+') as f:
+                        del f[group]
+                        if replacement:
+                            f[group] = 1
+                    err = io.StringIO()
+                    with contextlib.redirect_stderr(err):
+                        self.assertEqual(main([str(run)]), 14)
+                    self.assertIn('/' + group + ': required group missing or invalid', err.getvalue())
+                    self.assertEqual(len(err.getvalue().splitlines()), 1)
+
+    def test_fixture_cell_counts(self):
+        for cut in (False, True):
+            with tempfile.TemporaryDirectory() as tmp:
+                step, _ = fixture(Path(tmp), cut=cut)
+                with h5py.File(step, 'r') as f:
+                    for name in ('hex', 'cut'):
+                        block = f['VTKHDF/' + name]
+                        count = int(block['NumberOfCells'][...].sum())
+                        self.assertEqual(block['Types'].shape, (count,))
+                        for field in block['CellData'].values():
+                            self.assertEqual(field.shape, (count,))
+
+    def test_temperature_coverage(self):
+        for missing in ((), ('hex',), ('cut',), ('hex', 'cut')):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as tmp:
+                run = Path(tmp)
+                step, _ = fixture(run, cut=True)
+                with h5py.File(step, 'r+') as f:
+                    for block in missing:
+                        del f[f'VTKHDF/{block}/PointData/T']
+                if len(missing) == 1:
+                    self.assert_invalid_temperature(run)
+                elif missing:
+                    self.assertIsNone(summarize(run)['temperature'])
+                else:
+                    self.assertEqual(summarize(run)['temperature'], dict(
+                        min=100., max=999., top_min=301., top_max=999., top_mean=374.4))
+
+    def test_duplicate_with_temperature_only_in_cut(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run, cut=True)
+            with h5py.File(step, 'r+') as f:
+                del f['VTKHDF/hex/PointData/T']
+                cut = f['VTKHDF/cut']
+                cut['Points'][0] = [0., 0., 1.]
+                cut['PointData/U'][0] = [0., 0., .125]
+            self.assert_invalid_temperature(run)
+
+    def test_temperature_below_global_top(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run, cut=True)
+            with h5py.File(step, 'r+') as f:
+                del f['VTKHDF/hex/PointData/T']
+                f['VTKHDF/cut/Points'][...] = [[2., 0., .5], [0., 0., 0.]]
+            self.assert_invalid_temperature(run)
+
+    def assert_invalid_temperature(self, run):
+        with self.assertRaises(ResultSummaryError) as caught:
+            summarize(run)
+        self.assertEqual(caught.exception.code, 14)
+        self.assertEqual(caught.exception.name, 'INPUT_INVALID')
+        self.assertIn('PointData/T', str(caught.exception))
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            self.assertEqual(main([str(run)]), 14)
+        self.assertEqual(out.getvalue(), '')
+        self.assertEqual(err.getvalue().splitlines(), [
+            f'result_summary: INPUT_INVALID: {caught.exception}'])
+
+    def test_byte_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run, cut=True)
+            with h5py.File(step, 'r+') as f:
+                block = f['VTKHDF/hex']
+                u = block['PointData/U'][...].astype('>f8')
+                del block['PointData/U']
+                block['PointData/U'] = u
+            result = summarize(run)
+            self.assertEqual(result['temperature']['min'], 100.)
+            self.assertAlmostEqual(result['temperature']['top_mean'], 374.4)
+            self.assertEqual(result['warpage']['n_top_points'], 10)
+
+    def test_empty_geometry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = fixture(run)
+            with h5py.File(step, 'r+') as f:
+                del f['VTKHDF/cut/PointData/T']
+                b = f['VTKHDF/hex']
+                for path in ('Points', 'PointData', 'CellData', 'Types'):
+                    del b[path]
+                b['Points'] = np.empty((0, 3), dtype='float64')
+                b['Types'] = np.empty(0, dtype='uint8')
+                b['NumberOfPoints'][...] = 0
+                b['NumberOfCells'][...] = 0
+            result = summarize(run)
+            self.assertIsNone(result['temperature'])
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(main([str(run)]), 0)
+            self.assertIsNone(json.loads(out.getvalue())['temperature'])
+            self.assertEqual(result['warpage']['n_top_points'], 0)
+            self.assertIsNone(result['warpage']['w_bfp_m'])
+
+    def test_empty_temperature_datasets(self):
+        for empty_geometry in (False, True):
+            for temperature_blocks in (('cut',), ('hex',), ('hex', 'cut')):
+                with self.subTest(empty_geometry=empty_geometry, temperature_blocks=temperature_blocks), tempfile.TemporaryDirectory() as tmp:
+                    run = Path(tmp)
+                    step, _ = fixture(run)
+                    with h5py.File(step, 'r+') as f:
+                        if empty_geometry:
+                            block = f['VTKHDF/hex']
+                            for path in ('Points', 'PointData', 'CellData', 'Types'):
+                                del block[path]
+                            block['Points'] = np.empty((0, 3), dtype='float64')
+                            block['Types'] = np.empty(0, dtype='uint8')
+                            block['NumberOfPoints'][...] = 0
+                            block['NumberOfCells'][...] = 0
+                        for name in ('hex', 'cut'):
+                            block = f['VTKHDF/' + name]
+                            if 'PointData/T' in block:
+                                del block['PointData/T']
+                            if name in temperature_blocks:
+                                block['PointData/T'] = np.empty(0, dtype='float64')
+                    if not empty_geometry or len(temperature_blocks) == 1:
+                        self.assert_invalid_temperature(run)
+                        continue
+                    result = summarize(run)
+                    self.assertEqual(result['temperature'], dict.fromkeys(
+                        ('min', 'max', 'top_min', 'top_max', 'top_mean')))
+                    fixed_keys(self, result)
+                    self.assertEqual(result['warpage']['n_top_points'], 0)
+                    out = io.StringIO()
+                    with contextlib.redirect_stdout(out):
+                        self.assertEqual(main([str(run)]), 0)
+                    self.assertEqual(json.loads(out.getvalue())['temperature'], result['temperature'])
+
+    def test_structural_errors(self):
+        for case in ('corrupt', 'U_components', 'negative_counts', 'cut_types', 'cut_types_length', 'root_version'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                run = Path(tmp)
+                step, _ = fixture(run, cut=True)
+                if case == 'corrupt':
+                    step.write_bytes(b'not HDF5')
+                else:
+                    with h5py.File(step, 'r+') as f:
+                        if case == 'U_components':
+                            del f['VTKHDF/hex/PointData/U']
+                            f['VTKHDF/hex/PointData/U'] = np.zeros((11, 2))
+                        elif case == 'negative_counts':
+                            f['VTKHDF/hex/NumberOfPoints'][0] = -1
+                        elif case in ('cut_types', 'cut_types_length'):
+                            del f['VTKHDF/cut/Types']
+                            values = [42, 12] if case == 'cut_types' else [42]
+                            f['VTKHDF/cut/Types'] = np.array(values, dtype='uint8')
+                        else:
+                            f['VTKHDF'].attrs['Version'] = [2, 7]
+                with self.assertRaises(ResultSummaryError) as caught:
+                    summarize(run)
+                self.assertEqual(caught.exception.code, 12 if case == 'corrupt' else 14)
+
+
+if __name__ == '__main__':
+    unittest.main(argv=[__file__])

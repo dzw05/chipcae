@@ -9,10 +9,22 @@
 #include <QFormLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QSignalBlocker>
 namespace chipcae::desktop {
 ResultControls::ResultControls(ResultView& view, ResultSession& session, QWidget* parent)
     : QWidget(parent) {
     auto layout = new QFormLayout(this);
+    auto field = new QComboBox(this);
+    field->addItems({QStringLiteral("温度"), QStringLiteral("位移幅值"), QStringLiteral("翘曲")});
+    field->setCurrentIndex(static_cast<int>(view.colorField()));
+    layout->addRow("Field", field);
+    connect(field, &QComboBox::currentIndexChanged, &view, [&view](int index) {
+        view.setColorField(static_cast<ResultColorField>(index));
+    });
+    connect(&view, &ResultView::displayChanged, field, [&view, field] {
+        const QSignalBlocker blocker(field);
+        field->setCurrentIndex(static_cast<int>(view.colorField()));
+    });
     auto picked = new QLabel(QStringLiteral("未知"), this);
     layout->addRow("elem_gid", picked);
     connect(&view, &ResultView::elementPicked, picked, &QLabel::setText);
@@ -71,12 +83,20 @@ ResultControls::ResultControls(ResultView& view, ResultSession& session, QWidget
     summary->setWordWrap(true);
     layout->addRow(summary);
     auto refresh = [&view, summary] {
-        summary->setText(view.summary("warpage_pv") + "\n" + view.summary("U_mag_max"));
+        const auto range = view.colorRange();
+        const auto fieldText = range.valid ? QString("%1: min=%2 max=%3")
+                                                 .arg(view.colorBarTitle())
+                                                 .arg(range.min, 0, 'g', 16)
+                                                 .arg(range.max, 0, 'g', 16)
+                                           : QString("Field: unavailable");
+        summary->setText(view.tmaxText() + "\n" + fieldText + "\n" + view.summary("warpage_pv") +
+                         "\n" + view.summary("U_mag_max"));
     };
     connect(steps, &QComboBox::currentIndexChanged, &view, [&view, &session, steps, refresh] {
         view.loadStep(session, steps->currentData().toLongLong());
         refresh();
     });
+    connect(&view, &ResultView::displayChanged, summary, refresh);
     refresh();
     auto capture = new QPushButton("Export PNG", this);
     layout->addRow(capture);
