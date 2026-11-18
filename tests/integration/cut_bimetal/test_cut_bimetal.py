@@ -41,6 +41,9 @@ POLYGONS = {
     "B": [[.1, 0], [.9, 0], [1, .1], [1, .9], [.9, 1], [.1, 1], [0, .9], [0, .1]],
     "C": [[0, 0], [.9, 0], [.9, .9], [0, .9]],
 }
+# N=4 leaves only nine exported interior vertices; N=7 is the smallest
+# background grid with >=20 distinct vertices for both outlines (A: 25, B: 36).
+MESHES = ((7, 1), (8, 2), (16, 4))
 
 
 def read(path):
@@ -144,7 +147,9 @@ def fit_curvature(blocks, polygon):
     # Count/rank acceptance is collected by run_case, allowing remaining solves
     # and numerical comparisons to run. An undersampled fit never passes.
     return {"count": count, "rank": int(rank), "coefficients": coefficients.tolist(),
-            "kappa_h": float(coefficients[3] + coefficients[4])}
+            # Timoshenko uses the mean through-thickness strain curvature: with
+            # epsilon_x(z) = epsilon_x(0) - z*w_xx, it is -(d+e).
+            "kappa_h": float(-(coefficients[3] + coefficients[4]))}
 
 
 def temperature_error(blocks):
@@ -274,12 +279,49 @@ def write_result(run):
           flush=True)
 
 
+def check_fit_regressions():
+    failures = []
+    for sign, expected in ((1, -.04), (-1, .04)):
+        x, y = np.meshgrid(np.arange(8) / 8, np.arange(8) / 8)
+        points = np.column_stack((x.ravel(), y.ravel(), np.full(x.size, .04)))
+        u = np.zeros_like(points)
+        # A known quadratic plus rigid translation/tilt and a mixed term.
+        u[:, 2] = .013 + .004*points[:, 0] - .007*points[:, 1] + sign * (
+            .02*points[:, 0]**2 + .02*points[:, 1]**2 + .003*points[:, 0]*points[:, 1])
+        # Repeated partition/block vertices must not inflate fit sufficiency.
+        block = (points, u, np.zeros(len(points)), 1)
+        fit = fit_curvature({"hex": block, "cut": block}, POLYGONS["A"])
+        assert fit["count"] == 36 and fit["rank"] == 6, fit
+        if not math.isclose(fit["kappa_h"], expected, rel_tol=1e-10, abs_tol=1e-12):
+            failures.append(f"signed fit regression: expected {expected}, got {fit['kappa_h']}")
+    for geometry in ("A", "B"):
+        for nx, minimum in MESHES:
+            inputs = make_inputs(geometry, nx, minimum, 1, False)
+            mesh, outline = inputs["case.json"]["mesh"], inputs["stack.json"]["outline"]
+            xmin, ymin, xmax, ymax = outline["box"]
+            x, y = np.meshgrid(np.linspace(xmin, xmax, mesh["nx"] + 1),
+                               np.linspace(ymin, ymax, mesh["ny"] + 1))
+            xy = np.column_stack((x.ravel(), y.ravel()))
+            inside = np.ones(len(xy), dtype=bool)
+            vertices = np.asarray(outline["polygon"])
+            for start, end in zip(vertices, np.roll(vertices, -1, axis=0)):
+                edge = end - start
+                inside &= edge[0]*(xy[:, 1] - start[1]) - edge[1]*(xy[:, 0] - start[0]) >= -1e-12
+            points = np.column_stack((xy[inside], np.full(np.count_nonzero(inside), .04)))
+            fit = fit_curvature({"hex": (points, np.zeros_like(points),
+                                         np.zeros(len(points)), 1)}, outline["polygon"])
+            if fit["count"] < 20 or fit["rank"] != 6:
+                failures.append(f"sampling regression: {geometry} N={nx} {fit}")
+    assert not failures, "\n".join(failures)
+
+
+check_fit_regressions()
 with tempfile.TemporaryDirectory(prefix="cut-bimetal-") as tmp:
     print(f"workspace={tmp}", flush=True)
     root = Path(tmp)
     runs = {}
     for geometry in ("A", "B"):
-        for nx, minimum in ((4, 1), (8, 2), (16, 4)):
+        for nx, minimum in MESHES:
             runs[geometry, nx, 1] = run_case(root, geometry, nx, minimum)
     runs["C", 16, 1] = run_case(root, "C", 16, 4)
     launcher = shutil.which("mpiexec") or shutil.which("mpirun")
@@ -290,11 +332,13 @@ with tempfile.TemporaryDirectory(prefix="cut-bimetal-") as tmp:
     runs["thermal", 8, 1] = run_case(root, "B", 8, 2, thermal=True)
 
     for geometry in ("A", "B"):
-        errors = [runs[geometry, nx, 1]["error"] for nx in (4, 8, 16)]
+        errors = [runs[geometry, nx, 1]["error"] for nx, _ in MESHES]
         print(f"all {geometry} e_kappa={errors}", flush=True)
-        for coarse, fine in zip(errors, errors[1:]):
+        for index, (coarse, fine) in enumerate(zip(errors, errors[1:])):
             if coarse is not None and fine is not None and coarse > 0 and fine > 0:
-                print(f"{geometry} diagnostic log2(e_coarse/e_fine)={math.log2(coarse / fine):.17g}",
+                refinement = MESHES[index + 1][0] / MESHES[index][0]
+                order = math.log(coarse / fine) / math.log(refinement)
+                print(f"{geometry} diagnostic log(e_coarse/e_fine)/log(N_fine/N_coarse)={order:.17g}",
                       flush=True)
     finest = runs["A", 16, 1]
     try:

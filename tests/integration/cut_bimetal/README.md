@@ -1,4 +1,4 @@
-# Synthetic cut bilayer acceptance (TEST-FIRST)
+# Synthetic cut bilayer acceptance
 
 `cutbim_cut_bimetal` exercises the public solver with generated inputs only.
 It has labels `integration;numerical;vv`, timeout 2400 seconds, and skip code 77.
@@ -17,8 +17,8 @@ uncut test's anchor coordinates.
 
 | Geometry | Background box | Closed polygon vertices | (N,M), ranks |
 |---|---|---|---|
-| A, offset square | [0,0,1,1] | (0,0),(.9,0),(.9,.9),(0,.9) | (4,1),(8,2),(16,4), 1; (8,2), 2 |
-| B, chamfered octagon | [0,0,1,1] | (.1,0),(.9,0),(1,.1),(1,.9),(.9,1),(.1,1),(0,.9),(0,.1) | (4,1),(8,2),(16,4), 1 |
+| A, offset square | [0,0,1,1] | (0,0),(.9,0),(.9,.9),(0,.9) | (7,1),(8,2),(16,4), 1; (8,2), 2 |
+| B, chamfered octagon | [0,0,1,1] | (.1,0),(.9,0),(1,.1),(1,.9),(.9,1),(.1,1),(0,.9),(0,.1) | (7,1),(8,2),(16,4), 1 |
 | C, uncut control | [0,0,.9,.9] | (0,0),(.9,0),(.9,.9),(0,.9) | (16,4), 1 |
 | thermal, geometry B | [0,0,1,1] | same as B | (8,2), 1 |
 
@@ -34,17 +34,36 @@ The fit concatenates hex/cut points from all partitions, selects z=0.04 within
 1e-9, removes points within 0.1 of any closed polygon segment, and deduplicates
 (x,y) lexicographically. It fits `[1,x,y,x²,y²,xy]` by least squares and requires
 at least 20 distinct points and rank six on every mechanical run. The signed
-curvature is exactly `kappa_h=d+e`; its reference is the signed value from
-`tools.vv.derive_cards.timoshenko(...,-100)`. No sign correction or absolute-value
-comparison is substituted. Coarse fits remain diagnostic when their count gate
-fails, so other solves and comparisons can complete.
+curvature is `kappa_h=-(d+e)`, the mean strain curvature used by the signed
+`tools.vv.derive_cards.timoshenko(...,-100)` reference. For small deflections,
+`epsilon_x(z)=epsilon_x(0)-z*w_xx` and likewise in y; averaging the two
+curvatures gives `-(d+e)`. This matches the existing pipeline tests and retains
+sign sensitivity: a plate bending the wrong way fails the comparison.
+
+The original brief's `d+e` convention and N=4 sampling are reconciled here in
+response to the confirmed review findings. The mesh sequence is now
+(N,M)=(7,1),(8,2),(16,4). N=4 leaves only nine exported top vertices after the
+same 0.1 m exclusion; extra z planes do not add top-plane samples. N=7 is the
+smallest integer N that meets the 20-point gate for both outlines (A: 25,
+B: 36; A has only 16 at N=6). All fit samples still come directly from solver
+output. No interpolated or duplicate samples count toward acceptance. All
+material inputs, outlines, edge exclusions, fit rank and numerical tolerances
+are retained. Coarse curvature remains diagnostic; fit sufficiency is mandatory.
+
+Before solving, regressions check both curvature signs on known quadratics
+with rigid translation/tilt and a mixed term, verify that repeated blocks do
+not inflate the distinct-point count, and check fit sufficiency for the actual
+generated mesh inputs. The real solves independently enforce the same count
+and rank gates on exported hex/cut data.
 
 Finest A/B/C curvature error must be <=3%; A/C relative difference <=1%; finest
 A/B `abs(d-e)/abs(kappa_ref)` and `abs(f)/abs(kappa_ref)` <=2%. Every A/B/thermal
 run must have cut cells; C must have none. MPI differences for kappa_h,
 warpage_pv and U_mag_max must be <=1e-8 against finite, nonzero rank-one values.
 Warpage PV otherwise remains diagnostic. All summary quantities come from the
-manifest summary array. Observed log2(error_coarse/error_fine) is diagnostic only.
+manifest summary array. Observed
+`log(error_coarse/error_fine)/log(N_fine/N_coarse)` is diagnostic only;
+the denominator accounts for the nonuniform refinement ratios.
 
 The thermal run uses steady conduction followed by mechanics, zmin=298.15 K,
 and zmax convection with h=1000 and ambient 348.15 K. With
@@ -52,244 +71,131 @@ and zmax convection with h=1000 and ambient 348.15 K. With
 `T=298.15+q*(clip(z,0,.02)+clip(z-.02,0,.02)/10)` within 1e-6 K.
 The test prints the worst block, coordinate, measured and reference temperature.
 
+## Review reproduction
+
+The original acceptance (before this fix) completed nine solves but failed the
+two coarse fit-count gates (9 < 20) and all three finest curvature gates
+(relative errors near 2). The analytic reference was
+-0.036363636363636355 /m, while the old displacement-coefficient sum was positive.
+The pre-fix evidence is retained in task logs `v-int-cut-bimetal-normal.log`,
+`v-int-cut-bimetal-negative.log`, `v-int-cut-bimetal-restored.log` and the fresh
+review log `v-int-cut-bimetal-review-red.log`.
+
+New regression checks were run before applying the fixes: both sign checks
+and A/B N=4 sampling failed. Applying only the curvature fix left exactly the
+two sampling regressions failing. Logs: `v-int-cut-bimetal-review-regression-red.log`
+and `v-int-cut-bimetal-review-sampling-red.log`.
+
 ## Measured verification
 
-2026-11-18, baseline ae6a8b9, Release; MFEM/MPI/HDF5/JSONCONS enabled,
-core Kokkos backend OFF, material Kokkos dependency available. Use the shared-slot
-shim first in PATH, then the installed MPI tools. The box uses
-`OMPI_ALLOW_RUN_AS_ROOT=1`, `OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1`,
-`OPENBLAS_NUM_THREADS=1`, and `OMP_NUM_THREADS=1`.
-The dedicated build is `../build-v-int-cut-bimetal-release` relative to the source
-root (`build` below). All build/test tool invocations use plain command names.
-
-Normal command (exit **8**, 453.64 seconds):
+2026-11-18, review fix based on commit `7d7a179`, Release with
+MFEM/MPI/HDF5/JSONCONS enabled, core Kokkos OFF and material Kokkos available.
+The existing build already supplies the dependency/compiler paths. All commands
+use plain tool names with the shared-slot shim first in PATH, followed by the
+installed MPI tools. The box environment sets `OMPI_ALLOW_RUN_AS_ROOT=1`,
+`OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1`, `OPENBLAS_NUM_THREADS=1`, `OMP_NUM_THREADS=1`.
+Normal, negative and full-suite invocations use fresh TMPDIRs to avoid
+shared temporary artifacts.
 
 ```bash
 build=../build-v-int-cut-bimetal-release
+cmake -S . -B "$build" -DCMAKE_BUILD_TYPE=Release
+cmake --build "$build" -j2
 ctest --test-dir "$build" -R '^cutbim_cut_bimetal$' -V
 ```
 
-All nine solver exits were 0 and all nine result.json records passed `check_file`.
+Configure and build exited 0. Normal acceptance exited **0**, 350.18 seconds,
+with nine solver exits 0 and nine schema-validated passing result records.
 Signed kappa_ref = -0.036363636363636355 /m. 实测:
 
 | Case | kappa_h (/m), 实测 | e_kappa | warpage_pv (m), 实测 | cut cells | hex cells | fit points / rank |
 |---|---|---|---|---|---|---|
-| A_nx4_ranks1 | 0.036344411168334978 | 1.9994713071292118 | 0.0078858951162503899 | 14 | 18 | 9 / 6 |
-| A_nx8_ranks1 | 0.036354971650007402 | 1.9997617203752038 | 0.0089070589753208456 | 60 | 196 | 36 / 6 |
-| A_nx16_ranks1 | 0.036362069325634461 | 1.9999569064549476 | 0.0088149644873677917 | 232 | 1568 | 121 / 6 |
-| B_nx4_ranks1 | 0.036342431047406046 | 1.9994168538036667 | 0.0074863304135882915 | 8 | 24 | 9 / 6 |
-| B_nx8_ranks1 | 0.036356923112518494 | 1.9998153855942591 | 0.007459629945294438 | 16 | 240 | 49 / 6 |
-| B_nx16_ranks1 | 0.036362421255020372 | 1.9999665845130603 | 0.0074517806506299161 | 96 | 1952 | 169 / 6 |
-| C_nx16_ranks1 | 0.036363649929271699 | 2.0000003730549722 | 0.0073602739014961074 | 0 | 2048 | 169 / 6 |
-| A_nx8_ranks2 | 0.036354971650007402 | 1.9997617203752038 | 0.0089070589753208456 | 60 | 196 | 36 / 6 |
+| A_nx7_ranks1 | -0.036352470752085919 | 0.00030705431763698379 | 0.0087177237678162638 | 26 | 72 | 25 / 6 |
+| A_nx8_ranks1 | -0.036354971650007402 | 0.00023827962479620884 | 0.0089070589753208456 | 60 | 196 | 36 / 6 |
+| A_nx16_ranks1 | -0.036362069325634461 | 4.3093545052091272e-05 | 0.0088149644873677917 | 232 | 1568 | 121 / 6 |
+| B_nx7_ranks1 | -0.036355170104273429 | 0.00023282213248045433 | 0.0074626058229544084 | 8 | 90 | 36 / 6 |
+| B_nx8_ranks1 | -0.036356923112518494 | 0.0001846144057411799 | 0.007459629945294438 | 16 | 240 | 49 / 6 |
+| B_nx16_ranks1 | -0.036362421255020372 | 3.3415486939535756e-05 | 0.0074517806506299161 | 96 | 1952 | 169 / 6 |
+| C_nx16_ranks1 | -0.036363649929271699 | 3.7305497196590831e-07 | 0.0073602739014961074 | 0 | 2048 | 169 / 6 |
+| A_nx8_ranks2 | -0.036354971650007402 | 0.00023827962479620884 | 0.0089070589753208456 | 60 | 196 | 36 / 6 |
 | thermal_nx8_ranks1 | — | — | 0.0046219708003735292 | 16 | 240 | — |
 
-实测 maximum thermal error = 7.503331289626658e-12 K, in the cut block at
-(0.9000000000000001, 0, 0.02); measured 341.6282608695577 K versus
-341.6282608695652 K. All hex and cut points were checked.
-Cut/control relative curvature difference = 4.3466583808631972e-5.
-MPI relative differences for kappa_h, warpage_pv and U_mag_max were each 0.
-Isotropy and cut-cell gates passed.
+实测 maximum thermal error = 7.503331289626658e-12 K, cut block at
+(0.9000000000000001, 0, 0.02), measured 341.6282608695577 K versus
+341.6282608695652 K. Every hex/cut point was checked.
+A/C relative curvature difference = 4.3466583808631972e-5; MPI relative
+differences for kappa_h, warpage_pv and U_mag_max were all 0.
+All isotropy, fit, cut-cell, temperature and consistency gates passed.
+Normal output: task log `v-int-cut-bimetal-review-normal.log`;
+configure/build output: `v-int-cut-bimetal-review-configure.log` and
+`v-int-cut-bimetal-review-build.log`.
 
-The normal failure output is:
+The negative run used the same targeted CTest command with only the local
+`kappa_ref` expression temporarily multiplied by 1.1 (reference
+-0.039999999999999994 /m). It exited **8**, 316.28 seconds, after all nine
+solves exited 0 and all nine result records validated. Only the three finest
+3% accuracy gates failed: A16=0.090948266859138344,
+B16=0.090939468624490566, C16=0.090908751768207383.
+Count/rank, isotropy, cut/control, thermal and MPI gates still passed.
+The local driver restored the source byte for byte in `finally`; the multiplier
+is not committed. Logs: `v-int-cut-bimetal-review-negative.log` and
+`v-int-cut-bimetal-review-negative-driver.log`.
 
-```text
-cut_bimetal_A_nx4_ranks1: fit assertion failed: count=9 rank=6 (need >=20 and 6)
-cut_bimetal_A_nx16_ranks1: 3% accuracy assertion failed: e_kappa=1.9999569064549476
-cut_bimetal_B_nx4_ranks1: fit assertion failed: count=9 rank=6 (need >=20 and 6)
-cut_bimetal_B_nx16_ranks1: 3% accuracy assertion failed: e_kappa=1.9999665845130603
-cut_bimetal_C_nx16_ranks1: 3% accuracy assertion failed: e_kappa=2.0000003730549722
-```
-
-These are post-solve assertion failures. The coarse point count confirms the
-brief's sampling conflict: the exported vertices leave only a 3x3 interior grid.
-The fitted curvature has the opposite sign to the mandated reference; existing
-pipeline tests compare `-(d+e)` to the same convention. This evidence identifies
-unmet acceptance requirements and a brief/convention conflict; it does not by
-itself establish a physical solver defect. The TEST-FIRST delivery preserves
-both gates. Achieving a normal green/restored green run needs an explicit ruling
-on these requirements or appropriate output/product work outside this scope.
-
-Full normal output is retained in the task log `v-int-cut-bimetal-normal.log`.
-
-Negative command (same build/environment; exit **8**, 403.79 seconds):
+After restoring the source, the full Release suite uses:
 
 ```bash
-ctest --test-dir "$build" -R '^cutbim_cut_bimetal$' -V
+ctest --test-dir "$build" --output-on-failure -V -j1
 ```
 
-Only the working copy's kappa_ref expression was temporarily multiplied by 1.1,
-yielding -0.039999999999999994 /m. All nine solves exited 0, all nine records
-validated, and measured curvatures, summaries and fit coefficients were identical
-to the normal table. The actual finest-grid failures were:
-
-```text
-cut_bimetal_A_nx16_ranks1: 3% accuracy assertion failed: e_kappa=1.9090517331408616
-cut_bimetal_B_nx16_ranks1: 3% accuracy assertion failed: e_kappa=1.9090605313755094
-cut_bimetal_C_nx16_ranks1: 3% accuracy assertion failed: e_kappa=1.9090912482317925
-```
-
-Both coarse point-count failures also remained. The negative run reached and
-failed the required 3% comparisons after completing every solve; since normal
-acceptance was already red, it cannot demonstrate an isolated green-to-red
-sensitivity transition. The source was restored byte for byte in a `finally`
-block; the temporary multiplier is not committed. The concurrent full-suite
-invocation had already loaded the unchanged module before this local mutation.
-Full negative output: `v-int-cut-bimetal-negative.log` in the task logs.
-
-Restored command (same build/environment; exit **8**, 356.04 seconds):
-
-```bash
-ctest --test-dir "$build" -R '^cutbim_cut_bimetal$' -V
-```
-
-The original signed reference was restored to -0.036363636363636355 /m.
-All nine solver exits were 0 and all nine records validated. Every measured
-curvature, error, summary, cell count, fit count/rank and coefficient exactly
-matched the normal table. Thermal error, cut/control difference and the three
-zero MPI differences also matched. The same two point-count and three 3%
-assertions failed. Full restored output: `v-int-cut-bimetal-restored.log`.
-
-The three runs' 实测 curvature errors (coarse errors are diagnostic) were:
+Restored acceptance, executed within that full suite, passed in **430.45
+seconds**. All nine solver exits were 0 and all nine result records validated
+as pass. Every measured curvature, summary, fit coefficient/count/rank, cell
+count and thermal error exactly matched the normal run. MPI differences were
+again all 0. The three runs' 实测 errors are:
 
 | Case | Normal e_kappa | Reference x1.1 e_kappa | Restored e_kappa |
 |---|---|---|---|
-| A_nx4_ranks1 | 1.9994713071292118 | 1.9086102792083746 | 1.9994713071292118 |
-| A_nx8_ranks1 | 1.9997617203752038 | 1.9088742912501853 | 1.9997617203752038 |
-| A_nx16_ranks1 | 1.9999569064549476 | 1.9090517331408616 | 1.9999569064549476 |
-| B_nx4_ranks1 | 1.9994168538036667 | 1.9085607761851513 | 1.9994168538036667 |
-| B_nx8_ranks1 | 1.9998153855942591 | 1.9089230778129624 | 1.9998153855942591 |
-| B_nx16_ranks1 | 1.9999665845130603 | 1.9090605313755094 | 1.9999665845130603 |
-| C_nx16_ranks1 | 2.0000003730549722 | 1.9090912482317925 | 2.0000003730549722 |
-| A_nx8_ranks2 | 1.9997617203752038 | 1.9088742912501853 | 1.9997617203752038 |
+| A_nx7_ranks1 | 0.00030705431763698379 | 0.091188231197851882 | 0.00030705431763698379 |
+| A_nx8_ranks1 | 0.00023827962479620884 | 0.091125708749814821 | 0.00023827962479620884 |
+| A_nx16_ranks1 | 4.3093545052091272e-05 | 0.090948266859138344 | 4.3093545052091272e-05 |
+| B_nx7_ranks1 | 0.00023282213248045433 | 0.091120747393164128 | 0.00023282213248045433 |
+| B_nx8_ranks1 | 0.0001846144057411799 | 0.091076922187037515 | 0.0001846144057411799 |
+| B_nx16_ranks1 | 3.3415486939535756e-05 | 0.090939468624490566 | 3.3415486939535756e-05 |
+| C_nx16_ranks1 | 3.7305497196590831e-07 | 0.090908751768207383 | 3.7305497196590831e-07 |
+| A_nx8_ranks2 | 0.00023827962479620884 | 0.091125708749814821 | 0.00023827962479620884 |
 
-To reproduce the local negative/restored check from the source root, after the
-normal command and with the same numerical environment:
+The fresh full-suite command exited **8**, 2930.72 seconds: 215 tests,
+204 passed, 10 expected skips, and one failure, the previously recorded
+`solve_ghost_scan` timeout at its unchanged 300-second limit (300.11 seconds).
+The restored cut-bimetal acceptance passed; all other runnable tests passed.
+No ghost-scan assertion failure was printed before timeout; its matrix file
+contained all 2400 complete matrices. Its source, registered timeout and
+numerical checks are unchanged. Full output:
+`v-int-cut-bimetal-review-all.log`.
+
+The failed-test rerun uses a fresh TMPDIR and `OPENBLAS_NUM_THREADS=2` for the
+dense matrix spectrum analysis (`OMP_NUM_THREADS=1`), with the original checks
+and timeout:
 
 ```bash
-python3 - <<'PY'
-from pathlib import Path
-import subprocess
-
-path = Path("tests/integration/cut_bimetal/test_cut_bimetal.py")
-original = path.read_bytes()
-expression = b"kappa_ref = timoshenko(100e9, .02, 5e-6, 200e9, .02, 15e-6, -100)"
-assert original.count(expression) == 1
-build = Path("../build-v-int-cut-bimetal-release")
-command = ["ctest", "--test-dir", str(build), "-R", "^cutbim_cut_bimetal$", "-V"]
-def run(mode):
-    with (build / f"cut-bimetal-{mode}.log").open("w") as log:
-        print(f"command={command!r}", file=log, flush=True)
-        result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT)
-        print(f"exit={result.returncode}", file=log)
-    print(mode, result.returncode)
-try:
-    path.write_bytes(original.replace(expression, expression + b" * 1.1"))
-    run("negative")
-finally:
-    path.write_bytes(original)
-run("restored")
-assert path.read_bytes() == original
-PY
+OPENBLAS_NUM_THREADS=2 ctest --test-dir "$build" --rerun-failed --output-on-failure -V
 ```
 
-## Release suite and skips
+That two-thread rerun exited **8**: the unchanged test timed out in 300.10
+seconds (300.39 seconds total). A second fresh-TMPDIR rerun restored the
+original `OPENBLAS_NUM_THREADS=1`, using the same CTest command, and also
+exited **8**, timeout 300.12 seconds (300.33 seconds total).
+Logs: `v-int-cut-bimetal-review-rerun-failed.log` and
+`v-int-cut-bimetal-review-ghost-original.log`.
+The required all-green full suite was **not achieved**. The two confirmed
+cut-bimetal findings are fixed and its normal/restored acceptance passes;
+the pre-existing ghost-scan timeout remains unresolved. No existing test,
+timeout, assertion or tolerance was changed to remove this failure.
 
-`cmake --build "$build" -j2` exited 0. The complete command
-`ctest --test-dir "$build" --output-on-failure -j2` exited 8 in 1390.85 seconds:
-215 tests, 202 passed, 10 skipped, 3 failed. The failures were the intended
-`cutbim_cut_bimetal` acceptance and existing `event_log` and
-`k1_preview_mpi_surface`. The full-suite cut-bimetal invocation completed all
-nine solves and produced the same five assertion failures as the normal run.
-
-`event_log` reported exhausted salvage filenames in the shared temporary
-directory (10,000 existing artifacts); an isolated-TMPDIR rerun with
-`ctest --test-dir "$build" -R '^event_log$' -V` passed, exit 0.
-`k1_preview_mpi_surface` reported a JSON parse error in MPI stdout; a targeted
-fresh-TMPDIR rerun with
-`ctest --test-dir "$build" -R '^k1_preview_mpi_surface$' -V` also failed, exit 8.
-That unresolved existing failure is outside the four-file scope. Existing tests
-and production code were left untouched. Logs: `v-int-cut-bimetal-all.log`,
-`v-int-cut-bimetal-event-log-isolated.log`, and
-`v-int-cut-bimetal-preview-isolated.log` in the task logs.
-
-A backend-free configuration still registers the test with the same labels,
-timeout and skip code, omitting the solver environment. Its targeted CTest
-invocation exited 0 with one expected Skipped result (script exit 77).
-Direct missing-solver and missing-Python-dependency checks both returned 77.
-A completely bare repository configure encounters the existing
-`cte_contract: chipcae::material target missing` guard; providing the local
-material dependency allowed the backend-free registration/skip check.
-
-Python syntax and staged whitespace checks passed. clang-format 23.1.5 was
-verified; there are no touched C/C++ files for its `-i` and
-`--dry-run --Werror` phases. Only these four test files are committed.
-
-## Implementation follow-up: unresolved acceptance contracts
-
-The follow-up to acceptance commit `4c363b5` inspected the complete brief and
-the existing output implementation before considering changes. The four allowed
-files already implement the requested harness. There is no permitted numerical
-implementation change that resolves its five failing assertions while preserving
-the specified inputs, exported samples, and signed comparison.
-
-For N=4, the original Cartesian coordinates are 0, .25, .5, .75, and 1.
-After clipping A or B and removing the 0.1 m boundary band, the only eligible
-top vertices are the nine pairs in `{.25,.5,.75} x {.25,.5,.75}`. New vertices
-introduced by clipping lie on polygon edges and are excluded. Changing M only
-adds z planes; it adds no top-plane x/y samples. Hex output uses mesh vertices
-(`apps/chipcae-solve/src/pipeline.cpp`, the `GetVertexDofs` output loop), and
-cut output samples the polyhedron vertices
-(`apps/chipcae-solve/src/cut_output.hpp`, `append_cut_output`). Counting repeated
-vertices, synthesizing samples, or changing N would violate the required fit.
-This is a sampling/output contract decision for M5 and the brief owner.
-
-The sign discrepancy also occurs for uncut control C, so it cannot be attributed
-to cut integration alone. Existing `tests/solve/test_pipeline.py` and
-`tests/solve/test_cut_pipeline.py` explicitly negate the quadratic coefficient
-sum when comparing to their analytic convention. This brief explicitly requires
-the positive sum `d+e` against the signed `timoshenko(...,-100)` reference.
-Changing either sign in this test would change its acceptance contract. The
-brief owner must reconcile the convention before a physical solver defect can
-be assigned to M3.
-
-The brief's prohibition on product/previous-test/tool changes and its instruction
-to keep failing tests red apply to this follow-up. All assertions, mesh inputs,
-material cards, formulas, and tolerances remain unchanged. Normal/restored green
-runs, an isolated green-to-red negative check, and an all-green CTest suite
-cannot be delivered under the current requirements. The previous three-run
-logs were inspected again: each completed nine solves and validated nine result
-records, and the negative run reached all three required 3% comparisons. No
-new negative reference mutation was needed for this documentation-only follow-up.
-
-The follow-up Release configure and `cmake --build "$build" -j2` both exited 0.
-The registered labels, timeout, skip code and solver environment were checked
-again. Backend-free CTest skipped as expected, and direct missing-solver and
-missing-Python-dependency checks both returned 77. Python syntax passed;
-clang-format 23.1.5 has no changed C/C++ files to format or check.
-
-The fresh full-suite command was
-`ctest --test-dir "$build" --output-on-failure -V -j2`, with an isolated temporary
-directory supplied through TMPDIR. Its `cutbim_cut_bimetal` entry failed after
-380.79 seconds with exactly the five assertions above. All nine solver exits
-were 0 and all nine result records validated. Every measured row exactly matched
-the original normal run, including the thermal maximum error, A/C difference,
-and zero MPI differences. The extracted numerical output is retained in the
-task log `v-int-cut-bimetal-impl-numerical.log`.
-
-This fresh full suite exited 8 in 1298.04 seconds: 215 tests, 203 passed,
-10 skipped, and two failed. In addition to `cutbim_cut_bimetal`, the unchanged
-`solve_ghost_scan` exceeded its existing 300-second timeout (300.01 seconds).
-It had passed in 286.74 seconds in the original suite. No cause is asserted
-from the timeout alone, and its test/timeout were not changed. The previously
-reported `event_log` and `k1_preview_mpi_surface` failures did not reproduce;
-both passed. Full output: task log `v-int-cut-bimetal-impl-all.log`.
-
-A subsequent isolated-TMPDIR rerun with
-`ctest --test-dir "$build" -R '^solve_ghost_scan$' -V` exited 0; the test passed
-in 266.42 seconds (266.54 seconds total). This does not erase the full-suite
-timeout or establish its cause. Output:
-`v-int-cut-bimetal-impl-ghost-isolated.log` in the task logs.
+The final Release build exited 0 (`ninja: no work to do`), recorded in
+`v-int-cut-bimetal-review-final-build.log`. clang-format 23.1.5 was verified;
+this fix touches only Python/Markdown, leaving no C/C++ inputs for its `-i`
+and subsequent `--dry-run --Werror` phases. Scoped whitespace checks passed.
 
 ## Exclusions
 
