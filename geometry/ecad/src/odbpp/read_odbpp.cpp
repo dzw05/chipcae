@@ -2,6 +2,7 @@
 #include "map.hpp"
 #include "parser.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <exception>
 #include <set>
@@ -37,6 +38,28 @@ ImportResult read_odbpp(const std::filesystem::path& path,
             result.error = mapped.error().message;
             return result;
         }
+        // The frozen mapper uses overrides only for missing thickness. Enforce
+        // the public override-wins rule here; via fractions depend on XY area,
+        // so replacing a layer thickness does not invalidate mapped geometry.
+        for (auto& record : mapped_records) {
+            const auto match = std::find_if(overrides.begin(), overrides.end(), [&](const auto& e) {
+                return odbpp_detail::fold_ascii(e.first) == odbpp_detail::fold_ascii(record.layer);
+            });
+            if (match == overrides.end())
+                continue;
+            record.odb_value_m.reset();
+            if (record.source == "odb" && std::abs(record.thickness_m - match->second) > 0)
+                record.odb_value_m = record.thickness_m;
+            record.thickness_m = match->second;
+            record.source = "override";
+        }
+        for (auto& layer : mapped.value().layers) {
+            const auto match = std::find_if(overrides.begin(), overrides.end(), [&](const auto& e) {
+                return odbpp_detail::fold_ascii(e.first) == odbpp_detail::fold_ascii(layer.name);
+            });
+            if (match != overrides.end())
+                layer.thickness_m = match->second;
+        }
         auto unsupported = std::move(result.model.report.unsupported);
         result.model = std::move(mapped.value());
         result.model.report.unsupported.insert(
@@ -46,43 +69,49 @@ ImportResult read_odbpp(const std::filesystem::path& path,
         // without changing parser or mapper contracts. ArchiveReader owns all access.
         detail::ArchiveReader reader(path);
         std::map<std::string, std::string> functions;
-        std::string name, function;
+        std::string name, function, report_error;
         bool in_layer = false;
-        if (!reader.for_each_line(
-                "matrix/matrix",
-                [&](std::string_view raw) {
-                    const auto line = detail::trim(raw);
-                    if (line.starts_with("LAYER") && line.find('{') != std::string::npos) {
-                        in_layer = true;
-                        name.clear();
-                        function.clear();
-                    } else if (line == "}") {
-                        if (in_layer)
-                            functions.emplace(name, function);
-                        in_layer = false;
-                    } else if (in_layer) {
-                        const auto eq = line.find('=');
-                        if (eq != std::string::npos) {
-                            const auto key = detail::trim(std::string_view(line).substr(0, eq));
-                            const auto value = detail::trim(std::string_view(line).substr(eq + 1));
-                            if (key == "NAME")
-                                name = value;
-                            else if (key == "TYPE")
-                                function = value;
-                        }
+        reader.for_each_line(
+            "matrix/matrix",
+            [&](std::string_view raw) {
+                const auto line = detail::trim(raw);
+                if (line.starts_with("LAYER") && line.find('{') != std::string::npos) {
+                    in_layer = true;
+                    name.clear();
+                    function.clear();
+                } else if (line == "}") {
+                    if (in_layer)
+                        functions.emplace(name, function);
+                    in_layer = false;
+                } else if (in_layer) {
+                    const auto eq = line.find('=');
+                    if (eq != std::string::npos) {
+                        const auto key = detail::trim(std::string_view(line).substr(0, eq));
+                        const auto value = detail::trim(std::string_view(line).substr(eq + 1));
+                        if (key == "NAME")
+                            name = value;
+                        else if (key == "TYPE")
+                            function = value;
                     }
-                    return true;
-                },
-                result.error))
-            return result;
-        for (auto& layer : result.model.layers)
-            layer.function = functions.at(layer.name);
+                }
+                return true;
+            },
+            report_error);
+        // Source spelling is best-effort report metadata. A missing entry or
+        // failed second read must preserve the function already mapped above.
+        for (auto& layer : result.model.layers) {
+            const auto found = functions.find(layer.name);
+            if (found != functions.end() && !found->second.empty())
+                layer.function = found->second;
+        }
         for (auto& entry : result.model.report.unsupported) {
             if (!entry.element.starts_with("SkippedLayer:"))
                 continue;
             const auto end = entry.element.rfind(':');
             const auto layer = entry.element.substr(13, end - 13);
-            entry.element = "SkippedLayer:" + layer + ":" + functions.at(layer);
+            const auto found = functions.find(layer);
+            if (found != functions.end() && !found->second.empty())
+                entry.element = "SkippedLayer:" + layer + ":" + found->second;
         }
         if (records)
             for (const auto& record : mapped_records)

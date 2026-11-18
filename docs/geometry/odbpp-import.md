@@ -37,15 +37,15 @@ layer names after ASCII case folding are rejected. Empty `layers` is valid.
 Unicode characters are not case folded. Names retain their original spelling in
 reports. A name absent from the retained board layers produces one warning.
 
-IPC overrides replace matching source thicknesses; differing positive originals
+IPC and ODB overrides replace matching source thicknesses; differing positive originals
 produce a warning. Every retained layer must have a finite positive thickness;
 missing values are rejected together with all affected layer names. No default
 thickness or copper-weight conversion is used.
 
-The current frozen ODB mapper gives a positive source ODB thickness priority over
-an override and only uses overrides for missing thickness. This conflicts with
-the CLI acceptance requirement that overrides replace positive ODB values. The
-precedence ruling remains a prerequisite; the mapper is deliberately unchanged.
+The ODB reader enforces override precedence after mapping, without changing the
+frozen mapper. A matching override always has override provenance, including when
+it equals the source value. Only a differing positive ODB original produces
+`odb_value_m` and a conflict warning. The exact override double is retained.
 
 Material maps contain source-material-name to library-ID string mappings.
 An explicit per-layer override material bypasses material mapping for that layer.
@@ -75,12 +75,11 @@ archive paths, never the input filesystem path, in their deterministic IDs.
 | Bare IPC extension names without geometry context | B; the reader supplies no spatial context |
 
 Generic IDs use `board/<percent-encoded-diagnostic>/<source-line>`, with a
-per-diagnostic occurrence suffix for repeated identical entries. Encoding is
+per-ID occurrence suffix for repeated entries. Encoding is
 injective and independent of standard-library hashing and source relocation.
-The explicit IPC via-plating rule uses
-`ecad/via_plating_missing/<start>-<end>`; it is a specific exception to the general
-`board/` prefix. This exception conflicts with the general brief clause and still
-requires a ruling. ODB's shorter diagnostic uses its generic `board/` ID.
+IPC via-plating IDs use `board/via_plating_missing/<start>-<end>`, following the
+shared ECAD `board/` prefix contract. Repeated final IDs receive `/1`, `/2`, etc.
+ODB's shorter diagnostic uses its generic `board/` ID.
 
 B defects require `--accept-b-tier` or an explicitly named
 `--accept import.accept.json` with entries of the form
@@ -111,6 +110,11 @@ Retained rows additionally have `thickness_m` and `thickness_source`, which is
 originals have `odb_value_m`; equal and missing originals do not. The top-level
 `source` text is present only when supplied. `warnings` contains override and
 acceptance warnings; the same messages are printed to stderr.
+
+ODB function spelling is recovered from the source matrix when available. Missing
+report-only lookups retain the mapper's normalized function and do not reject the
+import. Thickness records must match the retained layer count and order before
+the CLI consumes their provenance; a mismatch returns 7.
 
 Stack, binary polyset and layer reports are staged before publication. The layer
 report is published last; publication failures restore previous output files.

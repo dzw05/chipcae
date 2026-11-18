@@ -632,12 +632,16 @@ def odb_skipped(b):
 @case('via_plating_missing','ipc')
 def plating(b):
     out,_,_ = b.run(data/'kicad_like/via_plating_mixed.xml',expected=6)
-    ds = load(out/'import_report.json')['defects']
-    # Specific ViaPlatingMissing rule is explicit, but conflicts with general board/ rule.
-    d = next((d for d in ds if d['defect_id'] == 'ecad/via_plating_missing/F.Cu-B.Cu'),None)
-    check(d is not None, 'missing specified via-plating defect ID (pending board/ ruling)')
+    ds = b.defect_rows(out)
+    d = next((d for d in ds if d['defect_id'] == 'board/via_plating_missing/F.Cu-B.Cu'),None)
+    check(d is not None, 'missing board-scoped via-plating defect ID')
     check(d['tier'] == 'B' and d['kind'] == 'IMPORT_UNSUPPORTED_ELEMENT' and d['size'] == 2,
           'missing-plating count/tier/kind')
+    accepted,_,_ = b.run(data/'kicad_like/via_plating_mixed.xml',
+                         ['--accept-b-tier'],name='accepted')
+    accepted_ds = b.defect_rows(accepted)
+    check([d['defect_id'] for d in ds] == [d['defect_id'] for d in accepted_ds],
+          'acceptance changed via-plating IDs')
 
 @case('report_and_preview')
 def report_preview(b):
@@ -732,11 +736,11 @@ void public_api() {
         out << text;
         require(out.good(), "cannot write public API fixture");
     };
-    write(root / "matrix/matrix",
-          "UNITS=MM\nSTEP {\nNAME=pcb\n}\n"
-          "LAYER {\nROW=2\nNAME=Core\nTYPE=DiElEcTrIc\n}\n"
-          "LAYER {\nROW=1\nNAME=Top\nTYPE=SIGNAL\n}\n"
-          "LAYER {\nROW=3\nNAME=Silk\nTYPE=SiLk_ScReEn\n}\n");
+    const std::string matrix = "UNITS=MM\nSTEP {\nNAME=pcb\n}\n"
+                               "LAYER {\nROW=2\nNAME=Core\nTYPE=DiElEcTrIc\n}\n"
+                               "LAYER {\nROW=1\nNAME=Top\nTYPE=SIGNAL\n}\n"
+                               "LAYER {\nROW=3\nNAME=Silk\nTYPE=SiLk_ScReEn\n}\n";
+    write(root / "matrix/matrix", matrix);
     write(root / "steps/pcb/profile",
           "UNITS=MM\nS P 0\nOB 0 0 I\nOS 1 0\nOS 1 1\nOS 0 1\nOS 0 0\nOE\nSE\n");
     write(root / "steps/pcb/layers/top/features", "UNITS=MM\nT 0 0 standard P 0 0 1 1 0 text\n");
@@ -770,6 +774,41 @@ void public_api() {
                 unsupported.end(),
                 [](const auto& entry) { return entry.element == "SkippedLayer:Silk:SiLk_ScReEn"; }),
             "mapper skipped entries must survive with original function spelling");
+    write(root / "steps/pcb/layers/core/attrlist", ".layer_dielectric=0.2\n");
+    constexpr double original = 0.0002;
+    const auto same_double = [](double a, double b) {
+        return std::bit_cast<std::uint64_t>(a) == std::bit_cast<std::uint64_t>(b);
+    };
+    for (const double selected : {thickness, original, std::nextafter(original, 1.0)}) {
+        const bool equal = same_double(selected, original);
+        auto overridden = read_odbpp(root, {{{"cOrE", selected}}}, &records);
+        require(bool(overridden), overridden.error);
+        require(records.size() == overridden.model.layers.size() && records.size() == 2,
+                "positive overrides must preserve one record per retained layer");
+        require(same_double(overridden.model.layers[1].thickness_m, selected) &&
+                    same_double(records[1].thickness_m, selected),
+                "positive ODB thickness must be replaced by the exact override double");
+        require(records[1].layer == "Core" && records[1].source == "override",
+                "positive and equal overrides must have override provenance");
+        require(records[1].odb_value_m.has_value() == !equal,
+                "only differing positive originals are ODB conflicts");
+        if (!equal)
+            require(same_double(*records[1].odb_value_m, original),
+                    "ODB conflict must preserve the original thickness");
+        require(records[0].source == "odb" && !records[0].odb_value_m,
+                "untouched layer must keep ODB provenance without a conflict");
+    }
+    // A skipped source TYPE containing ':' cannot be recovered by the report's
+    // delimiter-based name lookup. Reporting must preserve the mapper fallback.
+    write(root / "matrix/matrix", matrix + "LAYER {\nROW=4\nNAME=Notes\nTYPE=Custom:Document\n}\n");
+    auto fallback = read_odbpp(root, {}, &records);
+    require(bool(fallback), "missing report function lookup must not reject: " + fallback.error);
+    require(std::any_of(fallback.model.report.unsupported.begin(),
+                        fallback.model.report.unsupported.end(),
+                        [](const auto& entry) {
+                            return entry.element == "SkippedLayer:Notes:custom:document";
+                        }),
+            "missing report lookup must retain the mapper's deterministic function");
     for (const auto value : {0.0,
                              -1.0,
                              std::numeric_limits<double>::infinity(),

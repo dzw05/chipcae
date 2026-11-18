@@ -1,10 +1,10 @@
-#include "chipcae/geometry/import_accept.hpp"
 #include "chipcae/geometry/import_report.hpp"
 #include "import_common.hpp"
 #include "stack_override.hpp"
 #ifdef CHIPCAE_ENABLE_ECAD
 #include "chipcae/geometry/ecad/ipc2581.hpp"
 #include "chipcae/geometry/ecad/odbpp.hpp"
+#include "chipcae/geometry/import_accept.hpp"
 #endif
 
 #include <algorithm>
@@ -87,9 +87,6 @@ std::vector<Defect> classify_unsupported(const ecad::ImportReport& report,
         defect.size = 1;
         defect.suggestion = "unsupported geometry must be modeled before import";
         defect.defect_id = "board/" + id_component(text) + "/" + std::to_string(entry.line);
-        const auto count = occurrences[defect.defect_id]++;
-        if (count)
-            defect.defect_id += "/" + std::to_string(count);
         const auto colon = text.find(':');
         const auto tag = text.substr(0, colon);
         // See docs/geometry/odbpp-import.md. Unknown geometry stays C; bare
@@ -157,7 +154,7 @@ std::vector<Defect> classify_unsupported(const ecad::ImportReport& report,
                     std::from_chars(digits.data(), digits.data() + digits.size(), size);
                 if (error == std::errc{} && last == digits.data() + digits.size()) {
                     defect.size = static_cast<double>(size);
-                    defect.defect_id = "ecad/via_plating_missing/" +
+                    defect.defect_id = "board/via_plating_missing/" +
                                        text.substr(start, end - start) + "-" +
                                        text.substr(end + 1, number - end - 1);
                 }
@@ -165,6 +162,9 @@ std::vector<Defect> classify_unsupported(const ecad::ImportReport& report,
             // ODB's shorter diagnostic identifies the drill layer, with no
             // span/count available; keep its stable board ID and size=1.
         }
+        const auto count = occurrences[defect.defect_id]++;
+        if (count)
+            defect.defect_id += "/" + std::to_string(count);
         defects.push_back(std::move(defect));
     }
     std::sort(skipped.begin(), skipped.end(), [](const auto& a, const auto& b) {
@@ -324,11 +324,16 @@ int run_ecad(const ImportOptions& options) {
         if (!imported)
             return reject(imported.error);
         auto& model = imported.model;
+        if (odb && records.size() != model.layers.size())
+            return reject("IMPORT_REJECTED: ODB thickness record count does not match layers");
         std::vector<LayerSourceRow> rows;
         std::vector<std::string> warnings;
         std::vector<std::string> missing_thickness;
         for (std::size_t i = 0; i < model.layers.size(); ++i) {
             auto& layer = model.layers[i];
+            if (odb && records[i].layer != layer.name)
+                return reject("IMPORT_REJECTED: ODB thickness record does not match layer " +
+                              layer.name);
             std::string source = odb ? records[i].source : "ipc";
             if (!odb) {
                 const auto match = std::find_if(overrides.thicknesses.begin(),
