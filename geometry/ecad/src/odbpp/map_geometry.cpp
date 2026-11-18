@@ -257,7 +257,8 @@ bool bridged_ring(const Path64& path) {
     std::sort(edges.begin(), edges.end(), [&](auto i, auto j) {
         return std::tuple{key(i), i} < std::tuple{key(j), j};
     });
-    std::vector<bool> bridge(path.size(), false);
+    const auto no_bridge = path.size();
+    std::vector<std::size_t> bridge_pair(path.size(), no_bridge);
     for (std::size_t begin = 0; begin < edges.size();) {
         auto end = begin + 1;
         while (end < edges.size() && key(edges[begin]) == key(edges[end]))
@@ -269,12 +270,14 @@ bool bridged_ring(const Path64& path) {
             auto i = edges[at];
             (point_less(path[i], path[(i + 1) % path.size()]) ? forward : reverse).push_back(i);
         }
+        // Repeated matched traversals of the same geometric bridge share an ID.
+        // Unmatched occurrences retain the sentinel and are checked normally.
         for (std::size_t at = 0; at < std::min(forward.size(), reverse.size()); ++at)
-            bridge[forward[at]] = bridge[reverse[at]] = true;
+            bridge_pair[forward[at]] = bridge_pair[reverse[at]] = begin;
         begin = end;
     }
     if (!edge_candidates(path, [&](auto i, auto j) {
-            if (bridge[i] && bridge[j])
+            if (bridge_pair[i] != no_bridge && bridge_pair[i] == bridge_pair[j])
                 return true;
             const auto& a = path[i];
             const auto& b = path[(i + 1) % path.size()];
@@ -331,34 +334,6 @@ Paths64 surface_rings(const Paths64& paths) {
         }
     }
     return result;
-}
-// Clipper's AEL is a linked list. A comb with many edges on the same Y scanline
-// makes even a union of one simple ring quadratic. Estimate peak active edges
-// along each axis and choose the less crowded scan direction for that case.
-bool transpose_simple_surface(const Path64& path) {
-    auto peak = [&](bool x_axis) {
-        std::vector<std::pair<std::int64_t, int>> events;
-        events.reserve(2 * path.size());
-        for (std::size_t i = 0; i < path.size(); ++i) {
-            const auto& a = path[i];
-            const auto& b = path[(i + 1) % path.size()];
-            const auto u = x_axis ? a.x : a.y, v = x_axis ? b.x : b.y;
-            events.emplace_back(std::min(u, v), -1);
-            events.emplace_back(std::max(u, v), 1);
-        }
-        std::sort(events.begin(), events.end());
-        std::size_t active = 0, maximum = 0;
-        for (const auto& [coordinate, end] : events) {
-            (void)coordinate;
-            if (end < 0)
-                maximum = std::max(maximum, ++active);
-            else
-                --active;
-        }
-        return maximum;
-    };
-    // Avoid extra work for small inputs and nearly equal scan directions.
-    return path.size() > 4096 && peak(false) / 4 > peak(true) && simple_ring(path);
 }
 struct Mapper {
     const OdbJob& job;
@@ -532,7 +507,6 @@ struct Mapper {
     }
     void copper(EcadLayer& layer, const OdbFeatures& f) {
         Paths64 positive, negative;
-        bool transposed = false;
         auto add = [&](Paths64 paths, bool polarity) {
             auto& dst = polarity ? positive : negative;
             dst.insert(dst.end(), paths.begin(), paths.end());
@@ -546,16 +520,6 @@ struct Mapper {
                     throw std::runtime_error("invalid or degenerate contour: " + layer.name);
                 if (!path.empty())
                     paths.push_back(std::move(path));
-            }
-            // With one positive simple contour and no other features, none of
-            // these booleans creates intersections. Axis exchange is therefore
-            // exact, including the integer output vertices; no rounding changes.
-            if (f.surfaces.size() == 1 && surface.positive && paths.size() == 1 && f.pads.empty() &&
-                f.lines.empty() && f.arcs.empty() && transpose_simple_surface(paths.front())) {
-                transposed = true;
-                for (auto& point : paths.front())
-                    std::swap(point.x, point.y);
-                std::reverse(paths.front().begin(), paths.front().end());
             }
             auto rings = Union(paths, FillRule::NonZero);
             if (normalized_surface)
@@ -593,12 +557,6 @@ struct Mapper {
         if (!clipper.Execute(ClipType::Difference, FillRule::NonZero, rings))
             throw std::runtime_error("copper boolean failed: " + layer.name);
         append_rings(layer, rings);
-        if (transposed)
-            for (auto& polygon : layer.polygons) {
-                for (auto& point : polygon.points)
-                    std::swap(point[0], point[1]);
-                std::reverse(polygon.points.begin(), polygon.points.end());
-            }
     }
     void append_rings(EcadLayer& layer, const PolyPath64& parent) {
         for (const auto& ring : parent) {

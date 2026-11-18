@@ -2196,6 +2196,32 @@ void bridge_rejections() {
                                              {1, 1}, {2, 4}, {2, 0}, {5, 0}, {5, 1}, {5, 3}, {7, 3},
                                              {7, 1}, {5, 1}, {5, 0}, {8, 0}, {8, 8}, {0, 8}}));
          }},
+        {"distinct bridge pairs crossing",
+         [&] {
+             // Each diagonal is traversed in both directions and touches only
+             // its own hole. They cross at an interior point of both bridges.
+             std::vector<OdbPoint> points{{0, 0},
+                                          {2, 0},
+                                          {7, 6},
+                                          {7, 7},
+                                          {8, 7},
+                                          {8, 6},
+                                          {7, 6},
+                                          {2, 0},
+                                          {8, 0},
+                                          {3, 6},
+                                          {2, 6},
+                                          {2, 7},
+                                          {3, 7},
+                                          {3, 6},
+                                          {8, 0},
+                                          {10, 0},
+                                          {10, 10},
+                                          {0, 10}};
+             reject_surface(polygon_contour(points));
+             std::reverse(points.begin(), points.end());
+             reject_surface(polygon_contour(points));
+         }},
         {"opposite-winding exterior figure-eight",
          [&] {
              reject_surface(
