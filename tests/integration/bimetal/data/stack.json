@@ -1,0 +1,50 @@
+{
+  "id": "synthetic-bimetal",
+  "unit": "m",
+  "outline": {
+    "box": [
+      0,
+      0,
+      1,
+      1
+    ],
+    "polygon": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        0
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        0,
+        1
+      ]
+    ]
+  },
+  "symmetry": "none",
+  "package_type": "FCBGA",
+  "layers": [
+    {
+      "name": "base",
+      "kind": "Explicit",
+      "material": "base",
+      "thickness": 0.02,
+      "n_elem_min": 1,
+      "grading": 1
+    },
+    {
+      "name": "top",
+      "kind": "Explicit",
+      "material": "top",
+      "thickness": 0.02,
+      "n_elem_min": 1,
+      "grading": 1
+    }
+  ]
+}
