@@ -43,3 +43,9 @@ imports do not require the source checkout.
 Until E-ODB-3 supplies an implemented reader, ODB++ assembly boards reject with
 `odbpp reader not yet available`. Integration builds may enable
 `CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE` once that implementation is present.
+
+Tests requiring SP2/SP3 geometry (thin-layer exit 6/acceptance, split reports,
+and merged STEP regions) skip with code 77 while those implementations are stubs.
+Repair-policy and synthetic defect tests remain active on this baseline.
+Expanded `parts_from_step` identities use the body name; the schema-required
+`bodies` mapping `id` value does not rename a body.

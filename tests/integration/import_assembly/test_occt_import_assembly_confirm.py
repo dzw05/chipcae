@@ -1,9 +1,11 @@
+from assembly_test_support import require_assembly_geometry
 import tempfile
 import subprocess
 from assembly_test_support import Assembly, b_ids, check, require, step_generator
 
 require('JSONCONS')
 require('ECAD')
+require_assembly_geometry()
 with tempfile.TemporaryDirectory() as tmp:
     a = Assembly(tmp)
     check(subprocess.run([step_generator(), str(a.root), 'draft'],

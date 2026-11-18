@@ -92,16 +92,7 @@ inline bool write_assembly_report(const std::filesystem::path& dir,
         if (!first)
             j << ',';
         first = false;
-        j << "{\"defect_id\":" << json_quote(id) << ",\"tier\":" << json_quote(tier)
-          << ",\"kind\":" << json_quote(d.kind) << ",\"reason\":" << static_cast<unsigned>(d.reason)
-          << ",\"dimension\":" << json_quote(d.dimension) << ",\"size\":" << std::setprecision(17)
-          << d.size << ",\"suggestion\":" << json_quote(d.suggestion)
-          << ",\"action\":" << json_quote(d.action)
-          << ",\"rejection_reason\":" << json_quote(d.rejection_reason)
-          << ",\"material_ambiguous\":" << (d.material_ambiguous ? "true" : "false");
-        if (parts || !d.details.empty())
-            j << ",\"details\":" << json_quote(d.details);
-        j << '}';
+        write_defect(j, d);
         c << quote(id) << ',' << quote(tier) << ',' << quote(d.kind) << ','
           << static_cast<unsigned>(d.reason) << ',' << quote(d.dimension) << ','
           << std::setprecision(17) << d.size << ',' << quote(d.suggestion) << ',' << quote(d.action)
@@ -141,7 +132,14 @@ inline bool write_assembly_report(const std::filesystem::path& dir,
         j << "]}";
     }
     j << "}\n";
-    return static_cast<bool>(j) && static_cast<bool>(c);
+    j.close();
+    c.close();
+    if (!j || !c) {
+        if (error)
+            *error = "cannot write report output";
+        return false;
+    }
+    return true;
 }
 
 std::filesystem::path assembly_root() {
@@ -228,39 +226,21 @@ mesh::Expected<bool> inline_assembly_outline(mesh::StackModel& stack, const mesh
                 return mesh::Error{"$/outline", "CUT_UNSUPPORTED: outline needs one ring"};
             outline = &l;
         }
-    if (outline)
-        for (auto i = outline->ring_offsets[0]; i < outline->ring_offsets[1]; ++i)
-            stack.outline.polygon.push_back(
-                {static_cast<double>(outline->coordinates.at(static_cast<std::size_t>(2 * i))) *
-                     poly.dbu_m,
-                 static_cast<double>(outline->coordinates.at(static_cast<std::size_t>(2 * i + 1))) *
-                     poly.dbu_m});
+    if (outline) {
+        const auto& offsets = outline->ring_offsets;
+        const auto& coordinates = outline->coordinates;
+        if (coordinates.size() % 2 != 0 || offsets[0] != 0 || offsets[1] < 3 ||
+            static_cast<std::uint64_t>(offsets[1]) != coordinates.size() / 2)
+            return mesh::Error{"$/outline",
+                               "CUT_UNSUPPORTED: invalid outline coordinates or offsets"};
+        for (std::size_t i = 0; i < coordinates.size(); i += 2)
+            stack.outline.polygon.push_back({static_cast<double>(coordinates[i]) * poly.dbu_m,
+                                             static_cast<double>(coordinates[i + 1]) * poly.dbu_m});
+    }
     return true;
 }
-// The protocol uses a sequence of scalar mappings, in flow or block style.
-std::optional<int> assembly_protocol_code(const std::string& name, std::istream& in) {
-    std::string line, entry_name;
-    int code = -1;
-    const std::regex code_field(R"(\bcode:\s*([0-9]+))");
-    const std::regex name_field(R"re(\bname:\s*["']?([A-Z_]+)["']?)re");
-    const std::regex entry_start(R"(^\s*-\s)");
-    while (std::getline(in, line)) {
-        if (std::regex_search(line, entry_start)) {
-            code = -1;
-            entry_name.clear();
-        }
-        std::smatch match;
-        if (std::regex_search(line, match, code_field))
-            code = std::stoi(match[1]);
-        if (std::regex_search(line, match, name_field))
-            entry_name = match[1];
-        if (entry_name == name && code >= 0)
-            return code;
-    }
-    return std::nullopt;
-}
 int assembly_error_exit(const std::string& message, std::istream& in) {
-    return assembly_protocol_code(message.substr(0, message.find(':')), in).value_or(1);
+    return protocol_error_code(message.substr(0, message.find(':')), in).value_or(1);
 }
 int assembly_error_exit(const std::string& message) {
     std::ifstream in(assembly_root() / "protocol/errors.yaml");
@@ -290,16 +270,7 @@ int run_assembly(const ImportOptions& options) {
         const auto dir = import_report_directory(options.output);
         if (!write_assembly_report(dir, header, defects, &error, &parts))
             throw std::runtime_error(error);
-        std::ifstream common(dir / "import_report.json");
-        const auto report = J::parse(common);
-        J d;
-        d["code"] = code;
-        d["message"] = message;
-        d["defects"] = report["defects"];
-        std::ofstream dest(options.report);
-        dest << d << '\n';
-        if (!dest)
-            throw std::runtime_error("cannot write assembly reports");
+        write_defects(options.report, code, message, defects);
     };
     auto fail = [&](int exit, const std::string& code, const std::string& message) {
         const auto full =
@@ -339,7 +310,7 @@ int run_assembly(const ImportOptions& options) {
                     throw std::runtime_error(std::string("cannot open runtime asset ") + asset);
                 if (std::string(asset).ends_with(".json"))
                     (void)jsoncons::jsonschema::make_json_schema(J::parse(file));
-                else if (assembly_protocol_code("INTERNAL", file) != std::optional<int>(1))
+                else if (protocol_error_code("INTERNAL", file) != std::optional<int>(1))
                     throw std::runtime_error("invalid runtime asset protocol/errors.yaml");
             }
             std::ifstream spec(assembly_root() / "schema/assembly-0.1.schema.json");
@@ -461,7 +432,7 @@ int run_assembly(const ImportOptions& options) {
         if (doc.contains("parts_from_step")) {
             const auto& f = doc["parts_from_step"];
             for (const auto& kv : f["bodies"].object_range()) {
-                auto id = kv.value()["id"].as<std::string>();
+                auto id = std::string(kv.key());
                 if (id == "void")
                     return fail(14, "INPUT_INVALID", "INPUT_INVALID: part id void is reserved");
                 if (!ids.insert(id).second)
@@ -491,6 +462,7 @@ int run_assembly(const ImportOptions& options) {
                     names.emplace_back(kv.key());
             for (const auto& name : names) {
                 J p = f["bodies"][name];
+                p["id"] = name;
                 p["step"] = f["step"];
                 p["body"] = name;
                 p["placement"]["frame"] = "step";
@@ -567,6 +539,9 @@ int run_assembly(const ImportOptions& options) {
                     if (id == r.name || id == r.body)
                         throw std::runtime_error("INPUT_INVALID: part id collides with " + id);
             }
+            if (p.get_value_or<bool>("material_approx", false)) {
+                parts.material_approx.push_back(id);
+            }
             if (!step_import_available()) {
                 Defect d{};
                 d.tier = Tier::C;
@@ -582,9 +557,6 @@ int run_assembly(const ImportOptions& options) {
                     throw std::runtime_error("IMPORT_REJECTED: display-only geometry");
                 if (!names.insert(n).second)
                     throw std::runtime_error("IMPORT_REJECTED: duplicate body name " + n);
-            }
-            if (p.get_value_or<bool>("material_approx", false)) {
-                parts.material_approx.push_back(id);
             }
             if (!p.contains("body") && step.body_names.size() > 1)
                 throw std::runtime_error("IMPORT_REJECTED: body is required for multi-body STEP");

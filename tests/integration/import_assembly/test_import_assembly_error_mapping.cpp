@@ -15,12 +15,15 @@ int main() {
         std::cerr << "assembly threshold errors must use protocol/errors.yaml exit codes\n";
         return 1;
     }
-    for (const auto& yaml : {"errors:\n  - code: 14\n    name: INPUT_INVALID\n  - code: 13\n    "
-                             "name: CUT_UNSUPPORTED\n",
-                             "errors:\n  - name: INPUT_INVALID\n    code: 14\n  - name: "
-                             "CUT_UNSUPPORTED\n    code: 13\n",
-                             "errors:\n  - {code: 14, name: INPUT_INVALID}\n  - {name: "
-                             "CUT_UNSUPPORTED, code: 13}\n"}) {
+    for (const auto& yaml :
+         {"errors:\n  - {code: \"14\", # quoted code\n     name: INPUT_INVALID}\n"
+          "  - name: 'CUT_UNSUPPORTED' # comment\n    code: '13'\n",
+          "errors:\n  - code: 14\n    name: INPUT_INVALID\n  - code: 13\n    "
+          "name: CUT_UNSUPPORTED\n",
+          "errors:\n  - name: INPUT_INVALID\n    code: 14\n  - name: "
+          "CUT_UNSUPPORTED\n    code: 13\n",
+          "errors:\n  - {code: 14, name: INPUT_INVALID}\n  - {name: "
+          "CUT_UNSUPPORTED, code: 13}\n"}) {
         std::istringstream input(yaml), cut(yaml), unknown(yaml);
         if (assembly_error_exit("INPUT_INVALID: x", input) != 14 ||
             assembly_error_exit("CUT_UNSUPPORTED: x", cut) != 13 ||

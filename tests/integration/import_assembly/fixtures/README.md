@@ -7,6 +7,7 @@ cmake -G Ninja -S tests/integration/import_assembly/fixtures \
 cmake --build <main-build>/sp4-step-fixtures -j2
 ```
 
+OCCT tests skip with exit 77 when this optional tool is absent.
 Run these before CTest so its 60-second test timeout cannot terminate a build
 waiting for a shared slot. Alternatively set `SP4_FIXTURE_GENERATOR` to an
 already-built `sp4_step_fixtures` executable. Each test generates STEP files

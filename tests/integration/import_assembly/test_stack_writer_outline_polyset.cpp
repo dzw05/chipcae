@@ -63,6 +63,20 @@ int main() {
         invalid.layers.push_back(poly.layers.front());
         require(!chipcae::importer::inline_assembly_outline(base.value(), invalid),
                 "multiple outline layers must return CUT_UNSUPPORTED");
+        for (const auto& offsets : {std::vector<std::uint64_t>{0, 6}, {4, 2}, {1, 5}, {0, 2}}) {
+            invalid = poly;
+            invalid.layers[0].ring_offsets.assign(offsets.begin(), offsets.end());
+            auto result = chipcae::importer::inline_assembly_outline(base.value(), invalid);
+            require(!result && result.error().reason.starts_with("CUT_UNSUPPORTED:"),
+                    "invalid offsets must return CUT_UNSUPPORTED");
+        }
+        for (auto size : {9u, 8u}) {
+            invalid = poly;
+            invalid.layers[0].coordinates.resize(size);
+            auto result = chipcae::importer::inline_assembly_outline(base.value(), invalid);
+            require(!result && result.error().reason.starts_with("CUT_UNSUPPORTED:"),
+                    "short or odd coordinates must return CUT_UNSUPPORTED");
+        }
         require(base.value().outline.polygon.empty(), "invalid outlines must not mutate the stack");
 #else
         require(false, "outline acceptance requires jsoncons headers");

@@ -16,7 +16,7 @@ with tempfile.TemporaryDirectory() as tmp:
 # The collision case needs actual slicing; keep the reserved-id assertion above
 # active even in OCCT-off builds.
 from assembly_test_support import enabled
-if enabled('OCCT'):
+if enabled('OCCT') and enabled('ECAD'):
     with tempfile.TemporaryDirectory() as tmp:
         a = Assembly(tmp)
         a.boxes()

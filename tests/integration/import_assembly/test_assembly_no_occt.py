@@ -43,6 +43,21 @@ with tempfile.TemporaryDirectory() as tmp:
         defects = a.import_report()['defects']
         assert len(defects) == 2, defects
         assert {(d['tier'], d['reason'], d['defect_id']) for d in defects} == {
-            ('C', 8, 'mapped_a/occt_unavailable'),
-            ('C', 8, 'mapped_b/occt_unavailable')}, defects
+            ('C', 8, 'BodyA/occt_unavailable'),
+            ('C', 8, 'BodyB/occt_unavailable')}, defects
         assert not a.output.exists()
+
+    a.document['parts_from_step']['bodies']['BodyA']['material_approx'] = True
+    a.save()
+    check(a.run(), 7)
+    assert a.import_report()['parts']['material_approx'] == [
+        {'id': 'BodyA', 'material_approx': True, 'label': '近似材料'}]
+    # Body names determine reserved IDs and collisions even when aliases differ.
+    a.document['parts_from_step']['bodies'] = {'void': {'id': 'safe', 'material': 'copper'}}
+    a.save()
+    check(a.run(), 14)
+    assert a.defects()['message'] == 'INPUT_INVALID: part id void is reserved'
+    a.document['parts_from_step']['bodies'] = {'Core': {'id': 'safe', 'material': 'copper'}}
+    a.save()
+    check(a.run(), 14)
+    assert a.defects()['message'] == 'INPUT_INVALID: part id collides with Core'
