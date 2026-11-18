@@ -3,6 +3,8 @@
 #include <QWidget>
 #include <optional>
 
+class QLineEdit;
+
 namespace chipcae::desktop {
 // UI sidecar: nx/ny never modify stack polygons. levels=0 selects automatic refinement.
 struct PreviewOptions {
@@ -17,7 +19,6 @@ struct PreviewOptions {
     static PreviewOptions load(const QString& path);
 };
 
-// Test-first stub: the independent options editor is not implemented yet.
 class PreviewOptionsPanel : public QWidget {
     Q_OBJECT
 public:
@@ -27,5 +28,12 @@ public:
     QString validationMessage() const;
 signals:
     void optionsEdited();
+
+private:
+    QLineEdit* nx_;
+    QLineEdit* ny_;
+    QLineEdit* levels_;
+    QLineEdit* maxRatio_;
+    QLineEdit* surface_;
 };
 } // namespace chipcae::desktop
