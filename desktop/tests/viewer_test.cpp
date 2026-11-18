@@ -214,6 +214,10 @@ int acceptance(const QDir& root) {
                 require(view.colorRange().min == range.min && view.colorRange().max == range.max,
                         "repeated range differs");
                 checkRange(view, field);
+                view.setBlockVisible("hex", false);
+                checkRange(view, field);
+                view.setBlockVisible("hex", true);
+                checkRange(view, field);
                 view.setLayer(1);
                 checkRange(view, field);
                 view.setLayer(0);
@@ -225,6 +229,9 @@ int acceptance(const QDir& root) {
                     view.setBlockVisible(block, false);
                 require(!view.colorRange().valid && view.colorBarTitle().isEmpty(),
                         "hidden blocks still contribute range");
+                view.setClip(false);
+                require(!view.colorRange().valid && view.colorBarTitle().isEmpty(),
+                        "hidden unclipped blocks still contribute range");
             });
     }
     run("geometry invariance", [&] {
@@ -344,7 +351,39 @@ int acceptance(const QDir& root) {
                                   .arg(2.0, 0, 'g', 16)
                                   .arg(3.0, 0, 'g', 16)),
                 "position formatting or precedence");
-        require(text.contains(" location=die top surface"), "string location formatting");
+        require(!text.contains(" location="), "string location duplicated selected array");
+        auto checkLocation = [&](const QJsonObject& changes, const QString& suffix) {
+            auto entries = summary;
+            for (int i = 0; i < entries.size(); ++i) {
+                auto entry = entries[i].toObject();
+                if (entry["name"] != "T_max" || entry["step"].toInteger(-1) != 0)
+                    continue;
+                entry.remove("position");
+                entry.remove("xyz");
+                entry.remove("location");
+                for (auto it = changes.begin(); it != changes.end(); ++it)
+                    entry[it.key()] = it.value();
+                entries[i] = entry;
+            }
+            manifest["summary"] = entries;
+            require(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "rewrite manifest");
+            const auto bytes = QJsonDocument(manifest).toJson();
+            require(file.write(bytes) == bytes.size(), "rewrite summary");
+            file.close();
+            ResultSession updated;
+            require(updated.open(temp.path()), qPrintable(updated.error()));
+            ResultView current;
+            require(current.loadStep(updated, 0), qPrintable(current.error()));
+            require(current.tmaxText() == current.summary("T_max") + " region=die" + suffix,
+                    "location precedence or formatting");
+        };
+        checkLocation({{"position", QJsonArray{1, "invalid", 3}},
+                       {"xyz", QJsonArray{4, 5, 6}},
+                       {"location", "surface"}},
+                      "");
+        checkLocation({{"position", QJsonArray{1, 2}}, {"xyz", QJsonArray{4, 5, 6}}}, "");
+        checkLocation({{"location", "surface"}}, " location=surface");
+        checkLocation({{"location", QJsonArray{7, 8, 9}}}, " at=(7,8,9)");
     });
     for (const auto& source : {QString("mock"),
                                QString("precomputed"),
@@ -368,8 +407,10 @@ int acceptance(const QDir& root) {
                 require(view.setProvenance(object) == valid, "provenance return value");
                 auto banner = view.provenanceBanner();
                 if (source == "real" && degraded)
-                    require(banner.contains(QStringLiteral("降级")), "degraded real banner");
+                    require(banner == QStringLiteral("真实计算 — 降级数据"),
+                            "degraded real banner");
                 const QString watermark = source == "real" && !degraded ? ""
+                                          : source == "real"            ? "降级"
                                           : source == "precomputed"     ? "预计算"
                                                                         : "MOCK";
                 require(view.provenanceWatermark() == watermark, "provenance watermark");
@@ -378,7 +419,7 @@ int acceptance(const QDir& root) {
                     require(banner.isEmpty(), "real banner");
                 else {
                     require(banner.contains(valid ? watermark : QStringLiteral("来源未知")) &&
-                                !banner.contains(QStringLiteral("真实计算")),
+                                (source == "real" || !banner.contains(QStringLiteral("真实计算"))),
                             "unsafe provenance banner");
                     for (auto label : view.findChildren<QLabel*>())
                         if (label->text() == banner)
@@ -454,6 +495,8 @@ int acceptance(const QDir& root) {
 int main(int argc, char** argv) {
     QSurfaceFormat::setDefaultFormat(QVTKOpenGLNativeWidget::defaultFormat());
     QApplication app(argc, argv);
+    const QDir root(argv[1]);
+    int failures = 0;
     try {
         auto g = sheet();
         auto full = ResultView::quantify(g, "T");
@@ -471,7 +514,6 @@ int main(int argc, char** argv) {
         auto bad = sheet();
         bad->GetPoints()->SetPoint(6, 0.5, 0.5, 0.5e-7);
         require(!ResultView::quantify(bad).error.isEmpty(), "nonconvex cell accepted");
-        QDir root(argv[1]);
         ResultSession s;
         for (auto variant :
              {"default", "hex_fallback", "old_names", "s1_compat", "hex_only", "particles_only"}) {
@@ -608,9 +650,10 @@ int main(int argc, char** argv) {
         require(legacy.loadStep(s, 0), qPrintable(legacy.error()));
         require(legacy.summary("warpage_pv").contains("unavailable"), "missing summary fallback");
         std::cout << "existing viewer checks passed\n";
-        return acceptance(root) ? 1 : 0;
     } catch (const std::exception& e) {
-        std::cerr << e.what() << '\n';
-        return 1;
+        std::cerr << "FAIL legacy viewer checks: " << e.what() << '\n';
+        ++failures;
     }
+    failures += acceptance(root);
+    return failures ? 1 : 0;
 }

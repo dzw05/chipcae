@@ -235,7 +235,11 @@ QString ResultView::tmaxText() const {
                     break;
                 }
             }
+            bool selectedLocationArray = false;
             for (auto key : {"position", "xyz", "location"}) {
+                if (!entry[key].isArray())
+                    continue;
+                selectedLocationArray = true;
                 auto xyz = entry[key].toArray();
                 if (xyz.size() == 3 && xyz[0].isDouble() && xyz[1].isDouble() &&
                     xyz[2].isDouble()) {
@@ -243,10 +247,10 @@ QString ResultView::tmaxText() const {
                                 .arg(xyz[0].toDouble(), 0, 'g', 16)
                                 .arg(xyz[1].toDouble(), 0, 'g', 16)
                                 .arg(xyz[2].toDouble(), 0, 'g', 16);
-                    break;
                 }
+                break;
             }
-            if (!entry["location"].toString().isEmpty())
+            if (!selectedLocationArray && !entry["location"].toString().isEmpty())
                 text += " location=" + entry["location"].toString();
             return text;
         }
@@ -270,8 +274,8 @@ bool ResultView::setProvenance(const QJsonObject& provenance) {
         d->watermark = QStringLiteral("预计算");
         d->banner = QStringLiteral("预计算数据");
     } else if (provenance["degraded"].toBool()) {
-        d->watermark = "MOCK";
-        d->banner = QStringLiteral("降级数据 — MOCK");
+        d->watermark = QStringLiteral("降级");
+        d->banner = QStringLiteral("真实计算 — 降级数据");
     }
     d->bannerLabel->setText(d->banner);
     d->bannerLabel->setVisible(!d->banner.isEmpty());
@@ -392,7 +396,7 @@ void ResultView::rebuild() {
             b.shown->GetPointData()->AddArray(derived);
             scalar = derived;
         }
-        if (scalar && b.shown->GetNumberOfPoints()) {
+        if (visible && scalar && b.shown->GetNumberOfCells() && b.shown->GetNumberOfPoints()) {
             for (vtkIdType i = 0; i < b.shown->GetNumberOfPoints(); ++i) {
                 const double value = scalar->GetComponent(i, 0);
                 if (!d->range.valid) {
