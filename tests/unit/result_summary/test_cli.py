@@ -34,6 +34,32 @@ class CLI(unittest.TestCase):
                     content = output.read_bytes() if write_output else result.stdout
                     self.assertEqual(json.loads(content)['manifest_summary']['large_count'], value)
 
+    def test_large_integer_warpage(self):
+        for value in (10**400, -(10**400)):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as tmp:
+                run = Path(tmp) / 'run'
+                _, manifest = fixture(run)
+                entry = next(e for e in manifest['summary'] if e['name'] == 'warpage_pv')
+                entry['value'] = value
+                save(run, manifest)
+                expected = 1.0 if value > 0 else -1.0
+                summary = summarize(run)
+                self.assertEqual(summary['warpage']['manifest_warpage_pv_m'], value)
+                self.assertEqual(summary['warpage']['rel_diff'], expected)
+                for write_output in (False, True):
+                    with self.subTest(write_output=write_output):
+                        output = Path(tmp) / 'summary.json'
+                        args = ['-o', str(output)] if write_output else []
+                        result = subprocess.run(
+                            [sys.executable, str(SCRIPT), str(run)] + args,
+                            cwd=tmp, capture_output=True, timeout=20)
+                        self.assertEqual(result.returncode, 0, result.stderr.decode())
+                        self.assertEqual(result.stderr, b'')
+                        if write_output:
+                            self.assertEqual(result.stdout, b'')
+                        content = output.read_bytes() if write_output else result.stdout
+                        self.assertEqual(json.loads(content), summary)
+
     def test_failure_stderr_contract(self):
         for case in ('invalid_manifest', 'missing_manifest', 'invalid_tolerance'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:

@@ -13,6 +13,7 @@ Collinear top geometry fits along its centered principal axis (constant fit
 when x/y have rank zero), using the shared plane fitter for residuals.
 """
 import argparse
+from fractions import Fraction
 import json
 from pathlib import Path
 import sys
@@ -267,11 +268,16 @@ def _summarize(run_dir, top_rel_tol):
                            top_min=float(tt.min()) if len(tt) else None,
                            top_max=float(tt.max()) if len(tt) else None,
                            top_mean=float(tt.mean()) if len(tt) else None)
+    rel_diff = None
+    if w is not None and pv not in (None, 0):
+        # JSON integers may exceed float range. Convert only the final ratio,
+        # preserving the signed denominator required by the summary contract.
+        rel_diff = float(abs(Fraction(w) - pv) / pv) if isinstance(pv, int) else abs(w-pv)/pv
     return dict(schema=SCHEMA, step_file=step_file, mesh_sha256=mesh.get('mesh_sha256'),
                 blocks=blocks, layer_names=names[0], material_names=names[1],
                 temperature=temperature,
                 warpage=dict(manifest_warpage_pv_m=pv, w_bfp_m=w,
-                             rel_diff=abs(w-pv)/pv if w is not None and pv not in (None, 0) else None,
+                             rel_diff=rel_diff,
                              n_top_points=len(top)), manifest_summary=summary)
 
 
