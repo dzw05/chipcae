@@ -27,6 +27,17 @@
 #include <vtkDataObject.h>
 using namespace chipcae::desktop;
 namespace {
+// Inject a stale reference without exposing test-only setters in MainWindow's API.
+template <typename Tag, typename Tag::Type Member>
+struct PrivateMemberAccess {
+    friend typename Tag::Type member(Tag) { return Member; }
+};
+struct RunIdMember {
+    using Type = QString MainWindow::*;
+    friend Type member(RunIdMember);
+};
+template struct PrivateMemberAccess<RunIdMember, &MainWindow::runId_>;
+
 void check(bool ok, const char* why) {
     if (!ok)
         throw std::runtime_error(why);
@@ -356,6 +367,37 @@ int main(int argc, char** argv) {
         check(runDirectories(f.root()).isEmpty(), "profile write failure creates no service job");
         check(!w.statusBar()->currentMessage().isEmpty(), "profile write failure is reported");
     });
+    for (bool preview : {true, false}) {
+        test(preview ? "preview recovers from unknown run" : "submit recovers from unknown run",
+             [&] {
+                 Fixture f(argv[1]);
+                 f.configure();
+                 MainWindow w;
+                 f.openCase(w);
+                 check(w.submitCurrentCase(), "create owned job service");
+                 f.release();
+                 check(waitFor([&] {
+                           return persistedJob(f.root()).state() == jobs::JOB_STATE_COMPLETED;
+                       }),
+                       "initial job completes before replacing reference");
+                 w.*member(RunIdMember{}) = QUuid::createUuid().toString(QUuid::WithoutBraces);
+                 w.statusBar()->clearMessage();
+                 if (preview) {
+                     check(w.previewMesh(PYTHON_EXECUTABLE, {f.previewScript()}),
+                           "unknown run does not prevent preview");
+                     auto controllers = w.findChildren<PreviewController*>();
+                     check(controllers.size() == 1, "window owns preview controller");
+                     check(waitFor([&] { return !controllers.first()->running(); }),
+                           "recovered preview finishes");
+                     check(controllers.first()->mesh() != nullptr, "recovered preview has mesh");
+                 } else {
+                     check(w.submitCurrentCase(), "unknown run does not prevent submission");
+                     check(runDirectories(f.root()).size() == 2, "recovered submit creates job");
+                 }
+                 check(w.statusBar()->currentMessage().contains("Unknown run_id"),
+                       "unknown run lookup is reported");
+             });
+    }
     test("preview finish and busy guards", [&] {
         Fixture f(argv[1]);
         f.configure();

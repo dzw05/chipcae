@@ -459,7 +459,12 @@ bool MainWindow::workBusy() const {
         return false;
     chipcae::desktop::jobs::JobRef ref;
     ref.set_run_id(runId_.toStdString());
-    return !chipcae::desktop::terminal(service_->Get(ref).state());
+    try {
+        return !chipcae::desktop::terminal(service_->Get(ref).state());
+    } catch (const std::exception& e) {
+        statusBar()->showMessage(tr("Cannot get job status: %1").arg(QString::fromUtf8(e.what())));
+        return false;
+    }
 }
 bool MainWindow::previewMesh(const QString& program, const QStringList& prefix) {
     if (workBusy() || !caseIsOpen())
