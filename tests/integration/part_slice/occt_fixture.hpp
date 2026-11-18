@@ -25,7 +25,6 @@
 #include <TopoDS.hxx>
 #include <XCAFDoc_DocumentTool.hxx>
 #include <XCAFDoc_ShapeTool.hxx>
-#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <gp_Ax1.hxx>

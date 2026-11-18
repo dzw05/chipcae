@@ -386,7 +386,6 @@ slice_prismatic(const StepImportResult& input, std::string_view body, const Slic
             Defect d{};
             d.tier = delta <= options.tau_b ? Tier::B : Tier::C;
             d.reason = DefectReason::PART_NOT_PRISMATIC;
-            d.dimension = "vertical deviation";
             d.size = delta;
             std::ostringstream report;
             report.precision(17);
