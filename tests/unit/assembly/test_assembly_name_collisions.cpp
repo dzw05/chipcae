@@ -25,6 +25,12 @@ int main() {
         invalid_input(merge_parts(b, {part("split", .0005, .001)}, options()),
                       "split name collides with Core#0");
         invalid_input(merge_parts(base(), {part(), part()}, options()), "duplicate part id lid");
+        invalid_input(merge_parts(base(), {part("Core#0", .0005, .0015)}, options()),
+                      "generated name collides with Core#0");
+        invalid_input(
+            merge_parts(base(), {part("A", .0005, .0015), part("A#0", .001, .0015)}, options()),
+            "generated name collides with A#0#0#0");
+
         for (bool region : {false, true}) {
             b = base();
             if (region)

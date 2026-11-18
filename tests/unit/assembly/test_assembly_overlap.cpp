@@ -59,6 +59,22 @@ int main() {
         polygon_base.outline.polygon = concave.slabs[0].sections[0].outer.pts;
         check(defect(merge(polygon_base, {probe}), DefectReason::PART_OUTSIDE_OUTLINE),
               "polygon outline uses actual area");
+        // Convex and concave polygon outlines partition the interior triangle
+        // along different heights, exercising independent area summations.
+        for (bool concave_outline : {false, true}) {
+            auto enclosing = base();
+            enclosing.outline.polygon = {{0, 0}, {.02, 0}, {.02, .02}, {0, .02}};
+            if (concave_outline)
+                enclosing.outline.polygon = {
+                    {0, 0}, {.02, 0}, {.02, .01}, {.01, .01}, {.01, .02}, {0, .02}};
+            for (int i = 1; i <= 64; ++i) {
+                auto interior = part("interior");
+                double y = .002 + i * .00001;
+                interior.slabs[0].sections = {{Ring{{{.002, y}, {.008, .003}, {.003, .009}}}, {}}};
+                check(!defect(merge(enclosing, {interior}), DefectReason::PART_OUTSIDE_OUTLINE),
+                      "fully contained triangle has no polygon-outline outside defect");
+            }
+        }
         auto seeded = base();
         seeded.layers[0].regions.push_back(
             {"seed", "different", "board", {{.002, .002, .006, .006}, {}}});

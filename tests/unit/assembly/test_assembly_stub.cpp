@@ -18,6 +18,19 @@ int main() {
                 invalid_input(merge_parts(base(), {part()}, opt), "invalid MergeOptions");
             }
         }
+        for (double thickness : {0.0,
+                                 -1.0,
+                                 std::numeric_limits<double>::infinity(),
+                                 std::numeric_limits<double>::quiet_NaN()}) {
+            auto invalid_base = base();
+            invalid_base.layers[0].thickness = thickness;
+            invalid_input(merge_parts(invalid_base, {}, options()),
+                          "invalid base layer thickness or duplicate name");
+        }
+        auto duplicate_base = base();
+        duplicate_base.layers.push_back(duplicate_base.layers[0]);
+        invalid_input(merge_parts(duplicate_base, {}, options()),
+                      "invalid base layer thickness or duplicate name");
         auto b = base();
         b.unit = "m";
         b.symmetry = "none";

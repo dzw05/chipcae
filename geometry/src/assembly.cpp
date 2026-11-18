@@ -388,10 +388,6 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
         options.tau_a <= 0)
         return invalid("invalid MergeOptions");
     MergeResult result{base, {}, 0};
-    if (parts.empty())
-        return result;
-    if (base.layers.empty())
-        return invalid("base has no layers");
     std::set<std::string> ids, layer_names;
     std::vector<Real> boundaries{0};
     for (const auto& l : base.layers) {
@@ -399,6 +395,10 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
             return invalid("invalid base layer thickness or duplicate name");
         boundaries.push_back(boundaries.back() + l.thickness);
     }
+    if (parts.empty())
+        return result;
+    if (base.layers.empty())
+        return invalid("base has no layers");
     std::set<std::string> base_names, reserved;
     for (const auto& l : base.layers) {
         base_names.insert(l.name);
@@ -670,7 +670,14 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
                     bool contained = outline.polygon.empty() && box[0] >= outline.box[0] &&
                                      box[1] >= outline.box[1] && box[2] <= outline.box[2] &&
                                      box[3] <= outline.box[3];
-                    if (!contained && a - inside > 0)
+                    // Polygon clipping sums independently rounded fragment areas.
+                    // Bound that roundoff relative to the queried area and outline
+                    // complexity; box outlines retain the exact comparison above.
+                    Real roundoff = outline.polygon.empty()
+                                        ? 0
+                                        : 32 * std::numeric_limits<Real>::epsilon() *
+                                              outline.polygon.size() * std::max(a, inside);
+                    if (!contained && a - inside > roundoff)
                         result.defects.push_back(diagnostic(Tier::C,
                                                             DefectReason::PART_OUTSIDE_OUTLINE,
                                                             region.name + "/outside",
@@ -679,6 +686,16 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
                 }
             }
         result.stack.layers.push_back(std::move(l));
+    }
+    // Bodies intentionally repeat across split pieces, but generated names must
+    // remain distinct from every output name and from the part body identifiers.
+    std::set<std::string> output_names = ids;
+    for (const auto& layer : result.stack.layers) {
+        if (!output_names.insert(layer.name).second)
+            return invalid("generated name collides with " + layer.name);
+        for (const auto& region : layer.regions)
+            if (!output_names.insert(region.name).second)
+                return invalid("generated name collides with " + region.name);
     }
     return result;
 }
