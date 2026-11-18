@@ -860,7 +860,12 @@ SE
         check(abs(net_m2-92e-6) <= 1e-12 * 92e-6,
               f'{name}: net area_m2={net_m2}, expected=92e-6, relative tolerance=1e-12')
         results[name] = (polyset.dbu_m, len(rings), signed)
+        print(f'GEOMETRY odb_norm_bridged_surface run={name} '
+              f'dbu_m={polyset.dbu_m:.17g} rings={len(rings)} twice_areas={signed} '
+              f'areas_m2={actual_m2} net_m2={net_m2:.17g}')
 
+    # Bridge feet may leave collinear vertices; compare signed areas and counts
+    # without constraining ring start points or the retained intermediate points.
     for name in ('a1','a2'):
         check(same_double(results[name][0],results['b'][0]),
               f'{name}/b: dbu_m differs: {results[name][0]} vs {results["b"][0]}')
