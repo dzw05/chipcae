@@ -78,10 +78,29 @@ foreach(asset schema/assembly-0.1.schema.json schema/stack-0.2.schema.json proto
 endforeach()
 # Installed schemas/protocol are already packaged by ChipcaeInstall.cmake.
 
-# Enable explicitly only when the linked E-ODB-3 reader is implemented.
-# This capability must not depend on a stub's diagnostic wording.
-option(CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE "Implemented assembly ODB++ reader available" OFF)
-if(CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE)
+# Derive capabilities from the linked implementation sources, not a manual
+# cache switch. CONFIGURE_DEPENDS reruns this check when a stub is replaced.
+function(chipcae_assembly_capability variable)
+    set(available ON)
+    foreach(source IN LISTS ARGN)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${PROJECT_SOURCE_DIR}/${source}")
+        file(READ "${PROJECT_SOURCE_DIR}/${source}" implementation)
+        if(implementation MATCHES "not implemented")
+            set(available OFF)
+        endif()
+    endforeach()
+    set(${variable} ${available} CACHE BOOL "Detected assembly implementation capability" FORCE)
+endfunction()
+chipcae_assembly_capability(CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE
+    geometry/ecad/src/odbpp/read_odbpp.cpp
+    geometry/ecad/src/odbpp/archive.cpp
+    geometry/ecad/src/odbpp/parse_matrix.cpp
+    geometry/ecad/src/odbpp/parse_misc.cpp
+    geometry/ecad/src/odbpp/parse_features.cpp
+    geometry/ecad/src/odbpp/map_geometry.cpp
+    geometry/ecad/src/odbpp/map_stackup.cpp)
+if(CHIPCAE_ENABLE_ECAD AND CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE)
     target_compile_definitions(chipcae-import PRIVATE CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE=1)
 endif()
 
@@ -98,7 +117,7 @@ if(NOT CHIPCAE_ENABLE_JSONCONS AND NOT TARGET yaml-cpp::yaml-cpp)
 endif()
 target_link_libraries(chipcae-import PRIVATE yaml-cpp::yaml-cpp)
 
-# SP2/SP3 are still stubs on this baseline. Enable explicitly when both land.
-option(CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE "SP2/SP3 assembly geometry implemented" OFF)
+chipcae_assembly_capability(CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE
+    geometry/src/part_slice.cpp geometry/src/assembly.cpp)
 file(GENERATE OUTPUT "${PROJECT_BINARY_DIR}/import-assets/assembly-capabilities.json"
     CONTENT "{\"geometry\": \"${CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE}\"}\n")

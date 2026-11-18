@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <random>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -316,6 +317,25 @@ bool assembly_display_only(const geometry::StepImportResult& result) {
     return std::any_of(result.body_names.begin(), result.body_names.end(), [](const auto& name) {
         return name.find("NOT_CAE_GEOMETRY") != std::string::npos;
     });
+}
+std::optional<geometry::PlacedPart>
+assembly_placement_result(geometry::Expected<geometry::PlacedPart> result,
+                          const std::string& id,
+                          const std::string& material,
+                          std::vector<geometry::Defect>& defects) {
+    if (!result) {
+        geometry::Defect d{};
+        d.tier = geometry::Tier::C;
+        d.reason = geometry::DefectReason::PART_ATTACH_INVALID;
+        d.defect_id = id + "/attach_invalid";
+        d.details = result.error().message;
+        defects.push_back(d);
+        return std::nullopt;
+    }
+    auto part = result.value();
+    part.id = id;
+    part.material = material;
+    return part;
 }
 std::string assembly_failure_message(const std::string& code, const std::string& message) {
     return std::regex_search(message, std::regex("^[A-Z_]+: ")) ? message : code + ": " + message;
@@ -710,13 +730,12 @@ int run_assembly(const ImportOptions& options) {
             } else
                 placement = FramePlacement{v["origin"].as<std::array<Real, 3>>()};
             try {
-                auto result = place(sliced.slabs, placement, base);
-                if (!result)
-                    throw std::runtime_error(result.error().message);
-                auto pp = result.value();
-                pp.id = id;
-                pp.material = p["material"].as<std::string>();
-                placed.push_back(pp);
+                auto pp = assembly_placement_result(place(sliced.slabs, placement, base),
+                                                    id,
+                                                    p["material"].as<std::string>(),
+                                                    defects);
+                if (pp)
+                    placed.push_back(*pp);
             } catch (const std::logic_error& e) {
                 if (std::string(e.what()) != "not implemented: place")
                     throw;
@@ -791,15 +810,22 @@ int run_assembly(const ImportOptions& options) {
         if (policy.result == ImportResult::ConfirmationRequired)
             return fail("IMPORT_CONFIRMATION_REQUIRED",
                         "IMPORT_CONFIRMATION_REQUIRED: B-tier defects require acceptance");
-        Cleanup output_cleanup{options.output};
-        auto written = write_stack(merged, options.output);
+        // Keep the staged stack beside its sidecars so relative references
+        // resolve identically during validation and after publication.
+        auto staged = options.output;
+        do {
+            staged = options.output;
+            staged += ".tmp." + std::to_string(std::random_device{}());
+        } while (std::filesystem::exists(staged));
+        Cleanup output_cleanup{staged};
+        auto written = write_stack(merged, staged);
         if (!written)
             return fail("INPUT_INVALID", written.error().reason);
-        auto validated =
-            mesh::load_stack(options.output, assembly_root() / "schema/stack-0.2.schema.json");
+        auto validated = mesh::load_stack(staged, assembly_root() / "schema/stack-0.2.schema.json");
         if (!validated)
             return fail("INPUT_INVALID", validated.error().reason);
         reports("OK", "");
+        std::filesystem::rename(staged, options.output);
         output_cleanup.p.clear();
         return 0;
 #endif

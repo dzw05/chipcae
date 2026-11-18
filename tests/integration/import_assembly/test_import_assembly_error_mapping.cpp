@@ -12,6 +12,8 @@ int main() {
         assembly_error_exit(chipcae::importer::assembly_failure_message("INPUT_INVALID", "x")) !=
             14)
         return 1;
+    if (assembly_error_exit("IMPORT_CONFIRMATION_REQUIRED: synthetic B-tier defect") != 6)
+        return 1;
     if (assembly_error_exit("BOGUS: x") != 1) {
         std::cerr << "unknown assembly error prefix must map to INTERNAL / exit 1\n";
         return 1;

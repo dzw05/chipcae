@@ -110,6 +110,14 @@ int main() {
         require(first == sp4_test::bytes(output), "missing sidecar changed existing output");
         require(!chipcae::importer::write_stack(model, rejected), "missing sidecar must fail");
         require(!std::filesystem::exists(rejected), "missing sidecar created output");
+        if (std::filesystem::exists("/dev/full")) {
+            // Exercise a write that opens successfully but fails during flush.
+            const auto failed =
+                chipcae::importer::write_stack(chipcae::mesh::StackModel{}, "/dev/full");
+            require(!failed, "full device must fail serialization");
+            require(failed.error().reason == "INPUT_INVALID: cannot write stack",
+                    "write failure must preserve its serialization error");
+        }
 #else
         require(false, "roundtrip test requires jsoncons headers");
 #endif

@@ -37,12 +37,28 @@ with tempfile.TemporaryDirectory() as tmp:
     stack_schema = json.loads(saved_stack_schema)
     stack_schema['properties']['layers']['items']['properties']['body'] = {'not': {}}
     stack_schema_path.write_text(json.dumps(stack_schema))
-    a.output.unlink()
+    previous = a.output.read_bytes()
     check(run(), 14)
     assert a.defects()['code'] == 'INPUT_INVALID'
     assert a.defects()['message'].startswith('INPUT_INVALID: ')
+    assert a.output.read_bytes() == previous
+    assert not list(a.root.glob("out.stack.json.tmp.*"))
+    a.output.unlink()
+    check(run(), 14)
     assert not a.output.exists()
+    assert not list(a.root.glob("out.stack.json.tmp.*"))
     stack_schema_path.write_text(saved_stack_schema)
+    # Report publication failure must also preserve a previous stack.
+    check(run(), 0)
+    previous = a.output.read_bytes()
+    csv = a.root / 'import_report.csv'
+    csv.unlink()
+    csv.mkdir()
+    check(run(), 1)
+    assert a.output.read_bytes() == previous
+    assert not list(a.root.glob("out.stack.json.tmp.*"))
+    csv.rmdir()
+    a.output.unlink()
     # Changing only the packaged schema proves it is the runtime schema owner.
     schema_path = assets / 'schema/assembly-0.1.schema.json'
     schema = json.loads(schema_path.read_text())
