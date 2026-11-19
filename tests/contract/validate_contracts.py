@@ -23,6 +23,8 @@ def schemas(root):
     yaml = dependencies(schemas=True)
     import jsonschema
     from referencing import Registry, Resource
+    sys.path.insert(0, str(root))
+    from tools.stack.polyset import read_polyset
 
     registry = Registry()
     documents = {}
@@ -40,8 +42,6 @@ def schemas(root):
             continue
         if path.name.endswith(".polyset.json"):
             # The polyset contract uses CCPOLY01, including for .json sidecars.
-            sys.path.insert(0, str(root))
-            from tools.stack.polyset import read_polyset
             polyset = read_polyset(path)
             stack_path = path.with_name(path.name.removesuffix(".polyset.json") + ".stack.json")
             stack = json.loads(stack_path.read_text(encoding="utf-8"))
