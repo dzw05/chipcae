@@ -126,7 +126,10 @@ The target reader baseline is VTK 9.7.2 with independent outward faces.
 Manifest field descriptors include exact dtype strings; `partitions.per_step`
 lists the communicator size for each step, with `solver_fixed_per_run=true`.
 The keys remain schema_version, steps[].n, fields[].location/components and
-U_mag_max; no aliases or mesh summary are emitted.
+U_mag_max; aliases are not emitted. After `set_mesh` is called, `finalize` emits
+`mesh` with exactly five JSON integer keys (`nx0`, `ny0`, `L`, `padded_cells`,
+`nz`) and the string `mesh_sha256`. Without a call to `set_mesh`, `mesh` is
+omitted.
 
 `add_summary` accepts an optional method string. S1 warpage_pv uses exactly:
 `top surface (z=max) Q2 nodes; least-squares plane w=a+bx+cy removed; PV=max-min residual`.

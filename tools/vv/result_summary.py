@@ -427,6 +427,11 @@ def _summarize(run_dir, top_rel_tol, step):
             pv = value
     mesh = manifest.get('mesh', {})
     _require(isinstance(mesh, dict), 'mesh must be an object')
+    for key in ('nx0', 'ny0', 'L', 'padded_cells', 'nz'):
+        if key in mesh:
+            value = mesh[key]
+            _require(isinstance(value, int) and not isinstance(value, bool),
+                     f'mesh.{key}: expected integer')
     if 'mesh_sha256' in mesh:
         _require(isinstance(mesh['mesh_sha256'], str), 'mesh.mesh_sha256: expected string')
     path = Path(step_file)
