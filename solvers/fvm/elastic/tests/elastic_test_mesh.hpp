@@ -1,0 +1,475 @@
+#pragma once
+#include "chipcae/material/copper_laminate.hpp"
+#include "chipcae/solvers/fvm/elastic.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <functional>
+#include <iostream>
+#include <limits>
+#include <map>
+#include <numeric>
+#include <petscsys.h>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace elastic_test {
+using namespace chipcae::solvers::fvm;
+using V = std::array<double, 3>;
+using M3 = std::array<double, 9>;
+using M6 = std::array<double, 36>;
+inline V add(V a, const V& b) {
+    for (int i = 0; i < 3; ++i)
+        a[i] += b[i];
+    return a;
+}
+inline V scale(V a, double s) {
+    for (double& v : a)
+        v *= s;
+    return a;
+}
+inline V sub(V a, const V& b) {
+    return add(a, scale(b, -1));
+}
+inline double dot(const V& a, const V& b) {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+inline V cross(const V& a, const V& b) {
+    return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+}
+inline double norm(const V& a) {
+    return std::sqrt(dot(a, a));
+}
+inline V mul(const M3& a, const V& x) {
+    V y{};
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            y[i] += a[3 * i + j] * x[j];
+    return y;
+}
+inline void require(bool ok, const std::string& why) {
+    if (!ok)
+        throw std::runtime_error(why);
+}
+inline void near(double got, double want, double atol, double rtol, const std::string& why) {
+    require(std::isfinite(got) && std::abs(got - want) <= atol + rtol * std::abs(want),
+            why + ": got=" + std::to_string(got) + " want=" + std::to_string(want));
+}
+inline double max_norm(const std::vector<V>& u) {
+    double m = 0;
+    for (const auto& v : u)
+        m = std::max(m, norm(v));
+    return m;
+}
+inline void field_near(const std::vector<V>& got,
+                       const std::vector<V>& want,
+                       double atol,
+                       double rtol,
+                       const std::string& why) {
+    require(got.size() == want.size(), why + ": array length");
+    double error = 0;
+    for (std::size_t i = 0; i < got.size(); ++i) {
+        require(
+            std::all_of(got[i].begin(), got[i].end(), [](double v) { return std::isfinite(v); }),
+            why + ": nonfinite displacement");
+        error = std::max(error, norm(sub(got[i], want[i])));
+    }
+    const double limit = atol + rtol * max_norm(want);
+    require(error <= limit,
+            why + ": max error=" + std::to_string(error) + " limit=" + std::to_string(limit));
+}
+inline std::vector<double> axis(int n, double length = 1, double ratio = 1) {
+    std::vector<double> x(static_cast<std::size_t>(n) + 1);
+    double sum = 0;
+    for (int i = 0; i < n; ++i)
+        sum += std::pow(ratio, i);
+    for (int i = 0; i < n; ++i)
+        x[i + 1] = x[i] + length * std::pow(ratio, i) / sum;
+    x.back() = length;
+    return x;
+}
+inline ElasticMesh grid(const std::vector<double>& x,
+                        const std::vector<double>& y,
+                        const std::vector<double>& z,
+                        int ranks = 1) {
+    const std::array<int, 3> n{static_cast<int>(x.size()) - 1,
+                               static_cast<int>(y.size()) - 1,
+                               static_cast<int>(z.size()) - 1};
+    const std::array<std::vector<double>, 3> axes{x, y, z};
+    auto index = [&](const std::array<int, 3>& ijk) {
+        return static_cast<std::int64_t>((ijk[0] * n[1] + ijk[1]) * n[2] + ijk[2]);
+    };
+    ElasticMesh m;
+    m.z_top = z.back();
+    for (int i = 0; i < n[0]; ++i)
+        for (int j = 0; j < n[1]; ++j)
+            for (int k = 0; k < n[2]; ++k) {
+                const std::array<int, 3> ijk{i, j, k};
+                const auto c = index(ijk);
+                m.centroid.push_back(
+                    {(x[i] + x[i + 1]) / 2, (y[j] + y[j + 1]) / 2, (z[k] + z[k + 1]) / 2});
+                m.volume.push_back((x[i + 1] - x[i]) * (y[j + 1] - y[j]) * (z[k + 1] - z[k]));
+                m.gid.push_back(1000003 - 17 * c); // Deliberately unrelated to input order.
+                m.layer.push_back(k);
+                m.rank.push_back((i * n[1] + j) % ranks); // A column stays on one rank.
+                for (int d = 0; d < 3; ++d) {
+                    for (int sign : {-1, 1}) {
+                        if (sign < 0 && ijk[d] > 0)
+                            continue;
+                        auto next = ijk;
+                        next[d] += sign;
+                        const bool internal = next[d] >= 0 && next[d] < n[d];
+                        ElasticFace f;
+                        f.lo = c;
+                        f.hi = internal ? index(next) : -1;
+                        f.side = internal ? -1 : 2 * d + (sign > 0 ? 1 : 0);
+                        f.centroid = m.centroid.back();
+                        f.centroid[d] = axes[d][ijk[d] + (sign > 0 ? 1 : 0)];
+                        f.normal[d] = sign;
+                        f.area = 1;
+                        for (int q = 0; q < 3; ++q)
+                            if (q != d)
+                                f.area *= axes[q][ijk[q] + 1] - axes[q][ijk[q]];
+                        m.faces.push_back(f);
+                        m.is_embedded.push_back(0);
+                    }
+                }
+            }
+    return m;
+}
+inline ElasticMesh grid(int nx, int ny, int nz, int ranks = 1) {
+    return grid(axis(nx), axis(ny), axis(nz), ranks);
+}
+inline V center(const ElasticMesh& m) {
+    V c{};
+    for (const auto& p : m.centroid)
+        c = add(c, p);
+    return scale(c, 1.0 / static_cast<double>(m.centroid.size()));
+}
+inline double length(const ElasticMesh& m) {
+    V lo = m.centroid.front(), hi = lo;
+    for (const auto& f : m.faces)
+        for (int d = 0; d < 3; ++d) {
+            lo[d] = std::min(lo[d], f.centroid[d]);
+            hi[d] = std::max(hi[d], f.centroid[d]);
+        }
+    const auto extent = sub(hi, lo);
+    return *std::max_element(extent.begin(), extent.end());
+}
+// Test-only dense elimination. The constitutive reference never calls solver algebra.
+inline std::vector<double> linear_solve(std::vector<double> a, std::vector<double> b) {
+    const auto n = b.size();
+    require(a.size() == n * n, "reference matrix shape");
+    for (std::size_t k = 0; k < n; ++k) {
+        std::size_t p = k;
+        for (std::size_t i = k + 1; i < n; ++i)
+            if (std::abs(a[i * n + k]) > std::abs(a[p * n + k]))
+                p = i;
+        require(std::abs(a[p * n + k]) > 1e-30, "singular reference matrix");
+        for (std::size_t j = k; j < n; ++j)
+            std::swap(a[k * n + j], a[p * n + j]);
+        std::swap(b[k], b[p]);
+        const double pivot = a[k * n + k];
+        for (std::size_t j = k; j < n; ++j)
+            a[k * n + j] /= pivot;
+        b[k] /= pivot;
+        for (std::size_t i = 0; i < n; ++i) {
+            if (i == k)
+                continue;
+            const double v = a[i * n + k];
+            for (std::size_t j = k; j < n; ++j)
+                a[i * n + j] -= v * a[k * n + j];
+            b[i] -= v * b[k];
+        }
+    }
+    return b;
+}
+inline M6 inverse(const M6& s) {
+    M6 c{};
+    for (int j = 0; j < 6; ++j) {
+        std::vector<double> e(6);
+        e[j] = 1;
+        const auto col = linear_solve({s.begin(), s.end()}, e);
+        for (int i = 0; i < 6; ++i)
+            c[6 * i + j] = col[i];
+    }
+    return c;
+}
+struct Material {
+    M6 C;
+    V alpha;
+};
+inline Material isotropic(double E = 25e9, double nu = 0.3, double alpha = 1e-5) {
+    M6 c{};
+    const double mu = E / (2 * (1 + nu));
+    const double lambda = E * nu / ((1 + nu) * (1 - 2 * nu));
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            c[6 * i + j] = lambda + (i == j ? 2 * mu : 0);
+    for (int i = 3; i < 6; ++i)
+        c[6 * i + i] = mu;
+    return {c, {alpha, alpha, alpha}};
+}
+inline Material laminate(double f) {
+    double p[9]{}, a[3]{};
+    chipcae::material::copper_laminate(25e9, 0.3, 110e9, 0.34, 1e-5, 17e-6, f, p, a);
+    M6 s{};
+    for (int i = 0; i < 3; ++i)
+        s[6 * i + i] = 1 / p[i];
+    s[1] = s[6] = -p[3] / p[0];
+    s[2] = s[12] = -p[4] / p[0];
+    s[8] = s[13] = -p[5] / p[1];
+    s[21] = 1 / p[8];
+    s[28] = 1 / p[7];
+    s[35] = 1 / p[6];
+    return {inverse(s), {a[0], a[1], a[2]}};
+}
+inline Material orthotropic() {
+    M6 s{};
+    s[0] = 1 / 41e9;
+    s[7] = 1 / 27e9;
+    s[14] = 1 / 13e9;
+    s[1] = s[6] = -0.19 / 41e9;
+    s[2] = s[12] = -0.13 / 41e9;
+    s[8] = s[13] = -0.17 / 27e9;
+    s[21] = 1 / 3e9;
+    s[28] = 1 / 5e9;
+    s[35] = 1 / 7e9;
+    return {inverse(s), {7e-6, 11e-6, 19e-6}};
+}
+inline ElasticProblem problem(const ElasticMesh& m, Material mat = isotropic(), double dT = 80) {
+    ElasticProblem p;
+    p.C.assign(m.volume.size(), mat.C);
+    p.alpha.assign(m.volume.size(), mat.alpha);
+    p.dT.assign(m.volume.size(), dT);
+    p.rtol = 1e-13;
+    p.max_iter = 10000;
+    return p;
+}
+inline void prescribe(ElasticProblem& p, const ElasticMesh& m, const M3& a, const V& b = {}) {
+    p.support = ElasticProblem::Support::Fixed;
+    for (std::size_t f = 0; f < m.faces.size(); ++f)
+        if (m.faces[f].hi < 0 && !m.is_embedded[f])
+            p.prescribed.push_back(
+                {static_cast<std::int64_t>(f), add(mul(a, m.faces[f].centroid), b)});
+}
+inline ElasticResult solve(const ElasticMesh& m, const ElasticProblem& p, MPI_Comm comm) {
+    auto r = solve_elastic(m, p, comm);
+    int local = r ? 1 : 0, all = 0;
+    MPI_Allreduce(&local, &all, 1, MPI_INT, MPI_MIN, comm);
+    require(all != 0,
+            r ? "another rank rejected valid elastic problem"
+              : "solve_elastic must succeed: " + r.error().reason);
+    return std::move(r.value());
+}
+inline void check_output(const ElasticMesh& m, const ElasticProblem& p, const ElasticResult& r) {
+    require(r.U_cell.size() == m.volume.size(), "U_cell preserves input count/order");
+    for (const auto& u : r.U_cell)
+        for (double v : u)
+            require(std::isfinite(v), "finite cell displacement");
+    require(r.U_face.size() == m.faces.size(), "U_face preserves face count/order");
+    require(r.face_prescribed.size() == m.faces.size(), "face_prescribed length");
+    require(std::isfinite(r.residual) && r.residual >= 0, "finite nonnegative residual");
+    require(r.iterations >= 0 && r.iterations <= p.max_iter, "iteration bounds");
+    require(r.warpage_method == "FVM top-face centroids; least-squares plane removal",
+            "warpage method");
+    require(r.U_mag_method == "FVM cell centers", "U magnitude method");
+    near(r.U_mag_max, max_norm(r.U_cell), 1e-30, 1e-13, "cell magnitude maximum");
+    require(std::isfinite(r.warpage_pv) && r.warpage_pv >= 0, "finite plane removal");
+    std::vector<V> samples;
+    for (std::size_t i = 0; i < m.faces.size(); ++i) {
+        const auto& f = m.faces[i];
+        if (f.hi < 0 && (f.side == 5 || (m.is_embedded[i] && f.normal[2] > 0.99 &&
+                                         f.centroid[2] >= m.z_top - 1e-13)))
+            samples.push_back({f.centroid[0], f.centroid[1], r.U_face[i][2]});
+        bool expected = false;
+        if (p.support == ElasticProblem::Support::Fixed && f.hi < 0 && !m.is_embedded[i]) {
+            expected =
+                std::find(p.fixed_side.begin(), p.fixed_side.end(), f.side) != p.fixed_side.end() ||
+                std::find(p.fixed_layer.begin(), p.fixed_layer.end(), m.layer[f.lo]) !=
+                    p.fixed_layer.end();
+        }
+        for (const auto& bc : p.prescribed)
+            if (bc.face == static_cast<std::int64_t>(i)) {
+                expected = true;
+                // Required exact prescribed output (including signed/zero components).
+                require(r.U_face[i] == bc.U, "prescribed face value returned exactly");
+            }
+        require((r.face_prescribed[i] != 0) == expected,
+                "prescribed flag for face " + std::to_string(i));
+        for (double v : r.U_face[i])
+            require(std::isfinite(v), "finite face displacement");
+    }
+    field_near(r.top_samples, samples, 0, 1e-14, "top sample selection and order");
+}
+
+// Clip convex box polygons analytically against n.x <= offset. Face moments use
+// exact triangle formulas; volumes/centroids use tetrahedra, never voxel sampling.
+struct Polygon {
+    std::vector<V> v;
+    int side = -1;
+    bool embedded = false;
+};
+inline std::vector<Polygon> box(const V& lo, const V& hi) {
+    std::vector<Polygon> out;
+    for (int d = 0; d < 3; ++d)
+        for (int sign : {-1, 1}) {
+            Polygon f;
+            f.side = 2 * d + (sign > 0 ? 1 : 0);
+            const int u = (d + 1) % 3, v = (d + 2) % 3;
+            for (auto ij : {std::array<int, 2>{0, 0}, {1, 0}, {1, 1}, {0, 1}}) {
+                V p = lo;
+                p[d] = sign > 0 ? hi[d] : lo[d];
+                p[u] = ij[0] ? hi[u] : lo[u];
+                p[v] = ij[1] ? hi[v] : lo[v];
+                f.v.push_back(p);
+            }
+            if (sign < 0)
+                std::reverse(f.v.begin(), f.v.end());
+            out.push_back(std::move(f));
+        }
+    return out;
+}
+inline std::vector<Polygon> clip(std::vector<Polygon> faces, const V& n, double offset) {
+    std::vector<Polygon> out;
+    std::vector<V> cap;
+    for (const auto& f : faces) {
+        Polygon g{{}, f.side, false};
+        for (std::size_t i = 0; i < f.v.size(); ++i) {
+            const V a = f.v[i], b = f.v[(i + 1) % f.v.size()];
+            const double da = dot(n, a) - offset, db = dot(n, b) - offset;
+            if (da <= 0)
+                g.v.push_back(a);
+            if ((da < 0 && db > 0) || (da > 0 && db < 0)) {
+                const auto p = add(a, scale(sub(b, a), da / (da - db)));
+                g.v.push_back(p);
+                if (std::none_of(cap.begin(), cap.end(), [&](const V& q) {
+                        return norm(sub(p, q)) < 1e-13;
+                    }))
+                    cap.push_back(p);
+            }
+        }
+        if (g.v.size() >= 3)
+            out.push_back(std::move(g));
+    }
+    if (cap.size() >= 3) {
+        V c{};
+        for (const auto& p : cap)
+            c = add(c, p);
+        c = scale(c, 1.0 / static_cast<double>(cap.size()));
+        V u = cross(n, {0, 0, 1});
+        if (norm(u) < 1e-10)
+            u = cross(n, {0, 1, 0});
+        u = scale(u, 1 / norm(u));
+        const auto v = cross(n, u);
+        std::sort(cap.begin(), cap.end(), [&](const V& a, const V& b) {
+            const auto pa = sub(a, c), pb = sub(b, c);
+            return std::atan2(dot(pa, v), dot(pa, u)) < std::atan2(dot(pb, v), dot(pb, u));
+        });
+        out.push_back({cap, -1, true});
+    }
+    return out;
+}
+inline std::pair<V, V> face_moments(const Polygon& f) {
+    V av{}, moment{};
+    double area = 0;
+    for (std::size_t i = 1; i + 1 < f.v.size(); ++i) {
+        const auto a = scale(cross(sub(f.v[i], f.v[0]), sub(f.v[i + 1], f.v[0])), 0.5);
+        const double w = norm(a);
+        av = add(av, a);
+        area += w;
+        moment = add(moment, scale(add(add(f.v[0], f.v[i]), f.v[i + 1]), w / 3));
+    }
+    return {av, scale(moment, 1 / area)};
+}
+inline ElasticMesh clipped(int n, double offset = 1.4, int ranks = 1) {
+    ElasticMesh m;
+    m.z_top = 1;
+    const V normal{1, 0.35, 0.2};
+    using Key = std::vector<std::array<long long, 3>>;
+    std::map<Key, std::size_t> known;
+    const auto a = axis(n);
+    for (int i = 0; i < n; ++i)
+        for (int j = 0; j < n; ++j)
+            for (int k = 0; k < n; ++k) {
+                auto poly =
+                    clip(box({a[i], a[j], a[k]}, {a[i + 1], a[j + 1], a[k + 1]}), normal, offset);
+                if (poly.empty())
+                    continue;
+                V ref{(a[i] + a[i + 1]) / 2, (a[j] + a[j + 1]) / 2, (a[k] + a[k + 1]) / 2};
+                double volume = 0;
+                V moment{};
+                for (const auto& f : poly)
+                    for (std::size_t q = 1; q + 1 < f.v.size(); ++q) {
+                        const double w =
+                            dot(sub(f.v[0], ref), cross(sub(f.v[q], ref), sub(f.v[q + 1], ref))) /
+                            6;
+                        volume += w;
+                        moment = add(moment,
+                                     scale(add(add(add(ref, f.v[0]), f.v[q]), f.v[q + 1]), w / 4));
+                    }
+                require(volume > 0, "clipped fixture positive exact volume");
+                const auto cell = static_cast<std::int64_t>(m.volume.size());
+                m.volume.push_back(volume);
+                m.centroid.push_back(scale(moment, 1 / volume));
+                m.gid.push_back(1000003 - 17 * ((i * n + j) * n + k));
+                m.layer.push_back(k);
+                m.rank.push_back((i * n + j) % ranks);
+                for (const auto& f : poly) {
+                    auto [av, fc] = face_moments(f);
+                    require(norm(av) > 0, "clipped fixture positive face area");
+                    Key key;
+                    for (const auto& p : f.v)
+                        key.push_back({std::llround(p[0] * 1e12),
+                                       std::llround(p[1] * 1e12),
+                                       std::llround(p[2] * 1e12)});
+                    std::sort(key.begin(), key.end());
+                    auto it = known.find(key);
+                    if (it != known.end()) {
+                        auto& old = m.faces[it->second];
+                        require(old.hi < 0, "clipped fixture manifold face");
+                        old.hi = cell;
+                        old.side = -1;
+                    } else {
+                        known.emplace(std::move(key), m.faces.size());
+                        m.faces.push_back(
+                            {cell, -1, f.side, norm(av), scale(av, 1 / norm(av)), fc});
+                        m.is_embedded.push_back(f.embedded ? 1 : 0);
+                    }
+                }
+            }
+    return m;
+}
+
+struct Suite {
+    MPI_Comm comm;
+    int rank = 0, failures = 0, cases = 0;
+    explicit Suite(MPI_Comm c) : comm(c) { MPI_Comm_rank(comm, &rank); }
+    void run(const std::string& name, const std::function<void()>& f) {
+        int failed = 0;
+        std::string why;
+        try {
+            f();
+        } catch (const std::exception& e) {
+            failed = 1;
+            why = e.what();
+        }
+        int any = 0;
+        MPI_Allreduce(&failed, &any, 1, MPI_INT, MPI_MAX, comm);
+        ++cases;
+        failures += any;
+        if (failed)
+            std::cerr << "FAIL [rank " << rank << "] " << name << ": " << why << '\n';
+        if (!any && rank == 0)
+            std::cout << "PASS " << name << '\n';
+    }
+    int finish() const {
+        if (rank == 0)
+            std::cout << cases << " cases, " << failures << " failures\n";
+        return failures == 0 ? 0 : 1;
+    }
+};
+} // namespace elastic_test
