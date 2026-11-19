@@ -1,73 +1,35 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# DEMO-GATE CalculiX generator and independent validator
+# DEMO-GATE CalculiX reference attempt
 
-**PR #179 disposition (2026-11-19): generator/validator delivery; reference
-qualification deferred to V&V under the brief's scope revision.**
-The original qualified-reference deliverable remains incomplete. This PR ships
-the generator, independent validator and their regressions. Qualified
-`REFERENCE.json`, archived L1 decks and formal W_bfp/T_max/T_top_min reference
-values and real-reference acceptance belong to the follow-up qualification card.
-Green generator tests establish neither reference qualification nor a passing
-chipcae comparison.
-
-The written authorization is the supplied V-INT-6 brief's section
-**“PR #179 本轮评审范围修订（2026-11-19）”**. It explicitly defers qualified
-`REFERENCE.json`, committed L1 decks, formal reference values and real-reference
-acceptance, and authorizes explicitly selecting
-`CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=OFF` for this generator/validator
-delivery. This revision supersedes the original
-requirement to publish a qualified reference in this PR. It requires the JSON
-test to run complete synthetic validator fixtures and negative checks, and the
-regeneration test to run real L1 generation and generator regressions when
-dependencies are available. ON and direct script execution retain strict
-acceptance; any artifact present under OFF must also pass all original checks.
-The original reference deliverable remains incomplete.
-
-The complete supplied amendment is reproduced verbatim in the
-[scope amendment below](#supplied-brief-scope-amendment), with its SHA-256,
-so the authorization is available in the reviewed repository itself.
-
-Real-reference acceptance is **ON by default**. A clean default configuration
-fails while the qualified reference deliverable is missing. The amended scope
-allows an explicit OFF configuration for generator/validator verification;
-that opt-out must be selected deliberately and does not qualify a reference.
+**V-INT-6 acceptance: FAIL — the governing brief's reference deliverable is
+unfulfilled.** No qualified `REFERENCE.json`, archived L1 decks or formal
+W_bfp/T_max/T_top_min reference values are published. The generator and validator
+regressions do not complete the card or establish a passing chipcae comparison.
 
 **Candidate status: 参考不合格 — prescribed warpage sequence is nonmonotone.**
-L3 mechanics now completes within the unchanged memory guard, and all three
-levels plus the C3D20 cross-check have been solved. The complete candidate
-fails the original monotonicity/order criteria. No qualified `REFERENCE.json`,
-archived L1 decks or formal reference values are published. These candidate
-values must not be used to judge chipcae results.
+The external qualification archive contains complete L1/L2/L3, L1 full-model
+and L3 C3D20 cross-check results. Criteria (a) and (b) fail; criteria (c)–(f)
+passed in that attempt. Candidate values must not populate
+`demo_gate.reference_w_bfp_m` or judge chipcae. The brief requires a nonmonotone
+result to be reported to V&V; its meshes, QoI definitions and thresholds remain
+unchanged. Qualification requires a numerical resolution under (a)–(f), followed
+by publication of the qualified artifact, its L1 decks and formal values.
 
-Exactly two CTests are registered unconditionally: `vvccx_reference_json` and
-`vvccx_regen_l1`. Their configuration follows the revised brief:
+Both CTests are registered unconditionally, with no acceptance opt-out:
 
-| Configuration | `vvccx_reference_json` | `vvccx_regen_l1` |
-|---|---|---|
-| `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=ON` (default) | Requires the qualified artifact and archived L1 decks, independently recomputing all original acceptance criteria; also runs all validator regressions | Requires L2/L3 recorded deck hashes and real L1 byte/QoI comparisons with the artifact; also runs all generator regressions |
-| `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=OFF` (explicit opt-out) | Runs complete synthetic validator fixtures and negative checks using only the standard library; any present artifact also requires full acceptance | Runs generator, parser, failure and direct/iterative solver regressions; defers only artifact comparisons while no artifact is published |
+- `vvccx_reference_json` requires the qualified artifact and archived L1 decks,
+  independently recomputes (a)–(f), and runs synthetic validator regressions and
+  negative checks using only the standard library. It never skips.
+- `vvccx_regen_l1` requires L2/L3 recorded deck hashes and real L1 byte/QoI
+  comparisons with the artifact, alongside all generator regressions. Missing
+  artifacts fail before optional solver dependency checks.
 
-Direct script execution defaults to strict acceptance. CMake sets
-`CHIPCAE_DEMO_GATE_TEST_MODE=generator` under OFF and `reference` under ON.
-Only generator mode with an absent artifact defers artifact comparisons.
-Any present artifact, including an invalid file, directory or dangling symlink,
-requires full acceptance in both modes. Under strict acceptance, a missing
-artifact fails before optional solver dependency checks. The JSON test never skips.
-Only absent ccx, absent numpy/scipy or a solver-version mismatch against a
-published artifact may return 77 for regeneration; all applicable regressions
-run first, and failures take precedence. Individual `self.skipTest()` calls are
-collected by `unittest`; the script's final runner exits 77 if any tests skipped
-and none failed, 1 on failure, and 0 when all selected tests passed.
-Without an artifact, generator regressions use the queried solver version;
-there is no fallback version pin.
-All original acceptance assertions, numerical thresholds and mesh levels remain.
-
-V&V handoff for V-INT-6 / PR #179: the original (a)/(b) failure and complete
-candidate evidence in the external qualification archive remain open for
-numerical disposition. The follow-up must resolve qualification under (a)–(f),
-publish only a qualified artifact and its real L1 decks, and run the mandatory
-acceptance tests and real-artifact mutation/restore check. No candidate value from this PR may
-populate `demo_gate.reference_w_bfp_m` or gate chipcae before that handoff closes.
+Legacy test-mode environment variables cannot filter either suite. Only absent
+ccx, absent numpy/scipy or a solver-version mismatch against the recorded
+artifact may skip regeneration checks. All applicable regressions run first;
+failures take precedence over skips. The final runner exits 77 only if tests
+skipped and none failed, 1 on failure, and 0 when all tests passed. Dependency
+skips do not defer artifact acceptance.
 
 The model is derived from the original bytes of
 `examples/demo_gate/{case,stack,materials,profile}.json`; each hash is recorded.
@@ -239,25 +201,16 @@ The recorded solver is `This is Version 2.23`; version-only exit 201 is accepted
 Use the shared build-slot shim on PATH, plain command names and two jobs:
 
 ```sh
-cmake -S . -B build-vvccx -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_BUILD_TESTS=ON -U CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE
-ctest --test-dir build-vvccx -R '^vvccx_(reference_json|regen_l1)$' --output-on-failure -j2
-```
-
-Clearing the cached option selects the ON default even in an existing build
-directory. Both acceptance tests currently fail because no qualified artifact
-is published. To verify the authorized generator/validator delivery explicitly:
-
-```sh
-cmake -S . -B build-vvccx -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_BUILD_TESTS=ON -DCHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=OFF
+cmake -S . -B build-vvccx -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_BUILD_TESTS=ON
 cmake --build build-vvccx -j2
-ctest --test-dir build-vvccx -R '^vvccx_(reference_json|regen_l1)$' --output-on-failure
+ctest --test-dir build-vvccx -R '^vvccx_(reference_json|regen_l1)$' --output-on-failure -j2
 ctest --test-dir build-vvccx --output-on-failure -j2
 ```
 
-OFF exercises the authorized generator/validator delivery without claiming
-reference qualification. To restore strict acceptance, configure with
-`-DCHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=ON`, clear the cached option as
-above, or run the scripts directly with `CHIPCAE_DEMO_GATE_TEST_MODE` unset:
+Both acceptance tests currently fail because the qualified artifact is absent.
+This is the required failing result for the unfulfilled reference delivery;
+passing validator fixtures cannot satisfy acceptance. Direct script execution
+runs the same unconditional checks:
 
 ```sh
 python3 tests/vv/calculix_demo_gate/test_reference_json.py
@@ -272,41 +225,16 @@ heat-source, temperature-transfer, resource and signed heat-balance evidence.
 This checks real solver evidence without establishing three-level qualification.
 The separate mocked-solve artifact test checks producer/validator schema
 compatibility using synthetic data; it provides no solver or qualification evidence.
-The real qualified-artifact mutation/restore check remains blocked because there is no
-qualified baseline to restore; synthetic validator mutations do not replace it.
+The real qualified-artifact mutation/restore check remains blocked because there
+is no qualified baseline to restore; synthetic mutations do not replace it.
 
 The earlier complete generation command exited 0 and wrote the unqualified
 assessment only to the work archive. The independent validator, pointed at that
 archive and its real L1 deck bytes, rejected it specifically for nonmonotone
-warpage. This operational completion does not qualify the candidate.
-
-Build/test commands, exit codes and verification counts are recorded in the
-external task log. Generator regressions and strict missing-artifact rejection
-must both be checked; passing generator tests do not qualify a reference.
+warpage. Operational completion does not qualify the candidate. The external
+task log records verification commands, exit codes and the outstanding V&V
+qualification failure.
 
 This card does not change the night driver, chipcae comparison postprocessing,
-or product code. Reference qualification remains outstanding pending V&V
-disposition. Loading a qualified reference in the night driver and aligning its
-W_bfp comparison with this 81×81 algorithm require the follow-up card.
-
-## Supplied brief scope amendment
-
-Source: the task-supplied `v-int-calculix-demo-gate-ref.md`, final section
-“PR #179 本轮评审范围修订（2026-11-19）”. The following block copies that complete
-section verbatim. SHA-256 of its UTF-8 bytes, including the final newline:
-`89e778fec728fe88d12b2433696c922bf5fae80210fe75c46199a38f1281fe77`.
-This amendment governs this PR's generator/validator delivery and retains all
-original numerical qualification criteria for the follow-up reference.
-
-```markdown
-## PR #179 本轮评审范围修订（2026-11-19）
-
-本轮用户任务所附 CodeBuddy MUST 1 明确允许“explicitly descope the reference from this PR”。本 PR 采用此修复路径：交付生成器、独立校验器及其回归；合格 REFERENCE.json、入库 L1 deck、正式 W_bfp/T_max/T_top_min 参考值及真实参考验收留待后续资格卡。本卡原始参考交付尚未完成，绿色生成器测试不能作为参考合格或 chipcae 比较通过的依据。
-
-- 保留且仅注册 `vvccx_reference_json` 与 `vvccx_regen_l1`。`CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=OFF` 为本 PR 明确的生成器/校验器测试配置；前者必跑标准库完整合成夹具及负向校验，后者在依赖可用时跑真实 L1 生成、deck 确定性及生成器回归。
-- `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=ON` 执行原始真实参考验收；缺少 REFERENCE.json 必须失败，不得按产物缺失 skip。直接运行两个脚本默认也采用严格参考验收。生成器配置下若出现产物，同样必须通过全部原始验收断言。
-- 所有 (a)–(f) 数值判据、网格层级和原始验收断言均保留；不放宽 `1e-6` 对称性阈值，不以合成夹具冒充参考。
-- 新 DEMO-GATE 产物 schema 标识改为 `chipcae.vv.demo_gate.reference/0.1`，避免与已有 trilayer 的不同字段契约冲突；trilayer 不改。
-
-仓库内的同等范围说明及重现命令见 `tools/vv/calculix_demo_gate/README.md`。本修订不授权修改产品、样例、共享工具或 CI，也不授权 push。
-```
+or product code. Loading a qualified reference in the night driver and aligning
+its W_bfp comparison with this 81×81 algorithm require a separate card.

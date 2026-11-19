@@ -5,8 +5,7 @@
 Only absent ccx, absent numpy/scipy, or a different ccx version skips tests.
 All applicable regressions run before returning 77 for dependency skips, and
 failures take precedence. Missing reference artifacts fail artifact comparisons.
-The CMake generator configuration defers artifact comparisons only while no
-artifact is published; all generator regressions remain enabled.
+Artifact comparisons and generator regressions are always enabled.
 Internal parser contract used by these tests: parse_results(path) returns
 {nodes: {id: (x,y,z)}, temperature_blocks: [{id: T}, ...],
 displacement_blocks: [{id: (ux,uy,uz)}, ...]}. Blocks remain separate and in
@@ -88,9 +87,7 @@ class DemoGateRegenTest(unittest.TestCase):
         ) and dependencies() is None:
             self.skipTest("real L1 solve dependencies unavailable; see dependency diagnostic")
 
-    def test_generator_configuration_defers_only_absent_artifact_comparisons(self):
-        comparisons = {"test_l2_l3_deck_hashes_match_recorded_values_without_solver",
-                       "test_l1_deck_bytes_and_recomputed_qois"}
+    def test_artifact_comparisons_run_regardless_of_legacy_mode_environment(self):
         with tempfile.TemporaryDirectory() as directory, patch(
             __name__ + ".ARTIFACT_DIR", Path(directory)
         ):
@@ -110,8 +107,6 @@ class DemoGateRegenTest(unittest.TestCase):
                     suite = unittest.TestLoader().loadTestsFromModule(sys.modules[__name__])
                     names = {test._testMethodName for group in suite for test in group}
                     expected = set(unittest.TestLoader().getTestCaseNames(DemoGateRegenTest))
-                    if mode == "generator" and not present:
-                        expected -= comparisons
                     self.assertEqual(names, expected)
 
     def test_missing_artifact_fails_comparisons_before_dependency_skips(self):
@@ -119,17 +114,20 @@ class DemoGateRegenTest(unittest.TestCase):
                        "test_l1_deck_bytes_and_recomputed_qois"}
         with tempfile.TemporaryDirectory() as directory, patch(
             __name__ + ".ARTIFACT_DIR", Path(directory)
-        ), patch.dict(os.environ, {"CHIPCAE_DEMO_GATE_TEST_MODE": "reference"}), patch.object(
-            shutil, "which", return_value=None
-        ):
-            suite = unittest.TestLoader().loadTestsFromModule(sys.modules[__name__])
-            checks = unittest.TestSuite(test for group in suite for test in group
-                                        if test._testMethodName in comparisons)
-            result = unittest.TestResult()
-            checks.run(result)
-            self.assertEqual(result.testsRun, 2)
-            self.assertEqual(len(result.failures), 2)
-            self.assertFalse(result.errors or result.skipped)
+        ), patch.object(shutil, "which", return_value=None):
+            for mode in (None, "reference", "generator"):
+                with self.subTest(mode=mode), patch.dict(os.environ):
+                    os.environ.pop("CHIPCAE_DEMO_GATE_TEST_MODE", None)
+                    if mode is not None:
+                        os.environ["CHIPCAE_DEMO_GATE_TEST_MODE"] = mode
+                    suite = unittest.TestLoader().loadTestsFromModule(sys.modules[__name__])
+                    checks = unittest.TestSuite(test for group in suite for test in group
+                                                if test._testMethodName in comparisons)
+                    result = unittest.TestResult()
+                    checks.run(result)
+                    self.assertEqual(result.testsRun, 2)
+                    self.assertEqual(len(result.failures), 2)
+                    self.assertFalse(result.errors or result.skipped)
 
     def assert_regenerated_deck_hashes(self, level):
         module = self.generator()
@@ -675,20 +673,6 @@ class DemoGateRegenTest(unittest.TestCase):
                 denominator = reference if key == "W_bfp_m" else reference - 298.15
                 self.assertGreater(abs(denominator), 0)
                 self.assertLessEqual(abs(actual - reference) / abs(denominator), 1e-6, key)
-
-
-def load_tests(loader, standard_tests, pattern):
-    from tests.vv.calculix_demo_gate.test_reference_json import reference_acceptance_required
-
-    if reference_acceptance_required(ARTIFACT_DIR):
-        return standard_tests
-    comparisons = {"test_l2_l3_deck_hashes_match_recorded_values_without_solver",
-                   "test_l1_deck_bytes_and_recomputed_qois"}
-    print("DEMO-GATE generator configuration: artifact comparisons deferred to V&V qualification.")
-    return unittest.TestSuite(
-        unittest.TestSuite(test for test in group if test._testMethodName not in comparisons)
-        for group in standard_tests
-    )
 
 
 if __name__ == "__main__":
