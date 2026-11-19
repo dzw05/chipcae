@@ -631,6 +631,7 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             lookup.base = &m;
             lookup.layer = static_cast<std::size_t>(layer - inputs.stack.layers.begin());
             if (layer->copper) {
+                has_copper = true;
                 lookup.metal = &materials.at(layer->copper->metal);
             }
         }
@@ -668,10 +669,6 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                 f = arrays.copper_phi[static_cast<std::size_t>(copper) * columns +
                                       static_cast<std::size_t>(gid) / nz];
             fractions[e] = f;
-            // A zero-metal stack is exactly the isotropic matrix problem. Keep
-            // its assembly path identical to an explicit stack: separate
-            // equivalent stiffness assemblies amplify roundoff in bending modes.
-            has_copper |= f > 0;
             conductivities[e] = {base.k, base.k, base.k};
             // Missing conductivity is legal for mechanical-only legacy cards.
             // Omit that diagnostic for the whole run instead of inventing a value.
