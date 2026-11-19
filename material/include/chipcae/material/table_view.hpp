@@ -31,6 +31,10 @@ struct TableView {
                                                bool* clamped = nullptr) const {
         if (c < 0 || c >= columns || n == 0 || !Kokkos::isfinite(T))
             return StatusCode::Failed;
+        if (n == 1) {
+            v = values(c);
+            return StatusCode::Ok;
+        }
         if (T < t(0) || T > t(n - 1)) {
             if (extrapolation == Extrapolation::Error)
                 return StatusCode::OutOfRange;

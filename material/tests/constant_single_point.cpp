@@ -1,4 +1,6 @@
 #include "chipcae/material/schema.hpp"
+#include "chipcae/material/table_view.hpp"
+#include "chipcae/material/thermo_elastic.hpp"
 
 #include <Kokkos_Core.hpp>
 #include <cstddef>
@@ -224,6 +226,99 @@ void bad_inputs(const TemperatureTable& table) {
         require(table.evaluate(column, 250, value) == StatusCode::Failed,
                 "invalid column must return Failed");
 }
+
+// Absolute + relative tolerance for the table integrals and constitutive response.
+KOKKOS_INLINE_FUNCTION bool near(Real actual, Real expected) {
+    return Kokkos::abs(actual - expected) <= 1e-10 + 5.5e-6 * Kokkos::abs(expected);
+}
+
+template <class MS>
+KOKKOS_INLINE_FUNCTION int single_point_view_checks(const TableView<MS>& table) {
+    const Kokkos::Array<Real, 2> expected = {1e9, 0.3};
+    const Kokkos::Array<Real, 4> temperatures = {150, 250, 350, 250 + 1e-9};
+    for (int column = 0; column < 2; ++column) {
+        for (Real temperature : temperatures) {
+            Real value = 0;
+            bool clamped = false;
+            if (table.evaluate(column, temperature, value, &clamped) != StatusCode::Ok ||
+                !near(value, expected[column]) || clamped)
+                return 1;
+        }
+        // Span the knot, reverse the bounds, stay on either side, and use equal bounds.
+        const Kokkos::Array<Kokkos::Array<Real, 3>, 5> intervals = {
+            {{150, 350, 200}, {350, 150, -200}, {100, 200, 100}, {300, 400, 100}, {300, 300, 0}}};
+        for (const auto& interval : intervals) {
+            Real value = 0;
+            if (table.integral(column, interval[0], interval[1], value) != StatusCode::Ok ||
+                !near(value, interval[2] * expected[column]))
+                return 2;
+        }
+    }
+    Real value = 0;
+    for (int column : Kokkos::Array<int, 2>{-1, 2})
+        if (table.evaluate(column, 150, value) != StatusCode::Failed)
+            return 3;
+    const Kokkos::Array<Real, 3> nonfinite = {std::numeric_limits<Real>::quiet_NaN(),
+                                              std::numeric_limits<Real>::infinity(),
+                                              -std::numeric_limits<Real>::infinity()};
+    for (Real temperature : nonfinite)
+        if (table.evaluate(0, temperature, value) != StatusCode::Failed)
+            return 4;
+    return 0;
+}
+
+template <class MS>
+ThermoElastic<MS> single_point_model(Extrapolation extrapolation) {
+    const auto params = parse_material_json(
+        card_with_policies("constant", "constant", extrapolation, extrapolation));
+    return ThermoElastic<MS>(params.elastic_symmetry,
+                             params.elastic_table,
+                             ThermalStrain<MS>(params.thermal, params.cte_table));
+}
+
+template <class MS>
+KOKKOS_INLINE_FUNCTION bool single_point_model_checks(const ThermoElastic<MS>& model) {
+    const Kokkos::Array<Real, 3> temperatures = {150, 300, 350};
+    const Kokkos::Array<Real, 3> thermal_strains = {-0.0015, 0, 0.0005};
+    // Zero total strain: sigma = -E * alpha * (T - T_sf) / (1 - 2 * nu).
+    const Kokkos::Array<Real, 3> stresses = {3.75e6, 0, -1.25e6};
+    StepContext ctx{};
+    ctx.dt = 1;
+    for (int i = 0; i < 3; ++i) {
+        PointInput in{};
+        in.T_n = 300;
+        in.T_np1 = temperatures[i];
+        PointOutput out{};
+        if (model.update(ctx, in, ConstStateRef{}, StateRef{}, out) != StatusCode::Ok ||
+            out.status.code != StatusCode::Ok)
+            return false;
+        for (int d = 0; d < 6; ++d)
+            if (!near(out.thermal_strain[d], d < 3 ? thermal_strains[i] : 0) ||
+                !near(out.stress[d], d < 3 ? stresses[i] : 0))
+                return false;
+    }
+    return true;
+}
+
+template <class ExecutionSpace>
+void single_point_kernel(Extrapolation extrapolation) {
+    using MS = typename ExecutionSpace::memory_space;
+    const TableView<MS> table(
+        TemperatureTable({250}, {{1e9}, {0.3}}, Interpolation::Linear, extrapolation));
+    const auto model = single_point_model<MS>(extrapolation);
+    Kokkos::View<int[2], MS> results("single_point_results");
+    Kokkos::parallel_for(
+        "single_point_paths", Kokkos::RangePolicy<ExecutionSpace>(0, 1), KOKKOS_LAMBDA(int) {
+            results(0) = single_point_view_checks(table);
+            results(1) = single_point_model_checks(model) ? 0 : 1;
+        });
+    ExecutionSpace().fence();
+    const auto host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, results);
+    require(host(0) == 0,
+            "kernel TableView value/clamp, integral, column, or temperature check: " +
+                std::to_string(host(0)));
+    require(host(1) == 0, "kernel constitutive response must match constant elasticity and CTE");
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -276,6 +371,23 @@ int main(int argc, char** argv) {
 
     for (auto extrapolation : {Extrapolation::Error, Extrapolation::Clamp}) {
         const auto name = std::string("eval_") + extrapolation_name(extrapolation);
+        run(name + "/view_host", [&] {
+            const TableView<Kokkos::HostSpace> table(
+                TemperatureTable({250}, {{1e9}, {0.3}}, Interpolation::Linear, extrapolation));
+            const auto result = single_point_view_checks(table);
+            require(result == 0,
+                    "host TableView value/clamp, integral, column, or temperature check: " +
+                        std::to_string(result));
+        });
+        run(name + "/model_host", [&] {
+            require(single_point_model_checks(single_point_model<Kokkos::HostSpace>(extrapolation)),
+                    "host constitutive response must match constant elasticity and CTE");
+        });
+        run(name + "/kernel_default",
+            [&] { single_point_kernel<Kokkos::DefaultExecutionSpace>(extrapolation); });
+#if defined(KOKKOS_ENABLE_SERIAL)
+        run(name + "/kernel_serial", [&] { single_point_kernel<Kokkos::Serial>(extrapolation); });
+#endif
         run(name, [&] {
             single_point_values(
                 TemperatureTable({250}, {{1e9}, {0.3}}, Interpolation::Linear, extrapolation));
