@@ -1,6 +1,7 @@
 #include "import_common.hpp"
 
 #include <iostream>
+#include <vector>
 
 namespace {
 void help() {
@@ -26,6 +27,7 @@ int main(int argc, char** argv) {
     auto& accept_b = options.accept_b_tier;
     std::string reserved_argument;
     bool has_accept = false;
+    std::vector<std::string> reserved_options;
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
         auto next = [&](std::filesystem::path& path) {
@@ -63,6 +65,7 @@ int main(int argc, char** argv) {
                 std::cerr << "unknown argument: " << arg << '\n';
                 return chipcae::importer::CliExit::usage;
             }
+            reserved_options.push_back(arg);
             // --t-min consumes a placeholder value; numeric parsing belongs to I-STEP-B.
             if (reserved_argument.empty())
                 reserved_argument = arg;
@@ -95,6 +98,23 @@ int main(int argc, char** argv) {
     if (accept_b && has_accept) {
         // The conflict contract is a silent usage failure in either flag order.
         return chipcae::importer::CliExit::usage;
+    }
+    if (!options.assembly.empty()) {
+        if (output.empty() || !input.empty()) {
+            std::cerr << "not implemented yet: --assembly with positional input\n";
+            return chipcae::importer::CliExit::usage;
+        }
+        if (!material_map.empty()) {
+            std::cerr << "not implemented yet: --material-map in assembly mode\n";
+            return chipcae::importer::CliExit::usage;
+        }
+        for (const auto& option : reserved_options)
+            if (option != "--assembly" && option != "--accept") {
+                std::cerr << "not implemented yet: " << option << '\n';
+                return chipcae::importer::CliExit::usage;
+            }
+        chipcae::importer::derive_output_paths(options);
+        return chipcae::importer::run_assembly(options);
     }
     if (!reserved_argument.empty()) {
         std::cerr << "not implemented yet: " << reserved_argument << '\n';

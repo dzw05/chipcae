@@ -9,6 +9,7 @@ namespace chipcae::importer {
 struct CliExit {
     static constexpr int success = 0;
     static constexpr int usage = 2;
+    static constexpr int import_confirmation_required = 6;
     static constexpr int import_rejected = 7;
     static constexpr int material_mapping_missing = 9;
 };
@@ -23,6 +24,7 @@ struct ImportOptions {
 
 int run_ecad(const ImportOptions& options);
 int run_step(const ImportOptions& options);
+int run_assembly(const ImportOptions& options);
 // Format-specific help extension points; each returned string supplies its own newlines.
 std::string ecad_help();
 std::string step_help();

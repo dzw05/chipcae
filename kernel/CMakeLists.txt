@@ -52,6 +52,8 @@ add_executable(chipcae-import
     src/import_common.hpp
     src/import_common.cpp
     src/import_ecad.cpp
+    src/import_assembly.cpp
+    src/stack_writer.cpp
     src/import_step.cpp
     src/stack_override.hpp
     src/stack_override.cpp
@@ -62,3 +64,54 @@ if(CHIPCAE_ENABLE_ECAD)
     target_compile_definitions(chipcae-import PRIVATE CHIPCAE_ENABLE_ECAD=1)
 endif()
 chipcae_set_warnings(chipcae-import)
+
+target_compile_definitions(chipcae-import PRIVATE CHIPCAE_ASSEMBLY_CLI=1)
+if(CHIPCAE_ENABLE_JSONCONS)
+    target_compile_definitions(chipcae-import PRIVATE CHIPCAE_ENABLE_JSONCONS=1)
+    target_link_libraries(chipcae-import PRIVATE chipcae_stack jsoncons)
+endif()
+
+# Runtime contracts travel with the build/install, independently of the checkout.
+foreach(asset schema/assembly-0.1.schema.json schema/stack-0.2.schema.json protocol/errors.yaml)
+    configure_file("${PROJECT_SOURCE_DIR}/${asset}"
+        "${PROJECT_BINARY_DIR}/import-assets/${asset}" COPYONLY)
+endforeach()
+# Installed schemas/protocol are already packaged by ChipcaeInstall.cmake.
+
+# Owners may advertise support on their linked targets. Explicit cache options
+# also allow integration builds to enable newly merged implementations.
+function(chipcae_assembly_capability variable target property)
+    set(available OFF)
+    if(TARGET "${target}")
+        get_target_property(declared "${target}" "${property}")
+        if(declared)
+            set(available ON)
+        endif()
+    endif()
+    if(available)
+        if(DEFINED ${variable} AND NOT ${variable})
+            message(WARNING "${variable}: cached OFF conflicts with ${property}; enabling support")
+        endif()
+        set(${variable} ON CACHE BOOL "Enable ${property} for assembly imports" FORCE)
+    else()
+        option(${variable} "Enable ${property} for assembly imports" OFF)
+    endif()
+    set(${variable} "${${variable}}" PARENT_SCOPE)
+endfunction()
+chipcae_assembly_capability(CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE
+    chipcae::geometry_ecad CHIPCAE_ODBPP_AVAILABLE)
+if(CHIPCAE_ENABLE_ECAD AND CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE)
+    target_compile_definitions(chipcae-import PRIVATE CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE=1)
+endif()
+chipcae_assembly_capability(CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE
+    chipcae::geometry CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE)
+file(GENERATE OUTPUT "${PROJECT_BINARY_DIR}/import-assets/assembly-capabilities.json"
+    CONTENT "{\"geometry\": \"${CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE}\"}\n")
+
+if(CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE)
+    target_compile_definitions(chipcae-import PRIVATE CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE=1)
+endif()
+if(CHIPCAE_BUILD_TESTS AND CHIPCAE_ENABLE_OCCT)
+    add_subdirectory("${PROJECT_SOURCE_DIR}/tests/integration/import_assembly/fixtures"
+        "${PROJECT_BINARY_DIR}/sp4-step-fixtures")
+endif()
