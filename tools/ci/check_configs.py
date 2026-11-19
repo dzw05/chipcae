@@ -1,7 +1,8 @@
-"""Validate the perf-gate config and the protocol error table."""
+"""Validate CI configs, the protocol error table and workflow build limits."""
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -71,9 +72,145 @@ def check_errors(path: Path) -> list[str]:
     return errors
 
 
+# This is a deliberately narrow proof, not a general shell interpreter. Keep the
+# recognized block in sync with the workflow scripts and their Bash matrix tests.
+_NPROC_CAP = "\n".join(
+    r"[ \t]*" + re.escape(line) + r"[ \t]*"
+    for line in (
+        'if ! jobs="$(nproc)"; then',
+        "jobs=2",
+        "fi",
+        'case "$jobs" in',
+        "''|*[!0-9]*|0) jobs=2 ;;",
+        "[1-4]) ;;",
+        "*) jobs=4 ;;",
+        "esac",
+    )
+)
+_SHELL_PARTS = re.compile(
+    r"(?P<cap>^" + _NPROC_CAP + r"(?=\n|$))"
+    r"|(?P<space>[ \t\r]+)|(?P<comment>\#[^\n]*)"
+    # Keep quotes on shell words so only double-quoted variables are accepted.
+    r'''|(?P<word>(?:[^\s;&|()<>{}'"\\]+|\\[^\n]|"(?:\\.|[^"\\])*"|'[^']*')+)'''
+    r"|(?P<separator>&&|\|\||[;\n&|()<>{}])|(?P<unknown>.)",
+    re.MULTILINE,
+)
+_CMAKE_BUILD = re.compile(r"cmake[ \t]+--build")
+_PARALLEL = re.compile(r"--parallel(?:=(.*))?")
+_BOUNDED_CONSTANT = re.compile(r'''([A-Za-z_]\w*)=(?:[1-4]|"[1-4]"|'[1-4]')''')
+_QUOTED_VARIABLE = re.compile(r'"\$(?:([A-Za-z_]\w*)|\{([A-Za-z_]\w*)\})"')
+_ASSIGNMENT = re.compile(r"\b([A-Za-z_]\w*)\+?=")
+_CONTROL_WORDS = {
+    "if", "then", "elif", "else", "fi", "case", "esac", "for", "while",
+    "until", "do", "done", "function", "!", "eval", "source", ".", "alias",
+}
+
+
+def _parallel_violations(words: list[str], bounded: set[str]) -> list[str]:
+    """Return offending commands, retaining launcher support and word boundaries."""
+    builds = [i for i in range(len(words) - 1)
+              if _CMAKE_BUILD.fullmatch(" ".join(words[i:i + 2]))]
+    violations = []
+    for start, end in zip(builds, builds[1:] + [len(words)]):
+        command = words[start:end]
+        for index, word in enumerate(command):
+            flag = _PARALLEL.fullmatch(word)
+            if flag is None:
+                continue
+            argument = flag[1]
+            if argument is None:
+                argument = command[index + 1] if index + 1 < len(command) else ""
+            variable = _QUOTED_VARIABLE.fullmatch(argument)
+            if argument in {"1", "2", "3", "4"} or (
+                variable and (variable[1] or variable[2]) in bounded
+            ):
+                continue
+            violations.append(" ".join(command))
+            break  # One actionable diagnostic per offending build command.
+    return violations
+
+
+def _check_step_parallel(script: str) -> list[str]:
+    # Only an escaped newline joins commands. Ordinary newlines remain separators.
+    script = re.sub(r"\\\r?\n", "", script)
+    bounded: set[str] = set()
+    proofs_allowed = True
+    words: list[str] = []
+    violations = []
+
+    def finish_command():
+        nonlocal proofs_allowed
+        if not words:
+            return
+        constant = _BOUNDED_CONSTANT.fullmatch(words[0]) if len(words) == 1 else None
+        if constant and proofs_allowed:
+            bounded.add(constant[1])
+        else:
+            # A conditional, function or sourced script needs shell analysis we do
+            # not attempt. Never prove assignments inside/after such constructs.
+            if words[0] in _CONTROL_WORDS:
+                proofs_allowed = False
+            for name in _ASSIGNMENT.findall(" ".join(words)):
+                bounded.discard(name)
+            # Arithmetic/parameter expansions can change the parent shell's vars.
+            expansions = any(re.search(r"\$\(|`|\$\{(?![A-Za-z_]\w*\})", word) for word in words)
+            build = any(_CMAKE_BUILD.fullmatch(" ".join(words[i:i + 2]))
+                        for i in range(len(words) - 1))
+            harmless = words[0] == "echo" or words == ["set", "-euo", "pipefail"] or build
+            if not proofs_allowed or expansions or not harmless:
+                bounded.clear()
+            violations.extend(_parallel_violations(words, bounded))
+        words.clear()
+
+    for part in _SHELL_PARTS.finditer(script):
+        kind = part.lastgroup
+        if kind in {"space", "comment"}:
+            continue
+        if kind == "cap":
+            if not words and proofs_allowed:
+                bounded.add("jobs")
+            else:
+                bounded.clear()
+                proofs_allowed = False
+        elif kind == "word":
+            words.append(part[0])
+        else:
+            finish_command()
+            if kind == "unknown" or part[0] not in {"\n", ";"}:
+                bounded.clear()
+                proofs_allowed = False
+    finish_command()
+    return violations
+
+
 def check_build_parallel(text: str, source: str = "<workflow>") -> list[str]:
-    """Test-first placeholder; build parallelism validation is not implemented."""
-    return ["build parallelism validation is not implemented"]
+    """Check literal cmake --build/--parallel commands in each YAML run step.
+
+    Accept explicit 1-4 limits, or quoted variables proven by preceding simple
+    constants/the exact guarded nproc block in the same step. Unsupported shell
+    constructs cannot establish a variable bound; numeric limits still work.
+    """
+    try:
+        workflow = yaml.safe_load(text)
+    except yaml.YAMLError as error:
+        return [f"{source}: invalid workflow YAML: {error}"]
+    if not isinstance(workflow, dict) or not isinstance(workflow.get("jobs"), dict):
+        return [f"{source}: expected a workflow with a jobs mapping"]
+    errors = []
+    for job_name, job in workflow["jobs"].items():
+        if not isinstance(job, dict):
+            continue
+        for index, step in enumerate(job.get("steps", []), 1):
+            if not isinstance(step, dict) or not isinstance(step.get("run"), str):
+                continue
+            name = step.get("name", step.get("id", f"step {index}"))
+            for command in _check_step_parallel(step["run"]):
+                errors.append(
+                    f"{source}: job {job_name}, step {name}: {command}: "
+                    "--parallel requires an explicit limit 1-4 or a quoted variable "
+                    "with a proven preceding bound in this step"
+                )
+    return errors
 
 
 def main() -> int:
@@ -81,6 +218,9 @@ def main() -> int:
     problems = []
     problems.extend(check_perf(root / "bench" / "perf_config.yaml"))
     problems.extend(check_errors(root / "protocol" / "errors.yaml"))
+    for name in ("ci.yml", "mesh.yml"):
+        path = root / ".github" / "workflows" / name
+        problems.extend(check_build_parallel(path.read_text(encoding="utf-8"), str(path)))
     if problems:
         print("config check failed:")
         for problem in problems:

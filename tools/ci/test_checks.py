@@ -97,6 +97,8 @@ class BuildParallelTest(unittest.TestCase):
             self.assertEqual(self._check(
                 self.GUARDED_JOBS + 'cmake --build build --parallel "$jobs"\n'
             ), [])
+        with self.subTest(variable="braced"):
+            self.assertEqual(self._check('jobs=4\ncmake --build build --parallel "${jobs}"\n'), [])
 
     def test_invalid_limits_are_rejected(self):
         for value in ('""', "''", "0", "5", "-1", "text", "999999999999999999999999999999"):
@@ -151,6 +153,37 @@ class BuildParallelTest(unittest.TestCase):
         for assignment in ("if false; then jobs=4; fi", "jobs=4\nif true; then jobs=8; fi"):
             with self.subTest(assignment=assignment):
                 self._assert_one_violation(assignment + "\n" + command + "\n", command)
+
+    def test_unsupported_shell_cannot_establish_or_preserve_a_bound(self):
+        command = 'cmake --build build --parallel "$jobs"'
+        for prefix in (
+            "if false; then\n  jobs=4\nfi\n",
+            "false && jobs=4\n",
+            "jobs=4\neval 'jobs=8'\n",
+            'jobs=4\necho "$((jobs=8))"\n',
+            "jobs=4\nread jobs\n",
+            "jobs=4\nprintf -v jobs 8\n",
+        ):
+            with self.subTest(prefix=prefix):
+                self._assert_one_violation(prefix + command + "\n", command)
+
+    def test_incomplete_or_modified_cap_does_not_prove_a_bound(self):
+        command = 'cmake --build build --parallel "$jobs"'
+        for cap in (
+            self.GUARDED_JOBS.replace("*) jobs=4 ;;", "*) jobs=8 ;;"),
+            self.GUARDED_JOBS.replace("''|*[!0-9]*|0) jobs=2 ;;", "''|0) jobs=2 ;;"),
+            self.GUARDED_JOBS.replace("if ! jobs=", "if jobs="),
+        ):
+            with self.subTest(cap=cap):
+                self._assert_one_violation(cap + command + "\n", command)
+
+    def test_quoted_shell_words_do_not_supply_commands_or_extra_arguments(self):
+        with self.subTest(quoted_command="example"):
+            self.assertEqual(self._check('echo "cmake --build example --parallel"\n'), [])
+        for argument in ('$jobs', "'$jobs'", '"$jobs"suffix'):
+            command = f"cmake --build build --parallel {argument}"
+            with self.subTest(argument=argument):
+                self._assert_one_violation("jobs=4\n" + command + "\n", command)
 
     def test_empty_environment_does_not_bound_a_bare_flag(self):
         command = "cmake --build build --parallel"
