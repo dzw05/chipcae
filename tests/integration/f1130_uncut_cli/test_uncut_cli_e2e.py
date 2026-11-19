@@ -110,7 +110,7 @@ def write_solver_inputs(root):
                  dict(id='mech', solver='fem.solid', temp_from='thermal', T_ref=298.15)],
         loads=[dict(type='fixed_temperature', target='face:zmin', T=298.15),
                dict(type='convection', target='face:zmax', h=1000, T_inf=348.15)],
-        constraints=dict(rigid='3-2-1'), solver=dict(linear=dict(preconditioner='direct', rtol=1e-13)),
+        constraints=dict(rigid='3-2-1'), solver=dict(linear=dict(preconditioner='direct', rtol=1e-12)),
         output=dict(format='vtkhdf')))
     for ranks in (1, 2):
         write_json(root / f'profile_r{ranks}.json', dict(
@@ -246,8 +246,11 @@ def main():
             import trace_map_ref as ref
             stack = imported
             rings = ref.read_polyset(root / 'stack.polyset')
-            # Diagnostics must run even before the missing M3 product fields can gate.
-            ref.diagnostics(ref.tensor_mesh(stack, 4, 4), rings, stack)
+            # Record diagnostic failures without suppressing product evidence.
+            try:
+                ref.diagnostics(ref.tensor_mesh(stack, 4, 4), rings, stack)
+            except Exception as exc:
+                failures.append(f'diagnostics: {exc}')
             stdout = run_command('preview', [previewer, root / 'stack.json', '-o', 'preview',
                                             '--nx', '4', '--ny', '4', '--levels', '0',
                                             '--max-ratio', '100'], root, timings)
@@ -356,7 +359,7 @@ class AcceptanceRecords(unittest.TestCase):
             materials = read_json(root / 'materials.json')['materials']
             self.assertEqual([material['id'] for material in materials], ['cu', 'fr4_eq'])
             self.assertEqual(case['stack'], dict(ref='stack.json'))
-            self.assertLessEqual(abs(case['solver']['linear']['rtol']-1e-13), 1e-28)
+            self.assertLessEqual(abs(case['solver']['linear']['rtol']-1e-12), 1e-28)
             self.assertEqual(case['loads'], [dict(type='fixed_temperature',target='face:zmin',T=298.15),
                 dict(type='convection',target='face:zmax',h=1000,T_inf=348.15)])
 
@@ -538,7 +541,7 @@ class AcceptanceRecords(unittest.TestCase):
                 self.assertEqual(measurements['acceptance_checks'].get('numerical',False),
                                  failure is None)
 
-    def test_c11_failures_keep_readback_and_aligned_rank_comparison(self):
+    def test_diagnostics_and_c11_failures_keep_readback_and_aligned_rank_comparison(self):
         import h5py
         import struct
         import trace_map_ref as ref
@@ -598,6 +601,7 @@ class AcceptanceRecords(unittest.TestCase):
                     patch.object(shutil,'which',return_value='synthetic-mpiexec'), \
                     patch.dict(globals(),run_command=command), \
                     patch.object(ref,'COPPER_AREAS_MM2',{'In1.Cu': .5}), \
+                    patch.object(ref,'diagnostics',side_effect=RuntimeError('diagnostic probe')), \
                     redirect_stdout(output), redirect_stderr(StringIO()):
                 with self.assertRaisesRegex(AssertionError,'max temperature error'):
                     main()
@@ -616,6 +620,7 @@ class AcceptanceRecords(unittest.TestCase):
                 self.assertFalse(record['run']['acceptance_checks'].get('parallel',False))
                 self.assertEqual(set(record['run']['parallel_relative_errors']),set(QOIS))
                 self.assertTrue(any('max temperature error' in note for note in record['notes']))
+                self.assertIn('diagnostics: diagnostic probe',record['notes'])
                 self.assertIn('parallel temperatures',record['notes'])
                 self.assertNotIn('parallel aligned cell/vertex fields unavailable',record['notes'])
 
@@ -970,10 +975,19 @@ class TraceMapReferenceTests(unittest.TestCase):
             with self.subTest(z=z), self.assertRaises(AssertionError):
                 ref.tensor_mesh(stack,1,1,list(map(ref.rational,z)))
 
-    def test_core_coefficients_are_fixed_fr4_and_zero_copper(self):
+    def test_base_coefficients_are_fixed_fr4_and_core_has_zero_copper(self):
         import numpy as np
         import trace_map_ref as ref
         stack = synthetic_stack([.001])
+        mesh = ref.tensor_mesh(stack,1,1)
+        rings = {'In1.Cu': ref.PolyLayer(ref.rational('.001'),
+            (((0,0),(1,0),(1,1),(0,1)),))}
+        phi,k = ref.reference_coefficients(mesh,rings,stack)
+        np.testing.assert_allclose(phi,[.5],rtol=0,atol=1e-15)
+        np.testing.assert_allclose(k,[[195.15,195.15,780/1301]],rtol=1e-14,atol=0)
+        stack['layers'][0]['material'] = 'cu'
+        with self.assertRaisesRegex(AssertionError,'Patterned matrix/metal'):
+            ref.reference_coefficients(mesh,rings,stack)
         stack['layers'][0] = dict(name='Core',kind='Homogenized',material='fr4_eq',thickness=.001)
         mesh = ref.tensor_mesh(stack,1,1)
         phi,k = ref.reference_coefficients(mesh,{},stack)

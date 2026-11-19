@@ -14,3 +14,4 @@ add_test(NAME vv_result_schema
     COMMAND ${Python3_EXECUTABLE} -m unittest tests.vv.test_result_schema -v)
 set_tests_properties(vv_result_schema
     PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} TIMEOUT 60)
+add_subdirectory(calculix_demo_gate)

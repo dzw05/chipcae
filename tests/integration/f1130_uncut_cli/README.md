@@ -36,10 +36,12 @@ uses the same mesh parameters and `min_elems_per_layer=1`; no cut cells are
 allowed, every hex has `cell_kind=0`, and its count must match preview.
 The existing coupled thermal/mechanical loads and 3-2-1 constraints remain:
 zmin fixed at 298.15 K, zmax convection with h=1000 W/(m² K) and T_inf=348.15 K.
-The direct solver uses `solver.linear.rtol=1e-13`.
+The direct solver uses `solver.linear.rtol=1e-12`, as prescribed by the
+PR #200 architect ruling. The C11 acceptance limit remains 1e-8 K.
 
-Both solve/readback attempts run before numerical inspection, so a numerical
-failure in one rank does not suppress the other attempt. Inspection records C11
+Diagnostic exceptions are recorded as failures while preview and both solve
+attempts continue. Both solve/readback attempts run before numerical inspection,
+so a numerical failure in one rank does not suppress the other attempt. Inspection records C11
 failures while retaining the measured temperature error, then measures readback
 and returns the exported mesh for the aligned rank comparison. A failed numerical
 inspection keeps its numerical completion check false and its record verdict fail.
@@ -142,8 +144,8 @@ An analytic single-column regression perturbs exported top temperatures by
 ±1 K and verifies that both recovered fluxes change and energy fails at 1e-9.
 Recovery is tested against complete synthetic Q2 solutions. Raw gradient face
 flux is not recoverable from corner exports alone; if that interpretation is
-required, an architect ruling and additional output are needed. Product energy
-validation remains 未执行 until M3 can solve the polygon inputs.
+required, an architect ruling and additional output are needed. Measured product
+energy results are recorded below.
 
 ## Acceptance criteria
 
@@ -151,7 +153,7 @@ Every criterion below applies independently to ranks=1 and ranks=2.
 
 | Check | Required result |
 | --- | --- |
-| C3 cell fraction | Finite, 0 ≤ f ≤ 1, absolute error from phi_ref ≤ 1e-12 |
+| C3 cell fraction | Finite, 0 ≤ f ≤ 1, abs(f−phi_ref) ≤ 1e-12 × max(phi_ref, 1), equivalent to absolute 1e-12 for phi_ref in [0, 1] |
 | C3 spatial variation | Each copper layer has copper-positive and copper-free columns |
 | C3/K1 copper area | F.Cu=0.307835, In1.Cu=2.25, In2.Cu=3, B.Cu=7 mm²; relative error ≤ 1e-12 |
 | C4 conductivity | Every diagonal component finite; relative error ≤ 1e-14 |
@@ -224,76 +226,95 @@ partitions, and coverage/membership defects without gids. Mutation checks reject
 duplicate or incorrect gids, missing fields/layers, wrong layer-name case, invalid
 fractions, all-zero In1 copper, wrong conductivity and 1e-6 K temperature errors.
 
-## Verification (2026-11-19)
+## Verification (2026-11-20)
 
-Tested baseline and M1: `92a21a4f308ebb65acfc8287edc7bda47f54ead1`
-(#195), fetched at the start. Test-first commit:
-`975d7c21cc5897264958af8dc5c3893a75c16026`. A final fetch confirmed main had
-advanced to `4b50590fbe69ca16f84c47953b13525912f5140c` (#179) during testing;
-that unrelated change was not merged into this branch. The three-dot diff
-against that main remains restricted to this card's four permitted files.
-M3 (`solve-copper-trace-map`) is absent from this baseline; no M3 SHA was
-integrated. Product code remains outside this card's file scope.
+实测 source: the merged working tree based on fetched main
+`c9c1464bad72444d98bf52bb4d0848d530095281`, including M1 `92a21a4` (#195)
+and M3 `bcc40b3` (#212). Main was merged without rebasing. The PR diff against
+that baseline remains restricted to this card's four permitted files.
 
 实测 Release configure and build exit 0 with tests, ECAD, JSONCONS, MFEM, MPI
-and HDF5 enabled, optional Kokkos disabled, and Python 3.12 selected. 实测 direct
-records/self-tests: 25 passed, exercising sparse SciPy and forced pure NumPy
-paths. Two added geometry/topology regressions first failed against the prior
-reference and passed after validation was added.
+and HDF5 enabled, optional Kokkos disabled, and Python 3.12 selected. CMake
+reported dependency runtime-search-path warnings; compilation succeeded.
+实测 direct unittest discovery: **29 tests, OK** (13 assertion/verdict tests
+and 16 reference tests), including SciPy sparse and forced pure NumPy paths.
+The solver-input assertion and diagnostic-exception regression failed before
+the fixes and passed afterward. The latter verifies that preview, both solves,
+readback and aligned comparison remain available after a diagnostic exception;
+both records retain the diagnostic failure. The matrix regression also checks
+literal half-copper FR4 coefficients and rejects an incorrect copper base.
 
-实测 targeted CTest: exit 8, 1 passed / 2 failed / 3 total (7.60 s).
-`f1130_uncut_cli_records` passed; `f1130_uncut_cli_e2e` and
-`chain_ipc_uncut_chain` failed at the solver's polygon rejection (exit 13).
-The four-layer import checks and preview (80 cells) passed. Both rank solves
-were attempted, both failure records passed record validation, and shared
-input bytes remained unchanged. Readback could not run.
+实测 targeted CTest: exit **0**, **3/3 Passed**, **8.58 s**:
+`f1130_uncut_cli_records`, `f1130_uncut_cli_e2e`, and
+`chain_ipc_uncut_chain`. Four-layer preview and solve each produced 80 uncut
+hexes. Both ranks completed solve/readback, preserved all shared input bytes,
+and produced validated records with `verdict: pass`; import, fractions,
+conductivity, physics, numerical and parallel completion checks were all true.
+Aligned cell/vertex fields passed at the unchanged `PARALLEL_RTOL=1e-8`;
+all three QoI relative differences were zero.
 
-实测 independent reference diagnostics (K, without acceptance assertions):
+实测 product measurements (identical for ranks=1 and ranks=2):
+
+| Measurement | Value |
+| --- | --- |
+| `max_temperature_error_K` | 5.348965714802034e-11 K |
+| `energy_relative_error` | 5.588270495424436e-15 |
+| `Q_top_W` | 0.6357447589033838 W |
+| `Q_bot_W` | 0.6357447589033802 W |
+| `R_lo_K_W` | 75.31414010424379 K/W |
+| `R_hi_K_W` | 78.93330782246156 K/W |
+| Wiener heat-flow interval | [0.6334461506726798, 0.6638859572823113] W |
+| F.Cu copper area | 0.307835 mm² |
+| In1.Cu copper area | 2.25 mm² |
+| In2.Cu copper area | 3.0000000000000004 mm² |
+| B.Cu copper area | 6.999999999999999 mm² |
+
+The maximum area relative error was 1.480297366166875e-16. C11 remains
+1e-8 K; C3/C4, area, energy and parallel acceptance thresholds are unchanged.
+The permitted `rtol=1e-12` change affects the solver input only.
+
+实测 independent, non-gating Q2 diagnostics (K):
 
 ```text
 trace_map_vs_layer_average_dT_max=1.4087819663407117
 trace_map_nx_double_dT_max=0.20071960596669669
 ```
 
-实测 reference-only 4×4 energy: Q_top=0.6357447589028646 W,
-Q_bot=0.635744758903968 W, relative difference=1.736e-12,
-R_lo=75.31414010424379 K/W, R_hi=78.93330782246156 K/W.
-These are oracle measurements, not product numerical acceptance results.
+实测 two-layer chain: 24 uncut cells, `warpage_pv=4.385282668532796e-6` m,
+`T_max=340.53308548486064` K; import, per-cell reference checks and readback
+passed without calling the layer-average conversion tool.
 
-实测 full Release CTest: exit 8, **328 total = 306 passed + 13 skipped +
-9 failed**, 1771.41 s. `f1130_uncut_cli_records` and `solve_cut_pipeline`
-passed. All failures are retained here:
+实测 full Release CTest: exit **8**, **416 total = 381 passed +
+11 failed + 14 skipped + 10 already disabled**, **11187.08 s**. All three
+requested F-1130/chain tests passed again in this full run. The 10 disabled
+registrations and feature-dependent skips come unchanged from main; this
+fix adds none. All failures are listed individually:
 
-| Failed test | Observed failure |
-| --- | --- |
-| `f1130_uncut_cli_e2e` | Both rank solves reject polygons, exit 13 |
-| `chain_ipc_uncut_chain` | Solve rejects polygons, exit 13 |
-| `solve_column_gmg_fcbga_scaling` | Fine GMG subprocess exits −9 (SIGKILL) |
-| `bimetal_timoshenko` | 16×16×8 subprocess exits −9 (SIGKILL) |
-| `stack_writer_outline_polyset` | Exit 11, duplicate material id |
-| `import_assembly_cf_chain` | Exit 11, duplicate material id |
-| `rsmesh_types` | Readback subprocess exceeds its 20 s timeout |
-| `rssteps_select` | CTest 60 s timeout |
-| `preview_outline_nonconvex_rejected` | Missing expected non-convex error event |
+| Failed test | Reported elapsed (s) | Observed failure |
+| --- | --- | --- |
+| `ipc_zip_equals_xml` | 0.04 | Unchanged ZIP test supplies obsolete dotted material IDs, rejected by current ID validation. |
+| `k1_preview_mpi_surface` | 2.00 | Non-JSON run_config fragment in captured stdout; jsoncons parsing aborted. |
+| `solve_cut_pipeline` | 826.00 | Two-rank fcbga-polyset subprocess exceeded its existing 240 s timeout. |
+| `solve_ghost_scan` | 1470.81 | Existing 300 s CTest timeout; reported elapsed 1470.81 s. |
+| `solve_cut_bilayer` | 1723.27 | Existing 1200 s CTest timeout during the 16×16 case. |
+| `solve_column_gmg_fcbga` | 1404.16 | Existing 900 s CTest timeout after fine-grid comparisons were printed. |
+| `solve_column_gmg_fcbga_scaling` | 1715.65 | Existing 900 s CTest timeout after coarse-GMG output. |
+| `cutbim_cut_bimetal` | 1497.73 | 16×16 ranks=1 solver subprocess exceeded 420 s; comparison quantity missing. |
+| `demogate_solve` | 1013.92 | Zero-load solver subprocess exceeded its existing 420 s timeout. |
+| `stack_writer_outline_polyset` | 1.63 | Solver exit 11: duplicate material id from the unchanged assembly helper. |
+| `import_assembly_cf_chain` | 1.71 | Solver exit 11: duplicate material id from the unchanged assembly helper. |
 
-The last seven tests and their product/helper files are unchanged. The two
-assembly tests use a helper that appends `copper` to a library already
-containing that id. Kernel logs show global OOM events during the run;
-individual SIGKILL causes have not been conclusively attributed. Full-suite
-all-green status is not achieved.
+The listed tests, their helpers and product code match the merged main
+baseline. No out-of-scope product/helper change was made. Several reported
+elapsed times exceed the configured limits, and tool responses also suffered
+abnormal wall delays. The measurements are retained as reported without
+attributing a cause or adjusting timeouts. The seven long timeout cases were
+not rerun. Full-suite all-green status was **not achieved**.
 
-实测 isolated follow-up, with unchanged settings and `-j1`:
-`rsmesh_types`, `rssteps_select` and `preview_outline_nonconvex_rejected`
-all passed (exit 0, 3/3, 12.19 s). The full suite was not rerun; its failures
-above remain part of the measured record. The two SIGKILL and two assembly
-duplicate-material failures were not rerun.
+实测 unchanged isolated follow-up: `k1_preview_mpi_surface` passed, exit **0**, **1/1**, **44.26 s**, using `ctest -j1` and its original assertions/timeouts. This does not replace the original full-suite failure or counts. The full suite was not rerun.
 
-Product C3/C4/C11 comparisons, energy, readback and MPI numerical equivalence
-are 未执行 while the solver rejects `copper.polygons` with
-`internal material cuts are not supported`. Their assertions remain active;
-no tolerance is relaxed, no assertion is deleted, and no expected-failure mark
-is added. M3 integration and all-green product acceptance remain pending.
-
-Merge requires the prescribed mesh/solver/vv I1 1.1 signatures and PR hold.
-This gate checks implementation of the agreed trace-map model. Validation
-against explicit finely resolved copper geometry is outside this gate.
+The mesh/solver/vv I1 1.1 signatures are complete according to the PR #200
+architect ruling; no PR hold remains required. CI for the unpushed fix commit
+is 未执行. Merge still requires green ci-ok. This gate checks implementation
+of the agreed trace-map model; explicit finely resolved copper validation
+remains outside this gate.

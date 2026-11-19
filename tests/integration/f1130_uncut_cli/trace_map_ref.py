@@ -426,7 +426,7 @@ def check_solution(mesh, rings, stack, measurements, expected_areas=COPPER_AREAS
         assert np.all(np.isfinite(fields[name])), f'M3 nonfinite {name}'
     fraction = fields['copper_fraction']
     assert np.all((0 <= fraction)&(fraction <= 1)), 'M3 fraction outside [0,1]'
-    assert np.max(abs(fraction-phi)) <= 1e-12, 'M3 cell copper fraction mismatch'
+    assert np.all(abs(fraction-phi) <= 1e-12*np.maximum(phi,1)), 'M3 cell copper fraction mismatch'
     names = [l['name'] for l in stack['layers'] if l['kind'] == 'Patterned']
     assert set(names) == set(expected_areas), 'missing/unexpected copper layer'
     areas = {}

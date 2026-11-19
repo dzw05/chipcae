@@ -1,6 +1,7 @@
 #include "chipcae/io/vtkhdf_results.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -82,9 +83,9 @@ std::string quoted(const std::string& s) {
 [[maybe_unused]] bool empty(const ResultsPartition& p) {
     return p.points.empty() && p.hex.empty() && p.T.empty() && p.U.empty() && p.layer_id.empty() &&
            p.material_id.empty() && p.cell_kind.empty() && p.elem_gid.empty() && p.volume.empty() &&
-           p.connectivity.empty() && p.face_conn.empty() && p.poly_faces.empty() &&
-           p.offsets == std::vector<Index>{0} && p.face_off == std::vector<Index>{0} &&
-           p.poly_off == std::vector<Index>{0};
+           p.copper_fraction.empty() && p.conductivity_diag.empty() && p.connectivity.empty() &&
+           p.face_conn.empty() && p.poly_faces.empty() && p.offsets == std::vector<Index>{0} &&
+           p.face_off == std::vector<Index>{0} && p.poly_off == std::vector<Index>{0};
 }
 #ifdef CHIPCAE_ENABLE_HDF5
 using namespace chipcae::hdf_detail;
@@ -337,6 +338,37 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
           p.U.size() == p.points.size() && p.layer_id.size() == input_cells &&
           p.material_id.size() == input_cells && p.cell_kind.size() == input_cells &&
           (p.elem_gid.empty() || p.elem_gid.size() == input_cells));
+    auto diagnostics_valid = [](const ResultsPartition& q, std::size_t cells) {
+        bool valid = (q.copper_fraction.empty() || q.copper_fraction.size() == cells) &&
+                     (q.conductivity_diag.empty() || q.conductivity_diag.size() == 3 * cells);
+        for (double value : q.copper_fraction)
+            valid &= std::isfinite(value);
+        for (double value : q.conductivity_diag)
+            valid &= std::isfinite(value);
+        return valid;
+    };
+    // Validate before filtering, including values on cut parents discarded below.
+    agree(diagnostics_valid(p, input_cells) &&
+          diagnostics_valid(local.cut,
+                            local.cut.poly_off.empty() ? 0 : local.cut.poly_off.size() - 1) &&
+          diagnostics_valid(local.embedded_boundary,
+                            local.embedded_boundary.connectivity.size() / 3));
+    const std::array<const ResultsPartition*, 3> inputs{&p, &local.cut, &local.embedded_boundary};
+    const std::array<std::size_t, 3> input_counts{
+        input_cells,
+        local.cut.poly_off.empty() ? 0 : local.cut.poly_off.size() - 1,
+        local.embedded_boundary.connectivity.size() / 3};
+    std::array<int, 3> input_schemas{};
+    for (std::size_t b = 0; b < inputs.size(); ++b) {
+        const auto& q = *inputs[b];
+        int present = (!q.copper_fraction.empty() ? 1 : 0) | (!q.conductivity_diag.empty() ? 2 : 0);
+        input_schemas[b] = present;
+#ifdef CHIPCAE_ENABLE_MPI
+        if (size_ > 1)
+            MPI_Allreduce(&present, &input_schemas[b], 1, MPI_INT, MPI_BOR, MPI_COMM_WORLD);
+#endif
+        agree(input_counts[b] == 0 || present == input_schemas[b]);
+    }
     bool input_ids = true;
     for (auto id : p.hex)
         input_ids &= id >= 0 && static_cast<std::size_t>(id) < p.points.size() / 3;
@@ -360,6 +392,8 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
             filtered.layer_id.clear();
             filtered.material_id.clear();
             filtered.cell_kind.clear();
+            filtered.copper_fraction.clear();
+            filtered.conductivity_diag.clear();
             for (std::size_t i = 0; i < p.hex.size() / 8; ++i) {
                 if (p.cell_kind[i] == 1)
                     continue;
@@ -373,6 +407,12 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                     filtered.material_id.push_back(p.material_id[i]);
                 if (i < p.cell_kind.size())
                     filtered.cell_kind.push_back(p.cell_kind[i]);
+                if (!p.copper_fraction.empty())
+                    filtered.copper_fraction.push_back(p.copper_fraction[i]);
+                if (!p.conductivity_diag.empty())
+                    filtered.conductivity_diag.insert(filtered.conductivity_diag.end(),
+                                                      p.conductivity_diag.begin() + 3 * i,
+                                                      p.conductivity_diag.begin() + 3 * i + 3);
             }
             p = std::move(filtered);
         }
@@ -499,6 +539,33 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
     for (auto v : eb.connectivity)
         eb_valid &= v >= 0 && static_cast<std::size_t>(v) < eb.points.size() / 3;
     agree(eb_valid);
+    // All ranks must enter the same dataset collectives, including empty ranks.
+    // A legacy block with no diagnostics anywhere emits neither diagnostic.
+    const std::array<const ResultsPartition*, 4> blocks{&p, &cut, &eb, &local.particles};
+    std::array<int, 4> diagnostic_schema{};
+    std::array<int, 4> block_cells_any{};
+    int emitted_diagnostics = 0;
+    for (std::size_t b = 0; b < blocks.size(); ++b) {
+        const auto& q = *blocks[b];
+        const int any = b == 0   ? input_schemas[0]
+                        : b == 1 ? (local.cut_as_hex ? 0 : input_schemas[1])
+                        : b == 2 ? input_schemas[2]
+                                 : 0;
+        const auto cells = b == 0 ? nc : b == 1 ? cn : q.connectivity.size() / 3;
+        int has_cells = cells != 0;
+        block_cells_any[b] = has_cells;
+#ifdef CHIPCAE_ENABLE_MPI
+        if (size_ > 1)
+            MPI_Allreduce(&has_cells, &block_cells_any[b], 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+#endif
+        diagnostic_schema[b] = any;
+        emitted_diagnostics |= any;
+    }
+    // Preserve empty block templates (including --cut-output hex), but never
+    // create a conductivity dataset for a legacy run with no supplied values.
+    for (std::size_t b = 0; b < blocks.size(); ++b)
+        if (!block_cells_any[b])
+            diagnostic_schema[b] = emitted_diagnostics;
     bool parallel = false;
 #if defined(H5_HAVE_PARALLEL) && defined(CHIPCAE_ENABLE_MPI)
     parallel = size_ > 1 && !std::getenv("CHIPCAE_RESULTS_SERIAL");
@@ -721,6 +788,10 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                     emit(cd, "elem_gid", q.elem_gid);
                 if (block == 1 && (selected("volume") || cut_any))
                     emit(cd, "volume", q.volume);
+                if (selected("copper_fraction") && (diagnostic_schema[block] & 1))
+                    emit(cd, "copper_fraction", q.copper_fraction);
+                if (selected("conductivity_diag") && (diagnostic_schema[block] & 2))
+                    emit(cd, "conductivity_diag", q.conductivity_diag, 3);
                 if (pd >= 0) {
                     check(hcall(parallel, rank_, "H5Gclose", [&] { return H5Gclose(pd); }));
                     check(hcall(parallel, rank_, "H5Gclose", [&] { return H5Gclose(cd); }));
@@ -767,6 +838,7 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
             ok = false;
         }
     agree(ok);
+    diagnostic_fields_ |= emitted_diagnostics;
     gids_ = gid_any != 0;
     cut_fields_ = cut_fields_ || cut_any != 0;
     steps_.push_back({n, time, std::move(filename)});
@@ -821,6 +893,10 @@ void ResultsWriter::finalize() {
                     if (!selected(name))
                         manifest_fields.emplace_back(name);
             for (const auto& name : manifest_fields) {
+                if ((name == "copper_fraction" && !(diagnostic_fields_ & 1)) ||
+                    (name == "conductivity_diag" && !(diagnostic_fields_ & 2)))
+                    continue;
+                const bool diagnostic = name == "copper_fraction" || name == "conductivity_diag";
                 // The default volume schema includes the empty cut template and its GIDs.
                 if (name == "elem_gid" && !gids_ && !cut_fields_ && !selected("volume"))
                     continue;
@@ -829,15 +905,18 @@ void ResultsWriter::finalize() {
                 first_field = false;
                 out << "{\"name\":" << quoted(name)
                     << ",\"location\":" << quoted(name == "T" || name == "U" ? "point" : "cell")
-                    << ",\"components\":" << (name == "U" ? 3 : 1) << ",\"unit\":"
-                    << quoted(name == "T"        ? "K"
+                    << ",\"components\":" << (name == "U" || name == "conductivity_diag" ? 3 : 1)
+                    << ",\"unit\":"
+                    << quoted(diagnostic         ? ""
+                              : name == "T"      ? "K"
                               : name == "U"      ? "m"
                               : name == "volume" ? "m3"
                                                  : "1")
                     << ",\"dtype\":"
-                    << quoted(name == "T" || name == "U" || name == "volume" ? "float64"
-                              : name == "elem_gid"                           ? "int64"
-                                                                             : "int32")
+                    << quoted(name == "T" || name == "U" || name == "volume" || diagnostic
+                                  ? "float64"
+                              : name == "elem_gid" ? "int64"
+                                                   : "int32")
                     << '}';
             }
             if (!first_field)
@@ -864,8 +943,8 @@ void ResultsWriter::finalize() {
             if (mesh_) {
                 const auto& m = *mesh_;
                 out << ",\n\"mesh\":{\"nx0\":" << m.nx0 << ",\"ny0\":" << m.ny0 << ",\"L\":" << m.L
-                    << ",\"padded_cells\":" << m.padded_cells << ",\"nz\":" << m.nz
-                    << ",\"mesh_sha256\":" << quoted(m.mesh_sha256) << '}';
+                    << ",\"padded_cells\":" << m.padded_cells << ",\"void_cells\":" << m.void_cells
+                    << ",\"nz\":" << m.nz << ",\"mesh_sha256\":" << quoted(m.mesh_sha256) << '}';
             }
             out << "\n}\n";
             out.close();

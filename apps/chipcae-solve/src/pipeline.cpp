@@ -16,6 +16,7 @@
 #include <fstream>
 #include <jsoncons/json.hpp>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mfem.hpp>
 #include <numeric>
@@ -23,6 +24,7 @@
 #include <set>
 #include <sstream>
 #include <tuple>
+#include <yaml-cpp/yaml.h>
 
 namespace chipcae::solve {
 namespace {
@@ -166,7 +168,7 @@ public:
         a.SetSize(3 * nd);
         a = 0.0;
         DenseMatrix d(nd, 3), B(6, 3 * nd), CB(6, 3 * nd), local(3 * nd);
-        const auto& C = materials.at(t.Attribute - 1).C;
+        const auto& C = materials.at(t.ElementNo).C;
         const auto& rule =
             IntRule ? *IntRule : IntRules.Get(el.GetGeomType(), 2 * el.GetOrder() + 1);
         for (int q = 0; q < rule.GetNPoints(); ++q) {
@@ -206,7 +208,7 @@ public:
         v.SetSize(3 * nd);
         v = 0.0;
         DenseMatrix d(nd, 3);
-        const auto& m = materials.at(t.Attribute - 1);
+        const auto& m = materials.at(t.ElementNo);
         Vector stress(3);
         stress = 0.0;
         for (int a = 0; a < 3; ++a)
@@ -248,7 +250,7 @@ public:
         matrix.SetSize(3);
         matrix = 0.0;
         for (int i = 0; i < 3; ++i)
-            matrix(i, i) = values.at(t.Attribute - 1)[i];
+            matrix(i, i) = values.at(t.ElementNo)[i];
     }
 };
 Array<int>
@@ -272,6 +274,73 @@ boundary(const mesh::HexMeshArrays& arrays, Mesh& mesh, const std::string& targe
     if (!found)
         throw InputError(ErrorCode::INPUT_INVALID, "target has no boundary faces: " + target);
     return mark;
+}
+void check_floating(const mesh::HexMeshArrays& arrays,
+                    FiniteElementSpace& space,
+                    const Array<int>& essential) {
+    const auto count = arrays.elem_gid.size();
+    std::vector<std::size_t> parent(count), sizes(count, 1);
+    std::iota(parent.begin(), parent.end(), 0);
+    auto root = [&](std::size_t e) {
+        while (parent[e] != e) {
+            parent[e] = parent[parent[e]];
+            e = parent[e];
+        }
+        return e;
+    };
+    // Tensor-grid hex indices address the MFEM mesh vertices copied from arrays.vertices;
+    // node_gid has one entry per vertex. Q2-only DOFs are added by the FE space below.
+    // Connectivity is by vertex identity, including single-node contact.
+    // Equal coordinates with distinct vertex indices never join components.
+    std::vector<std::size_t> first(arrays.node_gid.size(), count);
+    for (std::size_t e = 0; e < count; ++e)
+        for (int j = 0; j < 8; ++j) {
+            auto& owner = first.at(arrays.hex[8 * e + j]);
+            if (owner == count)
+                owner = e;
+            else {
+                auto a = root(e), b = root(owner);
+                if (a == b)
+                    continue;
+                if (sizes[a] < sizes[b])
+                    std::swap(a, b);
+                parent[b] = a;
+                sizes[a] += sizes[b];
+            }
+        }
+    std::vector<bool> constrained(count, false);
+    for (std::size_t v = 0; v < first.size(); ++v) {
+        if (first[v] == count)
+            continue;
+        Array<int> dofs;
+        space.GetVertexVDofs(static_cast<int>(v), dofs);
+        for (int d : dofs)
+            if (std::binary_search(essential.begin(), essential.end(), d < 0 ? -1 - d : d))
+                constrained[root(first[v])] = true;
+    }
+    std::map<BodyId, std::string> bodies;
+    for (const auto& [name, id] : arrays.attr_table.bodies)
+        bodies.emplace(id, name);
+    std::vector<std::string> region_names(count), layer_names(count);
+    auto minimum = [](std::string& name, const std::string& candidate) {
+        if (name.empty() || candidate < name)
+            name = candidate;
+    };
+    for (std::size_t e = 0; e < count; ++e) {
+        const auto component = root(e);
+        const auto& record = arrays.attr_table.entries.at(arrays.attribute[e] - 1);
+        if (!record.region.empty())
+            minimum(region_names[component], bodies.at(record.body));
+        else
+            minimum(layer_names[component], record.layer);
+    }
+    // Choose by name across all offending components, independent of element order.
+    std::string offending;
+    for (std::size_t e = 0; e < count; ++e)
+        if (root(e) == e && !constrained[e])
+            minimum(offending, region_names[e].empty() ? layer_names[e] : region_names[e]);
+    if (!offending.empty())
+        throw InputError(ErrorCode::INPUT_INVALID, "floating body " + offending);
 }
 std::string file_bytes(const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);
@@ -350,6 +419,18 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
     };
     state(io::State::Value::starting);
     try {
+        int ranks = 1;
+        MPI_Comm_size(MPI_COMM_WORLD, &ranks);
+        if (inputs.grid.ranks != ranks)
+            throw InputError(ErrorCode::INTERNAL, "grid ranks do not match MPI communicator size");
+        // Keep physics selection inside the solver without extending RunInputs.
+        // YAML also accepts JSON, matching both case formats validated by the loader.
+        const auto case_data = YAML::Load(file_bytes(inputs.case_path));
+        const auto physics = case_data["physics"];
+        const bool mechanical =
+            std::any_of(physics.begin(), physics.end(), [](const YAML::Node& entry) {
+                return entry["solver"].as<std::string>() == "fem.solid";
+            });
         std::optional<mesh::cut::CutLayerArrays> clipped;
         auto arrays = build_mesh(inputs, &clipped);
         std::vector<std::string> layer_names, material_names(arrays.attr_table.materials.size());
@@ -369,6 +450,7 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
         summary.padded_cells = (nx * ny - (nx - arrays.grid_report.padding[0]) *
                                               (ny - arrays.grid_report.padding[1])) *
                                summary.nz;
+        summary.void_cells = arrays.grid_report.void_cells;
         // Each rank has the same global background arrays; hash in canonical GID order.
         std::string raw;
         auto append = [&](std::uint64_t bits) {
@@ -446,6 +528,47 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
         GridFunction temperature(&scalar), displacement(&vector);
         temperature = inputs.T_ref;
         displacement = 0.0;
+        // Keep each load intact; in particular an alias is one total-power load.
+        // Resolve the same concrete targets for every load and mechanical constraint.
+        std::map<std::string, std::vector<std::string>> targets;
+        auto resolve = [&](const std::string& target) -> const std::vector<std::string>& {
+            auto [it, inserted] = targets.try_emplace(target);
+            auto& resolved = it->second;
+            if (!inserted)
+                return resolved;
+            if (!target.starts_with("layer:")) {
+                resolved.push_back(target);
+                return resolved;
+            }
+            const auto name = target.substr(6);
+            auto exists = [&](const std::string& layer_name) {
+                return std::any_of(inputs.stack.layers.begin(),
+                                   inputs.stack.layers.end(),
+                                   [&](const auto& layer) { return layer.name == layer_name; });
+            };
+            if (exists(name))
+                resolved.push_back(target);
+            else {
+                const auto prefix = name + "#";
+                auto count = std::count_if(
+                    inputs.stack.layers.begin(), inputs.stack.layers.end(), [&](const auto& layer) {
+                        return layer.name.starts_with(prefix);
+                    });
+                for (decltype(count) k = 0; k < count; ++k) {
+                    auto slice = prefix + std::to_string(k);
+                    if (!exists(slice))
+                        throw InputError(ErrorCode::INPUT_INVALID, "invalid target: " + target);
+                    resolved.push_back("layer:" + slice);
+                }
+            }
+            if (resolved.empty())
+                throw InputError(ErrorCode::INPUT_INVALID, "invalid target: " + target);
+            return resolved;
+        };
+        auto selects_layer = [](const std::vector<std::string>& resolved,
+                                const std::string& layer) {
+            return std::find(resolved.begin(), resolved.end(), "layer:" + layer) != resolved.end();
+        };
         // Freeze constitutive properties at the reference temperature for this one-way solve.
         const auto& materials = inputs.materials;
         for (const auto& [id, material] : materials) {
@@ -463,39 +586,177 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             warn(material.alpha_clamped, "alpha");
         }
         const std::size_t na = arrays.attr_table.entries.size();
-        std::vector<Constitutive> mixtures;
-        std::vector<std::array<double, 3>> conductivities;
+        const auto ne = arrays.elem_gid.size();
+        std::vector<Constitutive> mixtures(mechanical ? ne : 0);
+        std::vector<std::array<double, 3>> conductivities(ne);
+        std::vector<double> fractions(ne, 0);
+        struct ElementMaterial {
+            const Material* base = nullptr;
+            const Material* metal = nullptr;
+            std::size_t layer = 0;
+        };
+        std::vector<ElementMaterial> attribute_materials(na);
+        bool conductivity_available = true;
         bool has_copper = false;
         std::vector<double> lambda(na), mu(na), stress(na), source(na, 0);
+        std::vector<bool> used(na, false);
+        for (auto attribute : arrays.attribute)
+            used.at(attribute - 1) = true;
         for (std::size_t a = 0; a < na; ++a) {
+            if (!used[a])
+                continue;
             const auto& record = arrays.attr_table.entries[a];
             std::string id;
             for (const auto& [name, number] : arrays.attr_table.materials)
                 if (number == record.material)
                     id = name;
-            const auto& m = materials.at(id);
+            auto material = materials.find(id);
+            if (material == materials.end())
+                throw InputError(ErrorCode::MATERIAL_MAPPING_MISSING,
+                                 "material mapping missing: " + id);
+            const auto& m = material->second;
             lambda[a] = m.E * m.nu / ((1 + m.nu) * (1 - 2 * m.nu));
             mu[a] = m.E / (2 * (1 + m.nu));
             stress[a] = (3 * lambda[a] + 2 * mu[a]) * m.alpha;
             if (!std::isfinite(lambda[a]) || !std::isfinite(mu[a]) || !std::isfinite(stress[a]))
                 throw InputError(ErrorCode::INPUT_INVALID,
                                  "material " + id + ": nonfinite constitutive coefficient");
-            conductivities.push_back({m.k, m.k, m.k});
             auto layer =
                 std::find_if(inputs.stack.layers.begin(),
                              inputs.stack.layers.end(),
                              [&](const auto& value) { return value.name == record.layer; });
+            if (layer == inputs.stack.layers.end())
+                throw InputError(ErrorCode::INPUT_INVALID, "attribute layer is missing");
+            auto& lookup = attribute_materials[a];
+            lookup.base = &m;
+            lookup.layer = static_cast<std::size_t>(layer - inputs.stack.layers.begin());
             if (layer->copper) {
                 has_copper = true;
-                const auto& metal = materials.at(layer->copper->metal);
-                double f = *layer->copper->fraction;
-                mixtures.push_back(mixture(m, metal, f));
-                if (inputs.thermal)
-                    conductivities.back() = {f * metal.k + (1 - f) * m.k,
-                                             f * metal.k + (1 - f) * m.k,
-                                             1 / (f / metal.k + (1 - f) / m.k)};
-            } else
-                mixtures.push_back(mixture(m, m, 0));
+                lookup.metal = &materials.at(layer->copper->metal);
+            }
+        }
+        const auto nz = arrays.axes[2].size() - 1;
+        const auto columns = nx * ny;
+        const auto copper_layers = static_cast<std::size_t>(std::count_if(
+            inputs.stack.layers.begin(), inputs.stack.layers.end(), [](const auto& layer) {
+                return layer.copper.has_value();
+            }));
+        if (nz == 0 || columns == 0 ||
+            ((!arrays.copper_layer_of_layer.empty() || copper_layers != 0) &&
+             arrays.copper_layer_of_layer.size() != inputs.stack.layers.size()) ||
+            (!arrays.copper_phi.empty() && arrays.copper_phi.size() != copper_layers * columns))
+            throw InputError(ErrorCode::INPUT_INVALID, "invalid copper map dimensions");
+        for (double f : arrays.copper_phi)
+            if (!std::isfinite(f) || f < 0 || f > 1)
+                throw InputError(ErrorCode::INPUT_INVALID, "invalid copper fraction");
+        // The replicated serial MFEM mesh retains source element order. ElementNo
+        // indexes these tables; only global GIDs determine the Morton column.
+        for (std::size_t e = 0; e < ne; ++e) {
+            const auto gid = arrays.elem_gid[e];
+            const auto& lookup = attribute_materials.at(arrays.attribute[e] - 1);
+            const auto& base = *lookup.base;
+            const auto* metal = lookup.metal;
+            const auto copper = arrays.copper_layer_of_layer.empty()
+                                    ? -1
+                                    : arrays.copper_layer_of_layer[lookup.layer];
+            if (gid < 0 || (metal && static_cast<std::size_t>(gid) / nz >= columns))
+                throw InputError(ErrorCode::INPUT_INVALID, "invalid element gid for copper map");
+            if ((metal && (copper < 0 || static_cast<std::size_t>(copper) >= copper_layers)) ||
+                (!metal && copper != -1))
+                throw InputError(ErrorCode::INPUT_INVALID, "invalid copper layer mapping");
+            double f = 0;
+            if (metal && !arrays.copper_phi.empty())
+                f = arrays.copper_phi[static_cast<std::size_t>(copper) * columns +
+                                      static_cast<std::size_t>(gid) / nz];
+            fractions[e] = f;
+            conductivities[e] = {base.k, base.k, base.k};
+            // Missing conductivity is legal for mechanical-only legacy cards.
+            // Omit that diagnostic for the whole run instead of inventing a value.
+            conductivity_available &= base.k > 0 && (!metal || metal->k > 0);
+            if (metal && base.k > 0 && metal->k > 0) {
+                const double kxy = f * metal->k + (1 - f) * base.k;
+                const double kz = 1 / (f / metal->k + (1 - f) / base.k);
+                conductivities[e] = {kxy, kxy, kz};
+            }
+            if (mechanical)
+                mixtures[e] = mixture(base, metal ? *metal : base, f);
+        }
+        Array<int> mechanical_essential;
+        if (mechanical) {
+            if (inputs.fixed.empty()) {
+                std::set<int> candidates;
+                std::set<int> cut_cells;
+                if (clipped)
+                    cut_cells.insert(clipped->cut_elem.begin(), clipped->cut_elem.end());
+                for (int e = 0; e < mesh.GetNE(); ++e)
+                    if (!cut_cells.contains(e)) {
+                        Array<int> vertices;
+                        mesh.GetElementVertices(e, vertices);
+                        for (int v : vertices)
+                            candidates.insert(v);
+                    }
+                // Choose three axis-aligned, non-collinear interior regular-cell
+                // vertices on one z plane, matching the constrained components.
+                int anchor = -1, along_x = -1, along_y = -1;
+                for (int a : candidates) {
+                    const double* p = mesh.GetVertex(a);
+                    for (int b : candidates) {
+                        const double* q = mesh.GetVertex(b);
+                        if (q[2] == p[2] && q[1] == p[1] && q[0] > p[0])
+                            along_x = b;
+                        if (q[2] == p[2] && q[0] == p[0] && q[1] > p[1])
+                            along_y = b;
+                    }
+                    if (along_x >= 0 && along_y >= 0) {
+                        anchor = a;
+                        break;
+                    }
+                    along_x = along_y = -1;
+                }
+                if (anchor < 0)
+                    throw InputError(
+                        ErrorCode::INPUT_INVALID,
+                        "3-2-1 requires three non-collinear vertices of fully interior "
+                        "regular cells (six DOFs)");
+                for (auto [v, count] :
+                     {std::pair{anchor, 3}, std::pair{along_x, 2}, std::pair{along_y, 1}}) {
+                    Array<int> dofs;
+                    vector.GetVertexVDofs(v, dofs);
+                    for (int c = 3 - count; c < 3; ++c)
+                        mechanical_essential.Append(dofs[c]);
+                }
+                mechanical_essential.Sort();
+                mechanical_essential.Unique();
+                if (mechanical_essential.Size() != 6)
+                    throw InputError(ErrorCode::INPUT_INVALID,
+                                     "3-2-1 must constrain exactly six DOFs");
+                emit(io::LogLine{1, rank, "3-2-1 constrained_dofs=6 (3+2+1)", "", 0});
+            } else {
+                Array<int> all(mesh.bdr_attributes.Max());
+                all = 0;
+                for (const auto& requested : inputs.fixed)
+                    for (const auto& target : resolve(requested)) {
+                        if (target.starts_with("layer:")) {
+                            for (int e = 0; e < mesh.GetNE(); ++e)
+                                if (arrays.attr_table.entries[arrays.attribute[e] - 1].layer ==
+                                    target.substr(6)) {
+                                    Array<int> dofs;
+                                    vector.GetElementVDofs(e, dofs);
+                                    mechanical_essential.Append(dofs);
+                                }
+                        } else {
+                            auto marker = boundary(arrays, mesh, target, all.Size());
+                            for (int i = 0; i < all.Size(); ++i)
+                                all[i] |= marker[i];
+                        }
+                    }
+                Array<int> boundary_dofs;
+                vector.GetEssentialTrueDofs(all, boundary_dofs);
+                mechanical_essential.Append(boundary_dofs);
+                mechanical_essential.Sort();
+                mechanical_essential.Unique();
+            }
+            check_floating(arrays, vector, mechanical_essential);
         }
         state(io::State::Value::running);
         auto solve = [&](BilinearForm& form,
@@ -591,8 +852,12 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             BilinearForm form(&scalar);
             form.AddDomainIntegrator(bilinear(new DiffusionIntegrator(k)));
             if (clipped)
-                form.AddInteriorFaceIntegrator(
-                    new fem::GhostPenalty(arrays, *clipped, conductivities, inputs.ghost_penalty));
+                form.AddInteriorFaceIntegrator(new fem::GhostPenalty(arrays,
+                                                                     *clipped,
+                                                                     conductivities,
+                                                                     inputs.ghost_penalty,
+                                                                     1,
+                                                                     fem::ScaleLayout::Element));
             LinearForm rhs(&scalar);
             Array<int> essential, all(mesh.bdr_attributes.Max());
             all = 0;
@@ -603,23 +868,25 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             if (clipped)
                 cut_boundary_cells.insert(clipped->cut_elem.begin(), clipped->cut_elem.end());
             for (const auto& load : inputs.loads) {
+                const auto& resolved = resolve(load.target);
                 if (load.type == "heat_source") {
                     double volume = 0;
                     for (int e = 0; e < mesh.GetNE(); ++e)
-                        if (arrays.attr_table.entries[arrays.attribute[e] - 1].layer ==
-                            load.target.substr(6))
+                        if (selects_layer(resolved,
+                                          arrays.attr_table.entries[arrays.attribute[e] - 1].layer))
                             volume += cut_rules ? cut_rules->volumes[e] : mesh.GetElementVolume(e);
                     if (load.total_power && !(volume > 0))
                         throw InputError(ErrorCode::INPUT_INVALID,
                                          "heat_source target has zero volume");
                     const double density = heat_source_density(load, volume);
                     for (std::size_t a = 0; a < na; ++a)
-                        if (arrays.attr_table.entries[a].layer == load.target.substr(6))
+                        if (selects_layer(resolved, arrays.attr_table.entries[a].layer))
                             source[a] += density;
                 } else if (load.type == "fixed_temperature" && load.target.starts_with("layer:")) {
                     for (int e = 0; e < mesh.GetNE(); ++e)
-                        if (arrays.attr_table.entries[arrays.attribute[e] - 1].layer ==
-                            load.target.substr(6)) {
+                        if (selects_layer(
+                                resolved,
+                                arrays.attr_table.entries[arrays.attribute[e] - 1].layer)) {
                             Array<int> dofs;
                             scalar.GetElementDofs(e, dofs);
                             for (int d : dofs) {
@@ -627,39 +894,43 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                                 essential.Append(d);
                             }
                         }
-                } else {
-                    if (clipped && load.type == "convection") {
-                        surface_rules.push_back(
-                            std::make_unique<CutSurfaceRule>(arrays, *clipped, load.target));
-                        form.AddDomainIntegrator(new CutSurfaceMass(*surface_rules.back(), load.h));
-                        rhs.AddDomainIntegrator(new CutSurfaceLoad(
-                            *surface_rules.back(), load.h * (load.T_inf - inputs.T_ref)));
-                        if (load.target == "boundary:embedded")
-                            continue;
+                } else
+                    for (const auto& target : resolved) {
+                        if (clipped && load.type == "convection") {
+                            surface_rules.push_back(
+                                std::make_unique<CutSurfaceRule>(arrays, *clipped, target));
+                            form.AddDomainIntegrator(
+                                new CutSurfaceMass(*surface_rules.back(), load.h));
+                            rhs.AddDomainIntegrator(new CutSurfaceLoad(
+                                *surface_rules.back(), load.h * (load.T_inf - inputs.T_ref)));
+                            if (target == "boundary:embedded")
+                                continue;
+                        }
+                        if (target == "boundary:embedded")
+                            throw InputError(ErrorCode::INPUT_INVALID,
+                                             "embedded boundary target requires a cut outline");
+                        markers.push_back(std::make_unique<Array<int>>(
+                            boundary(arrays, mesh, target, all.Size())));
+                        auto& marker = *markers.back();
+                        if (load.type == "fixed_temperature") {
+                            ConstantCoefficient value(load.T - inputs.T_ref);
+                            temperature.ProjectBdrCoefficient(value, marker);
+                            for (int i = 0; i < all.Size(); ++i)
+                                all[i] |= marker[i];
+                        } else if (load.type == "convection") {
+                            coefficients.push_back(std::make_unique<ConstantCoefficient>(load.h));
+                            form.AddBoundaryIntegrator(new RegularBoundaryMass(*coefficients.back(),
+                                                                               mesh,
+                                                                               cut_boundary_cells),
+                                                       marker);
+                            coefficients.push_back(std::make_unique<ConstantCoefficient>(
+                                load.h * (load.T_inf - inputs.T_ref)));
+                            rhs.AddBoundaryIntegrator(new RegularBoundaryLoad(*coefficients.back(),
+                                                                              mesh,
+                                                                              cut_boundary_cells),
+                                                      marker);
+                        }
                     }
-                    if (load.target == "boundary:embedded")
-                        throw InputError(ErrorCode::INPUT_INVALID,
-                                         "embedded boundary target requires a cut outline");
-                    markers.push_back(std::make_unique<Array<int>>(
-                        boundary(arrays, mesh, load.target, all.Size())));
-                    auto& marker = *markers.back();
-                    if (load.type == "fixed_temperature") {
-                        ConstantCoefficient value(load.T - inputs.T_ref);
-                        temperature.ProjectBdrCoefficient(value, marker);
-                        for (int i = 0; i < all.Size(); ++i)
-                            all[i] |= marker[i];
-                    } else if (load.type == "convection") {
-                        coefficients.push_back(std::make_unique<ConstantCoefficient>(load.h));
-                        form.AddBoundaryIntegrator(
-                            new RegularBoundaryMass(*coefficients.back(), mesh, cut_boundary_cells),
-                            marker);
-                        coefficients.push_back(std::make_unique<ConstantCoefficient>(
-                            load.h * (load.T_inf - inputs.T_ref)));
-                        rhs.AddBoundaryIntegrator(
-                            new RegularBoundaryLoad(*coefficients.back(), mesh, cut_boundary_cells),
-                            marker);
-                    }
-                }
             }
             AttributeCoefficient q(source);
             rhs.AddDomainIntegrator(linear(new DomainLFIntegrator(q)));
@@ -676,97 +947,34 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             for (const auto& load : inputs.loads)
                 if (load.type == "uniform_temperature")
                     temperature = load.T;
-        AttributeCoefficient l(lambda), m(mu), s(stress, &temperature, inputs.T_ref);
-        BilinearForm form(&vector);
-        if (has_copper)
-            form.AddDomainIntegrator(bilinear(new MixtureElasticity(mixtures)));
-        else
-            form.AddDomainIntegrator(bilinear(new ElasticityIntegrator(l, m)));
-        LinearForm rhs(&vector);
-        if (has_copper)
-            rhs.AddDomainIntegrator(linear(new MixtureForce(mixtures, temperature, inputs.T_ref)));
-        else
-            rhs.AddDomainIntegrator(linear(new ThermalForce(s)));
-        std::vector<std::array<double, 3>> mechanical_scale(na);
-        for (std::size_t a = 0; a < na; ++a)
-            mechanical_scale[a] = {mixtures[a].C(0, 0), mixtures[a].C(1, 1), mixtures[a].C(2, 2)};
-        if (clipped)
-            form.AddInteriorFaceIntegrator(
-                new fem::GhostPenalty(arrays, *clipped, mechanical_scale, inputs.ghost_penalty, 3));
-        Array<int> essential;
-        if (inputs.fixed.empty()) {
-            std::set<int> candidates;
-            std::set<int> cut_cells;
+        if (mechanical) {
+            AttributeCoefficient l(lambda), m(mu), s(stress, &temperature, inputs.T_ref);
+            BilinearForm form(&vector);
+            if (has_copper)
+                form.AddDomainIntegrator(bilinear(new MixtureElasticity(mixtures)));
+            else
+                form.AddDomainIntegrator(bilinear(new ElasticityIntegrator(l, m)));
+            LinearForm rhs(&vector);
+            if (has_copper)
+                rhs.AddDomainIntegrator(
+                    linear(new MixtureForce(mixtures, temperature, inputs.T_ref)));
+            else
+                rhs.AddDomainIntegrator(linear(new ThermalForce(s)));
+            std::vector<std::array<double, 3>> mechanical_scale(ne);
+            for (std::size_t e = 0; e < ne; ++e)
+                mechanical_scale[e] = {
+                    mixtures[e].C(0, 0), mixtures[e].C(1, 1), mixtures[e].C(2, 2)};
             if (clipped)
-                cut_cells.insert(clipped->cut_elem.begin(), clipped->cut_elem.end());
-            for (int e = 0; e < mesh.GetNE(); ++e)
-                if (!cut_cells.contains(e)) {
-                    Array<int> vertices;
-                    mesh.GetElementVertices(e, vertices);
-                    for (int v : vertices)
-                        candidates.insert(v);
-                }
-            // Choose three axis-aligned, non-collinear interior regular-cell
-            // vertices on one z plane, matching the constrained components.
-            int anchor = -1, along_x = -1, along_y = -1;
-            for (int a : candidates) {
-                const double* p = mesh.GetVertex(a);
-                for (int b : candidates) {
-                    const double* q = mesh.GetVertex(b);
-                    if (q[2] == p[2] && q[1] == p[1] && q[0] > p[0])
-                        along_x = b;
-                    if (q[2] == p[2] && q[0] == p[0] && q[1] > p[1])
-                        along_y = b;
-                }
-                if (along_x >= 0 && along_y >= 0) {
-                    anchor = a;
-                    break;
-                }
-                along_x = along_y = -1;
-            }
-            if (anchor < 0)
-                throw InputError(ErrorCode::INPUT_INVALID,
-                                 "3-2-1 requires three non-collinear vertices of fully interior "
-                                 "regular cells (six DOFs)");
-            for (auto [v, count] :
-                 {std::pair{anchor, 3}, std::pair{along_x, 2}, std::pair{along_y, 1}}) {
-                Array<int> dofs;
-                vector.GetVertexVDofs(v, dofs);
-                for (int c = 3 - count; c < 3; ++c)
-                    essential.Append(dofs[c]);
-            }
-            essential.Sort();
-            essential.Unique();
-            if (essential.Size() != 6)
-                throw InputError(ErrorCode::INPUT_INVALID, "3-2-1 must constrain exactly six DOFs");
-            emit(io::LogLine{1, rank, "3-2-1 constrained_dofs=6 (3+2+1)", "", 0});
-        } else {
-            Array<int> all(mesh.bdr_attributes.Max());
-            all = 0;
-            for (const auto& target : inputs.fixed) {
-                if (target.starts_with("layer:")) {
-                    for (int e = 0; e < mesh.GetNE(); ++e)
-                        if (arrays.attr_table.entries[arrays.attribute[e] - 1].layer ==
-                            target.substr(6)) {
-                            Array<int> dofs;
-                            vector.GetElementVDofs(e, dofs);
-                            essential.Append(dofs);
-                        }
-                } else {
-                    auto marker = boundary(arrays, mesh, target, all.Size());
-                    for (int i = 0; i < all.Size(); ++i)
-                        all[i] |= marker[i];
-                }
-            }
-            Array<int> boundary_dofs;
-            vector.GetEssentialTrueDofs(all, boundary_dofs);
-            essential.Append(boundary_dofs);
-            essential.Sort();
-            essential.Unique();
+                form.AddInteriorFaceIntegrator(new fem::GhostPenalty(arrays,
+                                                                     *clipped,
+                                                                     mechanical_scale,
+                                                                     inputs.ghost_penalty,
+                                                                     3,
+                                                                     fem::ScaleLayout::Element));
+            solve(form, rhs, displacement, mechanical_essential, "U");
+            if (stop())
+                return 0;
         }
-        solve(form, rhs, displacement, essential, "U");
-        if (stop())
-            return 0;
         // Evaluate summaries on all Q2 nodes, including midside/face/interior nodes.
         GridFunction coordinates(&vector);
         VectorFunctionCoefficient position(3, [](const Vector& x, Vector& v) { v = x; });
@@ -815,12 +1023,12 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             for (int c = 0; c < 3; ++c)
                 mag += std::pow(displacement[vector.DofToVDof(i, c)], 2);
             umax = std::max(umax, std::sqrt(mag));
-            if (std::abs(z - arrays.axes[2].back()) < 1e-13) {
+            if (mechanical && std::abs(z - arrays.axes[2].back()) < 1e-13) {
                 double w = displacement[vector.DofToVDof(i, 2)];
                 add_top(x, y, w);
             }
         }
-        if (clipped)
+        if (mechanical && clipped)
             for (std::size_t s = 0; s < clipped->cut_elem.size(); ++s) {
                 int e = clipped->cut_elem[s];
                 auto* t = mesh.GetElementTransformation(e);
@@ -837,22 +1045,41 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                     add_top(x[0], x[1], u[2]);
                 }
             }
-        if (top.size() < 3)
-            throw InputError(ErrorCode::INPUT_INVALID,
-                             "insufficient top-domain samples for plane removal");
-        Vector plane(3);
-        DenseMatrixInverse inverse(normal);
-        inverse.Mult(fit_rhs, plane);
-        double lo = std::numeric_limits<double>::infinity(), hi = -lo;
-        for (const auto& p : top) {
-            double w = p[2] - plane[0] - plane[1] * p[0] - plane[2] * p[1];
-            lo = std::min(lo, w);
-            hi = std::max(hi, w);
+        double warpage = 0;
+        if (mechanical) {
+            double lo = std::numeric_limits<double>::infinity(), hi = -lo;
+            if (top.size() < 3)
+                throw InputError(ErrorCode::INPUT_INVALID,
+                                 "insufficient top-domain samples for plane removal");
+            Vector plane(3);
+            DenseMatrixInverse inverse(normal);
+            inverse.Mult(fit_rhs, plane);
+            for (const auto& p : top) {
+                double w = p[2] - plane[0] - plane[1] * p[0] - plane[2] * p[1];
+                lo = std::min(lo, w);
+                hi = std::max(hi, w);
+            }
+            warpage = hi - lo;
         }
         io::ResultsStep result;
         result.cut_as_hex = inputs.cut_as_hex;
         if (clipped)
             append_cut_output(result, arrays, *clipped, temperature, displacement, rank);
+        auto append_diagnostics = [&](io::ResultsPartition& out, std::size_t e) {
+            out.copper_fraction.push_back(fractions[e]);
+            if (conductivity_available)
+                out.conductivity_diag.insert(out.conductivity_diag.end(),
+                                             conductivities[e].begin(),
+                                             conductivities[e].end());
+        };
+        if (clipped) {
+            std::map<Index, std::size_t> source;
+            for (std::size_t e = 0; e < ne; ++e)
+                source.emplace(arrays.elem_gid[e], e);
+            for (auto* out : {&result.cut, &result.embedded_boundary})
+                for (auto gid : out->elem_gid)
+                    append_diagnostics(*out, source.at(gid));
+        }
         std::set<int> cut_elements;
         if (clipped)
             cut_elements.insert(clipped->cut_elem.begin(), clipped->cut_elem.end());
@@ -877,6 +1104,7 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                             part.U.push_back(displacement[vector.DofToVDof(d, c)]);
                     }
                 }
+                append_diagnostics(part, e);
                 part.elem_gid.push_back(arrays.elem_gid[e]);
                 part.cell_kind.push_back(cut_elements.contains(e) ? 1 : 0);
                 auto& record = arrays.attr_table.entries[arrays.attribute[e] - 1];
@@ -888,15 +1116,20 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                 part.layer_id.push_back(static_cast<int>(it - inputs.stack.layers.begin()) + 1);
             }
         writer.write_step(0, 0, result);
+        // Thermal-only runs retain the zero displacement field. Publish its zero
+        // summaries explicitly to satisfy the unchanged ResultsWriter contract.
+        const std::string thermal_only = "mechanical physics disabled; zero displacement";
         writer.add_summary(
             "warpage_pv",
-            hi - lo,
+            warpage,
             "m",
             0,
-            clipped ? "Q2 top-domain nodes and mesh cut-top quadrature; least-squares plane removal"
-                    : "Q2 top nodes; least-squares plane removal");
+            !mechanical ? thermal_only
+            : clipped
+                ? "Q2 top-domain nodes and mesh cut-top quadrature; least-squares plane removal"
+                : "Q2 top nodes; least-squares plane removal");
         writer.add_summary("T_max", tmax, "K", 0);
-        writer.add_summary("U_mag_max", umax, "m", 0);
+        writer.add_summary("U_mag_max", umax, "m", 0, mechanical ? "" : thermal_only);
         writer.finalize();
         emit(io::OutputAvailable{window,
                                  0,

@@ -142,6 +142,23 @@ Footprint footprint(const Polygon& p, bool box_only) {
         f.polygon = p;
     return f;
 }
+void snap_to_outline(Footprint& f, const Footprint& outline) {
+    const auto snap = [](Real value, Real lo, Real hi) {
+        const Real dlo = std::abs(value - lo), dhi = std::abs(value - hi);
+        // Pick the nearest side; ties on very narrow outlines go to the lower side.
+        if (std::min(dlo, dhi) <= 1e-12)
+            return dlo <= dhi ? lo : hi;
+        return value;
+    };
+    for (size_t axis = 0; axis < 2; ++axis) {
+        for (size_t corner : {axis, axis + 2})
+            f.box[corner] = snap(f.box[corner], outline.box[axis], outline.box[axis + 2]);
+        for (auto& point : f.polygon)
+            point[axis] = snap(point[axis], outline.box[axis], outline.box[axis + 2]);
+    }
+    if (!f.polygon.empty())
+        f.box = footprint(f.polygon, true).box;
+}
 // Restrict coordinate coalescing to floating-point roundoff at this geometry's scale.
 Real coordinate_tolerance(const Polygon& p) {
     if (p.empty())
@@ -265,11 +282,6 @@ std::vector<Footprint> section_footprints(const SlabSection& section, std::strin
             return {};
         }
         const auto& p = rings.front();
-        for (size_t i = 0; i < p.size(); ++i)
-            if (cross(p[i], p[(i + 1) % p.size()], p[(i + 2) % p.size()]) <= 0) {
-                reason = "non-convex section";
-                return {};
-            }
         return {footprint(p, false)};
     }
     // Canonicalize both axes together across outer and hole rings before strip
@@ -855,6 +867,12 @@ merge_parts(StackModel base, const std::vector<PlacedPart>& parts, const MergeOp
             if (!output_names.insert(region.name).second)
                 return invalid("generated name collides with " + region.name);
     }
+    // Preserve diagnostics on the original geometry, including one-ULP protrusions.
+    // Exact body IDs select only generated part regions, never base regions.
+    for (auto& layer : result.stack.layers)
+        for (auto& region : layer.regions)
+            if (ids.contains(region.body))
+                snap_to_outline(region.footprint, result.stack.outline);
     return result;
 }
 } // namespace chipcae::geometry
