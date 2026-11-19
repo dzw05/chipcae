@@ -175,3 +175,84 @@ if(_solve_backend)
         set_tests_properties(${_outline_test} PROPERTIES TIMEOUT 600 LABELS "mesh;cut;preview;mpi;io")
     endforeach()
 endif()
+
+# SP6 test-first acceptance. The Python file owns the generated, build-tree-only
+# C++ harness so this card does not add production hooks or installed interfaces.
+if(TARGET chipcae_solve_inputs)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS test_parts.py)
+    set(_parts_generated "${CMAKE_CURRENT_BINARY_DIR}/parts_generated")
+    execute_process(COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_parts.py --emit "${_parts_generated}"
+        COMMAND_ERROR_IS_FATAL ANY)
+    add_executable(chipcae_test_solve_parts "${_parts_generated}/parts_driver.cpp")
+    target_include_directories(chipcae_test_solve_parts PRIVATE
+        ${PROJECT_SOURCE_DIR}/apps/chipcae-solve/src
+        ${PROJECT_SOURCE_DIR}/schema/src)
+    target_link_libraries(chipcae_test_solve_parts PRIVATE chipcae_solve_inputs)
+    chipcae_set_warnings(chipcae_test_solve_parts)
+    if(_solve_backend AND MFEM_USE_PETSC)
+        target_compile_definitions(chipcae_test_solve_parts PRIVATE PARTS_BACKEND=1)
+        target_include_directories(chipcae_test_solve_parts PRIVATE ${PROJECT_SOURCE_DIR}/material/include)
+        target_link_libraries(chipcae_test_solve_parts PRIVATE chipcae::fem chipcae::io mfem)
+    endif()
+
+    function(_parts_test name)
+        add_test(NAME solve_parts_${name} COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_parts.py
+            --driver $<TARGET_FILE:chipcae_test_solve_parts>
+            --solve $<TARGET_FILE:chipcae-solve> --source ${PROJECT_SOURCE_DIR}
+            --test ${name} ${ARGN})
+        set_tests_properties(solve_parts_${name} PROPERTIES
+            TIMEOUT 600 LABELS "solve;parts;tierA"
+            ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
+    endfunction()
+
+    foreach(_parts_case IN ITEMS region_material region_material_missing copper_material_missing
+            empty_mesh alias_case alias_gap alias_missing_zero alias_prefix alias_bad_suffix
+            alias_leading_zero alias_negative alias_load_split alias_load_exact
+            alias_load_exact_malformed alias_load_numeric heat_load_intact)
+        _parts_test(${_parts_case})
+    endforeach()
+    if(_solve_backend AND MFEM_USE_PETSC)
+        foreach(_parts_case IN ITEMS omitted_cells unused_attribute used_unmapped
+                floating_lid floating_reverse floating_plate floating_constrained
+                floating_thermal_constraint floating_cut floating_anchors floating_anchors_connected
+                floating_multiple floating_multiple_reverse floating_names floating_mixed
+                floating_mechanical
+                shared_node coincident_distinct_nodes thermal_only
+                alias_split alias_exact alias_numeric mechanical_alias convection_alias
+                convection_cut_alias
+                heat_split heat_q_vol heat_additive heat_zero_volume heat_cut_volume
+                summary_writer summary_default summary_pipeline)
+            _parts_test(${_parts_case})
+        endforeach()
+        foreach(_np IN ITEMS 1 2 3)
+            foreach(_match IN ITEMS match mismatch)
+                _parts_test(ranks_${_match}_np${_np} --mpiexec ${MPIEXEC_EXECUTABLE})
+                set_tests_properties(solve_parts_ranks_${_match}_np${_np} PROPERTIES
+                    LABELS "solve;parts;tierA;mpi")
+            endforeach()
+        endforeach()
+        foreach(_np IN ITEMS 2 3)
+            _parts_test(omitted_mpi${_np} --mpiexec ${MPIEXEC_EXECUTABLE})
+            set_tests_properties(solve_parts_omitted_mpi${_np} PROPERTIES
+                LABELS "solve;parts;tierA;mpi;io")
+        endforeach()
+    endif()
+
+    # B is written today and remains disabled until region cutting is integrated.
+    foreach(_parts_case IN ITEMS solve_ring_rotated_c pending_covered pending_missing
+            pending_missing_reverse region_cut_receiver)
+        _parts_test(${_parts_case})
+        set_tests_properties(solve_parts_${_parts_case} PROPERTIES
+            DISABLED TRUE LABELS "solve;parts;cut;sp6-b")
+    endforeach()
+    if(_solve_backend AND MFEM_USE_PETSC)
+        foreach(_parts_case IN ITEMS region_ls_cut_quad6 cut_chamfer_lid_volume
+                solve_lid_rounded solve_chamfer_lid_cut cut_convection_alias)
+            _parts_test(${_parts_case})
+            set_tests_properties(solve_parts_${_parts_case} PROPERTIES
+                DISABLED TRUE TIMEOUT 1200 LABELS "solve;parts;cut;numerical;sp6-b")
+        endforeach()
+    endif()
+endif()
