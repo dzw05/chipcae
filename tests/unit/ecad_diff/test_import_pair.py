@@ -12,7 +12,7 @@ def main():
     from test_identical import ROOT, DELTA, diff_stacks, entry, number, reports, save
     with tempfile.TemporaryDirectory() as tmp:
         directory = Path(tmp)
-        mapping = save(directory / 'material_map.json', {'FR4': 'mat.fr4', 'copper': 'mat.cu'})
+        mapping = save(directory / 'material_map.json', {'FR4': 'fr4_eq', 'copper': 'cu'})
         paths = []
         for name, fixture in (('a', 'board_2layer.xml'), ('b', 'board_2layer.xml'),
                               ('c', 'board_4layer.xml')):
@@ -49,8 +49,8 @@ def main():
             key = f'{i}:{name}|{name}'
             number(entry(r, 'thickness', key)['odb'], thickness)
             assert entry(r, 'material', key)['odb'] == {
-                'material': 'mat.fr4',
-                'metal': None if name == 'Core' else 'mat.cu'}
+                'material': 'fr4_eq',
+                'metal': None if name == 'Core' else 'cu'}
             number(entry(r, 'copper_area', key)['odb'], area)
         number(entry(r, 'total_thickness')['odb'], 1.67e-3)
         outline = entry(r, 'outline')['odb']

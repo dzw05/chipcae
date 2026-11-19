@@ -186,4 +186,8 @@ bool apply_material_map(EcadModel& model, const std::filesystem::path& file, std
     }
     return true;
 }
+// TEST-FIRST placeholder: intentionally performs no validation until the implementation pass.
+bool validate_mapped_targets(const EcadModel&, std::string*) {
+    return true;
+}
 } // namespace chipcae::geometry::ecad
