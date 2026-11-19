@@ -70,7 +70,8 @@ with tempfile.TemporaryDirectory() as tmp:
         run(case, profile, 0)
     cut['layers'][0]['regions'][0]['footprint']['polygon'] = [[0.005, 0.005], [0.015, 0.005], [0.01, 0.015]]
     (root / 'stack.json').write_text(json.dumps(cut))
-    run(case, profile, 13, 'internal material cuts are not supported')
+    if backend:
+        run(case, profile, 13, 'internal material cuts are not supported')
     (root / 'stack.json').write_text(json.dumps(stack))
     for mutation in ('duplicate', 'temperature', 'target', 'linear'):
         invalid = copy.deepcopy(case)

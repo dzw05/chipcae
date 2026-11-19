@@ -16,6 +16,9 @@ struct ResultsPartition {
     std::vector<Index> connectivity, offsets{0}, face_conn, face_off{0}, poly_faces, poly_off{0};
     std::vector<Index> hex, elem_gid; // elem_gid optional: dense Morton column * global nz + k
     std::vector<std::int32_t> layer_id, material_id, cell_kind;
+    // Optional cell diagnostics, scalar and interleaved xyz respectively.
+    std::vector<double> copper_fraction;
+    std::vector<double> conductivity_diag;
 };
 struct ResultsStep {
     ResultsPartition hex;
@@ -32,13 +35,21 @@ public:
     struct MeshSummary {
         std::int64_t nx0, ny0, L, padded_cells, nz;
         std::string mesh_sha256;
+        std::int64_t void_cells = 0;
     };
     ResultsWriter(std::filesystem::path run,
                   const std::filesystem::path& stackup,
                   std::vector<std::string> layer_names = {},
                   std::vector<std::string> material_names = {},
-                  std::vector<std::string> fields = {
-                      "T", "U", "layer_id", "material_id", "cell_kind", "elem_gid", "volume"});
+                  std::vector<std::string> fields = {"T",
+                                                     "U",
+                                                     "layer_id",
+                                                     "material_id",
+                                                     "cell_kind",
+                                                     "elem_gid",
+                                                     "volume",
+                                                     "copper_fraction",
+                                                     "conductivity_diag"});
     void set_mesh(MeshSummary mesh);
     void write_step(int n, double time, const ResultsStep& local);
     void add_summary(
@@ -65,6 +76,7 @@ private:
     int rank_ = 0, size_ = 1;
     bool gids_ = false;
     bool cut_fields_ = false;
+    int diagnostic_fields_ = 0;
     std::vector<std::string> fields_;
     bool selected(const std::string& name) const;
     std::optional<MeshSummary> mesh_;

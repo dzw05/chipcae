@@ -14,6 +14,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <stdlib.h>
 #include <string>
 #include <sys/wait.h>
 #include <vector>
@@ -165,9 +166,9 @@ class Board:
         self.cli = build / 'kernel/chipcae-import'
         check(self.cli.is_file(), f'build chipcae-import first: {self.cli}')
         self.map = root / 'materials.json'
-        self.map.write_text(json.dumps({'copper':'mat.cu', 'Copper':'mat.cu',
-                                       'COPPER':'mat.cu', 'FR4':'mat.fr4', 'fr4':'mat.fr4',
-                                       'layer:DIELECTRIC_1':'mat.fr4'}))
+        self.map.write_text(json.dumps({'copper':'cu', 'Copper':'cu',
+                                       'COPPER':'cu', 'FR4':'fr4_eq', 'fr4':'fr4_eq',
+                                       'layer:DIELECTRIC_1':'fr4_eq', 'copper_base':'fr4_eq'}))
         self.job = root / 'job'
         shutil.copytree(fixture / 'kicad4l', self.job)
         # Minimal geometry derived from the owned fixture isolates each CLI behavior.
@@ -243,7 +244,9 @@ class Board:
                 layer = next(l for l in stack['layers'] if l['name'] == row['name'])
                 check(same_double(row['thickness_m'], layer['thickness']),
                       'layer report differs from written stack thickness')
-                check(row['material_id'] == layer['material']
+                check(row['material_id'] == (layer['copper']['metal']
+                      if row['copper'] and row['name'] not in material_overrides
+                      else layer['material'])
                       if row['material_key'] or row['name'] in material_overrides
                       else row['material_id'] == '', 'report material ID/empty-source rule')
         return report, rows
@@ -287,6 +290,66 @@ def compare_stack(a, b, path=''):
         relative(a,b,1e-6,path)
     else:
         check(a == b, f'{path}: {a!r} != {b!r}')
+
+# Invalid mapping targets must reject before B-tier policy or artifact publication.
+# Explicit copper bases isolate a dielectric failure from nearest-dielectric inheritance.
+for fmt in ('odb', 'ipc'):
+    for field, target in (('dielectric', 'mat.bt'), ('dielectric', 'bt'),
+                          ('material', 'mat.bt'), ('metal', 'mat.cu')):
+        for policy in ('plain', 'unaccepted_B', 'accepted_B'):
+            @case(f'map_target_{fmt}_{field}_{target}_{policy}', fmt)
+            def map_target(b, fmt=fmt, field=field, target=target, policy=policy):
+                mapping = load(b.map)
+                copper_names = ('F.CU', 'IN1.CU', 'IN2.CU', 'B.CU') if fmt == 'odb' else (
+                    'F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu')
+                for name in copper_names:
+                    mapping['copper_base@'+name] = 'fr4_eq'
+                dielectric_name = 'DIELECTRIC_1' if fmt == 'odb' else 'Core'
+                if field == 'dielectric':
+                    if fmt == 'odb':
+                        attr = b.job/'steps/pcb/layers/dielectric_1/attrlist'
+                        attr.write_text(attr.read_text().replace('.material=fr4',
+                                                                '.material=unique_core'))
+                        mapping['unique_core'] = target
+                    else:
+                        mapping['FR4'] = target
+                    layer, diagnostic_field = dielectric_name, 'material'
+                elif field == 'material':
+                    mapping['copper_base@'+copper_names[0]] = target
+                    layer, diagnostic_field = copper_names[0], 'material'
+                else:
+                    for key in ('copper', 'Copper', 'COPPER'):
+                        mapping[key] = target
+                    layer, diagnostic_field = copper_names[0], 'metal'
+                b.map.write_text(json.dumps(mapping))
+                if fmt == 'odb':
+                    input = b.job
+                    if policy != 'plain':
+                        path = b.job/'steps/pcb/layers/f.cu/features'
+                        path.write_text(path.read_text()+'T 1 1 standard P 0 0 1 1 0 text\n')
+                else:
+                    input = b.root/'mapped.xml'
+                    xml = (data/'board_4layer.xml').read_text()
+                    if policy != 'plain':
+                        xml = xml.replace('<Ecad>', '<VendorExtension/><Ecad>')
+                    input.write_text(xml)
+                rule = ('homogenized material must end with _eq' if target == 'bt' else
+                        "must match ^[a-z0-9_-]+$ (lowercase letters, digits, '_' or '-'; "
+                        'no dots, e.g. cu, fr4_eq)')
+                expected = f"layer '{layer}' {diagnostic_field} '{target}': {rule}"
+                for prior in (False, True):
+                    out, result, defects = b.run(input,
+                        ['--accept-b-tier'] if policy == 'accepted_B' else [],
+                        expected=7, name=f'out{prior}', prior=prior)
+                    report = load(defects)
+                    check(report['code'] == 'IMPORT_REJECTED',
+                          'ecad-map-targets: illegal target must not be missing-mapping code')
+                    check(report['message'] == expected,
+                          f'ecad-map-targets: expected {expected!r}, got {report["message"]!r}')
+                    check(result.stderr == 'IMPORT_REJECTED: '+expected+'\n',
+                          f'ecad-map-targets: diagnostic prefix/precedence: {result.stderr!r}')
+                    check(not list(out.glob('.chipcae-import-*')),
+                          'ecad-map-targets: rejected target leaked staged artifacts')
 
 @case('cross_ipc')
 def cross_ipc(b):
@@ -594,7 +657,7 @@ for fmt, source_material in ((f,m) for f in ('odb','ipc')
             layer,original = 'DIELECTRIC_1',0.0002
         if source_material == 'empty_source':
             # A fallback map without an override retains the existing empty report ID rule.
-            mapping['layer:'+layer] = 'mat.fr4'
+            mapping['layer:'+layer] = 'fr4_eq'
             b.map.write_text(json.dumps(mapping))
             base,_,_ = b.run(input,['--accept-b-tier'],name='base')
             _,base_rows = b.rows(base)
@@ -602,23 +665,23 @@ for fmt, source_material in ((f,m) for f in ('odb','ipc')
             check(r['material_key'] == r['material_id'] == '',
                   'empty source without a material override must keep empty report strings')
             check(next(l for l in load(base/'board.stack.json')['layers']
-                       if l['name'] == layer)['material'] == 'mat.fr4', 'fallback material ID')
+                       if l['name'] == layer)['material'] == 'fr4_eq', 'fallback material ID')
             del mapping['layer:'+layer]
         b.map.write_text(json.dumps(mapping))
-        path = b.override([dict(name=layer,thickness_m=original,material='mat.special')])
+        path = b.override([dict(name=layer,thickness_m=original,material='special_eq')])
         out,_,_ = b.run(input,['--stack-override',path,'--accept-b-tier'])
         check(next(l for l in load(out/'board.stack.json')['layers']
-                   if l['name'] == layer)['material'] == 'mat.special', 'override stack material ID')
+                   if l['name'] == layer)['material'] == 'special_eq', 'override stack material ID')
         _,rows = b.rows(out,material_overrides=(layer,))
         if fmt == 'ipc':
             check([l['name'] for l in load(out/'board.stack.json')['layers']] == ['Core','Cu'],
                   'partial IPC material override reordered layers')
         r = next(r for r in rows if r['name'] == layer)
-        check(r['material_key'] == key and r['material_id'] == 'mat.special',
+        check(r['material_key'] == key and r['material_id'] == 'special_eq',
               'explicit material must bypass mapping while preserving source key')
         for r in rows:
             if r['name'] != layer and r['status'] == 'kept':
-                check(r['material_id'] in ('mat.cu','mat.fr4'), 'other layer mapping changed')
+                check(r['material_id'] in ('cu','fr4_eq'), 'other layer mapping changed')
 
 @case('override_ascii_fold_only')
 def ascii_fold_only(b):
@@ -904,7 +967,7 @@ def plating(b):
 def report_preview(b):
     # The stack loader requires an explicit homogenized ID for dielectric layers.
     mapping = load(b.map)
-    b.map.write_text(json.dumps({key: ('mat.fr4_eq' if value == 'mat.fr4' else value)
+    b.map.write_text(json.dumps({key: ('fr4_eq' if value == 'fr4_eq' else value)
                                 for key,value in mapping.items()}))
     custom = b.root/'reports/custom.json'
     out,_,d = b.run(report=custom)
@@ -1059,7 +1122,7 @@ sys.exit(bool(failures))
 void public_api() {
     using namespace chipcae::geometry::ecad;
     auto pattern = (fs::temp_directory_path() / "chipcae-odbpp-api-XXXXXX").string();
-    require(::mkdtemp(pattern.data()) != nullptr, "cannot create public API temporary directory");
+    require(mkdtemp(pattern.data()) != nullptr, "cannot create public API temporary directory");
     struct Cleanup {
         fs::path path;
         ~Cleanup() {

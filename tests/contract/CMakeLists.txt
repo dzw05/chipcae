@@ -21,3 +21,11 @@ endif()
 add_test(NAME contract_assembly_schema COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/validate_assembly.py ${PROJECT_SOURCE_DIR})
 set_tests_properties(contract_assembly_schema PROPERTIES LABELS "contract" SKIP_RETURN_CODE 77)
+
+if(CHIPCAE_ENABLE_JSONCONS)
+    add_executable(chipcae_contract_stack_relpath stack_relpath.cpp)
+    target_link_libraries(chipcae_contract_stack_relpath PRIVATE chipcae_stack)
+    chipcae_set_warnings(chipcae_contract_stack_relpath)
+    add_test(NAME contract_stack_relpath COMMAND chipcae_contract_stack_relpath ${PROJECT_SOURCE_DIR})
+    set_tests_properties(contract_stack_relpath PROPERTIES LABELS "contract" TIMEOUT 60)
+endif()

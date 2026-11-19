@@ -18,6 +18,7 @@ struct EcadLayer {
     double thickness_m = 0;
     bool copper = false;
     std::vector<Polygon> polygons;
+    std::string metal{}; // Mapped copper metal ID; material stores the base dielectric ID.
 };
 struct UnsupportedElement {
     std::string code = "IMPORT_UNSUPPORTED_ELEMENT";
@@ -78,12 +79,15 @@ bool apply_material_map(EcadModel& model,
                         const std::filesystem::path& file,
                         std::string* error = nullptr);
 
+bool validate_mapped_targets(const EcadModel& model, std::string* error = nullptr);
+
 // Parses IPC-2581 with Expat's streaming interface; XML content is never retained as a tree.
 ImportResult read_ipc2581(const std::filesystem::path& file);
 // Recompute via fractions on caller-supplied rectangular cells (dbu).
 // Copper layers are rejected. Overlapping conductors are unioned, including annular holes.
 bool rasterize_vias(const EcadModel& model, std::vector<ViaFraction>& cells);
 // Emits stack/0.2 JSON and its binary polyset sidecar.
+// Copper layers require mapped base and metal IDs; call apply_material_map first.
 bool to_stack(const EcadModel& model,
               const std::filesystem::path& json_file,
               const std::filesystem::path& polyset_file,

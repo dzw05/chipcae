@@ -376,7 +376,7 @@ def main():
         for name in ORDER:
             a, b = left[name], right[name]
             assert ('copper' in a) == ('copper' in b) == (name in COPPER), (name, a, b)
-            assert a['material'] == b['material'] == ('cu' if name in COPPER else 'fr4_eq'), (
+            assert a['material'] == b['material'] == 'fr4_eq', (
                 f'M1 material discrepancy: {name}', a, b)
             if name in COPPER:
                 assert a['copper']['metal'] == b['copper']['metal'] == 'cu', (name, a, b)

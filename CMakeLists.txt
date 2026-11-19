@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
 
+if(CMAKE_HOST_APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "Minimum macOS (float std::from_chars)")
+endif()
+
 project(chipcae
     VERSION 0.1.0
     DESCRIPTION "Multiphysics CAE for semiconductor packaging and electronics (芯仿)"

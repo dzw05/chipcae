@@ -391,33 +391,75 @@ int run_ecad(const ImportOptions& options) {
                 }))
                 warnings.push_back("stack override layer absent from board: " + name);
         }
-        // Explicit material IDs bypass the map entirely. Map only the remaining
-        // layers with the shared mapper, then merge IDs in the original order.
-        ecad::EcadModel remaining;
-        std::vector<std::size_t> indices;
+        // Overrides are stack material IDs: on copper they select the base,
+        // while the source material still selects the metal. Keep every layer in
+        // its original position so overridden dielectrics remain base candidates.
+        auto map_file = options.material_map;
+        StagedOutputs temporary_map;
         std::vector<bool> material_overridden(model.layers.size(), false);
-        for (std::size_t i = 0; i < model.layers.size(); ++i) {
-            const auto found = std::find_if(
-                overrides.materials.begin(), overrides.materials.end(), [&](const auto& entry) {
-                    return fold_layer_name(entry.first) == fold_layer_name(model.layers[i].name);
-                });
-            if (found != overrides.materials.end()) {
-                model.layers[i].material = found->second;
+        if (!overrides.materials.empty()) {
+            // Validate the original object before appending overrides, preserving
+            // malformed-map and ordinary duplicate-key diagnostics.
+            ecad::EcadModel empty;
+            std::string error;
+            if (!ecad::apply_material_map(empty, map_file, &error))
+                return reject(error, error.starts_with("MATERIAL_MAPPING_MISSING"));
+            if (!ecad::validate_mapped_targets(empty, &error))
+                return reject(error);
+            std::ifstream input(map_file);
+            std::string text((std::istreambuf_iterator<char>(input)), {});
+            const auto end = text.find_last_of('}');
+            if (!input || end == std::string::npos)
+                return reject("MATERIAL_MAPPING_MISSING: cannot read material map", true);
+            bool has_entries = text.find_first_not_of(" \t\r\n", text.find('{') + 1) != end;
+            text.resize(end);
+            for (std::size_t i = 0; i < model.layers.size(); ++i) {
+                auto& layer = model.layers[i];
+                const auto found = std::find_if(
+                    overrides.materials.begin(), overrides.materials.end(), [&](const auto& entry) {
+                        return fold_layer_name(entry.first) == fold_layer_name(layer.name);
+                    });
+                if (found == overrides.materials.end())
+                    continue;
                 material_overridden[i] = true;
-            } else {
-                indices.push_back(i);
-                remaining.layers.push_back(model.layers[i]);
+                std::string key = "copper_base@" + layer.name;
+                if (!layer.copper) {
+                    // A private exact source key bypasses even an existing exact
+                    // source-material mapping, without changing public interfaces.
+                    key = "__chipcae_override_" + std::to_string(i);
+                    while (
+                        text.find(json_string(key)) != std::string::npos ||
+                        std::any_of(model.layers.begin(), model.layers.end(), [&](const auto& l) {
+                            return fold_layer_name(l.material) == fold_layer_name(key);
+                        }))
+                        key += '_';
+                    layer.material = key;
+                }
+                if (has_entries)
+                    text += ',';
+                text += json_string(key) + ':' + json_string(found->second);
+                has_entries = true;
             }
+            text += '}';
+            map_file = temporary_map.add(std::filesystem::temp_directory_path() /
+                                         "chipcae-override-map.json");
+            std::ofstream output(map_file);
+            output << text;
+            output.close();
+            if (!output)
+                return reject("cannot stage material overrides");
         }
         std::string error;
-        if (!ecad::apply_material_map(remaining, options.material_map, &error))
+        if (!ecad::apply_material_map(model, map_file, &error))
             return reject(error, error.find("MATERIAL_MAPPING_MISSING") != std::string::npos);
-        for (std::size_t i = 0; i < indices.size(); ++i)
-            model.layers[indices[i]].material = remaining.layers[i].material;
+        if (!ecad::validate_mapped_targets(model, &error))
+            return reject(error);
         for (std::size_t i = 0; i < rows.size(); ++i)
             rows[i].material_id = rows[i].material_key.empty() && !material_overridden[i]
                                       ? ""
-                                      : model.layers[i].material;
+                                      : (model.layers[i].copper && !material_overridden[i]
+                                             ? model.layers[i].metal
+                                             : model.layers[i].material);
 
         std::vector<SkippedRow> skipped;
         auto defects = classify_unsupported(model.report, skipped, odb);

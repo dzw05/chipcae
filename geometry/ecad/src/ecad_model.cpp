@@ -29,6 +29,12 @@ bool to_stack(const EcadModel& model,
     };
     if (model.layers.empty() || model.outline.points.size() < 3 || !(model.dbu_m > 0))
         return fail("model requires layers and a closed outline");
+    for (const auto& layer : model.layers)
+        if (layer.copper && (layer.material.empty() || layer.metal.empty()))
+            return fail("MATERIAL_MAPPING_MISSING: copper layer requires base and metal: " +
+                        layer.name);
+    if (!validate_mapped_targets(model, error))
+        return false;
     chipcae::mesh::Polyset ps;
     ps.dbu_m = model.dbu_m;
     for (const auto& layer : model.layers) {
@@ -95,11 +101,10 @@ bool to_stack(const EcadModel& model,
         out << "{\"name\":\"" << l.name << "\",\"thickness\":" << l.thickness_m << ",\"kind\":\""
             << (l.copper ? "Patterned" : "Homogenized")
             << "\",\"n_elem_min\":1,\"grading\":1,\"material\":\""
-            << (l.material.empty() ? (l.copper ? "copper" : "dielectric") : l.material) << '"';
+            << (l.material.empty() ? "dielectric" : l.material) << '"';
         if (l.copper)
-            out << ",\"copper\":{\"metal\":\"" << (l.material.empty() ? "copper" : l.material)
-                << "\",\"polygons\":{\"file\":\"" << polyset_file.filename().string()
-                << "\",\"layer\":\"" << l.name << "\"}}";
+            out << ",\"copper\":{\"metal\":\"" << l.metal << "\",\"polygons\":{\"file\":\""
+                << polyset_file.filename().string() << "\",\"layer\":\"" << l.name << "\"}}";
         out << '}';
     }
     out << "],\"symmetry\":\"none\",\"package_type\":\"ipc2581\",\"external_refs\":[{\"path\":\""

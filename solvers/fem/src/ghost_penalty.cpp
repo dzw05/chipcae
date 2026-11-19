@@ -27,7 +27,25 @@ GhostPenalty::GhostPenalty(const mesh::HexMeshArrays& m,
                            const std::vector<std::array<double, 3>>& scale,
                            double gamma,
                            int components)
-    : scale_(scale), gamma_(gamma), components_(components) {
+    : GhostPenalty(m, c, scale, gamma, components, ScaleLayout::Attribute) {}
+GhostPenalty::GhostPenalty(const mesh::HexMeshArrays& m,
+                           const mesh::cut::CutLayerArrays& c,
+                           const std::vector<std::array<double, 3>>& scale,
+                           double gamma,
+                           int components,
+                           ScaleLayout layout)
+    : gamma_(gamma), components_(components) {
+    if (m.attribute.size() != m.elem_gid.size() ||
+        (layout == ScaleLayout::Element && scale.size() != m.elem_gid.size()))
+        throw std::runtime_error("GhostPenalty: scale table size mismatch");
+    scale_.reserve(m.elem_gid.size());
+    for (std::size_t e = 0; e < m.elem_gid.size(); ++e) {
+        const auto& value = scale.at(layout == ScaleLayout::Element ? e : m.attribute[e] - 1);
+        for (double v : value)
+            if (!std::isfinite(v) || !(v > 0))
+                throw std::runtime_error("GhostPenalty: scale must be finite and positive");
+        scale_.push_back(value);
+    }
     constexpr int reference[8][3] = {
         {0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}, {0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1}};
     for (std::size_t e = 0; e < m.elem_gid.size(); ++e) {
@@ -105,8 +123,8 @@ void GhostPenalty::AssembleFaceMatrix(const mfem::FiniteElement& a,
         double h1 = std::abs(t.Elem1->Jacobian()(axis, axis)),
                h2 = std::abs(t.Elem2->Jacobian()(axis, axis));
         double h = 2 * h1 * h2 / (h1 + h2);
-        double sa = scale_.at(t.Elem1->Attribute - 1)[axis];
-        double sb = scale_.at(t.Elem2->Attribute - 1)[axis];
+        double sa = scale_.at(t.Elem1No)[axis];
+        double sb = scale_.at(t.Elem2No)[axis];
         double scale = std::max(sa, sb);
         for (int i = 0; i < n; ++i) {
             bool minus = i < na;

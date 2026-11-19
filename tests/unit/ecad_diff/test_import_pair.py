@@ -12,7 +12,7 @@ def main():
     from test_identical import ROOT, DELTA, diff_stacks, entry, number, reports, save
     with tempfile.TemporaryDirectory() as tmp:
         directory = Path(tmp)
-        mapping = save(directory / 'material_map.json', {'FR4': 'mat.fr4', 'copper': 'mat.cu'})
+        mapping = save(directory / 'material_map.json', {'FR4': 'fr4_eq', 'copper': 'cu'})
         paths = []
         for name, fixture in (('a', 'board_2layer.xml'), ('b', 'board_2layer.xml'),
                               ('c', 'board_4layer.xml')):
@@ -49,8 +49,8 @@ def main():
             key = f'{i}:{name}|{name}'
             number(entry(r, 'thickness', key)['odb'], thickness)
             assert entry(r, 'material', key)['odb'] == {
-                'material': 'mat.fr4' if name == 'Core' else 'mat.cu',
-                'metal': None if name == 'Core' else 'mat.cu'}
+                'material': 'fr4_eq',
+                'metal': None if name == 'Core' else 'cu'}
             number(entry(r, 'copper_area', key)['odb'], area)
         number(entry(r, 'total_thickness')['odb'], 1.67e-3)
         outline = entry(r, 'outline')['odb']
@@ -70,7 +70,13 @@ def main():
                          ('total_thickness', 'stack'), ('outline', 'outline'),
                          ('vias', 'stack'), ('components', 'stack')])
         assert [(e['item'], e['key']) for e in r['entries']] == expected
-        assert r['summary'] == {'hard': 11, 'discuss': 0, 'info': 5}
+        # Only F.Cu thickness/material and the absent vias/components are equal.
+        # In1.Cu now has a 2.25 mm^2 rectangle, unlike the paired copper-free Core.
+        assert r['summary'] == {'hard': 12, 'discuss': 0, 'info': 4}
+        inner_area = entry(r, 'copper_area', '1:Core|In1.Cu')
+        assert inner_area['grade'] == 'hard'
+        number(inner_area['odb'], 0)
+        number(inner_area['ipc'], 2.25e-6)
         assert entry(r, 'outline')['grade'] == 'hard'
         number(entry(r, 'outline')['ipc']['area'], 25e-6)
         number(entry(r, 'total_thickness')['ipc'], 306e-6)

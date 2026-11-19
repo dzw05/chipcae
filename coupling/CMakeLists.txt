@@ -1,6 +1,7 @@
 add_library(chipcae_coupling
     src/coupler.cpp
     src/field_mapper.cpp
+    src/thermal_mechanic_map.cpp
 )
 add_library(chipcae::coupling ALIAS chipcae_coupling)
 
