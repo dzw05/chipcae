@@ -624,7 +624,15 @@ elif name == 'fake-solve':
     if mode == 'signal':
         os.kill(os.getpid(), signal.SIGTERM)
     out = arg('--out')
+    fail_run = (out.name == os.environ.get('REALCASE_TEST_FAIL_RUN')
+                and not {'attempt_2', 'auxiliary'} & set(out.parts))
+    if fail_run and mode == 'fail_solve':
+        sys.exit(14)
+    if fail_run and mode == 'fail_signal':
+        os.kill(os.getpid(), signal.SIGTERM)
     shutil.copytree(root / 'template', out, dirs_exist_ok=True)
+    if fail_run and mode == 'fail_events':
+        (out / 'events.bin').write_bytes(b'invalid event log')
     manifest_path = out / 'manifest.json'
     manifest = json.loads(manifest_path.read_text())
     ranks = profile['ranks']
@@ -671,6 +679,8 @@ elif name == 'fake-solve':
         import h5py
         with h5py.File(out / 'out/step-0.vtkhdf', 'r+') as f:
             f['VTKHDF/hex/CellData/material_id'][...] = 2
+    if fail_run and mode == 'fail_readback':
+        (out / 'out/step-0.vtkhdf').unlink()
 else:
     raise AssertionError('unexpected external stage: ' + name)
 '''
@@ -837,11 +847,32 @@ class DriverControlFlow(ContractTest):
                 record = self.invoke(params=params)
                 self.assertEqual(record["exit_code"], 2)
                 self.assertEqual(record["verdict"], "fail")
-                self.assertTrue(all(value is None for value in record["checks"].values()))
+                self.assertIs(record["checks"]["C10"], True)
+                self.assertTrue(all(value is None for key, value in record["checks"].items()
+                                    if key != "C10"))
                 self.assertEqual(record["needs_attention"], [])
                 self.assertTrue(record["notes"])
                 self.assertEqual(self.calls(), [])
-                self.persisted(record)
+                folder = self.persisted(record)
+                self.assertEqual(check_file(folder / "result.json"), [])
+                self.assertNotIn("checks.C10", record["missing"])
+
+    def test_usage_c10_checks_real_data_gate_and_invalid_source_commit(self):
+        params = dict(self.params, data_class="real", mesh={})
+        record = self.invoke(params=params)
+        self.assertEqual(record["exit_code"], 2)
+        self.assertIs(record["checks"]["C10"], True)
+        self.assertTrue(all(value is None for key, value in record["checks"].items()
+                            if key != "C10"))
+        folder = self.persisted(record)
+        self.assertEqual(check_file(folder / "result.json"), ["real result must stay local (D03)"])
+        shutil.rmtree(self.source / ".git")
+        invalid = self.invoke(params=params)
+        self.assertEqual(invalid["exit_code"], 2)
+        self.assertIs(invalid["checks"]["C10"], False)
+        self.assertEqual(check_file(self.persisted(invalid) / "result.json"),
+                         ["real result must stay local (D03)", "invalid commit"])
+        self.assertEqual(self.calls(), [])
 
     def test_invalid_mesh_types_ranks_repeat_timeout_and_nonfinite_values_start_no_stages(self):
         for key, bad in (("nx", 0), ("ny", -1), ("levels", -1), ("nx", True),
@@ -1043,6 +1074,89 @@ class DriverControlFlow(ContractTest):
         self.assertIs(record["checks"]["C4"], False)
         self.assertIs(record["checks"]["C7"], True)
         self.assertEqual(len(self.calls("solve")), 2)
+
+    def test_primary_interruptions_continue_other_runs_and_applicable_checks(self):
+        for mode in ("fail_solve", "fail_readback", "fail_events"):
+            for failed_run in ("np1_r1", "np1_r2", "np2_r1"):
+                with self.subTest(mode=mode, failed_run=failed_run):
+                    (self.root / "calls.jsonl").unlink(missing_ok=True)
+                    os.environ.update(REALCASE_TEST_MODE=mode, REALCASE_TEST_FAIL_RUN=failed_run)
+                    record = self.invoke(nps=[1, 2])
+                    self.assertEqual(record["exit_code"], 1)
+                    self.assertEqual(len(self.calls("solve")), 3)
+                    self.assertIs(record["checks"]["C1"], False)
+                    self.assertTrue(any(failed_run in note for note in record["notes"]))
+                    for check in ("C2", "C3", "C4", "C5", "C6", "C10"):
+                        expected = not (mode == "fail_readback" and check in ("C2", "C5", "C6"))
+                        self.assertIs(record["checks"][check], expected, (check, record["notes"]))
+                    if mode == "fail_readback":
+                        failed = [c for c in record["commands"] if c["stage"] == "readback_" + failed_run]
+                        self.assertEqual(len(failed), 1)
+                        self.assertNotEqual(failed[0]["exit_code"], 0)
+                    self.assertEqual(set(record["digests"]), {"np1_r1", "np1_r2", "np2_r1"} - {failed_run})
+                    if failed_run == "np2_r1":
+                        self.assertIs(record["checks"]["C7"], True)
+                        self.assertIsNone(record["checks"]["C8"])
+                    else:
+                        self.assertIsNone(record["checks"]["C7"])
+                        self.assertIs(record["checks"]["C8"], True)
+                    if failed_run == "np1_r1":
+                        self.assertIsNone(record["summary"]["T_max"])
+                    else:
+                        self.assertAlmostEqual(record["summary"]["T_max"], 320., delta=1e-10)
+                    self.persisted(record)
+
+    def test_primary_interruption_leaves_independent_warpage_auxiliaries_evaluable(self):
+        os.environ.update(REALCASE_TEST_MODE="fail_solve", REALCASE_TEST_FAIL_RUN="np1_r1")
+        record = self.invoke("warpage")
+        self.assertEqual(record["exit_code"], 1)
+        self.assertIs(record["checks"]["W1"], True)
+        self.assertIs(record["checks"]["W2"], True)
+        self.assertIs(record["checks"]["W3"], True)
+        self.assertIs(record["checks"]["W4"], True)
+        self.assertIsNone(record["checks"]["W5"])
+        self.assertEqual(len(self.calls("solve")), 4)
+        self.persisted(record)
+
+    def test_assembly_primary_interruption_continues_material_and_auxiliary_checks(self):
+        os.environ.update(REALCASE_TEST_MODE="fail_readback", REALCASE_TEST_FAIL_RUN="np1_r1")
+        record = self.invoke("assembly", params=self.assembly_params())
+        self.assertEqual(record["exit_code"], 1)
+        for check in ("A1", "A2", "A3", "W1", "W2", "W4"):
+            self.assertIs(record["checks"][check], True, (check, record["notes"]))
+        self.assertIsNone(record["checks"]["C7"])
+        self.assertIsNone(record["summary"]["T_max"])
+        self.assertEqual(len(self.calls("solve")), 3)
+        self.persisted(record)
+
+    def test_markdown_has_readable_metric_tables_and_preserves_complete_record(self):
+        for usage in (False, True):
+            with self.subTest(usage=usage):
+                record = self.invoke(params={} if usage else self.params)
+                folder = self.persisted(record)
+                markdown = (folder / "run_record.md").read_text(encoding="utf-8")
+                human, embedded = markdown.split("```json\n", 1)
+                self.assertEqual(json.loads(embedded.rsplit("```", 1)[0]), record)
+                tables = {}
+                for section in human.split("\n## ")[1:]:
+                    title, body = section.split("\n", 1)
+                    self.assertIn("|---", body, title)
+                    tables[title] = body
+                for title in ("Inputs", "Mesh", "Solver", "Energy", "Summary / QoIs", "Digests"):
+                    self.assertIn(title, tables)
+                if usage:
+                    self.assertIn("null", tables["Energy"])
+                    self.assertIn("null", tables["Summary / QoIs"])
+                else:
+                    self.assertIn("stack.json", tables["Inputs"])
+                    self.assertIn(record["inputs"]["stack.json"], tables["Inputs"])
+                    self.assertIn("n_cells_hex | 2", tables["Mesh"])
+                    self.assertIn("fvm.conduction | jacobi | 1e-12 | 7 | 1e-13", tables["Solver"])
+                    self.assertIn("heat_in | 1.0", tables["Energy"])
+                    self.assertIn("imbalance | 1e-09", tables["Energy"])
+                    self.assertIn("T_max | 320.0 | K | FVM cell centers", tables["Summary / QoIs"])
+                    self.assertIn(record["digests"]["np1_r1"], tables["Digests"])
+                    self.assertIn(record["file_sha256"]["vtkhdf"], tables["Digests"])
 
     def test_parallel_mesh_partition_and_qoi_mismatch_each_fail_c8(self):
         for mode in ("parallel_mesh", "parallel_partitions", "parallel_qoi"):
@@ -1256,6 +1370,37 @@ class DriverControlFlow(ContractTest):
                                   for r in cases], [(4, 4), (2, 2)])
                 self.assertNotEqual(cases[0]["out"], cases[1]["out"])
                 self.persisted(record)
+
+    def test_real_resource_retry_preserves_failure_and_continues_primary_runs(self):
+        os.environ.update(REALCASE_TEST_MODE="fail_signal", REALCASE_TEST_FAIL_RUN="np1_r1")
+        record = self.invoke(params=dict(self.params, data_class="real"), nps=[1, 2])
+        self.assertEqual(record["exit_code"], 1)
+        self.assertEqual(record["status_detail"], f"signal:{signal.SIGTERM}")
+        self.assertEqual([a["exit_code"] for a in record["attempts"]], [-signal.SIGTERM, 0])
+        self.assertEqual([a["mesh"]["nx"] for a in record["attempts"]], [4, 2])
+        self.assertEqual(record["attempts"][0]["output"], "np1_r1")
+        self.assertEqual(record["attempts"][1]["output"], "attempt_2/np1_r1")
+        self.assertEqual(len(self.calls("solve")), 4)
+        self.assertEqual(set(record["digests"]), {"np1_r2", "np2_r1"})
+        self.assertIs(record["checks"]["C1"], False)
+        self.assertIs(record["checks"]["C4"], True)
+        self.assertIsNone(record["checks"]["C7"])
+        self.assertIs(record["checks"]["C8"], True)
+        self.persisted(record)
+
+    def test_repeated_real_resource_failures_do_not_repeat_retry_or_abort_primary_runs(self):
+        os.environ["REALCASE_TEST_MODE"] = "signal"
+        record = self.invoke(params=dict(self.params, data_class="real"), nps=[1, 2])
+        self.assertEqual(record["exit_code"], 1)
+        self.assertEqual(len(self.calls("solve")), 4)
+        self.assertEqual(len(record["attempts"]), 2)
+        self.assertEqual([a["exit_code"] for a in record["attempts"]], [-signal.SIGTERM] * 2)
+        failed = [c["stage"] for c in record["commands"] if c["exit_code"] == -signal.SIGTERM]
+        self.assertEqual(failed, ["solve_np1_r1", "solve_attempt_2", "solve_np1_r2", "solve_np2_r1"])
+        for check in ("C2", "C3", "C4", "C5", "C6", "C7", "C8"):
+            self.assertIsNone(record["checks"][check])
+        self.assertFalse(any("driver exception" in note for note in record["notes"]))
+        self.persisted(record)
 
 
     def test_cli_usage_and_dependency_exits_propagate_with_records(self):

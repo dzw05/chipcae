@@ -1093,7 +1093,8 @@ def _solve_run(record, folder, inputs, output, stage, ranks, exes, mpi, timeout_
 def _resource_retry(record, entry, folder, inputs, case, exes, mpi, timeout_s, source_root):
     # Only solve resource failures on real data enter this path. A successful
     # retry remains diagnostic and cannot erase the original failure.
-    if record["data_class"] != "real" or not entry.get("status_detail"):
+    # Continuing primary runs must not overwrite the invocation's single retry.
+    if record["data_class"] != "real" or not entry.get("status_detail") or record["attempts"]:
         return
     original_output = Path(entry["argv"][entry["argv"].index("--out") + 1]).relative_to(folder).as_posix()
     record["attempts"].append(dict(mesh=copy.deepcopy(case["mesh"]), exit_code=entry["exit_code"],
@@ -1119,13 +1120,17 @@ def _auxiliary(record, folder, inputs, case, exes, mpi, timeout_s, source_root, 
         return
     if record["data_class"] != "synthetic":
         if record["kind"] == "warpage":
-            record["checks"]["W3"] = _check_w3(primary, case["constraints"])
+            if primary is not None:
+                record["checks"]["W3"] = _check_w3(primary, case["constraints"])
             record["notes"].append("W3: Rigid321 mean diagnostic only, tolerance 待定")
             record["notes"].append("W5: FEM comparison is a synthetic noncut assertion; real result diagnostic only")
         record["notes"].append("W4: uniform T_ref auxiliary assertion applies to synthetic inputs")
         return
     variants = ["W3", "W4", "W5"] if record["kind"] == "warpage" else ["W4"]
     for name in variants:
+        if name == "W5" and primary is None:
+            record["notes"].append("W5: primary np1_r1 unavailable; FEM comparison interrupted")
+            continue
         if name == "W5" and record["mesh"]["n_cells_cut"] != 0:
             record["notes"].append("W5: noncut FEM comparison inapplicable to cut input")
             continue
@@ -1250,28 +1255,35 @@ def _pipeline(record, folder, kind, params, resolved, nps, repeat, source_root, 
         for index in range(1, (repeat if ranks == 1 else 1) + 1):
             name = f"np{ranks}_r{index}"
             out = folder / name
-            entry, events = _solve_run(record, folder, inputs, out, name, ranks, exes, mpi, timeout_s, source_root)
-            if events is None:
-                _resource_retry(record, entry, folder, inputs, case, exes, mpi, timeout_s, source_root)
-                return
-            _primary_checks(record, out, events, case, mechanical, expected_materials)
-            digest = run_digest(out, events)
-            digests[name] = digest
-            record["digests"][name] = digest_sha256(digest)
-            runs[name] = out
-            if name == "np1_r1":
-                _collect_primary(record, out, events, case, mechanical)
-                record["mechanical_qoi_eligible"] = bool(w_ready and _check_w1(out, events))
+            try:
+                entry, events = _solve_run(record, folder, inputs, out, name, ranks, exes, mpi, timeout_s, source_root)
+                if events is None:
+                    _resource_retry(record, entry, folder, inputs, case, exes, mpi, timeout_s, source_root)
+                    continue
+                _primary_checks(record, out, events, case, mechanical, expected_materials)
+                digest = run_digest(out, events)
+                digests[name] = digest
+                record["digests"][name] = digest_sha256(digest)
+                runs[name] = out
+                if name == "np1_r1":
+                    _collect_primary(record, out, events, case, mechanical)
+                    record["mechanical_qoi_eligible"] = bool(w_ready and _check_w1(out, events))
+            except Exception as exc:
+                record["checks"]["C1"] = False
+                record["status_detail"] = record["status_detail"] or "error"
+                record["notes"].append(f"{name} driver exception: {type(exc).__name__}: {exc}")
     repeated = [f"np1_r{i}" for i in range(1, repeat + 1)]
-    record["checks"]["C7"] = len({record["digests"][name] for name in repeated}) == 1
+    if all(name in digests for name in repeated):
+        record["checks"]["C7"] = len({record["digests"][name] for name in repeated}) == 1
     if record["checks"]["C7"] is False:
         for name in repeated[1:]:
             different = _digest_diff(digests[repeated[0]], digests[name])
             if different:
                 record["notes"].append(f"C7: {repeated[0]} / {name}: " + ", ".join(different) + "; report M3")
-    if "np2_r1" in runs:
-        record["checks"]["C8"] = _parallel_check(record, [runs[n] for n in repeated], runs["np2_r1"], mechanical)
-    _auxiliary(record, folder, inputs, case, exes, mpi, timeout_s, source_root, runs["np1_r1"])
+    serial = [runs[name] for name in repeated if name in runs]
+    if "np2_r1" in runs and serial:
+        record["checks"]["C8"] = _parallel_check(record, serial, runs["np2_r1"], mechanical)
+    _auxiliary(record, folder, inputs, case, exes, mpi, timeout_s, source_root, runs.get("np1_r1"))
     if record["checks"]["C1"] is not False and not record["needs_attention"]:
         record["checks"]["C1"] = True
 
@@ -1345,6 +1357,33 @@ def _set_verdict(record, usage):
     record["verdict"] = {0: "pass", 1: "fail", 2: "fail", 77: "needs_attention"}[record["exit_code"]]
 
 
+def _markdown_table(title, columns, rows):
+    def cell(value):
+        text = json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else value
+        return text.replace("\\", "\\\\").replace("|", "\\|").replace("\r", "").replace("\n", "<br>")
+
+    rows = list(rows) or [[None] * len(columns)]
+    return (f"\n## {title}\n\n| " + " | ".join(columns) + " |\n|" + "|".join("---" for _ in columns)
+            + "|\n" + "".join("| " + " | ".join(cell(value) for value in row) + " |\n" for row in rows))
+
+
+def _metric_tables(record):
+    tables = _markdown_table("Inputs", ("File", "SHA-256"), record["inputs"].items())
+    mesh = list(record["mesh"].items()) + [("dofs." + key, value) for key, value in record["dofs"].items()]
+    tables += _markdown_table("Mesh", ("Metric", "Value"), mesh)
+    tables += _markdown_table("Solver", ("Name", "Preconditioner", "rtol", "Iterations", "Final residual"),
+                              ([solver.get(key) for key in ("name", "preconditioner", "rtol", "iterations", "final_residual")]
+                               for solver in record["solver"]))
+    tables += _markdown_table("Energy", ("Metric", "Value"), record["energy"].items())
+    tables += _markdown_table("Summary / QoIs", ("QoI", "Value", "Unit", "Method"),
+                              ((key, record["summary"][key], "K" if key == "T_max" else "m",
+                                record["summary"]["methods"].get(key)) for key in QOI_KEYS))
+    digests = [("run." + key, value) for key, value in record["digests"].items()]
+    digests += [("file." + key, value) for key, value in record["file_sha256"].items()]
+    tables += _markdown_table("Digests", ("Source", "SHA-256"), digests)
+    return tables
+
+
 def _finalize(record, folder, usage):
     inputs = folder / "inputs"
     record["inputs"] = {p.relative_to(inputs).as_posix(): _sha(p) for p in sorted(inputs.rglob("*")) if p.is_file()}
@@ -1357,21 +1396,21 @@ def _finalize(record, folder, usage):
     _set_verdict(record, usage)
     result_path = folder / "result.json"
     _write_json(result_path, _result(record))
+    # Unknown commit cannot be truthfully mapped to a hexadecimal SHA.
+    # This one schema conflict remains explicit instead of inventing one.
+    if record["commit"] == "unknown" and not usage:
+        record["notes"].append("C10 blocked: unknown source commit is rejected by frozen result schema")
+        if not record["needs_attention"]:
+            record["checks"]["C10"] = False
+    else:
+        record["checks"]["C10"] = _check_c10(result_path, record["data_class"])
     if not usage:
-        # Unknown commit cannot be truthfully mapped to a hexadecimal SHA.
-        # This one schema conflict remains explicit instead of inventing one.
-        if record["commit"] == "unknown":
-            record["notes"].append("C10 blocked: unknown source commit is rejected by frozen result schema")
-            if not record["needs_attention"]:
-                record["checks"]["C10"] = False
-        else:
-            record["checks"]["C10"] = _check_c10(result_path, record["data_class"])
         record["checks"]["C9"] = _check_c9(record)
     _set_verdict(record, usage)
     _write_json(result_path, _result(record))
     # Revalidate the actual finalized file; no status can be changed after this
     # check without regenerating result.json as well.
-    if not usage and record["checks"]["C10"] is not None:
+    if record["checks"]["C10"] is not None:
         record["checks"]["C10"] = _check_c10(result_path, record["data_class"])
         _set_verdict(record, usage)
         _write_json(result_path, _result(record))
@@ -1390,7 +1429,7 @@ def _finalize(record, folder, usage):
     commands = "\n| Stage | Exit | Wall s | Peak RSS KiB |\n|---|---|---|---|\n" + "".join(
         f"| {c['stage']} | {c['exit_code']} | {c['wall_s']:.6f} | {c['peak_rss_kib']} |\n"
         for c in record["commands"])
-    (folder / "run_record.md").write_text(title + checks + commands + "\n```json\n" +
+    (folder / "run_record.md").write_text(title + checks + commands + _metric_tables(record) + "\n```json\n" +
                                           json.dumps(record, ensure_ascii=False, indent=2, allow_nan=False) +
                                           "\n```\n", encoding="utf-8")
     return record
