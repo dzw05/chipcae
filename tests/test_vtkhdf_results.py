@@ -175,8 +175,9 @@ class ResultsTest(unittest.TestCase):
 
     def test_copper_diagnostics_malformed_and_collective_rejection(self):
         # One MPI initialization per batch keeps the existing 60/180 s test budgets.
-        # The sample checks seven length/nonfinite cases and, for MPI, four
-        # partial-schema/orphan-payload cases; each must reject on every rank.
+        # The sample checks seven length/nonfinite cases and, for MPI, six
+        # partial-schema/orphan-payload cases, including fully filtered parents;
+        # each must reject on every rank.
         for serial in (False, True):
             with self.subTest(serial=serial), tempfile.TemporaryDirectory() as tmp:
                 run = pathlib.Path(tmp) / 'run'
@@ -186,7 +187,7 @@ class ResultsTest(unittest.TestCase):
                 result = subprocess.run(self.command(run, 'diagnostics-validation'), env=env,
                                         capture_output=True, text=True, timeout=25)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                for fault in range(11 if int(sys.argv[3]) > 1 else 7):
+                for fault in range(13 if int(sys.argv[3]) > 1 else 7):
                     self.assertFalse((run/f'out/step-{99+fault}.vtkhdf').exists(), result.stderr)
                 self.assertTrue((run/'manifest.json').exists(), 'valid write after rejections failed')
 

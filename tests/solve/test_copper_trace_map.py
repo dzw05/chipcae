@@ -165,7 +165,9 @@ class TraceMapTests(unittest.TestCase):
         (folder/'materials.json').write_text(json.dumps(dict(schema='chipcae.material_library/1', materials=self.materials)))
         (folder/'profile.json').write_text(json.dumps(dict(schema='chipcae.run_profile/1.0', ranks=ranks, backend='cpu', gpus=0)))
         if polyset is not None:
-            (folder/'inputs/trace.polyset').write_bytes(polyset)
+            sidecars = {'trace.polyset': polyset} if isinstance(polyset, bytes) else polyset
+            for filename, data in sidecars.items():
+                (folder/'inputs'/filename).write_bytes(data)
         command = [EXE, '--case', str(folder/'case.json'), '--profile', str(folder/'profile.json'),
                    '--out', str(folder/'run')]
         if fallback:
@@ -386,6 +388,42 @@ class TraceMapTests(unittest.TestCase):
         result = self.run_case('mechanical-only', case=case)
         self.diagnostics(result, np.full((2, 2), .3))
 
+    def test_mechanical_only_missing_conductivity_omits_undefined_diagnostic(self):
+        case = copy.deepcopy(self.case)
+        case['physics'] = [dict(id='mech', solver='fem.solid')]
+        case['loads'] = [dict(type='uniform_temperature', T_ref=300., T_target=350.)]
+        for material in self.materials:
+            del material['conductivity']
+        result = self.run_case('mechanical-missing-conductivity', case=case)
+        fields = {f['name'] for f in result[0]['fields']}
+        self.assertIn('copper_fraction', fields)
+        self.assertNotIn('conductivity_diag', fields)
+        cells = result[1]['hex']['cell']
+        self.assertNotIn('conductivity_diag', cells)
+        for gid, f in zip(cells['elem_gid'], cells['copper_fraction']):
+            self.assertAlmostEqual(float(f), .3 if int(gid) % 4 < 2 else 0., delta=1e-12)
+
+    def test_mechanical_only_supplied_conductivity_is_validated(self):
+        case = copy.deepcopy(self.case)
+        case['physics'] = [dict(id='mech', solver='fem.solid')]
+        case['loads'] = [dict(type='uniform_temperature', T_ref=300., T_target=350.)]
+        self.materials[0]['conductivity'] = -1.
+        self.run_case('mechanical-invalid-conductivity', case=case, expected=14,
+                      diagnostic='conductivity')
+
+    def test_sidecar_duplicate_layers_and_inconsistent_database_units_rejected(self):
+        stack, binary = self.polygons(self.stack, np.full((2, 2), .3))
+        stack['layers'][1]['kind'] = 'Patterned'
+        stack['layers'][1]['copper'] = dict(metal='cu', polygons=dict(file='second.polyset', layer='trace'))
+        for kind in ('duplicate', 'dbu'):
+            with self.subTest(kind=kind):
+                second = binary if kind == 'duplicate' else binary[:8] + struct.pack('<d', 2e-6) + binary[16:]
+                stack['external_refs'] = [dict(path=name, sha256=hashlib.sha256(data).hexdigest())
+                                         for name, data in [('trace.polyset', binary), ('second.polyset', second)]]
+                self.run_case('sidecar-'+kind, stack,
+                              polyset={'trace.polyset': binary, 'second.polyset': second}, expected=14,
+                              diagnostic='duplicate polyset layer name' if kind == 'duplicate' else 'same database unit')
+
     def test_neither_copper_representation_rejected(self):
         stack = copy.deepcopy(self.stack)
         del stack['layers'][0]['copper']['fraction']
@@ -406,10 +444,12 @@ class TraceMapTests(unittest.TestCase):
     def test_padded_columns_and_mpi_global_gid_diagnostics(self):
         case = copy.deepcopy(self.case)
         case['mesh'].update(nx=3, ny=3, levels=2)
-        fractions = np.zeros((3, 3))
+        # Hierarchy padding subdivides the same outline into 4x4 columns.
+        # Align the synthetic stripe with those final columns; keep every GID
+        # and fraction assertion below unchanged.
+        fractions = np.zeros((4, 4))
         fractions[2, 2] = .3
-        stack, binary = self.polygons(self.stack, fractions, nx=3, ny=3)
-        # Grid padding extends the coordinate axes; report its actual widths below.
+        stack, binary = self.polygons(self.stack, fractions, nx=4, ny=4)
         for ranks in (1, 2):
             with self.subTest(ranks=ranks):
                 result = self.run_case(f'padded-{ranks}', stack, case, ranks, binary)

@@ -12,7 +12,29 @@ mesh::HexMeshArrays build_mesh(const RunInputs& inputs,
     // whose centers lie outside the physical outline.
     auto stack = inputs.stack;
     stack.outline.polygon.clear();
-    auto result = mesh::build_tensor_grid(stack, inputs.grid);
+    // Match preview's stable sidecar merge, relative to the stack file.
+    std::set<std::filesystem::path> sidecars;
+    for (const auto& layer : stack.layers)
+        if (layer.copper && layer.copper->polygons)
+            sidecars.insert(inputs.stack_path.parent_path() / layer.copper->polygons->file);
+    mesh::Polyset polygons;
+    std::set<std::string> names;
+    for (const auto& path : sidecars) {
+        auto part = mesh::read_polyset(path);
+        if (!part)
+            throw InputError(ErrorCode::INPUT_INVALID, part.error().reason);
+        if (polygons.dbu_m != 0 && polygons.dbu_m != part.value().dbu_m)
+            throw InputError(ErrorCode::INPUT_INVALID, "polysets must use the same database unit");
+        polygons.dbu_m = part.value().dbu_m;
+        for (auto& layer : part.value().layers) {
+            if (!names.insert(layer.name).second)
+                throw InputError(ErrorCode::INPUT_INVALID,
+                                 "duplicate polyset layer name: " + layer.name);
+            polygons.layers.push_back(std::move(layer));
+        }
+    }
+    auto result = sidecars.empty() ? mesh::build_tensor_grid(stack, inputs.grid)
+                                   : mesh::build_tensor_grid(stack, inputs.grid, polygons);
     if (!result) {
         const auto& err = result.error();
         const auto code = mesh_error_code(err);

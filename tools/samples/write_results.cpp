@@ -126,8 +126,18 @@ int main(int argc, char** argv) {
             step.cut_as_hex = mode == "diagnostics-fallback";
             if (mode == "diagnostics-validation") {
                 std::string accepted;
-                for (int fault = 0; fault < (ranks > 1 ? 11 : 7); ++fault) {
+                for (int fault = 0; fault < (ranks > 1 ? 13 : 7); ++fault) {
                     auto bad = step;
+                    if (fault >= 11) {
+                        // Filtering every hex parent must not hide a partial input schema.
+                        bad.hex.hex.resize(8);
+                        bad.hex.elem_gid = bad.cut.elem_gid;
+                        bad.hex.layer_id = bad.cut.layer_id;
+                        bad.hex.material_id = bad.cut.material_id;
+                        bad.hex.cell_kind = {1};
+                        bad.hex.copper_fraction = bad.cut.copper_fraction;
+                        bad.hex.conductivity_diag = bad.cut.conductivity_diag;
+                    }
                     if (rank == 0) {
                         if (fault == 0)
                             bad.hex.copper_fraction.pop_back();
@@ -151,6 +161,10 @@ int main(int argc, char** argv) {
                             bad.hex.conductivity_diag.clear();
                         if (fault == 9)
                             bad.cut.conductivity_diag.clear();
+                        if (fault == 11)
+                            bad.hex.copper_fraction.clear();
+                        if (fault == 12)
+                            bad.hex.conductivity_diag.clear();
                         if (fault == 10) {
                             bad.hex = {};
                             bad.cut = {};
