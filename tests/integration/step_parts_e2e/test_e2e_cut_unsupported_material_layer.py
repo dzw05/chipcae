@@ -26,4 +26,4 @@ def acceptance(d):
 
 
 if __name__ == '__main__':
-    main(acceptance, dependency='SP6-B', needs_occt=False)
+    main(acceptance, dependency='SP4/SP6-B', needs_occt=False)

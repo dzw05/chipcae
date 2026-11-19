@@ -4,9 +4,10 @@ from make_parts import ring_chamfer_parts
 
 
 def acceptance(d):
-    prepare(d)
+    ids = prepare(d)
+    lid_material = 'copper' if 'copper' in ids else 'silicon'
     ring_chamfer_parts(d)
-    stack = imported(d, assembly([part('stiffener', 'underfill'), part('lid', 'silicon')]))
+    stack = imported(d, assembly([part('stiffener', 'underfill'), part('lid', lid_material)]))
     ring = [r for layer in stack['layers'] for r in layer.get('regions', [])
             if r.get('body') == 'stiffener']
     lid = [(layer, r) for layer in stack['layers'] for r in layer.get('regions', [])
@@ -19,7 +20,7 @@ def acceptance(d):
     import h5py
     pvs = []
     for n in (2, 4):
-        pv, path = solve(d, f'ring-chamfer-{n}', n=n, ny=n, materials=['underfill', 'silicon'])
+        pv, path = solve(d, f'ring-chamfer-{n}', n=n, ny=n, materials=['underfill', lid_material])
         with h5py.File(path) as f:
             assert sum(f['VTKHDF/cut/NumberOfCells'][:]) > 0
         pvs.append(pv)

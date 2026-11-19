@@ -25,24 +25,18 @@ def acceptance(d):
     lid = 'copper' if 'copper' in ids else 'silicon'
     if lid == 'silicon':
         print('近似材料: lid 刚度近似，CTE 偏低，待 copper 入库后重跑')
-    model = assembly([])
-    model['parts_from_step'] = {
-        'step': 'PACKAGE_BULK_PARTS.step', 'frame': 'step', 'origin': [0, -.044, .000020002],
-        'bodies': {f'PACKAGE_BULK_PARTS/{name}': {'id': ident, 'material': material, 'material_approx': True}
-                   for name, ident, material in [('HOST_SILICON_BULK', 'host_si', 'silicon'),
-                                                ('IHP_adhesive', 'ihp_adh', 'underfill'),
-                                                ('TIM', 'tim', 'underfill'), ('lid', 'lid', lid)]}}
+    model = json.loads((ROOT / 'tools/samples/step_parts/bulk_parts.assembly.json').read_text())
+    for body in model['parts_from_step']['bodies'].values():
+        if body['id'] == 'lid':
+            body['material'] = lid
     # With real inputs configured, missing OCCT bindings are a setup failure.
     import OCP
     # Explicit temporary box equivalent to the requested manual box region.
     # STEP coordinates, lower face at substrate top after the shared origin.
     write_step(d / 'interposer_approx.step', box(2, 2, .8, 52, 32, .558))
-    interposer = part('interposer_approx', 'underfill')
-    interposer['placement']['origin'] = [0, -.044, .000020002]
-    interposer['material_approx'] = True
-    model['parts'].append(interposer)
+    interposer = next(p for p in model['parts'] if p['id'] == 'interposer_approx')
     stack = imported(d, model)
-    # Diagnostic tokens and mapped IDs: docs/geometry/assembly-report-0.1.md.
+    # SP7 diagnostic checks: docs/demo-1214.md.
     report = json.loads((d / 'report.json').read_text())
     text = json.dumps(report, ensure_ascii=False)
     assert '近似材料' in text, report

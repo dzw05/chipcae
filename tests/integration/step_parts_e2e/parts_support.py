@@ -112,7 +112,7 @@ def solve(directory, label, n=28, stack='stack.json', materials=(), ny=None, lev
 
 
 def volume(path, material):
-    """Read SI volumes under docs/geometry/vtkhdf-volume-reader-0.1.md."""
+    """Read solver SI volumes as described in docs/demo-1214.md."""
     import h5py
     import numpy as np
     total = 0.
@@ -125,7 +125,9 @@ def volume(path, material):
             # Writer material IDs index the FieldData table (see results contract).
             selected = ids == names.index(material) + 1
             if block == 'cut':
-                total += float(np.sum(g['CellData/volume'][:][selected]))
+                # The writer may omit volume when there are no cut cells.
+                if ids.size:
+                    total += float(np.sum(g['CellData/volume'][:][selected]))
             else:
                 start_p = start_c = 0
                 for count_p, count_c in zip(g['NumberOfPoints'][:], g['NumberOfCells'][:]):
