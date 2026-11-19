@@ -50,6 +50,10 @@ StatusCode TemperatureTable::evaluate(std::size_t column, Real T, Real& value) c
     if (column >= columns_.size() || !std::isfinite(T))
         return StatusCode::Failed;
     const auto& col = columns_[column];
+    if (temperatures_.size() == 1) {
+        value = col.front();
+        return StatusCode::Ok;
+    }
     if (T < temperatures_.front() || T > temperatures_.back()) {
         if (extrapolation_ == Extrapolation::Error)
             return StatusCode::OutOfRange;

@@ -219,7 +219,10 @@ TemperatureTable table(const Json& j,
                        ImportOptions options = {},
                        MaterialParams* params = nullptr) {
     auto interpolation = j.at("interpolation").str();
-    if (interpolation != "linear")
+    if (const auto temperatures = j.object.find("temperatures");
+        interpolation != "linear" &&
+        !(interpolation == "constant" && temperatures != j.object.end() &&
+          temperatures->second.kind == Json::Array && temperatures->second.array.size() == 1))
         throw std::runtime_error(
             j.path +
             ".interpolation: v0 only supports linear (pchip NotImplemented; constant forbidden)");
