@@ -8,7 +8,7 @@ Synthetic validator contracts supplement the real artifact checks.
 The additional evidence objects make (f), temperature transfer, and the reported
 heat balance auditable. Each level has n_elements, n_nodes, elements_by_type,
 max_aspect_ratio, resources {label, peak_rss_KiB, wall_seconds}, heat_source
-{die_volume_m3, q_W_per_m3, integrated_power_W, relative_error},
+{die_layer_volume_m3, q_W_per_m3, integrated_power_W, relative_error},
 temperature_transfer {n_nodes, max_abs_delta_K}, and thermal_balance
 {bottom_outward_W, top_outward_W, relative_error}. symmetry_check contains the
 full-model QoIs and the same evidence; element_cross contains the L3 C3D20 QoIs.
@@ -202,10 +202,10 @@ class DemoGateReferenceTest(unittest.TestCase):
         self.fields(obj, ("heat_source", "temperature_transfer", "thermal_balance", "resources"),
                     "solver evidence")
         heat = obj["heat_source"]
-        self.fields(heat, ("die_volume_m3", "q_W_per_m3", "integrated_power_W", "relative_error"),
+        self.fields(heat, ("die_layer_volume_m3", "q_W_per_m3", "integrated_power_W", "relative_error"),
                     "heat_source")
         # Quarter area = 98 mm²; full area = 392 mm², including the chamfer.
-        self.close(heat["die_volume_m3"], 392e-6 * 0.0005 * fraction, "die volume")
+        self.close(heat["die_layer_volume_m3"], 392e-6 * 0.0005 * fraction, "die-layer volume")
         self.close(heat["q_W_per_m3"], 10.0 / (392e-6 * 0.0005), "power density")
         power = self.number(heat["integrated_power_W"], "integrated power", 0.0)
         error = abs(power - 10.0 * fraction) / (10.0 * fraction)
@@ -430,7 +430,7 @@ class DemoGateReferenceTest(unittest.TestCase):
                                "observed_order", "selected", "U_ref", "reference", "status", "name", "h_m",
                                "n_elem_z_per_layer", "n_elements", "n_nodes", "elements_by_type", "max_aspect_ratio",
                                "decks", "W_bfp_nodes_m", "heat_source", "temperature_transfer", "thermal_balance",
-                               "resources", "peak_rss_KiB", "wall_seconds", "die_volume_m3", "q_W_per_m3",
+                               "resources", "peak_rss_KiB", "wall_seconds", "die_layer_volume_m3", "q_W_per_m3",
                                "integrated_power_W", "relative_error", "max_abs_delta_K", "bottom_outward_W",
                                "top_outward_W", *QOIS}:
                     continue
@@ -491,7 +491,7 @@ class ValidatorContractTest(DemoGateReferenceTest):
                 "W_bfp_nodes_m": 2**-17, "T_max_K": 308.15 + factor / 1024,
                 "T_top_min_K": 303.15 + factor / 1024,
                 "resources": {"label": "实测", "peak_rss_KiB": 1, "wall_seconds": 1},
-                "heat_source": {"die_volume_m3": 4.9e-8, "q_W_per_m3": 10 / 1.96e-7,
+                "heat_source": {"die_layer_volume_m3": 4.9e-8, "q_W_per_m3": 10 / 1.96e-7,
                                 "integrated_power_W": 2.5, "relative_error": 0},
                 "temperature_transfer": {"n_nodes": nodes, "max_abs_delta_K": 0},
                 "thermal_balance": {"bottom_outward_W": 2.4, "top_outward_W": 0.1,
@@ -500,7 +500,7 @@ class ValidatorContractTest(DemoGateReferenceTest):
         symmetry = copy.deepcopy(levels[0])
         symmetry.update(n_elements=2376, n_nodes=11345)
         symmetry["temperature_transfer"]["n_nodes"] = 11345
-        symmetry["heat_source"].update(die_volume_m3=1.96e-7, integrated_power_W=10)
+        symmetry["heat_source"].update(die_layer_volume_m3=1.96e-7, integrated_power_W=10)
         symmetry["thermal_balance"].update(bottom_outward_W=9.6, top_outward_W=0.4)
         cross = copy.deepcopy(levels[2])
         cross["element_type"] = "C3D20 + C3D15"

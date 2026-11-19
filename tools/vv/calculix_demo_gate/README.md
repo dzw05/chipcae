@@ -76,6 +76,8 @@ the actual full die-layer volume: `10/(392e-6 × 0.0005)` W/m³. Integrating
 this source over quarter elements gives 2.5 W and over full elements gives
 10 W. The integrated source must satisfy the unchanged `1e-10` relative-error
 limit on every mesh.
+The evidence field `heat_source.die_layer_volume_m3` includes both silicon and
+underfill in the heated layer; it is not the volume of the silicon region alone.
 
 Two decks are used: `<level>_quarter_thermal.inp` followed by
 `<level>_quarter_mech.inp`. `*TEMPERATURE,FILE=<thermal job>.frd,BSTEP=1`
@@ -154,6 +156,16 @@ three meshes, before grid interpolation. The archived final L3 residual
 correction is much smaller than the reversal. These checks provide no numerical
 correction that qualifies the prescribed sequence; the V&V disposition remains
 outstanding. No status or artifact edit can supply the missing convergence.
+
+A further diagnostic sampled the archived L3 nodal temperatures onto the L1/L2
+mechanical meshes. With that common thermal field, warpage increases from L1
+through L3. Control solves applying each mesh's own temperatures as explicit
+nodal loads reproduce its archived warpage within `1e-10` relative difference.
+This identifies thermal discretization as a contributor to the reversal in the
+prescribed sequential solves. Using the L3 field at coarser levels changes the
+required same-mesh thermal analysis, so these diagnostic results cannot qualify
+the reference. The external archive retains the diagnostic decks and results;
+the original (a)/(b) failures and both acceptance tests remain unresolved.
 
 Unqualified QoI tables, selection/uncertainty results, comparison deltas and
 numerical diagnostics are kept only in the external qualification archive and

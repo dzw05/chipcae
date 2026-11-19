@@ -390,7 +390,7 @@ def build_mesh(inputs, name, full=False, complete=False):
             area * inputs["layers"][2]["thickness"],
             rel_tol=1e-12,
         ),
-        "die volume",
+        "die-layer volume",
     )
     expected = {"L1": 594, "L2": 4728, "L3": 37728}[name] * (4 if full else 1)
     require(len(elements) == expected, "element count")
@@ -433,7 +433,7 @@ def build_mesh(inputs, name, full=False, complete=False):
         "elements_by_type": dict(Counter(e["type"] for e in elements)),
         "max_aspect_ratio": max(aspects),
         "heat_source": {
-            "die_volume_m3": math.fsum(die_volumes),
+            "die_layer_volume_m3": math.fsum(die_volumes),
             "q_W_per_m3": q,
             "integrated_power_W": power,
             "relative_error": error,
