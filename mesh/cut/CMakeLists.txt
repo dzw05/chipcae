@@ -1,4 +1,4 @@
-add_library(chipcae_mesh_cut src/outline_cut.cpp src/plane_cut.cpp src/cut_layer.cpp src/region_level_set.cpp src/region_cut.cpp)
+add_library(chipcae_mesh_cut src/outline_cut.cpp src/plane_cut.cpp src/cut_layer.cpp src/region_level_set.cpp src/region_cut.cpp src/convex_pieces.cpp)
 target_include_directories(chipcae_mesh_cut PUBLIC include)
 target_link_libraries(chipcae_mesh_cut PUBLIC chipcae_mesh_background)
 chipcae_set_warnings(chipcae_mesh_cut)
