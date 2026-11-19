@@ -766,7 +766,7 @@ def _check_names(kind, w_ready):
     return names
 
 
-def _missing(record):
+def _missing(record, *, pending_checks=()):
     """List unavailable applicable data, independently of caller-supplied missing[]."""
     missing = []
     notes = " ".join(record.get("notes", []))
@@ -789,8 +789,8 @@ def _missing(record):
                         continue
                     if name.startswith("checks."):
                         check = key
-                        if check in ("C9", "C10"):
-                            continue  # Finalized after data and result construction.
+                        if check in pending_checks:
+                            continue
                         if check == "C8" and "mpi" in notes.lower():
                             continue
                         if check in ("C6", "W3", "W5") and check in notes:
@@ -825,7 +825,7 @@ def _missing(record):
 def _check_c9(record: dict) -> bool | None:
     if record.get("needs_attention") and record.get("checks", {}).get("C1") is None:
         return None
-    return not record.get("missing") and not _missing(record)
+    return not record.get("missing") and not _missing(record, pending_checks=("C9",))
 
 
 def _host():
@@ -1392,7 +1392,6 @@ def _finalize(record, folder, usage):
     record.clear()
     record.update(cleaned)
     record["notes"].extend(notes)
-    record["missing"] = sorted(set(_missing(record) + invalid_numbers))
     _set_verdict(record, usage)
     result_path = folder / "result.json"
     _write_json(result_path, _result(record))
@@ -1404,8 +1403,11 @@ def _finalize(record, folder, usage):
             record["checks"]["C10"] = False
     else:
         record["checks"]["C10"] = _check_c10(result_path, record["data_class"])
+    # C9 depends on the finalized data gate; only its own result is pending.
+    record["missing"] = sorted(set(_missing(record, pending_checks=("C9",)) + invalid_numbers))
     if not usage:
         record["checks"]["C9"] = _check_c9(record)
+    record["missing"] = sorted(set(_missing(record) + invalid_numbers))
     _set_verdict(record, usage)
     _write_json(result_path, _result(record))
     # Revalidate the actual finalized file; no status can be changed after this
@@ -1414,10 +1416,6 @@ def _finalize(record, folder, usage):
         record["checks"]["C10"] = _check_c10(result_path, record["data_class"])
         _set_verdict(record, usage)
         _write_json(result_path, _result(record))
-    for key in ("C9", "C10"):
-        if record["checks"].get(key) is None:
-            record["missing"].append("checks." + key)
-    record["missing"] = sorted(set(record["missing"]))
     _write_json(folder / "run_record.json", record)
     title = f"# 实测 — {record['kind']} — {record['verdict']}\n\n"
     if record["materials_provenance"] == "illustrative":
@@ -1440,7 +1438,7 @@ def run_item(kind: str, params: dict, out_root: Path, nps: list[int], repeat: in
     return _run_item(kind, params, out_root, nps, repeat, source_root)[0]
 
 
-def _run_item(kind, params, out_root, nps, repeat, source_root):
+def _run_item(kind, params, out_root, nps, repeat, source_root, *, usage_error=None):
     """Keep the CLI's output location separate from the persisted run record."""
     source_root = Path(source_root).resolve()
     w_ready = readiness("warpage", source_root)[0]
@@ -1448,6 +1446,7 @@ def _run_item(kind, params, out_root, nps, repeat, source_root):
     usage = False
     try:
         out_root = Path(out_root).resolve() if out_root is not None else _safe_temp_root()
+        _require(usage_error is None, usage_error)
         resolved = _validate(kind, params, out_root, nps, repeat)
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         usage = True
@@ -1513,9 +1512,8 @@ def main(argv=None):
         # Malformed CLI input still follows the shared usage-record finalizer.
         source = Path(flag("--source-root", SOURCE_ROOT)).resolve()
         out = flag("--out-root")
-        record, folder = _run_item(argv[0] if argv else "invalid", {}, Path(out) if out else None, [1], 2, source)
-        record["notes"].append(f"CLI usage error: {exc}")
-        record = _finalize(record, folder, True)
+        record, folder = _run_item(argv[0] if argv else "invalid", {}, Path(out) if out else None,
+                                   [1], 2, source, usage_error=f"CLI usage error: {exc}")
     print(f"{record['verdict']}: {folder}")
     return record["exit_code"]
 

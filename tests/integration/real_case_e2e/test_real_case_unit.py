@@ -558,6 +558,28 @@ class RecordChecks(ContractTest):
         record["checks"] = {key: None for key in record["checks"]}
         self.assertIsNone(driver._check_c9(record))
 
+    def test_c9_requires_c10_before_completeness_can_pass(self):
+        record = complete_record()
+        record["checks"].update(C9=None, C10=None)
+        self.assertIs(driver._check_c9(record), False)
+        record["checks"]["C10"] = True
+        self.assertIs(driver._check_c9(record), True)
+
+    def test_finalized_completeness_agrees_with_missing_c10(self):
+        record = complete_record()
+        record["commit"] = "unknown"
+        record["needs_attention"] = [{"item": "W", "reason": "upstream unavailable"}]
+        record["checks"].update(C1=False, C9=None, C10=None)
+        folder = self.root / "finalized"
+        (folder / "inputs").mkdir(parents=True)
+        driver._finalize(record, folder, False)
+        self.assertIsNone(record["checks"]["C10"])
+        self.assertEqual(record["missing"], ["checks.C10"])
+        self.assertIs(record["checks"]["C9"], False)
+        self.assertIs(driver._check_c9(record), record["checks"]["C9"])
+        self.assertEqual(read_json(folder / "run_record.json"), record)
+        self.assertEqual(read_json(folder / "result.json")["verdict"], "fail")
+
     def test_c10_synthetic_empty_and_real_exact_d03_singleton(self):
         for data_class, reasons in (("synthetic", []),
                                     ("real", ["real result must stay local (D03)"])):
@@ -942,6 +964,25 @@ class DriverControlFlow(ContractTest):
         self.assertEqual(record["verdict"], "fail")
         self.assertEqual(self.calls(), [])
         self.persisted(record)
+
+    def test_assembly_material_map_accepts_null_or_path_and_rejects_other_types(self):
+        params = self.assembly_params()
+        for value in (42, True, False, [], {}, ["map.json"]):
+            with self.subTest(material_map=value):
+                record = self.invoke("assembly", params=dict(params, material_map=value))
+                self.assertEqual(record["exit_code"], 2)
+                self.assertEqual(record["verdict"], "fail")
+                self.assertIsNone(record["checks"]["C1"])
+                self.assertIs(record["checks"]["C10"], True)
+                self.assertEqual(record["needs_attention"], [])
+                self.assertTrue(any("assembly material_map" in note for note in record["notes"]))
+                self.assertFalse((self.persisted(record) / "inputs/case.json").exists())
+                self.assertEqual(self.calls(), [])
+        for value in (None, str(Path(params["input"]).parent / "map.json")):
+            with self.subTest(valid_material_map=value):
+                resolved = driver._validate("assembly", dict(params, material_map=value),
+                                            self.out, [1], 2)
+                self.assertEqual(resolved["document"]["board"]["material_map"], "map.json")
 
     def test_dependency_alone_is_77_with_reason_and_no_stages(self):
         self.pipeline.unlink()
@@ -1445,6 +1486,49 @@ class DriverControlFlow(ContractTest):
                 self.assertTrue(any("CLI usage error" in note for note in record["notes"]))
                 self.assertEqual(result.stdout.strip(), f"fail: {paths[0].parent}")
                 self.assertEqual(list(out.glob("*/*/inputs")), [paths[0].parent / "inputs"])
+                self.assertEqual(self.calls(), [])
+
+    def test_malformed_cli_finalizes_once_with_usage_diagnostics(self):
+        params_path = self.root / "params.json"
+        variants = (("{", []), ("[]", []), (json.dumps(self.params), ["--unknown"]),
+                    (json.dumps(self.params), ["--np", "invalid"]))
+        write = driver._write_json
+        for index, (content, extra) in enumerate(variants):
+            with self.subTest(content=content, extra=extra):
+                params_path.write_text(content)
+                out = self.root / f"single-finalize-{index}"
+                persisted = []
+
+                def observe_write(path, value):
+                    write(path, value)
+                    if path.name == "run_record.json":
+                        persisted.append(read_json(path))
+
+                with patch.object(driver, "_write_json", side_effect=observe_write), \
+                        patch("builtins.print") as printed:
+                    rc = driver.main(["thermal", "--params", str(params_path), "--source-root",
+                                      str(self.source), "--out-root", str(out), *extra])
+                self.assertEqual(rc, 2)
+                self.assertEqual(len(persisted), 1)
+                paths = list(out.rglob("run_record.json"))
+                self.assertEqual(len(paths), 1)
+                record = read_json(paths[0])
+                self.assertEqual(persisted[0], record)
+                self.assertEqual(record["exit_code"], 2)
+                self.assertEqual(record["verdict"], "fail")
+                self.assertIs(record["checks"]["C10"], True)
+                self.assertTrue(all(value is None for key, value in record["checks"].items()
+                                    if key != "C10"))
+                self.assertIn("checks.C9", record["missing"])
+                self.assertNotIn("checks.C10", record["missing"])
+                self.assertEqual(record["needs_attention"], [])
+                diagnostic = next(note for note in record["notes"] if "CLI usage error" in note)
+                result_path = paths[0].parent / "result.json"
+                self.assertIn(diagnostic, read_json(result_path)["notes"])
+                self.assertIn(diagnostic, (paths[0].parent / "run_record.md").read_text())
+                self.assertEqual(check_file(result_path), [])
+                printed.assert_called_once_with(f"fail: {paths[0].parent}")
+                self.assertFalse((paths[0].parent / "inputs/case.json").exists())
                 self.assertEqual(self.calls(), [])
 
     def test_missing_numeric_dependency_is_77_and_import_remains_lazy(self):
