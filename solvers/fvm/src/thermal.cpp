@@ -199,6 +199,7 @@ Expected<ThermalResult> detail::solve_thermal_on_comm(const FvGrid& g,
         local.push_back(std::move(op.value()));
     }
     try {
+        // Check all size conversions before numbering or collective PETSc allocation.
         detail::index(nf);
         detail::index(nc);
         std::vector<PetscInt> number(nf, -1), counts(static_cast<std::size_t>(ranks));
@@ -209,9 +210,6 @@ Expected<ThermalResult> detail::solve_thermal_on_comm(const FvGrid& g,
                     number[f] = unknowns++;
                     ++counts[r];
                 }
-        // Check all size conversions before entering collective PETSc allocation.
-        detail::index(nf);
-        detail::index(nc);
         const auto local_n = counts[rank];
         PetscInt begin = 0;
         for (int r = 0; r < rank; ++r)

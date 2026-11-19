@@ -125,12 +125,12 @@ Expected<LocalMfd> build_local_mfd(const FvGrid& g,
             }
         }
     LocalMfd out;
-    for (auto& x : gamma)
-        if (x < 1e-8L * max_gamma) {
-            x = 1e-8L * max_gamma;
-            if (mode == "diag")
+    if (mode == "diag")
+        for (auto& x : gamma)
+            if (x < 1e-8L * max_gamma) {
+                x = 1e-8L * max_gamma;
                 ++out.gamma_floor_count;
-        }
+            }
     Dense m = m0;
     for (std::size_t i = 0; i < n; ++i)
         for (std::size_t j = 0; j <= i; ++j) {

@@ -84,13 +84,20 @@ ctest --test-dir build -R '^solve_fvm_thermal_cut$' --output-on-failure
 ```
 
 On shared build hosts keep the build-slot wrapper first in `PATH`.
-Only the thermal acceptance executables are CMake targets, and both run under
-CTest, with an additional two-rank run when MPI is enabled. The manual diagnostic
-source `tests/test_fvm_thermal_stress.cpp` is retained for external builds, outside
-the project's targets and CTest suite. That scan takes
-`--output <external-directory>` and exits nonzero if any numerical gate fails;
-its raw JSON must stay outside the source tree. Extreme thinness and contrast
-remain measured numerical risks, with no relaxation of acceptance tolerances.
+Both thermal acceptance executables run under CTest, with an additional two-rank
+run when MPI is enabled. The manual `chipcae_fvm_thermal_stress` executable is also
+a CMake target, deliberately outside CTest and CI:
+
+```sh
+cmake --build build --target chipcae_fvm_thermal_stress --parallel 2
+build/solvers/fvm/chipcae_fvm_thermal_stress --output "$STRESS_OUTPUT_DIR"
+```
+
+Set `STRESS_OUTPUT_DIR` to an external directory; raw JSON stays outside the
+source tree. The scan records every failure and exits nonzero if any numerical
+gate fails, including the explicitly marked 1:1e8 known-risk cases and their
+inverses. These manual results do not block acceptance. Extreme thinness and
+contrast remain measured numerical risks, with no relaxation of tolerances.
 
 References: K. Lipnikov, G. Manzini and M. Shashkov,
 [Mimetic finite difference method, JCP 257 (2014), 1163–1227](https://doi.org/10.1016/j.jcp.2013.07.031);
