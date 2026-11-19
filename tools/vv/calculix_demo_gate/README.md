@@ -5,17 +5,20 @@
 qualification deferred to V&V under the brief's scope revision.**
 The original qualified-reference deliverable remains incomplete. This PR ships
 the generator, independent validator and their regressions. Qualified
-`REFERENCE.json`, archived L1 decks, formal W_bfp/T_max/T_top_min reference
-values and real-reference acceptance belong to the follow-up qualification card.
+`REFERENCE.json`, archived L1 decks and formal W_bfp/T_max/T_top_min reference
+values belong to the follow-up qualification card. Real-reference acceptance
+is mandatory now and fails until those qualified deliverables are published.
 Green generator tests establish neither reference qualification nor a passing
 chipcae comparison.
 
 The written authorization is the supplied V-INT-6 brief's section
 **“PR #179 本轮评审范围修订（2026-11-19）”**. It explicitly defers qualified
 `REFERENCE.json`, committed L1 decks, formal reference values and real-reference
-acceptance, and specifies `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=OFF` for this
-generator/validator delivery. The configuration below implements that approved
-scope revision. It does not complete the original reference deliverable.
+acceptance, and originally specified `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=OFF`
+for this generator/validator delivery. The current review supersedes that test
+configuration: strict acceptance defaults ON, OFF is rejected during configure,
+and missing artifacts fail both test suites. The authorization to defer reference
+publication remains applicable; the original reference deliverable is incomplete.
 
 **Candidate status: 参考不合格 — prescribed warpage sequence is nonmonotone.**
 L3 mechanics now completes within the unchanged memory guard, and all three
@@ -25,29 +28,28 @@ archived L1 decks or formal reference values are published. These candidate
 values must not be used to judge chipcae results.
 
 Exactly two CTests are registered unconditionally: `vvccx_reference_json` and
-`vvccx_regen_l1`. Their configuration explicitly records this disposition:
+`vvccx_regen_l1`. Their configuration enforces strict acceptance:
 
 | Configuration | `vvccx_reference_json` | `vvccx_regen_l1` |
 |---|---|---|
-| `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=OFF` (default for this PR) | Always runs complete synthetic validator fixtures and negative checks using only the standard library | Runs generator, deterministic deck-hash, parser and failure regressions, plus real L1 generation and direct/iterative solver comparison when dependencies are available |
-| `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=ON` | Also requires the qualified artifact and archived L1 decks, independently recomputing all original acceptance criteria | Also requires L2/L3 recorded deck hashes and real L1 byte/QoI comparisons with the artifact |
+| `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=ON` (default) | Requires the qualified artifact and archived L1 decks, independently recomputing all original acceptance criteria; also runs complete synthetic validator fixtures and negative checks using only the standard library | Requires L2/L3 recorded deck hashes and real L1 byte/QoI comparisons with the artifact; also runs generator, parser, failure and direct/iterative solver regressions |
+| `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=OFF` | Configuration fails; acceptance cannot be disabled | Configuration fails; acceptance cannot be disabled |
 
-The OFF configuration defers artifact comparisons only while `REFERENCE.json`
-is absent. Any present artifact, including an invalid file or directory, enables
-all original artifact acceptance checks in both configurations. ON and direct
-script execution default to strict reference acceptance: missing or invalid
-artifacts fail, never skip. CMake sets the script mode explicitly for each CTest.
-The JSON test never skips. Only absent ccx, absent numpy/scipy or a solver-version
-mismatch may return 77 for regeneration; all applicable regressions run first,
-and failures take precedence. Without an artifact the required solver version
-is 2.23. No acceptance assertion, numerical threshold or mesh level was changed.
+Both scripts always discover every acceptance test. The old
+`CHIPCAE_DEMO_GATE_TEST_MODE=generator` environment setting cannot suppress them.
+Missing or invalid artifacts fail, never skip; the L1 artifact-presence check
+runs before optional solver dependency checks. The JSON test never skips.
+Only absent ccx, absent numpy/scipy or a solver-version mismatch against a
+published artifact may return 77 for regeneration; all applicable regressions
+run first, and failures take precedence. Without an artifact, generator
+regressions use the queried solver version; there is no fallback version pin.
+All original acceptance assertions, numerical thresholds and mesh levels remain.
 
 V&V handoff for V-INT-6 / PR #179: the original (a)/(b) failure and complete
 candidate evidence in the external qualification archive remain open for
 numerical disposition. The follow-up must resolve qualification under (a)–(f),
-publish only a qualified artifact and its real L1 decks, enable
-`CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=ON`, and run
-the real-artifact mutation/restore check. No candidate value from this PR may
+publish only a qualified artifact and its real L1 decks, and run the mandatory
+acceptance tests and real-artifact mutation/restore check. No candidate value from this PR may
 populate `demo_gate.reference_w_bfp_m` or gate chipcae before that handoff closes.
 
 The model is derived from the original bytes of
@@ -218,15 +220,17 @@ The recorded solver is `This is Version 2.23`; version-only exit 201 is accepted
 Use the shared build-slot shim on PATH, plain command names and two jobs:
 
 ```sh
-cmake -S . -B build-vvccx -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_BUILD_TESTS=ON -DCHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=OFF
+cmake -S . -B build-vvccx -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_BUILD_TESTS=ON
 cmake --build build-vvccx -j2
 ctest --test-dir build-vvccx -R '^vvccx_(reference_json|regen_l1)$' --output-on-failure
 ctest --test-dir build-vvccx --output-on-failure -j2
 ```
 
-For the follow-up qualified-reference delivery, configure with
-`-DCHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=ON` and rerun both CTests. They must
-fail on this PR's absent artifact. To exercise strict acceptance directly:
+For an existing build cache that records the old OFF option, explicitly set
+`-DCHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=ON` when configuring. Both CTests
+currently fail because this PR has no qualified artifact. A successful full
+CTest run requires the follow-up qualified-reference delivery. To exercise
+the same strict acceptance directly:
 
 ```sh
 python3 tests/vv/calculix_demo_gate/test_reference_json.py

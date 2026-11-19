@@ -1,18 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-# PR #179's approved brief revision (2026-11-19) specifies generator-only delivery
-# with this option OFF. Qualified-reference delivery and acceptance remain pending.
+# Reference qualification remains pending; acceptance must fail closed meanwhile.
 option(CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE
-       "Run qualified DEMO-GATE reference acceptance (qualification pending V&V)" OFF)
-chipcae_auto_tests(PREFIX vvccx_ LABELS "vv" TIMEOUT 600)
-
-if(CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE)
-    set(_demo_gate_mode reference)
-else()
-    set(_demo_gate_mode generator)
-    message(STATUS "DEMO-GATE: generator/validator regressions per PR #179 scope revision "
-                   "(2026-11-19); qualified-reference delivery incomplete")
+       "Require qualified DEMO-GATE reference acceptance" ON)
+if(NOT CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE)
+    message(FATAL_ERROR "DEMO-GATE reference acceptance cannot be disabled. "
+                        "Publish a qualified REFERENCE.json and its L1 decks to pass acceptance.")
 endif()
-foreach(_test vvccx_reference_json vvccx_regen_l1)
-    set_property(TEST ${_test} APPEND PROPERTY ENVIRONMENT
-                 "CHIPCAE_DEMO_GATE_TEST_MODE=${_demo_gate_mode}")
-endforeach()
+chipcae_auto_tests(PREFIX vvccx_ LABELS "vv" TIMEOUT 600)

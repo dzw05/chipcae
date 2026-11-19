@@ -5,8 +5,7 @@
 Only absent ccx, absent numpy/scipy, or a different ccx version skips tests.
 All applicable regressions run before returning 77 for dependency skips, and
 failures take precedence. Missing reference artifacts fail artifact comparisons.
-The explicit CMake generator configuration defers only artifact comparisons
-while no artifact is published; all generator regressions remain enabled.
+Artifact comparisons always remain enabled, including before publication.
 Internal parser contract used by these tests: parse_results(path) returns
 {nodes: {id: (x,y,z)}, temperature_blocks: [{id: T}, ...],
 displacement_blocks: [{id: (ux,uy,uz)}, ...]}. Blocks remain separate and in
@@ -63,8 +62,6 @@ def dependencies():
         raise AssertionError(f"ccx -v did not report a unique valid version: exit={result.returncode}, "
                              f"stdout={result.stdout!r}, stderr={result.stderr!r}")
     path = ARTIFACT_DIR / "REFERENCE.json"
-    # Generator regressions can run before a qualified reference is published.
-    recorded = "This is Version 2.23"
     if path.is_file():
         artifact = json.loads(path.read_text(encoding="utf-8"))
         recorded = artifact.get("calculix_version") if isinstance(artifact, dict) else None
@@ -72,14 +69,17 @@ def dependencies():
             r"This is Version \d+\.\d+(?:\.\d+)?", recorded
         ):
             raise AssertionError("invalid artifact calculix_version: expected a ccx version string")
-    if versions[0] != recorded:
-        print(f"SKIP: ccx version {versions[0]!r} differs from required {recorded!r}")
-        return None
+        if versions[0] != recorded:
+            print(f"SKIP: ccx version {versions[0]!r} differs from required {recorded!r}")
+            return None
     return versions[0]
 
 
 class DemoGateRegenTest(unittest.TestCase):
     def setUp(self):
+        if self._testMethodName == "test_l1_deck_bytes_and_recomputed_qois":
+            self.assertTrue((ARTIFACT_DIR / "REFERENCE.json").is_file(),
+                            "missing required DEMO-GATE REFERENCE.json")
         if self._testMethodName in (
             "test_l1_generator_is_deterministic_without_publishing_reference",
             "test_l1_deck_bytes_and_recomputed_qois",
@@ -87,17 +87,18 @@ class DemoGateRegenTest(unittest.TestCase):
         ) and dependencies() is None:
             self.skipTest("real L1 solve dependencies unavailable; see dependency diagnostic")
 
-    def test_generator_configuration_defers_only_absent_artifact_comparisons(self):
-        comparisons = {"test_l2_l3_deck_hashes_match_recorded_values_without_solver",
-                       "test_l1_deck_bytes_and_recomputed_qois"}
+    def test_all_configurations_keep_artifact_comparisons(self):
         with tempfile.TemporaryDirectory() as directory, patch(
             __name__ + ".ARTIFACT_DIR", Path(directory)
         ):
-            for mode, present in (("generator", False), ("generator", True),
-                                  ("reference", False)):
+            for mode, present in ((None, False), ("generator", False), ("generator", True),
+                                  ("reference", False), ("reference", True)):
                 with self.subTest(mode=mode, present=present), patch.dict(
-                    os.environ, {"CHIPCAE_DEMO_GATE_TEST_MODE": mode}
+                    os.environ
                 ):
+                    os.environ.pop("CHIPCAE_DEMO_GATE_TEST_MODE", None)
+                    if mode is not None:
+                        os.environ["CHIPCAE_DEMO_GATE_TEST_MODE"] = mode
                     path = Path(directory) / "REFERENCE.json"
                     if present:
                         path.write_text('{"status": "参考不合格"}', encoding="utf-8")
@@ -106,9 +107,24 @@ class DemoGateRegenTest(unittest.TestCase):
                     suite = unittest.TestLoader().loadTestsFromModule(sys.modules[__name__])
                     names = {test._testMethodName for group in suite for test in group}
                     expected = set(unittest.TestLoader().getTestCaseNames(DemoGateRegenTest))
-                    if mode == "generator" and not present:
-                        expected -= comparisons
                     self.assertEqual(names, expected)
+
+    def test_missing_artifact_fails_comparisons_before_dependency_skips(self):
+        comparisons = {"test_l2_l3_deck_hashes_match_recorded_values_without_solver",
+                       "test_l1_deck_bytes_and_recomputed_qois"}
+        with tempfile.TemporaryDirectory() as directory, patch(
+            __name__ + ".ARTIFACT_DIR", Path(directory)
+        ), patch.dict(os.environ, {"CHIPCAE_DEMO_GATE_TEST_MODE": "generator"}), patch.object(
+            shutil, "which", return_value=None
+        ):
+            suite = unittest.TestLoader().loadTestsFromModule(sys.modules[__name__])
+            checks = unittest.TestSuite(test for group in suite for test in group
+                                        if test._testMethodName in comparisons)
+            result = unittest.TestResult()
+            checks.run(result)
+            self.assertEqual(result.testsRun, 2)
+            self.assertEqual(len(result.failures), 2)
+            self.assertFalse(result.errors or result.skipped)
 
     def assert_regenerated_deck_hashes(self, level):
         module = self.generator()
@@ -290,6 +306,11 @@ class DemoGateRegenTest(unittest.TestCase):
                 [], 201, "This is Version 2.23\n", "")
             # A functioning solver must not hide a missing artifact behind a dependency skip.
             self.assertEqual(dependencies(), "This is Version 2.23")
+            query.return_value = subprocess.CompletedProcess(
+                [], 0, "This is Version 2.24\n", "")
+            self.assertEqual(dependencies(), "This is Version 2.24")
+            query.return_value = subprocess.CompletedProcess(
+                [], 201, "This is Version 2.23\n", "")
             with patch.object(shutil, "which", return_value=None):
                 self.assertIsNone(dependencies())
             for name in ("numpy", "scipy"):
@@ -638,20 +659,6 @@ class DemoGateRegenTest(unittest.TestCase):
                 denominator = reference if key == "W_bfp_m" else reference - 298.15
                 self.assertGreater(abs(denominator), 0)
                 self.assertLessEqual(abs(actual - reference) / abs(denominator), 1e-6, key)
-
-
-def load_tests(loader, standard_tests, pattern):
-    from tests.vv.calculix_demo_gate.test_reference_json import reference_acceptance_required
-
-    if reference_acceptance_required(ARTIFACT_DIR):
-        return standard_tests
-    comparisons = {"test_l2_l3_deck_hashes_match_recorded_values_without_solver",
-                   "test_l1_deck_bytes_and_recomputed_qois"}
-    print("DEMO-GATE generator configuration: artifact comparisons deferred to V&V qualification.")
-    return unittest.TestSuite(
-        unittest.TestSuite(test for test in group if test._testMethodName not in comparisons)
-        for group in standard_tests
-    )
 
 
 if __name__ == "__main__":
