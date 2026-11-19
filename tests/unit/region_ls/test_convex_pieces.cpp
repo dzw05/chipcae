@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <numbers>
 #include <numeric>
@@ -443,6 +444,28 @@ void predicates() {
             "nearby distinct edges must not be classified as touching");
 }
 
+// Nonfinite coordinates must not silently pass comparisons or reach ear cutting.
+void nonfinite_inputs() {
+    for (double invalid :
+         {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()}) {
+        auto ring = square;
+        ring[1][0] = invalid;
+        const auto normalized = cut::normalize_ring(ring);
+        require(!normalized, "normalization rejects nonfinite coordinates");
+        require_error(normalized.error(), "outline must be a convex polygon");
+        require(!cut::is_convex(ring), "nonfinite rings cannot be convex");
+        const auto simple_error = cut::check_simple(ring);
+        require(simple_error.has_value(), "nonfinite rings cannot pass simplicity checking");
+        require_error(*simple_error, "self-intersecting outline");
+        require(std::isnan(cut::signed_distance(ring, {0, 0})),
+                "distance to a nonfinite ring is undefined");
+        require(std::isnan(cut::signed_distance(square, {invalid, 0})),
+                "distance from a nonfinite query is undefined");
+    }
+    require(std::isnan(cut::signed_distance({}, {0, 0})),
+            "distance to an empty boundary is undefined");
+}
+
 void perf_g() {
     const auto g = g_shape();
     const auto start = std::chrono::steady_clock::now();
@@ -463,7 +486,7 @@ void perf_g() {
 
 int main() {
     return sp5::run([] {
-        const std::array<std::pair<const char*, void (*)()>, 8> cases{
+        const std::array<std::pair<const char*, void (*)()>, 9> cases{
             {{"pieces_analytic", pieces_analytic},
              {"convex_single_piece", convex_single_piece},
              {"determinism", determinism},
@@ -471,6 +494,7 @@ int main() {
              {"errors", errors},
              {"cleanup_boundaries", cleanup_boundaries},
              {"predicates", predicates},
+             {"nonfinite_inputs", nonfinite_inputs},
              {"perf_g", perf_g}}};
         std::size_t failures = 0;
         for (const auto& [name, test] : cases) {
