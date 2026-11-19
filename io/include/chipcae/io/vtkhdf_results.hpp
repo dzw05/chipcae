@@ -32,6 +32,7 @@ public:
     struct MeshSummary {
         std::int64_t nx0, ny0, L, padded_cells, nz;
         std::string mesh_sha256;
+        std::int64_t void_cells = 0;
     };
     ResultsWriter(std::filesystem::path run,
                   const std::filesystem::path& stackup,
