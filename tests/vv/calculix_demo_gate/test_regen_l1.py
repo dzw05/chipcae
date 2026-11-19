@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Optional real L1 regeneration plus FRD/solver failure regressions.
+"""Optional real L1 solves plus solver-free deck/FRD/failure regressions.
 
-Only absent ccx, absent numpy/scipy, or a different ccx version returns 77.
-Missing reference artifacts fail the real L1 artifact comparison.
+Only absent ccx, absent numpy/scipy, or a different ccx version skips tests.
+All applicable regressions run before returning 77 for dependency skips, and
+failures take precedence. Missing reference artifacts fail artifact comparisons.
 Internal parser contract used by these tests: parse_results(path) returns
 {nodes: {id: (x,y,z)}, temperature_blocks: [{id: T}, ...],
 displacement_blocks: [{id: (ux,uy,uz)}, ...]}. Blocks remain separate and in
@@ -16,6 +17,7 @@ No production stub is necessary: missing generator is an explicit assertion.
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib
 import importlib.util
 import json
@@ -69,6 +71,59 @@ def dependencies():
 
 
 class DemoGateRegenTest(unittest.TestCase):
+    def setUp(self):
+        if self._testMethodName in (
+            "test_l1_generator_is_deterministic_without_publishing_reference",
+            "test_l1_deck_bytes_and_recomputed_qois",
+        ) and dependencies() is None:
+            self.skipTest("real L1 solve dependencies unavailable; see dependency diagnostic")
+
+    def assert_regenerated_deck_hashes(self, level):
+        module = self.generator()
+        inputs = module.load_inputs()
+        with tempfile.TemporaryDirectory(prefix="chipcae-demo-gate-decks-") as directory:
+            paths = module.write_decks(Path(directory), f"{level['name']}_quarter",
+                                       module.build_mesh(inputs, level["name"]), inputs)
+            self.assertCountEqual([deck["file"] for deck in level["decks"]],
+                                  [path.name for path in paths])
+            recorded = {deck["file"]: deck["sha256"] for deck in level["decks"]}
+            for path in paths:
+                self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), recorded[path.name],
+                                 f"sha256 mismatch: {path.name}")
+
+    def test_l2_l3_deck_hashes_match_recorded_values_without_solver(self):
+        path = ARTIFACT_DIR / "REFERENCE.json"
+        self.assertTrue(path.is_file(), "missing required DEMO-GATE REFERENCE.json")
+        artifact = json.loads(path.read_text(encoding="utf-8"))
+        for name in ("L2", "L3"):
+            with self.subTest(level=name):
+                levels = [level for level in artifact["levels"] if level["name"] == name]
+                self.assertEqual(len(levels), 1)
+                self.assert_regenerated_deck_hashes(levels[0])
+
+    def test_l2_l3_deck_hash_comparison_rejects_arbitrary_digests(self):
+        # Deck-byte fixtures from the recorded qualification attempt, with no
+        # solver results or claim of reference qualification.
+        hashes = {
+            "L2": ("c6ffbcf2008a072c3516fc91e79a24781106a1eab663579e2074bf68c9273932",
+                   "ac563ae4fdedaeae18b47c59126d1112206d17e04dac003c880351aca5586936"),
+            "L3": ("0b3b72e8b8ce33c86cd379b56b47cd8789f0f7d50795881e5b2ff89a2dc4713b",
+                   "0e3c2e5febf962d58b51c34e608e70f508fb2d92d955de6c27c4e30a6b92f30e"),
+        }
+        for name, digests in hashes.items():
+            level = {"name": name, "decks": [
+                {"file": f"{name}_quarter_{kind}.inp", "sha256": digest}
+                for kind, digest in zip(("thermal", "mech"), digests)
+            ]}
+            with self.subTest(level=name):
+                self.assert_regenerated_deck_hashes(level)
+            for index in range(len(level["decks"])):
+                with self.subTest(level=name, deck=level["decks"][index]["file"]):
+                    bad = copy.deepcopy(level)
+                    bad["decks"][index]["sha256"] = "0" * 64
+                    with self.assertRaisesRegex(AssertionError, "sha256 mismatch"):
+                        self.assert_regenerated_deck_hashes(bad)
+
     def test_l1_generator_is_deterministic_without_publishing_reference(self):
         module = self.generator()
         with tempfile.TemporaryDirectory(prefix="chipcae-demo-gate-generator-") as directory:
@@ -184,7 +239,12 @@ class DemoGateRegenTest(unittest.TestCase):
     def generator(self):
         self.assertTrue(GENERATOR.is_file(),
                         "missing DEMO-GATE generator: tools/vv/calculix_demo_gate/generate.py")
-        return importlib.import_module("tools.vv.calculix_demo_gate.generate")
+        try:
+            return importlib.import_module("tools.vv.calculix_demo_gate.generate")
+        except ModuleNotFoundError as error:
+            if error.name not in ("numpy", "scipy"):
+                raise
+            self.skipTest(f"missing {error.name}")
 
     def parse(self, text):
         module = self.generator()
@@ -432,8 +492,9 @@ class DemoGateRegenTest(unittest.TestCase):
         path = ARTIFACT_DIR / "REFERENCE.json"
         self.assertTrue(path.is_file(), "missing required DEMO-GATE REFERENCE.json")
         artifact = json.loads(path.read_text(encoding="utf-8"))
+        recorded_version = artifact["calculix_version"]
         module = self.generator()
-        self.assertEqual(module.ccx_version(), artifact["calculix_version"])
+        self.assertEqual(module.ccx_version(), recorded_version)
         l1 = [level for level in artifact["levels"] if level["name"] == "L1"]
         self.assertEqual(len(l1), 1)
         l1 = l1[0]
@@ -500,8 +561,9 @@ class DemoGateRegenTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    if dependencies() is None:
-        raise SystemExit(77)
     if len(sys.argv) == 2 and Path(sys.argv[1]).is_dir():
         sys.argv.pop()
-    unittest.main(verbosity=2)
+    result = unittest.main(verbosity=2, exit=False).result
+    if not result.wasSuccessful():
+        raise SystemExit(1)
+    raise SystemExit(77 if result.skipped else 0)

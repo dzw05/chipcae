@@ -9,10 +9,21 @@ must not be used to judge chipcae results.
 Exactly two CTests are registered: `vvccx_reference_json` and `vvccx_regen_l1`.
 Both always include their real-artifact acceptance methods. There is no CMake
 scope switch or environment-variable bypass. A missing or unqualified reference
-fails acceptance. The JSON test uses only the standard library and never skips;
-the optional L1 regeneration returns 77 only for missing ccx/numpy/scipy or a
-solver-version mismatch. Synthetic validator fixtures and generator regressions
-run in addition to the mandatory artifact checks.
+fails acceptance. The JSON test uses only the standard library and never skips.
+Only the real L1 solves depend on ccx and its recorded version. Solver-free
+deck, parser and failure regressions run even without ccx or with a version
+mismatch; importing the generator still requires numpy/scipy. The regeneration
+script returns 77 for dependency skips only after running applicable tests, and
+any failure takes precedence. Synthetic validator fixtures and generator
+regressions run in addition to the mandatory artifact checks.
+
+The JSON validator checks archived L1 deck bytes using only the standard library.
+The regeneration script also rebuilds both L2 and L3 decks with `write_decks`,
+without running ccx, and compares the filenames and SHA-256 digests with each
+level's recorded `decks` list. A separate regression uses deck hashes from the
+recorded qualification attempt and rejects an arbitrary 64-hex digest for each
+of the four decks. These deck-byte fixtures contain no QoIs and do not qualify
+or replace the missing reference.
 
 The original attempted archive is `runs/20261119_7a00f37/DEMO-GATE/reference/`
 under the local task archive root. Double-precision evidence is in
@@ -225,16 +236,31 @@ ctest --test-dir build-vvccx -R '^vvccx_(reference_json|regen_l1)$' --output-on-
 ctest --test-dir build-vvccx --output-on-failure -j2
 ```
 
+The deck-byte fixture and its four digest mutations can also run without a
+solver executable:
+
+```sh
+CHIPCAE_CCX=chipcae-deliberately-missing-ccx python3 tests/vv/calculix_demo_gate/test_regen_l1.py -k test_l2_l3_deck_hash_comparison_rejects_arbitrary_digests
+```
+
 Review-fix verification (2026-11-19): Release configure and build exited 0.
 Focused CTest exited 8: both mandated tests failed on the required missing
-artifact. Setting the former `CHIPCAE_DEMO_GATE_TEST_MODE=generator` did not
-bypass acceptance. The JSON module ran eight methods (five passed, three missing
-artifact failures); regeneration ran fifteen (fourteen passed, one missing
-artifact failure), including a real L1 solve. Full CTest exited 8: 209 registered,
-196 passed, 11 existing skips and the same two failures (50.41 s). No other
-regression was observed. Neither DEMO-GATE CTest skipped. No C/C++ files changed;
+artifact. The JSON module ran eight methods (five passed, three missing-artifact
+failures); regeneration ran seventeen (fifteen passed, two missing-artifact
+failures), including a real L1 solve and the new deck-hash regression. Full
+CTest exited 8: 209 registered, 196 passed, 11 existing skips and the same two
+failures (53.79 s). No other regression was observed. Neither DEMO-GATE CTest
+skipped. No C/C++ files changed;
 clang-format 23.1.5 has an empty applicable file list. Python compilation and
 whitespace checks passed.
+
+With an intentionally unavailable ccx, fourteen regeneration methods passed,
+the two real L1 methods skipped, and only the missing-reference deck-hash check
+failed (exit 1). Selecting just the deck-byte fixture passed (exit 0); selecting
+just a real L1 method returned 77. A temporary deck-metadata-only JSON exercised
+the artifact-reading hash check without a solver: recorded digests passed, and
+replacing each L2/L3 thermal/mechanical digest with 64 zeroes failed at the
+matching SHA-256 assertion. No reference artifact was published by these checks.
 
 The required real-artifact L3 +1% mutation/restore check cannot run until a
 qualified artifact exists. The same mutation is tested against the synthetic
