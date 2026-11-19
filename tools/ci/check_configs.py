@@ -130,9 +130,47 @@ def _parallel_violations(words: list[str], bounded: set[str]) -> list[str]:
     return violations
 
 
+def _join_shell_lines(script: str) -> str:
+    """Join escaped newlines outside single quotes, respecting shell comments."""
+    result = []
+    quote = ""
+    word_start = True
+    index = 0
+    while index < len(script):
+        char = script[index]
+        if char == "\\" and quote != "'":
+            if script.startswith("\\\r\n", index):
+                index += 3
+                continue
+            if script.startswith("\\\n", index):
+                index += 2
+                continue
+            result.append(script[index:index + 2])
+            index += 2
+            word_start = False
+            continue
+        if not quote and char == "#" and word_start:
+            # A backslash inside a comment cannot escape its terminating newline.
+            index = script.find("\n", index)
+            if index == -1:
+                break
+            continue
+        if char in {"'", '"'}:
+            if quote == char:
+                quote = ""
+            elif not quote:
+                quote = char
+            word_start = False
+        elif not quote:
+            word_start = char.isspace() or char in ";&|()<>{}"
+        result.append(char)
+        index += 1
+    return "".join(result)
+
+
 def _check_step_parallel(script: str) -> list[str]:
-    # Only an escaped newline joins commands. Ordinary newlines remain separators.
-    script = re.sub(r"\\\r?\n", "", script)
+    # Ordinary newlines must never provide a missing --parallel argument.
+    script = _join_shell_lines(script)
     bounded: set[str] = set()
     proofs_allowed = True
     words: list[str] = []

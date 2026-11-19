@@ -222,6 +222,9 @@ class BuildParallelTest(unittest.TestCase):
             self._assert_one_violation(
                 "cmake --build build --parallel # 4\n", "cmake --build build --parallel",
             )
+        with self.subTest(comments="a comment cannot continue onto a command"):
+            command = "cmake --build build --parallel"
+            self._assert_one_violation("# example \\\n" + command + "\n", command)
 
     def test_continued_commands_keep_argument_validation(self):
         for argument in ("4", '"$jobs"'):

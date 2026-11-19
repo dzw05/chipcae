@@ -43,6 +43,8 @@ Do not point `TIER_A_RUNNER` at a label that has no runner. The build job waits 
 
 ### Compiler cache
 
+Hosted Linux `Build and test` (including Kokkos) and mesh builds use at most four jobs, selected from `nproc` with a fallback of two if it fails or returns an invalid count. The explicit `cmake --build --parallel` limit avoids unbounded Make parallelism exhausting runner memory.
+
 The Linux build jobs install `ccache` and use `${{ github.workspace }}/.ccache` as `CCACHE_DIR`, restored with `actions/cache`. This applies to `ci.yml`, `mesh.yml`, `nightly-mesh-fulldep.yml`, `nightly-mpi.yml`, and `nightly-mpi-gpu.yml`. The main Release key starts with `ccache-gcc-release-`; full-dependency mesh uses `ccache-k1-fulldep-` and `CCACHE_MAXSIZE=500M`. Keep each job's existing compiler/configuration keys isolated. Explicit `-DCMAKE_C_COMPILER_LAUNCHER=ccache` and `-DCMAKE_CXX_COMPILER_LAUNCHER=ccache` settings take precedence over automatic detection.
 
 For local builds, install `ccache` on PATH and keep `/workspace/tasks/shim` first on PATH. The shim and `/workspace/tasks/slot.sh` default `CCACHE_DIR` to `/workspace/.ccache` and export missing C/C++ launcher environment variables as `ccache`. Supplied environment values are preserved. Slot limits remain three slots, `-j3`, nice 10, with nested commands using `CHIPCAE_SLOT_HELD`. Configure a new build directory to initialize CMake launchers from the environment. The CMake module independently finds ccache and fills empty C/C++ launchers; without ccache, configuration and tool execution proceed normally.
