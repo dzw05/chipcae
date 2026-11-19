@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """DEMO-GATE artifact acceptance: standard library only, never imports the generator.
 
+Direct execution defaults to strict reference acceptance. CMake's explicitly
+descoped generator configuration runs the synthetic validator contracts until
+an artifact is published; any present artifact still requires full acceptance.
+
 The additional evidence objects make (f), temperature transfer, and the reported
 heat balance auditable. Each level has n_elements, n_nodes, elements_by_type,
 max_aspect_ratio, resources {label, peak_rss_KiB, wall_seconds}, heat_source
@@ -20,6 +24,7 @@ import copy
 import hashlib
 import json
 import math
+import os
 import re
 import sys
 import tempfile
@@ -32,6 +37,14 @@ ROOT = Path(__file__).resolve().parents[3]
 ARTIFACT_DIR = ROOT / "tools/vv/calculix_demo_gate"
 QOIS = ("W_bfp_m", "T_max_K", "T_top_min_K")
 T_REF = 298.15
+
+
+def reference_acceptance_required(artifact_dir):
+    mode = os.environ.get("CHIPCAE_DEMO_GATE_TEST_MODE", "reference")
+    if mode not in ("reference", "generator"):
+        raise ValueError(f"invalid CHIPCAE_DEMO_GATE_TEST_MODE: {mode!r}")
+    path = artifact_dir / "REFERENCE.json"
+    return mode == "reference" or path.exists() or path.is_symlink()
 
 
 class ArtifactAvailabilityTest(unittest.TestCase):
@@ -56,6 +69,50 @@ class ArtifactAvailabilityTest(unittest.TestCase):
             path.write_text('{"status": "参考不合格"}', encoding="utf-8")
             with self.assertRaises(AssertionError):
                 DemoGateReferenceTest().validate_artifact(check())
+
+
+class AcceptanceDispositionTest(unittest.TestCase):
+    def reference_tests(self):
+        suite = unittest.TestLoader().loadTestsFromModule(sys.modules[__name__])
+        return unittest.TestSuite(test for group in suite for test in group
+                                  if type(test) is DemoGateReferenceTest)
+
+    def test_generator_configuration_runs_validator_contract_without_reference(self):
+        with tempfile.TemporaryDirectory() as directory, patch(
+            __name__ + ".ARTIFACT_DIR", Path(directory)
+        ), patch.dict(os.environ, {"CHIPCAE_DEMO_GATE_TEST_MODE": "generator"}):
+            suite = unittest.TestLoader().loadTestsFromModule(sys.modules[__name__])
+            cases = [test for group in suite for test in group]
+            self.assertFalse(any(type(test) is DemoGateReferenceTest for test in cases))
+            self.assertEqual(sum(type(test) is ValidatorContractTest for test in cases), 4)
+            self.assertTrue(any(type(test) is ArtifactAvailabilityTest for test in cases))
+
+    def test_default_and_explicit_reference_configurations_fail_without_artifact(self):
+        with tempfile.TemporaryDirectory() as directory, patch(
+            __name__ + ".ARTIFACT_DIR", Path(directory)
+        ):
+            for mode in (None, "reference"):
+                with self.subTest(mode=mode), patch.dict(os.environ):
+                    os.environ.pop("CHIPCAE_DEMO_GATE_TEST_MODE", None)
+                    if mode is not None:
+                        os.environ["CHIPCAE_DEMO_GATE_TEST_MODE"] = mode
+                    result = unittest.TestResult()
+                    self.reference_tests().run(result)
+                    self.assertEqual(result.testsRun, 3)
+                    self.assertEqual(len(result.failures), 3)
+                    self.assertFalse(result.errors or result.skipped)
+
+    def test_generator_configuration_rejects_present_unqualified_artifact(self):
+        with tempfile.TemporaryDirectory() as directory, patch(
+            __name__ + ".ARTIFACT_DIR", Path(directory)
+        ), patch.dict(os.environ, {"CHIPCAE_DEMO_GATE_TEST_MODE": "generator"}):
+            (Path(directory) / "REFERENCE.json").write_text(
+                '{"status": "参考不合格"}', encoding="utf-8")
+            result = unittest.TestResult()
+            self.reference_tests().run(result)
+            self.assertEqual(result.testsRun, 3)
+            self.assertEqual(len(result.failures), 3)
+            self.assertFalse(result.errors or result.skipped)
 
 
 class DemoGateReferenceTest(unittest.TestCase):
@@ -447,6 +504,16 @@ class ValidatorContractTest(DemoGateReferenceTest):
         data["schema_version"] = "chipcae.vv.reference/0.1"
         with self.assertRaisesRegex(AssertionError, "schema_version"):
             self.validate_artifact(data)
+
+
+def load_tests(loader, standard_tests, pattern):
+    if reference_acceptance_required(ARTIFACT_DIR):
+        return standard_tests
+    print("DEMO-GATE generator/validator configuration: reference qualification deferred to V&V.")
+    return unittest.TestSuite(
+        unittest.TestSuite(test for test in group if type(test) is not DemoGateReferenceTest)
+        for group in standard_tests
+    )
 
 
 if __name__ == "__main__":

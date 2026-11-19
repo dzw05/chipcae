@@ -1,23 +1,46 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# DEMO-GATE CalculiX independent reference
+# DEMO-GATE CalculiX generator and independent validator
 
-**Status: 参考不合格 — prescribed warpage sequence is nonmonotone.**
+**PR #179 disposition (2026-11-19): generator/validator delivery; reference
+qualification deferred to V&V under the brief's scope revision.**
+The original qualified-reference deliverable remains incomplete. This PR ships
+the generator, independent validator and their regressions. Qualified
+`REFERENCE.json`, archived L1 decks, formal W_bfp/T_max/T_top_min reference
+values and real-reference acceptance belong to the follow-up qualification card.
+Green generator tests establish neither reference qualification nor a passing
+chipcae comparison.
+
+**Candidate status: 参考不合格 — prescribed warpage sequence is nonmonotone.**
 L3 mechanics now completes within the unchanged memory guard, and all three
 levels plus the C3D20 cross-check have been solved. The complete candidate
 fails the original monotonicity/order criteria. No qualified `REFERENCE.json`,
-archived L1 decks or formal reference values are published. Both mandatory
-artifact acceptance tests still fail. These candidate values must not be used
-to judge chipcae results; V&V disposition is required under the brief.
+archived L1 decks or formal reference values are published. These candidate
+values must not be used to judge chipcae results.
 
 Exactly two CTests are registered unconditionally: `vvccx_reference_json` and
-`vvccx_regen_l1`. The first uses only the standard library and independently
-recomputes all acceptance criteria; it never skips. The second checks rebuilt
-L2/L3 deck hashes without a solver, tests the generator/parser/failure paths,
-and repeats the L1 solves when CalculiX 2.23, numpy and scipy are available.
-Missing dependencies or a recorded-version mismatch return 77 for the affected
-solve tests, as required by the brief; missing or invalid artifacts fail.
-There is no acceptance bypass. Synthetic validator tests supplement the real
-artifact checks. No acceptance threshold or prescribed mesh level was changed.
+`vvccx_regen_l1`. Their configuration explicitly records this disposition:
+
+| Configuration | `vvccx_reference_json` | `vvccx_regen_l1` |
+|---|---|---|
+| `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=OFF` (default for this PR) | Always runs complete synthetic validator fixtures and negative checks using only the standard library | Runs generator, deterministic deck-hash, parser and failure regressions, plus real L1 generation and direct/iterative solver comparison when dependencies are available |
+| `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=ON` | Also requires the qualified artifact and archived L1 decks, independently recomputing all original acceptance criteria | Also requires L2/L3 recorded deck hashes and real L1 byte/QoI comparisons with the artifact |
+
+The OFF configuration defers artifact comparisons only while `REFERENCE.json`
+is absent. Any present artifact, including an invalid file or directory, enables
+all original artifact acceptance checks in both configurations. ON and direct
+script execution default to strict reference acceptance: missing or invalid
+artifacts fail, never skip. CMake sets the script mode explicitly for each CTest.
+The JSON test never skips. Only absent ccx, absent numpy/scipy or a solver-version
+mismatch may return 77 for regeneration; all applicable regressions run first,
+and failures take precedence. Without an artifact the required solver version
+is 2.23. No acceptance assertion, numerical threshold or mesh level was changed.
+
+V&V handoff for V-INT-6 / PR #179: the original (a)/(b) failure and complete
+candidate evidence below remain open for numerical disposition. The follow-up
+must resolve qualification under (a)–(f), publish only a qualified artifact and
+its real L1 decks, enable `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=ON`, and run
+the real-artifact mutation/restore check. No candidate value from this PR may
+populate `demo_gate.reference_w_bfp_m` or gate chipcae before that handoff closes.
 
 The model is derived from the original bytes of
 `examples/demo_gate/{case,stack,materials,profile}.json`; each hash is recorded.
@@ -161,8 +184,9 @@ The surface peak also moves between levels (nodal y coordinates 5.5, 5.75
 and 5.625 mm). These observations support a mesh/QoI convergence limitation;
 they do not authorize changing the prescribed meshes or the monotonicity rule.
 The brief explicitly requires reporting a nonmonotone result to V&V.
-No altered mesh sequence, tolerance, acceptance switch or replacement QoI
-was introduced to make the gate pass.
+No altered mesh sequence, tolerance or replacement QoI was introduced. The PR
+disposition changes which deliverable is tested by default; strict reference
+acceptance continues to reject this candidate.
 
 | Check | W_bfp relative difference | ΔT_max relative difference | ΔT_top_min relative difference | Limit |
 |---|---:|---:|---:|---:|
@@ -233,10 +257,19 @@ The recorded solver is `This is Version 2.23`; version-only exit 201 is accepted
 Use the shared build-slot shim on PATH, plain command names and two jobs:
 
 ```sh
-cmake -S . -B build-vvccx -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_BUILD_TESTS=ON
+cmake -S . -B build-vvccx -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_BUILD_TESTS=ON -DCHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=OFF
 cmake --build build-vvccx -j2
 ctest --test-dir build-vvccx -R '^vvccx_(reference_json|regen_l1)$' --output-on-failure
 ctest --test-dir build-vvccx --output-on-failure -j2
+```
+
+For the follow-up qualified-reference delivery, configure with
+`-DCHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=ON` and rerun both CTests. They must
+fail on this PR's absent artifact. To exercise strict acceptance directly:
+
+```sh
+python3 tests/vv/calculix_demo_gate/test_reference_json.py
+python3 tests/vv/calculix_demo_gate/test_regen_l1.py
 ```
 
 Negative validation covers L3 W_bfp +1%, bad input hashes, forbidden provenance
@@ -245,18 +278,27 @@ Deck-hash regressions reject arbitrary digests for every L2/L3 deck. The real
 qualified-artifact mutation/restore check remains blocked because there is no
 qualified baseline to restore; synthetic validator mutations do not replace it.
 
-Review-fix verification (2026-11-19): Release configure and build exited 0.
-Full CTest exited 8: 209 registered, 196 passed, 11 existing skips, and two
-failures (`vvccx_reference_json`, `vvccx_regen_l1`) due to the required absent
-qualified artifact. The JSON script ran eight methods (five passed, three
-missing-artifact failures); regeneration ran nineteen (seventeen passed, two
-missing-artifact failures), including real L1 solves and both new solver
-regressions. No other regression was observed. Neither DEMO-GATE CTest skipped.
-The complete generation command exited 0 and wrote the unqualified assessment
-only to the work archive. The unchanged independent validator, pointed at that
+The earlier complete generation command exited 0 and wrote the unqualified
+assessment only to the work archive. The independent validator, pointed at that
 archive and its real L1 deck bytes, rejected it specifically for nonmonotone
-warpage. Python compilation and whitespace checks passed; clang-format 23.1.5
-has no applicable changed C/C++ files.
+warpage. This operational completion does not qualify the candidate.
+
+Disposition verification (2026-11-19): Release configure/build exited 0. With
+reference acceptance OFF, full CTest exited 0: 209 registered, 198 passed,
+11 existing skips and zero failures (60.80 s). Neither DEMO-GATE CTest skipped:
+the JSON suite passed eight methods, regeneration passed eighteen, including
+real L1 generation and the direct/iterative displacement/QoI comparison.
+With acceptance ON, both DEMO-GATE CTests failed on the absent artifact
+(CTest exit 8), even with an inherited generator-mode environment setting.
+The real archived nonmonotone candidate was also rejected by all three original
+JSON acceptance methods in generator configuration. The no-ccx generator run
+passed sixteen regressions, skipped its two real-solve methods and exited 77.
+New disposition/version regressions were observed failing before the fix and
+passing afterward. Original acceptance methods, synthetic fixtures and deck
+digest fixtures are unchanged; the dependency matrix gained malformed-version
+cases. Python compilation and whitespace checks passed. clang-format 23.1.5
+has no applicable changed C/C++ files. The default OFF configuration was restored
+after the strict negative check.
 
 This card does not change the night driver, chipcae comparison postprocessing,
 or product code. Reference qualification remains outstanding pending V&V
