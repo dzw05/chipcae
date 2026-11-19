@@ -1,6 +1,7 @@
 #include "chipcae/mesh/cut/plane_cut.hpp"
 
 #include "chipcae/mesh/background/activation.hpp"
+#include "chipcae/mesh/cut/detail/plane_cut_union.hpp"
 
 #include <algorithm>
 #include <array>
@@ -744,3 +745,34 @@ build_cut_layer(HexMeshArrays& mesh, const CutGeometry& g, const CutOptions& o) 
     return result;
 }
 } // namespace chipcae::mesh::cut
+
+// Compile-only stubs for the test-first acceptance pass. Legacy paths above are unchanged.
+namespace chipcae::mesh::cut::detail {
+Expected<CutLayerArrays> build_cut_layer_union(HexMeshArrays&,
+                                               const std::vector<UnionPiece>&,
+                                               const CutGeometry&,
+                                               const CutOptions&,
+                                               const std::vector<Real>&) {
+    return Error{"cut/union", "union kernel not implemented"};
+}
+
+// Implementation-local seam; not declared in any installed header. Replace this
+// stub by a delegation to the real connectivity predicate during implementation.
+Expected<bool> union_caps_connected_for_test(const std::vector<std::array<Real, 3>>&,
+                                             const std::array<Real, 3>&,
+                                             const std::vector<std::array<Real, 3>>&,
+                                             const std::array<Real, 3>&,
+                                             Real,
+                                             Real) {
+    return Error{"cut/union", "union connectivity not implemented"};
+}
+
+Expected<std::vector<std::array<Index, 3>>> union_face_sources_for_test(const HexMeshArrays&,
+                                                                        Local,
+                                                                        const UnionPiece&,
+                                                                        std::size_t,
+                                                                        const CutGeometry&,
+                                                                        const CutOptions&) {
+    return Error{"cut/union", "union provenance not implemented"};
+}
+} // namespace chipcae::mesh::cut::detail
