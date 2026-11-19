@@ -32,8 +32,12 @@ class Docs(unittest.TestCase):
     def test_writer_documents_process_umask_race_and_symlink_behavior(self):
         doc = ' '.join((exporter.write_result_json.__doc__ or '').split())
         requirements = {
-            'process-global umask': r'(?i)process[- ](?:global|wide)|进程.*全局|进程级',
-            'temporary mutation': r'(?i)temporarily|briefly|短暂',
+            'exclusive creation operation': r'os\.open',
+            'kernel applies umask': r'(?i)kernel.{0,80}umask|umask.{0,80}kernel|内核.*umask',
+            'process umask is not modified': (
+                r'(?i)(?:does not|never|without)\s+(?:modify|change|modifying|changing)'
+                r'.{0,40}process.{0,20}umask|不修改.*进程.*umask'
+            ),
             'stat/replace race': r'TOCTOU|竞态',
             'stat follows symlinks': r'(?i)symlink|符号链接',
             'stat operation': r'os\.stat',
