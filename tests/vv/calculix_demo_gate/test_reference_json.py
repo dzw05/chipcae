@@ -75,7 +75,7 @@ class AcceptanceDispositionTest(unittest.TestCase):
             suite = unittest.TestLoader().loadTestsFromModule(sys.modules[__name__])
             cases = [test for group in suite for test in group]
             self.assertEqual(sum(type(test) is DemoGateReferenceTest for test in cases), 3)
-            self.assertEqual(sum(type(test) is ValidatorContractTest for test in cases), 4)
+            self.assertEqual(sum(type(test) is ValidatorContractTest for test in cases), 5)
             self.assertTrue(any(type(test) is ArtifactAvailabilityTest for test in cases))
             result = unittest.TestResult()
             self.reference_tests().run(result)
@@ -233,7 +233,7 @@ class DemoGateReferenceTest(unittest.TestCase):
 
     def validate_artifact(self, data):
         required = ("SPDX-License-Identifier", "schema_version", "kind", "case", "reference_type",
-                    "label", "calculix_version", "ccx_package", "host", "model_scope", "element_type",
+                    "label", "calculix_version", "ccx_package", "host", "model_scope", "element_type", "thermal_element_type",
                     "inputs_sha256", "materials_at_T_ref", "levels", "symmetry_check", "element_cross",
                     "observed_order", "selected", "U_ref", "reference", "status")
         self.fields(data, required, "REFERENCE")
@@ -256,6 +256,7 @@ class DemoGateReferenceTest(unittest.TestCase):
                         ("calculix" in data["ccx_package"].lower() and
                          re.search(r"\b2\.23\b", data["ccx_package"])))
         self.assertCountEqual(re.findall(r"C3D\d+R?", data["element_type"]), ["C3D20R", "C3D15"])
+        self.assertEqual(data["thermal_element_type"], "C3D20 + C3D15")
         hashes = data["inputs_sha256"]
         self.fields(hashes, ("case", "stack", "materials", "profile"), "inputs_sha256")
         for name in ("case", "stack", "materials", "profile"):
@@ -284,9 +285,10 @@ class DemoGateReferenceTest(unittest.TestCase):
         self.assertEqual(len(data["levels"]), 3)
         for level in data["levels"]:
             self.fields(level, ("name", "h_m", "n_elem_z_per_layer", "n_elements", "n_nodes",
-                                "element_type", "elements_by_type", "max_aspect_ratio", "decks", "W_bfp_nodes_m"), "level")
+                                "element_type", "thermal_element_type", "elements_by_type", "max_aspect_ratio", "decks", "W_bfp_nodes_m"), "level")
             self.text(level["name"], "level name")
             self.assertEqual(level["element_type"], data["element_type"])
+            self.assertEqual(level["thermal_element_type"], data["thermal_element_type"])
         self.assertCountEqual([level["name"] for level in data["levels"]], ["L1", "L2", "L3"])
         levels = {level["name"]: level for level in data["levels"]}
         heat_ok = True
@@ -358,11 +360,12 @@ class DemoGateReferenceTest(unittest.TestCase):
         cross = data["element_cross"]
         for obj, name in ((symmetry, "symmetry_check"), (cross, "element_cross")):
             self.qois(obj, name)
-            self.fields(obj, ("relative_difference", "n_elements", "n_nodes", "element_type"), name)
+            self.fields(obj, ("relative_difference", "n_elements", "n_nodes", "element_type", "thermal_element_type"), name)
             self.fields(obj["relative_difference"], QOIS, f"{name}.relative_difference")
             self.integer(obj["n_elements"], f"{name}.n_elements")
             self.integer(obj["n_nodes"], f"{name}.n_nodes")
             self.text(obj["element_type"], f"{name}.element_type")
+            self.assertEqual(obj["thermal_element_type"], data["thermal_element_type"])
         self.assertEqual(symmetry["n_elements"], 2376)
         self.assertEqual(cross["n_elements"], 37728)
         self.assertEqual(symmetry["element_type"], data["element_type"])
@@ -425,7 +428,7 @@ class DemoGateReferenceTest(unittest.TestCase):
             for key in target:
                 # Additive metadata is allowed; only deletion of known required fields is tested.
                 if key not in {"SPDX-License-Identifier", "schema_version", "kind", "case", "reference_type",
-                               "label", "calculix_version", "ccx_package", "host", "model_scope", "element_type",
+                               "label", "calculix_version", "ccx_package", "host", "model_scope", "element_type", "thermal_element_type",
                                "inputs_sha256", "materials_at_T_ref", "levels", "symmetry_check", "element_cross",
                                "observed_order", "selected", "U_ref", "reference", "status", "name", "h_m",
                                "n_elem_z_per_layer", "n_elements", "n_nodes", "elements_by_type", "max_aspect_ratio",
@@ -487,6 +490,7 @@ class ValidatorContractTest(DemoGateReferenceTest):
                 "n_elements": count, "n_nodes": nodes,
                 "elements_by_type": {"C3D20R": count - wedges, "C3D15": wedges},
                 "element_type": "C3D20R + C3D15", "max_aspect_ratio": 28.28427125,
+                "thermal_element_type": "C3D20 + C3D15",
                 "decks": decks, "W_bfp_m": 2**-17 + factor * 2**-32,
                 "W_bfp_nodes_m": 2**-17, "T_max_K": 308.15 + factor / 1024,
                 "T_top_min_K": 303.15 + factor / 1024,
@@ -514,6 +518,7 @@ class ValidatorContractTest(DemoGateReferenceTest):
             "calculix_version": "This is Version 2.23", "ccx_package": "unknown",
             "host": "synthetic fixture", "model_scope": "quarter",
             "element_type": "C3D20R + C3D15",
+            "thermal_element_type": "C3D20 + C3D15",
             "inputs_sha256": {
                 name: hashlib.sha256((ROOT / "examples/demo_gate" / f"{name}.json").read_bytes()).hexdigest()
                 for name in ("case", "stack", "materials", "profile")
@@ -544,6 +549,24 @@ class ValidatorContractTest(DemoGateReferenceTest):
         data["schema_version"] = "chipcae.vv.reference/0.1"
         with self.assertRaisesRegex(AssertionError, "schema_version"):
             self.validate_artifact(data)
+
+    def test_thermal_formulation_is_required_for_every_solve(self):
+        data = self.load_artifact()
+        self.validate_artifact(data)
+        paths = [()] + [("levels", i) for i in range(3)] + [("symmetry_check",), ("element_cross",)]
+        for path in paths:
+            for value in (None, "C3D20R + C3D15"):
+                with self.subTest(path=path, value=value):
+                    bad = copy.deepcopy(data)
+                    obj = bad
+                    for part in path:
+                        obj = obj[part]
+                    if value is None:
+                        del obj["thermal_element_type"]
+                    else:
+                        obj["thermal_element_type"] = value
+                    with self.assertRaises(AssertionError):
+                        self.validate_artifact(bad)
 
 
 if __name__ == "__main__":

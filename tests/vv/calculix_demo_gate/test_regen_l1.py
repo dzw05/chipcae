@@ -153,12 +153,12 @@ class DemoGateRegenTest(unittest.TestCase):
                 self.assert_regenerated_deck_hashes(levels[0])
 
     def test_l2_l3_deck_hash_comparison_rejects_arbitrary_digests(self):
-        # Deck-byte fixtures from the recorded qualification attempt, with no
-        # solver results or claim of reference qualification.
+        # Deterministic deck fixtures use fully integrated heat conduction and
+        # the prescribed reduced-integration mechanical bricks.
         hashes = {
-            "L2": ("c6ffbcf2008a072c3516fc91e79a24781106a1eab663579e2074bf68c9273932",
+            "L2": ("509a130090deaa34141d9a376c8fb962ba3ba22127702135c44a3b794b0ec052",
                    "ac563ae4fdedaeae18b47c59126d1112206d17e04dac003c880351aca5586936"),
-            "L3": ("0b3b72e8b8ce33c86cd379b56b47cd8789f0f7d50795881e5b2ff89a2dc4713b",
+            "L3": ("d4989833e8603e2e9c5b04b8e6e6b803e81a512382b764a14ea8a4b2bdbdad83",
                    "82f2855c20ac7290a47f5b81340d9cc98239beecec80b9875fa8ba7ade20e908"),
         }
         for name, digests in hashes.items():
@@ -276,6 +276,42 @@ class DemoGateRegenTest(unittest.TestCase):
             self.assertLessEqual(max(abs(a - b) for n in direct_displacement
                                      for a, b in zip(final_displacement[n], direct_displacement[n])) / scale,
                                  1e-6)
+
+    def test_thermal_quadrature_integrates_quadratic_field_energy(self):
+        if dependencies() is None:
+            self.skipTest("real thermal quadrature probe dependencies unavailable")
+        module = self.generator()
+        inputs = module.load_inputs()
+        with tempfile.TemporaryDirectory(prefix="chipcae-demo-gate-quadrature-") as directory:
+            work = Path(directory)
+            paths = module.write_decks(work, "L1_quarter", module.build_mesh(inputs, "L1"), inputs)
+            # Exercise the emitted thermal brick formulation on a unit cube.
+            # T=x²y lies in its quadratic serendipity space. For k=1,
+            # integral |grad(T)|² dV = 4/9 + 1/5 = 29/45 exactly.
+            # Two-point quadrature misses the x^4 term and gives 23/36 instead.
+            kind = re.search(r"^\*ELEMENT,TYPE=(C3D20R?),", paths[0].read_text(), re.MULTILINE)[1]
+            corners = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0),
+                       (0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1)]
+            points = corners + [tuple((corners[a][d] + corners[b][d]) / 2 for d in range(3))
+                                for a, b in module.HEX_EDGES]
+            lines = ["*NODE"] + [f"{n},{x},{y},{z}" for n, (x, y, z) in enumerate(points, 1)]
+            lines += [f"*ELEMENT,TYPE={kind},ELSET=BLOCK", "1,1,2,3,4,5,6,7,8,9,10,",
+                      "11,12,13,14,15,16,17,18,19,20", "*NSET,NSET=NALL,GENERATE", "1,20,1",
+                      "*MATERIAL,NAME=UNIT", "*CONDUCTIVITY", "1.",
+                      "*SOLID SECTION,ELSET=BLOCK,MATERIAL=UNIT", "*STEP",
+                      "*HEAT TRANSFER,STEADY STATE", "1.,1.", "*BOUNDARY"]
+            lines += [f"{n},11,11,{x*x*y}" for n, (x, y, _) in enumerate(points, 1)]
+            lines += ["*NODE OUTPUT,DOUBLE", "NT", "*NODE PRINT,NSET=NALL", "RFL", "*END STEP"]
+            (work / "quadrature.inp").write_text("\n".join(lines) + "\n", encoding="ascii")
+            module.run_ccx(work, "quadrature")
+            dat = (work / "quadrature.dat").read_text()
+            reactions = {int(n): float(flux) for n, flux in re.findall(
+                r"^\s*(\d+)\s+([+-]?\d\.\d+E[+-]\d+)\s*$", dat, re.MULTILINE)}
+            self.assertEqual(set(reactions), set(range(1, 21)))
+            energy = math.fsum(x*x*y * reactions[n] for n, (x, y, _) in enumerate(points, 1))
+            # DAT reactions have six significant digits; allow their rounding only.
+            self.assertTrue(math.isclose(energy, 29/45, rel_tol=5.5e-6, abs_tol=1e-10),
+                            f"thermal energy {energy}, exact {29/45}")
 
     def test_iterative_nonconvergence_with_fresh_frd_is_rejected(self):
         module = self.generator()

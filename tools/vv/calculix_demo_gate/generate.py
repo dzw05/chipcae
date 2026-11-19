@@ -505,7 +505,14 @@ def write_decks(work, job, mesh, inputs, iterative=None):
             f"{e['id']},S{1 if k == 0 else 2}" for e in elements if e["k"] == k
         )
     common += ["*INITIAL CONDITIONS,TYPE=TEMPERATURE", f"NALL,{inputs['T_ref']:.15g}"]
-    thermal = common + [
+    # Heat conduction needs the fully integrated quadratic stiffness (27 Gauss
+    # points). Reusing the mechanical C3D20R formulation underintegrates terms
+    # such as (d(x²y)/dy)² = x⁴ and biases the coarse thermal field. C3D20 has
+    # identical nodes/connectivity; mechanics retains the prescribed C3D20R.
+    thermal = [
+        line.replace("*ELEMENT,TYPE=C3D20R,", "*ELEMENT,TYPE=C3D20,")
+        for line in common
+    ] + [
         "*STEP",
         "*HEAT TRANSFER,STEADY STATE",
         "1.,1.",
@@ -972,6 +979,7 @@ def run_model(work, name, inputs, full=False, complete=False):
     result.update(
         name=name,
         element_type="C3D20 + C3D15" if complete else "C3D20R + C3D15",
+        thermal_element_type="C3D20 + C3D15",
         decks=[{"file": path.name, "sha256": sha256(path)} for path in decks],
         resources={
             "label": "实测",
@@ -1096,6 +1104,7 @@ def main():
         "ccx_package": package,
         "host": f"box {platform.system()} {platform.machine()}",
         "element_type": "C3D20R + C3D15",
+        "thermal_element_type": "C3D20 + C3D15",
         "inputs_sha256": inputs["hashes"],
         "materials_at_T_ref": inputs["materials"],
         "levels": levels,
