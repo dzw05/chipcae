@@ -396,7 +396,7 @@ for tag,context in (('PolyStepCurve','profile'), ('Cutout','profile'),
         elif context == 'copper':
             # #142 added one <Set> per copper layer; this case needs
             # one bare element and one defect.
-            xml = xml.replace('<Set>', f'<Set><{tag}/>')
+            xml = xml.replace('<Set>', f'<Set><{tag}/>', 1)
             check(xml.count(f'<{tag}/>') == 1,
                   f'bare {tag}: expected one inserted element, got {xml.count(f"<{tag}/>")}')
         else:
