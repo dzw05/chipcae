@@ -227,9 +227,11 @@ void outline_snap_case() {
         expected.begin(), std::min_element(expected.begin(), expected.end()), expected.end());
     for (size_t i = 0; i < expected.size(); ++i)
         for (size_t axis = 0; axis < 2; ++axis)
-            if (expected[i][axis] == b.outline.box[axis] ||
-                expected[i][axis] == b.outline.box[axis + 2])
-                check(actual[i][axis] == expected[i][axis], "outline edge snaps exactly");
+            if (expected[i][axis] == b.outline.box[axis])
+                check(actual[i][axis] == b.outline.box[axis], "lower outline edge snaps exactly");
+            else if (expected[i][axis] == b.outline.box[axis + 2])
+                check(actual[i][axis] == b.outline.box[axis + 2],
+                      "upper outline edge snaps exactly");
 }
 
 void bow_tie_case() {
