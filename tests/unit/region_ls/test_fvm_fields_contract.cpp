@@ -499,9 +499,6 @@ void check_cut(Checks& checks,
                               cut.cut_elem_gid.end(),
                       "removed void GIDs absent from retained and cut elements");
     }
-    std::map<std::array<std::size_t, 3>, Index> topology;
-    for (std::size_t e = 0; e < m.elem_gid.size(); ++e)
-        topology.emplace(cell(m, e).index, m.elem_gid[e]);
     long double max_closure = 0, max_cartesian = 0, max_embedded = 0;
     std::size_t truncated = 0, small_checked = 0, copper_checked = 0;
     for (std::size_t row = 0; row < cut.cut_elem.size(); ++row) {
@@ -520,7 +517,6 @@ void check_cut(Checks& checks,
         const auto areas = surface_areas(cut, row, normal.at(e));
         const auto& cartesian = areas.cartesian;
         const auto& embedded = areas.embedded;
-        const auto& openings = areas.openings;
         long double solid = 0;
         for (auto sub = cut.sub_off[row]; sub < cut.sub_off[row + 1]; ++sub) {
             const auto si = static_cast<std::size_t>(sub);
@@ -533,25 +529,11 @@ void check_cut(Checks& checks,
             if (std::find(cut.small_subs.begin(), cut.small_subs.end(), sub) !=
                 cut.small_subs.end()) {
                 ++small_checked;
-                bool neighbor = false;
-                for (std::size_t side = 0; side < 6; ++side) {
-                    if (openings[side] <= 0)
-                        continue;
-                    auto target = c.index;
-                    const auto d = side / 2;
-                    if (side % 2 == 0) {
-                        if (target[d] == 0)
-                            continue;
-                        --target[d];
-                    } else {
-                        ++target[d];
-                    }
-                    const auto it = topology.find(target);
-                    neighbor =
-                        neighbor || (it != topology.end() && !void_gids.contains(it->second));
-                }
-                checks.expect(neighbor,
-                              "small subcell has positive opening to an existing solid neighbor");
+                // sq_off was validated per parent above; those aggregate openings cannot
+                // establish a merge target for an individual small subcell.
+                require(false,
+                        "fvm-fields: sq_off is parent-indexed; small-subcell merge-target "
+                        "validation requires per-subcell face records");
             }
         }
         checks.expect(std::isfinite(solid) && solid > 0 && solid <= 1 + 1e-14L,
@@ -693,6 +675,20 @@ int main() {
                               "independent half-spaces match outline subcell fractions");
             check_fields(checks, mesh, b, true, !no_ecad);
             check_cut(checks, bounding, mesh, cut, removal, b, volume_tolerance);
+            checks.run("parent-indexed small-subcell stop", [&] {
+                auto small = cut;
+                // Mark a subcell to exercise the layout guard independently of the threshold.
+                small.small_subs = {0};
+                bool stopped = false;
+                try {
+                    check_cut(checks, bounding, mesh, small, removal, b, volume_tolerance);
+                } catch (const std::runtime_error& e) {
+                    stopped =
+                        std::string(e.what()).find("sq_off is parent-indexed") != std::string::npos;
+                }
+                checks.expect(stopped,
+                              "small-subcell checks stop and report parent-indexed sq_off");
+            });
             auto repeated_mesh = build(b, true);
             auto repeated = checked(apply_outline_cut(repeated_mesh, b.outline, options));
             require(repeated.has_value(), "fvm-fields: repeated B cut result is engaged");
