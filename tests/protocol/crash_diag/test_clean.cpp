@@ -15,8 +15,8 @@ struct SavedActions {
     SavedActions() {
         struct sigaction action{};
         action.sa_handler = previous_handler;
-        ::sigemptyset(&action.sa_mask);
-        ::sigaddset(&action.sa_mask, SIGUSR1);
+        sigemptyset(&action.sa_mask);
+        sigaddset(&action.sa_mask, SIGUSR1);
         action.sa_flags = SA_RESTART;
         for (std::size_t i = 0; i < signals.size(); ++i)
             check(::sigaction(signals[i], &action, &previous[i]) == 0, "save signal action");

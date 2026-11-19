@@ -17,7 +17,7 @@ void scenario(int sig, const std::vector<std::uint64_t>& windows, bool direct = 
                 CrashDiag::set_window(window, 1.25);
             if (direct) {
                 sigset_t blocked;
-                check(::sigemptyset(&blocked) == 0 && ::sigaddset(&blocked, sig) == 0 &&
+                check(sigemptyset(&blocked) == 0 && sigaddset(&blocked, sig) == 0 &&
                           ::sigprocmask(SIG_BLOCK, &blocked, nullptr) == 0,
                       "could not block signal for direct handler call");
                 CrashDiag::on_signal(sig);

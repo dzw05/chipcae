@@ -15,6 +15,7 @@
 #include <limits>
 #include <map>
 #include <stdexcept>
+#include <stdlib.h>
 #include <string>
 #include <string_view>
 #include <sys/resource.h>
@@ -49,7 +50,7 @@ struct TempDir {
         auto name = (fs::temp_directory_path() / "chipcae-crashdiag-XXXXXX").string();
         std::vector<char> buffer(name.begin(), name.end());
         buffer.push_back('\0');
-        const char* result = ::mkdtemp(buffer.data());
+        const char* result = mkdtemp(buffer.data());
         check(result != nullptr, "mkdtemp failed");
         path = result;
     }

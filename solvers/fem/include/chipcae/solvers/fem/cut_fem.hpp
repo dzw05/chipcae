@@ -38,6 +38,7 @@ public:
 };
 // Each face is assembled once by MFEM's serial interior-face traversal. In the
 // replicated direct backend each rank assembles a complete independent system.
+enum class ScaleLayout { Attribute, Element };
 class GhostPenalty : public mfem::BilinearFormIntegrator {
     std::set<std::pair<int, int>> faces_;
     std::vector<std::array<double, 3>> scale_;
@@ -55,6 +56,13 @@ public:
                  const std::vector<std::array<double, 3>>& scale,
                  double gamma,
                  int components = 1);
+    // Legacy overloads interpret scale by attribute; this overload is explicit.
+    GhostPenalty(const mesh::HexMeshArrays&,
+                 const mesh::cut::CutLayerArrays&,
+                 const std::vector<std::array<double, 3>>& scale,
+                 double gamma,
+                 int components,
+                 ScaleLayout layout);
     using mfem::BilinearFormIntegrator::AssembleFaceMatrix;
     void AssembleFaceMatrix(const mfem::FiniteElement&,
                             const mfem::FiniteElement&,

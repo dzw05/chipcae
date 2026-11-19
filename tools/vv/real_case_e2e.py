@@ -312,8 +312,7 @@ def _check_c2(run_dir: Path, events: list[dict]) -> bool:
         reader.summarize(Path(run_dir))
         with h5py.File(_vtk_path(run_dir), "r") as output:
             for block in _volume_blocks(output):
-                count = int(block["NumberOfCells"][...].sum())
-                if count and not all(path in block for path in (
+                if not all(path in block for path in (
                     "PointData/T", "PointData/U", "CellData/layer_id", "CellData/material_id",
                     "CellData/cell_kind", "CellData/elem_gid", "CellData/volume")):
                     return False
@@ -350,7 +349,7 @@ def _check_c4(events: list[dict]) -> bool:
     energy = _energy(events)
     return bool(energy is not None
                 and {"heat_in", "heat_out", "imbalance", "iterations"} <= energy.keys()
-                and _finite(energy) and energy["imbalance"] <= 1e-9)
+                and _finite(energy) and abs(energy["imbalance"]) <= 1e-9)
 
 
 def _check_c5(run_dir: Path, energy: dict) -> bool:
@@ -1087,6 +1086,8 @@ def _solve_run(record, folder, inputs, output, stage, ranks, exes, mpi, timeout_
                           "-o", output / "readback.json"], "readback_" + stage, folder, record, timeout_s)
     if readback["exit_code"]:
         _stage_error(record, readback, folder)
+        record["notes"].append(f"readback_{stage}: downstream checks and digest interrupted")
+        return entry, None
     return entry, decode_events(output / "events.bin")
 
 

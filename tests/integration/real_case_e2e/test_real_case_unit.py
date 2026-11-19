@@ -1,5 +1,6 @@
 """V-INT-12 contracts; generated inputs need no compiled backend."""
 import copy
+from functools import wraps
 import hashlib
 import json
 import os
@@ -11,19 +12,17 @@ import struct
 import subprocess
 import sys
 import tempfile
+from types import ModuleType
 import unittest
 from unittest.mock import patch
 import zlib
 
-import h5py
 import numpy as np
 
 SOURCE = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(SOURCE))
 from tools.vv import real_case_e2e as driver
 from tools.vv.check_result_data_class import check_file
-from tools.vv.result_summary import summarize
-from tools.vv.result_summary_result import result_json_from_summary
 
 THERMAL_ONLY = "not solved: fvm thermal-only stage"
 WARPAGE_METHOD = "FVM top-face centroids; least-squares plane removal"
@@ -33,6 +32,35 @@ DEFAULT_LOADS = [
     {"type": "convection", "target": "face:zmax", "h": 1000, "T_inf": 348.15},
 ]
 ENERGY = {"heat_in": 1., "heat_out": 1., "imbalance": 1e-9, "iterations": 7}
+
+
+def require_h5py():
+    try:
+        import h5py
+    except ImportError:
+        raise unittest.SkipTest("h5py not installed") from None
+    return h5py
+
+
+def hdf5_fixture(test):
+    @wraps(test)
+    def run(self):
+        try:
+            import h5py  # noqa: F401
+        except ImportError:
+            self.skipTest("h5py not installed")
+        make_run(self.root / "template")
+        return test(self)
+    return run
+
+
+def stage_runtime():
+    # These tests stop before readback. Model only package availability so
+    # parameter and stage-error coverage runs even without a numerical reader.
+    return patch.dict(sys.modules, {
+        "h5py": ModuleType("h5py"),
+        "tools.vv.result_summary": ModuleType("tools.vv.result_summary"),
+    })
 
 
 def write_json(path, value):
@@ -86,6 +114,7 @@ def decoded_fixture(solid=True, energy=None):
 
 def make_run(root, *, thermal_only=False, endian="<", compressed=False):
     """Two hex control volumes, an empty cut block and valid exporter metadata."""
+    h5py = require_h5py()
     root.mkdir(parents=True, exist_ok=True)
     filename = root / "out" / "step-0.vtkhdf"
     filename.parent.mkdir(exist_ok=True)
@@ -166,7 +195,17 @@ class ContractTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix="chipcae-realcase-test-")
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        self.run = make_run(self.root / "run")
+
+    @property
+    def h5py(self):
+        return require_h5py()
+
+    @property
+    def fixture_run(self):
+        path = self.root / "run"
+        if not path.exists():
+            make_run(path)
+        return path
 
     def events(self, raw=None):
         if raw is None:
@@ -178,13 +217,13 @@ class ContractTest(unittest.TestCase):
         return decoded
 
     def digest(self, run=None, events=None):
-        result = driver.run_digest(self.run if run is None else run,
+        result = driver.run_digest(self.fixture_run if run is None else run,
                                    self.events() if events is None else events)
         self.assertIsInstance(result, dict, "run_digest must return deterministic components")
         return result
 
     def edit_manifest(self, callback, run=None):
-        path = (self.run if run is None else run) / "manifest.json"
+        path = (self.fixture_run if run is None else run) / "manifest.json"
         value = read_json(path)
         callback(value)
         write_json(path, value)
@@ -192,7 +231,9 @@ class ContractTest(unittest.TestCase):
 
 class FixtureValidity(ContractTest):
     def test_generated_vtkhdf_is_accepted_by_existing_reader(self):
-        self.assertIsInstance(summarize(self.run), dict)
+        require_h5py()
+        from tools.vv.result_summary import summarize
+        self.assertIsInstance(summarize(self.fixture_run), dict)
         path = write_json(self.root / "result.json", result_fixture())
         self.assertEqual(check_file(path), [])
 
@@ -219,7 +260,7 @@ class DigestContracts(ContractTest):
 
     def test_one_ulp_temperature_changes_only_its_field_component(self):
         before = self.digest()
-        with h5py.File(vtk_path(self.run), "r+") as output:
+        with self.h5py.File(vtk_path(self.fixture_run), "r+") as output:
             values = output["VTKHDF/hex/PointData/T"]
             values[0] = np.nextafter(values[0], np.inf)
         after = self.digest()
@@ -232,7 +273,7 @@ class DigestContracts(ContractTest):
         self.edit_manifest(lambda m: m.update(wall_s=100, peak_rss_kib=234,
                                              path="changed-path", date="changed-date"))
         self.edit_manifest(lambda m: m["summary"].append({"name": "debug", "value": 100}))
-        with h5py.File(vtk_path(self.run), "r+") as output:
+        with self.h5py.File(vtk_path(self.fixture_run), "r+") as output:
             output["VTKHDF"].attrs["clock"] = 999
         ev = self.events(event_bytes() + log_frame("irrelevant timing/path text", seq=3))
         self.assertEqual(before, self.digest(events=ev))
@@ -241,18 +282,18 @@ class DigestContracts(ContractTest):
         other = make_run(self.root / "big-endian", endian=">", compressed=True)
         first = self.digest()
         self.assertEqual(first, self.digest(other))
-        with h5py.File(vtk_path(self.run)) as output:
+        with self.h5py.File(vtk_path(self.fixture_run)) as output:
             value = output["VTKHDF/hex/PointData/T"][...]
         expected = hashlib.sha256(np.ascontiguousarray(value, dtype="<f8").tobytes()).hexdigest()
         self.assertEqual(first["fields"]["VTKHDF/hex/PointData/T"], expected)
 
     def test_assembly_links_and_reserved_fields_are_excluded(self):
         before = self.digest()
-        with h5py.File(vtk_path(self.run), "r+") as output:
+        with self.h5py.File(vtk_path(self.fixture_run), "r+") as output:
             assembly = output["VTKHDF"].create_group("Assembly")
             for group, name in (("volume", "hex"), ("volume", "cut"),
                                 ("boundary", "eb_surface"), ("lagrangian", "particles")):
-                assembly.require_group(group)[name] = h5py.SoftLink("/VTKHDF/" + name)
+                assembly.require_group(group)[name] = self.h5py.SoftLink("/VTKHDF/" + name)
             output.create_dataset("VTKHDF/hex/PointData/reserved", data=np.full(16, 42.))
             output.create_dataset("VTKHDF/hex/CellData/reserved", data=np.full(2, 43.))
         self.assertEqual(before, self.digest())
@@ -298,16 +339,18 @@ class EventContracts(ContractTest):
 
 class ThermalChecks(ContractTest):
     def test_c2_accepts_required_schema_methods_and_fields(self):
-        self.assertIs(driver._check_c2(self.run, self.events()), True)
+        self.assertIs(driver._check_c2(self.fixture_run, self.events()), True)
 
     def test_c2_rejects_missing_fields_wrong_schema_and_method(self):
-        for name in ("PointData/T", "PointData/U", "CellData/layer_id", "CellData/material_id",
-                     "CellData/cell_kind", "CellData/elem_gid", "CellData/volume"):
-            with self.subTest(missing=name):
-                run = make_run(self.root / name.replace("/", "_"))
-                with h5py.File(vtk_path(run), "r+") as output:
-                    del output["VTKHDF/hex/" + name]
-                self.assertIs(driver._check_c2(run, self.events()), False)
+        require_h5py()
+        for block in ("hex", "cut"):
+            for name in ("PointData/T", "PointData/U", "CellData/layer_id", "CellData/material_id",
+                         "CellData/cell_kind", "CellData/elem_gid", "CellData/volume"):
+                with self.subTest(block=block, missing=name):
+                    run = make_run(self.root / block / name.replace("/", "_"))
+                    with self.h5py.File(vtk_path(run), "r+") as output:
+                        del output["VTKHDF/" + block + "/" + name]
+                    self.assertIs(driver._check_c2(run, self.events()), False)
         for change in (lambda m: m.update(schema_version="wrong"),
                        lambda m: m["summary"][1].update(method="FEM nodes"),
                        lambda m: m["summary"].pop(0)):
@@ -316,10 +359,10 @@ class ThermalChecks(ContractTest):
             self.assertIs(driver._check_c2(run, self.events()), False)
 
     def test_c2_accepts_optional_absent_cell_temperature(self):
-        with h5py.File(vtk_path(self.run), "r+") as output:
+        with self.h5py.File(vtk_path(self.fixture_run), "r+") as output:
             for block in ("hex", "cut"):
                 del output["VTKHDF/" + block + "/CellData/T_cell"]
-        self.assertIs(driver._check_c2(self.run, decoded_fixture()), True)
+        self.assertIs(driver._check_c2(self.fixture_run, decoded_fixture()), True)
 
     def test_c2_thermal_only_zeros_require_matching_level_two_log(self):
         run = make_run(self.root / "thermal-only", thermal_only=True)
@@ -340,81 +383,87 @@ class ThermalChecks(ContractTest):
 
     def test_c4_exactly_one_level_one_energy_log_with_four_keys_and_threshold(self):
         self.assertIs(driver._check_c4(self.events()), True)
-        bad = dict(ENERGY, imbalance=2e-9)
+        for imbalance in (-1e-9, 0., 1e-9):
+            with self.subTest(accepted_imbalance=imbalance):
+                self.assertIs(driver._check_c4(decoded_fixture(energy=dict(ENERGY, imbalance=imbalance))), True)
         missing = dict(ENERGY)
         del missing["iterations"]
-        for events in (decoded_fixture(energy=bad), decoded_fixture(energy=missing), [],
+        for events in (decoded_fixture(energy=dict(ENERGY, imbalance=2e-9)),
+                       decoded_fixture(energy=dict(ENERGY, imbalance=-2e-9)),
+                       decoded_fixture(energy=dict(ENERGY, imbalance=-1.)),
+                       decoded_fixture(energy=missing), [],
                        decoded_fixture() + [decoded_fixture()[-1]],
                        [{"level": 2, "message": "FVM_ENERGY " + json.dumps(ENERGY)}]):
             with self.subTest(events=events):
                 self.assertIs(driver._check_c4(events), False)
 
     def test_c5_finite_fields_summary_and_energy_pass(self):
-        self.assertIs(driver._check_c5(self.run, ENERGY), True)
+        self.assertIs(driver._check_c5(self.fixture_run, ENERGY), True)
 
     def test_c5_nonfinite_point_and_cell_fields_fail(self):
+        require_h5py()
         for path in ("PointData/T", "PointData/U", "CellData/volume", "CellData/T_cell"):
             for value in (np.nan, np.inf):
                 with self.subTest(path=path, value=value):
                     run = make_run(self.root / "nonfinite")
-                    with h5py.File(vtk_path(run), "r+") as output:
+                    with self.h5py.File(vtk_path(run), "r+") as output:
                         output["VTKHDF/hex/" + path][0] = value
                     self.assertIs(driver._check_c5(run, ENERGY), False)
 
     def test_c5_nonfinite_summary_and_energy_fail(self):
         for value in (float("nan"), float("inf")):
-            self.assertIs(driver._check_c5(self.run, dict(ENERGY, heat_in=value)), False)
+            self.assertIs(driver._check_c5(self.fixture_run, dict(ENERGY, heat_in=value)), False)
             self.edit_manifest(lambda m: m["summary"][1].update(value=value))
-            self.assertIs(driver._check_c5(self.run, ENERGY), False)
+            self.assertIs(driver._check_c5(self.fixture_run, ENERGY), False)
 
     def test_c6_cell_min_and_summary_max_use_one_e_minus_eight_tolerance(self):
-        self.assertIs(driver._check_c6(self.run, DEFAULT_LOADS), True)
-        with h5py.File(vtk_path(self.run), "r+") as output:
+        self.assertIs(driver._check_c6(self.fixture_run, DEFAULT_LOADS), True)
+        with self.h5py.File(vtk_path(self.fixture_run), "r+") as output:
             output["VTKHDF/hex/CellData/T_cell"][0] = 298.15 - 1e-7
-        self.assertIs(driver._check_c6(self.run, DEFAULT_LOADS), False)
-        make_run(self.run)
+        self.assertIs(driver._check_c6(self.fixture_run, DEFAULT_LOADS), False)
+        make_run(self.fixture_run)
         self.edit_manifest(lambda m: m["summary"][1].update(value=348.15 + 1e-8))
-        self.assertIs(driver._check_c6(self.run, DEFAULT_LOADS), True)
+        self.assertIs(driver._check_c6(self.fixture_run, DEFAULT_LOADS), True)
         self.edit_manifest(lambda m: m["summary"][1].update(value=348.15 + 1e-7))
-        self.assertIs(driver._check_c6(self.run, DEFAULT_LOADS), False)
+        self.assertIs(driver._check_c6(self.fixture_run, DEFAULT_LOADS), False)
 
     def test_c6_vertex_overshoot_is_diagnostic_and_body_source_is_null(self):
-        with h5py.File(vtk_path(self.run), "r+") as output:
+        with self.h5py.File(vtk_path(self.fixture_run), "r+") as output:
             output["VTKHDF/hex/PointData/T"][0] = 1000.
-        self.assertIs(driver._check_c6(self.run, DEFAULT_LOADS), True)
+        self.assertIs(driver._check_c6(self.fixture_run, DEFAULT_LOADS), True)
         loads = DEFAULT_LOADS + [{"type": "heat_source", "target": "layer:board", "q_vol": 1.}]
-        self.assertIsNone(driver._check_c6(self.run, loads))
+        self.assertIsNone(driver._check_c6(self.fixture_run, loads))
 
 
 class WarpageChecks(ContractTest):
     def test_w1_requires_solid_residual_and_both_fvm_methods(self):
-        self.assertIs(driver._check_w1(self.run, self.events()), True)
-        self.assertIs(driver._check_w1(self.run, decoded_fixture(solid=False)), False)
+        self.assertIs(driver._check_w1(self.fixture_run, self.events()), True)
+        self.assertIs(driver._check_w1(self.fixture_run, decoded_fixture(solid=False)), False)
         for index in (0, 2):
             run = make_run(self.root / "wrong-method")
             self.edit_manifest(lambda m: m["summary"][index].update(method="wrong"), run)
             self.assertIs(driver._check_w1(run, self.events()), False)
 
     def test_w2_accepts_finite_nonnegative_qoi_and_rejects_negative_or_nonfinite(self):
-        self.assertIs(driver._check_w2(self.run), True)
+        self.assertIs(driver._check_w2(self.fixture_run), True)
         for index in (0, 2):
             run = make_run(self.root / "negative")
             self.edit_manifest(lambda m: m["summary"][index].update(value=-1e-30), run)
             self.assertIs(driver._check_w2(run), False)
         for value in (np.nan, np.inf):
-            with h5py.File(vtk_path(self.run), "r+") as output:
+            with self.h5py.File(vtk_path(self.fixture_run), "r+") as output:
                 output["VTKHDF/hex/PointData/U"][0, 2] = value
-            self.assertIs(driver._check_w2(self.run), False)
+            self.assertIs(driver._check_w2(self.fixture_run), False)
 
     def test_w3_bottom_vertices_must_be_exactly_zero(self):
         constraints = {"fixed": [{"target": "face:zmin"}]}
-        self.assertIs(driver._check_w3(self.run, constraints), True)
-        with h5py.File(vtk_path(self.run), "r+") as output:
+        self.assertIs(driver._check_w3(self.fixture_run, constraints), True)
+        with self.h5py.File(vtk_path(self.fixture_run), "r+") as output:
             output["VTKHDF/hex/PointData/U"][0, 2] = 1e-30
-        self.assertIs(driver._check_w3(self.run, constraints), False)
+        self.assertIs(driver._check_w3(self.fixture_run, constraints), False)
 
     def test_w3_rigid321_has_no_invented_tolerance(self):
-        self.assertIsNone(driver._check_w3(self.run, {"rigid": "3-2-1"}))
+        self.assertIsNone(driver._check_w3(self.root / "unused", {"rigid": "3-2-1"}))
 
 
 class AssemblyChecks(ContractTest):
@@ -542,6 +591,24 @@ def complete_record():
 
 
 class RecordChecks(ContractTest):
+    def test_failure_precedes_dependency_and_result_keeps_approved_metadata(self):
+        for failure, expected_exit, expected_verdict in ((False, 77, "skip"), (True, 1, "fail")):
+            with self.subTest(failure=failure):
+                record = complete_record()
+                record["checks"] = dict.fromkeys(record["checks"])
+                record["checks"]["C1"] = False if failure else None
+                record["needs_attention"] = [{"item": "W", "reason": "synthetic dependency unavailable"}]
+                driver._set_verdict(record, False)
+                self.assertEqual(record["exit_code"], expected_exit)
+                result = driver._result(record)
+                self.assertEqual(result["verdict"], expected_verdict)
+                self.assertIsNone(result["reference"])
+                self.assertEqual(set(result["qoi"]), {"T_max"})
+                self.assertTrue(any("无解析解" in note for note in result["notes"]))
+                path = write_json(self.root / "result.json", result)
+                self.assertEqual(check_file(path), [])
+                self.assertIs(driver._check_c10(path, "synthetic"), True)
+
     def test_c9_complete_applicable_record_and_unexplained_null(self):
         record = complete_record()
         self.assertIs(driver._check_c9(record), True)
@@ -593,8 +660,9 @@ class RecordChecks(ContractTest):
                 self.assertIs(driver._check_c10(path, data_class), False)
 
 
-# The external programs are the only substituted boundary. Driver orchestration,
-# records, readers, checks and resource measurement run unchanged.
+# External programs provide stage fixtures. Stage-only tests also model package
+# availability; numerical reader/check tests always use the actual packages.
+# Driver orchestration, records and resource measurement run unchanged.
 FAKE_CLI = r'''
 import json, os, pathlib, shutil, signal, sys, time
 root = pathlib.Path(os.environ['REALCASE_TEST_ROOT'])
@@ -633,6 +701,9 @@ elif name == 'fake-import':
     if '--polyset' in args:
         shutil.copyfile(root / 'board.polyset', arg('--polyset'))
 elif name == 'fake-preview':
+    if mode == 'preview_budget':
+        sys.stderr.write('cell_budget: synthetic preview exceeds its default budget\n')
+        sys.exit(14)
     print(json.dumps({'stage': 'success', 'cell_count': 2}))
 elif name == 'fake-solve':
     case = json.loads(arg('--case').read_text())
@@ -659,7 +730,7 @@ elif name == 'fake-solve':
     manifest = json.loads(manifest_path.read_text())
     ranks = profile['ranks']
     manifest['partitions']['per_step'] = [ranks]
-    if ranks == 2:
+    if ranks == 2 and mode != 'parallel_partitions':
         import h5py, numpy as np
         with h5py.File(out / 'out/step-0.vtkhdf', 'r+') as f:
             changes = {
@@ -725,7 +796,6 @@ class DriverControlFlow(ContractTest):
         elastic = self.source / "solvers/fvm/elastic/include/chipcae/solvers/fvm/elastic.hpp"
         elastic.parent.mkdir(parents=True)
         elastic.touch()
-        make_run(self.root / "template")
         (self.root / "bad-events.bin").write_bytes(event_bytes(energy=dict(ENERGY, imbalance=2e-9)))
         stack = {"id": "generated", "unit": "m", "outline": {"box": [0, 0, 2, 1]},
                  "symmetry": "none", "package_type": "FCBGA", "layers": [
@@ -806,7 +876,9 @@ class DriverControlFlow(ContractTest):
         params = dict(self.params, input=str(inputs / "assembly.json"), material_map=None)
         return params
 
+    @hdf5_fixture
     def test_external_fixtures_round_trip_through_existing_reader(self):
+        from tools.vv.result_summary import summarize
         # This passing smoke test rules out malformed fixtures as the cause of red contracts.
         stack = self.root / "fixture.stack.json"
         imported = subprocess.run([self.env["CHIPCAE_IMPORT_EXE"], self.params["input"],
@@ -837,6 +909,42 @@ class DriverControlFlow(ContractTest):
         self.assertEqual(parallel.returncode, 0, parallel.stderr)
         self.assertIsInstance(summarize(out2), dict)
 
+    @stage_runtime()
+    def test_cell_budget_transmission_and_preview_rejection_need_no_hdf5(self):
+        os.environ["REALCASE_TEST_MODE"] = "preview_budget"
+        for budget in (100000, None):
+            with self.subTest(budget=budget):
+                (self.root / "calls.jsonl").unlink(missing_ok=True)
+                params = copy.deepcopy(self.params)
+                if budget is not None:
+                    params["mesh"]["cell_budget"] = budget
+                record = self.invoke(params=params, repeat=1)
+                self.assertEqual(record["exit_code"], 1)
+                self.assertEqual(record["needs_attention"], [])
+                self.assertIs(record["checks"]["C1"], False)
+                self.assertIs(record["checks"]["C10"], True)
+                self.assertEqual([c["name"] for c in self.calls()], ["fake-import", "fake-preview"])
+                self.assertEqual([c["exit_code"] for c in record["commands"]], [0, 14])
+                self.assertTrue(any("cell_budget" in note for note in record["notes"]))
+                for check in ("C2", "C3", "C4", "C5", "C6", "C7", "C8"):
+                    self.assertIsNone(record["checks"][check])
+                case = read_json(self.persisted(record) / "inputs/case.json")
+                if budget is None:
+                    self.assertNotIn("cell_budget", case["mesh"])
+                else:
+                    self.assertIs(type(case["mesh"]["cell_budget"]), int)
+                    self.assertEqual(case["mesh"]["cell_budget"], 100000)
+        for budget in (0, -1, 1.5, True):
+            with self.subTest(invalid_budget=budget):
+                (self.root / "calls.jsonl").unlink(missing_ok=True)
+                params = copy.deepcopy(self.params)
+                params["mesh"]["cell_budget"] = budget
+                record = self.invoke(params=params)
+                self.assertEqual(record["exit_code"], 2)
+                self.assertEqual(self.calls(), [])
+                self.assertFalse((self.persisted(record) / "inputs/case.json").exists())
+
+    @hdf5_fixture
     def test_cell_budget_is_preserved_or_omitted_and_invalid_values_start_no_stages(self):
         for budget in (100000, None):
             with self.subTest(budget=budget):
@@ -965,6 +1073,7 @@ class DriverControlFlow(ContractTest):
         self.assertEqual(self.calls(), [])
         self.persisted(record)
 
+    @hdf5_fixture
     def test_assembly_material_map_accepts_null_or_path_and_rejects_other_types(self):
         params = self.assembly_params()
         for value in (42, True, False, [], {}, ["map.json"]):
@@ -1004,6 +1113,7 @@ class DriverControlFlow(ContractTest):
         self.assertEqual(self.calls(), [])
         self.persisted(record)
 
+    @hdf5_fixture
     def test_result_preserves_dependency_verdict(self):
         self.pipeline.unlink()
         record = self.invoke()
@@ -1020,6 +1130,7 @@ class DriverControlFlow(ContractTest):
         self.assertIs(record["checks"]["C10"], True)
         self.assert_exportable_metadata(result)
 
+    @hdf5_fixture
     def test_result_identifies_physical_check_reference(self):
         record = self.invoke()
         self.assertEqual(record["exit_code"], 0)
@@ -1033,6 +1144,9 @@ class DriverControlFlow(ContractTest):
         self.assert_exportable_metadata(result)
 
     def assert_exportable_metadata(self, result):
+        require_h5py()
+        from tools.vv.result_summary import summarize
+        from tools.vv.result_summary_result import result_json_from_summary
         metadata = {key: result[key] for key in ("case_id", "data_class", "label", "date", "commit",
                                                "verdict", "reference", "tolerance", "notes")}
         exported = result_json_from_summary(summarize(self.root / "template"), **metadata)
@@ -1040,6 +1154,7 @@ class DriverControlFlow(ContractTest):
         for key, value in metadata.items():
             self.assertEqual(exported.get(key), value)
 
+    @hdf5_fixture
     def test_result_checker_still_rejects_unversioned_contract_extensions(self):
         record = self.invoke()
         result = read_json(self.persisted(record) / "result.json")
@@ -1052,6 +1167,7 @@ class DriverControlFlow(ContractTest):
                 path = write_json(self.root / "invalid-result.json", dict(legacy, **fields))
                 self.assertEqual(check_file(path), expected)
 
+    @hdf5_fixture
     def test_real_record_keeps_output_location_out_of_persisted_fields(self):
         record = self.invoke(params=dict(self.params, data_class="real"))
         self.assertEqual(record["exit_code"], 0)
@@ -1075,6 +1191,7 @@ class DriverControlFlow(ContractTest):
         self.assertFalse({"W1", "W2", "W3", "W4", "W5"} & set(record["checks"]))
         self.persisted(record)
 
+    @stage_runtime()
     def test_assembly_w_dependency_does_not_hide_solver_error_or_replace_a_readiness(self):
         self.pipeline.write_text(THERMAL_ONLY)
         os.environ["REALCASE_TEST_MODE"] = "rc14"
@@ -1086,6 +1203,7 @@ class DriverControlFlow(ContractTest):
         self.assertIs(record["checks"]["C1"], False)
         self.persisted(record)
 
+    @stage_runtime()
     def test_rc13_only_assembly_is_dependency_with_a2_null(self):
         os.environ["REALCASE_TEST_MODE"] = "rc13"
         for kind in ("thermal", "warpage", "assembly"):
@@ -1100,6 +1218,7 @@ class DriverControlFlow(ContractTest):
                     self.assertIs(record["checks"]["C1"], False)
                 self.persisted(record)
 
+    @hdf5_fixture
     def test_repeated_digest_mismatch_fails_c7_and_names_changed_component(self):
         os.environ["REALCASE_TEST_MODE"] = "repeat_qoi"
         record = self.invoke()
@@ -1108,6 +1227,7 @@ class DriverControlFlow(ContractTest):
         self.assertIn("T_max", " ".join(record["notes"]))
         self.assertEqual(len(self.calls("solve")), 2)
 
+    @hdf5_fixture
     def test_failure_in_any_primary_run_fails_even_when_digests_match(self):
         os.environ["REALCASE_TEST_MODE"] = "repeat_energy"
         record = self.invoke()
@@ -1116,6 +1236,7 @@ class DriverControlFlow(ContractTest):
         self.assertIs(record["checks"]["C7"], True)
         self.assertEqual(len(self.calls("solve")), 2)
 
+    @hdf5_fixture
     def test_primary_interruptions_continue_other_runs_and_applicable_checks(self):
         for mode in ("fail_solve", "fail_readback", "fail_events"):
             for failed_run in ("np1_r1", "np1_r2", "np2_r1"):
@@ -1128,8 +1249,7 @@ class DriverControlFlow(ContractTest):
                     self.assertIs(record["checks"]["C1"], False)
                     self.assertTrue(any(failed_run in note for note in record["notes"]))
                     for check in ("C2", "C3", "C4", "C5", "C6", "C10"):
-                        expected = not (mode == "fail_readback" and check in ("C2", "C5", "C6"))
-                        self.assertIs(record["checks"][check], expected, (check, record["notes"]))
+                        self.assertIs(record["checks"][check], True, (check, record["notes"]))
                     if mode == "fail_readback":
                         failed = [c for c in record["commands"] if c["stage"] == "readback_" + failed_run]
                         self.assertEqual(len(failed), 1)
@@ -1147,6 +1267,26 @@ class DriverControlFlow(ContractTest):
                         self.assertAlmostEqual(record["summary"]["T_max"], 320., delta=1e-10)
                     self.persisted(record)
 
+    @hdf5_fixture
+    def test_failed_readback_leaves_its_output_checks_and_digests_unevaluated(self):
+        (self.source / "tools").unlink()
+        readback = self.source / "tools/vv/result_summary.py"
+        readback.parent.mkdir(parents=True)
+        readback.write_text("import sys\nsys.stderr.write('readback unavailable\\n')\nraise SystemExit(14)\n")
+        record = self.invoke()
+        self.assertEqual(record["exit_code"], 1)
+        self.assertIs(record["checks"]["C1"], False)
+        self.assertIs(record["checks"]["C10"], True)
+        for check in ("C2", "C3", "C4", "C5", "C6", "C7", "C8"):
+            self.assertIsNone(record["checks"][check], check)
+        self.assertEqual(record["digests"], {})
+        self.assertEqual(len(self.calls("solve")), 2)
+        folder = self.persisted(record)
+        for name in ("np1_r1", "np1_r2"):
+            self.assertTrue(vtk_path(folder / name).is_file())
+            self.assertTrue(any("readback_" + name in note for note in record["notes"]))
+
+    @hdf5_fixture
     def test_primary_interruption_leaves_independent_warpage_auxiliaries_evaluable(self):
         os.environ.update(REALCASE_TEST_MODE="fail_solve", REALCASE_TEST_FAIL_RUN="np1_r1")
         record = self.invoke("warpage")
@@ -1159,6 +1299,7 @@ class DriverControlFlow(ContractTest):
         self.assertEqual(len(self.calls("solve")), 4)
         self.persisted(record)
 
+    @hdf5_fixture
     def test_assembly_primary_interruption_continues_material_and_auxiliary_checks(self):
         os.environ.update(REALCASE_TEST_MODE="fail_readback", REALCASE_TEST_FAIL_RUN="np1_r1")
         record = self.invoke("assembly", params=self.assembly_params())
@@ -1170,6 +1311,7 @@ class DriverControlFlow(ContractTest):
         self.assertEqual(len(self.calls("solve")), 3)
         self.persisted(record)
 
+    @hdf5_fixture
     def test_markdown_has_readable_metric_tables_and_preserves_complete_record(self):
         for usage in (False, True):
             with self.subTest(usage=usage):
@@ -1199,14 +1341,18 @@ class DriverControlFlow(ContractTest):
                     self.assertIn(record["digests"]["np1_r1"], tables["Digests"])
                     self.assertIn(record["file_sha256"]["vtkhdf"], tables["Digests"])
 
+    @hdf5_fixture
     def test_parallel_mesh_partition_and_qoi_mismatch_each_fail_c8(self):
         for mode in ("parallel_mesh", "parallel_partitions", "parallel_qoi"):
             with self.subTest(mode=mode):
                 os.environ["REALCASE_TEST_MODE"] = mode
                 record = self.invoke(nps=[1, 2])
+                readbacks = [c for c in record["commands"] if c["stage"].startswith("readback_")]
+                self.assertEqual([c["exit_code"] for c in readbacks], [0, 0, 0])
                 self.assertIs(record["checks"]["C8"], False)
                 self.assertEqual(record["exit_code"], 1)
 
+    @hdf5_fixture
     def test_absent_mpi_leaves_c8_null_without_failure(self):
         os.environ.pop("CHIPCAE_MPIEXEC", None)
         actual_which = shutil.which
@@ -1218,6 +1364,7 @@ class DriverControlFlow(ContractTest):
         self.assertTrue(any("mpi" in note.lower() for note in record["notes"]))
         self.assertEqual(len(self.calls("solve")), 2)
 
+    @hdf5_fixture
     def test_success_pipeline_retains_sidecar_settings_logs_metrics_and_repeat_counts(self):
         self.params.update(loads=DEFAULT_LOADS, constraints={"rigid": "3-2-1"},
                            linear={"preconditioner": "jacobi", "rtol": 1e-10}, T_ref=300.)
@@ -1266,8 +1413,9 @@ class DriverControlFlow(ContractTest):
         self.assertGreaterEqual(len(list((folder / "logs").glob("*.stderr.log"))), 6)
         self.assertEqual(check_file(folder / "result.json"), [])
 
+    @hdf5_fixture
     def test_void_exported_cells_do_not_count_as_fvm_unknowns(self):
-        with h5py.File(vtk_path(self.root / "template"), "r+") as output:
+        with self.h5py.File(vtk_path(self.root / "template"), "r+") as output:
             output["VTKHDF/hex/CellData/cell_kind"][0] = 2
         record = self.invoke(repeat=1)
         self.assertEqual(record["exit_code"], 0, record["notes"])
@@ -1286,6 +1434,7 @@ class DriverControlFlow(ContractTest):
         self.assertNotIn("warpage_pv", qoi)
         self.assertNotIn("U_mag_max", qoi)
 
+    @hdf5_fixture
     def test_assembly_material_names_not_library_order_and_applicable_check_policy(self):
         params = self.assembly_params()
         record = self.invoke("assembly", params=params)
@@ -1315,6 +1464,7 @@ class DriverControlFlow(ContractTest):
         self.assertEqual(bad["exit_code"], 1)
         self.assertIs(bad["checks"]["A2"], False)
 
+    @hdf5_fixture
     def test_assembly_equal_material_content_is_accepted_and_approximation_is_illustrative(self):
         params = self.assembly_params()
         document_path = Path(params["input"])
@@ -1328,6 +1478,7 @@ class DriverControlFlow(ContractTest):
         self.assertEqual(record["materials_provenance"], "illustrative")
         self.assertTrue(self.calls("import"))
 
+    @hdf5_fixture
     def test_parts_from_step_approximation_controls_provenance(self):
         params = self.assembly_params()
         document_path = Path(params["input"])
@@ -1344,6 +1495,7 @@ class DriverControlFlow(ContractTest):
         self.assertNotEqual(record["exit_code"], 2)
         self.assertEqual(record["materials_provenance"], "illustrative")
 
+    @stage_runtime()
     def test_import_error_is_fail_with_record(self):
         for mode in ("import7", "import9"):
             with self.subTest(mode=mode):
@@ -1353,6 +1505,7 @@ class DriverControlFlow(ContractTest):
                 self.assertIs(record["checks"]["C1"], False)
                 self.persisted(record)
 
+    @hdf5_fixture
     def test_colliding_invocations_preserve_previous_artifacts(self):
         first = self.invoke()
         folder = self.persisted(first)
@@ -1364,6 +1517,7 @@ class DriverControlFlow(ContractTest):
         self.assertEqual((folder / "run_record.json").read_bytes(), snapshot)
         self.assertEqual(len(list(self.out.rglob("run_record.json"))), 2)
 
+    @stage_runtime()
     def test_timeout_and_signal_record_metrics_and_synthetic_has_no_retry(self):
         for mode, detail in (("timeout", "timeout"), ("signal", f"signal:{signal.SIGTERM}")):
             with self.subTest(mode=mode):
@@ -1380,6 +1534,7 @@ class DriverControlFlow(ContractTest):
                 self.assertGreater(failed[0]["peak_rss_kib"], 0)
                 self.persisted(record)
 
+    @hdf5_fixture
     def test_real_warpage_explained_auxiliary_nulls_do_not_fail_record_completeness(self):
         record = self.invoke("warpage", params=dict(self.params, data_class="real"))
         self.assertEqual(record["exit_code"], 0, {k: record[k] for k in ("checks", "missing", "notes")})
@@ -1392,6 +1547,7 @@ class DriverControlFlow(ContractTest):
         folder = self.persisted(record)
         self.assertEqual(check_file(folder / "result.json"), ["real result must stay local (D03)"])
 
+    @stage_runtime()
     def test_real_timeout_and_signal_retry_once_with_halved_mesh_and_still_fail(self):
         for mode in ("timeout", "signal"):
             with self.subTest(mode=mode):
@@ -1412,6 +1568,7 @@ class DriverControlFlow(ContractTest):
                 self.assertNotEqual(cases[0]["out"], cases[1]["out"])
                 self.persisted(record)
 
+    @hdf5_fixture
     def test_real_resource_retry_preserves_failure_and_continues_primary_runs(self):
         os.environ.update(REALCASE_TEST_MODE="fail_signal", REALCASE_TEST_FAIL_RUN="np1_r1")
         record = self.invoke(params=dict(self.params, data_class="real"), nps=[1, 2])
@@ -1429,6 +1586,7 @@ class DriverControlFlow(ContractTest):
         self.assertIs(record["checks"]["C8"], True)
         self.persisted(record)
 
+    @stage_runtime()
     def test_repeated_real_resource_failures_do_not_repeat_retry_or_abort_primary_runs(self):
         os.environ["REALCASE_TEST_MODE"] = "signal"
         record = self.invoke(params=dict(self.params, data_class="real"), nps=[1, 2])

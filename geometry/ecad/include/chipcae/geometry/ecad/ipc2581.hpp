@@ -79,6 +79,8 @@ bool apply_material_map(EcadModel& model,
                         const std::filesystem::path& file,
                         std::string* error = nullptr);
 
+bool validate_mapped_targets(const EcadModel& model, std::string* error = nullptr);
+
 // Parses IPC-2581 with Expat's streaming interface; XML content is never retained as a tree.
 ImportResult read_ipc2581(const std::filesystem::path& file);
 // Recompute via fractions on caller-supplied rectangular cells (dbu).

@@ -14,7 +14,10 @@ ctest --test-dir build-realcase --output-on-failure -L integration -R 'f1130|dem
 ctest --test-dir build-realcase --output-on-failure
 ```
 
-The unit test needs numpy and h5py, but no compiled solver, MPI or CAD backend.
+The unit test needs numpy, but no compiled solver, MPI or CAD backend. HDF5
+fixtures and reader checks import h5py when used and skip with `h5py not installed`
+if it is unavailable. Parameter, stage-error, exit-status, envelope and data-gate
+checks still run, including cell_budget transmission before preview rejection.
 It generates valid temporary manifest/VTKHDF/CAELOG1 fixtures. Temporary external
 programs exercise the driver's actual subprocess, resource and record handling;
 their output provides no evidence of numerical accuracy. The E2Es use a 4 by 4,
