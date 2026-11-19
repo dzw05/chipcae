@@ -53,11 +53,16 @@ are accepted. Non-convex or degenerate rings are rejected; vertices must be fini
 and inside `outline.box`. Clipping failures emit an error event before output is
 written. Holes are unsupported.
 
+Regions with a `footprint.polygon` are clipped in the same pass as the outline:
+`region_cut_planes` supplies the extra planes to `apply_outline_cut`. Errors use
+the shared mapping: `CUT_UNSUPPORTED` exits 13; other paths, including
+`INPUT_INVALID`, exit 14.
+
 The success event reports `cell_count`, `cut_cell_count`, and `mesh_sha256` after
 clipping. `cut_cell_count` agrees with the number of `cell_kind=1` entries in
-VTKHDF; `vol_frac` contains the retained volume fractions. Box-only grids have
-zero cut cells. Use identical integer grid parameters and ratio settings to compare
-preview and solve digests.
+VTKHDF; `vol_frac` contains the retained volume fractions. Grids with no outline
+or region polygons have zero cut cells. Use identical integer grid parameters and
+ratio settings to compare preview and solve digests.
 
 An external polyset layer named `outline` without an inline polygon is unsupported:
 preview exits with `CUT_UNSUPPORTED` (13) and explains that an inline polygon is
