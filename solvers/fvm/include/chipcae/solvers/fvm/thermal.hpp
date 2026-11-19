@@ -11,8 +11,7 @@ struct ThermalBc {
     enum class Kind { Dirichlet, Robin, Flux } kind;
     std::string target;
     double T = 0, h = 0, T_inf = 0, q = 0;
-    // Proposed plan extension for MMS: when present, select just this public
-    // face index within target. All original target-wide members are preserved.
+    // Select one public face within target, for spatially varying face averages.
     std::optional<std::size_t> face;
 };
 struct ThermalProblem {

@@ -555,6 +555,10 @@ inline fv::ThermalResult solve(const fv::FvGrid& g,
     return r;
 }
 inline void conservation(const fv::ThermalResult& r) {
+    if (r.cell_balance_max > 1e-12 || r.face_jump_max > 1e-9 || r.imbalance > 1e-9)
+        std::cout << std::setprecision(17)
+                  << "measured failed conservation: cell=" << r.cell_balance_max
+                  << " face=" << r.face_jump_max << " imbalance=" << r.imbalance << '\n';
     require(std::isfinite(r.cell_balance_max) && r.cell_balance_max >= 0 &&
                 r.cell_balance_max <= 1e-12,
             "cell balance <= 1e-12");

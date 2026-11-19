@@ -9,8 +9,7 @@
 #include <vector>
 
 namespace chipcae::solvers::fvm {
-// Test-first interface scaffold. Reuses the existing error carrier; coded error
-// transport is still an open contract question in the implementation brief.
+// Errors retain the mesh path/reason carrier; reason starts with the existing code name.
 using mesh::Expected;
 
 struct FvFace {
@@ -28,6 +27,11 @@ struct FvGrid {
     std::vector<std::array<double, 3>> cv_centroid;
     std::vector<FvFace> faces;
     std::vector<std::int64_t> cv_face_off{0}, cv_faces;
+    // Stable ordinal within the original parent. Merges use the smallest
+    // (gid, ordinal) representative and retain every constituent in CSR order.
+    std::vector<int> cv_subcell;
+    std::vector<std::int64_t> constituent_off{0}, constituent_elem, constituent_gid;
+    std::vector<int> constituent_subcell;
     double max_identity_defect = 0;
 };
 Expected<FvGrid> build_grid(const mesh::HexMeshArrays&,

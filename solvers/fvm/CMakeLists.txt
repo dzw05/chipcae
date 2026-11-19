@@ -12,7 +12,7 @@ target_link_libraries(chipcae_fvm PUBLIC chipcae::core chipcae::mesh)
 chipcae_set_warnings(chipcae_fvm)
 
 if(CHIPCAE_ENABLE_MFEM AND MFEM_USE_PETSC)
-    # Test-first link stubs; implementation is intentionally deferred.
+    # PETSc headers and link dependencies are supplied by the MFEM target.
     target_sources(chipcae_fvm PRIVATE src/grid.cpp src/thermal.cpp src/mfd_local.cpp)
     target_link_libraries(chipcae_fvm PUBLIC mfem chipcae_mesh_cut)
     target_include_directories(chipcae_fvm PUBLIC ${PROJECT_SOURCE_DIR}/material/include)
