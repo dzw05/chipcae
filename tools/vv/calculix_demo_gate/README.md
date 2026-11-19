@@ -10,6 +10,13 @@ values and real-reference acceptance belong to the follow-up qualification card.
 Green generator tests establish neither reference qualification nor a passing
 chipcae comparison.
 
+The written authorization is the supplied V-INT-6 brief's section
+**“PR #179 本轮评审范围修订（2026-11-19）”**. It explicitly defers qualified
+`REFERENCE.json`, committed L1 decks, formal reference values and real-reference
+acceptance, and specifies `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=OFF` for this
+generator/validator delivery. The configuration below implements that approved
+scope revision. It does not complete the original reference deliverable.
+
 **Candidate status: 参考不合格 — prescribed warpage sequence is nonmonotone.**
 L3 mechanics now completes within the unchanged memory guard, and all three
 levels plus the C3D20 cross-check have been solved. The complete candidate
@@ -36,9 +43,10 @@ and failures take precedence. Without an artifact the required solver version
 is 2.23. No acceptance assertion, numerical threshold or mesh level was changed.
 
 V&V handoff for V-INT-6 / PR #179: the original (a)/(b) failure and complete
-candidate evidence below remain open for numerical disposition. The follow-up
-must resolve qualification under (a)–(f), publish only a qualified artifact and
-its real L1 decks, enable `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=ON`, and run
+candidate evidence in the external qualification archive remain open for
+numerical disposition. The follow-up must resolve qualification under (a)–(f),
+publish only a qualified artifact and its real L1 decks, enable
+`CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=ON`, and run
 the real-artifact mutation/restore check. No candidate value from this PR may
 populate `demo_gate.reference_w_bfp_m` or gate chipcae before that handoff closes.
 
@@ -85,8 +93,8 @@ The thermal deck uses `*HEAT TRANSFER,STEADY STATE`, bottom temperature
 other faces insulated. The body flux is read from the input power divided by
 the actual full die-layer volume: `10/(392e-6 × 0.0005)` W/m³. Integrating
 this source over quarter elements gives 2.5 W and over full elements gives
-10 W. Maximum relative source error across all three constructed meshes and
-the full model is `5.3291e-16`, below `1e-10`.
+10 W. The integrated source must satisfy the unchanged `1e-10` relative-error
+limit on every mesh.
 
 Two decks are used: `<level>_quarter_thermal.inp` followed by
 `<level>_quarter_mech.inp`. `*TEMPERATURE,FILE=<thermal job>.frd,BSTEP=1`
@@ -109,8 +117,8 @@ ASCII format; it rejects duplicate/unknown nodes, incomplete fields, nonfinite
 values and truncated records. The binary layouts follow upstream
 [frd.c](https://github.com/Dhondtguido/CalculiX/blob/master/src/frd.c) and
 [frdselect.c](https://github.com/Dhondtguido/CalculiX/blob/master/src/frdselect.c).
-Thermal and structural NDTEMP blocks are compared node by node; maximum transfer
-difference is 0 K in every model, including all 161005 L3 nodes.
+Thermal and structural NDTEMP blocks are compared node by node against the
+unchanged `1e-3 K` transfer limit.
 
 QoIs use the shared `mirror_quarter`, `interp_grid`, `qoi_surface`, and
 `best_fit_plane` implementations. Numpy and SciPy are required. The full
@@ -123,13 +131,13 @@ places and points are sorted by y then x. This removes translation roundoff and
 fixes traversal order for co-circular Delaunay nodes. Displacements retain their
 full precision. Full and mirrored models consequently use the same triangulation,
 including when their displacement fields differ by a rigid plane.
-Temperatures below are absolute; convergence, uncertainty, and cross-checks
+Stored temperatures are absolute; convergence, uncertainty, and cross-checks
 use rises above 298.15 K.
 
 L1/L2 mechanics uses the direct SPOOLES solver. L3 mechanics (both C3D20R and
 C3D20) uses `SOLVER=ITERATIVE CHOLESKY` to avoid the direct factorization's memory
-cost. Plain iterative solution was rejected during diagnostics: on L2 it changed
-W_bfp by about 0.013% relative to SPOOLES, larger than the mesh differences.
+cost. Plain iterative solution was rejected during diagnostics because its
+W_bfp differed from SPOOLES beyond the required tolerance.
 
 The L3 mechanical deck first initializes at uniform T_ref with no load. Its
 zero displacements and unchanged temperature are covered by a real-solver
@@ -144,72 +152,30 @@ and §7.125 `*STEP`, and upstream
 [steps.f](https://github.com/Dhondtguido/CalculiX/blob/master/src/steps.f) and
 [checkconvergence.c](https://github.com/Dhondtguido/CalculiX/blob/master/src/checkconvergence.c).
 The regression compares both W_bfp and the complete displacement field against
-SPOOLES at unchanged 1e-6 relative tolerance. An additional L2 diagnostic
-compared the final refined W_bfp with the direct solution: relative difference
-2.7263e-11 at 172044 KiB peak RSS (实测). A failed iterative solver status
+SPOOLES at unchanged 1e-6 relative tolerance. Additional L2 diagnostic results
+remain in the external qualification archive. A failed iterative solver status
 is fatal even if ccx exits zero and writes a fresh FRD.
 
-**参考值（独立代码）候选，未合格**, all temperatures absolute:
+The qualification attempt produced nonmonotone W_bfp: it decreases from L1 to
+L2, then increases at L3. Criteria (a) and (b) fail, yielding
+`status: "参考不合格"`. The other criteria passed in that attempt; the full
+assessment remains subject to V&V disposition. Strict reference acceptance
+rejects this outcome. All original selection rules, acceptance thresholds,
+mesh levels and QoI definitions are retained.
 
-| Model | W_bfp (m) | W_bfp_nodes (m) | T_max (K) | T_top_min (K) |
-|---|---:|---:|---:|---:|
-| L1 quarter | 1.02578811052332e-05 | 1.02573121567569e-05 | 319.376785421088 | 306.533652393553 |
-| L2 quarter | 1.02571923832038e-05 | 1.02568652229504e-05 | 318.897751945929 | 306.535625001088 |
-| L3 quarter | 1.02675787497901e-05 | 1.02720254640636e-05 | 318.897741985273 | 306.536392187331 |
-| L1 full | 1.02578811012246e-05 | 1.0257312159631e-05 | 319.376785421088 | 306.533652393553 |
-| L3 C3D20 cross | 1.02691544345982e-05 | 1.02696924492876e-05 | 318.897829288905 | 306.534314357145 |
-
-Candidate selection and uncertainty (temperature criteria use rises above
-298.15 K; selected temperature candidates below are absolute):
-
-| QoI | Observed p | Selected | Candidate value | U_ref = abs(L3 − L2) | L2→L3 relative rise change |
-|---|---:|---|---:|---:|---:|
-| W_bfp_m | undefined (nonmonotone) | finest | 1.02675787497901e-05 | 1.03863665863e-08 | 0.00101156921601 |
-| T_max_K | 15.5535261201 | finest | 318.897741985273 | 9.96065648451e-06 | 4.80083880529e-07 |
-| T_top_min_K | 1.36245519578 | finest | 306.536392187331 | 0.000767186242058 | 9.14798908662e-05 |
-
-W_bfp decreases from L1 to L2, then increases at L3. Thus criterion (a)
-fails even though its ≤0.2% L2→L3 change bound holds; criterion (b) also
-fails because an observed warpage order cannot be computed. The recorded
-`finest` warpage is a diagnostic fallback, not a qualified reference.
-Temperature orders are outside [1.5,4.5], so their selection rule chooses L3.
-Criterion (c) requires U_ref ≤0.2% of selected warpage or temperature rise.
-All original selection and acceptance rules remain unchanged.
-The complete assessment is (a)=fail, (b)=fail, (c)=pass, (d)=pass, (e)=pass,
-(f)=pass, giving `status: "参考不合格"`.
-
-The final additional L3 refinement changed W_bfp by 1.1482e-11 m, versus
-1.0386e-8 m for L2→L3. Both loaded-step results show the direction reversal.
-The surface peak also moves between levels (nodal y coordinates 5.5, 5.75
-and 5.625 mm). These observations support a mesh/QoI convergence limitation;
-they do not authorize changing the prescribed meshes or the monotonicity rule.
-The brief explicitly requires reporting a nonmonotone result to V&V.
-No altered mesh sequence, tolerance or replacement QoI was introduced. The PR
-disposition changes which deliverable is tested by default; strict reference
-acceptance continues to reject this candidate.
-
-| Check | W_bfp relative difference | ΔT_max relative difference | ΔT_top_min relative difference | Limit |
-|---|---:|---:|---:|---:|
-| (e) L1 full/quarter | 3.90777374623e-10 | 0 | 1.35605381026e-14 | 1e-6 |
-| (d) L3 C3D20/C3D20R | 0.000153462159532 | 4.20786188279e-06 | 0.000247762105488 | 0.001 |
-
-Criterion (f) passes: maximum relative source error is 5.3290705182e-16
-(limit 1e-10), and maximum thermal/mechanical temperature-transfer difference
-is 0 K (limit 1e-3 K).
+Unqualified QoI tables, selection/uncertainty results, comparison deltas and
+numerical diagnostics are kept only in the external qualification archive and
+a clearly marked non-authoritative qualification note alongside the task log.
+They are omitted from this deliverable directory to prevent accidental use as
+gate values. No candidate may populate `demo_gate.reference_w_bfp_m` or judge
+chipcae. Only a future `status == "合格"` artifact may publish values labelled
+“参考值（独立代码）”.
 
 Heat balance is reported, not used as a qualification gate. Bottom outward
 heat is minus the *NODE PRINT bottom RFL total. Top outward heat is the exact
 integral of the quadratic surface temperature times h: quad corner/midside
 weights −1/12 and 1/3, triangle weights 0 and 1/3. *SECTION PRINT also archives
 conduction surface flux. Signed error is `(bottom + top − source)/source`.
-
-| Model | Bottom outward (W) | Top convection outward (W) | Signed relative error |
-|---|---:|---:|---:|
-| L1 quarter | 2.483179 | 0.0168207505681 | -9.97727408247e-08 |
-| L2 quarter | 2.48318 | 0.016820062126 | 2.48503805977e-08 |
-| L3 quarter | 2.483179 | 0.0168206316378 | -1.47344874435e-07 |
-| L1 full | 9.932717 | 0.0672830022726 | 2.27259278063e-10 |
-| L3 C3D20 cross | 2.48318 | 0.0168202562825 | 1.02513011591e-07 |
 
 Resources (**实测**, wall seconds per external solve; Linux peak RSS in KiB):
 
@@ -228,11 +194,6 @@ nonconvergence, missing fresh FRD, malformed/duplicate/incomplete/nonfinite
 fields and missing DISP fail. Operational failures do not write a final JSON.
 The earlier direct L3 runs ended in SIGKILL; their measured peaks did not
 establish a guard violation. The iterative path completes within the same guard.
-
-The brief supplies a night-run T_max of 318.898 K (2026-11-19, baseline
-5346215). **实测对照** only: the candidate finest thermal result differs by
--0.000258014727478 K. This supplied, rounded measurement
-was not an input to the reference solve or selection.
 
 To rebuild, set `CHIPCAE_CCX` to the installed executable (or use `ccx` on
 PATH), and `DEMO_GATE_WORK` to an external archive directory. The repository's
@@ -283,22 +244,9 @@ assessment only to the work archive. The independent validator, pointed at that
 archive and its real L1 deck bytes, rejected it specifically for nonmonotone
 warpage. This operational completion does not qualify the candidate.
 
-Disposition verification (2026-11-19): Release configure/build exited 0. With
-reference acceptance OFF, full CTest exited 0: 209 registered, 198 passed,
-11 existing skips and zero failures (60.80 s). Neither DEMO-GATE CTest skipped:
-the JSON suite passed eight methods, regeneration passed eighteen, including
-real L1 generation and the direct/iterative displacement/QoI comparison.
-With acceptance ON, both DEMO-GATE CTests failed on the absent artifact
-(CTest exit 8), even with an inherited generator-mode environment setting.
-The real archived nonmonotone candidate was also rejected by all three original
-JSON acceptance methods in generator configuration. The no-ccx generator run
-passed sixteen regressions, skipped its two real-solve methods and exited 77.
-New disposition/version regressions were observed failing before the fix and
-passing afterward. Original acceptance methods, synthetic fixtures and deck
-digest fixtures are unchanged; the dependency matrix gained malformed-version
-cases. Python compilation and whitespace checks passed. clang-format 23.1.5
-has no applicable changed C/C++ files. The default OFF configuration was restored
-after the strict negative check.
+Build/test commands, exit codes and verification counts are recorded in the
+external task log. Generator regressions and strict missing-artifact rejection
+must both be checked; passing generator tests do not qualify a reference.
 
 This card does not change the night driver, chipcae comparison postprocessing,
 or product code. Reference qualification remains outstanding pending V&V
