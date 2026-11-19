@@ -1,6 +1,7 @@
 # Owner-gated dependency list; new dependencies require owner approval.
 Kokkos
 KokkosKernels
+OpenMP
 MPI
 HDF5
 HYPRE

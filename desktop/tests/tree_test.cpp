@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonObject>
 #include <QTemporaryDir>
 #include <QUrl>
@@ -144,6 +145,105 @@ static void assemblyTreeAcceptance() {
     require(failures == 0, "assembly tree acceptance failures");
 }
 
+static void caseSchemaPathAcceptance() {
+    const auto defaultPath = QStringLiteral(CHIPCAE_REPOSITORY "/schema/case-1.0.schema.json");
+    CaseDocument doc;
+    require(doc.load(QStringLiteral(CHIPCAE_REPOSITORY "/schema/examples/fcbga_demo.case.json")),
+            "schema path fixture loads");
+    CaseTreeModel tree(&doc);
+    require(tree.caseSchemaPath() == defaultPath, "default case schema path matches exactly");
+    tree.setThermalMode(true);
+    require(doc.validate().empty(), "schema path thermal fixture is valid");
+    const auto convection =
+        Json::parse(R"({"type":"convection","target":"face:zmax","h":2,"T_inf":300})");
+    auto requireLocated =
+        [](const CaseTreeModel& model, const QString& pointer, const QString& identity) {
+            require(!identity.isEmpty(), "schema path addition returns an identity");
+            const auto node = model.locate(pointer);
+            require(node.isValid() && node.data(CaseTreeModel::PointerRole) == pointer &&
+                        node.data(CaseTreeModel::SourceRole) == "case" &&
+                        node.data(CaseTreeModel::IdentityRole) == identity,
+                    "schema path addition locates exact pointer and identity");
+        };
+    auto addConvection = [&] {
+        const auto pointer = QString("/loads/%1").arg(doc.toJson().at("loads").size());
+        const auto identity = tree.addLoad(convection);
+        requireLocated(tree, pointer, identity);
+        return identity;
+    };
+    auto addFixedFace = [&] {
+        const auto constraints = doc.toJson().at("constraints");
+        const auto count = constraints.contains("fixed") ? constraints.at("fixed").size() : 0;
+        const auto pointer = QString("/constraints/fixed/%1").arg(count);
+        const auto identity = tree.addFixedFace("face:zmin");
+        requireLocated(tree, pointer, identity);
+        return identity;
+    };
+    const auto loadIdentity = addConvection();
+    addFixedFace();
+
+    QTemporaryDir schemas;
+    require(schemas.isValid(), "temporary schema directory is valid");
+    for (const auto* name : {"case-1.0.schema.json", "parameters.schema.json"})
+        require(QFile::copy(QStringLiteral(CHIPCAE_REPOSITORY "/schema/") + name,
+                            schemas.filePath(name)),
+                "copy official case schema and its parameters dependency");
+    const auto copiedPath = QFileInfo(schemas.filePath("case-1.0.schema.json")).absoluteFilePath();
+    const auto beforePathChange = doc.toJson();
+    for (int i = 0; i < 2; ++i) {
+        tree.setCaseSchemaPath(copiedPath);
+        require(tree.caseSchemaPath() == copiedPath, "repeated schema path is stored verbatim");
+        require(doc.toJson() == beforePathChange, "setting schema path leaves document unchanged");
+    }
+    addConvection();
+    addFixedFace();
+
+    const auto missingPath = QFileInfo(schemas.filePath("missing.schema.json")).absoluteFilePath();
+    tree.setCaseSchemaPath(missingPath);
+    require(tree.caseSchemaPath() == missingPath, "missing schema path is stored verbatim");
+    const auto beforeMissingSchema = doc.toJson();
+    require(tree.addLoad(convection).isEmpty(), "missing schema rejects valid convection load");
+    require(doc.toJson() == beforeMissingSchema, "missing schema load leaves document unchanged");
+    require(tree.addFixedFace("face:zmin").isEmpty(), "missing schema rejects valid fixed face");
+    require(doc.toJson() == beforeMissingSchema,
+            "missing schema fixed face leaves document unchanged");
+    require(
+        !tree.edit(loadIdentity,
+                   Json::parse(R"({"type":"convection","target":"face:zmax","h":3,"T_inf":300})")),
+        "missing schema rejects valid load edit");
+    require(doc.toJson() == beforeMissingSchema, "missing schema edit leaves document unchanged");
+    require(!tree.remove(loadIdentity), "missing schema rejects valid load removal");
+    require(doc.toJson() == beforeMissingSchema,
+            "missing schema removal leaves document unchanged");
+    tree.setThermalMode(false);
+    require(doc.toJson() == beforeMissingSchema,
+            "missing schema thermal switch leaves document unchanged");
+
+    tree.setCaseSchemaPath(copiedPath);
+    require(tree.caseSchemaPath() == copiedPath, "restore copied schema path");
+    addConvection();
+    addFixedFace();
+    tree.setCaseSchemaPath(QString());
+    require(tree.caseSchemaPath() == defaultPath, "empty schema path restores exact default");
+    addConvection();
+
+    tree.setCaseSchemaPath(missingPath);
+    const auto beforeOtherModel = doc.toJson();
+    CaseDocument otherDoc;
+    require(
+        otherDoc.load(QStringLiteral(CHIPCAE_REPOSITORY "/schema/examples/fcbga_demo.case.json")),
+        "independent schema path fixture loads");
+    CaseTreeModel other(&otherDoc);
+    require(other.caseSchemaPath() == defaultPath, "other model retains default schema path");
+    other.setThermalMode(true);
+    const auto otherPointer = QString("/loads/%1").arg(otherDoc.toJson().at("loads").size());
+    requireLocated(other, otherPointer, other.addLoad(convection));
+    require(tree.caseSchemaPath() == missingPath && tree.addLoad(convection).isEmpty(),
+            "other model success does not replace missing schema path");
+    require(doc.toJson() == beforeOtherModel,
+            "independent model leaves rejected document unchanged");
+}
+
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     try {
@@ -249,6 +349,8 @@ int main(int argc, char** argv) {
         }
         std::cout << "existing tree tests passed\n";
         assemblyTreeAcceptance();
+        std::cout << "existing assembly tree tests passed\n";
+        caseSchemaPathAcceptance();
         std::cout << "tree tests passed\n";
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';

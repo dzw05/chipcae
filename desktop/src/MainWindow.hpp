@@ -7,6 +7,7 @@
 
 #include <QJsonObject>
 #include <QMainWindow>
+#include <QPointer>
 #include <QProcessEnvironment>
 #include <QSet>
 #include <QStringList>
@@ -19,6 +20,7 @@ class QLabel;
 #include <vector>
 namespace chipcae::desktop {
 class RunMonitor;
+class MonitorLogPanel;
 class PreviewController;
 class PreviewView;
 class ImportController;
@@ -67,10 +69,16 @@ public:
                     chipcae::desktop::LocalJobService* broker = nullptr,
                     const QString& runId = {},
                     const QString& eventFile = "events.caelog");
+    // 最近一次 monitorRun 创建的日志面板；尚未监控时返回空指针。
+    chipcae::desktop::MonitorLogPanel* monitorLogPanel() const;
 
-    bool previewMesh(const QString& program = "chipcae-preview",
-                     const QStringList& prefix = {},
-                     const chipcae::desktop::PreviewOptions& options = {});
+    // 使用 previewOptionsPanel()->options()。面板 validationMessage() 非空时不得启动，返回 false。
+    bool previewMesh(const QString& program = "chipcae-preview", const QStringList& prefix = {});
+    // 使用传入的 options，不读面板、不因面板非法而拒绝（与现有三参数调用一致）。
+    bool previewMesh(const QString& program,
+                     const QStringList& prefix,
+                     const chipcae::desktop::PreviewOptions& options);
+    chipcae::desktop::PreviewOptionsPanel* previewOptionsPanel() const;
     chipcae::desktop::PreviewView* previewView() const;
     bool previewDisplayStale() const;
     bool submitCurrentCase();
@@ -102,6 +110,7 @@ private:
     QLabel* sourceLabel_ = nullptr;
     QLabel* watermarkLabel_ = nullptr;
     QSet<QString> monitoredRuns_;
+    QPointer<chipcae::desktop::MonitorLogPanel> monitorLogPanel_;
     QJsonObject profile_;
     QString casePath_, runId_, runDir_, monitorStatus_;
     bool manualStack_ = false, fallback_ = false;
@@ -109,6 +118,7 @@ private:
     chipcae::desktop::Provenance provenance_;
     chipcae::desktop::LocalJobService* service_ = nullptr;
     chipcae::desktop::PreviewController* preview_ = nullptr;
+    chipcae::desktop::PreviewOptionsPanel* previewOptionsPanel_ = nullptr;
     std::unique_ptr<QTemporaryDir> previewOutput_;
     MeshDigestDialogChoice meshDigestDialogChoice_ = MeshDigestDialogChoice::Unset;
     chipcae::desktop::MeshSha256Compare lastMeshDigestCompare_ =

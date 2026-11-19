@@ -1,5 +1,6 @@
 #include "chipcae/solvers/fem/column_gmg.hpp"
 
+#include "batched_dense_lu.hpp"
 #include "chipcae/mesh/background/column_hierarchy.hpp"
 #include "column_gmg_checks.hpp"
 
@@ -11,7 +12,6 @@
 #include <limits>
 #include <memory>
 #include <numeric>
-#include <petscblaslapack.h>
 #include <petscksp.h>
 #include <sstream>
 #include <type_traits>
@@ -333,16 +333,10 @@ void verify_operator(Mat a, const ColumnGmgLevel& level, int k, bool positive) {
 namespace {
 
 struct ColumnBlocks {
-    struct Block {
-        PetscInt first = 0;
-        PetscBLASInt n = 0;
-        std::vector<PetscScalar> lu;
-        std::vector<PetscBLASInt> pivots;
-    };
     const ColumnGmgHierarchy& hierarchy;
     PC mg;
     int level;
-    std::vector<Block> blocks;
+    detail::BatchedDenseLU blocks;
     std::exception_ptr failure;
 
     ColumnBlocks(const ColumnGmgHierarchy& h, PC pc, int k) : hierarchy(h), mg(pc), level(k) {}
@@ -366,33 +360,35 @@ struct ColumnBlocks {
         check(PCGetOperators(pc, &a, nullptr));
         const auto& layout = hierarchy.levels[level];
         verify_operator(a, layout, level, level < hierarchy.L);
-        if (!blocks.empty())
+        if (blocks.blocks() != 0)
             return;
-        blocks.resize(layout.col_off.size() - 1);
-        for (std::size_t c = 0; c < blocks.size(); ++c) {
-            auto& block = blocks[c];
-            block.first = index_cast<PetscInt>(layout.col_off[c]);
-            block.n = index_cast<PetscBLASInt>(layout.col_off[c + 1] - layout.col_off[c]);
-            if (block.n == 0)
+        std::vector<std::int64_t> first(layout.col_off.begin(), layout.col_off.end() - 1);
+        std::vector<int> dimensions;
+        dimensions.reserve(first.size());
+        for (std::size_t c = 0; c < first.size(); ++c)
+            dimensions.push_back(index_cast<int>(layout.col_off[c + 1] - layout.col_off[c]));
+        blocks.resize(std::move(first), std::move(dimensions));
+        for (std::size_t c = 0; c < blocks.blocks(); ++c) {
+            const auto block_first = index_cast<PetscInt>(blocks.first(c));
+            const auto n = index_cast<PetscInt>(blocks.size(c));
+            if (n == 0)
                 continue;
-            block.lu.assign(static_cast<std::size_t>(block.n) * block.n, 0.);
-            block.pivots.resize(block.n);
-            for (PetscInt r = 0; r < block.n; ++r) {
-                const PetscInt row = block.first + r;
+            auto* block = blocks.block(c);
+            for (PetscInt r = 0; r < n; ++r) {
+                const PetscInt row = block_first + r;
                 PetscInt nnz;
                 const PetscInt* columns;
                 const PetscScalar* values;
                 check(MatGetRow(a, row, &nnz, &columns, &values));
                 for (PetscInt j = 0; j < nnz; ++j)
-                    if (columns[j] >= block.first && columns[j] < block.first + block.n)
-                        block.lu[(columns[j] - block.first) * block.n + r] = values[j];
+                    if (columns[j] >= block_first && columns[j] < block_first + n)
+                        block[(columns[j] - block_first) * n + r] = values[j];
                 check(MatRestoreRow(a, row, &nnz, &columns, &values));
             }
-            PetscBLASInt info = 0;
-            LAPACKgetrf_(&block.n, &block.n, block.lu.data(), &block.n, block.pivots.data(), &info);
-            if (info != 0)
-                throw std::runtime_error(singular(c));
         }
+        const auto failed = blocks.factor();
+        if (failed >= 0)
+            throw std::runtime_error(singular(index_cast<std::size_t>(failed)));
     }
 
     void apply(Vec rhs, Vec solution) {
@@ -400,28 +396,9 @@ struct ColumnBlocks {
         check(VecCopy(rhs, solution));
         PetscScalar* values;
         check(VecGetArray(solution, &values));
-        PetscBLASInt failure_info = 0;
-        for (const auto& block : blocks) {
-            if (block.n == 0)
-                continue;
-            const PetscBLASInt nrhs = 1;
-            PetscBLASInt info = 0;
-            LAPACKgetrs_("N",
-                         &block.n,
-                         &nrhs,
-                         block.lu.data(),
-                         &block.n,
-                         block.pivots.data(),
-                         values + block.first,
-                         &block.n,
-                         &info);
-            if (info != 0) {
-                failure_info = info;
-                break;
-            }
-        }
+        const bool solved = blocks.solve(values);
         check(VecRestoreArray(solution, &values));
-        require(failure_info == 0, "column block solve failed");
+        require(solved, "column block solve failed");
     }
 };
 

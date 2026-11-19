@@ -375,6 +375,335 @@ static bool geometry_acceptance() {
         }
         std::cout << (before == failures ? "PASS " : "FAIL ") << name << '\n';
     };
+    // These cases distinguish supported containers from unmodeled geometry and references.
+    auto diagnostic_lines = [](const ecad::EcadModel& m, const std::string& tag) {
+        std::vector<std::uint64_t> lines;
+        for (const auto& u : m.report.unsupported)
+            if (u.element.substr(0, u.element.find(':')) == tag)
+                lines.push_back(u.line);
+        return lines;
+    };
+    auto absent = [&](const ecad::EcadModel& m, const std::string& tag) {
+        check(diagnostic_lines(m, tag).empty(), "no " + tag + " diagnostic");
+    };
+    auto present = [&](const ecad::EcadModel& m, const std::string& tag) {
+        check(!diagnostic_lines(m, tag).empty(), "contains " + tag + " diagnostic");
+    };
+    auto no_copper = [&](const ecad::EcadModel& m) {
+        for (const auto& layer : m.layers)
+            check(layer.polygons.empty(), layer.name + " has no polygons");
+    };
+    const std::string square =
+        "<Polygon><PolyBegin x='20' y='20'/><PolyStepSegment x='30' y='20'/>"
+        "<PolyStepSegment x='30' y='30'/><PolyStepSegment x='20' y='30'/></Polygon>";
+    const std::string disk = "<EntryStandard id='disk'><Circle diameter='1'/></EntryStandard>";
+    auto pad = [](const std::string& id, int x) {
+        return "<Pad padstackDefRef='artwork'><Location x='" + std::to_string(x) +
+               "' y='20'/><StandardPrimitiveRef id='" + id + "'/></Pad>";
+    };
+    run("ipc_kicad10_user_special_fill", [&] {
+        auto m = geometry_read(root / "board_kicad10/board.xml");
+        area(m, 1400, "In2.Cu");
+        area(m, 2 * round_area(10, .2) + round_area(10, .4) + pi / 2, "F.Cu");
+        area(m, 2 * round_area(10, .2) + round_area(10, .4) + pi / 4, "B.Cu");
+        for (const auto* tag : {"Circle", "UserSpecial", "Contour", "UserPrimitiveRef"})
+            absent(m, tag);
+        reports(m, {"ViaPlatingMissing:F.Cu:B.Cu:1", "ViaPlatingMissing:F.Cu:In1.Cu:1"}, true);
+    });
+    run("ipc_user_special_contour_line", [&] {
+        auto m = geometry_xml("<Features><UserSpecial><Contour>" + square + "</Contour>" +
+                              geometry_line(3, "<LineDesc lineWidth='0.2'/>") +
+                              "</UserSpecial></Features>");
+        area(m, 100 + round_area(10, .2));
+        reports(m, {"Features"});
+    });
+    run("ipc_user_special_cutout_rejected", [&] {
+        auto m = geometry_xml("<Features><UserSpecial><Contour>" + square +
+                              "<Cutout><Polygon><PolyBegin x='22' y='22'/>"
+                              "<PolyStepSegment x='24' y='22'/><PolyStepSegment x='23' y='24'/>"
+                              "</Polygon></Cutout></Contour></UserSpecial></Features>");
+        present(m, "Cutout");
+    });
+    run("ipc_padstackdef_user_primitive_silent", [&] {
+        auto m =
+            geometry_xml("",
+                         "<PadStackDef name='P'><PadstackPadDef layerRef='F.Cu'>"
+                         "<UserPrimitiveRef id='U'/></PadstackPadDef></PadStackDef>"
+                         "<DictionaryUser><EntryUser id='U'><UserSpecial><Circle diameter='0.1'>"
+                         "<LineDesc lineWidth='0.1'/><FillDesc fillProperty='HOLLOW'/>"
+                         "</Circle></UserSpecial></EntryUser></DictionaryUser>");
+        for (const auto* tag :
+             {"UserPrimitiveRef", "UserSpecial", "Circle", "FillDesc", "LineDesc"})
+            absent(m, tag);
+        present(m, "PadstackPadDef");
+        present(m, "EntryUser");
+        present(m, "DictionaryUser");
+        check(m.layers.size() == 1 && m.layers[0].name == "F.Cu", "F.Cu retained");
+        no_copper(m);
+    });
+    run("ipc_user_primitive_instance_rejected", [&] {
+        for (const auto& body : {std::string("<UserPrimitiveRef id='U'/>"),
+                                 std::string("<Pad padstackDefRef='P'><Location x='0' y='0'/>"
+                                             "<UserPrimitiveRef id='U'/></Pad>")}) {
+            auto m = geometry_xml(body);
+            present(m, "UserPrimitiveRef");
+            no_copper(m);
+        }
+    });
+    run("ipc_entry_user_polygon_rejected", [&] {
+        const std::string triangle =
+            "<Polygon><PolyBegin x='50' y='50'/><PolyStepSegment x='55' y='50'/>"
+            "<PolyStepSegment x='50' y='55'/></Polygon>";
+        const std::string prefix =
+            "<IPC-2581><CadHeader units='MILLIMETER'/><CadData>"
+            "<Layer name='F.Cu' layerFunction='CONDUCTOR'/>"
+            "<StackupLayer layerOrGroupRef='F.Cu'/><Step><Profile>" +
+            square + "</Profile><Package name='P'><Profile>" + square +
+            "</Profile></Package><Component refDes='U1' packageRef='P'>"
+            "<Location x='0' y='0'/></Component><LayerFeature layerRef='F.Cu'><Set>" +
+            square + "</Set></LayerFeature>";
+        const std::string suffix = "</Step></CadData></IPC-2581>";
+        const std::string user = "\n<DictionaryUser><EntryUser id='U'>\n<UserSpecial><Contour>" +
+                                 triangle + triangle +
+                                 "</Contour></UserSpecial></EntryUser></DictionaryUser>";
+        ScopedMap temporary;
+        auto read = [&](const std::string& content) {
+            const auto path = temporary.directory / "outline.xml";
+            {
+                std::ofstream out(path);
+                out << content;
+            }
+            return geometry_read(path);
+        };
+        auto baseline = read(prefix + suffix);
+        auto m = read(prefix + user + suffix);
+        check(baseline.outline.points.size() == 4, "baseline has four outline vertices");
+        check(m.outline.points == baseline.outline.points, "outline vertices and order unchanged");
+        check(m.layers.size() == 1 && baseline.layers.size() == 1, "one copper layer retained");
+        if (m.layers.size() == 1 && baseline.layers.size() == 1) {
+            check(m.layers[0].polygons.size() == baseline.layers[0].polygons.size(),
+                  "copper polygon count unchanged");
+            if (m.layers[0].polygons.size() == baseline.layers[0].polygons.size())
+                for (std::size_t i = 0; i < m.layers[0].polygons.size(); ++i)
+                    check(m.layers[0].polygons[i].points == baseline.layers[0].polygons[i].points,
+                          "copper vertices unchanged");
+        }
+        check(m.components.size() == 1 && baseline.components.size() == 1,
+              "one package instance retained");
+        if (m.components.size() == 1 && baseline.components.size() == 1)
+            check(m.components[0].outline.points == baseline.components[0].outline.points,
+                  "package outline unchanged");
+        check(diagnostic_lines(m, "UserSpecial") == std::vector<std::uint64_t>{3},
+              "multiple user polygons report UserSpecial once at its start line 3");
+    });
+    run("ipc_entry_user_geometry_contexts_and_cleanup", [&] {
+        const std::string user_shape =
+            "<Polygon><PolyBegin x='40' y='40'/><PolyStepSegment x='50' y='40'/>"
+            "<PolyStepSegment x='50' y='50'/><PolyStepSegment x='40' y='50'/></Polygon>";
+        const std::string user = "<DictionaryUser><EntryUser id='U'>\n<UserSpecial><Contour>" +
+                                 user_shape + user_shape +
+                                 "</Contour></UserSpecial>\n<UserSpecial>" + user_shape +
+                                 "</UserSpecial></EntryUser></DictionaryUser>";
+        auto copper = geometry_xml(user + square);
+        area(copper, 100);
+        check(copper.layers.size() == 1 && copper.layers[0].polygons.size() == 1,
+              "dictionary polygons never enter copper; following ordinary Polygon does");
+        check(diagnostic_lines(copper, "UserSpecial") == std::vector<std::uint64_t>({2, 3}),
+              "each UserSpecial reports once at its own start line");
+        auto package = geometry_xml(
+            "",
+            "<Package name='P'>" + user +
+                "</Package>"
+                "<Component refDes='U1' packageRef='P'><Location x='0' y='0'/></Component>");
+        check(package.components.size() == 1, "package instance retained");
+        if (package.components.size() == 1)
+            check(package.components[0].outline.points.empty(),
+                  "dictionary polygons never enter package outline");
+        no_copper(package);
+        auto siblings =
+            geometry_xml("<UserSpecial/><UserSpecial><Other><Contour/></Other></UserSpecial>");
+        present(siblings, "Contour"); // Only a direct Contour child is supported.
+    });
+    run("ipc_standard_circle_modeled_silent", [&] {
+        auto m =
+            geometry_xml(pad("disk", 20) + geometry_line(3, "<LineDesc lineWidth='0.2'/>"), disk);
+        area(m, pi / 4 + round_area(10, .2));
+        absent(m, "Circle");
+        present(m, "EntryStandard");
+        present(m, "StandardPrimitiveRef");
+        check(m.vias.empty(), "artwork creates no drilled via");
+    });
+    run("ipc_standard_circle_unmodeled_ref", [&] {
+        auto direct = geometry_xml("\n<StandardPrimitiveRef id='disk'/>\n", disk);
+        check(diagnostic_lines(direct, "Circle") == std::vector<std::uint64_t>{2},
+              "Set reference reports Circle at reference line 2");
+        present(direct, "StandardPrimitiveRef");
+        no_copper(direct);
+        auto forward = geometry_xml("\n" + pad("disk", 20) + "\n" + disk);
+        check(diagnostic_lines(forward, "Circle") == std::vector<std::uint64_t>{2},
+              "forward Pad reference reports Circle at reference line 2");
+        present(forward, "StandardPrimitiveRef");
+        no_copper(forward); // Forward circle modeling is deliberately outside this feature.
+        for (const auto& definition :
+             {std::string("<Package name='P'><Pin number='1'>"
+                          "<StandardPrimitiveRef id='disk'/></Pin></Package>"),
+              std::string("<PadStackDef name='P'><PadstackPadDef layerRef='F.Cu'>"
+                          "<StandardPrimitiveRef id='disk'/></PadstackPadDef></PadStackDef>")}) {
+            auto m = geometry_xml("", disk + definition);
+            absent(m, "Circle");
+            present(m, "StandardPrimitiveRef");
+            no_copper(m);
+        }
+    });
+    run("ipc_standard_circle_repeated_modeled", [&] {
+        auto m = geometry_xml(pad("disk", 20) + pad("disk", 30), disk);
+        area(m, pi / 2);
+        absent(m, "Circle");
+        check(m.vias.empty(), "two artwork pads create no drilled vias");
+    });
+    run("ipc_standard_circle_reference_line_dedup", [&] {
+        auto two_lines =
+            geometry_xml("\n" + pad("disk", 20) + "\n" + pad("disk", 30) + "\n" + disk);
+        check(diagnostic_lines(two_lines, "Circle") == std::vector<std::uint64_t>({2, 3}),
+              "forward references report Circle on both lines in ascending order");
+        no_copper(two_lines);
+        auto same_line = geometry_xml("\n" + pad("disk", 20) + pad("disk", 30) + "\n" + disk);
+        check(diagnostic_lines(same_line, "Circle") == std::vector<std::uint64_t>{2},
+              "same id and line report Circle exactly once");
+        no_copper(same_line);
+    });
+    run("ipc_standard_circle_unknown_and_case_sensitive_id", [&] {
+        for (const auto& id : {"missing", "DISK"}) {
+            auto m = geometry_xml(pad(id, 20), disk);
+            absent(m, "Circle");
+            present(m, "StandardPrimitiveRef");
+            no_copper(m);
+        }
+    });
+    run("ipc_user_special_empty_and_scope_cleanup", [&] {
+        auto m = geometry_xml("<UserSpecial/><UserSpecial><Contour/></UserSpecial>");
+        no_copper(m);
+        reports(m, {});
+        auto dictionary = geometry_xml(
+            "", "<DictionaryUser><EntryUser id='U'><UserSpecial/></EntryUser></DictionaryUser>");
+        no_copper(dictionary);
+        reports(dictionary, {"DictionaryUser", "EntryUser"});
+        auto siblings = geometry_xml("<UserSpecial><Contour/></UserSpecial><Contour/>" + square);
+        area(siblings, 100);
+        reports(siblings, {"Contour"});
+        for (const auto& context : {std::string("<UserSpecial/>"),
+                                    std::string("<Package name='P'><UserSpecial/></Package>")}) {
+            auto outside = geometry_xml("", context);
+            present(outside, "UserSpecial");
+            no_copper(outside);
+        }
+    });
+    run("ipc_user_special_skipped_and_missing_layer", [&] {
+        for (const auto& name : {std::string("Edge.Cuts"), std::string("missing")}) {
+            auto m = geometry_xml("",
+                                  "<Layer name='Edge.Cuts' layerFunction='BOARD_OUTLINE'/>"
+                                  "<StackupLayer layerOrGroupRef='Edge.Cuts'/>"
+                                  "<LayerFeature layerRef='" +
+                                      name + "'><Set><UserSpecial><Contour>" + square +
+                                      "</Contour></UserSpecial></Set></LayerFeature>");
+            no_copper(m);
+            absent(m, "UserSpecial");
+            absent(m, "Contour");
+            present(m, "SkippedLayer");
+        }
+    });
+    run("ipc_standard_circle_skipped_and_missing_layer", [&] {
+        for (const auto& name : {std::string("Edge.Cuts"), std::string("missing")}) {
+            auto m = geometry_xml("",
+                                  disk +
+                                      "<Layer name='Edge.Cuts' layerFunction='BOARD_OUTLINE'/>"
+                                      "<StackupLayer layerOrGroupRef='Edge.Cuts'/>\n"
+                                      "<LayerFeature layerRef='" +
+                                      name + "'><Set>" + pad("disk", 20) + "</Set></LayerFeature>");
+            no_copper(m);
+            check(diagnostic_lines(m, "Circle") == std::vector<std::uint64_t>{2},
+                  "unmodeled reference on excluded layer reports Circle at line 2");
+        }
+    });
+    run("ipc_standard_circle_soldermask_metadata", [&] {
+        const std::string mask = "<Layer name='F.Mask' layerFunction='SOLDERMASK'/>";
+        for (const bool late_definition : {false, true}) {
+            auto m = geometry_xml("",
+                                  (late_definition ? std::string{} : disk + mask) +
+                                      "<StackupLayer layerOrGroupRef='F.Mask'/>\n"
+                                      "<LayerFeature layerRef='F.Mask'><Set>" +
+                                      pad("disk", 20) +
+                                      "<StandardPrimitiveRef id='disk'/>"
+                                      "</Set></LayerFeature>" +
+                                      (late_definition ? disk + mask : std::string{}));
+            no_copper(m);
+            absent(m, "Circle");
+            present(m, "SolderMask");
+            present(m, "StandardPrimitiveRef");
+        }
+        auto missing = geometry_xml("",
+                                    disk + mask + "<LayerFeature layerRef='F.Mask'><Set>" +
+                                        pad("disk", 20) + "</Set></LayerFeature>");
+        no_copper(missing);
+        absent(missing, "SolderMask");
+        present(missing, "Circle"); // No retained or explicitly omitted stackup layer.
+        auto bare = geometry_xml("",
+                                 mask + "<StackupLayer layerOrGroupRef='F.Mask'/>"
+                                        "<LayerFeature layerRef='F.Mask'><Circle/></LayerFeature>");
+        no_copper(bare);
+        present(bare, "Circle");
+        present(bare, "SolderMask");
+    });
+    run("ipc_user_special_unsupported_shapes_preserved", [&] {
+        auto bare = geometry_xml("<Circle/><Contour/>");
+        reports(bare, {"Circle", "Contour"});
+        auto m = geometry_xml("<UserSpecial><Circle/><RectCenter/><Oval/>"
+                              "<Contour><PolyStepCurve/></Contour></UserSpecial>");
+        for (const auto* tag : {"Circle", "RectCenter", "Oval", "PolyStepCurve"})
+            present(m, tag);
+        auto standard = geometry_xml("", "<EntryStandard id='oval'><Oval/></EntryStandard>");
+        present(standard, "Oval");
+        no_copper(standard);
+    });
+    run("ipc_user_special_case_and_exact_parent", [&] {
+        auto m = geometry_xml("<userspecial/><USERSPECIAL/><UserSpecialExtra/>"
+                              "<UserSpecial><contour/><CONTOUR/><ContourExtra/></UserSpecial>");
+        reports(m,
+                {"userspecial",
+                 "USERSPECIAL",
+                 "UserSpecialExtra",
+                 "contour",
+                 "CONTOUR",
+                 "ContourExtra"});
+        for (const auto* parent : {"padstackpaddef", "PadstackPadDefExtra", "Other"}) {
+            auto ref = geometry_xml(
+                "", std::string("<") + parent + "><UserPrimitiveRef id='U'/></" + parent + ">");
+            present(ref, "UserPrimitiveRef");
+        }
+        auto nested = geometry_xml("",
+                                   "<PadStackDef name='P'><PadstackPadDef>"
+                                   "<Other><UserPrimitiveRef id='U'/></Other>"
+                                   "</PadstackPadDef></PadStackDef>");
+        present(nested, "UserPrimitiveRef");
+    });
+    run("ipc_user_special_arc_matches_bare", [&] {
+        for (const auto* end : {"ROUND", "SQUARE"}) {
+            const std::string arc =
+                "<Arc startX='0' startY='100' endX='200' endY='100' centerX='100' "
+                "centerY='100' clockwise='false'><LineDesc lineWidth='2' lineEnd='" +
+                std::string(end) + "'/></Arc>";
+            auto bare = geometry_xml(arc);
+            auto wrapped = geometry_xml("<UserSpecial>" + arc + "</UserSpecial>");
+            area(bare, pi * 200 + pi);
+            area(wrapped, pi * 200 + pi);
+            const std::set<std::string> expected =
+                std::string(end) == "ROUND"
+                    ? std::set<std::string>{}
+                    : std::set<std::string>{"LineEndUnsupported:F.Cu:SQUARE"};
+            reports(bare, expected);
+            reports(wrapped, expected);
+        }
+    });
     run("ipc_duplicate_lines_union", [&] {
         const auto line = geometry_line(1, "<LineDesc lineWidth='0.4'/>");
         auto model = geometry_xml(line + line);

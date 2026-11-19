@@ -272,7 +272,16 @@ bool ResultSession::open(const QString& input, const QString& sidecar, const QSt
             if (canonicalBlock(name) != name)
                 warnings_ << "legacy block name: " + name;
         }
-        QString logPath = eventPath.isEmpty() ? QDir(root_).filePath("events.caelog") : eventPath;
+        QString logPath = eventPath;
+        if (logPath.isEmpty()) {
+            for (const auto* name : {"events.bin", "events.caelog"}) {
+                const auto candidate = QDir(root_).filePath(name);
+                if (QFileInfo::exists(candidate)) {
+                    logPath = candidate;
+                    break;
+                }
+            }
+        }
         if (QFileInfo::exists(logPath)) {
             log_ = readEventLog(logPath, format);
             if (!log_.error.isEmpty())

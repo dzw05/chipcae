@@ -219,7 +219,10 @@ TemperatureTable table(const Json& j,
                        ImportOptions options = {},
                        MaterialParams* params = nullptr) {
     auto interpolation = j.at("interpolation").str();
-    if (interpolation != "linear")
+    if (const auto temperatures = j.object.find("temperatures");
+        interpolation != "linear" &&
+        !(interpolation == "constant" && temperatures != j.object.end() &&
+          temperatures->second.kind == Json::Array && temperatures->second.array.size() == 1))
         throw std::runtime_error(
             j.path +
             ".interpolation: v0 only supports linear (pchip NotImplemented; constant forbidden)");
@@ -289,6 +292,15 @@ void set_paths(Json& j, const std::string& path = "material") {
     for (std::size_t i = 0; i < j.array.size(); ++i)
         set_paths(j.array[i], path + "[" + std::to_string(i) + "]");
 }
+bool valid_material_id(std::string_view id) {
+    if (id.empty())
+        return false;
+    for (const char c : id) {
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-'))
+            return false;
+    }
+    return true;
+}
 MaterialParams decode(Json j, bool customer_delivery = false, ImportOptions options = {}) {
     if (options.modulus_ramp &&
         (!std::isfinite(options.modulus_ramp_width) || options.modulus_ramp_width < 1))
@@ -296,6 +308,10 @@ MaterialParams decode(Json j, bool customer_delivery = false, ImportOptions opti
     set_paths(j);
     MaterialParams p;
     p.id = j.at("id").str();
+    if (!valid_material_id(p.id))
+        throw std::runtime_error(
+            j.at("id").path + ": must match ^[a-z0-9_-]+$ (lowercase letters, digits, '_' or '-'; "
+                              "no dots, e.g. cu, fr4_eq)");
     if (j.at("schema_version").str() != "1" || j.at("unit_system").str() != "SI")
         throw std::runtime_error("schema_version/unit_system: expected 1/SI");
     const auto& provenance = j.at("provenance");

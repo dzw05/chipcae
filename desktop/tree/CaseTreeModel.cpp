@@ -5,13 +5,22 @@
 #include <QJsonObject>
 #include <QMap>
 #include <QUuid>
+#include <exception>
 #include <jsoncons_ext/jsonpointer/jsonpointer.hpp>
 
 namespace chipcae::desktop {
 CaseTreeModel::CaseTreeModel(CaseDocument* document, QObject* parent)
-    : QStandardItemModel(parent), document_(document) {
+    : QStandardItemModel(parent), document_(document),
+      caseSchemaPath_(QStringLiteral(CHIPCAE_REPOSITORY "/schema/case-1.0.schema.json")) {
     connect(document_, &CaseDocument::changed, this, &CaseTreeModel::refresh);
     refresh();
+}
+void CaseTreeModel::setCaseSchemaPath(const QString& path) {
+    caseSchemaPath_ =
+        path.isEmpty() ? QStringLiteral(CHIPCAE_REPOSITORY "/schema/case-1.0.schema.json") : path;
+}
+QString CaseTreeModel::caseSchemaPath() const {
+    return caseSchemaPath_;
 }
 void CaseTreeModel::append(QStandardItem* parent,
                            const Json& value,
@@ -160,10 +169,13 @@ QModelIndex CaseTreeModel::locate(const QString& pointer, const QString& source)
     return best;
 }
 bool CaseTreeModel::apply(const Json& value) {
-    static const SchemaValidator validator(
-        QStringLiteral(CHIPCAE_REPOSITORY "/schema/case-1.0.schema.json"));
-    if (!validator.validate(value).empty())
+    try {
+        const SchemaValidator validator(caseSchemaPath_);
+        if (!validator.validate(value).empty())
+            return false;
+    } catch (const std::exception&) {
         return false;
+    }
     document_->applyJson(value);
     return document_->toJson() == value;
 }

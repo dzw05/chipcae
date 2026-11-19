@@ -251,7 +251,16 @@ jobs:
             -DKokkos_ENABLE_TESTS=OFF \
             -DKokkos_ENABLE_EXAMPLES=OFF \
             -DBUILD_SHARED_LIBS=OFF
-          cmake --build "$build" --parallel
+          if ! jobs="$(nproc)"; then
+            jobs=2
+          fi
+          case "$jobs" in
+            ''|*[!0-9]*|0) jobs=2 ;;
+            [1-4]) ;;
+            *) jobs=4 ;;
+          esac
+          echo "Build jobs: $jobs"
+          cmake --build "$build" --parallel "$jobs"
           cmake --install "$build"
 
       - name: Cache ccache
@@ -286,7 +295,16 @@ jobs:
           CCACHE_MAXSIZE: 200M
         run: |
           set -euo pipefail
-          cmake --build build --parallel
+          if ! jobs="$(nproc)"; then
+            jobs=2
+          fi
+          case "$jobs" in
+            ''|*[!0-9]*|0) jobs=2 ;;
+            [1-4]) ;;
+            *) jobs=4 ;;
+          esac
+          echo "Build jobs: $jobs"
+          cmake --build build --parallel "$jobs"
           ccache --show-stats
 
       - name: Test

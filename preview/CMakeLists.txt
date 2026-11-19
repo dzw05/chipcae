@@ -2,7 +2,7 @@ add_executable(chipcae-preview src/main.cpp)
 target_link_libraries(chipcae-preview PRIVATE chipcae::core chipcae::io)
 chipcae_set_warnings(chipcae-preview)
 if(CHIPCAE_ENABLE_JSONCONS AND CHIPCAE_ENABLE_HDF5)
-  target_link_libraries(chipcae-preview PRIVATE chipcae_stack chipcae_mesh_background chipcae_mesh_vtkhdf)
+  target_link_libraries(chipcae-preview PRIVATE chipcae_stack chipcae_mesh_background chipcae_mesh_vtkhdf chipcae_mesh_cut)
   target_compile_definitions(chipcae-preview PRIVATE
     CHIPCAE_PREVIEW_ENABLED=1
     CHIPCAE_PREVIEW_SCHEMA="schema/stack-0.2.schema.json")
@@ -27,4 +27,4 @@ endif()
 file(RELATIVE_PATH _chipcae_source_relative "${CMAKE_CURRENT_BINARY_DIR}" "${PROJECT_SOURCE_DIR}")
 target_compile_definitions(chipcae-preview PRIVATE
     CHIPCAE_SOURCE_RELATIVE="$<IF:$<BOOL:${CMAKE_CONFIGURATION_TYPES}>,../,>${_chipcae_source_relative}")
-target_include_directories(chipcae-preview PRIVATE ${PROJECT_SOURCE_DIR}/apps/chipcae-solve/src)
+target_include_directories(chipcae-preview PRIVATE ${PROJECT_SOURCE_DIR}/apps/chipcae-solve/src ${PROJECT_SOURCE_DIR}/apps/chipcae-solve/include)
