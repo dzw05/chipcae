@@ -168,7 +168,7 @@ public:
         a.SetSize(3 * nd);
         a = 0.0;
         DenseMatrix d(nd, 3), B(6, 3 * nd), CB(6, 3 * nd), local(3 * nd);
-        const auto& C = materials.at(t.Attribute - 1).C;
+        const auto& C = materials.at(t.ElementNo).C;
         const auto& rule =
             IntRule ? *IntRule : IntRules.Get(el.GetGeomType(), 2 * el.GetOrder() + 1);
         for (int q = 0; q < rule.GetNPoints(); ++q) {
@@ -208,7 +208,7 @@ public:
         v.SetSize(3 * nd);
         v = 0.0;
         DenseMatrix d(nd, 3);
-        const auto& m = materials.at(t.Attribute - 1);
+        const auto& m = materials.at(t.ElementNo);
         Vector stress(3);
         stress = 0.0;
         for (int a = 0; a < 3; ++a)
@@ -250,7 +250,7 @@ public:
         matrix.SetSize(3);
         matrix = 0.0;
         for (int i = 0; i < 3; ++i)
-            matrix(i, i) = values.at(t.Attribute - 1)[i];
+            matrix(i, i) = values.at(t.ElementNo)[i];
     }
 };
 Array<int>
@@ -586,8 +586,17 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             warn(material.alpha_clamped, "alpha");
         }
         const std::size_t na = arrays.attr_table.entries.size();
-        std::vector<Constitutive> mixtures(na);
-        std::vector<std::array<double, 3>> conductivities(na);
+        const auto ne = arrays.elem_gid.size();
+        std::vector<Constitutive> mixtures(mechanical ? ne : 0);
+        std::vector<std::array<double, 3>> conductivities(ne);
+        std::vector<double> fractions(ne, 0);
+        struct ElementMaterial {
+            const Material* base = nullptr;
+            const Material* metal = nullptr;
+            std::size_t layer = 0;
+        };
+        std::vector<ElementMaterial> attribute_materials(na);
+        bool conductivity_available = true;
         bool has_copper = false;
         std::vector<double> lambda(na), mu(na), stress(na), source(na, 0);
         std::vector<bool> used(na, false);
@@ -612,22 +621,65 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             if (!std::isfinite(lambda[a]) || !std::isfinite(mu[a]) || !std::isfinite(stress[a]))
                 throw InputError(ErrorCode::INPUT_INVALID,
                                  "material " + id + ": nonfinite constitutive coefficient");
-            conductivities[a] = {m.k, m.k, m.k};
             auto layer =
                 std::find_if(inputs.stack.layers.begin(),
                              inputs.stack.layers.end(),
                              [&](const auto& value) { return value.name == record.layer; });
+            if (layer == inputs.stack.layers.end())
+                throw InputError(ErrorCode::INPUT_INVALID, "attribute layer is missing");
+            auto& lookup = attribute_materials[a];
+            lookup.base = &m;
+            lookup.layer = static_cast<std::size_t>(layer - inputs.stack.layers.begin());
             if (layer->copper) {
                 has_copper = true;
-                const auto& metal = materials.at(layer->copper->metal);
-                double f = *layer->copper->fraction;
-                mixtures[a] = mixture(m, metal, f);
-                if (inputs.thermal)
-                    conductivities[a] = {f * metal.k + (1 - f) * m.k,
-                                         f * metal.k + (1 - f) * m.k,
-                                         1 / (f / metal.k + (1 - f) / m.k)};
-            } else
-                mixtures[a] = mixture(m, m, 0);
+                lookup.metal = &materials.at(layer->copper->metal);
+            }
+        }
+        const auto nz = arrays.axes[2].size() - 1;
+        const auto columns = nx * ny;
+        const auto copper_layers = static_cast<std::size_t>(std::count_if(
+            inputs.stack.layers.begin(), inputs.stack.layers.end(), [](const auto& layer) {
+                return layer.copper.has_value();
+            }));
+        if (nz == 0 || columns == 0 ||
+            ((!arrays.copper_layer_of_layer.empty() || copper_layers != 0) &&
+             arrays.copper_layer_of_layer.size() != inputs.stack.layers.size()) ||
+            (!arrays.copper_phi.empty() && arrays.copper_phi.size() != copper_layers * columns))
+            throw InputError(ErrorCode::INPUT_INVALID, "invalid copper map dimensions");
+        for (double f : arrays.copper_phi)
+            if (!std::isfinite(f) || f < 0 || f > 1)
+                throw InputError(ErrorCode::INPUT_INVALID, "invalid copper fraction");
+        // The replicated serial MFEM mesh retains source element order. ElementNo
+        // indexes these tables; only global GIDs determine the Morton column.
+        for (std::size_t e = 0; e < ne; ++e) {
+            const auto gid = arrays.elem_gid[e];
+            const auto& lookup = attribute_materials.at(arrays.attribute[e] - 1);
+            const auto& base = *lookup.base;
+            const auto* metal = lookup.metal;
+            const auto copper = arrays.copper_layer_of_layer.empty()
+                                    ? -1
+                                    : arrays.copper_layer_of_layer[lookup.layer];
+            if (gid < 0 || (metal && static_cast<std::size_t>(gid) / nz >= columns))
+                throw InputError(ErrorCode::INPUT_INVALID, "invalid element gid for copper map");
+            if ((metal && (copper < 0 || static_cast<std::size_t>(copper) >= copper_layers)) ||
+                (!metal && copper != -1))
+                throw InputError(ErrorCode::INPUT_INVALID, "invalid copper layer mapping");
+            double f = 0;
+            if (metal && !arrays.copper_phi.empty())
+                f = arrays.copper_phi[static_cast<std::size_t>(copper) * columns +
+                                      static_cast<std::size_t>(gid) / nz];
+            fractions[e] = f;
+            conductivities[e] = {base.k, base.k, base.k};
+            // Missing conductivity is legal for mechanical-only legacy cards.
+            // Omit that diagnostic for the whole run instead of inventing a value.
+            conductivity_available &= base.k > 0 && (!metal || metal->k > 0);
+            if (metal && base.k > 0 && metal->k > 0) {
+                const double kxy = f * metal->k + (1 - f) * base.k;
+                const double kz = 1 / (f / metal->k + (1 - f) / base.k);
+                conductivities[e] = {kxy, kxy, kz};
+            }
+            if (mechanical)
+                mixtures[e] = mixture(base, metal ? *metal : base, f);
         }
         Array<int> mechanical_essential;
         if (mechanical) {
@@ -800,8 +852,12 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             BilinearForm form(&scalar);
             form.AddDomainIntegrator(bilinear(new DiffusionIntegrator(k)));
             if (clipped)
-                form.AddInteriorFaceIntegrator(
-                    new fem::GhostPenalty(arrays, *clipped, conductivities, inputs.ghost_penalty));
+                form.AddInteriorFaceIntegrator(new fem::GhostPenalty(arrays,
+                                                                     *clipped,
+                                                                     conductivities,
+                                                                     inputs.ghost_penalty,
+                                                                     1,
+                                                                     fem::ScaleLayout::Element));
             LinearForm rhs(&scalar);
             Array<int> essential, all(mesh.bdr_attributes.Max());
             all = 0;
@@ -904,14 +960,17 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                     linear(new MixtureForce(mixtures, temperature, inputs.T_ref)));
             else
                 rhs.AddDomainIntegrator(linear(new ThermalForce(s)));
-            std::vector<std::array<double, 3>> mechanical_scale(na);
-            for (std::size_t a = 0; a < na; ++a)
-                if (used[a])
-                    mechanical_scale[a] = {
-                        mixtures[a].C(0, 0), mixtures[a].C(1, 1), mixtures[a].C(2, 2)};
+            std::vector<std::array<double, 3>> mechanical_scale(ne);
+            for (std::size_t e = 0; e < ne; ++e)
+                mechanical_scale[e] = {
+                    mixtures[e].C(0, 0), mixtures[e].C(1, 1), mixtures[e].C(2, 2)};
             if (clipped)
-                form.AddInteriorFaceIntegrator(new fem::GhostPenalty(
-                    arrays, *clipped, mechanical_scale, inputs.ghost_penalty, 3));
+                form.AddInteriorFaceIntegrator(new fem::GhostPenalty(arrays,
+                                                                     *clipped,
+                                                                     mechanical_scale,
+                                                                     inputs.ghost_penalty,
+                                                                     3,
+                                                                     fem::ScaleLayout::Element));
             solve(form, rhs, displacement, mechanical_essential, "U");
             if (stop())
                 return 0;
@@ -1006,6 +1065,21 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
         result.cut_as_hex = inputs.cut_as_hex;
         if (clipped)
             append_cut_output(result, arrays, *clipped, temperature, displacement, rank);
+        auto append_diagnostics = [&](io::ResultsPartition& out, std::size_t e) {
+            out.copper_fraction.push_back(fractions[e]);
+            if (conductivity_available)
+                out.conductivity_diag.insert(out.conductivity_diag.end(),
+                                             conductivities[e].begin(),
+                                             conductivities[e].end());
+        };
+        if (clipped) {
+            std::map<Index, std::size_t> source;
+            for (std::size_t e = 0; e < ne; ++e)
+                source.emplace(arrays.elem_gid[e], e);
+            for (auto* out : {&result.cut, &result.embedded_boundary})
+                for (auto gid : out->elem_gid)
+                    append_diagnostics(*out, source.at(gid));
+        }
         std::set<int> cut_elements;
         if (clipped)
             cut_elements.insert(clipped->cut_elem.begin(), clipped->cut_elem.end());
@@ -1030,6 +1104,7 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                             part.U.push_back(displacement[vector.DofToVDof(d, c)]);
                     }
                 }
+                append_diagnostics(part, e);
                 part.elem_gid.push_back(arrays.elem_gid[e]);
                 part.cell_kind.push_back(cut_elements.contains(e) ? 1 : 0);
                 auto& record = arrays.attr_table.entries[arrays.attribute[e] - 1];

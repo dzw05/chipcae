@@ -245,9 +245,10 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
                                  layer.coordinates[2 * i + 1] * polygons.dbu_m});
                     }
         for (const auto& layer : out.stack.layers)
-            if (layer.copper && layer.copper->polygons)
-                throw InputError(ErrorCode::CUT_UNSUPPORTED,
-                                 "internal material cuts are not supported");
+            for (const auto& region : layer.regions)
+                if (!region.footprint.polygon.empty())
+                    throw InputError(ErrorCode::CUT_UNSUPPORTED,
+                                     "internal material cuts are not supported");
 
         const auto& m = c.at("mesh");
         if (m.at("type").as<std::string>() != "aligned_cartesian_cut")
@@ -426,7 +427,14 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
         const auto& output = c.at("output");
         if (output.at("format").as<std::string>() != "vtkhdf")
             invalid("invalid output format");
-        out.fields = {"T", "U", "layer_id", "material_id", "cell_kind", "elem_gid"};
+        out.fields = {"T",
+                      "U",
+                      "layer_id",
+                      "material_id",
+                      "cell_kind",
+                      "elem_gid",
+                      "copper_fraction",
+                      "conductivity_diag"};
         if (output.contains("fields")) {
             std::set<std::string> selected;
             for (const auto& field : output.at("fields").array_range()) {
@@ -500,7 +508,7 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
             for (double nu : material.nu_table.values)
                 if (!(nu > -1 && nu < 0.5))
                     invalid("material " + material.id + "/nu: must be between -1 and 0.5");
-            if (out.thermal)
+            if (out.thermal || card.contains("conductivity"))
                 material.k = finite(card, "conductivity", true);
             if (!out.materials.emplace(material.id, material).second)
                 throw InputError(ErrorCode::MATERIAL_ID_DUPLICATE, "duplicate material id");
