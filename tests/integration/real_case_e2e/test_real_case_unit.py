@@ -152,7 +152,7 @@ def vtk_path(run):
 
 
 def result_fixture(data_class="synthetic"):
-    # Do not invent the writer's unresolved reference-type mapping.
+    # Retain a legacy v0.2 fixture to exercise backward compatibility.
     return {"schema": "chipcae.vv_result/0.2", "data_class": data_class,
             "case_id": "generated-board", "label": "实测", "date": "20261119",
             "commit": "1234567", "qoi": {"T_max": 320.}, "verdict": "pass",
@@ -930,6 +930,30 @@ class DriverControlFlow(ContractTest):
         self.assertTrue(record["needs_attention"])
         self.assertEqual(self.calls(), [])
         self.persisted(record)
+
+    def test_result_preserves_dependency_verdict(self):
+        self.pipeline.unlink()
+        record = self.invoke()
+        self.assertEqual(record["exit_code"], 77)
+        result_path = self.persisted(record) / "result.json"
+        result = read_json(result_path)
+        self.assertEqual(result["verdict"], "needs_attention")
+        self.assertEqual(result["schema"], "chipcae.vv_result/0.3")
+        self.assertEqual(check_file(result_path), [])
+        self.assertIs(record["checks"]["C10"], True)
+
+    def test_result_identifies_physical_check_reference(self):
+        record = self.invoke()
+        self.assertEqual(record["exit_code"], 0)
+        result_path = self.persisted(record) / "result.json"
+        result = read_json(result_path)
+        self.assertIsInstance(result["reference"], dict)
+        self.assertEqual(result["reference"]["type"], "无解析解（物理合理性检查）")
+        self.assertIsNone(result["reference"]["value"])
+        self.assertTrue(result["reference"]["source"])
+        self.assertEqual(result["schema"], "chipcae.vv_result/0.3")
+        self.assertEqual(result["verdict"], "pass")
+        self.assertEqual(check_file(result_path), [])
 
     def test_assembly_temperature_runs_when_only_w_is_unready(self):
         self.pipeline.write_text(THERMAL_ONLY)

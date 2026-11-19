@@ -98,16 +98,20 @@ An unavailable E2E prints `SKIP: <kind> upstream not merged: <reason>
 (NEEDS-ATTENTION)` and returns 77 before generating inputs. A missing actual
 welded_interfaces count fails A1; it is never synthesized or converted to 77.
 
+`result.json` uses `chipcae.vv_result/0.3`, defined in
+`tools/vv/schema/vv-result-0.3.schema.json`. It preserves `needs_attention` for
+dependency interruptions and records `reference.type` as
+`无解析解（物理合理性检查）`, with a null value and the acceptance checks as its
+source. The data-class checker supports both v0.2 and v0.3; the frozen v0.2
+schema and its verdict/reference categories remain unchanged. Real results
+still receive the D03 local-only diagnostic.
+
 The following conservative specification deviations are explicit:
 
 - Omitted --out-root allocates a persistent temporary root. Rejected real
   destinations receive no files; their usage record goes to a temporary root
   outside Git, returned as record_directory and printed by the CLI.
-- The frozen result schema has no physical-check reference category.
-  result.json uses reference=null, keeps the brief's physical-check wording in
-  notes, and maps needs_attention to the existing skip verdict. The detailed
-  record retains needs_attention and the exact exit code. No validator changes.
-  Unknown source commits remain unknown; C10 cannot be claimed for that schema
+- Unknown source commits remain unknown; C10 cannot be claimed for that schema
   conflict, and a completed pipeline fails rather than inventing a SHA.
 - C9 excludes normal null status_detail, inapplicable sections, absent optional
   T_cell extrema and explicitly explained unavailable displacement diagnostics.

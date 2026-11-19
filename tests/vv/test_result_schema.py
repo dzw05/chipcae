@@ -429,3 +429,57 @@ class ResultSchemaTest(unittest.TestCase):
         for field, variant, obj, expected in _optional_variants(base):
             with self.subTest(field=field, variant=variant):
                 self._assert_reasons(check_file(self._write_json(obj)), *expected)
+
+    def test_v03_verdict_and_physical_reference_are_versioned(self):
+        base = _load_json(FIXTURES / "valid_synthetic.json")
+        check_file = self._checker().check_file
+        physical = {"value": None, "type": "无解析解（物理合理性检查）",
+                    "source": "Generated physical checks"}
+        variants = (
+            ({"verdict": "needs_attention"}, ("invalid verdict",)),
+            ({"reference": physical}, ("invalid reference.type",)),
+            ({"verdict": "needs_attention", "reference": physical},
+             ("invalid verdict", "invalid reference.type")),
+        )
+        for fields, legacy_reasons in variants:
+            for version in ("0.2", "0.3"):
+                with self.subTest(fields=fields, version=version):
+                    obj = {**base, **fields, "schema": "chipcae.vv_result/" + version}
+                    self._assert_reasons(check_file(self._write_json(obj)),
+                                         *(legacy_reasons if version == "0.2" else ()))
+        obj = {**base, "schema": "chipcae.vv_result/0.3",
+               "verdict": "needs_attention", "reference": physical, "data_class": "real"}
+        self._assert_reasons(check_file(self._write_json(obj)), REAL_REJECTION)
+        obj["reference"] = {**physical, "type": "Ansys"}
+        self._assert_reasons(check_file(self._write_json(obj)),
+                             REAL_REJECTION, "invalid reference.type")
+        self._assert_reasons(check_file(self._write_json(
+            {**base, "schema": "chipcae.vv_result/0.4"})), "invalid schema")
+
+    def test_v03_schema_agrees_with_checker(self):
+        try:
+            import jsonschema
+        except ModuleNotFoundError as error:
+            if error.name != "jsonschema":
+                raise
+            self.skipTest("jsonschema not installed")
+        schema = _load_json(SCHEMA_PATH.with_name("vv-result-0.3.schema.json"))
+        self.assertEqual(schema["$id"], "chipcae.vv_result/0.3")
+        jsonschema.Draft202012Validator.check_schema(schema)
+        validator = jsonschema.Draft202012Validator(schema)
+        base = _load_json(FIXTURES / "valid_synthetic.json")
+        check_file = self._checker().check_file
+        for variants in (_required_variants(base), _optional_variants(base)):
+            for field, variant, obj, expected in variants:
+                if obj.get("schema") == SCHEMA_ID:
+                    obj = {**obj, "schema": "chipcae.vv_result/0.3"}
+                with self.subTest(field=field, variant=variant):
+                    self._assert_reasons(check_file(self._write_json(obj)), *expected)
+                    self.assertEqual(validator.is_valid(obj), not expected)
+        for verdict in ("pass", "fail", "needs_attention"):
+            obj = {**base, "schema": "chipcae.vv_result/0.3", "verdict": verdict,
+                   "reference": {"value": None, "type": "无解析解（物理合理性检查）",
+                                 "source": "Generated physical checks"}}
+            with self.subTest(verdict=verdict):
+                self.assertTrue(validator.is_valid(obj))
+                self._assert_reasons(check_file(self._write_json(obj)))

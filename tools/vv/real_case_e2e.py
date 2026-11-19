@@ -1305,7 +1305,6 @@ def _result(record):
             if _numeric(record["summary"].get(key)):
                 qoi[key] = record["summary"][key]
     notes = list(record["notes"])
-    notes.append("无解析解（物理合理性检查）; reference is null because no schema reference category describes this check")
     if record["materials_provenance"] == "illustrative" and ILLUSTRATIVE_NOTE not in notes:
         notes.append(ILLUSTRATIVE_NOTE)
     if record["verdict"] == "needs_attention":
@@ -1321,13 +1320,15 @@ def _result(record):
         data_class = "synthetic"
         notes.append("empty diagnostic envelope: caller data_class unavailable/invalid; no source data or QoIs")
         qoi = {}
-    return dict(schema="chipcae.vv_result/0.2", case_id=case_id, data_class=data_class, label="实测",
+    return dict(schema="chipcae.vv_result/0.3", case_id=case_id, data_class=data_class, label="实测",
                 date=record["date"], commit=record["commit"], qoi=qoi,
-                verdict="skip" if record["verdict"] == "needs_attention" else record["verdict"],
-                reference=None, tolerance=dict(value=None, temperature_atol_K=TEMPERATURE_ATOL,
-                                               parallel_rtol=PARALLEL_RTOL, energy_imbalance=1e-9,
-                                               synthetic_noncut_warpage_rtol=.05,
-                                               source="F-1130 / fvm-io/1.0 / fvm-thermoelastic-cutcell"),
+                verdict=record["verdict"],
+                reference=dict(value=None, type="无解析解（物理合理性检查）",
+                               source="C/W/A acceptance checks in tools/vv/real_case_e2e.py"),
+                tolerance=dict(value=None, temperature_atol_K=TEMPERATURE_ATOL,
+                               parallel_rtol=PARALLEL_RTOL, energy_imbalance=1e-9,
+                               synthetic_noncut_warpage_rtol=.05,
+                               source="F-1130 / fvm-io/1.0 / fvm-thermoelastic-cutcell"),
                 notes=notes)
 
 
