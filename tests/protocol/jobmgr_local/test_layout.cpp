@@ -29,7 +29,7 @@ int main() {
         const auto user = std::getenv("USER");
         require(job.owner() == (user ? user : ""), "owner from USER");
         require(job.labels().at("project") == "demo", "original labels");
-        require(job.labels().at("desktop.solver") == "chipcae-solve", "solver label");
+        require(job.labels().at("desktop.solver") == "solver-test", "configured solver label");
         require(job.native().scheduler() == jobs::SCHEDULER_TYPE_LOCAL, "native scheduler");
         require(job.native().native_job_id() == "4242", "PID mapped to native_job_id");
         require(job.profile().SerializeAsString() == mapped_profile().SerializeAsString(),

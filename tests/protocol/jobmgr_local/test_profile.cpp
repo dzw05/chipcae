@@ -115,6 +115,7 @@ int main() {
         f.profile(p);
         auto manager = f.manager();
         const auto job = f.running(*manager);
+        require(job.labels().at("desktop.solver") == "solver-test", "configured MPI solver label");
         require(job.profile().SerializeAsString() == mapped_profile().SerializeAsString(),
                 "MPI mapped protobuf fields");
         require(f.fake->starts.size() == 1, "one MPI start");
@@ -148,6 +149,8 @@ int main() {
         f.profile(p);
         auto manager = f.manager();
         const auto job = f.running(*manager);
+        require(job.labels().at("desktop.solver") == "solver-test",
+                "configured direct solver label");
         require(job.profile().SerializeAsString() == mapped_profile(1, 3).SerializeAsString(),
                 "direct mapped fields");
         const auto& cmd = f.fake->starts.at(0).second;

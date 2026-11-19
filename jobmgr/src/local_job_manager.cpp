@@ -156,7 +156,7 @@ jobs::Job LocalJobManager::Submit(const jobs::SubmitRequest& request,
     job.set_result_dir_local(true);
     job.set_state(jobs::JOB_STATE_SUBMITTING);
     *job.mutable_labels() = request.labels();
-    (*job.mutable_labels())["desktop.solver"] = "chipcae-solve";
+    (*job.mutable_labels())["desktop.solver"] = impl_->config.solver;
     detail::stamp(job.mutable_submitted_at());
     write_file_atomic(directory / "control.jsonl", {});
     detail::persist(job);
