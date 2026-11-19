@@ -683,6 +683,31 @@ class TraceMapReferenceTests(unittest.TestCase):
                     with self.assertRaises(AssertionError):
                         ref.read_hex_mesh(group, stack)
 
+    def test_distinct_hex_corners_with_crossed_connectivity_are_rejected(self):
+        import h5py
+        import trace_map_ref as ref
+        stack = synthetic_stack([.001])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'mesh.vtkhdf'
+            write_synthetic_hex(path, stack)
+            with h5py.File(path, 'r+') as file:
+                group = file['VTKHDF/hex']
+                # All eight corners remain present, but the bottom face crosses.
+                group['Connectivity'][:2] = [1, 0]
+                with self.assertRaisesRegex(AssertionError, 'hex connectivity'):
+                    ref.read_hex_mesh(group, stack)
+
+    def test_tensor_reference_rejects_nonrectangular_board_outlines(self):
+        import trace_map_ref as ref
+        stack = synthetic_stack([.001])
+        # The box alone must not silently replace a different physical domain.
+        for polygon in ([[0,0],[.002,0],[0,.001]],
+                        [[0,0],[.002,.001],[.002,0],[0,.001]]):
+            stack['outline']['polygon'] = polygon
+            with self.subTest(polygon=polygon), self.assertRaisesRegex(
+                    AssertionError, 'unsupported board outline'):
+                ref.tensor_mesh(stack,2,1)
+
     def test_cell_fraction_conductivity_and_temperature_mutations_fail(self):
         import h5py
         import trace_map_ref as ref

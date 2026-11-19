@@ -169,6 +169,12 @@ def layer_edges(stack):
 
 def tensor_mesh(stack, nx, ny, z_axis=None):
     x0,y0,x1,y1 = map(rational, stack['outline']['box'])
+    assert x0 < x1 and y0 < y1, 'degenerate board rectangle'
+    if 'polygon' in stack['outline']:
+        outline = [tuple(map(rational,p)) for p in stack['outline']['polygon']]
+        assert (len(outline) == 4 and set(outline) == set(product((x0,x1),(y0,y1)))
+                and all(sum(a[d] != b[d] for d in (0,1)) == 1
+                        for a,b in zip(outline,outline[1:]+outline[:1]))), 'unsupported board outline'
     axes = [[lo+(hi-lo)*Fraction(i,n) for i in range(n+1)]
             for lo,hi,n in ((x0,x1,nx),(y0,y1,ny))]
     axes.append(list(z_axis) if z_axis is not None else layer_edges(stack))
@@ -231,6 +237,18 @@ def read_hex_mesh(group, stack, require_fields=True):
             lo,hi = tuple(map(min,zip(*pts))),tuple(map(max,zip(*pts)))
             assert all(a < b for a,b in zip(lo,hi)), 'zero-volume hex'
             assert set(pts) == set(product(*zip(lo,hi))), 'nonrectangular hex'
+            # VTK corners must describe an affine, positively oriented hex.
+            # Checking only the vertex set would also admit crossed faces.
+            edges = [tuple(pts[i][d]-pts[0][d] for d in range(3)) for i in (1,3,4)]
+            a,b,c = edges
+            determinant = (a[0]*(b[1]*c[2]-b[2]*c[1])
+                           - a[1]*(b[0]*c[2]-b[2]*c[0])
+                           + a[2]*(b[0]*c[1]-b[1]*c[0]))
+            local_keys = ((0,0,0),(1,0,0),(1,1,0),(0,1,0),
+                          (0,0,1),(1,0,1),(1,1,1),(0,1,1))
+            assert determinant > 0 and pts == [
+                tuple(pts[0][d]+sum(key[j]*edges[j][d] for j in range(3))
+                      for d in range(3)) for key in local_keys], 'invalid hex connectivity'
             bounds.append(lo+hi)
         for index in range(pbase,pbase+npart):
             p = tuple(map(rational,points[index]))
