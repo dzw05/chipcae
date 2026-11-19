@@ -1,6 +1,9 @@
 #include "chipcae/mesh/cut/outline_cut.hpp"
+#include "chipcae/mesh/cut/region_cut.hpp"
 #include "chipcae/solve/case_loader.hpp"
 #include "mesh_error_map.hpp"
+
+#include <set>
 namespace chipcae::solve {
 mesh::HexMeshArrays build_mesh(const RunInputs& inputs,
                                std::optional<mesh::cut::CutLayerArrays>* cut) {
@@ -15,17 +18,38 @@ mesh::HexMeshArrays build_mesh(const RunInputs& inputs,
         throw InputError(code.code(), err.path + ": " + err.reason);
     }
     auto mesh = std::move(result.value());
-    if (!mesh.pending_cut.empty())
-        throw InputError(ErrorCode::CUT_UNSUPPORTED, "internal material cuts are not supported");
+    if (mesh.elem_gid.empty())
+        throw InputError(ErrorCode::INPUT_INVALID, "empty mesh");
+    auto region_planes = mesh::cut::region_cut_planes(inputs.stack, mesh);
+    if (!region_planes) {
+        const auto& err = region_planes.error();
+        throw InputError(mesh_error_code(err).code(), err.path + ": " + err.reason);
+    }
+    std::set<BodyId> covered;
+    for (const auto& plane : region_planes.value().planes)
+        covered.insert(plane.body);
+    std::map<BodyId, std::string> body_names;
+    for (const auto& [name, id] : mesh.attr_table.bodies)
+        body_names.emplace(id, name);
+    std::set<std::string> missing;
+    for (auto e : mesh.pending_cut) {
+        const auto body = mesh.attr_table.entries.at(mesh.attribute.at(e) - 1).body;
+        if (!covered.contains(body))
+            missing.insert(body_names.at(body));
+    }
+    if (!missing.empty())
+        throw InputError(ErrorCode::CUT_UNSUPPORTED,
+                         "pending cut cell without cut planes: " + *missing.begin());
     const auto nz = mesh.axes[2].size() - 1;
     validate_column_partition(mesh, nz);
     if (cut)
         cut->reset();
-    if (inputs.stack.outline.polygon.empty())
+    if (inputs.stack.outline.polygon.empty() && region_planes.value().planes.empty())
         return mesh;
     if (!cut)
         throw InputError(ErrorCode::CUT_UNSUPPORTED, "cut data receiver is required");
-    auto clipped = mesh::cut::apply_outline_cut(mesh, inputs.stack.outline, inputs.cut_options);
+    auto clipped = mesh::cut::apply_outline_cut(
+        mesh, inputs.stack.outline, inputs.cut_options, region_planes.value());
     if (!clipped) {
         const auto& err = clipped.error();
         throw InputError(mesh_error_code(err).code(), err.path + ": " + err.reason);

@@ -245,10 +245,7 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
                                  layer.coordinates[2 * i + 1] * polygons.dbu_m});
                     }
         for (const auto& layer : out.stack.layers)
-            if (std::any_of(layer.regions.begin(),
-                            layer.regions.end(),
-                            [](const auto& region) { return !region.footprint.polygon.empty(); }) ||
-                (layer.copper && layer.copper->polygons))
+            if (layer.copper && layer.copper->polygons)
                 throw InputError(ErrorCode::CUT_UNSUPPORTED,
                                  "internal material cuts are not supported");
 
@@ -308,10 +305,28 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
                 return;
             if (std::regex_match(target, std::regex("face:(xmin|xmax|ymin|ymax|zmin|zmax)")))
                 return;
-            if (target.starts_with("layer:"))
+            if (target.starts_with("layer:")) {
                 for (const auto& layer : out.stack.layers)
                     if (layer.name == target.substr(6))
                         return;
+                const auto prefix = target.substr(6) + "#";
+                auto count = std::count_if(
+                    out.stack.layers.begin(), out.stack.layers.end(), [&](const auto& layer) {
+                        return layer.name.starts_with(prefix);
+                    });
+                // Counting every prefixed name also rejects malformed suffixes:
+                // only the canonical, consecutive sequence #0,...,#(count-1) is valid.
+                if (count > 0) {
+                    for (decltype(count) k = 0; k < count; ++k)
+                        if (std::none_of(out.stack.layers.begin(),
+                                         out.stack.layers.end(),
+                                         [&](const auto& layer) {
+                                             return layer.name == prefix + std::to_string(k);
+                                         }))
+                            invalid("invalid target: " + target);
+                    return;
+                }
+            }
             invalid("invalid target: " + target);
         };
         bool mech = false, temp_from = false;
@@ -494,7 +509,8 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
                                  "material mapping missing: " + id);
         };
         for (const auto& layer : out.stack.layers) {
-            mapped(layer.material);
+            if (!layer.material.empty())
+                mapped(layer.material);
             for (const auto& region : layer.regions)
                 mapped(region.material);
             if (layer.copper)

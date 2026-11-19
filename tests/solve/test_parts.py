@@ -509,7 +509,20 @@ class Acceptance:
 
     @staticmethod
     def reports(result):
-        return [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
+        # MPI stdout forwarding can concatenate complete per-rank JSON records
+        # before forwarding their newlines. Decode every object; callers still
+        # require exactly one report per rank and check each rank's counters.
+        decoder = json.JSONDecoder()
+        reports = []
+        for line in result.stdout.splitlines():
+            if not line.startswith('{'):
+                continue
+            pending = line
+            while pending:
+                report, end = decoder.raw_decode(pending)
+                reports.append(report)
+                pending = pending[end:].lstrip()
+        return reports
 
     @staticmethod
     def fields(out):
@@ -707,11 +720,13 @@ class Acceptance:
             # slices would incorrectly pin the z=2/3 interface to 333 K.
             expected = 333 - 49.5*np.maximum(data['points'][:, 2]-1/3, 0)
             np.testing.assert_allclose(data['T'], expected, rtol=0, atol=1e-10)
+            print('exact-layer max temperature error K:', float(np.max(abs(data['T']-expected))))
         else:
             error = float(np.max(abs(data['T']-333)))
             assert error <= 1e-10, ('max exported nodal error K', error)
             maximum = next(s['value'] for s in manifest['summary'] if s['name'] == 'T_max')
             assert abs(maximum-333) <= 1e-10
+            print('split-alias max temperature error K:', error)
 
     def test_mechanical_alias(self):
         self.alias_stack(['substrate#1', 'substrate#0'])
@@ -725,6 +740,7 @@ class Acceptance:
         import numpy as np
         np.testing.assert_allclose(data['T'], 333, atol=1e-10, rtol=0)
         assert np.max(abs(data['U'])) <= 1e-14
+        print('mechanical-alias max displacement m:', float(np.max(abs(data['U']))))
 
     def test_convection_alias(self, cut=False):
         self.alias_stack(['substrate#0', 'substrate#1'])
@@ -748,6 +764,7 @@ class Acceptance:
         assert np.isfinite(a).all() and np.isfinite(b).all()
         assert np.max(b) > 301, 'explicit convection must heat the slab'
         np.testing.assert_allclose(a, b, atol=1e-10, rtol=0)
+        print('convection-alias max temperature difference K:', float(np.max(abs(a-b))))
 
     @staticmethod
     def temperatures(out, cut):
@@ -790,6 +807,9 @@ class Acceptance:
             assert abs(injected/desired-1) <= 1e-12, ('injected power W', injected, desired)
             maximum = next(s['value'] for s in manifest['summary'] if s['name'] == 'T_max')
             measurements.append((injected, maximum))
+            print('heat split, injected power W, T_max K, max temperature error K:',
+                  split, injected, maximum,
+                  float(np.max(abs(data['T']-(300+desired*z*(1-z)/4)))))
         assert abs(measurements[0][0]/measurements[1][0]-1) <= 1e-12
         assert abs(measurements[0][1]/measurements[1][1]-1) <= 1e-10
 
@@ -824,6 +844,8 @@ class Acceptance:
             np.testing.assert_allclose(T, 300+32*z*(1-z), rtol=0, atol=1e-10)
             injected = 16*volume*float(np.mean(T[abs(z-.5) < 1e-14])-300)
             assert abs(injected/64-1) <= 1e-12
+            print('cut volume m^3, injected power W, max temperature error K:',
+                  volume, injected, float(np.max(abs(T-(300+32*z*(1-z))))))
 
     def test_zero_volume(self):
         self.stack['layers'].append(layer('empty'))
@@ -955,7 +977,9 @@ class Acceptance:
         import numpy as np
         self.chamfer(outline=True)
         original = self.stack['layers'][0]
-        self.stack['layers'] = [dict(original, name='lid_layer#'+str(k), thickness=.0005)
+        self.stack['layers'] = [dict(original, name='lid_layer#'+str(k), thickness=.0005,
+                                    regions=[dict(r, name=r['name']+'#'+str(k))
+                                             for r in original['regions']])
                                 for k in range(2)]
         self.case['constraints'] = dict(fixed=[dict(target='layer:lid_layer')])
         self.thermal()
