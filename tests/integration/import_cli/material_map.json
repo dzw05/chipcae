@@ -1,4 +1,5 @@
 {
   "FR4": "fr4_eq",
-  "copper": "cu"
+  "copper": "cu",
+  "copper_base": "fr4_eq"
 }

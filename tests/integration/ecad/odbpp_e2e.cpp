@@ -167,7 +167,7 @@ class Board:
         self.map = root / 'materials.json'
         self.map.write_text(json.dumps({'copper':'mat.cu', 'Copper':'mat.cu',
                                        'COPPER':'mat.cu', 'FR4':'mat.fr4', 'fr4':'mat.fr4',
-                                       'layer:DIELECTRIC_1':'mat.fr4'}))
+                                       'layer:DIELECTRIC_1':'mat.fr4', 'copper_base':'mat.fr4'}))
         self.job = root / 'job'
         shutil.copytree(fixture / 'kicad4l', self.job)
         # Minimal geometry derived from the owned fixture isolates each CLI behavior.
@@ -243,7 +243,9 @@ class Board:
                 layer = next(l for l in stack['layers'] if l['name'] == row['name'])
                 check(same_double(row['thickness_m'], layer['thickness']),
                       'layer report differs from written stack thickness')
-                check(row['material_id'] == layer['material']
+                check(row['material_id'] == (layer['copper']['metal']
+                      if row['copper'] and row['name'] not in material_overrides
+                      else layer['material'])
                       if row['material_key'] or row['name'] in material_overrides
                       else row['material_id'] == '', 'report material ID/empty-source rule')
         return report, rows

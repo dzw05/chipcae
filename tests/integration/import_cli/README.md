@@ -1,6 +1,6 @@
 # Import CLI acceptance tests
 
-Golden source: `1607ad5fde6641a92fb7da7a0a66f456e4ec4adf`, the 11/17
+Historical golden source: `1607ad5fde6641a92fb7da7a0a66f456e4ec4adf`, the 11/17
 `origin/main` revision identified in the brief. The test-first branch HEAD was
 exactly this revision when the Release binaries were built; only tests and their
 registration had been added, and no production sources were changed.
@@ -8,12 +8,22 @@ registration had been added, and no production sources were changed.
 Following the 2026-11-19 03:55 supplemental ruling for #139, material id
 strings in the ten scoped `stack.json` goldens were migrated by exact text
 replacement: `"mat.fr4"` to `"fr4_eq"` and `"mat.cu"` to `"cu"`. All other
-bytes remain the output of baseline `1607ad5`, including the polyset files and
-their SHA-256 references. Future regeneration must also use the updated
-`material_map.json` with `FR4` mapped to `fr4_eq` and `copper` mapped to `cu`.
+bytes remained the output of baseline `1607ad5`, including the polyset files and
+their SHA-256 references, until the I1 1.1 update below. The updated
+`material_map.json` with `FR4` mapped to `fr4_eq`, `copper` mapped to `cu`,
+and the global fallback `copper_base` mapped to `fr4_eq` is required for current tests.
 
-Generation commands, run from the repository root (replace the build-directory
-placeholders with local paths):
+Following I1 1.1, Patterned layer `material` now identifies the base dielectric;
+`copper.metal` remains the metal ID. These goldens also lock the importer to
+polygon output without `copper.fraction`.
+Only Patterned `material` values changed from `cu` to `fr4_eq`; all other bytes,
+including polysets and SHA-256 references, were preserved.
+The synthetic `schema/examples/copper_polygons.stack.json` example uses a
+`CCPOLY01` binary sidecar named `copper_polygons.polyset.json`; despite its
+extension, the sidecar is not JSON text.
+
+Historical baseline generation commands, run from the root of a separate worktree
+at `1607ad5` (replace the build-directory placeholders with local paths):
 
 ```sh
 cmake -S . -B <build-on-dir> -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_ENABLE_ECAD=ON -DCHIPCAE_BUILD_TESTS=ON
@@ -23,9 +33,14 @@ cmake --build <build-off-dir> -j2
 tests/integration/import_cli/gen_golden.sh <build-on-dir>/kernel/chipcae-import <build-off-dir>/kernel/chipcae-import
 ```
 
-To regenerate later, build that source revision in a separate worktree and pass
-its two binaries to `gen_golden.sh`. Do not generate from the implementation
-under test. CI only reads the committed goldens and never builds an old binary.
+These commands reproduce the historical baseline, not the current goldens.
+Do not regenerate the committed goldens with `gen_golden.sh`: the baseline binary
+reuses the copper metal ID for Patterned `material`, even with the updated map.
+To reconstruct the current goldens independently, generate the baseline artifacts
+in a separate worktree, apply the material ID migration above, and then replace
+only Patterned `material: cu` values with `fr4_eq` in the scoped `stack.json` files.
+Preserve every other byte. Do not generate from the implementation under test.
+CI only reads the committed goldens and never builds an old binary.
 The fixed material map is `material_map.json`; inputs are the four existing XML
 fixtures in `../ecad/data/`. `input.step` is a minimal synthetic STEP placeholder:
 the baseline rejects STEP before reading it.

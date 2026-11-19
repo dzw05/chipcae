@@ -2,7 +2,7 @@
 0x1.0c6f7a0b5ed8dp-20
 3
 "F.Cu"
-"mat.cu"
+"mat.fr4"
 "SIGNAL"
 0x1.2599ed7c6fbd3p-15
 1
@@ -23,7 +23,7 @@
 0
 0
 "B.Cu"
-"mat.cu"
+"mat.fr4"
 "SIGNAL"
 0x1.2599ed7c6fbd3p-15
 1

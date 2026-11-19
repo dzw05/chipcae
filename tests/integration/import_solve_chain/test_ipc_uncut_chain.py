@@ -51,7 +51,7 @@ def main():
         for layer in stack['layers']:
             if layer['name'] in fractions:
                 assert layer['copper'] == {'metal': 'cu', 'fraction': fractions[layer['name']]}, layer
-                assert layer['material'] == 'cu', layer
+                assert layer['material'] == 'fr4_eq', layer
         materials = []
         for name, E, nu, alpha, k in [('cu', 110e9, .34, 17e-6, 390), ('fr4_eq', 25e9, .3, 1e-5, .3)]:
             def table(columns):

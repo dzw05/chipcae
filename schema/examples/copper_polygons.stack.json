@@ -1,0 +1,37 @@
+{
+  "id": "copper_polygons",
+  "unit": "m",
+  "outline": {
+    "box": [
+      0,
+      0,
+      0.004,
+      0.003
+    ]
+  },
+  "layers": [
+    {
+      "name": "F.Cu",
+      "thickness": 3.5e-05,
+      "kind": "Patterned",
+      "n_elem_min": 1,
+      "grading": 1,
+      "material": "fr4_eq",
+      "copper": {
+        "metal": "cu",
+        "polygons": {
+          "file": "copper_polygons.polyset.json",
+          "layer": "F.Cu"
+        }
+      }
+    }
+  ],
+  "symmetry": "none",
+  "package_type": "synthetic",
+  "external_refs": [
+    {
+      "path": "copper_polygons.polyset.json",
+      "sha256": "fbc3c782bf5fe5303b39d09558e318c3b85f1da17a55453d6fb90f52c0542858"
+    }
+  ]
+}

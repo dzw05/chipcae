@@ -1,4 +1,5 @@
 """Read-only acceptance checks for published schemas and process error codes."""
+import hashlib
 import json
 import pathlib
 import re
@@ -22,6 +23,8 @@ def schemas(root):
     yaml = dependencies(schemas=True)
     import jsonschema
     from referencing import Registry, Resource
+    sys.path.insert(0, str(root))
+    from tools.stack.polyset import read_polyset
 
     registry = Registry()
     documents = {}
@@ -36,6 +39,22 @@ def schemas(root):
 
     for path in sorted((root / "schema/examples").iterdir()):
         if path.suffix not in (".json", ".yaml", ".yml"):
+            continue
+        if path.name.endswith(".polyset.json"):
+            # The polyset contract uses CCPOLY01, including for .json sidecars.
+            polyset = read_polyset(path)
+            stack_path = path.with_name(path.name.removesuffix(".polyset.json") + ".stack.json")
+            stack = json.loads(stack_path.read_text(encoding="utf-8"))
+            refs = [ref for ref in stack["external_refs"] if ref["path"] == path.name]
+            assert len(refs) == 1, f"{path}: expected one stack reference"
+            assert refs[0]["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest(), path
+            names = {layer.name for layer in polyset.layers}
+            polygons = [layer["copper"]["polygons"] for layer in stack["layers"]
+                        if "polygons" in layer.get("copper", {})
+                        and layer["copper"]["polygons"]["file"] == path.name]
+            assert polygons, f"{path}: expected a copper polygons reference"
+            for reference in polygons:
+                assert reference["layer"] in names, f"{path}: unknown polyset layer"
             continue
         text = path.read_text(encoding="utf-8")
         instance = json.loads(text) if path.suffix == ".json" else yaml.safe_load(text)
