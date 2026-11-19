@@ -1919,20 +1919,47 @@ int main(int argc, char** argv) {
                 checkCanRestart(w, f);
         });
     }
-    test("monitor broker status failures are visible in the status bar", [&] {
+    test("monitor broker status failures are logged and survive level filtering", [&] {
         MonitorLogFixture f;
         LocalJobService broker(
             LauncherConfig{f.temp.filePath("runs"), "unused-solver", "mpirun", false, true});
         MainWindow w;
         w.monitorRun(
             f.temp.path(), EventFormat::LegacyCaelog1, &broker, "unknown-run", f.eventFile);
-        check(waitFor([&] {
-                  const auto message = w.statusBar()->currentMessage();
-                  return message.contains("cannot get job status", Qt::CaseInsensitive) &&
-                         message.contains("Unknown run_id");
-              }),
-              "broker lookup failure is reported through the visible status bar");
-        checkMonitorText(*monitorPanel(w), std::nullopt, f.fullText);
+        check(waitFor([&] { return w.monitorStatusText().contains(f.eventFile); }),
+              "monitor polls before checking the broker failure diagnostic");
+        auto* logs = monitorPanel(w);
+        const QByteArray diagnostic = "\n[diag] cannot get job status: Unknown run_id";
+        const auto fullText = f.independent.displayedText().toUtf8() + diagnostic;
+        checkMonitorText(*logs, std::nullopt, fullText);
+        waitForMonitorPolls();
+        checkMonitorText(*logs, std::nullopt, fullText);
+
+        f.independent.setMinimumLevel(0);
+        logs->setMinimumLevel(0);
+        const auto filteredText = f.independent.displayedText().toUtf8() + diagnostic;
+        checkMonitorText(*logs, std::optional<int>{0}, filteredText);
+        waitForMonitorPolls();
+        checkMonitorText(*logs, std::optional<int>{0}, filteredText);
+        logs->clearLevelFilter();
+        checkMonitorText(*logs, std::nullopt, fullText);
+    });
+    test("monitor broker status failures preserve the existing status bar message", [&] {
+        MonitorLogFixture f;
+        LocalJobService broker(
+            LauncherConfig{f.temp.filePath("runs"), "unused-solver", "mpirun", false, true});
+        MainWindow w;
+        const QString message = "Existing status message";
+        w.statusBar()->showMessage(message);
+        w.monitorRun(
+            f.temp.path(), EventFormat::LegacyCaelog1, &broker, "unknown-run", f.eventFile);
+        check(waitFor([&] { return w.monitorStatusText().contains(f.eventFile); }),
+              "monitor polls before checking the status bar message");
+        check(w.statusBar()->currentMessage() == message,
+              "broker lookup failure must preserve the existing status bar message");
+        waitForMonitorPolls();
+        check(w.statusBar()->currentMessage() == message,
+              "repeated broker lookup failures must preserve the existing status bar message");
     });
     test("monitor log panel is absent before monitoring", [&] {
         MainWindow w;
