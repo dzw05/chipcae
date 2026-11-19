@@ -1,5 +1,7 @@
 #include "chipcae/mesh/cut/outline_cut.hpp"
 
+#include "chipcae/mesh/cut/detail/outline_nonconvex.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -67,3 +69,13 @@ Expected<std::optional<CutLayerArrays>> apply_outline_cut(HexMeshArrays& mesh,
     return std::optional<CutLayerArrays>{std::move(clipped.value())};
 }
 } // namespace chipcae::mesh::cut
+
+namespace chipcae::mesh::cut::detail {
+// TEST-FIRST stub: retain legacy rejection until nonconvex support is implemented.
+Expected<std::optional<CutLayerArrays>> apply_outline_cut_general(HexMeshArrays& mesh,
+                                                                  const Footprint& outline,
+                                                                  const CutOptions& options,
+                                                                  const CutGeometry& extra) {
+    return apply_outline_cut(mesh, outline, options, extra);
+}
+} // namespace chipcae::mesh::cut::detail
