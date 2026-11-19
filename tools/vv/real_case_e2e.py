@@ -229,7 +229,7 @@ def _summary(run_dir):
 
 
 def _datasets(root, prefix="VTKHDF"):
-    """Digest only the V-INT-10 array whitelist, never Assembly or metadata."""
+    """Digest geometry and field arrays, excluding Assembly and reserved fields."""
     import h5py
     for block_name in sorted(root):
         if block_name == "Assembly" or not isinstance(root[block_name], h5py.Group):

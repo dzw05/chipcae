@@ -434,6 +434,14 @@ class ThermalChecks(ContractTest):
         loads = DEFAULT_LOADS + [{"type": "heat_source", "target": "layer:board", "q_vol": 1.}]
         self.assertIsNone(driver._check_c6(self.fixture_run, loads))
 
+    def test_c6_without_optional_cell_temperatures_still_checks_summary_upper_bound(self):
+        with self.h5py.File(vtk_path(self.fixture_run), "r+") as output:
+            for block in ("hex", "cut"):
+                del output[f"VTKHDF/{block}/CellData/T_cell"]
+        self.assertIs(driver._check_c6(self.fixture_run, DEFAULT_LOADS), True)
+        self.edit_manifest(lambda m: m["summary"][1].update(value=348.15 + 1e-7))
+        self.assertIs(driver._check_c6(self.fixture_run, DEFAULT_LOADS), False)
+
 
 class WarpageChecks(ContractTest):
     def test_w1_requires_solid_residual_and_both_fvm_methods(self):
@@ -1191,6 +1199,27 @@ class DriverControlFlow(ContractTest):
         self.assertFalse({"W1", "W2", "W3", "W4", "W5"} & set(record["checks"]))
         self.persisted(record)
 
+    def test_thermal_only_runs_keep_required_physics_and_omit_mechanical_results(self):
+        self.pipeline.write_text(THERMAL_ONLY)
+        make_run(self.root / "template", thermal_only=True)
+        for kind, exit_code in (("thermal", 0), ("assembly", 77)):
+            with self.subTest(kind=kind):
+                params = self.assembly_params() if kind == "assembly" else self.params
+                record = self.invoke(kind, params=params)
+                folder = self.persisted(record)
+                self.assertEqual(record["exit_code"], exit_code, record["notes"])
+                case = read_json(folder / "inputs/case.json")
+                self.assertEqual([(p["id"], p["solver"]) for p in case["physics"]],
+                                 [("thermal", "fvm.conduction"), ("mech", "fvm.solid")])
+                self.assertEqual(case["physics"][1]["temp_from"], "thermal")
+                self.assertIs(record["checks"]["C2"], True)
+                self.assertEqual([s["name"] for s in record["solver"]], ["fvm.conduction"])
+                self.assertIsNone(record["displacement"])
+                self.assertEqual(set(read_json(folder / "result.json")["qoi"]), {"T_max"})
+                self.assertFalse({"W1", "W2", "W3", "W4", "W5"} & set(record["checks"]))
+                self.assertEqual(len([c for c in record["commands"]
+                                      if c["stage"].startswith("solve_")]), 2)
+
     @stage_runtime()
     def test_assembly_w_dependency_does_not_hide_solver_error_or_replace_a_readiness(self):
         self.pipeline.write_text(THERMAL_ONLY)
@@ -1504,6 +1533,31 @@ class DriverControlFlow(ContractTest):
                 self.assertEqual(record["exit_code"], 1)
                 self.assertIs(record["checks"]["C1"], False)
                 self.persisted(record)
+
+    @stage_runtime()
+    def test_assembly_import_failure_without_outputs_preserves_import_diagnostics(self):
+        for mode, import_rc in (("import7", 7), ("import9", 9)):
+            with self.subTest(mode=mode):
+                os.environ["REALCASE_TEST_MODE"] = mode
+                record = self.invoke("assembly", params=self.assembly_params())
+                folder = self.persisted(record)
+                self.assertFalse((folder / "inputs/import_report.json").exists())
+                self.assertFalse((folder / "inputs/stack.json").exists())
+                self.assertEqual(record["exit_code"], 1)
+                self.assertEqual(record["verdict"], "fail")
+                self.assertIs(record["checks"]["C1"], False)
+                self.assertIs(record["checks"]["A1"], False)
+                self.assertIs(record["checks"]["C10"], True)
+                self.assertIsNone(record["checks"]["A2"])
+                self.assertIsNone(record["assembly"]["welded_interfaces"])
+                self.assertIsNone(record["assembly"]["bodies"])
+                self.assertIn("assembly.welded_interfaces", record["missing"])
+                self.assertIn("assembly.bodies", record["missing"])
+                self.assertEqual([(c["stage"], c["exit_code"]) for c in record["commands"]],
+                                 [("import", import_rc)])
+                self.assertTrue(any("import" in note and str(import_rc) in note
+                                    for note in record["notes"]))
+                self.assertFalse(any("driver exception" in note for note in record["notes"]))
 
     @hdf5_fixture
     def test_colliding_invocations_preserve_previous_artifacts(self):

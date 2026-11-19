@@ -74,9 +74,12 @@ error, 1e-9 energy imbalance, exact repeat hashes and exact W3/W4 zeros.
 The W5 5% bound comes from the fvm-thermoelastic-cutcell brief's comparison
 criteria for synthetic noncut cases (comparison section, line 93).
 Vertex temperature overshoot and recomputed vertex warpage are diagnostics.
+C6 always checks the summary temperature upper bound; it also checks the cell
+minimum when the optional T_cell field is available.
 Digests use mesh SHA, the ordered three-QoI whitelist as float.hex, final
 per-field iterations/residuals, and little-endian contiguous array values from
-the V-INT-10 dataset whitelist. Assembly links, reserved fields, metadata,
+geometry and field datasets selected by the V-INT-10 digest rules.
+Assembly links, reserved fields, metadata,
 timing, logs, paths and file bytes are excluded. Raw file SHA values are recorded
 separately. Exported material IDs are one-based indices into material_names;
 material-library ordering never defines them.
@@ -101,6 +104,9 @@ Readiness requires the upstream fvm_pipeline.cpp for T, elastic.hpp and removal
 of the thermal-only marker for W, and T plus geometry=ON for A. Assembly checks
 only the nearest capability file ascending from the resolved import executable;
 it never borrows another build's capabilities. Assembly evaluates W separately.
+All cases retain the required thermal and mech physics declarations. Before W
+is ready, the thermal-only solver stage supplies temperature results; the
+driver omits mechanical checks, auxiliary runs and mechanical result QoIs.
 An unavailable E2E prints `SKIP: <kind> upstream not merged: <reason>
 (NEEDS-ATTENTION)` and returns 77 before generating inputs. A missing actual
 welded_interfaces count fails A1; it is never synthesized or converted to 77.
