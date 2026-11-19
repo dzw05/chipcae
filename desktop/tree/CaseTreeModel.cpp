@@ -9,9 +9,18 @@
 
 namespace chipcae::desktop {
 CaseTreeModel::CaseTreeModel(CaseDocument* document, QObject* parent)
-    : QStandardItemModel(parent), document_(document) {
+    : QStandardItemModel(parent), document_(document),
+      caseSchemaPath_(QStringLiteral(CHIPCAE_REPOSITORY "/schema/case-1.0.schema.json")) {
     connect(document_, &CaseDocument::changed, this, &CaseTreeModel::refresh);
     refresh();
+}
+// TEST-FIRST interface stubs: apply() still uses its original static validator.
+void CaseTreeModel::setCaseSchemaPath(const QString& path) {
+    caseSchemaPath_ =
+        path.isEmpty() ? QStringLiteral(CHIPCAE_REPOSITORY "/schema/case-1.0.schema.json") : path;
+}
+QString CaseTreeModel::caseSchemaPath() const {
+    return caseSchemaPath_;
 }
 void CaseTreeModel::append(QStandardItem* parent,
                            const Json& value,

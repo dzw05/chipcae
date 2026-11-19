@@ -17,6 +17,8 @@ public:
     };
     explicit CaseTreeModel(CaseDocument* document, QObject* parent = nullptr);
     CaseDocument* document() const { return document_; }
+    void setCaseSchemaPath(const QString& path);
+    QString caseSchemaPath() const;
     QModelIndex locate(const QString& pointer, const QString& source = "case") const;
     QString addLoad(Json load);
     QString addFixedFace(const QString& target);
@@ -28,6 +30,7 @@ public:
 
 private:
     CaseDocument* document_;
+    QString caseSchemaPath_;
     void append(QStandardItem* parent,
                 const Json& value,
                 const QString& pointer,
