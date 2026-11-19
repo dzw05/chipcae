@@ -23,6 +23,7 @@ import math
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -35,7 +36,6 @@ ROOT = Path(__file__).resolve().parents[3]
 ARTIFACT_DIR = ROOT / "tools/vv/calculix_demo_gate"
 GENERATOR = ARTIFACT_DIR / "generate.py"
 sys.path.insert(0, str(ROOT))
-VERSION = None
 
 
 def dependencies():
@@ -235,6 +235,56 @@ class DemoGateRegenTest(unittest.TestCase):
                     for a, b in zip(values, numbers):
                         self.assertTrue(math.isclose(a, b, rel_tol=1e-12, abs_tol=1e-15))
 
+    def test_double_frd_retains_convergence_precision_and_rejects_bad_records(self):
+        # Native binary FRD records use 32-bit IDs and unaligned doubles.
+        # Unlike E12.5 output, these distinguish the fine-grid temperature extrema.
+        def fixture(ids=(1, 2), value=318.897712345678):
+            header = lambda tag, count, fmt: f"{tag:<6}{count:30d}{fmt:38d}\n".encode()
+            return (header("    2C", 2, 3)
+                    + struct.pack("=i3d", 1, 0, 0, 0.0016)
+                    + struct.pack("=i3d", 2, 0.001, 0, 0.0016)
+                    + header("    3C", 0, 2)
+                    + b"  100CL  101 1.000000000           2                     0    1           3\n"
+                    + b" -4  NDTEMP      1    1\n -5  T           1    1    0    0\n"
+                    + struct.pack("=id", ids[0], value)
+                    + struct.pack("=id", ids[1], 306.536412345678)
+                    + b" 9999\n")
+
+        module = self.generator()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "double.frd"
+            path.write_bytes(fixture())
+            result = module.parse_results(path)
+            self.assertAlmostEqual(result["temperature_blocks"][0][1],
+                                   318.897712345678, delta=1e-12)
+            for malformed in (fixture((1, 1)), fixture((1, 3)),
+                              fixture(value=float("nan")), fixture()[:-10]):
+                path.write_bytes(malformed)
+                with self.assertRaises(ValueError):
+                    module.parse_results(path)
+
+    def test_full_and_mirrored_qois_use_identical_triangulation(self):
+        module = self.generator()
+        inputs = module.load_inputs()
+        values = []
+        with tempfile.TemporaryDirectory() as directory:
+            for full in (False, True):
+                mesh = module.build_mesh(inputs, "L1", full=full)
+                nodes = mesh["nodes"]
+                temperatures = {n: 310.0 for n in nodes}
+                displacements = {}
+                for n, xyz in nodes.items():
+                    x, y = [(v - (0.01 if full else 0)) * 1000 for v in xyz[:2]]
+                    w = 1e-7 * (x*x + y*y + 0.003*x*x*y*y)
+                    displacements[n] = (0, 0, w + (1e-6 + 2e-8*x - 3e-8*y if full else 0))
+                thermal = {"nodes": nodes, "temperature_blocks": [temperatures]}
+                mechanical = dict(thermal, displacement_blocks=[displacements])
+                values.append(module.compute_qoi(thermal, mechanical, mesh, inputs,
+                                                 Path(directory), str(full)))
+        for key in ("W_bfp_m", "W_bfp_nodes_m"):
+            self.assertTrue(math.isclose(values[0][key], values[1][key],
+                                         rel_tol=1e-12, abs_tol=0), key)
+
     def test_results_from_different_steps_are_kept_separate(self):
         # Legal repeated node IDs in distinct result blocks must not be called duplicates.
         text = self.frd() + (
@@ -382,8 +432,8 @@ class DemoGateRegenTest(unittest.TestCase):
         path = ARTIFACT_DIR / "REFERENCE.json"
         self.assertTrue(path.is_file(), "missing required DEMO-GATE REFERENCE.json")
         artifact = json.loads(path.read_text(encoding="utf-8"))
-        self.assertEqual(VERSION, artifact["calculix_version"])
         module = self.generator()
+        self.assertEqual(module.ccx_version(), artifact["calculix_version"])
         l1 = [level for level in artifact["levels"] if level["name"] == "L1"]
         self.assertEqual(len(l1), 1)
         l1 = l1[0]
@@ -429,6 +479,8 @@ class DemoGateRegenTest(unittest.TestCase):
             points = np.array([(*nodes[n], *displacement[n]) for n in sorted(top)], dtype=float)
             points *= 1000.0
             points = mirror_quarter(points)
+            points[:, :3] = np.round(points[:, :3], 9)
+            points = points[np.lexsort((points[:, 0], points[:, 1]))]
             xs = ys = np.linspace(-10.0, 10.0, 81)
             x, y, w = interp_grid(points, xs, ys)
             outside = np.abs(x) + np.abs(y) > 18.0
@@ -448,22 +500,8 @@ class DemoGateRegenTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    VERSION = dependencies()
-    if VERSION is None:
+    if dependencies() is None:
         raise SystemExit(77)
     if len(sys.argv) == 2 and Path(sys.argv[1]).is_dir():
         sys.argv.pop()
-    mode = os.environ.get("CHIPCAE_DEMO_GATE_TEST_MODE", "reference")
-    if mode == "generator":
-        print("SCOPE: generator regressions and real L1 generation; archived-reference acceptance is deferred.",
-              flush=True)
-        path = ARTIFACT_DIR / "REFERENCE.json"
-        methods = unittest.defaultTestLoader.getTestCaseNames(DemoGateRegenTest)
-        suite = unittest.TestSuite(DemoGateRegenTest(method) for method in methods if
-                                  method != "test_l1_deck_bytes_and_recomputed_qois" or
-                                  path.exists() or path.is_symlink())
-        result = unittest.TextTestRunner(verbosity=2).run(suite)
-        raise SystemExit(0 if result.wasSuccessful() else 1)
-    if mode != "reference":
-        raise SystemExit(f"invalid DEMO-GATE test mode: {mode}")
     unittest.main(verbosity=2)

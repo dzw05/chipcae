@@ -20,7 +20,6 @@ import copy
 import hashlib
 import json
 import math
-import os
 import re
 import sys
 import tempfile
@@ -454,20 +453,4 @@ if __name__ == "__main__":
     # chipcae_auto_tests passes the source directory as argv[1].
     if len(sys.argv) == 2 and Path(sys.argv[1]).is_dir():
         sys.argv.pop()
-    mode = os.environ.get("CHIPCAE_DEMO_GATE_TEST_MODE", "reference")
-    if mode == "generator":
-        print("SCOPE: generator/validator only; qualified reference delivery and acceptance are deferred.",
-              flush=True)
-        suite = unittest.TestSuite(
-            unittest.defaultTestLoader.loadTestsFromTestCase(case)
-            for case in (ArtifactAvailabilityTest, ValidatorContractTest)
-        )
-        path = ARTIFACT_DIR / "REFERENCE.json"
-        # Even generator mode must reject an invalid artifact if someone adds one.
-        if path.exists() or path.is_symlink():
-            suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(DemoGateReferenceTest))
-        result = unittest.TextTestRunner(verbosity=2).run(suite)
-        raise SystemExit(0 if result.wasSuccessful() else 1)
-    if mode != "reference":
-        raise SystemExit(f"invalid DEMO-GATE test mode: {mode}")
     unittest.main(verbosity=2)

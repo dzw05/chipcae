@@ -4,7 +4,8 @@
 
 The ASCII fixed-width reader below is adapted from
  tools/vv/calculix_trilayer/generate.py:parse_frd, extended for separate NDTEMP
-and DISP blocks and strict node coverage. Version detection/CCX are imported.
+and DISP blocks and strict node coverage. Double binary FRD retains fine-grid
+temperature differences. Version detection/CCX are imported.
 Only a complete run writes work/REFERENCE.json; publishing is a separate action.
 """
 from __future__ import annotations
@@ -19,6 +20,7 @@ import platform
 import re
 import resource
 import signal
+import struct
 import subprocess
 import sys
 import time
@@ -516,7 +518,7 @@ def write_decks(work, job, mesh, inputs):
         if e["k"] == 3 * mesh["nz"] - 1
     )
     thermal += [
-        "*NODE FILE",
+        "*NODE OUTPUT,DOUBLE",
         "NT",
         "*NODE PRINT,NSET=BOTTOM,TOTALS=ONLY",
         "RFL",
@@ -545,7 +547,7 @@ def write_decks(work, job, mesh, inputs):
         "*STEP",
         "*STATIC",
         f"*TEMPERATURE,FILE={job}_thermal.frd,BSTEP=1",
-        "*NODE FILE",
+        "*NODE OUTPUT,DOUBLE",
         "U,NT",
         "*END STEP",
     ]
@@ -558,7 +560,13 @@ def write_decks(work, job, mesh, inputs):
 
 
 def parse_results(path):
-    """Read FRD short format (1X,I2,I10,nE12.5); keep each result block separate."""
+    """Read ASCII E12.5 or native double FRD; keep each result block separate."""
+    with Path(path).open("rb") as stream:
+        for line in stream:
+            if line.lstrip().startswith(b"2C"):
+                if line.split()[-1:] == [b"3"]:
+                    return parse_double_results(stream, line)
+                break
     nodes, temps, disps = {}, [], []
     mode, target = None, None
     record = re.compile(r" -1[ 0-9]{10}(?:[ -][0-9]\.[0-9]{5}E[+-][0-9]{2})+")
@@ -605,6 +613,71 @@ def parse_results(path):
     )
     for block in temps + disps:
         require(set(block) == set(nodes), "incomplete/unknown result node set")
+    return {"nodes": nodes, "temperature_blocks": temps, "displacement_blocks": disps}
+
+
+def parse_double_results(stream, coordinate_header):
+    """Read native double FRD from *NODE OUTPUT,DOUBLE (CalculiX 2.23).
+
+    The binary layouts follow upstream frd.c/frdselect.c: 32-bit IDs,
+    unaligned native doubles, C3D20/C3D15 topology codes 4/5. ASCII reading
+    remains available for historical results. Unsupported layouts fail closed.
+    """
+
+    def read_record(layout):
+        record = struct.Struct("=" + layout)
+        data = stream.read(record.size)
+        require(len(data) == record.size, "truncated binary FRD record")
+        return record.unpack(data)
+
+    def field(count, size):
+        require(count > 0, "empty binary FRD field")
+        result = {}
+        for _ in range(count):
+            nid, *values = read_record("i" + "d" * size)
+            require(nid > 0 and nid not in result, "duplicate/invalid binary FRD node")
+            require(all(math.isfinite(v) for v in values), "nonfinite binary FRD")
+            result[nid] = values[0] if size == 1 else tuple(values)
+        return result
+
+    nodes = field(int(coordinate_header.split()[1]), 3)
+    topology = stream.readline().split()
+    require(
+        len(topology) == 3 and topology[0] == b"3C" and topology[2] == b"2",
+        "unsupported binary FRD topology",
+    )
+    n_elements = int(topology[1])
+    require(n_elements >= 0, "invalid binary FRD element count")
+    for _ in range(n_elements):
+        _, kind, _, _ = read_record("4i")
+        require(kind in (4, 5), "unsupported binary FRD element")
+        read_record("i" * (20 if kind == 4 else 15))
+    temps, disps = [], []
+    ended = False
+    for line in stream:
+        key = line.split()
+        if key[:1] == [b"9999"]:
+            ended = True
+            break
+        if key[:1] != [b"100CL"]:
+            require(key[:1] == [b"1PSTEP"], "unexpected binary FRD header")
+            continue
+        require(key[-1:] == [b"3"], "FRD results must use double precision")
+        count = int(line[24:36])
+        header = stream.readline().split()
+        require(
+            len(header) == 4 and header[0] == b"-4", "missing binary FRD field header"
+        )
+        kind = header[1]
+        require(kind in (b"NDTEMP", b"DISP"), "unsupported binary FRD field")
+        components = int(header[2])
+        require(components == (1 if kind == b"NDTEMP" else 4), "invalid FRD components")
+        for _ in range(components):
+            require(stream.readline().split()[:1] == [b"-5"], "missing FRD component")
+        values = field(count, 1 if kind == b"NDTEMP" else 3)
+        require(set(values) == set(nodes), "incomplete/unknown result node set")
+        (temps if kind == b"NDTEMP" else disps).append(values)
+    require(ended and temps, "missing/incomplete binary FRD results")
     return {"nodes": nodes, "temperature_blocks": temps, "displacement_blocks": disps}
 
 
@@ -756,6 +829,11 @@ def compute_qoi(thermal, mechanical, mesh, inputs, work, job):
         points[:, :2] -= inputs["L"] * 500
     else:
         points = mirror_quarter(points)
+    # Co-circular surface nodes admit multiple Delaunay diagonals. Normalize
+    # translation roundoff and traversal order so full and mirrored models use
+    # the same triangulation, including under a rigid tilt.
+    points[:, :3] = np.round(points[:, :3], 9)
+    points = points[np.lexsort((points[:, 0], points[:, 1]))]
     xs = ys = np.linspace(-inputs["L"] * 500, inputs["L"] * 500, 81)
     x, y, w = interp_grid(points, xs, ys)
     outside = np.abs(x) + np.abs(y) > (inputs["L"] - inputs["c"]) * 1000
