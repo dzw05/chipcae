@@ -119,7 +119,7 @@ def write_solver_inputs(root):
     assert p1.pop('ranks') == 1 and p2.pop('ranks') == 2 and p1 == p2
 
 
-def inspect_run(run_dir, stack, rings, preview_count, measurements, np, h5py):
+def inspect_run(run_dir, stack, rings, preview_count, measurements, np, h5py, failures):
     import trace_map_ref as ref
 
     manifest = read_json(run_dir / 'manifest.json')
@@ -138,17 +138,25 @@ def inspect_run(run_dir, stack, rings, preview_count, measurements, np, h5py):
         assert cut_count == 0, f'M3 cut cells={cut_count}'
         assert count > 0 and count == preview_count, f'M2/M3 hex cells={count}, preview={preview_count}'
         mesh = ref.read_hex_mesh(hexes, stack, require_fields=False)
-    ref.check_solution(mesh, rings, stack, measurements,
-                       expected_areas=ref.COPPER_AREAS_MM2)
-    warpage = read_json(run_dir / 'summary.json')['warpage']
-    print(f'实测 {run_dir.name} w_bfp_m={warpage["w_bfp_m"]!r}', flush=True)
-    readback = warpage['manifest_warpage_pv_m']
-    assert readback is not None and math.isfinite(readback), f'M5 readback warpage={readback!r}'
-    relative = abs(readback-summary['warpage_pv'])/abs(summary['warpage_pv'])
-    measurements.update(readback_warpage_m=readback, readback_relative_error=relative)
+    inspection_failures = []
+    try:
+        ref.check_solution(mesh, rings, stack, measurements,
+                           expected_areas=ref.COPPER_AREAS_MM2)
+    except (AssertionError, OSError, ValueError, KeyError) as exc:
+        inspection_failures.append(f'{run_dir.name}: {exc}')
+    try:
+        warpage = read_json(run_dir / 'summary.json')['warpage']
+        print(f'实测 {run_dir.name} w_bfp_m={warpage["w_bfp_m"]!r}', flush=True)
+        readback = warpage['manifest_warpage_pv_m']
+        assert readback is not None and math.isfinite(readback), f'M5 readback warpage={readback!r}'
+        relative = abs(readback-summary['warpage_pv'])/abs(summary['warpage_pv'])
+        measurements.update(readback_warpage_m=readback, readback_relative_error=relative)
+        assert relative <= READBACK_RTOL, f'M3/M5 warpage readback relative error={relative}'
+    except (AssertionError, OSError, ValueError, KeyError) as exc:
+        inspection_failures.append(f'{run_dir.name}: {exc}')
     print(f'实测 {run_dir.name}: {json.dumps(measurements, ensure_ascii=False)}', flush=True)
-    assert relative <= READBACK_RTOL, f'M3/M5 warpage readback relative error={relative}'
-    measurements['acceptance_checks']['numerical'] = True
+    measurements['acceptance_checks']['numerical'] = not inspection_failures
+    failures.extend(inspection_failures)
     return mesh
 
 
@@ -288,7 +296,7 @@ def main():
                 if run['completed']:
                     try:
                         run['mesh'] = inspect_run(run['path'], stack, rings, preview_count,
-                                                  run['measurements'], np, h5py)
+                                                  run['measurements'], np, h5py, run['failures'])
                     except (AssertionError, OSError, ValueError, KeyError) as exc:
                         run['failures'].append(f'ranks={ranks}: {exc}')
             if len(runs) == 2 and all('qoi' in run['measurements'] for run in runs.values()):
@@ -518,15 +526,98 @@ class AcceptanceRecords(unittest.TestCase):
                         # Unique external vertex: avoid triggering the boundary-copy check.
                         file['VTKHDF/hex/PointData/T'][0] += 1e-6
                 measurements = dict(acceptance_checks={})
+                failures = []
                 # Geometry-specific area expectation; all numerical checks stay real.
                 with patch.object(ref, 'COPPER_AREAS_MM2', {'In1.Cu': .5}), redirect_stdout(StringIO()):
-                    if failure is None:
-                        inspect_run(root,stack,rings,2,measurements,np,h5py)
-                    else:
+                    if failure == 'qoi':
                         with self.assertRaises(AssertionError):
-                            inspect_run(root,stack,rings,2,measurements,np,h5py)
+                            inspect_run(root,stack,rings,2,measurements,np,h5py,failures)
+                    else:
+                        inspect_run(root,stack,rings,2,measurements,np,h5py,failures)
+                self.assertEqual(bool(failures),failure in ('temperature','readback'))
                 self.assertEqual(measurements['acceptance_checks'].get('numerical',False),
                                  failure is None)
+
+    def test_c11_failures_keep_readback_and_aligned_rank_comparison(self):
+        import h5py
+        import struct
+        import trace_map_ref as ref
+
+        stack = synthetic_stack([.001])
+        output = StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            golden = source / 'tests/integration/import_cli/golden/board_4layer/stack.json'
+            golden.parent.mkdir(parents=True)
+            write_json(golden, stack)
+
+            # Replace only the external CLI stages; inspection, comparisons and
+            # verdict/record generation consume real JSON and VTKHDF artifacts.
+            def command(stage, args, root, timings):
+                timings[stage] = .001
+                if stage == 'import':
+                    write_json(root / 'stack.json', stack)
+                    write_json(root / 'defects.json', {})
+                    ring = ((0,0),(500,0),(500,1000),(0,1000))
+                    name = b'In1.Cu'
+                    data = (b'CCPOLY01' + struct.pack('<dI',1e-6,1)
+                            + struct.pack('<I',len(name)) + name
+                            + struct.pack('<Iqq',1,0,4)
+                            + b''.join(struct.pack('<qq',*p) for p in ring))
+                    (root / 'stack.polyset').write_bytes(data)
+                elif stage == 'preview':
+                    (root / 'preview.vtkhdf').write_bytes(b'preview')
+                    return json.dumps(dict(stage='success',cell_count=2))
+                elif stage.startswith('solve ranks='):
+                    ranks = int(stage.rsplit('=',1)[1])
+                    run_dir = root / f'ranks{ranks}'
+                    (run_dir / 'out').mkdir()
+                    write_json(run_dir / 'manifest.json', dict(
+                        schema_version='chipcae.results/1.0', summary=[
+                            dict(name='warpage_pv',value=1e-6),
+                            dict(name='U_mag_max',value=2e-6),
+                            dict(name='T_max',value=336.62)]))
+                    path = run_dir / 'out/step-0.vtkhdf'
+                    write_synthetic_hex(path,stack,patterned=True)
+                    with h5py.File(path,'r+') as file:
+                        # A unique top vertex; rank differences exceed the
+                        # existing parallel tolerance as well as C11's limit.
+                        file['VTKHDF/hex/PointData/T'][4] += ranks*1e-4
+                elif stage.startswith('readback ranks='):
+                    ranks = int(stage.rsplit('=',1)[1])
+                    write_json(root / f'ranks{ranks}/summary.json', dict(warpage=dict(
+                        manifest_warpage_pv_m=1e-6,w_bfp_m=2e-6)))
+                else:
+                    raise AssertionError(f'unexpected command stage {stage}')
+                return ''
+
+            env = dict(CHIPCAE_IMPORT_EXE='synthetic-importer',
+                       CHIPCAE_PREVIEW_EXE='synthetic-previewer',
+                       CHIPCAE_SOLVE_EXE='synthetic-solver',CHIPCAE_GIT_SHA='1234567')
+            with patch.dict(os.environ,env), patch.dict(globals(),SOURCE=source), \
+                    patch.object(shutil,'which',return_value='synthetic-mpiexec'), \
+                    patch.dict(globals(),run_command=command), \
+                    patch.object(ref,'COPPER_AREAS_MM2',{'In1.Cu': .5}), \
+                    redirect_stdout(output), redirect_stderr(StringIO()):
+                with self.assertRaisesRegex(AssertionError,'max temperature error'):
+                    main()
+
+        for ranks in (1,2):
+            record, _ = json.JSONDecoder().raw_decode(
+                output.getvalue().split(f'RESULT ranks{ranks}/result.json\n',1)[1])
+            with self.subTest(ranks=ranks):
+                self.assertEqual(record['verdict'],'fail')
+                self.assertGreater(record['error']['value'],TEMPERATURE_ATOL)
+                self.assertIn('readback_warpage_m',record['run'])
+                self.assertLessEqual(abs(record['run']['readback_warpage_m']-1e-6),1e-18)
+                self.assertLessEqual(record['run']['readback_relative_error'],READBACK_RTOL)
+                self.assertTrue(record['run']['acceptance_checks']['solve_readback'])
+                self.assertFalse(record['run']['acceptance_checks'].get('numerical',False))
+                self.assertFalse(record['run']['acceptance_checks'].get('parallel',False))
+                self.assertEqual(set(record['run']['parallel_relative_errors']),set(QOIS))
+                self.assertTrue(any('max temperature error' in note for note in record['notes']))
+                self.assertIn('parallel temperatures',record['notes'])
+                self.assertNotIn('parallel aligned cell/vertex fields unavailable',record['notes'])
 
 
 class TraceMapReferenceTests(unittest.TestCase):
@@ -630,6 +721,39 @@ class TraceMapReferenceTests(unittest.TestCase):
             self.assertLessEqual(abs(actual - want), 1e-8)
         qtop, qbot, _, _ = ref.thermal_checks(mesh, stack, k, temperatures, reactions, dofs)
         self.assertLessEqual(abs(qtop-qbot)/abs(qbot), 1e-9)
+
+    def test_energy_reconstruction_preserves_exported_temperature_errors(self):
+        import numpy as np
+        import trace_map_ref as ref
+
+        stack = synthetic_stack([.001])
+        mesh = ref.tensor_mesh(stack,1,1)
+        k = np.full((1,3),.3)
+        operator,rhs,dofs = ref.assemble_q2(mesh,k)
+        # A=2e-6 m2, t=.001 m, k=.3 W/(m K), h=1000:
+        # Q = 50 / (t/(k*A) + 1/(h*A)) = 3/130 W.
+        for offset in (0.,-1.,1.):
+            with self.subTest(top_offset_K=offset):
+                corners = {p:298.15 if p[2] == 0 else 298.15+500/13+offset
+                           for p in mesh['vertices']}
+                recovered,reactions = ref.solve_q2(operator,rhs,dofs,corners=corners)
+                for point,temperature in corners.items():
+                    self.assertLessEqual(abs(recovered[dofs['index'][point]]-temperature),1e-12)
+                qtop,qbot,_,_ = ref.thermal_checks(mesh,stack,k,recovered,reactions,dofs)
+                relative = abs(qtop-qbot)/max(abs(qtop),abs(qbot),1e-30)
+                top_corners = [dofs['index'][p] for p in corners if p[2] != 0]
+                self.assertLessEqual(abs(qbot-qtop-np.sum(reactions[top_corners])),1e-12)
+                print(f'energy_reconstruction top_offset_K={offset} '
+                      f'Q_top_W={qtop:.17g} Q_bot_W={qbot:.17g} '
+                      f'energy_relative_error={relative:.17g}',flush=True)
+                if offset == 0:
+                    self.assertLessEqual(abs(qtop-3/130),1e-12)
+                    self.assertLessEqual(abs(qbot-3/130),1e-12)
+                    self.assertLessEqual(relative,1e-9)
+                else:
+                    self.assertGreater(abs(qtop-3/130),1e-6)
+                    self.assertGreater(abs(qbot-3/130),1e-6)
+                    self.assertGreater(relative,1e-9)
 
     def test_partition_permutations_align_cells_and_vertices(self):
         import trace_map_ref as ref

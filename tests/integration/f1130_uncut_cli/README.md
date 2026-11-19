@@ -39,8 +39,12 @@ zmin fixed at 298.15 K, zmax convection with h=1000 W/(m² K) and T_inf=348.15 K
 The direct solver uses `solver.linear.rtol=1e-13`.
 
 Both solve/readback attempts run before numerical inspection, so a numerical
-failure in one rank does not suppress the other attempt. Stack, sidecar, case,
-materials and both profiles are checked byte for byte after each attempt.
+failure in one rank does not suppress the other attempt. Inspection records C11
+failures while retaining the measured temperature error, then measures readback
+and returns the exported mesh for the aligned rank comparison. A failed numerical
+inspection keeps its numerical completion check false and its record verdict fail.
+Stack, sidecar, case, materials and both profiles are checked byte for byte after
+each attempt.
 Profiles differ only in ranks. Every attempt produces a separate
 `chipcae.vv_result/0.2` record with `data_class: synthetic`, `label: 实测`,
 `reference.type: 独立代码`, and `reference.value: null`. Missing fraction,
@@ -131,6 +135,11 @@ values or flux. Energy evaluation therefore pins exported corners and solves
 the independent equations for the remaining Q2 DOFs. Q_top integrates top
 convection with 3×3 Gauss; Q_bot is minus the summed bottom Dirichlet reactions
 from that same assembled operator. This is a **discrete variational flux**.
+Every exported corner stays pinned, including non-Dirichlet corners whose
+reactions need not vanish. The energy imbalance equals minus their summed
+reactions; recovery does not force conservation for an incorrect exported field.
+An analytic single-column regression perturbs exported top temperatures by
+±1 K and verifies that both recovered fluxes change and energy fails at 1e-9.
 Recovery is tested against complete synthetic Q2 solutions. Raw gradient face
 flux is not recoverable from corner exports alone; if that interpretation is
 required, an architect ruling and additional output are needed. Product energy
@@ -204,8 +213,8 @@ Missing executable configuration or NumPy/h5py returns the existing skip code
 timeouts. A missing MPI launcher fails, and no retired fixture gate suppresses
 configured acceptance.
 
-The records discovery path retains all 12 assertion/verdict tests and includes
-15 reference tests: exact clipping, signed holes and empty copper, binary
+The records discovery path includes 13 assertion/verdict tests and
+16 reference tests: exact clipping, signed holes and empty copper, binary
 validation and exact fixture areas, Q2 partition/derivative sums (1e-14),
 symmetric assembly (relative 1e-12), analytic single-column and uniform
 multilayer solutions (1e-8 K), forced no-SciPy assembly/solve, hidden-DOF
