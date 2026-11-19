@@ -71,6 +71,11 @@ def check_errors(path: Path) -> list[str]:
     return errors
 
 
+def check_build_parallel(text: str, source: str = "<workflow>") -> list[str]:
+    """Test-first placeholder; build parallelism validation is not implemented."""
+    return ["build parallelism validation is not implemented"]
+
+
 def main() -> int:
     root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
     problems = []
