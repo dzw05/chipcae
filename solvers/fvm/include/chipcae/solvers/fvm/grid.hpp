@@ -17,6 +17,7 @@ struct FvFace {
     int axis = -1, side = -1;
     double area = 0;
     std::array<double, 3> area_vector{}, centroid{};
+    std::int64_t parent_elem = -1; // Original face piece, including after a merge.
 };
 struct FvGrid {
     std::array<std::vector<double>, 3> axes;

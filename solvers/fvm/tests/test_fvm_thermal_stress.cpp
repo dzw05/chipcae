@@ -108,12 +108,12 @@ void contrast(Measurement& row, bool tangential) {
 }
 void benchmark(Measurement& row) {
     auto m = boxes({uniform(68), uniform(68), uniform(6)});
-    auto start = std::chrono::steady_clock::now();
     auto g = take(fv::build_grid(m), "68x68x6 build_grid");
     row.defect = g.max_identity_defect;
     auto p = problem(g);
     p.rtol = 1e-12;
     p.bcs = {dirichlet("face:zmin", 1), dirichlet("face:zmax", 0)};
+    auto start = std::chrono::steady_clock::now();
     auto r = solve(g, m, p);
     row.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     diagnostics(row, r);

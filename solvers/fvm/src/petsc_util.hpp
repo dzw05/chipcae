@@ -16,32 +16,19 @@ inline void collective_check(PetscErrorCode code, MPI_Comm comm, const char* ope
     if (any)
         throw std::runtime_error(std::string("INTERNAL: PETSc ") + operation + " failed");
 }
-struct Matrix {
-    Mat value = nullptr;
-    ~Matrix() {
+template <class T, PetscErrorCode (*Destroy)(T*)>
+struct Handle {
+    T value = nullptr;
+    Handle() = default;
+    Handle(const Handle&) = delete;
+    Handle& operator=(const Handle&) = delete;
+    ~Handle() {
         if (value)
-            MatDestroy(&value);
+            Destroy(&value);
     }
 };
-struct Vector {
-    Vec value = nullptr;
-    ~Vector() {
-        if (value)
-            VecDestroy(&value);
-    }
-};
-struct Krylov {
-    KSP value = nullptr;
-    ~Krylov() {
-        if (value)
-            KSPDestroy(&value);
-    }
-};
-struct Scatter {
-    VecScatter value = nullptr;
-    ~Scatter() {
-        if (value)
-            VecScatterDestroy(&value);
-    }
-};
+using Matrix = Handle<Mat, MatDestroy>;
+using Vector = Handle<Vec, VecDestroy>;
+using Krylov = Handle<KSP, KSPDestroy>;
+using Scatter = Handle<VecScatter, VecScatterDestroy>;
 } // namespace chipcae::solvers::fvm::detail

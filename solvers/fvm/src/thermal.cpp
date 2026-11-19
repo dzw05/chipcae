@@ -36,8 +36,20 @@ Expected<ThermalResult> solve_thermal(const FvGrid& g,
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &ranks);
     if (p.k.size() != nc || p.q_vol.size() != nc || p.fixed_cv.size() != p.fixed_T.size() || !nc ||
-        g.cv_rank.size() != nc || g.cv_elem.size() != nc || g.cv_layer.size() != nc)
+        g.cv_rank.size() != nc || g.cv_elem.size() != nc || g.cv_layer.size() != nc ||
+        g.cv_elem_gid.size() != nc || g.cv_attribute.size() != nc || g.cv_centroid.size() != nc ||
+        g.cv_face_off.size() != nc + 1)
         return invalid("inconsistent problem/grid array lengths");
+    if (g.cv_face_off.front() != 0 || g.cv_face_off.back() < 0 ||
+        static_cast<std::size_t>(g.cv_face_off.back()) != g.cv_faces.size())
+        return invalid("invalid CSR endpoints");
+    for (const auto& axis : g.axes) {
+        if (axis.size() < 2)
+            return invalid("invalid grid axes");
+        for (std::size_t i = 0; i < axis.size(); ++i)
+            if (!std::isfinite(axis[i]) || (i && !(axis[i] > axis[i - 1])))
+                return invalid("invalid grid axes");
+    }
     if ((p.preconditioner != "jacobi" && p.preconditioner != "gamg") ||
         (p.stabilization != "diag" && p.stabilization != "scalar") || !(p.rtol > 0 && p.rtol < 1) ||
         !std::isfinite(p.rtol) || p.max_iter <= 0 || (p.T_ref && !std::isfinite(*p.T_ref)))
@@ -83,8 +95,8 @@ Expected<ThermalResult> solve_thermal(const FvGrid& g,
                 const auto& axis = g.axes[face.axis];
                 const auto coordinate = face.side % 2 ? axis.back() : axis.front();
                 match |= b.target == names[face.side] &&
-                         std::abs(face.centroid[face.axis] - coordinate) <=
-                             1e-12 * (axis.back() - axis.front());
+                         (b.face || std::abs(face.centroid[face.axis] - coordinate) <=
+                                        1e-12 * (axis.back() - axis.front()));
             }
             if (b.target.starts_with("layer:")) {
                 auto it = m.attr_table.layers.find(b.target.substr(6));
@@ -393,12 +405,14 @@ Expected<ThermalResult> solve_thermal(const FvGrid& g,
             result.face_flux[f] = static_cast<double>(flux[f][0]);
             if (g.faces[f].hi < 0)
                 ledger(-flux[f][0]);
-            else
-                result.face_jump_max = std::max(
-                    result.face_jump_max,
-                    static_cast<double>(
-                        std::abs(flux[f][0] + flux[f][1]) /
-                        std::max({std::abs(flux[f][0]), std::abs(flux[f][1]), 1e-300L * largest})));
+            else {
+                const auto denominator =
+                    std::max({std::abs(flux[f][0]), std::abs(flux[f][1]), 1e-300L * largest});
+                // Define the indeterminate 0/0 jump as zero for an entirely zero-flux solve.
+                const auto jump =
+                    denominator > 0 ? std::abs(flux[f][0] + flux[f][1]) / denominator : 0;
+                result.face_jump_max = std::max(result.face_jump_max, static_cast<double>(jump));
+            }
         }
         result.heat_in = static_cast<double>(in);
         result.heat_out = static_cast<double>(out);
@@ -409,29 +423,44 @@ Expected<ThermalResult> solve_thermal(const FvGrid& g,
         constexpr int vertices[6][4] = {
             {0, 4, 7, 3}, {1, 2, 6, 5}, {0, 1, 5, 4}, {3, 7, 6, 2}, {0, 3, 2, 1}, {4, 5, 6, 7}};
         for (std::size_t c = 0; c < nc; ++c) {
-            auto e = static_cast<std::size_t>(g.cv_elem[c]);
-            if (8 * e + 8 > m.hex.size())
-                return invalid("invalid CV parent");
-            for (int j = 0; j < 8; ++j) {
-                auto v = m.hex[8 * e + j];
+            std::set<std::size_t> incident;
+            auto add_parent = [&](std::int64_t element) {
+                if (element < 0 || static_cast<std::size_t>(element) >= m.hex.size() / 8)
+                    throw std::runtime_error("INPUT_INVALID: invalid CV parent");
+                for (int j = 0; j < 8; ++j) {
+                    auto v = m.hex[8 * element + j];
+                    if (v < 0 || static_cast<std::size_t>(v) >= nv)
+                        throw std::runtime_error("INPUT_INVALID: invalid parent vertex");
+                    incident.insert(static_cast<std::size_t>(v));
+                }
+            };
+            if (g.constituent_off.size() == nc + 1) {
+                for (auto i = g.constituent_off[c]; i < g.constituent_off[c + 1]; ++i)
+                    add_parent(g.constituent_elem.at(static_cast<std::size_t>(i)));
+            } else {
+                add_parent(g.cv_elem[c]);
+            }
+            for (auto v : incident) {
                 weight[v] += g.cv_volume[c];
                 sum[v] += g.cv_volume[c] * result.T_cell[c];
             }
         }
-        for (std::size_t f = 0; f < nf; ++f)
-            if (g.faces[f].hi < 0 && g.faces[f].side >= 0 && g.faces[f].side < 6) {
-                auto e = static_cast<std::size_t>(g.cv_elem[g.faces[f].lo]);
-                for (int j : vertices[g.faces[f].side]) {
-                    auto v = m.hex[8 * e + j];
-                    if (bc[f].kind == 0) {
-                        dw[v] += g.faces[f].area;
-                        dsum[v] += g.faces[f].area * result.T_face[f];
-                    } else {
-                        bw[v] += g.faces[f].area;
-                        bsum[v] += g.faces[f].area * result.T_face[f];
-                    }
+        for (std::size_t f = 0; f < nf; ++f) {
+            const auto& face = g.faces[f];
+            if (face.hi >= 0 || face.side < 0 || face.side >= 6)
+                continue;
+            const auto e = face.parent_elem >= 0 ? face.parent_elem : g.cv_elem[face.lo];
+            for (int j : vertices[face.side]) {
+                auto v = m.hex[8 * e + j];
+                if (bc[f].kind == 0) {
+                    dw[v] += face.area;
+                    dsum[v] += face.area * result.T_face[f];
+                } else {
+                    bw[v] += face.area;
+                    bsum[v] += face.area * result.T_face[f];
                 }
             }
+        }
         result.T_vertex.resize(nv);
         for (std::size_t v = 0; v < nv; ++v)
             result.T_vertex[v] = static_cast<double>(dw[v] > 0       ? dsum[v] / dw[v]
