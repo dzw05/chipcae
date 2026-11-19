@@ -394,7 +394,11 @@ for tag,context in (('PolyStepCurve','profile'), ('Cutout','profile'),
         if context == 'profile':
             xml = xml.replace('</Polygon></Profile>', f'<{tag}/></Polygon></Profile>')
         elif context == 'copper':
-            xml = xml.replace('<Set>', f'<Set><{tag}/>')
+            # #142 added one <Set> per copper layer; this case needs
+            # one bare element and one defect.
+            xml = xml.replace('<Set>', f'<Set><{tag}/>', 1)
+            check(xml.count(f'<{tag}/>') == 1,
+                  f'bare {tag}: expected one inserted element, got {xml.count(f"<{tag}/>")}')
         else:
             xml = xml.replace('<Ecad>', f'<{tag}/><Ecad>')
         path = b.root/'bare.xml'
