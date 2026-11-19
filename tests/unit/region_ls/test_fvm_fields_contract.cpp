@@ -366,6 +366,69 @@ void offsets(const std::vector<Local>& off, std::size_t rows, std::size_t values
             "fvm-fields: CSR has bounded monotone offsets and exact terminal count");
 }
 
+struct SurfaceAreas {
+    std::array<long double, 3> cartesian{}, embedded{};
+    std::array<long double, 6> openings{};
+};
+
+SurfaceAreas
+surface_areas(const CutLayerArrays& cut, std::size_t row, const std::array<Real, 3>& normal) {
+    // Surface rows belong to cut parents; sub_off separately partitions volume.
+    offsets(cut.sq_off, cut.cut_elem.size(), cut.sq_w.size());
+    SurfaceAreas areas;
+    for (auto q = cut.sq_off[row]; q < cut.sq_off[row + 1]; ++q) {
+        const auto qi = static_cast<std::size_t>(q);
+        const auto side = cut.sq_side[qi];
+        const auto w = cut.sq_w[qi];
+        require(side >= -1 && side <= 5 && std::isfinite(w) && w > 0,
+                "fvm-fields: valid side and positive physical area weight");
+        if (side < 0) {
+            for (std::size_t d = 0; d < 3; ++d)
+                areas.embedded[d] += w * normal[d];
+        } else {
+            const auto side_index = static_cast<std::size_t>(side);
+            areas.cartesian[side_index / 2] += (side % 2 == 0 ? -w : w);
+            areas.openings[side_index] += w;
+        }
+    }
+    return areas;
+}
+
+void check_surface_rows(Checks& checks) {
+    // Synthetic parent-boundary data: unit boxes clipped at x=1/2 and y=1/4.
+    // Partition the first solid into two equal subcells. The current convex
+    // plane cutter cannot emit this layout; this exercises the array consumer.
+    CutLayerArrays cut;
+    cut.cut_elem = {0, 1};
+    cut.sub_off = {0, 2, 3};
+    cut.sub_volfrac = {.25, .25, .25};
+    cut.sub_attribute = {1, 1, 1};
+    cut.sq_off = {0, 6, 12};
+    cut.sq_side = {0, -1, 2, 3, 4, 5, 0, 1, 2, -1, 4, 5};
+    cut.sq_w = {1, 1, .5, .5, .5, .5, .25, .25, 1, 1, .25, .25};
+    cut.exterior_area_vector = {{{-1, 0, 0}}, {{0, -1, 0}}};
+    const std::array<std::array<Real, 3>, 2> normals{{{1, 0, 0}, {0, 1, 0}}};
+    const std::array<std::array<Real, 6>, 2> expected_openings{
+        {{1, 0, .5, .5, .5, .5}, {.25, .25, 1, 0, .25, .25}}};
+    require(cut.cut_elem.size() != cut.sub_volfrac.size(),
+            "fvm-fields: surface row fixture distinguishes parents from subcells");
+    offsets(cut.sub_off, cut.cut_elem.size(), cut.sub_volfrac.size());
+    for (std::size_t row = 0; row < cut.cut_elem.size(); ++row) {
+        const auto areas = surface_areas(cut, row, normals[row]);
+        for (std::size_t side = 0; side < 6; ++side)
+            checks.expect(std::abs(areas.openings[side] - expected_openings[row][side]) <= 1e-12L,
+                          "parent surface openings counted once regardless of subcell count");
+        for (std::size_t d = 0; d < 3; ++d) {
+            checks.expect(std::abs(areas.cartesian[d] - cut.exterior_area_vector[row][d]) <= 1e-12L,
+                          "synthetic Cartesian area equals exterior");
+            checks.expect(std::abs(areas.embedded[d] + cut.exterior_area_vector[row][d]) <= 1e-12L,
+                          "synthetic embedded area equals negative exterior");
+            checks.expect(std::abs(areas.cartesian[d] + areas.embedded[d]) <= 1e-12L,
+                          "synthetic parent surface closes");
+        }
+    }
+}
+
 void check_cut(Checks& checks,
                const HexMeshArrays& original,
                const HexMeshArrays& m,
@@ -385,9 +448,7 @@ void check_cut(Checks& checks,
     offsets(cut.sub_off, cut.cut_elem.size(), cut.sub_volfrac.size());
     require(cut.sub_attribute.size() == cut.sub_volfrac.size(),
             "fvm-fields: subcell attributes match fractions");
-    // Contract is subcell-indexed. This fixture emits one subcell per parent,
-    // so matching cardinality alone cannot distinguish the two index meanings.
-    offsets(cut.sq_off, cut.sub_volfrac.size(), cut.sq_w.size());
+    offsets(cut.sq_off, cut.cut_elem.size(), cut.sq_w.size());
     offsets(cut.vq_off, cut.sub_volfrac.size(), cut.vq_w.size());
     offsets(cut.bq_off, cut.sub_volfrac.size(), cut.bq_w.size());
     require(cut.sq_side.size() == cut.sq_w.size(), "fvm-fields: side records match weights");
@@ -449,7 +510,10 @@ void check_cut(Checks& checks,
         const auto c = cell(m, static_cast<std::size_t>(e));
         const Real hx = c.hi[0] - c.lo[0], hy = c.hi[1] - c.lo[1], hz = c.hi[2] - c.lo[2];
         const long double parent_area = 2.L * (hx * hy + hy * hz + hz * hx);
-        std::array<long double, 3> cartesian{}, embedded{};
+        const auto areas = surface_areas(cut, row, normal.at(e));
+        const auto& cartesian = areas.cartesian;
+        const auto& embedded = areas.embedded;
+        const auto& openings = areas.openings;
         long double solid = 0;
         for (auto sub = cut.sub_off[row]; sub < cut.sub_off[row + 1]; ++sub) {
             const auto si = static_cast<std::size_t>(sub);
@@ -459,22 +523,6 @@ void check_cut(Checks& checks,
             const auto a = cut.sub_attribute[si];
             require(a > 0 && static_cast<std::size_t>(a) <= m.attr_table.entries.size(),
                     "fvm-fields: subcell attribute in bounds");
-            std::array<long double, 6> openings{};
-            for (auto q = cut.sq_off[si]; q < cut.sq_off[si + 1]; ++q) {
-                const auto qi = static_cast<std::size_t>(q);
-                const auto side = cut.sq_side[qi];
-                const auto w = cut.sq_w[qi];
-                require(side >= -1 && side <= 5 && std::isfinite(w) && w > 0,
-                        "fvm-fields: valid side and positive physical area weight");
-                if (side < 0) {
-                    for (std::size_t d = 0; d < 3; ++d)
-                        embedded[d] += w * normal.at(e)[d];
-                } else {
-                    const auto side_index = static_cast<std::size_t>(side);
-                    cartesian[side_index / 2] += (side % 2 == 0 ? -w : w);
-                    openings[side_index] += w;
-                }
-            }
             if (std::find(cut.small_subs.begin(), cut.small_subs.end(), sub) !=
                 cut.small_subs.end()) {
                 ++small_checked;
@@ -516,7 +564,7 @@ void check_cut(Checks& checks,
         for (std::size_t d = 0; d < 3; ++d) {
             const auto exterior = cut.exterior_area_vector[row][d];
             require(std::isfinite(exterior), "fvm-fields: finite exterior area vector");
-            const auto error = std::abs(cartesian[d] + embedded[d] - exterior);
+            const auto error = std::abs(cartesian[d] + embedded[d]);
             max_closure = std::max(max_closure, error / parent_area);
             max_cartesian =
                 std::max(max_cartesian, std::abs(cartesian[d] - exterior) / parent_area);
@@ -541,15 +589,12 @@ void check_cut(Checks& checks,
         std::cout << "fvm-fields: small-subcell merge-target coverage is vacuous\n";
     if (void_gids.empty())
         std::cout << "fvm-fields: void-removal coverage is vacuous\n";
-    std::cout << "fvm-fields: sq_off parent/subcell indexing indistinguishable for one subcell per "
-                 "parent; architect ruling needed\n";
     checks.expect(volume_error <= volume_tolerance,
                   "cut_stats volume matches analytic octagonal prism");
-    // Retain the requested acceptance expression pending an architect ruling:
-    // implementation currently records C in exterior, whereas C + E is zero.
-    checks.expect(max_closure <= 1e-12L,
-                  "cut closure sum(Cartesian + embedded) equals exterior_area_vector (architect "
-                  "ruling needed)");
+    checks.expect(max_cartesian <= 1e-12L, "Cartesian area vector equals exterior_area_vector");
+    checks.expect(max_embedded <= 1e-12L,
+                  "embedded area vector equals negative exterior_area_vector");
+    checks.expect(max_closure <= 1e-12L, "cut closure sum(Cartesian + embedded) equals zero");
 }
 
 void check_reference(Checks& checks) {
@@ -570,6 +615,7 @@ int main() {
         std::cout << std::setprecision(17);
         Checks checks;
         check_reference(checks);
+        checks.run("parent surface rows", [&] { check_surface_rows(checks); });
         GridOptions grid;
         grid.nx = static_cast<Local>(nx);
         grid.ny = static_cast<Local>(ny);
