@@ -4,9 +4,24 @@
 #include <fstream>
 #include <map>
 #include <sstream>
+#include <string_view>
 
 namespace chipcae::geometry::ecad {
 namespace {
+// Matches material/src/schema.cpp:295-302.
+bool valid_material_id(std::string_view id) {
+    if (id.empty())
+        return false;
+    for (const char c : id) {
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-'))
+            return false;
+    }
+    return true;
+}
+// Matches schema/src/stack.cpp:149-150 for Homogenized materials.
+bool missing_homogenized_suffix(std::string_view material) {
+    return !material.ends_with("_eq");
+}
 bool parse_string(const std::string& s, std::size_t& p, std::string& out) {
     if (p >= s.size() || s[p++] != '"')
         return false;
@@ -186,8 +201,28 @@ bool apply_material_map(EcadModel& model, const std::filesystem::path& file, std
     }
     return true;
 }
-// TEST-FIRST placeholder: intentionally performs no validation until the implementation pass.
-bool validate_mapped_targets(const EcadModel&, std::string*) {
+bool validate_mapped_targets(const EcadModel& model, std::string* error) {
+    auto fail = [&](const EcadLayer& layer,
+                    std::string_view field,
+                    const std::string& id,
+                    std::string_view reason) {
+        if (error)
+            *error = "layer '" + layer.name + "' " + std::string(field) + " '" + id +
+                     "': " + std::string(reason);
+        return false;
+    };
+    constexpr std::string_view id_rule = "must match ^[a-z0-9_-]+$ (lowercase letters, digits, '_' "
+                                         "or '-'; no dots, e.g. cu, fr4_eq)";
+    for (const auto& layer : model.layers) {
+        if ((!layer.copper || !layer.material.empty()) && !valid_material_id(layer.material))
+            return fail(layer, "material", layer.material, id_rule);
+        if (layer.copper && !layer.metal.empty() && !valid_material_id(layer.metal))
+            return fail(layer, "metal", layer.metal, id_rule);
+    }
+    for (const auto& layer : model.layers)
+        if (!layer.copper && missing_homogenized_suffix(layer.material))
+            return fail(
+                layer, "material", layer.material, "homogenized material must end with _eq");
     return true;
 }
 } // namespace chipcae::geometry::ecad
