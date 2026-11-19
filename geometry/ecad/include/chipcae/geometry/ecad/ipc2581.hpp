@@ -85,6 +85,7 @@ ImportResult read_ipc2581(const std::filesystem::path& file);
 // Copper layers are rejected. Overlapping conductors are unioned, including annular holes.
 bool rasterize_vias(const EcadModel& model, std::vector<ViaFraction>& cells);
 // Emits stack/0.2 JSON and its binary polyset sidecar.
+// Copper layers require mapped base and metal IDs; call apply_material_map first.
 bool to_stack(const EcadModel& model,
               const std::filesystem::path& json_file,
               const std::filesystem::path& polyset_file,
