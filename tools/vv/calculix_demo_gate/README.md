@@ -1,39 +1,23 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # DEMO-GATE CalculiX independent reference
 
-**Status: reference qualification is incomplete.** No qualified `REFERENCE.json`,
-archived L1 decks, or formal W_bfp/T_max/T_top_min reference values are published.
-The mandatory artifact acceptance currently fails; the candidate numbers below
-must not be used to judge chipcae results.
+**Status: 参考不合格 — prescribed warpage sequence is nonmonotone.**
+L3 mechanics now completes within the unchanged memory guard, and all three
+levels plus the C3D20 cross-check have been solved. The complete candidate
+fails the original monotonicity/order criteria. No qualified `REFERENCE.json`,
+archived L1 decks or formal reference values are published. Both mandatory
+artifact acceptance tests still fail. These candidate values must not be used
+to judge chipcae results; V&V disposition is required under the brief.
 
-Exactly two CTests are registered: `vvccx_reference_json` and `vvccx_regen_l1`.
-Both always include their real-artifact acceptance methods. There is no CMake
-scope switch or environment-variable bypass. A missing or unqualified reference
-fails acceptance. The JSON test uses only the standard library and never skips.
-Only the real L1 solves depend on ccx and its recorded version. Solver-free
-deck, parser and failure regressions run even without ccx or with a version
-mismatch; importing the generator still requires numpy/scipy. The regeneration
-script returns 77 for dependency skips only after running applicable tests, and
-any failure takes precedence. Synthetic validator fixtures and generator
-regressions run in addition to the mandatory artifact checks.
-
-The JSON validator checks archived L1 deck bytes using only the standard library.
-The regeneration script also rebuilds both L2 and L3 decks with `write_decks`,
-without running ccx, and compares the filenames and SHA-256 digests with each
-level's recorded `decks` list. A separate regression uses deck hashes from the
-recorded qualification attempt and rejects an arbitrary 64-hex digest for each
-of the four decks. These deck-byte fixtures contain no QoIs and do not qualify
-or replace the missing reference.
-
-The original attempted archive is `runs/20261119_7a00f37/DEMO-GATE/reference/`
-under the local task archive root. Double-precision evidence is in
-`runs/20261119_97ba560_qualification/DEMO-GATE/reference/` and
-`runs/20261119_97ba560_diagnostics/DEMO-GATE/reference/`; the direct-solver
-retries are in the corresponding `20261119_97ba560_retry` and
-`20261119_97ba560_serial` archives. These contain decks, solver logs, FRD,
-resource measurements, available QoI JSON/CSV and generator snapshots. They
-contain no qualified final reference. L2/L3 decks and solver output stay outside
-Git. Only a reference satisfying all original criteria may be published.
+Exactly two CTests are registered unconditionally: `vvccx_reference_json` and
+`vvccx_regen_l1`. The first uses only the standard library and independently
+recomputes all acceptance criteria; it never skips. The second checks rebuilt
+L2/L3 deck hashes without a solver, tests the generator/parser/failure paths,
+and repeats the L1 solves when CalculiX 2.23, numpy and scipy are available.
+Missing dependencies or a recorded-version mismatch return 77 for the affected
+solve tests, as required by the brief; missing or invalid artifacts fail.
+There is no acceptance bypass. Synthetic validator tests supplement the real
+artifact checks. No acceptance threshold or prescribed mesh level was changed.
 
 The model is derived from the original bytes of
 `examples/demo_gate/{case,stack,materials,profile}.json`; each hash is recorded.
@@ -84,10 +68,11 @@ the full model is `5.3291e-16`, below `1e-10`.
 Two decks are used: `<level>_quarter_thermal.inp` followed by
 `<level>_quarter_mech.inp`. `*TEMPERATURE,FILE=<thermal job>.frd,BSTEP=1`
 was verified on the installed conda-forge `calculix 2.23` package (build
-`pl5321h92dc11e_8`; generation records the package metadata). The external FRD dependency and unchanged numbering were
-verified on L1, L2, and the separate L1 full model. The mechanical deck starts
-at 298.15 K, specifies `*EXPANSION,ZERO=298.15`, and uses a geometrically linear
-`*STATIC` step. No single-deck fallback was required. See the official
+`pl5321h92dc11e_8`; generation records the package metadata). The external FRD
+dependency and unchanged numbering were verified on all three levels, the L3
+element cross-check, and the L1 full model. The mechanical deck starts at
+298.15 K, specifies `*EXPANSION,ZERO=298.15`, and uses geometrically linear
+loaded `*STATIC` steps. No single-deck fallback was required. See the official
 [CalculiX 2.23 manual](https://www.dhondt.de/ccx_2.23.pdf), §7.132
 `*TEMPERATURE`, §7.99 `*NODE PRINT`, and §7.115 `*SECTION PRINT`.
 
@@ -102,7 +87,7 @@ values and truncated records. The binary layouts follow upstream
 [frd.c](https://github.com/Dhondtguido/CalculiX/blob/master/src/frd.c) and
 [frdselect.c](https://github.com/Dhondtguido/CalculiX/blob/master/src/frdselect.c).
 Thermal and structural NDTEMP blocks are compared node by node; maximum transfer
-difference is 0 K for L1 (3046 nodes), L2 (21487), and L1 full (11345).
+difference is 0 K in every model, including all 161005 L3 nodes.
 
 QoIs use the shared `mirror_quarter`, `interp_grid`, `qoi_surface`, and
 `best_fit_plane` implementations. Numpy and SciPy are required. The full
@@ -118,116 +103,134 @@ including when their displacement fields differ by a rigid plane.
 Temperatures below are absolute; convergence, uncertainty, and cross-checks
 use rises above 298.15 K.
 
-**参考值（独立代码）候选，未合格** (double-precision FRD):
+L1/L2 mechanics uses the direct SPOOLES solver. L3 mechanics (both C3D20R and
+C3D20) uses `SOLVER=ITERATIVE CHOLESKY` to avoid the direct factorization's memory
+cost. Plain iterative solution was rejected during diagnostics: on L2 it changed
+W_bfp by about 0.013% relative to SPOOLES, larger than the mesh differences.
 
-| Candidate | W_bfp (m) | W_bfp_nodes (m) | T_max (K) | T_top_min (K) |
+The L3 mechanical deck first initializes at uniform T_ref with no load. Its
+zero displacements and unchanged temperature are covered by a real-solver
+regression. This initialization enables CalculiX's residual-correction loop.
+Both subsequent loaded steps explicitly set `NLGEOM=NO`, use the same thermal
+FRD, and set field residual/correction controls to 1e-10. Repeating the identical
+temperature adds no load and corrects the remaining linear-solve residual;
+CalculiX's absolute correction stopping rule makes field controls alone
+insufficient. The final loaded solution uses the prescribed linear elastic,
+small-strain equations. See the 2.23 manual, §7.24 `*CONTROLS`, §7.123 `*STATIC`
+and §7.125 `*STEP`, and upstream
+[steps.f](https://github.com/Dhondtguido/CalculiX/blob/master/src/steps.f) and
+[checkconvergence.c](https://github.com/Dhondtguido/CalculiX/blob/master/src/checkconvergence.c).
+The regression compares both W_bfp and the complete displacement field against
+SPOOLES at unchanged 1e-6 relative tolerance. An additional L2 diagnostic
+compared the final refined W_bfp with the direct solution: relative difference
+2.7263e-11 at 172044 KiB peak RSS (实测). A failed iterative solver status
+is fatal even if ccx exits zero and writes a fresh FRD.
+
+**参考值（独立代码）候选，未合格**, all temperatures absolute:
+
+| Model | W_bfp (m) | W_bfp_nodes (m) | T_max (K) | T_top_min (K) |
 |---|---:|---:|---:|---:|
-| L1 quarter | 1.025788110523318e-5 | 1.0257312156756893e-5 | 319.37678542108773 | 306.5336523935535 |
-| L2 quarter | 1.0257192383203835e-5 | 1.0256865222950445e-5 | 318.89775194592903 | 306.5356250010884 |
-| L3 quarter | unavailable: structural solver killed | unavailable | 318.89774198527255 | 306.53639218733053 |
-| L1 full | 1.0257881101224625e-5 | 1.0257312159631037e-5 | 319.37678542108773 | 306.5336523935534 |
+| L1 quarter | 1.02578811052332e-05 | 1.02573121567569e-05 | 319.376785421088 | 306.533652393553 |
+| L2 quarter | 1.02571923832038e-05 | 1.02568652229504e-05 | 318.897751945929 | 306.535625001088 |
+| L3 quarter | 1.02675787497901e-05 | 1.02720254640636e-05 | 318.897741985273 | 306.536392187331 |
+| L1 full | 1.02578811012246e-05 | 1.0257312159631e-05 | 319.376785421088 | 306.533652393553 |
+| L3 C3D20 cross | 1.02691544345982e-05 | 1.02696924492876e-05 | 318.897829288905 | 306.534314357145 |
 
-The precision fixes resolve two earlier diagnostic failures:
+Candidate selection and uncertainty (temperature criteria use rises above
+298.15 K; selected temperature candidates below are absolute):
 
-- Both temperature sequences are now strictly monotonic. Their observed orders
-  are 15.5535261201 (T_max) and 1.36245519563 (T_top_min), with L2-to-L3 relative
-  rise changes of 4.8008388053e-7 and 9.1479890873e-5. Both orders are outside
-  [1.5,4.5], so criterion (b) selects the finest temperature, without Richardson
-  extrapolation. These partial thermal observations do not qualify the reference.
-- The L1 full/quarter relative W_bfp difference is 3.9077853066e-10, below the
-  unchanged 1e-6 threshold. Temperature relative differences are 0 and
-  1.3560538103e-14. The original E12.5/order-sensitive postprocessing reported
-  5.4940392481e-6 for warpage. A regression independently constructs equal full
-  and mirrored fields with an added rigid plane to check triangulation invariance.
+| QoI | Observed p | Selected | Candidate value | U_ref = abs(L3 − L2) | L2→L3 relative rise change |
+|---|---:|---|---:|---:|---:|
+| W_bfp_m | undefined (nonmonotone) | finest | 1.02675787497901e-05 | 1.03863665863e-08 | 0.00101156921601 |
+| T_max_K | 15.5535261201 | finest | 318.897741985273 | 9.96065648451e-06 | 4.80083880529e-07 |
+| T_top_min_K | 1.36245519578 | finest | 306.536392187331 | 0.000767186242058 | 9.14798908662e-05 |
 
-L3 mechanics remains the qualification blocker. Fresh direct-SPOOLES attempts
-with the prescribed 37,728-element, 161,005-node mesh both exited -9 (SIGKILL):
+W_bfp decreases from L1 to L2, then increases at L3. Thus criterion (a)
+fails even though its ≤0.2% L2→L3 change bound holds; criterion (b) also
+fails because an observed warpage order cannot be computed. The recorded
+`finest` warpage is a diagnostic fallback, not a qualified reference.
+Temperature orders are outside [1.5,4.5], so their selection rule chooses L3.
+Criterion (c) requires U_ref ≤0.2% of selected warpage or temperature rise.
+All original selection and acceptance rules remain unchanged.
+The complete assessment is (a)=fail, (b)=fail, (c)=pass, (d)=pass, (e)=pass,
+(f)=pass, giving `status: "参考不合格"`.
 
-| Equation-solver threads | Peak RSS (KiB), 实测 | Wall seconds, 实测 | Exit |
-|---|---:|---:|---:|
-| 2 | 7420040 | 245.987516 | -9 |
-| 1 | 5677960 | 854.264720 | -9 |
+The final additional L3 refinement changed W_bfp by 1.1482e-11 m, versus
+1.0386e-8 m for L2→L3. Both loaded-step results show the direction reversal.
+The surface peak also moves between levels (nodal y coordinates 5.5, 5.75
+and 5.625 mm). These observations support a mesh/QoI convergence limitation;
+they do not authorize changing the prescribed meshes or the monotonicity rule.
+The brief explicitly requires reporting a nonmonotone result to V&V.
+No altered mesh sequence, tolerance, acceptance switch or replacement QoI
+was introduced to make the gate pass.
 
-The available evidence establishes the signal and measurements, not its cause.
-Neither recorded peak establishes an 8 GiB guard violation. The guard remains
-unchanged and operational failures do not write a final reference. The L3
-C3D20/C3D15 cross-check has not run, and no complete warpage convergence,
-Richardson selection or uncertainty qualification can be claimed. Qualified JSON,
-archived L1 decks and the real-artifact acceptance remain outstanding.
+| Check | W_bfp relative difference | ΔT_max relative difference | ΔT_top_min relative difference | Limit |
+|---|---:|---:|---:|---:|
+| (e) L1 full/quarter | 3.90777374623e-10 | 0 | 1.35605381026e-14 | 1e-6 |
+| (d) L3 C3D20/C3D20R | 0.000153462159532 | 4.20786188279e-06 | 0.000247762105488 | 0.001 |
 
-A complete run computes p from all three raw QoIs; p in [1.5,4.5] selects
-Richardson, otherwise L3. It records `U_ref=|Q3−Q2|`, evaluates (a)–(f), and
-writes a candidate JSON **only to the chosen work directory**. Invalid numerical
-criteria are retained as `参考不合格` or `需讨论`; only `合格` may subsequently be
-published. Operational failures do not write a final JSON. The unpublished
-DEMO-GATE contract now uses `schema_version: "chipcae.vv.demo_gate.reference/0.1"`
-and `case: "DEMO-GATE"`. This distinct identifier replaces the original brief's
-reuse of the incompatible trilayer identifier `chipcae.vv.reference/0.1`.
-The generator and independent validator agree on it; trilayer artifacts and
-consumers are unchanged.
+Criterion (f) passes: maximum relative source error is 5.3290705182e-16
+(limit 1e-10), and maximum thermal/mechanical temperature-transfer difference
+is 0 K (limit 1e-3 K).
 
 Heat balance is reported, not used as a qualification gate. Bottom outward
 heat is minus the *NODE PRINT bottom RFL total. Top outward heat is the exact
-integral of the quadratic surface-temperature interpolation times h; quad
-corner/midside weights are −1/12 and 1/3, triangle corner/midside weights 0
-and 1/3. *SECTION PRINT additionally archives conduction surface flux for
-inspection. The signed error is `(bottom + top − source)/source`:
+integral of the quadratic surface temperature times h: quad corner/midside
+weights −1/12 and 1/3, triangle weights 0 and 1/3. *SECTION PRINT also archives
+conduction surface flux. Signed error is `(bottom + top − source)/source`.
 
 | Model | Bottom outward (W) | Top convection outward (W) | Signed relative error |
 |---|---:|---:|---:|
-| L1 quarter | 2.483179 | 0.01682075056814808 | −9.9772740825e-8 |
-| L2 quarter | 2.483180 | 0.01682006212595158 | 2.4850380598e-8 |
-| L3 quarter, thermal only | 2.483179 | 0.016820631637814068 | −1.4734487443e-7 |
-| L1 full | 9.932717 | 0.06728300227259232 | 2.2725927806e-10 |
+| L1 quarter | 2.483179 | 0.0168207505681 | -9.97727408247e-08 |
+| L2 quarter | 2.48318 | 0.016820062126 | 2.48503805977e-08 |
+| L3 quarter | 2.483179 | 0.0168206316378 | -1.47344874435e-07 |
+| L1 full | 9.932717 | 0.0672830022726 | 2.27259278063e-10 |
+| L3 C3D20 cross | 2.48318 | 0.0168202562825 | 1.02513011591e-07 |
 
-Resources (**实测**, wall time per external solve, Linux ru_maxrss in KiB):
+Resources (**实测**, wall seconds per external solve; Linux peak RSS in KiB):
 
 | Model | Thermal seconds | Thermal RSS | Mechanical seconds | Mechanical RSS |
 |---|---:|---:|---:|---:|
-| L1 quarter | 1.001148 | 79944 | 1.001206 | 100984 |
-| L2 quarter | 4.003194 | 171884 | 12.007974 | 1266560 |
-| L3 quarter | 68.048121 | 2350940 | failed; retries above | retries above |
-| L1 full | 2.001726 | 79956 | 4.003466 | 507172 |
+| L1 quarter | 1.001397 | 79780 | 1.002425 | 100128 |
+| L2 quarter | 4.003591 | 170844 | 15.009885 | 1267256 |
+| L3 quarter | 90.219338 | 2344308 | 900.962972 | 1201888 |
+| L1 full | 2.002308 | 79596 | 4.002485 | 507192 |
+| L3 C3D20 cross | 149.241918 | 2504048 | 528.018193 | 1473764 |
 
-Each solver runs inside a fresh Python measuring process; measurements are not
-contaminated by earlier solver children. Assembly/results use at most two threads;
-the serial retry uses one equation-solver thread. The worker samples the solver
-and descendants once per second, terminates the
-process group above 8 GiB, and reaps it. Nonzero solver exits, case-insensitive
-`*ERROR`, missing fresh FRD, malformed records, duplicates within a block,
-incomplete node sets, nonfinite fields, and missing mechanical DISP all fail.
-Repeated complete temperature blocks in separate steps remain distinct.
+Each solve runs in a fresh measuring process with at most two assembly/result
+threads. The runner samples solver/descendant RSS once per second and terminates
+and reaps the process group above 8 GiB. Nonzero ccx exits, `*ERROR`, iterative
+nonconvergence, missing fresh FRD, malformed/duplicate/incomplete/nonfinite
+fields and missing DISP fail. Operational failures do not write a final JSON.
+The earlier direct L3 runs ended in SIGKILL; their measured peaks did not
+establish a guard violation. The iterative path completes within the same guard.
 
 The brief supplies a night-run T_max of 318.898 K (2026-11-19, baseline
-5346215). **实测对照** only: candidate L1 differs by +0.478785 K,
-L2 by −0.000248 K, and L3 thermal by −0.000258 K (the supplied night-run
-number has only three decimal places). These supplied night-run
-values are not reference inputs and were not used in the solver or selection.
+5346215). **实测对照** only: the candidate finest thermal result differs by
+-0.000258014727478 K. This supplied, rounded measurement
+was not an input to the reference solve or selection.
 
-To reproduce on a host with CalculiX 2.23, numpy and scipy, set `CHIPCAE_CCX`
-to the installed executable (or leave it unset when `ccx` is on PATH) and set
-`DEMO_GATE_WORK` to an external archive directory. The default local `work/`
-is not ignored by the repository, so the recorded attempts used an external
-work directory without changing `.gitignore`.
+To rebuild, set `CHIPCAE_CCX` to the installed executable (or use `ccx` on
+PATH), and `DEMO_GATE_WORK` to an external archive directory. The repository's
+default local `work/` is not ignored, so use an external directory. L2/L3 decks,
+solver logs, FRD, per-model QoI JSON, native version string, resource records,
+Richardson results and top CSV are archived locally under
+`runs/<date>_<commit>/DEMO-GATE/reference/`; see the task log for the concrete
+qualification archive. They stay outside Git. The work-directory JSON records the
+input and deterministic deck SHA-256 digests and uses the distinct DEMO-GATE
+schema `chipcae.vv.demo_gate.reference/0.1`; trilayer's contract is unchanged.
 
 ```sh
 python3 tools/vv/calculix_demo_gate/generate.py --levels L1 --work "$DEMO_GATE_WORK"
 python3 tools/vv/calculix_demo_gate/generate.py --work "$DEMO_GATE_WORK"
 ```
 
-Recorded outcomes: L1 exit 0; two L1 decks compared byte-for-byte across fresh
-runs with identical QoIs and no complete JSON. The complete three-level command
-and both subsequent L3 mechanics retries exited 1 at the Python driver level.
-Separate L1 full-model execution exited 0. The version query returned
-`This is Version 2.23` (version-only exit 201 is accepted). To reproduce the
-serial-equation-solver attempt, set `CCX_NPROC_EQUATION_SOLVER=1` before the
-same generation command. No grid, constraint or numerical threshold was changed.
+A complete run writes its assessment only to the work directory; publish only
+`status == "合格"` and its L1 decks. Unqualified numerical outcomes remain in
+the work archive. L1-only runs write neither a final JSON nor partial reference.
+The recorded solver is `This is Version 2.23`; version-only exit 201 is accepted.
 
-The branch appends `add_subdirectory(calculix_demo_gate)` in
-`tests/vv/CMakeLists.txt`; the child uses `chipcae_auto_tests` with the original
-vv labels and 600-second timeout. Use the shared build-slot shim on PATH, plain
-command names and at most two build jobs. This box retains the available
-JSONCONS/HDF5 dependencies from the preceding acceptance-test pass:
+Use the shared build-slot shim on PATH, plain command names and two jobs:
 
 ```sh
 cmake -S . -B build-vvccx -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_BUILD_TESTS=ON
@@ -236,39 +239,26 @@ ctest --test-dir build-vvccx -R '^vvccx_(reference_json|regen_l1)$' --output-on-
 ctest --test-dir build-vvccx --output-on-failure -j2
 ```
 
-The deck-byte fixture and its four digest mutations can also run without a
-solver executable:
-
-```sh
-CHIPCAE_CCX=chipcae-deliberately-missing-ccx python3 tests/vv/calculix_demo_gate/test_regen_l1.py -k test_l2_l3_deck_hash_comparison_rejects_arbitrary_digests
-```
+Negative validation covers L3 W_bfp +1%, bad input hashes, forbidden provenance
+paths and incorrect reference type, plus invalid fields and nonfinite values.
+Deck-hash regressions reject arbitrary digests for every L2/L3 deck. The real
+qualified-artifact mutation/restore check remains blocked because there is no
+qualified baseline to restore; synthetic validator mutations do not replace it.
 
 Review-fix verification (2026-11-19): Release configure and build exited 0.
-Focused CTest exited 8: both mandated tests failed on the required missing
-artifact. The JSON module ran eight methods (five passed, three missing-artifact
-failures); regeneration ran seventeen (fifteen passed, two missing-artifact
-failures), including a real L1 solve and the new deck-hash regression. Full
-CTest exited 8: 209 registered, 196 passed, 11 existing skips and the same two
-failures (53.79 s). No other regression was observed. Neither DEMO-GATE CTest
-skipped. No C/C++ files changed;
-clang-format 23.1.5 has an empty applicable file list. Python compilation and
-whitespace checks passed.
+Full CTest exited 8: 209 registered, 196 passed, 11 existing skips, and two
+failures (`vvccx_reference_json`, `vvccx_regen_l1`) due to the required absent
+qualified artifact. The JSON script ran eight methods (five passed, three
+missing-artifact failures); regeneration ran nineteen (seventeen passed, two
+missing-artifact failures), including real L1 solves and both new solver
+regressions. No other regression was observed. Neither DEMO-GATE CTest skipped.
+The complete generation command exited 0 and wrote the unqualified assessment
+only to the work archive. The unchanged independent validator, pointed at that
+archive and its real L1 deck bytes, rejected it specifically for nonmonotone
+warpage. Python compilation and whitespace checks passed; clang-format 23.1.5
+has no applicable changed C/C++ files.
 
-With an intentionally unavailable ccx, fourteen regeneration methods passed,
-the two real L1 methods skipped, and only the missing-reference deck-hash check
-failed (exit 1). Selecting just the deck-byte fixture passed (exit 0); selecting
-just a real L1 method returned 77. A temporary deck-metadata-only JSON exercised
-the artifact-reading hash check without a solver: recorded digests passed, and
-replacing each L2/L3 thermal/mechanical digest with 64 zeroes failed at the
-matching SHA-256 assertion. No reference artifact was published by these checks.
-
-The required real-artifact L3 +1% mutation/restore check cannot run until a
-qualified artifact exists. The same mutation is tested against the synthetic
-validator fixture, alongside bad input hashes, forbidden provenance paths and
-incorrect reference type. This unit coverage does not replace real acceptance.
-
-This card does not change the night driver, chipcae's comparison postprocessing,
-or product code. Loading a qualified reference in the night driver and aligning
-its W_bfp comparison to the same 81×81 algorithm require the follow-up card.
-V&V must resolve L3 mechanics and complete all original checks before this
-reference is used.
+This card does not change the night driver, chipcae comparison postprocessing,
+or product code. Reference qualification remains outstanding pending V&V
+disposition. Loading a qualified reference in the night driver and aligning its
+W_bfp comparison with this 81×81 algorithm require the follow-up card.

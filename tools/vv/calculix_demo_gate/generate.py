@@ -446,7 +446,9 @@ def append_set(lines, name, ids, kind="NSET"):
         lines.append(",".join(map(str, ids[i : i + 16])))
 
 
-def write_decks(work, job, mesh, inputs):
+def write_decks(work, job, mesh, inputs, iterative=None):
+    if iterative is None:
+        iterative = mesh["name"] == "L3"
     nodes, elements = mesh["nodes"], mesh["elements"]
     common = [
         "** SPDX-License-Identifier: Apache-2.0",
@@ -543,14 +545,42 @@ def write_decks(work, job, mesh, inputs):
         append_set(mech, "YSYM", [n for n, xyz in nodes.items() if close(xyz[1], 0)])
         anchor = next(n for n, xyz in nodes.items() if all(close(a, 0) for a in xyz))
         mech += ["*BOUNDARY", "XSYM,1,1", "YSYM,2,2", f"{anchor},3,3"]
-    mech += [
-        "*STEP",
-        "*STATIC",
+    if iterative:
+        # Keep CalculiX's residual-correction loop active without geometric
+        # nonlinearity in the loaded steps. This unloaded, isothermal step has
+        # identically zero displacement; *STEP,NLGEOM=NO then restores the
+        # prescribed small-strain equations (2.23 manual, *STEP).
+        mech += [
+            "*STEP,NLGEOM",
+            "*STATIC,SOLVER=ITERATIVE CHOLESKY",
+            "1.,1.",
+            "*NODE OUTPUT,DOUBLE",
+            "U,NT",
+            "*END STEP",
+        ]
+    loaded_step = [
+        "*STEP,NLGEOM=NO" if iterative else "*STEP",
+        "*STATIC,SOLVER=ITERATIVE CHOLESKY" if iterative else "*STATIC",
+    ]
+    if iterative:
+        loaded_step += [
+            "1.,1.",
+            "*CONTROLS,PARAMETERS=FIELD",
+            "1.e-10,1.e-10,,,1.e-10",
+        ]
+    loaded_step += [
         f"*TEMPERATURE,FILE={job}_thermal.frd,BSTEP=1",
         "*NODE OUTPUT,DOUBLE",
         "U,NT",
         "*END STEP",
     ]
+    mech += loaded_step
+    if iterative:
+        # A second step at the identical temperature corrects the remaining
+        # linear-solve residual. It adds no load. CalculiX also has an absolute
+        # displacement-correction stopping rule, so field controls alone do not
+        # ensure sufficiently accurate fine-grid warpage differences.
+        mech += loaded_step
     paths = []
     for suffix, lines in (("thermal", thermal), ("mech", mech)):
         path = work / f"{job}_{suffix}.inp"
@@ -744,6 +774,9 @@ def measured_solver(work, job, executable):
             raise RuntimeError(
                 f"ccx {job} failed (exit {proc.returncode}):\n{output[-4000:]}"
             )
+        conditions = re.findall(r"error condition \(0=good, 1=bad\)\s*=\s*(\d+)", output)
+        if any(int(condition) != 0 for condition in conditions):
+            raise RuntimeError(f"ccx {job}: iterative solver did not converge")
         if not (work / f"{job}.frd").is_file():
             raise RuntimeError(f"ccx {job} did not write fresh FRD")
         return result

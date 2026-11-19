@@ -75,6 +75,7 @@ class DemoGateRegenTest(unittest.TestCase):
         if self._testMethodName in (
             "test_l1_generator_is_deterministic_without_publishing_reference",
             "test_l1_deck_bytes_and_recomputed_qois",
+            "test_refined_iterative_mechanics_agrees_with_direct_solve",
         ) and dependencies() is None:
             self.skipTest("real L1 solve dependencies unavailable; see dependency diagnostic")
 
@@ -108,7 +109,7 @@ class DemoGateRegenTest(unittest.TestCase):
             "L2": ("c6ffbcf2008a072c3516fc91e79a24781106a1eab663579e2074bf68c9273932",
                    "ac563ae4fdedaeae18b47c59126d1112206d17e04dac003c880351aca5586936"),
             "L3": ("0b3b72e8b8ce33c86cd379b56b47cd8789f0f7d50795881e5b2ff89a2dc4713b",
-                   "0e3c2e5febf962d58b51c34e608e70f508fb2d92d955de6c27c4e30a6b92f30e"),
+                   "82f2855c20ac7290a47f5b81340d9cc98239beecec80b9875fa8ba7ade20e908"),
         }
         for name, digests in hashes.items():
             level = {"name": name, "decks": [
@@ -168,6 +169,48 @@ class DemoGateRegenTest(unittest.TestCase):
             module.main()
         artifact = json.loads((fixture.directory / "REFERENCE.json").read_text())
         fixture.validate_artifact(artifact)
+
+    def test_refined_iterative_mechanics_agrees_with_direct_solve(self):
+        module = self.generator()
+        inputs = module.load_inputs()
+        with tempfile.TemporaryDirectory(prefix="chipcae-demo-gate-refinement-") as directory:
+            work = Path(directory)
+            direct = module.run_model(work, "L1", inputs)
+            direct_displacement = module.parse_results(work / "L1_quarter_mech.frd")["displacement_blocks"][-1]
+            mesh = module.build_mesh(inputs, "L1")
+            decks = module.write_decks(work, "L1_quarter", mesh, inputs, iterative=True)
+            module.run_ccx(work, decks[1].stem)
+            thermal = module.parse_results(decks[0].with_suffix(".frd"))
+            mechanical = module.parse_results(decks[1].with_suffix(".frd"))
+            # The unloaded initialization must not deform or heat the model.
+            self.assertGreaterEqual(len(mechanical["displacement_blocks"]), 3)
+            self.assertLessEqual(max(abs(v) for xyz in mechanical["displacement_blocks"][0].values()
+                                     for v in xyz), 1e-15)
+            self.assertLessEqual(max(abs(t - 298.15) for t in mechanical["temperature_blocks"][0].values()),
+                                 1e-12)
+            refined = module.compute_qoi(thermal, mechanical, mesh, inputs, work, "refined")
+            self.assertLessEqual(abs(refined["W_bfp_m"] - direct["W_bfp_m"]) / direct["W_bfp_m"],
+                                 1e-6)
+            self.assertLessEqual(refined["temperature_transfer"]["max_abs_delta_K"], 1e-3)
+            final_displacement = mechanical["displacement_blocks"][-1]
+            scale = max(abs(v) for xyz in direct_displacement.values() for v in xyz)
+            self.assertLessEqual(max(abs(a - b) for n in direct_displacement
+                                     for a, b in zip(final_displacement[n], direct_displacement[n])) / scale,
+                                 1e-6)
+
+    def test_iterative_nonconvergence_with_fresh_frd_is_rejected(self):
+        module = self.generator()
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            fake = work / "unconverged_ccx"
+            fake.write_text(f"#!{sys.executable}\nfrom pathlib import Path\n"
+                            "Path('probe.frd').write_text('fresh but unconverged')\n"
+                            "print('error condition (0=good, 1=bad) = 1')\n")
+            fake.chmod(0o755)
+            with patch.object(module, "CCX", str(fake)):
+                with self.assertRaisesRegex(RuntimeError, "iterative solver did not converge"):
+                    module.run_ccx(work, "probe")
+            self.assertTrue((work / "probe.failure.json").is_file())
 
     def test_missing_and_invalid_artifacts_fail(self):
         spec = importlib.util.spec_from_file_location(
