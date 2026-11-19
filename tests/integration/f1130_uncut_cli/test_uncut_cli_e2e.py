@@ -683,6 +683,67 @@ class TraceMapReferenceTests(unittest.TestCase):
                     with self.assertRaises(AssertionError):
                         ref.read_hex_mesh(group, stack)
 
+    def test_optional_elem_gid_preserves_partition_alignment(self):
+        import h5py
+        import trace_map_ref as ref
+        stack = synthetic_stack([.001])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'mesh.vtkhdf'
+            write_synthetic_hex(path, stack, patterned=True)
+            with h5py.File(path) as file:
+                expected = ref.read_hex_mesh(file['VTKHDF/hex'], stack)
+            for order in ((0, 1), (1, 0)):
+                for empty_partition in (False, True):
+                    with self.subTest(order=order, empty_partition=empty_partition):
+                        write_synthetic_hex(path, stack, order=order, patterned=True)
+                        with h5py.File(path, 'r+') as file:
+                            group = file['VTKHDF/hex']
+                            del group['CellData/elem_gid']
+                            if empty_partition:
+                                for name, values in dict(NumberOfPoints=[0,8,8],
+                                        NumberOfCells=[0,1,1],
+                                        NumberOfConnectivityIds=[0,8,8],
+                                        Offsets=[0,0,8,0,8]).items():
+                                    del group[name]
+                                    group[name] = values
+                            actual = ref.read_hex_mesh(group, stack)
+                        self.assertNotIn('elem_gid', actual['fields'])
+                        self.assertEqual(actual['bounds'], expected['bounds'])
+                        self.assertEqual(actual['vertices'], expected['vertices'])
+                        ref.compare_aligned(expected, actual, PARALLEL_RTOL)
+
+    def test_missing_elem_gid_keeps_coverage_and_membership_checks(self):
+        import h5py
+        import numpy as np
+        import trace_map_ref as ref
+        stack = synthetic_stack([.001])
+        for defect in ('duplicate_cell', 'missing_cell', 'layer_id'):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'mesh.vtkhdf'
+                write_synthetic_hex(path, stack)
+                with h5py.File(path, 'r+') as file:
+                    group = file['VTKHDF/hex']
+                    del group['CellData/elem_gid']
+                    if defect == 'duplicate_cell':
+                        # Duplicate the first cell without losing either board edge.
+                        for name, values in dict(NumberOfCells=[2,1],
+                                NumberOfConnectivityIds=[16,8],
+                                Connectivity=list(range(8))*3,
+                                Offsets=[0,8,16,0,8], Types=[12,12,12]).items():
+                            del group[name]
+                            group[name] = values
+                        for name in list(group['CellData']):
+                            values = group['CellData/'+name][:]
+                            del group['CellData/'+name]
+                            group['CellData/'+name] = np.concatenate((values[:1],values))
+                    elif defect == 'missing_cell':
+                        group['NumberOfCells'][1] = 0
+                    else:
+                        group['CellData/layer_id'][0] = 2
+                    with self.assertRaisesRegex(AssertionError,
+                            'cell coverage|topology length|layer_id membership'):
+                        ref.read_hex_mesh(group, stack)
+
     def test_distinct_hex_corners_with_crossed_connectivity_are_rejected(self):
         import h5py
         import trace_map_ref as ref

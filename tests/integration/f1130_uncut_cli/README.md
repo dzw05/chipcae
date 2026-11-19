@@ -62,8 +62,13 @@ and uses no Shapely.
 
 VTKHDF decoding respects `NumberOfPoints`, `NumberOfCells` and
 `NumberOfConnectivityIds`: offsets and connectivity restart in each partition.
-Cells are aligned by globally unique `elem_gid`, with complete dense Morton
-column coverage and layer/z membership checked independently. Vertices are
+The [I1 trace-map results contract 1.1](../../../io/trace-map-1.1.md) defines
+the two required coefficient fields and records the existing owner approvals.
+Cells are aligned by globally unique `elem_gid` when exported, with complete
+dense Morton column coverage and layer/z membership checked independently.
+O1 permits omitting hex `elem_gid`; in that case exact rational cell bounds
+provide alignment, with complete, unique coverage and layer/z checks retained.
+Dense coverage belongs to this uncut fixture. Vertices are
 aligned by rational coordinates; repeated boundary temperatures/displacements
 must agree before deduplication. Partition ordering cannot choose the column.
 
@@ -164,13 +169,14 @@ timeouts. A missing MPI launcher fails, and no retired fixture gate suppresses
 configured acceptance.
 
 The records discovery path retains all 12 assertion/verdict tests and includes
-13 reference tests: exact clipping, signed holes and empty copper, binary
+15 reference tests: exact clipping, signed holes and empty copper, binary
 validation and exact fixture areas, Q2 partition/derivative sums (1e-14),
 symmetric assembly (relative 1e-12), analytic single-column and uniform
 multilayer solutions (1e-8 K), forced no-SciPy assembly/solve, hidden-DOF
 recovery, energy (1e-9), Wiener bounds, multiple z cells, partition permutation,
-malformed topology and unsupported outlines. Mutation checks reject duplicate
-or incorrect gids, missing fields/layers, wrong layer-name case, invalid
+malformed topology and unsupported outlines, optional gids with reordered/empty
+partitions, and coverage/membership defects without gids. Mutation checks reject
+duplicate or incorrect gids, missing fields/layers, wrong layer-name case, invalid
 fractions, all-zero In1 copper, wrong conductivity and 1e-6 K temperature errors.
 
 ## Verification (2026-11-19)

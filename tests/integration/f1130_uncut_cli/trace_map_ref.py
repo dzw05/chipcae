@@ -209,7 +209,10 @@ def read_hex_mesh(group, stack, require_fields=True):
     assert len(types) == sum(ncs) and np.all(types == 12), 'non-hex cell type'
     temperatures = read('PointData/T')
     assert temperatures.shape == (len(points),) and np.all(np.isfinite(temperatures)), 'nonfinite temperatures'
-    raw_fields = {n:read('CellData/'+n) for n in ('elem_gid','layer_id','cell_kind')}
+    raw_fields = {n:read('CellData/'+n) for n in ('layer_id','cell_kind')}
+    if 'CellData/elem_gid' in group:
+        raw_fields['elem_gid'] = read('CellData/elem_gid')
+    # Coefficient layouts and acceptance semantics: io/trace-map-1.1.md (I1 1.1).
     for name in ('copper_fraction','conductivity_diag'):
         if require_fields or 'CellData/'+name in group:
             raw_fields[name] = read('CellData/'+name)
@@ -218,8 +221,9 @@ def read_hex_mesh(group, stack, require_fields=True):
         shape = (count,3) if name == 'conductivity_diag' else (count,)
         assert a.shape == shape, f'invalid {name} shape'
     assert np.all(raw_fields['cell_kind'] == 0), 'nonzero hex cell_kind'
-    gids = raw_fields['elem_gid']
-    assert np.issubdtype(gids.dtype,np.integer) and len(set(gids)) == count, 'duplicate/invalid elem_gid'
+    if 'elem_gid' in raw_fields:
+        gids = raw_fields['elem_gid']
+        assert np.issubdtype(gids.dtype,np.integer) and len(set(gids)) == count, 'duplicate/invalid elem_gid'
     assert np.issubdtype(raw_fields['layer_id'].dtype,np.integer), 'invalid layer_id type'
     vertex_values, vertex_u, bounds = {}, {}, []
     displacement = read('PointData/U')
@@ -263,8 +267,16 @@ def read_hex_mesh(group, stack, require_fields=True):
     axes = [sorted({b[d] for b in bounds} | {b[d+3] for b in bounds}) for d in range(3)]
     expected = tensor_mesh(stack,len(axes[0])-1,len(axes[1])-1,axes[2])
     assert axes == expected['axes'], 'unexpected mesh axes/outline'
-    order = np.argsort(gids)
-    assert np.array_equal(gids[order],expected['gids']), 'incomplete cell coverage'
+    if 'elem_gid' in raw_fields:
+        order = np.argsort(gids)
+        assert np.array_equal(gids[order],expected['gids']), 'incomplete cell coverage'
+    else:
+        # elem_gid is optional in O1. Identify cells by their exact physical
+        # bounds while preserving complete, unique coverage of this uncut case.
+        by_bounds = {box:i for i,box in enumerate(bounds)}
+        assert (len(by_bounds) == len(bounds) == len(expected['bounds'])
+                and set(by_bounds) == set(expected['bounds'])), 'incomplete/duplicate cell coverage'
+        order = np.array([by_bounds[box] for box in expected['bounds']],dtype=int)
     aligned = [bounds[i] for i in order]
     assert aligned == expected['bounds'], 'elem_gid/Morton column or z membership mismatch'
     assert np.array_equal(raw_fields['layer_id'][order],expected['layer_ids']), 'layer_id membership'

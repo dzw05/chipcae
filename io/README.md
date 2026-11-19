@@ -8,6 +8,11 @@
 
 ## O1 results contract
 
+The additive [I1 trace-map results contract 1.1](trace-map-1.1.md) declares
+`copper_fraction` and `conductivity_diag`, their layouts, selection rules and
+acceptance semantics, with the existing owner sign-offs. It retains the O1
+manifest version and optional hex `elem_gid` behaviour described below.
+
 `chipcae::io::ResultsWriter` (`vtkhdf_results.hpp`) accepts rank-local arrays without
 MFEM dependencies. Enable `CHIPCAE_ENABLE_HDF5`; MPI support uses `MPI_COMM_WORLD`
 when initialized. All ranks call the constructor, `write_step`, and `finalize` in
