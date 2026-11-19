@@ -178,6 +178,8 @@ class DemoGateRegenTest(unittest.TestCase):
                         self.assert_regenerated_deck_hashes(bad)
 
     def test_l1_generator_is_deterministic_without_publishing_reference(self):
+        from tests.vv.calculix_demo_gate.test_reference_json import DemoGateReferenceTest
+
         module = self.generator()
         with tempfile.TemporaryDirectory(prefix="chipcae-demo-gate-generator-") as directory:
             work = Path(directory)
@@ -189,6 +191,9 @@ class DemoGateRegenTest(unittest.TestCase):
             self.assertNotIn("*ERROR", (result.stdout + result.stderr).upper())
             self.assertFalse((work / "REFERENCE.json").exists())
             candidate = json.loads((work / "L1_quarter.json").read_text())
+            # Validate real solver evidence independently of the generator;
+            # a single level does not establish reference qualification.
+            self.assertTrue(DemoGateReferenceTest().evidence(candidate, 0.25))
             inputs = module.load_inputs()
             regenerated = work / "regenerated"
             regenerated.mkdir()

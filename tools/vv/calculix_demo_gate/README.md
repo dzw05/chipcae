@@ -247,8 +247,11 @@ python3 tests/vv/calculix_demo_gate/test_regen_l1.py
 
 Negative validation covers L3 W_bfp +1%, bad input hashes, forbidden provenance
 paths and incorrect reference type, plus invalid fields and nonfinite values.
-Deck-hash regressions reject arbitrary digests for every L2/L3 deck. The real
-qualified-artifact mutation/restore check remains blocked because there is no
+Deck-hash regressions reject arbitrary digests for every L2/L3 deck. The real L1
+generator regression also applies the independent validator to emitted
+heat-source, temperature-transfer, resource and signed heat-balance evidence.
+This checks real solver evidence without establishing three-level qualification.
+The real qualified-artifact mutation/restore check remains blocked because there is no
 qualified baseline to restore; synthetic validator mutations do not replace it.
 
 The earlier complete generation command exited 0 and wrote the unqualified
