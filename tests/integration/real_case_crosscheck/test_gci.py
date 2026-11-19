@@ -146,6 +146,22 @@ class GciTests(unittest.TestCase):
         self.assertEqual(result["status"], "monotone")
         self.assertLessEqual(abs(result["p"] - 2), 1e-12)
 
+    def test_exact_zero_difference_is_flat_even_if_other_difference_overflows(self):
+        for phi in ((-1e308, 1e308, 1e308), (-1e308, -1e308, 1e308)):
+            with self.subTest(phi=phi):
+                result = self.gci((1.0, 2.0, 4.0), phi)
+                self.assertEqual(result["status"], "flat")
+                self.assertEqual(result["iterations"], 0)
+                for key in DERIVED:
+                    self.assertIsNone(result[key], key)
+
+    def test_underflowed_difference_ratio_has_zero_sign_and_no_convergence(self):
+        result = self.gci((1.0, 2.0, 4.0), (1e300, 0.0, 1e-300))
+        self.assertEqual(result["status"], "no_convergence")
+        self.assertEqual(result["s"], 0)
+        for key in DERIVED:
+            self.assertIsNone(result[key], key)
+
     def test_one_update_on_unequal_ratios_exhausts_iteration_budget(self):
         h = (0.010, 0.0137, 0.0193)
         result = self.gci(h, [1 - 0.3 * x**1.5 for x in h], max_iter=1)
