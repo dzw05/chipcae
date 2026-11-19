@@ -239,7 +239,7 @@ class DemoGateReferenceTest(unittest.TestCase):
         self.fields(data, required, "REFERENCE")
         self.finite_tree(data)
         serialized = json.dumps(data, ensure_ascii=False)
-        for forbidden in ("/" + "workspace", "/" + "home", "/" + "Users", "demo-1214"):
+        for forbidden in ("/" + "workspace", "/" + "home", "/" + "Users", "demo-1214", "demo1214"):
             self.assertNotIn(forbidden, serialized)
         for key, value in {
             "SPDX-License-Identifier": "Apache-2.0", "schema_version": "chipcae.vv.demo_gate.reference/0.1",
@@ -396,7 +396,7 @@ class DemoGateReferenceTest(unittest.TestCase):
         data = self.load_artifact()
         self.validate_artifact(data)
         for mutation in ("L3 warpage +1%", "stack hash", "reference type",
-                         "workspace", "home", "Users"):
+                         "workspace", "home", "Users", "demo-1214", "demo1214"):
             with self.subTest(mutation=mutation):
                 bad = copy.deepcopy(data)
                 if mutation == "L3 warpage +1%":
@@ -405,6 +405,8 @@ class DemoGateReferenceTest(unittest.TestCase):
                     bad["inputs_sha256"]["stack"] = "0" * 64
                 elif mutation == "reference type":
                     bad["reference_type"] = "解析"
+                elif mutation in ("demo-1214", "demo1214"):
+                    bad["host"] = mutation
                 else:
                     bad["host"] = "/" + mutation + "/x"
                 with self.assertRaises(AssertionError):

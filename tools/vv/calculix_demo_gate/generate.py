@@ -23,6 +23,7 @@ import signal
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 from collections import Counter
 from pathlib import Path
@@ -1054,7 +1055,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--levels", default="L1,L2,L3")
     parser.add_argument(
-        "--work", type=Path, default=Path(__file__).resolve().parent / "work"
+        "--work", type=Path,
+        help="solver output directory (default: a new system temporary directory)",
     )
     args = parser.parse_args()
     names = args.levels.split(",")
@@ -1062,8 +1064,9 @@ def main():
         names and len(names) == len(set(names)) and set(names) <= LEVELS.keys(),
         "invalid levels",
     )
-    work = args.work.resolve()
+    work = args.work.resolve() if args.work else Path(tempfile.mkdtemp(prefix="chipcae-demo-gate-"))
     work.mkdir(parents=True, exist_ok=True)
+    print(f"Working directory: {work}", flush=True)
     # Never leave a stale reference when an operation fails or only L1 is rebuilt.
     (work / "REFERENCE.json").unlink(missing_ok=True)
     inputs = load_inputs()

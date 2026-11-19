@@ -146,6 +146,15 @@ The other criteria passed in that attempt; the full assessment remains subject
 to V&V disposition. All original selection rules, acceptance thresholds,
 mesh levels and QoI definitions are retained.
 
+A current-code recheck reproduced all five archived models' deck bytes and
+recomputed their QoIs from double FRD. Fresh L1/L2 solves reproduced their
+recorded QoIs within the unchanged regeneration tolerance. The reversal also
+occurs in displacement differences between two fixed top nodes shared by all
+three meshes, before grid interpolation. The archived final L3 residual
+correction is much smaller than the reversal. These checks provide no numerical
+correction that qualifies the prescribed sequence; the V&V disposition remains
+outstanding. No status or artifact edit can supply the missing convergence.
+
 Unqualified QoI tables, selection/uncertainty results, comparison deltas and
 numerical diagnostics are kept only in the external qualification archive and
 a clearly marked non-authoritative qualification note alongside the task log.
@@ -179,8 +188,9 @@ The earlier direct L3 runs ended in SIGKILL; their measured peaks did not
 establish a guard violation. The iterative path completes within the same guard.
 
 To rebuild, set `CHIPCAE_CCX` to the installed executable (or use `ccx` on
-PATH), and `DEMO_GATE_WORK` to an external archive directory. The repository's
-default local `work/` is not ignored, so use an external directory. L2/L3 decks,
+PATH), and `DEMO_GATE_WORK` to an external archive directory. Without `--work`,
+the generator creates a new system temporary directory and prints its path;
+pass `--work` explicitly to retain results in a chosen archive. L2/L3 decks,
 solver logs, FRD, per-model QoI JSON, native version string, resource records,
 Richardson results and top CSV are archived locally under
 `runs/<date>_<commit>/DEMO-GATE/reference/`; see the task log for the concrete
@@ -218,7 +228,8 @@ python3 tests/vv/calculix_demo_gate/test_regen_l1.py
 ```
 
 Negative validation covers L3 W_bfp +1%, bad input hashes, forbidden provenance
-paths and incorrect reference type, plus invalid fields and nonfinite values.
+paths (including both prohibited case-name spellings) and incorrect reference
+type, plus invalid fields and nonfinite values.
 Deck-hash regressions reject arbitrary digests for every L2/L3 deck. The real L1
 generator regression also applies the independent validator to emitted
 heat-source, temperature-transfer, resource and signed heat-balance evidence.

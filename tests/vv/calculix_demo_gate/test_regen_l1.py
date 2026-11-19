@@ -231,6 +231,24 @@ class DemoGateRegenTest(unittest.TestCase):
         artifact = json.loads((fixture.directory / "REFERENCE.json").read_text())
         fixture.validate_artifact(artifact)
 
+    def test_default_work_uses_an_external_temporary_directory(self):
+        module = self.generator()
+        with tempfile.TemporaryDirectory(prefix="chipcae-demo-gate-default-") as directory:
+            temporary = Path(directory) / "temporary"
+            temporary.mkdir()
+            # Relocate the script for the old default so a failing regression
+            # cannot leave solver output in the actual source tree.
+            with patch.object(module, "__file__", str(Path(directory) / "source/generate.py")), patch.object(
+                tempfile, "tempdir", str(temporary)
+            ), patch.object(sys, "argv", [str(GENERATOR), "--levels", "L1"]), patch.object(
+                module, "ccx_version", return_value="This is Version 2.23"
+            ), patch.object(module, "run_model", return_value={}) as solve:
+                module.main()
+            work = solve.call_args.args[0]
+            self.assertEqual(work.parent, temporary)
+            self.assertTrue((work / "calculix-version.txt").is_file())
+            self.assertFalse((work / "REFERENCE.json").exists())
+
     def test_refined_iterative_mechanics_agrees_with_direct_solve(self):
         module = self.generator()
         inputs = module.load_inputs()
