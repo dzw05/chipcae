@@ -287,6 +287,8 @@ void check_floating(const mesh::HexMeshArrays& arrays,
         }
         return e;
     };
+    // Tensor-grid hex indices address the MFEM mesh vertices copied from arrays.vertices;
+    // node_gid has one entry per vertex. Q2-only DOFs are added by the FE space below.
     // Connectivity is by vertex identity, including single-node contact.
     // Equal coordinates with distinct vertex indices never join components.
     std::vector<std::size_t> first(arrays.node_gid.size(), count);
@@ -427,8 +429,12 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             layer_names.push_back(layer.name);
         for (const auto& [name, id] : arrays.attr_table.materials)
             material_names.at(id - 1) = name;
-        io::ResultsWriter writer(
-            output, inputs.stack_path, layer_names, material_names, inputs.fields);
+        io::ResultsWriter writer(output,
+                                 inputs.stack_path,
+                                 layer_names,
+                                 material_names,
+                                 inputs.fields,
+                                 inputs.mechanical);
         io::ResultsWriter::MeshSummary summary{};
         summary.nx0 = arrays.grid_report.level_axes.front()[0].size() - 1;
         summary.ny0 = arrays.grid_report.level_axes.front()[1].size() - 1;
@@ -619,78 +625,82 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                 mixtures[a] = mixture(m, m, 0);
         }
         Array<int> mechanical_essential;
-        if (inputs.fixed.empty()) {
-            std::set<int> candidates;
-            std::set<int> cut_cells;
-            if (clipped)
-                cut_cells.insert(clipped->cut_elem.begin(), clipped->cut_elem.end());
-            for (int e = 0; e < mesh.GetNE(); ++e)
-                if (!cut_cells.contains(e)) {
-                    Array<int> vertices;
-                    mesh.GetElementVertices(e, vertices);
-                    for (int v : vertices)
-                        candidates.insert(v);
-                }
-            // Choose three axis-aligned, non-collinear interior regular-cell
-            // vertices on one z plane, matching the constrained components.
-            int anchor = -1, along_x = -1, along_y = -1;
-            for (int a : candidates) {
-                const double* p = mesh.GetVertex(a);
-                for (int b : candidates) {
-                    const double* q = mesh.GetVertex(b);
-                    if (q[2] == p[2] && q[1] == p[1] && q[0] > p[0])
-                        along_x = b;
-                    if (q[2] == p[2] && q[0] == p[0] && q[1] > p[1])
-                        along_y = b;
-                }
-                if (along_x >= 0 && along_y >= 0) {
-                    anchor = a;
-                    break;
-                }
-                along_x = along_y = -1;
-            }
-            if (anchor < 0)
-                throw InputError(ErrorCode::INPUT_INVALID,
-                                 "3-2-1 requires three non-collinear vertices of fully interior "
-                                 "regular cells (six DOFs)");
-            for (auto [v, count] :
-                 {std::pair{anchor, 3}, std::pair{along_x, 2}, std::pair{along_y, 1}}) {
-                Array<int> dofs;
-                vector.GetVertexVDofs(v, dofs);
-                for (int c = 3 - count; c < 3; ++c)
-                    mechanical_essential.Append(dofs[c]);
-            }
-            mechanical_essential.Sort();
-            mechanical_essential.Unique();
-            if (mechanical_essential.Size() != 6)
-                throw InputError(ErrorCode::INPUT_INVALID, "3-2-1 must constrain exactly six DOFs");
-            emit(io::LogLine{1, rank, "3-2-1 constrained_dofs=6 (3+2+1)", "", 0});
-        } else {
-            Array<int> all(mesh.bdr_attributes.Max());
-            all = 0;
-            for (const auto& requested : inputs.fixed)
-                for (const auto& target : resolve(requested)) {
-                    if (target.starts_with("layer:")) {
-                        for (int e = 0; e < mesh.GetNE(); ++e)
-                            if (arrays.attr_table.entries[arrays.attribute[e] - 1].layer ==
-                                target.substr(6)) {
-                                Array<int> dofs;
-                                vector.GetElementVDofs(e, dofs);
-                                mechanical_essential.Append(dofs);
-                            }
-                    } else {
-                        auto marker = boundary(arrays, mesh, target, all.Size());
-                        for (int i = 0; i < all.Size(); ++i)
-                            all[i] |= marker[i];
+        if (inputs.mechanical) {
+            if (inputs.fixed.empty()) {
+                std::set<int> candidates;
+                std::set<int> cut_cells;
+                if (clipped)
+                    cut_cells.insert(clipped->cut_elem.begin(), clipped->cut_elem.end());
+                for (int e = 0; e < mesh.GetNE(); ++e)
+                    if (!cut_cells.contains(e)) {
+                        Array<int> vertices;
+                        mesh.GetElementVertices(e, vertices);
+                        for (int v : vertices)
+                            candidates.insert(v);
                     }
+                // Choose three axis-aligned, non-collinear interior regular-cell
+                // vertices on one z plane, matching the constrained components.
+                int anchor = -1, along_x = -1, along_y = -1;
+                for (int a : candidates) {
+                    const double* p = mesh.GetVertex(a);
+                    for (int b : candidates) {
+                        const double* q = mesh.GetVertex(b);
+                        if (q[2] == p[2] && q[1] == p[1] && q[0] > p[0])
+                            along_x = b;
+                        if (q[2] == p[2] && q[0] == p[0] && q[1] > p[1])
+                            along_y = b;
+                    }
+                    if (along_x >= 0 && along_y >= 0) {
+                        anchor = a;
+                        break;
+                    }
+                    along_x = along_y = -1;
                 }
-            Array<int> boundary_dofs;
-            vector.GetEssentialTrueDofs(all, boundary_dofs);
-            mechanical_essential.Append(boundary_dofs);
-            mechanical_essential.Sort();
-            mechanical_essential.Unique();
+                if (anchor < 0)
+                    throw InputError(
+                        ErrorCode::INPUT_INVALID,
+                        "3-2-1 requires three non-collinear vertices of fully interior "
+                        "regular cells (six DOFs)");
+                for (auto [v, count] :
+                     {std::pair{anchor, 3}, std::pair{along_x, 2}, std::pair{along_y, 1}}) {
+                    Array<int> dofs;
+                    vector.GetVertexVDofs(v, dofs);
+                    for (int c = 3 - count; c < 3; ++c)
+                        mechanical_essential.Append(dofs[c]);
+                }
+                mechanical_essential.Sort();
+                mechanical_essential.Unique();
+                if (mechanical_essential.Size() != 6)
+                    throw InputError(ErrorCode::INPUT_INVALID,
+                                     "3-2-1 must constrain exactly six DOFs");
+                emit(io::LogLine{1, rank, "3-2-1 constrained_dofs=6 (3+2+1)", "", 0});
+            } else {
+                Array<int> all(mesh.bdr_attributes.Max());
+                all = 0;
+                for (const auto& requested : inputs.fixed)
+                    for (const auto& target : resolve(requested)) {
+                        if (target.starts_with("layer:")) {
+                            for (int e = 0; e < mesh.GetNE(); ++e)
+                                if (arrays.attr_table.entries[arrays.attribute[e] - 1].layer ==
+                                    target.substr(6)) {
+                                    Array<int> dofs;
+                                    vector.GetElementVDofs(e, dofs);
+                                    mechanical_essential.Append(dofs);
+                                }
+                        } else {
+                            auto marker = boundary(arrays, mesh, target, all.Size());
+                            for (int i = 0; i < all.Size(); ++i)
+                                all[i] |= marker[i];
+                        }
+                    }
+                Array<int> boundary_dofs;
+                vector.GetEssentialTrueDofs(all, boundary_dofs);
+                mechanical_essential.Append(boundary_dofs);
+                mechanical_essential.Sort();
+                mechanical_essential.Unique();
+            }
+            check_floating(arrays, vector, mechanical_essential);
         }
-        check_floating(arrays, vector, mechanical_essential);
         state(io::State::Value::running);
         auto solve = [&](BilinearForm& form,
                          LinearForm& rhs,
@@ -876,28 +886,31 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             for (const auto& load : inputs.loads)
                 if (load.type == "uniform_temperature")
                     temperature = load.T;
-        AttributeCoefficient l(lambda), m(mu), s(stress, &temperature, inputs.T_ref);
-        BilinearForm form(&vector);
-        if (has_copper)
-            form.AddDomainIntegrator(bilinear(new MixtureElasticity(mixtures)));
-        else
-            form.AddDomainIntegrator(bilinear(new ElasticityIntegrator(l, m)));
-        LinearForm rhs(&vector);
-        if (has_copper)
-            rhs.AddDomainIntegrator(linear(new MixtureForce(mixtures, temperature, inputs.T_ref)));
-        else
-            rhs.AddDomainIntegrator(linear(new ThermalForce(s)));
-        std::vector<std::array<double, 3>> mechanical_scale(na);
-        for (std::size_t a = 0; a < na; ++a)
-            if (used[a])
-                mechanical_scale[a] = {
-                    mixtures[a].C(0, 0), mixtures[a].C(1, 1), mixtures[a].C(2, 2)};
-        if (clipped)
-            form.AddInteriorFaceIntegrator(
-                new fem::GhostPenalty(arrays, *clipped, mechanical_scale, inputs.ghost_penalty, 3));
-        solve(form, rhs, displacement, mechanical_essential, "U");
-        if (stop())
-            return 0;
+        if (inputs.mechanical) {
+            AttributeCoefficient l(lambda), m(mu), s(stress, &temperature, inputs.T_ref);
+            BilinearForm form(&vector);
+            if (has_copper)
+                form.AddDomainIntegrator(bilinear(new MixtureElasticity(mixtures)));
+            else
+                form.AddDomainIntegrator(bilinear(new ElasticityIntegrator(l, m)));
+            LinearForm rhs(&vector);
+            if (has_copper)
+                rhs.AddDomainIntegrator(
+                    linear(new MixtureForce(mixtures, temperature, inputs.T_ref)));
+            else
+                rhs.AddDomainIntegrator(linear(new ThermalForce(s)));
+            std::vector<std::array<double, 3>> mechanical_scale(na);
+            for (std::size_t a = 0; a < na; ++a)
+                if (used[a])
+                    mechanical_scale[a] = {
+                        mixtures[a].C(0, 0), mixtures[a].C(1, 1), mixtures[a].C(2, 2)};
+            if (clipped)
+                form.AddInteriorFaceIntegrator(new fem::GhostPenalty(
+                    arrays, *clipped, mechanical_scale, inputs.ghost_penalty, 3));
+            solve(form, rhs, displacement, mechanical_essential, "U");
+            if (stop())
+                return 0;
+        }
         // Evaluate summaries on all Q2 nodes, including midside/face/interior nodes.
         GridFunction coordinates(&vector);
         VectorFunctionCoefficient position(3, [](const Vector& x, Vector& v) { v = x; });
@@ -946,12 +959,12 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             for (int c = 0; c < 3; ++c)
                 mag += std::pow(displacement[vector.DofToVDof(i, c)], 2);
             umax = std::max(umax, std::sqrt(mag));
-            if (std::abs(z - arrays.axes[2].back()) < 1e-13) {
+            if (inputs.mechanical && std::abs(z - arrays.axes[2].back()) < 1e-13) {
                 double w = displacement[vector.DofToVDof(i, 2)];
                 add_top(x, y, w);
             }
         }
-        if (clipped)
+        if (inputs.mechanical && clipped)
             for (std::size_t s = 0; s < clipped->cut_elem.size(); ++s) {
                 int e = clipped->cut_elem[s];
                 auto* t = mesh.GetElementTransformation(e);
@@ -968,17 +981,19 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                     add_top(x[0], x[1], u[2]);
                 }
             }
-        if (top.size() < 3)
-            throw InputError(ErrorCode::INPUT_INVALID,
-                             "insufficient top-domain samples for plane removal");
-        Vector plane(3);
-        DenseMatrixInverse inverse(normal);
-        inverse.Mult(fit_rhs, plane);
         double lo = std::numeric_limits<double>::infinity(), hi = -lo;
-        for (const auto& p : top) {
-            double w = p[2] - plane[0] - plane[1] * p[0] - plane[2] * p[1];
-            lo = std::min(lo, w);
-            hi = std::max(hi, w);
+        if (inputs.mechanical) {
+            if (top.size() < 3)
+                throw InputError(ErrorCode::INPUT_INVALID,
+                                 "insufficient top-domain samples for plane removal");
+            Vector plane(3);
+            DenseMatrixInverse inverse(normal);
+            inverse.Mult(fit_rhs, plane);
+            for (const auto& p : top) {
+                double w = p[2] - plane[0] - plane[1] * p[0] - plane[2] * p[1];
+                lo = std::min(lo, w);
+                hi = std::max(hi, w);
+            }
         }
         io::ResultsStep result;
         result.cut_as_hex = inputs.cut_as_hex;
@@ -1019,15 +1034,18 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                 part.layer_id.push_back(static_cast<int>(it - inputs.stack.layers.begin()) + 1);
             }
         writer.write_step(0, 0, result);
-        writer.add_summary(
-            "warpage_pv",
-            hi - lo,
-            "m",
-            0,
-            clipped ? "Q2 top-domain nodes and mesh cut-top quadrature; least-squares plane removal"
+        if (inputs.mechanical)
+            writer.add_summary(
+                "warpage_pv",
+                hi - lo,
+                "m",
+                0,
+                clipped
+                    ? "Q2 top-domain nodes and mesh cut-top quadrature; least-squares plane removal"
                     : "Q2 top nodes; least-squares plane removal");
         writer.add_summary("T_max", tmax, "K", 0);
-        writer.add_summary("U_mag_max", umax, "m", 0);
+        if (inputs.mechanical)
+            writer.add_summary("U_mag_max", umax, "m", 0);
         writer.finalize();
         emit(io::OutputAvailable{window,
                                  0,

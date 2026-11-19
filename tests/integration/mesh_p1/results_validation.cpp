@@ -45,6 +45,18 @@ int main(int argc, char** argv) {
         p.cell_kind = {1};
         p.volume = {1};
         writer.write_step(0, 0, step); // Geometry-only cut fields are optional.
+        auto require_missing_summary_rejection = [](ResultsWriter& result_writer) {
+            bool rejected = false;
+            try {
+                result_writer.finalize();
+            } catch (const std::exception&) {
+                rejected = true;
+            }
+            if (!rejected)
+                throw std::runtime_error("missing solver summary accepted");
+        };
+        writer.add_summary("T_max", 300, "K", 0);
+        require_missing_summary_rejection(writer);
         // Selection applies to physical fields; cut topology metadata stays required.
         auto selected_run = run / "selected";
         ResultsWriter selected_writer(
@@ -57,6 +69,16 @@ int main(int argc, char** argv) {
         selected_writer.add_summary("T_max", 300, "K", 0);
         selected_writer.add_summary("U_mag_max", 0, "m", 0);
         selected_writer.finalize();
+        ResultsWriter thermal_writer(run / "thermal",
+                                     std::string(K1_ROOT) + "/tools/samples/s1.stack.json",
+                                     {},
+                                     {},
+                                     {"T"},
+                                     false);
+        thermal_writer.write_step(0, 0, selected_step);
+        require_missing_summary_rejection(thermal_writer);
+        thermal_writer.add_summary("T_max", 300, "K", 0);
+        thermal_writer.finalize();
         if (rank == 0) {
             auto file =
                 H5Fopen((selected_run / "out/step-0.vtkhdf").c_str(), H5F_ACC_RDONLY, H5P_DEFAULT);

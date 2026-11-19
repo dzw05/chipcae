@@ -119,7 +119,8 @@ and ResultWriter APIs remain available unchanged.
 Every published step requires solver summaries warpage_pv (m), T_max (K), and
 U_mag_max (m). warpage_pv must come from the solver's full Q2 field with the
 best-fit plane removed; it cannot be reconstructed faithfully from this vertex
-output. sigma_vm is reserved in the manifest and absent from step data.
+output. Thermal-only runs pass `mechanical=false` to `ResultsWriter` and require
+only T_max. sigma_vm is reserved in the manifest and absent from step data.
 
 Specification: https://docs.vtk.org/en/latest/vtk_file_formats/vtkhdf_file_format/vtkhdf_specifications.html
 The target reader baseline is VTK 9.7.2 with independent outward faces.

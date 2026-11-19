@@ -329,16 +329,16 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
             }
             invalid("invalid target: " + target);
         };
-        bool mech = false, temp_from = false;
+        bool temp_from = false;
         for (const auto& physics : c.at("physics").array_range()) {
             auto id = physics.at("id").as<std::string>();
             if (id == "thermal" && !out.thermal &&
                 physics.at("solver").as<std::string>() == "fem.conduction" &&
                 physics.at("mode").as<std::string>() == "steady")
                 out.thermal = true;
-            else if (id == "mech" && !mech &&
+            else if (id == "mech" && !out.mechanical &&
                      physics.at("solver").as<std::string>() == "fem.solid") {
-                mech = true;
+                out.mechanical = true;
                 if (physics.contains("temp_from")) {
                     if (physics.at("temp_from").as<std::string>() != "thermal")
                         invalid("invalid temp_from");
@@ -384,29 +384,31 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
             }
             out.loads.push_back(load);
         }
-        if (!mech || (out.thermal ? (uniform != 0 || !temp_from || anchors == 0)
-                                  : (uniform != 1 || temp_from || thermal_loads != 0)))
+        if (out.thermal ? (uniform != 0 || (out.mechanical && !temp_from) || anchors == 0)
+                        : (!out.mechanical || uniform != 1 || temp_from || thermal_loads != 0))
             invalid("inconsistent temperature sources");
-        const auto& constraints = c.at("constraints");
-        if (constraints.contains("rigid") == constraints.contains("fixed"))
-            invalid("choose rigid or fixed constraints");
-        if (constraints.contains("rigid")) {
-            if (constraints.at("rigid").as<std::string>() != "3-2-1")
-                invalid("invalid rigid constraint");
-            (void)check_id(constraints);
-        } else {
-            for (const auto& fixed : constraints.at("fixed").array_range()) {
-                (void)check_id(fixed);
-                auto target = fixed.at("target").as<std::string>();
-                check_target(target);
-                if (target == "boundary:embedded")
-                    throw InputError(
-                        ErrorCode::CUT_UNSUPPORTED,
-                        "embedded fixed displacement is not supported: Nitsche is not implemented");
-                out.fixed.push_back(target);
+        if (out.mechanical) {
+            const auto& constraints = c.at("constraints");
+            if (constraints.contains("rigid") == constraints.contains("fixed"))
+                invalid("choose rigid or fixed constraints");
+            if (constraints.contains("rigid")) {
+                if (constraints.at("rigid").as<std::string>() != "3-2-1")
+                    invalid("invalid rigid constraint");
+                (void)check_id(constraints);
+            } else {
+                for (const auto& fixed : constraints.at("fixed").array_range()) {
+                    (void)check_id(fixed);
+                    auto target = fixed.at("target").as<std::string>();
+                    check_target(target);
+                    if (target == "boundary:embedded")
+                        throw InputError(ErrorCode::CUT_UNSUPPORTED,
+                                         "embedded fixed displacement is not supported: Nitsche is "
+                                         "not implemented");
+                    out.fixed.push_back(target);
+                }
+                if (out.fixed.empty())
+                    invalid("empty fixed constraints");
             }
-            if (out.fixed.empty())
-                invalid("empty fixed constraints");
         }
         if (c.contains("process"))
             invalid("process is not supported in case/1.0");

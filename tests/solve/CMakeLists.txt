@@ -220,6 +220,7 @@ if(TARGET chipcae_solve_inputs)
                 floating_multiple floating_multiple_reverse floating_names floating_mixed
                 floating_mechanical
                 shared_node coincident_distinct_nodes thermal_only
+                thermal_only_no_constraints thermal_only_rigid_cut
                 alias_split alias_exact alias_numeric mechanical_alias convection_alias
                 convection_cut_alias
                 heat_split heat_q_vol heat_additive heat_zero_volume heat_cut_volume

@@ -3,6 +3,7 @@
 #include "chipcae/solve/case_loader.hpp"
 #include "mesh_error_map.hpp"
 
+#include <map>
 #include <set>
 namespace chipcae::solve {
 mesh::HexMeshArrays build_mesh(const RunInputs& inputs,
@@ -15,6 +16,11 @@ mesh::HexMeshArrays build_mesh(const RunInputs& inputs,
     if (!result) {
         const auto& err = result.error();
         const auto code = mesh_error_code(err);
+        if (code.code() == ErrorCode::CUT_UNSUPPORTED &&
+            err.reason.ends_with(": polygon in material layer"))
+            throw InputError(code.code(),
+                             "internal material cuts are not supported: " + err.path + ": " +
+                                 err.reason);
         throw InputError(code.code(), err.path + ": " + err.reason);
     }
     auto mesh = std::move(result.value());

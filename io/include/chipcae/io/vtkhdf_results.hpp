@@ -34,12 +34,14 @@ public:
         std::string mesh_sha256;
         std::int64_t void_cells = 0;
     };
+    // Thermal-only runs set mechanical=false and require only the T_max summary.
     ResultsWriter(std::filesystem::path run,
                   const std::filesystem::path& stackup,
                   std::vector<std::string> layer_names = {},
                   std::vector<std::string> material_names = {},
-                  std::vector<std::string> fields = {
-                      "T", "U", "layer_id", "material_id", "cell_kind", "elem_gid", "volume"});
+                  std::vector<std::string> fields =
+                      {"T", "U", "layer_id", "material_id", "cell_kind", "elem_gid", "volume"},
+                  bool mechanical = true);
     void set_mesh(MeshSummary mesh);
     void write_step(int n, double time, const ResultsStep& local);
     void add_summary(
@@ -66,6 +68,7 @@ private:
     int rank_ = 0, size_ = 1;
     bool gids_ = false;
     bool cut_fields_ = false;
+    bool mechanical_ = true;
     std::vector<std::string> fields_;
     bool selected(const std::string& name) const;
     std::optional<MeshSummary> mesh_;

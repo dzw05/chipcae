@@ -642,28 +642,49 @@ class Acceptance:
         assert report['thermal_assemblies'] == int(shared)
         assert report['mechanical_assemblies'] == 0
 
-    def test_thermal_only(self):
+    def test_thermal_only(self, no_constraints=False):
         import h5py
         import numpy as np
         self.thermal()
         self.case['physics'] = self.case['physics'][:1]
+        if no_constraints:
+            self.case.pop('constraints')
         # Keep a thermal anchor on each disconnected component.
         self.case['loads'].append(dict(type='fixed_temperature', target='layer:lid_layer', T=310))
         spec = self.disconnected()
-        result, out = self.invoke(spec=spec)
-        self.expect(result)
-        manifest = json.loads((out/'manifest.json').read_text())
-        assert 'floating body' not in result.stderr
-        assert not any(s['name'] == 'warpage_pv' for s in manifest['summary']), (
-            'thermal-only execution must bypass mechanical assembly')
+        for rigid, fixture in ((False, ''), (True, ''), (True, 'cut')):
+            if rigid:
+                self.case['constraints'] = dict(rigid='3-2-1')
+            # Keep the same temperature readback checks for cut meshes as well.
+            result, out = self.invoke(spec=spec, fixture=fixture)
+            self.expect(result)
+            manifest = json.loads((out/'manifest.json').read_text())
+            assert 'floating body' not in result.stderr
+            assert not any(s['name'] == 'warpage_pv' for s in manifest['summary']), (
+                'thermal-only execution must bypass mechanical assembly')
+            report = self.reports(result)[-1]
+            assert report['thermal_assemblies'] == 1 and report['mechanical_assemblies'] == 0
+            with h5py.File(out/manifest['steps'][0]['file']) as f:
+                temperatures = f['VTKHDF/hex/PointData/T'][:]
+                z = f['VTKHDF/hex/Points'][:, 2]
+                assert temperatures.size > 0 and np.isfinite(temperatures).all()
+                np.testing.assert_allclose(temperatures[z <= 1], 300, rtol=0, atol=1e-10)
+                np.testing.assert_allclose(temperatures[z >= 2], 310, rtol=0, atol=1e-10)
+
+    def test_thermal_only_rigid_cut(self):
+        self.thermal()
+        self.case['physics'] = self.case['physics'][:1]
+        self.case['constraints'] = dict(rigid='3-2-1')
+        self.case['loads'].append(dict(type='fixed_temperature', target='layer:lid_layer', T=310))
+        self.stack['layers'] = [layer('base'), layer('lid_layer')]
+        # Every cell is cut, so a mechanical run cannot choose regular-cell
+        # 3-2-1 anchors. Thermal assembly must still be reached.
+        spec = dict(cells=[cell(0, [0, 0, 0], [1, 1, 1], 'base', 'base'),
+                           cell(9, [0, 0, 2], [1, 1, 3], 'lid_layer', 'lid', 2)], void_cells=7)
+        result, _ = self.invoke('barrier', fixture='cut', spec=spec)
+        self.expect(result, 80, 'assembly reached')
         report = self.reports(result)[-1]
         assert report['thermal_assemblies'] == 1 and report['mechanical_assemblies'] == 0
-        with h5py.File(out/manifest['steps'][0]['file']) as f:
-            temperatures = f['VTKHDF/hex/PointData/T'][:]
-            z = f['VTKHDF/hex/Points'][:, 2]
-            assert temperatures.size > 0 and np.isfinite(temperatures).all()
-            np.testing.assert_allclose(temperatures[z <= 1], 300, rtol=0, atol=1e-10)
-            np.testing.assert_allclose(temperatures[z >= 2], 310, rtol=0, atol=1e-10)
 
     def alias_stack(self, names):
         self.stack['layers'] = [layer(name, 1/len(names)) for name in names]
@@ -1062,6 +1083,8 @@ def main():
             'shared_node': lambda: t.test_node_identity(True),
             'coincident_distinct_nodes': lambda: t.test_node_identity(False),
             'thermal_only': t.test_thermal_only,
+            'thermal_only_no_constraints': lambda: t.test_thermal_only(no_constraints=True),
+            'thermal_only_rigid_cut': t.test_thermal_only_rigid_cut,
             'mechanical_alias': t.test_mechanical_alias,
             'convection_alias': t.test_convection_alias,
             'convection_cut_alias': lambda: t.test_convection_alias(cut=True),
