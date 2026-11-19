@@ -126,6 +126,70 @@ class ResultsTest(unittest.TestCase):
                 for j in (1,2): volume+=np.dot(xyz[0],np.cross(xyz[j],xyz[j+1]))/6
             self.assertAlmostEqual(volume,1.,delta=1e-12)
 
+    def test_copper_diagnostics_filtering_cut_fallback_and_empty_ranks(self):
+        import h5py
+        import numpy as np
+        ranks = int(sys.argv[3])
+        for serial in (False, True):
+            for mode in ('diagnostics', 'diagnostics-empty', 'diagnostics-fallback'):
+                with self.subTest(serial=serial, mode=mode), tempfile.TemporaryDirectory() as tmp:
+                    run = pathlib.Path(tmp) / 'run'
+                    env = dict(os.environ)
+                    if serial:
+                        env['CHIPCAE_RESULTS_SERIAL'] = '1'
+                    subprocess.run(self.command(run, mode), env=env, check=True, timeout=25)
+                    manifest = json.loads((run/'manifest.json').read_text())
+                    fields = {f['name']: f for f in manifest['fields']}
+                    for name, components in [('copper_fraction', 1), ('conductivity_diag', 3)]:
+                        self.assertIn(name, fields, f'missing diagnostic manifest field {name}')
+                        self.assertEqual({key: fields[name][key] for key in
+                                          ('location', 'components', 'dtype', 'unit')},
+                                         dict(location='cell', components=components,
+                                              dtype='float64', unit=''))
+                    # Existing default fields, including volume, remain advertised.
+                    self.assertTrue({'T', 'U', 'layer_id', 'material_id', 'cell_kind',
+                                     'elem_gid', 'volume'} <= fields.keys())
+                    nonempty = 1 if mode == 'diagnostics-empty' else ranks
+                    with h5py.File(run/'out/step-0.vtkhdf') as file:
+                        for block in ('hex', 'cut'):
+                            group = file['VTKHDF/'+block]
+                            suffixes = ([7, 2, 9] if mode == 'diagnostics-fallback' else [7, 9]) if block == 'hex' else ([2] if mode != 'diagnostics-fallback' else [])
+                            expected_gids = [100*r+suffix for r in range(nonempty) for suffix in suffixes]
+                            np.testing.assert_array_equal(group['CellData/elem_gid'], expected_gids)
+                            expected_counts = [len(suffixes) if r < nonempty else 0 for r in range(ranks)]
+                            np.testing.assert_array_equal(group['NumberOfCells'], expected_counts)
+                            for name, components in [('copper_fraction', 1), ('conductivity_diag', 3)]:
+                                self.assertIn(name, group['CellData'], f'{block}: missing {name}')
+                                data = group['CellData/'+name]
+                                self.assertEqual(data.shape, (len(expected_gids),) if components == 1 else (len(expected_gids), 3))
+                                self.assertEqual(data.dtype, np.dtype('float64'))
+                                self.assertTrue(np.all(np.isfinite(data[:])))
+                            np.testing.assert_array_equal(group['CellData/copper_fraction'],
+                                                          [(gid % 10)/10 for gid in expected_gids])
+                            np.testing.assert_array_equal(group['CellData/conductivity_diag'],
+                                np.array([[1.+gid, 100.+gid, 1000.+gid] for gid in expected_gids]).reshape(-1, 3))
+                        # Middle input cell is filtered to cut, with its own diagnostics.
+                        if mode != 'diagnostics-fallback':
+                            np.testing.assert_array_equal(file['VTKHDF/hex/CellData/cell_kind'], [0]*(2*nonempty))
+                            np.testing.assert_array_equal(file['VTKHDF/cut/CellData/cell_kind'], [1]*nonempty)
+
+    def test_copper_diagnostics_malformed_and_collective_rejection(self):
+        # One MPI initialization per batch keeps the existing 60/180 s test budgets.
+        # The sample checks seven length/nonfinite cases and, for MPI, four
+        # partial-schema/orphan-payload cases; each must reject on every rank.
+        for serial in (False, True):
+            with self.subTest(serial=serial), tempfile.TemporaryDirectory() as tmp:
+                run = pathlib.Path(tmp) / 'run'
+                env = dict(os.environ)
+                if serial:
+                    env['CHIPCAE_RESULTS_SERIAL'] = '1'
+                result = subprocess.run(self.command(run, 'diagnostics-validation'), env=env,
+                                        capture_output=True, text=True, timeout=25)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                for fault in range(11 if int(sys.argv[3]) > 1 else 7):
+                    self.assertFalse((run/f'out/step-{99+fault}.vtkhdf').exists(), result.stderr)
+                self.assertTrue((run/'manifest.json').exists(), 'valid write after rejections failed')
+
     def test_roundtrip(self):
         try:
             import h5py
@@ -185,6 +249,9 @@ class ResultsTest(unittest.TestCase):
                     self.assertEqual(g['CellData/'+name].dtype,np.dtype('int32'))
                     self.assertEqual(g['CellData/'+name].shape,(1,))
                 self.assertNotIn('sigma_vm',g['CellData'])
+                self.assertNotIn('copper_fraction', g['CellData'])
+                self.assertNotIn('conductivity_diag', g['CellData'],
+                                 'legacy empty vectors must not invent conductivity')
                 for name in ['cut','eb_surface','particles']:
                     b=root[name]
                     self.assertEqual(tuple(b.attrs['Version']), (2,8))

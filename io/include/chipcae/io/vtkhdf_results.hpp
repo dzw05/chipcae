@@ -16,6 +16,9 @@ struct ResultsPartition {
     std::vector<Index> connectivity, offsets{0}, face_conn, face_off{0}, poly_faces, poly_off{0};
     std::vector<Index> hex, elem_gid; // elem_gid optional: dense Morton column * global nz + k
     std::vector<std::int32_t> layer_id, material_id, cell_kind;
+    // Test-first interface stubs: population, validation and writing are not implemented yet.
+    std::vector<double> copper_fraction;
+    std::vector<double> conductivity_diag;
 };
 struct ResultsStep {
     ResultsPartition hex;
