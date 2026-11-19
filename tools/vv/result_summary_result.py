@@ -16,7 +16,7 @@ import re
 import stat
 import subprocess
 import sys
-import tempfile
+import uuid
 
 if __name__ == '__main__':
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -150,8 +150,8 @@ def write_result_json(path: Path, obj: dict) -> None:
     """Atomically replace path using a closed temporary file in its parent.
 
     For an existing target, preserve stat.S_IMODE(os.stat(path).st_mode).
-    For a new target, use mode 0o666 & ~umask. Reading the umask temporarily
-    changes the process-global umask, which can affect concurrent file creation.
+    For a new target, use mode 0o666 & ~umask, applied by the kernel through
+    os.open. This function does not modify the process umask.
     A TOCTOU window exists between os.stat and os.replace. os.stat follows
     symlinks; os.replace replaces the symlink itself with a regular file.
     """
@@ -162,17 +162,26 @@ def write_result_json(path: Path, obj: dict) -> None:
         try:
             mode = stat.S_IMODE(os.stat(path).st_mode)
         except FileNotFoundError:
-            old = os.umask(0)
+            mode = None
+        for _ in range(100):
+            candidate = path.parent / f'.result-json-{uuid.uuid4().hex}.tmp'
             try:
-                mode = 0o666 & ~old
-            finally:
-                os.umask(old)
-        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', newline='\n',
-                                         dir=path.parent, prefix='.result-json-',
-                                         suffix='.tmp', delete=False) as stream:
-            temporary = Path(stream.name)
+                fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+            except FileExistsError:
+                continue
+            temporary = candidate
+            break
+        else:
+            raise OSError('could not create a unique result JSON temporary file')
+        try:
+            stream = os.fdopen(fd, 'w', encoding='utf-8', newline='\n')
+        except BaseException:
+            os.close(fd)
+            raise
+        with stream:
             stream.write(content)
-        os.chmod(temporary, mode)
+        if mode is not None:
+            os.chmod(temporary, mode)
         os.replace(temporary, path)
         temporary = None
     except (OSError, ValueError, TypeError) as exc:
