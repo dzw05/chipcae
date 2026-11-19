@@ -1305,6 +1305,7 @@ def _result(record):
             if _numeric(record["summary"].get(key)):
                 qoi[key] = record["summary"][key]
     notes = list(record["notes"])
+    notes.append("无解析解（物理合理性检查）; reference is null because no v0.2 reference category describes this check")
     if record["materials_provenance"] == "illustrative" and ILLUSTRATIVE_NOTE not in notes:
         notes.append(ILLUSTRATIVE_NOTE)
     if record["verdict"] == "needs_attention":
@@ -1320,11 +1321,10 @@ def _result(record):
         data_class = "synthetic"
         notes.append("empty diagnostic envelope: caller data_class unavailable/invalid; no source data or QoIs")
         qoi = {}
-    return dict(schema="chipcae.vv_result/0.3", case_id=case_id, data_class=data_class, label="实测",
+    return dict(schema="chipcae.vv_result/0.2", case_id=case_id, data_class=data_class, label="实测",
                 date=record["date"], commit=record["commit"], qoi=qoi,
-                verdict=record["verdict"],
-                reference=dict(value=None, type="无解析解（物理合理性检查）",
-                               source="C/W/A acceptance checks in tools/vv/real_case_e2e.py"),
+                verdict="skip" if record["verdict"] == "needs_attention" else record["verdict"],
+                reference=None,
                 tolerance=dict(value=None, temperature_atol_K=TEMPERATURE_ATOL,
                                parallel_rtol=PARALLEL_RTOL, energy_imbalance=1e-9,
                                synthetic_noncut_warpage_rtol=.05,
@@ -1398,6 +1398,11 @@ def _finalize(record, folder, usage):
 
 def run_item(kind: str, params: dict, out_root: Path, nps: list[int], repeat: int,
              source_root: Path) -> dict:
+    return _run_item(kind, params, out_root, nps, repeat, source_root)[0]
+
+
+def _run_item(kind, params, out_root, nps, repeat, source_root):
+    """Keep the CLI's output location separate from the persisted run record."""
     source_root = Path(source_root).resolve()
     w_ready = readiness("warpage", source_root)[0]
     record = _blank_record(kind, params, source_root, w_ready)
@@ -1420,7 +1425,6 @@ def run_item(kind: str, params: dict, out_root: Path, nps: list[int], repeat: in
         usage = True
         record["notes"].append(f"usage error: output unavailable: {exc}; using safe temporary output")
         folder = _new_folder(_safe_temp_root(), record["commit"], "invalid")
-    record["record_directory"] = str(folder)
     if not usage:
         params = copy.deepcopy(params)
         approximate = kind == "assembly" and any(p.get("material_approx") is True
@@ -1434,7 +1438,7 @@ def run_item(kind: str, params: dict, out_root: Path, nps: list[int], repeat: in
             record["checks"]["C1"] = False
             record["status_detail"] = record["status_detail"] or "error"
             record["notes"].append(f"driver exception: {type(exc).__name__}: {exc}")
-    return _finalize(record, folder, usage)
+    return _finalize(record, folder, usage), folder
 
 
 class _Parser(argparse.ArgumentParser):
@@ -1460,7 +1464,7 @@ def main(argv=None):
         for key in ("input", "material_map", "materials"):
             if isinstance(params.get(key), str):
                 params[key] = str((args.params.resolve().parent / params[key]).resolve())
-        record = run_item(args.kind, params, args.out_root, args.nps, args.repeat, args.source_root)
+        record, folder = _run_item(args.kind, params, args.out_root, args.nps, args.repeat, args.source_root)
     except (OSError, ValueError, TypeError) as exc:
         def flag(name, default=None):
             try:
@@ -1470,10 +1474,10 @@ def main(argv=None):
         # Malformed CLI input still follows the shared usage-record finalizer.
         source = Path(flag("--source-root", SOURCE_ROOT)).resolve()
         out = flag("--out-root")
-        record = run_item(argv[0] if argv else "invalid", {}, Path(out) if out else None, [1], 2, source)
+        record, folder = _run_item(argv[0] if argv else "invalid", {}, Path(out) if out else None, [1], 2, source)
         record["notes"].append(f"CLI usage error: {exc}")
-        record = _finalize(record, Path(record["record_directory"]), True)
-    print(f"{record['verdict']}: {record['record_directory']}")
+        record = _finalize(record, folder, True)
+    print(f"{record['verdict']}: {folder}")
     return record["exit_code"]
 
 

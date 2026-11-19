@@ -23,6 +23,7 @@ sys.path.insert(0, str(SOURCE))
 from tools.vv import real_case_e2e as driver
 from tools.vv.check_result_data_class import check_file
 from tools.vv.result_summary import summarize
+from tools.vv.result_summary_result import result_json_from_summary
 
 THERMAL_ONLY = "not solved: fvm thermal-only stage"
 WARPAGE_METHOD = "FVM top-face centroids; least-squares plane removal"
@@ -935,25 +936,60 @@ class DriverControlFlow(ContractTest):
         self.pipeline.unlink()
         record = self.invoke()
         self.assertEqual(record["exit_code"], 77)
+        self.assertEqual(record["verdict"], "needs_attention")
+        self.assertTrue(record["needs_attention"])
         result_path = self.persisted(record) / "result.json"
         result = read_json(result_path)
-        self.assertEqual(result["verdict"], "needs_attention")
-        self.assertEqual(result["schema"], "chipcae.vv_result/0.3")
+        self.assertEqual(result["verdict"], "skip")
+        self.assertEqual(result["schema"], "chipcae.vv_result/0.2")
+        self.assertTrue(any("needs_attention" in note for note in result["notes"]))
+        self.assertTrue(any(record["needs_attention"][0]["reason"] in note for note in result["notes"]))
         self.assertEqual(check_file(result_path), [])
         self.assertIs(record["checks"]["C10"], True)
+        self.assert_exportable_metadata(result)
 
     def test_result_identifies_physical_check_reference(self):
         record = self.invoke()
         self.assertEqual(record["exit_code"], 0)
         result_path = self.persisted(record) / "result.json"
         result = read_json(result_path)
-        self.assertIsInstance(result["reference"], dict)
-        self.assertEqual(result["reference"]["type"], "无解析解（物理合理性检查）")
-        self.assertIsNone(result["reference"]["value"])
-        self.assertTrue(result["reference"]["source"])
-        self.assertEqual(result["schema"], "chipcae.vv_result/0.3")
+        self.assertIsNone(result["reference"])
+        self.assertTrue(any("无解析解（物理合理性检查）" in note for note in result["notes"]))
+        self.assertEqual(result["schema"], "chipcae.vv_result/0.2")
         self.assertEqual(result["verdict"], "pass")
         self.assertEqual(check_file(result_path), [])
+        self.assert_exportable_metadata(result)
+
+    def assert_exportable_metadata(self, result):
+        metadata = {key: result[key] for key in ("case_id", "data_class", "label", "date", "commit",
+                                               "verdict", "reference", "tolerance", "notes")}
+        exported = result_json_from_summary(summarize(self.root / "template"), **metadata)
+        self.assertEqual(exported["schema"], "chipcae.vv_result/0.2")
+        for key, value in metadata.items():
+            self.assertEqual(exported.get(key), value)
+
+    def test_result_checker_still_rejects_unversioned_contract_extensions(self):
+        record = self.invoke()
+        result = read_json(self.persisted(record) / "result.json")
+        legacy = dict(result, schema="chipcae.vv_result/0.2", verdict="pass", reference=None)
+        for fields, expected in (({"schema": "chipcae.vv_result/0.3"}, ["invalid schema"]),
+                                 ({"verdict": "needs_attention"}, ["invalid verdict"]),
+                                 ({"reference": {"value": None, "type": "无解析解（物理合理性检查）",
+                                                 "source": "C/W/A acceptance checks"}}, ["invalid reference.type"])):
+            with self.subTest(fields=fields):
+                path = write_json(self.root / "invalid-result.json", dict(legacy, **fields))
+                self.assertEqual(check_file(path), expected)
+
+    def test_real_record_keeps_output_location_out_of_persisted_fields(self):
+        record = self.invoke(params=dict(self.params, data_class="real"))
+        self.assertEqual(record["exit_code"], 0)
+        folder = self.persisted(record)
+        self.assertNotIn("record_directory", record)
+        self.assertNotIn(str(folder), read_json(folder / "run_record.json").values())
+        self.assertNotIn('"record_directory"', (folder / "run_record.md").read_text())
+        self.assertTrue(record["inputs"])
+        self.assertTrue(all(not Path(name).is_absolute() and ".." not in Path(name).parts
+                            for name in record["inputs"]))
 
     def test_assembly_temperature_runs_when_only_w_is_unready(self):
         self.pipeline.write_text(THERMAL_ONLY)
@@ -1241,6 +1277,29 @@ class DriverControlFlow(ContractTest):
                 paths = list(out.rglob("run_record.json"))
                 self.assertEqual(len(paths), 1)
                 self.assertEqual(read_json(paths[0])["exit_code"], result.returncode)
+                self.assertEqual(self.calls(), [])
+
+    def test_malformed_cli_allocates_exactly_one_usage_record(self):
+        params_path = self.root / "params.json"
+        variants = (("{", []), ("[]", []), (json.dumps(self.params), ["--unknown"]),
+                    (json.dumps(self.params), ["--np", "invalid"]))
+        for index, (content, extra) in enumerate(variants):
+            with self.subTest(content=content, extra=extra):
+                params_path.write_text(content)
+                out = self.root / f"malformed-cli-{index}"
+                result = subprocess.run([sys.executable, str(SOURCE / "tools/vv/real_case_e2e.py"),
+                                         "thermal", "--params", str(params_path), "--source-root",
+                                         str(self.source), "--out-root", str(out), *extra],
+                                        capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                paths = list(out.rglob("run_record.json"))
+                self.assertEqual(len(paths), 1)
+                record = read_json(paths[0])
+                self.assertEqual(record["exit_code"], 2)
+                self.assertEqual(record["verdict"], "fail")
+                self.assertTrue(any("CLI usage error" in note for note in record["notes"]))
+                self.assertEqual(result.stdout.strip(), f"fail: {paths[0].parent}")
+                self.assertEqual(list(out.glob("*/*/inputs")), [paths[0].parent / "inputs"])
                 self.assertEqual(self.calls(), [])
 
     def test_missing_numeric_dependency_is_77_and_import_remains_lazy(self):

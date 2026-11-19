@@ -18,7 +18,7 @@ ALLOWED_DIRS: tuple[str, ...] = ("cases/benchmarks/", "tests/vv/data/")
 MAX_BYTES: int = 2 * 1024 * 1024
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema" / "vv-result-0.2.schema.json"
 
-_SCHEMA_IDS = ("chipcae.vv_result/0.2", "chipcae.vv_result/0.3")
+_SCHEMA_ID = "chipcae.vv_result/0.2"
 _OBJECT_FIELDS = ("timing", "memory", "machine", "build", "run", "iterations", "caps", "cap_checks")
 
 
@@ -70,19 +70,13 @@ def check_file(path: Path) -> list[str]:
     if obj.get("data_class") == "real":
         reasons.append("real result must stay local (D03)")
 
-    verdicts = ("pass", "fail", "需讨论", "skip")
-    reference_types = ("解析", "独立代码", "原型", "回归")
-    if obj.get("schema") == "chipcae.vv_result/0.3":
-        verdicts += ("needs_attention",)
-        reference_types += ("无解析解（物理合理性检查）",)
-
-    _check_field(obj, "schema", lambda value: value in _SCHEMA_IDS, reasons)
+    _check_field(obj, "schema", lambda value: value == _SCHEMA_ID, reasons)
     _check_field(obj, "case_id", lambda value: _matches(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value), reasons)
     _check_field(obj, "label", lambda value: value in ("实测", "参考值", "计划值"), reasons)
     _check_field(obj, "date", lambda value: _matches(r"[0-9]{8}", value), reasons)
     _check_field(obj, "commit", lambda value: _matches(r"[0-9a-f]{7,40}", value), reasons)
     _check_field(obj, "qoi", lambda value: isinstance(value, dict), reasons)
-    _check_field(obj, "verdict", lambda value: value in verdicts, reasons)
+    _check_field(obj, "verdict", lambda value: value in ("pass", "fail", "需讨论", "skip"), reasons)
 
     for field in ("reference", "error", "tolerance"):
         value = obj.get(field)
@@ -94,7 +88,7 @@ def check_file(path: Path) -> list[str]:
         _check_field(value, "value", _number_or_null, reasons, parent=field)
         if field == "reference":
             _check_field(
-                value, "type", lambda item: item in reference_types,
+                value, "type", lambda item: item in ("解析", "独立代码", "原型", "回归"),
                 reasons, parent=field,
             )
             _check_field(

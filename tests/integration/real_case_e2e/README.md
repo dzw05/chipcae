@@ -43,6 +43,8 @@ command names from PATH. Set `CHIPCAE_MPIEXEC` for a specific MPI launcher;
 otherwise mpiexec/mpirun is discovered on PATH. CTest supplies current-build
 executable paths under the brief's feature condition and supplies
 `SP4_FIXTURE_GENERATOR` when that target exists.
+Rank selections include the serial baseline: `--np 1` or `--np 1 2`.
+The baseline supplies the reported QoIs and repeat check; the pair also runs C8.
 
 Required params are case_id, data_class (synthetic/real), input, material_map,
 materials (path or null) and mesh (nx, ny, levels, max_ratio,
@@ -66,6 +68,8 @@ F-1130 thermal loads, Rigid321, Jacobi with rtol=1e-12, T_ref=298.15 and a
 
 Thresholds are unchanged: 1e-8 K temperature tolerance, 1e-8 parallel relative
 error, 1e-9 energy imbalance, exact repeat hashes and exact W3/W4 zeros.
+The W5 5% bound comes from the fvm-thermoelastic-cutcell brief's comparison
+criteria for synthetic noncut cases (comparison section, line 93).
 Vertex temperature overshoot and recomputed vertex warpage are diagnostics.
 Digests use mesh SHA, the ordered three-QoI whitelist as float.hex, final
 per-field iterations/residuals, and little-endian contiguous array values from
@@ -98,19 +102,21 @@ An unavailable E2E prints `SKIP: <kind> upstream not merged: <reason>
 (NEEDS-ATTENTION)` and returns 77 before generating inputs. A missing actual
 welded_interfaces count fails A1; it is never synthesized or converted to 77.
 
-`result.json` uses `chipcae.vv_result/0.3`, defined in
-`tools/vv/schema/vv-result-0.3.schema.json`. It preserves `needs_attention` for
-dependency interruptions and records `reference.type` as
-`无解析解（物理合理性检查）`, with a null value and the acceptance checks as its
-source. The data-class checker supports both v0.2 and v0.3; the frozen v0.2
-schema and its verdict/reference categories remain unchanged. Real results
-still receive the D03 local-only diagnostic.
+`result.json` uses the frozen `chipcae.vv_result/0.2` contract and the existing
+data-class checker. Dependency interruptions use its `skip` verdict; the
+`needs_attention` verdict, item-specific reasons and exit code 77 remain in
+`run_record.json`. The result notes also retain those reasons. The v0.2
+reference categories cannot describe `无解析解（物理合理性检查）`, so reference is
+null and that description is retained in notes. No new category is assigned
+to a physical check. Real results still receive the exact D03 local-only
+diagnostic. These metadata values are also accepted by the v0.2 exporter.
 
 The following conservative specification deviations are explicit:
 
 - Omitted --out-root allocates a persistent temporary root. Rejected real
   destinations receive no files; their usage record goes to a temporary root
-  outside Git, returned as record_directory and printed by the CLI.
+  outside Git. The CLI prints the output directory; that runtime location is
+  kept outside the returned and persisted run record.
 - Unknown source commits remain unknown; C10 cannot be claimed for that schema
   conflict, and a completed pipeline fails rather than inventing a SHA.
 - C9 excludes normal null status_detail, inapplicable sections, absent optional
