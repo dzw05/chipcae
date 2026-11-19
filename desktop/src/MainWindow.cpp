@@ -397,7 +397,8 @@ void MainWindow::monitorRun(const QString& directory,
                 } catch (const std::exception& e) {
                     const auto diagnostic =
                         QString("cannot get job status: %1").arg(QString::fromUtf8(e.what()));
-                    model->appendDiagnostic(diagnostic);
+                    if (!model->diagnostics.contains(diagnostic))
+                        model->diagnostics.append(diagnostic);
                 }
             }
             if (elapsed->isValid())

@@ -30,7 +30,6 @@ public:
     void stop(LocalJobService& broker, const QString& runId);
     void trackStop(quint64 sequence, QString requestId);
     void checkTimeout(qint64 elapsedMs);
-    void appendDiagnostic(const QString& text);
     const std::vector<MonitorLogEntry>& logEntries() const;
     QString directory;
     EventFormat format;
@@ -46,6 +45,7 @@ public:
     QString pendingRequest;
 
 private:
+    void appendDiagnostic(const QString& text);
     void reconcile();
     EventTailer tailer_;
     std::vector<MonitorLogEntry> logEntries_;

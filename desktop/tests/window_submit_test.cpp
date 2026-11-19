@@ -1919,7 +1919,7 @@ int main(int argc, char** argv) {
                 checkCanRestart(w, f);
         });
     }
-    test("monitor broker status failures are logged and survive level filtering", [&] {
+    test("monitor broker status failures preserve model log entries and level filtering", [&] {
         MonitorLogFixture f;
         LocalJobService broker(
             LauncherConfig{f.temp.filePath("runs"), "unused-solver", "mpirun", false, true});
@@ -1927,17 +1927,16 @@ int main(int argc, char** argv) {
         w.monitorRun(
             f.temp.path(), EventFormat::LegacyCaelog1, &broker, "unknown-run", f.eventFile);
         check(waitFor([&] { return w.monitorStatusText().contains(f.eventFile); }),
-              "monitor polls before checking the broker failure diagnostic");
+              "monitor polls before checking log entries during broker failures");
         auto* logs = monitorPanel(w);
-        const QByteArray diagnostic = "\n[diag] cannot get job status: Unknown run_id";
-        const auto fullText = f.independent.displayedText().toUtf8() + diagnostic;
+        const auto fullText = f.independent.displayedText().toUtf8();
         checkMonitorText(*logs, std::nullopt, fullText);
         waitForMonitorPolls();
         checkMonitorText(*logs, std::nullopt, fullText);
 
         f.independent.setMinimumLevel(0);
         logs->setMinimumLevel(0);
-        const auto filteredText = f.independent.displayedText().toUtf8() + diagnostic;
+        const auto filteredText = f.independent.displayedText().toUtf8();
         checkMonitorText(*logs, std::optional<int>{0}, filteredText);
         waitForMonitorPolls();
         checkMonitorText(*logs, std::optional<int>{0}, filteredText);
