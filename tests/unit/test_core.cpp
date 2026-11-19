@@ -5,7 +5,7 @@
 #include "chipcae/core/version.hpp"
 #include "chipcae/coupling/field_mapper.hpp"
 #include "chipcae/io/manifest.hpp"
-#include "chipcae/jobmgr/job_manager.hpp"
+#include "chipcae/jobmgr/local_paths.hpp"
 
 #include <cstdlib>
 #include <filesystem>
@@ -63,11 +63,9 @@ int main() {
     chipcae::set_log_level(chipcae::LogLevel::error);
     chipcae::log(chipcae::LogLevel::info, "this message should be filtered");
 
-    chipcae::jobmgr::JobManager manager;
-    const auto& job = manager.submit("run-1");
-    expect(job.run_id == "run-1", "job id");
-    expect(job.state == chipcae::jobmgr::JobState::queued, "job starts queued");
-    expect(manager.find("run-1") != nullptr, "job lookup");
+    const auto run_id = chipcae::jobmgr::make_run_id();
+    expect(chipcae::jobmgr::is_uuid(run_id), "generated run id is valid");
+    expect(!chipcae::jobmgr::is_uuid(""), "empty run id is invalid");
 
     const auto manifest_path =
         std::filesystem::temp_directory_path() / "chipcae_manifest_test.json";

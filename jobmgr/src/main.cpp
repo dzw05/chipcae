@@ -1,5 +1,4 @@
 #include "chipcae/core/version.hpp"
-#include "chipcae/jobmgr/job_manager.hpp"
 
 #include <iostream>
 #include <string_view>
@@ -17,8 +16,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    chipcae::jobmgr::JobManager manager;
-    (void)manager;
-    std::cout << "chipcae-jobmgr skeleton is idle\n";
+    std::cout << "chipcae-jobmgr is idle\n";
     return 0;
 }
