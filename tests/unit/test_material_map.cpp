@@ -188,6 +188,16 @@ static bool copper_base_acceptance() {
         2,
         "lower_eq");
     run("no dielectric uses global", {copper}, neighbours, 0, "global_eq");
+    run("duplicate reserved global key uses last value",
+        {copper},
+        R"({"copper":"cu","copper_base":"old","copper_base":"global_eq"})",
+        0,
+        "global_eq");
+    run("duplicate reserved layer key uses last value",
+        {copper, lower},
+        R"({"copper":"cu","FR4_B":"lower_eq","copper_base":"global_eq","copper_base@F.Cu":"old","copper_base@F.Cu":"local_eq"})",
+        0,
+        "local_eq");
     run("exact metal precedes case, layer and copper",
         {copper},
         R"({"Copper":"gold","COPPER":"wrong","layer:F.Cu":"wrong","copper":"wrong","copper_base":"base_eq"})",

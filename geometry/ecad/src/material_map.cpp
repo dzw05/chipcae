@@ -50,7 +50,7 @@ bool apply_material_map(EcadModel& model, const std::filesystem::path& file, std
     whitespace(text, p);
     if (p == text.size() || text[p++] != '{')
         return fail("invalid material map: expected JSON object");
-    std::map<std::string, std::string> mapping;
+    std::map<std::string, std::string> mapping, bases;
     whitespace(text, p);
     while (p < text.size() && text[p] != '}') {
         std::string name, id;
@@ -62,7 +62,11 @@ bool apply_material_map(EcadModel& model, const std::filesystem::path& file, std
         whitespace(text, p);
         if (!parse_string(text, p, id) || name.empty() || id.empty())
             return fail("invalid material map: material names and IDs must be nonempty strings");
-        if (!mapping.emplace(std::move(name), std::move(id)).second)
+        // Reserved base keys never participate in source-material lookup. Repeated
+        // reserved keys use the last value; ordinary duplicate keys remain errors.
+        if (name == "copper_base" || name.starts_with("copper_base@"))
+            bases.insert_or_assign(std::move(name), std::move(id));
+        else if (!mapping.emplace(std::move(name), std::move(id)).second)
             return fail("invalid material map: duplicate material name");
         whitespace(text, p);
         if (p < text.size() && text[p] == ',') {
@@ -93,8 +97,10 @@ bool apply_material_map(EcadModel& model, const std::filesystem::path& file, std
         }
         return result;
     };
-    std::vector<std::string> missing;
-    for (auto& layer : model.layers) {
+    std::vector<std::string> layer_errors(model.layers.size());
+    std::vector<bool> mapped(model.layers.size(), false);
+    for (std::size_t i = 0; i < model.layers.size(); ++i) {
+        auto& layer = model.layers[i];
         std::vector<std::string> tried, conflicts;
         auto found = mapping.end();
         if (!layer.material.empty()) {
@@ -119,14 +125,58 @@ bool apply_material_map(EcadModel& model, const std::filesystem::path& file, std
             found = mapping.find(tried.back());
         }
         if (found != mapping.end()) {
-            layer.material = found->second;
+            (layer.copper ? layer.metal : layer.material) = found->second;
+            mapped[i] = true;
             continue;
         }
         std::string entry = layer.name + " (tried: " + quoted(tried);
         if (conflicts.size() > 1)
             entry += "; case-conflict: " + quoted(conflicts);
-        missing.push_back(entry + ")");
+        layer_errors[i] = entry + ")";
     }
+    // Resolve bases only after every dielectric has its mapped ID. Scan original
+    // indices, including failed dielectrics; ties select the larger (lower) index.
+    for (std::size_t i = 0; i < model.layers.size(); ++i) {
+        auto& layer = model.layers[i];
+        if (!layer.copper)
+            continue;
+        layer.material.clear();
+        std::vector<std::string> tried{"copper_base@" + layer.name};
+        auto base = bases.find(tried.back());
+        if (base != bases.end()) {
+            layer.material = base->second;
+            continue;
+        }
+        std::size_t nearest = model.layers.size(), distance = model.layers.size();
+        for (std::size_t j = 0; j < model.layers.size(); ++j) {
+            if (model.layers[j].copper)
+                continue;
+            const auto d = i > j ? i - j : j - i;
+            if (d <= distance) {
+                nearest = j;
+                distance = d;
+            }
+        }
+        if (nearest != model.layers.size()) {
+            tried.push_back("layer:" + model.layers[nearest].name);
+            if (mapped[nearest]) {
+                layer.material = model.layers[nearest].material;
+                continue;
+            }
+        }
+        // A failed neighbour never supplies its source name. Global fallback can
+        // supply the base, but that neighbour still makes the entire map fail.
+        tried.push_back("copper_base");
+        base = bases.find(tried.back());
+        if (base != bases.end())
+            layer.material = base->second;
+        else if (layer_errors[i].empty())
+            layer_errors[i] = layer.name + " (tried: " + quoted(tried) + ")";
+    }
+    std::vector<std::string> missing;
+    for (auto& entry : layer_errors)
+        if (!entry.empty())
+            missing.push_back(std::move(entry));
     if (!missing.empty()) {
         std::string message =
             "MATERIAL_MAPPING_MISSING: " + std::to_string(missing.size()) + " layer(s) unmapped: ";

@@ -10,7 +10,15 @@ strings in the ten scoped `stack.json` goldens were migrated by exact text
 replacement: `"mat.fr4"` to `"fr4_eq"` and `"mat.cu"` to `"cu"`. All other
 bytes remain the output of baseline `1607ad5`, including the polyset files and
 their SHA-256 references. Future regeneration must also use the updated
-`material_map.json` with `FR4` mapped to `fr4_eq` and `copper` mapped to `cu`.
+`material_map.json` with `FR4` mapped to `fr4_eq`, `copper` mapped to `cu`,
+and the global fallback `copper_base` mapped to `fr4_eq`.
+
+Following I1 1.1, Patterned layer `material` now identifies the base dielectric;
+`copper.metal` remains the metal ID. These goldens also lock the importer to
+polygon output without `copper.fraction`.
+The synthetic `schema/examples/copper_polygons.stack.json` example uses a
+`CCPOLY01` binary sidecar named `copper_polygons.polyset.json`; despite its
+extension, the sidecar is not JSON text.
 
 Generation commands, run from the repository root (replace the build-directory
 placeholders with local paths):

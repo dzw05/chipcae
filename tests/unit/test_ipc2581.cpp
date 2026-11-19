@@ -107,7 +107,7 @@ static bool golden_regression() {
     const auto map = temporary.path();
     {
         std::ofstream out(map);
-        out << R"({"FR4":"mat.fr4","copper":"mat.cu"})";
+        out << R"({"FR4":"mat.fr4","copper":"mat.cu","copper_base":"mat.fr4"})";
     }
     for (auto board : {"board_2layer", "board_4layer", "board_arc"}) {
         auto r = ecad::read_ipc2581(root / "tests/integration/ecad/data" /
@@ -120,6 +120,10 @@ static bool golden_regression() {
                 std::cerr << error << '\n';
                 return false;
             }
+            if (std::string(stage) == "mapped")
+                for (const auto& layer : r.model.layers)
+                    if (layer.copper && layer.metal != "mat.cu")
+                        return false;
             auto path =
                 root / "tests/unit/golden" / ("ipc_" + std::string(board) + "." + stage + ".txt");
             auto actual = dump_model_for_golden(r.model);
@@ -679,6 +683,9 @@ int main() {
     const auto output = output_directory.directory;
     std::filesystem::create_directories(output);
     std::string error;
+    if (!ecad::apply_material_map(
+            a.model, root.parent_path().parent_path() / "import_cli/material_map.json", &error))
+        return 15;
     if (!ecad::to_stack(a.model, output / "board.stack.json", output / "board.polyset", &error))
         return 8;
     if (!std::filesystem::exists(output / "board.stack.json") ||
