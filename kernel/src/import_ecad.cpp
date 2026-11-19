@@ -404,6 +404,8 @@ int run_ecad(const ImportOptions& options) {
             std::string error;
             if (!ecad::apply_material_map(empty, map_file, &error))
                 return reject(error, error.starts_with("MATERIAL_MAPPING_MISSING"));
+            if (!ecad::validate_mapped_targets(empty, &error))
+                return reject(error);
             std::ifstream input(map_file);
             std::string text((std::istreambuf_iterator<char>(input)), {});
             const auto end = text.find_last_of('}');
@@ -450,6 +452,8 @@ int run_ecad(const ImportOptions& options) {
         std::string error;
         if (!ecad::apply_material_map(model, map_file, &error))
             return reject(error, error.find("MATERIAL_MAPPING_MISSING") != std::string::npos);
+        if (!ecad::validate_mapped_targets(model, &error))
+            return reject(error);
         for (std::size_t i = 0; i < rows.size(); ++i)
             rows[i].material_id = rows[i].material_key.empty() && !material_overridden[i]
                                       ? ""

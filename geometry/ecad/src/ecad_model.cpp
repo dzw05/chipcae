@@ -33,6 +33,8 @@ bool to_stack(const EcadModel& model,
         if (layer.copper && (layer.material.empty() || layer.metal.empty()))
             return fail("MATERIAL_MAPPING_MISSING: copper layer requires base and metal: " +
                         layer.name);
+    if (!validate_mapped_targets(model, error))
+        return false;
     chipcae::mesh::Polyset ps;
     ps.dbu_m = model.dbu_m;
     for (const auto& layer : model.layers) {
