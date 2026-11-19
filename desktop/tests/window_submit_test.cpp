@@ -6,14 +6,18 @@
 #include "LocalJobService.hpp"
 #include "MainWindow.hpp"
 #include "PreviewController.hpp"
+#include "ResidualChart.hpp"
 #include "ResultControls.hpp"
 #include "ResultView.hpp"
+#include "RunMonitor.hpp"
 #include "SchemaForm.hpp"
 #include "StackEditor.hpp"
 #include "SubmitDialog.hpp"
+#include "chipcae/io/event_log.hpp"
 
 #include <QAction>
 #include <QApplication>
+#include <QComboBox>
 #include <QDir>
 #include <QDirIterator>
 #include <QDockWidget>
@@ -38,6 +42,7 @@
 #include <QVTKOpenGLNativeWidget.h>
 #include <functional>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <vtkDataObject.h>
 using namespace chipcae::desktop;
@@ -123,6 +128,74 @@ bool waitFor(const std::function<bool()>& predicate, int timeout = 10000) {
     }
     return predicate();
 }
+struct MonitorLogFixture {
+    QTemporaryDir temp;
+    const QString eventFile = "window-events.caelog";
+    const QByteArray fullText = "level=-7 rank=1 negative\nlevel=0 rank=2 MiXeD 日志\n"
+                                "[diag] malformed complete control.jsonl line";
+    const QByteArray filteredText =
+        "level=0 rank=2 MiXeD 日志\n[diag] malformed complete control.jsonl line";
+    MonitorLogPanel independent;
+
+    MonitorLogFixture() {
+        check(temp.isValid(), "monitor temporary directory");
+        {
+            chipcae::io::EventLogWriter writer(temp.filePath(eventFile).toStdString());
+            chipcae::io::KernelHello hello;
+            hello.run_id = "window-monitor";
+            writer.append({1, 123, hello});
+            writer.append({2, 123, chipcae::io::LogLine{-7, 1, "negative", "", 0}});
+            writer.append({3, 123, chipcae::io::LogLine{0, 2, "MiXeD 日志", "", 0}});
+        }
+        write(temp.filePath("control.jsonl"), "{}\n");
+        RunMonitor model(temp.path(), EventFormat::LegacyCaelog1, eventFile);
+        model.poll();
+        independent.setEntries(model.logEntries());
+        check(independent.displayedText().toUtf8() == fullText,
+              "fixture has both complete log lines and the lowercase diagnostic prefix");
+    }
+
+    void start(MainWindow& window, const QString& runId = {}) const {
+        window.monitorRun(temp.path(), EventFormat::LegacyCaelog1, nullptr, runId, eventFile);
+        check(waitFor([&] { return window.monitorStatusText().contains(eventFile); }),
+              "monitor status updates after polling the configured event file");
+    }
+};
+MonitorLogPanel* monitorPanel(MainWindow& window) {
+    auto* logs = window.monitorLogPanel();
+    check(logs != nullptr,
+          "monitorRun must expose a MonitorLogPanel instead of a plain QPlainTextEdit");
+    return logs;
+}
+QDockWidget* monitorLogDock(MainWindow& window, MonitorLogPanel* logs) {
+    for (auto* dock : window.findChildren<QDockWidget*>())
+        for (auto* object : dock->findChildren<QObject*>())
+            // MonitorLogPanel has no Q_OBJECT; qobject_cast cannot check this subclass.
+            if (auto* panel = dynamic_cast<MonitorLogPanel*>(object); panel && panel == logs)
+                return dock;
+    throw std::runtime_error("monitor getter must return the real MonitorLogPanel in its dock");
+}
+QComboBox* monitorLevelFilter(QDockWidget* dock) {
+    const auto filters = dock->findChildren<QComboBox*>("monitorLogLevelFilter");
+    check(filters.size() == 1 && filters.first()->count() == 2,
+          "monitor dock offers all levels and minimum level zero in one filter control");
+    return filters.first();
+}
+void checkMonitorText(const MonitorLogPanel& logs,
+                      std::optional<int> level,
+                      const QByteArray& expected) {
+    check(logs.minimumLevel() == level, "window log panel preserves the requested level filter");
+    check(logs.displayedText().toUtf8() == expected,
+          "window log text matches the independent panel byte for byte");
+}
+void waitForMonitorPolls() {
+    QElapsedTimer elapsed;
+    elapsed.start();
+    // An immediately true predicate would not exercise the 250 ms polling timer.
+    check(waitFor([&] { return elapsed.elapsed() >= 650; }, 2000),
+          "event loop runs across at least two monitor polling periods");
+}
+
 void copyTree(const QString& from, const QString& to) {
     check(QDir().mkpath(to), "fixture directory");
     for (const auto& entry : QDir(from).entryInfoList(QDir::NoDotAndDotDot | QDir::AllEntries)) {
@@ -1846,6 +1919,129 @@ int main(int argc, char** argv) {
                 checkCanRestart(w, f);
         });
     }
+    test("monitor log panel is absent before monitoring", [&] {
+        MainWindow w;
+        check(w.monitorLogPanel() == nullptr, "unmonitored window has no monitor log panel");
+    });
+    test("monitor dock owns a read-only MonitorLogPanel", [&] {
+        MonitorLogFixture f;
+        MainWindow w;
+        f.start(w);
+        MonitorLogPanel* installed = nullptr;
+        for (QObject* object : w.findChildren<QPlainTextEdit*>())
+            if (auto* panel = dynamic_cast<MonitorLogPanel*>(object))
+                installed = panel;
+        check(installed != nullptr,
+              "monitor dock must construct MonitorLogPanel instead of QPlainTextEdit");
+        auto* logs = monitorPanel(w);
+        check(logs == installed, "getter exposes the monitor dock's installed log panel");
+        check(monitorLogDock(w, logs) != nullptr, "log panel belongs to the monitor dock");
+        check(logs->isReadOnly(), "window monitor log panel is read-only");
+        check(logs->minimumLevel() == std::nullopt, "window monitor starts with all levels");
+    });
+    test("monitor log entries and direct level filtering survive polling", [&] {
+        MonitorLogFixture f;
+        MainWindow w;
+        f.start(w);
+        auto* logs = monitorPanel(w);
+        check(waitFor([&] { return !logs->displayedText().isEmpty(); }),
+              "monitor polling supplies log entries");
+        checkMonitorText(*logs, std::nullopt, f.independent.displayedText().toUtf8());
+
+        f.independent.setMinimumLevel(0);
+        check(f.independent.displayedText().toUtf8() == f.filteredText,
+              "filtered fixture hides the complete negative line and retains log and diagnostic");
+        logs->setMinimumLevel(0);
+        checkMonitorText(*logs, std::optional<int>{0}, f.independent.displayedText().toUtf8());
+        waitForMonitorPolls();
+        checkMonitorText(*logs, std::optional<int>{0}, f.independent.displayedText().toUtf8());
+
+        f.independent.clearLevelFilter();
+        logs->clearLevelFilter();
+        checkMonitorText(*logs, std::nullopt, f.fullText);
+        check(logs->displayedText().toUtf8() == f.independent.displayedText().toUtf8(),
+              "clearing the filter restores the independent panel's complete text");
+        waitForMonitorPolls();
+        checkMonitorText(*logs, std::nullopt, f.fullText);
+    });
+    test("monitor level control filters the same panel exposed by the getter", [&] {
+        MonitorLogFixture f;
+        MainWindow w;
+        f.start(w);
+        auto* logs = monitorPanel(w);
+        auto* filter = monitorLevelFilter(monitorLogDock(w, logs));
+        check(filter->currentIndex() == 0, "level control defaults to all levels");
+        check(waitFor([&] { return !logs->displayedText().isEmpty(); }),
+              "monitor polling supplies text before UI filtering");
+        checkMonitorText(*logs, std::nullopt, f.fullText);
+
+        filter->setCurrentIndex(1);
+        check(w.monitorLogPanel() == logs, "filter control operates on the exposed panel");
+        checkMonitorText(*logs, std::optional<int>{0}, f.filteredText);
+        waitForMonitorPolls();
+        checkMonitorText(*logs, std::optional<int>{0}, f.filteredText);
+        filter->setCurrentIndex(0);
+        checkMonitorText(*logs, std::nullopt, f.fullText);
+    });
+    test("repeated monitoring tracks the latest panel and keeps dock controls independent", [&] {
+        MonitorLogFixture f;
+        MainWindow w;
+        f.start(w, "first-monitor");
+        QPointer<MonitorLogPanel> first = monitorPanel(w);
+        auto* firstDock = monitorLogDock(w, first.data());
+        auto* firstFilter = monitorLevelFilter(firstDock);
+        w.monitorRun(
+            f.temp.path(), EventFormat::LegacyCaelog1, nullptr, "second-monitor", f.eventFile);
+        auto* second = monitorPanel(w);
+        check(first && second != first.data(), "same directory creates a distinct latest panel");
+        auto* secondDock = monitorLogDock(w, second);
+        check(secondDock != firstDock, "repeated monitoring creates another dock");
+        check(waitFor([&] {
+                  return !first->displayedText().isEmpty() && !second->displayedText().isEmpty();
+              }),
+              "both monitor panels receive log entries");
+        checkMonitorText(*first, std::nullopt, f.fullText);
+        checkMonitorText(*second, std::nullopt, f.fullText);
+        waitForMonitorPolls();
+        checkMonitorText(*first, std::nullopt, f.fullText);
+        checkMonitorText(*second, std::nullopt, f.fullText);
+
+        firstFilter->setCurrentIndex(1);
+        checkMonitorText(*first, std::optional<int>{0}, f.filteredText);
+        checkMonitorText(*second, std::nullopt, f.fullText);
+        waitForMonitorPolls();
+        checkMonitorText(*first, std::optional<int>{0}, f.filteredText);
+        checkMonitorText(*second, std::nullopt, f.fullText);
+        firstFilter->setCurrentIndex(0);
+        auto* secondFilter = monitorLevelFilter(secondDock);
+        secondFilter->setCurrentIndex(1);
+        checkMonitorText(*first, std::nullopt, f.fullText);
+        checkMonitorText(*second, std::optional<int>{0}, f.filteredText);
+
+        const auto docksBefore = w.findChildren<QDockWidget*>().size();
+        w.monitorRun(
+            f.temp.path(), EventFormat::LegacyCaelog1, nullptr, "first-monitor", f.eventFile);
+        check(w.monitorLogPanel() == second && w.findChildren<QDockWidget*>().size() == docksBefore,
+              "deduplicated runId preserves the latest panel and does not create another dock");
+        delete firstDock;
+        check(!first && w.monitorLogPanel() == second,
+              "destroying an older dock preserves the latest panel getter");
+        delete secondDock;
+        check(w.monitorLogPanel() == nullptr,
+              "destroying the latest monitor dock clears the panel getter");
+    });
+    test("empty event file produces an empty monitor log panel after polling", [&] {
+        QTemporaryDir temp;
+        check(temp.isValid(), "empty monitor temporary directory");
+        const QString eventFile = "empty-events.caelog";
+        write(temp.filePath(eventFile), {});
+        MainWindow w;
+        w.monitorRun(temp.path(), EventFormat::LegacyCaelog1, nullptr, {}, eventFile);
+        check(waitFor([&] { return w.monitorStatusText().contains(eventFile); }),
+              "empty event file is polled before checking its text");
+        auto* logs = monitorPanel(w);
+        checkMonitorText(*logs, std::nullopt, {});
+    });
     test("monitor status format, filename and source", [&] {
         Fixture f(argv[1]);
         MainWindow w;

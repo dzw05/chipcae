@@ -287,6 +287,11 @@ MainWindow::MainWindow(const QStringList& args,
     resize(960, 640);
 }
 
+chipcae::desktop::MonitorLogPanel* MainWindow::monitorLogPanel() const {
+    // TEST-FIRST stub: the monitor dock is not wired to MonitorLogPanel yet.
+    return nullptr;
+}
+
 void MainWindow::monitorRun(const QString& directory,
                             chipcae::desktop::EventFormat format,
                             chipcae::desktop::LocalJobService* broker,
