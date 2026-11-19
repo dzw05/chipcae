@@ -18,6 +18,7 @@ struct EcadLayer {
     double thickness_m = 0;
     bool copper = false;
     std::vector<Polygon> polygons;
+    std::string metal{}; // Test-first storage stub; mapping/export behavior is unchanged.
 };
 struct UnsupportedElement {
     std::string code = "IMPORT_UNSUPPORTED_ELEMENT";
