@@ -1,8 +1,7 @@
-These are TEST-FIRST acceptance tests for I7-jobs-local/1.0, card 1.
-
-The new jobmgr entry points currently have inert linkage stubs. A successful
-compile is expected; enabled acceptance assertions intentionally fail until the
-implementation card. Existing JobManager/CLI behavior is retained in this pass.
+These acceptance tests cover I7-jobs-local/1.0, card 1. They were committed
+before implementation and retain their original assertions. The manager now
+implements snapshots, profiles, persisted state, recovery and local call semantics;
+real process execution and desktop comparison tests remain for card 2.
 
 `test_paths` always runs. The six manager executables return 77 only when the
 optional local target is absent. Release assertions use explicit checks, so

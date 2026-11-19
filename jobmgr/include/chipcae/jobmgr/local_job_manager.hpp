@@ -29,6 +29,11 @@ public:
     jobs::ControlReply Control(const jobs::ControlRequest& request);
     jobs::Job Cancel(const jobs::CancelRequest& request);
     jobs::ListOutputsResponse ListOutputs(const jobs::ListOutputsRequest& request) const;
+    // Consume exits once; const reads observe only already persisted state.
     std::size_t poll();
+
+private:
+    class Impl;
+    std::unique_ptr<Impl> impl_;
 };
 } // namespace chipcae::jobmgr
