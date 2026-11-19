@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-# PR #179's approved brief revision (2026-11-19) defers reference qualification.
+# The brief amendment archived in the generator README defers reference qualification.
+# Generator-only regressions require an explicit opt-out of reference acceptance.
 option(CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE
-       "Require qualified DEMO-GATE reference acceptance" OFF)
+       "Require qualified DEMO-GATE reference acceptance" ON)
 chipcae_auto_tests(PREFIX vvccx_ LABELS "vv" TIMEOUT 600)
 
 if(CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE)

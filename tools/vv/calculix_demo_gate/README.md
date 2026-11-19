@@ -13,8 +13,9 @@ chipcae comparison.
 The written authorization is the supplied V-INT-6 brief's section
 **“PR #179 本轮评审范围修订（2026-11-19）”**. It explicitly defers qualified
 `REFERENCE.json`, committed L1 decks, formal reference values and real-reference
-acceptance, and specifies `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=OFF`
-for this generator/validator delivery. This revision supersedes the original
+acceptance, and authorizes explicitly selecting
+`CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=OFF` for this generator/validator
+delivery. This revision supersedes the original
 requirement to publish a qualified reference in this PR. It requires the JSON
 test to run complete synthetic validator fixtures and negative checks, and the
 regeneration test to run real L1 generation and generator regressions when
@@ -25,6 +26,11 @@ The original reference deliverable remains incomplete.
 The complete supplied amendment is reproduced verbatim in the
 [scope amendment below](#supplied-brief-scope-amendment), with its SHA-256,
 so the authorization is available in the reviewed repository itself.
+
+Real-reference acceptance is **ON by default**. A clean default configuration
+fails while the qualified reference deliverable is missing. The amended scope
+allows an explicit OFF configuration for generator/validator verification;
+that opt-out must be selected deliberately and does not qualify a reference.
 
 **Candidate status: 参考不合格 — prescribed warpage sequence is nonmonotone.**
 L3 mechanics now completes within the unchanged memory guard, and all three
@@ -38,8 +44,8 @@ Exactly two CTests are registered unconditionally: `vvccx_reference_json` and
 
 | Configuration | `vvccx_reference_json` | `vvccx_regen_l1` |
 |---|---|---|
-| `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=OFF` (default) | Runs complete synthetic validator fixtures and negative checks using only the standard library; any present artifact also requires full acceptance | Runs generator, parser, failure and direct/iterative solver regressions; defers only artifact comparisons while no artifact is published |
-| `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=ON` | Requires the qualified artifact and archived L1 decks, independently recomputing all original acceptance criteria; also runs all validator regressions | Requires L2/L3 recorded deck hashes and real L1 byte/QoI comparisons with the artifact; also runs all generator regressions |
+| `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=ON` (default) | Requires the qualified artifact and archived L1 decks, independently recomputing all original acceptance criteria; also runs all validator regressions | Requires L2/L3 recorded deck hashes and real L1 byte/QoI comparisons with the artifact; also runs all generator regressions |
+| `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=OFF` (explicit opt-out) | Runs complete synthetic validator fixtures and negative checks using only the standard library; any present artifact also requires full acceptance | Runs generator, parser, failure and direct/iterative solver regressions; defers only artifact comparisons while no artifact is published |
 
 Direct script execution defaults to strict acceptance. CMake sets
 `CHIPCAE_DEMO_GATE_TEST_MODE=generator` under OFF and `reference` under ON.
@@ -233,6 +239,15 @@ The recorded solver is `This is Version 2.23`; version-only exit 201 is accepted
 Use the shared build-slot shim on PATH, plain command names and two jobs:
 
 ```sh
+cmake -S . -B build-vvccx -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_BUILD_TESTS=ON -U CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE
+ctest --test-dir build-vvccx -R '^vvccx_(reference_json|regen_l1)$' --output-on-failure -j2
+```
+
+Clearing the cached option selects the ON default even in an existing build
+directory. Both acceptance tests currently fail because no qualified artifact
+is published. To verify the authorized generator/validator delivery explicitly:
+
+```sh
 cmake -S . -B build-vvccx -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_BUILD_TESTS=ON -DCHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=OFF
 cmake --build build-vvccx -j2
 ctest --test-dir build-vvccx -R '^vvccx_(reference_json|regen_l1)$' --output-on-failure
@@ -240,10 +255,9 @@ ctest --test-dir build-vvccx --output-on-failure -j2
 ```
 
 OFF exercises the authorized generator/validator delivery without claiming
-reference qualification. To exercise strict acceptance, configure with
-`-DCHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=ON`, or run the scripts directly
-with `CHIPCAE_DEMO_GATE_TEST_MODE` unset. Both strict suites currently fail
-because this PR has no qualified artifact:
+reference qualification. To restore strict acceptance, configure with
+`-DCHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=ON`, clear the cached option as
+above, or run the scripts directly with `CHIPCAE_DEMO_GATE_TEST_MODE` unset:
 
 ```sh
 python3 tests/vv/calculix_demo_gate/test_reference_json.py
