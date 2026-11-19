@@ -209,6 +209,7 @@ void orthotropic_plane_strain() {
 }
 } // namespace
 int main(int argc, char** argv) {
+    std::cout << std::unitbuf;
     if (PetscInitialize(&argc, &argv, nullptr, nullptr) != PETSC_SUCCESS)
         return 2;
     Suite s(MPI_COMM_WORLD);

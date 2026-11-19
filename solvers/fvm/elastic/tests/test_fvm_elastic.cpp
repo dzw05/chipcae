@@ -693,6 +693,7 @@ void benchmark(Suite& s) {
 }
 } // namespace
 int main(int argc, char** argv) {
+    std::cout << std::unitbuf;
     if (PetscInitialize(&argc, &argv, nullptr, nullptr) != PETSC_SUCCESS)
         return 2;
     KSPInitializePackage();

@@ -6,7 +6,8 @@ add_library(chipcae_fvm_elastic src/elastic.cpp)
 add_library(chipcae::fvm_elastic ALIAS chipcae_fvm_elastic)
 target_include_directories(chipcae_fvm_elastic PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${PROJECT_SOURCE_DIR}/schema/include)
+    ${PROJECT_SOURCE_DIR}/schema/include
+    PRIVATE ${PROJECT_SOURCE_DIR}/material/include)
 target_link_libraries(chipcae_fvm_elastic PUBLIC mfem chipcae::core)
 chipcae_set_warnings(chipcae_fvm_elastic)
 
