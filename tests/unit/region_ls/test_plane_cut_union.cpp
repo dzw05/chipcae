@@ -1430,6 +1430,34 @@ public:
     }
     ~Fault() { set(saved_ ? saved_->c_str() : nullptr); }
 };
+void open_union_export_rollback() {
+    const auto s = l_shape();
+    auto m = sp5::grid(stack(), 8);
+    const auto ph = phi(m, s.outline);
+    auto ps = pieces(s);
+    const auto o = options();
+    auto good_mesh = m;
+    auto good_cut = value(union_kernel::build_cut_layer_union(good_mesh, ps, {}, o, ph),
+                          "closed union control");
+    require(good_mesh.elem_gid.size() < m.elem_gid.size(), "control removes void cells");
+    valid_output({std::move(good_mesh), std::move(good_cut)});
+
+    // Incorrectly discard the first piece's exterior y=.0137 cap. At the
+    // reentrant corner the second piece still supplies a retained embedded
+    // face, but the exported boundary has unpaired edges and must be rejected.
+    require(!ps[0].internal[2], "fixture cap starts as exterior");
+    ps[0].internal[2] = true;
+    m.copper_phi = {-0., .125};
+    m.nodes = {-0., .25};
+    m.grid_report.warnings.push_back("synthetic closure rollback sentinel");
+    const auto before = m;
+    auto result = union_kernel::build_cut_layer_union(m, ps, {}, o, ph);
+    require(!result, "open union export must fail before committing the mesh");
+    require(result.error().path == "cut/polyhedron", "open export reports polyhedron error");
+    require(result.error().reason.find("closed=false") != std::string::npos,
+            "unpaired exported edges fail closure validation");
+    exact(m, before, "open export preserves all caller mesh fields");
+}
 void late_failure(const char* stage, bool fast) {
     auto m = sp5::grid(stack(), 8);
     Shape s = l_shape();
@@ -1539,6 +1567,7 @@ int main(int argc, char** argv) {
         run("connectivity_point_contact", [] { connectivity_contact(true); });
         run("connectivity_edge_contact", [] { connectivity_contact(false); });
         run("connectivity_length_scale", connectivity_length_scale);
+        run("open_union_export_rollback", open_union_export_rollback);
         for (const char* stage : {"clipping", "export", "final_validation"})
             for (bool fast : {false, true})
                 run(std::string("rollback_") + stage + (fast ? "_fast" : "_union"),
