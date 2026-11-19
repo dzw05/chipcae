@@ -120,7 +120,9 @@ ctest --test-dir build-fvm-elastic -R solve_fvm_elastic_benchmark -V
 
 Acceptance tests use synthetic uncut tensor grids. Negative tests reject embedded
 geometry, including a single tetrahedron and horizontal embedded faces, through both
-the solver and diagnostic assembly on one and two ranks. Timoshenko tests use
+the solver and diagnostic assembly on one and two ranks. Physical KSP operator checks
+require exact, near and transpose rigid nullspaces for Rigid321 and their absence for
+Fixed, with both preconditioners on one and two ranks. Timoshenko tests use
 nu=0 plies to isolate the beam reference, three factor-two refinements, four cells per
 ply initially and central-half curvature fits. The orthotropic CLT test imposes
 plane-strain kinematics on lateral y faces; it does not infer plane strain from free

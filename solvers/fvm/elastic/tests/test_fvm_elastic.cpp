@@ -507,6 +507,7 @@ void preconditioners() {
 }
 // Observe the real physical KSP operator, excluding GAMG's nested coarse solves.
 // Fixed operators have neither exact nor near rigid nullspaces.
+template <bool rigid>
 PetscErrorCode check_rigid_nullspaces(
     PetscLogEvent event, int, PetscObject object, PetscObject, PetscObject, PetscObject) {
     PetscLogEvent solve_event = 0;
@@ -526,19 +527,23 @@ PetscErrorCode check_rigid_nullspaces(
     PetscCall(MatGetNullSpace(a, &exact));
     PetscCall(MatGetNearNullSpace(a, &near_space));
     PetscCall(MatGetTransposeNullSpace(a, &transpose));
-    PetscCheck((exact != nullptr) == (near_space != nullptr) &&
-                   (exact != nullptr) == (transpose != nullptr),
+    PetscCheck((exact != nullptr) == rigid && (near_space != nullptr) == rigid &&
+                   (transpose != nullptr) == rigid,
                PetscObjectComm(object),
                PETSC_ERR_ARG_WRONGSTATE,
-               "Rigid near-nullspace requires an exact and transpose rigid nullspace");
+               "Exact, near and transpose rigid nullspaces must match the selected support");
     return PETSC_SUCCESS;
 }
 struct NullspaceCheck {
     PetscLogHandler handler = nullptr;
-    NullspaceCheck() {
-        require(PetscLogHandlerCreateLegacy(
-                    MPI_COMM_SELF, check_rigid_nullspaces, nullptr, nullptr, nullptr, &handler) ==
-                    PETSC_SUCCESS,
+    explicit NullspaceCheck(bool rigid) {
+        require(PetscLogHandlerCreateLegacy(MPI_COMM_SELF,
+                                            rigid ? check_rigid_nullspaces<true>
+                                                  : check_rigid_nullspaces<false>,
+                                            nullptr,
+                                            nullptr,
+                                            nullptr,
+                                            &handler) == PETSC_SUCCESS,
                 "create KSP nullspace observer");
         require(PetscLogHandlerStart(handler) == PETSC_SUCCESS, "start KSP nullspace observer");
     }
@@ -548,7 +553,6 @@ struct NullspaceCheck {
     }
 };
 void nullspace_supports() {
-    const NullspaceCheck check;
     auto disconnected = grid(3, 2, 2);
     const auto body = disconnected;
     const auto cells = static_cast<std::int64_t>(body.volume.size());
@@ -570,6 +574,7 @@ void nullspace_supports() {
     for (const auto& m : {grid(3, 2, 2), grid(1, 1, 1), disconnected})
         for (const std::string pc : {"jacobi", "gamg"})
             for (bool fixed : {false, true}) {
+                const NullspaceCheck check(!fixed);
                 auto p = problem(m);
                 p.preconditioner = pc;
                 M3 a{};
@@ -633,6 +638,7 @@ void distributed(Suite& suite, int ranks) {
         for (const std::string pc : {"jacobi", "gamg"})
             for (bool fixed : {false, true})
                 suite.run(name + " " + pc + (fixed ? " Fixed" : " Rigid321"), [&] {
+                    const NullspaceCheck check(!fixed);
                     auto m = grid(axis(4, 1, 1.3), axis(3), axis(4, 0.05), ranks);
                     if (name == "zero owned rows")
                         std::fill(m.rank.begin(), m.rank.end(), 0);
