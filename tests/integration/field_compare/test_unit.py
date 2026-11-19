@@ -402,6 +402,13 @@ class FieldCompareTests(unittest.TestCase):
             data["VTKHDF/hex/CellData/T_cell"] = [float("nan"), 300., 300.]
         self.invalid("nonfinite field")
 
+    def test_finite_input_cannot_overflow_into_nonfinite_loaded_fields(self):
+        # A duplicate mean or connected-vertex mean can overflow even when
+        # every stored value is finite. No generated infinity is a sentinel.
+        with h5py.File(self.other_step, "r+") as data:
+            data["VTKHDF/hex/PointData/T"][:] = np.finfo(float).max
+        self.invalid("nonfinite")
+
     def test_missing_manifest_vtkhdf_ids_and_required_qois(self):
         for file in (self.other / "manifest.json", self.other_step):
             with self.subTest(file=file.name):
