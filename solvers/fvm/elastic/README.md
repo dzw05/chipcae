@@ -104,9 +104,19 @@ and single-sample sets are supported. Method strings are:
 ## Reproduction
 
 This subdirectory requires `CHIPCAE_ENABLE_MFEM AND MFEM_USE_PETSC`. Test executables
-additionally require `CHIPCAE_BUILD_TESTS`. The parent `solvers/fvm/CMakeLists.txt`
-adds this directory; the dependency gate keeps the library and tests out of builds
-without PETSc-enabled MFEM.
+additionally require `CHIPCAE_BUILD_TESTS`. The thermal card, or a separate lead-owned
+integration patch, must add the following conditional block to the parent
+`solvers/fvm/CMakeLists.txt`; that parent change is outside this card's scope:
+
+```cmake
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/elastic/CMakeLists.txt")
+    add_subdirectory(elastic)
+endif()
+```
+
+Until that integration lands, add the block temporarily for the local commands below
+and remove it after verification, before committing. The dependency gate in this
+subdirectory keeps the library and tests out of builds without PETSc-enabled MFEM.
 
 ```sh
 cmake -S . -B build-fvm-elastic -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -173,4 +183,6 @@ acceptance cases and their clipping builder were removed from this card; embedde
 input now has rejection coverage. The public signature and result method strings
 are preserved. CI/ci-ok, FVM CLI wiring and FVM-to-FEM cross-comparison are
 **未执行** in this local library-only delivery. The external verification log records
-full-suite results, environment, exact commands and commit hashes.
+full-suite results, environment, exact commands and commit hashes. The current local
+verification uses the temporary conditional parent integration described above;
+that block is not part of this card's committed changes.
