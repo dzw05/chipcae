@@ -100,7 +100,7 @@ struct Parser {
                       reports.end());
         std::vector<EcadLayer> retained;
         std::vector<UnsupportedElement> additions;
-        std::set<std::string> seen;
+        std::set<std::string> seen, omitted_masks;
         layer_index.clear();
         for (std::size_t i = 0; i < model.layers.size(); ++i) {
             auto& layer = model.layers[i];
@@ -114,6 +114,8 @@ struct Parser {
                     if (first) {
                         const auto& f = layer.function;
                         const auto k = classify(f);
+                        if (k == Kind::mask)
+                            omitted_masks.insert(layer.name);
                         const auto element = k == Kind::mask ? "SolderMask:" + layer.name
                                              : k == Kind::skipped
                                                  ? "SkippedLayer:" + layer.name + ":" + f
@@ -150,6 +152,7 @@ struct Parser {
                      std::llround(center[1] + artwork.radius * std::sin(angle))});
             }
             model.layers[li->second].polygons.push_back(std::move(polygon));
+            circle_uses[artwork.use].modeled = true;
         }
         // Merge overlapping copper artwork and traces before computing their area.
         for (auto& layer : model.layers) {
@@ -181,6 +184,18 @@ struct Parser {
         }
         model.report.unsupported.insert(
             model.report.unsupported.begin(), additions.begin(), additions.end());
+        std::stable_sort(circle_uses.begin(), circle_uses.end(), [](const auto& a, const auto& b) {
+            return a.line < b.line;
+        });
+        std::set<std::pair<std::string, std::uint64_t>> reported_circles;
+        for (const auto& use : circle_uses) {
+            // Solder mask is deliberately omitted and already has its own diagnostic.
+            if (omitted_masks.count(use.layer))
+                continue;
+            if (!use.modeled && circles.count(use.id) &&
+                reported_circles.emplace(use.id, use.line).second)
+                reports.push_back({"IMPORT_UNSUPPORTED_ELEMENT", "Circle", use.line});
+        }
         for (std::size_t ci = 0; ci < model.components.size(); ++ci) {
             auto& c = model.components[ci];
             auto pkg = packages.find(c.package);
@@ -294,11 +309,24 @@ struct Parser {
     std::set<std::string> duplicate_ids, missing_ids, missing_layers, end_layers;
     std::map<std::string, double> circles;
     std::string standard;
+    struct CircleUse {
+        std::string id, layer;
+        std::uint64_t line;
+        bool modeled = false;
+    };
+    std::vector<CircleUse> circle_uses;
     struct Artwork {
-        std::size_t pad;
+        std::size_t pad, use;
         double radius;
     };
     std::vector<Artwork> deferred_artwork;
+    std::size_t dictionary_user_depth = 0, entry_user_depth = 0;
+    struct UserSpecial {
+        std::size_t depth;
+        std::uint64_t line;
+        bool dictionary, layer, reported = false;
+    };
+    std::vector<UserSpecial> user_specials;
     void draw_trace(Trace& t, Clipper2Lib::EndType end = Clipper2Lib::EndType::Round) {
         auto li = layer_index.find(t.layer);
         if (li == layer_index.end() || skipped(t.layer))
@@ -382,6 +410,39 @@ struct Parser {
         if (name == "StandardPrimitiveRef" && in_pad)
             pending.back().artwork = true;
         const auto parent = path.size() > 1 ? path[path.size() - 2] : std::string{};
+        if (name == "DictionaryUser")
+            dictionary_user_depth = path.size();
+        if (name == "EntryUser" && dictionary_user_depth)
+            entry_user_depth = path.size();
+        if (name == "UserSpecial") {
+            user_specials.push_back(
+                {path.size(), line_number(), entry_user_depth != 0, !current_layer.empty()});
+            if (user_specials.back().dictionary || user_specials.back().layer)
+                return;
+        }
+        if (entry_user_depth &&
+            (name == "Polygon" || name == "PolyBegin" || name == "PolyStepSegment")) {
+            // Dictionary shapes are definitions, never board, layer or package geometry.
+            if (!user_specials.empty()) {
+                auto& user = user_specials.back();
+                if (user.dictionary && !user.reported) {
+                    model.report.unsupported.push_back(
+                        {"IMPORT_UNSUPPORTED_ELEMENT", "UserSpecial", user.line});
+                    user.reported = true;
+                }
+            }
+            return;
+        }
+        if (!user_specials.empty()) {
+            const auto& user = user_specials.back();
+            if (name == "Contour" && path.size() == user.depth + 1 &&
+                (user.dictionary || user.layer))
+                return;
+            if (user.dictionary && (name == "Circle" || name == "LineDesc" || name == "FillDesc"))
+                return;
+        }
+        if (name == "UserPrimitiveRef" && parent == "PadstackPadDef")
+            return;
         if (name == "Property" && !spec.empty() && material_general_depth &&
             materials[spec].empty() && !value(a, "text").empty())
             materials[spec] = value(a, "text");
@@ -514,11 +575,20 @@ struct Parser {
             model.report.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT", name, line_number()});
             standard = value(a, "id");
         } else if (name == "Circle" && !standard.empty()) {
-            model.report.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT", name, line_number()});
             circles[standard] = number(attr(a, "diameter")) * scale();
-        } else if (name == "StandardPrimitiveRef" && in_pad && circles.count(value(a, "id"))) {
+        } else if (name == "StandardPrimitiveRef") {
             model.report.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT", name, line_number()});
-            deferred_artwork.push_back({pending.size() - 1, circles[value(a, "id")] / 2});
+            const bool definition =
+                (!package.empty() && std::find(path.begin(), path.end(), "Pin") != path.end()) ||
+                std::find(path.begin(), path.end(), "PadstackPadDef") != path.end();
+            if (!current_layer.empty() && !definition) {
+                const auto id = value(a, "id");
+                circle_uses.push_back({id, current_layer, line_number()});
+                // Preserve the existing requirement that the circle is already defined.
+                if (in_pad && circles.count(id))
+                    deferred_artwork.push_back(
+                        {pending.size() - 1, circle_uses.size() - 1, circles[id] / 2});
+            }
         } else if (name == "LineDesc") {
             const char* id = attr(a, "id");
             const double width = number(attr(a, "lineWidth"));
@@ -611,6 +681,12 @@ struct Parser {
     }
     void end(const char* raw) {
         auto n = local(raw);
+        if (!user_specials.empty() && path.size() == user_specials.back().depth)
+            user_specials.pop_back();
+        if (path.size() == entry_user_depth)
+            entry_user_depth = 0;
+        if (path.size() == dictionary_user_depth)
+            dictionary_user_depth = 0;
         if (n == "General" && path.size() == material_general_depth)
             material_general_depth = 0;
         if (n == "Package")

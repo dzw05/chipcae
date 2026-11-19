@@ -625,6 +625,35 @@ static bool geometry_acceptance() {
                   "unmodeled reference on excluded layer reports Circle at line 2");
         }
     });
+    run("ipc_standard_circle_soldermask_metadata", [&] {
+        const std::string mask = "<Layer name='F.Mask' layerFunction='SOLDERMASK'/>";
+        for (const bool late_definition : {false, true}) {
+            auto m = geometry_xml("",
+                                  (late_definition ? std::string{} : disk + mask) +
+                                      "<StackupLayer layerOrGroupRef='F.Mask'/>\n"
+                                      "<LayerFeature layerRef='F.Mask'><Set>" +
+                                      pad("disk", 20) +
+                                      "<StandardPrimitiveRef id='disk'/>"
+                                      "</Set></LayerFeature>" +
+                                      (late_definition ? disk + mask : std::string{}));
+            no_copper(m);
+            absent(m, "Circle");
+            present(m, "SolderMask");
+            present(m, "StandardPrimitiveRef");
+        }
+        auto missing = geometry_xml("",
+                                    disk + mask + "<LayerFeature layerRef='F.Mask'><Set>" +
+                                        pad("disk", 20) + "</Set></LayerFeature>");
+        no_copper(missing);
+        absent(missing, "SolderMask");
+        present(missing, "Circle"); // No retained or explicitly omitted stackup layer.
+        auto bare = geometry_xml("",
+                                 mask + "<StackupLayer layerOrGroupRef='F.Mask'/>"
+                                        "<LayerFeature layerRef='F.Mask'><Circle/></LayerFeature>");
+        no_copper(bare);
+        present(bare, "Circle");
+        present(bare, "SolderMask");
+    });
     run("ipc_user_special_unsupported_shapes_preserved", [&] {
         auto bare = geometry_xml("<Circle/><Contour/>");
         reports(bare, {"Circle", "Contour"});
