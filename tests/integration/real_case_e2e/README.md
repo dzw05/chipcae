@@ -1,6 +1,7 @@
-V-INT-12 automated acceptance tests, TEST-FIRST pass. The driver module contains
-only empty signature stubs, so new contract assertions intentionally fail until
-the implementation pass. No real input or generated result belongs in this tree.
+V-INT-12 runs a shared import → preview → FVM solve → readback pipeline for
+`thermal`, `warpage` and `assembly`. Repository fixtures are generated or
+synthetic; real inputs and all real output records must remain outside Git
+worktrees. No real execution is claimed by the tests.
 
 From the repository root, with the build queue wrappers first on PATH:
 
@@ -13,30 +14,112 @@ ctest --test-dir build-realcase --output-on-failure -L integration -R 'f1130|dem
 ctest --test-dir build-realcase --output-on-failure
 ```
 
-The unit test generates valid temporary manifest/VTKHDF/event fixtures. It needs
-numpy and h5py, but no compiled solver, MPI or CAD backend. Temporary executable
-doubles exercise the actual driver's process and record boundaries; no numerical
-solver result is inferred from those doubles.
-
-The three E2Es check readiness before preparing inputs. Once implemented, an
-unavailable upstream prints `SKIP: <kind> upstream not merged: <reason>
-(NEEDS-ATTENTION)` and returns 77. Current-build executable paths come from CTest.
-Thermal and warpage use the public synthetic four-layer board with a 4 by 4,
+The unit test needs numpy and h5py, but no compiled solver, MPI or CAD backend.
+It generates valid temporary manifest/VTKHDF/CAELOG1 fixtures. Temporary external
+programs exercise the driver's actual subprocess, resource and record handling;
+their output provides no evidence of numerical accuracy. The E2Es use a 4 by 4,
 level-zero mesh, two serial runs and one two-rank run when MPI is available.
-Assembly generates a lid and ring and derives the attachment layer by importing
-the synthetic board. Warpage additionally verifies exact fixed-face zeros,
-exact zero-dT displacement and the existing 5% noncut FEM comparison. Assembly
-applies W1/W2/W4 when available, with W3/W5 excluded.
+Assembly generates a lid and ring, imports the board to discover its attachment
+layer, and checks box regions and material names from the exported ID table.
 
-Expected driver exits are 0 (pass), 1 (evaluated failure or execution error),
-2 (usage error), and 77 (dependency unavailable). A dependency never masks an
-evaluated failure. All exits must produce records. Thresholds stay at 1e-8 K,
-1e-8 parallel relative error, 1e-9 energy imbalance and exact digest equality.
+The CLI accepts only these options:
 
-Implementation prerequisites still need resolution: the writer's requested
-reference type and dependency verdict conflict with the frozen result schema;
-the importer must expose its actual welded-interface count. C10 fixtures use
-an already valid schema value to test the data gate independently of that
-writer decision. No validator is changed by this test pass. Custom-load C6
-bounds, zero-denominator C8 behavior and rejected-output record destinations
-remain unspecified and are not assigned invented policies by these tests.
+```sh
+python3 tools/vv/real_case_e2e.py thermal --params params.json --source-root . --out-root local-runs --np 1 2 --repeat 2
+```
+
+Select `warpage` or `assembly` in place of `thermal`. `--source-root` defaults to
+the module's repository. CLI input paths are relative to params.json; library
+calls resolve relative input paths from the current directory. Assembly's board,
+map, material library and STEP references are relative to assembly.json and are
+copied into the run's inputs dependency tree. Assembly import and solve use the
+same parsed material content. A separate params library must match it exactly
+by material ID, independently of list order. Approximate parts, including
+parts_from_step bodies, mark the materials provenance illustrative.
+
+Set `CHIPCAE_IMPORT_EXE`, `CHIPCAE_PREVIEW_EXE` and `CHIPCAE_SOLVE_EXE` to the
+current build's executables. Thermal/warpage also resolve the corresponding
+command names from PATH. Set `CHIPCAE_MPIEXEC` for a specific MPI launcher;
+otherwise mpiexec/mpirun is discovered on PATH. CTest supplies current-build
+executable paths under the brief's feature condition and supplies
+`SP4_FIXTURE_GENERATOR` when that target exists.
+
+Required params are case_id, data_class (synthetic/real), input, material_map,
+materials (path or null) and mesh (nx, ny, levels, max_ratio,
+min_elems_per_layer). Assembly keeps material_map in its document, so the params
+entry may be null. Optional cell_budget must be an integer >= 1 and passes
+through unchanged; omission keeps the solver's default. Loads, constraints,
+linear settings and T_ref are preserved when supplied. Defaults are the
+F-1130 thermal loads, Rigid321, Jacobi with rtol=1e-12, T_ref=298.15 and a
+3600-second process timeout. Copper polygon sidecars remain intact for FVM.
+
+| Checks | Applicability |
+|---|---|
+| C1–C10 | All three kinds; every primary run is checked |
+| C7 | Exact deterministic digest equality across serial repeats |
+| C8 | Serial/two-rank mesh, partition and QoI agreement; null without MPI |
+| W1/W2 | Warpage and assembly when W is ready |
+| W3 | Separate synthetic warpage run with exactly zero fixed-bottom U |
+| W4 | Separate synthetic warpage/assembly run with exactly zero U at uniform T_ref |
+| W5 | Synthetic noncut warpage FEM comparison, relative difference <= 0.05 |
+| A1/A2/A3 | Assembly bodies/weld count/defects, material membership and check policy |
+
+Thresholds are unchanged: 1e-8 K temperature tolerance, 1e-8 parallel relative
+error, 1e-9 energy imbalance, exact repeat hashes and exact W3/W4 zeros.
+Vertex temperature overshoot and recomputed vertex warpage are diagnostics.
+Digests use mesh SHA, the ordered three-QoI whitelist as float.hex, final
+per-field iterations/residuals, and little-endian contiguous array values from
+the V-INT-10 dataset whitelist. Assembly links, reserved fields, metadata,
+timing, logs, paths and file bytes are excluded. Raw file SHA values are recorded
+separately. Exported material IDs are one-based indices into material_names;
+material-library ordering never defines them.
+
+| Exit | Meaning |
+|---|---|
+| 0 | All applicable evaluated checks pass |
+| 1 | An evaluated check fails or a pipeline/driver error occurs |
+| 2 | Invalid CLI/params or forbidden real output destination; no pipeline starts |
+| 77 | Dependency unavailable, with nonempty item-specific reasons |
+
+Evaluated failures take precedence over dependency status. Only assembly solve
+13 is a dependency interruption. Missing MPI leaves C8 null without failing.
+Each invocation allocates a new directory, writes run_record.json/md, result.json,
+cmd.txt and individual stdout/stderr logs, and returns the finalized record.
+Commands carry per-process monotonic wall time and wait4 RSS. A watchdog kills
+the process group on timeout. A real solve timeout/signal retries once with
+halved nx/ny in separate inputs/output directories; the invocation still fails.
+Synthetic inputs never receive that retry.
+
+Readiness requires the upstream fvm_pipeline.cpp for T, elastic.hpp and removal
+of the thermal-only marker for W, and T plus geometry=ON for A. Assembly checks
+only the nearest capability file ascending from the resolved import executable;
+it never borrows another build's capabilities. Assembly evaluates W separately.
+An unavailable E2E prints `SKIP: <kind> upstream not merged: <reason>
+(NEEDS-ATTENTION)` and returns 77 before generating inputs. A missing actual
+welded_interfaces count fails A1; it is never synthesized or converted to 77.
+
+The following conservative specification deviations are explicit:
+
+- Omitted --out-root allocates a persistent temporary root. Rejected real
+  destinations receive no files; their usage record goes to a temporary root
+  outside Git, returned as record_directory and printed by the CLI.
+- The frozen result schema has no physical-check reference category.
+  result.json uses reference=null, keeps the brief's physical-check wording in
+  notes, and maps needs_attention to the existing skip verdict. The detailed
+  record retains needs_attention and the exact exit code. No validator changes.
+  Unknown source commits remain unknown; C10 cannot be claimed for that schema
+  conflict, and a completed pipeline fails rather than inventing a SHA.
+- C9 excludes normal null status_detail, inapplicable sections, absent optional
+  T_cell extrema and explicitly explained unavailable displacement diagnostics.
+  Dependency-interrupted C1/C9 stay null. Other missing required data fails C9.
+- C6 is null with a pending-bound note for custom loads or a body source. C8
+  accepts identical zeros; an unequal zero-denominator comparison stays null
+  with a pending-bound note. No new numerical tolerance is assigned.
+- The decoder retains the validated event prefix at a damaged tail, including
+  bad tail magic, without scanning ahead. Invalid initial magic is an error.
+- Noncut DoFs are derived as 1 thermal / 3 mechanical unknowns per active volume; void cells are excluded.
+  Current cut exporter polyhedron counts do not establish independent merged
+  FVM unknown counts; cut-case DoFs remain missing until that contract exists.
+- The local digest implements V-INT-10 while its module is absent; reuse the
+  shared module when it becomes available. Real executions remain pending until
+  the required upstream features merge.

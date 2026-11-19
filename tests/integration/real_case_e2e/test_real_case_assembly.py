@@ -56,7 +56,7 @@ def inspect_assembly(record, folder):
     with h5py.File(folder / "np1_r1" / manifest["steps"][0]["file"]) as output:
         names = output["VTKHDF/hex/FieldData/material_names"].asstr()[...].tolist()
         ids = output["VTKHDF/hex/CellData/material_id"][...]
-        assert {"copper", "fr4_eq"} <= {names[int(i)] for i in ids}, (names, ids)
+        assert {"copper", "fr4_eq"} <= {names[int(i) - 1] for i in ids}, (names, ids)
         assert np.sum(output["VTKHDF/cut/NumberOfCells"][...]) == 0
     assert isinstance(record["assembly"]["welded_interfaces"], int)
     if driver.readiness("warpage", source_root())[0]:

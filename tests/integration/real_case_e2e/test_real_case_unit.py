@@ -109,8 +109,8 @@ def make_run(root, *, thermal_only=False, endian="<", compressed=False):
                 "PointData/T": np.full(n, 320., dtype="f8"),
                 "PointData/U": np.zeros((n, 3), dtype="f8"),
                 "CellData/T_cell": np.full(c, 320., dtype="f8"),
-                "CellData/layer_id": np.zeros(c, dtype="i4"),
-                "CellData/material_id": np.arange(c, dtype="i4"),
+                "CellData/layer_id": np.ones(c, dtype="i4"),
+                "CellData/material_id": np.arange(1, c + 1, dtype="i4"),
                 "CellData/cell_kind": np.zeros(c, dtype="i4"),
                 "CellData/elem_gid": np.arange(c, dtype="i8"),
                 "CellData/volume": np.ones(c, dtype="f8"),
@@ -271,6 +271,18 @@ class EventContracts(ContractTest):
                          [("fvm.conduction", "T", 7, 1e-13), ("fvm.solid", "U", 9, 2e-13)])
         self.assertEqual(events[-1]["level"], 1)
         self.assertTrue(events[-1]["message"].startswith("FVM_ENERGY "))
+
+    def test_lifecycle_events_from_real_solver_do_not_interrupt_batch_decoding(self):
+        hello = (string("run") + struct.pack("<I", 0) + struct.pack("<I", 1) + string("v1")
+                 + string("kernel") + string("schema") + struct.pack("<I", 0)
+                 + struct.pack("<III", 1, 1, 2) + struct.pack("<II", 2, 8)
+                 + string("case") + string("git") + string("protocol") + struct.pack("<I", 0))
+        prefix = frame(15, hello, seq=1) + frame(21, struct.pack("<BQd", 2, 0, 0.), seq=2)
+        suffix = frame(19, struct.pack("<iQ", 0, 0) + string("completed"), seq=5)
+        events = self.events(prefix + event_bytes() + suffix)
+        self.assertEqual([e["kind"] for e in events], [15, 21, 18, 18, 20, 19])
+        self.assertEqual([e["iterations"] for e in events if "solver" in e], [7, 9])
+        self.assertEqual(events[-1]["exit_code"], 0)
 
     def test_incomplete_and_crc_invalid_tail_stop_without_losing_valid_prefix(self):
         prefix = event_bytes()
@@ -590,6 +602,8 @@ elif name == 'fake-import':
     stack = json.loads((root / 'stack.json').read_text())
     write(arg('-o'), stack)
     report = {'welded_interfaces': 2, 'defects': [], 'parts': {'split_layers': {}}}
+    if mode == 'no_weld':
+        del report['welded_interfaces']
     write(arg('-o').parent / 'import_report.json', report)
     if '--report' in args:
         write(arg('--report'), report)
@@ -655,7 +669,7 @@ elif name == 'fake-solve':
     if mode == 'bad_material':
         import h5py
         with h5py.File(out / 'out/step-0.vtkhdf', 'r+') as f:
-            f['VTKHDF/hex/CellData/material_id'][...] = 1
+            f['VTKHDF/hex/CellData/material_id'][...] = 2
 else:
     raise AssertionError('unexpected external stage: ' + name)
 '''
@@ -790,6 +804,30 @@ class DriverControlFlow(ContractTest):
         self.assertEqual(parallel.returncode, 0, parallel.stderr)
         self.assertIsInstance(summarize(out2), dict)
 
+    def test_cell_budget_is_preserved_or_omitted_and_invalid_values_start_no_stages(self):
+        for budget in (100000, None):
+            with self.subTest(budget=budget):
+                params = copy.deepcopy(self.params)
+                if budget is not None:
+                    params["mesh"]["cell_budget"] = budget
+                record = self.invoke(params=params, repeat=1)
+                self.assertEqual(record["exit_code"], 0, {k: record[k] for k in ("checks", "missing", "notes")})
+                case = read_json(self.persisted(record) / "inputs/case.json")
+                if budget is None:
+                    self.assertNotIn("cell_budget", case["mesh"])
+                else:
+                    self.assertIs(type(case["mesh"]["cell_budget"]), int)
+                    self.assertEqual(case["mesh"]["cell_budget"], 100000)
+        (self.root / "calls.jsonl").unlink()
+        for budget in (0, -1, 1.5, True):
+            with self.subTest(invalid_budget=budget):
+                params = copy.deepcopy(self.params)
+                params["mesh"]["cell_budget"] = budget
+                record = self.invoke(params=params)
+                self.assertEqual(record["exit_code"], 2)
+                self.assertEqual(self.calls(), [])
+                self.assertFalse((self.persisted(record) / "inputs/case.json").exists())
+
     def test_missing_required_params_writes_usage_record_without_stages(self):
         for missing in ("case_id", "data_class", "input", "material_map", "materials", "mesh"):
             with self.subTest(missing=missing):
@@ -818,6 +856,27 @@ class DriverControlFlow(ContractTest):
                          ("T_ref", float("nan")), ("accept_b_tier", "yes")):
             self.assertEqual(self.invoke(params=dict(self.params, **{key: bad}))["exit_code"], 2)
         self.assertEqual(self.calls(), [])
+
+    def test_bad_numeric_load_values_are_usage_before_import(self):
+        for field, value in (("T", "hot"), ("T", True), ("T_inf", "warm"), ("h", [])):
+            with self.subTest(field=field):
+                loads = copy.deepcopy(DEFAULT_LOADS)
+                loads[0 if field == "T" else 1][field] = value
+                record = self.invoke(params=dict(self.params, loads=loads))
+                self.assertEqual(record["exit_code"], 2)
+                self.assertEqual(self.calls(), [])
+                self.persisted(record)
+
+    def test_missing_weld_count_is_failure_even_if_assembly_w_is_unready(self):
+        self.pipeline.write_text(THERMAL_ONLY)
+        make_run(self.root / "template", thermal_only=True)
+        os.environ["REALCASE_TEST_MODE"] = "no_weld"
+        record = self.invoke("assembly", params=self.assembly_params())
+        self.assertEqual(record["exit_code"], 1)
+        self.assertIs(record["checks"]["A1"], False)
+        self.assertIsNone(record["assembly"]["welded_interfaces"])
+        self.assertTrue(record["needs_attention"])
+        self.persisted(record)
 
     def test_invalid_kind_and_required_field_types_are_usage_without_stages(self):
         self.assertEqual(self.invoke(kind="unsupported")["exit_code"], 2)
@@ -939,7 +998,7 @@ class DriverControlFlow(ContractTest):
         with patch("shutil.which", side_effect=lambda name, *a, **kw:
                    None if name in ("mpiexec", "mpirun") else actual_which(name, *a, **kw)):
             record = self.invoke(nps=[1, 2])
-        self.assertEqual(record["exit_code"], 0)
+        self.assertEqual(record["exit_code"], 0, {k: record[k] for k in ("checks", "missing", "notes")})
         self.assertIsNone(record["checks"]["C8"])
         self.assertTrue(any("mpi" in note.lower() for note in record["notes"]))
         self.assertEqual(len(self.calls("solve")), 2)
@@ -949,7 +1008,7 @@ class DriverControlFlow(ContractTest):
                            linear={"preconditioner": "jacobi", "rtol": 1e-10}, T_ref=300.)
         original = copy.deepcopy(self.params)
         record = self.invoke(nps=[1, 2])
-        self.assertEqual(record["exit_code"], 0)
+        self.assertEqual(record["exit_code"], 0, {k: record[k] for k in ("checks", "missing", "notes")})
         self.assertEqual(record["verdict"], "pass")
         self.assertEqual(self.params, original)
         self.assertEqual(record["needs_attention"], [])
@@ -992,11 +1051,20 @@ class DriverControlFlow(ContractTest):
         self.assertGreaterEqual(len(list((folder / "logs").glob("*.stderr.log"))), 6)
         self.assertEqual(check_file(folder / "result.json"), [])
 
+    def test_void_exported_cells_do_not_count_as_fvm_unknowns(self):
+        with h5py.File(vtk_path(self.root / "template"), "r+") as output:
+            output["VTKHDF/hex/CellData/cell_kind"][0] = 2
+        record = self.invoke(repeat=1)
+        self.assertEqual(record["exit_code"], 0, record["notes"])
+        self.assertEqual(record["mesh"]["n_cells_hex"], 2)
+        self.assertEqual(record["dofs"]["thermal"], 1)
+        self.assertEqual(record["dofs"]["mech"], 3)
+
     def test_thermal_only_result_never_reports_zero_mechanical_qoi(self):
         self.pipeline.write_text(THERMAL_ONLY)
         make_run(self.root / "template", thermal_only=True)
         record = self.invoke()
-        self.assertEqual(record["exit_code"], 0)
+        self.assertEqual(record["exit_code"], 0, {k: record[k] for k in ("checks", "missing", "notes")})
         folder = self.persisted(record)
         qoi = read_json(folder / "result.json")["qoi"]
         self.assertIn("T_max", qoi)
@@ -1006,7 +1074,7 @@ class DriverControlFlow(ContractTest):
     def test_assembly_material_names_not_library_order_and_applicable_check_policy(self):
         params = self.assembly_params()
         record = self.invoke("assembly", params=params)
-        self.assertEqual(record["exit_code"], 0)
+        self.assertEqual(record["exit_code"], 0, {k: record[k] for k in ("checks", "missing", "notes")})
         self.assertIs(record["checks"]["A2"], True)
         self.assertIs(record["checks"]["A3"], True)
         self.assertTrue({"W1", "W2", "W4"} <= set(record["checks"]))
@@ -1096,6 +1164,18 @@ class DriverControlFlow(ContractTest):
                 self.assertGreater(failed[0]["wall_s"], 0)
                 self.assertGreater(failed[0]["peak_rss_kib"], 0)
                 self.persisted(record)
+
+    def test_real_warpage_explained_auxiliary_nulls_do_not_fail_record_completeness(self):
+        record = self.invoke("warpage", params=dict(self.params, data_class="real"))
+        self.assertEqual(record["exit_code"], 0, {k: record[k] for k in ("checks", "missing", "notes")})
+        self.assertIs(record["checks"]["C9"], True)
+        self.assertEqual(record["missing"], [])
+        for name in ("W3", "W4", "W5"):
+            self.assertIsNone(record["checks"][name])
+            self.assertTrue(any(name in note for note in record["notes"]))
+        self.assertEqual(len(self.calls("solve")), 2)
+        folder = self.persisted(record)
+        self.assertEqual(check_file(folder / "result.json"), ["real result must stay local (D03)"])
 
     def test_real_timeout_and_signal_retry_once_with_halved_mesh_and_still_fail(self):
         for mode in ("timeout", "signal"):
