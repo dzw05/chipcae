@@ -103,8 +103,6 @@ ElasticBoundary validate(const ElasticMesh& m, const ElasticProblem& p, MPI_Comm
     }
     for (std::size_t k = 0; k < nf; ++k) {
         const auto& f = m.faces[k];
-        // First delivery is the tensor-grid solver; the next commit enables cut geometry.
-        require(!m.is_embedded[k], "embedded faces require cut-cell support");
         require(f.lo >= 0 && static_cast<std::size_t>(f.lo) < n && f.hi >= -1 &&
                     (f.hi < 0 || (static_cast<std::size_t>(f.hi) < n && f.hi != f.lo)),
                 "face cell indices");
@@ -1143,10 +1141,9 @@ ElasticResult solve_system(const ElasticMesh& m,
     petsc(VecDuplicate(x, &coordinates.value));
     petsc(VecSetBlockSize(coordinates, 3));
     petsc(VecGetArray(coordinates, &values));
-    std::vector<PetscReal> coords(static_cast<std::size_t>(std::max(PetscInt{1}, 3 * local)));
     for (PetscInt i = 0; i < local; ++i)
         for (int j = 0; j < 3; ++j)
-            coords[3 * i + j] = values[3 * i + j] = m.centroid[order[first + i]][j];
+            values[3 * i + j] = m.centroid[order[first + i]][j];
     petsc(VecRestoreArray(coordinates, &values));
     if (full_body) {
         petsc(MatNullSpaceCreateRigidBody(coordinates, &near.value));
@@ -1237,7 +1234,7 @@ ElasticResult solve_system(const ElasticMesh& m,
     petsc(VecNorm(physical, NORM_2, &bnorm));
     petsc(KSPCreate(comm, &ksp.value));
     petsc(KSPSetOperators(ksp, a, a));
-    petsc(KSPSetType(ksp, p.preconditioner == "gamg" ? KSPGMRES : KSPCG));
+    petsc(KSPSetType(ksp, p.preconditioner == "gamg" ? KSPFGMRES : KSPCG));
     petsc(KSPSetInitialGuessNonzero(ksp, PETSC_TRUE));
     if (p.preconditioner == "gamg") {
         petsc(KSPGMRESSetRestart(ksp, 50));
@@ -1265,8 +1262,8 @@ ElasticResult solve_system(const ElasticMesh& m,
     petsc(PCCreate(comm, &base.value));
     petsc(PCSetOperators(base, a, a));
     petsc(PCSetType(base, p.preconditioner == "gamg" ? PCGAMG : PCJACOBI));
-    if (p.preconditioner == "gamg" && full_body)
-        petsc(PCSetCoordinates(base, 3, local, coords.data()));
+    // GAMG reads the normalized Mat near-nullspace made from centroid
+    // coordinates above. Raw PCSetCoordinates would override that basis.
     correction.base = base;
     correction.amg = p.preconditioner == "gamg";
     PC pc = nullptr;

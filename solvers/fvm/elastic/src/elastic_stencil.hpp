@@ -21,7 +21,7 @@ struct ElasticFaceStencil {
 struct ElasticAssembly {
     std::vector<ElasticBlock> blocks;
     std::vector<std::array<double, 3>> rhs;
-    // Integrated physical traction outward from lo, including thermal stress.
+    // Integrated energy-conjugate numerical traction outward from lo, including thermal stress.
     // Internal faces enter lo and hi equations with opposite signs.
     std::vector<ElasticFaceStencil> faces;
 };
