@@ -22,6 +22,10 @@ dependencies are available. ON and direct script execution retain strict
 acceptance; any artifact present under OFF must also pass all original checks.
 The original reference deliverable remains incomplete.
 
+The complete supplied amendment is reproduced verbatim in the
+[scope amendment below](#supplied-brief-scope-amendment), with its SHA-256,
+so the authorization is available in the reviewed repository itself.
+
 **Candidate status: 参考不合格 — prescribed warpage sequence is nonmonotone.**
 L3 mechanics now completes within the unchanged memory guard, and all three
 levels plus the C3D20 cross-check have been solved. The complete candidate
@@ -260,3 +264,25 @@ This card does not change the night driver, chipcae comparison postprocessing,
 or product code. Reference qualification remains outstanding pending V&V
 disposition. Loading a qualified reference in the night driver and aligning its
 W_bfp comparison with this 81×81 algorithm require the follow-up card.
+
+## Supplied brief scope amendment
+
+Source: the task-supplied `v-int-calculix-demo-gate-ref.md`, final section
+“PR #179 本轮评审范围修订（2026-11-19）”. The following block copies that complete
+section verbatim. SHA-256 of its UTF-8 bytes, including the final newline:
+`89e778fec728fe88d12b2433696c922bf5fae80210fe75c46199a38f1281fe77`.
+This amendment governs this PR's generator/validator delivery and retains all
+original numerical qualification criteria for the follow-up reference.
+
+```markdown
+## PR #179 本轮评审范围修订（2026-11-19）
+
+本轮用户任务所附 CodeBuddy MUST 1 明确允许“explicitly descope the reference from this PR”。本 PR 采用此修复路径：交付生成器、独立校验器及其回归；合格 REFERENCE.json、入库 L1 deck、正式 W_bfp/T_max/T_top_min 参考值及真实参考验收留待后续资格卡。本卡原始参考交付尚未完成，绿色生成器测试不能作为参考合格或 chipcae 比较通过的依据。
+
+- 保留且仅注册 `vvccx_reference_json` 与 `vvccx_regen_l1`。`CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=OFF` 为本 PR 明确的生成器/校验器测试配置；前者必跑标准库完整合成夹具及负向校验，后者在依赖可用时跑真实 L1 生成、deck 确定性及生成器回归。
+- `CHIPCAE_DEMO_GATE_REFERENCE_ACCEPTANCE=ON` 执行原始真实参考验收；缺少 REFERENCE.json 必须失败，不得按产物缺失 skip。直接运行两个脚本默认也采用严格参考验收。生成器配置下若出现产物，同样必须通过全部原始验收断言。
+- 所有 (a)–(f) 数值判据、网格层级和原始验收断言均保留；不放宽 `1e-6` 对称性阈值，不以合成夹具冒充参考。
+- 新 DEMO-GATE 产物 schema 标识改为 `chipcae.vv.demo_gate.reference/0.1`，避免与已有 trilayer 的不同字段契约冲突；trilayer 不改。
+
+仓库内的同等范围说明及重现命令见 `tools/vv/calculix_demo_gate/README.md`。本修订不授权修改产品、样例、共享工具或 CI，也不授权 push。
+```
