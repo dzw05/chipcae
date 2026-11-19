@@ -49,8 +49,11 @@ requires full acceptance in both modes. Under strict acceptance, a missing
 artifact fails before optional solver dependency checks. The JSON test never skips.
 Only absent ccx, absent numpy/scipy or a solver-version mismatch against a
 published artifact may return 77 for regeneration; all applicable regressions
-run first, and failures take precedence. Without an artifact, generator
-regressions use the queried solver version; there is no fallback version pin.
+run first, and failures take precedence. Individual `self.skipTest()` calls are
+collected by `unittest`; the script's final runner exits 77 if any tests skipped
+and none failed, 1 on failure, and 0 when all selected tests passed.
+Without an artifact, generator regressions use the queried solver version;
+there is no fallback version pin.
 All original acceptance assertions, numerical thresholds and mesh levels remain.
 
 V&V handoff for V-INT-6 / PR #179: the original (a)/(b) failure and complete
