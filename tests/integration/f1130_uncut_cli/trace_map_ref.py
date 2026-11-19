@@ -212,7 +212,7 @@ def read_hex_mesh(group, stack, require_fields=True):
     raw_fields = {n:read('CellData/'+n) for n in ('layer_id','cell_kind')}
     if 'CellData/elem_gid' in group:
         raw_fields['elem_gid'] = read('CellData/elem_gid')
-    # Coefficient layouts and acceptance semantics: io/trace-map-1.1.md (I1 1.1).
+    # Coefficient layouts and acceptance semantics: README.md (I1 1.1 consumer expectations).
     for name in ('copper_fraction','conductivity_diag'):
         if require_fields or 'CellData/'+name in group:
             raw_fields[name] = read('CellData/'+name)

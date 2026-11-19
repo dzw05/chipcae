@@ -48,6 +48,42 @@ conductivity, physics, numerical or parallel completion checks force
 `verdict: fail`. Records must pass `tools.vv.check_result_data_class.check_file()`.
 Commands, stage wall times and records are printed before temporary cleanup.
 
+## I1 1.1 consumer expectations
+
+This gate consumes the per-cell coefficients specified by the I1 copper-base
+ruling 1.1 (2026-11-19, including its Q2 revision) and the producer brief
+`solve-copper-trace-map` (M3). Producer implementation and public I/O contract
+changes belong to M3 and the I/O owner. This test card changes no public
+interface, manifest schema or VTKHDF version.
+
+The gate requires both coefficient fields. For the uncut hex block
+with N cells summed over partitions, the reader requires:
+
+| CellData field | dtype | Dataset shape | Components / physical unit |
+| --- | --- | --- | --- |
+| `copper_fraction` | float64 | `(N,)` | 1 / dimensionless |
+| `conductivity_diag` | float64 | `(N,3)` | global xyz diagonal / W/(m K) |
+
+Rows follow cell/connectivity order within each partition and partition
+concatenation across the block. Conductivity rows contain `(k_xx,k_yy,k_zz)`;
+empty partitions contribute no rows. The gate checks field presence and shape
+explicitly; an older O1 result without either field cannot pass F-1130.
+These test expectations prescribe neither default writer fields nor manifest
+unit metadata. `layer_id` is the 1-based stack index, checked against physical
+z membership; non-Patterned cells have zero copper and their material diagonal.
+The fixed FR4/Cu formula and numerical tolerances are specified below.
+
+Existing owner approvals of I1 1.1 are recorded in the project handoff. They
+approve the model used by this consumer; they do not establish a new public
+I/O contract in this card.
+
+| Owner | Recorded approval (2026-11-19) | Evidence identifier / relevant condition |
+| --- | --- | --- |
+| mesh (M2) | 13:10 | `handoff/status/mesh.md`: global elem_gid determines columns, independent of rank-local order; polygon areas use union area. |
+| solver (M3) | 13:36 | `handoff/status/solver.md`: Q2 reference, 3×3×3/3×3 Gauss and vertex comparison. |
+| vv (INT) | 13:20 | `handoff/status/vv.md`: absolute fraction tolerance 1e-12 and volume/thickness area weights for multiple z cells. |
+| desktop notification | 09:55 | `handoff/inbox/desktop.md`: both added output fields announced. |
+
 ## Independent reference
 
 [trace_map_ref.py](trace_map_ref.py) decodes `CCPOLY01` with `struct`, retaining
@@ -62,8 +98,8 @@ and uses no Shapely.
 
 VTKHDF decoding respects `NumberOfPoints`, `NumberOfCells` and
 `NumberOfConnectivityIds`: offsets and connectivity restart in each partition.
-The [I1 trace-map results contract 1.1](../../../io/trace-map-1.1.md) defines
-the two required coefficient fields and records the existing owner approvals.
+The [I1 1.1 consumer expectations](#i1-11-consumer-expectations) above describe
+the two required coefficient fields and the recorded owner approvals.
 Cells are aligned by globally unique `elem_gid` when exported, with complete
 dense Morton column coverage and layer/z membership checked independently.
 O1 permits omitting hex `elem_gid`; in that case exact rational cell bounds
