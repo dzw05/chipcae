@@ -35,15 +35,12 @@ struct CutLayerArrays {
     std::vector<Local> eb_parent_elem;
     // All polyhedron face quadrature, physical area weights. side=-1 denotes
     // embedded faces; 0..5 are xmin,xmax,ymin,ymax,zmin,zmax on the parent.
-    // sq_off has one CSR row per cut_elem, independent of the subcell count:
-    // parent row r uses [sq_off[r], sq_off[r+1]); sub_off indexes its subcells.
     std::vector<Local> sq_off{0}, sq_side;
     std::array<std::vector<Real>, 3> sq_xi;
     std::vector<Real> sq_w;
     Local void_attribute = -1;
     std::vector<Index> cut_elem_gid;
     std::vector<Local> void_elem, small_subs;
-    // Per cut_elem: outward Cartesian face area sum, excluding embedded faces.
     std::vector<std::array<Real, 3>> exterior_area_vector;
 };
 template <class MemSpace>

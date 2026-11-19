@@ -60,7 +60,7 @@ StackModel stack(bool polygons) {
         const bool copper = i % 2 == 0;
         l.name = copper ? "L" + std::to_string(i / 2 + 1) + "_cu" : "D" + std::to_string(i / 2 + 1);
         l.kind = copper ? "Patterned" : "Homogenized";
-        l.material = "bt_eq";
+        l.material = copper ? "fr4_eq" : "bt_eq";
         l.thickness = copper ? 35e-6 : 74.286e-6;
         // Keep adjacent z widths within the unchanged k1 max_ratio of two.
         l.n_elem_min = copper ? 1 : 2;
@@ -373,7 +373,7 @@ struct SurfaceAreas {
 
 SurfaceAreas
 surface_areas(const CutLayerArrays& cut, std::size_t row, const std::array<Real, 3>& normal) {
-    // Surface rows belong to cut parents; sub_off separately partitions volume.
+    // Integrate one surface row with fresh accumulators on each call.
     offsets(cut.sq_off, cut.cut_elem.size(), cut.sq_w.size());
     SurfaceAreas areas;
     for (auto q = cut.sq_off[row]; q < cut.sq_off[row + 1]; ++q) {
@@ -397,7 +397,8 @@ surface_areas(const CutLayerArrays& cut, std::size_t row, const std::array<Real,
 void check_surface_rows(Checks& checks) {
     // Synthetic parent-boundary data: unit boxes clipped at x=1/2 and y=1/4.
     // Partition the first solid into two equal subcells. The current convex
-    // plane cutter cannot emit this layout; this exercises the array consumer.
+    // plane cutter cannot emit this layout; this checks only the helper above,
+    // not a producer contract for multiple subcells per parent.
     CutLayerArrays cut;
     cut.cut_elem = {0, 1};
     cut.sub_off = {0, 2, 3};
@@ -417,7 +418,7 @@ void check_surface_rows(Checks& checks) {
         const auto areas = surface_areas(cut, row, normals[row]);
         for (std::size_t side = 0; side < 6; ++side)
             checks.expect(std::abs(areas.openings[side] - expected_openings[row][side]) <= 1e-12L,
-                          "parent surface openings counted once regardless of subcell count");
+                          "synthetic surface row openings match the clipped-box reference");
         for (std::size_t d = 0; d < 3; ++d) {
             checks.expect(std::abs(areas.cartesian[d] - cut.exterior_area_vector[row][d]) <= 1e-12L,
                           "synthetic Cartesian area equals exterior");
@@ -446,6 +447,12 @@ void check_cut(Checks& checks,
                 cut.cut_elem.size(),
             "fvm-fields: unique cut parent GIDs");
     offsets(cut.sub_off, cut.cut_elem.size(), cut.sub_volfrac.size());
+    // The convex producer emits one subcell per parent. Parent and subcell
+    // surface-row indexing coincide here; this does not decide the general case.
+    for (std::size_t row = 0; row < cut.cut_elem.size(); ++row)
+        require(static_cast<std::size_t>(cut.sub_off[row]) == row &&
+                    static_cast<std::size_t>(cut.sub_off[row + 1]) == row + 1,
+                "fvm-fields: convex chamfer has exactly one subcell per cut parent");
     require(cut.sub_attribute.size() == cut.sub_volfrac.size(),
             "fvm-fields: subcell attributes match fractions");
     offsets(cut.sq_off, cut.cut_elem.size(), cut.sq_w.size());
@@ -591,6 +598,8 @@ void check_cut(Checks& checks,
         std::cout << "fvm-fields: void-removal coverage is vacuous\n";
     checks.expect(volume_error <= volume_tolerance,
                   "cut_stats volume matches analytic octagonal prism");
+    // plane_cut.cpp accumulates only outward Cartesian faces into exterior.
+    // Thus C = exterior, E = -exterior, and the complete boundary closes at zero.
     checks.expect(max_cartesian <= 1e-12L, "Cartesian area vector equals exterior_area_vector");
     checks.expect(max_embedded <= 1e-12L,
                   "embedded area vector equals negative exterior_area_vector");
