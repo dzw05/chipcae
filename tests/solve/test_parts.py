@@ -331,6 +331,51 @@ void summary(const std::filesystem::path& out,
     writer.set_mesh(s);
     writer.finalize();
 }
+void summary_contract(const std::filesystem::path& out, const std::filesystem::path& stack) {
+    // Physical field selection never changes the required solver summaries.
+    for (const std::string missing : {"warpage_pv", "T_max", "U_mag_max"}) {
+        io::ResultsWriter writer(out / missing, stack, {}, {}, {"T"});
+        io::ResultsStep step;
+        auto& p = step.cut;
+        p.points = {0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1};
+        p.connectivity = {0, 1, 2, 3, 4, 5, 6, 7};
+        p.offsets = {0, 8};
+        p.face_conn = {0, 3, 2, 1, 4, 5, 6, 7, 0, 1, 5, 4, 3, 7, 6, 2, 0, 4, 7, 3, 1, 2, 6, 5};
+        p.face_off = {0, 4, 8, 12, 16, 20, 24};
+        p.poly_faces = {0, 1, 2, 3, 4, 5};
+        p.poly_off = {0, 6};
+        int rank = 0;
+        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+        p.elem_gid = {rank};
+        p.layer_id = {1};
+        p.material_id = {1};
+        p.cell_kind = {1};
+        p.volume = {1};
+        p.T.assign(8, 300);
+        p.U.assign(24, 0);
+        writer.write_step(0, 0, step);
+        auto require_rejection = [&]() {
+            try {
+                writer.finalize();
+            } catch (const std::runtime_error&) {
+                return;
+            }
+            throw std::runtime_error("missing solver summary accepted: " + missing);
+        };
+        require_rejection();
+        if (missing != "T_max") {
+            writer.add_summary("T_max", 300, "K", 0);
+            require_rejection();
+        }
+        for (const std::string name : {"warpage_pv", "T_max", "U_mag_max"})
+            if (name != missing && name != "T_max")
+                writer.add_summary(name, name == "T_max" ? 300 : 0, name == "T_max" ? "K" : "m", 0);
+        require_rejection();
+        writer.add_summary(
+            missing, missing == "T_max" ? 300 : 0, missing == "T_max" ? "K" : "m", 0);
+        writer.finalize();
+    }
+}
 } // namespace parts
 #endif
 
@@ -371,6 +416,8 @@ int main(int argc, char** argv) {
             parts::quadrature(in);
         else if (mode == "summary" || mode == "summary_default")
             parts::summary(argv[4], in.stack_path, mode == "summary");
+        else if (mode == "summary_contract")
+            parts::summary_contract(argv[4], in.stack_path);
         else {
             parts::barrier = mode == "barrier";
             if (parts::fixture == "ranks_mismatch")
@@ -471,7 +518,8 @@ class Acceptance:
                                      temp_from='thermal', T_ref=300)]
         self.case['loads'] = [dict(type='fixed_temperature', target='face:zmin', T=300)]
 
-    def invoke(self, mode='pipeline', fixture='', spec=None, cli=False, ranks=1):
+    def invoke(self, mode='pipeline', fixture='', spec=None, cli=False, ranks=1,
+               case_extension='json'):
         self.counter += 1
         for name, value in [('stack', self.stack), ('case', self.case),
                             ('materials', dict(schema='chipcae.material_library/1',
@@ -483,11 +531,16 @@ class Acceptance:
         out = self.root / str(self.counter)
         if spec is not None:
             (self.root / 'fields.json').write_text(json.dumps(spec))
+        case_path = self.root / ('case.' + case_extension)
+        if case_extension != 'json':
+            # Native YAML mapping with flow-style values; no Python YAML dependency.
+            case_path.write_text(''.join(f'{k}: {json.dumps(v)}\n'
+                                         for k, v in self.case.items()))
         if cli:
-            command = [self.args.solve, '--case', str(self.root/'case.json'), '--profile',
+            command = [self.args.solve, '--case', str(case_path), '--profile',
                        str(self.root/'profile.json'), '--out', str(out)]
         else:
-            command = [self.args.driver, mode, str(self.root/'case.json'),
+            command = [self.args.driver, mode, str(case_path),
                        str(self.root/'profile.json'), str(out), fixture,
                        str(self.root/'fields.json') if spec is not None else '-']
         if ranks > 1:
@@ -642,13 +695,15 @@ class Acceptance:
         assert report['thermal_assemblies'] == int(shared)
         assert report['mechanical_assemblies'] == 0
 
-    def test_thermal_only(self, no_constraints=False):
+    def test_thermal_only(self, no_constraints=False, temperature_only=False, ranks=1):
         import h5py
         import numpy as np
         self.thermal()
         self.case['physics'] = self.case['physics'][:1]
         if no_constraints:
             self.case.pop('constraints')
+        if temperature_only:
+            self.case['output']['fields'] = ['T']
         # Keep a thermal anchor on each disconnected component.
         self.case['loads'].append(dict(type='fixed_temperature', target='layer:lid_layer', T=310))
         spec = self.disconnected()
@@ -656,12 +711,16 @@ class Acceptance:
             if rigid:
                 self.case['constraints'] = dict(rigid='3-2-1')
             # Keep the same temperature readback checks for cut meshes as well.
-            result, out = self.invoke(spec=spec, fixture=fixture)
+            result, out = self.invoke(spec=spec, fixture=fixture, ranks=ranks)
             self.expect(result)
             manifest = json.loads((out/'manifest.json').read_text())
             assert 'floating body' not in result.stderr
-            assert not any(s['name'] == 'warpage_pv' for s in manifest['summary']), (
-                'thermal-only execution must bypass mechanical assembly')
+            summaries = {s['name']: s for s in manifest['summary']}
+            assert set(summaries) == {'warpage_pv', 'T_max', 'U_mag_max'}
+            for name in ('warpage_pv', 'U_mag_max'):
+                np.testing.assert_array_equal(summaries[name]['value'], 0)
+                assert 'mechanical physics disabled' in summaries[name]['method']
+            np.testing.assert_allclose(summaries['T_max']['value'], 310, rtol=0, atol=1e-10)
             report = self.reports(result)[-1]
             assert report['thermal_assemblies'] == 1 and report['mechanical_assemblies'] == 0
             with h5py.File(out/manifest['steps'][0]['file']) as f:
@@ -670,6 +729,11 @@ class Acceptance:
                 assert temperatures.size > 0 and np.isfinite(temperatures).all()
                 np.testing.assert_allclose(temperatures[z <= 1], 300, rtol=0, atol=1e-10)
                 np.testing.assert_allclose(temperatures[z >= 2], 310, rtol=0, atol=1e-10)
+                if temperature_only:
+                    assert 'U' not in f['VTKHDF/hex/PointData']
+                else:
+                    displacements = f['VTKHDF/hex/PointData/U'][:]
+                    np.testing.assert_array_equal(displacements, np.zeros_like(displacements))
 
     def test_thermal_only_rigid_cut(self):
         self.thermal()
@@ -685,6 +749,28 @@ class Acceptance:
         self.expect(result, 80, 'assembly reached')
         report = self.reports(result)[-1]
         assert report['thermal_assemblies'] == 1 and report['mechanical_assemblies'] == 0
+
+    def test_thermal_only_yaml(self):
+        import h5py
+        import numpy as np
+        self.thermal()
+        self.case['physics'] = self.case['physics'][:1]
+        self.case.pop('constraints')
+        self.case['output']['fields'] = ['T']
+        for extension in ('yaml', 'yml'):
+            result, out = self.invoke(cli=True, case_extension=extension)
+            self.expect(result)
+            manifest = json.loads((out/'manifest.json').read_text())
+            with h5py.File(out/manifest['steps'][0]['file']) as f:
+                temperatures = f['VTKHDF/hex/PointData/T'][:]
+                assert temperatures.size > 0 and np.isfinite(temperatures).all()
+                np.testing.assert_allclose(temperatures, 300, rtol=0, atol=1e-10)
+                assert 'U' not in f['VTKHDF/hex/PointData']
+            summaries = {s['name']: s for s in manifest['summary']}
+            assert set(summaries) == {'warpage_pv', 'T_max', 'U_mag_max'}
+            for name in ('warpage_pv', 'U_mag_max'):
+                np.testing.assert_array_equal(summaries[name]['value'], 0)
+                assert 'mechanical physics disabled' in summaries[name]['method']
 
     def alias_stack(self, names):
         self.stack['layers'] = [layer(name, 1/len(names)) for name in names]
@@ -884,6 +970,13 @@ class Acceptance:
         assert list(mesh).index('void_cells') == list(mesh).index('padded_cells')+1
 
     def test_summary(self, variant):
+        if variant in ('contract', 'contract_np2'):
+            result, out = self.invoke('summary_contract', ranks=2 if variant.endswith('np2') else 1)
+            self.expect(result)
+            for name in ('warpage_pv', 'T_max', 'U_mag_max'):
+                manifest = json.loads((out/name/'manifest.json').read_text())
+                assert {s['name'] for s in manifest['summary']} == {'warpage_pv', 'T_max', 'U_mag_max'}
+            return
         if variant in ('writer', 'default'):
             result, out = self.invoke('summary' if variant == 'writer' else 'summary_default')
             self.expect(result)
@@ -1084,6 +1177,9 @@ def main():
             'coincident_distinct_nodes': lambda: t.test_node_identity(False),
             'thermal_only': t.test_thermal_only,
             'thermal_only_no_constraints': lambda: t.test_thermal_only(no_constraints=True),
+            'thermal_only_temperature_field': lambda: t.test_thermal_only(temperature_only=True),
+            'thermal_only_np2': lambda: t.test_thermal_only(ranks=2),
+            'thermal_only_yaml': t.test_thermal_only_yaml,
             'thermal_only_rigid_cut': t.test_thermal_only_rigid_cut,
             'mechanical_alias': t.test_mechanical_alias,
             'convection_alias': t.test_convection_alias,
@@ -1115,7 +1211,7 @@ def main():
             tests['alias_'+variant] = lambda v=variant: t.test_alias(v)
         for variant in ('split', 'exact', 'exact_malformed', 'numeric'):
             tests['alias_load_'+variant] = lambda v=variant: t.test_alias(v, loader=True)
-        for variant in ('writer','default','pipeline'):
+        for variant in ('writer','default','pipeline', 'contract', 'contract_np2'):
             tests['summary_'+variant] = lambda v=variant: t.test_summary(v)
         for ranks in (1,2,3):
             for mismatch in (False, True):

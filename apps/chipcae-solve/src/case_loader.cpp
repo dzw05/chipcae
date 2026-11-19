@@ -329,16 +329,16 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
             }
             invalid("invalid target: " + target);
         };
-        bool temp_from = false;
+        bool mechanical = false, temp_from = false;
         for (const auto& physics : c.at("physics").array_range()) {
             auto id = physics.at("id").as<std::string>();
             if (id == "thermal" && !out.thermal &&
                 physics.at("solver").as<std::string>() == "fem.conduction" &&
                 physics.at("mode").as<std::string>() == "steady")
                 out.thermal = true;
-            else if (id == "mech" && !out.mechanical &&
+            else if (id == "mech" && !mechanical &&
                      physics.at("solver").as<std::string>() == "fem.solid") {
-                out.mechanical = true;
+                mechanical = true;
                 if (physics.contains("temp_from")) {
                     if (physics.at("temp_from").as<std::string>() != "thermal")
                         invalid("invalid temp_from");
@@ -384,10 +384,10 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
             }
             out.loads.push_back(load);
         }
-        if (out.thermal ? (uniform != 0 || (out.mechanical && !temp_from) || anchors == 0)
-                        : (!out.mechanical || uniform != 1 || temp_from || thermal_loads != 0))
+        if (out.thermal ? (uniform != 0 || (mechanical && !temp_from) || anchors == 0)
+                        : (!mechanical || uniform != 1 || temp_from || thermal_loads != 0))
             invalid("inconsistent temperature sources");
-        if (out.mechanical) {
+        if (mechanical) {
             const auto& constraints = c.at("constraints");
             if (constraints.contains("rigid") == constraints.contains("fixed"))
                 invalid("choose rigid or fixed constraints");

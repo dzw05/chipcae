@@ -24,6 +24,7 @@
 #include <set>
 #include <sstream>
 #include <tuple>
+#include <yaml-cpp/yaml.h>
 
 namespace chipcae::solve {
 namespace {
@@ -422,6 +423,14 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
         MPI_Comm_size(MPI_COMM_WORLD, &ranks);
         if (inputs.grid.ranks != ranks)
             throw InputError(ErrorCode::INTERNAL, "grid ranks do not match MPI communicator size");
+        // Keep physics selection inside the solver without extending RunInputs.
+        // YAML also accepts JSON, matching both case formats validated by the loader.
+        const auto case_data = YAML::Load(file_bytes(inputs.case_path));
+        const auto physics = case_data["physics"];
+        const bool mechanical =
+            std::any_of(physics.begin(), physics.end(), [](const YAML::Node& entry) {
+                return entry["solver"].as<std::string>() == "fem.solid";
+            });
         std::optional<mesh::cut::CutLayerArrays> clipped;
         auto arrays = build_mesh(inputs, &clipped);
         std::vector<std::string> layer_names, material_names(arrays.attr_table.materials.size());
@@ -429,12 +438,8 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             layer_names.push_back(layer.name);
         for (const auto& [name, id] : arrays.attr_table.materials)
             material_names.at(id - 1) = name;
-        io::ResultsWriter writer(output,
-                                 inputs.stack_path,
-                                 layer_names,
-                                 material_names,
-                                 inputs.fields,
-                                 inputs.mechanical);
+        io::ResultsWriter writer(
+            output, inputs.stack_path, layer_names, material_names, inputs.fields);
         io::ResultsWriter::MeshSummary summary{};
         summary.nx0 = arrays.grid_report.level_axes.front()[0].size() - 1;
         summary.ny0 = arrays.grid_report.level_axes.front()[1].size() - 1;
@@ -625,7 +630,7 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                 mixtures[a] = mixture(m, m, 0);
         }
         Array<int> mechanical_essential;
-        if (inputs.mechanical) {
+        if (mechanical) {
             if (inputs.fixed.empty()) {
                 std::set<int> candidates;
                 std::set<int> cut_cells;
@@ -886,7 +891,7 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             for (const auto& load : inputs.loads)
                 if (load.type == "uniform_temperature")
                     temperature = load.T;
-        if (inputs.mechanical) {
+        if (mechanical) {
             AttributeCoefficient l(lambda), m(mu), s(stress, &temperature, inputs.T_ref);
             BilinearForm form(&vector);
             if (has_copper)
@@ -959,12 +964,12 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             for (int c = 0; c < 3; ++c)
                 mag += std::pow(displacement[vector.DofToVDof(i, c)], 2);
             umax = std::max(umax, std::sqrt(mag));
-            if (inputs.mechanical && std::abs(z - arrays.axes[2].back()) < 1e-13) {
+            if (mechanical && std::abs(z - arrays.axes[2].back()) < 1e-13) {
                 double w = displacement[vector.DofToVDof(i, 2)];
                 add_top(x, y, w);
             }
         }
-        if (inputs.mechanical && clipped)
+        if (mechanical && clipped)
             for (std::size_t s = 0; s < clipped->cut_elem.size(); ++s) {
                 int e = clipped->cut_elem[s];
                 auto* t = mesh.GetElementTransformation(e);
@@ -981,8 +986,9 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                     add_top(x[0], x[1], u[2]);
                 }
             }
-        double lo = std::numeric_limits<double>::infinity(), hi = -lo;
-        if (inputs.mechanical) {
+        double warpage = 0;
+        if (mechanical) {
+            double lo = std::numeric_limits<double>::infinity(), hi = -lo;
             if (top.size() < 3)
                 throw InputError(ErrorCode::INPUT_INVALID,
                                  "insufficient top-domain samples for plane removal");
@@ -994,6 +1000,7 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                 lo = std::min(lo, w);
                 hi = std::max(hi, w);
             }
+            warpage = hi - lo;
         }
         io::ResultsStep result;
         result.cut_as_hex = inputs.cut_as_hex;
@@ -1034,18 +1041,20 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                 part.layer_id.push_back(static_cast<int>(it - inputs.stack.layers.begin()) + 1);
             }
         writer.write_step(0, 0, result);
-        if (inputs.mechanical)
-            writer.add_summary(
-                "warpage_pv",
-                hi - lo,
-                "m",
-                0,
-                clipped
-                    ? "Q2 top-domain nodes and mesh cut-top quadrature; least-squares plane removal"
-                    : "Q2 top nodes; least-squares plane removal");
+        // Thermal-only runs retain the zero displacement field. Publish its zero
+        // summaries explicitly to satisfy the unchanged ResultsWriter contract.
+        const std::string thermal_only = "mechanical physics disabled; zero displacement";
+        writer.add_summary(
+            "warpage_pv",
+            warpage,
+            "m",
+            0,
+            !mechanical ? thermal_only
+            : clipped
+                ? "Q2 top-domain nodes and mesh cut-top quadrature; least-squares plane removal"
+                : "Q2 top nodes; least-squares plane removal");
         writer.add_summary("T_max", tmax, "K", 0);
-        if (inputs.mechanical)
-            writer.add_summary("U_mag_max", umax, "m", 0);
+        writer.add_summary("U_mag_max", umax, "m", 0, mechanical ? "" : thermal_only);
         writer.finalize();
         emit(io::OutputAvailable{window,
                                  0,

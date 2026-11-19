@@ -221,6 +221,7 @@ if(TARGET chipcae_solve_inputs)
                 floating_mechanical
                 shared_node coincident_distinct_nodes thermal_only
                 thermal_only_no_constraints thermal_only_rigid_cut
+                thermal_only_temperature_field thermal_only_yaml summary_contract
                 alias_split alias_exact alias_numeric mechanical_alias convection_alias
                 convection_cut_alias
                 heat_split heat_q_vol heat_additive heat_zero_volume heat_cut_volume
@@ -237,6 +238,11 @@ if(TARGET chipcae_solve_inputs)
         foreach(_np IN ITEMS 2 3)
             _parts_test(omitted_mpi${_np} --mpiexec ${MPIEXEC_EXECUTABLE})
             set_tests_properties(solve_parts_omitted_mpi${_np} PROPERTIES
+                LABELS "solve;parts;tierA;mpi;io")
+        endforeach()
+        foreach(_parts_case IN ITEMS thermal_only_np2 summary_contract_np2)
+            _parts_test(${_parts_case} --mpiexec ${MPIEXEC_EXECUTABLE})
+            set_tests_properties(solve_parts_${_parts_case} PROPERTIES
                 LABELS "solve;parts;tierA;mpi;io")
         endforeach()
     endif()

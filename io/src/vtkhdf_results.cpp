@@ -9,7 +9,6 @@
 #include <limits>
 #include <set>
 #include <stdexcept>
-#include <string_view>
 #ifdef CHIPCAE_ENABLE_HDF5
 #include "chipcae/io/detail/hdf5.hpp"
 #endif
@@ -266,11 +265,9 @@ ResultsWriter::ResultsWriter(std::filesystem::path run,
                              const std::filesystem::path& stackup,
                              std::vector<std::string> layer_names,
                              std::vector<std::string> material_names,
-                             std::vector<std::string> fields,
-                             bool mechanical)
+                             std::vector<std::string> fields)
     : run_(std::move(run)), layer_names_(std::move(layer_names)),
-      material_names_(std::move(material_names)), mechanical_(mechanical),
-      fields_(std::move(fields)) {
+      material_names_(std::move(material_names)), fields_(std::move(fields)) {
 #ifdef CHIPCAE_ENABLE_MPI
     int initialized = 0;
     MPI_Initialized(&initialized);
@@ -790,8 +787,6 @@ void ResultsWriter::finalize() {
         try {
             for (auto& step : steps_)
                 for (auto name : {"warpage_pv", "T_max", "U_mag_max"}) {
-                    if (!mechanical_ && std::string_view(name) != "T_max")
-                        continue;
                     bool found = false;
                     for (auto& s : summary_)
                         if (s.step == step.n && s.name == name)
