@@ -282,11 +282,6 @@ std::vector<Footprint> section_footprints(const SlabSection& section, std::strin
             return {};
         }
         const auto& p = rings.front();
-        for (size_t i = 0; i < p.size(); ++i)
-            if (cross(p[i], p[(i + 1) % p.size()], p[(i + 2) % p.size()]) <= 0) {
-                reason = "non-convex section";
-                return {};
-            }
         return {footprint(p, false)};
     }
     // Canonicalize both axes together across outer and hole rings before strip
