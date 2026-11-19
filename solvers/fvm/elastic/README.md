@@ -122,7 +122,9 @@ Acceptance tests use synthetic uncut tensor grids. Negative tests reject embedde
 geometry, including a single tetrahedron and horizontal embedded faces, through both
 the solver and diagnostic assembly on one and two ranks. Physical KSP operator checks
 require exact, near and transpose rigid nullspaces for Rigid321 and their absence for
-Fixed, with both preconditioners on one and two ranks. Timoshenko tests use
+Fixed, with both preconditioners on one and two ranks. Homogeneous, bimetal and
+orthotropic laminate assemblies must also satisfy stiffness symmetry, internal-force
+cancellation and right/transpose rigid-mode compatibility. Timoshenko tests use
 nu=0 plies to isolate the beam reference, three factor-two refinements, four cells per
 ply initially and central-half curvature fits. The orthotropic CLT test imposes
 plane-strain kinematics on lateral y faces; it does not infer plane strain from free
@@ -147,12 +149,12 @@ interpolated face tensor loses positive definiteness.
 
 | Acceptance | Result |
 | --- | --- |
-| Uncut elastic patches, errors, supports, reconstruction and embedded-input rejection | 108 cases pass |
+| Uncut elastic patches, errors, supports, reconstruction and embedded-input rejection | 110 cases pass |
 | MPI np=2, both supports/PCs, zero-owned-row ranks and embedded-input rejection | 10 cases pass |
 | Signed Timoshenko heating, 512/4096/32768 cells | errors 2.2741%, 0.5590%, 0.1392% |
 | Timoshenko observed orders | 2.0243, 2.0060; cooling gives the same convergence |
 | Orthotropic f=0.3 plane-strain CLT | signed curvature 0.362605596231; relative error 2.16e-12 |
-| Matrix symmetry defect | `||A-A^T||F/||A||F = 4.69e-17` |
+| Matrix symmetry defect, homogeneous / bimetal / laminate | `4.69e-17` / `6.70e-17` / `5.31e-17`, required `||A-A^T||F/||A||F <= 1e-13` |
 
 The **实测** 68x68x6 benchmark has 27,744 cells and 83,232 displacement unknowns:
 

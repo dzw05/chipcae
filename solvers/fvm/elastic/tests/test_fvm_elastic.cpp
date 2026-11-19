@@ -152,9 +152,7 @@ void reject_embedded(MPI_Comm comm) {
                             "diagnostic assembly must also reject embedded meshes");
                 }
 }
-void matrix_invariants() {
-    const auto m = grid(3, 3, 3);
-    auto p = problem(m);
+void matrix_invariants(const ElasticMesh& m, const ElasticProblem& p) {
     const auto a = assembly(m, p);
     const auto n = m.volume.size();
     std::map<std::pair<std::int64_t, std::int64_t>, M3> blocks;
@@ -190,6 +188,7 @@ void matrix_invariants() {
                 defect2 += v * v;
     }
     std::cout << "实测 matrix symmetry ||A-A^T||F/||A||F=" << std::sqrt(defect2) / anorm << '\n';
+    require(std::sqrt(defect2) / anorm <= 1e-13, "elastic stiffness is symmetric");
     double cancel2 = 0;
     for (const auto& b : column_sums)
         for (double v : b)
@@ -773,7 +772,22 @@ int main(int argc, char** argv) {
             for (bool fixed : {false, true})
                 s.run(name + (fixed ? " zero fixed" : " zero rigid"), [&] { zero(m, fixed); });
         }
-        s.run("matrix conservation and rigid nullspaces", matrix_invariants);
+        s.run("matrix conservation and rigid nullspaces", [] {
+            const auto m = grid(3, 3, 3);
+            matrix_invariants(m, problem(m));
+        });
+        for (const auto& [name, top] : std::vector<std::pair<std::string, Material>>{
+                 {"bimetal", isotropic(110e9, 0.34, 17e-6)}, {"laminate", laminate(0.3)}})
+            s.run(name + " matrix conservation and rigid nullspaces", [&] {
+                const auto m = grid(3, 3, 4);
+                auto p = problem(m);
+                for (std::size_t c = 0; c < m.volume.size(); ++c)
+                    if (m.centroid[c][2] > 0.5) {
+                        p.C[c] = top.C;
+                        p.alpha[c] = top.alpha;
+                    }
+                matrix_invariants(m, p);
+            });
         for (int i = 0; i < 3; ++i)
             s.run("engineering shear " + std::to_string(i), [&] { shear(i); });
         for (double f : {0.0, 0.3, 1.0})
