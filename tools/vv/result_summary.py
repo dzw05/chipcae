@@ -434,6 +434,22 @@ def _summarize(run_dir, top_rel_tol, step):
                      f'mesh.{key}: expected integer')
     if 'mesh_sha256' in mesh:
         _require(isinstance(mesh['mesh_sha256'], str), 'mesh.mesh_sha256: expected string')
+    per_step = None
+    if 'partitions' in manifest:
+        partitions = manifest['partitions']
+        _require(isinstance(partitions, dict), 'partitions: expected object')
+        per_step = partitions.get('per_step')
+        _require(isinstance(per_step, list), 'partitions.per_step: expected array')
+        _require(len(per_step) == len(steps),
+                 f'partitions.per_step: expected length {len(steps)}')
+        for index, value in enumerate(per_step):
+            _require(isinstance(value, int) and not isinstance(value, bool) and value >= 1,
+                     f'partitions.per_step[{index}]: expected integer >= 1')
+        fixed = partitions.get('solver_fixed_per_run')
+        _require(isinstance(fixed, bool), 'partitions.solver_fixed_per_run: expected boolean')
+        if fixed:
+            _require(all(value == per_step[0] for value in per_step),
+                     'partitions.per_step: expected identical values')
     path = Path(step_file)
     if not path.is_absolute():
         path = run_dir / path
@@ -445,6 +461,16 @@ def _summarize(run_dir, top_rel_tol, step):
         _require('VTKHDF' in f and isinstance(f['VTKHDF'], h5py.Group),
                  '/VTKHDF: required group missing or invalid')
         blocks, data, temperatures, names = _read(f['VTKHDF'])
+        if per_step is not None:
+            expected = per_step[selected_index]
+            count_paths = ['hex/NumberOfCells', 'cut/NumberOfCells']
+            if 'eb_surface' in f['VTKHDF']:
+                count_paths.append('eb_surface/Polygons/NumberOfCells')
+            for count_path in count_paths:
+                actual = f['VTKHDF'][count_path].shape[0]
+                _require(actual == expected,
+                         f'partitions.per_step[{selected_index}]: partition count mismatch '
+                         f'at /VTKHDF/{count_path}: expected {expected}, got {actual}')
     points = np.concatenate([d[0] for d in data])
     u = np.concatenate([d[1] for d in data])
     top = np.array([], dtype=int)
