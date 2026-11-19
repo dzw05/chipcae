@@ -683,8 +683,10 @@ int main() {
     const auto output = output_directory.directory;
     std::filesystem::create_directories(output);
     std::string error;
-    if (!ecad::apply_material_map(
-            a.model, root.parent_path().parent_path() / "import_cli/material_map.json", &error))
+    if (!ecad::apply_material_map(a.model,
+                                  std::filesystem::path(CHIPCAE_TEST_SOURCE_DIR) /
+                                      "tests/integration/import_cli/material_map.json",
+                                  &error))
         return 15;
     if (!ecad::to_stack(a.model, output / "board.stack.json", output / "board.polyset", &error))
         return 8;
