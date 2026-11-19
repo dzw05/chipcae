@@ -14,6 +14,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <stdlib.h>
 #include <string>
 #include <sys/wait.h>
 #include <vector>
@@ -1121,7 +1122,7 @@ sys.exit(bool(failures))
 void public_api() {
     using namespace chipcae::geometry::ecad;
     auto pattern = (fs::temp_directory_path() / "chipcae-odbpp-api-XXXXXX").string();
-    require(::mkdtemp(pattern.data()) != nullptr, "cannot create public API temporary directory");
+    require(mkdtemp(pattern.data()) != nullptr, "cannot create public API temporary directory");
     struct Cleanup {
         fs::path path;
         ~Cleanup() {
