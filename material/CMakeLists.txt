@@ -259,3 +259,14 @@ if(CHIPCAE_MATERIAL_ENABLE_TESTS)
     endforeach()
     target_compile_definitions(material_expint_fallback PRIVATE CHIPCAE_MATERIAL_FORCE_EXPINT_FALLBACK=1)
 endif()
+
+if(CHIPCAE_MATERIAL_ENABLE_TESTS)
+    add_executable(material_tableview_single_point tests/tableview_single_point.cpp)
+    target_link_libraries(material_tableview_single_point PRIVATE chipcae_material)
+    add_test(NAME material_tableview_single_point COMMAND material_tableview_single_point host)
+    set_tests_properties(material_tableview_single_point PROPERTIES LABELS tierA TIMEOUT 60
+        ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
+    add_test(NAME material_tableview_single_point_cuda COMMAND material_tableview_single_point cuda)
+    set_tests_properties(material_tableview_single_point_cuda PROPERTIES LABELS nightly TIMEOUT 60
+        ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false" SKIP_RETURN_CODE 77)
+endif()
