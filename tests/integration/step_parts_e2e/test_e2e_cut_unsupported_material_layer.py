@@ -7,7 +7,8 @@ def acceptance(d):
     prepare(d)
     # Board-only assembly still exercises the required import CLI before meshing
     # the hand-authored negative stack; import must not reject mesh preconditions.
-    imported(d, assembly([]))
+    model = ROOT / 'tools/samples/step_parts/negative_material_layer.assembly.json'
+    imported(d, json.loads(model.read_text()))
     source = ROOT / 'tools/samples/step_parts/negative_material_layer.stack.json'
     dump(d / 'stack.json', json.loads(source.read_text()))
     spec = yaml.safe_load((ROOT / 'protocol/errors.yaml').read_text())

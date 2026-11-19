@@ -18,10 +18,10 @@ def acceptance(d):
                        '--report', d / 'report.json', '--accept-b-tier'], expected=code)
         report = json.loads((d / 'report.json').read_text())
         assert report['code'] == 'IMPORT_REJECTED', report
-        report = json.loads((d / 'import_report.json').read_text())
-        defects = [v for v in report['defects']
+        import_report = json.loads((d / 'import_report.json').read_text())
+        defects = [v for v in import_report['defects']
                    if v['defect_id'].startswith(ident + '/cut_unsupported#')]
-        assert defects, report
+        assert defects, import_report
         for defect in defects:
             assert defect['tier'] == 'C', defect
             # Frozen DefectReason ordinal: assembly v1.0.2 continuation 7-7.

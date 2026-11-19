@@ -51,11 +51,21 @@ def acceptance(d):
         matches = [r for r in regions if r.get('body') == ident]
         assert matches, f'missing imported body {ident}'
         assert all(r['material'] == material for r in matches), (ident, matches)
-    solve(d, 'real-bulk', materials=set(expected.values()))
+    pv, _ = solve(d, 'real-bulk', materials=set(expected.values()), emit_summary=False)
+    dump(d / 'result.json', {
+        'data_class': 'real',
+        'measurement': '实测',
+        'labels': ['近似材料', 'interposer_approx: 近似材料、近似几何'],
+        'copper_layers': '整层平均',
+        'materials': expected,
+        'lid_caveat': '刚度近似，CTE 偏低，待 copper 入库后重跑' if lid == 'silicon' else '',
+        'warpage_pv': pv,
+        'warpage_unit': 'm',
+    })
 
 
 if __name__ == '__main__':
     if not os.environ.get('CHIPCAE_DEMO_STEP_DIR'):
         print('SKIP: CHIPCAE_DEMO_STEP_DIR is unset')
         sys.exit(77)
-    main(acceptance, needs_occt=False)
+    main(acceptance, needs_occt=False, local_runs=True)

@@ -1,9 +1,10 @@
-"""SP7 acceptance fixtures; all CAD and solver output lives in private temp dirs.
+"""SP7 acceptance fixtures; all CAD and solver output lives in private run dirs.
 
 CTest starts scripts in the binary test directory. Resolve tools from that
 build's CMakeCache, never from an unrelated source tree or PATH installation.
 SP7_STRICT_ACCEPTANCE=1 exposes dependency failures for the red TDD run.
 """
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import json
 import math
 import os
@@ -11,6 +12,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import traceback
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'tests/contract'))
@@ -75,7 +77,8 @@ def imported(directory, model):
     return json.loads((directory / 'stack.json').read_text())
 
 
-def solve(directory, label, n=28, stack='stack.json', materials=(), ny=None, levels=1):
+def solve(directory, label, n=28, stack='stack.json', materials=(), ny=None, levels=1,
+          emit_summary=True):
     # Every positive uses CKPT-CF, including stacks without copper polygons.
     cf = ROOT / 'tools/stack/copper_fraction.py'
     if not cf.is_file():
@@ -107,7 +110,8 @@ def solve(directory, label, n=28, stack='stack.json', materials=(), ny=None, lev
         raw = f['VTKHDF/hex/FieldData/material_names'][()]
         names = {v.decode() if isinstance(v, bytes) else str(v) for v in raw.flat}
         assert set(materials) <= names, (materials, names)
-    print('MEASURED', label, summary, flush=True)
+    if emit_summary:
+        print('MEASURED', label, summary, flush=True)
     return summary['warpage_pv'], out / manifest['steps'][0]['file']
 
 
@@ -142,11 +146,31 @@ def volume(path, material):
     return total
 
 
-def main(test, dependency=None, needs_occt=True):
+@contextmanager
+def local_real_run():
+    # The caller configures the box-local root; never put real data in the checkout.
+    root = Path(os.environ['CHIPCAE_REAL_RUNS_DIR']).resolve()
+    assert root != ROOT and ROOT not in root.parents, 'Real run root must be outside the checkout'
+    root.mkdir(parents=True, exist_ok=True)
+    directory = Path(tempfile.mkdtemp(prefix='sp7-real-bulk-', dir=root))
+    log_path = directory / 'run.log'
+    with log_path.open('w', encoding='utf-8') as log, redirect_stdout(log), redirect_stderr(log):
+        try:
+            yield directory
+        except DependencyMissing:
+            traceback.print_exc()
+            raise DependencyMissing(f'Real bulk dependency unavailable; see {log_path}') from None
+        except Exception:
+            # CLI assertion details can contain the measured summary, even on failure.
+            traceback.print_exc()
+            raise AssertionError(f'Real bulk acceptance failed; see {log_path}') from None
+
+
+def main(test, dependency=None, needs_occt=True, local_runs=False):
     if needs_occt:
         occt()
     try:
-        with tempfile.TemporaryDirectory(prefix='sp7-') as tmp:
+        with (local_real_run() if local_runs else tempfile.TemporaryDirectory(prefix='sp7-')) as tmp:
             test(Path(tmp))
     except DependencyMissing as error:
         if os.environ.get('SP7_STRICT_ACCEPTANCE') == '1':
