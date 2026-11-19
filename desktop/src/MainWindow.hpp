@@ -7,6 +7,7 @@
 
 #include <QJsonObject>
 #include <QMainWindow>
+#include <QPointer>
 #include <QProcessEnvironment>
 #include <QSet>
 #include <QStringList>
@@ -109,6 +110,7 @@ private:
     QLabel* sourceLabel_ = nullptr;
     QLabel* watermarkLabel_ = nullptr;
     QSet<QString> monitoredRuns_;
+    QPointer<chipcae::desktop::MonitorLogPanel> monitorLogPanel_;
     QJsonObject profile_;
     QString casePath_, runId_, runDir_, monitorStatus_;
     bool manualStack_ = false, fallback_ = false;

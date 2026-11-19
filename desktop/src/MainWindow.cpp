@@ -15,6 +15,7 @@
 #include "StackEditor.hpp"
 #include "SubmitDialog.hpp"
 
+#include <QComboBox>
 #include <QCoreApplication>
 #include <QDir>
 #include <QDockWidget>
@@ -288,8 +289,7 @@ MainWindow::MainWindow(const QStringList& args,
 }
 
 chipcae::desktop::MonitorLogPanel* MainWindow::monitorLogPanel() const {
-    // TEST-FIRST stub: the monitor dock is not wired to MonitorLogPanel yet.
-    return nullptr;
+    return monitorLogPanel_.data();
 }
 
 void MainWindow::monitorRun(const QString& directory,
@@ -312,12 +312,21 @@ void MainWindow::monitorRun(const QString& directory,
     auto* layout = new QVBoxLayout(panel);
     auto* status = new QLabel(panel);
     auto* chart = new chipcae::desktop::ResidualChart(panel);
-    auto* logs = new QPlainTextEdit(panel);
-    logs->setReadOnly(true);
+    auto* logs = new chipcae::desktop::MonitorLogPanel(panel);
+    auto* filter = new QComboBox(panel);
+    filter->setObjectName("monitorLogLevelFilter");
+    filter->addItems({tr("全部级别"), tr("level ≥ 0")});
+    connect(filter, &QComboBox::currentIndexChanged, panel, [logs](int index) {
+        if (index == 1)
+            logs->setMinimumLevel(0);
+        else
+            logs->clearLevelFilter();
+    });
     auto* stop = new QPushButton("STOP", panel);
     stop->setEnabled(broker && !runId.isEmpty());
     layout->addWidget(status);
     layout->addWidget(chart);
+    layout->addWidget(filter);
     layout->addWidget(logs);
     layout->addWidget(stop);
     auto elapsed = std::make_shared<QElapsedTimer>();
@@ -408,13 +417,14 @@ void MainWindow::monitorRun(const QString& directory,
             text += " | " + eventFile + " | " + sourceBadgeText();
             monitorStatus_ = text;
             status->setText(text);
-            logs->setPlainText((model->logs + model->diagnostics).join('\n'));
+            logs->setEntries(model->logEntries());
             if (chart->samples().size() != model->residuals.size())
                 chart->setSamples(model->residuals);
         });
     timer->start(250);
     dock->setWidget(panel);
     addDockWidget(Qt::BottomDockWidgetArea, dock);
+    monitorLogPanel_ = logs;
 }
 
 MainWindow::~MainWindow() {
