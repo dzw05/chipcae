@@ -43,15 +43,16 @@ def prism(points, z, height):
     return BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(wire.Wire()).Face(), gp_Vec(0, 0, height)).Shape()
 
 
-def prepare(directory):
+def prepare(directory, board_size=(56, 44)):
     # Original synthetic IPC, SI geometry below corresponds to its mm dimensions.
-    (directory / 'board.xml').write_text('''<IPC-2581 revision="C"><Ecad><CadData>
+    width, height = board_size
+    (directory / 'board.xml').write_text(f'''<IPC-2581 revision="C"><Ecad><CadData>
 <Layer name="base" layerFunction="DIELECTRIC"/>
 <Stackup><StackupGroup name="S"><StackupLayer layerOrGroupRef="base"
  thickness="0.5" sequence="0" matDes="Si"/></StackupGroup></Stackup>
 <Step name="sp7"><Profile><Polygon><PolyBegin x="0" y="0"/>
-<PolyStepSegment x="56" y="0"/><PolyStepSegment x="56" y="44"/>
-<PolyStepSegment x="0" y="44"/></Polygon></Profile></Step>
+<PolyStepSegment x="{width}" y="0"/><PolyStepSegment x="{width}" y="{height}"/>
+<PolyStepSegment x="0" y="{height}"/></Polygon></Profile></Step>
 </CadData></Ecad></IPC-2581>''')
     dump(directory / 'map.json', {'Si': 'silicon'})
     library = json.loads((ROOT / 'schema/examples/fcbga_demo.materials.json').read_text())
@@ -105,8 +106,17 @@ def cylinder(directory):
     from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder
     from OCP.gp import gp_Ax2, gp_Pnt, gp_Dir
     shape = BRepPrimAPI_MakeCylinder(
-        gp_Ax2(gp_Pnt(28, 22, 0), gp_Dir(0, 0, 1)), 10, 1).Shape()
+        gp_Ax2(gp_Pnt(20, 20, 0), gp_Dir(0, 0, 1)), 10, 1).Shape()
     write_step(directory / 'cylinder.step', shape)
+
+
+def ring_chamfer_parts(directory):
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+    ring = BRepAlgoAPI_Cut(box(8, 2, 0, 40, 40, 1), box(13, 7, 0, 30, 30, 1)).Shape()
+    write_step(directory / 'stiffener.step', ring)
+    points = [(2, 0), (54, 0), (56, 2), (56, 42),
+              (54, 44), (2, 44), (0, 42), (0, 2)]
+    write_step(directory / 'lid.step', prism(points, 1, .5))
 
 
 def chamfer_lid(directory, source):
@@ -171,7 +181,7 @@ def bulk(directory, source):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', type=Path, required=True)
-    parser.add_argument('--case', choices=('box', 'rounded', 'cylinder', 'chamfer', 'bulk', 'negative'),
+    parser.add_argument('--case', choices=('box', 'rounded', 'ring-chamfer', 'cylinder', 'chamfer', 'bulk', 'negative'),
                         default='box')
     parser.add_argument('--demo-step-dir', type=Path,
                         default=os.environ.get('CHIPCAE_DEMO_STEP_DIR'))
@@ -189,11 +199,13 @@ def main():
             import OCP
         except ImportError:
             parser.error('STEP generation requires cadquery-ocp')
-    ids = prepare(destination)
+    ids = prepare(destination, board_size=(40, 40) if args.case == 'cylinder' else (56, 44))
     if args.case == 'box':
         box_parts(destination)
     elif args.case == 'rounded':
         rounded_parts(destination)
+    elif args.case == 'ring-chamfer':
+        ring_chamfer_parts(destination)
     elif args.case == 'cylinder':
         cylinder(destination)
     elif args.case == 'chamfer':
@@ -201,6 +213,7 @@ def main():
     elif args.case == 'bulk':
         bulk(destination, args.demo_step_dir)
     filename = {'bulk': 'bulk_parts', 'box': 'box_parts', 'rounded': 'rounded_parts',
+                'ring-chamfer': 'box_parts',
                 'cylinder': 'cylinder', 'chamfer': 'derived_chamfer_lid',
                 'negative': 'negative_material_layer'}[args.case]
     model = json.loads((HERE / (filename + '.assembly.json')).read_text())
@@ -221,9 +234,9 @@ def main():
     case = json.loads((ROOT / 'examples/s2_solve/case.json').read_text())
     case['stack']['ref'] = 'stack.json'
     case['materials']['ref'] = 'materials.json'
-    case['mesh'].update(nx=112 if args.case in ('chamfer', 'rounded') else 28,
-                        ny=88 if args.case in ('chamfer', 'rounded') else 22,
-                        levels=1, min_elems_per_layer=1, max_ratio=100)
+    nx, ny, levels = {'cylinder': (8, 8, 0), 'ring-chamfer': (2, 2, 1),
+                      'chamfer': (112, 88, 1)}.get(args.case, (28, 22, 1))
+    case['mesh'].update(nx=nx, ny=ny, levels=levels, min_elems_per_layer=1, max_ratio=100)
     case['output']['fields'] = ['T', 'U', 'layer_id', 'material_id', 'cell_kind', 'elem_gid']
     dump(destination / 'case.json', case)
     dump(destination / 'fixture-notes.json', {

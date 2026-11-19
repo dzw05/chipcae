@@ -15,12 +15,14 @@ def acceptance(d):
     code, name = error['code'], error['name']
     result = run('preview', [d / 'stack.json', '-o', d / 'negative.vtkhdf'], expected=code)
     assert name in result.stderr, result.stderr
+    assert 'polygon in material layer' in result.stderr, result.stderr
     case = json.loads((ROOT / 'examples/s2_solve/case.json').read_text())
     case['stack']['ref'] = 'stack.json'
     case['materials']['ref'] = 'materials.json'
     dump(d / 'case.json', case)
     result = run('solve', ['--case', d / 'case.json', '--profile', d / 'profile.json', '--out', d / 'negative'], expected=code)
     assert name in result.stderr, result.stderr
+    assert 'polygon in material layer' in result.stderr, result.stderr
 
 
 if __name__ == '__main__':

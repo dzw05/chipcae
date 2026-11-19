@@ -25,7 +25,8 @@ class DependencyMissing(AssertionError):
 
 
 def cli(name):
-    build = Path(os.environ.get('CHIPCAE_TEST_BUILD_DIR', Path.cwd())).resolve()
+    build = Path(os.environ.get('CHIPCAE_TEST_BUILD_DIR',
+                 os.environ.get('CHIPCAE_BINARY_DIR', Path.cwd()))).resolve()
     while not (build / 'CMakeCache.txt').exists():
         assert build != build.parent, 'Run from a build tree or set CHIPCAE_TEST_BUILD_DIR'
         build = build.parent
@@ -74,15 +75,25 @@ def imported(directory, model):
     return json.loads((directory / 'stack.json').read_text())
 
 
-def solve(directory, label, n=28, stack='stack.json', materials=()):
+def solve(directory, label, n=28, stack='stack.json', materials=(), ny=None, levels=1):
+    # Every positive uses CKPT-CF, including stacks without copper polygons.
+    cf = ROOT / 'tools/stack/copper_fraction.py'
+    if not cf.is_file():
+        raise DependencyMissing('CKPT-CF (#105) copper_fraction.py missing')
+    solve_stack = label + '.stack.json'
+    command = [sys.executable, str(cf), str(directory / stack), '-o',
+               str(directory / solve_stack), '--report', str(directory / (label + '-cf.json'))]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=45)
+    assert result.returncode == 0, (command, result.returncode, result.stderr)
+    ny = round(n * 44 / 56) if ny is None else ny
     case = json.loads((ROOT / 'examples/s2_solve/case.json').read_text())
-    case['stack']['ref'] = stack
+    case['stack']['ref'] = solve_stack
     case['materials']['ref'] = 'materials.json'
-    case['mesh'].update(nx=n, ny=round(n * 44 / 56), levels=1, min_elems_per_layer=1, max_ratio=100)
+    case['mesh'].update(nx=n, ny=ny, levels=levels, min_elems_per_layer=1, max_ratio=100)
     case['output']['fields'] = ['T', 'U', 'layer_id', 'material_id', 'cell_kind', 'elem_gid']
     dump(directory / 'case.json', case)
-    run('preview', [directory / stack, '-o', directory / (label + '.vtkhdf'),
-                    '--nx', n, '--ny', round(n * 44 / 56), '--max-ratio', 100])
+    run('preview', [directory / solve_stack, '-o', directory / (label + '.vtkhdf'),
+                    '--nx', n, '--ny', ny, '--levels', levels, '--max-ratio', 100])
     out = directory / label
     run('solve', ['--case', directory / 'case.json', '--profile', directory / 'profile.json', '--out', out])
     manifest = json.loads((out / 'manifest.json').read_text())
