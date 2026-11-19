@@ -1123,34 +1123,37 @@ ElasticResult solve_system(const ElasticMesh& m,
     petsc(VecRestoreArray(b, &values));
     petsc(VecCopy(b, physical));
     petsc(VecSet(x, 0));
-    bool full_body = false;
-    const auto q = rigid_basis(m, full_body);
-    std::vector<VecHandle> modes(q.size());
-    std::vector<Vec> raw(q.size());
-    for (std::size_t k = 0; k < q.size(); ++k) {
-        petsc(VecDuplicate(x, &modes[k].value));
-        raw[k] = modes[k];
-        petsc(VecGetArray(modes[k], &values));
+    std::vector<std::vector<V>> q;
+    // Prescribed faces restrain rigid motions. Fixed operators must not carry
+    // either exact rigid nullspaces or rigid near-nullspaces for GAMG.
+    if (p.support == ElasticProblem::Support::Rigid321) {
+        bool full_body = false;
+        q = rigid_basis(m, full_body);
+        std::vector<VecHandle> modes(q.size());
+        std::vector<Vec> raw(q.size());
+        for (std::size_t k = 0; k < q.size(); ++k) {
+            petsc(VecDuplicate(x, &modes[k].value));
+            raw[k] = modes[k];
+            petsc(VecGetArray(modes[k], &values));
+            for (PetscInt i = 0; i < local; ++i)
+                for (int j = 0; j < 3; ++j)
+                    values[3 * i + j] = q[k][order[first + i]][j];
+            petsc(VecRestoreArray(modes[k], &values));
+        }
+        petsc(MatNullSpaceCreate(
+            comm, PETSC_FALSE, static_cast<PetscInt>(raw.size()), raw.data(), &nullspace.value));
+        petsc(VecDuplicate(x, &coordinates.value));
+        petsc(VecSetBlockSize(coordinates, 3));
+        petsc(VecGetArray(coordinates, &values));
         for (PetscInt i = 0; i < local; ++i)
             for (int j = 0; j < 3; ++j)
-                values[3 * i + j] = q[k][order[first + i]][j];
-        petsc(VecRestoreArray(modes[k], &values));
-    }
-    petsc(MatNullSpaceCreate(
-        comm, PETSC_FALSE, static_cast<PetscInt>(raw.size()), raw.data(), &nullspace.value));
-    petsc(VecDuplicate(x, &coordinates.value));
-    petsc(VecSetBlockSize(coordinates, 3));
-    petsc(VecGetArray(coordinates, &values));
-    for (PetscInt i = 0; i < local; ++i)
-        for (int j = 0; j < 3; ++j)
-            values[3 * i + j] = m.centroid[order[first + i]][j];
-    petsc(VecRestoreArray(coordinates, &values));
-    if (full_body) {
-        petsc(MatNullSpaceCreateRigidBody(coordinates, &near.value));
-        petsc(MatSetNearNullSpace(a, near));
-    } else
-        petsc(MatSetNearNullSpace(a, nullspace));
-    if (p.support == ElasticProblem::Support::Rigid321) {
+                values[3 * i + j] = m.centroid[order[first + i]][j];
+        petsc(VecRestoreArray(coordinates, &values));
+        if (full_body) {
+            petsc(MatNullSpaceCreateRigidBody(coordinates, &near.value));
+            petsc(MatSetNearNullSpace(a, near));
+        } else
+            petsc(MatSetNearNullSpace(a, nullspace));
         petsc(MatSetNullSpace(a, nullspace));
         // Verify the transpose basis before projecting; right null modes alone
         // do not establish compatibility for a nonsymmetric operator.

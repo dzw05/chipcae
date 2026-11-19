@@ -10,3 +10,5 @@ target_include_directories(chipcae_fvm
 
 target_link_libraries(chipcae_fvm PUBLIC chipcae::core chipcae::mesh)
 chipcae_set_warnings(chipcae_fvm)
+
+add_subdirectory(elastic)

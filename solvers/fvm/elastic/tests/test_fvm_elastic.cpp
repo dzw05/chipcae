@@ -505,6 +505,89 @@ void preconditioners() {
     check_output(m, p, gamg);
     compare_results(gamg, jacobi, 1e-7);
 }
+// Observe the real physical KSP operator, excluding GAMG's nested coarse solves.
+// Fixed operators have neither exact nor near rigid nullspaces.
+PetscErrorCode check_rigid_nullspaces(
+    PetscLogEvent event, int, PetscObject object, PetscObject, PetscObject, PetscObject) {
+    PetscLogEvent solve_event = 0;
+    PetscCall(PetscLogEventGetId("KSPSolve", &solve_event));
+    if (event != solve_event)
+        return PETSC_SUCCESS;
+    const auto ksp = reinterpret_cast<KSP>(object);
+    PC pc = nullptr;
+    PetscBool physical = PETSC_FALSE;
+    PetscCall(KSPGetPC(ksp, &pc));
+    PetscCall(PetscObjectTypeCompare(reinterpret_cast<PetscObject>(pc), PCSHELL, &physical));
+    if (!physical)
+        return PETSC_SUCCESS;
+    Mat a = nullptr;
+    MatNullSpace exact = nullptr, near_space = nullptr, transpose = nullptr;
+    PetscCall(KSPGetOperators(ksp, &a, nullptr));
+    PetscCall(MatGetNullSpace(a, &exact));
+    PetscCall(MatGetNearNullSpace(a, &near_space));
+    PetscCall(MatGetTransposeNullSpace(a, &transpose));
+    PetscCheck((exact != nullptr) == (near_space != nullptr) &&
+                   (exact != nullptr) == (transpose != nullptr),
+               PetscObjectComm(object),
+               PETSC_ERR_ARG_WRONGSTATE,
+               "Rigid near-nullspace requires an exact and transpose rigid nullspace");
+    return PETSC_SUCCESS;
+}
+struct NullspaceCheck {
+    PetscLogHandler handler = nullptr;
+    NullspaceCheck() {
+        require(PetscLogHandlerCreateLegacy(
+                    MPI_COMM_SELF, check_rigid_nullspaces, nullptr, nullptr, nullptr, &handler) ==
+                    PETSC_SUCCESS,
+                "create KSP nullspace observer");
+        require(PetscLogHandlerStart(handler) == PETSC_SUCCESS, "start KSP nullspace observer");
+    }
+    ~NullspaceCheck() {
+        PetscLogHandlerStop(handler);
+        PetscLogHandlerDestroy(&handler);
+    }
+};
+void nullspace_supports() {
+    const NullspaceCheck check;
+    auto disconnected = grid(3, 2, 2);
+    const auto body = disconnected;
+    const auto cells = static_cast<std::int64_t>(body.volume.size());
+    for (std::size_t c = 0; c < body.volume.size(); ++c) {
+        disconnected.volume.push_back(body.volume[c]);
+        disconnected.centroid.push_back(add(body.centroid[c], {2, 0, 0}));
+        disconnected.gid.push_back(body.gid[c] - 10000);
+        disconnected.layer.push_back(body.layer[c]);
+        disconnected.rank.push_back(0);
+    }
+    for (auto f : body.faces) {
+        f.lo += cells;
+        if (f.hi >= 0)
+            f.hi += cells;
+        f.centroid = add(f.centroid, {2, 0, 0});
+        disconnected.faces.push_back(f);
+        disconnected.is_embedded.push_back(0);
+    }
+    for (const auto& m : {grid(3, 2, 2), grid(1, 1, 1), disconnected})
+        for (const std::string pc : {"jacobi", "gamg"})
+            for (bool fixed : {false, true}) {
+                auto p = problem(m);
+                p.preconditioner = pc;
+                M3 a{};
+                for (int j = 0; j < 3; ++j)
+                    a[3 * j + j] = 80e-5;
+                if (fixed)
+                    prescribe(p, m, a);
+                const auto r = solve(m, p, MPI_COMM_SELF);
+                check_output(m, p, r);
+                if (fixed)
+                    field_near(r.U_cell,
+                               affine(m.centroid, a),
+                               0,
+                               1e-10,
+                               "Fixed affine fields retain prescribed translations");
+                traction(m, p, r, 1e-10);
+            }
+}
 void cut_support() {
     const auto m = clipped(4);
     auto p = problem(m);
@@ -756,6 +839,7 @@ int main(int argc, char** argv) {
         s.run("Fixed expansion and duplicate prescribed", supports);
         s.run("nonconvergence reports iterations and residual", failed_ksp);
         s.run("jacobi versus gamg", preconditioners);
+        s.run("rigid nullspaces follow support for all body layouts", nullspace_supports);
         s.run("cut oblique expansion", [] { expansion(clipped(4), 1e-8, true); });
         s.run("cut prescribed cantilever", cut_support);
         s.run("uncut polyhedral equivalence", uncut_equivalence);

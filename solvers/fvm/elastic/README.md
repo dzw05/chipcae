@@ -8,7 +8,8 @@ owns MPI/PETSc initialization and constructs materials with the existing
 `ElasticMesh::gid` is a unique external key. Sparse, descending or interleaved gids are
 valid. Internal permutations sort by owner rank and gid; results keep caller cell/face
 order on every rank. Identical prescribed face values merge; conflicting values fail.
-Every Fixed side/layer target must match a nonembedded exterior face. Embedded faces
+Every Fixed side/layer target must match a nonembedded exterior face. A layer target
+fixes all exterior faces of that layer, including lateral faces. Embedded faces
 remain free. Errors reuse `mesh::Expected` and `mesh::Error`; invalid input reasons start
 with `INPUT_INVALID`. No new error code is defined.
 
@@ -84,7 +85,8 @@ arithmetic translation and rotation on each body; no cell is pinned. Uniform the
 eigenstrain supplies an affine warm start whose convergence is checked against the
 assembled physical equations. GAMG receives centroid coordinates and rigid near-nullspace
 data. The normalized matrix near-nullspace is used directly: a raw `PCSetCoordinates`
-call would override it with coordinate-scaled modes. Empty owner ranks participate in
+call would override it with coordinate-scaled modes. Fixed problems construct no rigid
+basis and attach neither exact nor near rigid nullspaces. Empty owner ranks participate in
 all collectives and receive the same near-nullspace mode count.
 
 Solutions are gathered once, restored to caller order and reconstructed identically on
@@ -99,9 +101,9 @@ and single-sample sets are supported. Method strings are:
 ## Reproduction
 
 This subdirectory requires `CHIPCAE_ENABLE_MFEM AND MFEM_USE_PETSC`. Test executables
-additionally require `CHIPCAE_BUILD_TESTS`. The parent `solvers/fvm/CMakeLists.txt` must
-add this directory; the thermal/chief integration owns that hook. Local verification
-used a temporary parent hook, removed before commit.
+additionally require `CHIPCAE_BUILD_TESTS`. The parent `solvers/fvm/CMakeLists.txt`
+adds this directory; the dependency gate keeps the library and tests out of builds
+without PETSc-enabled MFEM.
 
 ```sh
 cmake -S . -B build-fvm-elastic -G Ninja -DCMAKE_BUILD_TYPE=Release \
