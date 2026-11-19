@@ -18,7 +18,7 @@ struct EcadLayer {
     double thickness_m = 0;
     bool copper = false;
     std::vector<Polygon> polygons;
-    std::string metal{}; // Test-first storage stub; mapping/export behavior is unchanged.
+    std::string metal{}; // Mapped copper metal ID; material stores the base dielectric ID.
 };
 struct UnsupportedElement {
     std::string code = "IMPORT_UNSUPPORTED_ELEMENT";
