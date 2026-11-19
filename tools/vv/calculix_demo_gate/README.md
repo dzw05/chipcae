@@ -170,10 +170,12 @@ remain in the external qualification archive. A failed iterative solver status
 is fatal even if ccx exits zero and writes a fresh FRD.
 
 The qualification attempt produced nonmonotone W_bfp: it decreases from L1 to
-L2, then increases at L3. Criteria (a) and (b) fail, yielding
-`status: "参考不合格"`. The other criteria passed in that attempt; the full
-assessment remains subject to V&V disposition. Strict reference acceptance
-rejects this outcome. All original selection rules, acceptance thresholds,
+L2, then increases at L3. The generator's `assess_reference` records failed
+criteria (a) and (b) and `status: "参考不合格"` in the work artifact.
+The independent validator rejects nonmonotone data immediately, before its
+status-consistency check; it does not accept an unqualified status.
+The other criteria passed in that attempt; the full assessment remains subject
+to V&V disposition. All original selection rules, acceptance thresholds,
 mesh levels and QoI definitions are retained.
 
 Unqualified QoI tables, selection/uncertainty results, comparison deltas and
@@ -254,6 +256,8 @@ Deck-hash regressions reject arbitrary digests for every L2/L3 deck. The real L1
 generator regression also applies the independent validator to emitted
 heat-source, temperature-transfer, resource and signed heat-balance evidence.
 This checks real solver evidence without establishing three-level qualification.
+The separate mocked-solve artifact test checks producer/validator schema
+compatibility using synthetic data; it provides no solver or qualification evidence.
 The real qualified-artifact mutation/restore check remains blocked because there is no
 qualified baseline to restore; synthetic validator mutations do not replace it.
 
