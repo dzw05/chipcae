@@ -5,13 +5,17 @@ matrices and thermal strains. It has no CLI or temperature-solver dependency. Th
 owns MPI/PETSc initialization and constructs materials with the existing
 `material::copper_laminate` compliance adapter. All public quantities use SI units.
 
+This card supports uncut tensor grids. Meshes containing embedded faces are rejected
+with `INPUT_INVALID` before assembly or solving, including zero-load problems. Cut-cell
+discretization and acceptance belong to the `fvm-thermoelastic-cut-concave` follow-up;
+the public mesh fields are retained for that integration.
+
 `ElasticMesh::gid` is a unique external key. Sparse, descending or interleaved gids are
 valid. Internal permutations sort by owner rank and gid; results keep caller cell/face
 order on every rank. Identical prescribed face values merge; conflicting values fail.
 Every Fixed side/layer target must match a nonembedded exterior face. A layer target
-fixes all exterior faces of that layer, including lateral faces. Embedded faces
-remain free. Errors reuse `mesh::Expected` and `mesh::Error`; invalid input reasons start
-with `INPUT_INVALID`. No new error code is defined.
+fixes all exterior faces of that layer, including lateral faces. Errors reuse
+`mesh::Expected` and `mesh::Error`; invalid input reasons start with `INPUT_INVALID`. No new error code is defined.
 
 ## Discretization
 
@@ -28,9 +32,8 @@ an implicit tangential centroid correction; exterior values are prescribed or
 boundary-consistent least-squares extrapolations. Cell strain energy uses the caller's
 full stiffness and thermal eigenstrain. A face energy penalizes the compact-gradient
 residual `deltaU-Gbar*d` using the harmonic acoustic tensor and `area/(n.d)`. This
-is the implicit over-relaxed normal correction; it vanishes for affine fields and
-interior quadratic bending fields. Actual centroids, normals and areas are used on
-both tensor grids and clipped polyhedra.
+vanishes for affine fields and interior quadratic bending fields. The geometry is
+taken from the uncut tensor grid's centroids, normals and areas.
 
 Differentiating these energies gives symmetric block-coupled equations. Differences
 are routed through deterministic shortest paths in the local face graph to retain
@@ -38,7 +41,7 @@ one oriented integrated traction per physical face, inserted with opposite signs
 its adjacent cells. This enforces force and moment conservation together. Prescribed
 boundary reactions follow the same energy derivative; free face tractions are zero.
 The complete implicit stencil is preallocated, including beyond second-ring columns
-introduced by the adjoint and nonorthogonal reconstructions.
+introduced by the adjoint gradient reconstruction.
 
 This energy-conjugate assembly is a substantive deviation from the planned direct
 compact-traction stencil. The direct stencil passed affine patches but failed the
@@ -91,8 +94,8 @@ all collectives and receive the same near-nullspace mode count.
 
 Solutions are gathered once, restored to caller order and reconstructed identically on
 every rank. Prescribed face outputs are exact. Internal faces interpolate reconstructions
-from both sides. `U_mag_max` uses cell centers. Top samples use side 5 or upward embedded
-faces at z_top; a centered, scaled rank-revealing plane fit removes tilt. Empty, collinear
+from both sides. `U_mag_max` uses cell centers. Top samples use exterior side 5 faces;
+a centered, scaled rank-revealing plane fit removes tilt. Empty, collinear
 and single-sample sets are supported. Method strings are:
 
 - `FVM cell centers`
@@ -115,7 +118,9 @@ cmake -S . -B build-fvm-elastic -DCHIPCAE_FVM_ELASTIC_BENCHMARK=ON
 ctest --test-dir build-fvm-elastic -R solve_fvm_elastic_benchmark -V
 ```
 
-Tests use only synthetic tensor and analytically clipped meshes. Timoshenko tests use
+Acceptance tests use synthetic uncut tensor grids. Negative tests reject embedded
+geometry, including a single tetrahedron and horizontal embedded faces, through both
+the solver and diagnostic assembly on one and two ranks. Timoshenko tests use
 nu=0 plies to isolate the beam reference, three factor-two refinements, four cells per
 ply initially and central-half curvature fits. The orthotropic CLT test imposes
 plane-strain kinematics on lateral y faces; it does not infer plane strain from free
@@ -125,12 +130,10 @@ finite-strip boundaries. Assertions remain active in Release builds.
 
 Method references from the brief: Demirdzic & Muzaferija, CMAME 125 (1995), 235–255;
 Jasak & Weller, IJNME 48 (2000), 267–287; Cardiff, Tukovic, Jasak & Ivankovic,
-IJNME 108 (2016), 1572–1592. Nonorthogonal over-relaxation follows Jasak's 1996
-thesis, section 3.3. PETSc documents right/transpose nullspace compatibility under
+IJNME 108 (2016), 1572–1592. PETSc documents right/transpose nullspace compatibility under
 [MatSetNullSpace](https://petsc.org/release/manualpages/Mat/MatSetNullSpace/).
 
-Small cut volumes must already have been merged by the caller. This is linear,
-small-strain elasticity with axes-aligned thermal expansion tensors; no contact,
+This is linear, small-strain elasticity with axes-aligned thermal expansion tensors; no contact,
 plasticity, nonlinear geometry, vertex reconstruction or FEM comparison is included.
 The full replicated mesh and implicit second-ring gradient operators consume memory
 on each rank. Componentwise harmonic interpolation can reject an SPD pair if its
@@ -142,8 +145,8 @@ interpolated face tensor loses positive definiteness.
 
 | Acceptance | Result |
 | --- | --- |
-| Elastic patches, errors, supports, reconstruction and clipping | 110 cases pass |
-| MPI np=2, both supports/PCs, zero-owned-row ranks | 13 cases pass |
+| Uncut elastic patches, errors, supports, reconstruction and embedded-input rejection | 108 cases pass |
+| MPI np=2, both supports/PCs, zero-owned-row ranks and embedded-input rejection | 10 cases pass |
 | Signed Timoshenko heating, 512/4096/32768 cells | errors 2.2741%, 0.5590%, 0.1392% |
 | Timoshenko observed orders | 2.0243, 2.0060; cooling gives the same convergence |
 | Orthotropic f=0.3 plane-strain CLT | signed curvature 0.362605596231; relative error 2.16e-12 |
@@ -153,25 +156,17 @@ The **实测** 68x68x6 benchmark has 27,744 cells and 83,232 displacement unknow
 
 | Base PC / Krylov method | solve_elastic wall (s) | Iterations | Independent `||A U-b||2` (N) | Reported residual (N) | Process peak RSS (KiB) |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Jacobi / CG | 38.2305 | 3446 | 2.69502e-8 | 2.69424e-8 | 399836 |
-| GAMG / flexible GMRES(50) | 28.5432 | 695 | 1.60256e-8 | 1.60268e-8 | 576976 |
+| Jacobi / CG | 32.1559 | 3446 | 2.66786e-8 | 2.66695e-8 | 400580 |
+| GAMG / flexible GMRES(50) | 26.1867 | 693 | 1.62500e-8 | 1.62460e-8 | 590368 |
 
 The RHS norm is 7572.82 N. Wall times include validation, assembly, the coarse space,
 KSP and reconstruction on a shared build box. RSS uses cumulative process `ru_maxrss`
 across both cases and the intervening residual diagnostics. Physical residuals use the
 original, unprojected load. The documented backward-error floor was active.
 
-No acceptance assertion was loosened or removed. The public signature and result method
-strings are preserved. The committed delivery order is acceptance tests, tensor-grid
-solver, then embedded-face activation and documentation. A temporary validation gate
-kept embedded-face cases RED in the tensor-grid commit; the geometric operators are
-shared by both paths.
-
-The broader suite has two unresolved exceptions outside this module's file scope.
-`stack_writer_outline_polyset` fails with `duplicate material id`: its assembly test
-helper appends a `copper` card although the example material library already contains
-that id. The fine solve in `solve_column_gmg_fcbga_scaling` was terminated by signal 9
-in both the initial run and recheck. All four FVM entries pass. The final external
-verification log records the full-suite results, environment, exact commands, deviations
-and commit hashes. CI/ci-ok, FVM CLI wiring and FVM-to-FEM cross-comparison are
-**未执行** in this local library-only delivery.
+The uncut acceptance assertions and numerical tolerances are preserved. Cut-cell
+acceptance cases and their clipping builder were removed from this card; embedded
+input now has rejection coverage. The public signature and result method strings
+are preserved. CI/ci-ok, FVM CLI wiring and FVM-to-FEM cross-comparison are
+**未执行** in this local library-only delivery. The external verification log records
+full-suite results, environment, exact commands and commit hashes.

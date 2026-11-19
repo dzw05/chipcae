@@ -43,11 +43,7 @@ detail::ElasticAssembly assembly(const ElasticMesh& m, const ElasticProblem& p) 
     require(a.value().rhs.size() == m.volume.size(), "assembled rhs length");
     return std::move(a.value());
 }
-void traction(const ElasticMesh& m,
-              const ElasticProblem& p,
-              const ElasticResult& r,
-              double tol,
-              bool embedded_only = false) {
+void traction(const ElasticMesh& m, const ElasticProblem& p, const ElasticResult& r, double tol) {
     const auto t = face_forces(assembly(m, p), r.U_cell);
     double stiffness = 0, strain = 0;
     for (std::size_t c = 0; c < p.C.size(); ++c) {
@@ -58,12 +54,10 @@ void traction(const ElasticMesh& m,
     }
     require(stiffness * strain > 0, "nonzero traction normalization");
     for (std::size_t f = 0; f < m.faces.size(); ++f)
-        if (!embedded_only || m.is_embedded[f])
-            require(norm(t[f]) <= tol * stiffness * strain * m.faces[f].area,
-                    "integrated traction / (max|C| max|alpha*dT| area) on face " +
-                        std::to_string(f));
+        require(norm(t[f]) <= tol * stiffness * strain * m.faces[f].area,
+                "integrated traction / (max|C| max|alpha*dT| area) on face " + std::to_string(f));
 }
-void expansion(const ElasticMesh& m, double tol = 1e-10, bool cut = false) {
+void expansion(const ElasticMesh& m, double tol = 1e-10) {
     const auto p = problem(m);
     const auto r = solve(m, p, MPI_COMM_SELF);
     check_output(m, p, r);
@@ -88,7 +82,7 @@ void expansion(const ElasticMesh& m, double tol = 1e-10, bool cut = false) {
             "zero arithmetic translation gauge");
     require(norm(rotation) <= atol * length(m) * static_cast<double>(m.volume.size()),
             "zero rotation gauge");
-    traction(m, p, r, tol, cut);
+    traction(m, p, r, tol);
 }
 void affine_patch(
     const ElasticMesh& m,
@@ -116,41 +110,47 @@ void zero(const ElasticMesh& m, bool fixed) {
     require(r.warpage_pv == 0 && r.U_mag_max == 0, "zero load gives exact zero summaries");
     require(r.iterations == 0 || r.iterations == 1, "zero load takes 0 or 1 iterations");
 }
-void geometry() {
-    const auto m = clipped(4);
-    const double delta = 1.55 - 1.4;
-    const double missing = delta * delta * delta / (6 * 0.35 * 0.2);
-    const double volume = std::accumulate(m.volume.begin(), m.volume.end(), 0.0);
-    near(volume, 1 - missing, 1e-13, 0, "exact clipped tetrahedron volume");
-    V first{};
-    for (std::size_t c = 0; c < m.volume.size(); ++c)
-        first = add(first, scale(m.centroid[c], m.volume[c]));
-    const V removed_centroid{1 - delta / 4, 1 - delta / (4 * 0.35), 1 - delta / (4 * 0.2)};
-    const V expected = sub({0.5, 0.5, 0.5}, scale(removed_centroid, missing));
-    require(norm(sub(first, expected)) <= 2e-13, "exact clipped first moments");
-    std::vector<V> closure(m.volume.size());
-    std::vector<double> area(m.volume.size());
-    bool embedded = false, nonorthogonal = false;
-    for (std::size_t i = 0; i < m.faces.size(); ++i) {
-        const auto& f = m.faces[i];
-        const V av = scale(f.normal, f.area);
-        closure[f.lo] = add(closure[f.lo], av);
-        area[f.lo] += f.area;
-        embedded = embedded || m.is_embedded[i];
-        if (f.hi >= 0) {
-            closure[f.hi] = sub(closure[f.hi], av);
-            area[f.hi] += f.area;
-            const auto d = sub(m.centroid[f.hi], m.centroid[f.lo]);
-            require(dot(d, f.normal) > 0, "positive projected internal distance");
-            nonorthogonal = nonorthogonal || norm(cross(d, f.normal)) > 1e-6;
-        } else {
-            require(dot(sub(f.centroid, m.centroid[f.lo]), f.normal) > 0,
-                    "positive projected boundary distance");
+void reject_embedded(MPI_Comm comm) {
+    // The unit cube clipped by x+y+z<=1 is a tetrahedron. Its sloping face is
+    // embedded; the public mesh carrier remains available for the follow-up card.
+    ElasticMesh tetra;
+    tetra.volume = {1.0 / 6};
+    tetra.centroid = {{0.25, 0.25, 0.25}};
+    tetra.gid = {19};
+    tetra.layer = {0};
+    tetra.rank = {0};
+    tetra.z_top = 1;
+    const double s = std::sqrt(3.0);
+    tetra.faces = {{0, -1, 0, 0.5, {-1, 0, 0}, {0, 1.0 / 3, 1.0 / 3}},
+                   {0, -1, 2, 0.5, {0, -1, 0}, {1.0 / 3, 0, 1.0 / 3}},
+                   {0, -1, 4, 0.5, {0, 0, -1}, {1.0 / 3, 1.0 / 3, 0}},
+                   {0, -1, -1, s / 2, {1 / s, 1 / s, 1 / s}, {1.0 / 3, 1.0 / 3, 1.0 / 3}}};
+    tetra.is_embedded = {0, 0, 0, 1};
+    auto horizontal = grid(2, 2, 2);
+    for (std::size_t f = 0; f < horizontal.faces.size(); ++f)
+        if (horizontal.faces[f].side == 5) {
+            horizontal.faces[f].side = -1;
+            horizontal.is_embedded[f] = 1;
         }
-    }
-    for (std::size_t i = 0; i < closure.size(); ++i)
-        require(norm(closure[i]) <= 1e-12 * area[i], "clipped cell area-vector closure");
-    require(embedded && nonorthogonal, "fixture exercises embedded and nonorthogonal open faces");
+    for (const auto& m : {tetra, horizontal})
+        for (const std::string pc : {"jacobi", "gamg"})
+            for (bool fixed : {false, true})
+                for (double dt : {0.0, 80.0}) {
+                    auto p = problem(m, isotropic(), dt);
+                    p.preconditioner = pc;
+                    if (fixed) {
+                        p.support = ElasticProblem::Support::Fixed;
+                        p.fixed_side = {0};
+                    }
+                    const auto r = solve_elastic(m, p, comm);
+                    require(!r && r.error().reason.starts_with("INPUT_INVALID:") &&
+                                r.error().reason.find("embedded") != std::string::npos,
+                            "embedded meshes must be rejected before solving, including zero load");
+                    const auto a = detail::assemble_elastic(m, p, comm);
+                    require(!a && a.error().reason.starts_with("INPUT_INVALID:") &&
+                                a.error().reason.find("embedded") != std::string::npos,
+                            "diagnostic assembly must also reject embedded meshes");
+                }
 }
 void matrix_invariants() {
     const auto m = grid(3, 3, 3);
@@ -588,58 +588,16 @@ void nullspace_supports() {
                 traction(m, p, r, 1e-10);
             }
 }
-void cut_support() {
-    const auto m = clipped(4);
-    auto p = problem(m);
-    p.support = ElasticProblem::Support::Fixed;
-    p.fixed_side = {0};
-    const auto r = solve(m, p, MPI_COMM_SELF);
-    check_output(m, p, r);
-    require(r.U_mag_max > 0, "cut cantilever responds to thermal loading");
-    traction(m, p, r, 1e-8, true);
-}
-void uncut_equivalence() {
-    const auto plain = grid(3, 3, 3), cut = clipped(3, 2);
-    auto p = problem(plain), q = problem(cut);
-    const M3 a{0.001, 0.002, 0, -0.001, 0.003, 0.002, 0, 0.001, 0.002};
-    prescribe(p, plain, a);
-    prescribe(q, cut, a);
-    const auto r = solve(plain, p, MPI_COMM_SELF), s = solve(cut, q, MPI_COMM_SELF);
-    std::map<std::int64_t, V> by_gid;
-    for (std::size_t c = 0; c < plain.gid.size(); ++c)
-        by_gid[plain.gid[c]] = r.U_cell[c];
-    std::vector<V> expected;
-    for (const auto gid : cut.gid)
-        expected.push_back(by_gid.at(gid));
-    field_near(s.U_cell, expected, 0, 1e-10, "unclipped polyhedral/tensor equivalence by gid");
-    // The two builders enumerate faces differently; compare geometry-keyed outputs.
-    for (std::size_t f = 0; f < cut.faces.size(); ++f) {
-        bool found = false;
-        for (std::size_t g = 0; g < plain.faces.size(); ++g)
-            if (norm(sub(cut.faces[f].centroid, plain.faces[g].centroid)) < 1e-13 &&
-                norm(sub(cut.faces[f].normal, plain.faces[g].normal)) < 1e-13) {
-                require(norm(sub(s.U_face[f], r.U_face[g])) <= 1e-10 * r.U_mag_max,
-                        "uncut face reconstruction equivalence");
-                require(s.face_prescribed[f] == r.face_prescribed[g], "uncut flags");
-                found = true;
-                break;
-            }
-        require(found, "unclipped face geometric match");
-    }
-}
 void top_selection() {
     auto m = grid(3, 2, 2);
-    // Top faces become horizontal embedded faces. A lower upward face must not qualify.
-    for (std::size_t i = 0; i < m.faces.size(); ++i)
-        if (m.faces[i].side == 5) {
-            m.faces[i].side = -1;
-            m.is_embedded[i] = 1;
-        }
     auto p = problem(m);
     const auto r = solve(m, p, MPI_COMM_SELF);
     check_output(m, p, r);
-    require(r.top_samples.size() == 6, "horizontal embedded top faces selected");
-    m.z_top += 1;
+    require(r.top_samples.size() == 6, "side 5 top faces selected");
+    // Unlabelled exterior faces do not contribute top samples.
+    for (auto& f : m.faces)
+        if (f.side == 5)
+            f.side = -1;
     p = problem(m);
     const auto empty = solve(m, p, MPI_COMM_SELF);
     check_output(m, p, empty);
@@ -671,13 +629,11 @@ void plane_removal() {
     near(r.warpage_pv, 0.125e-6, 1e-17, 1e-10, "centered scaled least-squares plane removal");
 }
 void distributed(Suite& suite, int ranks) {
-    for (const std::string name : {"replicated graded", "replicated cut", "zero owned rows"})
+    for (const std::string name : {"replicated graded", "zero owned rows"})
         for (const std::string pc : {"jacobi", "gamg"})
             for (bool fixed : {false, true})
                 suite.run(name + " " + pc + (fixed ? " Fixed" : " Rigid321"), [&] {
-                    auto m = name == "replicated cut"
-                                 ? clipped(4, 1.4, ranks)
-                                 : grid(axis(4, 1, 1.3), axis(3), axis(4, 0.05), ranks);
+                    auto m = grid(axis(4, 1, 1.3), axis(3), axis(4, 0.05), ranks);
                     if (name == "zero owned rows")
                         std::fill(m.rank.begin(), m.rank.end(), 0);
                     auto p = problem(m, orthotropic());
@@ -792,10 +748,12 @@ int main(int argc, char** argv) {
         s.run("np2 launcher",
               [&] { require(ranks == 2, "MPI acceptance requires exactly two ranks"); });
         distributed(s, ranks);
+        s.run("embedded meshes rejected on every rank", [&] { reject_embedded(s.comm); });
     } else if (mode == "benchmark") {
         benchmark(s);
     } else {
-        s.run("clipped fixture exact moments", geometry);
+        s.run("embedded meshes rejected before assembly or solve",
+              [&] { reject_embedded(s.comm); });
         const std::vector<std::pair<std::string, ElasticMesh>> grids{
             {"uniform", grid(3, 3, 3)},
             {"graded ratio<=2", grid(axis(4, 1, 1.5), axis(3, 0.7, 1.3), axis(3, 0.4, 1.4))},
@@ -840,10 +798,7 @@ int main(int argc, char** argv) {
         s.run("nonconvergence reports iterations and residual", failed_ksp);
         s.run("jacobi versus gamg", preconditioners);
         s.run("rigid nullspaces follow support for all body layouts", nullspace_supports);
-        s.run("cut oblique expansion", [] { expansion(clipped(4), 1e-8, true); });
-        s.run("cut prescribed cantilever", cut_support);
-        s.run("uncut polyhedral equivalence", uncut_equivalence);
-        s.run("embedded top and empty sample selection", top_selection);
+        s.run("side 5 top and empty sample selection", top_selection);
         s.run("shifted coordinates quadratic plane removal", plane_removal);
         s.run("free gamg expansion", [] {
             const auto m = grid(3, 3, 3);

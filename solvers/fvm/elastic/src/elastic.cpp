@@ -110,6 +110,8 @@ ElasticBoundary validate(const ElasticMesh& m, const ElasticProblem& p, MPI_Comm
         require((m.is_embedded[k] == 0 || m.is_embedded[k] == 1) &&
                     (!m.is_embedded[k] || (f.hi == -1 && f.side == -1)),
                 "embedded face metadata");
+        // Cut-cell discretization belongs to fvm-thermoelastic-cut-concave.
+        require(!m.is_embedded[k], "embedded faces require cut-cell support");
         require(std::isfinite(f.area) && f.area > 0 && finite(f.normal) && finite(f.centroid),
                 "face geometry");
         require(std::abs(dot(f.normal, f.normal) - 1) < 1e-10, "face normal must be unit length");
@@ -793,8 +795,7 @@ void reconstruct(const ElasticMesh& m,
             }
         }
         r.U_face[k] = u;
-        if (f.hi < 0 && (f.side == 5 || (m.is_embedded[k] && f.normal[2] > 0.99 &&
-                                         f.centroid[2] >= m.z_top - 1e-13)))
+        if (f.hi < 0 && f.side == 5)
             r.top_samples.push_back({f.centroid[0], f.centroid[1], u[2]});
     }
     for (const auto& u : r.U_cell)
