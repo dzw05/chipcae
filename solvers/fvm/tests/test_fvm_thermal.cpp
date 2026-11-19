@@ -75,13 +75,15 @@ void independent_balances(const fv::FvGrid& g,
 void layered(const std::string& pc,
              double fraction,
              bool robin,
-             const std::vector<double>& base = {.3, 1.2, .7, 2.1}) {
+             const std::vector<double>& base = {.3, 1.2, .7, 2.1},
+             bool transverse = true) {
     const auto z = base.size() == 2 ? std::vector<double>{0, .17, 1}
                                     : std::vector<double>{0, .07, .23, .56, 1};
-    auto m = boxes({{0, .4, 1}, {0, .3, 1}, z}, true);
+    auto m =
+        boxes(transverse ? TestAxes{{0, .4, 1}, {0, .3, 1}, z} : TestAxes{{0, 1}, {0, 1}, z}, true);
     m.copper_layer_of_layer.resize(base.size());
     std::iota(m.copper_layer_of_layer.begin(), m.copper_layer_of_layer.end(), 0);
-    m.copper_phi.assign(base.size() * 4, fraction);
+    m.copper_phi.assign(base.size() * (transverse ? 4 : 1), fraction);
     auto g = take(fv::build_grid(m), "build_grid layered nonuniform mesh");
     geometry_gate(g);
     auto f = fv::copper_fraction(g, m);
@@ -108,6 +110,31 @@ void layered(const std::string& pc,
     top.q = -2; // Inward-positive: outward heat is +2 W/m^2.
     p.bcs.push_back(top);
     const double q = robin ? 20 / (resistance + 1. / 7) : 2;
+    // On multiple columns add a known transverse affine field, so every
+    // interior face carries measurable flux. The separate one-column case
+    // retains the exact 1D solution and insulated transverse faces.
+    const Vec gradient = transverse ? Vec{.3, .2, 0} : Vec{};
+    p.bcs.clear();
+    for (std::size_t f = 0; f < g.faces.size(); ++f) {
+        const auto& face = g.faces[f];
+        if (face.hi >= 0)
+            continue;
+        fv::ThermalBc b{};
+        const double tilt = dot(gradient, face.centroid);
+        if (face.side == 4) {
+            b = dirichlet(target(face), 310 + tilt);
+        } else if (face.side == 5) {
+            b = top;
+            b.T_inf += tilt;
+        } else {
+            b.kind = fv::ThermalBc::Kind::Flux;
+            b.target = target(face);
+            b.q = p.k[face.lo][face.axis] * gradient[face.axis] * face.area_vector[face.axis] /
+                  face.area;
+        }
+        b.face = f;
+        p.bcs.push_back(b);
+    }
     auto r = solve(g, m, p);
     for (std::size_t c = 0; c < r.T_cell.size(); ++c) {
         const auto l = static_cast<std::size_t>(m.attribute[g.cv_elem[c]] - 1);
@@ -115,11 +142,22 @@ void layered(const std::string& pc,
         for (std::size_t j = 0; j < l; ++j)
             drop += (z[j + 1] - z[j]) / ks[j][2];
         drop += (z[l + 1] - z[l]) / (2 * ks[l][2]);
-        near(r.T_cell[c], 310 - q * drop, 1e-10, 0, "layered exact cell-average temperature");
+        near(r.T_cell[c],
+             310 - q * drop + dot(gradient, g.cv_centroid[c]),
+             1e-10,
+             0,
+             "layered exact cell-average temperature");
     }
     conservation(r);
-    near(r.heat_in, q, 0, 1e-12, "layered analytic incoming heat");
-    near(r.heat_out, q, 0, 1e-12, "layered analytic outgoing heat");
+    double incoming = q;
+    for (std::size_t l = 0; l < base.size(); ++l)
+        incoming += (z[l + 1] - z[l]) * (ks[l][0] * gradient[0] + ks[l][1] * gradient[1]);
+    near(r.heat_in, incoming, 0, 1e-12, "layered analytic incoming heat");
+    near(r.heat_out, incoming, 0, 1e-12, "layered analytic outgoing heat");
+    if (!transverse)
+        for (std::size_t f = 0; f < g.faces.size(); ++f)
+            if (g.faces[f].axis < 2)
+                near(r.face_flux[f], 0, 1e-12, 0, "1D insulated transverse face flux");
 }
 
 void box_equivalence(const std::string& pc) {
@@ -353,6 +391,26 @@ int main(int argc, char** argv) {
         require(std::isfinite(local.condition) && local.condition > 1e8,
                 "thin-box conditioning is recorded without eigenvalue clipping");
     });
+    suite.run("tiny source retains assembled face load", [] {
+        auto m = cube(1);
+        auto g = take(fv::build_grid(m), "build_grid tiny source");
+        auto p = problem(g, {1, 2, 3});
+        p.T_ref = 0;
+        p.q_vol[0] = 1e-20;
+        for (const auto& face : g.faces)
+            p.bcs.push_back(dirichlet(target(face), 1));
+        auto r = solve(g, m, p);
+        // The cell temperature increment is below extended-precision epsilon
+        // at T=1. Recovering M^-1(u-lambda) loses the entire heat source.
+        // Box half conductances partition it as k_i/(2*sum(k)).
+        for (std::size_t f = 0; f < g.faces.size(); ++f)
+            near(r.face_flux[f],
+                 p.q_vol[0] * p.k[0][g.faces[f].axis] / 12,
+                 1e-40,
+                 1e-14,
+                 "source partition from analytic box half conductances");
+        conservation(r);
+    });
     suite.run("regular geometry retains gids, ownership, and one-based layers", [] {
         auto m = boxes({{0, .13, .6, 1}, {0, .25, .8, 1}, {0, .12, .43, 1}}, true);
         // Input element order is deliberately shuffled; geometry is never inferred from gid.
@@ -396,7 +454,7 @@ int main(int argc, char** argv) {
                 "void separates solids");
         auto p = problem(g);
         p.bcs = {dirichlet("face:zmin", 1)};
-        rejected(fv::solve_thermal(g, m, p, MPI_COMM_WORLD),
+        rejected(fv::solve_thermal(g, m, p, chipcae::Communicator::world()),
                  "each disconnected component needs an anchor");
     });
     for (const std::string pc : {"jacobi", "gamg"}) {
@@ -405,6 +463,11 @@ int main(int argc, char** argv) {
                 suite.run("layered nonuniform f=" + std::to_string(f) +
                               (robin ? " Robin " : " Flux ") + pc,
                           [&] { layered(pc, f, robin); });
+        for (double f : {0., .3})
+            for (bool robin : {false, true})
+                suite.run("one-column insulated layered f=" + std::to_string(f) +
+                              (robin ? " Robin " : " Flux ") + pc,
+                          [&] { layered(pc, f, robin, {.3, 1.2, .7, 2.1}, false); });
         suite.run("independent harmonic TPFA equivalence " + pc, [&] { box_equivalence(pc); });
         for (const std::string stabilization : {"diag", "scalar"}) {
             for (const Polynomial u : {Polynomial{300, {}, false},
@@ -421,7 +484,16 @@ int main(int argc, char** argv) {
             suite.run("quadratic true-average convergence " + pc + " " + stabilization, [&] {
                 std::vector<Errors> errors;
                 for (int n : {4, 8, 16}) {
-                    auto m = cube(n);
+                    // Smooth grading avoids the exact quadratic face/flux
+                    // solution on uniform cubes, where order measures roundoff.
+                    auto x = uniform(n), y = x, z = x;
+                    for (auto& t : x)
+                        t += .2 * t * (1 - t);
+                    for (auto& t : y)
+                        t -= .15 * t * (1 - t);
+                    for (auto& t : z)
+                        t += .1 * t * (1 - t);
+                    auto m = boxes({x, y, z});
                     auto g = take(fv::build_grid(m), "build_grid quadratic n=" + std::to_string(n));
                     errors.push_back(quadratic_errors(g, m, polynomials(g, m), pc, stabilization));
                 }
@@ -523,6 +595,34 @@ int main(int argc, char** argv) {
             }
         });
     }
+    suite.run("uniform quadratic exact face and flux solution", [] {
+        auto m = cube(4);
+        auto g = take(fv::build_grid(m), "build_grid uniform quadratic");
+        auto polys = polynomials(g, m);
+        const Polynomial u{0, {}, true};
+        auto p = manufactured(g, polys, u);
+        auto r = solve(g, m, p);
+        for (std::size_t c = 0; c < g.cv_volume.size(); ++c)
+            near(r.T_cell[c],
+                 u.cell(polys[c]) - 1. / 48,
+                 1e-12,
+                 0,
+                 "uniform quadratic cell shift is -h^2/3");
+        for (std::size_t f = 0; f < g.faces.size(); ++f) {
+            const auto& face = g.faces[f];
+            near(r.T_face[f],
+                 u.face(matching_face(polys[face.lo], face)),
+                 1e-12,
+                 0,
+                 "uniform quadratic true face average");
+            near(r.face_flux[f],
+                 exact_flux(face, u, p.k[face.lo]),
+                 1e-12,
+                 0,
+                 "uniform quadratic exact integrated flux");
+        }
+        conservation(r);
+    });
     suite.run("jacobi/gamg results agree", [] {
         auto m = cube(4);
         auto g = take(fv::build_grid(m), "build_grid PC comparison");
@@ -602,14 +702,14 @@ int main(int argc, char** argv) {
             auto p = problem(g);
             p.bcs = {dirichlet("face:zmin", 1)};
             mutate(p);
-            rejected(fv::solve_thermal(g, m, p, MPI_COMM_WORLD), name);
+            rejected(fv::solve_thermal(g, m, p, chipcae::Communicator::world()), name);
         });
     suite.run("empty layer target preserves FEM diagnostic", [] {
         auto m = cube(1);
         auto g = take(fv::build_grid(m), "build_grid empty target");
         auto p = problem(g);
         p.bcs = {dirichlet("layer:missing", 1)};
-        rejected(fv::solve_thermal(g, m, p, MPI_COMM_WORLD),
+        rejected(fv::solve_thermal(g, m, p, chipcae::Communicator::world()),
                  "empty layer target",
                  "target has no boundary faces: layer:missing");
     });
@@ -619,7 +719,7 @@ int main(int argc, char** argv) {
         auto p = manufactured(g, polynomials(g, m), {1, {.2, -.7, .3}, true});
         p.max_iter = 1;
         p.rtol = 1e-16;
-        auto r = fv::solve_thermal(g, m, p, MPI_COMM_WORLD);
+        auto r = fv::solve_thermal(g, m, p, chipcae::Communicator::world());
         rejected(r, "forced nonconvergence", "residual");
         require(r.error().reason.find("iter") != std::string::npos,
                 "nonconvergence iteration diagnostic");

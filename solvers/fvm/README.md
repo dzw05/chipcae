@@ -25,10 +25,14 @@ harmonic TPFA conductivity. Boxes use the same MFD implementation.
 
 Cholesky solves give `b = M^-1 1`, `alpha = 1^T b` and columns of
 `S = M^-1 - b b^T/alpha`. Only this condensed operator is stored, alongside
-the factor; no inverse is used for recovery. Assembly gives
+the factor; no full inverse is stored. Assembly gives
 `S lambda = b source/alpha`, plus positive Robin diagonals. A fixed CV
 contributes its uncondensed operator and prescribed cell value. Recovery is
-`u = (source + b^T lambda)/alpha`, `q = M^-1(u 1-lambda)`.
+`u = (source + b^T lambda)/alpha`. Flux recovery uses
+`q = b source/alpha - S lambda`, with the identical row-sum-adjusted `S`
+used in assembly. For a fixed CV it replaces `source` by
+`alpha u_fixed - b^T lambda`. Evaluating row differences preserves the
+constant nullspace without subtracting large temperature origins.
 Local dense arithmetic uses extended precision to limit cancellation.
 
 `ThermalProblem::k` supplies final positive diagonal conductivities, copied
@@ -39,7 +43,8 @@ and exclusively `elem_gid/nz` for the Morton column. Hex coordinates determine
 geometric indices, independently of gids and element ordering.
 
 Targets are `face:xmin` through `face:zmax`, `layer:<name>` for the layer's
-exterior faces, and `boundary:embedded`. The optional `ThermalBc::face`
+exterior axial faces, and `boundary:embedded`. Layer targets exclude embedded
+faces, including when an explicit face selector is supplied. The optional `ThermalBc::face`
 selects one public face within its target, permitting spatially varying MMS
 averages. Duplicate prescriptions fail. Flux density is positive inward;
 returned integrated flux is positive outward from the face's `lo` CV.
@@ -99,7 +104,9 @@ contain physical area. Positive-volume unlisted slivers are retained.
 Embedded quadrature is assigned to independently oriented triangle planes
 at tolerance `1e-12 * min(parent edge)`. Axial openings must agree in area
 and centroid before sharing a face. Embedded faces support Robin or default
-insulation.
+insulation. They bound the retained solid; shared interfaces between adjacent
+Cartesian parents are axial openings. Internal embedded material interfaces
+are outside the cut-geometry contract.
 
 Only explicitly listed `small_subs` merge, choosing maximum total shared
 opening area among neighbors of the same material and layer. Equal areas
@@ -124,10 +131,12 @@ removing them would remove material. Omitted void elements and explicit
 actual outer coordinate plane, so an internal void boundary cannot anchor
 a disconnected component accidentally.
 
-The required MPI public signature conflicts with the repository's current
-raw-text public-header checker, which rejects every communicator handle.
-This module preserves the specified signature and does not alter or evade
-that checker. Error codes use existing names as prefixes in the unchanged
+The public solver accepts the existing `chipcae::Communicator` world
+snapshot, constructed after runtime initialization. MPI headers and native
+communicator handles remain in the private backend; serial-reference tests
+use that backend on the self communicator. A stale world snapshot is rejected.
+`Communicator` stores only world rank and size and cannot wrap a subcommunicator.
+Error codes use existing names as prefixes in the unchanged
 `mesh::Error::reason` carrier rather than adding a frozen schema error type.
 
 Precisely, the diagonal stabilization is
@@ -153,8 +162,15 @@ with cell average `u_exact_average - h^2/3`. Indeed,
 `2 k_i A_f/h * (u_c-lambda_f) = -k_i S_f,i * 2 C_f,i`.
 Thus the temperature error is second order but a flux observed-order test
 on this fixture compares rounding errors rather than a nonzero truncation
-error. The acceptance assertions are retained; measurements and remaining
-failed gates belong in the external verification report.
+error. A dedicated uniform-cube regression checks those exact face averages,
+fluxes, and the cell shift. The quadratic order tests use smoothly graded
+Cartesian meshes with nonzero truncation error and the same order thresholds.
+Layered tests cover insulated single columns and multiple columns with a
+known transverse affine field, so the exact relative interior-jump check
+measures nonzero flux. Explicit zero-flux patch and insulation checks remain.
+The retained-sliver fixture supplies analytic sub-box quadrature at thickness
+`2e-10`, retaining all sixteen positive slivers and the strict opening gates;
+this avoids generic clipping's centroid cancellation at that aspect ratio.
 An explicit face selector may address any exterior piece with the target's
 side orientation, including an exposed interior void boundary after merging;
 a target-wide `face:*` prescription selects the global outer coordinate plane.

@@ -10,6 +10,17 @@
 #include <set>
 #include <sstream>
 namespace chipcae::solvers::fvm {
+Expected<ThermalResult> solve_thermal(const FvGrid& g,
+                                      const mesh::HexMeshArrays& m,
+                                      const ThermalProblem& p,
+                                      const Communicator& world) {
+    int rank = 0, size = 0;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    if (world.rank() != rank || world.size() != size)
+        return mesh::Error{"fvm/thermal", "INPUT_INVALID: stale world communicator snapshot"};
+    return detail::solve_thermal_on_comm(g, m, p, MPI_COMM_WORLD);
+}
 namespace {
 using detail::Dense;
 mesh::Error invalid(const std::string& reason) {
@@ -27,10 +38,10 @@ std::size_t root(std::vector<std::size_t>& parent, std::size_t a) {
     return a;
 }
 } // namespace
-Expected<ThermalResult> solve_thermal(const FvGrid& g,
-                                      const mesh::HexMeshArrays& m,
-                                      const ThermalProblem& p,
-                                      MPI_Comm comm) {
+Expected<ThermalResult> detail::solve_thermal_on_comm(const FvGrid& g,
+                                                      const mesh::HexMeshArrays& m,
+                                                      const ThermalProblem& p,
+                                                      MPI_Comm comm) {
     const auto nc = g.cv_volume.size(), nf = g.faces.size();
     int rank = 0, ranks = 0;
     MPI_Comm_rank(comm, &rank);
@@ -91,16 +102,16 @@ Expected<ThermalResult> solve_thermal(const FvGrid& g,
             if (face.hi >= 0 || (b.face && *b.face != f))
                 continue;
             bool match = b.target == "boundary:embedded" && face.side == 6;
-            if (face.side >= 0 && face.side < 6 && face.axis >= 0) {
+            if (face.side >= 0 && face.side < 6 && face.axis >= 0 && face.axis < 3) {
                 const auto& axis = g.axes[face.axis];
                 const auto coordinate = face.side % 2 ? axis.back() : axis.front();
                 match |= b.target == names[face.side] &&
                          (b.face || std::abs(face.centroid[face.axis] - coordinate) <=
                                         1e-12 * (axis.back() - axis.front()));
-            }
-            if (b.target.starts_with("layer:")) {
-                auto it = m.attr_table.layers.find(b.target.substr(6));
-                match = it != m.attr_table.layers.end() && g.cv_layer[face.lo] == it->second;
+                if (b.target.starts_with("layer:")) {
+                    auto it = m.attr_table.layers.find(b.target.substr(6));
+                    match |= it != m.attr_table.layers.end() && g.cv_layer[face.lo] == it->second;
+                }
             }
             if (match)
                 selected.push_back(f);
@@ -373,9 +384,21 @@ Expected<ThermalResult> solve_thermal(const FvGrid& g,
                 u += value / op.alpha;
             }
             result.T_cell[c] = static_cast<double>(u + reference);
-            for (auto& v : lc)
-                v = u - v;
-            auto q = op.apply(lc);
+            // Recover the residual of the same row-sum-adjusted operator that
+            // was assembled. Raw Cholesky application would undo that adjustment.
+            long double load = p.q_vol[c] * g.cv_volume[c];
+            if (fixed[c]) {
+                load = op.alpha * (*fixed[c] - lc[0]);
+                for (std::size_t j = 0; j < n; ++j)
+                    load -= op.b[j] * (lc[j] - lc[0]);
+            }
+            Dense q(n);
+            for (std::size_t i = 0; i < n; ++i) {
+                q[i] = op.b[i] * load / op.alpha;
+                for (std::size_t j = 0; j < n; ++j)
+                    if (j != i)
+                        q[i] -= op.S[i * n + j] * (lc[j] - lc[i]);
+            }
             for (std::size_t i = 0; i < n; ++i) {
                 auto f = static_cast<std::size_t>(
                     g.cv_faces[g.cv_face_off[c] + static_cast<std::int64_t>(i)]);

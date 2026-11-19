@@ -1,8 +1,14 @@
 #pragma once
 #include "chipcae/solvers/fvm/grid.hpp"
+#include "chipcae/solvers/fvm/thermal.hpp"
 
+#include <mpi.h>
 #include <string>
 namespace chipcae::solvers::fvm::detail {
+// Backend entry point; native communicator handles stay out of public headers.
+Expected<ThermalResult>
+solve_thermal_on_comm(const FvGrid&, const mesh::HexMeshArrays&, const ThermalProblem&, MPI_Comm);
+
 using Dense = std::vector<long double>;
 struct LocalMfd {
     std::vector<double> M;

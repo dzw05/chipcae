@@ -537,7 +537,10 @@ inline fv::ThermalResult solve(const fv::FvGrid& g,
                                const mesh::HexMeshArrays& m,
                                const fv::ThermalProblem& p,
                                MPI_Comm comm = MPI_COMM_WORLD) {
-    auto r = take(fv::solve_thermal(g, m, p, comm), "solve_thermal must solve acceptance fixture");
+    auto r =
+        take(comm == MPI_COMM_WORLD ? fv::solve_thermal(g, m, p, chipcae::Communicator::world())
+                                    : fv::detail::solve_thermal_on_comm(g, m, p, comm),
+             "solve_thermal must solve acceptance fixture");
     require(r.T_cell.size() == g.cv_volume.size(), "T_cell size");
     require(r.T_face.size() == g.faces.size() && r.face_flux.size() == g.faces.size(),
             "face field sizes");

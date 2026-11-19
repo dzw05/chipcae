@@ -223,10 +223,22 @@ int main(int argc, char** argv) {
                   << '\n';
     });
     suite.run("unlisted positive slivers are retained", [] {
-        mesh::cut::CutGeometry geometry{{{0, {1, 0, 0}, 2e-10}}};
-        auto f = cut_fixture(4, geometry);
-        require(f.cut.small_subs.empty(), "fixture has no listed small subcells");
-        auto g = take(fv::build_grid(f.mesh, &f.cut), "build_grid unlisted sliver");
+        // Supply exact sub-box moments at the same 2e-10 thickness. Generic
+        // clipping loses opening-centroid accuracy on this extreme aspect ratio.
+        auto m = cube(4);
+        mesh::cut::CutLayerArrays cut;
+        for (std::size_t e = 0; e < m.attribute.size(); ++e) {
+            auto lo = vertex(m, e, 0), hi = vertex(m, e, 6);
+            if (lo[0] > 0) {
+                cut.void_elem.push_back(static_cast<mesh::Local>(e));
+            } else {
+                hi[0] = 2e-10;
+                append_sub_box(cut, m, e, lo, hi);
+            }
+        }
+        require(cut.small_subs.empty(), "fixture has no listed small subcells");
+        auto g = take(fv::build_grid(m, &cut), "build_grid unlisted sliver");
+        geometry_gate(g);
         require(g.cv_volume.size() == 16, "retain every unlisted positive sliver");
         for (double v : g.cv_volume)
             near(v, 2e-10 / 16, 0, 1e-12, "physical sliver volume");
@@ -343,8 +355,39 @@ int main(int argc, char** argv) {
             eb.kind = kind;
             eb.target = "boundary:embedded";
             p.bcs = {dirichlet("face:zmin", 1), eb};
-            rejected(fv::solve_thermal(g, f.mesh, p, MPI_COMM_WORLD), "embedded Dirichlet/Flux");
+            rejected(fv::solve_thermal(g, f.mesh, p, chipcae::Communicator::world()),
+                     "embedded Dirichlet/Flux");
         });
+    for (const auto kind :
+         {fv::ThermalBc::Kind::Dirichlet, fv::ThermalBc::Kind::Robin, fv::ThermalBc::Kind::Flux})
+        suite.run(
+            "cut layer selects axial exterior only " + std::to_string(static_cast<int>(kind)), [&] {
+                auto f = cut_fixture(2);
+                auto g = take(fv::build_grid(f.mesh, &f.cut), "build_grid cut layer target");
+                auto p = problem(g);
+                fv::ThermalBc layer{};
+                layer.kind = kind;
+                layer.target = "layer:solid";
+                layer.T = layer.T_inf = 2;
+                layer.h = 5;
+                fv::ThermalBc embedded{};
+                embedded.kind = fv::ThermalBc::Kind::Robin;
+                embedded.target = "boundary:embedded";
+                embedded.h = 3;
+                embedded.T_inf = 2;
+                p.bcs = {layer, embedded};
+                auto r = solve(g, f.mesh, p);
+                for (auto T : r.T_cell)
+                    near(T, 2, 1e-11, 0, "layer and embedded prescriptions remain disjoint");
+                for (std::size_t i = 0; i < g.faces.size(); ++i)
+                    if (g.faces[i].side == 6) {
+                        p.bcs[0].face = i;
+                        rejected(fv::solve_thermal(g, f.mesh, p, chipcae::Communicator::world()),
+                                 "layer selector cannot address embedded face",
+                                 "target has no boundary faces: layer:solid");
+                        break;
+                    }
+            });
     suite.run("embedded boundary defaults to insulation", [] {
         auto f = cut_fixture(3);
         auto g = take(fv::build_grid(f.mesh, &f.cut), "build_grid insulated EB");

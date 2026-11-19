@@ -1,8 +1,8 @@
 #pragma once
 
+#include "chipcae/core/communicator.hpp"
 #include "grid.hpp"
 
-#include <mpi.h>
 #include <optional>
 #include <string>
 
@@ -36,6 +36,8 @@ struct ThermalResult {
     std::int64_t gamma_floor_count = 0;
     std::vector<std::array<double, 3>> k_used;
 };
-Expected<ThermalResult>
-solve_thermal(const FvGrid&, const mesh::HexMeshArrays&, const ThermalProblem&, MPI_Comm comm);
+Expected<ThermalResult> solve_thermal(const FvGrid&,
+                                      const mesh::HexMeshArrays&,
+                                      const ThermalProblem&,
+                                      const Communicator& world);
 } // namespace chipcae::solvers::fvm
