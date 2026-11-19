@@ -316,7 +316,7 @@ void MainWindow::monitorRun(const QString& directory,
     auto* filter = new QComboBox(panel);
     filter->setObjectName("monitorLogLevelFilter");
     filter->addItems({tr("全部级别"), tr("level ≥ 0")});
-    connect(filter, &QComboBox::currentIndexChanged, panel, [logs](int index) {
+    connect(filter, qOverload<int>(&QComboBox::currentIndexChanged), panel, [logs](int index) {
         if (index == 1)
             logs->setMinimumLevel(0);
         else
