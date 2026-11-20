@@ -176,7 +176,8 @@ if(_solve_backend AND TARGET chipcae-solve AND MFEM_USE_PETSC)
     set_tests_properties(solve_column_gmg_prolongation solve_column_gmg_unsupported
         PROPERTIES TIMEOUT 120 LABELS "gmg;numerical")
     set_tests_properties(solve_column_gmg_fcbga solve_column_gmg_fcbga_scaling
-        PROPERTIES TIMEOUT 900 LABELS "gmg;numerical")
+        PROPERTIES TIMEOUT 900
+        RESOURCE_LOCK chipcae_highmem LABELS "gmg;numerical;highmem")
 endif()
 
 if(_solve_backend)
