@@ -155,6 +155,35 @@ class CaseAcceptance(unittest.TestCase):
                         for block in ('hex', 'cut'):
                             self.assertIn('volume', result[f'VTKHDF/{block}/CellData'])
 
+    def test_invalid_physics_cannot_select_fvm_before_legacy_validation(self):
+        fem = u.thermal_case('fem')['physics']
+        fvm = u.thermal_case()['physics']
+        variants = [
+            fem + [dict(id='unknown', solver='fvm.solid')],
+            fem + [dict(id='thermal', solver='fvm.conduction', mode='steady')],
+            [dict(id='thermal', solver='fvm.solid', mode='steady')],
+            [dict(id='thermal', solver='fvm.conduction', mode='transient')],
+            [fvm[0], dict(id='mech')],
+            [fvm[0], dict(id='mech', solver=42)],
+            [fvm[0], dict(id='mech', solver='fvm.solid', temp_from='unknown', T_ref=300)],
+            [fvm[0], dict(id='mech', solver='fvm.solid', temp_from='thermal', T_ref='bad')],
+        ]
+        for index, physics in enumerate(variants):
+            for earlier in ('reference', 'gamma_g', 'stabilization'):
+                with self.subTest(physics=index, earlier=earlier):
+                    case = u.thermal_case('fem')
+                    case['physics'] = deepcopy(physics)
+                    if earlier == 'reference':
+                        case['stack']['ref'] = 'missing-stack.json'
+                        _, result = u.probe(self.root, case, expected=12)
+                        self.assertIn('cannot read reference:', result.stderr)
+                        self.assertIn('missing-stack.json', result.stderr)
+                    else:
+                        case['mesh']['cut'][earlier] = -1 if earlier == 'gamma_g' else 'invalid'
+                        _, result = u.probe(self.root, case, expected=14)
+                        self.assertEqual(result.stderr.strip(), 'gamma_g must be nonnegative'
+                                         if earlier == 'gamma_g' else 'unsupported cut stabilization')
+
     def test_fvm_selection_orders_defaults_and_preconditioners(self):
         for reverse in (False, True):
             for mode in ('no_solver', 'no_linear', 'no_pc', 'jacobi', 'gamg'):
@@ -366,6 +395,38 @@ class CaseAcceptance(unittest.TestCase):
             # R from fixed a center to top ambient: .025/2 + .05/4 + 1/20 = .075.
             self.assertAlmostEqual(ledger['heat_in'], 50 / .075, delta=1e-7)
             self.assertAlmostEqual(ledger['heat_out'], 50 / .075, delta=1e-7)
+
+    def test_layer_convection_matches_exterior_faces_including_embedded_and_split(self):
+        for geometry in ('uncut', 'cut', 'split-cut'):
+            with self.subTest(geometry=geometry):
+                stack = deepcopy(self.stack)
+                stack['layers'] = [deepcopy(stack['layers'][0])]
+                if geometry != 'uncut':
+                    stack['outline']['polygon'] = [[.6, 0], [1, 0], [1, 1], [0, 1], [0, .6]]
+                if geometry == 'split-cut':
+                    stack['layers'] *= 2
+                    stack['layers'] = [dict(layer, name=f'a#{i}')
+                                       for i, layer in enumerate(stack['layers'])]
+                u.write_json(self.root / 'stack.json', stack)
+                case = u.thermal_case()
+                case['loads'] = [dict(type='fixed_temperature', target='layer:a', T=350)]
+                targets = ['face:' + side for side in ('xmin', 'xmax', 'ymin', 'ymax', 'zmin', 'zmax')]
+                if geometry != 'uncut':
+                    targets.append('boundary:embedded')
+                explicit = deepcopy(case)
+                explicit['loads'] += [dict(type='convection', target=target, h=20, T_inf=300)
+                                      for target in targets]
+                _, expected_blocks, expected_ledger, _ = self.successful_thermal(
+                    explicit, geometry + '-explicit')
+                self.assertGreater(expected_ledger['heat_out'], 0)
+                case['loads'].append(dict(type='convection', target='layer:a', h=20, T_inf=300))
+                for ranks in (1, 2):
+                    with self.subTest(ranks=ranks):
+                        _, blocks, ledger, _ = self.successful_thermal(
+                            case, f'{geometry}-layer{ranks}', ranks)
+                        u.compare_parallel(expected_blocks, blocks)
+                        for key in ('heat_in', 'heat_out'):
+                            self.assertAlmostEqual(ledger[key], expected_ledger[key], delta=1e-9)
 
     def test_board_import_preview_fvm_fem_gate_and_mpi(self):
         import numpy as np

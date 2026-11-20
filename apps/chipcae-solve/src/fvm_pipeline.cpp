@@ -146,16 +146,35 @@ fv::ThermalProblem thermal_problem(const RunInputs& inputs,
                         throw InputError(ErrorCode::INPUT_INVALID, "conflicting fixed CV");
                 }
         } else if (load.type == "fixed_temperature" || load.type == "convection") {
-            for (const auto& target : targets) {
-                fv::ThermalBc bc{};
-                bc.kind = load.type == "fixed_temperature" ? fv::ThermalBc::Kind::Dirichlet
-                                                           : fv::ThermalBc::Kind::Robin;
-                bc.target = target;
-                bc.T = load.T;
-                bc.h = load.h;
-                bc.T_inf = load.T_inf;
-                problem.bcs.push_back(std::move(bc));
-            }
+            fv::ThermalBc bc{};
+            bc.kind = load.type == "fixed_temperature" ? fv::ThermalBc::Kind::Dirichlet
+                                                       : fv::ThermalBc::Kind::Robin;
+            bc.T = load.T;
+            bc.h = load.h;
+            bc.T_inf = load.T_inf;
+            if (load.target.starts_with("layer:")) {
+                const std::array<std::string, 6> names{
+                    "face:xmin", "face:xmax", "face:ymin", "face:ymax", "face:zmin", "face:zmax"};
+                bool found = false;
+                // A layer load covers its whole exterior, including embedded faces.
+                // Select each face once across all slices of a split-layer alias.
+                for (std::size_t f = 0; f < grid.faces.size(); ++f) {
+                    const auto& face = grid.faces[f];
+                    if (face.hi >= 0 || !selected(static_cast<std::size_t>(face.lo)))
+                        continue;
+                    bc.target = face.side == 6 ? "boundary:embedded" : names.at(face.side);
+                    bc.face = f;
+                    problem.bcs.push_back(bc);
+                    found = true;
+                }
+                if (!found)
+                    throw InputError(ErrorCode::INPUT_INVALID,
+                                     "target has no boundary faces: " + load.target);
+            } else
+                for (const auto& target : targets) {
+                    bc.target = target;
+                    problem.bcs.push_back(bc);
+                }
         }
     }
     for (const auto& [cv, temperature] : fixed) {

@@ -140,7 +140,10 @@ when `solver.linear` is absent) and `gamg`. It copies `rtol` and `max_iter` to
 the thermal library. FEM stabilization and penalty settings are ignored for
 FVM; shared cut quadrature settings are still validated. Fixed temperatures
 support faces and layers; convection supports faces, layers and embedded
-boundaries. Power uses actual physical target volume, including cut cells.
+boundaries. Layer convection covers every exterior face of the selected layers,
+including embedded faces and all slices of a split-layer alias. Power uses
+actual physical target volume, including cut cells; `q_vol` supplies density
+directly through the same `heat_source_density` conversion used by FEM.
 Embedded fixed temperature/displacement constraints remain unsupported.
 
 This stage solves heat only. All output U values and both mechanical summaries

@@ -26,6 +26,9 @@ are normalized.
 
 The acceptance exercises:
 
+- Invalid physics cannot select FVM mesh rules or reorder earlier reference and
+  FEM mesh errors. Layer convection matches explicit exterior face and embedded
+  Robin loads on regular, cut and split-layer grids at np=1 and np=2.
 - Both physics orders, FVM defaults even without `solver.linear`, Jacobi and
   GAMG solves, exact mixed-family and preconditioner diagnostics, unknown and
   case-sensitive solver names, duplicate physics, temperature-source rules,
