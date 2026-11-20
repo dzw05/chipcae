@@ -14,7 +14,12 @@ links only protobuf. Without either dependency CMake reports:
 jobmgr: LocalJobManager skipped (Protobuf or jsoncons not found)
 ```
 
-Path tests and core still run; the six manager acceptance tests return 77.
+Path tests and core still run; manager acceptance tests return 77. The launch,
+cancel and desktop parity tests are always registered. Without the local target
+all three skip with code 77; without Qt Core only desktop parity skips, printing
+`SKIP: desktop Qt sources unavailable`. The mock solver is built only with the
+local target. Desktop parity compiles the original desktop sources against the
+same generated protocol library.
 
 Construct with `LocalConfig{run_root, solver, mpi, cuda_available}`. One manager
 owns each absolute run root via `launcher.lock`. Each run has an atomic `job.pb`,
@@ -32,12 +37,18 @@ restart, nonterminal Jobs become FAILED/JOB_MANAGER because the new manager does
 not own their processes. Destruction requests termination of still-owned children
 before releasing the spawner and root lock.
 
-The default launcher is transitional: `start` returns no PID and the error
-`process launcher not available in this build`. Inject `detail::Spawner` to supply
-process operations; this card's acceptance tests inject FakeSpawner. Real POSIX
-launch/wait, SIGTERM→SIGKILL, desktop command comparisons and bidirectional
-QLockFile tests belong to the `jobs-local-launch` card. Desktop remains on its
-existing LocalJobService for the December demo and does not call this manager.
+This is the test-first stage of `jobs-local-launch`. The default launcher still
+returns no PID and `process launcher not available in this build`.
+`wait(run_id, timeout)` has only a compilation stub returning `Get`; it does not
+poll or wait. Existing state tests explicitly inject FakeSpawner. New launch and
+cancel tests deliberately fail behavioral assertions until real process ownership
+and waiting are implemented. They require inherited argv/environment/working
+directory, synchronous start errors, process exit collection, prompt CANCELLED
+state with independent SIGTERM→grace→SIGKILL escalation, destructor cleanup, and
+bounded polling waits. Desktop comparisons and bidirectional QLockFile checks
+exercise existing behavior. See `tests/protocol/jobmgr_local/README.md` for the
+acceptance matrix. Desktop remains on its existing LocalJobService for the
+December demo and does not call this manager.
 
 ## 与 desktop 的已知差异
 

@@ -133,6 +133,12 @@ LocalJobManager::LocalJobManager(LocalConfig config)
 LocalJobManager::LocalJobManager(LocalConfig config, std::unique_ptr<detail::Spawner> spawner)
     : impl_(std::make_unique<Impl>(std::move(config), std::move(spawner))) {}
 LocalJobManager::~LocalJobManager() = default;
+// TEST-FIRST compilation stub: polling and timeout behavior remain unimplemented.
+jobs::Job LocalJobManager::wait(const std::string& run_id, std::chrono::milliseconds) {
+    jobs::JobRef request;
+    request.set_run_id(run_id);
+    return Get(request);
+}
 jobs::Job LocalJobManager::Submit(const jobs::SubmitRequest& request,
                                   const std::filesystem::path& case_path,
                                   const std::filesystem::path& profile_path) {
