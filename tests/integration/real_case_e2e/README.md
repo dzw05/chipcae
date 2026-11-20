@@ -3,10 +3,6 @@ V-INT-12 runs a shared import → preview → FVM solve → readback pipeline fo
 synthetic; real inputs and all real output records must remain outside Git
 worktrees. No real execution is claimed by the tests.
 
-The binding [architect ruling](../../../handoff/rulings/pr206.md) covers the
-result envelope, dependency skips and optional h5py coverage. Its second round
-closes the three prior CLI/finalization findings on `7a98e3f`.
-
 From the repository root, with the build queue wrappers first on PATH:
 
 ```sh
