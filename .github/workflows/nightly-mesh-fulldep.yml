@@ -216,12 +216,52 @@ jobs:
             -DCHIPCAE_ENABLE_ECAD=ON -DCHIPCAE_ENABLE_OCCT=ON -DPython3_EXECUTABLE=/usr/bin/python3 \
             -DCMAKE_DISABLE_FIND_PACKAGE_Clipper2=TRUE \
             -DCMAKE_DISABLE_FIND_PACKAGE_EXPAT=TRUE
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          raw = Path("build-k1-full/import-assets/assembly-capabilities.json").read_text()
+          print(raw, flush=True)
+          if json.loads(raw).get("geometry") != "ON":
+              raise SystemExit('N11 requires geometry == "ON"')
+          PY
           cmake --build build-k1-full --parallel 2
           build_secs=$((SECONDS - start))
           test_start=$SECONDS
           ctest --test-dir build-k1-full -L "mesh|occt" -LE gpu --output-on-failure --output-junit mesh-results.xml
           ctest --test-dir build-k1-full -R '^mesh_digest_mpi$' --no-tests=error --output-on-failure
           ctest --test-dir build-k1-full -R "^vtkhdf_results_" --no-tests=error --output-on-failure
+          n11_names=(
+            import_assembly_accept import_assembly_accept_default
+            import_assembly_exit6 import_assembly_split_report
+            occt_import_assembly_box_parts occt_import_assembly_confirm
+            occt_import_assembly_ring_chamfer_lid occt_import_assembly_parts_from_step
+          )
+          n11_regex="^($(IFS='|'; echo "${n11_names[*]}"))$"
+          n11_status=0
+          ctest --test-dir build-k1-full -R "$n11_regex" --no-tests=error --output-on-failure \
+            --output-junit n11-geometry-on.xml || n11_status=$?
+          python3 - "${n11_names[@]}" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          from collections import Counter
+
+          cases = list(ET.parse("build-k1-full/n11-geometry-on.xml").getroot().iter("testcase"))
+          for case in cases:
+              print(f'{case.get("name")}: status={case.get("status")}, time={case.get("time")}',
+                    flush=True)
+          skipped = sum(1 for case in cases if case.find("skipped") is not None)
+          if Counter(case.get("name") for case in cases) != Counter(sys.argv[1:]):
+              raise SystemExit("N11 requires exactly eight unique expected testcases")
+          if skipped != 0 or any(
+              case.get("status") != "run"
+              or any(case.find(tag) is not None for tag in ("skipped", "failure", "error"))
+              for case in cases
+          ):
+              raise SystemExit(f"N11 requires all eight Passed, Skipped={skipped}")
+          print("Passed=8, Skipped=0")
+          PY
+          if ((n11_status != 0)); then exit "$n11_status"; fi
           echo "build_secs=$build_secs" >> "$GITHUB_OUTPUT"
           echo "test_secs=$((SECONDS - test_start))" >> "$GITHUB_OUTPUT"
           echo "Project build ${build_secs}s, ctest $((SECONDS - test_start))s"
