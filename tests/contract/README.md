@@ -27,3 +27,23 @@ material references against that library before invoking the consumer.
 
 Output tests return 77 if h5py/numpy or the required solver backend is absent.
 The ECAD test is registered when ECAD and JSON schema support are enabled.
+
+The test-first `fixtures/fvm-io-1.0/check.py --repo <source>` acceptance checker
+requires NumPy; jsonschema is optional (prints `SKIP-SCHEMA`, retaining structural
+checks). It checks synthetic laminate analytic temperatures, an independent dense
+TPFA solve for 3×2×4 hexes, conservation, completed-output manifest metadata and
+five case contract outcomes, then tests `gen.py --out <directory>` determinism,
+overwrite behavior and checker mutations. Run it directly or through
+`python3 tests/contract/validate_contracts.py schemas <source>` / `contract_schemas`.
+Fixture IDs use `((k*ny)+j)*nx+i`; they are local keys, distinct from product
+Morton `elem_gid`. Add `--handoff <package>` to compare repository/handoff SHA-256
+maps. The optional-schema test also checks missing-T rejection without jsonschema.
+The pending fixture input format uses `x_m`, `y_m`, `z_m` face-coordinate arrays,
+`cells` with integer `id`, explicit `ijk` and `conductivity_diag`, and `boundary`
+with `bottom_T_K`, `top_q_in_W_m2` and `sides: "insulated"`; laminate inputs also
+have `layers` with `thickness_m` and `conductivity_W_mK`. Numerical expected files
+have `cells` with `id` and `T_K`; root `expected.json` has `fields` metadata
+(including optional `T_cell`) and `cases` mapping names to null or code/message.
+Diagnostic unit strings still require an architect ruling before fixture data is
+supplied. These tests validate the fixture contract, not product parser or solver
+behavior; the missing generator/data intentionally keep this test-first pass red.
