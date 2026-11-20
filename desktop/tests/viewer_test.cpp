@@ -256,6 +256,40 @@ void checkScalarBar(ResultView& view) {
     }
     require(count == (view.colorRange().valid ? 1 : 0), "scalar bar presence");
 }
+void checkLoadedResultScene(ResultView& view) {
+    auto actors = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetActors();
+    int blockActors = 0;
+    for (const auto& name : displayedBlocks) {
+        auto block = view.displayed(name);
+        if (!block || !block->GetNumberOfCells())
+            continue;
+        actors->InitTraversal();
+        while (auto actor = actors->GetNextActor()) {
+            auto mapper = vtkDataSetMapper::SafeDownCast(actor->GetMapper());
+            if (mapper && mapper->GetInput() == block)
+                ++blockActors;
+        }
+    }
+    require(blockActors > 0, "failed reload fixture needs displayed cells and result block actors");
+    require(boundaryActor(view), "failed reload fixture needs a layer boundary actor");
+}
+void checkClearedResultScene(ResultView& view) {
+    auto actors = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetActors();
+    require(actors->GetNumberOfItems() == 0,
+            qPrintable(QString("failed reload retained %1 stale result/highlight actors")
+                           .arg(actors->GetNumberOfItems())));
+    require(!boundaryActor(view), "failed reload retained layer boundary actor");
+    for (const auto& name : displayedBlocks)
+        require(!view.displayed(name), "failed reload retained displayed block data");
+    const auto range = view.colorRange();
+    require(!range.valid, "failed reload retained a valid color range");
+    near(range.min, 0);
+    near(range.max, 0);
+    require(range.unit.isEmpty(), "failed reload retained color range unit");
+    require(view.colorBarTitle().isEmpty(), "failed reload retained color bar title");
+    checkScalarBar(view);
+    checkFieldStatus(view, false);
+}
 void checkRange(ResultView& view, ResultColorField field, const QStringList& hidden = {}) {
     checkScalarBar(view);
     double low = std::numeric_limits<double>::infinity();
@@ -969,27 +1003,102 @@ int obliqueAndTemperatureAcceptance(const QDir& root) {
         checkFieldStatus(view, false);
         checkNoBoundaries(view);
     });
-    for (bool missingT : {false, true})
-        run(missingT ? "failed reload clears temperature overlay"
-                     : "failed reload clears boundary overlay",
-            [&] {
-                QTemporaryDir temp;
-                require(temp.isValid(), "failed reload fixture directory");
-                const auto path = temp.filePath("stack.vtkhdf");
-                writeFixture(root, path, [&](vtkUnstructuredGrid* grid) {
-                    twoLayers(grid);
-                    if (missingT)
-                        grid->GetPointData()->RemoveArray("T");
-                });
-                ResultSession session;
-                require(session.open(path), qPrintable(session.error()));
-                ResultView view;
-                require(view.loadStep(session, 0), qPrintable(view.error()));
-                require(!view.loadStep(session, 999), "failed reload unexpectedly succeeded");
-                require(!view.error().isEmpty(), "failed reload lost existing error path");
-                checkFieldStatus(view, false);
-                checkNoBoundaries(view);
+    struct FailedReloadCase {
+        const char* name;
+        bool missingT, missingFile, provenance;
+    };
+    for (const auto& test :
+         {FailedReloadCase{
+              "failed reload clears boundary overlay and result scene", false, false, false},
+          FailedReloadCase{
+              "failed reload clears temperature overlay and result scene", true, false, false},
+          FailedReloadCase{"missing file reload clears result scene", false, true, false},
+          FailedReloadCase{"missing file reload preserves provenance while clearing results",
+                           false,
+                           true,
+                           true}})
+        run(test.name, [&] {
+            QTemporaryDir temp;
+            require(temp.isValid(), "failed reload fixture directory");
+            const auto path = temp.filePath("stack.vtkhdf");
+            writeFixture(root, path, [&](vtkUnstructuredGrid* grid) {
+                twoLayers(grid);
+                if (test.missingT)
+                    grid->GetPointData()->RemoveArray("T");
             });
+            ResultSession session;
+            require(session.open(path), qPrintable(session.error()));
+            ResultView view;
+            if (test.provenance)
+                require(
+                    view.setProvenance({{"schema", "chipcae.provenance/0.1"}, {"source", "mock"}}),
+                    "valid failed reload provenance rejected");
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            checkLoadedResultScene(view);
+            if (test.missingT)
+                checkUnavailable(view, true);
+            else
+                checkRange(view, ResultColorField::Temperature);
+            camera(view)->Azimuth(17);
+            camera(view)->Elevation(-11);
+            camera(view)->OrthogonalizeViewUp();
+            const auto direction = cameraDirection(view);
+            const auto watermark = view.provenanceWatermark();
+            const auto banner = view.provenanceBanner();
+            auto checkProvenance = [&] {
+                if (!test.provenance)
+                    return;
+                require(watermark == "MOCK" && !banner.isEmpty(),
+                        "failed reload provenance fixture needs watermark and banner");
+                require(view.provenanceWatermark() == watermark &&
+                            view.provenanceBanner() == banner,
+                        "failed reload changed provenance");
+                auto props =
+                    view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetViewProps();
+                bool foundWatermark = false;
+                props->InitTraversal();
+                while (auto prop = props->GetNextProp())
+                    if (auto text = vtkTextActor::SafeDownCast(prop))
+                        foundWatermark |= QString::fromUtf8(text->GetInput()) == watermark &&
+                                          text->GetVisibility();
+                require(foundWatermark, "failed reload removed provenance watermark actor");
+                VisibleStatusView visible(view);
+                bool foundBanner = false;
+                for (auto label : view.findChildren<QLabel*>())
+                    foundBanner |= label->text() == banner && label->isVisible();
+                require(foundBanner, "failed reload hid provenance banner");
+            };
+            checkProvenance();
+            if (test.missingFile)
+                require(QFile::remove(path), "could not remove loaded result fixture");
+            require(!view.loadStep(session, test.missingFile ? 0 : 999),
+                    "failed reload unexpectedly succeeded");
+            require(view.error() == session.error(), "failed reload changed session error");
+            if (!test.missingFile)
+                require(!view.error().isEmpty(), "failed reload lost existing error path");
+            checkProvenance();
+            checkClearedResultScene(view);
+            checkCameraDirection(view, direction);
+            // Exercise rebuilds: retained raw blocks must not resurrect stale geometry.
+            // No public loaded() accessor exists; hidden missing-T status also checks
+            // the observable unloaded state after rebuilding.
+            view.setColorField(ResultColorField::Temperature);
+            checkClearedResultScene(view);
+            checkProvenance();
+            view.setWarpageScale(2);
+            checkClearedResultScene(view);
+            checkProvenance();
+            checkCameraDirection(view, direction);
+            writeFixture(root, path, [](vtkUnstructuredGrid* grid) { twoLayers(grid); });
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            require(view.error().isEmpty(), "successful recovery retained load error");
+            checkLoadedResultScene(view);
+            checkRange(view, ResultColorField::Temperature);
+            checkFieldStatus(view, false);
+            checkWarpedInterface(view, 2);
+            checkProvenance();
+            checkCameraDirection(view, direction);
+        });
     run("restoring PointData T clears missing-temperature status", [&] {
         ResultSession mesh, withT;
         require(mesh.open(root.filePath("viewer_mesh")), qPrintable(mesh.error()));

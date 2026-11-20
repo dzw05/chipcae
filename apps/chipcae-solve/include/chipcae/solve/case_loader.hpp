@@ -63,6 +63,7 @@ struct RunInputs {
     bool cut_as_hex = false;
     bool thermal = false;
     double T_ref = 0;
+    std::string family = "fem";
 };
 RunInputs load_inputs(const std::filesystem::path& case_path,
                       const std::filesystem::path& profile_path,

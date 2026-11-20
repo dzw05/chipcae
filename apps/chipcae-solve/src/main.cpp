@@ -1,6 +1,10 @@
 #include "chipcae/core/error_code.hpp"
 #include "chipcae/core/version.hpp"
 
+#ifdef CHIPCAE_SOLVE_BACKEND
+#include "fvm_pipeline.hpp"
+#endif
+
 #include <iostream>
 #include <map>
 #include <memory>
@@ -87,7 +91,8 @@ int main(int argc, char** argv) {
         }
 #ifdef CHIPCAE_SOLVE_BACKEND
         inputs.cut_as_hex = args.contains("--cut-output");
-        return chipcae::solve::run(inputs, args.at("--out"));
+        return inputs.family == "fvm" ? chipcae::solve::run_fvm(inputs, args.at("--out"))
+                                      : chipcae::solve::run(inputs, args.at("--out"));
 #else
         (void)inputs;
 #endif

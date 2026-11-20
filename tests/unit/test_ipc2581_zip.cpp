@@ -177,7 +177,7 @@ equivalent(const fs::path& xml, const fs::path& archive, const fs::path& dir, bo
     equal(zipped.model, again.model);
     if (!outputs)
         return;
-    write(dir / "map.json", R"({"FR4":"mat.fr4","copper":"mat.cu"})");
+    write(dir / "map.json", R"({"FR4":"fr4_eq","copper":"cu"})");
     std::string error;
     require(ecad::apply_material_map(direct.model, dir / "map.json", &error), error);
     require(ecad::apply_material_map(zipped.model, dir / "map.json", &error), error);
