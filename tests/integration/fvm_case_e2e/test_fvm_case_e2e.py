@@ -295,6 +295,11 @@ class CaseAcceptance(unittest.TestCase):
         manifest, blocks = u.read_result(out, require_volume=False)
         u.inspect_elastic(out, blocks, manifest)
 
+    def test_adapter_removes_thermal_only_placeholder(self):
+        adapter = SOURCE / 'apps/chipcae-solve/src/fvm_pipeline.cpp'
+        self.assertFalse(u.THERMAL_ONLY in adapter.read_text(encoding='utf-8'),
+                         'the brief requires removing the thermal-only fallback from the adapter')
+
     def test_uniform_bimaterial_strip_matches_fem_warpage_and_curvature(self):
         case = u.bimaterial_strip(self.root)
         results = {}
@@ -352,10 +357,22 @@ class CaseAcceptance(unittest.TestCase):
                 if height is not None:
                     block = blocks['hex']
                     mask = np.abs(block['Points'][:, 2] - height) <= 1e-14
+                    if name == 'fixed-layer-b':
+                        x, y, z = block['Points'].T
+                        exterior = ((np.abs(x) <= 1e-14) | (np.abs(x-1) <= 1e-14)
+                                    | (np.abs(y) <= 1e-14) | (np.abs(y-.2) <= 1e-14)
+                                    | (np.abs(z-.1) <= 1e-14))
+                        mask = (z >= .05-1e-14) & exterior
                     self.assertTrue(np.any(mask), 'no vertices on prescribed exterior faces')
                     self.assertTrue(np.all(np.abs(block['PointData/U'][mask]) <= 1e-14),
                                     'fixed/free edge vertices must retain prescribed zero U')
-                u.inspect_elastic(out, blocks, manifest)
+                # Layer b includes the entire top surface: prescribed zero top
+                # displacement gives zero top-face warpage even with nonzero dT.
+                u.inspect_elastic(out, blocks, manifest, nonzero=name != 'fixed-layer-b')
+                self.assertGreater(u.summary(manifest)['U_mag_max'], 0)
+                self.assertTrue(np.any(blocks['hex']['PointData/U'] != 0))
+                if name == 'fixed-layer-b':
+                    self.assertLessEqual(abs(u.summary(manifest)['warpage_pv']), 1e-14)
 
     def test_solid_only_nonconvergence_exits_one_with_residual_and_no_output(self):
         case = u.bimaterial_strip(self.root)
@@ -368,6 +385,8 @@ class CaseAcceptance(unittest.TestCase):
                      if p['solver'] == 'fvm.solid' and p['field'] == 'U']
         self.assertTrue(residuals, 'mechanics failure must publish measured residuals')
         self.assertTrue(all(math.isfinite(p['norm']) and p['norm'] >= 0 for p in residuals))
+        self.assertFalse(any(e['kind'] == 20 and e['text'].startswith(u.ELASTIC_PREFIX)
+                             for e in events), 'failed mechanics must not publish success diagnostics')
         self.assertFalse(any(e['kind'] == 22 for e in events))
         self.assertFalse((out / 'out/step-0.vtkhdf').exists())
         if (out / 'manifest.json').exists():
@@ -381,25 +400,52 @@ class CaseAcceptance(unittest.TestCase):
         stack['outline']['polygon'] = [[.1, 0], [1, 0], [1, .2], [0, .2], [0, .1]]
         u.write_json(self.root / 'stack.json', stack)
         u.probe(self.root, case)  # Reject fixture/schema mistakes before exercising mechanics.
-        out, result = u.solve(self.root, case, 'cut-elastic', expected=None)
-        if result.returncode == 13:
-            # The frozen library currently rejects embedded faces. Preserve the
-            # explicit CUT_UNSUPPORTED outcome until the upstream cut path exists.
-            self.assertIn('unsupported', result.stderr.lower().replace('not supported', 'unsupported'))
-            events = u.decode_events((out / 'events.bin').read_bytes())
-            self.assertFalse(any(e['kind'] == 22 for e in events))
-            self.assertEqual((events[-1]['kind'], events[-1]['exit_code']), (19, 13))
-            self.assertFalse((out / 'out/step-0.vtkhdf').exists())
-            if (out / 'manifest.json').exists():
-                self.assertEqual(u.read_json(out / 'manifest.json')['steps'], [])
-        else:
-            self.assertEqual(result.returncode, 0, result.stderr)
-            manifest, blocks = u.read_result(out, require_volume=False)
-            self.assertGreater(int(blocks['cut']['NumberOfCells'].sum()), 0)
-            self.assertGreater(int(blocks['eb_surface']['Polygons/NumberOfCells'].sum()), 0)
-            self.assertTrue(np.any(blocks['cut']['PointData/U'] != 0))
-            self.assertTrue(np.any(blocks['eb_surface']['PointData/U'] != 0))
-            u.inspect_elastic(out, blocks, manifest)
+        results = {}
+        for mode, extra in (('polyhedron', ()), ('hex', ('--cut-output', 'hex'))):
+            with self.subTest(cut_output=mode):
+                out, result = u.solve(self.root, case, 'cut-elastic-' + mode,
+                                      extra=extra, expected=None)
+                if result.returncode == 13:
+                    # Preserve the explicit unsupported outcome until upstream
+                    # supports embedded faces; hex output must not bypass it.
+                    self.assertIn('unsupported', result.stderr.lower().replace(
+                        'not supported', 'unsupported'))
+                    events = u.decode_events((out / 'events.bin').read_bytes())
+                    self.assertFalse(any(e['kind'] == 22 for e in events))
+                    self.assertFalse(any(e['kind'] == 20 and e['text'].startswith(u.ELASTIC_PREFIX)
+                                         for e in events))
+                    self.assertEqual((events[-1]['kind'], events[-1]['exit_code']), (19, 13))
+                    self.assertFalse((out / 'out/step-0.vtkhdf').exists())
+                    if (out / 'manifest.json').exists():
+                        self.assertEqual(u.read_json(out / 'manifest.json')['steps'], [])
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    manifest, blocks = u.read_result(out, require_volume=False)
+                    self.assertGreater(int(blocks['eb_surface']['Polygons/NumberOfCells'].sum()), 0)
+                    if mode == 'polyhedron':
+                        self.assertGreater(int(blocks['cut']['NumberOfCells'].sum()), 0)
+                        self.assertTrue(np.any(blocks['cut']['PointData/U'] != 0))
+                    else:
+                        self.assertEqual(int(blocks['cut']['NumberOfCells'].sum()), 0)
+                        mask = blocks['hex']['CellData/cell_kind'] == 1
+                        self.assertTrue(np.any(mask), 'hex output lost cut parent cells')
+                        cells = u.canonical_cells(blocks['hex'], 'U')
+                        cut_gids = set(blocks['hex']['CellData/elem_gid'][mask])
+                        self.assertTrue(any(np.any(np.asarray(values) != 0)
+                                            for (gid, _), values in cells.items()
+                                            if gid in cut_gids), 'hex cut parent U is zero')
+                    self.assertTrue(np.any(blocks['eb_surface']['PointData/U'] != 0))
+                    u.inspect_elastic(out, blocks, manifest)
+                    results[mode] = manifest, blocks
+        if len(results) == 2:
+            poly, hexa = (results[mode] for mode in ('polyhedron', 'hex'))
+            np.testing.assert_allclose(poly[1]['eb_surface']['Points'],
+                                       hexa[1]['eb_surface']['Points'], rtol=0, atol=1e-14)
+            np.testing.assert_allclose(poly[1]['eb_surface']['PointData/U'],
+                                       hexa[1]['eb_surface']['PointData/U'], rtol=1e-12, atol=1e-14)
+            for key in ('warpage_pv', 'U_mag_max'):
+                a, b = u.summary(poly[0])[key], u.summary(hexa[0])[key]
+                self.assertLessEqual(abs(a-b), 1e-12 * abs(a))
 
     def test_solid_only_stop_is_acknowledged_once_without_successful_output(self):
         case = u.bimaterial_strip(self.root)
@@ -555,15 +601,19 @@ class CaseAcceptance(unittest.TestCase):
                     p['solver'] = family + ('.conduction' if p['id'] == 'thermal' else '.solid')
                 candidate['solver']['linear']['preconditioner'] = 'direct' if family == 'fem' else 'jacobi'
                 out, _ = u.solve(self.root, candidate, family + str(ranks), ranks)
-                manifest, blocks = u.read_result(out, require_volume=family == 'fvm')
+                # Collect mechanics independently so missing upstream volume or
+                # a failed thermal gate cannot hide the missing elastic solve.
+                manifest, blocks = u.read_result(out, require_volume=False)
+                results[family, ranks] = manifest, blocks
                 self.assertEqual(int(blocks['hex']['NumberOfCells'].sum()), preview['cell_count'])
                 self.assertEqual(int(blocks['cut']['NumberOfCells'].sum()), 0)
                 self.assertTrue(np.all(blocks['hex']['CellData/cell_kind'] == 0))
                 for field in ('nx0', 'ny0', 'L', 'nz', 'padded_cells', 'mesh_sha256'):
                     self.assertEqual(manifest['mesh'][field], preview[field])
                 if family == 'fvm':
-                    u.inspect_fvm(out, blocks, manifest)
-                results[family, ranks] = manifest, blocks
+                    with self.subTest(gate='thermal-output'):
+                        u.read_result(out)  # Keep the existing physical-volume/copper requirements.
+                        u.inspect_fvm(out, blocks, manifest)
         for name, content in originals.items():
             self.assertEqual((self.root / name).read_bytes(), content)
         self.assertEqual(len(stack['layers']), 5)
@@ -575,15 +625,19 @@ class CaseAcceptance(unittest.TestCase):
         error = abs(fvm - fem) / (fem - 298.15)
         print(f'实测 board Tmax fvm={fvm:.17g} fem={fem:.17g} '
               f'rise_relative={error:.17g} absolute_T_relative={abs(fvm-fem)/abs(fem):.17g}', flush=True)
-        self.assertLessEqual(error, .01)
+        with self.subTest(gate='thermal-comparison'):
+            self.assertLessEqual(error, .01)
         fvm_manifest, fvm_blocks = results['fvm', 1]
         fem_manifest, fem_blocks = results['fem', 1]
-        u.compare_mechanics(fvm_manifest, fem_manifest, fvm_blocks, fem_blocks)
+        with self.subTest(gate='mechanics-comparison'):
+            u.compare_mechanics(fvm_manifest, fem_manifest, fvm_blocks, fem_blocks)
         a, b = (u.summary(results['fvm', n][0])['warpage_pv'] for n in (1, 2))
-        self.assertGreater(a, 0)
-        self.assertLessEqual(abs(a-b) / a, 1e-8)
+        with self.subTest(gate='mechanics-mpi'):
+            self.assertGreater(a, 0)
+            self.assertLessEqual(abs(a-b) / a, 1e-8)
         for ranks in (1, 2):
-            u.inspect_elastic(self.root / f'fvm{ranks}', results['fvm', ranks][1], results['fvm', ranks][0])
+            with self.subTest(gate='mechanics-output', ranks=ranks):
+                u.inspect_elastic(self.root / f'fvm{ranks}', results['fvm', ranks][1], results['fvm', ranks][0])
 
     def test_wiener_nonzero_bottom_rise(self):
         # Source-free top Dirichlet/bottom Robin gives a meaningful nonzero bottom rise.
