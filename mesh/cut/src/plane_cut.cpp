@@ -222,7 +222,7 @@ Real face_area(const Polygon& p) {
     return norm(area) / 2;
 }
 // Union-only cleanup: the legacy clipper and its floating-point traversal stay intact.
-std::vector<Face> clean_faces(std::vector<Face> faces, Real snap) {
+Expected<std::vector<Face>> clean_faces(std::vector<Face> faces, Real snap) {
     Polygon points;
     std::set<std::vector<std::size_t>> seen;
     std::vector<Face> out;
@@ -235,13 +235,20 @@ std::vector<Face> clean_faces(std::vector<Face> faces, Real snap) {
             auto id = static_cast<std::size_t>(it - points.begin());
             if (it == points.end())
                 points.push_back(p);
-            if (std::find(ids.begin(), ids.end(), id) == ids.end()) {
+            if (ids.empty() || ids.back() != id) {
                 ids.push_back(id);
                 ring.push_back(points[id]);
             }
         }
-        if (ring.size() < 3 || face_area(ring) <= snap * snap)
+        if (ids.size() > 1 && ids.front() == ids.back()) {
+            ids.pop_back();
+            ring.pop_back();
+        }
+        const std::set<std::size_t> distinct(ids.begin(), ids.end());
+        if (distinct.size() < 3 || face_area(ring) <= snap * snap)
             continue;
+        if (distinct.size() != ids.size())
+            return Error{"cut/union", "self-touching face ring after snap"};
         auto canonical = ids;
         std::rotate(canonical.begin(),
                     std::min_element(canonical.begin(), canonical.end()),
@@ -290,13 +297,13 @@ Expected<std::vector<Plane>> normalized_planes(std::vector<Plane> planes) {
     }
     return planes;
 }
-std::vector<Face> clip_piece(std::vector<Face> faces,
-                             const detail::UnionPiece& piece,
-                             std::size_t k,
-                             const std::vector<Plane>& extra,
-                             BodyId body,
-                             Real clip_snap,
-                             Real physical_snap) {
+Expected<std::vector<Face>> clip_piece(std::vector<Face> faces,
+                                       const detail::UnionPiece& piece,
+                                       std::size_t k,
+                                       const std::vector<Plane>& extra,
+                                       BodyId body,
+                                       Real clip_snap,
+                                       Real physical_snap) {
     for (std::size_t i = 0; i < piece.planes.size(); ++i) {
         const auto& p = piece.planes[i];
         faces = clip(std::move(faces),
@@ -576,8 +583,24 @@ Expected<CutLayerArrays> generate(const HexMeshArrays& m,
                 if (bounds[k].hi[0] <= lo[0] || bounds[k].lo[0] >= lo[0] + size[0] ||
                     bounds[k].hi[1] <= lo[1] || bounds[k].lo[1] >= lo[1] + size[1])
                     continue;
-                auto clipped =
+                auto result =
                     clip_piece(faces, (*pieces)[k], k, planes, body, o.snap_phi, physical_snap);
+                if (!result)
+                    return result.error();
+                auto clipped = std::move(result.value());
+                if (union_fault("self_touching_face",
+                                union_call,
+                                !c.vq_w.empty() && !c.void_elem.empty()) &&
+                    !clipped.empty() && clipped.front().p.size() >= 4) {
+                    // Exercise real snap cleanup after output and pending voids.
+                    // A B C A D keeps the positive-area A B C lobe.
+                    auto& ring = clipped.front().p;
+                    ring.insert(ring.end() - 1, ring.front());
+                    auto cleaned = clean_faces(std::move(clipped), physical_snap);
+                    if (!cleaned)
+                        return cleaned.error();
+                    clipped = std::move(cleaned.value());
+                }
                 if (convex_volume(clipped) > 0)
                     cells.push_back(std::move(clipped));
             }
@@ -1045,6 +1068,8 @@ Expected<CutLayerArrays> finalize(HexMeshArrays& mesh,
     }
     if (union_call) {
         if (c.sub_off.size() != c.cut_elem.size() + 1 ||
+            c.cut_elem_gid.size() != c.cut_elem.size() ||
+            c.exterior_area_vector.size() != c.cut_elem.size() ||
             c.sub_attribute.size() != c.cut_elem.size() ||
             c.sub_volfrac.size() != c.cut_elem.size() || c.vq_off.size() != c.cut_elem.size() + 1 ||
             c.bq_off.size() != c.cut_elem.size() + 1 || c.sq_off.size() != c.cut_elem.size() + 1 ||
@@ -1055,9 +1080,15 @@ Expected<CutLayerArrays> finalize(HexMeshArrays& mesh,
         for (const auto& ls : c.level_sets)
             if (ls.phi.size() != m.node_gid.size())
                 return Error{"cut/union", "invalid remapped level set"};
-        for (auto e : c.cut_elem)
-            if (e < 0 || static_cast<std::size_t>(e) >= m.attribute.size())
+        for (std::size_t row = 0; row < c.cut_elem.size(); ++row) {
+            auto e = c.cut_elem[row];
+            if (e < 0 || static_cast<std::size_t>(e) >= m.attribute.size() ||
+                c.cut_elem_gid[row] != m.elem_gid[e])
                 return Error{"cut/union", "invalid remapped element"};
+        }
+        for (auto sub : c.small_subs)
+            if (sub < 0 || static_cast<std::size_t>(sub) >= c.sub_attribute.size())
+                return Error{"cut/union", "invalid remapped small subcell"};
         if (auto fault = union_fault("final_validation", true, pending_void))
             return *fault;
     }
@@ -1165,15 +1196,17 @@ Expected<std::vector<Source>> union_face_sources_for_test(const HexMeshArrays& m
         std::max(options.snap_phi,
                  32 * std::numeric_limits<Real>::epsilon() * std::max({size[0], size[1], size[2]}));
     auto body = mesh.attr_table.entries[mesh.attribute[elem] - 1].body;
-    faces = clip_piece(std::move(faces),
-                       UnionPiece{normalized.value(), piece.internal},
-                       k,
-                       ep.value(),
-                       body,
-                       options.snap_phi,
-                       snap);
+    auto clipped = clip_piece(std::move(faces),
+                              UnionPiece{normalized.value(), piece.internal},
+                              k,
+                              ep.value(),
+                              body,
+                              options.snap_phi,
+                              snap);
+    if (!clipped)
+        return clipped.error();
     std::vector<Source> sources;
-    for (const auto& f : faces)
+    for (const auto& f : clipped.value())
         sources.push_back(f.source);
     return sources;
 }

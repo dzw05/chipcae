@@ -940,7 +940,23 @@ void partition_compare(const Output& serial,
     exact(serial.cut.face_sets, parallel.cut.face_sets, "partition cut face sets");
     exact(serial.mesh.axes, parallel.mesh.axes, "partition grid axes");
     exact(serial.mesh.copper_phi, parallel.mesh.copper_phi, "partition untouched copper field");
+    exact(serial.mesh.copper_layer_of_layer,
+          parallel.mesh.copper_layer_of_layer,
+          "partition copper layer map");
+    exact(serial.mesh.attr_frame, parallel.mesh.attr_frame, "partition attribute frames");
     exact(serial.mesh.nodes, parallel.mesh.nodes, "partition untouched nodes");
+    exact(
+        serial.mesh.internal_interfaces, parallel.mesh.internal_interfaces, "partition interfaces");
+    exact(serial.mesh.order, parallel.mesh.order, "partition mesh order");
+    exact(serial.mesh.snapped, parallel.mesh.snapped, "partition snap reports");
+    auto serial_report = serial.mesh.grid_report, parallel_report = parallel.mesh.grid_report;
+    // Ownership and load imbalance depend on the rank count; all geometric
+    // grid metadata and removal counts must still match bit for bit.
+    serial_report.column_ranks.clear();
+    parallel_report.column_ranks.clear();
+    serial_report.partition_imbalance = parallel_report.partition_imbalance = 0;
+    exact(serial_report, parallel_report, "partition grid reports except ownership");
+    exact(serial.cut.void_attribute, parallel.cut.void_attribute, "partition void attribute");
 }
 void partition_identity(const Shape& s) {
     auto original = sp5::grid(stack(), 8);
@@ -954,6 +970,28 @@ void partition_identity(const Shape& s) {
              1e-10,
              "partition analytic volume");
     }
+}
+
+void partition_oracle_fields() {
+    auto original = sp5::grid(stack(), 8);
+    auto serial = build(l_shape(), options(), 1), parallel = build(l_shape(), options(), 2);
+    auto rejects = [&](const std::function<void(Output&)>& mutate) {
+        auto changed = parallel;
+        mutate(changed);
+        bool rejected = false;
+        try {
+            partition_compare(serial, changed, original);
+        } catch (const std::exception&) {
+            rejected = true;
+        }
+        require(rejected, "partition oracle detects a changed mesh or cut field");
+    };
+    rejects([](Output& out) { ++out.mesh.order; });
+    rejects([](Output& out) { out.mesh.internal_interfaces = !out.mesh.internal_interfaces; });
+    rejects([](Output& out) { out.mesh.copper_layer_of_layer.push_back(-1); });
+    rejects([](Output& out) { out.mesh.snapped.push_back({'x', -0., 0., -0.}); });
+    rejects([](Output& out) { ++out.mesh.grid_report.void_cells; });
+    rejects([](Output& out) { ++out.cut.void_attribute; });
 }
 
 void error_case(HexMeshArrays mesh,
@@ -1144,6 +1182,7 @@ void ordered_piece_quadrature() {
     o.small_sub_vf = .125;
     std::vector<Real> expected_w;
     std::array<std::vector<Real>, 3> expected_xi;
+    std::vector<std::size_t> piece_off{0};
     Real expected_volume = +0.;
     const auto [lo, size] = bounds(original, target);
     (void)lo;
@@ -1165,21 +1204,66 @@ void ordered_piece_quadrature() {
             for (int d = 0; d < 3; ++d)
                 expected_xi[d].push_back(convex.vq_xi[d].at(q));
         }
+        piece_off.push_back(expected_w.size());
     }
     exact(expected_volume, .125, "ordered quadrature target is exactly one eighth full");
     auto out = binary_build(.125, 1);
     const auto row = row_for(out, original.elem_gid[target]);
     const auto sub = out.cut.sub_off.at(row);
     exact(out.cut.sub_volfrac.at(sub), expected_volume / jac, "ordered convex-piece volume sum");
-    Bits actual, expected;
-    slice(actual, out.cut.vq_w, out.cut.vq_off.at(sub), out.cut.vq_off.at(sub + 1));
-    expected.add(expected_w);
-    for (int d = 0; d < 3; ++d) {
-        slice(actual, out.cut.vq_xi[d], out.cut.vq_off[sub], out.cut.vq_off[sub + 1]);
-        expected.add(expected_xi[d]);
+    const auto begin = static_cast<std::size_t>(out.cut.vq_off.at(sub));
+    const auto count = static_cast<std::size_t>(out.cut.vq_off.at(sub + 1)) - begin;
+    check(count == expected_w.size(),
+          "ordered quadrature point count: actual=" + std::to_string(count) +
+              " expected=" + std::to_string(expected_w.size()));
+    // Infer actual piece boundaries from the disjoint y interiors of the slabs.
+    std::vector<std::size_t> actual_piece_off{0};
+    std::size_t next = 0;
+    for (std::size_t k = 0; k < ps.size(); ++k) {
+        const Real lower = Real(k) * .0625, upper = Real(k + 1) * .0625;
+        while (next < count && out.cut.vq_xi[1].at(begin + next) < upper) {
+            check(out.cut.vq_xi[1].at(begin + next) > lower,
+                  "ordered quadrature point belongs to the current piece interior");
+            ++next;
+        }
+        actual_piece_off.push_back(next);
     }
-    require(actual.words == expected.words,
-            "volume quadrature concatenates completed pieces in input k order");
+    check(next == count && actual_piece_off == piece_off,
+          "ordered quadrature preserves every piece segment boundary in input k order");
+    // 依据 handoff/rulings/pr202.md 第二轮 MUST 1: CI run 44644329948
+    // showed 1 ULP cross-path rounding with identical counts and piece boundaries.
+    // Only this independent legacy reference allows relative error <= 1e-14.
+    auto compare = [&](const std::vector<Real>& actual,
+                       const std::vector<Real>& expected,
+                       const std::string& field) {
+        bool reported = false;
+        for (std::size_t k = 0; k + 1 < piece_off.size(); ++k)
+            for (auto q = piece_off[k]; q < piece_off[k + 1]; ++q) {
+                const auto a = std::bit_cast<std::uint64_t>(actual.at(begin + q));
+                const auto b = std::bit_cast<std::uint64_t>(expected.at(q));
+                if (a == b)
+                    continue;
+                // Values in this binary slab fixture are nonnegative, so the
+                // unsigned bit-pattern distance is their ULP distance.
+                std::ostringstream message;
+                message << std::setprecision(std::numeric_limits<Real>::max_digits10)
+                        << "ordered quadrature " << field << " index=" << q << " piece=" << k
+                        << " segment=[" << piece_off[k] << ',' << piece_off[k + 1]
+                        << ") actual=" << actual.at(begin + q) << " expected=" << expected.at(q)
+                        << " ulp=" << (a > b ? a - b : b - a);
+                if (!reported) {
+                    std::cerr << message.str() << '\n';
+                    reported = true;
+                }
+                const Real av = actual.at(begin + q), bv = expected.at(q);
+                const Real scale = std::max({std::abs(av), std::abs(bv), Real(1e-300)});
+                check(std::isfinite(av) && std::isfinite(bv) && std::abs(av - bv) / scale <= 1e-14,
+                      message.str());
+            }
+    };
+    compare(out.cut.vq_w, expected_w, "vq_w");
+    for (int d = 0; d < 3; ++d)
+        compare(out.cut.vq_xi[d], expected_xi[d], "vq_xi[" + std::to_string(d) + "]");
 }
 
 void threshold_sum(Real threshold) {
@@ -1496,6 +1580,11 @@ void late_failure(const char* stage, bool fast) {
     m.pending_cut = {0, 1};
     const auto ph = phi(m, s.outline);
     Fault fault(stage);
+    if (std::string_view(stage) == "self_touching_face") {
+        error_case(
+            m, pieces(s), {}, options(), ph, "cut/union", "self-touching face ring after snap");
+        return;
+    }
     error_case(m,
                pieces(s),
                {},
@@ -1533,6 +1622,7 @@ int main(int argc, char** argv) {
         run("ordered_piece_quadrature", ordered_piece_quadrature);
         run("partition_identity_L", [] { partition_identity(l_shape()); });
         run("partition_identity_R", [] { partition_identity(r_shape()); });
+        run("partition_oracle_fields", partition_oracle_fields);
         run("disconnected_error", disconnected_error);
         for (int i = 0; i < 4; ++i)
             run("invalid_piece_" + std::to_string(i), [i] { invalid_piece_case(i); });
@@ -1568,6 +1658,7 @@ int main(int argc, char** argv) {
         run("connectivity_edge_contact", [] { connectivity_contact(false); });
         run("connectivity_length_scale", connectivity_length_scale);
         run("open_union_export_rollback", open_union_export_rollback);
+        run("self_touching_face_rollback", [] { late_failure("self_touching_face", false); });
         for (const char* stage : {"clipping", "export", "final_validation"})
             for (bool fast : {false, true})
                 run(std::string("rollback_") + stage + (fast ? "_fast" : "_union"),

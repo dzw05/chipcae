@@ -87,6 +87,21 @@ if(_solve_backend AND TARGET chipcae_material)
     target_include_directories(chipcae_test_solve_mixture PRIVATE ${PROJECT_SOURCE_DIR}/apps/chipcae-solve/include)
     target_link_libraries(chipcae_test_solve_mixture PRIVATE chipcae_solve_inputs chipcae_material mfem)
     add_test(NAME solve_material_mixture COMMAND chipcae_test_solve_mixture)
+
+    add_executable(chipcae_test_copper_trace_map test_copper_trace_map.cpp)
+    target_include_directories(chipcae_test_copper_trace_map PRIVATE ${PROJECT_SOURCE_DIR}/apps/chipcae-solve/include)
+    target_link_libraries(chipcae_test_copper_trace_map PRIVATE chipcae_solve_inputs chipcae_material mfem)
+    chipcae_set_warnings(chipcae_test_copper_trace_map)
+    add_test(NAME solve_copper_trace_map COMMAND chipcae_test_copper_trace_map)
+    set_tests_properties(solve_copper_trace_map PROPERTIES TIMEOUT 60 LABELS "solve;material;tierA")
+endif()
+if(_solve_backend)
+    add_test(NAME solve_copper_trace_map_paths COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_copper_trace_map.py
+        $<TARGET_FILE:chipcae-solve> ${PROJECT_SOURCE_DIR})
+    set_tests_properties(solve_copper_trace_map_paths PROPERTIES
+        TIMEOUT 600 LABELS "solve;material;mpi;io;cut;numerical"
+        ENVIRONMENT "MPIEXEC_EXECUTABLE=${MPIEXEC_EXECUTABLE};OMP_NUM_THREADS=2;OPENBLAS_NUM_THREADS=1")
 endif()
 if(_solve_backend)
     add_executable(chipcae_cut_manufactured cut_manufactured.cpp)
@@ -262,4 +277,12 @@ if(TARGET chipcae_solve_inputs)
                 DISABLED TRUE TIMEOUT 1200 LABELS "solve;parts;cut;numerical;sp6-b")
         endforeach()
     endif()
+endif()
+
+if(_solve_backend)
+    add_test(NAME solve_fem_thermal_bow COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_fem_thermal_bow.py
+        $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE})
+    set_tests_properties(solve_fem_thermal_bow PROPERTIES
+        TIMEOUT 600 LABELS "solve;numerical" SKIP_RETURN_CODE 77)
 endif()

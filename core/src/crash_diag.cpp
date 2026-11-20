@@ -187,9 +187,9 @@ void CrashDiag::install(const std::filesystem::path& run_dir, int rank) {
         installed_rank = rank;
         struct sigaction action{};
         action.sa_handler = CrashDiag::on_signal;
-        ::sigemptyset(&action.sa_mask);
+        sigemptyset(&action.sa_mask);
         for (const int sig : fatal_signals)
-            ::sigaddset(&action.sa_mask, sig);
+            sigaddset(&action.sa_mask, sig);
         for (std::size_t i = 0; i < fatal_signals.size(); ++i) {
             if (::sigaction(fatal_signals[i], &action, &previous_actions[i]) != 0)
                 system_failure("install diagnostic signal handler");

@@ -8,6 +8,7 @@
 #include <iostream>
 #include <iterator>
 #include <stdexcept>
+#include <stdlib.h>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -53,7 +54,7 @@ public:
         auto pattern = (fs::temp_directory_path() / "chipcae-jobmgr-XXXXXX").string();
         std::vector<char> buffer(pattern.begin(), pattern.end());
         buffer.push_back('\0');
-        const auto result = ::mkdtemp(buffer.data());
+        const auto result = mkdtemp(buffer.data());
         require(result != nullptr, "mkdtemp failed");
         path = result;
     }

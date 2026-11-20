@@ -75,12 +75,12 @@
         "nx": {
           "type": "integer",
           "minimum": 1,
-          "description": "Initial in-plane columns; omitted values are selected automatically from the stack."
+          "description": "Initial in-plane columns; omitted value is 1. Give this explicitly."
         },
         "ny": {
           "type": "integer",
           "minimum": 1,
-          "description": "Initial in-plane columns; omitted values are selected automatically from the stack."
+          "description": "Initial in-plane columns; omitted value is 1. Give this explicitly."
         },
         "max_ratio": {
           "type": "number",

@@ -11,6 +11,7 @@
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <stdlib.h>
 #include <string>
 #include <utility>
 #include <vector>
@@ -38,7 +39,7 @@ struct Acceptance {
         fs::path path;
         TemporaryDirectory() {
             auto pattern = (fs::temp_directory_path() / "chipcae-ecad-map-targets-XXXXXX").string();
-            require(::mkdtemp(pattern.data()) != nullptr, "cannot create temporary directory");
+            require(mkdtemp(pattern.data()) != nullptr, "cannot create temporary directory");
             path = pattern;
         }
         ~TemporaryDirectory() {

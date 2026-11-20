@@ -161,6 +161,15 @@ Expected<HexMeshArrays> parts_tensor_grid(const StackModel& s, const GridOptions
         throw std::runtime_error("bounding-grid provider received outline polygon");
     return parts::supplied ? Expected<HexMeshArrays>(*parts::supplied) : build_tensor_grid(s, o);
 }
+Expected<HexMeshArrays>
+parts_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset& polygons) {
+    ++parts::grid_calls;
+    parts::calls.push_back("grid");
+    if (!s.outline.polygon.empty())
+        throw std::runtime_error("bounding-grid provider received outline polygon");
+    return parts::supplied ? Expected<HexMeshArrays>(*parts::supplied)
+                           : build_tensor_grid(s, o, polygons);
+}
 namespace cut {
 Expected<CutGeometry> parts_region_cut_planes(const StackModel& s, const HexMeshArrays& m) {
     ++parts::plane_calls;
