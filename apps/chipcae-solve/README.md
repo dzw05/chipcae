@@ -1,4 +1,4 @@
-# Q2 thermal stress solver
+# Thermal and thermal stress solver
 
 `chipcae-solve --case case.json --profile profile.json --out run_dir [--cut-output hex]`
 
@@ -16,8 +16,8 @@ Cards must be constant isotropic thermoelastic materials with single-knot E,
 nu and alpha tables; steady conduction also requires positive `conductivity`
 in W/(m K). Layer and aligned region materials remain distinct. Copper fractions
 call the material module's shared M7 law also used by `CopperMixture`; conductivity is arithmetic in
-plane and harmonic through thickness. Polygon copper maps and internal material
-cuts are rejected.
+plane and harmonic through thickness. Polygon copper maps use the mesh module’s
+per-column fractions. Unsupported internal material cuts fail explicitly.
 
 A stack outline may be a convex polygon extruded through every layer, with or
 without a repeated closing vertex. Vertices must lie inside `outline.box`.
@@ -123,3 +123,90 @@ The amended X1 brief permits the additive public `RunInputs::backend` string
 member (default `"cpu"`) in `include/chipcae/solve/case_loader.hpp`. This changes
 the struct layout/ABI and requires consumers to rebuild; function signatures
 and solver/kernel interfaces are unchanged.
+
+## FVM case selection (thermal-only stage)
+
+Select `fvm.conduction` for steady thermal physics and `fvm.solid` for the
+mechanical physics entry in `case.json`; physics order is immaterial. Both
+entries must belong to the same family. The command stays unchanged:
+
+```sh
+chipcae-solve --case case.json --profile profile.json --out run-fvm
+chipcae-solve --case case.json --profile profile.json --out run-fvm-hex --cut-output hex
+```
+
+FVM accepts `solver.linear.preconditioner` values `jacobi` (also the default
+when `solver.linear` is absent) and `gamg`. It copies `rtol` and `max_iter` to
+the thermal library. FEM stabilization and penalty settings are ignored for
+FVM; shared cut quadrature settings are still validated. Fixed temperatures
+support faces and layers; convection supports faces, layers and embedded
+boundaries. Layer convection covers every exterior face of the selected layers,
+including embedded faces and all slices of a split-layer alias. Power uses
+actual physical target volume, including cut cells; `q_vol` supplies density
+directly through the same `heat_source_density` conversion used by FEM.
+Embedded fixed temperature/displacement constraints remain unsupported.
+
+This stage solves heat only. All output U values and both mechanical summaries
+are zero, with method and level-2 warning `not solved: fvm thermal-only stage`.
+These zeros are placeholders, not warpage predictions. Linking an available
+elastic library does not activate mechanics. A solid-only case with valid
+`uniform_temperature` writes that temperature and zero U.
+
+`T_max` uses the maximum CV temperature and method `FVM cell centers`.
+Regular hex vertices use the thermal library's `T_vertex`. New cut/EB points
+use volume-weighted incident CV first-order reconstructions from `T_cell` and
+`T_face`; incident Dirichlet faces take precedence with area weighting at
+conflicting corners. Mesh-owned topology, parent GIDs and physical cut volumes
+are retained. `--cut-output hex` retains active cut parents and EB triangles.
+Copper fraction and conductivity diagonals are populated when supported by the
+results interface. Mechanics C/alpha mixture wiring is deferred.
+
+Each successful thermal solve emits one rank-0 level-1 `FVM_ENERGY ` record,
+containing exactly the library's `heat_in`, `heat_out`, `imbalance`, and
+`iterations`. The final residual batch uses `fvm.conduction`. STOP is checked
+after the solve and before step publication; nonconvergence publishes no step.
+
+Acceptance and measured results are recorded in
+[the FVM integration README](../../tests/integration/fvm_case_e2e/README.md).
+FVM always writes physical `CellData/volume` for both hex and cut cells,
+including when `output.fields` omits it. An explicit `volume` selection is
+accepted only for FVM; FEM retains `invalid output field`. The default fields
+list is unchanged. Hex volumes are optional writer input: callers that supply
+none retain the existing output without hex volume. Cut output and unit
+metadata are unchanged.
+
+The board 1% gate independently takes the maximum of each result's hex
+`PointData/T`, then compares temperature rises above 298.15 K. Both summary
+maxima are printed separately; the FVM summary retains its cell-center
+definition. Energy imbalance must remain at most 1e-9; the board and DEMO
+embedded-Robin checks explicitly solve with `rtol=1e-12`.
+
+Run the FVM CLI acceptance with the shared build wrappers:
+
+```sh
+cmake --build "$build" -j2
+ctest --test-dir "$build" -R '^fvm_fvm_case_e2e$' --output-on-failure
+```
+
+Local Release measurements (2026-11-20, 实测), including CLI startup; RSS
+uses wait4 maximum child RSS and is not a sum across MPI ranks:
+
+| Case/backend | Wall seconds | Peak RSS KiB |
+| --- | ---: | ---: |
+| imported board, FVM np=1 | 1.533149 | 50428 |
+| same board, FEM/direct | 1.790768 | 61804 |
+| DEMO-GATE, FVM | 1.569853 | 55764 |
+| original DEMO-GATE, FEM | 39.224233 | 1311676 |
+
+The board vertex maxima are FVM 323.13920209610802 K and FEM
+323.17794030362211 K: temperature-rise difference 0.1547798462%, below 1%.
+Board energy imbalance is 1.3544070916991032e-12 (np=1) and
+4.4733543527735244e-14 (np=2). DEMO embedded Robin returns imbalance
+1.2088229951858545e-13 in 445 iterations at explicit `rtol=1e-12`.
+The largest np=1/2 temperature relative difference is 1.1015562826700222e-14.
+
+Earlier continuation CTest: `fvm_fvm_case_e2e` passes all 19 methods (97.27 s),
+`k1_results_validation*` passes 2/2 (4.24 s), and the existing VTKHDF
+regressions pass 5/5 (56.69 s), with no skips or threshold changes.
+The integration README records the later full-suite results and separates
+ordinary passes, successful OOM retries and failures reproduced on main.
