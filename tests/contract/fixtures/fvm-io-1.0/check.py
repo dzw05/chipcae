@@ -68,10 +68,12 @@ def read(path):
     return json.loads(path.read_text(encoding="utf-8"), parse_constant=reject_constant)
 
 
-def named(rows, key="name"):
+def named(rows, key="name", string_ids=False):
     result = {}
     for row in rows:
-        if key in ("id", "n"):
+        if key == "id" and string_ids:
+            require(isinstance(row[key], str) and row[key], f"invalid {key}: {row[key]}")
+        elif key in ("id", "n"):
             require(type(row[key]) is int and row[key] >= 0, f"invalid {key}: {row[key]}")
         require(row[key] not in result, f"duplicate {key}: {row[key]}")
         result[row[key]] = row
@@ -266,7 +268,7 @@ def cases(package):
     for name, expected in CASE_ERRORS.items():
         doc = read(package / f"cases/{name}.json")
         require(doc["schema"] == "chipcae.case/1.0", f"{name}: case version")
-        physics = named(doc["physics"], "id")
+        physics = named(doc["physics"], "id", string_ids=True)
         require(set(physics) == {"thermal", "mech"}, f"{name}: thermal and mech required")
         solvers = {p["solver"] for p in physics.values()}
         require(solvers <= {"fem.conduction", "fem.solid", "fvm.conduction", "fvm.solid"},
