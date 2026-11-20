@@ -2,9 +2,10 @@
 """Black-box acceptance for the cutgeom-nc/1.0 fixture tools (standard library).
 
 Run: python3 -m unittest discover -s tests/contract/fixtures/cutgeom-nc-1.0 -v
-This test-first suite intentionally fails until gen.py, check.py and their data
-are delivered. It neither implements nor substitutes for those tools. Temporary
-copies isolate destructive probes; the source checkout is always read-only.
+This test-first suite covers gen.py, check.py, their data, literal provenance,
+and complete-directory reproduction. It neither implements nor substitutes for
+those tools. Temporary copies isolate destructive probes; the source checkout
+is always read-only.
 
 CUTGEOM_BRANCH_REF overrides the local #202 source ref. CUTGEOM_HANDOFF points
 to the handoff fixture directory when it is outside the sibling handoff tree.
@@ -59,13 +60,13 @@ SOURCE_TABLES = {
 }
 
 
-def manifest(root):
-    """Exclude this harness and interpreter caches, neither of which is fixture data."""
+def manifest(root, include_harness=False):
+    """Hash payloads, or the complete deliverable including this test harness."""
     return {
         str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
         for p in sorted(root.rglob("*"))
         if p.is_file() and "__pycache__" not in p.parts
-        and p.name != Path(__file__).name
+        and (include_harness or p.name != Path(__file__).name)
     }
 
 
@@ -225,9 +226,23 @@ class FixtureAcceptance(unittest.TestCase):
             for destination in (first, second):
                 self.status(self.command(sys.executable, generator, "--out", destination), 0)
             self.assertTrue(manifest(first), "generator must produce files")
-            self.assertEqual(manifest(first), manifest(second))
-            self.assertEqual(manifest(first), manifest(HERE))
+            generated = manifest(first, include_harness=True)
+            self.assertEqual(generated, manifest(second, include_harness=True))
+            self.assertEqual(
+                set(generated), set(manifest(HERE, include_harness=True)),
+                "full-directory reproduction must include test_acceptance.py",
+            )
+            self.assertEqual(generated, manifest(HERE, include_harness=True))
         self.assertEqual(snapshot(HERE), before, "--out must leave the source fixture unchanged")
+
+    def test_manifest_enumerates_the_complete_deliverable_including_tests(self):
+        expected = self.read_json(HERE / "expected.json")
+        self.assertEqual(len(expected["files"]), len(set(expected["files"])),
+                         "manifest paths must be unique")
+        self.assertEqual(
+            set(expected["files"]), set(manifest(HERE, include_harness=True)),
+            "the generated manifest must cover every delivered file, including its tests",
+        )
 
     def test_handoff_and_repository_have_identical_hashes(self):
         self.tool("gen.py")
@@ -235,7 +250,8 @@ class FixtureAcceptance(unittest.TestCase):
             "CUTGEOM_HANDOFF", REPO.parent / "handoff" / "fixtures" / HERE.name,
         ))
         self.assertTrue(handoff.is_dir(), "handoff fixture copy is missing")
-        self.assertEqual(manifest(HERE), manifest(handoff))
+        self.assertEqual(manifest(HERE, include_harness=True),
+                         manifest(handoff, include_harness=True))
 
     def test_source_tables_preserve_every_vertex_and_block_in_order(self):
         for case in (*SOURCE_TABLES, "l1_corner"):
@@ -244,6 +260,13 @@ class FixtureAcceptance(unittest.TestCase):
                 outline, blocks = source_shape(case)
                 self.assertEqual(points(data["outline"]), outline)
                 self.assertEqual([points(p) for p in data["pieces"]], blocks)
+                # Numeric equality alone misses a loss of the source spelling.
+                raw, indices = SOURCE_TABLES["l_shape" if case == "l1_corner" else case]
+                literal_ring = [[".012501" if case == "l1_corner" and
+                                 v in (".0113", ".0137") else v for v in p] for p in raw]
+                self.assertEqual(data["outline"], literal_ring)
+                self.assertEqual(data["pieces"],
+                                 [[literal_ring[i] for i in block] for block in indices])
 
     def test_fixture_manifest_records_source_tip_and_portable_paths(self):
         expected = self.read_json(HERE / "expected.json")
@@ -357,6 +380,23 @@ class FixtureAcceptance(unittest.TestCase):
                     self.assertTrue(any(len(v.as_tuple().digits) == 17 for v in approximations),
                                     "V embedded-area oracle must retain 17 significant digits")
 
+    def test_named_geometry_oracles_keep_exact_decimals_and_piece_counts(self):
+        golden = {
+            "l_shape": ("0.00034519", "0.00000034519", 2),
+            "v_shape": ("0.00036607", "0.00000036607", 3),
+            "r_shape": ("0.00025671", "0.00000025671", 5),
+            "chamfer_lid_octagon": ("0.000382", "0.000000382", 1),
+        }
+        for case, (area_value, volume, count) in golden.items():
+            with self.subTest(case=case):
+                expected = self.read_json(HERE / case / "expected.json")
+                self.assertEqual(expected["area"], area_value)
+                self.assertEqual(expected["volume"], volume)
+                self.assertEqual(expected["piece_count"], count)
+                self.assertEqual(expected["exterior_area_vector_xy"], ["0", "0"])
+                for field in ("area_volume_rel", "embedded_area_rel", "closure_abs"):
+                    self.assertEqual(Fraction(expected["tolerance"][field]), Fraction("1e-12"))
+
     def test_l1_uses_shifted_corner_and_exact_fraction_oracles(self):
         data = self.read_json(HERE / "l1_corner" / "input.json")
         self.assertIn(Fraction(".012501"), decimal_values(data["outline"]))
@@ -368,6 +408,7 @@ class FixtureAcceptance(unittest.TestCase):
 
     def test_l1_completed_union_selects_two_corners_eight_strips_and_no_duplicates(self):
         data = self.read_json(HERE / "l1_corner" / "input.json")
+        self.assertEqual(data["grid"], {"h_xy": "0.0025", "nx": 8, "ny": 8, "nz": 2})
         blocks = [points(p) for p in data["pieces"]]
         h = Fraction(".0025")
         fractions = {}
@@ -389,6 +430,13 @@ class FixtureAcceptance(unittest.TestCase):
         expected = self.read_json(HERE / "l1_corner" / "expected.json")
         self.assertEqual(expected["corner_count"], 2)
         self.assertEqual(expected["strip_count"], 8)
+        recorded = {tuple(c["cell"]): Fraction(c["sub_volfrac"])
+                    for c in expected["cut_cells"]}
+        self.assertEqual(len(recorded), len(expected["cut_cells"]),
+                         "cell ids must remain unique after union accumulation")
+        self.assertEqual(recorded, {cell: v for cell, v in fractions.items() if 0 < v < 1})
+        self.assertIs(expected["small_subs_unique"], True)
+        self.assertEqual(Fraction(expected["tolerance"]["sub_volfrac_rel"]), Fraction("1e-10"))
         for threshold, count in (("0.001", 10), ("0.0005", 8)):
             selected = {cell for cell, v in fractions.items() if 0 < v < Fraction(threshold)}
             self.assertEqual(len(selected), count)
@@ -436,6 +484,26 @@ class FixtureAcceptance(unittest.TestCase):
             ("CUT_UNSUPPORTED", "region0: self-intersecting polygon"),
             ("CUT_UNSUPPORTED", "region0: multiple rings"),
         } <= pairs, "each error must keep its own exact path/reason pair")
+
+    def test_runtime_assertions_are_declared_for_cpp_consumers(self):
+        for case in CASES[:-1]:
+            with self.subTest(case=case):
+                expected = self.read_json(HERE / case / "expected.json")
+                self.assertEqual(expected["internal_side_minus1_faces"], 0)
+                assertions = expected["consumer_assertions_only"]
+                self.assertIn("internal_side_minus1_faces", assertions)
+                required = {
+                    "l1_corner": {"small_subs"},
+                    "convex_split2": {"sub_volfrac", "sq_w", "duplicate_points_equivalent"},
+                    "chamfer_lid_octagon": {"legacy_all_fields_bitwise_equal"},
+                }.get(case, set())
+                self.assertTrue(required <= set(assertions))
+        errors = self.read_json(HERE / "errors" / "expected.json")
+        self.assertIs(errors["consumer_assertions_only"], True)
+        self.assertIs(errors["mesh_all_fields_and_order_unchanged"], True)
+        for record in errors["cases"]:
+            layer = "i11" if record["path"] == "CUT_UNSUPPORTED" else "i10"
+            self.assertEqual(record["layer"], layer)
 
     def test_error_inputs_cover_each_invalid_shape_and_keep_body_id_numeric(self):
         data = self.read_json(HERE / "errors" / "input.json")
@@ -614,6 +682,20 @@ class FixtureAcceptance(unittest.TestCase):
             self.assertTrue(replace(data), "L area must be recorded as an exact decimal string")
         self.mutate("l_shape/expected.json", change)
 
+    def test_checker_rejects_rational_oracle_drift_below_float_tolerance(self):
+        for field, altered in (
+            ("area", "0.000345190000000000000001"),
+            ("volume", "0.000000345190000000000001"),
+            ("embedded_area", "0.000015000000000000000001"),
+        ):
+            with self.subTest(field=field):
+                def change(data):
+                    before, after = Fraction(data[field]), Fraction(altered)
+                    self.assertNotEqual(before, after)
+                    self.assertLess(abs(after / before - 1), Fraction("1e-12"))
+                    data[field] = altered
+                self.mutate("l_shape/expected.json", change)
+
     def test_checker_rejects_reversed_ccw_piece(self):
         def change(data):
             data["pieces"][0].reverse()
@@ -634,6 +716,15 @@ class FixtureAcceptance(unittest.TestCase):
         self.status(self.command(sys.executable, script, "--unknown-option"), 2)
         with tempfile.TemporaryDirectory() as tmp:
             self.status(self.checker(HERE, Path(tmp) / "absent"), 2)
+
+    def test_generator_cli_and_io_errors_exit_two(self):
+        generator = self.tool("gen.py")
+        self.status(self.command(sys.executable, generator, "--unknown-option"), 2)
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp) / "file"
+            destination.write_text("occupied\n", encoding="utf-8")
+            self.status(self.command(sys.executable, generator, "--out", destination), 2)
+            self.assertEqual(destination.read_text(encoding="utf-8"), "occupied\n")
 
     def test_branch_source_matches_and_literal_drift_is_rejected(self):
         self.tool("check.py")
@@ -676,17 +767,25 @@ class FixtureAcceptance(unittest.TestCase):
                         "-c", "commit.gpgsign=false", "commit", "-m", "Source drift probe",
                     ), 0)
                     self.status(self.checker(root, repo, "--branch-ref", "HEAD"), 1)
-            # C++ leading-dot literals and JSON-compatible decimal/exponent
-            # spellings denote the same exact values. Textual grep is insufficient.
-            normalized = source.stdout.replace(".0064", "0.0064").replace(".0137", "1.37e-2")
-            path.write_text(normalized, encoding="utf-8")
-            self.status(self.command("git", "-C", repo, "add", SOURCE), 0)
-            self.status(self.command(
-                "git", "-C", repo, "-c", "user.name=Fixture Acceptance",
-                "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
-                "commit", "-m", "Equivalent numeric spellings",
-            ), 0)
-            self.status(self.checker(root, repo, "--branch-ref", "HEAD"), 0)
+            # The brief requires literal provenance as well as numeric equality,
+            # including parameter defaults and both L1 arguments.
+            for old, new in (
+                (".0064", "0.0064"),
+                (".0137", "1.37e-2"),
+                ("Real x = .0113", "Real x = 0.0113"),
+                ("l_shape(.012501, .012501)", "l_shape(0.012501, .012501)"),
+                ("l_shape(.012501, .012501)", "l_shape(.012501, 0.012501)"),
+            ):
+                with self.subTest(literal_drift=(old, new)):
+                    self.assertIn(old, source.stdout)
+                    path.write_text(source.stdout.replace(old, new, 1), encoding="utf-8")
+                    self.status(self.command("git", "-C", repo, "add", SOURCE), 0)
+                    self.status(self.command(
+                        "git", "-C", repo, "-c", "user.name=Fixture Acceptance",
+                        "-c", "user.email=fixture@example.invalid",
+                        "-c", "commit.gpgsign=false", "commit", "-m", "Source literal drift probe",
+                    ), 0)
+                    self.status(self.checker(root, repo, "--branch-ref", "HEAD"), 1)
             path.unlink()
             self.status(self.command("git", "-C", repo, "add", "-u"), 0)
             self.status(self.command(
@@ -725,6 +824,25 @@ class FixtureAcceptance(unittest.TestCase):
             result = self.checker(root, repo, "--branch-ref", BRANCH, env=env)
             self.status(result, 0)
             self.assertIn("SKIP", result.stdout + result.stderr)
+
+    def test_optional_source_skip_cannot_hide_invalid_default_data(self):
+        for missing in ("git", "ref"):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as tmp:
+                repo, root = self.isolated(tmp)
+                self.status(self.checker(root, repo), 0)
+                if missing == "ref" and shutil.which("git"):
+                    self.status(self.command("git", "init", repo), 0)
+                path = root / "l_shape" / "expected.json"
+                data = json.loads(path.read_text(encoding="utf-8"))
+                data["area"] = "0.00034520"
+                path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+                before = snapshot(root)
+                env = dict(os.environ, PATH=tmp) if missing == "git" else None
+                result = self.checker(root, repo, "--branch-ref",
+                                      "refs/heads/absent-cutgeom-fixture-ref", env=env)
+                self.status(result, 1)
+                self.assertNotIn("SKIP", result.stdout + result.stderr)
+                self.assertEqual(snapshot(root), before)
 
 
 if __name__ == "__main__":
