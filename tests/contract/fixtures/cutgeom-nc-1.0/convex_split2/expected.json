@@ -1,0 +1,28 @@
+{
+  "contract": "cutgeom-nc/1.0",
+  "case": "convex_split2",
+  "area": "0.000255",
+  "volume": "0.000000255",
+  "embedded_area": "0.000064",
+  "embedded_area_exact": true,
+  "exterior_area_vector_xy": [
+    "0",
+    "0"
+  ],
+  "piece_count": 2,
+  "internal_side_minus1_faces": 0,
+  "consumer_assertions_only": [
+    "internal_side_minus1_faces",
+    "duplicate_points_equivalent",
+    "sub_volfrac",
+    "sq_w"
+  ],
+  "tolerance": {
+    "area_volume_rel": "1e-12",
+    "embedded_area_rel": "1e-12",
+    "closure_abs": "1e-12",
+    "sub_volfrac_rel": "1e-14",
+    "sq_w_rel": "1e-14"
+  },
+  "duplicate_points_equivalent": true
+}

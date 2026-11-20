@@ -1,0 +1,115 @@
+{
+  "contract": "cutgeom-nc/1.0",
+  "case": "l1_corner",
+  "area": "0.000343764999",
+  "volume": "0.000000343764999",
+  "embedded_area": "0.000014998",
+  "embedded_area_exact": true,
+  "exterior_area_vector_xy": [
+    "0",
+    "0"
+  ],
+  "piece_count": 2,
+  "internal_side_minus1_faces": 0,
+  "consumer_assertions_only": [
+    "internal_side_minus1_faces",
+    "small_subs"
+  ],
+  "tolerance": {
+    "area_volume_rel": "1e-12",
+    "embedded_area_rel": "1e-12",
+    "closure_abs": "1e-12",
+    "sub_volfrac_rel": "1e-10"
+  },
+  "corner_fraction": "0.00079984",
+  "strip_fraction": "0.0004",
+  "corner_count": 2,
+  "strip_count": 8,
+  "small_subs": {
+    "0.001": 10,
+    "0.0005": 8
+  },
+  "cut_cells": [
+    {
+      "cell": [
+        5,
+        5,
+        0
+      ],
+      "sub_volfrac": "0.00079984"
+    },
+    {
+      "cell": [
+        5,
+        5,
+        1
+      ],
+      "sub_volfrac": "0.00079984"
+    },
+    {
+      "cell": [
+        6,
+        5,
+        0
+      ],
+      "sub_volfrac": "0.0004"
+    },
+    {
+      "cell": [
+        6,
+        5,
+        1
+      ],
+      "sub_volfrac": "0.0004"
+    },
+    {
+      "cell": [
+        7,
+        5,
+        0
+      ],
+      "sub_volfrac": "0.0004"
+    },
+    {
+      "cell": [
+        7,
+        5,
+        1
+      ],
+      "sub_volfrac": "0.0004"
+    },
+    {
+      "cell": [
+        5,
+        6,
+        0
+      ],
+      "sub_volfrac": "0.0004"
+    },
+    {
+      "cell": [
+        5,
+        6,
+        1
+      ],
+      "sub_volfrac": "0.0004"
+    },
+    {
+      "cell": [
+        5,
+        7,
+        0
+      ],
+      "sub_volfrac": "0.0004"
+    },
+    {
+      "cell": [
+        5,
+        7,
+        1
+      ],
+      "sub_volfrac": "0.0004"
+    }
+  ],
+  "small_subs_unique": true
+}
