@@ -124,72 +124,72 @@ member (default `"cpu"`) in `include/chipcae/solve/case_loader.hpp`. This change
 the struct layout/ABI and requires consumers to rebuild; function signatures
 and solver/kernel interfaces are unchanged.
 
-## FVM case selection (thermal-only stage)
+## FVM case selection
 
-Select `fvm.conduction` for steady thermal physics and `fvm.solid` for the
-mechanical physics entry in `case.json`; physics order is immaterial. Both
-entries must belong to the same family. The command stays unchanged:
+Select `fvm.conduction` for steady heat and `fvm.solid` for mechanics in
+`case.json`. Physics order is immaterial; both entries must use the same
+family. The command stays unchanged:
 
 ```sh
 chipcae-solve --case case.json --profile profile.json --out run-fvm
 chipcae-solve --case case.json --profile profile.json --out run-fvm-hex --cut-output hex
 ```
 
-FVM accepts `solver.linear.preconditioner` values `jacobi` (also the default
-when `solver.linear` is absent) and `gamg`. It copies `rtol` and `max_iter` to
-the thermal library. FEM stabilization and penalty settings are ignored for
-FVM; shared cut quadrature settings are still validated. Fixed temperatures
-support faces and layers; convection supports faces, layers and embedded
-boundaries. Power uses actual physical target volume, including cut cells.
+The adapter solves heat first, then passes CV temperatures minus `T_ref` to
+`solve_elastic`. A solid-only case uses `uniform_temperature` minus `T_ref`.
+Mechanical stiffness and expansion use the shared `solve::mixture` laminate
+helper with the same CV copper fractions as thermal conductivity. Both
+libraries receive the case's `rtol`, `max_iter` and `preconditioner` unchanged;
+FVM accepts `jacobi` (default) and `gamg`. FEM stabilization and penalty
+settings are ignored; shared cut quadrature settings remain validated.
+
+`rigid: "3-2-1"` selects the elastic library's rigid-mode removal. Fixed face
+targets map to sides xmin/xmax/ymin/ymax/zmin/zmax. Fixed layer targets expand
+to every exterior face of that layer, including all slices of a named layer.
 Embedded fixed temperature/displacement constraints remain unsupported.
+Thermal fixed temperatures support faces and layers; convection supports
+faces, layers and embedded boundaries. Power uses physical target volume.
 
-This stage solves heat only. All output U values and both mechanical summaries
-are zero, with method and level-2 warning `not solved: fvm thermal-only stage`.
-These zeros are placeholders, not warpage predictions. Linking an available
-elastic library does not activate mechanics. A solid-only case with valid
-`uniform_temperature` writes that temperature and zero U.
+`warpage_pv` and `U_mag_max` come directly from the elastic result, with methods
+`FVM top-face centroids; least-squares plane removal` and `FVM cell centers`.
+`T_max` retains the maximum CV temperature and method `FVM cell centers`.
+Zero temperature rise still runs mechanics and retains the normal methods.
 
-`T_max` uses the maximum CV temperature and method `FVM cell centers`.
-Regular hex vertices use the thermal library's `T_vertex`. New cut/EB points
-use volume-weighted incident CV first-order reconstructions from `T_cell` and
-`T_face`; incident Dirichlet faces take precedence with area weighting at
-conflicting corners. Mesh-owned topology, parent GIDs and physical cut volumes
-are retained. `--cut-output hex` retains active cut parents and EB triangles.
-Copper fraction and conductivity diagonals are populated when supported by the
-results interface. Mechanics C/alpha mixture wiring is deferred.
+Point U uses a volume-weighted average of distinct incident CV displacements
+in the interior. Exterior vertices use area-weighted incident face values;
+prescribed faces take precedence over free faces, including fixed/free edges.
+Coordinate keys reconcile copied rings deterministically. Cut-face membership
+uses actual planar polygon rings. The same reconstruction supplies regular
+hex, cut polyhedron, embedded-boundary and `--cut-output hex` points.
+Regular hex T remains the thermal library's `T_vertex`; new cut/EB T retains
+the existing incident-CV first-order reconstruction and Dirichlet precedence.
+Topology, parent GIDs, physical volumes and copper diagnostics are retained.
 
-Each successful thermal solve emits one rank-0 level-1 `FVM_ENERGY ` record,
-containing exactly the library's `heat_in`, `heat_out`, `imbalance`, and
-`iterations`. The final residual batch uses `fvm.conduction`. STOP is checked
-after the solve and before step publication; nonconvergence publishes no step.
+A successful thermal solve emits one rank-0 level-1 `FVM_ENERGY ` JSON record.
+A successful elastic solve emits one rank-0 level-1 `FVM_ELASTIC ` JSON record
+with exactly `iterations`, `residual`, `warpage_pv` and `U_mag_max`, using the
+classic locale and 17 significant digits. Final residual points identify
+`fvm.conduction`/`T` and `fvm.solid`/`U` respectively. STOP is checked before
+mechanics and immediately after its collective call, before failure handling
+or successful mechanics/output publication. A STOP queued during a solve
+therefore takes effect once the solve returns.
 
-Acceptance and measured results are recorded in
-[the FVM integration README](../../tests/integration/fvm_case_e2e/README.md).
-The existing results writer does not serialize hex `CellData/volume`, even
-when the adapter supplies it. That required output remains an upstream io/
-prerequisite; this adapter does not patch HDF5 after writing.
+The current I14 1.0 elastic library rejects embedded faces. Such geometry
+exits with `CUT_UNSUPPORTED` (13) in either output mode, without a successful
+step or elastic diagnostic. Geometry is never replaced by an uncut mesh.
+Other named error prefixes keep their existing codes; unclassified mechanical
+solver failures exit 1, matching FEM. Failure residual publication is blocked:
+I14 section 6 forbids parsing numerical diagnostics, and its error carrier
+has no structured iterations/residual. That acceptance assertion remains
+unsatisfied pending a producer/API ruling; no residual is fabricated.
 
-Run the FVM CLI acceptance with the shared build wrappers:
+The results writer currently omits regular-hex `CellData/volume` even when
+supplied. Existing board temperature, energy and snapshot gates also remain
+visible upstream limitations. See [FVM acceptance](../../tests/integration/fvm_case_e2e/README.md)
+for current measurements and verification. Build and test through the shared
+wrappers, retaining their PATH precedence:
 
 ```sh
 cmake --build "$build" -j2
 ctest --test-dir "$build" -R '^fvm_fvm_case_e2e$' --output-on-failure
 ```
-
-Local Release measurements (2026-11-20, 实测), including CLI startup; RSS
-uses wait4 maximum child RSS and is not a sum across MPI ranks:
-
-| Case/backend | Wall seconds | Peak RSS KiB |
-| --- | ---: | ---: |
-| imported board, FVM np=1 | 1.532473 | 55060 |
-| same board, FEM/direct | 1.713540 | 62124 |
-| DEMO-GATE, FVM | 1.613696 | 55316 |
-| original DEMO-GATE, FEM | 47.716326 | 1305304 |
-
-These solves exit 0, but acceptance remains red. The board's mandated FVM
-cell-center/FEM nodal Tmax-rise comparison differs by 7.96% (1% gate).
-DEMO-GATE passes that comparison at 0.242%; its embedded-Robin variant at
-unchanged rtol=1e-8 fails the 1e-9 energy gate with imbalance 9.76e-9.
-The hex-volume writer prerequisite and frozen snapshots predating upstream
-copper fields also remain visible failures. No mesh, tolerance, summary
-sampling, library ledger or existing assertion is changed to hide them.

@@ -329,6 +329,52 @@ class CaseAcceptance(unittest.TestCase):
             self.assertTrue(np.all(np.abs(block['PointData/U']) <= 1e-14), name)
         u.inspect_elastic(out, blocks, manifest, nonzero=False)
 
+    def test_uniform_expansion_reconstructs_interior_volume_and_boundary_area_weights(self):
+        import numpy as np
+        # Equal CTEs give the analytic stress-free affine displacement. Unequal
+        # layer thicknesses distinguish CV volume weighting from a plain mean.
+        self.stack['layers'][0].update(thickness=.02, n_elem_min=2)
+        self.stack['layers'][1].update(thickness=.08, n_elem_min=2)
+        u.write_json(self.root / 'stack.json', self.stack)
+        case = u.solid_case()
+        case['solver']['linear'].update(rtol=1e-12)
+        out, _ = u.solve(self.root, case, 'affine-reconstruction')
+        manifest, blocks = u.read_result(out, require_volume=False)
+        block = blocks['hex']
+        points = block['Points']
+        # This is a serial uncut fixture, so each hexahedron has eight local IDs.
+        cells = points[block['Connectivity'].reshape(-1, 8).astype(int)]
+        lo, hi = cells.min(axis=1), cells.max(axis=1)
+        centers, widths = (lo+hi)/2, hi-lo
+        origin = centers.mean(axis=0)  # I14 Rigid321 removes arithmetic translation.
+        volume = widths.prod(axis=1)
+        domain_lo, domain_hi = points.min(axis=0), points.max(axis=0)
+        strain = 1e-5 * 50
+        expected = []
+        unequal_interior = False
+        for point in points:
+            incident = np.all((point >= lo-1e-14) & (point <= hi+1e-14), axis=1)
+            face_centers, areas = [], []
+            for cell in np.flatnonzero(incident):
+                for axis in range(3):
+                    for plane in (domain_lo[axis], domain_hi[axis]):
+                        if (abs(point[axis]-plane) <= 1e-14
+                                and (abs(lo[cell, axis]-plane) <= 1e-14
+                                     or abs(hi[cell, axis]-plane) <= 1e-14)):
+                            center = centers[cell].copy()
+                            center[axis] = plane
+                            face_centers.append(center)
+                            areas.append(np.prod(np.delete(widths[cell], axis)))
+            if areas:
+                location = np.average(face_centers, axis=0, weights=areas)
+            else:
+                location = np.average(centers[incident], axis=0, weights=volume[incident])
+                unequal_interior |= np.linalg.norm(location-centers[incident].mean(axis=0)) > 1e-6
+            expected.append(strain * (location-origin))
+        self.assertTrue(unequal_interior, 'fixture must resolve unequal incident CV weights')
+        np.testing.assert_allclose(block['PointData/U'], expected, rtol=1e-9, atol=1e-14)
+        u.inspect_elastic(out, blocks, manifest, nonzero=False)
+
     def test_solid_only_np1_np2_preserve_displacement_and_warpage(self):
         case = u.bimaterial_strip(self.root)
         results = {}
@@ -478,6 +524,23 @@ class CaseAcceptance(unittest.TestCase):
                 self.assertFalse((out / 'out/step-0.vtkhdf').exists())
                 if (out / 'manifest.json').exists():
                     self.assertEqual(u.read_json(out / 'manifest.json')['steps'], [])
+
+    @unittest.skipUnless(hasattr(os, 'mkfifo'), 'deterministic checkpoint fixture requires POSIX FIFO')
+    def test_stop_after_failed_mechanics_precedes_failure_publication(self):
+        case = u.bimaterial_strip(self.root)
+        case['solver']['linear'].update(max_iter=1, rtol=1e-14)
+        for ranks in (1, 2):
+            with self.subTest(ranks=ranks):
+                out, _ = u.solve_with_late_stop(self.root, case, f'failed-late-stop{ranks}', ranks)
+                events = u.decode_events((out / 'events.bin').read_bytes())
+                self.assertEqual([(e['cmd_seq'], e['status']) for e in events if e['kind'] == 17],
+                                 [(1, 3), (2, 1)])
+                self.assertEqual((events[-1]['kind'], events[-1]['exit_code'], events[-1]['reason']),
+                                 (19, 0, 'user_stop'))
+                self.assertFalse(any(e['kind'] == 22 or
+                                     (e['kind'] == 20 and e['text'].startswith(u.ELASTIC_PREFIX))
+                                     for e in events))
+                self.assertFalse((out / 'out/step-0.vtkhdf').exists())
 
     def test_fvm_ignores_fem_stabilization_retains_quadrature_and_constraints(self):
         for family, expected in (('fem', 14), ('fvm', 0)):
