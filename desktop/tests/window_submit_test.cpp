@@ -1352,6 +1352,16 @@ int main(int argc, char** argv) {
         ResultSnapshot before(w);
         auto other = differentHash(hash);
         auto path = digestResult(f, other);
+        auto* stack = w.findChild<StackEditor*>();
+        check(stack != nullptr, "existing stack editor before digest cancellation");
+        const auto stackBefore = w.document()->stackJson();
+        const auto caseBefore = w.document()->toJson();
+        const auto rowsBefore = stack->model()->rowCount();
+        const auto dirtyBefore = w.document()->isDirty();
+        const auto staleBefore = stack->previewStale();
+        const auto readOnlyBefore = stack->isReadOnly();
+        int invalidated = 0;
+        QObject::connect(stack, &StackEditor::previewInvalidated, &w, [&] { ++invalidated; });
         w.setMeshDigestDialogChoice(Choice::Cancel);
         for (int attempt = 0; attempt < 2; ++attempt) {
             check(!w.openResultsPath(path), "mismatched digest Cancel rejects result open");
@@ -1364,6 +1374,15 @@ int main(int argc, char** argv) {
             check(w.meshDigestDialogChoice() == Choice::Cancel, "Cancel hook persists after use");
             check(w.property("meshDigestWarningText").toString().contains(detail),
                   "hook warning records complete mismatch detail");
+            check(stack->model()->rowCount() == rowsBefore &&
+                      w.document()->stackJson() == stackBefore &&
+                      w.document()->toJson() == caseBefore &&
+                      w.document()->isDirty() == dirtyBefore &&
+                      stack->previewStale() == staleBefore &&
+                      stack->isReadOnly() == readOnlyBefore && invalidated == 0,
+                  "digest Cancel preserves stack display document editability and preview");
+            check(w.lastOpenResultsStackFillMs() >= 0,
+                  "digest Cancel records stack fill decision time");
         }
     });
     test("digest mismatch Accept after Cancel replaces existing results", [&] {

@@ -10,6 +10,7 @@
 #include <QImage>
 #include <QJsonDocument>
 #include <QLabel>
+#include <QProcess>
 #include <QSurfaceFormat>
 #include <QTemporaryDir>
 #include <QVTKOpenGLNativeWidget.h>
@@ -200,7 +201,6 @@ void checkIdRange(ResultView& view, ResultSession& session, ResultColorField fie
     const auto name = idArrayName(field);
     int low = std::numeric_limits<int>::max();
     int high = std::numeric_limits<int>::min();
-    bool titleMatches = false;
     bool nonempty = false;
     const auto range = view.colorRange();
     for (const auto& blockName : displayedBlocks) {
@@ -240,13 +240,6 @@ void checkIdRange(ResultView& view, ResultSession& session, ResultColorField fie
             require(value == static_cast<double>(id), "fixture ID is not integral");
             low = std::min(low, id);
             high = std::max(high, id);
-            auto label = field == ResultColorField::LayerId ? session.layerName(id)
-                                                            : session.materialName(id);
-            if (label.isEmpty())
-                label = QString("%1 %2")
-                            .arg(field == ResultColorField::LayerId ? "layer" : "material")
-                            .arg(id);
-            titleMatches |= view.colorBarTitle().contains(label);
         }
     }
     require(nonempty, "ID fixture has no displayed cells");
@@ -255,7 +248,22 @@ void checkIdRange(ResultView& view, ResultSession& session, ResultColorField fie
     // IDs are integers; the acceptance contract requires exact double equality.
     require(range.min == static_cast<double>(low) && range.max == static_cast<double>(high),
             "ID range differs from visible cell IDs");
-    require(titleMatches, "ID title lacks a visible session name or fallback");
+    QStringList labels;
+    for (int id = low; id <= high; ++id) {
+        auto label =
+            field == ResultColorField::LayerId ? session.layerName(id) : session.materialName(id);
+        if (label.isEmpty())
+            label = QString("%1 %2")
+                        .arg(field == ResultColorField::LayerId ? "layer" : "material")
+                        .arg(id);
+        labels << label;
+    }
+    const auto expected =
+        (field == ResultColorField::LayerId ? QStringLiteral("叠层: ") : QStringLiteral("材料: ")) +
+        labels.join(", ");
+    require(view.colorBarTitle() == expected,
+            qPrintable("ID title must list every ID in ascending order: expected [" + expected +
+                       "] got [" + view.colorBarTitle() + "]"));
     checkScalarBar(view);
 }
 void checkIdBounds(ResultView& view, double low, double high) {
@@ -417,10 +425,12 @@ int acceptance(const QDir& root) {
                 const double factor = material ? 10 : 1;
                 checkIdBounds(view, (stage == 1 ? 1 : 2) * factor, (stage == 2 ? 2 : 3) * factor);
                 checkIdRange(view, session, field);
-                require(view.colorBarTitle().contains(
-                            material ? (stage == 1 ? "material 10" : "material 20")
-                                     : (stage == 1 ? "layer 1" : "layer 2")),
-                        "ID title missing fallback for representative visible ID");
+                if (!material)
+                    require(view.colorBarTitle() ==
+                                (stage == 0   ? QStringLiteral("叠层: layer 2, layer 3")
+                                 : stage == 1 ? QStringLiteral("叠层: layer 1, layer 2, layer 3")
+                                              : QStringLiteral("叠层: layer 2")),
+                            "unnamed layer title matches independent fixture IDs");
                 if (stage == 2)
                     for (const auto& blockName : displayedBlocks)
                         if (auto block = view.displayed(blockName)) {
@@ -520,12 +530,74 @@ int acceptance(const QDir& root) {
             require(unnamed.layerNames().isEmpty() && unnamed.materialNames().isEmpty(),
                     "replacement session must have no names");
             require(view.colorField() == field, "session replacement lost ID field selection");
-            require(view.colorBarTitle().contains(
-                        field == ResultColorField::LayerId ? "layer 2" : "material 20"),
-                    "replacement session title did not use fallback name");
             checkIdRange(view, unnamed, field);
         });
     }
+    // Unlike default (whose cells all have id 1), this fixture exercises a named multi-ID range.
+    for (auto field : {ResultColorField::LayerId, ResultColorField::MaterialId})
+        for (int stage : {0, 1, 2})
+            run(qPrintable(QString(idArrayName(field)) + " exact named range stage " +
+                           QString::number(stage)),
+                [&] {
+                    QTemporaryDir temp;
+                    require(temp.isValid(), "named multi-ID directory");
+                    const auto path = temp.filePath("step.vtkhdf");
+                    writeFixture(root, path, [](vtkUnstructuredGrid* grid) {
+                        addMaterialIds(grid);
+                        auto materials = grid->GetCellData()->GetArray("material_id");
+                        for (vtkIdType cell = 0; cell < grid->GetNumberOfCells(); ++cell)
+                            materials->SetComponent(cell, 0, materials->GetComponent(cell, 0) / 10);
+                    });
+                    QProcess python;
+                    python.start(qEnvironmentVariable("CHIPCAE_FIXTURE_PYTHON", "python3"),
+                                 {"-c",
+                                  QString::fromUtf8(R"(
+import h5py, numpy as np, sys
+with h5py.File(sys.argv[1], 'r+') as f:
+    groups = []
+    f.visititems(lambda name, obj: groups.append(obj) if isinstance(obj, h5py.Group) and 'CellData' in obj else None)
+    assert groups, 'synthetic VTKHDF has no data blocks'
+    for group in groups:
+        fields = group.require_group('FieldData')
+        for key, names in [('layer_names', ['Base_CASE', 'die_attach', 'Si']),
+                           ('material_names', ['Organic_EQ', 'Solder', 'Si_Mat'])]:
+            if key in fields:
+                del fields[key]
+            fields.create_dataset(key, data=np.array(names, dtype='S32'))
+)"),
+                                  path});
+                    require(python.waitForFinished(30000) &&
+                                python.exitStatus() == QProcess::NormalExit &&
+                                python.exitCode() == 0,
+                            qPrintable("write named fixture: " +
+                                       QString::fromUtf8(python.readAllStandardError())));
+                    ResultSession session;
+                    require(session.open(path), qPrintable(session.error()));
+                    ResultView view;
+                    require(view.loadStep(session, 0), qPrintable(view.error()));
+                    require(session.layerNames() == QStringList{"Base_CASE", "die_attach", "Si"} &&
+                                session.materialNames() ==
+                                    QStringList{"Organic_EQ", "Solder", "Si_Mat"},
+                            "independent named multi-ID fixture tables");
+                    if (stage >= 1)
+                        view.setShowVoid(true);
+                    if (stage == 2)
+                        view.setLayer(2);
+                    view.setColorField(field);
+                    const bool layer = field == ResultColorField::LayerId;
+                    const QString expected =
+                        stage == 0   ? (layer ? QStringLiteral("叠层: die_attach, Si")
+                                              : QStringLiteral("材料: Solder, Si_Mat"))
+                        : stage == 1 ? (layer ? QStringLiteral("叠层: Base_CASE, die_attach, Si")
+                                              : QStringLiteral("材料: Organic_EQ, Solder, Si_Mat"))
+                                     : (layer ? QStringLiteral("叠层: die_attach")
+                                              : QStringLiteral("材料: Solder"));
+                    require(view.colorBarTitle() == expected,
+                            qPrintable("named range title expected [" + expected + "] got [" +
+                                       view.colorBarTitle() + "]"));
+                    checkIdRange(view, session, field);
+                    checkScalarBar(view);
+                });
     run("five field repeated switching", [&] {
         ResultSession session;
         require(session.open(root.filePath("default")), qPrintable(session.error()));

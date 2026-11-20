@@ -9,6 +9,10 @@ class StackEditor : public QWidget {
 public:
     explicit StackEditor(CaseDocument* document, QWidget* parent = nullptr);
     LayerModel* model() const { return model_; }
+    // TEST-FIRST stubs: behavior is intentionally absent until the implementation pass.
+    void setReadOnly(bool) {}
+    bool isReadOnly() const { return false; }
+    void setResultsStack(const Json&) {}
     void beginEdit();
     void revertEdit();
     bool save(const QString& path);

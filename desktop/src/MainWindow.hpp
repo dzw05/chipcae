@@ -51,6 +51,8 @@ public:
                             const QStringList& prefix = {});
     void cancelImport();
     bool openResultsPath(const QString& manifestPath);
+    // TEST-FIRST stub: no timing behavior is implemented in this pass.
+    qint64 lastOpenResultsStackFillMs() const { return -1; }
     enum class MeshDigestDialogChoice { Unset, Accept, Cancel };
     void setMeshDigestDialogChoice(MeshDigestDialogChoice choice);
     MeshDigestDialogChoice meshDigestDialogChoice() const;
