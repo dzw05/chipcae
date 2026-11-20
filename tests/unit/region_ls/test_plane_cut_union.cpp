@@ -1216,9 +1216,27 @@ void ordered_piece_quadrature() {
     check(count == expected_w.size(),
           "ordered quadrature point count: actual=" + std::to_string(count) +
               " expected=" + std::to_string(expected_w.size()));
+    // Infer actual piece boundaries from the disjoint y interiors of the slabs.
+    std::vector<std::size_t> actual_piece_off{0};
+    std::size_t next = 0;
+    for (std::size_t k = 0; k < ps.size(); ++k) {
+        const Real lower = Real(k) * .0625, upper = Real(k + 1) * .0625;
+        while (next < count && out.cut.vq_xi[1].at(begin + next) < upper) {
+            check(out.cut.vq_xi[1].at(begin + next) > lower,
+                  "ordered quadrature point belongs to the current piece interior");
+            ++next;
+        }
+        actual_piece_off.push_back(next);
+    }
+    check(next == count && actual_piece_off == piece_off,
+          "ordered quadrature preserves every piece segment boundary in input k order");
+    // 依据 handoff/rulings/pr202.md 第二轮 MUST 1: CI run 44644329948
+    // showed 1 ULP cross-path rounding with identical counts and piece boundaries.
+    // Only this independent legacy reference allows relative error <= 1e-14.
     auto compare = [&](const std::vector<Real>& actual,
                        const std::vector<Real>& expected,
                        const std::string& field) {
+        bool reported = false;
         for (std::size_t k = 0; k + 1 < piece_off.size(); ++k)
             for (auto q = piece_off[k]; q < piece_off[k + 1]; ++q) {
                 const auto a = std::bit_cast<std::uint64_t>(actual.at(begin + q));
@@ -1233,7 +1251,14 @@ void ordered_piece_quadrature() {
                         << " segment=[" << piece_off[k] << ',' << piece_off[k + 1]
                         << ") actual=" << actual.at(begin + q) << " expected=" << expected.at(q)
                         << " ulp=" << (a > b ? a - b : b - a);
-                check(false, message.str());
+                if (!reported) {
+                    std::cerr << message.str() << '\n';
+                    reported = true;
+                }
+                const Real av = actual.at(begin + q), bv = expected.at(q);
+                const Real scale = std::max({std::abs(av), std::abs(bv), Real(1e-300)});
+                check(std::isfinite(av) && std::isfinite(bv) && std::abs(av - bv) / scale <= 1e-14,
+                      message.str());
             }
     };
     compare(out.cut.vq_w, expected_w, "vq_w");
@@ -1555,6 +1580,11 @@ void late_failure(const char* stage, bool fast) {
     m.pending_cut = {0, 1};
     const auto ph = phi(m, s.outline);
     Fault fault(stage);
+    if (std::string_view(stage) == "self_touching_face") {
+        error_case(
+            m, pieces(s), {}, options(), ph, "cut/union", "self-touching face ring after snap");
+        return;
+    }
     error_case(m,
                pieces(s),
                {},
@@ -1628,6 +1658,7 @@ int main(int argc, char** argv) {
         run("connectivity_edge_contact", [] { connectivity_contact(false); });
         run("connectivity_length_scale", connectivity_length_scale);
         run("open_union_export_rollback", open_union_export_rollback);
+        run("self_touching_face_rollback", [] { late_failure("self_touching_face", false); });
         for (const char* stage : {"clipping", "export", "final_validation"})
             for (bool fast : {false, true})
                 run(std::string("rollback_") + stage + (fast ? "_fast" : "_union"),
