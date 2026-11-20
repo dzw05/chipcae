@@ -1,5 +1,6 @@
 #include "chipcae/io/event_log.hpp"
 #include "chipcae/io/vtkhdf_results.hpp"
+#include "chipcae/material/copper_laminate.hpp"
 #include "chipcae/solve/case_loader.hpp"
 #include "chipcae/solve/mixture.hpp"
 #include "chipcae/solvers/fem/column_gmg.hpp"
@@ -674,9 +675,8 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             // Omit that diagnostic for the whole run instead of inventing a value.
             conductivity_available &= base.k > 0 && (!metal || metal->k > 0);
             if (metal && base.k > 0 && metal->k > 0) {
-                const double kxy = f * metal->k + (1 - f) * base.k;
-                const double kz = 1 / (f / metal->k + (1 - f) / base.k);
-                conductivities[e] = {kxy, kxy, kz};
+                chipcae::material::copper_laminate_conductivity(
+                    base.k, metal->k, f, conductivities[e].data());
             }
             if (mechanical)
                 mixtures[e] = mixture(base, metal ? *metal : base, f);
