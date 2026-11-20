@@ -658,6 +658,9 @@ void small_count(const Output& out, std::size_t row, int expected) {
             "small membership must be decided once from completed union volume");
 }
 void small_subs_union() {
+    // In the corner cell the L is the union of two h-by-delta strips,
+    // overlapping in a delta-by-delta square: (2*h*delta-delta^2)/h^2
+    // = 7.9984e-4 for h=.0025 and delta=1e-6. Each adjacent strip is 4e-4.
     const auto s = l_shape(.012501, .012501);
     auto original = background(s.outline);
     for (Real threshold : {1e-3, 5e-4}) {
@@ -678,6 +681,9 @@ void small_subs_union() {
                      7.9984e-4,
                      1e-10,
                      "L1 corner fraction");
+                std::cout << std::setprecision(17) << "L1 corner gid=" << original.elem_gid[e]
+                          << " fraction=" << out.cut.sub_volfrac.at(out.cut.sub_off[row])
+                          << " expected=0.00079984 threshold=" << threshold << '\n';
                 small_count(out, row, threshold > 7.9984e-4 ? 1 : 0);
                 ++corners;
             } else if ((i >= 6 && j == 5) || (i == 5 && j >= 6)) {

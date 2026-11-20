@@ -367,6 +367,23 @@ void convex_bitwise_demo_gate() {
     std::cout << "convex DEMO-GATE full-field identity: 1728 / 2261 / cut 66, digest="
               << digest.sha256 << '\n';
 }
+void convex_bitwise_collinear() {
+    const auto original = octagon();
+    Ring subdivided;
+    for (std::size_t i = 0; i < original.size(); ++i) {
+        const auto a = original[i], b = original[(i + 1) % original.size()];
+        subdivided.push_back(a);
+        subdivided.push_back({a[0] + .375 * (b[0] - a[0]), a[1] + .375 * (b[1] - a[1])});
+    }
+    // Legacy accepts these subdivisions; cleanup would discard their planes.
+    // Compare every output field against legacy using the original vertices.
+    const auto m = background();
+    compare_paths(m, footprint(subdivided));
+    std::reverse(subdivided.begin(), subdivided.end());
+    std::rotate(subdivided.begin(), subdivided.begin() + 3, subdivided.end());
+    subdivided.push_back(subdivided.front());
+    compare_paths(m, footprint(subdivided));
+}
 void empty_nullopt() {
     const auto m = background();
     const auto out = compare_paths(m, footprint({}));
@@ -494,6 +511,7 @@ int main(int argc, char** argv) {
         };
         run("bitwise_oracle", bitwise_oracle);
         run("convex_bitwise_octagon", convex_bitwise_octagon);
+        run("convex_bitwise_collinear", convex_bitwise_collinear);
         run("convex_bitwise_demo_gate", convex_bitwise_demo_gate);
         run("empty_nullopt", empty_nullopt);
         run("duplicate_cleanup_convex", duplicate_cleanup_convex);
