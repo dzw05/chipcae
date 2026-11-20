@@ -26,6 +26,12 @@ if(CHIPCAE_ENABLE_MFEM AND MFEM_USE_PETSC)
             target_link_libraries(${_target} PRIVATE chipcae::fvm)
             chipcae_set_warnings(${_target})
         endforeach()
+        # Manual pressure scan: buildable, but deliberately outside CTest/CI.
+        add_executable(chipcae_fvm_thermal_stress tests/test_fvm_thermal_stress.cpp)
+        target_include_directories(chipcae_fvm_thermal_stress
+            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        target_link_libraries(chipcae_fvm_thermal_stress PRIVATE chipcae::fvm)
+        chipcae_set_warnings(chipcae_fvm_thermal_stress)
         add_test(NAME solve_fvm_thermal COMMAND chipcae_test_fvm_thermal)
         add_test(NAME solve_fvm_thermal_cut COMMAND chipcae_test_fvm_thermal_cut)
         set_tests_properties(solve_fvm_thermal solve_fvm_thermal_cut PROPERTIES
