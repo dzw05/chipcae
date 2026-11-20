@@ -18,10 +18,11 @@ def main():
     if not importer or not solver:
         print('SKIP: importer/solver executable environment unavailable')
         return 77
+    import numpy as np
     try:
-        import numpy as np
         import h5py
     except ImportError:
+        print('SKIP: h5py missing (pending infra-ci-h5py)', file=sys.stderr)
         return 77
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)

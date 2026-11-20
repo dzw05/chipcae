@@ -212,11 +212,11 @@ def main():
     if not importer or not previewer or not solver:
         print('SKIP: importer/preview/solver executable environment unavailable')
         return 77
+    import numpy as np
     try:
-        import numpy as np
         import h5py
-    except ImportError as exc:
-        print(f'SKIP: numpy/h5py unavailable: {exc}')
+    except ImportError:
+        print('SKIP: h5py missing (pending infra-ci-h5py)', file=sys.stderr)
         return 77
 
     started = time.monotonic()
@@ -430,11 +430,11 @@ class AcceptanceRecords(unittest.TestCase):
             self.assertIn('acceptance check incomplete: parallel', result['notes'])
 
     def test_missing_launcher_fails_main_and_result_record(self):
+        import numpy  # noqa: F401
         try:
-            import numpy  # noqa: F401
             import h5py  # noqa: F401
         except ImportError:
-            self.skipTest('main requires numpy/h5py')
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
         output = StringIO()
         env = dict(CHIPCAE_IMPORT_EXE='unused-importer', CHIPCAE_PREVIEW_EXE='unused-previewer',
                    CHIPCAE_SOLVE_EXE='unused-solver')
@@ -468,11 +468,11 @@ class AcceptanceRecords(unittest.TestCase):
                     self.assertEqual(passed['verdict'], 'pass')
 
     def test_main_raises_accumulated_failures_after_writing_results(self):
+        import numpy  # noqa: F401
         try:
-            import numpy  # noqa: F401
             import h5py  # noqa: F401
         except ImportError:
-            self.skipTest('main requires numpy/h5py')
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
         output = StringIO()
         with tempfile.TemporaryDirectory() as directory:
             absent = str(Path(directory) / 'absent-executable')
@@ -486,11 +486,11 @@ class AcceptanceRecords(unittest.TestCase):
         self.assertEqual(record['qoi'], {})
 
     def test_retired_fixture_gate_does_not_skip_configured_backends(self):
+        import numpy  # noqa: F401
         try:
-            import numpy  # noqa: F401
             import h5py  # noqa: F401
         except ImportError:
-            self.skipTest('main requires numpy/h5py')
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
         output = StringIO()
         with tempfile.TemporaryDirectory() as directory:
             absent = str(Path(directory) / 'absent-executable')
@@ -505,7 +505,10 @@ class AcceptanceRecords(unittest.TestCase):
 
     def test_numerical_check_completes_only_after_all_inspection_assertions(self):
         import numpy as np
-        import h5py
+        try:
+            import h5py
+        except ImportError:
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
         import trace_map_ref as ref
         stack = synthetic_stack([.001])
         rings = {'In1.Cu': ref.PolyLayer(ref.rational(1),
@@ -542,7 +545,11 @@ class AcceptanceRecords(unittest.TestCase):
                                  failure is None)
 
     def test_diagnostics_and_c11_failures_keep_readback_and_aligned_rank_comparison(self):
-        import h5py
+        import numpy  # noqa: F401
+        try:
+            import h5py
+        except ImportError:
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
         import struct
         import trace_map_ref as ref
 
@@ -761,6 +768,11 @@ class TraceMapReferenceTests(unittest.TestCase):
                     self.assertGreater(relative,1e-9)
 
     def test_partition_permutations_align_cells_and_vertices(self):
+        import numpy  # noqa: F401
+        try:
+            import h5py
+        except ImportError:
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
         import trace_map_ref as ref
         stack = synthetic_stack([.001])
         with tempfile.TemporaryDirectory() as directory:
@@ -769,7 +781,6 @@ class TraceMapReferenceTests(unittest.TestCase):
             for order in ((0, 1), (1, 0)):
                 path = root / f'{order[0]}.vtkhdf'
                 write_synthetic_hex(path, stack, order=order)
-                import h5py
                 with h5py.File(path) as file:
                     meshes.append(ref.read_hex_mesh(file['VTKHDF/hex'], stack))
             self.assertEqual(meshes[0]['bounds'], meshes[1]['bounds'])
@@ -783,7 +794,11 @@ class TraceMapReferenceTests(unittest.TestCase):
                     ref.compare_aligned(meshes[0], mutated, PARALLEL_RTOL)
 
     def test_invalid_topology_identity_and_missing_fields_fail(self):
-        import h5py
+        import numpy  # noqa: F401
+        try:
+            import h5py
+        except ImportError:
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
         import trace_map_ref as ref
         stack = synthetic_stack([.001])
         for defect in ('duplicate_gid', 'missing_field', 'layer_id', 'connectivity',
@@ -813,7 +828,11 @@ class TraceMapReferenceTests(unittest.TestCase):
                         ref.read_hex_mesh(group, stack)
 
     def test_optional_elem_gid_preserves_partition_alignment(self):
-        import h5py
+        import numpy  # noqa: F401
+        try:
+            import h5py
+        except ImportError:
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
         import trace_map_ref as ref
         stack = synthetic_stack([.001])
         with tempfile.TemporaryDirectory() as directory:
@@ -842,8 +861,11 @@ class TraceMapReferenceTests(unittest.TestCase):
                         ref.compare_aligned(expected, actual, PARALLEL_RTOL)
 
     def test_missing_elem_gid_keeps_coverage_and_membership_checks(self):
-        import h5py
         import numpy as np
+        try:
+            import h5py
+        except ImportError:
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
         import trace_map_ref as ref
         stack = synthetic_stack([.001])
         for defect in ('duplicate_cell', 'missing_cell', 'layer_id'):
@@ -874,7 +896,11 @@ class TraceMapReferenceTests(unittest.TestCase):
                         ref.read_hex_mesh(group, stack)
 
     def test_distinct_hex_corners_with_crossed_connectivity_are_rejected(self):
-        import h5py
+        import numpy  # noqa: F401
+        try:
+            import h5py
+        except ImportError:
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
         import trace_map_ref as ref
         stack = synthetic_stack([.001])
         with tempfile.TemporaryDirectory() as directory:
@@ -899,7 +925,11 @@ class TraceMapReferenceTests(unittest.TestCase):
                 ref.tensor_mesh(stack,2,1)
 
     def test_cell_fraction_conductivity_and_temperature_mutations_fail(self):
-        import h5py
+        import numpy  # noqa: F401
+        try:
+            import h5py
+        except ImportError:
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
         import trace_map_ref as ref
         stack = synthetic_stack([.001])
         # Half of the first xy column is copper, second is empty.
