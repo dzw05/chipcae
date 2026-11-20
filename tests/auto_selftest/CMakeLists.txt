@@ -9,6 +9,7 @@ file(WRITE "${_highmem_check}" [=[
 import argparse
 import json
 from pathlib import Path
+import re
 import subprocess
 import unittest
 
@@ -19,7 +20,19 @@ parser.add_argument("--backend", choices=("0", "1"), required=True)
 parser.add_argument("--case", required=True)
 parser.add_argument("--baseline", type=Path)
 parser.add_argument("--selection", type=Path)
+parser.add_argument("--measurements", type=Path)
+parser.add_argument("--pr-body", type=Path)
 args = parser.parse_args()
+# chipcae-solve is an unconditional top-level target. Demo/cut-bimetal use
+# these backend flags without GMG's additional MFEM_USE_PETSC condition.
+cache = (Path(args.build) / "CMakeCache.txt").read_text()
+backend_flags = dict(re.findall(r"^CHIPCAE_ENABLE_(MFEM|MPI|HDF5):BOOL=(.*)$", cache, re.M))
+solve_backend = all(
+    backend_flags.get(dependency, "OFF").upper()
+    not in {"", "0", "OFF", "NO", "FALSE", "N", "IGNORE", "NOTFOUND"}
+    and not backend_flags.get(dependency, "OFF").upper().endswith("-NOTFOUND")
+    for dependency in ("MFEM", "MPI", "HDF5")
+)
 
 
 def inventory(*filters):
@@ -46,14 +59,14 @@ class HighmemAcceptance(unittest.TestCase):
         }
 
     def test_selection(self):
-        # The RSS measurements decide the final list. Do not turn unmeasured
-        # candidates into requirements, or silently accept an empty full build.
+        # Successful pinned RSS measurements provide independent minimum
+        # membership requirements; an arbitrary nonempty subset is insufficient.
         if args.backend == "1":
-            self.assertTrue(
-                self.highmem,
-                "backend-enabled inventory has no highmem tests; measured "
-                "high-memory cases need the highmem label and chipcae_highmem lock",
-            )
+            self.assertIn("solve_column_gmg_fcbga", self.highmem,
+                          "pinned Release peak 1,602,996 KiB exceeds 1.5 GiB")
+        if solve_backend:
+            self.assertIn("cutbim_cut_bimetal", self.highmem,
+                          "pinned Release peak 1,882,428 KiB exceeds 1.5 GiB")
         listed = set(inventory("-L", "^highmem$"))
         self.assertEqual(listed, self.highmem)
 
@@ -80,10 +93,16 @@ class HighmemAcceptance(unittest.TestCase):
             "solve_column_gmg_fcbga_scaling": (900, {"gmg", "numerical"}),
             "demogate_solve": (1800, {"cut", "numerical"}),
             "f1130_uncut_cli_e2e": (1200, {"integration", "numerical", "vv"}),
+            "cutbim_cut_bimetal": (2400, {"integration", "numerical", "vv"}),
         }
         for name, (timeout, labels) in expected.items():
             with self.subTest(name=name):
-                present = args.backend == "1" or name == "f1130_uncut_cli_e2e"
+                if name.startswith("solve_column_gmg"):
+                    present = args.backend == "1"
+                elif name == "demogate_solve":
+                    present = solve_backend
+                else:
+                    present = True
                 self.assertEqual(name in self.tests, present)
                 if not present:
                     continue
@@ -112,10 +131,13 @@ class HighmemAcceptance(unittest.TestCase):
             for test in json.loads(args.baseline.read_text())["tests"]
         }
         selection = set(args.selection.read_text().splitlines())
-        self.assertTrue(selection, "the measured selection must not be empty")
+        if args.backend == "1" or solve_backend:
+            self.assertTrue(selection, "the measured selection must not be empty")
         self.assertEqual(set(self.tests), set(baseline))
         self.assertEqual(self.highmem, selection)
         self.assertEqual(set(inventory("-L", "^highmem$")), selection)
+        self.assertEqual({name for name, props in self.props.items()
+                          if "chipcae_highmem" in props.get("RESOURCE_LOCK", [])}, selection)
         for name, old in baseline.items():
             with self.subTest(name=name):
                 current = self.tests[name]
@@ -129,6 +151,56 @@ class HighmemAcceptance(unittest.TestCase):
                         set(expected.get("RESOURCE_LOCK", [])) | {"chipcae_highmem"}
                     )
                 self.assertEqual(self.props[name], expected)
+
+    def test_measured_evidence(self):
+        # Read the raw profiling artifacts, not a hand-maintained allowlist.
+        # Failed/killed/skipped runs and current-revision peaks cannot justify
+        # selecting a test in place of a successful pinned Release measurement.
+        self.assertIsNotNone(args.measurements, "provide --measurements raw-evidence-root")
+        self.assertIsNotNone(args.pr_body, "provide --pr-body pr-body.md")
+        self.assertTrue(self.highmem, "full measured acceptance needs a nonempty selection")
+        peaks = {}
+        for path in sorted(args.measurements.rglob("result.json")):
+            result = json.loads(path.read_text())
+            name = result.get("name")
+            if (result.get("revision") != "eaed3e4" or result.get("status") != 0
+                    or result.get("outcomes") != {name: "passed"}
+                    or result.get("disabled", False)):
+                continue
+            raw = (path.parent / "time.txt").read_text()
+            peak = re.search(r"Maximum resident set size \(kbytes\):\s*(\d+)", raw)
+            self.assertIsNotNone(peak, "missing GNU time RSS: " + str(path))
+            self.assertRegex(raw, r"Exit status:\s*0\s*$")
+            kib = int(peak[1])
+            self.assertEqual(kib, result["time_peak_kib"], str(path))
+            if kib >= 1572864:
+                peaks.setdefault(name, set()).add(kib)
+        with self.subTest(evidence="pinned coverage"):
+            self.assertFalse(self.highmem - peaks.keys(),
+                             "locked tests lack successful eaed3e4 RSS >= 1.5 GiB: "
+                             + str(sorted(self.highmem - peaks.keys())))
+        with self.subTest(evidence="measured selection"):
+            self.assertEqual(self.highmem, set(peaks),
+                             "every successfully measured high-memory test must be locked")
+        rows = {}
+        peak_column = None
+        for line in args.pr_body.read_text().splitlines():
+            if not line.startswith("|"):
+                peak_column = None
+                continue
+            columns = [column.strip() for column in line.strip().strip("|").split("|")]
+            if columns and columns[0] == "Locked test":
+                peak_column = columns.index("Peak KiB")
+                continue
+            if peak_column is not None and re.fullmatch(r"`[^`]+`", columns[0]):
+                name = columns[0].strip("`")
+                self.assertNotIn(name, rows, "duplicate PR table row")
+                rows[name] = int(columns[peak_column].replace(",", ""))
+        self.assertEqual(set(rows), self.highmem, "PR table must equal the CTest selection")
+        for name, kib in rows.items():
+            with self.subTest(name=name):
+                self.assertIn(kib, peaks.get(name, set()),
+                              "PR RSS must match successful pinned raw output: " + name)
 
 
 unittest.main(argv=[__file__, "HighmemAcceptance.test_" + args.case], verbosity=2)
@@ -149,7 +221,8 @@ endforeach()
 # Run manually, never as a registered CTest (which would recursively run itself):
 # python run_highmem_acceptance.py --build <build> --evidence <outside-source-dir>
 #     --phase baseline
-# Repeat with --phase verify --selection <measured-PR-table-test-names.txt> after
+# Repeat with --phase verify --selection <measured-PR-table-test-names.txt>
+#     --measurements <raw-profiling-root> --pr-body <pr-body.md> after
 # implementing the properties. Raw inventories, JUnit, CTest and kernel logs stay
 # in the evidence directory. No solver instrumentation or fixtures are added.
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/run_highmem_acceptance.py" [=[
@@ -168,6 +241,8 @@ parser.add_argument("--build", required=True, type=Path)
 parser.add_argument("--evidence", required=True, type=Path)
 parser.add_argument("--phase", required=True, choices=("baseline", "verify"))
 parser.add_argument("--selection", type=Path)
+parser.add_argument("--measurements", type=Path)
+parser.add_argument("--pr-body", type=Path)
 args = parser.parse_args()
 args.build = args.build.resolve()
 args.evidence = args.evidence.resolve()
@@ -285,6 +360,8 @@ if args.phase == "baseline":
     run("baseline-j4", 4, set(), baseline=True)
 else:
     require(args.selection is not None, "provide the measured selection from the PR table")
+    require(args.measurements is not None and args.pr_body is not None,
+            "provide --measurements and --pr-body to verify pinned RSS and table membership")
     require(cache == (args.evidence / "baseline-cache.txt").read_text(),
             "CMake cache changed; compiler/dependency/options comparison is unverified")
     selected = set(args.selection.read_text().splitlines())
@@ -293,6 +370,12 @@ else:
          "--build", str(args.build), "--backend", "1", "--case", "inventory_preserved",
          "--baseline", str(args.evidence / "baseline-inventory.json"),
          "--selection", str(args.selection)], check=True,
+    )
+    subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("check_highmem.py")),
+         "--build", str(args.build), "--backend", "1",
+         "--case", "measured_evidence", "--measurements", str(args.measurements),
+         "--pr-body", str(args.pr_body)], check=True,
     )
     (args.evidence / "after-inventory.json").write_text(inventory)
     baseline = json.loads((args.evidence / "baseline-j4" / "report.json").read_text())
