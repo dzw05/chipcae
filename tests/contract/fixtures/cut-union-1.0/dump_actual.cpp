@@ -1,8 +1,10 @@
 #include "chipcae/mesh/cut/cut_stats.hpp"
+#include "chipcae/mesh/cut/detail/plane_cut_union.hpp"
 #include "support.hpp"
 
 #include <bit>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <functional>
 #include <iomanip>
@@ -12,9 +14,6 @@
 #include <sstream>
 #include <string_view>
 #include <type_traits>
-
-#include "chipcae/mesh/cut/detail/plane_cut_union.hpp"
-#include <cstdio>
 namespace {
 using namespace chipcae;
 using namespace chipcae::mesh;
@@ -377,7 +376,10 @@ std::pair<P3, P3> bounds(const HexMeshArrays& m, std::size_t e) {
 }
 std::uint64_t fnv(const Bits& b) {
     std::uint64_t h = 1469598103934665603ULL;
-    for (auto w : b.words) { h ^= w; h *= 1099511628211ULL; }
+    for (auto w : b.words) {
+        h ^= w;
+        h *= 1099511628211ULL;
+    }
     return h;
 }
 void emit_planes(const std::vector<UnionPiece>& ps) {
@@ -386,8 +388,13 @@ void emit_planes(const std::vector<UnionPiece>& ps) {
         std::printf("%s[", k ? "," : "");
         for (std::size_t i = 0; i < ps[k].planes.size(); ++i) {
             const auto& p = ps[k].planes[i];
-            std::printf("%s{\"n\":[%.17g,%.17g,%.17g],\"d\":%.17g,\"internal\":%s}", i ? "," : "",
-                        p.n[0], p.n[1], p.n[2], p.d, ps[k].internal[i] ? "true" : "false");
+            std::printf("%s{\"n\":[%.17g,%.17g,%.17g],\"d\":%.17g,\"internal\":%s}",
+                        i ? "," : "",
+                        p.n[0],
+                        p.n[1],
+                        p.n[2],
+                        p.d,
+                        ps[k].internal[i] ? "true" : "false");
         }
         std::printf("]");
     }
@@ -397,31 +404,50 @@ void emit_ok(const char* name, const Output& out, const std::vector<UnionPiece>&
     const auto& c = out.cut;
     auto st = cut_stats(out.mesh, c);
     Real eb = 0;
-    for (std::size_t q = 0; q < c.sq_w.size(); ++q) if (c.sq_side[q] == -1) eb += c.sq_w[q];
+    for (std::size_t q = 0; q < c.sq_w.size(); ++q)
+        if (c.sq_side[q] == -1)
+            eb += c.sq_w[q];
     std::size_t faces = c.polyhedra ? c.polyhedra->face_off.size() - 1 : 0;
     std::size_t polys = c.polyhedra ? c.polyhedra->poly_off.size() - 1 : 0;
     std::printf("%s\"%s\":{\"ok\":true,", first ? "" : ",", name);
     emit_planes(ps);
     std::printf("\"solid_volume\":%.17g,\"embedded_area\":%.17g,\"n_cells\":%zu,\"n_cut\":%zu,"
                 "\"n_poly\":%zu,\"n_faces\":%zu,\"n_small\":%zu,\"cells\":[",
-                st ? st.value().solid_volume : -1.0, eb, out.mesh.attribute.size(), c.cut_elem.size(),
-                polys, faces, c.small_subs.size());
+                st ? st.value().solid_volume : -1.0,
+                eb,
+                out.mesh.attribute.size(),
+                c.cut_elem.size(),
+                polys,
+                faces,
+                c.small_subs.size());
     for (std::size_t row = 0; row < c.cut_elem.size(); ++row) {
         auto [lo, size] = bounds(out.mesh, c.cut_elem[row]);
         (void)size;
-        std::printf("%s[%ld,%ld,%ld,%.17g]", row ? "," : "", std::lround(lo[0] / .0025),
-                    std::lround(lo[1] / .0025), std::lround(lo[2] / .0005),
+        std::printf("%s[%ld,%ld,%ld,%.17g]",
+                    row ? "," : "",
+                    std::lround(lo[0] / .0025),
+                    std::lround(lo[1] / .0025),
+                    std::lround(lo[2] / .0005),
                     c.sub_volfrac.at(c.sub_off[row]));
     }
     std::printf("]}");
 }
-void emit_err(const char* name, HexMeshArrays m, const std::vector<UnionPiece>& ps, const CutGeometry& ex,
-              CutOptions o, const std::vector<Real>& ph) {
-    Bits b0; b0.add(m);
+void emit_err(const char* name,
+              HexMeshArrays m,
+              const std::vector<UnionPiece>& ps,
+              const CutGeometry& ex,
+              CutOptions o,
+              const std::vector<Real>& ph) {
+    Bits b0;
+    b0.add(m);
     auto r = union_kernel::build_cut_layer_union(m, ps, ex, o, ph);
-    Bits b1; b1.add(m);
-    std::printf(",\"%s\":{\"ok\":%s,\"path\":\"%s\",\"reason\":\"%s\",\"mesh_unchanged\":%s}", name,
-                r ? "true" : "false", r ? "" : r.error().path.c_str(), r ? "" : r.error().reason.c_str(),
+    Bits b1;
+    b1.add(m);
+    std::printf(",\"%s\":{\"ok\":%s,\"path\":\"%s\",\"reason\":\"%s\",\"mesh_unchanged\":%s}",
+                name,
+                r ? "true" : "false",
+                r ? "" : r.error().path.c_str(),
+                r ? "" : r.error().reason.c_str(),
                 b0.words == b1.words ? "true" : "false");
 }
 } // namespace
@@ -434,41 +460,95 @@ int main() {
         emit_ok("R", build(R), pieces(R), false);
         auto L1 = l_shape(.012501, .012501);
         for (Real th : {1e-3, 5e-4}) {
-            auto o = options(); o.small_sub_vf = th;
+            auto o = options();
+            o.small_sub_vf = th;
             emit_ok(th > 7e-4 ? "L1_th1e-3" : "L1_th5e-4", build(L1, o), pieces(L1), false);
         }
-        {   // convex single piece vs legacy build_cut_layer (bitwise)
-            const Ring ring{{.003, 0}, {.017, 0}, {.02, .003}, {.02, .017}, {.017, .02}, {.003, .02}, {0, .017}, {0, .003}};
+        { // convex single piece vs legacy build_cut_layer (bitwise)
+            const Ring ring{{.003, 0},
+                            {.017, 0},
+                            {.02, .003},
+                            {.02, .017},
+                            {.017, .02},
+                            {.003, .02},
+                            {0, .017},
+                            {0, .003}};
             const std::vector<UnionPiece> ps{piece(ring, ring)};
             auto a = sp5::grid(stack(), 8), b = a;
             CutGeometry expanded;
             for (const auto& plane : ps[0].planes)
-                for (const auto& [name, body] : a.attr_table.bodies) { (void)name; auto p = plane; p.body = body; expanded.planes.push_back(p); }
+                for (const auto& [name, body] : a.attr_table.bodies) {
+                    (void)name;
+                    auto p = plane;
+                    p.body = body;
+                    expanded.planes.push_back(p);
+                }
             auto o = options();
             auto e = build_cut_layer(b, expanded, o);
             std::vector<Real> ignored(a.node_gid.size(), -0.);
             auto u = union_kernel::build_cut_layer_union(a, ps, {}, o, ignored);
-            Bits x, y, mx, my; x.add(u.value()); y.add(e.value()); mx.add(a); my.add(b);
+            Bits x, y, mx, my;
+            x.add(u.value());
+            y.add(e.value());
+            mx.add(a);
+            my.add(b);
             Output out{a, u.value()};
             emit_ok("O8_convex", out, ps, false);
-            std::printf(",\"O8_bitwise\":{\"cut_equal\":%s,\"mesh_equal\":%s,\"cut_fnv\":\"%016llx\",\"legacy_fnv\":\"%016llx\",\"n_words\":%zu}",
-                        x.words == y.words ? "true" : "false", mx.words == my.words ? "true" : "false",
-                        (unsigned long long)fnv(x), (unsigned long long)fnv(y), x.words.size());
+            std::printf(",\"O8_bitwise\":{\"cut_equal\":%s,\"mesh_equal\":%s,\"cut_fnv\":\"%"
+                        "016llx\",\"legacy_fnv\":\"%016llx\",\"n_words\":%zu}",
+                        x.words == y.words ? "true" : "false",
+                        mx.words == my.words ? "true" : "false",
+                        (unsigned long long)fnv(x),
+                        (unsigned long long)fnv(y),
+                        x.words.size());
         }
         auto m = sp5::grid(stack(), 8);
         auto ph = phi(m, L.outline);
         emit_err("E_empty", m, {}, {}, options(), ph);
-        { auto ps = pieces(L); ps[1].internal.pop_back(); emit_err("E_internal_size", m, ps, {}, options(), ph); }
-        { auto ps = pieces(L); ps[0].planes[0].body = m.attr_table.entries[0].body; emit_err("E_body", m, ps, {}, options(), ph); }
-        { auto p2 = ph; p2.pop_back(); emit_err("E_phi_short", m, pieces(L), {}, options(), p2); }
-        { auto p2 = ph; p2.push_back(0); auto ps = pieces(L); ps.resize(1); ps[0].internal.assign(ps[0].planes.size(), false); emit_err("E_phi_long_fast", m, ps, {}, options(), p2); }
-        { auto o = options(); o.quad_degree = 3; emit_err("E_options", m, pieces(L), {}, o, ph); }
-        { auto ps = pieces(L); ps[1].planes[0].n = {0, 0, 0}; emit_err("E_plane", m, ps, {}, options(), ph); }
         {
-            const Ring left{{0, 0}, {.0105, 0}, {.0105, .02}, {0, .02}}, right{{.0115, 0}, {.02, 0}, {.02, .02}, {.0115, .02}};
+            auto ps = pieces(L);
+            ps[1].internal.pop_back();
+            emit_err("E_internal_size", m, ps, {}, options(), ph);
+        }
+        {
+            auto ps = pieces(L);
+            ps[0].planes[0].body = m.attr_table.entries[0].body;
+            emit_err("E_body", m, ps, {}, options(), ph);
+        }
+        {
+            auto p2 = ph;
+            p2.pop_back();
+            emit_err("E_phi_short", m, pieces(L), {}, options(), p2);
+        }
+        {
+            auto p2 = ph;
+            p2.push_back(0);
+            auto ps = pieces(L);
+            ps.resize(1);
+            ps[0].internal.assign(ps[0].planes.size(), false);
+            emit_err("E_phi_long_fast", m, ps, {}, options(), p2);
+        }
+        {
+            auto o = options();
+            o.quad_degree = 3;
+            emit_err("E_options", m, pieces(L), {}, o, ph);
+        }
+        {
+            auto ps = pieces(L);
+            ps[1].planes[0].n = {0, 0, 0};
+            emit_err("E_plane", m, ps, {}, options(), ph);
+        }
+        {
+            const Ring left{{0, 0}, {.0105, 0}, {.0105, .02}, {0, .02}},
+                right{{.0115, 0}, {.02, 0}, {.02, .02}, {.0115, .02}};
             std::vector<Real> op;
-            for (std::size_t v = 0; v < m.node_gid.size(); ++v) { auto p = point(m.vertices, v); op.push_back(std::min(signed_distance({p[0], p[1]}, left), signed_distance({p[0], p[1]}, right))); }
-            emit_err("E_disconnected", m, {piece(left, left), piece(right, right)}, {}, options(), op);
+            for (std::size_t v = 0; v < m.node_gid.size(); ++v) {
+                auto p = point(m.vertices, v);
+                op.push_back(std::min(signed_distance({p[0], p[1]}, left),
+                                      signed_distance({p[0], p[1]}, right)));
+            }
+            emit_err(
+                "E_disconnected", m, {piece(left, left), piece(right, right)}, {}, options(), op);
         }
         std::printf("}\n");
     });
