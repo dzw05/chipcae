@@ -1071,6 +1071,6 @@ def write_synthetic_hex(path, stack, order=(0, 1), patterned=False):
 
 if __name__ == '__main__':
     suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
-    if not unittest.TextTestRunner().run(suite).wasSuccessful():
+    if not unittest.TextTestRunner(stream=sys.stdout).run(suite).wasSuccessful():
         raise SystemExit(1)
     raise SystemExit(main())
