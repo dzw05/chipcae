@@ -662,6 +662,10 @@ int run_assembly(const ImportOptions& options) {
                     } else
                         names.push_back(name);
                 }
+#ifndef CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE
+                if (!names.empty())
+                    return fail("IMPORT_REJECTED", "parts_from_step geometry unavailable");
+#endif
             } else
                 for (const auto& kv : f["bodies"].object_range())
                     names.emplace_back(kv.key());
