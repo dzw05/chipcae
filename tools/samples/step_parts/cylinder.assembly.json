@@ -1,0 +1,24 @@
+{
+  "schema": "chipcae.assembly/0.1",
+  "board": {
+    "path": "board.xml",
+    "format": "ipc2581",
+    "material_map": "map.json"
+  },
+  "materials": "materials.json",
+  "parts": [
+    {
+      "id": "cylinder",
+      "step": "cylinder.step",
+      "material": "underfill",
+      "placement": {
+        "frame": "step",
+        "origin": [
+          0,
+          0,
+          0.0005
+        ]
+      }
+    }
+  ]
+}

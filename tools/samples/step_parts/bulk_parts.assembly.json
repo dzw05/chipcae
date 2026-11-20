@@ -1,0 +1,56 @@
+{
+  "schema": "chipcae.assembly/0.1",
+  "board": {
+    "path": "board.xml",
+    "format": "ipc2581",
+    "material_map": "map.json"
+  },
+  "materials": "materials.json",
+  "parts": [
+    {
+      "id": "interposer_approx",
+      "step": "interposer_approx.step",
+      "material": "underfill",
+      "placement": {
+        "frame": "step",
+        "origin": [
+          0,
+          -0.044,
+          2.0002e-05
+        ]
+      },
+      "material_approx": true
+    }
+  ],
+  "parts_from_step": {
+    "step": "PACKAGE_BULK_PARTS.step",
+    "frame": "step",
+    "origin": [
+      0,
+      -0.044,
+      2.0002e-05
+    ],
+    "bodies": {
+      "PACKAGE_BULK_PARTS/HOST_SILICON_BULK": {
+        "id": "host_si",
+        "material": "silicon",
+        "material_approx": true
+      },
+      "PACKAGE_BULK_PARTS/IHP_adhesive": {
+        "id": "ihp_adh",
+        "material": "underfill",
+        "material_approx": true
+      },
+      "PACKAGE_BULK_PARTS/TIM": {
+        "id": "tim",
+        "material": "underfill",
+        "material_approx": true
+      },
+      "PACKAGE_BULK_PARTS/lid": {
+        "id": "lid",
+        "material": "silicon",
+        "material_approx": true
+      }
+    }
+  }
+}
