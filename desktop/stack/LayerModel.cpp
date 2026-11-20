@@ -10,8 +10,26 @@ LayerModel::LayerModel(CaseDocument* document, QObject* parent)
         endResetModel();
     });
 }
+Json LayerModel::displayStack() const {
+    return resultsStack_.empty() ? document_->stackJson() : resultsStack_;
+}
+void LayerModel::setResultsStack(const Json& stack) {
+    beginResetModel();
+    resultsStack_ = stack.is_object() && stack.contains("layers") &&
+                            stack.at("layers").is_array() && !stack.at("layers").empty()
+                        ? stack
+                        : Json::object();
+    endResetModel();
+}
+void LayerModel::setReadOnly(bool readOnly) {
+    if (readOnly_ == readOnly)
+        return;
+    beginResetModel();
+    readOnly_ = readOnly;
+    endResetModel();
+}
 int LayerModel::rowCount(const QModelIndex& parent) const {
-    auto stack = document_->stackJson();
+    auto stack = displayStack();
     return parent.isValid() || !stack.contains("layers") ? 0 : int(stack.at("layers").size());
 }
 int LayerModel::columnCount(const QModelIndex& parent) const {
@@ -29,7 +47,7 @@ QVariant LayerModel::data(const QModelIndex& index, int role) const {
     if (!index.isValid() || index.row() >= rowCount() ||
         (role != Qt::DisplayRole && role != Qt::EditRole))
         return {};
-    const auto stack = document_->stackJson();
+    const auto stack = displayStack();
     const auto& layer = stack.at("layers").at(index.row());
     switch (index.column()) {
     case Name:
@@ -70,10 +88,11 @@ QVariant LayerModel::headerData(int section, Qt::Orientation orientation, int ro
 }
 Qt::ItemFlags LayerModel::flags(const QModelIndex& index) const {
     auto result = QAbstractTableModel::flags(index);
-    if (!index.isValid() || index.row() >= rowCount() || index.column() >= Geometry)
+    if (readOnly_ || !resultsStack_.empty() || !index.isValid() || index.row() >= rowCount() ||
+        index.column() >= Geometry)
         return result;
     if (index.column() == Fraction) {
-        const auto stack = document_->stackJson();
+        const auto stack = displayStack();
         const auto& layer = stack.at("layers").at(index.row());
         if (!layer.contains("copper") || layer.at("copper").contains("polygons"))
             return result;
