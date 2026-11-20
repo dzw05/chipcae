@@ -6,9 +6,17 @@ struct Plane {
     std::array<Real, 3> n{1, 0, 0};
     Real d = 0;
 };
+// Data-only declaration for the test-first I11 acceptance pass.
+struct PieceUnion {
+    BodyId body = 0;
+    std::vector<std::vector<Plane>> pieces;
+    std::vector<std::vector<bool>> internal;
+    std::vector<std::array<Real, 2>> ring;
+};
 // Repeated body IDs mean intersection of half-spaces: piecewise planar fillets.
 struct CutGeometry {
     std::vector<Plane> planes;
+    std::vector<PieceUnion> unions{};
 };
 struct CutOptions {
     Real snap_phi = 1e-14, small_sub_vf = 1e-8;
