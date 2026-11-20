@@ -24,6 +24,7 @@
 #include "chipcae/mesh/background/tensor_grid.hpp"
 #include "chipcae/mesh/background/vtkhdf_writer.hpp"
 #include "chipcae/mesh/cut/outline_cut.hpp"
+#include "chipcae/mesh/cut/region_cut.hpp"
 #include "mesh_digest.hpp"
 #include "mesh_error_map.hpp"
 #ifdef CHIPCAE_ENABLE_MPI
@@ -219,7 +220,8 @@ int run(int argc, char** argv) {
     event("mesh", 0.3, "Building tensor grid");
     auto mesh = sidecars.empty() ? checked(build_tensor_grid(bounding_stack, options))
                                  : checked(build_tensor_grid(bounding_stack, options, polygons));
-    auto cut = checked(cut::apply_outline_cut(mesh, stack.outline, {}));
+    auto region_planes = checked(cut::region_cut_planes(stack, mesh));
+    auto cut = checked(cut::apply_outline_cut(mesh, stack.outline, {}, region_planes));
     event("write", 0.8, "Writing VTKHDF");
     auto files =
         checked_io(write_vtkhdf(stem, mesh, cut ? &*cut : nullptr, chipcae::Communicator::world()));

@@ -26,6 +26,8 @@ their output provides no evidence of numerical accuracy. The E2Es use a 4 by 4,
 level-zero mesh, two serial runs and one two-rank run when MPI is available.
 Assembly generates a lid and ring, imports the board to discover its attachment
 layer, and checks box regions and material names from the exported ID table.
+The importer writes `import_report.json` beside `stack.json`; `--report` selects
+the separate `defects.json` output. A1 reads `import_report.json`.
 
 The CLI accepts only these options:
 
@@ -122,7 +124,7 @@ An unavailable E2E prints `SKIP: <kind> upstream not merged: <reason>
 (NEEDS-ATTENTION)` and returns 77 before generating inputs. A missing actual
 welded_interfaces count fails A1; it is never synthesized or converted to 77.
 
-`result.json` uses the frozen `chipcae.vv_result/0.2` contract and the existing
+`result.json` uses the `chipcae.vv_result/0.2` schema and the existing
 data-class checker. Dependency interruptions use its `skip` verdict; the
 `needs_attention` verdict, item-specific reasons and exit code 77 remain in
 `run_record.json`. The result notes also retain those reasons. The v0.2

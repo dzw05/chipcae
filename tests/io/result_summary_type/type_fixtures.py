@@ -9,7 +9,7 @@ import sys
 ROOT = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(ROOT / 'tests/unit/result_summary'))
 # The unchanged fixture exits exactly 77 if h5py or numpy is unavailable.
-from fixtures import fixture, fixed_keys, h5py, np
+from fixtures import baseline_for_numpy, fixture, fixed_keys, h5py, np
 
 sys.path.insert(0, str(ROOT))
 from tools.vv import result_summary as rs
@@ -69,6 +69,7 @@ BASELINE_TEXT = '''{
   }
 }
 '''
+BASELINE_TEXT = baseline_for_numpy(BASELINE_TEXT)
 BASELINE = BASELINE_TEXT.encode('utf-8')
 
 

@@ -3,6 +3,7 @@
 #include "chipcae/jobmgr/detail/spawner.hpp"
 #include "chipcae/jobs/v1/jobs.pb.h"
 
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <memory>
@@ -31,6 +32,7 @@ public:
     jobs::ListOutputsResponse ListOutputs(const jobs::ListOutputsRequest& request) const;
     // Consume exits once; const reads observe only already persisted state.
     std::size_t poll();
+    jobs::Job wait(const std::string& run_id, std::chrono::milliseconds timeout);
 
 private:
     class Impl;
