@@ -18,6 +18,8 @@ The unit test needs numpy, but no compiled solver, MPI or CAD backend. HDF5
 fixtures and reader checks import h5py when used and skip with `h5py not installed`
 if it is unavailable. Parameter, stage-error, exit-status, envelope and data-gate
 checks still run, including cell_budget transmission before preview rejection.
+The unit CTest entry has the brief's `integration;vv` labels; it is independent
+of the backend and is intentionally excluded from the `numerical` label.
 It generates valid temporary manifest/VTKHDF/CAELOG1 fixtures. Temporary external
 programs exercise the driver's actual subprocess, resource and record handling;
 their output provides no evidence of numerical accuracy. The E2Es use a 4 by 4,
@@ -67,7 +69,12 @@ F-1130 thermal loads, Rigid321, Jacobi with rtol=1e-12, T_ref=298.15 and a
 | W3 | Separate synthetic warpage run with exactly zero fixed-bottom U |
 | W4 | Separate synthetic warpage/assembly run; valid FVM thermal/solid checks, uniform T_ref fields/summary and exactly zero U/warpage |
 | W5 | Synthetic noncut warpage FEM comparison, relative difference <= 0.05 |
-| A1/A2/A3 | Assembly bodies/weld count/defects, material membership and check policy |
+| A1/A2/A3 | Assembly bodies/weld count/defects, material membership and applicable check results |
+
+A3 aggregates the finalized common, assembly and applicable mechanical checks.
+An evaluated failure, including C9 or C10, makes A3 false. Required checks
+interrupted by dependencies leave A3 null; explicitly allowed nulls such as C8
+without MPI do not prevent A3 from passing. W3 and W5 remain excluded.
 
 Thresholds are unchanged: 1e-8 K temperature tolerance, 1e-8 parallel relative
 error, 1e-9 energy imbalance, exact repeat hashes and exact W3/W4 zeros.
@@ -100,6 +107,8 @@ Commands carry per-process monotonic wall time and wait4 RSS. A watchdog kills
 the process group on timeout. A real solve timeout/signal retries once with
 halved nx/ny in separate inputs/output directories; the invocation still fails.
 Synthetic inputs never receive that retry.
+Host memory comes from MemTotal on Linux and `sysctl -n hw.memsize` on macOS,
+converted to KiB. An unavailable or invalid probe remains explicit missing data.
 
 Readiness requires the upstream fvm_pipeline.cpp for T, elastic.hpp and removal
 of the thermal-only marker for W, and T plus geometry=ON for A. Assembly checks

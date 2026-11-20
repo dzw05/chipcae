@@ -863,13 +863,28 @@ def _check_c9(record: dict) -> bool | None:
     return not record.get("missing") and not _missing(record, pending_checks=("C9",))
 
 
+def _check_a3(record, *, pending_checks=()):
+    checks = record["checks"]
+    expected = set(_check_names("assembly", bool({"W1", "W2", "W4"} & checks.keys())))
+    if set(checks) != expected or any(value is False for key, value in checks.items() if key != "A3"):
+        return False
+    missing = set(_missing(record, pending_checks=("A3", *pending_checks)))
+    return None if any("checks." + key in missing for key in expected) else True
+
+
 def _host():
     memory = None
     try:
-        for line in Path("/proc/meminfo").read_text().splitlines():
-            if line.startswith("MemTotal:"):
-                memory = int(line.split()[1])
-    except (OSError, ValueError):
+        if sys.platform == "darwin":
+            memory = int(subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True,
+                                                stderr=subprocess.DEVNULL, timeout=5)) // 1024
+        else:
+            for line in Path("/proc/meminfo").read_text().splitlines():
+                if line.startswith("MemTotal:"):
+                    memory = int(line.split()[1])
+        if memory is not None and memory <= 0:
+            memory = None
+    except (OSError, ValueError, subprocess.SubprocessError):
         pass
     return dict(nproc=os.cpu_count(), mem_total_kib=memory)
 
@@ -1259,8 +1274,6 @@ def _pipeline(record, folder, kind, params, resolved, nps, repeat, source_root, 
                                    bodies=_bodies(_json(inputs / "stack.json")) if (inputs / "stack.json").is_file() else None,
                                    split_layers=report.get("parts", {}).get("split_layers"),
                                    b_tier_defects=[d.get("defect_id") for d in report.get("defects", []) if d.get("tier") == "B"])
-        expected_checks = set(_check_names("assembly", w_ready))
-        record["checks"]["A3"] = set(record["checks"]) == expected_checks and not {"W3", "W5"} & set(record["checks"])
     if imported["exit_code"]:
         _stage_error(record, imported, folder)
         return
@@ -1438,10 +1451,16 @@ def _finalize(record, folder, usage):
             record["checks"]["C10"] = False
     else:
         record["checks"]["C10"] = _check_c10(result_path, record["data_class"])
+    # A3 and C9 depend on each other: seed A3 from the evaluated checks, then
+    # include C9's completeness result in the final assembly aggregate.
+    if record["kind"] == "assembly" and not usage:
+        record["checks"]["A3"] = _check_a3(record, pending_checks=("C9",))
     # C9 depends on the finalized data gate; only its own result is pending.
     record["missing"] = sorted(set(_missing(record, pending_checks=("C9",)) + invalid_numbers))
     if not usage:
         record["checks"]["C9"] = _check_c9(record)
+        if record["kind"] == "assembly":
+            record["checks"]["A3"] = _check_a3(record)
     record["missing"] = sorted(set(_missing(record) + invalid_numbers))
     _set_verdict(record, usage)
     _write_json(result_path, _result(record))
@@ -1449,6 +1468,8 @@ def _finalize(record, folder, usage):
     # check without regenerating result.json as well.
     if record["checks"]["C10"] is not None:
         record["checks"]["C10"] = _check_c10(result_path, record["data_class"])
+        if record["kind"] == "assembly" and not usage:
+            record["checks"]["A3"] = _check_a3(record)
         _set_verdict(record, usage)
         _write_json(result_path, _result(record))
     _write_json(folder / "run_record.json", record)

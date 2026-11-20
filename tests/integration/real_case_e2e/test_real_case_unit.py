@@ -598,7 +598,97 @@ def complete_record():
     }
 
 
+def complete_assembly_record(w_ready=True):
+    record = complete_record()
+    record["kind"] = "assembly"
+    record["assembly"] = dict(welded_interfaces=0, bodies=["lid", "stiffener"],
+                              split_layers=0, b_tier_defects=[])
+    record["checks"].update(A1=True, A2=True, A3=None)
+    if w_ready:
+        record["displacement"] = dict(U_fixed_face_max_abs=None, U_mean=[0., 0., 0.],
+                                      warpage_pv_vertex_recompute=0.)
+        record["notes"].append("Rigid321 displacement diagnostic")
+        record["checks"].update(W1=True, W2=True, W4=True)
+    return record
+
+
 class RecordChecks(ContractTest):
+    def test_darwin_host_memory_keeps_complete_record_passing(self):
+        with patch.object(sys, "platform", "darwin"), \
+                patch.object(Path, "read_text", side_effect=FileNotFoundError), \
+                patch.object(subprocess, "check_output", return_value="8589934592\n"):
+            host = driver._host()
+        self.assertEqual(host["mem_total_kib"], 8388608)
+        record = complete_record()
+        record["host"] = host
+        folder = self.root / "darwin-record"
+        (folder / "inputs").mkdir(parents=True)
+        driver._finalize(record, folder, False)
+        self.assertEqual(record["exit_code"], 0)
+        self.assertIs(record["checks"]["C9"], True)
+        self.assertEqual(record["missing"], [])
+        self.assertEqual(read_json(folder / "run_record.json"), record)
+        self.assertEqual(check_file(folder / "result.json"), [])
+
+    def test_darwin_memory_probe_errors_remain_explicit_missing_data(self):
+        for response in ("invalid", "0", "-1024", OSError("sysctl unavailable"),
+                         subprocess.CalledProcessError(1, ["sysctl"]),
+                         subprocess.TimeoutExpired(["sysctl"], 5)):
+            with self.subTest(response=response):
+                kwargs = {"side_effect": response} if isinstance(response, Exception) else {"return_value": response}
+                with patch.object(sys, "platform", "darwin"), \
+                        patch.object(subprocess, "check_output", **kwargs):
+                    host = driver._host()
+                self.assertIsNone(host["mem_total_kib"])
+                record = complete_record()
+                record["host"] = host
+                self.assertIn("host.mem_total_kib", driver._missing(record))
+                self.assertIs(driver._check_c9(record), False)
+
+    def test_assembly_a3_aggregates_finalized_failures_and_required_nulls(self):
+        failures = ("C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "A1", "A2", "W1", "W2", "W4")
+        variants = [(key, False) for key in failures]
+        variants += [("C6", None), ("W4", None), ("C10", "invalid-commit"), ("C9", "missing-data")]
+        for index, (check, value) in enumerate(variants):
+            with self.subTest(check=check, value=value):
+                record = complete_assembly_record()
+                if check == "C10":
+                    record["commit"] = "invalid"
+                elif check == "C9":
+                    record["energy"]["heat_in"] = None
+                else:
+                    record["checks"][check] = value
+                folder = self.root / f"assembly-aggregate-{index}"
+                (folder / "inputs").mkdir(parents=True)
+                driver._finalize(record, folder, False)
+                self.assertIs(record["checks"]["A3"], False)
+                self.assertEqual(record["exit_code"], 1)
+                self.assertEqual(read_json(folder / "run_record.json"), record)
+                self.assertEqual(read_json(folder / "result.json")["verdict"], "fail")
+                if check == "C10":
+                    self.assertIs(record["checks"]["C10"], False)
+                    self.assertIs(record["checks"]["C9"], True)
+                elif check == "C9" or value is None:
+                    self.assertIs(record["checks"]["C9"], False)
+
+    def test_assembly_a3_allows_explained_nulls_and_retains_dependency_null(self):
+        for dependency in (False, True):
+            with self.subTest(dependency=dependency):
+                record = complete_assembly_record(w_ready=not dependency)
+                record["checks"]["C6"] = None
+                record["notes"].append("C6: custom loads / body-source bounds 待定")
+                if dependency:
+                    record["checks"]["C1"] = None
+                    record["needs_attention"] = [{"item": "W", "reason": "elastic upstream unavailable"}]
+                folder = self.root / f"assembly-allowed-null-{dependency}"
+                (folder / "inputs").mkdir(parents=True)
+                driver._finalize(record, folder, False)
+                self.assertIs(record["checks"]["A3"], None if dependency else True)
+                self.assertEqual(record["exit_code"], 77 if dependency else 0)
+                self.assertIs(record["checks"]["C9"], None if dependency else True)
+                self.assertEqual(read_json(folder / "run_record.json"), record)
+                self.assertEqual(read_json(folder / "result.json")["verdict"], "skip" if dependency else "pass")
+
     def test_failure_precedes_dependency_and_result_keeps_approved_metadata(self):
         for failure, expected_exit, expected_verdict in ((False, 77, "skip"), (True, 1, "fail")):
             with self.subTest(failure=failure):
@@ -961,6 +1051,40 @@ class DriverControlFlow(ContractTest):
         params = dict(self.params, input=str(inputs / "assembly.json"), material_map=None)
         return params
 
+    def test_copied_assembly_resolves_all_dependencies_without_source_tree(self):
+        params = self.assembly_params()
+        document_path = Path(params["input"])
+        original = read_json(document_path)
+        document = copy.deepcopy(original)
+        nested = document_path.parent / "nested"
+        nested.mkdir()
+        document["board"]["path"] = "../board.xml"
+        document["board"]["material_map"] = "../map.json"
+        document["materials"] = "../materials.json"
+        for part in document["parts"]:
+            part["step"] = str((document_path.parent / part["step"]).resolve())
+        document["parts_from_step"] = dict(step="../lid.step", frame="step", origin=[0, 0, 0],
+                                            bodies={"generated": dict(id="extra", material="copper")})
+        nested_path = write_json(nested / "assembly.json", document)
+        params["input"] = str(nested_path)
+        resolved = driver._validate("assembly", params, self.out, [1], 2)
+        inputs = self.root / "relocated-inputs"
+        driver._copy_inputs(inputs, "assembly", resolved)
+        self.assertEqual(read_json(nested_path), document)
+        shutil.rmtree(document_path.parent)
+        copied = read_json(inputs / "assembly.json")
+        refs = [copied["board"]["path"], copied["board"]["material_map"], copied["materials"],
+                *(part["step"] for part in copied["parts"]), copied["parts_from_step"]["step"]]
+        for ref in refs:
+            self.assertFalse(Path(ref).is_absolute())
+            target = (inputs / ref).resolve()
+            self.assertTrue(target.is_relative_to(inputs.resolve()))
+            self.assertTrue(target.is_file(), ref)
+        self.assertEqual(read_json(inputs / copied["materials"]), read_json(inputs / "materials.json"))
+        self.assertEqual(read_json(inputs / copied["board"]["material_map"]),
+                         {"FR4": "fr4_eq", "copper": "copper"})
+        self.assertTrue(all((inputs / ref).read_text() == "generated fixture" for ref in refs[3:]))
+
     @hdf5_fixture
     def test_external_fixtures_round_trip_through_existing_reader(self):
         from tools.vv.result_summary import summarize
@@ -1273,6 +1397,7 @@ class DriverControlFlow(ContractTest):
         self.assertTrue(any(item["item"] == "W" for item in record["needs_attention"]))
         self.assertTrue(self.calls("solve"))
         self.assertIs(record["checks"]["A2"], True)
+        self.assertIsNone(record["checks"]["A3"])
         self.assertFalse({"W1", "W2", "W3", "W4", "W5"} & set(record["checks"]))
         self.persisted(record)
 
@@ -1319,6 +1444,7 @@ class DriverControlFlow(ContractTest):
                 self.assertEqual(record["exit_code"], 77 if kind == "assembly" else 1)
                 if kind == "assembly":
                     self.assertIsNone(record["checks"]["A2"])
+                    self.assertIsNone(record["checks"]["A3"])
                     self.assertTrue(any(item["item"] == "A" for item in record["needs_attention"]))
                 else:
                     self.assertIs(record["checks"]["C1"], False)
@@ -1451,8 +1577,9 @@ class DriverControlFlow(ContractTest):
         os.environ.update(REALCASE_TEST_MODE="fail_readback", REALCASE_TEST_FAIL_RUN="np1_r1")
         record = self.invoke("assembly", params=self.assembly_params())
         self.assertEqual(record["exit_code"], 1)
-        for check in ("A1", "A2", "A3", "W1", "W2", "W4"):
+        for check in ("A1", "A2", "W1", "W2", "W4"):
             self.assertIs(record["checks"][check], True, (check, record["notes"]))
+        self.assertIs(record["checks"]["A3"], False)
         self.assertIsNone(record["checks"]["C7"])
         self.assertIsNone(record["summary"]["T_max"])
         self.assertEqual(len(self.calls("solve")), 3)
@@ -1816,6 +1943,31 @@ class DriverControlFlow(ContractTest):
                 self.assertTrue(any("CLI usage error" in note for note in record["notes"]))
                 self.assertEqual(result.stdout.strip(), f"fail: {paths[0].parent}")
                 self.assertEqual(list(out.glob("*/*/inputs")), [paths[0].parent / "inputs"])
+                self.assertEqual(self.calls(), [])
+
+    def test_missing_params_option_and_unreadable_parameter_files_write_usage_records(self):
+        missing = self.root / "absent-params.json"
+        invalid = self.root / "invalid-encoding.json"
+        invalid.write_bytes(b"\xff")
+        variants = ([], ["--params"], ["--params", str(missing)], ["--params", str(invalid)])
+        for index, options in enumerate(variants):
+            with self.subTest(options=options):
+                out = self.root / f"missing-params-{index}"
+                result = subprocess.run([sys.executable, str(SOURCE / "tools/vv/real_case_e2e.py"),
+                                         "thermal", "--source-root", str(self.source), "--out-root", str(out),
+                                         *options], capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                paths = list(out.rglob("run_record.json"))
+                self.assertEqual(len(paths), 1)
+                record = read_json(paths[0])
+                self.assertEqual(record["exit_code"], 2)
+                self.assertEqual(record["verdict"], "fail")
+                self.assertIs(record["checks"]["C10"], True)
+                self.assertTrue(all(value is None for key, value in record["checks"].items() if key != "C10"))
+                self.assertEqual(record["needs_attention"], [])
+                self.assertTrue(any("CLI usage error" in note for note in record["notes"]))
+                self.assertEqual(read_json(paths[0].parent / "result.json")["verdict"], "fail")
+                self.assertEqual(check_file(paths[0].parent / "result.json"), [])
                 self.assertEqual(self.calls(), [])
 
     def test_malformed_cli_finalizes_once_with_usage_diagnostics(self):
