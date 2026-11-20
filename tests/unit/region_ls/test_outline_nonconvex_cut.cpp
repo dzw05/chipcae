@@ -983,6 +983,16 @@ void bowtie_error() {
                "outline.unsupported",
                "self-intersecting outline");
 }
+void nonzero_area_crossing_error() {
+    auto m = background({});
+    rollback_sentinels(m);
+    // Unequal lobes have nonzero shoelace area and must reach check_simple
+    // after successful normalization, rather than the zero-area fallback.
+    error_case(std::move(m),
+               footprint({{0, 0}, {.02, .02}, {.02, 0}, {0, .01}}),
+               "outline.unsupported",
+               "self-intersecting outline");
+}
 void disconnected_error() {
     auto s = r_shape();
     s.outline[1][0] = s.outline[2][0] = .0105;
@@ -1079,6 +1089,7 @@ int main(int argc, char** argv) {
         run("partition_identity_R", [] { partition_identity(r_shape()); });
         run("errors_legacy_L", legacy_L_error);
         run("errors_bowtie", bowtie_error);
+        run("errors_nonzero_area_crossing", nonzero_area_crossing_error);
         run("errors_disconnected_R", disconnected_error);
         for (const char* stage : {"clipping", "export", "final_validation"})
             run(std::string("rollback_") + stage, [=] { late_failure(stage); });
