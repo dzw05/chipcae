@@ -13,6 +13,11 @@
 #include <thread>
 #include <unistd.h>
 
+#if defined(__APPLE__)
+#include <sys/proc.h>
+#include <sys/sysctl.h>
+#endif
+
 namespace jobmgr_test {
 using namespace std::chrono_literals;
 using Clock = std::chrono::steady_clock;
@@ -143,11 +148,21 @@ inline bool gone(pid_t pid) {
     return kill(pid, 0) == -1 && errno == ESRCH;
 }
 inline char process_state(pid_t pid) {
+#if defined(__APPLE__)
+    int mib[] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
+    struct kinfo_proc info{};
+    std::size_t size = sizeof(info);
+    require(sysctl(mib, 4, &info, &size, nullptr, 0) == 0 && size == sizeof(info),
+            "failed to read child status with sysctl");
+    // Callers only distinguish zombies; querying must leave the child waitable.
+    return info.kp_proc.p_stat == SZOMB ? 'Z' : '?';
+#else
     const auto stat = read(fs::path("/proc") / std::to_string(pid) / "stat");
     const auto end_name = stat.rfind(')');
     require(end_name != std::string::npos && stat.size() > end_name + 2,
             "invalid /proc child status");
     return stat[end_name + 2];
+#endif
 }
 inline void await_zombie(pid_t pid) {
     const auto deadline = Clock::now() + 2s;
