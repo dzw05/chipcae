@@ -38,4 +38,19 @@ struct ElasticBoundary {
     std::vector<ElasticVector> value;
 };
 Expected<ElasticAssembly> assemble_elastic(const ElasticMesh&, const ElasticProblem&, MPI_Comm);
+// TEST-FIRST seams: explicit errors keep acceptance assertions executable without
+// changing the parent solver. Replace these stubs when implementing cut reconstruction.
+inline Expected<std::vector<ElasticMatrix>> evaluate_cut_gradients(
+    const ElasticMesh&, const ElasticProblem&, const std::vector<ElasticVector>&, MPI_Comm) {
+    return chipcae::mesh::Error{"fvm.elastic",
+                                "INTERNAL: cut Green-Gauss gradient not implemented"};
+}
+// Boundary value is supplied explicitly. Internal faces ignore this argument.
+inline Expected<ElasticMatrix> evaluate_cut_face_gradient(const ElasticMesh&,
+                                                          std::size_t,
+                                                          const std::vector<ElasticVector>&,
+                                                          const std::vector<ElasticMatrix>&,
+                                                          const ElasticVector&) {
+    return chipcae::mesh::Error{"fvm.elastic", "INTERNAL: cut face gradient not implemented"};
+}
 } // namespace chipcae::solvers::fvm::detail

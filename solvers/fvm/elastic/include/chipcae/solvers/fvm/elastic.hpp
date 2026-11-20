@@ -29,6 +29,8 @@ struct ElasticMesh {
     std::vector<ElasticFace> faces;
     std::vector<char> is_embedded;
     double z_top = 0;
+    // TEST-FIRST carrier only; empty means all zero. Validation is not implemented yet.
+    std::vector<char> is_cut;
 };
 struct ElasticProblem {
     // Row-major SPD stiffness acting on engineering strains
@@ -68,6 +70,11 @@ struct ElasticResult {
     double residual = 0;
     std::string warpage_method;
     std::string U_mag_method;
+    // TEST-FIRST diagnostic defaults; production does not populate these yet.
+    double min_dn_ratio = 1;
+    std::int64_t min_dn_gid = -1;
+    int gradient_corrections = 0;
+    double max_identity_defect = 0;
 };
 // Caller initializes/finalizes MPI and PETSc and retains ownership of all inputs.
 // Rigid321 solves without pins and removes arithmetic translation and rotation
