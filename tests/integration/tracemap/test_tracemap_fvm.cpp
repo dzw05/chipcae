@@ -128,6 +128,32 @@ Cut cut(const mesh::CopperPath& path, double phi_reference) {
                             "half-cube build_cut_layer");
     require(layer.sub_volfrac.size() == 1, "one cut subcell");
     near(layer.sub_volfrac[0], 0.5, 0, 1e-12, "half-cube sub_volfrac self-check");
+    // Either half has volume 0.5. Check which half survived before interpreting
+    // copper overlap; the retained triangular prism has centroid (1/3, 1/3, 1/2).
+    require(!layer.vq_w.empty(), "half-cube volume quadrature exists");
+    for (const auto& coordinates : layer.vq_xi)
+        require(coordinates.size() == layer.vq_w.size(), "half-cube quadrature sizes");
+    long double volume = 0;
+    std::array<long double, 3> first{};
+    for (std::size_t q = 0; q < layer.vq_w.size(); ++q) {
+        const double w = layer.vq_w[q];
+        require(std::isfinite(w) && w > 0, "half-cube positive finite quadrature weight");
+        for (std::size_t d = 0; d < first.size(); ++d) {
+            const double coordinate = layer.vq_xi[d][q];
+            require(std::isfinite(coordinate) && coordinate >= 0 && coordinate <= 1,
+                    "half-cube quadrature inside unit cube");
+            first[d] += static_cast<long double>(w) * coordinate;
+        }
+        require(layer.vq_xi[0][q] + layer.vq_xi[1][q] <= 1 + 1e-12, "half-cube must retain x+y<=1");
+        volume += w;
+    }
+    near(static_cast<double>(volume), 0.5, 0, 1e-12, "half-cube quadrature volume");
+    for (std::size_t d = 0; d < first.size(); ++d)
+        near(static_cast<double>(first[d] / volume),
+             static_cast<double>(d == 2 ? 0.5L : 1.L / 3),
+             0,
+             1e-12,
+             "half-cube retained centroid");
     m.copper_layer_of_layer = {0};
     m.copper_phi = mesh::rasterize_copper(m.axes[0], m.axes[1], {path});
     require(m.copper_phi.size() == 1, "cut single-column phi");

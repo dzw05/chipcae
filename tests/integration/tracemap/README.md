@@ -6,11 +6,12 @@
 
 ## 源码基线
 
-2026-11-20 初次核实的 main 为 `e8e86ceb9a4aacb45c806c0602a2a90474f54297`；
-交付复核时 `git ls-remote` 和 `git fetch --no-tags origin main` 核实 main 已前进到
-`4a871e395b929755d2a532fde2bba794c27e2b59`。#204 的远端 head 和当前依赖基线仍为
-`995424f5f56c6e90f538fe64ac2ca35c068682bf`。该依赖不是新 main 的祖先，且新 main
-仍缺少 B 组需要的热 FVM grid/thermal 源码；B 组继续在依赖分支源码上运行。
+2026-11-20 本轮复核起点为 `7033fabd6a9f6dead041d250fdaeb9e748835979`，工作区干净。
+`git ls-remote origin refs/heads/main refs/heads/solve/fvm-thermal-cutcell` 实测 main 为
+`e6216add38d2d0e130fdf222c4c17845a342cc04`，与本地 origin/main 一致；#204 的远端
+head 和当前依赖基线仍为 `995424f5f56c6e90f538fe64ac2ca35c068682bf`。该依赖是当前
+HEAD 的祖先，不是 main 的祖先；main 仍缺少 B 组需要的热 FVM grid/thermal 源码。
+B 组继续在依赖分支源码上运行，未合并 main。
 
 `rasterize_copper` 实际返回 Morton dense 序，测试用 `level0_dense` 读取；
 其头文件中的 row-major 注释与实现不符。当前基线 FEM pipeline 使用层常量 fraction，
@@ -35,12 +36,15 @@ B 组平板用 boxes 直接给 x/y 各四等分、z 为 `[0,35 µm]`；先从 he
 行间调和平均比较。另一独立解析 phi 预测用于 strict xfail。
 
 切割用 const `build_cut_layer` 保留单位立方体内 `x+y<=1`，先核对唯一子单元
-体积分数为 0.5。实体内横带面积闭式为 `[y-y²/2]_a^b`；完全在实体内的矩形
+体积分数为 0.5。另检查体积积分点全部位于该半空间，积分体积为 0.5，
+解析质心为 `(1/3,1/3,1/2)`，避免仅凭体积把反向保留的半立方体当作正确夹具。
+实体内横带面积闭式为 `[y-y²/2]_a^b`；完全在实体内的矩形
 直接乘长宽。铜横带越出实体时，目标只计实体内交面积；饱和案例还核对铜体积。
 
 合并夹具是相邻两行等高盒：A 完整且全铜，B 仅保留贴着 A 的底部 0.1h 且无铜。
-先不标 small_subs 得到两个 CV，再标记重建得到一个 CV；检查合并前后 sum(fV)、
-体积为 1.1、f=1/1.1（均为绝对容差 1e-12），以及 kxx 的体积加权并联目标。kyy 的目标是
+先不标 small_subs 得到两个 CV，再标记重建得到一个 CV；检查合并前后 sum(fV) 相等，
+使用相对容差 `1e-14`；体积为 1.1、f=1/1.1 使用绝对容差 `1e-12`，
+另检查 kxx 的体积加权并联目标。kyy 的目标是
 `1.1/(1/390+0.1/0.3)`，现行预测独立来自解析体积加权 fraction。
 
 ## Case 与容差
@@ -68,6 +72,8 @@ B 组平板用 boxes 直接给 x/y 各四等分、z 为 `[0,35 µm]`；先从 he
 未另注明的普通导热断言相对容差为 `1e-12`；phi/f 的绝对容差为 `1e-12`；
 空输入导热为相对 `1e-15`。xfail 解析目标默认相对 `1e-6`，现行预测相对 `1e-9`。
 brief 中提及 C 组容差但没有定义 C 组夹具或验收 case，因此不增加 C 组。
+
+空铜输入另逐列断言 phi 为零，绝对容差 `1e-12`。
 
 每个 xfail 只调用一次共享 `xfail_check`：目标命中返回 1/XPASS；目标不满足且
 吻合现行预测返回 0/XFAIL；其他情况（包括非有限值）返回 2/XFAIL-WRONG-REASON。
@@ -204,3 +210,52 @@ clang-format 23.1.5 的 `-i` 和 `--dry-run --Werror` 均成功。
 复跑结果不改变首轮全量回归失败的事实。上述六项既有失败仍未解决，
 所要求的全量 CTest 全绿尚未达到；未修改 brief 禁改的产品路径或其他测试。
 macOS/Apple clang、其他后端及远端 CI/ci-ok 均为未执行。
+
+## TEST-FIRST 续验（起点 7033fab）
+
+本轮保留全部 24 个已有 case，只补空输入的逐列 phi=0 断言，以及三个切割 case
+共享的半空间、积分体积和解析质心自检。没有修改生产代码，也不需要符号 stub。
+Release 重新构建成功，验收实测仍为 24/24（8 PASS + 16 strict XFAIL，6.05 s）；
+上述全部 case 的实测数值逐行一致。既有 copper-map/FVM 回归实测 4/4 通过（3.67 s）。
+外部解析目标驱动实测 16/16 失败，均因解析目标未满足而输出匹配独立现行预测的
+XFAIL；该驱动不改变仓库中的 strict xfail 登记或可执行文件。
+
+登记矩阵实测仍为 0/17/24，标签、超时、完整名称及 strict 正则均已核对。
+外部 checker 驱动的 12 项返回值/边界/非有限输入检查、两个 dispatcher 的 10 项
+非法参数检查均通过。严格正则驱动接受 XFAIL，拒绝 XPASS、WRONG-REASON、
+非有限值、XFAIL 后附带 ERROR、缺少标记以及仅前缀相同的错误名称。
+clang-format 23.1.5 的 `-i`、`--dry-run --Werror` 和 `git diff --check` 均成功。
+
+当前 `build-tracemap-release` 配置启用 ECAD/MFEM/PETSc/MPI，JSONCONS/HDF5 关闭。
+其未筛选全量 CTest 实测 304 项：260 PASS、33 个既有 SKIP、11 FAIL，返回 8，
+耗时 122.99 s；24 个 tracemap case 全部通过。失败名称和诊断如下；未放宽或修改
+这些已有测试。另在 JSONCONS/HDF5 开启的完整 Release 配置中复核，结果单列于后。
+
+| 失败 case | 本轮诊断 |
+| --- | --- |
+| odbpp_fixture_present、mesh_hash_preview_np | preview 要求 JSONCONS/HDF5 |
+| install_smoke、install_relocate、cpack_tgz | 安装后 preview 要求 JSONCONS/HDF5 |
+| import_cli_reserved_args | 未到达所期望的 assembly handler |
+| import_assembly_error_mapping | JSON 关闭时返回失败，无附加诊断 |
+| stack_writer_empty_body、stack_writer_outline_polyset | 要求 jsoncons headers |
+| stack_writer_roundtrip | JSON support disabled |
+| ecaddiff_import_pair | 既有 summary 计数与预期不符 |
+
+开启 JSONCONS/HDF5/MPI 的完整 Release 复核实测为 **355 项：337 PASS、13 个既有
+SKIP、5 FAIL**，CTest 返回 8，耗时 2815.19 s。全部 24 个 tracemap case 再次通过，
+数值与上列实测输出一致；既有 copper-map 和三个 FVM 回归也通过。
+
+| 完整配置失败 case | 本轮实测 |
+| --- | --- |
+| solve_column_gmg_fcbga_scaling | coarse 通过，fine 子进程返回 -9，原因未确认 |
+| f1130_uncut_cli_e2e | In1.Cu 实测 0.09，既有预期为 0 |
+| stack_writer_outline_polyset | solve 返回 11，duplicate material id |
+| import_assembly_cf_chain | solve 返回 11，duplicate material id |
+| ecaddiff_import_pair | summary 实测 hard/discuss/info=0/0/14，既有预期 11/0/5 |
+
+五项均在本轮未修改的既有测试/产品路径中，历史运行也记录过相同失败现象。
+此前不稳定的 `k1_preview_mpi_surface`、切割制造解、切割双材料和 demo gate
+本轮完整配置均通过；关闭 JSON/HDF5 时失败的 preview/install/stack-writer 支持检查
+在完整配置中通过。没有为此修改生产代码、已有断言或超时。
+**全量 CTest 全绿条件仍未达到**。
+macOS/Apple clang、其他后端及远端 CI/ci-ok：未执行。本轮仅本地提交，不推送。

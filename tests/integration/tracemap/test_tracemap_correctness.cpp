@@ -158,6 +158,8 @@ int run(const std::string& name) {
         }
     } else if (name == "tracemap_empty_and_duplicate") {
         const auto empty = measure(40, false, {}, false);
+        for (double f : empty.phi)
+            near(f, 0, 1e-12, 0, "empty column copper fraction");
         near(empty.along, 0.3, 0, 1e-15, "empty kxx");
         near(empty.perpendicular, 0.3, 0, 1e-15, "empty kyy");
         const auto single = measure(40);
