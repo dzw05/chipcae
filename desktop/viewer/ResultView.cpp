@@ -290,12 +290,19 @@ bool ResultView::loadStep(ResultSession& session, qint64 step) {
     if (!object) {
         d->error = session.error();
         d->loaded = false;
-        d->renderer->RemoveActor(d->boundaries);
+        d->blocks.clear();
+        d->renderer->RemoveAllViewProps();
         d->boundaries = nullptr;
+        d->boundarySetupMs = 0;
+        d->range = {};
         d->fieldStatusLabel->clear();
         d->fieldStatusLabel->hide();
+        if (!d->watermark.isEmpty())
+            d->renderer->AddViewProp(d->overlay);
+        emit displayChanged();
         if (isVisible())
             d->window->Render();
+        update();
         return false;
     }
     d->blocks.clear();
