@@ -153,16 +153,25 @@ QString idName(const QStringList& names, int id) {
         return {};
     return names[id - 1];
 }
-bool validStackRows(const QJsonObject& stack) {
+bool validStackNames(const QJsonObject& stack) {
     if (!stack["layers"].isArray() || stack["layers"].toArray().isEmpty())
         return false;
     for (auto value : stack["layers"].toArray()) {
         if (!value.isObject())
             return false;
         const auto layer = value.toObject();
-        if (!layer["name"].isString() || !layer["thickness"].isDouble() ||
-            !std::isfinite(layer["thickness"].toDouble()) ||
+        if (!layer["name"].isString() ||
             (layer.contains("material") && !layer["material"].isString()))
+            return false;
+    }
+    return true;
+}
+bool validStackRows(const QJsonObject& stack) {
+    if (!validStackNames(stack))
+        return false;
+    for (auto value : stack["layers"].toArray()) {
+        const auto layer = value.toObject();
+        if (!layer["thickness"].isDouble() || !std::isfinite(layer["thickness"].toDouble()))
             return false;
         if (layer.contains("copper")) {
             if (!layer["copper"].isObject())
@@ -353,13 +362,16 @@ void ResultSession::cacheResultsStack() {
         QJsonParseError error;
         const auto stack = QJsonDocument::fromJson(raw, &error);
         if (error.error != QJsonParseError::NoError || !stack.isObject() ||
-            !validStackRows(stack.object()))
-            throw std::runtime_error("invalid stackup JSON or layer fields");
+            !validStackNames(stack.object()))
+            throw std::runtime_error("invalid stackup JSON or name fields");
         for (auto value : stack.object()["layers"].toArray()) {
             const auto layer = value.toObject();
             stackLayerNames_ << layer["name"].toString();
             stackMaterialNames_ << layer["material"].toString();
         }
+        // Name fallback remains usable even when the stack cannot safely populate the table.
+        if (!validStackRows(stack.object()))
+            throw std::runtime_error("invalid stackup display fields");
         resultsStackJson_ = raw;
     } catch (const std::exception& e) {
         warnings_ << QStringLiteral("result stackup ignored: %1").arg(QString::fromUtf8(e.what()));

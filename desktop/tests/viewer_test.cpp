@@ -598,6 +598,41 @@ with h5py.File(sys.argv[1], 'r+') as f:
                     checkIdRange(view, session, field);
                     checkScalarBar(view);
                 });
+    for (auto field : {ResultColorField::LayerId, ResultColorField::MaterialId})
+        for (bool single : {false, true})
+            run(qPrintable(QString(idArrayName(field)) + " range ending at INT_MAX " +
+                           (single ? "single" : "multiple")),
+                [&] {
+                    QTemporaryDir temp;
+                    require(temp.isValid(), "INT_MAX fixture directory");
+                    const auto path = temp.filePath("step.vtkhdf");
+                    writeFixture(root, path, [&](vtkUnstructuredGrid* grid) {
+                        vtkNew<vtkIntArray> ids;
+                        ids->SetName(idArrayName(field));
+                        for (vtkIdType cell = 0; cell < grid->GetNumberOfCells(); ++cell)
+                            ids->InsertNextValue(std::numeric_limits<int>::max() -
+                                                 (single ? 0 : static_cast<int>(cell % 2)));
+                        grid->GetCellData()->AddArray(ids);
+                    });
+                    ResultSession session;
+                    require(session.open(path), qPrintable(session.error()));
+                    ResultView view;
+                    require(view.loadStep(session, 0), qPrintable(view.error()));
+                    view.setColorField(field);
+                    checkIdBounds(view,
+                                  std::numeric_limits<int>::max() - (single ? 0 : 1),
+                                  std::numeric_limits<int>::max());
+                    const bool layer = field == ResultColorField::LayerId;
+                    const auto expected =
+                        single ? (layer ? QStringLiteral("叠层: layer 2147483647")
+                                        : QStringLiteral("材料: material 2147483647"))
+                               : (layer ? QStringLiteral("叠层: layer 2147483646, layer 2147483647")
+                                        : QStringLiteral(
+                                              "材料: material 2147483646, material 2147483647"));
+                    require(view.colorBarTitle() == expected,
+                            "range ending at INT_MAX lists all IDs and terminates");
+                    checkScalarBar(view);
+                });
     run("five field repeated switching", [&] {
         ResultSession session;
         require(session.open(root.filePath("default")), qPrintable(session.error()));

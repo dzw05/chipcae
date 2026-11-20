@@ -82,6 +82,22 @@ int resultsDisplayAcceptance() {
         require(editor.model()->setData(editor.model()->index(0, LayerModel::Name), "case_edit"),
                 "normal case editing works after clearing results");
     });
+    run("result source changes preserve explicit read-only", [&] {
+        CaseDocument doc;
+        require(doc.load(DOCUMENT_FIXTURE_DIR "/fcbga_demo.case.json"),
+                "load case for explicit read-only");
+        StackEditor editor(&doc);
+        editor.setReadOnly(true);
+        editor.setResultsStack(result);
+        editor.setResultsStack(Json::object());
+        require(editor.isReadOnly() && !editor.actionsAllowed() &&
+                    !editor.model()->setData(editor.model()->index(0, LayerModel::Name), "blocked"),
+                "clearing result override preserves explicit read-only");
+        editor.setReadOnly(false);
+        require(!editor.isReadOnly() &&
+                    editor.model()->setData(editor.model()->index(0, LayerModel::Name), "allowed"),
+                "explicit unlock restores case editing after clearing results");
+    });
     run("read-only blocks flags direct edits save and revert", [&] {
         CaseDocument doc;
         require(doc.load(DOCUMENT_FIXTURE_DIR "/fcbga_demo.case.json"), "load case for guards");
@@ -152,6 +168,33 @@ int resultsDisplayAcceptance() {
         require(editor.model()->rowCount() == 2 && doc.toJson() == before &&
                     doc.isDirty() == dirty && editor.previewStale() == stale && invalidated == 0,
                 "result actions leave display document and preview unchanged");
+    });
+    run("empty result source stays read-only until a case is loaded", [&] {
+        for (const auto& empty : {Json::parse("{}"), Json::parse(R"({"layers":[]})")}) {
+            CaseDocument doc;
+            StackEditor editor(&doc);
+            const auto before = doc.toJson();
+            editor.setResultsStack(result);
+            editor.setResultsStack(empty);
+            editor.setReadOnly(false);
+            require(editor.isReadOnly() && editor.model()->rowCount() == 0,
+                    "empty result source cannot be unlocked");
+            require(!editor.actionsAllowed(), "empty result blocks case actions");
+            for (auto* button : editor.findChildren<QPushButton*>())
+                require(!button->isEnabled(), "empty result disables revert button");
+            editor.revertEdit();
+            QTemporaryDir dir;
+            require(dir.isValid(), "empty result save directory");
+            const auto path = dir.filePath("blocked.json");
+            require(!editor.save(path) && !QFileInfo::exists(path) && doc.toJson() == before,
+                    "empty result save and revert preserve document");
+            require(doc.load(DOCUMENT_FIXTURE_DIR "/fcbga_demo.case.json"),
+                    "load case after empty results");
+            require(
+                !editor.isReadOnly() && editor.model()->rowCount() == 3 &&
+                    editor.model()->setData(editor.model()->index(0, LayerModel::Name), "restored"),
+                "case loading restores editing after empty results");
+        }
     });
     run("loading document clears the result override", [&] {
         CaseDocument doc;

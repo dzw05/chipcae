@@ -81,10 +81,12 @@ void StackEditor::setReadOnly(bool readOnly) {
     revert_->setEnabled(!isReadOnly());
 }
 void StackEditor::setResultsStack(const Json& stack) {
-    resultsDisplayed_ = stack.is_object() && stack.contains("layers") &&
-                        stack.at("layers").is_array() && !stack.at("layers").empty();
+    // With no case stack, even an empty result source must keep case actions locked.
+    resultsDisplayed_ = !document_->stackJson().contains("layers") ||
+                        (stack.is_object() && stack.contains("layers") &&
+                         stack.at("layers").is_array() && !stack.at("layers").empty());
     model_->setResultsStack(stack);
-    setReadOnly(false);
+    setReadOnly(readOnly_);
 }
 void StackEditor::beginEdit() {
     if (isReadOnly())

@@ -690,6 +690,26 @@ int stackNameAcceptance(const QDir& root) {
                 "reopen named directory");
         requireNames(session, fieldLayers, fieldMaterials);
     });
+    for (const auto& fields : {QByteArray{},
+                               QByteArray(R"(,"thickness":null)"),
+                               QByteArray(R"(,"thickness":"invalid")"),
+                               QByteArray(R"(,"thickness":[])")}) {
+        run("name fallback ignores display-only fields: " + QString::fromUtf8(fields), [&] {
+            QTemporaryDir temp;
+            require(temp.isValid(), "names-only stack directory");
+            copyStackPack(root, temp.path());
+            removeFieldNames(temp.path(), "both", false);
+            stackWrite(temp.filePath("stackup.json"),
+                       R"({"layers":[{"name":" Base ","material":"Mixed_CASE")" + fields +
+                           R"(},{"name":" Base "},{"name":"TOP","material":""}]})");
+            ResultSession session;
+            require(session.open(temp.path()) && session.loadStep(0) != nullptr,
+                    "names-only stack must not prevent result loading");
+            requireNames(session, fallbackLayers, fallbackMaterials);
+            require(session.resultsStackJson().isEmpty(),
+                    "names-only stack is not eligible for row display");
+        });
+    }
     run("open caches stack bytes for later step loading", [&] {
         QTemporaryDir temp;
         require(temp.isValid(), "cached stack directory");

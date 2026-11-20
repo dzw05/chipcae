@@ -638,6 +638,7 @@ bool MainWindow::openResultsPath(const QString& manifestPath) {
         if (auto* stack = findChild<chipcae::desktop::StackEditor*>()) {
             const auto raw = session_->resultsStackJson();
             chipcae::desktop::Json display = chipcae::desktop::Json::object();
+            display["layers"] = chipcae::desktop::Json::array();
             if (!raw.isEmpty()) {
                 try {
                     display = chipcae::desktop::Json::parse(raw.toStdString());

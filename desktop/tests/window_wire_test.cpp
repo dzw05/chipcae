@@ -372,6 +372,9 @@ int resultsStackAcceptance(const QString& samples) {
         require(window.openResultsPath(samples + "/viewer_mixed/manifest.json"),
                 "open result without stackup");
         require(stackEditor(window)->model()->rowCount() == 0, "no stale result rows");
+        stackEditor(window)->setReadOnly(false);
+        require(stackEditor(window)->isReadOnly() && !stackEditor(window)->actionsAllowed(),
+                "empty replacement remains read-only");
         require(!window.caseIsOpen() && !window.document()->isDirty(),
                 "empty result stays result-only");
     });
@@ -512,13 +515,25 @@ int resultsStackAcceptance(const QString& samples) {
             MainWindow window;
             require(window.openResultsPath(target + "/manifest.json"),
                     "invalid stack does not reject results");
-            if (QString(name) == "relative")
-                requireRows(stackEditor(window)->model(), stack);
-            else
-                require(stackEditor(window)->model()->rowCount() == 0,
-                        "invalid or absent stack gives zero rows");
             require(!window.caseIsOpen() && !window.document()->isDirty(),
                     "path test preserves document");
+            if (QString(name) == "relative")
+                requireRows(stackEditor(window)->model(), stack);
+            else {
+                auto* editor = stackEditor(window);
+                require(editor->model()->rowCount() == 0,
+                        "invalid or absent stack gives zero rows");
+                editor->setReadOnly(false);
+                require(editor->isReadOnly() && !editor->actionsAllowed(),
+                        "invalid or absent stack remains result-only and read-only");
+                require(window.openCase(QString(CHIPCAE_REPOSITORY) +
+                                        "/schema/examples/fcbga_demo.case.json"),
+                        "open case after invalid or absent result stack");
+                require(!editor->isReadOnly() && editor->model()->rowCount() == 3 &&
+                            editor->model()->setData(editor->model()->index(0, LayerModel::Name),
+                                                     "restored"),
+                        "case loading restores editing after no-stack results");
+            }
         });
     }
     for (const auto& entry :
@@ -531,11 +546,20 @@ int resultsStackAcceptance(const QString& samples) {
             continue;
         }
         run(entry.first, [&] {
+            const auto manifestPath =
+                QFileInfo(path).isDir() ? QDir(path).filePath("manifest.json") : path;
+            QFile manifestFile(manifestPath);
+            require(manifestFile.open(QIODevice::ReadOnly), "read official manifest");
+            const auto manifest = QJsonDocument::fromJson(manifestFile.readAll()).object();
+            QFile stackFile(QFileInfo(manifestPath)
+                                .dir()
+                                .filePath(manifest.value("stackup").toString("stackup.json")));
+            require(stackFile.open(QIODevice::ReadOnly), "read official stackup");
+            const auto officialStack = Json::parse(stackFile.readAll().toStdString());
             MainWindow window;
-            require(window.openResultsPath(
-                        QFileInfo(path).isDir() ? QDir(path).filePath("manifest.json") : path),
-                    "open optional official results");
+            require(window.openResultsPath(manifestPath), "open optional official results");
             auto* model = stackEditor(window)->model();
+            requireRows(model, officialStack);
             require(model->rowCount() == 3, "official stack has three layers");
             for (int row = 0; row < 3; ++row)
                 require(model->index(row, LayerModel::Name).data().toString() == entry.second[row],
