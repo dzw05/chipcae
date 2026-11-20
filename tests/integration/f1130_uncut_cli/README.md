@@ -210,8 +210,13 @@ python3 -m unittest discover -s tests/integration/f1130_uncut_cli \
 ```
 
 CMake supplies executable locations when ECAD, MFEM, MPI and HDF5 are enabled.
-Missing executable configuration or NumPy/h5py returns the existing skip code
-77; configured command failures fail acceptance. Commands have 600 second
+Missing executable configuration returns the existing skip code 77. With
+backends configured, only an ImportError from h5py returns 77, printing exactly
+`SKIP: h5py missing (pending infra-ci-h5py)` to stderr. Missing NumPy and
+non-ImportError dependency failures fail acceptance. HDF5-dependent record
+cases use `self.skipTest('h5py missing (pending infra-ci-h5py)')`; CTest
+reports their unittest process as Passed even when its output says `skipped=`.
+Configured command failures fail acceptance. Commands have 600 second
 timeouts. A missing MPI launcher fails, and no retired fixture gate suppresses
 configured acceptance.
 
@@ -228,30 +233,49 @@ fractions, all-zero In1 copper, wrong conductivity and 1e-6 K temperature errors
 
 ## Verification (2026-11-20)
 
-实测 source: the merged working tree based on fetched main
-`c9c1464bad72444d98bf52bb4d0848d530095281`, including M1 `92a21a4` (#195)
-and M3 `bcc40b3` (#212). Main was merged without rebasing. The PR diff against
-that baseline remains restricted to this card's four permitted files.
+实测 source: main `4a871e3` was merged in `708c8b9`, followed by dependency
+handling commit `867cb59`. Main advanced during verification, so a second
+`git merge origin/main` brought in `e6b72388cf2930e5f403f810f27a491a33fc6c42`
+in `7f791cc`. Commit `2cc8184` then moved the script self-test log to stdout
+so the missing-h5py stderr contains exactly the required line. The final
+verification source is `2cc8184`; all acceptance checks were rerun. History
+retains `817dbe1`; no rebase or revert was performed.
+The PR diff against main contains exactly the four permitted integration files,
+with no `.github/` changes. Main already installs h5py through `ec075e1` (#218).
+第 2 轮预审意见已裁定，见 rulings/pr200.md 第 2 轮。
 
-实测 Release configure and build exit 0 with tests, ECAD, JSONCONS, MFEM, MPI
-and HDF5 enabled, optional Kokkos disabled, and Python 3.12 selected. CMake
-reported dependency runtime-search-path warnings; compilation succeeded.
-实测 direct unittest discovery: **29 tests, OK** (13 assertion/verdict tests
-and 16 reference tests), including SciPy sparse and forced pure NumPy paths.
-The solver-input assertion and diagnostic-exception regression failed before
-the fixes and passed afterward. The latter verifies that preview, both solves,
-readback and aligned comparison remain available after a diagnostic exception;
-both records retain the diagnostic failure. The matrix regression also checks
-literal half-copper FR4 coefficients and rejects an incorrect copper base.
+实测 the existing Release build was rebuilt successfully with tests, ECAD,
+JSONCONS, MFEM, MPI and HDF5 enabled, optional Kokkos disabled, and Python 3.12.
+The MPI launcher was available on PATH. NumPy 2.5.5 and h5py 3.16.0 were installed.
+No numerical threshold or solver input tolerance changed in this fix.
 
-实测 targeted CTest: exit **0**, **3/3 Passed**, **8.58 s**:
-`f1130_uncut_cli_records`, `f1130_uncut_cli_e2e`, and
-`chain_ipc_uncut_chain`. Four-layer preview and solve each produced 80 uncut
-hexes. Both ranks completed solve/readback, preserved all shared input bytes,
-and produced validated records with `verdict: pass`; import, fractions,
-conductivity, physics, numerical and parallel completion checks were all true.
-Aligned cell/vertex fields passed at the unchanged `PARALLEL_RTOL=1e-8`;
-all three QoI relative differences were zero.
+The rs* CI failures came from old byte-for-byte fixtures comparing LAPACK
+rounding bits: `rel_diff=0.2500000000000008` versus the captured
+`0.2500000000000019`. Installing h5py exposed tests previously skipped in CI.
+The branch lacked main's `ec075e1` fixture fix, `baseline_for_numpy()`, which
+independently recomputes those last bits while retaining analytic checks.
+Historical failing run 44648224633 and passing main run 44666026940 contain
+exactly the same ten affected cases. 实测 after merging main, the isolated
+`rs*` selection was **21/21 Passed**, with no skips. The full-run stop is
+reported below. No baseline was regenerated or directly edited.
+The merged head's CI still requires a push and a fresh run.
+
+实测 direct unittest discovery: **29 tests, OK, zero skips**. 实测 targeted
+CTest lists exactly these three registrations:
+
+```text
+Test #212: f1130_uncut_cli_e2e
+Test #213: f1130_uncut_cli_records
+Test #243: chain_ipc_uncut_chain
+Total Tests: 3
+```
+
+实测 targeted CTest at `2cc8184`: **3/3 Passed**, no skips, **8.34 s**.
+Four-layer preview and each solve produced 80 uncut hexes. Both ranks completed solve/readback, preserved
+shared input bytes, and produced validated records with `verdict: pass`.
+Import, fractions, conductivity, physics, numerical and parallel completion
+checks were all true. QoI relative differences and readback relative errors
+were zero.
 
 实测 product measurements (identical for ranks=1 and ranks=2):
 
@@ -269,9 +293,9 @@ all three QoI relative differences were zero.
 | In2.Cu copper area | 3.0000000000000004 mm² |
 | B.Cu copper area | 6.999999999999999 mm² |
 
-The maximum area relative error was 1.480297366166875e-16. C11 remains
-1e-8 K; C3/C4, area, energy and parallel acceptance thresholds are unchanged.
-The permitted `rtol=1e-12` change affects the solver input only.
+The maximum area relative error was 1.480297366166875e-16. Measurements agree
+with the architect's first-round probe; C11 remains 1e-8 K, readback rtol
+1e-12, MPI rtol 1e-8, K1 area rtol 1e-12, and solver.linear.rtol 1e-12.
 
 实测 independent, non-gating Q2 diagnostics (K):
 
@@ -284,37 +308,84 @@ trace_map_nx_double_dT_max=0.20071960596669669
 `T_max=340.53308548486064` K; import, per-cell reference checks and readback
 passed without calling the layer-average conversion tool.
 
-实测 full Release CTest: exit **8**, **416 total = 381 passed +
-11 failed + 14 skipped + 10 already disabled**, **11187.08 s**. All three
-requested F-1130/chain tests passed again in this full run. The 10 disabled
-registrations and feature-dependent skips come unchanged from main; this
-fix adds none. All failures are listed individually:
+实测 dependency checks used an isolated venv containing NumPy and no h5py:
+both entry-point `main()` functions returned 77 with empty stdout and exactly
+`SKIP: h5py missing (pending infra-ci-h5py)` plus a newline on stderr.
+Records ran 29 cases: 18 passed, 11 skipped with exactly
+`h5py missing (pending infra-ci-h5py)`. Injecting RuntimeError from h5py
+made both entry points and records fail; injecting missing NumPy likewise
+failed, with no NumPy skips. Before the fix, the entry points skipped missing
+NumPy, and missing h5py produced the wrong messages or record errors. Real
+script-entry probes also checked
+all six dependency scenarios: missing h5py exits 77 with exactly the one-line
+stderr; h5py RuntimeError and missing NumPy exit 1. The e2e script sends its
+unittest summary to stdout; discovery keeps the standard unittest stream.
 
-| Failed test | Reported elapsed (s) | Observed failure |
-| --- | --- | --- |
-| `ipc_zip_equals_xml` | 0.04 | Unchanged ZIP test supplies obsolete dotted material IDs, rejected by current ID validation. |
-| `k1_preview_mpi_surface` | 2.00 | Non-JSON run_config fragment in captured stdout; jsoncons parsing aborted. |
-| `solve_cut_pipeline` | 826.00 | Two-rank fcbga-polyset subprocess exceeded its existing 240 s timeout. |
-| `solve_ghost_scan` | 1470.81 | Existing 300 s CTest timeout; reported elapsed 1470.81 s. |
-| `solve_cut_bilayer` | 1723.27 | Existing 1200 s CTest timeout during the 16×16 case. |
-| `solve_column_gmg_fcbga` | 1404.16 | Existing 900 s CTest timeout after fine-grid comparisons were printed. |
-| `solve_column_gmg_fcbga_scaling` | 1715.65 | Existing 900 s CTest timeout after coarse-GMG output. |
-| `cutbim_cut_bimetal` | 1497.73 | 16×16 ranks=1 solver subprocess exceeded 420 s; comparison quantity missing. |
-| `demogate_solve` | 1013.92 | Zero-load solver subprocess exceeded its existing 420 s timeout. |
-| `stack_writer_outline_polyset` | 1.63 | Solver exit 11: duplicate material id from the unchanged assembly helper. |
-| `import_assembly_cf_chain` | 1.71 | Solver exit 11: duplicate material id from the unchanged assembly helper. |
+Only missing h5py qualifies for this dependency skip. Acceptance requires the
+backend-complete, h5py-installed local three-test run above. A CI skip never
+counts as F-1130 acceptance: main's CI installs h5py but leaves ECAD/MFEM off,
+so e2e and chain still skip for missing backends. Records may show CTest Passed
+with unittest skips; that is not product acceptance. CI for this unpushed head
+is 未执行; merge still requires green Build and test and ci-ok.
 
-The listed tests, their helpers and product code match the merged main
-baseline. No out-of-scope product/helper change was made. Several reported
-elapsed times exceed the configured limits, and tool responses also suffered
-abnormal wall delays. The measurements are retained as reported without
-attributing a cause or adjusting timeouts. The seven long timeout cases were
-not rerun. Full-suite all-green status was **not achieved**.
+实测 full Release CTest at `2cc8184`: exit **8**, **429 registrations =
+391 passed + 10 failed + 18 skipped + 10 disabled**, **1730.22 s**.
+All three F-1130/chain tests passed again in this full run. The existing
+feature-dependent skips and disabled registrations do not count as acceptance.
+Every failure was compared with a separately built main snapshot `e6b7238`,
+using the same Release, ECAD/MFEM/MPI/HDF5 configuration and dependencies:
 
-实测 unchanged isolated follow-up: `k1_preview_mpi_surface` passed, exit **0**, **1/1**, **44.26 s**, using `ctest -j1` and its original assertions/timeouts. This does not replace the original full-suite failure or counts. The full suite was not rerun.
+| Failed test | Branch elapsed (s) / observed failure | main e6b7238 control | Owner |
+| --- | --- | --- | --- |
+| `rspart_types` | 164.53; Timeout, no assertion/output; existing limit 60 s | Passed, 5.29 s | M5/io |
+| `convex_pieces` | 163.55; Timeout; existing limit 60 s | Passed, 3.06 s | M2 mesh |
+| `mesh_digest_mpi` | 3.12; JSONDecodeError: Expecting value: line 1 column 1 (char 0) | Passed, 4.73 s | M2 preview/mesh |
+| `ipc_zip_equals_xml` | 0.04; material mat.fr4 rejected by ID pattern | Failed, 0.03 s | M1 ECAD |
+| `solve_fem_thermal_bow` | 8.71; C-0/A cross-run U residual 9.5759468232801005e-13 > 2.5499999995493557e-15 | Failed, 8.25 s | M3 solver |
+| `field_compare_outline_bbox` | 1.65; plain-direct status 14: invalid output field | Failed, 1.62 s | INT/M3 |
+| `field_compare_ranks` | 1.64; np1 status 14: invalid output field | Failed, 1.60 s | INT/M3 |
+| `stack_writer_outline_polyset` | 1.57; exit 11: duplicate material id | Failed, 1.54 s | M1 import |
+| `import_assembly_cf_chain` | 1.67; exit 11: duplicate material id | Failed, 1.65 s | M1 import |
+| `solve_column_gmg_fcbga_scaling` | 119.53; scaling-fine-gmg solver exit -9 | Failed, 110.04 s | M3 solver |
 
-The mesh/solver/vv I1 1.1 signatures are complete according to the PR #200
-architect ruling; no PR hold remains required. CI for the unpushed fix commit
-is 未执行. Merge still requires green ci-ok. This gate checks implementation
-of the agreed trace-map model; explicit finely resolved copper validation
-remains outside this gate.
+**Stop condition hit:** the isolated rs* selection passed 21/21, but
+`rspart_types` timed out in the full run. Its existing timeout is 60 s; CTest
+reported 164.53 s, with no assertion/output. The simultaneous `convex_pieces`
+timeout reported 163.55 s against its existing 60 s limit. Those reported
+values are retained without attributing a cause. Main passed both in one
+control run (5.37 s total); it also passed `mesh_digest_mpi` (4.75 s total).
+These are observations from different run contexts, not proof of a code cause.
+The rs* red triggers the brief's mandatory M5/io handoff. Code changes stopped;
+no failing branch case was rerun to obtain green and no timeout, baseline or
+out-of-scope product/test change was authored. Full-suite all-green status was
+**not achieved**.
+
+The ten original CI byte-comparison failures all passed in this final full
+run; no `rel_diff` rounding assertion recurred. The new `rspart_types` timeout
+is a separate unresolved failure, so the rs* full-run acceptance gate remains
+unmet despite the successful isolated selection.
+
+实测 full-run history (all registrations accounted for, including skips and
+existing disabled tests):
+
+| Source | Passed | Failed | Skipped | Disabled | CTest elapsed (s) |
+| --- | --- | --- | --- | --- | --- |
+| 867cb59 | 392 | 9 | 18 | 10 | 1472.68 |
+| 7f791cc | 392 | 9 | 18 | 10 | 1423.07 |
+| 2cc8184 | 391 | 10 | 18 | 10 | 1730.22 |
+
+The first full run additionally failed `solve_ghost_scan` (300.02 s timeout)
+and `cutbim_cut_bimetal` (solver exit -9); main `4a871e3` controls passed
+(227.97 s and 250.10 s). Both tests passed in the later full runs. The second
+full run additionally failed `k1_preview` (60.03 s timeout) and
+`k1_preview_mpi_surface` (`jsoncons::ser_error`, JSON syntax_error at line 1
+and column 1); main `e6b7238` controls passed (35.38 s and 43.60 s total).
+Both preview tests passed in the final full run. All preceding failures remain
+reported; none was removed by relaxing a check.
+
+After the stop condition, `origin/main` was observed at `d26326c`. It was not
+merged or tested further because code work had stopped. The measured branch
+and control baseline remains the explicitly named `e6b7238` snapshot.
+
+This gate checks implementation of the agreed trace-map model; explicit finely
+resolved copper validation remains outside this gate.
