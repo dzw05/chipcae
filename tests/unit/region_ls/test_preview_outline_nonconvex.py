@@ -191,7 +191,13 @@ class PreviewOutlineNonconvex(unittest.TestCase):
                 arrays = self.read_arrays(stem, context)
                 points = arrays['Points'].astype(np.float64)
                 fractions = arrays['CellData/vol_frac'].astype(np.float64)
-                connectivity = arrays['Connectivity'].reshape(-1, 8)
+                connectivity = arrays['Connectivity']
+                # VTKHDF stores eight integer node references per background hex.
+                # Validate the stored layout before reshape can hide a malformed array.
+                self.assertEqual(connectivity.ndim, 1, context)
+                self.assertTrue(np.issubdtype(connectivity.dtype, np.integer), context)
+                self.assertEqual(connectivity.size % 8, 0, context)
+                connectivity = connectivity.reshape(-1, 8)
                 kinds = arrays['CellData/cell_kind']
                 self.assertEqual(fractions.shape, (len(connectivity),), context)
                 self.assertEqual(kinds.shape, (len(connectivity),), context)
