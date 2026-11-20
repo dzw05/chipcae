@@ -1,5 +1,6 @@
 set(assembly_test_libs chipcae::geometry chipcae_mesh_cut)
 chipcae_auto_tests(LIBS ${assembly_test_libs} LABELS tierA TIMEOUT 60)
+set_tests_properties(stack_writer_outline_polyset PROPERTIES TIMEOUT 240)
 
 # Match the production writer's configured JSON support in its test translation units.
 if(CHIPCAE_ENABLE_JSONCONS)

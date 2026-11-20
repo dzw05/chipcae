@@ -116,7 +116,7 @@ def step_generator():
     return str(generator)
 
 
-def solve_stack(root, stack, name):
+def solve_stack(root, stack, name, timeout=40):
     """Use the established FCBGA solve case with constant material tables."""
     require('MFEM')
     require('MPI')
@@ -149,5 +149,5 @@ def solve_stack(root, stack, name):
     destination = root / name
     check(subprocess.run([str(BUILD / 'apps/chipcae-solve/chipcae-solve'), '--case',
                           str(root / 'case.json'), '--profile', str(root / 'profile.json'),
-                          '--out', str(destination)], text=True, capture_output=True, timeout=40), 0)
+                          '--out', str(destination)], text=True, capture_output=True, timeout=timeout), 0)
     return json.loads((destination / 'manifest.json').read_text())
