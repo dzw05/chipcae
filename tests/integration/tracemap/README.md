@@ -6,9 +6,9 @@
 
 ## 源码基线
 
-2026-11-20 本轮复核起点为 `7033fabd6a9f6dead041d250fdaeb9e748835979`，工作区干净。
+2026-11-20 本轮复核起点为 `c5e9b918b8fffb3451c0fa411dc657e3d9be524d`，工作区干净。
 `git ls-remote origin refs/heads/main refs/heads/solve/fvm-thermal-cutcell` 实测 main 为
-`e6216add38d2d0e130fdf222c4c17845a342cc04`，与本地 origin/main 一致；#204 的远端
+`d26326c50520cb398e8819e554145f38e4b0544b`，fetch 后与本地 origin/main 一致；#204 的远端
 head 和当前依赖基线仍为 `995424f5f56c6e90f538fe64ac2ca35c068682bf`。该依赖是当前
 HEAD 的祖先，不是 main 的祖先；main 仍缺少 B 组需要的热 FVM grid/thermal 源码。
 B 组继续在依赖分支源码上运行，未合并 main。
@@ -259,3 +259,53 @@ SKIP、5 FAIL**，CTest 返回 8，耗时 2815.19 s。全部 24 个 tracemap cas
 在完整配置中通过。没有为此修改生产代码、已有断言或超时。
 **全量 CTest 全绿条件仍未达到**。
 macOS/Apple clang、其他后端及远端 CI/ci-ok：未执行。本轮仅本地提交，不推送。
+
+## 最终执行复核（起点 c5e9b91）
+
+2026-11-20 实测：现有实现已覆盖 brief 的 24 个 case，本轮只更新本文的实际基线和
+验证证据，没有重复新增测试或修改验收断言。远端 main 前进到上述 d26326c，仍未包含
+995424f 依赖；继续使用已有叠加分支，不合并 main。B 组私有 src include 因复用的
+`fvm_test_util.hpp` 直接包含 `mfd_local.hpp` 而保留；不增加未定义的 C 组。
+
+使用共享槽 shim 优先的 plain cmake/ctest 命令，重新配置并完成两个已有 Release
+构建树的完整构建，warnings-as-errors 开启，均返回 0。`build-tracemap-release`
+的验收实测 **24/24（8 PASS + 16 strict XFAIL）**，6.18 s；既有 copper-map/FVM
+回归 **4/4 PASS**，14.12 s。全部 30 行数值输出与本文已有实测行逐行一致。
+
+ECAD OFF、仅 ECAD、完整后端的登记数量实测为 0/17/24，xfail 数量为 0/12/16；
+标签、60/600 s 超时、完整名称正则和无 WILL_FAIL 均通过核对。前两个配置仅重新
+配置和列举登记，未重新构建。checker 的 12 项返回值、边界及非有限输入检查，
+以及两个 dispatcher 的 10 项非法参数检查均通过（外部 CTest，2.27 s）。
+外部解析目标驱动实测仍为 **16/16 失败**（返回 8，3.21 s），每项输出对应的 XFAIL
+且匹配独立现行预测，没有 XPASS、WRONG-REASON 或 ERROR；仓库登记保持 strict xfail。
+
+clang-format 23.1.5 的 `-i` 和 `--dry-run --Werror` 返回 0，三个 C++ 文件未产生差异。
+外部严格正则探针实测仅接受 contract 和匹配预测的 XFAIL；XPASS、WRONG-REASON、
+非有限输入、XFAIL 附带 ERROR、缺少标记、名称只有前缀相同均被拒绝，
+结果为预期的 2 通过/6 拒绝，CTest 返回 8（0.02 s）。该探针不登记到仓库测试中。
+
+完整可选后端 Release 配置的未筛选全量 CTest 使用原断言、原超时和 parallel 2，
+实测 **355 项：334 PASS、13 个既有 SKIP、8 FAIL**，返回 8，耗时 1485.96 s。
+全部 24 个 tracemap case、copper-map 和三个 FVM 回归在这次全量运行中也通过；
+安装、重定位、TGZ 打包和 MPI/HDF5 输出通过。失败清单如下：
+
+| 失败 case | 本轮全量首跑实测 |
+| --- | --- |
+| solve_preview_mesh_digest | 解析输出时 JSONDecodeError，第 1 行第 1 列 |
+| solve_ghost_scan | 原有 300 s 超时，CTest 实测 311.22 s；原因未确认 |
+| solve_column_gmg_fcbga | reference-fine-direct 子进程返回 -9；原因未确认 |
+| solve_column_gmg_fcbga_scaling | coarse 通过，scaling-fine-gmg 子进程返回 -9；原因未确认 |
+| f1130_uncut_cli_e2e | In1.Cu 实测 0.09，既有预期为 0 |
+| stack_writer_outline_polyset | solve 返回 11，duplicate material id |
+| import_assembly_cf_chain | solve 返回 11，duplicate material id |
+| ecaddiff_import_pair | summary 实测 hard/discuss/info=0/0/14，既有预期 11/0/5 |
+
+这些失败均位于本轮未修改的既有测试/产品路径。**全量 CTest 全绿条件未达到**；
+没有改动禁改路径、放宽断言或超时、删除或排除测试来隐藏失败。
+macOS/Apple clang、其他可选后端及远端 CI/ci-ok：未执行。
+
+本轮新增出现的三项失败使用同环境、全新临时目录、原断言和原超时串行复核，
+实测 **3/3 PASS**，返回 0，合计 366.65 s：`solve_preview_mesh_digest` 9.81 s、
+`solve_ghost_scan` 228.35 s、`solve_column_gmg_fcbga` 128.47 s。首跑失败原因仍未确认，
+复核通过不改变全量首跑失败的事实。其余五项已有相同失败记录，本轮不再重复复跑；
+未修改或隐藏失败，未宣称全量全绿或远端 CI 通过。
