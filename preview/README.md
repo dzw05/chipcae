@@ -63,17 +63,32 @@ change together with solve's non-convex outline support. Self-intersecting outli
 still exit 13, and holes remain unsupported. Convex and empty outlines delegate to
 the default cutter and retain identical output.
 
+```sh
+chipcae-preview input.stack.json --nx 8 --ny 8 --levels 1 --max-ratio 10 \
+  --nonconvex-outline -o output.vtkhdf
+```
+
+The flag takes no value. Repeating it exits 1 with
+`duplicate option: --nonconvex-outline`. A cut that leaves disconnected solid
+pieces within one background cell remains unsupported (exit 13).
+
 Regions with a `footprint.polygon` are clipped in the same pass as the outline:
 `region_cut_planes` supplies the extra planes to the selected cutter. Errors use
 the shared mapping: `CUT_UNSUPPORTED` and `outline.unsupported` exit 13;
 other clipping errors, including `INPUT_INVALID`, exit 14.
 
-The success event reports `cell_count`, `cut_cell_count`, and `mesh_sha256` after
-clipping. `cut_cell_count` agrees with the number of `cell_kind=1` entries in
-VTKHDF; `vol_frac` contains the retained volume fractions. Grids with no outline
-or region polygons have zero cut cells. Use identical integer grid parameters and
-ratio settings to compare preview and solve digests.
+The success event reports `cell_count`, `node_count`, `cut_cell_count`, and
+`mesh_sha256` after clipping. Non-convex cutting removes cells with no retained
+volume and their unused nodes. Each retained background cell is counted once,
+even when it intersects several decomposition pieces. `cell_count` matches the
+number of eight-node hexes in Connectivity, and `node_count` matches the number
+of Points. `cut_cell_count` agrees with the number of `cell_kind=1` entries in
+VTKHDF. `vol_frac` contains the retained volume fractions, relative to each
+original background hex. Grids with no outline or region polygons have zero cut
+cells. Use identical integer grid parameters and ratio settings to compare
+preview and solve digests.
 
 An external polyset layer named `outline` without an inline polygon is unsupported:
 preview exits with `CUT_UNSUPPORTED` (13) and explains that an inline polygon is
 required. It does not silently preview the bounding box in this case.
+This rejection also applies with `--nonconvex-outline`.
