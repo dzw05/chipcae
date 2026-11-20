@@ -405,7 +405,7 @@ jobs:
             -DCMAKE_PREFIX_PATH="$PWD/build-k1-deps/prefix" \
             -DCHIPCAE_ENABLE_MPI=ON -DCHIPCAE_ENABLE_MFEM=ON \
             -DCHIPCAE_ENABLE_HYPRE=ON -DCHIPCAE_ENABLE_HDF5=ON -DCHIPCAE_ENABLE_JSONCONS=ON \
-            -DCHIPCAE_ENABLE_ECAD=ON -DCHIPCAE_ENABLE_OCCT=ON -DPython3_EXECUTABLE=/usr/bin/python3 \
+            -DCHIPCAE_ENABLE_ECAD=ON -DCHIPCAE_ENABLE_OCCT=ON -DCHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE=ON -DPython3_EXECUTABLE=/usr/bin/python3 \
             -DCMAKE_DISABLE_FIND_PACKAGE_Clipper2=TRUE \
             -DCMAKE_DISABLE_FIND_PACKAGE_EXPAT=TRUE
           python3 - <<'PY'
@@ -474,6 +474,7 @@ jobs:
           name: mesh-full-results
           path: |
             build-k1-full/mesh-results.xml
+            build-k1-full/n11-geometry-on.xml
             build-k1-full/Testing/Temporary/LastTest.log
 
       - name: Fail if a cache key could not be replaced
