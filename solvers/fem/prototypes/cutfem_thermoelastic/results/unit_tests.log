@@ -1,0 +1,11 @@
+PASS Kokkos thermal/elastic cut assembly and Nt=16 strip solution
+PASS Kokkos Timoshenko Nt=16 displacement relative error=0
+PASS plane strain material and engineering shear
+PASS cut area/perimeter, tags, offsets, CV IDs and fitted boundary
+PASS recursive subdivision vs half-plane (degree 4 moments and CutLayer CSR)
+PASS elastic -div(sigma) finite difference max error=5.2072e-12
+PASS thermal linear cut patch max nodal error=1.66533e-15
+PASS elastic linear cut patch max nodal error=2.44249e-15
+PASS hypre PCG iterations=4
+PASS banded/PCG agreement, elimination, Lanczos eigenvalues, indefinite detection
+All unit tests passed
