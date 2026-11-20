@@ -92,7 +92,9 @@ ResultControls::ResultControls(ResultView& view, ResultSession& session, QWidget
                                                  .arg(view.colorBarTitle())
                                                  .arg(range.min, 0, 'g', 16)
                                                  .arg(range.max, 0, 'g', 16)
-                                           : QString("Field: unavailable");
+                               : view.colorField() == ResultColorField::Temperature
+                                   ? QStringLiteral("无温度场")
+                                   : QString("Field: unavailable");
         summary->setText(view.tmaxText() + "\n" + fieldText + "\n" + view.summary("warpage_pv") +
                          "\n" + view.summary("U_mag_max"));
     };
