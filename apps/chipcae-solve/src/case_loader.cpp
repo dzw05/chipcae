@@ -245,12 +245,10 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
                                  layer.coordinates[2 * i + 1] * polygons.dbu_m});
                     }
         for (const auto& layer : out.stack.layers)
-            if (std::any_of(layer.regions.begin(),
-                            layer.regions.end(),
-                            [](const auto& region) { return !region.footprint.polygon.empty(); }) ||
-                (layer.copper && layer.copper->polygons))
-                throw InputError(ErrorCode::CUT_UNSUPPORTED,
-                                 "internal material cuts are not supported");
+            for (const auto& region : layer.regions)
+                if (!region.footprint.polygon.empty())
+                    throw InputError(ErrorCode::CUT_UNSUPPORTED,
+                                     "internal material cuts are not supported");
 
         const auto& m = c.at("mesh");
         if (m.at("type").as<std::string>() != "aligned_cartesian_cut")
@@ -308,22 +306,40 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
                 return;
             if (std::regex_match(target, std::regex("face:(xmin|xmax|ymin|ymax|zmin|zmax)")))
                 return;
-            if (target.starts_with("layer:"))
+            if (target.starts_with("layer:")) {
                 for (const auto& layer : out.stack.layers)
                     if (layer.name == target.substr(6))
                         return;
+                const auto prefix = target.substr(6) + "#";
+                auto count = std::count_if(
+                    out.stack.layers.begin(), out.stack.layers.end(), [&](const auto& layer) {
+                        return layer.name.starts_with(prefix);
+                    });
+                // Counting every prefixed name also rejects malformed suffixes:
+                // only the canonical, consecutive sequence #0,...,#(count-1) is valid.
+                if (count > 0) {
+                    for (decltype(count) k = 0; k < count; ++k)
+                        if (std::none_of(out.stack.layers.begin(),
+                                         out.stack.layers.end(),
+                                         [&](const auto& layer) {
+                                             return layer.name == prefix + std::to_string(k);
+                                         }))
+                            invalid("invalid target: " + target);
+                    return;
+                }
+            }
             invalid("invalid target: " + target);
         };
-        bool mech = false, temp_from = false;
+        bool mechanical = false, temp_from = false;
         for (const auto& physics : c.at("physics").array_range()) {
             auto id = physics.at("id").as<std::string>();
             if (id == "thermal" && !out.thermal &&
                 physics.at("solver").as<std::string>() == "fem.conduction" &&
                 physics.at("mode").as<std::string>() == "steady")
                 out.thermal = true;
-            else if (id == "mech" && !mech &&
+            else if (id == "mech" && !mechanical &&
                      physics.at("solver").as<std::string>() == "fem.solid") {
-                mech = true;
+                mechanical = true;
                 if (physics.contains("temp_from")) {
                     if (physics.at("temp_from").as<std::string>() != "thermal")
                         invalid("invalid temp_from");
@@ -369,29 +385,31 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
             }
             out.loads.push_back(load);
         }
-        if (!mech || (out.thermal ? (uniform != 0 || !temp_from || anchors == 0)
-                                  : (uniform != 1 || temp_from || thermal_loads != 0)))
+        if (out.thermal ? (uniform != 0 || (mechanical && !temp_from) || anchors == 0)
+                        : (!mechanical || uniform != 1 || temp_from || thermal_loads != 0))
             invalid("inconsistent temperature sources");
-        const auto& constraints = c.at("constraints");
-        if (constraints.contains("rigid") == constraints.contains("fixed"))
-            invalid("choose rigid or fixed constraints");
-        if (constraints.contains("rigid")) {
-            if (constraints.at("rigid").as<std::string>() != "3-2-1")
-                invalid("invalid rigid constraint");
-            (void)check_id(constraints);
-        } else {
-            for (const auto& fixed : constraints.at("fixed").array_range()) {
-                (void)check_id(fixed);
-                auto target = fixed.at("target").as<std::string>();
-                check_target(target);
-                if (target == "boundary:embedded")
-                    throw InputError(
-                        ErrorCode::CUT_UNSUPPORTED,
-                        "embedded fixed displacement is not supported: Nitsche is not implemented");
-                out.fixed.push_back(target);
+        if (mechanical) {
+            const auto& constraints = c.at("constraints");
+            if (constraints.contains("rigid") == constraints.contains("fixed"))
+                invalid("choose rigid or fixed constraints");
+            if (constraints.contains("rigid")) {
+                if (constraints.at("rigid").as<std::string>() != "3-2-1")
+                    invalid("invalid rigid constraint");
+                (void)check_id(constraints);
+            } else {
+                for (const auto& fixed : constraints.at("fixed").array_range()) {
+                    (void)check_id(fixed);
+                    auto target = fixed.at("target").as<std::string>();
+                    check_target(target);
+                    if (target == "boundary:embedded")
+                        throw InputError(ErrorCode::CUT_UNSUPPORTED,
+                                         "embedded fixed displacement is not supported: Nitsche is "
+                                         "not implemented");
+                    out.fixed.push_back(target);
+                }
+                if (out.fixed.empty())
+                    invalid("empty fixed constraints");
             }
-            if (out.fixed.empty())
-                invalid("empty fixed constraints");
         }
         if (c.contains("process"))
             invalid("process is not supported in case/1.0");
@@ -409,7 +427,14 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
         const auto& output = c.at("output");
         if (output.at("format").as<std::string>() != "vtkhdf")
             invalid("invalid output format");
-        out.fields = {"T", "U", "layer_id", "material_id", "cell_kind", "elem_gid"};
+        out.fields = {"T",
+                      "U",
+                      "layer_id",
+                      "material_id",
+                      "cell_kind",
+                      "elem_gid",
+                      "copper_fraction",
+                      "conductivity_diag"};
         if (output.contains("fields")) {
             std::set<std::string> selected;
             for (const auto& field : output.at("fields").array_range()) {
@@ -483,7 +508,7 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
             for (double nu : material.nu_table.values)
                 if (!(nu > -1 && nu < 0.5))
                     invalid("material " + material.id + "/nu: must be between -1 and 0.5");
-            if (out.thermal)
+            if (out.thermal || card.contains("conductivity"))
                 material.k = finite(card, "conductivity", true);
             if (!out.materials.emplace(material.id, material).second)
                 throw InputError(ErrorCode::MATERIAL_ID_DUPLICATE, "duplicate material id");
@@ -494,7 +519,8 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
                                  "material mapping missing: " + id);
         };
         for (const auto& layer : out.stack.layers) {
-            mapped(layer.material);
+            if (!layer.material.empty())
+                mapped(layer.material);
             for (const auto& region : layer.regions)
                 mapped(region.material);
             if (layer.copper)

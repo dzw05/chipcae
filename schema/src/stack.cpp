@@ -200,7 +200,8 @@ Expected<StackModel> load_stack(const std::filesystem::path& file,
         if (j.contains("external_refs"))
             for (const auto& r : j.at("external_refs").array_range()) {
                 auto relative = std::filesystem::path(r.at("path").as<std::string>());
-                auto root = std::filesystem::weakly_canonical(file.parent_path());
+                auto root = std::filesystem::weakly_canonical(std::filesystem::absolute(file))
+                                .parent_path();
                 auto target = std::filesystem::weakly_canonical(root / relative);
                 auto rel = target.lexically_relative(root);
                 if (relative.is_absolute() || rel.empty() || *rel.begin() == "..")

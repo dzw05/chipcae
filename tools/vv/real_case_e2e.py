@@ -229,20 +229,21 @@ def _summary(run_dir):
 
 
 def _datasets(root, prefix="VTKHDF"):
-    """Digest only the V-INT-10 array whitelist, never Assembly or metadata."""
+    """Digest every block dataset, excluding Assembly and reserved fields."""
     import h5py
     for block_name in sorted(root):
         if block_name == "Assembly" or not isinstance(root[block_name], h5py.Group):
             continue
         block = root[block_name]
-        for field in sorted(("Points", "Connectivity", "Offsets", "Types")):
-            if field in block:
-                yield f"{prefix}/{block_name}/{field}", block[field]
-        for group in ("CellData", "PointData"):
-            if group in block:
-                for field in sorted(block[group]):
-                    if field != "reserved" and isinstance(block[group][field], h5py.Dataset):
-                        yield f"{prefix}/{block_name}/{group}/{field}", block[group][field]
+        datasets = []
+
+        def collect(name, item):
+            if isinstance(item, h5py.Dataset) and name.rsplit("/", 1)[-1] != "reserved":
+                datasets.append((f"{prefix}/{block_name}/{name}", item))
+
+        # Includes FieldData and nested PolyData topology, without following soft links.
+        block.visititems(collect)
+        yield from datasets
 
 
 def run_digest(run_dir: Path, events: list[dict]) -> dict:
@@ -257,7 +258,11 @@ def run_digest(run_dir: Path, events: list[dict]) -> dict:
                 continue
             values = dataset[...]
             if values.dtype.hasobject:
-                raise ValueError("digest arrays must have a value dtype: " + path)
+                if h5py.check_string_dtype(dataset.dtype) is None:
+                    raise ValueError("digest arrays must have a value dtype: " + path)
+                # The exporter uses variable-length strings in FieldData. Replace
+                # object pointers with fixed-width bytes sized from their values.
+                values = np.asarray(values, dtype="S")
             values = np.ascontiguousarray(values, dtype=values.dtype.newbyteorder("<"))
             fields[path] = hashlib.sha256(values.tobytes(order="C")).hexdigest()
     iterations, residual = {}, {}
@@ -312,8 +317,7 @@ def _check_c2(run_dir: Path, events: list[dict]) -> bool:
         reader.summarize(Path(run_dir))
         with h5py.File(_vtk_path(run_dir), "r") as output:
             for block in _volume_blocks(output):
-                count = int(block["NumberOfCells"][...].sum())
-                if count and not all(path in block for path in (
+                if not all(path in block for path in (
                     "PointData/T", "PointData/U", "CellData/layer_id", "CellData/material_id",
                     "CellData/cell_kind", "CellData/elem_gid", "CellData/volume")):
                     return False
@@ -350,7 +354,7 @@ def _check_c4(events: list[dict]) -> bool:
     energy = _energy(events)
     return bool(energy is not None
                 and {"heat_in", "heat_out", "imbalance", "iterations"} <= energy.keys()
-                and _finite(energy) and energy["imbalance"] <= 1e-9)
+                and _finite(energy) and abs(energy["imbalance"]) <= 1e-9)
 
 
 def _check_c5(run_dir: Path, energy: dict) -> bool:
@@ -438,6 +442,34 @@ def _check_w3(run_dir: Path, constraints: dict) -> bool | None:
     try:
         points, u = _points_u(run_dir)
         return bool(len(points) and np.all(u[points[:, 2] == points[:, 2].min()] == 0))
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
+def _check_w4(run_dir: Path, events: list[dict], T_ref: float) -> bool:
+    import h5py
+    import numpy as np
+    # Zero U only proves temperature transfer when the auxiliary run actually
+    # solved both FVM physics with a valid, uniform reference-temperature field.
+    if not all((_check_c2(run_dir, events), _check_c3(events), _check_c4(events),
+                _check_c5(run_dir, _energy(events) or {}), _check_w1(run_dir, events),
+                _check_w2(run_dir))):
+        return False
+    try:
+        summary = _summary(run_dir)
+        if (summary["T_max"]["value"] != T_ref
+                or any(summary[key]["value"] != 0 for key in ("warpage_pv", "U_mag_max"))):
+            return False
+        has_temperature = False
+        with h5py.File(_vtk_path(run_dir), "r") as output:
+            for block in _volume_blocks(output):
+                temperature = block["PointData/T"][...]
+                has_temperature |= bool(temperature.size)
+                if not np.all(temperature == T_ref) or not np.all(block["PointData/U"][...] == 0):
+                    return False
+                if "CellData/T_cell" in block and not np.all(block["CellData/T_cell"][...] == T_ref):
+                    return False
+        return has_temperature
     except (OSError, ValueError, KeyError, TypeError):
         return False
 
@@ -770,6 +802,11 @@ def _missing(record, *, pending_checks=()):
     """List unavailable applicable data, independently of caller-supplied missing[]."""
     missing = []
     notes = " ".join(record.get("notes", []))
+    null_reasons = {
+        "C6": ("bounds 待定",),
+        "W3": ("tolerance 待定",),
+        "W5": ("comparison undefined", "comparison inapplicable", "real result diagnostic only"),
+    }
     inactive = {"status_detail"}
     if record.get("kind") != "assembly":
         inactive.add("assembly")
@@ -793,7 +830,10 @@ def _missing(record, *, pending_checks=()):
                             continue
                         if check == "C8" and "mpi" in notes.lower():
                             continue
-                        if check in ("C6", "W3", "W5") and check in notes:
+                        if check in null_reasons and any(
+                                note.startswith(check + ":")
+                                and any(reason in note for reason in null_reasons[check])
+                                for note in record.get("notes", [])):
                             continue
                         if check == "W4" and record.get("data_class") == "real" and "W4" in notes:
                             continue
@@ -828,13 +868,28 @@ def _check_c9(record: dict) -> bool | None:
     return not record.get("missing") and not _missing(record, pending_checks=("C9",))
 
 
+def _check_a3(record, *, pending_checks=()):
+    checks = record["checks"]
+    expected = set(_check_names("assembly", bool({"W1", "W2", "W4"} & checks.keys())))
+    if set(checks) != expected or any(value is False for key, value in checks.items() if key != "A3"):
+        return False
+    missing = set(_missing(record, pending_checks=("A3", *pending_checks)))
+    return None if any("checks." + key in missing for key in expected) else True
+
+
 def _host():
     memory = None
     try:
-        for line in Path("/proc/meminfo").read_text().splitlines():
-            if line.startswith("MemTotal:"):
-                memory = int(line.split()[1])
-    except (OSError, ValueError):
+        if sys.platform == "darwin":
+            memory = int(subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True,
+                                                stderr=subprocess.DEVNULL, timeout=5)) // 1024
+        else:
+            for line in Path("/proc/meminfo").read_text().splitlines():
+                if line.startswith("MemTotal:"):
+                    memory = int(line.split()[1])
+        if memory is not None and memory <= 0:
+            memory = None
+    except (OSError, ValueError, subprocess.SubprocessError):
         pass
     return dict(nproc=os.cpu_count(), mem_total_kib=memory)
 
@@ -1087,6 +1142,8 @@ def _solve_run(record, folder, inputs, output, stage, ranks, exes, mpi, timeout_
                           "-o", output / "readback.json"], "readback_" + stage, folder, record, timeout_s)
     if readback["exit_code"]:
         _stage_error(record, readback, folder)
+        record["notes"].append(f"readback_{stage}: downstream checks and digest interrupted")
+        return entry, None
     return entry, decode_events(output / "events.bin")
 
 
@@ -1115,7 +1172,6 @@ def _resource_retry(record, entry, folder, inputs, case, exes, mpi, timeout_s, s
 
 
 def _auxiliary(record, folder, inputs, case, exes, mpi, timeout_s, source_root, primary):
-    import numpy as np
     if record["kind"] == "thermal" or "W1" not in record["checks"]:
         return
     if record["data_class"] != "synthetic":
@@ -1155,8 +1211,7 @@ def _auxiliary(record, folder, inputs, case, exes, mpi, timeout_s, source_root, 
         if name == "W3":
             record["checks"][name] = _check_w3(out, variant["constraints"])
         elif name == "W4":
-            _, u = _points_u(out)
-            record["checks"][name] = bool(np.all(u == 0) and _summary(out)["warpage_pv"]["value"] == 0)
+            record["checks"][name] = _check_w4(out, events, variant["physics"][1]["T_ref"])
         else:
             fem = _summary(out)["warpage_pv"]["value"]
             fvm = _summary(primary)["warpage_pv"]["value"]
@@ -1224,8 +1279,6 @@ def _pipeline(record, folder, kind, params, resolved, nps, repeat, source_root, 
                                    bodies=_bodies(_json(inputs / "stack.json")) if (inputs / "stack.json").is_file() else None,
                                    split_layers=report.get("parts", {}).get("split_layers"),
                                    b_tier_defects=[d.get("defect_id") for d in report.get("defects", []) if d.get("tier") == "B"])
-        expected_checks = set(_check_names("assembly", w_ready))
-        record["checks"]["A3"] = set(record["checks"]) == expected_checks and not {"W3", "W5"} & set(record["checks"])
     if imported["exit_code"]:
         _stage_error(record, imported, folder)
         return
@@ -1403,10 +1456,16 @@ def _finalize(record, folder, usage):
             record["checks"]["C10"] = False
     else:
         record["checks"]["C10"] = _check_c10(result_path, record["data_class"])
+    # A3 and C9 depend on each other: seed A3 from the evaluated checks, then
+    # include C9's completeness result in the final assembly aggregate.
+    if record["kind"] == "assembly" and not usage:
+        record["checks"]["A3"] = _check_a3(record, pending_checks=("C9",))
     # C9 depends on the finalized data gate; only its own result is pending.
     record["missing"] = sorted(set(_missing(record, pending_checks=("C9",)) + invalid_numbers))
     if not usage:
         record["checks"]["C9"] = _check_c9(record)
+        if record["kind"] == "assembly":
+            record["checks"]["A3"] = _check_a3(record)
     record["missing"] = sorted(set(_missing(record) + invalid_numbers))
     _set_verdict(record, usage)
     _write_json(result_path, _result(record))
@@ -1414,6 +1473,8 @@ def _finalize(record, folder, usage):
     # check without regenerating result.json as well.
     if record["checks"]["C10"] is not None:
         record["checks"]["C10"] = _check_c10(result_path, record["data_class"])
+        if record["kind"] == "assembly" and not usage:
+            record["checks"]["A3"] = _check_a3(record)
         _set_verdict(record, usage)
         _write_json(result_path, _result(record))
     _write_json(folder / "run_record.json", record)
@@ -1505,10 +1566,13 @@ def main(argv=None):
         record, folder = _run_item(args.kind, params, args.out_root, args.nps, args.repeat, args.source_root)
     except (OSError, ValueError, TypeError) as exc:
         def flag(name, default=None):
-            try:
-                return argv[argv.index(name) + 1]
-            except (ValueError, IndexError):
-                return default
+            # Match argparse's equals syntax and last-value rule even when an
+            # earlier malformed option prevented it from reaching these paths.
+            for index in range(len(argv) - 1, -1, -1):
+                option, equals, value = argv[index].partition("=")
+                if option == name:
+                    return value if equals else argv[index + 1] if index + 1 < len(argv) else default
+            return default
         # Malformed CLI input still follows the shared usage-record finalizer.
         source = Path(flag("--source-root", SOURCE_ROOT)).resolve()
         out = flag("--out-root")

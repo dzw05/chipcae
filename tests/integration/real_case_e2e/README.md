@@ -14,13 +14,20 @@ ctest --test-dir build-realcase --output-on-failure -L integration -R 'f1130|dem
 ctest --test-dir build-realcase --output-on-failure
 ```
 
-The unit test needs numpy and h5py, but no compiled solver, MPI or CAD backend.
+The unit test needs numpy, but no compiled solver, MPI or CAD backend. HDF5
+fixtures and reader checks import h5py when used and skip with `h5py not installed`
+if it is unavailable. Parameter, stage-error, exit-status, envelope and data-gate
+checks still run, including cell_budget transmission before preview rejection.
+The unit CTest entry has the brief's `integration;vv` labels; it is independent
+of the backend and is intentionally excluded from the `numerical` label.
 It generates valid temporary manifest/VTKHDF/CAELOG1 fixtures. Temporary external
 programs exercise the driver's actual subprocess, resource and record handling;
 their output provides no evidence of numerical accuracy. The E2Es use a 4 by 4,
 level-zero mesh, two serial runs and one two-rank run when MPI is available.
 Assembly generates a lid and ring, imports the board to discover its attachment
 layer, and checks box regions and material names from the exported ID table.
+The importer writes `import_report.json` beside `stack.json`; `--report` selects
+the separate `defects.json` output. A1 reads `import_report.json`.
 
 The CLI accepts only these options:
 
@@ -62,18 +69,28 @@ F-1130 thermal loads, Rigid321, Jacobi with rtol=1e-12, T_ref=298.15 and a
 | C8 | Serial/two-rank mesh, partition and QoI agreement; null without MPI |
 | W1/W2 | Warpage and assembly when W is ready |
 | W3 | Separate synthetic warpage run with exactly zero fixed-bottom U |
-| W4 | Separate synthetic warpage/assembly run with exactly zero U at uniform T_ref |
+| W4 | Separate synthetic warpage/assembly run; valid FVM thermal/solid checks, uniform T_ref fields/summary and exactly zero U/warpage |
 | W5 | Synthetic noncut warpage FEM comparison, relative difference <= 0.05 |
-| A1/A2/A3 | Assembly bodies/weld count/defects, material membership and check policy |
+| A1/A2/A3 | Assembly bodies/weld count/defects, material membership and applicable check results |
+
+A3 aggregates the finalized common, assembly and applicable mechanical checks.
+An evaluated failure, including C9 or C10, makes A3 false. Required checks
+interrupted by dependencies leave A3 null; explicitly allowed nulls such as C8
+without MPI do not prevent A3 from passing. W3 and W5 remain excluded.
 
 Thresholds are unchanged: 1e-8 K temperature tolerance, 1e-8 parallel relative
 error, 1e-9 energy imbalance, exact repeat hashes and exact W3/W4 zeros.
-The W5 5% bound comes from the fvm-thermoelastic-cutcell brief's comparison
-criteria for synthetic noncut cases (comparison section, line 93).
+V-INT-12 requires W5 to compare synthetic noncut warpage with an independent
+FEM run: abs(FVM warpage_pv - FEM warpage_pv) / FEM warpage_pv <= 0.05, with
+a positive FEM reference. This is the prescribed 5% acceptance bound.
 Vertex temperature overshoot and recomputed vertex warpage are diagnostics.
+C6 always checks the summary temperature upper bound; it also checks the cell
+minimum when the optional T_cell field is available.
 Digests use mesh SHA, the ordered three-QoI whitelist as float.hex, final
 per-field iterations/residuals, and little-endian contiguous array values from
-the V-INT-10 dataset whitelist. Assembly links, reserved fields, metadata,
+every dataset in the top-level VTKHDF blocks, including counts, FieldData and
+nested surface topology. Variable-length strings use fixed-width byte arrays
+sized from their values before hashing. Assembly links, reserved fields, attributes,
 timing, logs, paths and file bytes are excluded. Raw file SHA values are recorded
 separately. Exported material IDs are one-based indices into material_names;
 material-library ordering never defines them.
@@ -93,16 +110,21 @@ Commands carry per-process monotonic wall time and wait4 RSS. A watchdog kills
 the process group on timeout. A real solve timeout/signal retries once with
 halved nx/ny in separate inputs/output directories; the invocation still fails.
 Synthetic inputs never receive that retry.
+Host memory comes from MemTotal on Linux and `sysctl -n hw.memsize` on macOS,
+converted to KiB. An unavailable or invalid probe remains explicit missing data.
 
 Readiness requires the upstream fvm_pipeline.cpp for T, elastic.hpp and removal
 of the thermal-only marker for W, and T plus geometry=ON for A. Assembly checks
 only the nearest capability file ascending from the resolved import executable;
 it never borrows another build's capabilities. Assembly evaluates W separately.
+All cases retain the required thermal and mech physics declarations. Before W
+is ready, the thermal-only solver stage supplies temperature results; the
+driver omits mechanical checks, auxiliary runs and mechanical result QoIs.
 An unavailable E2E prints `SKIP: <kind> upstream not merged: <reason>
 (NEEDS-ATTENTION)` and returns 77 before generating inputs. A missing actual
 welded_interfaces count fails A1; it is never synthesized or converted to 77.
 
-`result.json` uses the frozen `chipcae.vv_result/0.2` contract and the existing
+`result.json` uses the `chipcae.vv_result/0.2` schema and the existing
 data-class checker. Dependency interruptions use its `skip` verdict; the
 `needs_attention` verdict, item-specific reasons and exit code 77 remain in
 `run_record.json`. The result notes also retain those reasons. The v0.2
@@ -122,6 +144,9 @@ The following conservative specification deviations are explicit:
 - C9 excludes normal null status_detail, inapplicable sections, absent optional
   T_cell extrema and explicitly explained unavailable displacement diagnostics.
   Dependency-interrupted C1/C9 stay null. Other missing required data fails C9.
+  Null C6/W3/W5 require a note prefixed by that check and an explicit pending
+  bound, inapplicable/undefined comparison or real-result diagnostic reason.
+  A check-name mention or failure note alone does not explain a missing result.
 - C6 is null with a pending-bound note for custom loads or a body source. C8
   accepts identical zeros; an unequal zero-denominator comparison stays null
   with a pending-bound note. No new numerical tolerance is assigned.
