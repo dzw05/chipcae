@@ -108,6 +108,8 @@ class PreviewRegionPlanes(unittest.TestCase):
                 points = grid['Points'][:]
                 connectivity = grid['Connectivity'][:].reshape(-1, 8)
                 corners = points[connectivity]
+                # Connectivity contains full, axis-aligned background hexes;
+                # clipping is represented by vol_frac, so bounding boxes give full cell volumes.
                 cell_volume = np.prod(corners.max(axis=1) - corners.min(axis=1), axis=1)
                 fractions = grid['CellData/vol_frac'][:]
                 cut_count = int(np.count_nonzero(grid['CellData/cell_kind'][:] == 1))

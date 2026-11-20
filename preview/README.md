@@ -7,6 +7,9 @@ Without either dependency the executable remains available and reports
 `NOT_IMPLEMENTED` (exit 2). The schema path is bound to this source tree at
 configure time; this entry point does not yet provide an installed schema layout.
 
+The Python preview acceptance tests require NumPy and h5py in the interpreter
+selected by CMake (`Python3_EXECUTABLE`).
+
 ```
 chipcae-preview input.stack.json --nx 2 --ny 2 --levels 0 -o output.vtkhdf
 ```
