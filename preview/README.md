@@ -58,8 +58,8 @@ written. Holes are unsupported.
 
 Regions with a `footprint.polygon` are clipped in the same pass as the outline:
 `region_cut_planes` supplies the extra planes to `apply_outline_cut`. Errors use
-the shared mapping: `CUT_UNSUPPORTED` exits 13; other paths, including
-`INPUT_INVALID`, exit 14.
+the shared mapping: `CUT_UNSUPPORTED` and `outline.unsupported` exit 13;
+other clipping errors, including `INPUT_INVALID`, exit 14.
 
 The success event reports `cell_count`, `cut_cell_count`, and `mesh_sha256` after
 clipping. `cut_cell_count` agrees with the number of `cell_kind=1` entries in
