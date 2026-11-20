@@ -1,0 +1,65 @@
+{
+  "id": "sp7-negative-material-layer",
+  "unit": "m",
+  "outline": {
+    "box": [
+      0,
+      0,
+      0.056,
+      0.044
+    ]
+  },
+  "symmetry": "none",
+  "package_type": "FCBGA",
+  "layers": [
+    {
+      "name": "base",
+      "kind": "Explicit",
+      "thickness": 0.0005,
+      "n_elem_min": 1,
+      "grading": 1,
+      "material": "silicon"
+    },
+    {
+      "name": "material_layer",
+      "kind": "Explicit",
+      "thickness": 0.001,
+      "n_elem_min": 1,
+      "grading": 1,
+      "material": "silicon",
+      "regions": [
+        {
+          "name": "rotated_rectangle",
+          "body": "rectangle",
+          "material": "copper",
+          "footprint": {
+            "box": [
+              0.014855975813916057,
+              0.013098616501035342,
+              0.04114402418608395,
+              0.03090138349896466
+            ],
+            "polygon": [
+              [
+                0.017961804355146306,
+                0.013098616501035342
+              ],
+              [
+                0.04114402418608395,
+                0.019310273583495838
+              ],
+              [
+                0.038038195644853695,
+                0.03090138349896466
+              ],
+              [
+                0.014855975813916057,
+                0.024689726416504163
+              ]
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
