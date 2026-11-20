@@ -6,9 +6,11 @@
 
 ## 源码基线
 
-2026-11-20 远端只读核实：main 为 `e8e86ceb9a4aacb45c806c0602a2a90474f54297`，
-#204 的 head 和当前依赖基线均为 `995424f5f56c6e90f538fe64ac2ca35c068682bf`。
-main 尚不包含该依赖，B 组在依赖分支源码上运行。
+2026-11-20 初次核实的 main 为 `e8e86ceb9a4aacb45c806c0602a2a90474f54297`；
+交付复核时 `git ls-remote` 和 `git fetch --no-tags origin main` 核实 main 已前进到
+`4a871e395b929755d2a532fde2bba794c27e2b59`。#204 的远端 head 和当前依赖基线仍为
+`995424f5f56c6e90f538fe64ac2ca35c068682bf`。该依赖不是新 main 的祖先，且新 main
+仍缺少 B 组需要的热 FVM grid/thermal 源码；B 组继续在依赖分支源码上运行。
 
 `rasterize_copper` 实际返回 Morton dense 序，测试用 `level0_dense` 读取；
 其头文件中的 row-major 注释与实现不符。当前基线 FEM pipeline 使用层常量 fraction，
@@ -38,7 +40,7 @@ B 组平板用 boxes 直接给 x/y 各四等分、z 为 `[0,35 µm]`；先从 he
 
 合并夹具是相邻两行等高盒：A 完整且全铜，B 仅保留贴着 A 的底部 0.1h 且无铜。
 先不标 small_subs 得到两个 CV，再标记重建得到一个 CV；检查合并前后 sum(fV)、
-f=1/1.1，以及 kxx 的体积加权并联目标。kyy 的目标是
+体积为 1.1、f=1/1.1（均为绝对容差 1e-12），以及 kxx 的体积加权并联目标。kyy 的目标是
 `1.1/(1/390+0.1/0.3)`，现行预测独立来自解析体积加权 fraction。
 
 ## Case 与容差
@@ -167,3 +169,38 @@ XFAIL tracemap_merge_directional_xfail observed=354.57272727272726 target=3.2748
 这些未改动路径的失败阻止了本次全量全绿；本卡只交付失败验收测试。
 macOS/Apple clang、其他可选后端配置：未执行。
 远端 CI/ci-ok：未执行，本次仅本地提交、不推送。
+
+## 同日实现复核
+
+复核起点为已提交且工作区干净的 `ef34937`，已有本卡的夹具、独立参考与 strict
+xfail 实现，没有未提交草稿。合并体积普通断言按计划收紧为绝对 `1e-12`，
+此前使用相对 `1e-12`；其余验收断言保留。重新执行 Release 构建成功，验收实测仍为
+24/24（8 PASS + 16 XFAIL，6.03 s），所有数值与上列输出逐行一致。
+外部解析目标驱动仍为 16/16 失败，且均打印匹配现行预测的 XFAIL；
+xfail 的解析目标、容差和判定均保留。
+
+重新核对登记矩阵 0/17/24、标签、超时、输出正则及无 WILL_FAIL；
+checker 的 12 项返回值/输出检查通过，正则驱动只接受 XFAIL，拒绝另外三种状态。
+两 dispatcher 共 10 项非法参数探针均返回 4 并列出完整名称。
+clang-format 23.1.5 的 `-i` 和 `--dry-run --Werror` 均成功。
+
+本轮完整 Release 回归使用原断言、原超时串行运行，实测 355 项：333 PASS、
+13 个既有 SKIP、9 FAIL，CTest 返回 8，耗时 3969.89 s；24 个 tracemap case 均通过。
+仍失败的六项为 `k1_preview_mpi_surface`、`solve_column_gmg_fcbga_scaling`、
+`f1130_uncut_cli_e2e`、`stack_writer_outline_polyset`、`import_assembly_cf_chain`、
+`ecaddiff_import_pair`。GMG scaling 本轮在 coarse 子进程退出 -9，其余诊断同上表。
+此前超时的 MPI/HDF5、cut-results，以及 demo gate 本轮均通过。
+
+另外三项在本轮出现此前未持续重现的失败，原因尚未确认：
+
+| Case | 本轮首跑实测 |
+| --- | --- |
+| solve_profile_cuda_unavailable | 子进程触发原有 120 s 超时 |
+| solve_cut_manufactured | 原有 1800 s 超时，实测 1800.03 s |
+| cutbim_cut_bimetal | A/nx16/ranks1 子进程退出 -9，缺少比较量 |
+
+这三项以相同环境、原断言和原超时串行单独复跑，实测 3/3 PASS，CTest 返回 0，
+总耗时 480.69 s；依次为 1.54 s、235.61 s、243.53 s。首跑原因仍未确认，
+复跑结果不改变首轮全量回归失败的事实。上述六项既有失败仍未解决，
+所要求的全量 CTest 全绿尚未达到；未修改 brief 禁改的产品路径或其他测试。
+macOS/Apple clang、其他后端及远端 CI/ci-ok 均为未执行。

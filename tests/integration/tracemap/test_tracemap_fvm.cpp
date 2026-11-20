@@ -181,7 +181,7 @@ Merged merge() {
     const auto merged = fv::copper_fraction(after, m);
     require(merged.size() == 1, "one merged fraction");
     bounded_fractions(merged);
-    near(after.cv_volume[0], 1.1, 0, 1e-12, "merged physical volume");
+    near(after.cv_volume[0], 1.1, 1e-12, 0, "merged physical volume");
     near(merged[0] * after.cv_volume[0],
          static_cast<double>(copper_before),
          0,
