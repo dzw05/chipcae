@@ -249,7 +249,7 @@ void checkIdRange(ResultView& view, ResultSession& session, ResultColorField fie
     require(range.min == static_cast<double>(low) && range.max == static_cast<double>(high),
             "ID range differs from visible cell IDs");
     QStringList labels;
-    for (int id = low; id <= high; ++id) {
+    for (int id = low;; ++id) {
         auto label =
             field == ResultColorField::LayerId ? session.layerName(id) : session.materialName(id);
         if (label.isEmpty())
@@ -257,6 +257,8 @@ void checkIdRange(ResultView& view, ResultSession& session, ResultColorField fie
                         .arg(field == ResultColorField::LayerId ? "layer" : "material")
                         .arg(id);
         labels << label;
+        if (id == high)
+            break;
     }
     const auto expected =
         (field == ResultColorField::LayerId ? QStringLiteral("叠层: ") : QStringLiteral("材料: ")) +
@@ -631,6 +633,7 @@ with h5py.File(sys.argv[1], 'r+') as f:
                                               "材料: material 2147483646, material 2147483647"));
                     require(view.colorBarTitle() == expected,
                             "range ending at INT_MAX lists all IDs and terminates");
+                    checkIdRange(view, session, field);
                     checkScalarBar(view);
                 });
     run("five field repeated switching", [&] {
