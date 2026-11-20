@@ -441,6 +441,34 @@ def _check_w3(run_dir: Path, constraints: dict) -> bool | None:
         return False
 
 
+def _check_w4(run_dir: Path, events: list[dict], T_ref: float) -> bool:
+    import h5py
+    import numpy as np
+    # Zero U only proves temperature transfer when the auxiliary run actually
+    # solved both FVM physics with a valid, uniform reference-temperature field.
+    if not all((_check_c2(run_dir, events), _check_c3(events), _check_c4(events),
+                _check_c5(run_dir, _energy(events) or {}), _check_w1(run_dir, events),
+                _check_w2(run_dir))):
+        return False
+    try:
+        summary = _summary(run_dir)
+        if (summary["T_max"]["value"] != T_ref
+                or any(summary[key]["value"] != 0 for key in ("warpage_pv", "U_mag_max"))):
+            return False
+        has_temperature = False
+        with h5py.File(_vtk_path(run_dir), "r") as output:
+            for block in _volume_blocks(output):
+                temperature = block["PointData/T"][...]
+                has_temperature |= bool(temperature.size)
+                if not np.all(temperature == T_ref) or not np.all(block["PointData/U"][...] == 0):
+                    return False
+                if "CellData/T_cell" in block and not np.all(block["CellData/T_cell"][...] == T_ref):
+                    return False
+        return has_temperature
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def _bodies(stack):
     return sorted({body for layer in stack["layers"] for body in
                    [layer.get("body"), *(r.get("body") for r in layer.get("regions", []))] if body})
@@ -1116,7 +1144,6 @@ def _resource_retry(record, entry, folder, inputs, case, exes, mpi, timeout_s, s
 
 
 def _auxiliary(record, folder, inputs, case, exes, mpi, timeout_s, source_root, primary):
-    import numpy as np
     if record["kind"] == "thermal" or "W1" not in record["checks"]:
         return
     if record["data_class"] != "synthetic":
@@ -1156,8 +1183,7 @@ def _auxiliary(record, folder, inputs, case, exes, mpi, timeout_s, source_root, 
         if name == "W3":
             record["checks"][name] = _check_w3(out, variant["constraints"])
         elif name == "W4":
-            _, u = _points_u(out)
-            record["checks"][name] = bool(np.all(u == 0) and _summary(out)["warpage_pv"]["value"] == 0)
+            record["checks"][name] = _check_w4(out, events, variant["physics"][1]["T_ref"])
         else:
             fem = _summary(out)["warpage_pv"]["value"]
             fvm = _summary(primary)["warpage_pv"]["value"]
@@ -1506,10 +1532,13 @@ def main(argv=None):
         record, folder = _run_item(args.kind, params, args.out_root, args.nps, args.repeat, args.source_root)
     except (OSError, ValueError, TypeError) as exc:
         def flag(name, default=None):
-            try:
-                return argv[argv.index(name) + 1]
-            except (ValueError, IndexError):
-                return default
+            # Match argparse's equals syntax and last-value rule even when an
+            # earlier malformed option prevented it from reaching these paths.
+            for index in range(len(argv) - 1, -1, -1):
+                option, equals, value = argv[index].partition("=")
+                if option == name:
+                    return value if equals else argv[index + 1] if index + 1 < len(argv) else default
+            return default
         # Malformed CLI input still follows the shared usage-record finalizer.
         source = Path(flag("--source-root", SOURCE_ROOT)).resolve()
         out = flag("--out-root")

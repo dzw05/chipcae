@@ -764,6 +764,37 @@ elif name == 'fake-solve':
                 f['VTKHDF/' + block + '/PointData/T'][...] = tref
                 f['VTKHDF/' + block + '/PointData/U'][...] = 0.
                 f['VTKHDF/' + block + '/CellData/T_cell'][...] = tref
+        fault = os.environ.get('REALCASE_TEST_W4_FAULT', '')
+        if fault in ('vertex_temperature', 'cell_temperature', 'wrong_uniform_temperature',
+                     'no_cell_temperature', 'nonfinite_volume', 'displacement'):
+            with h5py.File(out / 'out/step-0.vtkhdf', 'r+') as f:
+                if fault == 'wrong_uniform_temperature':
+                    for block in ('hex', 'cut'):
+                        f['VTKHDF/' + block + '/PointData/T'][...] = tref + 1.
+                        f['VTKHDF/' + block + '/CellData/T_cell'][...] = tref + 1.
+                    manifest['summary'][1]['value'] = tref + 1.
+                elif fault == 'no_cell_temperature':
+                    for block in ('hex', 'cut'):
+                        del f['VTKHDF/' + block + '/CellData/T_cell']
+                elif fault == 'nonfinite_volume':
+                    f['VTKHDF/hex/CellData/volume'][0] = float('nan')
+                elif fault == 'displacement':
+                    f['VTKHDF/hex/PointData/U'][0, 2] = 1e-30
+                else:
+                    field = 'PointData/T' if fault == 'vertex_temperature' else 'CellData/T_cell'
+                    f['VTKHDF/hex/' + field][0] = tref + 1.
+        elif fault == 'summary_temperature':
+            manifest['summary'][1]['value'] = tref + 1.
+        elif fault == 'energy':
+            shutil.copyfile(root / 'bad-events.bin', out / 'events.bin')
+        elif fault in ('missing_conduction', 'missing_solid'):
+            shutil.copyfile(root / (fault + '.bin'), out / 'events.bin')
+        elif fault == 'method':
+            manifest['summary'][0]['method'] = 'wrong'
+        elif fault == 'summary_displacement':
+            manifest['summary'][2]['value'] = 1e-30
+        elif fault == 'warpage':
+            manifest['summary'][0]['value'] = 1e-30
     nsolve = sum(json.loads(line)['name'] == name for line in previous)
     if mode == 'repeat_energy' and nsolve == 1:
         shutil.copyfile(root / 'bad-events.bin', out / 'events.bin')
@@ -830,6 +861,7 @@ class DriverControlFlow(ContractTest):
             "CHIPCAE_MPIEXEC": str(self.bin / "fake-mpi"),
             "SP4_FIXTURE_GENERATOR": str(self.bin / "fake-generator"),
             "REALCASE_TEST_ROOT": str(self.root), "REALCASE_TEST_MODE": "ok",
+            "REALCASE_TEST_W4_FAULT": "",
         }
         env = patch.dict(os.environ, self.env)
         env.start()
@@ -1329,6 +1361,47 @@ class DriverControlFlow(ContractTest):
         self.persisted(record)
 
     @hdf5_fixture
+    def test_w4_requires_uniform_reference_temperature_in_fields_and_summary(self):
+        for fault in ("vertex_temperature", "cell_temperature", "wrong_uniform_temperature",
+                      "summary_temperature"):
+            with self.subTest(fault=fault):
+                os.environ["REALCASE_TEST_W4_FAULT"] = fault
+                record = self.invoke("warpage", params=dict(self.params, T_ref=300.), repeat=1)
+                readbacks = [c for c in record["commands"] if c["stage"].startswith("readback_")]
+                self.assertEqual([c["exit_code"] for c in readbacks], [0, 0, 0, 0], record["notes"])
+                self.assertIs(record["checks"]["W4"], False)
+                self.assertEqual(record["exit_code"], 1)
+                self.assertIs(record["checks"]["C10"], True)
+                self.persisted(record)
+
+    @hdf5_fixture
+    def test_w4_requires_auxiliary_physics_checks_despite_zero_displacement(self):
+        (self.root / "missing_solid.bin").write_bytes(event_bytes(solid=False))
+        (self.root / "missing_conduction.bin").write_bytes(
+            residual_frame([("fvm.solid", "U", 9, 2e-13)])
+            + log_frame("FVM_ENERGY " + json.dumps(ENERGY)))
+        params = self.assembly_params()
+        for fault in ("energy", "missing_conduction", "missing_solid", "method", "nonfinite_volume",
+                      "summary_displacement", "displacement", "warpage"):
+            with self.subTest(fault=fault):
+                os.environ["REALCASE_TEST_W4_FAULT"] = fault
+                record = self.invoke("assembly", params=params, repeat=1)
+                self.assertEqual([c["exit_code"] for c in record["commands"]], [0, 0, 0, 0, 0, 0])
+                for check in ("C2", "C3", "C4", "C5", "W1", "W2"):
+                    self.assertIs(record["checks"][check], True, check)
+                self.assertIs(record["checks"]["W4"], False)
+                self.assertEqual(record["exit_code"], 1)
+                self.persisted(record)
+
+    @hdf5_fixture
+    def test_w4_uniform_reference_temperature_allows_optional_t_cell_absence(self):
+        os.environ["REALCASE_TEST_W4_FAULT"] = "no_cell_temperature"
+        record = self.invoke("assembly", params=self.assembly_params(), repeat=1)
+        self.assertEqual(record["exit_code"], 0, record["notes"])
+        self.assertIs(record["checks"]["W4"], True)
+        self.persisted(record)
+
+    @hdf5_fixture
     def test_assembly_primary_interruption_continues_material_and_auxiliary_checks(self):
         os.environ.update(REALCASE_TEST_MODE="fail_readback", REALCASE_TEST_FAIL_RUN="np1_r1")
         record = self.invoke("assembly", params=self.assembly_params())
@@ -1742,6 +1815,35 @@ class DriverControlFlow(ContractTest):
                 printed.assert_called_once_with(f"fail: {paths[0].parent}")
                 self.assertFalse((paths[0].parent / "inputs/case.json").exists())
                 self.assertEqual(self.calls(), [])
+
+    def test_malformed_cli_recovers_equals_and_last_output_and_source_options(self):
+        params_path = self.root / "params.json"
+        variants = (("{", []), (json.dumps(self.params), ["--unknown"]),
+                    (json.dumps(self.params), ["--np", "invalid"]))
+        for index, (content, extra) in enumerate(variants):
+            params_path.write_text(content)
+            for style in ("equals", "repeated"):
+                with self.subTest(content=content, extra=extra, style=style):
+                    out = self.root / f"recovered-{index}-{style}"
+                    options = [f"--source-root={self.source}", f"--out-root={out}"]
+                    if style == "repeated":
+                        options = ["--source-root", str(self.root / "unused-source"),
+                                   "--out-root", str(self.root / "unused-output"),
+                                   "--source-root", str(self.source), "--out-root", str(out)]
+                    # Keep a failed recovery's fallback artifacts inside this test.
+                    with patch.object(driver, "_safe_temp_root", return_value=self.root / "fallback"), \
+                            patch("builtins.print"):
+                        rc = driver.main(["thermal", "--params", str(params_path), *extra, *options])
+                    self.assertEqual(rc, 2)
+                    paths = list(out.rglob("run_record.json"))
+                    self.assertEqual(len(paths), 1)
+                    record = read_json(paths[0])
+                    self.assertEqual(record["exit_code"], 2)
+                    self.assertEqual(record["verdict"], "fail")
+                    self.assertIs(record["checks"]["C10"], True)
+                    self.assertEqual(record["commit"], subprocess.check_output(
+                        ["git", "-C", str(self.source), "rev-parse", "HEAD"], text=True).strip())
+                    self.assertEqual(self.calls(), [])
 
     def test_missing_numeric_dependency_is_77_and_import_remains_lazy(self):
         params_path = write_json(self.root / "params.json", self.params)

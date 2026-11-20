@@ -65,7 +65,7 @@ F-1130 thermal loads, Rigid321, Jacobi with rtol=1e-12, T_ref=298.15 and a
 | C8 | Serial/two-rank mesh, partition and QoI agreement; null without MPI |
 | W1/W2 | Warpage and assembly when W is ready |
 | W3 | Separate synthetic warpage run with exactly zero fixed-bottom U |
-| W4 | Separate synthetic warpage/assembly run with exactly zero U at uniform T_ref |
+| W4 | Separate synthetic warpage/assembly run; valid FVM thermal/solid checks, uniform T_ref fields/summary and exactly zero U/warpage |
 | W5 | Synthetic noncut warpage FEM comparison, relative difference <= 0.05 |
 | A1/A2/A3 | Assembly bodies/weld count/defects, material membership and check policy |
 
