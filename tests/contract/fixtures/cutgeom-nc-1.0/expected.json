@@ -24,6 +24,7 @@
   "files": [
     "gen.py",
     "check.py",
+    "test_acceptance.py",
     "expected.json",
     "chamfer_lid_octagon/expected.json",
     "chamfer_lid_octagon/input.json",

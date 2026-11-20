@@ -76,6 +76,28 @@ def external(a, b, outline):
     return any(on_segment(a, x, y) and on_segment(b, x, y) for x, y in edges(outline))
 
 
+def triangulate(outline):
+    """Triangulate the outline without using the supplied decomposition blocks."""
+    remaining, triangles = list(outline), []
+    while len(remaining) > 3:
+        for i, b in enumerate(remaining):
+            triangle = [remaining[i-1], b, remaining[(i+1) % len(remaining)]]
+            if cross(*triangle) <= 0:
+                continue
+            if any(all(cross(a, c, p) >= 0 for a, c in edges(triangle))
+                   for p in remaining if p not in triangle):
+                continue
+            triangles.append(triangle)
+            remaining.pop(i)
+            break
+        else:
+            raise ValueError("cannot triangulate source outline")
+    triangles.append(remaining)
+    assert all(area(t) > 0 for t in triangles)
+    assert sum(map(area, triangles), F(0)) == area(outline)
+    return triangles
+
+
 def decimal(value):
     """Serialize terminating rationals without a float conversion or rounding."""
     den = value.denominator
@@ -147,10 +169,11 @@ def build(name):
         raise ValueError(name)
     ring, pieces = points(outline), [points(p) for p in blocks]
     flags = [[not external(a, b, ring) for a, b in edges(p)] for p in pieces]
+    triangles = triangulate(ring)
     # Reject invalid source decompositions before producing any files.
     for i, p in enumerate(pieces):
         assert len(p) >= 3 and all(cross(p[j-1], p[j], p[(j+1) % len(p)]) > 0 for j in range(len(p)))
-        assert area(clip(ring, p)) == area(p), "piece outside outline"
+        assert sum((area(clip(t, p)) for t in triangles), F(0)) == area(p), "piece outside outline"
         assert all(area(clip(p, q)) == 0 for q in pieces[:i]), "overlap"
     assert sum(map(area, pieces), F(0)) == area(ring)
     closure = [sum(((b[1]-a[1], a[0]-b[0])[d] * F(".001")
@@ -242,7 +265,7 @@ def payloads():
         "contract": "cutgeom-nc/1.0", "status": "draft", "units": "m", "cases": list(CASES),
         "source": {"tip": TIP, "file": SOURCE, "tables": "l_shape/v_shape/r_shape",
                    "l1_parameters": [".012501", ".012501"], "octagon": "single_piece_bitwise synthetic ring"},
-        "files": ["gen.py", "check.py", "expected.json"] + sorted(out),
+        "files": ["gen.py", "check.py", "test_acceptance.py", "expected.json"] + sorted(out),
         "tolerance": {"area_volume_rel": "1e-12", "embedded_area_rel": "1e-12",
                       "closure_abs": "1e-12", "l1_sub_volfrac_rel": "1e-10",
                       "convex_sub_volfrac_rel": "1e-14", "convex_sq_w_rel": "1e-14"},
@@ -257,7 +280,8 @@ def main():
     args = ap.parse_args()
     try:
         data = payloads()
-        scripts = {name: (HERE / name).read_bytes() for name in ("gen.py", "check.py")}
+        scripts = {name: (HERE / name).read_bytes()
+                   for name in ("gen.py", "check.py", "test_acceptance.py")}
         for relative, obj in data.items():
             path = args.out / relative
             path.parent.mkdir(parents=True, exist_ok=True)

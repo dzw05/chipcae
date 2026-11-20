@@ -233,7 +233,11 @@ def geometry(name, inp, exp):
             if any(a[d] == b[d] == bound for d in (0, 1) for bound in (F(0), F(".02"))):
                 continue
             squared = sum((b[d]-a[d])**2 for d in (0, 1))
-            length += (Decimal(squared.numerator) / Decimal(squared.denominator)).sqrt()
+            n, d = math.isqrt(squared.numerator), math.isqrt(squared.denominator)
+            if n*n == squared.numerator and d*d == squared.denominator:
+                length += Decimal(n) / Decimal(d)
+            else:
+                length += (Decimal(squared.numerator) / Decimal(squared.denominator)).sqrt()
         want = length * Decimal(".001")
         require(abs(Decimal(exp["embedded_area"])/want - 1) <= Decimal("1e-12"), "embedded area")
         if name == "v_shape":
@@ -241,8 +245,10 @@ def geometry(name, inp, exp):
             require(abs(Decimal(exp["embedded_area"])/oracle - 1) <= Decimal("1e-12"), "V irrational oracle")
             require(len(Decimal(exp["embedded_area"]).as_tuple().digits) == 17, "V significant digits")
     # Float checks are separate from the exact equalities above.
-    for exact, recorded in ((measure(ring), exp["area"]), (measure(ring)*F(".001"), exp["volume"])):
-        require(abs(float(exact)/float(recorded)-1) <= 1e-12, "floating area/volume cross-check")
+    float_ring = [tuple(map(float, p)) for p in ring]
+    float_area = sum(a[0]*b[1] - b[0]*a[1] for a, b in pairs(float_ring)) / 2
+    for value, recorded in ((float_area, exp["area"]), (float_area*.001, exp["volume"])):
+        require(abs(value/float(recorded)-1) <= 1e-12, "floating area/volume cross-check")
     float_embedded = sum(math.hypot(float(b[0]-a[0]), float(b[1]-a[1]))
                          for a, b in pairs(ring)
                          if not any(a[d] == b[d] == bound for d in (0, 1)
@@ -317,7 +323,7 @@ def invalid_inputs(inp, exp):
 
 
 def source_tables(text, generator):
-    """Parse the small C++ aggregate grammar, keeping exact literal values/order."""
+    """Compare ordered source tokens, preserving decimal spelling as provenance."""
     text = re.sub(r"//[^\n]*|/\*.*?\*/", "", text, flags=re.S)
     number = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
     token = re.compile(number + r"|[{}(),]|[A-Za-z_]\w*")
@@ -327,7 +333,7 @@ def source_tables(text, generator):
         t = tokens[pos]
         if t != "{":
             require(t in env or re.fullmatch(number, t), "unexpected source coordinate")
-            return env[t] if t in env else F(t), pos+1
+            return env[t] if t in env else t, pos+1
         values, pos = [], pos+1
         while pos < len(tokens) and tokens[pos] != "}":
             v, pos = read_aggregate(tokens, env, pos)
@@ -343,7 +349,7 @@ def source_tables(text, generator):
         found = re.search(r"Shape\s+" + name + r"\s*\(([^)]*)\)\s*\{\s*return\s*(.*?);\s*\}", text, re.S)
         require(found is not None, "source missing " + name)
         params, aggregate = found.groups()
-        env = {key: F(value) for key, value in re.findall(r"Real\s+(\w+)\s*=\s*(" + number + ")", params)}
+        env = dict(re.findall(r"Real\s+(\w+)\s*=\s*(" + number + ")", params))
         tokens = token.findall(aggregate)
         # Only parse outline and blocks; trailing scalar expressions include std::hypot.
         require(tokens[0] == "{", "source shape aggregate")
@@ -351,12 +357,12 @@ def source_tables(text, generator):
         require(tokens[end] == ",", "source table separator")
         blocks, _ = read_aggregate(tokens, env, end+1)
         inp, _ = generator.build(name)
-        expected_ring = [list(p) for p in polygon(inp["outline"])]
-        expected_blocks = [[list(p) for p in polygon(b)] for b in inp["pieces"]]
+        expected_ring = inp["outline"]
+        expected_blocks = inp["pieces"]
         require(outline == expected_ring and blocks == expected_blocks, "ordered source drift: " + name)
     found = re.search(r"void\s+union_small_subs\s*\(\s*\)\s*\{\s*const\s+auto\s+s\s*=\s*l_shape\s*\(([^)]*)\)", text)
     require(found is not None, "missing L1 source")
-    require([F(v.strip()) for v in found[1].split(",")] == [F(".012501")]*2, "L1 source parameter drift")
+    require([v.strip() for v in found[1].split(",")] == [".012501"]*2, "L1 source parameter drift")
 
 
 def branch_check(repo, ref, generator):
@@ -419,9 +425,9 @@ def main():
             require(actual[relative] == template, "canonical value mismatch: " + relative)
             require((root / relative).read_bytes() == generator.dump(template).encode("utf-8"),
                     "serialization differs from generator: " + relative)
-        allowed = set(templates) | {"gen.py", "check.py"}
+        allowed = set(templates) | {"gen.py", "check.py", "test_acceptance.py"}
         present = {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()
-                   and "__pycache__" not in p.parts and p.name != "test_acceptance.py"}
+                   and "__pycache__" not in p.parts}
         require(present == allowed, "fixture relative file set differs")
         if args.branch_ref:
             branch_check(args.repo, args.branch_ref, generator)
