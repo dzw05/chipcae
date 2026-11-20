@@ -14,6 +14,7 @@
 #include <set>
 #include <vtkActor.h>
 #include <vtkAppendFilter.h>
+#include <vtkBoundingBox.h>
 #include <vtkCallbackCommand.h>
 #include <vtkCamera.h>
 #include <vtkCell.h>
@@ -36,6 +37,7 @@
 #include <vtkPartitionedDataSetCollection.h>
 #include <vtkPlane.h>
 #include <vtkPointData.h>
+#include <vtkPointLocator.h>
 #include <vtkPointSet.h>
 #include <vtkPoints.h>
 #include <vtkPolyData.h>
@@ -95,34 +97,70 @@ double determinant(const double* a, const double* b, const double* c, const doub
     vtkMath::Cross(y, z, cross);
     return vtkMath::Dot(x, cross);
 }
-// Match exact coordinates only in this temporary topology table. Displayed solution points
-// remain independent, including duplicated vertices from different partitions.
-vtkSmartPointer<vtkActor> layerBoundaries(const std::vector<vtkUnstructuredGrid*>& grids) {
+struct BoundaryGrid {
+    vtkUnstructuredGrid* shown;
+    vtkSmartPointer<vtkPoints> reference;
+};
+// Use undeformed face connectivity to find neighbors. Canonicalize duplicate vertices only
+// in this temporary topology table; each owner keeps its own displayed solution points.
+vtkSmartPointer<vtkActor> layerBoundaries(const std::vector<BoundaryGrid>& grids) {
     using Edge = std::pair<vtkIdType, vtkIdType>;
     struct Owner {
         std::size_t cell;
         double layer;
         std::vector<Edge> edges;
     };
-    std::map<std::array<double, 3>, vtkIdType> vertices;
+    vtkBoundingBox bounds;
+    vtkIdType pointCount = 0;
+    auto finite = [](const double* p) {
+        return std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]);
+    };
+    for (const auto& grid : grids)
+        for (vtkIdType i = 0; i < grid.reference->GetNumberOfPoints(); ++i) {
+            double p[3];
+            grid.reference->GetPoint(i, p);
+            if (finite(p)) {
+                bounds.AddPoint(p);
+                ++pointCount;
+            }
+        }
+    if (!bounds.IsValid())
+        return nullptr;
+    double box[6], lengths[3];
+    bounds.GetBounds(box);
+    bounds.GetLengths(lengths);
+    double magnitude = 0;
+    for (double value : box)
+        magnitude = std::max(magnitude, std::abs(value));
+    // Absolute distance: 1e-10 of the undeformed extent, with a coordinate-roundoff floor.
+    // This joins numerical duplicates without merging displayed points or averaging U.
+    const double tolerance = std::max(1e-10 * std::max({lengths[0], lengths[1], lengths[2]}),
+                                      64 * std::numeric_limits<double>::epsilon() * magnitude);
+    vtkNew<vtkPoints> vertices;
+    vertices->SetDataTypeToDouble();
+    vtkNew<vtkPointLocator> locator;
+    locator->SetTolerance(tolerance);
+    locator->InitPointInsertion(vertices, box, pointCount);
     std::map<std::vector<vtkIdType>, std::vector<Owner>> faces;
     vtkNew<vtkPoints> points;
     points->SetDataTypeToDouble();
-    auto vertex = [&](vtkUnstructuredGrid* grid, vtkIdType id) -> vtkIdType {
-        std::array<double, 3> p;
-        grid->GetPoint(id, p.data());
-        if (!std::all_of(p.begin(), p.end(), [](double v) { return std::isfinite(v); }))
-            return -1;
-        auto [it, inserted] = vertices.try_emplace(p, points->GetNumberOfPoints());
-        if (inserted)
-            points->InsertNextPoint(p.data());
-        return it->second;
-    };
     std::size_t cellId = 0;
-    for (auto grid : grids) {
+    for (const auto& entry : grids) {
+        auto grid = entry.shown;
         auto layers = grid->GetCellData()->GetArray("layer_id");
         if (!layers)
             continue;
+        std::vector<vtkIdType> topology(grid->GetNumberOfPoints(), -1);
+        std::vector<vtkIdType> displayed(grid->GetNumberOfPoints(), -1);
+        for (vtkIdType i = 0; i < grid->GetNumberOfPoints(); ++i) {
+            double reference[3], shown[3];
+            entry.reference->GetPoint(i, reference);
+            grid->GetPoint(i, shown);
+            if (finite(reference) && finite(shown)) {
+                locator->InsertUniquePoint(reference, topology[i]);
+                displayed[i] = points->InsertNextPoint(shown);
+            }
+        }
         for (vtkIdType i = 0; i < grid->GetNumberOfCells(); ++i, ++cellId) {
             auto cell = grid->GetCell(i);
             const double layer = layers->GetComponent(i, 0);
@@ -132,16 +170,17 @@ vtkSmartPointer<vtkActor> layerBoundaries(const std::vector<vtkUnstructuredGrid*
                 auto face = cell->GetFace(f);
                 std::vector<vtkIdType> key;
                 for (vtkIdType j = 0; j < face->GetNumberOfPoints(); ++j)
-                    key.push_back(vertex(grid, face->GetPointId(j)));
+                    key.push_back(topology[face->GetPointId(j)]);
                 std::sort(key.begin(), key.end());
-                if (key.size() < 3 || key.front() < 0)
+                if (key.size() < 3 || key.front() < 0 ||
+                    std::adjacent_find(key.begin(), key.end()) != key.end())
                     continue;
                 Owner owner{cellId, layer, {}};
                 // Preserve the face's actual edges; sorting the face key loses its perimeter.
                 for (int e = 0; e < face->GetNumberOfEdges(); ++e) {
                     auto edge = face->GetEdge(e);
-                    const auto a = vertex(grid, edge->GetPointId(0));
-                    const auto b = vertex(grid, edge->GetPointId(1));
+                    const auto a = displayed[edge->GetPointId(0)];
+                    const auto b = displayed[edge->GetPointId(1)];
                     if (a >= 0 && b >= 0 && a != b)
                         owner.edges.emplace_back(std::min(a, b), std::max(a, b));
                 }
@@ -195,6 +234,7 @@ struct ResultView::State {
     QLabel* bannerLabel = nullptr;
     QLabel* fieldStatusLabel = nullptr;
     bool loaded = false;
+    bool cameraInitialized = false;
     double boundarySetupMs = 0;
     vtkSmartPointer<vtkActor> boundaries;
     vtkSmartPointer<vtkTextActor> overlay = vtkSmartPointer<vtkTextActor>::New();
@@ -300,16 +340,18 @@ bool ResultView::loadStep(ResultSession& session, qint64 step) {
     if (!d->error.isEmpty())
         return false;
     const auto start = std::chrono::steady_clock::now();
-    auto camera = d->renderer->GetActiveCamera();
-    // ResetCamera fits bounds but preserves orientation, so start each load from +Z / +Y.
-    camera->SetFocalPoint(0, 0, 0);
-    camera->SetPosition(0, 0, 1);
-    camera->SetViewUp(0, 1, 0);
-    d->renderer->ResetCamera();
-    camera->Azimuth(45);
-    camera->Elevation(30);
-    camera->OrthogonalizeViewUp();
-    d->renderer->ResetCameraClippingRange();
+    if (!d->cameraInitialized) {
+        auto camera = d->renderer->GetActiveCamera();
+        camera->SetFocalPoint(0, 0, 0);
+        camera->SetPosition(0, 0, 1);
+        camera->SetViewUp(0, 1, 0);
+        d->renderer->ResetCamera();
+        camera->Azimuth(45);
+        camera->Elevation(30);
+        camera->OrthogonalizeViewUp();
+        d->renderer->ResetCameraClippingRange();
+        d->cameraInitialized = true;
+    }
     const double cameraSetupMs =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     qInfo() << "result_default_view_setup_ms" << d->boundarySetupMs + cameraSetupMs;
@@ -508,7 +550,7 @@ void ResultView::rebuild() {
     vtkNew<vtkLookupTable> lut;
     lut->SetHueRange(0.667, 0);
     lut->Build();
-    std::vector<vtkUnstructuredGrid*> shown;
+    std::vector<BoundaryGrid> shown;
     for (auto& b : d->blocks) {
         vtkNew<vtkIdList> ids;
         auto kinds = b.raw->GetCellData()->GetArray("cell_kind");
@@ -533,6 +575,11 @@ void ResultView::rebuild() {
             }
             b.shown = clipped(t, d->origin, d->normal);
         }
+        if (b.shown->GetNumberOfCells() && b.shown->GetCellData()->HasArray("layer_id")) {
+            vtkNew<vtkPoints> reference;
+            reference->DeepCopy(b.shown->GetPoints());
+            shown.push_back({b.shown, reference});
+        }
         auto u = b.shown->GetPointData()->GetArray("U");
         if (u && u->GetNumberOfComponents() == 3)
             for (vtkIdType i = 0; i < b.shown->GetNumberOfPoints(); ++i) {
@@ -542,7 +589,6 @@ void ResultView::rebuild() {
                     p[j] += d->scale * u->GetComponent(i, j);
                 b.shown->GetPoints()->SetPoint(i, p);
             }
-        shown.push_back(b.shown);
         vtkNew<vtkDataSetMapper> mapper;
         mapper->SetInputData(b.shown);
         vtkDataArray* scalar = nullptr;

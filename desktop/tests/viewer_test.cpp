@@ -513,6 +513,14 @@ void twoLayers(vtkUnstructuredGrid* grid, const QString& variant = {}) {
             point[0] += 4;
             upper[i] = points->InsertNextPoint(point);
         }
+    if (variant == "roundoff coordinates" || variant == "discontinuous displacement")
+        for (int i = 0; i < 8; ++i) {
+            double point[3];
+            points->GetPoint(upper[i], point);
+            if (variant == "roundoff coordinates")
+                point[0] += 1e-12;
+            upper[i] = points->InsertNextPoint(point);
+        }
     if (variant == "surface cells" || variant == "particles") {
         const int type = variant == "surface cells" ? VTK_QUAD : VTK_VERTEX;
         const vtkIdType count = variant == "surface cells" ? 4 : 1;
@@ -535,6 +543,9 @@ void twoLayers(vtkUnstructuredGrid* grid, const QString& variant = {}) {
                                        2e-3 * (1 + point[1]),
                                        1e-3 * (1 + point[0] + point[1] + point[2]));
     }
+    if (variant == "discontinuous displacement")
+        for (vtkIdType i = 12; i < points->GetNumberOfPoints(); ++i)
+            displacement->SetComponent(i, 0, displacement->GetComponent(i, 0) + 0.025);
     grid->GetPointData()->AddArray(temperature);
     grid->GetPointData()->AddArray(displacement);
     for (auto name : {"cell_kind", "layer_id", "material_id"}) {
@@ -660,19 +671,35 @@ int obliqueAndTemperatureAcceptance(const QDir& root) {
                 view.setClip(false);
                 checkCameraDirection(view, direction);
             });
-    run("reload restores fixed default camera", [&] {
+    run("reload preserves camera orientation and roll", [&] {
         ResultSession session;
         require(session.open(root.filePath("default")), qPrintable(session.error()));
         ResultView view;
         require(view.loadStep(session, 0), qPrintable(view.error()));
-        const auto direction = cameraDirection(view);
-        for (int repeat = 0; repeat < 2; ++repeat) {
+        checkOblique(view);
+        for (int repeat = 0; repeat < 3; ++repeat) {
             camera(view)->Azimuth(37);
             camera(view)->Elevation(-13);
+            camera(view)->Roll(23);
             camera(view)->OrthogonalizeViewUp();
+            const auto direction = cameraDirection(view);
+            std::array<double, 3> up;
+            camera(view)->GetViewUp(up.data());
+            if (repeat == 1)
+                require(!view.loadStep(session, 999), "invalid reload unexpectedly succeeded");
             require(view.loadStep(session, 0), qPrintable(view.error()));
             checkCameraDirection(view, direction);
+            for (int axis = 0; axis < 3; ++axis)
+                near(camera(view)->GetViewUp()[axis], up[axis], 1e-12);
         }
+    });
+    run("failed first load still initializes an oblique camera", [&] {
+        ResultSession session;
+        require(session.open(root.filePath("default")), qPrintable(session.error()));
+        ResultView view;
+        require(!view.loadStep(session, 999), "invalid first load unexpectedly succeeded");
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        checkOblique(view);
     });
     run("thin adjacent stack has oblique default and no default clipping", [&] {
         QTemporaryDir temp;
@@ -720,6 +747,80 @@ int obliqueAndTemperatureAcceptance(const QDir& root) {
                 view.setBlockVisible("hex", true);
                 checkWarpedInterface(view, 10);
             });
+    for (const auto& variant : {"roundoff coordinates", "discontinuous displacement"})
+        run(QString("undeformed adjacency survives ") + variant, [&] {
+            QTemporaryDir temp;
+            require(temp.isValid(), "duplicate interface fixture directory");
+            const auto path = temp.filePath("stack.vtkhdf");
+            writeFixture(root, path, [&](vtkUnstructuredGrid* grid) { twoLayers(grid, variant); });
+            ResultSession session;
+            require(session.open(path), qPrintable(session.error()));
+            ResultView view;
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            for (double scale : {0.0, 1.0, 10.0}) {
+                view.setWarpageScale(scale);
+                auto input = boundaryInput(view);
+                require(input && input->GetNumberOfCells() > 0,
+                        "undeformed adjacent layers lost their boundary actor");
+                // Both interface perimeters must follow their own displayed solution points.
+                const auto shown = view.displayed("hex");
+                require(shown && shown->GetNumberOfCells() == 2,
+                        "duplicate interface fixture lost its cells");
+                std::array<std::array<vtkIdType, 4>, 2> faces;
+                for (int corner = 0; corner < 4; ++corner) {
+                    faces[0][corner] = shown->GetCell(0)->GetPointId(4 + corner);
+                    faces[1][corner] = shown->GetCell(1)->GetPointId(corner);
+                    require(faces[0][corner] != faces[1][corner],
+                            "interface solution points were merged");
+                }
+                for (const auto& face : faces)
+                    for (int edge = 0; edge < 4; ++edge) {
+                        double expectedA[3], expectedB[3];
+                        shown->GetPoint(face[edge], expectedA);
+                        shown->GetPoint(face[(edge + 1) % 4], expectedB);
+                        auto matches = [](const double* a, const double* b) {
+                            for (int axis = 0; axis < 3; ++axis)
+                                if (std::abs(a[axis] - b[axis]) > 1e-10)
+                                    return false;
+                            return true;
+                        };
+                        bool found = false;
+                        for (vtkIdType i = 0; i < input->GetNumberOfCells(); ++i) {
+                            auto line = input->GetCell(i);
+                            require(line->GetNumberOfPoints() == 2, "boundary must be an edge");
+                            double a[3], b[3];
+                            input->GetPoint(line->GetPointId(0), a);
+                            input->GetPoint(line->GetPointId(1), b);
+                            found |= (matches(a, expectedA) && matches(b, expectedB)) ||
+                                     (matches(a, expectedB) && matches(b, expectedA));
+                        }
+                        require(found, "boundary edge does not follow its displayed face");
+                    }
+            }
+            view.setLayer(1);
+            checkNoBoundaries(view);
+            view.setLayer(0);
+            require(boundaryInput(view), "restoring layer visibility lost interface");
+        });
+    run("warpage cannot create adjacency between disconnected layers", [&] {
+        QTemporaryDir temp;
+        require(temp.isValid(), "disconnected interface fixture directory");
+        const auto path = temp.filePath("stack.vtkhdf");
+        writeFixture(root, path, [](vtkUnstructuredGrid* grid) {
+            twoLayers(grid, "separated layers");
+            auto u = grid->GetPointData()->GetArray("U");
+            for (vtkIdType i = 0; i < grid->GetNumberOfPoints(); ++i) {
+                u->SetComponent(i, 0, i >= 12 ? -4 : 0);
+                u->SetComponent(i, 1, 0);
+                u->SetComponent(i, 2, 0);
+            }
+        });
+        ResultSession session;
+        require(session.open(path), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        checkNoBoundaries(view);
+    });
     for (const auto& variant :
          {"equal layers", "missing layer_id", "separated layers", "surface cells", "particles"})
         run(QString("no interface for ") + variant, [&] {
