@@ -2,7 +2,9 @@
 
 #include "chipcae/geometry/import_thresholds.hpp"
 
+#include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -13,6 +15,8 @@ struct ImportReportHeader {
     Real t_min = 0;
     ImportTolerances tolerances;
     bool b_tier_accepted_all = false;
+    // TEST-FIRST storage stub: serialization is intentionally unimplemented.
+    std::optional<std::int64_t> welded_interfaces;
 };
 
 enum class ImportResult { Success, ConfirmationRequired, Rejected };
@@ -31,5 +35,7 @@ bool write_import_report(const std::filesystem::path& directory,
                          std::string* error = nullptr);
 std::string tier_name(Tier tier);
 std::string defect_id(const Defect& defect);
+// TEST-FIRST link stub; normalization is intentionally unimplemented.
+void deduplicate_defect_ids(std::vector<Defect>& defects);
 
 } // namespace chipcae::geometry

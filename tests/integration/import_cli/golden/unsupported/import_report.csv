@@ -1,1 +1,4 @@
-defect_id,tier,kind,reason,dimension,size,suggestion,action,rejection_reason,material_ambiguous
+defect_id,tier,kind,reason,dimension,size,size_unit,suggestion,action,rejection_reason,material_ambiguous
+"board/MysteryA/2","B","IMPORT_UNSUPPORTED_ELEMENT",0,"element",1,"1","confirm omitted metadata, components or text","","tier B defect requires explicit confirmation",false
+"board/MysteryB/2","B","IMPORT_UNSUPPORTED_ELEMENT",0,"element",1,"1","confirm omitted metadata, components or text","","tier B defect requires explicit confirmation",false
+"board/MysteryC/2","B","IMPORT_UNSUPPORTED_ELEMENT",0,"element",1,"1","confirm omitted metadata, components or text","","tier B defect requires explicit confirmation",false

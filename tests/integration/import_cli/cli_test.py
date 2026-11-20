@@ -65,27 +65,8 @@ def check_unsupported(result, directory, reference):
           "unsupported: expected unconfirmed B exit 6 and diagnostic")
     for name in ("stack.json", "stack.polyset", "import_layers.json"):
         check(not (directory / name).exists(), f"unsupported: published {name}")
-    check(json.loads((directory / "defects.json").read_text()) == {
-        "code": "IMPORT_CONFIRMATION_REQUIRED",
-        "message": "tier B defects require confirmation", "defects": []},
-        "unsupported: confirmation summary differs")
-    expected = json.loads((reference / "import_report.json").read_text())
-    expected["tier_counts"]["B"] = 3
-    expected["defects"] = [{
-        "defect_id": f"board/Mystery{suffix}/2", "tier": "B",
-        "kind": "IMPORT_UNSUPPORTED_ELEMENT", "reason": 0, "dimension": "element",
-        "size": 1, "suggestion": "confirm omitted metadata, components or text",
-        "action": "", "rejection_reason": "tier B defect requires explicit confirmation",
-        "material_ambiguous": False} for suffix in "ABC"]
-    check(json.loads((directory / "import_report.json").read_text()) == expected,
-          "unsupported: three complete B defects must be reported")
-    expected_csv = (reference / "import_report.csv").read_bytes() + b"".join(
-        f'"board/Mystery{suffix}/2","B","IMPORT_UNSUPPORTED_ELEMENT",0,"element",1,'
-        '"confirm omitted metadata, components or text","",'
-        '"tier B defect requires explicit confirmation",false\n'.encode()
-        for suffix in "ABC")
-    check((directory / "import_report.csv").read_bytes() == expected_csv,
-          "unsupported: CSV defects differ")
+    record_or_compare(result, directory, reference,
+                      (*ARTIFACTS, "stdout", "stderr"), False)
 
 
 def run_case(binary, case, generate=False):

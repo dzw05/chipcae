@@ -5,6 +5,8 @@
 #include <sstream>
 
 namespace chipcae::geometry {
+void deduplicate_defect_ids(std::vector<Defect>&) {}
+
 std::string tier_name(Tier tier) {
     switch (tier) {
     case Tier::Weld:
