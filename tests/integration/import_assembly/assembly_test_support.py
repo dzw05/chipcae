@@ -132,6 +132,8 @@ def solve_stack(root, stack, name):
             table['extrapolation'] = 'clamp'
     import copy
     for id_ in ('fr4_eq', 'copper'):
+        if any(m['id'] == id_ for m in library['materials']):
+            continue
         material = copy.deepcopy(library['materials'][0])
         material['id'] = id_
         library['materials'].append(material)
