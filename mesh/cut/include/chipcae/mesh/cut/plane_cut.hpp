@@ -6,12 +6,12 @@ struct Plane {
     std::array<Real, 3> n{1, 0, 0};
     Real d = 0;
 };
-// Data-only declaration for the test-first I11 acceptance pass.
+// Disjoint convex pieces of one body, with decomposition caps marked internal.
 struct PieceUnion {
     BodyId body = 0;
-    std::vector<std::vector<Plane>> pieces;
-    std::vector<std::vector<bool>> internal;
-    std::vector<std::array<Real, 2>> ring;
+    std::vector<std::vector<Plane>> pieces;  // Each half-space carries this union's body.
+    std::vector<std::vector<bool>> internal; // Same shape as pieces; true hides a cap.
+    std::vector<std::array<Real, 2>> ring;   // Normalized, unsnapped CCW source for distances.
 };
 // Repeated body IDs mean intersection of half-spaces: piecewise planar fillets.
 struct CutGeometry {

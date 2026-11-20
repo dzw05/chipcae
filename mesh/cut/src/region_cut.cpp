@@ -1,6 +1,7 @@
 #include "chipcae/mesh/cut/region_cut.hpp"
 
 #include "chipcae/mesh/background/tensor_grid.hpp"
+#include "chipcae/mesh/cut/detail/convex_pieces.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -63,13 +64,25 @@ Expected<Polygon> normalized_polygon(const Inclusion& region) {
     for (std::size_t i = 1; i + 1 < ring.size(); ++i)
         area += (ring[i][0] - ring[0][0]) * (ring[i + 1][1] - ring[0][1]) -
                 (ring[i][1] - ring[0][1]) * (ring[i + 1][0] - ring[0][0]);
-    if (ring.size() < 3 || area == 0)
+    if (ring.size() < 3 || !std::isfinite(area) || area == 0)
         return Error{"CUT_UNSUPPORTED", region.name + ": degenerate polygon"};
+    // Cleanup must not erase a self-touching excursion before topology checks.
+    // Repeated closure/consecutive vertices remain accepted normalization input.
+    auto topology = region.footprint.polygon;
+    topology.erase(std::unique(topology.begin(), topology.end()), topology.end());
+    while (topology.size() > 1 && topology.front() == topology.back())
+        topology.pop_back();
+    if (detail::check_simple(topology) || detail::check_simple(ring))
+        return Error{"CUT_UNSUPPORTED", region.name + ": self-intersecting polygon"};
     if (area < 0)
         std::reverse(ring.begin(), ring.end());
     std::rotate(ring.begin(), std::min_element(ring.begin(), ring.end()), ring.end());
 
-    // Validate the unsnapped ring with the solve outline half-space criterion.
+    return ring;
+}
+
+bool legacy_convex(const Polygon& ring) {
+    // Preserve the relative half-space criterion on the unsnapped ring.
     for (std::size_t i = 0; i < ring.size(); ++i) {
         const auto& a = ring[i];
         const auto& b = ring[(i + 1) % ring.size()];
@@ -78,15 +91,16 @@ Expected<Polygon> normalized_polygon(const Inclusion& region) {
         const Real d = nx * a[0] + ny * a[1];
         for (const auto& v : ring)
             if (nx * v[0] + ny * v[1] - d > 1e-12 * length)
-                return Error{"CUT_UNSUPPORTED", region.name + ": non-convex polygon"};
+                return false;
     }
-    return ring;
+    return true;
 }
 
 struct Source {
     std::string body;
     BodyId id;
     Polygon ring;
+    std::optional<detail::ConvexPieces> decomposition;
 };
 
 Expected<std::vector<Source>> polygon_sources(const StackModel& stack, const HexMeshArrays& mesh) {
@@ -104,7 +118,19 @@ Expected<std::vector<Source>> polygon_sources(const StackModel& stack, const Hex
             const auto found = mesh.attr_table.bodies.find(body);
             if (found == mesh.attr_table.bodies.end())
                 return Error{"INPUT_INVALID", body + ": body not in attr_table"};
-            sources.push_back({body, found->second, std::move(normalized.value())});
+            auto ring = std::move(normalized.value());
+            std::optional<detail::ConvexPieces> decomposition;
+            if (!legacy_convex(ring)) {
+                auto canonical = detail::normalize_ring(ring);
+                if (!canonical)
+                    return Error{"CUT_UNSUPPORTED", region.name + ": degenerate polygon"};
+                ring = std::move(canonical.value());
+                auto pieces = detail::convex_pieces(ring);
+                if (!pieces)
+                    return Error{"CUT_UNSUPPORTED", region.name + ": " + pieces.error().reason};
+                decomposition = std::move(pieces.value());
+            }
+            sources.push_back({body, found->second, std::move(ring), std::move(decomposition)});
         }
     return sources;
 }
@@ -123,6 +149,24 @@ Real snapped_coordinate(Real coordinate, const std::vector<Real>& axis) {
         }
     }
     return nearest;
+}
+
+Plane edge_plane(const Point& a, const Point& b, BodyId body, const HexMeshArrays& mesh) {
+    const Real dx = b[0] - a[0], dy = b[1] - a[1];
+    Plane plane;
+    plane.body = body;
+    if (dx == 0) {
+        plane.n = {dy > 0 ? Real(1) : Real(-1), 0, 0};
+        plane.d = plane.n[0] * snapped_coordinate(a[0], mesh.axes[0]);
+    } else if (dy == 0) {
+        plane.n = {0, dx > 0 ? Real(-1) : Real(1), 0};
+        plane.d = plane.n[1] * snapped_coordinate(a[1], mesh.axes[1]);
+    } else {
+        const Real length = std::hypot(dx, dy);
+        plane.n = {dy / length, -dx / length, 0};
+        plane.d = plane.n[0] * a[0] + plane.n[1] * a[1];
+    }
+    return plane;
 }
 } // namespace
 
@@ -146,26 +190,28 @@ Expected<CutGeometry> region_cut_planes(const StackModel& stack, const HexMeshAr
     });
 
     CutGeometry geometry;
-    for (const auto* source : ordered)
-        for (std::size_t i = 0; i < source->ring.size(); ++i) {
-            const auto& a = source->ring[i];
-            const auto& b = source->ring[(i + 1) % source->ring.size()];
-            const Real dx = b[0] - a[0], dy = b[1] - a[1];
-            Plane plane;
-            plane.body = source->id;
-            if (dx == 0) {
-                plane.n = {dy > 0 ? Real(1) : Real(-1), 0, 0};
-                plane.d = plane.n[0] * snapped_coordinate(a[0], mesh.axes[0]);
-            } else if (dy == 0) {
-                plane.n = {0, dx > 0 ? Real(-1) : Real(1), 0};
-                plane.d = plane.n[1] * snapped_coordinate(a[1], mesh.axes[1]);
-            } else {
-                const Real length = std::hypot(dx, dy);
-                plane.n = {dy / length, -dx / length, 0};
-                plane.d = plane.n[0] * a[0] + plane.n[1] * a[1];
+    for (const auto* source : ordered) {
+        if (source->decomposition) {
+            PieceUnion target;
+            target.body = source->id;
+            target.ring = source->ring;
+            target.internal = source->decomposition->internal_edge;
+            for (const auto& piece : source->decomposition->pieces) {
+                std::vector<Plane> planes;
+                for (std::size_t i = 0; i < piece.size(); ++i)
+                    planes.push_back(
+                        edge_plane(piece[i], piece[(i + 1) % piece.size()], source->id, mesh));
+                target.pieces.push_back(std::move(planes));
             }
-            geometry.planes.push_back(plane);
+            geometry.unions.push_back(std::move(target));
+        } else {
+            for (std::size_t i = 0; i < source->ring.size(); ++i)
+                geometry.planes.push_back(edge_plane(source->ring[i],
+                                                     source->ring[(i + 1) % source->ring.size()],
+                                                     source->id,
+                                                     mesh));
         }
+    }
     return geometry;
 }
 } // namespace chipcae::mesh::cut
