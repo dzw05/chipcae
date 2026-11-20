@@ -726,6 +726,102 @@ class FixtureAcceptance(unittest.TestCase):
             self.status(self.command(sys.executable, generator, "--out", destination), 2)
             self.assertEqual(destination.read_text(encoding="utf-8"), "occupied\n")
 
+    def generate_source_table(self, outline, blocks, destination):
+        # TABLES is the generator's source-data boundary. Inject only that data
+        # in a child process; all geometry, serialization and exit handling run
+        # unchanged. No new generator CLI or implementation stub is required.
+        driver = """
+import json
+import runpy
+import sys
+
+fixture = runpy.run_path(sys.argv[1], run_name="cutgeom_generator_under_test")
+table = json.loads(sys.argv[3])
+fixture["TABLES"]["l_shape"] = (table["outline"], table["blocks"])
+sys.argv = [sys.argv[1], "--out", sys.argv[2]]
+raise SystemExit(fixture["main"]())
+"""
+        return self.command(
+            sys.executable, "-B", "-c", driver, self.tool("gen.py"), destination,
+            json.dumps({"outline": outline, "blocks": blocks}),
+        )
+
+    def test_generator_rejects_a_collinear_turn_in_an_otherwise_valid_partition(self):
+        # A midpoint changes neither area nor coverage. Only strict convexity
+        # rejects this block, even though every turn is nonnegative.
+        outline = [["0", "0"], [".01", "0"], [".02", "0"], [".02", ".0137"],
+                   [".0113", ".0137"], [".0113", ".02"], ["0", ".02"]]
+        ring = points(outline)
+        self.assertEqual(area(ring), Fraction(".00034519"))
+        self.assertEqual(cross(*ring[:3]), 0)
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self.generate_source_table(
+                outline, [[0, 1, 2, 3, 4], [0, 4, 5, 6]], Path(tmp) / "out",
+            )
+            self.status(result, 1)
+            self.assertIn("FAIL", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+
+    def test_generator_rejects_equal_area_disjoint_blocks_outside_the_outline(self):
+        # Both triangles are strictly convex and disjoint, and their total area
+        # equals the L outline. One crosses its notch: area sums alone cannot
+        # establish containment. The outline's two rectangles are independent
+        # reference regions, unrelated to the generator's ear triangulation.
+        outline = [["0", "0"], [".02", "0"], [".02", ".01"],
+                   [".01", ".01"], [".01", ".02"], ["0", ".02"]]
+        ring = points(outline)
+        blocks = [[0, 1, 4], [0, 4, 5]]
+        triangles = [[ring[i] for i in block] for block in blocks]
+        rectangles = [points(raw) for raw in (
+            [["0", "0"], [".02", "0"], [".02", ".01"], ["0", ".01"]],
+            [["0", ".01"], [".01", ".01"], [".01", ".02"], ["0", ".02"]],
+        )]
+        self.assertTrue(all(cross(*triangle) > 0 for triangle in triangles))
+        self.assertEqual(sum(map(area, triangles), Fraction(0)), area(ring))
+        self.assertEqual(area(intersection(*triangles)), 0)
+        inside = sum((area(intersection(triangles[0], box)) for box in rectangles), Fraction(0))
+        self.assertLess(inside, area(triangles[0]))
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self.generate_source_table(outline, blocks, Path(tmp) / "out")
+            self.status(result, 1)
+            self.assertIn("piece outside outline", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+
+    def test_branch_mode_rejects_a_unary_minus_separated_from_its_decimal(self):
+        # These are valid C++ coordinate expressions with different values.
+        # A token scanner must not silently discard the spaced unary minus.
+        if shutil.which("git") is None:
+            self.skipTest("SKIP: git is unavailable for the auxiliary drift probe")
+        source = self.command("git", "-C", REPO, "show", f"{BRANCH}:{SOURCE}")
+        if source.returncode:
+            self.skipTest(f"SKIP: optional #202 source ref {BRANCH} is unavailable")
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, root = self.isolated(tmp)
+            self.status(self.command("git", "init", repo), 0)
+            path = repo / SOURCE
+            path.parent.mkdir(parents=True, exist_ok=True)
+
+            def commit_source(text):
+                path.write_text(text, encoding="utf-8")
+                self.status(self.command("git", "-C", repo, "add", SOURCE), 0)
+                self.status(self.command(
+                    "git", "-C", repo, "-c", "user.name=Fixture Acceptance",
+                    "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+                    "commit", "-m", "Synthetic unary-sign source probe",
+                ), 0)
+
+            commit_source(source.stdout)
+            self.status(self.checker(root, repo, "--branch-ref", "HEAD"), 0)
+            for literal in (".0064", ".0086"):
+                with self.subTest(source_literal=literal):
+                    self.assertIn(literal, source.stdout)
+                    commit_source(source.stdout.replace(literal, "- " + literal))
+                    before = snapshot(root)
+                    result = self.checker(root, repo, "--branch-ref", "HEAD")
+                    self.assertEqual(snapshot(root), before)
+                    self.assertNotIn("SKIP", result.stdout + result.stderr)
+                    self.status(result, 1)
+
     def test_branch_source_matches_and_literal_drift_is_rejected(self):
         self.tool("check.py")
         # Only this auxiliary drift probe needs #202 locally. Default acceptance
