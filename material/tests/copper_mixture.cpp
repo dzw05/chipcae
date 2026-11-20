@@ -139,36 +139,42 @@ bool constant_longitudinal() {
     m.thermal.cte_type = c.thermal.cte_type = CteType::Tangent;
     m.thermal.T_sf = c.thermal.T_sf = 300;
     CopperMixture<MS> mix(kernel(m), kernel(c));
-    auto in = input(f, 400);
-    const Real delta_T = in.T_np1 - m.thermal.T_sf;
-    auto out = run(mix, in);
-    auto S = inverse(out.tangent);
     const Real E = f * Ec + (1 - f) * Em;
     const Real alpha = (f * Ec * ac + (1 - f) * Em * am) / E;
     bool ok = true;
-    auto expect = [&](Real actual, Real expected, Real tolerance, const char* name) {
-        if (!(std::abs(actual - expected) <= tolerance * std::abs(expected))) {
-            std::cerr << std::setprecision(17) << "FAIL " << name << ": actual=" << actual
-                      << " expected=" << expected << '\n';
-            ok = false;
-        }
-    };
-    expect(1 / S[14], E, 1e-12, "constant_longitudinal_Ez");
-    expect(out.thermal_strain[2] / delta_T, alpha, 1e-12, "constant_longitudinal_alpha_z");
-    expect(1 / S[14], 50.5e9, 1e-4, "displayed_Ez");
-    expect(out.thermal_strain[2] / delta_T, 14.574e-6, 1e-4, "displayed_alpha_z");
-    Mat6 L{};
-    for (int j = 0; j < 6; ++j)
-        for (int k = 0; k <= j; ++k) {
-            near(out.tangent[6 * j + k], out.tangent[6 * k + j]);
-            Real v = out.tangent[6 * j + k];
-            for (int l = 0; l < k; ++l)
-                v -= L[6 * j + l] * L[6 * k + l];
-            if (j == k) {
-                check(v > 0, "constant longitudinal non-SPD tangent");
-                L[6 * j + k] = std::sqrt(v);
-            } else
-                L[6 * j + k] = v / L[6 * k + k];
+    for (Real T : {233., 400., 533.})
+        for (bool override_zero : {false, true}) {
+            auto in = input(f, T);
+            in.override_T_sf = override_zero;
+            in.T_sf = 350;
+            const Real delta_T = T - (override_zero ? in.T_sf : m.thermal.T_sf);
+            auto out = run(mix, in);
+            auto S = inverse(out.tangent);
+            auto expect = [&](Real actual, Real expected, Real tolerance, const char* name) {
+                if (!(std::abs(actual - expected) <= tolerance * std::abs(expected))) {
+                    std::cerr << std::setprecision(17) << "FAIL " << name << ": actual=" << actual
+                              << " expected=" << expected << " T=" << T
+                              << " override_T_sf=" << override_zero << '\n';
+                    ok = false;
+                }
+            };
+            expect(1 / S[14], E, 1e-12, "constant_longitudinal_Ez");
+            expect(out.thermal_strain[2] / delta_T, alpha, 1e-12, "constant_longitudinal_alpha_z");
+            expect(1 / S[14], 50.5e9, 1e-4, "displayed_Ez");
+            expect(out.thermal_strain[2] / delta_T, 14.574e-6, 1e-4, "displayed_alpha_z");
+            Mat6 L{};
+            for (int j = 0; j < 6; ++j)
+                for (int k = 0; k <= j; ++k) {
+                    near(out.tangent[6 * j + k], out.tangent[6 * k + j]);
+                    Real v = out.tangent[6 * j + k];
+                    for (int l = 0; l < k; ++l)
+                        v -= L[6 * j + l] * L[6 * k + l];
+                    if (j == k) {
+                        check(v > 0, "constant longitudinal non-SPD tangent");
+                        L[6 * j + k] = std::sqrt(v);
+                    } else
+                        L[6 * j + k] = v / L[6 * k + k];
+                }
         }
     return ok;
 }
