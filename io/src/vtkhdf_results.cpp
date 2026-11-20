@@ -337,7 +337,8 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
     agree(p.hex.size() % 8 == 0 && p.points.size() % 3 == 0 && p.T.size() == p.points.size() / 3 &&
           p.U.size() == p.points.size() && p.layer_id.size() == input_cells &&
           p.material_id.size() == input_cells && p.cell_kind.size() == input_cells &&
-          (p.elem_gid.empty() || p.elem_gid.size() == input_cells));
+          (p.elem_gid.empty() || p.elem_gid.size() == input_cells) &&
+          (p.volume.empty() || p.volume.size() == input_cells));
     auto diagnostics_valid = [](const ResultsPartition& q, std::size_t cells) {
         bool valid = (q.copper_fraction.empty() || q.copper_fraction.size() == cells) &&
                      (q.conductivity_diag.empty() || q.conductivity_diag.size() == 3 * cells);
@@ -392,6 +393,7 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
             filtered.layer_id.clear();
             filtered.material_id.clear();
             filtered.cell_kind.clear();
+            filtered.volume.clear();
             filtered.copper_fraction.clear();
             filtered.conductivity_diag.clear();
             for (std::size_t i = 0; i < p.hex.size() / 8; ++i) {
@@ -407,6 +409,8 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                     filtered.material_id.push_back(p.material_id[i]);
                 if (i < p.cell_kind.size())
                     filtered.cell_kind.push_back(p.cell_kind[i]);
+                if (!p.volume.empty())
+                    filtered.volume.push_back(p.volume[i]);
                 if (!p.copper_fraction.empty())
                     filtered.copper_fraction.push_back(p.copper_fraction[i]);
                 if (!p.conductivity_diag.empty())
@@ -521,10 +525,14 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
         valid = valid && s.n != n;
     agree(valid);
     int gid_present = !p.elem_gid.empty() || !cut.elem_gid.empty(), gid_any = gid_present;
+    int hex_volume_present = !p.volume.empty(), hex_volume_any = hex_volume_present;
 #ifdef CHIPCAE_ENABLE_MPI
-    if (size_ > 1)
+    if (size_ > 1) {
         MPI_Allreduce(&gid_present, &gid_any, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+        MPI_Allreduce(&hex_volume_present, &hex_volume_any, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+    }
 #endif
+    agree(!hex_volume_any || nc == 0 || !p.volume.empty());
     agree(!gid_any || ((nc == 0 || !p.elem_gid.empty()) && (cn == 0 || !cut.elem_gid.empty())));
     agree(steps_.empty() || gids_ == (gid_any != 0));
     const auto& eb = local.embedded_boundary;
@@ -786,6 +794,8 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                     emit(cd, "cell_kind", q.cell_kind);
                 if ((gid_any && selected("elem_gid")) || block == 1)
                     emit(cd, "elem_gid", q.elem_gid);
+                if (block == 0 && hex_volume_any)
+                    emit(cd, "volume", q.volume);
                 if (block == 1 && (selected("volume") || cut_any))
                     emit(cd, "volume", q.volume);
                 if (selected("copper_fraction") && (diagnostic_schema[block] & 1))

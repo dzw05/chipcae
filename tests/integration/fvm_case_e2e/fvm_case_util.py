@@ -378,13 +378,16 @@ def canonical_cells(block):
 
 def compare_parallel(first, second):
     import numpy as np
+    max_error = 0.0
     for name in ('hex', 'cut'):
         a, b = canonical_cells(first[name]), canonical_cells(second[name])
         assert a.keys() == b.keys(), f'{name}: owned gid/coordinate sets differ'
         for key in a:
             x, y = np.asarray(a[key]), np.asarray(b[key])
             error = float(np.max(np.abs(x - y))) / max(float(np.max(np.abs(x))), 1e-300)
+            max_error = max(max_error, error)
             assert error <= 1e-8, (name, key, error)
+    print(f'实测 compare_parallel maximum_relative_difference={max_error:.17g}', flush=True)
 
 
 def inspect_fvm(out, blocks, manifest, stopped=False):
@@ -472,7 +475,7 @@ def wiener_fixture(root):
     return {name: (root / name).read_bytes() for name in ('stack.json', 'half.polyset')}
 
 
-# Captured from the unmodified loader at 6eca460; only temporary paths normalized.
+# Frozen at upstream merge 75878ee (origin/main c9c1464); only temporary paths normalized.
 FEM_SNAPSHOTS = {'copper': {'T_ref': 300.0,
             'backend': 'cpu',
             'case_path': '<fixture>/case.json',
@@ -482,7 +485,8 @@ FEM_SNAPSHOTS = {'copper': {'T_ref': 300.0,
                             'quad_degree': 6,
                             'small_sub_vf': 1e-08,
                             'snap_phi': 1e-14},
-            'fields': ['T', 'U', 'layer_id', 'material_id', 'cell_kind', 'elem_gid'],
+            'fields': ['T', 'U', 'layer_id', 'material_id', 'cell_kind', 'elem_gid',
+                       'copper_fraction', 'conductivity_diag'],
             'fixed': [],
             'ghost_penalty': 0.1,
             'grid': {'ar_max': 'inf',
@@ -726,7 +730,8 @@ FEM_SNAPSHOTS = {'copper': {'T_ref': 300.0,
                              'quad_degree': 6,
                              'small_sub_vf': 1e-08,
                              'snap_phi': 1e-14},
-             'fields': ['T', 'U', 'layer_id', 'material_id', 'cell_kind', 'elem_gid'],
+             'fields': ['T', 'U', 'layer_id', 'material_id', 'cell_kind', 'elem_gid',
+                        'copper_fraction', 'conductivity_diag'],
              'fixed': [],
              'ghost_penalty': 0.1,
              'grid': {'ar_max': 'inf',
@@ -836,7 +841,8 @@ FEM_SNAPSHOTS = {'copper': {'T_ref': 300.0,
                            'quad_degree': 6,
                            'small_sub_vf': 1e-08,
                            'snap_phi': 1e-14},
-           'fields': ['T', 'U', 'layer_id', 'material_id', 'cell_kind', 'elem_gid'],
+           'fields': ['T', 'U', 'layer_id', 'material_id', 'cell_kind', 'elem_gid',
+                      'copper_fraction', 'conductivity_diag'],
            'fixed': [],
            'ghost_penalty': 0.1,
            'grid': {'ar_max': 'inf',
@@ -873,7 +879,7 @@ FEM_SNAPSHOTS = {'copper': {'T_ref': 300.0,
                                                'temperatures': [300.0],
                                                'values': [1e-05]},
                                'id': 'a',
-                               'k': 0.0,
+                               'k': 2.0,
                                'nu': 0.3,
                                'nu_clamped': False,
                                'nu_table': {'extrapolation': 'clamp',
@@ -893,7 +899,7 @@ FEM_SNAPSHOTS = {'copper': {'T_ref': 300.0,
                                                'temperatures': [300.0],
                                                'values': [1e-05]},
                                'id': 'b',
-                               'k': 0.0,
+                               'k': 4.0,
                                'nu': 0.3,
                                'nu_clamped': False,
                                'nu_table': {'extrapolation': 'clamp',
@@ -937,7 +943,8 @@ FEM_SNAPSHOTS = {'copper': {'T_ref': 300.0,
                              'quad_degree': 6,
                              'small_sub_vf': 1e-08,
                              'snap_phi': 1e-14},
-             'fields': ['T', 'U', 'layer_id', 'material_id', 'cell_kind', 'elem_gid'],
+             'fields': ['T', 'U', 'layer_id', 'material_id', 'cell_kind', 'elem_gid',
+                        'copper_fraction', 'conductivity_diag'],
              'fixed': [],
              'ghost_penalty': 0.1,
              'grid': {'ar_max': 'inf',

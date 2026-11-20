@@ -460,7 +460,8 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
             std::set<std::string> selected;
             for (const auto& field : output.at("fields").array_range()) {
                 auto name = field.as<std::string>();
-                if (std::find(out.fields.begin(), out.fields.end(), name) == out.fields.end() ||
+                if ((std::find(out.fields.begin(), out.fields.end(), name) == out.fields.end() &&
+                     !(out.family == "fvm" && name == "volume")) ||
                     !selected.insert(name).second)
                     invalid("invalid output field");
             }

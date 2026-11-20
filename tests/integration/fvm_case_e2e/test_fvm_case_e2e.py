@@ -1,4 +1,4 @@
-"""Public FVM case/1.0 acceptance; this test-first revision is expected to be red."""
+"""Public FVM case/1.0 acceptance through the loader, CLI and results writer."""
 
 from copy import deepcopy
 import json
@@ -119,7 +119,8 @@ class CaseAcceptance(unittest.TestCase):
                 got, _ = u.probe(self.root, case)
                 got = u.normalize_paths(got, self.root)
                 family = got.pop('family')
-                # Full public structure, frozen before any production edits at 6eca460.
+                # frozen at upstream merge 75878ee (origin/main c9c1464);
+                # FEM diffs vs e181d83 come from #212 / solid-k parsing upstream
                 self.assertEqual(got, u.FEM_SNAPSHOTS[name])
                 self.assertEqual(family, 'fem')
 
@@ -136,6 +137,23 @@ class CaseAcceptance(unittest.TestCase):
                 _, result = u.probe(self.root, case, expected=12)
                 self.assertIn('cannot read reference:', result.stderr)
                 self.assertIn('missing-stack.json', result.stderr)
+
+    def test_volume_output_field_is_fvm_only(self):
+        import h5py
+        for family in ('fem', 'fvm'):
+            with self.subTest(family=family):
+                case = u.thermal_case(family)
+                case['output']['fields'] = ['T', 'volume']
+                if family == 'fem':
+                    _, result = u.probe(self.root, case, expected=14)
+                    self.assertEqual(result.stderr.strip(), 'invalid output field')
+                else:
+                    got, _ = u.probe(self.root, case)
+                    self.assertEqual(got['fields'], ['T', 'volume'])
+                    out, _ = u.solve(self.root, case, 'explicit-volume')
+                    with h5py.File(out / 'out/step-0.vtkhdf', 'r') as result:
+                        for block in ('hex', 'cut'):
+                            self.assertIn('volume', result[f'VTKHDF/{block}/CellData'])
 
     def test_fvm_selection_orders_defaults_and_preconditioners(self):
         for reverse in (False, True):
@@ -284,11 +302,12 @@ class CaseAcceptance(unittest.TestCase):
         parameters = u.read_json(SOURCE / 'schema/parameters.schema.json')
         registry = Registry().with_resource(parameters['$id'], Resource.from_contents(parameters))
         validator = jsonschema.validators.validator_for(schema)(schema, registry=registry)
-        for case in (u.thermal_case(), u.solid_case()):
+        explicit_volume = u.thermal_case()
+        explicit_volume['output']['fields'] = ['T', 'volume']
+        for case in (u.thermal_case(), u.solid_case(), explicit_volume):
             for reverse in (False, True):
                 with self.subTest(physics=case['physics'], reverse=reverse):
                     candidate = deepcopy(case)
-                    # The brief permits only solver-name enums in case schema;
                     # parameters.schema.json still restricts explicit FEM preconditioners.
                     # Exercise FVM preconditioners through the real loader/CLI above.
                     candidate.pop('solver')
@@ -374,18 +393,23 @@ class CaseAcceptance(unittest.TestCase):
                 for field in ('nx0', 'ny0', 'L', 'nz', 'padded_cells', 'mesh_sha256'):
                     self.assertEqual(manifest['mesh'][field], preview[field])
                 if family == 'fvm':
-                    u.inspect_fvm(out, blocks, manifest)
+                    ledger, _ = u.inspect_fvm(out, blocks, manifest)
+                    print(f'实测 board energy np={ranks} imbalance={ledger["imbalance"]:.17g} '
+                          f'iterations={ledger["iterations"]}', flush=True)
                 results[family, ranks] = manifest, blocks
         for name, content in originals.items():
             self.assertEqual((self.root / name).read_bytes(), content)
         self.assertEqual(len(stack['layers']), 5)
         self.assertEqual(set(results), {('fvm', 1), ('fvm', 2), ('fem', 1)})
         u.compare_parallel(results['fvm', 1][1], results['fvm', 2][1])
-        fvm = u.summary(results['fvm', 1][0])['T_max']
-        fem = u.summary(results['fem', 1][0])['T_max']
+        fvm = float(results['fvm', 1][1]['hex']['PointData/T'].max())
+        fem = float(results['fem', 1][1]['hex']['PointData/T'].max())
         self.assertGreater(fem - 298.15, 0)
         error = abs(fvm - fem) / (fem - 298.15)
-        print(f'实测 board Tmax fvm={fvm:.17g} fem={fem:.17g} '
+        fvm_summary = u.summary(results['fvm', 1][0])['T_max']
+        fem_summary = u.summary(results['fem', 1][0])['T_max']
+        print(f'实测 board vertex_Tmax fvm={fvm:.17g} fem={fem:.17g} '
+              f'summary_Tmax fvm={fvm_summary:.17g} fem={fem_summary:.17g} '
               f'rise_relative={error:.17g} absolute_T_relative={abs(fvm-fem)/abs(fem):.17g}', flush=True)
         self.assertLessEqual(error, .01)
 
@@ -463,7 +487,10 @@ class CaseAcceptance(unittest.TestCase):
         with self.subTest(embedded_robin=True):
             case['loads'] = [dict(type='fixed_temperature', target='face:zmin', T=298.15),
                              dict(type='convection', target='boundary:embedded', h=500, T_inf=348.15)]
+            case['solver']['linear']['rtol'] = 1e-12
             _, blocks, ledger, _ = self.successful_thermal(case, 'demo-embedded')
+            print(f'实测 DEMO embedded_robin imbalance={ledger["imbalance"]:.17g} '
+                  f'iterations={ledger["iterations"]}', flush=True)
             self.assertGreater(ledger['heat_in'], 0)
             self.assertGreater(ledger['heat_out'], 0)
             self.assertGreater(int(blocks['eb_surface']['Polygons/NumberOfCells'].sum()), 0)

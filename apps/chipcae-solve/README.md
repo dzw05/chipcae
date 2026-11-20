@@ -165,9 +165,18 @@ after the solve and before step publication; nonconvergence publishes no step.
 
 Acceptance and measured results are recorded in
 [the FVM integration README](../../tests/integration/fvm_case_e2e/README.md).
-The existing results writer does not serialize hex `CellData/volume`, even
-when the adapter supplies it. That required output remains an upstream io/
-prerequisite; this adapter does not patch HDF5 after writing.
+FVM always writes physical `CellData/volume` for both hex and cut cells,
+including when `output.fields` omits it. An explicit `volume` selection is
+accepted only for FVM; FEM retains `invalid output field`. The default fields
+list is unchanged. Hex volumes are optional writer input: callers that supply
+none retain the existing output without hex volume. Cut output and unit
+metadata are unchanged.
+
+The board 1% gate independently takes the maximum of each result's hex
+`PointData/T`, then compares temperature rises above 298.15 K. Both summary
+maxima are printed separately; the FVM summary retains its cell-center
+definition. Energy imbalance must remain at most 1e-9; the board and DEMO
+embedded-Robin checks explicitly solve with `rtol=1e-12`.
 
 Run the FVM CLI acceptance with the shared build wrappers:
 
@@ -181,15 +190,18 @@ uses wait4 maximum child RSS and is not a sum across MPI ranks:
 
 | Case/backend | Wall seconds | Peak RSS KiB |
 | --- | ---: | ---: |
-| imported board, FVM np=1 | 1.532473 | 55060 |
-| same board, FEM/direct | 1.713540 | 62124 |
-| DEMO-GATE, FVM | 1.613696 | 55316 |
-| original DEMO-GATE, FEM | 47.716326 | 1305304 |
+| imported board, FVM np=1 | 1.533149 | 50428 |
+| same board, FEM/direct | 1.790768 | 61804 |
+| DEMO-GATE, FVM | 1.569853 | 55764 |
+| original DEMO-GATE, FEM | 39.224233 | 1311676 |
 
-These solves exit 0, but acceptance remains red. The board's mandated FVM
-cell-center/FEM nodal Tmax-rise comparison differs by 7.96% (1% gate).
-DEMO-GATE passes that comparison at 0.242%; its embedded-Robin variant at
-unchanged rtol=1e-8 fails the 1e-9 energy gate with imbalance 9.76e-9.
-The hex-volume writer prerequisite and frozen snapshots predating upstream
-copper fields also remain visible failures. No mesh, tolerance, summary
-sampling, library ledger or existing assertion is changed to hide them.
+The board vertex maxima are FVM 323.13920209610802 K and FEM
+323.17794030362211 K: temperature-rise difference 0.1547798462%, below 1%.
+Board energy imbalance is 1.3544070916991032e-12 (np=1) and
+4.4733543527735244e-14 (np=2). DEMO embedded Robin returns imbalance
+1.2088229951858545e-13 in 445 iterations at explicit `rtol=1e-12`.
+The largest np=1/2 temperature relative difference is 1.1015562826700222e-14.
+
+Fresh local CTest: `fvm_fvm_case_e2e` passes all 19 methods (97.27 s),
+`k1_results_validation*` passes 2/2 (4.24 s), and the existing VTKHDF
+regressions pass 5/5 (56.69 s), with no skips or threshold changes.

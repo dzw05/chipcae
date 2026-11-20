@@ -508,7 +508,8 @@
               "layer_id",
               "material_id",
               "cell_kind",
-              "elem_gid"
+              "elem_gid",
+              "volume"
             ]
           },
           "default": [
