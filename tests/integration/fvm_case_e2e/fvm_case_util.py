@@ -1,6 +1,7 @@
 """Synthetic fixtures, CLI execution, partition-aware readback and strict CAELOG1 decoding."""
 
 from copy import deepcopy
+import errno
 import hashlib
 import json
 import math
@@ -12,11 +13,15 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import zlib
 
 THERMAL_ONLY = 'not solved: fvm thermal-only stage'
 ENERGY_PREFIX = 'FVM_ENERGY '
+ELASTIC_PREFIX = 'FVM_ELASTIC '
+WARPAGE_METHOD = 'FVM top-face centroids; least-squares plane removal'
+DISPLACEMENT_METHOD = 'FVM cell centers'
 REQUIRE_COPPER_FIELDS = False
 
 
@@ -62,6 +67,22 @@ def solid_case(family='fvm'):
     case = thermal_case(family)
     case['physics'] = [dict(id='mech', solver=family + '.solid')]
     case['loads'] = [dict(type='uniform_temperature', T_ref=300, T_target=350)]
+    return case
+
+
+def bimaterial_strip(root):
+    """Synthetic strip with equal moduli and an explicit 20 ppm/K CTE mismatch."""
+    stack = fixture(root)
+    stack['outline'] = dict(box=[0, 0, 1, .2])
+    for layer in stack['layers']:
+        layer.update(thickness=.05, n_elem_min=2)
+    library = read_json(root / 'materials.json')
+    for card, alpha in zip(library['materials'], (1e-5, 3e-5), strict=True):
+        card['thermal_expansion']['table']['columns']['alpha'] = [alpha]
+    write_json(root / 'stack.json', stack)
+    write_json(root / 'materials.json', library)
+    case = solid_case()
+    case['mesh'].update(nx=12, ny=4)
     return case
 
 
@@ -168,6 +189,61 @@ def solve(root, case, name, ranks=1, extra=(), control=None, expected=0):
     args = [os.environ['CHIPCAE_SOLVE_EXE'], '--case', root / 'case.json', '--profile',
             root / f'profile{ranks}.json', '--out', out, *extra]
     return out, command(mpi_command(args, ranks), root, expected)
+
+
+def solve_with_late_stop(root, case, name, ranks=1):
+    """Queue STOP after the first control checkpoint without a timing race.
+
+    A FIFO supplies an unsupported PAUSE at the pre-mechanics checkpoint.
+    Once its acknowledgment is visible, STOP is queued for the next read.
+    The writer cannot leak STOP into the first read, and the solve needs a
+    post-mechanics checkpoint to acknowledge it before publishing output.
+    """
+    out = root / name
+    out.mkdir()
+    fifo = out / 'control.jsonl'
+    os.mkfifo(fifo)
+    done = threading.Event()
+    errors = []
+    def write_control(text):
+        while not done.is_set():
+            try:
+                descriptor = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+            except OSError as error:
+                if error.errno != errno.ENXIO:  # No reader at this checkpoint yet.
+                    raise
+                done.wait(.001)
+                continue
+            with os.fdopen(descriptor, 'w') as stream:
+                stream.write(text)
+            return True
+        return False
+    def control():
+        try:
+            if not write_control(json.dumps(dict(cmd_seq='1', action='PAUSE')) + '\n'):
+                return
+            while not done.is_set():
+                try:
+                    events = decode_events((out / 'events.bin').read_bytes())
+                except (FileNotFoundError, AssertionError):
+                    done.wait(.001)
+                    continue
+                if any(e['kind'] == 17 and e['cmd_seq'] == 1 for e in events):
+                    write_control(json.dumps(dict(cmd_seq='2', action='STOP')) + '\n')
+                    return
+                done.wait(.001)
+        except Exception as error:
+            errors.append(error)
+    worker = threading.Thread(target=control, daemon=True)
+    worker.start()
+    try:
+        result = solve(root, case, name, ranks)
+    finally:
+        done.set()
+        worker.join(timeout=2)
+    assert not worker.is_alive(), 'control fixture did not finish'
+    assert not errors, f'control fixture failed: {errors}'
+    return result
 
 
 class Cursor:
@@ -297,6 +373,62 @@ def energy(events):
     return value
 
 
+def elastic(events):
+    records = [e for e in events if e['kind'] == 20 and e['text'].startswith(ELASTIC_PREFIX)]
+    assert len(records) == 1, f'expected exactly one FVM_ELASTIC LogLine, got {len(records)}'
+    event = records[0]
+    assert event['level'] == 1 and event['rank'] == 0, event
+    def pairs(items):
+        assert len(items) == len({k for k, _ in items}), 'duplicate elastic JSON keys'
+        return dict(items)
+    def constant(text):
+        raise AssertionError(f'nonfinite JSON constant {text}')
+    text = event['text'][len(ELASTIC_PREFIX):]
+    assert '\n' not in text and '\r' not in text, 'elastic JSON must be one line'
+    try:
+        value = json.loads(text, object_pairs_hook=pairs, parse_constant=constant)
+    except (ValueError, TypeError) as error:
+        raise AssertionError(f'malformed elastic JSON: {text!r}') from error
+    assert isinstance(value, dict) and set(value) == {
+        'iterations', 'residual', 'warpage_pv', 'U_mag_max'}, value
+    assert type(value['iterations']) is int and value['iterations'] >= 0, value
+    for key in ('residual', 'warpage_pv', 'U_mag_max'):
+        assert type(value[key]) in (int, float), (key, value)
+        assert math.isfinite(value[key]) and value[key] >= 0, (key, value)
+    return value
+
+
+def inspect_elastic(out, blocks, manifest, nonzero=True):
+    import numpy as np
+    events = decode_events((out / 'events.bin').read_bytes())
+    assert THERMAL_ONLY not in json.dumps(manifest), 'placeholder in manifest'
+    assert all(THERMAL_ONLY not in e.get('text', '') for e in events), 'placeholder in event text'
+    ledger = elastic(events)
+    summaries = {x['name']: x for x in manifest['summary']}
+    for key, method in (('warpage_pv', WARPAGE_METHOD), ('U_mag_max', DISPLACEMENT_METHOD)):
+        entry = summaries[key]
+        assert entry['method'] == method, entry
+        assert type(entry['value']) in (int, float) and math.isfinite(entry['value']), entry
+        assert entry['value'] >= 0, entry
+        if nonzero:
+            assert entry['value'] > 0, f'{key}: expected solved nonzero mechanics, got {entry}'
+        assert abs(ledger[key] - entry['value']) <= 1e-12 * abs(entry['value']), (ledger, entry)
+    residuals = [p for e in events if e['kind'] == 18 for p in e['points']
+                 if p['solver'] == 'fvm.solid' and p['field'] == 'U']
+    assert residuals, 'missing fvm.solid/U ResidualBatch'
+    final = residuals[-1]
+    assert final['iteration'] == ledger['iterations'], (final, ledger)
+    assert math.isfinite(final['norm']) and final['norm'] >= 0, final
+    assert abs(final['norm'] - ledger['residual']) <= 1e-12 * abs(ledger['residual']), (final, ledger)
+    for name, data in blocks.items():
+        assert np.all(np.isfinite(data['PointData/U'])), name
+    if nonzero:
+        assert any(np.any(data['PointData/U'] != 0) for data in blocks.values()), 'all output U is zero'
+    assert events[-1]['kind'] == 19 and events[-1]['exit_code'] == 0
+    assert events[-1]['reason'] == 'end_reached'
+    return ledger, events
+
+
 def read_result(out, require_volume=True):
     import h5py
     import numpy as np
@@ -339,6 +471,7 @@ def read_result(out, require_volume=True):
             else:
                 assert np.all(np.isin(data['CellData/cell_kind'], [0, 1])), name
             if require_volume and count:
+                assert 'CellData/volume' in data, f'{name}: missing required physical volume output'
                 volumes = data['CellData/volume']
                 assert volumes.shape == (count,) and np.all(np.isfinite(volumes))
                 assert np.all(volumes > 0), (name, volumes)
@@ -352,7 +485,7 @@ def read_result(out, require_volume=True):
     return manifest, blocks
 
 
-def canonical_cells(block):
+def canonical_cells(block, field='T'):
     """Key by parent gid and cell's coordinates, interpreting each rank's local IDs."""
     cells, p0, c0, o0, k0 = {}, 0, 0, 0, 0
     counts = zip(block['NumberOfPoints'], block['NumberOfCells'],
@@ -366,7 +499,7 @@ def canonical_cells(block):
             indices = conn[int(offsets[local]):int(offsets[local + 1])].astype(int)
             assert len(indices) > 0 and min(indices) >= 0 and max(indices) < npoints
             pairs = sorted((tuple(block['Points'][p0 + i]),
-                            float(block['PointData/T'][p0 + i])) for i in indices)
+                            block['PointData/' + field][p0 + i]) for i in indices)
             key = (int(block['CellData/elem_gid'][c0 + local]), tuple(p for p, _ in pairs))
             assert key not in cells, f'duplicate owned volume cell {key}'
             cells[key] = tuple(t for _, t in pairs)
@@ -385,10 +518,22 @@ def compare_parallel(first, second):
             x, y = np.asarray(a[key]), np.asarray(b[key])
             error = float(np.max(np.abs(x - y))) / max(float(np.max(np.abs(x))), 1e-300)
             assert error <= 1e-8, (name, key, error)
+    # Use one global vector norm; a zero component or a small local displacement
+    # must not amplify roundoff. Cell keys preserve parent gids and vertex coordinates.
+    x, y = [], []
+    for name in ('hex', 'cut'):
+        a, b = canonical_cells(first[name], 'U'), canonical_cells(second[name], 'U')
+        assert a.keys() == b.keys(), f'{name}: displacement gid/coordinate sets differ'
+        for key in sorted(a):
+            x.extend(np.asarray(a[key]).ravel())
+            y.extend(np.asarray(b[key]).ravel())
+    x, y = np.asarray(x), np.asarray(y)
+    assert np.all(np.isfinite(x)) and np.all(np.isfinite(y)), 'nonfinite MPI displacement'
+    error = float(np.linalg.norm(x - y)) / max(float(np.linalg.norm(x)), 1e-300)
+    assert error <= 1e-8, f'MPI global U relative difference {error:.17g} > 1e-8'
 
 
 def inspect_fvm(out, blocks, manifest, stopped=False):
-    import numpy as np
     events = decode_events((out / 'events.bin').read_bytes())
     ledger = energy(events)
     assert events[-1]['kind'] == 19 and events[-1]['exit_code'] == 0
@@ -405,12 +550,7 @@ def inspect_fvm(out, blocks, manifest, stopped=False):
     summaries = {x['name']: x for x in manifest['summary']}
     assert summaries['T_max']['method'] == 'FVM cell centers'
     assert math.isfinite(summaries['T_max']['value'])
-    for name in ('warpage_pv', 'U_mag_max'):
-        assert abs(summaries[name]['value']) <= 1e-15, summaries[name]
-        assert summaries[name]['method'] == THERMAL_ONLY
-    assert any(e['kind'] == 20 and e['level'] == 2 and e['text'] == THERMAL_ONLY for e in events)
-    for name, data in blocks.items():
-        assert np.allclose(data['PointData/U'], 0, rtol=0, atol=1e-15), name
+    inspect_elastic(out, blocks, manifest, nonzero=False)
     states = [e['state'] for e in events if e['kind'] == 21]
     assert states[0] == 1 and states[-1] == 4 and 2 in states, states
     outputs = [e for e in events if e['kind'] == 22]
@@ -424,6 +564,45 @@ def summary(manifest):
     return {x['name']: x['value'] for x in manifest['summary']}
 
 
+def curvature(blocks):
+    """Signed quadratic curvature after removing the top surface's rigid plane."""
+    import numpy as np
+    samples = {}
+    for name in ('hex', 'cut'):
+        for point, displacement in zip(blocks[name]['Points'], blocks[name]['PointData/U'], strict=True):
+            key = tuple(point)
+            if key in samples:
+                np.testing.assert_allclose(samples[key], displacement[2], rtol=1e-8, atol=1e-14)
+            samples[key] = displacement[2]
+    top = max(p[2] for p in samples)
+    points = np.array([(*p, value) for p, value in samples.items() if abs(p[2] - top) <= 1e-14])
+    xy = points[:, :2] - points[:, :2].mean(axis=0)
+    xy /= max(float(np.ptp(xy[:, 0])), float(np.ptp(xy[:, 1])))
+    x, y = xy.T
+    plane = np.column_stack((np.ones(len(x)), x, y))
+    uz = points[:, 3]
+    detrended = uz - plane @ np.linalg.lstsq(plane, uz, rcond=None)[0]
+    quadratic = np.column_stack((x*x, x*y, y*y, plane))
+    coefficients, _, rank, _ = np.linalg.lstsq(quadratic, detrended, rcond=None)
+    assert rank == 6, 'top surface cannot resolve a quadratic curvature'
+    signed = float(coefficients[0] + coefficients[2])
+    assert math.isfinite(signed) and abs(signed) > 1e-14, 'unresolved curvature sign'
+    return signed
+
+
+def compare_mechanics(fvm, fem, fvm_blocks, fem_blocks):
+    a, b = summary(fvm), summary(fem)
+    assert b['warpage_pv'] > 0 and b['U_mag_max'] > 0, b
+    error = abs(a['warpage_pv'] - b['warpage_pv']) / b['warpage_pv']
+    u_error = abs(a['U_mag_max'] - b['U_mag_max']) / b['U_mag_max']
+    print(f'实测 mechanics warpage_fvm={a["warpage_pv"]:.17g} '
+          f'warpage_fem={b["warpage_pv"]:.17g} relative={error:.17g} '
+          f'U_mag_max_fvm={a["U_mag_max"]:.17g} U_mag_max_fem={b["U_mag_max"]:.17g} '
+          f'U_relative={u_error:.17g}', flush=True)
+    assert error <= .10, f'FVM/FEM warpage relative difference {error:.17g} > 0.10'
+    assert curvature(fvm_blocks) * curvature(fem_blocks) > 0, 'opposite FVM/FEM curvature signs'
+
+
 def import_board(root, source):
     fixture(root)
     command([os.environ['CHIPCAE_IMPORT_EXE'],
@@ -434,6 +613,11 @@ def import_board(root, source):
     stack = read_json(root / 'stack.json')
     assert any('polygons' in l.get('copper', {}) for l in stack['layers'])
     materials = [material('cu', 390), material('fr4_eq', .3)]
+    # Distinct mechanical cards exercise the copper laminate adapter as well as
+    # the thermal solve. FVM and FEM consume this identical synthetic library.
+    for card, youngs, alpha in zip(materials, (110e9, 25e9), (17e-6, 12e-6), strict=True):
+        card['elastic']['table']['columns']['E'] = [youngs]
+        card['thermal_expansion']['table']['columns']['alpha'] = [alpha]
     write_json(root / 'materials.json', dict(schema='chipcae.material_library/1', materials=materials))
     originals = {p: (root / p).read_bytes() for p in ('stack.json', 'stack.polyset')}
     result = command([os.environ['CHIPCAE_PREVIEW_EXE'], root / 'stack.json',

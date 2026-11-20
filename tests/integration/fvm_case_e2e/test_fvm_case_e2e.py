@@ -46,6 +46,33 @@ def log_record(text, level=1, rank=0, seq=1):
 
 
 class DecoderAcceptance(unittest.TestCase):
+    def test_elastic_log_requires_one_rank_zero_level_one_strict_finite_record(self):
+        valid = 'FVM_ELASTIC {"iterations":2,"residual":1e-18,"warpage_pv":0.012345678901234567,"U_mag_max":0.02}'
+        decoded = u.elastic(u.decode_events(log_record(valid)))
+        self.assertEqual(decoded['iterations'], 2)
+        self.assertAlmostEqual(decoded['warpage_pv'], .012345678901234567, delta=1e-18)
+        zero = 'FVM_ELASTIC {"iterations":0,"residual":0,"warpage_pv":0,"U_mag_max":0}'
+        self.assertAlmostEqual(u.elastic(u.decode_events(log_record(zero)))['warpage_pv'], 0)
+        invalid = [log_record('unrelated'), log_record(valid) + log_record(valid, seq=2),
+                   log_record(valid, level=2), log_record(valid, rank=1),
+                   log_record(valid + ' trailing'), log_record(valid + '\n'),
+                   log_record(valid + '\r'), log_record('FVM_ELASTIC []')]
+        fields = dict(iterations='2', residual='1e-18', warpage_pv='0.012345678901234567',
+                      U_mag_max='0.02')
+        for key, value in fields.items():
+            token = f'"{key}":{value}'
+            invalid.append(log_record(valid.replace(token, token + ',' + token)))
+            missing = json.loads(valid[len(u.ELASTIC_PREFIX):])
+            del missing[key]
+            invalid.append(log_record(u.ELASTIC_PREFIX + json.dumps(missing)))
+            for replacement in ('true', 'false', 'null', '"1"', '-1', 'NaN', 'Infinity', '1e999'):
+                invalid.append(log_record(valid.replace(token, f'"{key}":{replacement}')))
+        invalid.extend([log_record(valid.replace('"iterations":2', '"iterations":2.0')),
+                        log_record(valid.replace('"iterations":2', '"iterations":2,"extra":0'))])
+        for index, raw in enumerate(invalid):
+            with self.subTest(index=index), self.assertRaises(AssertionError):
+                u.elastic(u.decode_events(raw))
+
     # A permissive decoder could make a broken energy publisher pass the numerical gate.
     def test_corrupt_duplicate_missing_or_invalid_energy_is_rejected(self):
         valid = 'FVM_ENERGY {"heat_in":1,"heat_out":1,"imbalance":0,"iterations":2}'
@@ -91,12 +118,31 @@ class DecoderAcceptance(unittest.TestCase):
                     'Offsets': np.array([0, 8, 0, 8]), 'Connectivity': np.tile(np.arange(8), 2),
                     'Types': np.array([12, 12]), 'Points': np.concatenate([c[1] for c in chunks]),
                     'CellData/elem_gid': np.array([c[0] for c in chunks]),
-                    'PointData/T': np.concatenate([np.full(8, c[2]) for c in chunks])}
+                    'PointData/T': np.concatenate([np.full(8, c[2]) for c in chunks]),
+                    'PointData/U': np.concatenate([np.tile([c[0]*1e-6, 0, -2e-6], (8, 1))
+                                                   for c in chunks])}
         a, b = block(False), block(True)
         u.compare_parallel(dict(hex=a, cut=a), dict(hex=b, cut=b))
+        b['PointData/U'][0, 2] += 1e-6
+        with self.assertRaisesRegex(AssertionError, 'MPI global U'):
+            u.compare_parallel(dict(hex=a, cut=a), dict(hex=b, cut=b))
+        b = block(True)
         b['PointData/T'][0] += .01
         with self.assertRaises(AssertionError):
             u.compare_parallel(dict(hex=a, cut=a), dict(hex=b, cut=b))
+
+    def test_curvature_sign_ignores_rigid_translation_and_tilt(self):
+        import numpy as np
+        points = np.array([(x, y, .1) for x in (0., .5, 1.) for y in (0., .5, 1.)])
+        def blocks(sign, tilt):
+            displacement = np.zeros((len(points), 3))
+            displacement[:, 2] = sign * (points[:, 0]**2 + points[:, 1]**2) * 1e-4
+            displacement[:, 2] += tilt * (3 + 2*points[:, 0] - points[:, 1])
+            return dict(hex={'Points': points, 'PointData/U': displacement},
+                        cut={'Points': np.empty((0, 3)), 'PointData/U': np.empty((0, 3))})
+        self.assertGreater(u.curvature(blocks(1, 0)), 0)
+        self.assertGreater(u.curvature(blocks(1, -10)), 0)
+        self.assertLess(u.curvature(blocks(-1, 10)), 0)
 
 
 class CaseAcceptance(unittest.TestCase):
@@ -235,15 +281,157 @@ class CaseAcceptance(unittest.TestCase):
             self.assertAlmostEqual(u.summary(manifest)['T_max'], 350, delta=1e-10)
             for data in blocks.values():
                 self.assertTrue(np.allclose(data['PointData/T'], 350, rtol=0, atol=1e-10))
-                self.assertTrue(np.allclose(data['PointData/U'], 0, rtol=0, atol=1e-15))
             summaries = {x['name']: x for x in manifest['summary']}
             self.assertEqual(summaries['T_max']['method'], 'FVM cell centers')
-            for key in ('warpage_pv', 'U_mag_max'):
-                self.assertAlmostEqual(summaries[key]['value'], 0, delta=1e-15)
-                self.assertEqual(summaries[key]['method'], u.THERMAL_ONLY)
+            # Equal CTEs permit zero bending, while free thermal expansion is nonzero.
+            u.inspect_elastic(out, blocks, manifest, nonzero=False)
+            self.assertGreater(summaries['U_mag_max']['value'], 0)
+
+    def test_solid_only_publishes_solved_elastic_log_residual_and_displacement(self):
+        case = u.bimaterial_strip(self.root)
+        out, _ = u.solve(self.root, case, 'solid-elastic')
+        # Volume publication has its own unchanged thermal gate. Isolate this
+        # mechanics gate so the upstream missing hex volume cannot mask U=0.
+        manifest, blocks = u.read_result(out, require_volume=False)
+        u.inspect_elastic(out, blocks, manifest)
+
+    def test_uniform_bimaterial_strip_matches_fem_warpage_and_curvature(self):
+        case = u.bimaterial_strip(self.root)
+        results = {}
+        for family in ('fvm', 'fem'):
+            with self.subTest(family=family):
+                candidate = deepcopy(case)
+                candidate['physics'][0]['solver'] = family + '.solid'
+                candidate['solver']['linear']['preconditioner'] = 'direct' if family == 'fem' else 'jacobi'
+                out, _ = u.solve(self.root, candidate, 'strip-' + family)
+                results[family] = u.read_result(out, require_volume=False)
+        self.assertEqual(set(results), {'fvm', 'fem'})
+        fvm, fem = results['fvm'], results['fem']
+        u.compare_mechanics(fvm[0], fem[0], fvm[1], fem[1])
+        u.inspect_elastic(self.root / 'strip-fvm', fvm[1], fvm[0])
+
+    def test_zero_temperature_rise_has_zero_U_and_warpage_with_normal_methods(self):
+        import numpy as np
+        case = u.bimaterial_strip(self.root)
+        case['loads'][0]['T_target'] = 300
+        out, _ = u.solve(self.root, case, 'strip-zero')
+        manifest, blocks = u.read_result(out, require_volume=False)
+        # Largest fixture dimension is exactly 1 m; zero-rise warpage <= 1e-14 L.
+        values = u.summary(manifest)
+        self.assertLessEqual(abs(values['warpage_pv']), 1e-14 * 1.0)
+        self.assertLessEqual(abs(values['U_mag_max']), 1e-14)
+        for name, block in blocks.items():
+            self.assertTrue(np.all(np.abs(block['PointData/U']) <= 1e-14), name)
+        u.inspect_elastic(out, blocks, manifest, nonzero=False)
+
+    def test_solid_only_np1_np2_preserve_displacement_and_warpage(self):
+        case = u.bimaterial_strip(self.root)
+        results = {}
+        for ranks in (1, 2):
+            out, _ = u.solve(self.root, case, f'strip-np{ranks}', ranks)
+            results[ranks] = u.read_result(out, require_volume=False)
+        u.compare_parallel(results[1][1], results[2][1])
+        first, second = (u.summary(results[r][0])['warpage_pv'] for r in (1, 2))
+        self.assertGreater(first, 0)
+        self.assertLessEqual(abs(first-second) / first, 1e-8)
+        for ranks in (1, 2):
+            u.inspect_elastic(self.root / f'strip-np{ranks}', results[ranks][1], results[ranks][0])
+
+    def test_rigid321_fixed_bottom_and_fixed_nonfirst_layer_supports(self):
+        import numpy as np
+        case = u.bimaterial_strip(self.root)
+        for name, constraint, height in (
+                ('rigid321', dict(rigid='3-2-1'), None),
+                ('fixed-bottom', dict(fixed=[dict(target='face:zmin')]), 0),
+                ('fixed-layer-b', dict(fixed=[dict(target='layer:b')]), .1)):
+            with self.subTest(support=name):
+                candidate = deepcopy(case)
+                candidate['constraints'] = constraint
+                out, _ = u.solve(self.root, candidate, name)
+                manifest, blocks = u.read_result(out, require_volume=False)
+                if height is not None:
+                    block = blocks['hex']
+                    mask = np.abs(block['Points'][:, 2] - height) <= 1e-14
+                    self.assertTrue(np.any(mask), 'no vertices on prescribed exterior faces')
+                    self.assertTrue(np.all(np.abs(block['PointData/U'][mask]) <= 1e-14),
+                                    'fixed/free edge vertices must retain prescribed zero U')
+                u.inspect_elastic(out, blocks, manifest)
+
+    def test_solid_only_nonconvergence_exits_one_with_residual_and_no_output(self):
+        case = u.bimaterial_strip(self.root)
+        case['solver']['linear'].update(max_iter=1, rtol=1e-14)
+        u.probe(self.root, case)
+        out, result = u.solve(self.root, case, 'solid-nonconverged', expected=None)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        events = u.decode_events((out / 'events.bin').read_bytes())
+        residuals = [p for e in events if e['kind'] == 18 for p in e['points']
+                     if p['solver'] == 'fvm.solid' and p['field'] == 'U']
+        self.assertTrue(residuals, 'mechanics failure must publish measured residuals')
+        self.assertTrue(all(math.isfinite(p['norm']) and p['norm'] >= 0 for p in residuals))
+        self.assertFalse(any(e['kind'] == 22 for e in events))
+        self.assertFalse((out / 'out/step-0.vtkhdf').exists())
+        if (out / 'manifest.json').exists():
+            self.assertEqual(u.read_json(out / 'manifest.json')['steps'], [])
+        self.assertEqual((events[-1]['kind'], events[-1]['exit_code']), (19, 1))
+
+    def test_cut_elastic_rejects_unsupported_geometry_or_publishes_solved_cut_U(self):
+        import numpy as np
+        case = u.bimaterial_strip(self.root)
+        stack = u.read_json(self.root / 'stack.json')
+        stack['outline']['polygon'] = [[.1, 0], [1, 0], [1, .2], [0, .2], [0, .1]]
+        u.write_json(self.root / 'stack.json', stack)
+        u.probe(self.root, case)  # Reject fixture/schema mistakes before exercising mechanics.
+        out, result = u.solve(self.root, case, 'cut-elastic', expected=None)
+        if result.returncode == 13:
+            # The frozen library currently rejects embedded faces. Preserve the
+            # explicit CUT_UNSUPPORTED outcome until the upstream cut path exists.
+            self.assertIn('unsupported', result.stderr.lower().replace('not supported', 'unsupported'))
             events = u.decode_events((out / 'events.bin').read_bytes())
-            self.assertTrue(any(e['kind'] == 20 and e['level'] == 2 and
-                                e['text'] == u.THERMAL_ONLY for e in events))
+            self.assertFalse(any(e['kind'] == 22 for e in events))
+            self.assertEqual((events[-1]['kind'], events[-1]['exit_code']), (19, 13))
+            self.assertFalse((out / 'out/step-0.vtkhdf').exists())
+            if (out / 'manifest.json').exists():
+                self.assertEqual(u.read_json(out / 'manifest.json')['steps'], [])
+        else:
+            self.assertEqual(result.returncode, 0, result.stderr)
+            manifest, blocks = u.read_result(out, require_volume=False)
+            self.assertGreater(int(blocks['cut']['NumberOfCells'].sum()), 0)
+            self.assertGreater(int(blocks['eb_surface']['Polygons/NumberOfCells'].sum()), 0)
+            self.assertTrue(np.any(blocks['cut']['PointData/U'] != 0))
+            self.assertTrue(np.any(blocks['eb_surface']['PointData/U'] != 0))
+            u.inspect_elastic(out, blocks, manifest)
+
+    def test_solid_only_stop_is_acknowledged_once_without_successful_output(self):
+        case = u.bimaterial_strip(self.root)
+        control = json.dumps(dict(cmd_seq='1', action='STOP')) + '\n'
+        for ranks in (1, 2):
+            with self.subTest(ranks=ranks):
+                out, _ = u.solve(self.root, case, f'solid-stop{ranks}', ranks, control=control*2)
+                events = u.decode_events((out / 'events.bin').read_bytes())
+                acks = [e for e in events if e['kind'] == 17 and e['status'] == 1]
+                self.assertEqual(len(acks), 1)
+                self.assertEqual(acks[0]['cmd_seq'], 1)
+                self.assertEqual((events[-1]['kind'], events[-1]['reason']), (19, 'user_stop'))
+                self.assertFalse(any(e['kind'] == 22 for e in events))
+                self.assertFalse((out / 'out/step-0.vtkhdf').exists())
+                if (out / 'manifest.json').exists():
+                    self.assertEqual(u.read_json(out / 'manifest.json')['steps'], [])
+
+    @unittest.skipUnless(hasattr(os, 'mkfifo'), 'deterministic checkpoint fixture requires POSIX FIFO')
+    def test_stop_queued_after_first_checkpoint_prevents_mechanics_publication(self):
+        case = u.bimaterial_strip(self.root)
+        for ranks in (1, 2):
+            with self.subTest(ranks=ranks):
+                out, _ = u.solve_with_late_stop(self.root, case, f'late-stop{ranks}', ranks)
+                events = u.decode_events((out / 'events.bin').read_bytes())
+                acks = [e for e in events if e['kind'] == 17]
+                self.assertEqual([(e['cmd_seq'], e['status']) for e in acks], [(1, 3), (2, 1)],
+                                 'STOP queued during mechanics needs a second control checkpoint')
+                self.assertEqual((events[-1]['kind'], events[-1]['reason']), (19, 'user_stop'))
+                self.assertFalse(any(e['kind'] == 22 for e in events))
+                self.assertFalse((out / 'out/step-0.vtkhdf').exists())
+                if (out / 'manifest.json').exists():
+                    self.assertEqual(u.read_json(out / 'manifest.json')['steps'], [])
 
     def test_fvm_ignores_fem_stabilization_retains_quadrature_and_constraints(self):
         for family, expected in (('fem', 14), ('fvm', 0)):
@@ -388,6 +576,14 @@ class CaseAcceptance(unittest.TestCase):
         print(f'实测 board Tmax fvm={fvm:.17g} fem={fem:.17g} '
               f'rise_relative={error:.17g} absolute_T_relative={abs(fvm-fem)/abs(fem):.17g}', flush=True)
         self.assertLessEqual(error, .01)
+        fvm_manifest, fvm_blocks = results['fvm', 1]
+        fem_manifest, fem_blocks = results['fem', 1]
+        u.compare_mechanics(fvm_manifest, fem_manifest, fvm_blocks, fem_blocks)
+        a, b = (u.summary(results['fvm', n][0])['warpage_pv'] for n in (1, 2))
+        self.assertGreater(a, 0)
+        self.assertLessEqual(abs(a-b) / a, 1e-8)
+        for ranks in (1, 2):
+            u.inspect_elastic(self.root / f'fvm{ranks}', results['fvm', ranks][1], results['fvm', ranks][0])
 
     def test_wiener_nonzero_bottom_rise(self):
         # Source-free top Dirichlet/bottom Robin gives a meaningful nonzero bottom rise.
