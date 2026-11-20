@@ -2,12 +2,10 @@ These acceptance tests cover both cards of I7-jobs-local/1.0. They use explicit
 `require` checks in Release builds. `test_paths` always runs; the other manager
 tests skip with code 77 only when the optional local target is absent.
 
-The launch card is TEST-FIRST: the default launcher is still unavailable and
-`LocalJobManager::wait` has only a compilation stub returning `Get`. The new
-launch and cancellation executables intentionally fail their behavior assertions
-until the launcher and waiting implementation arrive. They are ordinary failures,
-not expected-failure or skip registrations. Existing state tests inject their
-failing FakeSpawner explicitly rather than depending on the default launcher.
+The launch card exercises the default POSIX launcher and blocking `wait` with
+real child processes. Existing state tests inject FakeSpawner explicitly. Launch
+and cancellation tests use ordinary failure semantics; dependency absence alone
+causes return-77 skips.
 
 `test_launch_e2e` uses the production EventLogWriter in a standalone mock solver
 for success reasons, missing/torn/invalid/failed/no exit logs, exit 9, signal 139,
@@ -19,9 +17,9 @@ an exit twice. It never runs a real solver or real mpirun.
 
 `test_cancel` checks TERM, grace-expiry KILL independent of polling, zero grace,
 reaping, sticky CANCELLED state, manager destruction and recovery, and wait
-boundaries, including a positive timeout with FakeSpawner so the wait stub is
-tested independently of the missing real launcher. The Linux `/proc` zombie
-check waits for mock readiness published after installing SIGTERM handling.
+boundaries, including a positive timeout with FakeSpawner to isolate polling
+from process startup. The Linux `/proc` zombie check waits for mock readiness
+published after installing SIGTERM handling.
 Emergency test cleanup runs only after the ownership assertions and manager
 destruction. The existing `test_calls` retains
 the recorded 120-second to 60000-ms clamp test without waiting a minute.
@@ -39,7 +37,8 @@ Local validation uses a Release configuration with protobuf, jsoncons and Qt
 Core, then a protobuf-disabled build and a Qt-disabled parity build. Main CI
 usually lacks protobuf/Qt, so its dependency skips do not establish launch or
 desktop parity coverage; local results must be reported as 实测. The external
-TDD evidence log records commands and observed failures.
+implementation evidence log records commands, red/green results, dependency skips,
+and full-suite baseline comparisons.
 
 Recovery makes every formerly live job terminal. New Control calls after
 restart therefore reject; cached accepted replies retain their original uint64

@@ -3,6 +3,7 @@
 #include "chipcae/jobmgr/local_paths.hpp"
 #include "launcher_lock.hpp"
 #include "outcome.hpp"
+#include "posix_spawner.hpp"
 #include "profile_map.hpp"
 #include "run_dir.hpp"
 
@@ -13,6 +14,7 @@
 #include <limits>
 #include <map>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 namespace chipcae::jobmgr {
@@ -114,6 +116,7 @@ public:
                     // Destruction must still release the root lock if a launcher fails.
                 }
             }
+        spawner.reset(); // Finish collection and join watchdogs while launcher.lock is held.
     }
     Run& run(const std::string& id) {
         auto it = runs.find(id);
@@ -129,15 +132,30 @@ public:
     }
 };
 LocalJobManager::LocalJobManager(LocalConfig config)
-    : LocalJobManager(std::move(config), std::make_unique<UnavailableSpawner>()) {}
+    : LocalJobManager(std::move(config), std::make_unique<detail::PosixSpawner>()) {}
 LocalJobManager::LocalJobManager(LocalConfig config, std::unique_ptr<detail::Spawner> spawner)
     : impl_(std::make_unique<Impl>(std::move(config), std::move(spawner))) {}
 LocalJobManager::~LocalJobManager() = default;
-// TEST-FIRST compilation stub: polling and timeout behavior remain unimplemented.
-jobs::Job LocalJobManager::wait(const std::string& run_id, std::chrono::milliseconds) {
-    jobs::JobRef request;
-    request.set_run_id(run_id);
-    return Get(request);
+jobs::Job LocalJobManager::wait(const std::string& run_id, std::chrono::milliseconds timeout) {
+    auto& run = impl_->run(run_id);
+    using Clock = std::chrono::steady_clock;
+    const auto start = Clock::now();
+    // Saturate before converting an arbitrarily large millisecond timeout.
+    const auto available = Clock::time_point::max() - start;
+    const auto duration =
+        timeout <= std::chrono::milliseconds::zero() ? Clock::duration::zero()
+        : timeout >= std::chrono::duration_cast<std::chrono::milliseconds>(available)
+            ? available
+            : std::chrono::duration_cast<Clock::duration>(timeout);
+    const auto deadline = start + duration;
+    for (;;) {
+        poll();
+        const auto now = Clock::now();
+        if (detail::terminal(run.job.state()) || now >= deadline)
+            return run.job;
+        std::this_thread::sleep_for(
+            std::min(Clock::duration(std::chrono::milliseconds(10)), deadline - now));
+    }
 }
 jobs::Job LocalJobManager::Submit(const jobs::SubmitRequest& request,
                                   const std::filesystem::path& case_path,
