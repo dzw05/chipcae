@@ -1,0 +1,85 @@
+{
+  "contract": "cutgeom-nc/1.0",
+  "consumer_assertions_only": true,
+  "mesh_all_fields_and_order_unchanged": true,
+  "cases": [
+    {
+      "case": "empty_pieces",
+      "layer": "i10",
+      "path": "cut/union",
+      "reason": "invalid piece"
+    },
+    {
+      "case": "internal_mismatch",
+      "layer": "i10",
+      "path": "cut/union",
+      "reason": "invalid piece"
+    },
+    {
+      "case": "nonzero_plane_body",
+      "layer": "i10",
+      "path": "cut/union",
+      "reason": "invalid piece"
+    },
+    {
+      "case": "outline_phi_mismatch",
+      "layer": "i10",
+      "path": "cut/union",
+      "reason": "outline_phi size mismatch"
+    },
+    {
+      "case": "short_ring",
+      "layer": "i11",
+      "path": "CUT_UNSUPPORTED",
+      "reason": "region0: degenerate polygon"
+    },
+    {
+      "case": "zero_area_ring",
+      "layer": "i11",
+      "path": "CUT_UNSUPPORTED",
+      "reason": "region0: degenerate polygon"
+    },
+    {
+      "case": "self_intersection",
+      "layer": "i11",
+      "path": "CUT_UNSUPPORTED",
+      "reason": "region0: self-intersecting polygon"
+    },
+    {
+      "case": "multiple_rings",
+      "layer": "i11",
+      "path": "CUT_UNSUPPORTED",
+      "reason": "region0: multiple rings"
+    },
+    {
+      "case": "duplicate_body",
+      "layer": "i11",
+      "path": "CUT_UNSUPPORTED",
+      "reason": "body0: duplicate piece union"
+    },
+    {
+      "case": "zero_normal",
+      "layer": "i10",
+      "path": "cut/plane",
+      "reason": "nonfinite or zero normal"
+    },
+    {
+      "case": "invalid_thresholds",
+      "layer": "i10",
+      "path": "cut/options",
+      "reason": "invalid thresholds"
+    },
+    {
+      "case": "nonpositive_box",
+      "layer": "i10",
+      "path": "cut/mesh",
+      "reason": "positive affine box required"
+    },
+    {
+      "case": "disconnected_cell",
+      "layer": "i10",
+      "path": "outline.unsupported",
+      "reason": "outline: disconnected solid in one cell"
+    }
+  ]
+}
