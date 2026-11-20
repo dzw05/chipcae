@@ -3,6 +3,10 @@ V-INT-12 runs a shared import → preview → FVM solve → readback pipeline fo
 synthetic; real inputs and all real output records must remain outside Git
 worktrees. No real execution is claimed by the tests.
 
+The binding [architect ruling](../../../handoff/rulings/pr206.md) covers the
+result envelope, dependency skips and optional h5py coverage. Its second round
+closes the three prior CLI/finalization findings on `7a98e3f`.
+
 From the repository root, with the build queue wrappers first on PATH:
 
 ```sh
@@ -71,8 +75,9 @@ F-1130 thermal loads, Rigid321, Jacobi with rtol=1e-12, T_ref=298.15 and a
 
 Thresholds are unchanged: 1e-8 K temperature tolerance, 1e-8 parallel relative
 error, 1e-9 energy imbalance, exact repeat hashes and exact W3/W4 zeros.
-The W5 5% bound comes from the fvm-thermoelastic-cutcell brief's comparison
-criteria for synthetic noncut cases (comparison section, line 93).
+V-INT-12 requires W5 to compare synthetic noncut warpage with an independent
+FEM run: abs(FVM warpage_pv - FEM warpage_pv) / FEM warpage_pv <= 0.05, with
+a positive FEM reference. This is the prescribed 5% acceptance bound.
 Vertex temperature overshoot and recomputed vertex warpage are diagnostics.
 C6 always checks the summary temperature upper bound; it also checks the cell
 minimum when the optional T_cell field is available.
