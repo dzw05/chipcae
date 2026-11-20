@@ -620,6 +620,36 @@ void volume_case(const Shape& s) {
     surfaces(out, s);
     level_sets(out, s.outline);
 }
+void extra_planes_two_bodies() {
+    auto s = stack();
+    auto cap = s.layers.front();
+    cap.name = "cap";
+    s.layers.push_back(cap);
+    const auto original = support::grid(s, 8);
+    const auto substrate = original.attr_table.bodies.at("substrate");
+    const auto upper = original.attr_table.bodies.at("cap");
+    require(substrate != upper, "two layers must have distinct bodies");
+    const auto shape = l_shape();
+    for (const auto clipped_body : {substrate, upper}) {
+        auto m = original;
+        // x <= .0151 leaves area .0113*.02 + (.0151-.0113)*.0137
+        // in the selected body; the other body retains the entire L outline.
+        const CutGeometry extra{{Plane{clipped_body, {2, 0, 0}, .0302}}};
+        auto cut = value(general::apply_outline_cut_general(m, footprint(shape.outline), {}, extra),
+                         "nonconvex outline with body-specific extra plane");
+        require(cut.has_value(), "two-body outline must return a cut layer");
+        const auto stats = value(cut_stats(m, *cut), "two-body cut_stats");
+        for (const auto body : {substrate, upper})
+            near(stats.body_volume.at(body),
+                 body == clipped_body ? 2.7806e-7 : shape.volume,
+                 1e-10,
+                 "extra plane applies only to its body; outline applies to both");
+        near(stats.solid_volume, 6.2325e-7, 1e-10, "two-body analytic union volume");
+        Output out{std::move(m), std::move(*cut)};
+        valid_output(out, true);
+        level_sets(out, shape.outline, extra);
+    }
+}
 void grid_aligned_L0() {
     auto original = background(l0_shape().outline);
     auto out = build(l0_shape());
@@ -1080,6 +1110,7 @@ int main(int argc, char** argv) {
         run("volume_U", [] { volume_case(u_shape()); });
         run("volume_V", [] { volume_case(v_shape()); });
         run("volume_R", [] { volume_case(r_shape()); });
+        run("extra_planes_two_bodies", extra_planes_two_bodies);
         run("grid_aligned_L0", grid_aligned_L0);
         run("small_subs_union", small_subs_union);
         run("determinism_L", [] { determinism(l_shape()); });
