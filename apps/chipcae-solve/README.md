@@ -205,6 +205,8 @@ Board energy imbalance is 1.3544070916991032e-12 (np=1) and
 1.2088229951858545e-13 in 445 iterations at explicit `rtol=1e-12`.
 The largest np=1/2 temperature relative difference is 1.1015562826700222e-14.
 
-Fresh local CTest: `fvm_fvm_case_e2e` passes all 19 methods (97.27 s),
+Earlier continuation CTest: `fvm_fvm_case_e2e` passes all 19 methods (97.27 s),
 `k1_results_validation*` passes 2/2 (4.24 s), and the existing VTKHDF
 regressions pass 5/5 (56.69 s), with no skips or threshold changes.
+The integration README records the later full-suite results and separates
+ordinary passes, successful OOM retries and failures reproduced on main.

@@ -35,16 +35,19 @@ The acceptance exercises:
   solid-only uniform temperature and FEM-specific stabilization handling.
 - Real schema validation, including the required `output.warpage` object and
   explicit FVM `volume`, complete solver settings, both physics orders and
-  family-specific preconditioners (including defaults and rejection cases).
+  all known preconditioners. The real loader checks family-specific defaults
+  and rejects preconditioners from the other family; the shared schema rejects
+  unknown preconditioners and malformed linear settings.
   FEM explicitly requesting `volume` retains
   INPUT_INVALID with `invalid output field`.
-  Missing jsonschema skips only this check and prints the reason.
+  jsonschema is required for this check; a missing dependency fails acceptance.
 - Import of the unchanged public board XML and F-1130 material map, unchanged
   stack/polyset through preview and solve, cell counts and mesh digests,
   readable results, finite T, zero U, required metadata and physical volumes.
 - Exactly one rank-0 level-1 `FVM_ENERGY ` record, four unique JSON keys,
   finite nonnegative numbers and an integer iteration count. The test
-  independently recomputes imbalance with the brief's formula and tolerances,
+  recomputes imbalance from logged `heat_in` and `heat_out` with the brief's
+  formula and tolerances,
   and requires both imbalances at most 1e-9. It validates final residual
   batches, state/exit records and output checksums structurally.
 - Zero energy, additive power/q_vol equivalence, fixed-CV reactions, embedded
@@ -95,6 +98,15 @@ corrected importer base materials and both copper result members. FVM
 populates `copper_fraction` and `conductivity_diag`; the compiled capability
 probe makes both mandatory. No import artifact is rewritten or averaged.
 
+The M3 ruling of 2026-11-20 19:50 authorizes appending `jacobi` and `gamg`
+to `parameters.schema.json`, retaining the `column_gmg` default; architect
+post-review is pending. `case-1.0.schema.json` retains the brief's three
+additions (the two FVM physics selections and `volume`) and the original
+solver `$ref`. Commit `60e0ae6` restores that file byte-for-byte to the parent
+of `5413f24`, removing all of `5413f24`'s conditional-schema changes.
+The `solvers/fvm/` directory is unchanged from prerequisite #204 at `995424f`,
+merged by `80ade73`; its library changes belong to that prerequisite.
+
 Use the shared build-slot wrappers on PATH and at most two build jobs:
 
 ```sh
@@ -140,7 +152,7 @@ change either summary definition.
 Board energy imbalance is 1.3544070916991032e-12 at np=1 (89 iterations)
 and 4.4733543527735244e-14 at np=2 (90 iterations). DEMO embedded Robin
 at explicit `rtol=1e-12` returns 1.2088229951858545e-13 (445 iterations).
-The logged ledger and independent recomputation retain the 1e-9 limit.
+The logged imbalance and its recomputation retain the 1e-9 limit.
 The maximum np=1/2 relative temperature difference from `compare_parallel`
 is 1.1015562826700222e-14 for board and 1.6240976817373746e-16 for cut;
 the unchanged limit is 1e-8.
@@ -158,7 +170,7 @@ the unchanged limit is 1e-8.
 Only public synthetic fixtures are used. Remote CI has not been run; no push
 or PR is part of this continuation.
 
-Fresh local CTest: `fvm_fvm_case_e2e` passes all 19 methods (97.27 s),
+Earlier continuation CTest: `fvm_fvm_case_e2e` passes all 19 methods (97.27 s),
 `k1_results_validation*` passes 2/2 (4.24 s), and the existing VTKHDF
 regressions pass 5/5 (56.69 s), with no skips or threshold changes.
 
@@ -170,5 +182,36 @@ fixtures are unchanged; the task's FVM acceptance above passes independently.
 The additional `^solve_` subset passes all 93 enabled tests, including the
 column GMG scaling regression, with 10 unchanged upstream-disabled tests
 (1062.50 s). No FEM source, shared test assertion or disabled-test setting
-was changed. The F-1130 fraction check above is the only remaining failure
-in the verification performed for this continuation.
+was changed. The F-1130 fraction check above was the only remaining failure
+in that continuation; the later full-suite results below supersede its status.
+
+## Review recheck (2026-11-20, 实测)
+
+At `60e0ae6`, Release configure and the full build pass. The complete-case
+schema check passes separately without skips (0.63 s), and the full CTest run
+passes all 22 FVM acceptance methods without skips (133.06 s). Pinned
+clang-format 23.1.5 passes on all 18 C/C++ files in the PR diff.
+
+Full CTest (`-j2 --output-on-failure`) takes 2013.89 s and exits 8:
+481 registered, 447 passed, 18 skipped, 10 disabled and 6 failed.
+The skipped and disabled settings are unchanged. The four baseline failures
+below match the preceding main `40fa721` reproductions; their test and fixture
+files are unchanged from that baseline. No new main-baseline run is claimed.
+
+| Passed | OOM then isolated retry passed | Existing baseline failures |
+| --- | --- | --- |
+| FVM 22/22; standalone schema; serial/MPI VTKHDF and R1 results validation; FEM input, ghost, manufactured, bilayer, cut pipeline and ordinary GMG; analytical bimetal; DEMO-GATE; preview MPI; installation, relocation and packaging | None in this recheck | `ipc_zip_equals_xml` (`mat.fr4` material ID); `f1130_uncut_cli_e2e` (In1.Cu fraction 0.09 vs 0); `stack_writer_outline_polyset` and `import_assembly_cf_chain` (duplicate material ID) |
+
+Two resource failures remain unresolved after sequential, isolated retries:
+`cutbim_cut_bimetal` exits 8 in 166.82 s because A/nx16 exits -9;
+`solve_column_gmg_fcbga_scaling` exits 8 in 162.99 s because its fine solve
+exits -9. Kernel logs record OOM kills during these runs. Each retry uses
+`ctest -j1 -R '^<name>$'` with only that test selected. Neither is counted as
+an OOM retry pass. The original full run fails cut-bimetal B/C nx16 and fine
+GMG with the same subprocess exit -9.
+
+The all-CTest-green outcome is not achieved. This recheck changes only the
+brief-permitted READMEs; production code, schemas, tests, numerical thresholds,
+timeouts and registrations are unchanged. The M3 ruling releases baseline
+failures from MUST status; their importer/fixture fixes and FEM resource
+behavior remain outside this card's scope.
