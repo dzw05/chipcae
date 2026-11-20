@@ -384,6 +384,19 @@ void convex_bitwise_collinear() {
     subdivided.push_back(subdivided.front());
     compare_paths(m, footprint(subdivided));
 }
+void convex_bitwise_tolerance() {
+    auto ring = octagon();
+    // The inward midpoint makes the bottom edge slightly concave, with the
+    // opposite endpoint only 5e-13 outside each new edge's half-space.
+    // Legacy accepts this within 1e-12; the original planes must be preserved.
+    ring.insert(ring.begin() + 1, {.01, 2.5e-13});
+    const auto m = background();
+    compare_paths(m, footprint(ring));
+    std::reverse(ring.begin(), ring.end());
+    std::rotate(ring.begin(), ring.begin() + 3, ring.end());
+    ring.push_back(ring.front());
+    compare_paths(m, footprint(ring));
+}
 void empty_nullopt() {
     const auto m = background();
     const auto out = compare_paths(m, footprint({}));
@@ -512,6 +525,7 @@ int main(int argc, char** argv) {
         run("bitwise_oracle", bitwise_oracle);
         run("convex_bitwise_octagon", convex_bitwise_octagon);
         run("convex_bitwise_collinear", convex_bitwise_collinear);
+        run("convex_bitwise_tolerance", convex_bitwise_tolerance);
         run("convex_bitwise_demo_gate", convex_bitwise_demo_gate);
         run("empty_nullopt", empty_nullopt);
         run("duplicate_cleanup_convex", duplicate_cleanup_convex);
