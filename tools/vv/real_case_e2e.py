@@ -229,20 +229,21 @@ def _summary(run_dir):
 
 
 def _datasets(root, prefix="VTKHDF"):
-    """Digest geometry and field arrays, excluding Assembly and reserved fields."""
+    """Digest every block dataset, excluding Assembly and reserved fields."""
     import h5py
     for block_name in sorted(root):
         if block_name == "Assembly" or not isinstance(root[block_name], h5py.Group):
             continue
         block = root[block_name]
-        for field in sorted(("Points", "Connectivity", "Offsets", "Types")):
-            if field in block:
-                yield f"{prefix}/{block_name}/{field}", block[field]
-        for group in ("CellData", "PointData"):
-            if group in block:
-                for field in sorted(block[group]):
-                    if field != "reserved" and isinstance(block[group][field], h5py.Dataset):
-                        yield f"{prefix}/{block_name}/{group}/{field}", block[group][field]
+        datasets = []
+
+        def collect(name, item):
+            if isinstance(item, h5py.Dataset) and name.rsplit("/", 1)[-1] != "reserved":
+                datasets.append((f"{prefix}/{block_name}/{name}", item))
+
+        # Includes FieldData and nested PolyData topology, without following soft links.
+        block.visititems(collect)
+        yield from datasets
 
 
 def run_digest(run_dir: Path, events: list[dict]) -> dict:
@@ -257,7 +258,11 @@ def run_digest(run_dir: Path, events: list[dict]) -> dict:
                 continue
             values = dataset[...]
             if values.dtype.hasobject:
-                raise ValueError("digest arrays must have a value dtype: " + path)
+                if h5py.check_string_dtype(dataset.dtype) is None:
+                    raise ValueError("digest arrays must have a value dtype: " + path)
+                # The exporter uses variable-length strings in FieldData. Replace
+                # object pointers with fixed-width bytes sized from their values.
+                values = np.asarray(values, dtype="S")
             values = np.ascontiguousarray(values, dtype=values.dtype.newbyteorder("<"))
             fields[path] = hashlib.sha256(values.tobytes(order="C")).hexdigest()
     iterations, residual = {}, {}

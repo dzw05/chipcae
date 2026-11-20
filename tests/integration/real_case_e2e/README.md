@@ -86,8 +86,9 @@ C6 always checks the summary temperature upper bound; it also checks the cell
 minimum when the optional T_cell field is available.
 Digests use mesh SHA, the ordered three-QoI whitelist as float.hex, final
 per-field iterations/residuals, and little-endian contiguous array values from
-geometry and field datasets selected by the V-INT-10 digest rules.
-Assembly links, reserved fields, metadata,
+every dataset in the top-level VTKHDF blocks, including counts, FieldData and
+nested surface topology. Variable-length strings use fixed-width byte arrays
+sized from their values before hashing. Assembly links, reserved fields, attributes,
 timing, logs, paths and file bytes are excluded. Raw file SHA values are recorded
 separately. Exported material IDs are one-based indices into material_names;
 material-library ordering never defines them.

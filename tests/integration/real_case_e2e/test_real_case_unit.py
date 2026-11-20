@@ -268,6 +268,74 @@ class DigestContracts(ContractTest):
         self.assertEqual(changed, ["VTKHDF/hex/PointData/T"])
         self.assertNotEqual(driver.digest_sha256(before), driver.digest_sha256(after))
 
+    def test_counts_field_data_and_surface_topology_affect_digest(self):
+        paths = (
+            "hex/NumberOfCells", "hex/NumberOfPoints", "hex/NumberOfConnectivityIds",
+            "hex/FieldData/layer_names", "hex/FieldData/material_names",
+            "cut/NumberOfCells", "eb_surface/NumberOfPoints",
+            "eb_surface/Polygons/NumberOfCells", "particles/Polygons/NumberOfCells",
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                before = self.digest()
+                with self.h5py.File(vtk_path(self.fixture_run), "r+") as output:
+                    dataset = output["VTKHDF/" + path]
+                    dataset[0] = b"changed" if dataset.dtype.kind == "S" else dataset[0] + 1
+                after = self.digest()
+                changed = [key for key in before["fields"]
+                           if before["fields"][key] != after["fields"][key]]
+                self.assertEqual(changed, ["VTKHDF/" + path])
+                self.assertNotEqual(driver.digest_sha256(before), driver.digest_sha256(after))
+
+    def test_nested_topology_arrays_use_canonical_value_bytes(self):
+        paths = ("cut/FaceConnectivity", "cut/FaceOffsets", "cut/PolyhedronToFaces",
+                 "cut/PolyhedronOffsets", "cut/NumberOfFaces",
+                 "cut/NumberOfFaceConnectivityIds", "cut/NumberOfPolyhedronToFaceIds",
+                 "eb_surface/Polygons/Connectivity", "eb_surface/Polygons/Offsets",
+                 "particles/Vertices/Connectivity", "particles/Vertices/Offsets")
+        before = self.digest()
+        with self.h5py.File(vtk_path(self.fixture_run), "r+") as output:
+            for path in paths:
+                output.create_dataset("VTKHDF/" + path, data=np.array([1, 2], dtype=">i8"),
+                                      compression="gzip")
+        after = self.digest()
+        expected = hashlib.sha256(struct.pack("<qq", 1, 2)).hexdigest()
+        self.assertEqual(set(after["fields"]) - set(before["fields"]),
+                         {"VTKHDF/" + path for path in paths})
+        for path in paths:
+            self.assertEqual(after["fields"]["VTKHDF/" + path], expected)
+        self.assertNotEqual(driver.digest_sha256(before), driver.digest_sha256(after))
+
+    def test_empty_datasets_in_every_block_are_hashed(self):
+        digest = self.digest()
+        empty = hashlib.sha256(b"").hexdigest()
+        for path in ("cut/Connectivity", "eb_surface/Points", "particles/Points"):
+            self.assertEqual(digest["fields"]["VTKHDF/" + path], empty)
+
+    def test_exporter_variable_length_field_data_hashes_string_values(self):
+        other = make_run(self.root / "other")
+        for run in (self.fixture_run, other):
+            with self.h5py.File(vtk_path(run), "r+") as output:
+                for block in ("hex", "cut", "eb_surface", "particles"):
+                    path = "VTKHDF/" + block + "/FieldData/material_names"
+                    if path in output:
+                        del output[path]
+                    output.create_dataset(path, data=[b"copper", b"fr4_eq"],
+                                          dtype=self.h5py.string_dtype("ascii"))
+                output.create_dataset("VTKHDF/particles/FieldData/layer_names", shape=(0,),
+                                      dtype=self.h5py.string_dtype("ascii"))
+        before = self.digest()
+        self.assertEqual(before, self.digest(other))
+        expected = hashlib.sha256(b"copperfr4_eq").hexdigest()
+        for block in ("hex", "cut", "eb_surface", "particles"):
+            self.assertEqual(before["fields"]["VTKHDF/" + block + "/FieldData/material_names"],
+                             expected)
+        self.assertEqual(before["fields"]["VTKHDF/particles/FieldData/layer_names"],
+                         hashlib.sha256(b"").hexdigest())
+        with self.h5py.File(vtk_path(self.fixture_run), "r+") as output:
+            output["VTKHDF/hex/FieldData/material_names"][0] = b"silver"
+        self.assertNotEqual(driver.digest_sha256(before), driver.digest_sha256(self.digest()))
+
     def test_times_paths_logs_attributes_and_unlisted_qoi_are_excluded(self):
         before = self.digest()
         self.edit_manifest(lambda m: m.update(wall_s=100, peak_rss_kib=234,
