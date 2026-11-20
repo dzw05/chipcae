@@ -65,7 +65,7 @@ int main() {
     // Lock the shared helper to the original pipeline expressions before replacing that copy.
     for (double f : {0., .12, .3, .5, 1.}) {
         const double kxy = f * metal.k + (1 - f) * base.k;
-        const double kz = 1 / (f / metal.k + (1 - f) / base.k);
+        const double kz = f * metal.k + (1 - f) * base.k;
         std::array<double, 3> actual{};
         chipcae::material::copper_laminate_conductivity(base.k, metal.k, f, actual.data());
         const std::array<double, 3> expected{kxy, kxy, kz};
@@ -81,7 +81,7 @@ int main() {
         double conductivity[3]{};
         chipcae::material::copper_laminate_conductivity(base.k, metal.k, f, conductivity);
         const double kxy = f * metal.k + (1 - f) * base.k;
-        const double kz = 1 / (f / metal.k + (1 - f) / base.k);
+        const double kz = f * metal.k + (1 - f) * base.k;
         for (int d = 0; d < 3; ++d)
             near(conductivity[d], d == 2 ? kz : kxy, 1e-14, "conductivity formula");
 

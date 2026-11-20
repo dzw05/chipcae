@@ -32,7 +32,7 @@ FIXED, AMBIENT, H = 300., 400., 20.
 
 def conductivity(f, base=.3):
     return np.array([f * 390 + (1 - f) * base] * 2 +
-                    [1 / (f / 390 + (1 - f) / base)])
+                    [f * 390 + (1 - f) * base])
 
 
 def card(name, E, nu, alpha, k):
