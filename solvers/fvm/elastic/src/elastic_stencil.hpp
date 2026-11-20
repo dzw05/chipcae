@@ -38,19 +38,20 @@ struct ElasticBoundary {
     std::vector<ElasticVector> value;
 };
 Expected<ElasticAssembly> assemble_elastic(const ElasticMesh&, const ElasticProblem&, MPI_Comm);
-// TEST-FIRST seams: explicit errors keep acceptance assertions executable without
-// changing the parent solver. Replace these stubs when implementing cut reconstruction.
-inline Expected<std::vector<ElasticMatrix>> evaluate_cut_gradients(
-    const ElasticMesh&, const ElasticProblem&, const std::vector<ElasticVector>&, MPI_Comm) {
-    return chipcae::mesh::Error{"fvm.elastic",
-                                "INTERNAL: cut Green-Gauss gradient not implemented"};
-}
+struct ElasticGeometry {
+    double min_dn_ratio = 1;
+    std::int64_t min_dn_gid = -1;
+    double max_identity_defect = 0;
+};
+// Cut gradients satisfy the implicit face-value Green-Gauss equations.
+Expected<std::vector<ElasticMatrix>> evaluate_cut_gradients(const ElasticMesh&,
+                                                            const ElasticProblem&,
+                                                            const std::vector<ElasticVector>&,
+                                                            MPI_Comm);
 // Boundary value is supplied explicitly. Internal faces ignore this argument.
-inline Expected<ElasticMatrix> evaluate_cut_face_gradient(const ElasticMesh&,
-                                                          std::size_t,
-                                                          const std::vector<ElasticVector>&,
-                                                          const std::vector<ElasticMatrix>&,
-                                                          const ElasticVector&) {
-    return chipcae::mesh::Error{"fvm.elastic", "INTERNAL: cut face gradient not implemented"};
-}
+Expected<ElasticMatrix> evaluate_cut_face_gradient(const ElasticMesh&,
+                                                   std::size_t,
+                                                   const std::vector<ElasticVector>&,
+                                                   const std::vector<ElasticMatrix>&,
+                                                   const ElasticVector&);
 } // namespace chipcae::solvers::fvm::detail

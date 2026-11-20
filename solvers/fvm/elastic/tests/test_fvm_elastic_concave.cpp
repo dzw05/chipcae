@@ -243,21 +243,27 @@ M3 compatible_slanted_a() {
 }
 ElasticMesh shear_cube(double rho) {
     auto m = grid(1, 1, 1);
-    const double tangent = std::sqrt(1 - rho * rho);
+    // Center the highly sheared cell before transforming: subtracting large
+    // translated coordinates otherwise loses O(epsilon/rho) in the moments.
+    // Round the tangent upward so sqrt(rho^2+tangent^2) is exactly one in
+    // double precision, including the exact gate-equality case.
+    const double tangent = std::nextafter(std::sqrt(1 - rho * rho), 1.0);
+    const V origin = m.centroid[0];
     const M3 t{2 * rho, 0, 0, 2 * tangent, 2, 0, 0, 0, 2};
-    m.centroid[0] = mul(t, m.centroid[0]);
+    m.centroid[0] = {};
+
     m.volume[0] = 8 * rho;
     m.is_cut = {1};
     m.gid = {61};
     for (auto& f : m.faces) {
-        f.centroid = mul(t, f.centroid);
+        f.centroid = mul(t, sub(f.centroid, origin));
         const V n{f.normal[0] / (2 * rho) - tangent * f.normal[1] / (2 * rho),
                   f.normal[1] / 2,
                   f.normal[2] / 2};
         f.area *= 8 * rho * norm(n);
         f.normal = scale(n, 1 / norm(n));
     }
-    m.z_top = 2;
+    m.z_top = 1;
     return m;
 }
 ElasticMesh tied_minima(bool near_tie, int ranks) {
@@ -562,6 +568,13 @@ void concave_acceptance(Suite& suite, int ranks, bool mpi_only) {
                             "manufactured affine stress has zero embedded traction");
             affine_patch(m, a, isotropic());
         });
+        suite.run("slanted free rigid rotation preserves cut gradients", [] {
+            const auto m = slanted_cut();
+            const M3 rotation{0, -0.0007, 0.0004, 0.0007, 0, -0.0002, -0.0004, 0.0002, 0};
+            check_gradient(
+                m, problem(m, isotropic(), 0), values(m.centroid, rotation, {}), rotation);
+            matrix_compatibility(m);
+        });
         suite.run("slanted free expansion and embedded traction <=1e-9",
                   [] { free_expansion(slanted_cut(), 1e-9); });
         suite.run("cut cell with one prescribed face, three globally noncollinear constraints", [] {
@@ -610,6 +623,18 @@ void concave_acceptance(Suite& suite, int ranks, bool mpi_only) {
             const auto why = reject_before_ksp(m, problem(m));
             require(std::regex_search(why, std::regex("gid[ =:]+0\\b")), "identity error gid");
             require(why.find("defect") != std::string::npos, "identity error includes defect");
+        });
+        suite.run("broken area-vector closure despite valid moment identity", [] {
+            auto m = grid(1, 1, 1);
+            m.is_cut = {1};
+            m.faces[0].area *= 1.1;
+            m.faces[0].centroid =
+                add(m.centroid[0], scale(sub(m.faces[0].centroid, m.centroid[0]), 1 / 1.1));
+            const auto reference = geometry_reference(m);
+            require(reference.moment_defect[0] <= 1e-14, "moment identity alone still holds");
+            require(reference.closure_defect[0] > 0.09, "constant field would not reproduce");
+            const auto why = reject_before_ksp(m, problem(m));
+            require(why.find("closure") != std::string::npos, "error identifies area closure");
         });
         const std::vector<std::pair<std::string, std::function<void(ElasticMesh&)>>> malformed{
             {"short is_cut", [](auto& m) { m.is_cut.pop_back(); }},

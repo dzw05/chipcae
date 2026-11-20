@@ -29,7 +29,7 @@ struct ElasticMesh {
     std::vector<ElasticFace> faces;
     std::vector<char> is_embedded;
     double z_top = 0;
-    // TEST-FIRST carrier only; empty means all zero. Validation is not implemented yet.
+    // Empty means all zero; otherwise one binary flag per cell in caller order.
     std::vector<char> is_cut;
 };
 struct ElasticProblem {
@@ -70,7 +70,7 @@ struct ElasticResult {
     double residual = 0;
     std::string warpage_method;
     std::string U_mag_method;
-    // TEST-FIRST diagnostic defaults; production does not populate these yet.
+    // Global diagnostics over all faces; exact rho ties choose the smallest lo gid.
     double min_dn_ratio = 1;
     std::int64_t min_dn_gid = -1;
     int gradient_corrections = 0;
@@ -79,7 +79,7 @@ struct ElasticResult {
 // Caller initializes/finalizes MPI and PETSc and retains ownership of all inputs.
 // Rigid321 solves without pins and removes arithmetic translation and rotation
 // separately for each connected body (rank-reduced modes for degenerate centers).
-// Invalid inputs return the existing Error carrier with INPUT_INVALID in reason,
-// before KSPSolve; solver failures include reason, iterations and force residual.
+// Invalid metadata uses INPUT_INVALID; invalid geometry uses INTERNAL in the
+// existing Error reason, before KSPSolve. Solver failures report iterations/residual.
 Expected<ElasticResult> solve_elastic(const ElasticMesh&, const ElasticProblem&, MPI_Comm comm);
 } // namespace chipcae::solvers::fvm
