@@ -140,6 +140,153 @@ void physical_residual(const ElasticMesh& m,
             "corrected physical residual, independently evaluated from production assembly");
     std::cout << "实测 corrected_physical_residual=" << normalized << '\n';
 }
+ElasticProblem nonaffine_problem(const ElasticMesh& m) {
+    auto p = problem(m, laminate(0.3));
+    prescribe(p, m, patch_a, patch_b);
+    for (auto& prescribed : p.prescribed) {
+        const auto& x = m.faces[prescribed.face].centroid;
+        prescribed.U =
+            add(prescribed.U, {0.0003 * x[1] * x[1], -0.0002 * x[0] * x[2], 0.0004 * x[0] * x[1]});
+    }
+    for (std::size_t c = 0; c < m.volume.size(); ++c) {
+        p.dT[c] += 7 * m.centroid[c][0];
+        for (auto& value : p.C[c])
+            value *= 1 + 0.1 * m.centroid[c][1];
+    }
+    return p;
+}
+// Independent scalar energy oracle. In particular, cut stabilization uses the
+// full prescribed face gradient relative to the cell-energy (Gauss) gradients,
+// including tangential components at interfaces between cut and uncut cells.
+double
+face_gradient_energy(const ElasticMesh& m, const ElasticProblem& p, const std::vector<V>& u) {
+    const auto reconstructed = detail::evaluate_cut_gradients(m, p, u, MPI_COMM_SELF);
+    require(static_cast<bool>(reconstructed), reconstructed ? "" : reconstructed.error().reason);
+    const auto& ls = reconstructed.value();
+    std::map<std::int64_t, V> prescribed;
+    for (const auto& value : p.prescribed)
+        prescribed[value.face] = value.U;
+    auto cut = [&](std::size_t k) {
+        const auto& f = m.faces[k];
+        return m.is_embedded[k] || m.is_cut[f.lo] || (f.hi >= 0 && m.is_cut[f.hi]);
+    };
+    std::vector<M3> gauss(m.volume.size());
+    for (std::size_t k = 0; k < m.faces.size(); ++k) {
+        const auto& f = m.faces[k];
+        const V dl = sub(f.centroid, m.centroid[f.lo]);
+        V uf = prescribed.contains(k) ? prescribed.at(k) : add(u[f.lo], mul(ls[f.lo], dl));
+        if (f.hi >= 0) {
+            const V dh = sub(f.centroid, m.centroid[f.hi]);
+            const double wl = cut(k) ? norm(dh) / (norm(dl) + norm(dh))
+                                     : -dot(dh, f.normal) / dot(sub(dl, dh), f.normal);
+            if (cut(k))
+                uf = add(scale(add(u[f.lo], mul(ls[f.lo], dl)), wl),
+                         scale(add(u[f.hi], mul(ls[f.hi], dh)), 1 - wl));
+            else {
+                V tangent = add(scale(dl, wl), scale(dh, 1 - wl));
+                tangent = sub(tangent, scale(f.normal, dot(tangent, f.normal)));
+                uf = add(
+                    add(scale(u[f.lo], wl), scale(u[f.hi], 1 - wl)),
+                    add(scale(mul(ls[f.lo], tangent), wl), scale(mul(ls[f.hi], tangent), 1 - wl)));
+            }
+        }
+        for (int side = 0; side < (f.hi >= 0 ? 2 : 1); ++side) {
+            const auto c = side == 0 ? f.lo : f.hi;
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    gauss[c][3 * i + j] += (uf[i] - u[c][i]) * f.normal[j] * f.area *
+                                           (side == 0 ? 1 : -1) / m.volume[c];
+        }
+    }
+    auto density = [](const M3& g, const M6& stiffness, const V& thermal = V{}) {
+        const std::array<double, 6> e{g[0] - thermal[0],
+                                      g[4] - thermal[1],
+                                      g[8] - thermal[2],
+                                      g[5] + g[7],
+                                      g[2] + g[6],
+                                      g[1] + g[3]};
+        double value = 0;
+        for (int i = 0; i < 6; ++i)
+            for (int j = 0; j < 6; ++j)
+                value += 0.5 * e[i] * stiffness[6 * i + j] * e[j];
+        return value;
+    };
+    double value = 0;
+    for (std::size_t c = 0; c < m.volume.size(); ++c)
+        value += m.volume[c] * density(gauss[c], p.C[c], scale(p.alpha[c], p.dT[c]));
+    for (std::size_t k = 0; k < m.faces.size(); ++k) {
+        const auto& f = m.faces[k];
+        if (f.hi < 0 && !prescribed.contains(k))
+            continue;
+        const V d = sub(f.hi < 0 ? f.centroid : m.centroid[f.hi], m.centroid[f.lo]);
+        const double dn = dot(d, f.normal);
+        const V jump = sub(f.hi < 0 ? prescribed.at(k) : u[f.hi], u[f.lo]);
+        M3 defect{};
+        M6 stiffness = p.C[f.lo];
+        double wl = 1;
+        if (f.hi >= 0) {
+            const V dl = sub(f.centroid, m.centroid[f.lo]);
+            const V dh = sub(m.centroid[f.hi], f.centroid);
+            wl = cut(k) ? norm(dh) / (norm(dl) + norm(dh)) : dot(dh, f.normal) / dn;
+            // The fixture scales a common SPD tensor, so harmonic interpolation
+            // is independently a single scalar harmonic mean, including couplings.
+            const double ratio = p.C[f.hi][0] / stiffness[0];
+            for (auto& entry : stiffness)
+                entry /= (1 - wl) + wl / ratio;
+        }
+        M3 mean = ls[f.lo];
+        if (f.hi >= 0)
+            for (int j = 0; j < 9; ++j)
+                mean[j] = (cut(k) ? 0.5 : wl) * ls[f.lo][j] + (cut(k) ? 0.5 : 1 - wl) * ls[f.hi][j];
+        const V residual = sub(jump, mul(mean, d));
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j) {
+                defect[3 * i + j] = residual[i] * f.normal[j] / dn;
+                if (cut(k)) {
+                    const double consistent =
+                        f.hi < 0 ? gauss[f.lo][3 * i + j]
+                                 : (gauss[f.lo][3 * i + j] + gauss[f.hi][3 * i + j]) / 2;
+                    defect[3 * i + j] += mean[3 * i + j] - consistent;
+                }
+            }
+        value += f.area * dn * density(defect, stiffness);
+    }
+    return value;
+}
+void assembled_face_gradient_work(const ElasticMesh& m, bool free) {
+    auto p = nonaffine_problem(m);
+    if (free) {
+        p.support = ElasticProblem::Support::Rigid321;
+        p.prescribed.clear();
+    }
+    auto u = values(m.centroid, patch_a, patch_b);
+    std::vector<V> v;
+    for (std::size_t c = 0; c < u.size(); ++c) {
+        const double q = static_cast<double>(c + 1);
+        u[c] = add(u[c], {0.0002 * std::sin(q), 0.0003 * std::cos(q), -0.0001 * q});
+        v.push_back({0.0004 * std::cos(q), -0.0001 * q, 0.0002 * std::sin(q)});
+    }
+    auto plus = u, minus = u;
+    for (std::size_t c = 0; c < u.size(); ++c) {
+        plus[c] = add(u[c], v[c]);
+        minus[c] = sub(u[c], v[c]);
+    }
+    const double expected =
+        (face_gradient_energy(m, p, plus) - face_gradient_energy(m, p, minus)) / 2;
+    const auto a = assemble(m, p);
+    double matrix_work = 0, traction_work = 0;
+    for (const auto& b : a.blocks)
+        matrix_work += dot(v[b.row], mul(b.value, u[b.column]));
+    for (std::size_t c = 0; c < u.size(); ++c)
+        matrix_work -= dot(v[c], a.rhs[c]);
+    const auto force = tractions(a, u);
+    for (std::size_t k = 0; k < m.faces.size(); ++k) {
+        const auto& f = m.faces[k];
+        traction_work += dot(f.hi < 0 ? scale(v[f.lo], -1) : sub(v[f.hi], v[f.lo]), force[k]);
+    }
+    near(matrix_work, expected, 1e-8, 1e-11, "matrix virtual work uses full cut face gradient");
+    near(traction_work, expected, 1e-8, 1e-11, "assembled traction uses full cut face gradient");
+}
 void check_gradient(const ElasticMesh& m,
                     const ElasticProblem& p,
                     const std::vector<V>& u,
@@ -298,6 +445,7 @@ void matrix_compatibility(const ElasticMesh& m) {
         }
     require(norm2 > 0, "nonzero cut stiffness");
     std::cout << "实测 matrix_symmetry_defect=" << std::sqrt(symmetry2 / norm2) << '\n';
+    require(std::sqrt(symmetry2 / norm2) <= 1e-13, "cut stiffness symmetry");
     for (int mode = 0; mode < 6; ++mode) {
         V axis{};
         axis[mode % 3] = 1;
@@ -395,9 +543,56 @@ void mpi_case(Suite& suite, ElasticMesh m, bool empty_owner, const std::string& 
          0,
          "global identity maximum independent of partition");
 }
+void nonaffine_solver(const ElasticMesh& m, bool free, MPI_Comm comm) {
+    auto p = nonaffine_problem(m);
+    if (free) {
+        p.support = ElasticProblem::Support::Rigid321;
+        p.prescribed.clear();
+    }
+    p.preconditioner = "jacobi";
+    const auto jacobi = solve(m, p, comm);
+    p.preconditioner = "gamg";
+    const auto gamg = solve(m, p, comm);
+    auto serial_mesh = m;
+    std::fill(serial_mesh.rank.begin(), serial_mesh.rank.end(), 0);
+    const auto serial = solve(serial_mesh, p, MPI_COMM_SELF);
+    field_near(jacobi.U_cell, gamg.U_cell, 0, 1e-8, "nonaffine Jacobi/GAMG cells");
+    field_near(jacobi.U_face, gamg.U_face, 0, 1e-8, "nonaffine Jacobi/GAMG faces");
+    field_near(gamg.U_cell, serial.U_cell, 0, 1e-8, "nonaffine np1/np2 cells");
+    field_near(gamg.U_face, serial.U_face, 0, 1e-8, "nonaffine np1/np2 faces");
+    require(jacobi.iterations > 0 && gamg.iterations > 0, "nonaffine load exercises Krylov solve");
+    physical_residual(serial_mesh, p, jacobi, 1e-10);
+    physical_residual(serial_mesh, p, gamg, 1e-10);
+}
 } // namespace
 
 void concave_acceptance(Suite& suite, int ranks, bool mpi_only) {
+    if (!mpi_only)
+        for (bool free : {false, true})
+            suite.run(std::string("uncut nonaffine virtual work") + (free ? " free" : " Fixed"),
+                      [=] {
+                          auto m = grid(2, 2, 2);
+                          m.is_cut.assign(m.volume.size(), 0);
+                          assembled_face_gradient_work(m, free);
+                      });
+    for (bool slanted : {false, true})
+        for (bool free : {false, true}) {
+            const auto name = std::string(slanted ? "slanted" : "L") + (free ? " free" : " Fixed");
+            if (!mpi_only)
+                suite.run(name + " nonaffine face-gradient matrix and traction virtual work", [=] {
+                    assembled_face_gradient_work(slanted ? slanted_cut() : concave_l(), free);
+                });
+            for (bool empty : {false, true}) {
+                if (empty && !mpi_only)
+                    continue;
+                suite.run(name + " nonaffine Jacobi/GAMG" + (empty ? " empty owner" : ""), [&] {
+                    auto m = slanted ? slanted_cut(ranks) : concave_l(ranks);
+                    if (empty)
+                        std::fill(m.rank.begin(), m.rank.end(), 0);
+                    nonaffine_solver(m, free, suite.comm);
+                });
+            }
+        }
     if (!mpi_only) {
         suite.run("L fixture seven cells, segmented interfaces and exact geometry", [] {
             const auto m = concave_l();

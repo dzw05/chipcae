@@ -33,8 +33,8 @@ The final discretization uses an energy-conjugate finite-volume gradient:
 `V G = sum_f (U_f-U_cell) tensor n A`. Internal face values interpolate cells with
 an implicit tangential centroid correction; exterior values are prescribed or
 boundary-consistent least-squares extrapolations. Cell strain energy uses the caller's
-full stiffness and thermal eigenstrain. A face energy penalizes the compact-gradient
-residual `deltaU-Gbar*d` using the harmonic acoustic tensor and `area/(n.d)`. This
+full stiffness and thermal eigenstrain. On uncut faces, a face energy penalizes the
+compact-gradient residual `deltaU-Gbar*d` using the harmonic acoustic tensor and `area/(n.d)`. This
 vanishes for affine fields and interior quadratic bending fields on the parent grids.
 The geometry is supplied by the caller, including cut polyhedron moments.
 
@@ -70,20 +70,31 @@ smallest exactly tied lo gid is reduced as an integer. Cut cells require normali
 face-moment identity defect at most `1e-10` and area-vector closure at the same
 relative scale. `max_identity_defect` is the global maximum over marked cut cells.
 
-The cut face-gradient seam evaluates
+The cut face-gradient operator evaluates
 `G_face = Gbar + (deltaU-Gbar*d) tensor n/(d dot n)`, with the arithmetic mean of
-both cell gradients internally and the owner gradient on boundaries. In the energy
-assembly the cut compact correction replaces the parent's distance-weighted gradient
-in the residual energy, using this same arithmetic mean. Face material interpolation
-retains the componentwise harmonic/mixed formula below, but uses positive Euclidean
+both cell gradients internally and the owner gradient on boundaries. Production assembly
+and diagnostic evaluation use the same affine face-gradient operator. On internal and
+prescribed cut faces, let `Hbar` be the arithmetic mean of the two cell-energy Gauss
+gradients (the owner gradient on a boundary). The cut face energy is
+`area*(d dot n)/2 * e^T C_face e`, where `e = engineering(G_face-Hbar)`.
+Thus the full corrected face gradient enters the constitutive stress and its adjoint
+traction, including tangential differences between reconstruction and cell-energy
+gradients at cut/uncut interfaces. The parent cell-energy consistency term already
+accounts for `Hbar`; subtracting it avoids counting that strain energy twice. Thermal
+eigenstrain cancels in this difference and remains in the parent cell energy.
+When the reconstructed and cell-energy gradients agree, this reduces algebraically
+to the acoustic compact penalty. Free and embedded boundary tractions remain zero.
+Face material interpolation retains the componentwise harmonic/mixed formula below,
+but uses positive Euclidean
 distances on cut faces; uncut projected weights retain their original ordering.
 
 **Design deviations from the brief/plan:** the full implicit option replaces delayed
 correction (`gradient_corrections = 0`). The parent variational assembly is retained:
-cell energy and the energy of the compact face correction are differentiated once,
-with no additional direct-traction contribution. Thus numerical face tractions are
-energy-conjugate, not the direct constitutive traction from the face-gradient seam.
-This avoids double counting and preserves the right and transpose rigid modes.
+cell energy and the full cut face-gradient mismatch energy are differentiated once.
+The resulting numerical traction includes the face-gradient constitutive stress
+difference and the derivatives of both gradient reconstructions, retaining the parent
+energy-conjugate traction formulation. It is not simply `C:strain(G_face)` times the
+normal; those adjoint contributions preserve the right and transpose rigid modes.
 The constrained completion and Euclidean cut material weights are explicit local
 design decisions; the available architecture exemption addresses interface scope
 and does not supply a discretization ruling. These departures require review as
@@ -97,7 +108,7 @@ boundary reactions follow the same energy derivative; free face tractions are ze
 The complete implicit stencil is preallocated, including beyond second-ring columns
 introduced by the adjoint gradient reconstruction.
 
-This energy-conjugate assembly is a substantive deviation from the planned direct
+The retained parent energy-conjugate traction differs from a bare direct
 compact-traction stencil. The direct stencil passed affine patches but failed the
 left rotational nullspace; local force-couple projections introduced bending stiffness
 errors. The final variational form satisfies both rigid nullspaces without such a
@@ -243,7 +254,7 @@ cut path. The uncut acceptance tolerances and saved parent fields are retained.
 CI/ci-ok, FVM CLI wiring, full-repository integration and FVM-to-FEM comparison are
 **未执行** in this local library delivery.
 
-## Cut-concave Release verification
+## Historical cut-concave Release verification
 
 **实测**, Release with warnings-as-errors, MPI and PETSc-enabled MFEM, using an
 external harness (the parent CMake file remains unchanged): all 6 registered CTests
@@ -276,3 +287,21 @@ its tangent is rounded upward by one ulp to represent the intended equality case
 The `rho <= 1e-6` gate, geometry thresholds and all existing acceptance assertions
 are unchanged. The original test-first commit failed 45 of 50 concave cases; a new
 rotation regression also failed before its connected-patch completion was added.
+
+## Connected face-gradient Release verification
+
+The review fix connects the full face-gradient operator to the parent variational
+traction through the cut strain-mismatch energy above. An independent scalar-energy
+oracle checks matrix and face-traction virtual work for nonaffine L and slanted fields,
+with Fixed and free supports, spatially varying laminate stiffness and thermal loads.
+Restoring the pre-fix assembly fails all four cut virtual-work checks; both uncut
+virtual-work checks pass. No existing tests or tolerances were weakened.
+
+**实测**, Release with warnings-as-errors, the same external harness passes all 6
+CTests: 113 elastic, 62 concave, 29 np2 and 4 bimetal cases, plus the saved-parent
+snapshot and geometry helpers. Nonaffine Jacobi/GAMG solves agree within `1e-8`
+relatively on cells and faces, including split and empty owner ranks. Independent
+physical residuals satisfy `1e-10`. Cut symmetry defects are `9.92e-17` (L) and
+`8.49e-17` (slanted), with all right/transpose rigid-mode checks retained. Pinned
+clang-format 23.1.5 `-i` followed by `--dry-run --Werror` is clean on both touched
+C++ files. This verification covers the local library harness, not a top-level build.

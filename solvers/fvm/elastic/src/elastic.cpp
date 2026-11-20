@@ -566,12 +566,33 @@ AffineMap prescribed_map(std::size_t face, const ElasticBoundary& bc) {
     a.boundary[static_cast<Index>(face)] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
     return a;
 }
-AffineMap extrapolation(const ElasticGradient& g, const V& d) {
+AffineMap extrapolation(const AffineMap& g, const V& d) {
     std::vector<double> t(27);
     for (int i = 0; i < 3; ++i)
         for (int j = 0; j < 3; ++j)
             t[9 * i + 3 * i + j] = d[j];
-    return transform(gradient_map(g), 3, t);
+    return transform(g, 3, t);
+}
+AffineMap extrapolation(const ElasticGradient& g, const V& d) {
+    return extrapolation(gradient_map(g), d);
+}
+// Shared by production assembly and the face-gradient diagnostic. Keeping the
+// full affine operator here includes its tangential and boundary derivatives.
+AffineMap compact_face_gradient(
+    const AffineMap& lo, const AffineMap& hi, const AffineMap& jump, const V& d, const V& normal) {
+    AffineMap mean;
+    add_map(mean, lo, hi.rows == 0 ? 1 : 0.5);
+    if (hi.rows != 0)
+        add_map(mean, hi, 0.5);
+    auto residual = jump;
+    add_map(residual, extrapolation(mean, d), -1);
+    std::vector<double> lift(27);
+    const double dn = dot(d, normal);
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            lift[3 * (3 * i + j) + i] = normal[j] / dn;
+    add_map(mean, transform(residual, 9, lift), 1);
+    return mean;
 }
 // Euclidean inverse-distance interpolation, including concave owners whose
 // individual projected face distances can have either sign.
@@ -928,15 +949,34 @@ ElasticAssembly assemble(const ElasticMesh& m,
         const double dn = dot(d, f.normal);
         AffineMap r = f.hi < 0 ? prescribed_map(k, bc) : displacement_map(f.hi);
         add_map(r, displacement_map(f.lo), -1);
+        if (cut_face(m, k)) {
+            auto face_gradient =
+                compact_face_gradient(gradient_map(ls[f.lo]),
+                                      f.hi < 0 ? AffineMap{} : gradient_map(ls[f.hi]),
+                                      r,
+                                      d,
+                                      f.normal);
+            // Retain the parent's cell-energy consistency and adjoint traction.
+            // Stabilize the full face strain relative to that same consistency
+            // gradient, rather than independently penalizing deltaU-Gbar*d.
+            // This includes tangential mismatch at cut/uncut interfaces and
+            // reduces to the parent acoustic penalty when the gradients agree.
+            add_map(face_gradient, g[f.lo], f.hi < 0 ? -1 : -0.5);
+            if (f.hi >= 0)
+                add_map(face_gradient, g[f.hi], -0.5);
+            const auto c = face_stiffness(p, f, m, true);
+            energy(
+                f.lo, transform(face_gradient, 6, engineering), {c.begin(), c.end()}, f.area * dn);
+            continue;
+        }
         if (f.hi < 0)
             add_map(r, extrapolation(ls[f.lo], d), -1);
         else {
-            const double wl =
-                cut_face(m, k) ? 0.5 : dot(subtract(m.centroid[f.hi], f.centroid), f.normal) / dn;
+            const double wl = dot(subtract(m.centroid[f.hi], f.centroid), f.normal) / dn;
             add_map(r, extrapolation(ls[f.lo], d), -wl);
             add_map(r, extrapolation(ls[f.hi], d), -(1 - wl));
         }
-        const auto t = traction_map(face_stiffness(p, f, m, cut_face(m, k)), f.normal);
+        const auto t = traction_map(face_stiffness(p, f, m, false), f.normal);
         std::vector<double> acoustic(9);
         for (int i = 0; i < 3; ++i)
             for (int j = 0; j < 3; ++j)
@@ -1009,22 +1049,24 @@ Expected<ElasticMatrix> evaluate_cut_face_gradient(const ElasticMesh& m,
                     f.lo >= 0 && static_cast<std::size_t>(f.lo) < n && f.hi >= -1 &&
                     (f.hi < 0 || static_cast<std::size_t>(f.hi) < n),
                 "face gradient arrays/indices");
-        M out = g[f.lo];
-        if (f.hi >= 0)
-            for (int j = 0; j < 9; ++j)
-                out[j] = (out[j] + g[f.hi][j]) / 2;
         const V d = subtract(f.hi < 0 ? f.centroid : m.centroid[f.hi], m.centroid[f.lo]);
         const double distance = std::sqrt(dot(d, d)), dn = dot(d, f.normal);
         if (!finite(d) || !std::isfinite(distance) || !(distance > 0) || !std::isfinite(dn) ||
             dn / distance <= 1e-6)
             geometry_error(m, f.lo, "invalid compact face gradient distance", k);
-        V correction = subtract(f.hi < 0 ? boundary : u[f.hi], u[f.lo]);
-        for (int i = 0; i < 3; ++i)
-            for (int j = 0; j < 3; ++j)
-                correction[i] -= out[3 * i + j] * d[j];
-        for (int i = 0; i < 3; ++i)
-            for (int j = 0; j < 3; ++j)
-                out[3 * i + j] += correction[i] * f.normal[j] / dn;
+        AffineMap lo, hi, jump;
+        lo.rows = 9;
+        lo.constant.assign(g[f.lo].begin(), g[f.lo].end());
+        if (f.hi >= 0) {
+            hi.rows = 9;
+            hi.constant.assign(g[f.hi].begin(), g[f.hi].end());
+        }
+        jump.rows = 3;
+        const V delta = subtract(f.hi < 0 ? boundary : u[f.hi], u[f.lo]);
+        jump.constant.assign(delta.begin(), delta.end());
+        const auto gradient = compact_face_gradient(lo, hi, jump, d, f.normal);
+        M out{};
+        std::copy(gradient.constant.begin(), gradient.constant.end(), out.begin());
         require(finite(out), "nonfinite face gradient");
         return out;
     } catch (const Invalid& e) {
