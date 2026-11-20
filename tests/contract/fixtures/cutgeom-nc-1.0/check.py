@@ -326,7 +326,9 @@ def source_tables(text, generator):
     """Compare ordered source tokens, preserving decimal spelling as provenance."""
     text = re.sub(r"//[^\n]*|/\*.*?\*/", "", text, flags=re.S)
     number = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
-    token = re.compile(number + r"|[{}(),]|[A-Za-z_]\w*")
+    # Preserve every non-whitespace token: dropping a standalone sign would
+    # incorrectly compare the valid C++ expression `- .0064` as `.0064`.
+    token = re.compile(number + r"|[{}(),]|[A-Za-z_]\w*|\S")
 
     def read_aggregate(tokens, env, pos=0):
         require(pos < len(tokens), "truncated source table")
