@@ -278,3 +278,11 @@ if(TARGET chipcae_solve_inputs)
         endforeach()
     endif()
 endif()
+
+if(_solve_backend)
+    add_test(NAME solve_fem_thermal_bow COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_fem_thermal_bow.py
+        $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE})
+    set_tests_properties(solve_fem_thermal_bow PROPERTIES
+        TIMEOUT 600 LABELS "solve;numerical" SKIP_RETURN_CODE 77)
+endif()
