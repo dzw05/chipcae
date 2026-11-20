@@ -1045,6 +1045,8 @@ Expected<CutLayerArrays> finalize(HexMeshArrays& mesh,
     }
     if (union_call) {
         if (c.sub_off.size() != c.cut_elem.size() + 1 ||
+            c.cut_elem_gid.size() != c.cut_elem.size() ||
+            c.exterior_area_vector.size() != c.cut_elem.size() ||
             c.sub_attribute.size() != c.cut_elem.size() ||
             c.sub_volfrac.size() != c.cut_elem.size() || c.vq_off.size() != c.cut_elem.size() + 1 ||
             c.bq_off.size() != c.cut_elem.size() + 1 || c.sq_off.size() != c.cut_elem.size() + 1 ||
@@ -1055,9 +1057,15 @@ Expected<CutLayerArrays> finalize(HexMeshArrays& mesh,
         for (const auto& ls : c.level_sets)
             if (ls.phi.size() != m.node_gid.size())
                 return Error{"cut/union", "invalid remapped level set"};
-        for (auto e : c.cut_elem)
-            if (e < 0 || static_cast<std::size_t>(e) >= m.attribute.size())
+        for (std::size_t row = 0; row < c.cut_elem.size(); ++row) {
+            auto e = c.cut_elem[row];
+            if (e < 0 || static_cast<std::size_t>(e) >= m.attribute.size() ||
+                c.cut_elem_gid[row] != m.elem_gid[e])
                 return Error{"cut/union", "invalid remapped element"};
+        }
+        for (auto sub : c.small_subs)
+            if (sub < 0 || static_cast<std::size_t>(sub) >= c.sub_attribute.size())
+                return Error{"cut/union", "invalid remapped small subcell"};
         if (auto fault = union_fault("final_validation", true, pending_void))
             return *fault;
     }

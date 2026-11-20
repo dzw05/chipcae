@@ -28,10 +28,9 @@ void unsupported(PlacedPart p, const std::string& reason, size_t slab = 0) {
 }
 int main() {
     return run([] {
-        for (bool hole : {true, false}) {
+        {
             auto p = part("cut");
-            p.slabs[0].sections = {
-                hole ? SlabSection{rect().outer, {rect(.001, .001, .002, .002).outer}} : ell()};
+            p.slabs[0].sections = {SlabSection{rect().outer, {rect(.001, .001, .002, .002).outer}}};
             AttachPlacement a;
             a.target = "layer:Core";
             a.rot_z_deg = 15;
@@ -41,14 +40,15 @@ int main() {
             auto interior = p;
             interior.slabs[0].z0 = .0003;
             interior.slabs[0].z1 = .0007;
-            unsupported(interior, hole ? "holed non-rectilinear section" : "non-convex section");
-            unsupported(p, hole ? "holed non-rectilinear section" : "non-convex section");
+            unsupported(interior, "holed non-rectilinear section");
+            unsupported(p, "holed non-rectilinear section");
         }
         // Unsupported endpoints must neither attract nor cut supported interfaces.
         auto supported = part("supported", .000405, .0008);
         auto ghost = part("ghost", .0004, .0009);
         ghost.slabs[0].sections = {
-            {Ring{{{0, 0}, {.004, 0}, {.002, .001}, {.004, .004}, {0, .004}}}, {}}};
+            {Ring{{{0, 0}, {.004, 0}, {.002, .001}, {.004, .004}, {0, .004}}},
+             {rect(.0005, .0025, .0005, .0005).outer}}};
         auto alone = merge(base(), {supported}, .001);
         for (auto range :
              {std::array{.0004, .0009}, std::array{.0004055, .0009}, std::array{.0003, .0007995}}) {
