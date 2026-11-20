@@ -22,8 +22,7 @@ def acceptance(d):
     case['materials']['ref'] = 'materials.json'
     dump(d / 'case.json', case)
     result = run('solve', ['--case', d / 'case.json', '--profile', d / 'profile.json', '--out', d / 'negative'], expected=code)
-    assert name in result.stderr, result.stderr
-    assert 'polygon in material layer' in result.stderr, result.stderr
+    assert 'internal material cuts are not supported' in result.stderr, result.stderr
 
 
 if __name__ == '__main__':

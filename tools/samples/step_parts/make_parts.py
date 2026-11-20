@@ -54,7 +54,7 @@ def prepare(directory, board_size=(56, 44)):
 <PolyStepSegment x="{width}" y="0"/><PolyStepSegment x="{width}" y="{height}"/>
 <PolyStepSegment x="0" y="{height}"/></Polygon></Profile></Step>
 </CadData></Ecad></IPC-2581>''')
-    dump(directory / 'map.json', {'Si': 'silicon'})
+    dump(directory / 'map.json', {'Si': 'silicon_eq'})
     library = json.loads((ROOT / 'schema/examples/fcbga_demo.materials.json').read_text())
     # Reuse published cards, freezing temperature tables as test_cut_pipeline does.
     for card in library['materials']:
@@ -63,6 +63,8 @@ def prepare(directory, board_size=(56, 44)):
             table['temperatures'] = table['temperatures'][:1]
             table['columns'] = {k: v[:1] for k, v in table['columns'].items()}
             table.update(interpolation='constant', extrapolation='clamp')
+    silicon = next(card for card in library['materials'] if card['id'] == 'silicon')
+    library['materials'].append(dict(silicon, id='silicon_eq'))
     dump(directory / 'materials.json', library)
     dump(directory / 'profile.json', {'schema': 'chipcae.run_profile/1.0', 'ranks': 1, 'backend': 'cpu', 'gpus': 0})
     return {m['id'] for m in library['materials']}

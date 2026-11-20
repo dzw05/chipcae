@@ -46,6 +46,9 @@ def run(name, args, expected=0):
     if (name == 'import' and result.returncode == 2 and result.stderr.strip() in
             ('unknown argument: --assembly', 'not implemented yet: --assembly')):
         raise DependencyMissing('SP4 assembly CLI missing: ' + result.stderr.strip())
+    if (name == 'import' and result.returncode == 7 and
+            result.stderr.strip() == 'IMPORT_REJECTED: ECAD support disabled'):
+        raise DependencyMissing('import built without ECAD: ' + result.stderr.strip())
     assert result.returncode == expected, (command, result.returncode, expected, result.stderr)
     return result
 
