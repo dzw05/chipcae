@@ -667,6 +667,8 @@ int run_fvm(const RunInputs& inputs, const std::filesystem::path& output) {
             thermal.T_face.assign(grid.faces.size(), uniform->T);
             thermal.T_vertex.assign(arrays.vertices.size() / 3, uniform->T);
         }
+        if (thermal.T_cell.empty())
+            throw InputError(ErrorCode::INPUT_INVALID, "FVM grid has no control volumes");
         if (stop())
             return 0;
         const auto step = results(

@@ -322,10 +322,7 @@ class CaseAcceptance(unittest.TestCase):
                               result.stderr)
 
     def test_fvm_cases_validate_against_case_schema(self):
-        try:
-            import jsonschema
-        except ImportError as error:
-            self.skipTest(f'only schema validation skipped: jsonschema unavailable: {error}')
+        import jsonschema
         from referencing import Registry, Resource
         schema = u.read_json(SOURCE / 'schema/case-1.0.schema.json')
         parameters = u.read_json(SOURCE / 'schema/parameters.schema.json')
@@ -359,7 +356,15 @@ class CaseAcceptance(unittest.TestCase):
                 with self.subTest(family=family, rejected_preconditioner=pc):
                     candidate = deepcopy(case)
                     candidate['solver']['linear']['preconditioner'] = pc
-                    self.assertTrue(list(validator.iter_errors(candidate)))
+                    # The frozen schema admits all known preconditioners; family
+                    # consistency belongs to the loader (M3 ruling 11-20 19:50).
+                    errors = list(validator.iter_errors(candidate))
+                    if pc == 'unknown':
+                        self.assertTrue(errors)
+                    else:
+                        self.assertFalse(errors, '\n'.join(e.message for e in errors))
+                    _, result = u.probe(self.root, candidate, expected=14)
+                    self.assertEqual(result.stderr.strip(), 'invalid preconditioner')
             for field, value in (('rtol', 0), ('max_iter', 0), ('unknown', True)):
                 with self.subTest(family=family, invalid_linear_field=field):
                     candidate = deepcopy(case)

@@ -467,7 +467,7 @@
       ]
     },
     "solver": {
-      "type": "object"
+      "$ref": "https://chipcae.local/schema/parameters.schema.json"
     },
     "output": {
       "type": "object",
@@ -738,67 +738,5 @@
         }
       }
     }
-  ],
-  "if": {
-    "properties": {
-      "physics": {
-        "contains": {
-          "properties": {
-            "solver": {
-              "enum": [
-                "fvm.conduction",
-                "fvm.solid"
-              ]
-            }
-          },
-          "required": [
-            "solver"
-          ]
-        }
-      }
-    },
-    "required": [
-      "physics"
-    ]
-  },
-  "then": {
-    "properties": {
-      "solver": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "linear": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "rtol": {
-                "type": "number",
-                "exclusiveMinimum": 0,
-                "default": 1e-08
-              },
-              "max_iter": {
-                "type": "integer",
-                "minimum": 1,
-                "default": 500
-              },
-              "preconditioner": {
-                "enum": [
-                  "jacobi",
-                  "gamg"
-                ],
-                "default": "jacobi"
-              }
-            }
-          }
-        }
-      }
-    }
-  },
-  "else": {
-    "properties": {
-      "solver": {
-        "$ref": "https://chipcae.local/schema/parameters.schema.json"
-      }
-    }
-  }
+  ]
 }
