@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -61,6 +62,21 @@ int main() {
     metal.nu = .34;
     metal.alpha = 17e-6;
     metal.k = 390;
+    // Lock the shared helper to the original pipeline expressions before replacing that copy.
+    for (double f : {0., .12, .3, .5, 1.}) {
+        const double kxy = f * metal.k + (1 - f) * base.k;
+        const double kz = 1 / (f / metal.k + (1 - f) / base.k);
+        std::array<double, 3> actual{};
+        chipcae::material::copper_laminate_conductivity(base.k, metal.k, f, actual.data());
+        const std::array<double, 3> expected{kxy, kxy, kz};
+        for (std::size_t d = 0; d < actual.size(); ++d)
+            if (!(actual[d] == expected[d])) {
+                std::ostringstream message;
+                message << "exact legacy conductivity: f=" << f << " component=" << d
+                        << std::hexfloat << " actual=" << actual[d] << " expected=" << expected[d];
+                throw std::runtime_error(message.str());
+            }
+    }
     for (double f : {0., .3, 1.}) {
         double conductivity[3]{};
         chipcae::material::copper_laminate_conductivity(base.k, metal.k, f, conductivity);
