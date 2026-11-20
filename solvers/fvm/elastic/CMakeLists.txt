@@ -12,7 +12,7 @@ target_link_libraries(chipcae_fvm_elastic PUBLIC mfem chipcae::core)
 chipcae_set_warnings(chipcae_fvm_elastic)
 
 if(CHIPCAE_BUILD_TESTS)
-    foreach(kind elastic bimetal)
+    foreach(kind elastic bimetal elastic_concave)
         add_executable(chipcae_test_fvm_${kind} tests/test_fvm_${kind}.cpp)
         target_include_directories(chipcae_test_fvm_${kind} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -22,6 +22,9 @@ if(CHIPCAE_BUILD_TESTS)
         add_test(NAME solve_fvm_${kind} COMMAND chipcae_test_fvm_${kind})
         set_tests_properties(solve_fvm_${kind} PROPERTIES LABELS "fvm;numerical" TIMEOUT 900)
     endforeach()
+    set_tests_properties(solve_fvm_elastic_concave PROPERTIES TIMEOUT 600)
+    target_sources(chipcae_test_fvm_elastic PRIVATE tests/test_fvm_elastic_concave.cpp)
+    target_compile_definitions(chipcae_test_fvm_elastic PRIVATE CHIPCAE_CONCAVE_NO_MAIN)
     option(CHIPCAE_FVM_ELASTIC_BENCHMARK "Register the synthetic elastic performance acceptance" OFF)
     if(CHIPCAE_FVM_ELASTIC_BENCHMARK)
         add_test(NAME solve_fvm_elastic_benchmark COMMAND chipcae_test_fvm_elastic -elastic_test_mode benchmark)

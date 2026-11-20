@@ -110,9 +110,9 @@ void zero(const ElasticMesh& m, bool fixed) {
     require(r.warpage_pv == 0 && r.U_mag_max == 0, "zero load gives exact zero summaries");
     require(r.iterations == 0 || r.iterations == 1, "zero load takes 0 or 1 iterations");
 }
-void reject_embedded(MPI_Comm comm) {
+void embedded_support(MPI_Comm comm) {
     // The unit cube clipped by x+y+z<=1 is a tetrahedron. Its sloping face is
-    // embedded; the public mesh carrier remains available for the follow-up card.
+    // embedded. The cut-concave contract now requires support for this geometry.
     ElasticMesh tetra;
     tetra.volume = {1.0 / 6};
     tetra.centroid = {{0.25, 0.25, 0.25}};
@@ -126,31 +126,84 @@ void reject_embedded(MPI_Comm comm) {
                    {0, -1, 4, 0.5, {0, 0, -1}, {1.0 / 3, 1.0 / 3, 0}},
                    {0, -1, -1, s / 2, {1 / s, 1 / s, 1 / s}, {1.0 / 3, 1.0 / 3, 1.0 / 3}}};
     tetra.is_embedded = {0, 0, 0, 1};
+    tetra.is_cut = {1};
     auto horizontal = grid(2, 2, 2);
     for (std::size_t f = 0; f < horizontal.faces.size(); ++f)
         if (horizontal.faces[f].side == 5) {
             horizontal.faces[f].side = -1;
             horizontal.is_embedded[f] = 1;
         }
+    horizontal.is_cut.assign(horizontal.volume.size(), 1);
     for (const auto& m : {tetra, horizontal})
         for (const std::string pc : {"jacobi", "gamg"})
-            for (bool fixed : {false, true})
-                for (double dt : {0.0, 80.0}) {
-                    auto p = problem(m, isotropic(), dt);
-                    p.preconditioner = pc;
-                    if (fixed) {
-                        p.support = ElasticProblem::Support::Fixed;
-                        p.fixed_side = {0};
-                    }
-                    const auto r = solve_elastic(m, p, comm);
-                    require(!r && r.error().reason.starts_with("INPUT_INVALID:") &&
-                                r.error().reason.find("embedded") != std::string::npos,
-                            "embedded meshes must be rejected before solving, including zero load");
-                    const auto a = detail::assemble_elastic(m, p, comm);
-                    require(!a && a.error().reason.starts_with("INPUT_INVALID:") &&
-                                a.error().reason.find("embedded") != std::string::npos,
-                            "diagnostic assembly must also reject embedded meshes");
-                }
+            for (double dt : {0.0, 80.0}) {
+                auto p = problem(m, isotropic(), dt);
+                p.preconditioner = pc;
+                const double strain = 1e-5 * dt;
+                const M3 a{
+                    strain, -0.0003, 0.0002, 0.0003, strain, -0.0001, -0.0002, 0.0001, strain};
+                const V b{0.0002, -0.0003, 0.0001};
+                // These exterior values constrain rigid motion and have stress-free strain.
+                prescribe(p, m, a, b);
+                const auto r = solve(m, p, comm);
+                field_near(r.U_cell,
+                           affine(m.centroid, a, b),
+                           0,
+                           1e-10,
+                           "embedded-compatible affine cells");
+                field_near(r.U_face,
+                           affine(face_points(m), a, b),
+                           0,
+                           1e-10,
+                           "embedded free faces use owner extrapolation");
+                check_output(m, p, r);
+                const auto assembled = detail::assemble_elastic(m, p, comm);
+                require(static_cast<bool>(assembled),
+                        assembled ? ""
+                                  : "embedded diagnostic assembly: " + assembled.error().reason);
+            }
+}
+// Saved from parent 40fa721322bbe65982a9f4f17b7c73251e1f7c21, Release/PETSc,
+// before extending these tests. This nonaffine fixed bilayer exercises parent assembly.
+void uncut_regression(bool compare_flags) {
+    auto m = grid(2, 2, 2);
+    auto p = problem(m);
+    p.support = ElasticProblem::Support::Fixed;
+    p.fixed_side = {0};
+    const auto top = laminate(0.3);
+    for (std::size_t c = 0; c < m.volume.size(); ++c)
+        if (m.centroid[c][2] > 0.5) {
+            p.C[c] = top.C;
+            p.alpha[c] = top.alpha;
+        }
+    const auto r = solve(m, p, MPI_COMM_SELF);
+    const std::vector<V> parent{
+        {0.000215287545635354, -0.00018146171248660089, -0.00024354123357001585},
+        {0.0003131199638203407, -0.00024896428923006786, 0.00010968775654632344},
+        {0.00021528754563535432, 0.00018146171248660054, -0.00024354123357001585},
+        {0.00031311996382034081, 0.00024896428923006726, 0.00010968775654632332},
+        {0.00064270669742172437, -0.00020642309354412865, -0.00046122485212008065},
+        {0.00090607076721228408, -0.00028658086640763122, -6.439135344352884e-05},
+        {0.0006427066974217247, 0.00020642309354412789, -0.00046122485212008065},
+        {0.00090607076721228364, 0.00028658086640763128, -6.4391353443528636e-05}};
+    field_near(r.U_cell, parent, 0, 1e-14, "saved parent nonaffine cell field");
+    if (compare_flags) {
+        m.is_cut.assign(m.volume.size(), 0);
+        const auto zero_flags = solve(m, p, MPI_COMM_SELF);
+        // Exact comparisons intentionally enforce the brief's legacy arithmetic contract.
+        require(r.U_cell == zero_flags.U_cell && r.U_face == zero_flags.U_face &&
+                    r.face_prescribed == zero_flags.face_prescribed &&
+                    r.top_samples == zero_flags.top_samples &&
+                    r.warpage_pv == zero_flags.warpage_pv && r.U_mag_max == zero_flags.U_mag_max &&
+                    r.iterations == zero_flags.iterations && r.residual == zero_flags.residual &&
+                    r.min_dn_ratio == zero_flags.min_dn_ratio &&
+                    r.min_dn_gid == zero_flags.min_dn_gid &&
+                    r.gradient_corrections == zero_flags.gradient_corrections &&
+                    r.max_identity_defect == zero_flags.max_identity_defect &&
+                    r.warpage_method == zero_flags.warpage_method &&
+                    r.U_mag_method == zero_flags.U_mag_method,
+                "empty/all-zero flags give identical fields and diagnostics");
+    }
 }
 void matrix_invariants(const ElasticMesh& m, const ElasticProblem& p) {
     const auto a = assembly(m, p);
@@ -263,7 +316,8 @@ void shear(int mode) {
                     1e-10 * tau * m.faces[f].area,
                 "engineering shear traction, component " + std::to_string(mode));
 }
-void invalid(const std::function<void(ElasticMesh&, ElasticProblem&)>& mutate) {
+void invalid(const std::function<void(ElasticMesh&, ElasticProblem&)>& mutate,
+             const std::string& code = "INPUT_INVALID") {
     auto m = grid(2, 2, 2);
     auto p = problem(m);
     mutate(m, p);
@@ -276,8 +330,8 @@ void invalid(const std::function<void(ElasticMesh&, ElasticProblem&)>& mutate) {
     require(PetscLogEventGetPerfInfo(PETSC_DETERMINE, event, &after) == PETSC_SUCCESS,
             "KSP event after");
     require(!r, "malformed input must return failure");
-    require(r.error().reason.find("INPUT_INVALID") != std::string::npos,
-            "expected INPUT_INVALID, got: " + r.error().reason);
+    require(r.error().reason.find(code) != std::string::npos,
+            "expected " + code + ", got: " + r.error().reason);
     require(after.count == before.count, "invalid input rejected before KSPSolve");
 }
 void validation(Suite& s) {
@@ -376,8 +430,13 @@ void validation(Suite& s) {
              p.fixed_side = {0};
              p.prescribed = {{0, {1, 0, 0}}};
          }}};
-    for (const auto& [name, f] : cases)
-        s.run("INPUT_INVALID " + name, [&] { invalid(f); });
+    for (const auto& [name, f] : cases) {
+        const bool geometry = name == "zero volume" || name == "negative volume" ||
+                              name == "zero area" || name == "negative area" ||
+                              name == "zero projected distance";
+        const std::string code = geometry ? "INTERNAL" : "INPUT_INVALID";
+        s.run(code + " " + name, [&] { invalid(f, code); });
+    }
     for (double bad :
          {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()}) {
         const std::string suffix = std::isnan(bad) ? " NaN" : " Inf";
@@ -396,8 +455,12 @@ void validation(Suite& s) {
                  p.support = ElasticProblem::Support::Fixed;
                  p.prescribed = {{0, {bad, 0, 0}}};
              }}};
-        for (const auto& [name, f] : nonfinite)
-            s.run("INPUT_INVALID " + name + suffix, [&] { invalid(f); });
+        for (const auto& [name, f] : nonfinite) {
+            const bool geometry =
+                name == "volume" || name == "area" || name == "centroid" || name == "face centroid";
+            const std::string code = geometry ? "INTERNAL" : "INPUT_INVALID";
+            s.run(code + " " + name + suffix, [&] { invalid(f, code); });
+        }
     }
 }
 void more_validation(Suite& s) {
@@ -753,12 +816,24 @@ int main(int argc, char** argv) {
         s.run("np2 launcher",
               [&] { require(ranks == 2, "MPI acceptance requires exactly two ranks"); });
         distributed(s, ranks);
-        s.run("embedded meshes rejected on every rank", [&] { reject_embedded(s.comm); });
+        s.run("embedded support on every rank", [&] { embedded_support(s.comm); });
+        concave_acceptance(s, ranks, true);
     } else if (mode == "benchmark") {
         benchmark(s);
     } else {
-        s.run("embedded meshes rejected before assembly or solve",
-              [&] { reject_embedded(s.comm); });
+        s.run("embedded affine support in assembly and solve", [&] { embedded_support(s.comm); });
+        s.run("uncut saved parent fields at relative 1e-14", [] { uncut_regression(false); });
+        s.run("empty and all-zero is_cut retain exact parent outputs",
+              [] { uncut_regression(true); });
+        s.run("uncut all-face minimum rho and gid", [] {
+            const auto m = grid(3, 2, 1);
+            const auto r = solve(m, problem(m), MPI_COMM_SELF);
+            const auto g = geometry_reference(m);
+            near(r.min_dn_ratio, g.min_rho, 2e-15, 0, "uncut minimum rho");
+            require(r.min_dn_gid == g.min_gid, "uncut strict minimum/tied gid");
+            require(r.gradient_corrections == 0, "legacy uncut path has no corrections");
+            near(r.max_identity_defect, 0, 0, 0, "uncut identity diagnostic default");
+        });
         const std::vector<std::pair<std::string, ElasticMesh>> grids{
             {"uniform", grid(3, 3, 3)},
             {"graded ratio<=2", grid(axis(4, 1, 1.5), axis(3, 0.7, 1.3), axis(3, 0.4, 1.4))},
