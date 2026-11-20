@@ -213,12 +213,24 @@ QString ResultView::colorBarTitle() const {
     case ResultColorField::LayerId:
     case ResultColorField::MaterialId: {
         const bool layer = d->field == ResultColorField::LayerId;
-        const int id = static_cast<int>(d->range.min);
-        auto name = d->session ? (layer ? d->session->layerName(id) : d->session->materialName(id))
-                               : QString{};
-        if (name.isEmpty())
-            name = QString("%1 %2").arg(layer ? "layer" : "material").arg(id);
-        return QString("%1: %2").arg(layer ? "layer_id" : "material_id", name);
+        const double first = std::ceil(d->range.min), last = std::floor(d->range.max);
+        if (!std::isfinite(first) || !std::isfinite(last) || first > last ||
+            first < std::numeric_limits<int>::min() || last > std::numeric_limits<int>::max())
+            return {};
+        QStringList names;
+        const int end = static_cast<int>(last);
+        for (int id = static_cast<int>(first);; ++id) {
+            auto name = d->session
+                            ? (layer ? d->session->layerName(id) : d->session->materialName(id))
+                            : QString{};
+            if (name.isEmpty())
+                name = QString("%1 %2").arg(layer ? "layer" : "material").arg(id);
+            names << name;
+            if (id == end)
+                break;
+        }
+        return QStringLiteral("%1: %2").arg(layer ? QStringLiteral("叠层") : QStringLiteral("材料"),
+                                            names.join(", "));
     }
     }
     return {};

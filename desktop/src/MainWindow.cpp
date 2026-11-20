@@ -17,6 +17,7 @@
 
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDebug>
 #include <QDir>
 #include <QDockWidget>
 #include <QElapsedTimer>
@@ -32,6 +33,7 @@
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTimer>
@@ -580,6 +582,12 @@ void MainWindow::clearPreviewMeshOptions() {
 }
 
 bool MainWindow::openResultsPath(const QString& manifestPath) {
+    QElapsedTimer timer;
+    timer.start();
+    const auto recordStackFill = qScopeGuard([this, &timer] {
+        lastOpenResultsStackFillMs_ = timer.elapsed();
+        qInfo().nospace() << "open_results_stack_fill_ms=" << lastOpenResultsStackFillMs_;
+    });
     lastOpenCancelledForMeshDigest_ = false;
     auto session = std::make_unique<chipcae::desktop::ResultSession>();
     if (!session->open(manifestPath) || session->steps().isEmpty())
@@ -626,6 +634,20 @@ bool MainWindow::openResultsPath(const QString& manifestPath) {
     watermarkLabel_->move(20, 20);
     watermarkLabel_->setStyleSheet("color: #cc8800; font-size: 28px; font-weight: bold;");
     refreshSourceUi();
+    if (casePath_.isEmpty() && !document_.stackJson().contains("layers")) {
+        if (auto* stack = findChild<chipcae::desktop::StackEditor*>()) {
+            const auto raw = session_->resultsStackJson();
+            chipcae::desktop::Json display = chipcae::desktop::Json::object();
+            if (!raw.isEmpty()) {
+                try {
+                    display = chipcae::desktop::Json::parse(raw.toStdString());
+                } catch (const std::exception& e) {
+                    qWarning() << "result stackup ignored:" << e.what();
+                }
+            }
+            stack->setResultsStack(display);
+        }
+    }
     return true;
 }
 

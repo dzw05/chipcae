@@ -48,7 +48,8 @@ public:
 } // namespace
 StackEditor::StackEditor(CaseDocument* document, QWidget* parent)
     : QWidget(parent), document_(document), model_(new LayerModel(document, this)),
-      hint_(new QLabel(this)), observedStack_(document->stackJson()) {
+      hint_(new QLabel(this)), revert_(new QPushButton("Revert edit group", this)),
+      observedStack_(document->stackJson()) {
     auto* layout = new QVBoxLayout(this);
     auto* table = new QTableView(this);
     table->setModel(model_);
@@ -57,11 +58,12 @@ StackEditor::StackEditor(CaseDocument* document, QWidget* parent)
     table->setItemDelegateForColumn(LayerModel::Material, new MaterialDelegate(table));
     layout->addWidget(table);
     layout->addWidget(hint_);
-    auto* revert = new QPushButton("Revert edit group", this);
-    layout->addWidget(revert);
-    connect(revert, &QPushButton::clicked, this, &StackEditor::revertEdit);
+    layout->addWidget(revert_);
+    connect(revert_, &QPushButton::clicked, this, &StackEditor::revertEdit);
     connect(model_, &LayerModel::editRejected, hint_, &QLabel::setText);
     connect(document_, &CaseDocument::changed, this, [this] {
+        if (resultsDisplayed_ && document_->stackJson().contains("layers"))
+            setResultsStack(Json::object());
         if (!document_->isDirty() && document_->toJson() != savedCase_)
             beginEdit();
         if (observedStack_ != document_->stackJson()) {
@@ -73,12 +75,27 @@ StackEditor::StackEditor(CaseDocument* document, QWidget* parent)
     });
     beginEdit();
 }
+void StackEditor::setReadOnly(bool readOnly) {
+    readOnly_ = readOnly;
+    model_->setReadOnly(isReadOnly());
+    revert_->setEnabled(!isReadOnly());
+}
+void StackEditor::setResultsStack(const Json& stack) {
+    resultsDisplayed_ = stack.is_object() && stack.contains("layers") &&
+                        stack.at("layers").is_array() && !stack.at("layers").empty();
+    model_->setResultsStack(stack);
+    setReadOnly(false);
+}
 void StackEditor::beginEdit() {
+    if (isReadOnly())
+        return;
     savedCase_ = document_->toJson();
     savedStack_ = document_->stackJson();
     document_->beginEdit();
 }
 void StackEditor::revertEdit() {
+    if (isReadOnly())
+        return;
     document_->applyJson(savedCase_);
     document_->setStackJson(savedStack_);
 }

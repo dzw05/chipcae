@@ -5,6 +5,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <vector>
@@ -152,14 +153,51 @@ QString idName(const QStringList& names, int id) {
         return {};
     return names[id - 1];
 }
+bool validStackRows(const QJsonObject& stack) {
+    if (!stack["layers"].isArray() || stack["layers"].toArray().isEmpty())
+        return false;
+    for (auto value : stack["layers"].toArray()) {
+        if (!value.isObject())
+            return false;
+        const auto layer = value.toObject();
+        if (!layer["name"].isString() || !layer["thickness"].isDouble() ||
+            !std::isfinite(layer["thickness"].toDouble()) ||
+            (layer.contains("material") && !layer["material"].isString()))
+            return false;
+        if (layer.contains("copper")) {
+            if (!layer["copper"].isObject())
+                return false;
+            const auto copper = layer["copper"].toObject();
+            if (copper.contains("fraction") &&
+                (!copper["fraction"].isDouble() || !std::isfinite(copper["fraction"].toDouble())))
+                return false;
+            if (copper.contains("polygons")) {
+                const auto polygons = copper["polygons"].toObject();
+                if (!polygons["file"].isString() || !polygons["layer"].isString())
+                    return false;
+            }
+        }
+    }
+    if (stack.contains("external_refs")) {
+        if (!stack["external_refs"].isArray())
+            return false;
+        for (auto value : stack["external_refs"].toArray()) {
+            const auto ref = value.toObject();
+            if (!ref["path"].isString() || !ref["sha256"].isString())
+                return false;
+        }
+    }
+    return true;
+}
 void attachNameTables(vtkDataObject* object,
                       const QStringList& layers,
                       const QStringList& materials) {
     if (!object)
         return;
     auto add = [&](const char* name, const QStringList& values) {
-        if (object->GetFieldData() && object->GetFieldData()->GetAbstractArray(name))
-            return;
+        if (auto* existing = object->GetFieldData()->GetAbstractArray(name))
+            if (existing->GetNumberOfValues() > 0)
+                return;
         vtkNew<vtkStringArray> array;
         array->SetName(name);
         array->SetNumberOfValues(values.size());
@@ -186,6 +224,11 @@ bool ResultSession::open(const QString& input, const QString& sidecar, const QSt
     warnings_.clear();
     error_.clear();
     names_.clear();
+    resultsStackJson_.clear();
+    stackLayerNames_.clear();
+    stackMaterialNames_.clear();
+    fallbackLayerNames_.clear();
+    fallbackMaterialNames_.clear();
     log_ = {};
     direct_.clear();
     try {
@@ -287,10 +330,39 @@ bool ResultSession::open(const QString& input, const QString& sidecar, const QSt
             if (!log_.error.isEmpty())
                 warnings_ << log_.error;
         }
+        cacheResultsStack();
         return true;
     } catch (const std::exception& e) {
         error_ = QString::fromUtf8(e.what());
         return false;
+    }
+}
+void ResultSession::cacheResultsStack() {
+    try {
+        const auto declared = manifest_.value("stackup");
+        if (!declared.isUndefined() && (!declared.isString() || declared.toString().isEmpty()))
+            throw std::runtime_error("invalid stackup path");
+        const auto path = checkedPath(declared.isUndefined() ? QStringLiteral("stackup.json")
+                                                             : declared.toString());
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly))
+            throw std::runtime_error("cannot open stackup file");
+        const auto raw = file.readAll();
+        if (file.error() != QFileDevice::NoError)
+            throw std::runtime_error("cannot read stackup file");
+        QJsonParseError error;
+        const auto stack = QJsonDocument::fromJson(raw, &error);
+        if (error.error != QJsonParseError::NoError || !stack.isObject() ||
+            !validStackRows(stack.object()))
+            throw std::runtime_error("invalid stackup JSON or layer fields");
+        for (auto value : stack.object()["layers"].toArray()) {
+            const auto layer = value.toObject();
+            stackLayerNames_ << layer["name"].toString();
+            stackMaterialNames_ << layer["material"].toString();
+        }
+        resultsStackJson_ = raw;
+    } catch (const std::exception& e) {
+        warnings_ << QStringLiteral("result stackup ignored: %1").arg(QString::fromUtf8(e.what()));
     }
 }
 QJsonArray ResultSession::steps() const {
@@ -418,6 +490,8 @@ bool ResultSession::preflight(const QString& path) {
 vtkSmartPointer<vtkDataObject> ResultSession::loadStep(qint64 n, const QString& field) {
     error_.clear();
     names_.clear();
+    fallbackLayerNames_.clear();
+    fallbackMaterialNames_.clear();
     try {
         QJsonObject step;
         for (auto v : steps())
@@ -446,6 +520,10 @@ vtkSmartPointer<vtkDataObject> ResultSession::loadStep(qint64 n, const QString& 
         }
         if (!preflight(path))
             return nullptr;
+        if (tableNamed(names_, "/layer_names").isEmpty())
+            fallbackLayerNames_ = stackLayerNames_;
+        if (tableNamed(names_, "/material_names").isEmpty())
+            fallbackMaterialNames_ = stackMaterialNames_;
         vtkNew<vtkHDFReader> reader;
         bool readerError = false;
         vtkNew<vtkCallbackCommand> errors;
@@ -503,8 +581,8 @@ vtkSmartPointer<vtkDataObject> ResultSession::loadStep(qint64 n, const QString& 
             inspect(result);
         if (!found)
             warnings_ << "selected field absent (empty or mesh-only result)";
-        const auto layers = tableNamed(names_, "/layer_names");
-        const auto materials = tableNamed(names_, "/material_names");
+        const auto layers = layerNames();
+        const auto materials = materialNames();
         attachNameTables(result, layers, materials);
         if (auto composite = vtkCompositeDataSet::SafeDownCast(result)) {
             vtkSmartPointer<vtkCompositeDataIterator> it;
@@ -570,10 +648,12 @@ EventLogResult ResultSession::readEventLog(const QString& path, int format) {
     return out;
 }
 QStringList ResultSession::layerNames() const {
-    return tableNamed(names_, "/layer_names");
+    const auto names = tableNamed(names_, "/layer_names");
+    return names.isEmpty() ? fallbackLayerNames_ : names;
 }
 QStringList ResultSession::materialNames() const {
-    return tableNamed(names_, "/material_names");
+    const auto names = tableNamed(names_, "/material_names");
+    return names.isEmpty() ? fallbackMaterialNames_ : names;
 }
 QString ResultSession::layerName(int id) const {
     return idName(layerNames(), id);

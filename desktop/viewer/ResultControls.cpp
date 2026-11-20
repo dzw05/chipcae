@@ -21,7 +21,7 @@ ResultControls::ResultControls(ResultView& view, ResultSession& session, QWidget
                      QStringLiteral("叠层"),
                      QStringLiteral("材料")});
     field->setCurrentIndex(static_cast<int>(view.colorField()));
-    layout->addRow("Field", field);
+    layout->addRow(QStringLiteral("字段"), field);
     connect(field, &QComboBox::currentIndexChanged, &view, [&view](int index) {
         view.setColorField(static_cast<ResultColorField>(index));
     });
@@ -36,14 +36,14 @@ ResultControls::ResultControls(ResultView& view, ResultSession& session, QWidget
     scale->setRange(-1e9, 1e9);
     scale->setDecimals(6);
     scale->setValue(1);
-    layout->addRow("U display scale", scale);
+    layout->addRow(QStringLiteral("翘曲放大系数"), scale);
     connect(scale, &QDoubleSpinBox::valueChanged, &view, &ResultView::setWarpageScale);
     auto layer = new QComboBox(this);
-    layer->addItem("All layers", 0);
+    layer->addItem(QStringLiteral("全部层"), 0);
     const auto names = session.layerNames();
     for (int i = 0; i < names.size(); ++i)
         layer->addItem(session.layerName(i + 1), i + 1);
-    layout->addRow("Layer", layer);
+    layout->addRow(QStringLiteral("叠层"), layer);
     connect(layer, &QComboBox::currentIndexChanged, &view, [&view, layer] {
         view.setLayer(layer->currentData().toInt());
     });
