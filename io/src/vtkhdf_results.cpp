@@ -864,8 +864,8 @@ void ResultsWriter::finalize() {
             if (mesh_) {
                 const auto& m = *mesh_;
                 out << ",\n\"mesh\":{\"nx0\":" << m.nx0 << ",\"ny0\":" << m.ny0 << ",\"L\":" << m.L
-                    << ",\"padded_cells\":" << m.padded_cells << ",\"nz\":" << m.nz
-                    << ",\"mesh_sha256\":" << quoted(m.mesh_sha256) << '}';
+                    << ",\"padded_cells\":" << m.padded_cells << ",\"void_cells\":" << m.void_cells
+                    << ",\"nz\":" << m.nz << ",\"mesh_sha256\":" << quoted(m.mesh_sha256) << '}';
             }
             out << "\n}\n";
             out.close();

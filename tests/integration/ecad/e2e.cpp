@@ -21,13 +21,38 @@ int main() {
     }
     {
         std::ofstream out(map);
-        out << R"({"FR4":"mat.fr4"})";
+        out << R"({"FR4":"fr4_eq"})";
     }
     auto result = read_ipc2581(xml);
     std::string error;
     if (!result || !apply_material_map(result.model, map, &error) ||
         !to_stack(result.model, dir / "board.stack.json", dir / "board.polyset", &error)) {
         std::cerr << error << '\n';
+        return 1;
+    }
+    {
+        std::ofstream out(map);
+        out << R"({"FR4":"mat.bt"})";
+    }
+    auto invalid = read_ipc2581(xml);
+    error.clear();
+    if (!invalid || !apply_material_map(invalid.model, map, &error)) {
+        std::cerr << "ecad-map-targets: illegal target must still map: " << error << '\n';
+        std::filesystem::remove_all(dir);
+        return 1;
+    }
+    const auto invalid_stack = dir / "invalid.stack.json",
+               invalid_polyset = dir / "invalid.polyset";
+    error.clear();
+    const bool exported = to_stack(invalid.model, invalid_stack, invalid_polyset, &error);
+    const std::string expected =
+        "layer 'Core' material 'mat.bt': must match ^[a-z0-9_-]+$ (lowercase letters, digits, "
+        "'_' or '-'; no dots, e.g. cu, fr4_eq)";
+    if (exported || error != expected || std::filesystem::exists(invalid_stack) ||
+        std::filesystem::exists(invalid_polyset)) {
+        std::cerr << "ecad-map-targets: mat.bt export must reject before publication; exported="
+                  << exported << "; expected [" << expected << "], got [" << error << "]\n";
+        std::filesystem::remove_all(dir);
         return 1;
     }
     std::filesystem::remove_all(dir);

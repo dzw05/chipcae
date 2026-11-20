@@ -1,0 +1,49 @@
+{
+  "id": "synthetic_step_ring_chamfer_lid",
+  "unit": "m",
+  "symmetry": "none",
+  "package_type": "assembly",
+  "outline": {"box": [0, 0, 0.056, 0.044]},
+  "layers": [
+    {
+      "name": "substrate",
+      "kind": "Explicit",
+      "material": "organic_eq",
+      "body": "substrate",
+      "thickness": 0.001,
+      "grading": 1,
+      "n_elem_min": 1
+    },
+    {
+      "name": "stiffener_layer",
+      "kind": "Explicit",
+      "thickness": 0.0005,
+      "grading": 1,
+      "n_elem_min": 1,
+      "regions": [
+        {"name": "stiffener_south", "material": "copper", "body": "stiffener", "footprint": {"box": [0.008, 0.002, 0.048, 0.007]}},
+        {"name": "stiffener_north", "material": "copper", "body": "stiffener", "footprint": {"box": [0.008, 0.037, 0.048, 0.042]}},
+        {"name": "stiffener_west", "material": "copper", "body": "stiffener", "footprint": {"box": [0.008, 0.007, 0.013, 0.037]}},
+        {"name": "stiffener_east", "material": "copper", "body": "stiffener", "footprint": {"box": [0.043, 0.007, 0.048, 0.037]}}
+      ]
+    },
+    {
+      "name": "lid_layer",
+      "kind": "Explicit",
+      "thickness": 0.0005,
+      "grading": 1,
+      "n_elem_min": 1,
+      "regions": [
+        {
+          "name": "lid",
+          "material": "copper",
+          "body": "lid",
+          "footprint": {
+            "box": [0, 0, 0.056, 0.044],
+            "polygon": [[0.002, 0], [0.054, 0], [0.056, 0.002], [0.056, 0.042], [0.054, 0.044], [0.002, 0.044], [0, 0.042], [0, 0.002]]
+          }
+        }
+      ]
+    }
+  ]
+}

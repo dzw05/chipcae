@@ -151,6 +151,23 @@ int main() {
         automatic.grid_report.level_axes.size() !=
             static_cast<std::size_t>(automatic.grid_report.levels))
         return 5;
+    // Material polygon rejection must also be covered without the numerical backend.
+    inputs.stack.layers[0].kind = "Explicit";
+    inputs.stack.layers[0].regions = {
+        {"die",
+         "base",
+         "",
+         {{0.005, 0.005, 0.015, 0.015}, {{0.005, 0.005}, {0.015, 0.005}, {0.01, 0.015}}}}};
+    try {
+        std::optional<chipcae::mesh::cut::CutLayerArrays> cut;
+        chipcae::solve::build_mesh(inputs, &cut);
+        return 12;
+    } catch (const chipcae::solve::InputError& error) {
+        if (error.code != chipcae::ErrorCode::CUT_UNSUPPORTED ||
+            std::string(error.what()).find("internal material cuts are not supported") ==
+                std::string::npos)
+            return 13;
+    }
     if (!acceptance_passed)
         return 11;
     std::cout << "uncut elements=" << mesh.elem_gid.size() << " nz=" << nz << '\n';

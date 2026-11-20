@@ -1,0 +1,407 @@
+{
+  "SPDX-License-Identifier": "Apache-2.0",
+  "schema_version": "chipcae.vv.demo_gate.reference/0.1",
+  "kind": "REFERENCE",
+  "case": "DEMO-GATE",
+  "reference_type": "独立代码",
+  "label": "CalculiX 独立参考值，不是实测，不是解析解",
+  "model_scope": "quarter",
+  "calculix_version": "This is Version 2.23",
+  "ccx_package": "calculix 2.23 pl5321h92dc11e_8",
+  "host": "box Linux x86_64",
+  "element_type": "C3D20R + C3D15",
+  "thermal_element_type": "C3D20 + C3D15",
+  "inputs_sha256": {
+    "case": "af9e54b74aebbcd9038382e276cf0a4d14a105bd8eb3197898f06bbbcb2a4b0a",
+    "stack": "c4705e94f24462a2b7ab196ea2aab6ec9bf8d7a6a531ab69ecae65c0b06ed726",
+    "materials": "10fa6448f5221b7a46f9c99c707349a6372f819dcbaada0c54aa03d3a2c269d9",
+    "profile": "65e80766a514f9b12dd45bcc9a43b87dcb1b3715e3085b6ce5590d67ff457700"
+  },
+  "materials_at_T_ref": {
+    "organic_eq": {
+      "E_Pa": 24197500000.0,
+      "nu": 0.30321,
+      "alpha_1_per_K": 1.54815e-05,
+      "conductivity_W_per_mK": 3.1
+    },
+    "sac305_ball_eq": {
+      "E_Pa": 43555500000.0,
+      "nu": 0.35320999999999997,
+      "alpha_1_per_K": 2.27062e-05,
+      "conductivity_W_per_mK": 58
+    },
+    "underfill": {
+      "E_Pa": 7743200000.0,
+      "nu": 0.32321,
+      "alpha_1_per_K": 3.0963e-05,
+      "conductivity_W_per_mK": 0.5
+    },
+    "silicon": {
+      "E_Pa": 125827000000.0,
+      "nu": 0.28321,
+      "alpha_1_per_K": 2.68346e-06,
+      "conductivity_W_per_mK": 148
+    }
+  },
+  "levels": [
+    {
+      "h_m": 0.001,
+      "n_elem_z_per_layer": [
+        2,
+        2,
+        2
+      ],
+      "n_nodes": 3046,
+      "n_elements": 594,
+      "elements_by_type": {
+        "C3D20R": 582,
+        "C3D15": 12
+      },
+      "max_aspect_ratio": 28.28427124746195,
+      "heat_source": {
+        "die_layer_volume_m3": 4.900000000000002e-08,
+        "q_W_per_m3": 51020408.163265295,
+        "integrated_power_W": 2.500000000000001,
+        "relative_error": 3.552713678800501e-16
+      },
+      "name": "L1",
+      "element_type": "C3D20R + C3D15",
+      "thermal_element_type": "C3D20 + C3D15",
+      "decks": [
+        {
+          "file": "L1_quarter_thermal.inp",
+          "sha256": "2026853cc573e4f15e3381534b8ba6e6e9747f464d6aa3731cbc4dcd437f5240"
+        },
+        {
+          "file": "L1_quarter_mech.inp",
+          "sha256": "ab29d0706627a31da2dbba82e13506641a8350a003afdb1facd3ecbc114404b8"
+        }
+      ],
+      "resources": {
+        "label": "实测",
+        "peak_rss_KiB": 100452,
+        "wall_seconds": 2.003568386018742
+      },
+      "solver_runs": [
+        {
+          "label": "实测",
+          "peak_rss_KiB": 79812,
+          "wall_seconds": 1.0011537040118128
+        },
+        {
+          "label": "实测",
+          "peak_rss_KiB": 100452,
+          "wall_seconds": 1.002414682006929
+        }
+      ],
+      "W_bfp_m": 1.0240753737680228e-05,
+      "W_bfp_nodes_m": 1.024020001100737e-05,
+      "T_max_K": 319.20465051342796,
+      "T_top_min_K": 306.5261454416866,
+      "temperature_transfer": {
+        "n_nodes": 3046,
+        "max_abs_delta_K": 0.0
+      },
+      "thermal_balance": {
+        "bottom_outward_W": 2.483194,
+        "top_outward_W": 0.016806130125257703,
+        "relative_error": 5.2050103072076584e-08
+      }
+    },
+    {
+      "h_m": 0.0005,
+      "n_elem_z_per_layer": [
+        4,
+        4,
+        4
+      ],
+      "n_nodes": 21487,
+      "n_elements": 4728,
+      "elements_by_type": {
+        "C3D20R": 4680,
+        "C3D15": 48
+      },
+      "max_aspect_ratio": 28.284271247462097,
+      "heat_source": {
+        "die_layer_volume_m3": 4.900000000000002e-08,
+        "q_W_per_m3": 51020408.163265295,
+        "integrated_power_W": 2.5000000000000004,
+        "relative_error": 1.7763568394002506e-16
+      },
+      "name": "L2",
+      "element_type": "C3D20R + C3D15",
+      "thermal_element_type": "C3D20 + C3D15",
+      "decks": [
+        {
+          "file": "L2_quarter_thermal.inp",
+          "sha256": "509a130090deaa34141d9a376c8fb962ba3ba22127702135c44a3b794b0ec052"
+        },
+        {
+          "file": "L2_quarter_mech.inp",
+          "sha256": "ac563ae4fdedaeae18b47c59126d1112206d17e04dac003c880351aca5586936"
+        }
+      ],
+      "resources": {
+        "label": "实测",
+        "peak_rss_KiB": 1267412,
+        "wall_seconds": 16.011588060995564
+      },
+      "solver_runs": [
+        {
+          "label": "实测",
+          "peak_rss_KiB": 190980,
+          "wall_seconds": 4.00272215998848
+        },
+        {
+          "label": "实测",
+          "peak_rss_KiB": 1267412,
+          "wall_seconds": 12.008865901007084
+        }
+      ],
+      "W_bfp_m": 1.0256639050719124e-05,
+      "W_bfp_nodes_m": 1.0256312750136825e-05,
+      "T_max_K": 318.8979216499528,
+      "T_top_min_K": 306.53137474740254,
+      "temperature_transfer": {
+        "n_nodes": 21487,
+        "max_abs_delta_K": 0.0
+      },
+      "thermal_balance": {
+        "bottom_outward_W": 2.483182,
+        "top_outward_W": 0.016818263839957815,
+        "relative_error": 1.0553598297491363e-07
+      }
+    },
+    {
+      "h_m": 0.00025,
+      "n_elem_z_per_layer": [
+        8,
+        8,
+        8
+      ],
+      "n_nodes": 161005,
+      "n_elements": 37728,
+      "elements_by_type": {
+        "C3D20R": 37536,
+        "C3D15": 192
+      },
+      "max_aspect_ratio": 28.284271247462097,
+      "heat_source": {
+        "die_layer_volume_m3": 4.899999999999998e-08,
+        "q_W_per_m3": 51020408.163265295,
+        "integrated_power_W": 2.4999999999999987,
+        "relative_error": 5.329070518200751e-16
+      },
+      "name": "L3",
+      "element_type": "C3D20R + C3D15",
+      "thermal_element_type": "C3D20 + C3D15",
+      "decks": [
+        {
+          "file": "L3_quarter_thermal.inp",
+          "sha256": "d4989833e8603e2e9c5b04b8e6e6b803e81a512382b764a14ea8a4b2bdbdad83"
+        },
+        {
+          "file": "L3_quarter_mech.inp",
+          "sha256": "82f2855c20ac7290a47f5b81340d9cc98239beecec80b9875fa8ba7ade20e908"
+        }
+      ],
+      "resources": {
+        "label": "实测",
+        "peak_rss_KiB": 2510444,
+        "wall_seconds": 939.2043738180073
+      },
+      "solver_runs": [
+        {
+          "label": "实测",
+          "peak_rss_KiB": 2510444,
+          "wall_seconds": 72.05751064201468
+        },
+        {
+          "label": "实测",
+          "peak_rss_KiB": 1200888,
+          "wall_seconds": 867.1468631759926
+        }
+      ],
+      "W_bfp_m": 1.0267959961925398e-05,
+      "W_bfp_nodes_m": 1.027242093397618e-05,
+      "T_max_K": 318.8978292889052,
+      "T_top_min_K": 306.53431435714475,
+      "temperature_transfer": {
+        "n_nodes": 161005,
+        "max_abs_delta_K": 0.0
+      },
+      "thermal_balance": {
+        "bottom_outward_W": 2.48318,
+        "top_outward_W": 0.016820256282529172,
+        "relative_error": 1.0251301159058812e-07
+      }
+    }
+  ],
+  "symmetry_check": {
+    "h_m": 0.001,
+    "n_elem_z_per_layer": [
+      2,
+      2,
+      2
+    ],
+    "n_nodes": 11345,
+    "n_elements": 2376,
+    "elements_by_type": {
+      "C3D15": 48,
+      "C3D20R": 2328
+    },
+    "max_aspect_ratio": 28.28427124746195,
+    "heat_source": {
+      "die_layer_volume_m3": 1.9600000000000011e-07,
+      "q_W_per_m3": 51020408.163265295,
+      "integrated_power_W": 10.000000000000004,
+      "relative_error": 3.552713678800501e-16
+    },
+    "name": "L1",
+    "element_type": "C3D20R + C3D15",
+    "thermal_element_type": "C3D20 + C3D15",
+    "decks": [
+      {
+        "file": "L1_full_thermal.inp",
+        "sha256": "c80dcaa8141cca1880bea83865987bc4e2d37aeb498a0dd9ade8d7efb559aa66"
+      },
+      {
+        "file": "L1_full_mech.inp",
+        "sha256": "e1572e9ddbd3a5ba1d5052dc12a9b7cecc718c693be1400c3ba728698fc66963"
+      }
+    ],
+    "resources": {
+      "label": "实测",
+      "peak_rss_KiB": 507160,
+      "wall_seconds": 6.005519341008039
+    },
+    "solver_runs": [
+      {
+        "label": "实测",
+        "peak_rss_KiB": 84312,
+        "wall_seconds": 2.0025040100154
+      },
+      {
+        "label": "实测",
+        "peak_rss_KiB": 507160,
+        "wall_seconds": 4.003015330992639
+      }
+    ],
+    "W_bfp_m": 1.0240753733673567e-05,
+    "W_bfp_nodes_m": 1.0240200013879128e-05,
+    "T_max_K": 319.20465051342796,
+    "T_top_min_K": 306.52614544168654,
+    "temperature_transfer": {
+      "n_nodes": 11345,
+      "max_abs_delta_K": 0.0
+    },
+    "thermal_balance": {
+      "bottom_outward_W": 9.932775,
+      "top_outward_W": 0.0672245205010308,
+      "relative_error": -4.794989703071906e-08
+    },
+    "relative_difference": {
+      "W_bfp_m": 3.912466563226148e-10,
+      "T_max_K": 0.0,
+      "T_top_min_K": 6.786345731045717e-15
+    }
+  },
+  "element_cross": {
+    "h_m": 0.00025,
+    "n_elem_z_per_layer": [
+      8,
+      8,
+      8
+    ],
+    "n_nodes": 161005,
+    "n_elements": 37728,
+    "elements_by_type": {
+      "C3D20": 37536,
+      "C3D15": 192
+    },
+    "max_aspect_ratio": 28.284271247462097,
+    "heat_source": {
+      "die_layer_volume_m3": 4.899999999999998e-08,
+      "q_W_per_m3": 51020408.163265295,
+      "integrated_power_W": 2.4999999999999987,
+      "relative_error": 5.329070518200751e-16
+    },
+    "name": "L3",
+    "element_type": "C3D20 + C3D15",
+    "thermal_element_type": "C3D20 + C3D15",
+    "decks": [
+      {
+        "file": "L3_cross_thermal.inp",
+        "sha256": "aa1b34bfb99301bbc28544b209a3ce09306c64bc1665768373b6e796a5660f04"
+      },
+      {
+        "file": "L3_cross_mech.inp",
+        "sha256": "6d1b028e9a9ebcf48e561317d392e390fbd941ccccc69b19a1f219b0c2394e8b"
+      }
+    ],
+    "resources": {
+      "label": "实测",
+      "peak_rss_KiB": 2510840,
+      "wall_seconds": 689.8479122289864
+    },
+    "solver_runs": [
+      {
+        "label": "实测",
+        "peak_rss_KiB": 2510840,
+        "wall_seconds": 74.08027160598431
+      },
+      {
+        "label": "实测",
+        "peak_rss_KiB": 1470812,
+        "wall_seconds": 615.7676406230021
+      }
+    ],
+    "W_bfp_m": 1.026915443459817e-05,
+    "W_bfp_nodes_m": 1.0269692449287535e-05,
+    "T_max_K": 318.8978292889052,
+    "T_top_min_K": 306.53431435714475,
+    "temperature_transfer": {
+      "n_nodes": 161005,
+      "max_abs_delta_K": 0.0
+    },
+    "thermal_balance": {
+      "bottom_outward_W": 2.48318,
+      "top_outward_W": 0.016820256282529172,
+      "relative_error": 1.0251301159058812e-07
+    },
+    "relative_difference": {
+      "W_bfp_m": 0.00011633008671658703,
+      "T_max_K": 0.0,
+      "T_top_min_K": 0.0
+    }
+  },
+  "observed_order": {
+    "W_bfp_m": 0.4887034367453958,
+    "T_max_K": 11.697391774290129,
+    "T_top_min_K": 0.8309947776252188
+  },
+  "selected": {
+    "W_bfp_m": "finest",
+    "T_max_K": "finest",
+    "T_top_min_K": "finest"
+  },
+  "U_ref": {
+    "W_bfp_m": 1.1320911206273216e-08,
+    "T_max_K": 9.236104762067043e-05,
+    "T_top_min_K": 0.0029396097422136336
+  },
+  "reference": {
+    "W_bfp_m": 1.0267959961925398e-05,
+    "T_max_K": 318.8978292889052,
+    "T_top_min_K": 306.53431435714475
+  },
+  "status": "合格",
+  "criteria": {
+    "a": true,
+    "b": true,
+    "c": true,
+    "d": true,
+    "e": true,
+    "f": true
+  }
+}
