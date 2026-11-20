@@ -95,11 +95,11 @@ class PreviewOutlineNonconvex(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
 
-    def invoke(self, name, stack, n=8, flags=(), launcher=()):
+    def invoke(self, name, stack, n=8, flags=(), launcher=(), prefix_flags=()):
         source = self.root / f'{name}.json'
         source.write_text(json.dumps(stack), encoding='utf-8')
         stem = self.root / name
-        command = [*launcher, str(self.preview), str(source), '--nx', str(n),
+        command = [*launcher, str(self.preview), *prefix_flags, str(source), '--nx', str(n),
                    '--ny', str(n), '--levels', '1', '--max-ratio', '10',
                    '-o', str(stem), *flags]
         env = dict(os.environ, OMPI_ALLOW_RUN_AS_ROOT='1',
@@ -130,6 +130,8 @@ class PreviewOutlineNonconvex(unittest.TestCase):
         self.assertEqual(result.returncode, 0, context)
         found = [event for event in events if event.get('stage') == 'success']
         self.assertEqual(len(found), 1, context)
+        self.assertFalse(any(event.get('stage') in ('error', 'failure') for event in events),
+                         context)
         return found[0]
 
     def read_arrays(self, stem, context):
@@ -201,6 +203,10 @@ class PreviewOutlineNonconvex(unittest.TestCase):
                 kinds = arrays['CellData/cell_kind']
                 self.assertEqual(fractions.shape, (len(connectivity),), context)
                 self.assertEqual(kinds.shape, (len(connectivity),), context)
+                self.assertTrue(np.all(np.isfinite(fractions)), context)
+                self.assertTrue(np.all((fractions > 0) & (fractions <= 1)), context)
+                self.assertTrue(np.issubdtype(kinds.dtype, np.integer), context)
+                self.assertTrue(np.all(np.isin(kinds, (0, 1))), context)
                 self.check_lattice(label, points, connectivity, context)
                 corners = points[connectivity]
                 bbox_volume = np.prod(corners.max(axis=1) - corners.min(axis=1), axis=1)
@@ -217,6 +223,8 @@ class PreviewOutlineNonconvex(unittest.TestCase):
                                   context)
                 self.assertFalse(np.any(kinds == 2), context)
                 self.assertTrue(np.all(fractions > 0), context)
+                print(f'MEASURED {label}: cells={len(connectivity)} nodes={len(points)} '
+                      f'cut={cut_count}; retained lattice verified', flush=True)
 
     def check_rejected(self, result, events, stem, message, exit_code=13):
         context = diagnostics(result)
@@ -240,11 +248,17 @@ class PreviewOutlineNonconvex(unittest.TestCase):
         self.check_rejected(result, events, stem, 'self-intersecting outline')
 
     def test_duplicate_flag(self):
-        result, events, stem = self.invoke(
-            'duplicate', stack_s(OUTLINES['square']),
-            flags=['--nonconvex-outline', '--nonconvex-outline'])
-        self.check_rejected(result, events, stem, 'duplicate option: --nonconvex-outline',
-                            exit_code=1)
+        # Duplicate detection must span the positional input and valued options,
+        # as well as catching adjacent copies at the end of the command.
+        for name, prefix_flags, flags in (
+                ('adjacent', [], ['--nonconvex-outline', '--nonconvex-outline']),
+                ('separated', ['--nonconvex-outline'], ['--nonconvex-outline'])):
+            with self.subTest(placement=name):
+                result, events, stem = self.invoke(
+                    'duplicate-' + name, stack_s(OUTLINES['square']),
+                    prefix_flags=prefix_flags, flags=flags)
+                self.check_rejected(result, events, stem, 'duplicate option: --nonconvex-outline',
+                                    exit_code=1)
 
     def test_convex_bitwise(self):
         for name, stack, n, counts, digest in (
@@ -294,6 +308,7 @@ class PreviewOutlineNonconvex(unittest.TestCase):
         summary = self.success(parallel, parallel_events)
         self.check_fields(summary, {field: reference[field] for field in FIELDS},
                           diagnostics(serial) + diagnostics(parallel))
+        print('MEASURED L: MPI np=1/np=2 success fields exactly equal', flush=True)
 
 
 if __name__ == '__main__':
