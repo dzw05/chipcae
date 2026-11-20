@@ -50,14 +50,21 @@ names. The grid's `VTKHDF/FieldData/layer_names` and `material_names` string
 arrays map index i to ID i+1, using the same attribute-table source as the cell IDs.
 `cell_kind` remains 0 for regular, 1 for cut, and 2 for void cells.
 
-Inline `outline.polygon` is clipped using the same convex half-space API as solve,
-after building the full bounding grid. Clockwise rings and repeated closing points
-are accepted. Non-convex or degenerate rings are rejected; vertices must be finite
-and inside `outline.box`. Clipping failures emit an error event before output is
-written. Holes are unsupported.
+By default, inline `outline.polygon` is clipped using the same convex half-space API
+as solve, after building the full bounding grid. Clockwise rings and repeated
+closing points are accepted. Non-convex or degenerate rings are rejected; vertices
+must be finite and inside `outline.box`. Clipping failures emit an error event
+before output is written. Holes are unsupported.
+
+`--nonconvex-outline` enables simple non-convex outlines through the mesh/cut
+general entry point, using convex decomposition and per-cell union. The option is
+off by default to keep preview consistent with `chipcae-solve`; the default will
+change together with solve's non-convex outline support. Self-intersecting outlines
+still exit 13, and holes remain unsupported. Convex and empty outlines delegate to
+the default cutter and retain identical output.
 
 Regions with a `footprint.polygon` are clipped in the same pass as the outline:
-`region_cut_planes` supplies the extra planes to `apply_outline_cut`. Errors use
+`region_cut_planes` supplies the extra planes to the selected cutter. Errors use
 the shared mapping: `CUT_UNSUPPORTED` and `outline.unsupported` exit 13;
 other clipping errors, including `INPUT_INVALID`, exit 14.
 
