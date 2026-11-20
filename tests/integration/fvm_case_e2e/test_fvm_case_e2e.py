@@ -123,6 +123,20 @@ class CaseAcceptance(unittest.TestCase):
                 self.assertEqual(got, u.FEM_SNAPSHOTS[name])
                 self.assertEqual(family, 'fem')
 
+    def test_fem_reference_errors_precede_malformed_physics(self):
+        # Early family discovery must not reorder legacy FEM validation errors.
+        for malformed in ('missing_solver', 'non_array'):
+            with self.subTest(physics=malformed):
+                case = u.thermal_case('fem')
+                case['stack']['ref'] = 'missing-stack.json'
+                if malformed == 'missing_solver':
+                    case['physics'][0].pop('solver')
+                else:
+                    case['physics'] = {}
+                _, result = u.probe(self.root, case, expected=12)
+                self.assertIn('cannot read reference:', result.stderr)
+                self.assertIn('missing-stack.json', result.stderr)
+
     def test_fvm_selection_orders_defaults_and_preconditioners(self):
         for reverse in (False, True):
             for mode in ('no_solver', 'no_linear', 'no_pc', 'jacobi', 'gamg'):

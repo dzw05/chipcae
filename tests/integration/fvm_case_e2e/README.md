@@ -1,10 +1,12 @@
-# FVM case CLI acceptance (test-first)
+# FVM case CLI acceptance
 
 `fvm_fvm_case_e2e` selects `fvm.conduction` / `fvm.solid` through
 `physics[].solver`, without adding CLI arguments. It is registered with labels
 `integration;numerical;fvm`, timeout 1200 seconds and skip return code 77.
-This revision adds acceptance tests only. The current loader and schema do not
-accept FVM selections, so the numerical acceptance is expected to fail.
+The loader and schema accept FVM selections, and the CLI dispatches to the
+thermal FVM library. The required regular-hex volume field remains an upstream
+results-writer prerequisite. Acceptance assertions are retained without skips
+or tolerance changes.
 
 The brief and the explicit task require the thermal-only stage: zero U,
 `warpage_pv=0`, `U_mag_max=0`, and both mechanical summary methods and the
@@ -63,14 +65,15 @@ inconsistent energy, invalid framing, CRC errors and truncated logs. A
 partition fixture verifies that rank ordering is irrelevant and a changed
 temperature still fails alignment checks.
 
-The imported-board chain deliberately exposes two upstream prerequisites:
+The imported-board chain originally exposed two upstream prerequisites:
 the mesh setup must pass polygon data to the tensor-grid builder, and the
 results writer must emit `volume` for regular hexes. No loader-only relaxation,
 fraction averaging, direct HDF5 editing or forbidden-file change bypasses
-these dependencies. `copper_fraction` and `conductivity_diag` are deferred
-while their `ResultsPartition` members are absent; a compiled capability
-probe makes them mandatory automatically when both members become available.
-Importer base-material semantics remain an independent integration dependency.
+these dependencies. The ordinary prerequisite merge of #198 and #212 supplies
+polygon ingestion, corrected importer base materials and the two copper result
+members. FVM populates `copper_fraction` and `conductivity_diag`; the compiled
+capability probe makes both mandatory. The writer still omits hex `volume`,
+which this card cannot fix within its allowed source files.
 
 Use the shared build-slot wrappers on PATH and at most two build jobs:
 
@@ -91,9 +94,9 @@ return 77; configured command failures fail acceptance. Where `wait4` is
 available, it records each command's measured peak RSS in KiB, alongside wall
 time. MPI RSS is the launcher's maximum child RSS, not a sum across ranks.
 No timing or RSS value is a numerical acceptance threshold. FVM timing and
-RSS for successful solves cannot be reported until the missing feature runs.
+RSS for successful solves are reported only after execution.
 
-## Measured verification (2026-11-20)
+## Preimplementation RED measurements (2026-11-20)
 
 Both bare and numerical Release builds complete. The standalone acceptance
 exits 8: 17 test methods, 61 subtest assertion failures, 103.41 seconds.
@@ -127,3 +130,108 @@ material IDs; the ECAD comparison disagrees with its existing expected
 summary. Bare full CTest has 9 existing failures out of 237; the new test
 skips there because numerical executables are not configured. This test-first
 revision does not establish green regression or numerical acceptance.
+
+## Implementation verification (2026-11-20, 实测)
+
+An ordinary merge of upstream #198/#212 resolves the polygon mesh/import
+prerequisites and supplies copper result members. Both numerical and bare
+Release builds pass. The unchanged acceptance runs 17 methods in 124.375 s:
+6 assertion failures and 17 errors, CTest exit 8 (124.68 s). Every error is
+missing regular-hex `CellData/volume`; two subsequent assertions report the
+result sets left incomplete by those errors. Four frozen snapshot cases
+(`default`, `sources`, `solid`, `copper`) differ after the prerequisite merge.
+The explicit-field `custom` snapshot remains identical. Selection/schema,
+negative inputs, nonconvergence, STOP application and repeated-directory
+behavior reach their expected outcomes. No assertions are removed or weakened.
+
+A separate diagnostic audit collects missing-volume failures and continues
+checking numerical results. It also exits 8; it is not a passing acceptance
+replacement. It confirms additive power/q_vol energy (15 W), fixed-layer
+reactions (666.666666666666 W), affine cut/EB reconstruction and np=1/2
+agreement. The half-covered Wiener fixture's bottom surface rise is
+68.521980018447 K, within [68.491588252067, 79.682854311199] K.
+
+| 实测 stage | Wall seconds | Peak RSS KiB | Exit |
+| --- | ---: | ---: | ---: |
+| unchanged board import | 0.010388 | 55060 | 0 |
+| board preview | 1.504969 | 55060 | 0 |
+| board FVM np=1 | 1.532473 | 55060 | 0 |
+| board FVM np=2 | 1.612725 | 55060 | 0 |
+| board FEM/direct | 1.713540 | 62124 | 0 |
+| original DEMO-GATE FEM | 47.716326 | 1305304 | 0 |
+| permitted DEMO-GATE FVM | 1.613696 | 55316 | 0 |
+| DEMO-GATE FVM hex output | 1.614091 | 55316 | 0 |
+| DEMO-GATE FVM embedded Robin | 1.587780 | 55316 | 0 |
+
+The board comparison fails the unchanged 1% gate: cell-center FVM Tmax is
+321.92657327984955 K, FEM Q2 nodal Tmax is 323.98160735460056 K; relative
+rise difference is 0.07955502135584323. Copper fractions and conductivity
+diagonals match exactly by GID. Their output vertex maxima are much closer
+(323.139202096108 K and 323.1779403036221 K), consistent with the different
+sampling locations contributing to the gate failure. The mandated cell-center
+summary, mesh and tolerance are retained.
+
+DEMO-GATE's temperature gate passes: FVM 318.94837439789933 K, FEM
+318.89820740109059 K, relative rise difference 0.00241789547592937.
+It has nonempty cut cells; hex output retains cut-marked parents and EB
+triangles, with unchanged EB temperatures. Its energy imbalance is
+2.509934519797364e-10. The embedded-Robin variant, at the unchanged default
+rtol=1e-8, returns imbalance 9.758564446658027e-9 and fails the required 1e-9
+energy gate. The adapter copies case tolerances and the library ledger;
+it does not tighten tolerances silently or replace ledger values.
+
+Bare CTest: 247 tests, 9 failures, 72.11 s. The same dependency-disabled
+failures recorded above remain. The requested F-1130 integration subset
+reproduces its existing inner copper-area expectation failure (1/2 tests
+fails); it stops before thermal comparison. Numerical solve/full-suite
+results are recorded when the running verification completes.
+
+Supplemental readback also verifies uniform T=350 K with zero U and the
+required summary methods, conflicting Dirichlet corner area weighting, and
+both copper diagnostics on DEMO cut/hex/embedded outputs. Exact snapshot
+comparison isolates upstream changes to the default `fields` list in four
+cases and solid-only conductivity parsing (a: 0→2, b: 0→4 W/(m K)); every
+other existing field matches. These checks still report missing volumes as
+failures. A new input-order regression method (two malformed FEM physics
+variants) was added after reproducing return14 instead of the original
+missing-reference code12; final verification covers the guarded family scan.
+
+The requested solve subset completes with 90 passes, 10 upstream-disabled
+tests and 3 timeouts (`solve_inputs`, `solve_ghost_scan`,
+`solve_column_gmg_fcbga_scaling`), 6892.29 s. The first full numerical run has
+444 passes, 18 skips, 10 disabled and 9 failures out of 481, 4065.51 s. It
+reproduces the FVM/F-1130 failures and two duplicate-material assembly failures,
+and also reports an ODB++ timeout, an obsolete dotted material ID in
+`ipc_zip_equals_xml`, a subprocess timeout in `solve_inputs`, and failures in
+both FCBGA GMG tests. The ghost scan passes in the full run; original
+DEMO-GATE and cut-bimetal pass too. All these failures are retained in the log.
+
+The final Release rebuild passes. The added diagnostic-order regression is
+GREEN (both malformed FEM cases correctly retain missing-reference code12).
+Fresh final acceptance/full-suite results follow in the final verification
+record; the requested all-green outcome is not established by these results.
+
+## Final verification (2026-11-20, 实测)
+
+The final guarded binary builds in Release; clang-format 23.1.5 (`-i`, then
+`--dry-run --Werror`), Python parsing and diff whitespace checks pass. Fresh
+standalone acceptance runs 18 methods in 113.908 s (CTest 114.17 s), with the
+same 6 assertion failures and 17 missing-volume errors. The added FEM error-order
+regression passes. No existing assertion or frozen snapshot is changed.
+
+Final full numerical CTest: **447 passed, 18 skipped, 10 upstream-disabled,
+6 failed out of 481**, 2568.92 s, exit8. Failures:
+
+- `fvm_fvm_case_e2e`: required hex volume and pre-upstream snapshots, as above.
+- `ipc_zip_equals_xml`: old dotted material ID `mat.fr4` conflicts with the
+  merged importer's ID validation.
+- `solve_column_gmg_fcbga_scaling`: fine run returns -9 (SIGKILL); cause unconfirmed.
+- `f1130_uncut_cli_e2e`: existing inner copper-area expectation.
+- `stack_writer_outline_polyset` and `import_assembly_cf_chain`: existing
+  duplicate-material-ID rejection (exit11).
+
+`solve_inputs` passes in 191.40 s, the FCBGA comparison passes in 111.01 s,
+and original `demogate_solve` passes in 120.71 s in this final run. Earlier
+subset/full timeouts and failures remain recorded above. Bare final counts
+are 204 passed, 34 skipped and 9 failed out of 247. Remote CI was not run;
+no push was performed. The required all-green acceptance remains blocked.
