@@ -67,8 +67,8 @@ class MaterialAliases(unittest.TestCase):
         self.assertEqual([card for card in cards if card['id'] == 'copper'], [expected])
 
     def test_only_missing_aliases_are_appended_with_exact_case(self):
-        # Distinct density values expose replacing an existing alias with a
-        # clone of the first card. Source order deliberately differs from alias order.
+        # Distinct properties expose replacing an existing alias with a clone
+        # of the first card. Source order deliberately differs from alias order.
         scenarios = [
             (['base'], ['base', 'fr4_eq', 'copper']),
             (['base', 'copper', 'fr4_eq'], ['base', 'copper', 'fr4_eq']),
@@ -80,16 +80,37 @@ class MaterialAliases(unittest.TestCase):
             with self.subTest(source_ids=source_ids):
                 library = copy.deepcopy(self.original)
                 library['materials'] = []
+                expected_cards = []
                 for offset, id_ in enumerate(source_ids):
                     card = copy.deepcopy(self.original['materials'][0])
                     card.update(id=id_, density=1000 + offset)
+                    card['provenance']['notes'] = f'synthetic source card {offset}'
                     library['materials'].append(card)
-                cards = self.solve(library, f'scenario-{index}')['materials']
-                self.assertEqual([card['id'] for card in cards], expected_ids)
-                self.assertEqual([card['density'] for card in cards[:len(source_ids)]],
-                                 list(range(1000, 1000 + len(source_ids))))
-                for card in cards[len(source_ids):]:
-                    self.assertEqual(card['density'], 1000)
+                    expected = copy.deepcopy(card)
+                    expected['elastic']['table'] = {
+                        'temperatures': [250],
+                        'columns': {'E': [25000000000], 'nu': [0.3]},
+                        'interpolation': 'constant', 'extrapolation': 'clamp'}
+                    expected['thermal_expansion']['table'] = {
+                        'temperatures': [250], 'columns': {'alpha': [0.000015]},
+                        'interpolation': 'constant', 'extrapolation': 'clamp'}
+                    expected_cards.append(expected)
+                for id_ in expected_ids[len(source_ids):]:
+                    alias = copy.deepcopy(expected_cards[0])
+                    alias['id'] = id_
+                    expected_cards.append(alias)
+                source_before = copy.deepcopy(library)
+                result = self.solve(library, f'scenario-{index}')
+                ids = [card['id'] for card in result['materials']]
+                self.assertEqual(ids, expected_ids)
+                self.assertEqual(len(ids), len(set(ids)))
+                self.assertEqual(ids.count('copper'), 1)
+                expected_document = copy.deepcopy(library)
+                expected_document['materials'] = expected_cards
+                self.assertEqual(result, expected_document)
+                self.assertEqual(library, source_before)
+                self.assertEqual(json.loads(
+                    (self.examples / 'fcbga_demo.materials.json').read_text()), source_before)
 
     def test_separate_calls_reload_the_source_without_shared_state(self):
         first = self.solve(self.original, 'first')
