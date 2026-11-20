@@ -142,7 +142,10 @@ fv::ThermalProblem thermal_problem(const RunInputs& inputs,
                     if (c > static_cast<std::size_t>(std::numeric_limits<int>::max()))
                         throw InputError(ErrorCode::INPUT_INVALID, "fixed CV index overflow");
                     auto [it, inserted] = fixed.emplace(static_cast<int>(c), load.T);
-                    if (!inserted && it->second != load.T)
+                    // Kelvin: allow round-off with absolute and relative tolerances of 1e-12.
+                    const double tolerance =
+                        1e-12 + 1e-12 * std::max(std::abs(it->second), std::abs(load.T));
+                    if (!inserted && std::abs(it->second - load.T) > tolerance)
                         throw InputError(ErrorCode::INPUT_INVALID, "conflicting fixed CV");
                 }
         } else if (load.type == "fixed_temperature" || load.type == "convection") {

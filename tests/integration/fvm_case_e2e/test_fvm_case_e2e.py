@@ -333,18 +333,68 @@ class CaseAcceptance(unittest.TestCase):
         validator = jsonschema.validators.validator_for(schema)(schema, registry=registry)
         explicit_volume = u.thermal_case()
         explicit_volume['output']['fields'] = ['T', 'volume']
-        for case in (u.thermal_case(), u.solid_case(), explicit_volume):
-            for reverse in (False, True):
-                with self.subTest(physics=case['physics'], reverse=reverse):
+        for case in (u.thermal_case(), u.solid_case(), explicit_volume,
+                     u.thermal_case('fem'), u.solid_case('fem')):
+            family = case['physics'][0]['solver'].split('.')[0]
+            accepted = ('jacobi', 'gamg') if family == 'fvm' else ('direct', 'column_gmg')
+            for reverse, pc in ((reverse, pc) for reverse in (False, True)
+                                for pc in (*accepted, None)):
+                with self.subTest(physics=case['physics'], reverse=reverse, preconditioner=pc):
                     candidate = deepcopy(case)
-                    # parameters.schema.json still restricts explicit FEM preconditioners.
-                    # Exercise FVM preconditioners through the real loader/CLI above.
-                    candidate.pop('solver')
+                    if pc is None:
+                        candidate['solver']['linear'].pop('preconditioner')
+                    else:
+                        candidate['solver']['linear']['preconditioner'] = pc
                     if reverse:
                         candidate['physics'].reverse()
                     self.assertIn('warpage', candidate['output'])
                     errors = list(validator.iter_errors(candidate))
                     self.assertFalse(errors, '\n'.join(e.message for e in errors))
+                    got, _ = u.probe(self.root, candidate)
+                    default_pc = 'jacobi' if family == 'fvm' else 'column_gmg'
+                    self.assertEqual(got['linear']['preconditioner'], pc or default_pc)
+            rejected = ('direct', 'column_gmg', 'unknown') if family == 'fvm' else (
+                'jacobi', 'gamg', 'unknown')
+            for pc in rejected:
+                with self.subTest(family=family, rejected_preconditioner=pc):
+                    candidate = deepcopy(case)
+                    candidate['solver']['linear']['preconditioner'] = pc
+                    self.assertTrue(list(validator.iter_errors(candidate)))
+            for field, value in (('rtol', 0), ('max_iter', 0), ('unknown', True)):
+                with self.subTest(family=family, invalid_linear_field=field):
+                    candidate = deepcopy(case)
+                    candidate['solver']['linear'][field] = value
+                    self.assertTrue(list(validator.iter_errors(candidate)))
+
+    def test_layer_fixed_temperatures_allow_roundoff_but_reject_conflicts(self):
+        import numpy as np
+        cases = ((0., 5e-13), (300., math.nextafter(300., math.inf)),
+                 (300., math.nextafter(300., -math.inf)), (300., 300. + 1e-10))
+        for index, (temperature, duplicate) in enumerate(cases):
+            for ranks in (1, 2):
+                with self.subTest(temperature=temperature, duplicate=duplicate, ranks=ranks):
+                    case = u.thermal_case()
+                    case['loads'] = [
+                        dict(type='fixed_temperature', target='layer:a', T=temperature),
+                        dict(type='fixed_temperature', target='layer:a', T=duplicate),
+                        dict(type='convection', target='face:zmax', h=20,
+                             T_inf=temperature + 50)]
+                    _, blocks, ledger, _ = self.successful_thermal(
+                        case, f'fixed-roundoff-{index}-{ranks}', ranks)
+                    # The first prescription is retained. R = .025/2 + .05/4 + 1/20.
+                    self.assertAlmostEqual(ledger['heat_in'], 50 / .075, delta=1e-7)
+                    self.assertAlmostEqual(ledger['heat_out'], 50 / .075, delta=1e-7)
+                    self.assertTrue(np.all(np.isfinite(blocks['hex']['PointData/T'])))
+        for index, (temperature, duplicate) in enumerate(((0., 2e-12),
+                                                         (300., 300. + 1e-8),
+                                                         (300., 350.))):
+            with self.subTest(conflict=(temperature, duplicate)):
+                case = u.thermal_case()
+                case['loads'] = [dict(type='fixed_temperature', target='layer:a', T=value)
+                                 for value in (temperature, duplicate)]
+                out, result = u.solve(self.root, case, f'fixed-conflict-{index}', expected=14)
+                self.assertIn('conflicting fixed CV', result.stderr)
+                self.assertFalse((out / 'out/step-0.vtkhdf').exists())
 
     def test_nonconvergence_never_publishes_a_successful_step(self):
         case = u.thermal_case()

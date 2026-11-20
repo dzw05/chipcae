@@ -34,7 +34,9 @@ The acceptance exercises:
   case-sensitive solver names, duplicate physics, temperature-source rules,
   solid-only uniform temperature and FEM-specific stabilization handling.
 - Real schema validation, including the required `output.warpage` object and
-  explicit FVM `volume`. FEM explicitly requesting `volume` retains
+  explicit FVM `volume`, complete solver settings, both physics orders and
+  family-specific preconditioners (including defaults and rejection cases).
+  FEM explicitly requesting `volume` retains
   INPUT_INVALID with `invalid output field`.
   Missing jsonschema skips only this check and prints the reason.
 - Import of the unchanged public board XML and F-1130 material map, unchanged
@@ -54,6 +56,10 @@ The acceptance exercises:
   artwork or matrix semantics; no layer averaging conversion is used. The
   bottom mean surface rise follows `heat_out/(h*area)` for this source-free
   fixture's sole Robin outflow, avoiding corner artifacts in vertex averaging.
+- Repeated layer fixed temperatures accept differences within
+  `1e-12 K + 1e-12 * max(abs(T1), abs(T2))`, retain the first prescription and
+  reject larger conflicts before publishing a step. Absolute and relative
+  tolerance cases run at np=1 and np=2.
 - The board 1% gate compares independently computed hex `PointData/T` maxima
   using `abs(fvm_vertex_max - fem_vertex_max) / (fem_vertex_max - 298.15)`.
   Both vertex and summary maxima and the absolute-temperature relative
