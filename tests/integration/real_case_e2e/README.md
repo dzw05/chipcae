@@ -132,6 +132,9 @@ The following conservative specification deviations are explicit:
 - C9 excludes normal null status_detail, inapplicable sections, absent optional
   T_cell extrema and explicitly explained unavailable displacement diagnostics.
   Dependency-interrupted C1/C9 stay null. Other missing required data fails C9.
+  Null C6/W3/W5 require a note prefixed by that check and an explicit pending
+  bound, inapplicable/undefined comparison or real-result diagnostic reason.
+  A check-name mention or failure note alone does not explain a missing result.
 - C6 is null with a pending-bound note for custom loads or a body source. C8
   accepts identical zeros; an unequal zero-denominator comparison stays null
   with a pending-bound note. No new numerical tolerance is assigned.

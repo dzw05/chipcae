@@ -797,6 +797,11 @@ def _missing(record, *, pending_checks=()):
     """List unavailable applicable data, independently of caller-supplied missing[]."""
     missing = []
     notes = " ".join(record.get("notes", []))
+    null_reasons = {
+        "C6": ("bounds 待定",),
+        "W3": ("tolerance 待定",),
+        "W5": ("comparison undefined", "comparison inapplicable", "real result diagnostic only"),
+    }
     inactive = {"status_detail"}
     if record.get("kind") != "assembly":
         inactive.add("assembly")
@@ -820,7 +825,10 @@ def _missing(record, *, pending_checks=()):
                             continue
                         if check == "C8" and "mpi" in notes.lower():
                             continue
-                        if check in ("C6", "W3", "W5") and check in notes:
+                        if check in null_reasons and any(
+                                note.startswith(check + ":")
+                                and any(reason in note for reason in null_reasons[check])
+                                for note in record.get("notes", [])):
                             continue
                         if check == "W4" and record.get("data_class") == "real" and "W4" in notes:
                             continue

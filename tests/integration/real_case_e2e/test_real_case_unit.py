@@ -624,6 +624,51 @@ class RecordChecks(ContractTest):
         # Empty missing[] must not conceal an unexplained null in an applicable field.
         self.assertIs(driver._check_c9(record), False)
 
+    def test_c9_check_mentions_do_not_explain_nullable_checks(self):
+        for check in ("C6", "W3", "W5"):
+            for index, notes in enumerate((
+                    [f"{check} failed"], [f"{check}: auxiliary assertion failed"],
+                    [f"{check}: failed", "unrelated bounds 待定; tolerance 待定; comparison undefined"],
+                    [f"diagnostic mentions {check}; bounds 待定; tolerance 待定; comparison undefined"],
+                    [f"{check}0: bounds 待定; tolerance 待定; comparison undefined"])):
+                with self.subTest(check=check, notes=notes):
+                    record = complete_record()
+                    record["kind"] = "warpage"
+                    record["displacement"] = dict(U_fixed_face_max_abs=0., U_mean=[0., 0., 0.],
+                                                  warpage_pv_vertex_recompute=0.)
+                    record["checks"].update(dict.fromkeys((f"W{i}" for i in range(1, 6)), True))
+                    record["checks"][check] = None
+                    record["notes"].extend(notes)
+                    self.assertIn(f"checks.{check}", driver._missing(record))
+                    self.assertIs(driver._check_c9(record), False)
+                    folder = self.root / f"{check}_{index}"
+                    (folder / "inputs").mkdir(parents=True)
+                    driver._finalize(record, folder, False)
+                    self.assertEqual(record["exit_code"], 1)
+                    self.assertIs(record["checks"]["C9"], False)
+                    self.assertIn(f"checks.{check}", record["missing"])
+                    self.assertEqual(read_json(folder / "result.json")["verdict"], "fail")
+
+    def test_c9_accepts_explicit_check_specific_pending_or_inapplicable_reasons(self):
+        for check, note in (
+                ("C6", "C6: custom loads / body-source bounds 待定; no invented temperature threshold"),
+                ("W3", "W3: Rigid321 mean diagnostic only, tolerance 待定"),
+                ("W5", "W5: zero FEM warpage denominator; comparison undefined"),
+                ("W5", "W5: noncut FEM comparison inapplicable to cut input"),
+                ("W5", "W5: FEM comparison is a synthetic noncut assertion; real result diagnostic only")):
+            with self.subTest(check=check, note=note):
+                record = complete_record()
+                record["kind"] = "warpage"
+                record["displacement"] = dict(U_fixed_face_max_abs=0., U_mean=[0., 0., 0.],
+                                              warpage_pv_vertex_recompute=0.)
+                record["checks"].update(dict.fromkeys((f"W{i}" for i in range(1, 6)), True))
+                record["checks"][check] = None
+                record["notes"].append(note)
+                if "real result" in note:
+                    record["data_class"] = "real"
+                self.assertNotIn(f"checks.{check}", driver._missing(record))
+                self.assertIs(driver._check_c9(record), True)
+
     def test_c9_dependency_interruption_allows_unavailable_fields(self):
         record = complete_record()
         record.update(exit_code=77, verdict="needs_attention", energy=None,
@@ -1872,4 +1917,5 @@ class DriverControlFlow(ContractTest):
 
 
 if __name__ == "__main__":
-    unittest.main(argv=[sys.argv[0]], verbosity=2)
+    # Keep passing counts and dependency skips within CTest's 1024-byte CI output limit.
+    unittest.main(argv=[sys.argv[0]], verbosity=1)
