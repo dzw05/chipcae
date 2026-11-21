@@ -56,6 +56,9 @@ struct PetscSession {
     if (mechanical && error.reason == "INPUT_INVALID: embedded faces require cut-cell support")
         throw InputError(ErrorCode::CUT_UNSUPPORTED,
                          error.path + ": CUT_UNSUPPORTED: " + error.reason);
+    // I14 1.0 retains two producer errors with this double prefix.
+    if (mechanical && error.reason.starts_with("INPUT_INVALID: INTERNAL:"))
+        throw InputError(ErrorCode::INTERNAL, error.path + ": " + error.reason);
     // The FVM library carries existing code names as reason prefixes.
     for (auto value : {ErrorCode::INPUT_INVALID,
                        ErrorCode::NOT_IMPLEMENTED,
@@ -192,30 +195,6 @@ fv::ThermalProblem thermal_problem(const RunInputs& inputs,
     return problem;
 }
 
-std::map<CellKey, std::size_t> constituent_lookup(const fv::FvGrid& grid,
-                                                  const mesh::HexMeshArrays& arrays) {
-    const auto nc = grid.cv_volume.size(), n = grid.constituent_gid.size();
-    if (grid.constituent_off.size() != nc + 1 || grid.constituent_off.front() != 0 ||
-        grid.constituent_off.back() != static_cast<std::int64_t>(n) ||
-        !std::is_sorted(grid.constituent_off.begin(), grid.constituent_off.end()) ||
-        grid.constituent_subcell.size() != n || grid.constituent_elem.size() != n)
-        throw InputError(ErrorCode::INTERNAL, "invalid FVM constituent CSR");
-    std::map<CellKey, std::size_t> result;
-    for (std::size_t c = 0; c < nc; ++c) {
-        if (grid.constituent_off[c] == grid.constituent_off[c + 1])
-            throw InputError(ErrorCode::INTERNAL, "empty FVM constituent set");
-        for (auto j = grid.constituent_off[c]; j < grid.constituent_off[c + 1]; ++j) {
-            const auto e = grid.constituent_elem[j];
-            if (e < 0 || static_cast<std::size_t>(e) >= arrays.elem_gid.size() ||
-                arrays.elem_gid[e] != grid.constituent_gid[j] || grid.constituent_subcell[j] < 0 ||
-                !result.emplace(CellKey{grid.constituent_gid[j], grid.constituent_subcell[j]}, c)
-                     .second)
-                throw InputError(ErrorCode::INTERNAL, "invalid or duplicate FVM constituent");
-        }
-    }
-    return result;
-}
-
 int stack_layer(const RunInputs& inputs, const std::string& name) {
     const auto found = std::find_if(inputs.stack.layers.begin(),
                                     inputs.stack.layers.end(),
@@ -237,7 +216,7 @@ fv::ElasticMesh to_elastic_mesh(const fv::FvGrid& grid,
                                 const mesh::HexMeshArrays& arrays) {
     const auto nc = grid.cv_volume.size();
     if (nc == 0 || grid.cv_centroid.size() != nc || grid.cv_elem_gid.size() != nc ||
-        grid.cv_rank.size() != nc || grid.cv_attribute.size() != nc)
+        grid.cv_rank.size() != nc || grid.cv_attribute.size() != nc || grid.cv_kind.size() != nc)
         throw InputError(ErrorCode::INPUT_INVALID, "invalid FVM mechanical cell array lengths");
     fv::ElasticMesh mesh;
     mesh.volume = grid.cv_volume;
@@ -251,6 +230,7 @@ fv::ElasticMesh to_elastic_mesh(const fv::FvGrid& grid,
             throw InputError(ErrorCode::INPUT_INVALID, "invalid FVM mechanical geometry or gid");
         const auto& record = arrays.attr_table.entries.at(grid.cv_attribute[c] - 1);
         mesh.layer.push_back(stack_layer(inputs, record.layer));
+        mesh.is_cut.push_back(grid.cv_kind[c] != 0);
     }
     for (const auto& face : grid.faces) {
         if (!(face.area > 0) || !std::isfinite(face.area) || !finite_point(face.centroid))
@@ -278,6 +258,7 @@ fv::ElasticProblem to_elastic_problem(const RunInputs& inputs,
                                       const mesh::HexMeshArrays& arrays,
                                       const std::vector<double>& fractions) {
     fv::ElasticProblem problem;
+    problem.support = fv::ElasticProblem::Support::Rigid321;
     problem.rtol = inputs.linear.rtol;
     problem.max_iter = inputs.linear.max_iter;
     problem.preconditioner = inputs.linear.preconditioner;
@@ -333,11 +314,24 @@ fv::ElasticProblem to_elastic_problem(const RunInputs& inputs,
 }
 
 void validate_elastic_result(const fv::ElasticMesh& mesh, const fv::ElasticResult& result) {
+    std::size_t top_count = 0;
+    for (std::size_t f = 0; f < mesh.faces.size(); ++f) {
+        const auto& face = mesh.faces[f];
+        if (face.hi < 0 && ((!mesh.is_embedded[f] && face.side == 5) ||
+                            (mesh.is_embedded[f] && face.normal[2] > 0.99 &&
+                             face.centroid[2] >= mesh.z_top - 1e-13)))
+            ++top_count;
+    }
     if (result.U_cell.size() != mesh.volume.size() || result.U_face.size() != mesh.faces.size() ||
-        result.face_prescribed.size() != mesh.faces.size() || result.iterations < 0 ||
+        result.face_prescribed.size() != mesh.faces.size() ||
+        result.top_samples.size() != top_count || result.iterations < 0 ||
         !std::isfinite(result.residual) || result.residual < 0 ||
         !std::isfinite(result.warpage_pv) || result.warpage_pv < 0 ||
         !std::isfinite(result.U_mag_max) || result.U_mag_max < 0 ||
+        !std::isfinite(result.min_dn_ratio) ||
+        std::find(mesh.gid.begin(), mesh.gid.end(), result.min_dn_gid) == mesh.gid.end() ||
+        result.gradient_corrections < 0 || !std::isfinite(result.max_identity_defect) ||
+        result.max_identity_defect < 0 ||
         !std::all_of(result.U_cell.begin(), result.U_cell.end(), finite_point) ||
         !std::all_of(result.U_face.begin(), result.U_face.end(), finite_point) ||
         !std::all_of(result.top_samples.begin(), result.top_samples.end(), finite_point) ||

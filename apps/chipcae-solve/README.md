@@ -174,20 +174,35 @@ mechanics and immediately after its collective call, before failure handling
 or successful mechanics/output publication. A STOP queued during a solve
 therefore takes effect once the solve returns.
 
-The current I14 1.0 elastic library rejects embedded faces. Such geometry
-exits with `CUT_UNSUPPORTED` (13) in either output mode, without a successful
-step or elastic diagnostic. Geometry is never replaced by an uncut mesh.
-Other named error prefixes keep their existing codes; unclassified mechanical
-solver failures exit 1, matching FEM. Failure residual publication is blocked:
-I14 section 6 forbids parsing numerical diagnostics, and its error carrier
-has no structured iterations/residual. That acceptance assertion remains
-unsatisfied pending a producer/API ruling; no residual is fabricated.
+The frozen I14 1.0 library supports cut CVs and embedded faces. The adapter
+preserves CV order and sets `is_cut[c] = (cv_kind[c] != 0)`, including merged
+CVs. Exterior grid side 6 becomes side -1 with `is_embedded=1`; `z_top` is the
+upper grid z coordinate. Result validation checks cell/face arrays, the number
+of top samples (including qualifying embedded top faces), finite values and
+the library diagnostics before publication.
 
-The results writer currently omits regular-hex `CellData/volume` even when
-supplied. Existing board temperature, energy and snapshot gates also remain
-visible upstream limitations. See [FVM acceptance](../../tests/integration/fvm_case_e2e/README.md)
-for current measurements and verification. Build and test through the shared
-wrappers, retaining their PATH precedence:
+Named error prefixes keep their existing codes. Both `INTERNAL:` and the
+known I14 `INPUT_INVALID: INTERNAL:` producer prefix map to INTERNAL (1).
+Unclassified mechanical solver failures also exit 1, matching FEM; invalid
+metadata exits 14. The legacy embedded-face unsupported diagnostic retains
+its exit-13 mapping, but supported cut geometry follows the normal solve path.
+Failure residual publication remains blocked: I14 section 6 forbids parsing
+numerical diagnostics, and its error carrier has no structured failure
+iterations/residual. The acceptance assertion remains in place pending a
+producer/API ruling.
+
+Local Release verification against the merged dependency baseline exercises
+both cut output modes, cut/EB displacement, MPI alignment, all six fixed
+faces, layer aliases, zero rise, unequal-volume reconstruction and STOP.
+Regular-hex physical volume output and the integration prerequisites now pass.
+Acceptance remains red: the synthetic board PV differs from FEM/direct by
+81.9810%, its temperature rise by 7.9555%, and uniform-bilayer PV by 10.1472%
+(the unchanged gates are 10%, 1% and 10%). Demo cut mechanics also reaches its
+case's 500-iteration limit; four pre-upstream FEM snapshots remain stale.
+No tolerance, snapshot or solver option is adjusted to hide these failures.
+See [FVM acceptance](../../tests/integration/fvm_case_e2e/README.md) for measured
+values and remaining merge gates. Build and test through the shared wrappers,
+retaining their PATH precedence:
 
 ```sh
 cmake --build "$build" -j2

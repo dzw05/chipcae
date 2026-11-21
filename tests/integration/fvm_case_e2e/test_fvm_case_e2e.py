@@ -738,6 +738,9 @@ class CaseAcceptance(unittest.TestCase):
                     u.inspect_elastic(out, blocks, manifest)
                     results[mode] = manifest, blocks
         self.assertEqual(set(outcomes), {'polyhedron', 'hex'})
+        # Frozen I14 includes embedded faces and cut CVs; both output modes
+        # must now exercise the supported reconstruction path.
+        self.assertEqual(outcomes, {'polyhedron': 0, 'hex': 0})
         self.assertEqual(outcomes['polyhedron'], outcomes['hex'],
                          'cut output mode must not change mechanical support or bypass rejection')
         if len(results) == 2:
