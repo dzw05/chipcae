@@ -43,21 +43,47 @@ with tempfile.TemporaryDirectory() as tmp:
         defects = a.import_report()['defects']
         assert len(defects) == 2, defects
         assert {(d['tier'], d['reason'], d['defect_id']) for d in defects} == {
-            ('C', 8, 'BodyA/occt_unavailable'),
-            ('C', 8, 'BodyB/occt_unavailable')}, defects
+            ('C', 8, 'mapped_a/occt_unavailable'),
+            ('C', 8, 'mapped_b/occt_unavailable')}, defects
         assert not a.output.exists()
 
     a.document['parts_from_step']['bodies']['BodyA']['material_approx'] = True
     a.save()
     check(a.run(), 7)
     assert a.import_report()['parts']['material_approx'] == [
-        {'id': 'BodyA', 'material_approx': True, 'label': '近似材料'}]
-    # Body names determine reserved IDs and collisions even when aliases differ.
-    a.document['parts_from_step']['bodies'] = {'void': {'id': 'safe', 'material': 'copper'}}
-    a.save()
-    check(a.run(), 14)
-    assert a.defects()['message'] == 'INPUT_INVALID: part id void is reserved'
-    a.document['parts_from_step']['bodies'] = {'Core': {'id': 'safe', 'material': 'copper'}}
-    a.save()
-    check(a.run(), 14)
-    assert a.defects()['message'] == 'INPUT_INVALID: part id collides with Core'
+        {'id': 'mapped_a', 'material_approx': True, 'label': '近似材料'}]
+    # Mapped IDs determine reserved IDs and collisions (I2 §2.1).
+    for body, mapped_id, expected, message in (
+            ('void', 'safe', 7, None),
+            ('BodyA', 'void', 14, 'INPUT_INVALID: part id void is reserved'),
+            ('Core', 'safe', 7, None),
+            ('BodyA', 'Core', 14, 'INPUT_INVALID: part id collides with Core')):
+        a.document['parts_from_step']['bodies'] = {
+            body: {'id': mapped_id, 'material': 'copper'}}
+        a.save()
+        check(a.run(), expected)
+        if message is None:
+            defects = a.import_report()['defects']
+            assert len(defects) == 1, defects
+            d = defects[0]
+            assert (d['tier'], d['reason'], d['defect_id']) == (
+                'C', 8, 'safe/occt_unavailable'), d
+        else:
+            assert a.defects()['message'] == message
+        assert not a.output.exists()
+
+    # Expanded IDs share the uniqueness namespace with explicit and mapped parts.
+    for explicit in (True, False):
+        a.document['parts'] = []
+        if explicit:
+            a.part('lid')
+        a.document['parts_from_step']['bodies'] = {
+            'BodyA': {'id': 'lid', 'material': 'copper'}}
+        if not explicit:
+            a.document['parts_from_step']['bodies']['BodyB'] = {
+                'id': 'lid', 'material': 'copper'}
+        a.save()
+        check(a.run(), 7)
+        assert a.defects()['code'] == 'IMPORT_REJECTED'
+        assert a.defects()['message'] == 'IMPORT_REJECTED: duplicate part id lid'
+        assert not a.output.exists()

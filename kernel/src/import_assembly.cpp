@@ -640,7 +640,7 @@ int run_assembly(const ImportOptions& options) {
         if (doc.contains("parts_from_step")) {
             const auto& f = doc["parts_from_step"];
             for (const auto& kv : f["bodies"].object_range()) {
-                auto id = std::string(kv.key());
+                auto id = kv.value()["id"].as<std::string>();
                 if (id == "void")
                     return fail("INPUT_INVALID", "INPUT_INVALID: part id void is reserved");
                 if (!ids.insert(id).second)
@@ -674,7 +674,6 @@ int run_assembly(const ImportOptions& options) {
                     names.emplace_back(kv.key());
             for (const auto& name : names) {
                 J p = f["bodies"][name];
-                p["id"] = name;
                 p["step"] = f["step"];
                 p["body"] = name;
                 p["placement"]["frame"] = "step";
