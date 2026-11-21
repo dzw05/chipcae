@@ -176,8 +176,12 @@ if(_solve_backend AND TARGET chipcae-solve AND MFEM_USE_PETSC)
     set_tests_properties(solve_column_gmg_prolongation solve_column_gmg_unsupported
         PROPERTIES TIMEOUT 120 LABELS "gmg;numerical")
     set_tests_properties(solve_column_gmg_fcbga solve_column_gmg_fcbga_scaling
-        PROPERTIES TIMEOUT 900
-        RESOURCE_LOCK chipcae_highmem LABELS "gmg;numerical;highmem")
+        PROPERTIES TIMEOUT 900 LABELS "gmg;numerical")
+    # Successful pinned Release RSS measurements select the shared-lock members.
+    # The lock covers each complete Python wrapper, including its MPI children.
+    set_tests_properties(solve_column_gmg_fcbga
+        PROPERTIES RESOURCE_LOCK chipcae_highmem)
+    set_property(TEST solve_column_gmg_fcbga APPEND PROPERTY LABELS highmem)
 endif()
 
 if(_solve_backend)
