@@ -112,6 +112,13 @@ struct Projection {
         FIELD(cut_area);
         return j;
     }
+    J value(const HexMeshArrays::GridReport::CopperArea& x) const {
+        const auto& [polygons, raster] = x;
+        J j;
+        FIELD(polygons);
+        FIELD(raster);
+        return j;
+    }
     J value(const HexMeshArrays::GridReport& x) const {
         // Aggregate decomposition makes omitted/new members a compile error.
         const auto& [levels,
@@ -124,7 +131,8 @@ struct Projection {
                      column_ranks,
                      warnings,
                      partition_imbalance,
-                     void_cells] = x;
+                     void_cells,
+                     copper_area_m2] = x;
         J j;
         FIELD(levels);
         FIELD(rule);
@@ -137,6 +145,8 @@ struct Projection {
         FIELD(warnings);
         FIELD(partition_imbalance);
         FIELD(void_cells);
+        if (!copper_area_m2.empty())
+            FIELD(copper_area_m2);
         return j;
     }
     J value(const AttributeTable& x) const {

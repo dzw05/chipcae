@@ -50,6 +50,12 @@ struct HexMeshArrays {
         std::vector<std::string> warnings;
         Real partition_imbalance = 0;
         std::int64_t void_cells = 0; // 没有 material 的层里不生成的单元数
+        // Interface-only stub for the copper area acceptance tests.
+        struct CopperArea {
+            Real polygons = 0;
+            Real raster = 0;
+        };
+        std::map<std::string, CopperArea> copper_area_m2;
     } grid_report;
     AttributeTable attr_table;
     // Named face groups. Cut-face attributes also appear here (and therefore in
