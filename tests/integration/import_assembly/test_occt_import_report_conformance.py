@@ -188,7 +188,7 @@ class LiveReportConformance(unittest.TestCase):
                     if case == 'assembly_unconfirmed':
                         expect(set(b_ids(report)) == set(b_ids(summary)), f'{case}:{summary_path}.defects',
                                f'B IDs matching {b_ids(report)!r}', b_ids(summary))
-                    if case == 'ecad_accepted':
+                    if case in ('ecad_accepted', 'assembly_success', 'assembly_accepted'):
                         expect(report['b_tier_accepted'] == 'all', f'{case}:{report_path}.b_tier_accepted',
                                'all', report['b_tier_accepted'])
                     if rc == 7:
