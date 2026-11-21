@@ -8,6 +8,7 @@
 #include "column_gmg_assembly.hpp"
 #include "cut_convection.hpp"
 #include "cut_output.hpp"
+#include "outline_contains.hpp"
 #include "sha256.hpp"
 
 #include <algorithm>
@@ -989,20 +990,9 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
         auto in_domain = [&](double x, double y, double z) {
             if (!clipped)
                 return true;
-            // Convex extruded outline; nodal maxima and PV exclude extension nodes.
-            const auto& ring = inputs.stack.outline.polygon;
-            double sign = 0;
-            for (std::size_t j = 0; j < ring.size(); ++j) {
-                auto a = ring[j], b = ring[(j + 1) % ring.size()];
-                double v = (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]);
-                if (std::abs(v) < 1e-14)
-                    continue;
-                if (sign * v < 0)
-                    return false;
-                sign = v;
-            }
+            // Simple nonconvex outlines also exclude extension nodes from maxima and PV.
             (void)z;
-            return true;
+            return detail::outline_contains(inputs.stack.outline.polygon, x, y);
         };
         auto add_top = [&](double x, double y, double w) {
             top.push_back({x, y, w});
