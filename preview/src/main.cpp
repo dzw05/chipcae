@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -134,6 +135,7 @@ int run(int argc, char** argv) {
     using namespace chipcae::mesh;
     std::filesystem::path input, output, surface, polyset;
     GridOptions options;
+    std::optional<int> min_elems_per_layer;
     bool nonconvex_outline = false;
 #ifdef CHIPCAE_ENABLE_MPI
     int world_size = 1;
@@ -146,7 +148,8 @@ int run(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-o" || arg == "--surface" || arg == "--polyset" || arg == "--nx" ||
-            arg == "--ny" || arg == "--levels" || arg == "--max-ratio") {
+            arg == "--ny" || arg == "--levels" || arg == "--max-ratio" || arg == "--cell-budget" ||
+            arg == "--min-elems-per-layer") {
             if (!seen.insert(arg).second)
                 throw std::runtime_error("duplicate option: " + arg);
             if (++i == argc || std::string(argv[i]).empty())
@@ -162,6 +165,10 @@ int run(int argc, char** argv) {
                 options.nx = integer(value, false);
             else if (arg == "--ny")
                 options.ny = integer(value, false);
+            else if (arg == "--cell-budget")
+                options.cell_budget = integer(value, false);
+            else if (arg == "--min-elems-per-layer")
+                min_elems_per_layer = integer(value, false);
             else if (arg == "--max-ratio") {
                 double ratio = 0;
                 auto [end, error] =
@@ -195,6 +202,9 @@ int run(int argc, char** argv) {
         throw std::runtime_error("surface and grid paths must differ");
     event("load", 0, "Loading stack 0.2");
     auto stack = checked_io(load_stack(input, chipcae::data_path(CHIPCAE_PREVIEW_SCHEMA)));
+    if (min_elems_per_layer)
+        for (auto& layer : stack.layers)
+            layer.n_elem_min = std::max(layer.n_elem_min, *min_elems_per_layer);
     for (const auto& warning : stack.warnings)
         std::cerr << warning << '\n';
     std::set<std::filesystem::path> sidecars;
@@ -266,7 +276,9 @@ int run(int argc, char** argv) {
               << ",\"void_cells\":" << summary.void_cells << ",\"nz\":" << summary.nz
               << ",\"node_count\":" << summary.nodes << ",\"cell_count\":" << summary.cells
               << ",\"cut_cell_count\":" << (cut ? cut->cut_elem.size() : 0)
-              << ",\"mesh_sha256\":" << quote(summary.sha256) << "}";
+              << ",\"mesh_sha256\":" << quote(summary.sha256)
+              << ",\"cell_budget\":" << options.cell_budget << ",\"min_elems_per_layer\":"
+              << (min_elems_per_layer ? std::to_string(*min_elems_per_layer) : "null") << "}";
     event("success", 1, effective.str());
     return 0;
 }
@@ -279,7 +291,8 @@ int main(int argc, char** argv) {
             event("help",
                   1,
                   "chipcae-preview <stack.json> [--polyset f] [--nx N --ny N] "
-                  "[--levels N] [--max-ratio R] [--nonconvex-outline] "
+                  "[--levels N] [--max-ratio R] [--cell-budget B] [--min-elems-per-layer M] "
+                  "[--nonconvex-outline] "
                   "-o <stem|out.vtkhdf> [--surface <exact-eb-file>] "
                   "(--polyset overrides meshing sidecars; levels=0 is automatic)");
             return 0;
