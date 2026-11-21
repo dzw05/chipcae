@@ -81,11 +81,9 @@ Expected<std::optional<CutLayerArrays>> apply_outline_cut(HexMeshArrays& mesh,
 
 namespace chipcae::mesh::cut::detail {
 namespace {
-// Only a genuinely two-dimensional zero-area ring can need the owner's
-// crossing diagnostic. Collapsed and collinear inputs keep normalization's error.
-bool crossing_candidate(const Ring2& ring, Real area) {
-    if (!std::isfinite(area) || area != 0)
-        return false;
+// Normalization has already failed; non-collinearity determines whether to check
+// for crossings. Collapsed and collinear inputs keep normalization's error.
+bool crossing_candidate(const Ring2& ring) {
     auto distinct = ring;
     std::sort(distinct.begin(), distinct.end());
     distinct.erase(std::unique(distinct.begin(), distinct.end()), distinct.end());
@@ -151,7 +149,7 @@ Expected<std::optional<CutLayerArrays>> apply_outline_cut_general(HexMeshArrays&
 
     auto normalized = normalize_ring(outline.polygon);
     if (!normalized) {
-        if (crossing_candidate(ring, area)) {
+        if (crossing_candidate(ring)) {
             while (ring.size() > 1 && ring.front() == ring.back())
                 ring.pop_back();
             if (auto error = check_simple(ring))
