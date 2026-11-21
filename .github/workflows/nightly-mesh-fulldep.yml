@@ -488,9 +488,6 @@ jobs:
               "reportfields_step_box_a1",
           }
           cases = list(ET.parse("build-k1-full/n11-geometry-on.xml").getroot().iter("testcase"))
-          for case in cases:
-              print(f'{case.get("name")}: status={case.get("status")}, time={case.get("time")}',
-                    flush=True)
           skipped = sum(1 for case in cases if case.find("skipped") is not None)
           if Counter(case.get("name") for case in cases) != Counter(required_names):
               raise SystemExit("N11 requires exactly nine unique expected testcases, "
@@ -503,6 +500,9 @@ jobs:
               for case in cases
           ):
               raise SystemExit(f"N11 requires all nine Passed, Skipped={skipped}")
+          for case in cases:
+              print(f'{case.get("name")}: status={case.get("status")}, time={case.get("time")}',
+                    flush=True)
           print("Passed=9, Skipped=0")
           PY
           if ((n11_status != 0)); then exit "$n11_status"; fi
