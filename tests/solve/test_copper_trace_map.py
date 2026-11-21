@@ -292,12 +292,15 @@ class TraceMapTests(unittest.TestCase):
         self.diagnostics(polygons, np.full((2, 2), .3))
 
     def test_copper_base_counterexample_uses_fresh_inputs(self):
+        # Sparse copper keeps the base-material contrast above 1 K with parallel kz.
+        fraction = .01
+        self.stack['layers'][0]['copper']['fraction'] = fraction
         reference_run = self.run_case('fr4-reference')
-        reference = self.one_dimensional(reference_run)
+        reference = self.one_dimensional(reference_run, f=fraction)
         changed = copy.deepcopy(self.stack)
         changed['layers'][0]['material'] = 'cu'
         counter = self.run_case('copper-base', changed)
-        self.one_dimensional(counter, base=390)
+        self.one_dimensional(counter, f=fraction, base=390)
         actual = self.temperatures(counter)
         self.assertEqual(actual.keys(), reference.keys())
         difference = max(abs(actual[p]-reference[p]) for p in actual)
