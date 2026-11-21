@@ -1,0 +1,7 @@
+{
+ "case": "E_plane",
+ "ok": false,
+ "path": "cut/plane",
+ "reason": "nonfinite or zero normal",
+ "mesh_unchanged": true
+}

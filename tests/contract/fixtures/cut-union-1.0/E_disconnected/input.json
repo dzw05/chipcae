@@ -1,0 +1,5 @@
+{
+ "case": "E_disconnected",
+ "setup": "two rectangles x<.0105 and x>.0115, phi=min of both",
+ "source": "tests/unit/region_ls/test_plane_cut_union.cpp @ #202 0d97b59 :1012-1029; plane_cut.cpp:585"
+}
