@@ -28,7 +28,15 @@ material references against that library before invoking the consumer.
 Output tests return 77 if h5py/numpy or the required solver backend is absent.
 The ECAD test is registered when ECAD and JSON schema support are enabled.
 
-The `fixtures/fvm-io-1.0/check.py --repo <source>` acceptance checker
+The `fixtures/fvm-io-1.0/check.py` acceptance checker runs without arguments
+from any working directory. It discovers the repository from its own resolved
+directory, then each ancestor, choosing the nearest directory containing
+`tests/contract`; it never infers the repository from the working directory.
+Copies outside the repository, including handoff packages, require
+`--repo <source>` (otherwise exit 2 with `--repo required outside the repository`).
+The shared `fixture_selfchecks(root)` hook runs all discovered checkers without
+arguments, in sorted order with the repository as their working directory, and
+includes captured stdout/stderr in any failure assertion. The FVM checker
 requires NumPy; jsonschema is optional (prints `SKIP-SCHEMA`, retaining structural
 checks). It checks synthetic laminate analytic temperatures, an independent dense
 TPFA solve for 3×2×4 hexes, conservation, completed-output manifest metadata and

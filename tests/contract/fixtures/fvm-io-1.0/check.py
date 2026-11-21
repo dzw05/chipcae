@@ -566,8 +566,9 @@ def invocation_acceptance(package, repo):
 
     with tempfile.TemporaryDirectory(prefix="fvm-io-invocation-") as temp:
         unrelated = Path(temp)
-        check("no arguments from repository cwd", package / "check.py", [], repo, 0)
-        check("no arguments from unrelated cwd", package / "check.py", [], unrelated, 0)
+        repository_checker = repo / "tests/contract/fixtures/fvm-io-1.0/check.py"
+        check("no arguments from repository cwd", repository_checker, [], repo, 0)
+        check("no arguments from unrelated cwd", repository_checker, [], unrelated, 0)
         check("explicit repository", package / "check.py", ["--repo", str(repo)], unrelated, 0)
 
         handoff = unrelated / "handoff/fixtures/fvm-io-1.0"
@@ -628,9 +629,15 @@ def argument_free_hook_acceptance(repo):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", required=True, type=Path)
+    parser.add_argument("--repo", type=Path)
     parser.add_argument("--handoff", type=Path, help="also compare the handoff package SHA-256 map")
     args = parser.parse_args()
+    if args.repo is None:
+        args.repo = next((root for root in (HERE, *HERE.parents)
+                          if (root / "tests/contract").is_dir()), None)
+        if args.repo is None:
+            print("--repo required outside the repository", file=sys.stderr)
+            return 2
     try:
         import numpy  # Required, unlike the optional jsonschema validator.
         validate(HERE, args.repo)
