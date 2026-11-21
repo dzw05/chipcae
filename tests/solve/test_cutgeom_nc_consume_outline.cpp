@@ -1,5 +1,6 @@
 // Consumer acceptance: JSON expectations are independent of the cutter output.
 #include "chipcae/mesh/background/tensor_grid.hpp"
+#include "chipcae/mesh/cut/detail/convex_pieces.hpp"
 #include "chipcae/mesh/cut/detail/outline_nonconvex.hpp"
 
 #include <algorithm>
@@ -103,6 +104,7 @@ Real segment_distance(P2 p, P2 a, P2 b) {
 struct Fixture {
     Json input, expected;
     Ring ring;
+    std::vector<std::array<P2, 2>> internal_caps;
     P3 lo{}, hi{};
     int nx = 8, ny = 8, nz = 1;
     explicit Fixture(const std::filesystem::path& directory)
@@ -121,6 +123,16 @@ struct Fixture {
             nx = input.at("grid").at("nx").as<int>();
             ny = input.at("grid").at("ny").as<int>();
             nz = input.at("grid").at("nz").as<int>();
+        }
+        const auto normalized =
+            value(chipcae::mesh::cut::detail::normalize_ring(ring), "normalize fixture outline");
+        const auto decomposition = value(chipcae::mesh::cut::detail::convex_pieces(normalized),
+                                         "fixture cutter decomposition");
+        for (std::size_t k = 0; k < decomposition.pieces.size(); ++k) {
+            const auto& piece = decomposition.pieces[k];
+            for (std::size_t edge = 0; edge < piece.size(); ++edge)
+                if (decomposition.internal_edge.at(k).at(edge))
+                    internal_caps.push_back({piece[edge], piece[(edge + 1) % piece.size()]});
         }
     }
     Footprint outline() const { return {{lo[0], lo[1], hi[0], hi[1]}, ring}; }
@@ -171,6 +183,21 @@ struct Fixture {
                 v /= length;
             if (segment_distance({p[0], p[1]}, a, b) <= 1e-14 &&
                 norm(difference(outward, n)) <= 1e-12)
+                return true;
+        }
+        return false;
+    }
+    bool internal(P3 p) const {
+        const Real tolerance =
+            32 * std::numeric_limits<Real>::epsilon() * std::hypot(hi[0] - lo[0], hi[1] - lo[1]);
+        for (const auto& [a, b] : internal_caps) {
+            const Real dx = b[0] - a[0], dy = b[1] - a[1];
+            const Real px = p[0] - a[0], py = p[1] - a[1];
+            const Real along = px * dx + py * dy;
+            // Positive-area cap quadrature and triangle centroids lie strictly
+            // between endpoints. Exterior junctions themselves are not caps.
+            if (along > 0 && along < dx * dx + dy * dy &&
+                std::abs(px * dy - py * dx) <= tolerance * std::hypot(dx, dy))
                 return true;
         }
         return false;
@@ -356,6 +383,80 @@ Output build(const Fixture& f, CutOptions o) {
     check(cut.has_value(), "fixture must return cut arrays");
     return {std::move(mesh), std::move(*cut)};
 }
+std::size_t check_internal_sides(const Fixture& f, const Output& out) {
+    const auto& c = out.cut;
+    for (std::size_t row = 0; row < c.cut_elem.size(); ++row) {
+        const auto box = bounds(out.mesh, static_cast<std::size_t>(c.cut_elem.at(row)));
+        for (Local q = c.sq_off.at(row); q < c.sq_off.at(row + 1); ++q)
+            if (f.internal(box.physical(c.sq_xi, q)))
+                check(c.sq_side.at(q) != -1, "internal cap must not have side -1");
+    }
+    std::size_t internal_faces = 0;
+    check(c.eb_parent_elem.size() % 3 == 0, "embedded output contains complete triangles");
+    for (std::size_t triangle = 0; triangle < c.eb_parent_elem.size(); triangle += 3) {
+        P3 center{};
+        for (std::size_t vertex = triangle; vertex < triangle + 3; ++vertex)
+            for (int d = 0; d < 3; ++d)
+                center[d] += c.eb_points.at(3 * vertex + d) / 3;
+        if (f.internal(center))
+            ++internal_faces;
+        // Retain the exterior-vertex sanity check independently of cap classification.
+        for (std::size_t vertex = triangle; vertex < triangle + 3; ++vertex)
+            check(f.exterior(point(c.eb_points, vertex), point(c.eb_normals, vertex)),
+                  "embedded vertex must have an exterior outward normal");
+    }
+    check(internal_faces == f.expected.at("internal_side_minus1_faces").as<std::size_t>(),
+          "decomposition-only embedded faces");
+    return internal_faces;
+}
+
+// An internal quadrature face must be rejected independently of EB triangulation.
+void internal_side_regression(const Fixture& f) {
+    const auto mesh = f.background();
+    const bool has_fixture_caps =
+        std::any_of(f.input.at("internal").array_range().begin(),
+                    f.input.at("internal").array_range().end(),
+                    [](const Json& flags) {
+                        return std::any_of(flags.array_range().begin(),
+                                           flags.array_range().end(),
+                                           [](const Json& flag) { return flag.as<bool>(); });
+                    });
+    check(!f.internal_caps.empty() == has_fixture_caps, "exercise fixture decomposition caps");
+    for (const auto& [a, b] : f.internal_caps) {
+        // The cutter may choose different diagonals from the fixture's valid
+        // partition. Exercise its actual caps, including split faces/junctions.
+        for (const Real t : {.25, .5, .75, 1e-8, 1 - 1e-8}) {
+            const P3 p{
+                (1 - t) * a[0] + t * b[0], (1 - t) * a[1] + t * b[1], (f.lo[2] + f.hi[2]) / 2};
+            Output probe{mesh, {}};
+            for (std::size_t e = 0; e < probe.mesh.elem_gid.size(); ++e) {
+                const auto box = bounds(probe.mesh, e);
+                P3 xi{};
+                for (int d = 0; d < 3; ++d)
+                    xi[d] = (p[d] - box.lo[d]) / box.h[d];
+                if (std::any_of(xi.begin(), xi.end(), [](Real v) { return v < 0 || v > 1; }))
+                    continue;
+                probe.cut.cut_elem = {static_cast<Local>(e)};
+                probe.cut.sq_off = {0, 1};
+                probe.cut.sq_side = {-1};
+                probe.cut.sq_w = {1};
+                for (int d = 0; d < 3; ++d)
+                    probe.cut.sq_xi[d] = {xi[d]};
+                break;
+            }
+            check(!probe.cut.cut_elem.empty(), "internal regression sample inside mesh");
+            bool rejected = false;
+            try {
+                check_internal_sides(f, probe);
+            } catch (const std::runtime_error& error) {
+                rejected = std::string_view(error.what()) == "internal cap must not have side -1";
+            }
+            check(rejected, "internal side -1 sample escaped face classification");
+            probe.cut.sq_side[0] = 0;
+            check_internal_sides(f, probe); // An axial face crossing the cap is allowed.
+        }
+    }
+}
 void invariants(const Fixture& f, const Output& out) {
     const auto& m = out.mesh;
     const auto& c = out.cut;
@@ -371,15 +472,8 @@ void invariants(const Fixture& f, const Output& out) {
         if (!cut_cells.contains(static_cast<Local>(e)) &&
             !void_cells.contains(static_cast<Local>(e)))
             volume += bounds(m, e).volume();
-    std::size_t internal_samples = 0, internal_faces = 0, embedded_samples = 0;
-    check(c.eb_parent_elem.size() % 3 == 0, "embedded output contains complete triangles");
-    for (std::size_t triangle = 0; triangle < c.eb_parent_elem.size(); triangle += 3) {
-        bool exterior = true;
-        for (std::size_t vertex = triangle; vertex < triangle + 3; ++vertex)
-            exterior &= f.exterior(point(c.eb_points, vertex), point(c.eb_normals, vertex));
-        if (!exterior)
-            ++internal_faces;
-    }
+    std::size_t internal_samples = 0, embedded_samples = 0;
+    const auto internal_faces = check_internal_sides(f, out);
     for (std::size_t row = 0; row < c.cut_elem.size(); ++row) {
         const auto e = static_cast<std::size_t>(c.cut_elem.at(row));
         const auto box = bounds(m, e);
@@ -440,7 +534,6 @@ void invariants(const Fixture& f, const Output& out) {
           "retain genuine exterior embedded faces");
     const auto expected_internal = f.expected.at("internal_side_minus1_faces").as<std::size_t>();
     check(internal_samples == expected_internal, "decomposition-only embedded samples");
-    check(internal_faces == expected_internal, "decomposition-only embedded faces");
     near(static_cast<Real>(volume), number(f.expected.at("volume")), 1e-12, "fixture volume");
     std::cout << "volume=" << std::setprecision(17) << volume
               << " embedded samples=" << embedded_samples
@@ -511,6 +604,7 @@ void l1(const Fixture& f, const Output& out, Real threshold) {
 }
 void run(const std::filesystem::path& root, const std::string& name) {
     const Fixture f(root / name);
+    internal_side_regression(f);
     if (name == "chamfer_lid_octagon") {
         auto legacy = f.background(), general = f.background();
         const auto a =
