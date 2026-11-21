@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import subprocess
 import unittest
+import xml.etree.ElementTree as ET
 
 
 parser = argparse.ArgumentParser()
@@ -69,6 +70,12 @@ class HighmemAcceptance(unittest.TestCase):
                           "pinned Release peak 1,882,428 KiB exceeds 1.5 GiB")
         listed = set(inventory("-L", "^highmem$"))
         self.assertEqual(listed, self.highmem)
+        listing = subprocess.run(
+            ["ctest", "--test-dir", args.build, "-L", "highmem", "-N"],
+            check=True, capture_output=True, text=True,
+        ).stdout
+        self.assertEqual(set(re.findall(r"^\s*Test\s+#\d+:\s+(\S+)\s*$", listing, re.M)),
+                         self.highmem, "ctest -L highmem -N must list exactly the selection")
 
     def test_shared_lock(self):
         locked = {
@@ -158,7 +165,9 @@ class HighmemAcceptance(unittest.TestCase):
         # selecting a test in place of a successful pinned Release measurement.
         self.assertIsNotNone(args.measurements, "provide --measurements raw-evidence-root")
         self.assertIsNotNone(args.pr_body, "provide --pr-body pr-body.md")
+        self.assertIsNotNone(args.selection, "provide --selection measured-tests.txt")
         self.assertTrue(self.highmem, "full measured acceptance needs a nonempty selection")
+        selection = set(args.selection.read_text().splitlines())
         peaks = {}
         for path in sorted(args.measurements.rglob("result.json")):
             result = json.loads(path.read_text())
@@ -166,6 +175,17 @@ class HighmemAcceptance(unittest.TestCase):
             if (result.get("revision") != "eaed3e4" or result.get("status") != 0
                     or result.get("outcomes") != {name: "passed"}
                     or result.get("disabled", False)):
+                continue
+            # A summary's pass flag and revision alone cannot establish a
+            # successful Release run. Reuse the profiler's saved cache/JUnit.
+            measured_cache = (path.parent.parent / "cache.txt").read_text()
+            if not re.search(r"^CMAKE_BUILD_TYPE:STRING=Release$", measured_cache, re.M):
+                continue
+            cases = ET.parse(path.parent / "results.xml").findall(".//testcase")
+            if (len(cases) != 1 or cases[0].get("name") != name
+                    or cases[0].get("status") != "run"
+                    or any(cases[0].find(tag) is not None
+                           for tag in ("skipped", "failure", "error"))):
                 continue
             raw = (path.parent / "time.txt").read_text()
             peak = re.search(r"Maximum resident set size \(kbytes\):\s*(\d+)", raw)
@@ -182,6 +202,14 @@ class HighmemAcceptance(unittest.TestCase):
         with self.subTest(evidence="measured selection"):
             self.assertEqual(self.highmem, set(peaks),
                              "every successfully measured high-memory test must be locked")
+        with self.subTest(evidence="selection file"):
+            self.assertEqual(selection, set(peaks),
+                             "selection file must equal successful pinned Release measurements")
+        with self.subTest(evidence="selection lock membership"):
+            self.assertEqual(selection, {
+                name for name, props in self.props.items()
+                if "chipcae_highmem" in props.get("RESOURCE_LOCK", [])
+            })
         rows = {}
         peak_column = None
         for line in args.pr_body.read_text().splitlines():
@@ -197,6 +225,7 @@ class HighmemAcceptance(unittest.TestCase):
                 self.assertNotIn(name, rows, "duplicate PR table row")
                 rows[name] = int(columns[peak_column].replace(",", ""))
         self.assertEqual(set(rows), self.highmem, "PR table must equal the CTest selection")
+        self.assertEqual(set(rows), selection, "PR table must equal the measured selection file")
         for name, kib in rows.items():
             with self.subTest(name=name):
                 self.assertIn(kib, peaks.get(name, set()),
@@ -375,7 +404,7 @@ else:
         [sys.executable, str(Path(__file__).with_name("check_highmem.py")),
          "--build", str(args.build), "--backend", "1",
          "--case", "measured_evidence", "--measurements", str(args.measurements),
-         "--pr-body", str(args.pr_body)], check=True,
+         "--pr-body", str(args.pr_body), "--selection", str(args.selection)], check=True,
     )
     (args.evidence / "after-inventory.json").write_text(inventory)
     baseline = json.loads((args.evidence / "baseline-j4" / "report.json").read_text())
