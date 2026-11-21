@@ -1746,6 +1746,8 @@ void single_piece_plane(bool common) {
                  1e-12,
                  "body-0 plane clips substrate volume");
         equivalent(actual.cut, split.cut);
+        exact(actual.cut.cut_elem_gid, split.cut.cut_elem_gid, "split cut element gids");
+        exact(actual.cut.small_subs, split.cut.small_subs, "split small-subcell membership");
         exact(duplicate.mesh, actual.mesh, "duplicate extra plane preserves every mesh field");
         exact(duplicate.cut, actual.cut, "duplicate extra plane preserves every cut field");
         // Exercise both overloads even when the full-cut legacy contract fails.
