@@ -1,0 +1,7 @@
+{
+ "case": "E_empty",
+ "ok": false,
+ "path": "cut/union",
+ "reason": "invalid piece",
+ "mesh_unchanged": true
+}

@@ -29,6 +29,7 @@
 #include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
+#include <QPlainTextEdit>
 #include <QPointer>
 #include <QProcessEnvironment>
 #include <QPushButton>
@@ -36,7 +37,9 @@
 #include <QStatusBar>
 #include <QStringList>
 #include <QSurfaceFormat>
+#include <QTableView>
 #include <QTemporaryDir>
+#include <QTextEdit>
 #include <QThread>
 #include <QUuid>
 #include <QVTKOpenGLNativeWidget.h>
@@ -376,29 +379,95 @@ void checkAssembly(MainWindow& w, const QString& annotation) {
     auto indexed = tree->locate("/layers/0/regions/0", "bodies-index");
     check(indexed.isValid() && indexed.parent().isValid(), "lid appears under Bodies index");
     check(indexed.parent().data(CaseTreeModel::BodyAnnotationRole) == annotation,
-          "Bodies annotation equals top-level report part summary");
+          "Bodies annotation equals sidecar parts.material_approx summary");
     auto displayed = tree->locate("/layers/0/regions/0", "stack");
     check(displayed.isValid() && displayed.parent().isValid() &&
               displayed.parent().data(CaseTreeModel::BodyAnnotationRole).toString() == QString(""),
           "stack display group has no body annotation");
 }
-// Keep the real importer and adapt only its report inside this test's temporary directory.
-QString assemblyReportAdapter(Fixture& f, bool nonArray) {
+// The fixture adapter emits the frozen dual-file protocol independently of the
+// shipped mock's current report format. It still uses that mock's stack generator.
+QString assemblyReportAdapter(Fixture& f, const QString& mode = "valid") {
     auto encoded = [](const QString& value) {
         const auto json = QJsonDocument(QJsonArray{value}).toJson(QJsonDocument::Compact);
         return json.mid(1, json.size() - 2);
     };
-    auto script = f.temp.filePath("assembly-report.py");
+    auto root = QString(CHIPCAE_REPOSITORY) + "/tests/contract/fixtures/import-report-1.0";
+    if (!QDir(root).exists())
+        root = qEnvironmentVariable("CHIPCAE_IMPORT_REPORT_FIXTURE_DIR");
+    check(!root.isEmpty() && QDir(root).exists(),
+          "set CHIPCAE_IMPORT_REPORT_FIXTURE_DIR to frozen fixtures");
+    const auto frozen = f.temp.filePath("frozen-assembly-report.json");
+    if (!QFile::exists(frozen))
+        check(QFile::copy(root + "/assembly_parts_synthetic/import_report.json", frozen),
+              "copy frozen assembly sidecar");
+    const auto script = f.temp.filePath("assembly-report.py");
     write(script,
-          "import json, runpy, sys\nfrom pathlib import Path\nfixture = runpy.run_path(" +
+          "import json, runpy, sys\nfrom pathlib import Path\nmode = " + encoded(mode) +
+              "\nfrozen = " + encoded(frozen) + "\nfixture = runpy.run_path(" +
               encoded(assemblyMock()) +
-              ")\ncode = fixture['main']()\nif code: sys.exit(code)\n"
-              "path = Path(sys.argv[sys.argv.index('--report') + 1])\n"
-              "report = json.loads(path.read_text())\n"
-              "parts = report.pop('parts')\nreport['nested'] = {'parts': parts}\n" +
-              (nonArray ? QByteArray("report['parts'] = {'lid': True}\n") : QByteArray{}) +
-              "path.write_text(json.dumps(report))\n");
+              R"PY()
+code = fixture['main']()
+if code: sys.exit(code)
+a=sys.argv[1:]
+path=Path(a[a.index('--report')+1])
+summary=json.loads(path.read_text())
+summary['schema_version']='import-report/1.0'
+summary.pop('parts',None)
+sidecar=json.loads(Path(frozen).read_text())
+assembly=json.loads(Path(a[a.index('--assembly')+1]).read_text())
+sidecar['parts']['material_approx']=[{'id':p['id'],'material_approx':p.get('material_approx') is True,'label':'近似材料' if p.get('material_approx') is True else ''} for p in assembly['parts']]
+if mode=='false': sidecar['parts']['material_approx']=[{'id':'lid','material_approx':False}]
+if mode=='missing-item': sidecar['parts']['material_approx']=[]
+if mode=='duplicate': sidecar['parts']['material_approx']=[{'id':'lid','material_approx':False},{'id':'lid','material_approx':True}]
+if mode=='no-parts': sidecar.pop('parts')
+if mode=='bad-parts': sidecar['parts']=[]
+if mode=='bad-material': sidecar['parts']['material_approx']={}
+if mode=='bad-bool': sidecar['parts']['material_approx']=[{'id':'lid','material_approx':'true'}]
+# Deliberately misleading legacy summary values must never supply the annotation.
+if mode in ('false','missing-item','no-parts','bad-parts','bad-material','bad-bool','duplicate'):
+    summary['parts']=[{'id':'lid','material_approx':mode!='duplicate'}]
+if mode=='nested-summary':
+    summary['nested']={'parts':[{'id':'lid','material_approx':False}]}
+    summary['parts']={'lid':False}
+if mode.startswith('summary-version-') or mode.startswith('sidecar-version-'):
+    target=summary if mode.startswith('summary-') else sidecar
+    version=mode.split('-version-',1)[1]
+    if version=='missing': target.pop('schema_version')
+    elif version=='number': target['schema_version']=1
+    else: target['schema_version']=version
+sidecar_path=Path(a[a.index('-o')+1]).parent/'import_report.json'
+sidecar_path.write_text(json.dumps(sidecar))
+path.write_text(json.dumps(summary))
+)PY");
     return script;
+}
+QString importDockText(MainWindow& w) {
+    QString result;
+    for (auto* dock : w.findChildren<QDockWidget*>())
+        if (dock->windowTitle() == "Import log")
+            for (auto* text : dock->findChildren<QPlainTextEdit*>())
+                result += text->toPlainText();
+    return result;
+}
+QString importDetailsText(MainWindow& w) {
+    QString result = importDockText(w);
+    for (auto* dialog : w.findChildren<QDialog*>()) {
+        for (auto* text : dialog->findChildren<QPlainTextEdit*>())
+            result += text->toPlainText();
+        for (auto* text : dialog->findChildren<QTextEdit*>())
+            result += text->toPlainText();
+        for (auto* label : dialog->findChildren<QLabel*>())
+            result += label->text();
+        for (auto* table : dialog->findChildren<QTableView*>()) {
+            if (!table->model())
+                continue;
+            for (int row = 0; row < table->model()->rowCount(); ++row)
+                for (int col = 0; col < table->model()->columnCount(); ++col)
+                    result += table->model()->index(row, col).data().toString() + '\n';
+        }
+    }
+    return result;
 }
 // Use the real controller and subscribe before starting: an idle process alone is not success.
 PreviewController* previewController(MainWindow& w) {
@@ -924,9 +993,16 @@ int main(int argc, char** argv) {
         check(w.document()->stackJson() == before, "rejected assembly leaves stack unchanged");
         checkAssembly(w, QString("近似材料"));
     });
-    for (bool nonArray : {false, true}) {
-        test(nonArray ? "assembly report with non-array parts clears annotations"
-                      : "assembly report without parts clears annotations",
+    for (const auto* mode : {"valid",
+                             "false",
+                             "missing-item",
+                             "duplicate",
+                             "nested-summary",
+                             "no-parts",
+                             "bad-parts",
+                             "bad-material",
+                             "bad-bool"}) {
+        test((QString("assembly annotation reads only sidecar: ") + mode).toUtf8().constData(),
              [&] {
                  Fixture f(argv[1]);
                  f.configure();
@@ -934,9 +1010,76 @@ int main(int argc, char** argv) {
                  f.openCase(w);
                  importAssembly(w, assemblyInput());
                  checkAssembly(w, QString("近似材料"));
-                 importAssembly(w, assemblyInput(), true, assemblyReportAdapter(f, nonArray));
-                 checkAssembly(w, QString(""));
+                 importAssembly(w, assemblyInput(), true, assemblyReportAdapter(f, mode));
+                 const QString m = mode;
+                 const bool approx = m == "valid" || m == "duplicate" || m == "nested-summary";
+                 checkAssembly(w, approx ? QString("近似材料") : QString{});
+                 // Neither an old annotation nor summary decoys may survive a reimport.
+                 if (approx) {
+                     importAssembly(
+                         w, assemblyInput(), true, assemblyReportAdapter(f, "missing-item"));
+                     checkAssembly(w, QString{});
+                 }
              });
+    }
+    test("C3 displays split layers rewrite targets and welded interface count", [&] {
+        Fixture f(argv[1]);
+        f.configure();
+        MainWindow w;
+        f.openCase(w);
+        importAssembly(w, assemblyInput(), true, assemblyReportAdapter(f));
+        const auto text = importDetailsText(w);
+        const auto normalized = QString(text).toLower().replace(' ', '_');
+        check(normalized.contains("split_layers") || text.contains("拆分"),
+              "assembly details identify split layers");
+        check(normalized.contains("rewrite_targets") || text.contains("回写") ||
+                  text.contains("改写"),
+              "assembly details identify rewrite targets");
+        check(normalized.contains("welded_interfaces") || text.contains("焊接"),
+              "assembly details identify welded interfaces");
+        const QRegularExpression weldCount("(?:welded[_ ]interfaces|焊接)[^0-9]{0,32}0",
+                                           QRegularExpression::CaseInsensitiveOption);
+        check(text.contains("L#0") && text.contains("L#1") && text.contains("region:R#0") &&
+                  text.contains("interface:L#1|U") && weldCount.match(text).hasMatch(),
+              "assembly details show actual split/rewrite values and labelled zero weld count");
+    });
+    for (bool summary : {true, false}) {
+        for (const auto* version :
+             {"missing", "import-report/2.0", "import-report/1.0 ", "number"}) {
+            test((QString("P1 import dock ") + (summary ? "summary " : "sidecar ") + version)
+                     .toUtf8()
+                     .constData(),
+                 [&] {
+                     Fixture f(argv[1]);
+                     f.configure();
+                     MainWindow w;
+                     f.openCase(w);
+                     const auto adapter = assemblyReportAdapter(
+                         f,
+                         (summary ? QString("summary-version-") : QString("sidecar-version-")) +
+                             version);
+                     int completions = 0;
+                     QObject receiver;
+                     QObject::connect(w.importController(),
+                                      &ImportController::finished,
+                                      &receiver,
+                                      [&](bool) { ++completions; });
+                     check(w.importAssemblyPath(assemblyInput(), PYTHON_EXECUTABLE, {adapter}),
+                           "version import starts");
+                     check(waitFor([&] { return completions == 1; }),
+                           "version import completes without crash");
+                     check(importDockText(w).contains("导入报告版本不受支持"),
+                           "P1 unsupported report version reaches import dock");
+                     if (summary)
+                         check(w.importController()->outcome() == ImportOutcome::Failed,
+                               "unsupported summary cannot be Accepted");
+                     else {
+                         check(w.importController()->outcome() == ImportOutcome::Accepted,
+                               "unsupported sidecar preserves matched OK");
+                         checkAssembly(w, QString{});
+                     }
+                 });
+        }
     }
     test("assembly to convection to preview to submit to completed results", [&] {
         Fixture f(argv[1]);

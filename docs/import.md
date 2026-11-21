@@ -66,8 +66,8 @@ Enable `CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE` for geometry acceptance tests
 The main OCCT test build includes the synthetic STEP fixture generator; missing
 fixtures fail the tests. Repair-policy and synthetic split/rewrite report tests
 remain active without OCCT.
-Expanded `parts_from_step` identities use the body name; the schema-required
-`bodies` mapping `id` value does not rename a body.
+Expanded `parts_from_step` identities use the `id` in the `bodies` mapping;
+mapping keys only match STEP body names verbatim (I2 v1.0.2 §2.1).
 
 Assembly board, material-map, and STEP input paths all follow the frozen
 assembly schema: they are relative to the assembly file and cannot contain

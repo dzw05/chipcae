@@ -1,0 +1,7 @@
+{
+ "case": "E_disconnected",
+ "ok": false,
+ "path": "outline.unsupported",
+ "reason": "outline: disconnected solid in one cell",
+ "mesh_unchanged": true
+}

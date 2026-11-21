@@ -387,6 +387,7 @@ slice_prismatic(const StepImportResult& input, std::string_view body, const Slic
             d.tier = delta <= options.tau_b ? Tier::B : Tier::C;
             d.reason = DefectReason::PART_NOT_PRISMATIC;
             d.size = delta;
+            d.dimension = "delta";
             std::ostringstream report;
             report.precision(17);
             report << "maximum section Hausdorff distance; estimated volume error (m^3): "

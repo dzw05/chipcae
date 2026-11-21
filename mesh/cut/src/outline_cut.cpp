@@ -18,7 +18,7 @@ Expected<std::optional<CutLayerArrays>> apply_outline_cut(HexMeshArrays& mesh,
                                                           const CutOptions& options,
                                                           const CutGeometry& extra) {
     auto ring = outline.polygon;
-    if (ring.empty() && extra.planes.empty())
+    if (ring.empty() && extra.planes.empty() && extra.unions.empty())
         return std::optional<CutLayerArrays>{};
     CutGeometry geometry;
     if (!ring.empty()) {
@@ -61,14 +61,20 @@ Expected<std::optional<CutLayerArrays>> apply_outline_cut(HexMeshArrays& mesh,
         }
     }
     geometry.planes.insert(geometry.planes.end(), extra.planes.begin(), extra.planes.end());
+    geometry.unions = extra.unions;
     auto opt = options;
     opt.export_polyhedra = true;
     opt.keep_void = false;
-    auto clipped = build_cut_layer(mesh, geometry, opt);
-    if (!clipped)
+    auto candidate = mesh;
+    auto clipped = build_cut_layer(candidate, geometry, opt);
+    if (!clipped) {
+        if (!extra.unions.empty())
+            return clipped.error();
         return Error{"outline", clipped.error().path + ": " + clipped.error().reason};
-    if (mesh.elem_gid.empty())
+    }
+    if (candidate.elem_gid.empty())
         return Error{"outline", "empty cut domain"};
+    mesh = std::move(candidate);
     return std::optional<CutLayerArrays>{std::move(clipped.value())};
 }
 } // namespace chipcae::mesh::cut
@@ -101,7 +107,7 @@ Expected<std::optional<CutLayerArrays>> apply_outline_cut_general(HexMeshArrays&
                                                                   const Footprint& outline,
                                                                   const CutOptions& options,
                                                                   const CutGeometry& extra) {
-    if (outline.polygon.empty() && extra.planes.empty())
+    if (outline.polygon.empty() && extra.planes.empty() && extra.unions.empty())
         return std::optional<CutLayerArrays>{};
     const auto legacy = [&](const Footprint& footprint) -> Expected<std::optional<CutLayerArrays>> {
         auto candidate = mesh;
@@ -193,7 +199,7 @@ Expected<std::optional<CutLayerArrays>> apply_outline_cut_general(HexMeshArrays&
     auto candidate = mesh;
     auto clipped = build_cut_layer_union(candidate, pieces, extra, opt, outline_phi);
     if (!clipped) {
-        if (clipped.error().path == "outline.unsupported")
+        if (!extra.unions.empty() || clipped.error().path == "outline.unsupported")
             return clipped.error();
         return Error{"outline", clipped.error().path + ": " + clipped.error().reason};
     }
