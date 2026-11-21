@@ -1,0 +1,432 @@
+"""CLI acceptance: attach bonds fill the gap and participate in thin-layer review."""
+from pathlib import Path
+import math
+import re
+import shutil
+import sys
+import tempfile
+import unittest
+
+from assembly_test_support import (
+    Assembly, b_ids, check, require, require_assembly_geometry,
+)
+
+require('JSONCONS')
+require('ECAD')
+require_assembly_geometry()
+
+
+def intervals(stack):
+    z = 0.0
+    for layer in stack['layers']:
+        end = z + layer['thickness']
+        yield z, end, layer
+        z = end
+
+
+def has_body(layer, body):
+    return any(r.get('body') == body for r in layer.get('regions', []))
+
+
+def overlaps(z0, z1, lower, upper):
+    # Board-relative subtraction can move a shared face by a few ULPs.
+    return (z0 < upper and z1 > lower
+            and not math.isclose(z0, upper, rel_tol=4 * sys.float_info.epsilon, abs_tol=0)
+            and not math.isclose(z1, lower, rel_tol=4 * sys.float_info.epsilon, abs_tol=0))
+
+
+def stepped_lid(source, destination):
+    """Reuse the generated box's STEP topology to add a translated upper box.
+
+    One product contains two touching solids: [1, 2] x [1, 2] at z=[0, .5]
+    and [1.5, 2.5] x [1, 2] at z=[.5, 1], all in millimetres.
+    """
+    text = source.read_text()
+    entities = {int(m[1]): m[2] for m in re.finditer(r'#(\d+)\s*=\s*(.*?);', text, re.S)}
+    solid, = [key for key, value in entities.items()
+              if value.startswith('MANIFOLD_SOLID_BREP(')]
+    # Copy only the solid and its dependencies; retain the product and units.
+    geometry = set()
+    pending = [solid]
+    while pending:
+        key = pending.pop()
+        if key not in geometry:
+            geometry.add(key)
+            pending.extend(int(ref) for ref in re.findall(r'#(\d+)', entities[key]))
+    first_new = max(entities) + 1
+    remap = {key: first_new + index for index, key in enumerate(sorted(geometry))}
+    upper = []
+    for key in sorted(geometry):
+        value = re.sub(r'#(\d+)', lambda m: f'#{remap[int(m[1])]}', entities[key])
+        point = re.fullmatch(r"CARTESIAN_POINT\('',\(([^)]+)\)\)", value)
+        if point:
+            coordinates = [float(c) for c in point[1].split(',')]
+            if len(coordinates) == 3:
+                coordinates[0] += .5
+                coordinates[2] += .5
+                value = "CARTESIAN_POINT('',(" + ','.join(map(str, coordinates)) + '))'
+        upper.append(f'#{remap[key]} = {value};')
+    text, count = re.subn(r'(ADVANCED_BREP_SHAPE_REPRESENTATION\([^;]*?)'
+                         + rf'#{solid}\)', rf'\g<1>#{solid},#{remap[solid]})', text)
+    assert count == 1, 'expected one generated box representation'
+    destination.write_text(text.replace('ENDSEC;\nEND-ISO',
+                                        '\n'.join(upper) + '\nENDSEC;\nEND-ISO'))
+
+
+class AssemblyBond(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.baseline_dir = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.baseline_dir.cleanup)
+        baseline = Assembly(cls.baseline_dir.name)
+        # Resolve attachment faces from the unmodified board, before merge can
+        # introduce roundoff into the exported layer thicknesses.
+        check(baseline.run('--accept-b-tier'), 0)
+        board_layers = list(intervals(baseline.stack()))
+        cls.board_top = next(z1 for _, z1, layer in board_layers if layer['name'] == 'B.Cu')
+        cls.board_bottom_name = board_layers[0][2]['name']
+        baseline.boxes()
+        check(baseline.run('--accept-b-tier'), 0)
+        stack = baseline.stack()
+        cls.t_min = baseline.import_report()['t_min']
+        cls.eps_weld = baseline.import_report()['eps_weld']
+        cls.thickness = 2 * cls.t_min
+        layers = list(intervals(stack))
+        first_lid = next(i for i, (_, _, layer) in enumerate(layers)
+                         if has_body(layer, 'lid'))
+        assert first_lid > 0, stack
+        cls.lid_height = sum(layer['thickness'] for _, _, layer in layers
+                             if has_body(layer, 'lid'))
+        cls.lid_box = next(r['footprint']['box']
+                           for r in layers[first_lid][2]['regions'] if r['body'] == 'lid')
+        assert not any(has_body(layer, 'lid.bond') for _, _, layer in layers), stack
+
+    def setUp(self):
+        # Every case starts without an output stack, especially the exit-6 case.
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.a = Assembly(directory.name)
+        shutil.copyfile(Path(self.baseline_dir.name) / 'lid.step', self.a.root / 'lid.step')
+        self.a.part()
+
+    def close(self, actual, expected, *, scale):
+        tolerance = 4 * sys.float_info.epsilon * scale
+        self.assertLessEqual(abs(actual - expected), tolerance, (actual, expected))
+
+    def place(self, thickness, *, bottom=False, bond=True):
+        attach = (f'layer:{self.board_bottom_name}@bottom' if bottom
+                  else 'layer:B.Cu@top')
+        placement = {'attach': attach, 'gap': thickness}
+        if bond:
+            placement['bond'] = {'material': 'fr4_eq', 'thickness': thickness}
+        self.a.document['parts'][0]['placement'] = placement
+        self.a.save()
+
+    def assert_bond(self, stack, lower, upper, *, face, origin=0.0):
+        # Both bond faces use the attachment rule, independent of stack origin
+        # and the absolute coordinates of the compared endpoints.
+        scale = max(abs(self.thickness), abs(face))
+        layers = list(intervals(stack))
+        bonded = [(z0 - origin, z1 - origin, layer) for z0, z1, layer in layers
+                  if has_body(layer, 'lid.bond')]
+        self.assertTrue(bonded, 'missing lid.bond regions: attach bond gap is still void')
+        self.close(min(z0 for z0, _, _ in bonded), lower, scale=scale)
+        self.close(max(z1 for _, z1, _ in bonded), upper, scale=scale)
+        for z0, z1, layer in bonded:
+            self.close(z0, lower, scale=scale)
+            self.close(z1, upper, scale=scale)
+            self.close(layer['thickness'], self.thickness, scale=self.thickness)
+            # No background material: space outside the bond footprint stays void.
+            self.assertFalse(layer.get('material'), layer)
+            for region in layer['regions']:
+                self.assertEqual(region['body'], 'lid.bond')
+                self.assertEqual(region['material'], 'fr4_eq')
+                self.assertTrue(region['name'].startswith('lid.bond#'), region)
+                box = region['footprint']['box']
+                self.assertEqual(len(box), len(self.lid_box))
+                for actual, expected in zip(box, self.lid_box):
+                    self.close(actual, expected, scale=abs(expected))
+        # Check all layers intersecting the gap, not just the bond-bearing subset.
+        gap = [(z0 - origin, z1 - origin, layer) for z0, z1, layer in layers
+               if overlaps(z0 - origin, z1 - origin, lower, upper)]
+        self.assertTrue(gap)
+        self.close(gap[0][0], lower, scale=scale)
+        self.close(gap[-1][1], upper, scale=scale)
+        for _, _, layer in gap:
+            self.assertTrue(has_body(layer, 'lid.bond'), layer)
+        self.assertFalse([d for d in self.a.import_report()['defects']
+                          if d['defect_id'].startswith('lid.bond/')])
+
+    def test_top_bond_fills_gap(self):
+        self.place(self.thickness)
+        check(self.a.run('--accept-b-tier'), 0)
+        stack = self.a.stack()
+        self.assert_bond(stack, self.board_top, self.board_top + self.thickness,
+                         face=self.board_top)
+        self.close(min(z0 for z0, _, layer in intervals(stack) if has_body(layer, 'lid')),
+                   self.board_top + self.thickness,
+                   scale=max(self.thickness, abs(self.board_top)))
+
+    def add_frame_witness(self):
+        self.a.part('witness', 'lid.step',
+                    placement={'frame': 'step', 'origin': [.003, 0, self.board_top]})
+
+    def test_top_bond_alongside_frame_part(self):
+        self.place(self.thickness)
+        self.a.document['parts'][0]['material_approx'] = True
+        # The disjoint frame part gives every gap layer a region. This isolates
+        # missing bond geometry from the existing schema rejection of void layers.
+        self.add_frame_witness()
+        check(self.a.run('--accept-b-tier'), 0)
+        stack = self.a.stack()
+        self.assertTrue(any(has_body(layer, 'witness') for layer in stack['layers']))
+        self.assertTrue(any(has_body(layer, 'lid.bond') for layer in stack['layers']),
+                        'missing lid.bond regions: attach bond gap is still void')
+        bonded = [(z0, z1, layer) for z0, z1, layer in intervals(stack)
+                  if has_body(layer, 'lid.bond')]
+        scale = max(self.thickness, abs(self.board_top))
+        self.close(min(z0 for z0, _, _ in bonded), self.board_top, scale=scale)
+        self.close(max(z1 for _, z1, _ in bonded), self.board_top + self.thickness, scale=scale)
+        for _, _, layer in bonded:
+            self.close(layer['thickness'], self.thickness, scale=self.thickness)
+            for region in layer['regions']:
+                if region['body'] != 'lid.bond':
+                    continue
+                self.assertEqual(region['material'], 'fr4_eq')
+                self.assertTrue(region['name'].startswith('lid.bond#'), region)
+                box = region['footprint']['box']
+                self.assertEqual(len(box), len(self.lid_box))
+                for actual, expected in zip(box, self.lid_box):
+                    self.close(actual, expected, scale=abs(expected))
+        # Approximation belongs to the input lid, never its synthetic bond.
+        self.assertEqual(self.a.import_report()['parts']['material_approx'],
+                         [{'id': 'lid', 'material_approx': True, 'label': '近似材料'}])
+
+    def test_bottom_bond_fills_gap(self):
+        self.place(self.thickness, bottom=True)
+        check(self.a.run('--accept-b-tier'), 0)
+        stack = self.a.stack()
+        # Stack JSON has thicknesses only; anchor negative z to the board's lower face.
+        origin = next(z0 for z0, _, layer in intervals(stack)
+                      if layer['name'] == self.board_bottom_name)
+        self.assert_bond(stack, -self.thickness, 0.0, face=0.0, origin=origin)
+        self.close(max(z1 - origin for _, z1, layer in intervals(stack)
+                       if has_body(layer, 'lid')), -self.thickness, scale=self.thickness)
+
+    def assert_stepped_bond(self, *, bottom):
+        stepped_lid(self.a.root / 'lid.step', self.a.root / 'stepped.step')
+        self.a.document['parts'][0]['step'] = 'stepped.step'
+        self.place(self.thickness, bottom=bottom)
+        # These box probes reach only the lower / upper slab's exclusive xy area.
+        # Their z intervals cover the bond without meeting a supported lid slab.
+        z = -.0005 if bottom else self.board_top
+        for name, dx in [('lower_probe', -.0006), ('upper_probe', .0011)]:
+            self.a.part(name, 'lid.step',
+                        placement={'frame': 'step', 'origin': [dx, 0, z]})
+        # merge_parts currently rejects distinct sections even for boxes, so the
+        # CLI publishes no stack. Its overlap diagnostics still expose the bond
+        # footprint: the whole-part bbox would intersect BOTH probes.
+        check(self.a.run('--accept-b-tier'), 7)
+        self.assertFalse(self.a.output.exists())
+        defects = self.a.import_report()['defects']
+        self.assertEqual([(d['defect_id'], d['tier'], d['reason'], d['details'])
+                          for d in defects if d['reason'] != 5],
+                         [('lid/cut_unsupported#1', 'C', 3,
+                           'cut_unsupported: multiple distinct cut sections')])
+        probe = 'upper_probe' if bottom else 'lower_probe'
+        self.assertEqual([(d['defect_id'], d['tier'], d['details'])
+                          for d in defects if d['reason'] == 5],
+                         [(probe + '#0/overlap/lid.bond#0#0', 'C',
+                           'overlap with lid.bond')])
+
+    def test_top_bond_uses_lowest_slab_footprint(self):
+        self.assert_stepped_bond(bottom=False)
+
+    def test_bottom_bond_uses_highest_slab_footprint(self):
+        self.assert_stepped_bond(bottom=True)
+
+    def test_bond_face_mismatch_is_reported(self):
+        thickness = .01
+        gap = .009999999999999992
+        # place() accepts this difference, but placement roundoff pushes the
+        # synthetic outer face beyond the unchanged four-epsilon snap bound.
+        self.assertLessEqual(abs(gap - thickness),
+                             4 * sys.float_info.epsilon * max(gap, thickness))
+        for side in ('top', 'bottom'):
+            with self.subTest(side=side):
+                self.a.document['parts'][0]['placement'] = {
+                    'attach': f'layer:B.Cu@{side}', 'gap': gap,
+                    'bond': {'material': 'fr4_eq', 'thickness': thickness}}
+                self.a.save()
+                check(self.a.run('--accept-b-tier'), 1)
+                self.assertFalse(self.a.output.exists())
+                self.assertEqual(self.a.defects()['code'], 'INTERNAL')
+                self.assertNotIn('lid.bond/attach_invalid',
+                                 [d['defect_id'] for d in self.a.import_report()['defects']])
+
+    def test_bond_uses_frame_target_global_face(self):
+        # A binary-exact gap isolates target coordinates from thickness rounding.
+        self.thickness = 2 ** -13
+        for bottom in (False, True):
+            with self.subTest(bottom=bottom):
+                self.place(self.thickness, bottom=bottom)
+                origin_z = -self.lid_height if bottom else self.board_top
+                self.a.document['parts'][0]['placement']['attach'] = (
+                    'part:anchor@bottom' if bottom else 'part:anchor@top')
+                self.a.document['parts'] = self.a.document['parts'][:1]
+                self.a.part('anchor', placement={'frame': 'step',
+                                                 'origin': [0, 0, origin_z]})
+                check(self.a.run('--accept-b-tier'), 0)
+                stack = self.a.stack()
+                origin = next(z0 for z0, _, layer in intervals(stack)
+                              if layer['name'] == self.board_bottom_name)
+                face = origin_z if bottom else origin_z + self.lid_height
+                lower, upper = ((face - self.thickness, face) if bottom
+                                else (face, face + self.thickness))
+                self.assert_bond(stack, lower, upper, face=face, origin=origin)
+
+    def test_top_bond_roundoff_meets_attachment_face(self):
+        # Translate the local box by 1 m so top placement cancellation exceeds
+        # merge's face-relative coincidence bound and needs the z0 snap.
+        path = self.a.root / 'lid.step'
+
+        def translate(point):
+            coordinates = [float(c) for c in point[1].split(',')]
+            if len(coordinates) == 3:
+                coordinates[2] += 1000  # STEP fixture coordinates are in mm.
+            return "CARTESIAN_POINT('',(" + ','.join(map(str, coordinates)) + '))'
+
+        path.write_text(re.sub(r"CARTESIAN_POINT\('',\(([^)]+)\)\)", translate,
+                               path.read_text()))
+        predicted_z0 = 1 + (self.board_top + self.thickness - 1)
+        self.assertGreater(abs(predicted_z0 - self.thickness - self.board_top),
+                           4 * sys.float_info.epsilon * self.board_top)
+        self.place(self.thickness)
+        check(self.a.run(), 0)
+        layers = list(intervals(self.a.stack()))
+        bonded = [(z0, z1, layer) for z0, z1, layer in layers
+                  if has_body(layer, 'lid.bond')]
+        self.assertEqual(len(bonded), 1)
+        z0, z1, layer = bonded[0]
+        self.close(z0, self.board_top, scale=0.0)
+        self.close(layer['thickness'], self.thickness, scale=1 + self.lid_height)
+        self.close(min(lo for lo, _, layer in layers if has_body(layer, 'lid')),
+                   z1, scale=0.0)
+        self.assertFalse([d for d in self.a.import_report()['defects']
+                          if d['defect_id'].startswith('lid.bond/')])
+
+    def test_bottom_bond_roundoff_meets_attachment_face(self):
+        # Original roundoff witness from the architect's ruling: adding T to
+        # this placed face used to create a spurious lid.bond/thin#1 interval.
+        thickness = 7.000000000000001e-05
+        placed_z1 = -6.999999999999997e-05
+        self.close(self.thickness, thickness, scale=thickness)
+        # place() translates the local top by dz = -gap - local_top.
+        # Derive the face from the measured fixture height and configured gap,
+        # then verify the CLI actually preserves that face in its output.
+        local_top = self.lid_height
+        predicted_z1 = local_top + (-thickness - local_top)
+        self.close(predicted_z1, placed_z1, scale=abs(placed_z1))
+        self.assertGreater(predicted_z1 + thickness, 0.0)
+        self.close(predicted_z1 + thickness, 4.0657581468206416e-20,
+                   scale=4.0657581468206416e-20)
+        self.place(thickness, bottom=True)
+        check(self.a.run(), 0)
+        stack = self.a.stack()
+        origin = next(z0 for z0, _, layer in intervals(stack)
+                      if layer['name'] == self.board_bottom_name)
+        actual_z1 = max(z1 - origin for _, z1, layer in intervals(stack)
+                        if has_body(layer, 'lid'))
+        self.close(actual_z1, predicted_z1, scale=abs(predicted_z1))
+        self.assertGreater(actual_z1 + thickness, 0.0)
+        self.close(actual_z1 + thickness, 4.0657581468206416e-20,
+                   scale=4.0657581468206416e-20)
+        self.assert_bond(stack, -thickness, 0.0, face=0.0, origin=origin)
+        bond_top = max(z1 for _, z1, layer in intervals(stack)
+                       if has_body(layer, 'lid.bond'))
+        # Exact shared interface, with no absolute tolerance at the zero face.
+        self.close(bond_top - origin, 0.0, scale=0.0)
+
+    def test_tall_part_bottom_bond_meets_attachment_face(self):
+        # Stretch the synthetic 0.5 mm box to 10 mm. Bottom translation then
+        # accumulates roundoff at the part's scale, beyond the thin bond's scale.
+        path = self.a.root / 'lid.step'
+
+        def stretch(point):
+            coordinates = [float(c) for c in point[1].split(',')]
+            if len(coordinates) == 3:
+                coordinates[2] *= 20
+            return "CARTESIAN_POINT('',(" + ','.join(map(str, coordinates)) + '))'
+
+        path.write_text(re.sub(r"CARTESIAN_POINT\('',\(([^)]+)\)\)", stretch,
+                               path.read_text()))
+        self.place(self.thickness, bottom=True)
+        check(self.a.run(), 0)
+        layers = list(intervals(self.a.stack()))
+        origin = next(z0 for z0, _, layer in layers
+                      if layer['name'] == self.board_bottom_name)
+        lid = [(z0, z1) for z0, z1, layer in layers if has_body(layer, 'lid')]
+        self.close(sum(z1 - z0 for z0, z1 in lid), .01, scale=.01)
+        bonded = [(z0, z1, layer) for z0, z1, layer in layers
+                  if has_body(layer, 'lid.bond')]
+        self.assertEqual(len(bonded), 1)
+        z0, z1, layer = bonded[0]
+        self.close(z1 - origin, 0.0, scale=0.0)
+        self.close(z0 - origin, -self.thickness, scale=.01)
+        self.close(layer['thickness'], self.thickness, scale=.01)
+        self.close(max(top for _, top in lid), z0, scale=0.0)
+        self.assertFalse([d for d in self.a.import_report()['defects']
+                          if d['defect_id'].startswith('lid.bond/')])
+
+    def thin_bond(self):
+        thickness = (self.eps_weld + self.t_min) / 2
+        self.assertLess(self.eps_weld, thickness)
+        self.assertLess(thickness, self.t_min)
+        self.place(thickness)
+
+    def assert_thin_bond_report(self):
+        report = self.a.import_report()
+        matching = [id_ for id_ in b_ids(report) if id_.startswith('lid.bond/thin#')]
+        self.assertTrue(matching, report)
+        for defect in report['defects']:
+            if defect['defect_id'] in matching:
+                self.assertEqual(defect['tier'], 'B')
+                self.assertIs(type(defect['reason']), int)
+                self.assertEqual(defect['reason'], 1)
+
+    def test_thin_bond_requires_acceptance(self):
+        self.thin_bond()
+        check(self.a.run(), 6)
+        self.assertFalse(self.a.output.exists())
+        self.assert_thin_bond_report()
+
+    def test_thin_bond_alongside_frame_part_requires_acceptance(self):
+        self.thin_bond()
+        self.add_frame_witness()
+        check(self.a.run(), 6)
+        self.assertFalse(self.a.output.exists())
+        self.assert_thin_bond_report()
+
+    def test_thin_bond_can_be_accepted(self):
+        self.thin_bond()
+        check(self.a.run('--accept-b-tier'), 0)
+        self.a.stack()
+
+    def test_gap_without_bond_stays_void(self):
+        self.place(self.thickness, bond=False)
+        # Architect ruling: preserve main's schema rejection and publication
+        # behavior. 整层空腔待卡 assembly-floating-gap.
+        result = self.a.run('--accept-b-tier')
+        check(result, 14)
+        self.assertFalse(self.a.output.exists())
+        self.assertEqual(result.stdout, '')
+        self.assertEqual(result.stderr,
+                         'INPUT_INVALID: Must be valid against at least one schema, '
+                         'but found no matching schemas\n')
+        self.assertEqual(self.a.defects()['code'], 'INPUT_INVALID')
+        self.assertFalse([d for d in self.a.import_report()['defects']
+                          if d['defect_id'].startswith('lid.bond/')])
+
+
+if __name__ == '__main__':
+    unittest.main(argv=[sys.argv[0]], verbosity=2)
