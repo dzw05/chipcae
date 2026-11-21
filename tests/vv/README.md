@@ -30,6 +30,49 @@ ctest --test-dir build -R '^vv_result_schema$' --output-on-failure
 `vv_result_schema` 中只有 schema 与检查器的一致性测试需要可选的 `jsonschema`，
 缺包时该项跳过，其余测试照常运行。
 
+## CTest SKIP 审计
+
+`tools.vv.ctest_skip_audit` 只用 Python 标准库，从一份 CTest JUnit 和对应构建目录的
+`CMakeCache.txt` 汇总 Passed、Failed、Skipped、NotRun，不启动 CTest。
+
+```sh
+python3 -m tools.vv.ctest_skip_audit --junit build/junit.xml \
+  --build-dir build --out build/skip-audit --required tests/vv/skip_audit_required.tsv
+python3 -m unittest tests.vv.test_ctest_skip_audit -v
+ctest --test-dir build -R '^vv_ctest_skip_audit_unit$' --output-on-failure
+```
+
+输出 `skip-audit.json` 与 `skip-audit.md`；已有输出目录中仅覆盖这两个文件。
+退出码 0 表示没有启用的必跑项被跳过、未运行或缺失，1 表示存在这些违规，2 表示参数、
+输入或输出读写错误。普通 Failed 仍按 Failed 计数，不产生 skip 违规；必须同时保留
+原始 CTest 的退出码。省略 `--required` 时仅汇总，合法输入的审计退出码为 0。
+
+必跑清单为三列 TSV：`test_name<TAB>requires<TAB>note`，忽略空行和 `#` 注释。
+`requires` 为 `-` 时无条件必跑，否则其中逗号分隔的所有 BOOL 开关必须开启。
+CMake 的 ON/TRUE/YES/Y/1 等真值不区分大小写；OFF/FALSE/NO/N/0、空值、IGNORE、
+NOTFOUND 和 `*-NOTFOUND` 为关闭。缓存中缺少的开关按 OFF 处理并给出警告。
+缺失测试始终列在 `missing_required`，只在启用时违规；未启用项列出 OFF/缺失开关。
+生产清单固定为六项，增删须由 vv 裁定。
+
+四条 CLI 链路的 CMake 环境门控均需 ECAD、MFEM、MPI、HDF5，且需要相应程序 target：
+`f1130_uncut_cli_e2e`、`chain_ipc_uncut_chain`、`odbcli_odbpp_cli_e2e`、
+`fvm_fvm_case_e2e`。`field_compare_ranks` 按 brief 仅以 MPI 为必跑门控，
+但它的实际注册还依赖 MFEM、HDF5 和 solver target，因此 MPI 单独开启时可能报 Missing。
+`vv_result_schema` 无条件必跑。审计器只根据清单中的 BOOL 判断，不推断 target 是否存在。
+
+支持 `<testsuite>`/`<testsuites>` 根，精确测试名重复时按文档顺序取最后一次，并警告次数。
+Disabled 优先归 NotRun；其他带 `<skipped>` 的测试归 Skipped，优先于 `status="notrun"`；
+然后依次判断 notrun、failure/fail、成功 run。未知状态或无效 XML 结构报输入错误。
+原因优先取 skipped 的非空 message，其次取文本，再取 system-out 原文；不解析控制台文字
+判断状态。原因最多保留 500 字符，JSON 保留原始空白，Markdown 对表格换行、竖线做显示转义。
+Skipped 的 `time` 写为 `elapsed_seconds`，缺失、非有限或负值写 null 并警告。
+
+报告记录所有 `CHIPCAE_ENABLE_*` BOOL 的原始值与启用状态，以及 `shutil.which("mpiexec")`。
+提交取缓存 `CMAKE_HOME_DIRECTORY:INTERNAL` 所指源码的当前 HEAD；发现失败写 null 和警告，
+不会回退到审计器所在仓库。该 HEAD 可能不同于原构建时提交，复用旧 JUnit 时应另外记录
+构建来源与时间。`data_class` 固定为 synthetic，报告列表按名称排序。
+35 个验收测试使用合成样本及临时 Git 仓库，包括 500 条测试在 5 秒内完成的检查。
+
 ## 许可
 
 `tools/vv/` 与 `tests/vv/` 按 Apache-2.0 发布（见各目录 LICENSE）。
