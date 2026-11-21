@@ -821,6 +821,16 @@ int run_assembly(const ImportOptions& options) {
                                                           : std::min(z, slab.z0);
                         a.resolved_z = z;
                     }
+                } else if (a.bond && a.target.starts_with("layer:")) {
+                    const auto layer_name = a.target.substr(6);
+                    Real z = 0;
+                    for (const auto& layer : base.layers) {
+                        if (layer.name == layer_name) {
+                            a.resolved_z = a.side == AttachSide::top ? z + layer.thickness : z;
+                            break;
+                        }
+                        z += layer.thickness;
+                    }
                 }
                 placement = a;
             } else
@@ -846,17 +856,8 @@ int run_assembly(const ImportOptions& options) {
                             });
                         bond_slab = Slab{s.z1, s.z1 + bond.thickness, s.sections};
                     }
-                    Real face = attach->resolved_z.value_or(0);
-                    if (!attach->resolved_z) {
-                        for (const auto& layer : base.layers) {
-                            if (layer.name == attach->target.substr(6)) {
-                                if (attach->side == AttachSide::top)
-                                    face += layer.thickness;
-                                break;
-                            }
-                            face += layer.thickness;
-                        }
-                    }
+                    // Use the exact global face supplied to place() for both target kinds.
+                    const Real face = attach->resolved_z.value();
                     // Undo placement roundoff only at the original attachment face.
                     Real& outer = attach->side == AttachSide::top ? bond_slab.z0 : bond_slab.z1;
                     Real scale = std::max(std::abs(bond.thickness), std::abs(face));
@@ -864,8 +865,10 @@ int run_assembly(const ImportOptions& options) {
                     for (const auto& slab : sliced.slabs)
                         scale = std::max({scale, std::abs(slab.z0), std::abs(slab.z1)});
                     const Real bound = 4 * std::numeric_limits<Real>::epsilon() * scale;
-                    if (std::abs(outer - face) > bound)
-                        throw std::runtime_error("INTERNAL: bond does not meet attachment face");
+                    if (std::abs(outer - face) > bound) {
+                        attachment_defect(id + ".bond", "bond does not meet attachment face");
+                        return;
+                    }
                     outer = face;
                     placed.push_back(PlacedPart{id + ".bond", bond.material, {bond_slab}});
                 }

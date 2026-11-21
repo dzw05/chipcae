@@ -245,6 +245,77 @@ class AssemblyBond(unittest.TestCase):
     def test_bottom_bond_uses_highest_slab_footprint(self):
         self.assert_stepped_bond(bottom=True)
 
+    def test_bond_face_mismatch_is_reported(self):
+        thickness = .01
+        gap = .009999999999999992
+        # place() accepts this difference, but placement roundoff pushes the
+        # synthetic outer face beyond the unchanged four-epsilon snap bound.
+        self.assertLessEqual(abs(gap - thickness),
+                             4 * sys.float_info.epsilon * max(gap, thickness))
+        for side in ('top', 'bottom'):
+            with self.subTest(side=side):
+                self.a.document['parts'][0]['placement'] = {
+                    'attach': f'layer:B.Cu@{side}', 'gap': gap,
+                    'bond': {'material': 'fr4_eq', 'thickness': thickness}}
+                self.a.save()
+                check(self.a.run('--accept-b-tier'), 7)
+                self.assertFalse(self.a.output.exists())
+                self.assertEqual(self.a.defects()['code'], 'IMPORT_REJECTED')
+                self.assertEqual([(d['defect_id'], d['tier'], d['reason'])
+                                  for d in self.a.import_report()['defects']],
+                                 [('lid.bond/attach_invalid', 'C', 7)])
+
+    def test_bond_uses_frame_target_global_face(self):
+        # A binary-exact gap isolates target coordinates from thickness rounding.
+        self.thickness = 2 ** -13
+        for bottom in (False, True):
+            with self.subTest(bottom=bottom):
+                self.place(self.thickness, bottom=bottom)
+                origin_z = -self.lid_height if bottom else self.board_top
+                self.a.document['parts'][0]['placement']['attach'] = (
+                    'part:anchor@bottom' if bottom else 'part:anchor@top')
+                self.a.document['parts'] = self.a.document['parts'][:1]
+                self.a.part('anchor', placement={'frame': 'step',
+                                                 'origin': [0, 0, origin_z]})
+                check(self.a.run('--accept-b-tier'), 0)
+                stack = self.a.stack()
+                origin = next(z0 for z0, _, layer in intervals(stack)
+                              if layer['name'] == self.board_bottom_name)
+                face = origin_z if bottom else origin_z + self.lid_height
+                lower, upper = ((face - self.thickness, face) if bottom
+                                else (face, face + self.thickness))
+                self.assert_bond(stack, lower, upper, face=face, origin=origin)
+
+    def test_top_bond_roundoff_meets_attachment_face(self):
+        # Translate the local box by 1 m so top placement cancellation exceeds
+        # merge's face-relative coincidence bound and needs the z0 snap.
+        path = self.a.root / 'lid.step'
+
+        def translate(point):
+            coordinates = [float(c) for c in point[1].split(',')]
+            if len(coordinates) == 3:
+                coordinates[2] += 1000  # STEP fixture coordinates are in mm.
+            return "CARTESIAN_POINT('',(" + ','.join(map(str, coordinates)) + '))'
+
+        path.write_text(re.sub(r"CARTESIAN_POINT\('',\(([^)]+)\)\)", translate,
+                               path.read_text()))
+        predicted_z0 = 1 + (self.board_top + self.thickness - 1)
+        self.assertGreater(abs(predicted_z0 - self.thickness - self.board_top),
+                           4 * sys.float_info.epsilon * self.board_top)
+        self.place(self.thickness)
+        check(self.a.run(), 0)
+        layers = list(intervals(self.a.stack()))
+        bonded = [(z0, z1, layer) for z0, z1, layer in layers
+                  if has_body(layer, 'lid.bond')]
+        self.assertEqual(len(bonded), 1)
+        z0, z1, layer = bonded[0]
+        self.close(z0, self.board_top, scale=0.0)
+        self.close(layer['thickness'], self.thickness, scale=1 + self.lid_height)
+        self.close(min(lo for lo, _, layer in layers if has_body(layer, 'lid')),
+                   z1, scale=0.0)
+        self.assertFalse([d for d in self.a.import_report()['defects']
+                          if d['defect_id'].startswith('lid.bond/')])
+
     def test_bottom_bond_roundoff_meets_attachment_face(self):
         # Original roundoff witness from the architect's ruling: adding T to
         # this placed face used to create a spurious lid.bond/thin#1 interval.
