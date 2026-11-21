@@ -205,10 +205,12 @@ cmake -S . -B "$build" -DCMAKE_BUILD_TYPE=Release \
 cmake --build "$build" -j2
 ctest --test-dir "$build" -V \
   -R '^(f1130_uncut_cli_records|f1130_uncut_cli_e2e|chain_ipc_uncut_chain)$'
-ctest --test-dir "$build" --output-on-failure -j2
 python3 -m unittest discover -s tests/integration/f1130_uncut_cli \
   -p test_uncut_cli_e2e.py -v
 ```
+
+During iteration, run only the related or named acceptance tests above. The
+pipeline runs full CTest once after local work, before the DONE gate.
 
 CMake supplies executable locations when ECAD, MFEM, MPI and HDF5 are enabled.
 Missing executable configuration returns the existing skip code 77. With
@@ -231,9 +233,15 @@ malformed topology and unsupported outlines, optional gids with reordered/empty
 partitions, and coverage/membership defects without gids. Mutation checks reject
 duplicate or incorrect gids, missing fields/layers, wrong layer-name case, invalid
 fractions, all-zero In1 copper, wrong conductivity and 1e-6 K temperature errors.
-A scoped series-kz reference mutation preserves fractions and x/y coefficients,
-then requires C4 to raise `M3 conductivity mismatch` and a validated fail record
-whose only incomplete check is conductivity. The passing parallel control remains.
+A series-kz input mutation overwrites only `conductivity_diag[:,2]` with
+`1/(phi/390+(1-phi)/0.3)`, using independent reference fractions. The reference
+keeps its parallel formula throughout. Mixed cells must exist; input fractions
+and x/y coefficients remain exactly unchanged, and at least one mixed cell
+must exceed relative 1e-14. Real C4 must raise `M3 conductivity mismatch` after
+C3 completes, and the validated fail record must have conductivity as its only
+incomplete check. Other flags are pre-completed solely for this record unit
+check. Restoring the original input must pass real C3/C4/physics and write a
+validated pass record.
 The four-layer B.Cu reference also checks nonempty zero/full-fraction selections
 and the exact float64 endpoint representations of 0.3 and 390. Core checks and
 given-coefficient Q2 self-checks retain their coefficients and tolerances; the
@@ -243,12 +251,13 @@ multilayer series resistance describes layers stacked through thickness.
 
 实测 main baseline: `c4e9eaeac95c7889cec1f9fa3c1ecc30fedb8d75`, containing
 #200 (`8ad1211`) and the parallel-formula change #236 (`c4e9eae`).
-Tested source: `94822c005fac954b9bd678563052dd63f15a788d` (including the
-post-mutation parallel control); the subsequent change only updates this README.
-Local `origin/main` was observed at `e2d391aa60280b297ae2c998e2bc727f6a9c330a`
-during this pass. It was not merged: the actual implementation baseline above
-is retained. The reference already implements parallel conductivity in all
-three directions, so no product or reference formula change was necessary.
+Tested source: `f21f7a4b4730b54df150702d77833465cdaac297` (including the
+input-only series-kz mutation and restored parallel control); this delivery
+only updates this README. Local `origin/main` was observed at
+`e52baacb6f43d0c4c80bb5840f2c7dab3161ff88` during this pass. It was neither
+merged nor tested: the actual implementation baseline above is retained.
+The reference already implements parallel conductivity in all three directions,
+so no product or reference formula change was necessary.
 
 The Release configuration enables tests, ECAD, JSONCONS, MFEM, PETSc, MPI and
 HDF5. Installed MFEM/PETSc, MPI-enabled HDF5 and JSONCONS packages were used;
@@ -260,16 +269,16 @@ search-path warnings about competing `libgomp.so.1` locations; configuration,
 build and the three backend tests succeeded. These are environment
 adjustments, with no CMake or dependency source changes.
 
-实测 targeted CTest: **3/3 passed, zero skips, 7.49 s**. The single e2e
+实测 targeted CTest: **3/3 passed, zero skips, 7.43 s**. The single e2e
 entry point performs both ranks=1 and ranks=2 solve/readback attempts; no
 second invocation with different flags is needed.
 
-实测 direct unittest discovery: **30 tests, OK, zero skips**. The series-kz
+实测 direct unittest discovery: **30 tests, OK, zero skips, 0.649 s**. The series-kz
 mutation has maximum componentwise relative difference `0.99692780519449054`,
 raises `M3 conductivity mismatch`, completes cell fractions and leaves only
 conductivity incomplete in its validated `verdict: fail` record. This is a
 caught negative assertion; the regression tests pass immediately on the
-already-parallel implementation. After the scoped mutation ends, the same
+already-parallel implementation. After restoring the original input, the same
 export passes C3/C4/Q2 physics and produces a validated `verdict: pass` record.
 No missing-feature RED is claimed.
 
@@ -296,7 +305,7 @@ both solves have 80 hexes and zero cut cells.
 | In1.Cu copper area | 2.25 mm² |
 | In2.Cu copper area | 3.0000000000000004 mm² |
 | B.Cu copper area | 6.999999999999999 mm² |
-| Maximum copper-area relative error | 1.4802973661668753e-16 |
+| Maximum copper-area relative error | 1.4802973661668751e-16 |
 | `warpage_pv` / independent readback | 7.270602005916752e-06 m |
 | `U_mag_max` | 7.1136040162876474e-06 m |
 | `T_max` | 323.333553639902 K |
@@ -310,37 +319,19 @@ trace_map_vs_layer_average_dT_max=5.0388880325680248
 trace_map_nx_double_dT_max=0.59059340053721598
 ```
 
-实测 full Release CTest: **exit 8; 484 registrations = 439 passed + 8 failed +
-27 skipped + 10 disabled; 1511.47 s**. All three F-1130/chain tests passed
-again. Skips and disabled tests do not establish acceptance. The all-suite
-green requirement is unmet; no failing assertion or timeout was changed.
-
-| Failed test | Observed failure |
-| --- | --- |
-| `k1_preview_mpi_surface` | Subprocess aborted with `jsoncons::ser_error`: JSON syntax_error at line 1 and column 1. |
-| `solve_column_gmg_fcbga` | `reference-fine-direct` subprocess exit -9; termination cause not established. |
-| `solve_column_gmg_fcbga_scaling` | `scaling-fine-gmg` subprocess exit -9 after coarse solve completed; termination cause not established. |
-| `solve_fem_thermal_bow` | C-0/A cross-run U residual 9.5759468232801005e-13 exceeds 2.5499999995493557e-15. |
-| `field_compare_fem_fvm` | Solver status 14, `invalid output field`. |
-| `field_compare_outline_bbox` | Solver status 14, `invalid output field`. |
-| `field_compare_ranks` | Solver status 14, `invalid output field`. |
-| `preview_outline_nonconvex` | A-flagged preview exceeded the existing subprocess timeout of 8 s. |
-
-These failures are in unchanged files outside this card's two-file scope.
-The field-comparison fixture explicitly requests `volume` for FEM, which the
-case loader rejects; both paths are unchanged. No separate baseline control
-run was performed, so no baseline-versus-branch causal claim is made.
-Local `origin/main` advanced to `6438958d74829386d3b85e72f187cda59f9f4c53`
-during verification; this SHA was neither merged nor tested. The actual source
-baseline and tested SHA remain those stated above.
+Full Release CTest: **未执行 in this pass**, reserved for the pipeline before
+the DONE gate. Prior full-suite logs are historical, not verification of the
+tested source above. No baseline comparison was run and no full-suite-green
+claim is made.
 
 Complete evidence accompanies the local PR draft: `v-int-f1130-z-parallel-ref-`
-files with suffixes `delivery-configure.log`, `delivery-build.log`,
-`delivery-unittest.log`, `delivery-targeted.log` (full commands and both rank
-outputs), `delivery-ranks1-result.json`, `delivery-ranks2-result.json`,
-`delivery-all.log` and `delivery-failures.txt` (all failures and skipped/disabled
-names are retained in the full log). The README contains only current
-measurements; #200 old-versus-new differences are in the PR draft.
+files with suffixes `input-delivery-configure.log`, `input-delivery-build.log`,
+`input-delivery-unittest.log`, `input-delivery-targeted.log` (the exact solver
+and readback commands and both complete rank records),
+`input-delivery-ranks1-result.json`, `input-delivery-ranks2-result.json`, and
+`input-delivery-rank-validation.log` (independent record validation). The
+records identify the tested SHA above. The README contains only current
+measurements; #200 old-versus-new differences are in the local PR draft.
 
 Remote `ci-ok`: **未执行** (no push); green `ci-ok` remains a merge requirement.
 Missing-backend and missing-h5py skips do not establish acceptance. Dependency
