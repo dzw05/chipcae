@@ -122,6 +122,10 @@ jobs:
           import re
           from pathlib import Path
           tests = json.loads((Path(os.environ['RUNNER_TEMP']) / 'mac-highmem-tests.json').read_text())['tests']
+          def is_launcher(token):
+              if token.startswith(('--launcher=', '--mpiexec=', '--mpi=')):
+                  token = token.split('=', 1)[1]
+              return Path(token).name in ('mpiexec', 'mpirun')
           names = set()
           maximum = 4  # Includes the audited wrappers and distributed install profile.
           for test in tests:
@@ -134,7 +138,7 @@ jobs:
                   continue
               command = test.get('command', [])
               launchers = [i for i, token in enumerate(command)
-                           if Path(token).name in ('mpiexec', 'mpirun')]
+                           if is_launcher(token)]
               if launchers and 'mpi' not in labels:
                   names.add(test['name'])
               if 'mpi' in labels or launchers:
