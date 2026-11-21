@@ -62,7 +62,7 @@ int main() {
     metal.nu = .34;
     metal.alpha = 17e-6;
     metal.k = 390;
-    // Lock the shared helper to the original pipeline expressions before replacing that copy.
+    // Lock the shared helper to the parallel conductivity expressions in all three directions.
     for (double f : {0., .12, .3, .5, 1.}) {
         const double kxy = f * metal.k + (1 - f) * base.k;
         const double kz = f * metal.k + (1 - f) * base.k;
@@ -72,7 +72,7 @@ int main() {
         for (std::size_t d = 0; d < actual.size(); ++d)
             if (!(actual[d] == expected[d])) {
                 std::ostringstream message;
-                message << "exact legacy conductivity: f=" << f << " component=" << d
+                message << "exact parallel conductivity: f=" << f << " component=" << d
                         << std::hexfloat << " actual=" << actual[d] << " expected=" << expected[d];
                 throw std::runtime_error(message.str());
             }

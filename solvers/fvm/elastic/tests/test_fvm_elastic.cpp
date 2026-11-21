@@ -163,8 +163,8 @@ void embedded_support(MPI_Comm comm) {
                                   : "embedded diagnostic assembly: " + assembled.error().reason);
             }
 }
-// Saved from parent 40fa721322bbe65982a9f4f17b7c73251e1f7c21, Release/PETSc,
-// before extending these tests. This nonaffine fixed bilayer exercises parent assembly.
+// Regenerated at 4e4a0a6, Release/PETSc, with parallel Ez and E-weighted alpha_z.
+// This nonaffine fixed bilayer exercises the uncut assembly path.
 void uncut_regression(bool compare_flags) {
     auto m = grid(2, 2, 2);
     auto p = problem(m);
@@ -177,16 +177,16 @@ void uncut_regression(bool compare_flags) {
             p.alpha[c] = top.alpha;
         }
     const auto r = solve(m, p, MPI_COMM_SELF);
-    const std::vector<V> parent{
-        {0.000215287545635354, -0.00018146171248660089, -0.00024354123357001585},
-        {0.0003131199638203407, -0.00024896428923006786, 0.00010968775654632344},
-        {0.00021528754563535432, 0.00018146171248660054, -0.00024354123357001585},
-        {0.00031311996382034081, 0.00024896428923006726, 0.00010968775654632332},
-        {0.00064270669742172437, -0.00020642309354412865, -0.00046122485212008065},
-        {0.00090607076721228408, -0.00028658086640763122, -6.439135344352884e-05},
-        {0.0006427066974217247, 0.00020642309354412789, -0.00046122485212008065},
-        {0.00090607076721228364, 0.00028658086640763128, -6.4391353443528636e-05}};
-    field_near(r.U_cell, parent, 0, 1e-14, "saved parent nonaffine cell field");
+    const std::vector<V> expected{
+        {0.00020113416246671521, -0.00017331969344440252, -0.00032277707199421555},
+        {0.0003232699408376548, -0.00025691700920090583, 0.00015121029609339786},
+        {0.00020113416246671576, 0.00017331969344440147, -0.00032277707199421588},
+        {0.00032326994083765512, 0.00025691700920090502, 0.00015121029609339683},
+        {0.00060650824618279058, -0.00019641049323154865, -0.00058624199917299124},
+        {0.00093007301159365096, -0.0002916511917817904, -6.7134119225708907e-05},
+        {0.00060650824618279189, 0.0001964104932315451, -0.00058624199917299167},
+        {0.0009300730115936514, 0.00029165119178178856, -6.7134119225709232e-05}};
+    field_near(r.U_cell, expected, 0, 1e-14, "saved laminate nonaffine cell field");
     if (compare_flags) {
         m.is_cut.assign(m.volume.size(), 0);
         const auto zero_flags = solve(m, p, MPI_COMM_SELF);
@@ -822,9 +822,8 @@ int main(int argc, char** argv) {
         benchmark(s);
     } else {
         s.run("embedded affine support in assembly and solve", [&] { embedded_support(s.comm); });
-        s.run("uncut saved parent fields at relative 1e-14", [] { uncut_regression(false); });
-        s.run("empty and all-zero is_cut retain exact parent outputs",
-              [] { uncut_regression(true); });
+        s.run("uncut saved laminate fields at relative 1e-14", [] { uncut_regression(false); });
+        s.run("empty and all-zero is_cut retain exact outputs", [] { uncut_regression(true); });
         s.run("uncut all-face minimum rho and gid", [] {
             const auto m = grid(3, 2, 1);
             const auto r = solve(m, problem(m), MPI_COMM_SELF);
