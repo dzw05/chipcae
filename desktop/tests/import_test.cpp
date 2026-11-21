@@ -623,7 +623,8 @@ void reportAcceptance() {
                                  "reason",
                                  "size",
                                  "bool",
-                                 "missing-defect-key"}) {
+                                 "missing-defect-key",
+                                 "empty-defect-id"}) {
         test(QString("sidecar rejects field shape %1").arg(mutation), [&] {
             ReportReplay f("confirm_b_tier_synthetic");
             auto j = QJsonDocument::fromJson(f.sidecar).object();
@@ -653,6 +654,8 @@ void reportAcceptance() {
                     d["material_ambiguous"] = "false";
                 if (mode == "missing-defect-key")
                     d.remove("suggestion");
+                if (mode == "empty-defect-id")
+                    d["defect_id"] = "";
                 defects[0] = d;
                 j["defects"] = defects;
             }
@@ -1290,6 +1293,21 @@ sys.exit(rc)
                     wanted << "--accept-b-tier";
                 check(ImportControllerTestAccess::arguments(r) == wanted,
                       "full QStringList argv order and unchanged input " + suffix);
+                if (mode == "corrupt") {
+                    const auto reportIndex = actual.indexOf("--report");
+                    require(reportIndex >= 0 && reportIndex + 1 < actual.size(),
+                            "malformed report path recorded");
+                    const auto original = actual[reportIndex + 1];
+                    check(QFile::exists(original) && read(original) == "{" &&
+                              c.error().contains(original),
+                          "malformed original remains readable until the next import");
+                    // P4 retains syntax failures through inspection; the next start
+                    // releases that directory even if local validation rejects the request.
+                    auto next = r;
+                    next.output.clear();
+                    check(!c.start(next), "next local start releases malformed staging");
+                    check(!QFile::exists(original), "next import removes malformed original");
+                }
                 check(QDir(dir.path())
                           .entryList({".chipcae-import-*"},
                                      QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot)

@@ -193,17 +193,27 @@ MainWindow::MainWindow(const QStringList& args,
     connect(importer_,
             &chipcae::desktop::ImportController::finished,
             this,
-            [this, cancel, logTimer, appendLog](bool replaced) {
+            [this, cancel, logTimer, appendLog, importLog](bool replaced) {
                 if (replaced && currentImportKind_ == chipcae::desktop::ImportKind::Assembly) {
-                    const auto report = QJsonDocument::fromJson(importer_->reportBytes()).object();
+                    const auto report = importer_->importReport();
+                    QJsonArray summary;
+                    if (report.contains("parts")) {
+                        for (const auto& entry :
+                             report.at("parts").at("material_approx").array_range())
+                            summary.append(QJsonObject{
+                                {"id", QString::fromStdString(entry.at("id").as<std::string>())},
+                                {"material_approx", entry.at("material_approx").as<bool>()}});
+                    }
                     if (auto* model = findChild<chipcae::desktop::CaseTreeModel*>())
-                        model->applyPartSummary(report.value("parts").toArray());
+                        model->applyPartSummary(summary);
                 }
                 if (importer_->outcome() != chipcae::desktop::ImportOutcome::NeedsConfirmation)
                     currentImportKind_.reset();
                 if (replaced)
                     clearPreviewMeshOptions();
                 appendLog();
+                if (!importer_->error().isEmpty())
+                    importLog->appendPlainText(importer_->error());
                 logTimer->stop();
                 cancel->hide();
                 for (auto* action : importBlockedActions_)

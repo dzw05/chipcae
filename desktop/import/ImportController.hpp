@@ -39,9 +39,13 @@ public:
     QProcess::ExitStatus exitStatus() const { return exitStatus_; }
     QByteArray stderrText() const { return stderr_; }
     QByteArray reportBytes() const { return report_; }
-    // Test-first placeholders for the frozen D09c API; no report is consumed yet.
-    QByteArray importReportBytes() const { return {}; }
-    jsoncons::json importReport() const { return jsoncons::json::object(); }
+    // Original sidecar bytes, independent of staging lifetime; empty if missing,
+    // unreadable, malformed, or rejected by version/field validation.
+    QByteArray importReportBytes() const;
+    // Validated sidecar object, or an empty object. Defects retain file order and
+    // duplicate IDs (with a diagnostic); material_approx retains order/duplicates
+    // for applyPartSummary's existing "any true" merge rule.
+    jsoncons::json importReport() const;
     QString error() const { return error_; }
     QString grade() const { return grade_; }
 public slots:
@@ -60,7 +64,8 @@ private:
     std::unique_ptr<QTemporaryDir> staging_;
     PreviewWorker worker_;
     QStringList staged_, destinations_;
-    QByteArray stderr_, report_;
+    QByteArray stderr_, report_, importReportBytes_;
+    jsoncons::json importReport_ = jsoncons::json::object();
     QString error_, grade_, reportCode_;
     ImportRequest request_;
     ImportOutcome outcome_ = ImportOutcome::None;
