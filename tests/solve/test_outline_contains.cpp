@@ -86,6 +86,12 @@ int main() {
                                                                  {{.017, .005}, true},
                                                                  {{.0113, .0137}, true},
                                                                  {{.0113, .0168}, true},
+                                                                 {{.005, .0137}, true},
+                                                                 {{.015, .0137}, true},
+                                                                 {{.005, .02}, true},
+                                                                 {{.015, .02}, false},
+                                                                 {{.025, .0137}, false},
+                                                                 {{.0113, .025}, false},
                                                                  {{0, 0}, true},
                                                                  {{-.001, .01}, false},
                                                                  {{.0113 + 1e-14, .0168}, true},
@@ -95,6 +101,28 @@ int main() {
             context << std::setprecision(17) << label << "point (" << point[0] << "," << point[1]
                     << ") expected " << expected;
             check(outline_contains(ring, point[0], point[1]) == expected, context.str());
+        }
+    }
+    // The L box diagonal is sqrt(2)*.02: the boundary tolerance is
+    // sqrt(2)*2e-14, scaled with the ring. A fixed absolute tolerance would
+    // misclassify these points. The outer corner also requires distance to
+    // the finite segment endpoint rather than distance to its supporting line.
+    for (double scale : {.1, 1., 1000.}) {
+        auto ring = l;
+        for (auto& p : ring) {
+            p[0] *= scale;
+            p[1] *= scale;
+        }
+        for (const auto& [point, expected] : std::vector<std::pair<std::array<double, 2>, bool>>{
+                 {{.0113 + 2e-14, .0168}, true},
+                 {{.0113 + 4e-14, .0168}, false},
+                 {{.02 + 1.5e-14, .0137 + 1.5e-14}, true},
+                 {{.02 + 2.5e-14, .0137 + 2.5e-14}, false}}) {
+            std::ostringstream context;
+            context << std::setprecision(17) << "L boundary scale " << scale << " point ("
+                    << point[0] * scale << "," << point[1] * scale << ") expected " << expected;
+            check(outline_contains(ring, point[0] * scale, point[1] * scale) == expected,
+                  context.str());
         }
     }
     Ring collinear{{0, 0}, {.01, 0}, {.02, 0}, {.02, .02}, {0, .02}, {0, .02}, {0, 0}};
