@@ -2,8 +2,8 @@
 """Generate t2m/1.0 fixtures. Standard library only.
 
   python3 gen.py --out DIR
-Writes a 2x2x2 cell-center thermal case, unit/missing/length/nonfinite
-negatives, expected.json, and copies of gen.py / check.py.
+Writes a 2x2x2 cell-center thermal case, nine error-semantics negatives,
+expected.json, and copies of gen.py / check.py.
 Two runs on the same DIR must be byte-identical.
 """
 from __future__ import annotations
@@ -104,6 +104,52 @@ def generate(out: Path) -> None:
         failure(14, "INPUT_INVALID", "nonfinite T_cell"),
     )
 
+    invalid_volume = valid_input()
+    invalid_volume["volume"] = list(VOLUME)
+    invalid_volume["volume"][3] = 0.0
+    dump(out / "negative/invalid_volume/input.json", invalid_volume)
+    dump(
+        out / "negative/invalid_volume/expected.json",
+        failure(14, "INPUT_INVALID", "invalid volume"),
+    )
+
+    invalid_tref = valid_input()
+    invalid_tref["T_ref"] = {"__nonfinite__": "nan"}
+    dump(out / "negative/invalid_tref/input.json", invalid_tref)
+    dump(
+        out / "negative/invalid_tref/expected.json",
+        failure(14, "INPUT_INVALID", "invalid T_ref"),
+    )
+
+    inconsistent = valid_input()
+    inconsistent["T_uniform"] = 400.0
+    dump(out / "negative/inconsistent_sources/input.json", inconsistent)
+    dump(
+        out / "negative/inconsistent_sources/expected.json",
+        failure(14, "INPUT_INVALID", "inconsistent temperature sources"),
+    )
+
+    invalid_tuniform = valid_input()
+    invalid_tuniform["mode"] = "uniform"
+    invalid_tuniform["T_cell"] = []
+    invalid_tuniform["T_uniform"] = {"__nonfinite__": "nan"}
+    dump(out / "negative/invalid_tuniform/input.json", invalid_tuniform)
+    dump(
+        out / "negative/invalid_tuniform/expected.json",
+        failure(14, "INPUT_INVALID", "invalid T_uniform"),
+    )
+
+    invalid_arithmetic = valid_input()
+    invalid_arithmetic["T_cell"] = list(T_CELL)
+    invalid_arithmetic["T_cell"][3] = 1.7e308
+    invalid_arithmetic["T_ref"] = -1.7e308
+    # The ordered dTV sum overflows before the fourth cell's subtraction.
+    dump(out / "negative/invalid_arithmetic/input.json", invalid_arithmetic)
+    dump(
+        out / "negative/invalid_arithmetic/expected.json",
+        failure(14, "INPUT_INVALID", "invalid temperature arithmetic"),
+    )
+
     catalog = {
         "positives": ["valid_2x2x2"],
         "negatives": [
@@ -111,6 +157,11 @@ def generate(out: Path) -> None:
             "negative/missing_tcell",
             "negative/length_mismatch",
             "negative/nonfinite_tcell",
+            "negative/invalid_volume",
+            "negative/invalid_tref",
+            "negative/inconsistent_sources",
+            "negative/invalid_tuniform",
+            "negative/invalid_arithmetic",
         ],
     }
     dump(out / "expected.json", catalog)
