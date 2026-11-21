@@ -243,9 +243,9 @@ multilayer series resistance describes layers stacked through thickness.
 
 实测 main baseline: `c4e9eaeac95c7889cec1f9fa3c1ecc30fedb8d75`, containing
 #200 (`8ad1211`) and the parallel-formula change #236 (`c4e9eae`).
-Tested source: `3682d1a0d40deed8fc9de26d769de7acbd12f92b` (the regression-test
-commit on that baseline); the subsequent change only updates this README.
-Local `origin/main` was observed at `dc446e70a5151fafe9cec032509c90a4d36e30f4`
+Tested source: `94822c005fac954b9bd678563052dd63f15a788d` (including the
+post-mutation parallel control); the subsequent change only updates this README.
+Local `origin/main` was observed at `e2d391aa60280b297ae2c998e2bc727f6a9c330a`
 during this pass. It was not merged: the actual implementation baseline above
 is retained. The reference already implements parallel conductivity in all
 three directions, so no product or reference formula change was necessary.
@@ -260,7 +260,7 @@ search-path warnings about competing `libgomp.so.1` locations; configuration,
 build and the three backend tests succeeded. These are environment
 adjustments, with no CMake or dependency source changes.
 
-实测 targeted CTest: **3/3 passed, zero skips, 7.82 s**. The single e2e
+实测 targeted CTest: **3/3 passed, zero skips, 7.49 s**. The single e2e
 entry point performs both ranks=1 and ranks=2 solve/readback attempts; no
 second invocation with different flags is needed.
 
@@ -269,7 +269,9 @@ mutation has maximum componentwise relative difference `0.99692780519449054`,
 raises `M3 conductivity mismatch`, completes cell fractions and leaves only
 conductivity incomplete in its validated `verdict: fail` record. This is a
 caught negative assertion; the regression tests pass immediately on the
-already-parallel implementation. No missing-feature RED is claimed.
+already-parallel implementation. After the scoped mutation ends, the same
+export passes C3/C4/Q2 physics and produces a validated `verdict: pass` record.
+No missing-feature RED is claimed.
 
 实测 product measurements below are identical for ranks=1 and ranks=2. Both
 `chipcae.vv_result/0.2` records validate and have `verdict: pass`; all nine
@@ -308,32 +310,37 @@ trace_map_vs_layer_average_dT_max=5.0388880325680248
 trace_map_nx_double_dT_max=0.59059340053721598
 ```
 
-实测 full Release CTest: **exit 8; 484 registrations = 441 passed + 6 failed +
-27 skipped + 10 disabled; 1845.54 s**. All three F-1130/chain tests passed
+实测 full Release CTest: **exit 8; 484 registrations = 439 passed + 8 failed +
+27 skipped + 10 disabled; 1511.47 s**. All three F-1130/chain tests passed
 again. Skips and disabled tests do not establish acceptance. The all-suite
 green requirement is unmet; no failing assertion or timeout was changed.
 
 | Failed test | Observed failure |
 | --- | --- |
+| `k1_preview_mpi_surface` | Subprocess aborted with `jsoncons::ser_error`: JSON syntax_error at line 1 and column 1. |
+| `solve_column_gmg_fcbga` | `reference-fine-direct` subprocess exit -9; termination cause not established. |
 | `solve_column_gmg_fcbga_scaling` | `scaling-fine-gmg` subprocess exit -9 after coarse solve completed; termination cause not established. |
 | `solve_fem_thermal_bow` | C-0/A cross-run U residual 9.5759468232801005e-13 exceeds 2.5499999995493557e-15. |
-| `cutbim_cut_bimetal` | B_nx16 ranks=1 solver exit -9; termination cause not established. |
 | `field_compare_fem_fvm` | Solver status 14, `invalid output field`. |
 | `field_compare_outline_bbox` | Solver status 14, `invalid output field`. |
 | `field_compare_ranks` | Solver status 14, `invalid output field`. |
+| `preview_outline_nonconvex` | A-flagged preview exceeded the existing subprocess timeout of 8 s. |
 
 These failures are in unchanged files outside this card's two-file scope.
-No separate baseline control run was performed, so no baseline-versus-branch
-causal claim is made. A previous test-only pass recorded seven failures; its
-`realcase_real_case_unit` failure did not recur in this fresh run (30.10 s,
-Passed). The current status above comes from this execution.
+The field-comparison fixture explicitly requests `volume` for FEM, which the
+case loader rejects; both paths are unchanged. No separate baseline control
+run was performed, so no baseline-versus-branch causal claim is made.
+Local `origin/main` advanced to `6438958d74829386d3b85e72f187cda59f9f4c53`
+during verification; this SHA was neither merged nor tested. The actual source
+baseline and tested SHA remain those stated above.
 
 Complete evidence accompanies the local PR draft: `v-int-f1130-z-parallel-ref-`
-files with suffixes `final-configure.log`, `final-build.log`,
-`final-unittest.log`, `final-targeted.log` (full commands and both rank outputs),
-`final-ranks1-result.json`, `final-ranks2-result.json`, `final-all.log` and
-`final-all.xml` (all failures and skipped/disabled names). The README contains
-only current measurements; #200 old-versus-new differences are in the PR draft.
+files with suffixes `delivery-configure.log`, `delivery-build.log`,
+`delivery-unittest.log`, `delivery-targeted.log` (full commands and both rank
+outputs), `delivery-ranks1-result.json`, `delivery-ranks2-result.json`,
+`delivery-all.log` and `delivery-failures.txt` (all failures and skipped/disabled
+names are retained in the full log). The README contains only current
+measurements; #200 old-versus-new differences are in the PR draft.
 
 Remote `ci-ok`: **未执行** (no push); green `ci-ok` remains a merge requirement.
 Missing-backend and missing-h5py skips do not establish acceptance. Dependency
