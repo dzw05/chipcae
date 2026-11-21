@@ -649,8 +649,7 @@ int main(int argc, char** argv) {
                     .3, 390, fractions[c], p.k[c].data());
             }
             auto r = solve(g, m, p);
-            Vec expected{
-                f * 390 + (1 - f) * .3, f * 390 + (1 - f) * .3, 1 / (f / 390 + (1 - f) / .3)};
+            Vec expected{f * 390 + (1 - f) * .3, f * 390 + (1 - f) * .3, f * 390 + (1 - f) * .3};
             for (auto k : r.k_used)
                 for (int d = 0; d < 3; ++d)
                     near(

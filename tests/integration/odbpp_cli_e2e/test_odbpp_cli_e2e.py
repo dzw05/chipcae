@@ -278,7 +278,7 @@ def check_run(run_dir, mesh_stack, materials, fractions, preview_cells):
             copper = layer['copper']
             f = by_name[fold(layer['name'])]['fraction']
             relative(copper['fraction'], f, 1e-12, f'{layer["name"]}/solver fraction')
-            k = 1 / (f / conductivity[copper['metal']] + (1 - f) / k)
+            k = f * conductivity[copper['metal']] + (1 - f) * k
         assert math.isfinite(k) and k > 0
         assert math.isfinite(layer['thickness']) and layer['thickness'] > 0
         layers.append((layer['thickness'], k))

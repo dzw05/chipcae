@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <random>
 #include <regex>
@@ -456,6 +457,7 @@ int assembly_error_exit(const std::string& message) {
 #include <jsoncons_ext/jsonschema/jsonschema.hpp>
 #ifdef CHIPCAE_ENABLE_ECAD
 #include "chipcae/geometry/ecad/ipc2581.hpp"
+#include "import_ecad_defects.hpp"
 #ifdef CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE
 #include "chipcae/geometry/ecad/odbpp.hpp"
 #endif
@@ -583,6 +585,11 @@ int run_assembly(const ImportOptions& options) {
         if (!ecad::apply_material_map(
                 board.model, root / b["material_map"].as<std::string>(), &error))
             return fail("MATERIAL_MAPPING_MISSING", error);
+        {
+            auto bd = ecad_defects::board_defects(board.model.report,
+                                                  b["format"].as<std::string>() == "odbpp");
+            defects.insert(defects.end(), bd.begin(), bd.end());
+        }
         // Intermediate board JSON is removed before confirmation; the sidecar is retained.
         auto temp = options.output;
         temp += ".board.tmp";
@@ -820,14 +827,59 @@ int run_assembly(const ImportOptions& options) {
                                                           : std::min(z, slab.z0);
                         a.resolved_z = z;
                     }
+                } else if (a.bond && a.target.starts_with("layer:")) {
+                    const auto layer_name = a.target.substr(6);
+                    Real z = 0;
+                    for (const auto& layer : base.layers) {
+                        if (layer.name == layer_name) {
+                            a.resolved_z = a.side == AttachSide::top ? z + layer.thickness : z;
+                            break;
+                        }
+                        z += layer.thickness;
+                    }
                 }
                 placement = a;
             } else
                 placement = FramePlacement{v["origin"].as<std::array<Real, 3>>()};
             auto pp = assembly_placement_result(
                 place(sliced.slabs, placement, base), id, p["material"].as<std::string>(), defects);
-            if (pp)
+            if (pp) {
                 placed.push_back(*pp);
+                if (const auto* attach = std::get_if<AttachPlacement>(&placement);
+                    attach && attach->bond) {
+                    const auto& bond = *attach->bond;
+                    Slab bond_slab;
+                    if (attach->side == AttachSide::top) {
+                        const auto& s = *std::min_element(
+                            pp->slabs.begin(), pp->slabs.end(), [](const Slab& a, const Slab& b) {
+                                return a.z0 < b.z0;
+                            });
+                        bond_slab = Slab{s.z0 - bond.thickness, s.z0, s.sections};
+                    } else {
+                        const auto& s = *std::max_element(
+                            pp->slabs.begin(), pp->slabs.end(), [](const Slab& a, const Slab& b) {
+                                return a.z1 < b.z1;
+                            });
+                        bond_slab = Slab{s.z1, s.z1 + bond.thickness, s.sections};
+                    }
+                    // Use the exact global face supplied to place() for both target kinds.
+                    const Real face = attach->resolved_z.value();
+                    // Undo placement roundoff only at the original attachment face.
+                    Real& outer = attach->side == AttachSide::top ? bond_slab.z0 : bond_slab.z1;
+                    // S includes |T|, |s.z| (the global face), and the largest source slab |z|.
+                    // See handoff/rulings/pr242.md (architect sign-off, 2026-11-21 18:02)
+                    // and handoff/rulings/i-assembly-bond-slab.md section 2 erratum.
+                    Real scale = std::max(std::abs(bond.thickness), std::abs(face));
+                    // Translation can cancel source z coordinates much larger than the bond.
+                    for (const auto& slab : sliced.slabs)
+                        scale = std::max({scale, std::abs(slab.z0), std::abs(slab.z1)});
+                    const Real bound = 4 * std::numeric_limits<Real>::epsilon() * scale;
+                    if (std::abs(outer - face) > bound)
+                        throw std::runtime_error("INTERNAL: bond does not meet attachment face");
+                    outer = face;
+                    placed.push_back(PlacedPart{id + ".bond", bond.material, {bond_slab}});
+                }
+            }
         };
         for (const auto& p : ordered) {
             auto shared = shared_steps.find(p["id"].as<std::string>());

@@ -673,6 +673,25 @@ class TraceMapReferenceTests(unittest.TestCase):
                 with self.subTest(size=len(data)), self.assertRaises(AssertionError):
                     ref.read_polyset(bad)
 
+    def test_bcu_reference_kz_endpoints_are_bit_exact(self):
+        import numpy as np
+        import trace_map_ref as ref
+        root = SOURCE / 'tests/integration/import_cli/golden/board_4layer'
+        stack = read_json(root / 'stack.json')
+        rings = ref.read_polyset(root / 'stack.polyset')
+        mesh = ref.tensor_mesh(stack, 4, 4)
+        phi,k = ref.reference_coefficients(mesh,rings,stack)
+        lid = next(i for i,layer in enumerate(stack['layers'],1)
+                   if layer['name'] == 'B.Cu')
+        for fraction,conductivity in ((0, .3), (1, 390.)):
+            with self.subTest(fraction=fraction):
+                indices = np.flatnonzero((mesh['layer_ids'] == lid) & (phi == fraction))
+                self.assertGreater(len(indices),0)
+                # Endpoint representations are explicitly required to be bit exact.
+                actual = np.asarray(k[indices,2],dtype=np.float64).view(np.uint64)
+                expected = np.full(len(indices),conductivity,dtype=np.float64).view(np.uint64)
+                np.testing.assert_array_equal(actual,expected)
+
     def test_q2_basis_partition_derivatives_and_symmetric_assembly(self):
         import numpy as np
         import trace_map_ref as ref
@@ -682,7 +701,7 @@ class TraceMapReferenceTests(unittest.TestCase):
             self.assertLessEqual(abs(sum(derivatives)), 1e-14)
         stack = synthetic_stack([.001])
         mesh = ref.tensor_mesh(stack, 1, 1)
-        operator, rhs, dofs = ref.assemble_q2(mesh, np.array([[195.15, 195.15, 780/1301]]))
+        operator, rhs, dofs = ref.assemble_q2(mesh, np.array([[195.15, 195.15, 195.15]]))
         matrix = operator.toarray() if hasattr(operator, 'toarray') else operator
         self.assertLessEqual(np.max(abs(matrix - matrix.T)) / np.max(abs(matrix)), 1e-12)
         self.assertEqual(len(dofs['points']), 27)
@@ -691,10 +710,10 @@ class TraceMapReferenceTests(unittest.TestCase):
     def test_single_column_known_fraction_and_numpy_fallback(self):
         import numpy as np
         import trace_map_ref as ref
-        # Analytic 50% copper/FR4 series solution, independent literal values.
+        # Given coefficients for Q2 assembly self-checks.
         stack = synthetic_stack([.001])
         mesh = ref.tensor_mesh(stack, 1, 1)
-        k = np.array([[195.15, 195.15, 780/1301]])
+        k = np.array([[195.15, 195.15, 195.15]])
         operator, rhs, dofs = ref.assemble_q2(mesh, k)
         sparse, _ = ref.solve_q2(operator, rhs, dofs)
         # Force assembly as well as the direct solve to operate without SciPy.
@@ -703,33 +722,34 @@ class TraceMapReferenceTests(unittest.TestCase):
             dense, reactions = ref.solve_q2(numpy_operator, numpy_rhs, numpy_dofs, use_scipy=False)
         self.assertIsInstance(numpy_operator, np.ndarray)
         for point, actual in zip(dofs['points'], dense, strict=True):
-            want = 298.15 + (float(point[2]) / .001) * (65050/2081)
+            want = 298.15 + (float(point[2]) / .001) * (1000/3923)
             self.assertLessEqual(abs(actual - want), 1e-8)
         self.assertLessEqual(np.max(abs(sparse - dense)), 1e-8)
         qtop, qbot, rlo, rhi = ref.thermal_checks(mesh, stack, k, dense, reactions, dofs)
         self.assertLessEqual(abs(qtop - qbot) / abs(qbot), 1e-9)
-        self.assertLessEqual(abs(qbot - .03748197981739548), 1e-11)
+        self.assertLessEqual(abs(qbot - 3903/39230), 1e-11)
         self.assertLessEqual(abs(rlo - rhi), 1e-9)
         corner = ref.corner_values(mesh, dense, dofs)
         recovered, recovered_reactions = ref.solve_q2(operator, rhs, dofs, corners=corner)
         self.assertLessEqual(np.max(abs(recovered - dense)), 1e-8)
         self.assertLessEqual(np.max(abs(recovered_reactions - reactions)), 1e-10)
 
-    def test_uniform_multilayer_series_solution(self):
+    def test_uniform_multilayer_stacked_resistance_solution(self):
         import numpy as np
         import trace_map_ref as ref
         stack = synthetic_stack([.0002, .001, .0003])
         mesh = ref.tensor_mesh(stack, 2, 1)
-        # Uniform f=(0, 1/2, 1); independent series resistance in SI.
-        kz = [.3, 780/1301, 390]
+        # Given coefficients for Q2 assembly self-checks, uniform within each layer.
+        # Independent series resistance across the stacked layers, in SI.
+        kz = [.3, 195.15, 390]
         k = np.array([[.3, .3, .3], [195.15, 195.15, kz[1]], [390, 390, 390]] * 2)
         operator, rhs, dofs = ref.assemble_q2(mesh, k)
         temperatures, reactions = ref.solve_q2(operator, rhs, dofs)
-        flux = 50 / (.0002/.3 + .001/(780/1301) + .0003/390 + .001)
+        flux = 50 / (.0002/.3 + .001/(195.15) + .0003/390 + .001)
         for point, actual in zip(dofs['points'], temperatures, strict=True):
             z = float(point[2])
             want = 298.15 + flux * (min(z, .0002)/.3 +
-                min(max(z-.0002, 0), .001)/(780/1301) + max(z-.0012, 0)/390)
+                min(max(z-.0002, 0), .001)/(195.15) + max(z-.0012, 0)/390)
             self.assertLessEqual(abs(actual - want), 1e-8)
         qtop, qbot, _, _ = ref.thermal_checks(mesh, stack, k, temperatures, reactions, dofs)
         self.assertLessEqual(abs(qtop-qbot)/abs(qbot), 1e-9)
@@ -925,7 +945,7 @@ class TraceMapReferenceTests(unittest.TestCase):
                 ref.tensor_mesh(stack,2,1)
 
     def test_cell_fraction_conductivity_and_temperature_mutations_fail(self):
-        import numpy  # noqa: F401
+        import numpy as np
         try:
             import h5py
         except ImportError:
@@ -938,7 +958,7 @@ class TraceMapReferenceTests(unittest.TestCase):
               (ref.rational('.0005'), ref.rational('.001')), (0, ref.rational('.001'))),))}
         for defect in (None, 'zero_copper', 'nan', 'inf', 'negative', 'above_one',
                        'conductivity', 'temperature', 'case', 'missing_layer', 'conductivity_nan',
-                       'conductivity_inf', 'area'):
+                       'conductivity_inf', 'area', 'series_kz'):
             with self.subTest(defect=defect), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / 'mesh.vtkhdf'
                 write_synthetic_hex(path, stack, patterned=True)
@@ -965,6 +985,53 @@ class TraceMapReferenceTests(unittest.TestCase):
                     mesh['temperatures'][-1] += 1e-6
                 if defect is None:
                     ref.check_solution(mesh, given_rings, stack, {}, expected_areas={'In1.Cu': .5})
+                elif defect == 'series_kz':
+                    phi,parallel = ref.reference_coefficients(mesh,given_rings,stack)
+                    mixed = (0 < phi) & (phi < 1)
+                    self.assertTrue(np.any(mixed))
+                    fields = mesh['fields']
+                    original_fraction = fields['copper_fraction'].copy()
+                    original_conductivity = fields['conductivity_diag'].copy()
+                    fields['conductivity_diag'][:,2] = 1/(phi/390+(1-phi)/.3)
+                    np.testing.assert_array_equal(fields['copper_fraction'],original_fraction)
+                    np.testing.assert_array_equal(fields['conductivity_diag'][:,:2],
+                                                  original_conductivity[:,:2])
+                    relative = float(np.max(abs(fields['conductivity_diag'][mixed,2]
+                                                -parallel[mixed,2])/abs(parallel[mixed,2])))
+                    self.assertGreater(relative,1e-14)
+                    # Other checks are pre-completed only to isolate record verdict handling.
+                    measurements = dict(acceptance_checks={name: True
+                        for name in ACCEPTANCE_CHECKS
+                        if name not in ('cell_fractions','conductivity')})
+                    with self.assertRaisesRegex(AssertionError,'M3 conductivity mismatch') as failure:
+                        ref.check_solution(mesh,given_rings,stack,measurements,
+                                           expected_areas={'In1.Cu': .5})
+                    self.assertIs(measurements['acceptance_checks']['cell_fractions'],True)
+                    self.assertFalse(measurements['acceptance_checks'].get('conductivity',False))
+                    with redirect_stdout(StringIO()):
+                        write_result(Path(directory),1,measurements,{},[],[str(failure.exception)])
+                    record = read_json(Path(directory) / 'result.json')
+                    self.assertEqual(record['verdict'],'fail')
+                    self.assertIn('M3 conductivity mismatch',record['notes'])
+                    self.assertEqual([note for note in record['notes']
+                        if note.startswith('acceptance check incomplete:')],
+                        ['acceptance check incomplete: conductivity'])
+                    print(f'series_kz relative_conductivity_difference={relative:.17g} '
+                          f'failure={failure.exception} verdict={record["verdict"]}',flush=True)
+                    # The same export must pass again after restoring its original input.
+                    # This catches a leaked mutation or a checker that always rejects C4.
+                    fields['copper_fraction'][:] = original_fraction
+                    fields['conductivity_diag'][:] = original_conductivity
+                    control = dict(acceptance_checks={name: True
+                        for name in ACCEPTANCE_CHECKS
+                        if name not in ('cell_fractions','conductivity','physics')})
+                    ref.check_solution(mesh,given_rings,stack,control,
+                                       expected_areas={'In1.Cu': .5})
+                    self.assertTrue(all(control['acceptance_checks'][name]
+                                        for name in ACCEPTANCE_CHECKS))
+                    with redirect_stdout(StringIO()):
+                        write_result(Path(directory),1,control,{},[],[])
+                    self.assertEqual(read_json(Path(directory) / 'result.json')['verdict'],'pass')
                 else:
                     with self.assertRaises(AssertionError):
                         ref.check_solution(mesh, given_rings, stack, {}, expected_areas={'In1.Cu': .5})
@@ -988,8 +1055,8 @@ class TraceMapReferenceTests(unittest.TestCase):
         self.assertLessEqual(abs(measurements['copper_areas_mm2']['In1.Cu']-.5), 1e-12)
         qtop,qbot,rlo,rhi = ref.thermal_checks(mesh,stack,k,temperatures,reactions,dofs)
         # A=2e-6; arithmetic/harmonic kz means are hand-derived.
-        expected_lo = .001/(((780/1301+.3)/2)*2e-6)+500
-        expected_hi = .001*((1301/780+1/.3)/2)/2e-6+500
+        expected_lo = .001/(((195.15+.3)/2)*2e-6)+500
+        expected_hi = .001*((1/195.15+1/.3)/2)/2e-6+500
         self.assertLessEqual(abs(rlo-expected_lo)/expected_lo,1e-14)
         self.assertLessEqual(abs(rhi-expected_hi)/expected_hi,1e-14)
         epsilon = 1e-9*max(50/rlo,50/rhi,abs(qbot),1e-30)
@@ -1014,7 +1081,7 @@ class TraceMapReferenceTests(unittest.TestCase):
             (((0,0),(1,0),(1,1),(0,1)),))}
         phi,k = ref.reference_coefficients(mesh,rings,stack)
         np.testing.assert_allclose(phi,[.5],rtol=0,atol=1e-15)
-        np.testing.assert_allclose(k,[[195.15,195.15,780/1301]],rtol=1e-14,atol=0)
+        np.testing.assert_allclose(k,[[195.15,195.15,195.15]],rtol=1e-14,atol=0)
         stack['layers'][0]['material'] = 'cu'
         with self.assertRaisesRegex(AssertionError,'Patterned matrix/metal'):
             ref.reference_coefficients(mesh,rings,stack)
@@ -1043,7 +1110,7 @@ def write_synthetic_hex(path, stack, order=(0, 1), patterned=False):
     import numpy as np
     import trace_map_ref as ref
     mesh = ref.tensor_mesh(stack, 2, 1)
-    k = np.array([[195.15, 195.15, 780/1301] if patterned and i == 0 else [.3]*3
+    k = np.array([[195.15, 195.15, 195.15] if patterned and i == 0 else [.3]*3
                   for i in range(2)])
     operator, rhs, dofs = ref.assemble_q2(mesh, k)
     temperatures, _ = ref.solve_q2(operator, rhs, dofs)

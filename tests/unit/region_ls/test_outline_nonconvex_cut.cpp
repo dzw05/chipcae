@@ -4,6 +4,7 @@
 #include "support.hpp"
 
 #include <bit>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
@@ -13,6 +14,7 @@
 #include <optional>
 #include <sstream>
 #include <string_view>
+#include <sys/resource.h>
 #include <tuple>
 #include <type_traits>
 
@@ -1013,6 +1015,70 @@ void bowtie_error() {
                "outline.unsupported",
                "self-intersecting outline");
 }
+void offset_bowtie_error() {
+    const auto start = std::chrono::steady_clock::now();
+    constexpr Real X = 0.013468177236857448, Y = 225.91539618748192, d = 0.02;
+    Ring ring{{X, Y}, {X + d, Y + d}, {X + d, Y}, {X, Y + d}};
+    Real raw_area = 0;
+    for (std::size_t i = 0; i < ring.size(); ++i) {
+        auto a = ring[i], b = ring[(i + 1) % ring.size()];
+        raw_area += a[0] * b[1] - a[1] * b[0];
+    }
+    Real fan_area = 0;
+    for (std::size_t i = 1; i + 1 < ring.size(); ++i)
+        fan_area += (ring[i][0] - ring[0][0]) * (ring[i + 1][1] - ring[0][1]) -
+                    (ring[i][1] - ring[0][1]) * (ring[i + 1][0] - ring[0][0]);
+    std::ostringstream areas;
+    areas << std::setprecision(17) << "raw_area=" << raw_area << ", fan_area=" << fan_area;
+    std::cout << "offset bowtie preconditions: " << areas.str() << '\n';
+    // Exact comparisons intentionally prove the rounding discrepancy being tested.
+    require(raw_area != 0, ("offset bowtie needs nonzero raw area: " + areas.str()).c_str());
+    require(fan_area == 0,
+            ("offset bowtie needs zero translated fan area: " + areas.str()).c_str());
+
+    auto m = background(ring);
+    for (std::size_t i = 0; i < m.vertices.size(); i += 3) {
+        m.vertices[i] += X;
+        m.vertices[i + 1] += Y;
+    }
+    for (auto& x : m.axes[0])
+        x += X;
+    for (auto& y : m.axes[1])
+        y += Y;
+    for (const auto& p : ring)
+        require(m.axes[0].front() <= p[0] && p[0] <= m.axes[0].back() &&
+                    m.axes[1].front() <= p[1] && p[1] <= m.axes[1].back(),
+                "translated background must cover every offset bowtie vertex");
+    rollback_sentinels(m);
+
+    // Exercise both representations even if the first reports the wrong reason.
+    std::string failures;
+    for (const char* form : {"open", "closed"}) {
+        auto outline = footprint(ring);
+        outline.box = {X, Y, X + d, Y + d};
+        try {
+            error_case(m, outline, "outline.unsupported", "self-intersecting outline");
+        } catch (const std::exception& e) {
+            failures += std::string(form) + ": " + e.what() + "\n";
+        }
+        if (ring.size() == 4)
+            ring.push_back(ring.front());
+    }
+
+    const auto seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    struct rusage usage{};
+    require(getrusage(RUSAGE_SELF, &usage) == 0, "offset bowtie getrusage must succeed");
+#if defined(__APPLE__)
+    const double peak_rss_MiB = static_cast<double>(usage.ru_maxrss) / (1024. * 1024.);
+#else
+    const double peak_rss_MiB = static_cast<double>(usage.ru_maxrss) / 1024.;
+#endif
+    // RSS is the process peak, rather than incremental allocation for this subcase.
+    std::cout << "MEASURE errors_offset_bowtie seconds=" << seconds
+              << " peak_rss_MiB=" << peak_rss_MiB << '\n';
+    check(failures.empty(), failures);
+}
 void nonzero_area_crossing_error() {
     auto m = background({});
     rollback_sentinels(m);
@@ -1120,6 +1186,7 @@ int main(int argc, char** argv) {
         run("partition_identity_R", [] { partition_identity(r_shape()); });
         run("errors_legacy_L", legacy_L_error);
         run("errors_bowtie", bowtie_error);
+        run("errors_offset_bowtie", offset_bowtie_error);
         run("errors_nonzero_area_crossing", nonzero_area_crossing_error);
         run("errors_disconnected_R", disconnected_error);
         for (const char* stage : {"clipping", "export", "final_validation"})

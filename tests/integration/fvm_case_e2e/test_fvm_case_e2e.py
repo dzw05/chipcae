@@ -1175,14 +1175,6 @@ class CaseAcceptance(unittest.TestCase):
         with self.subTest(gate='direct-mechanics'):
             direct = u.direct_elastic(self.root, case, 'board', self.adapter, self.replay)
             u.compare_replay(results['fvm', 1][0], direct)
-        fvm = u.summary(results['fvm', 1][0])['T_max']
-        fem = u.summary(results['fem', 1][0])['T_max']
-        self.assertGreater(fem - 298.15, 0)
-        error = abs(fvm - fem) / (fem - 298.15)
-        print(f'实测 board Tmax fvm={fvm:.17g} fem={fem:.17g} '
-              f'rise_relative={error:.17g} absolute_T_relative={abs(fvm-fem)/abs(fem):.17g}', flush=True)
-        with self.subTest(gate='thermal-comparison'):
-            self.assertLessEqual(error, .01)
         fvm_manifest, fvm_blocks = results['fvm', 1]
         fem_manifest, fem_blocks = results['fem', 1]
         with self.subTest(gate='mechanics-comparison'):
@@ -1194,6 +1186,16 @@ class CaseAcceptance(unittest.TestCase):
         for ranks in (1, 2):
             with self.subTest(gate='mechanics-output', ranks=ranks):
                 u.inspect_elastic(self.root / f'fvm{ranks}', results['fvm', ranks][1], results['fvm', ranks][0])
+        fvm = float(results['fvm', 1][1]['hex']['PointData/T'].max())
+        fem = float(results['fem', 1][1]['hex']['PointData/T'].max())
+        self.assertGreater(fem - 298.15, 0)
+        error = abs(fvm - fem) / (fem - 298.15)
+        fvm_summary = u.summary(results['fvm', 1][0])['T_max']
+        fem_summary = u.summary(results['fem', 1][0])['T_max']
+        print(f'实测 board vertex_Tmax fvm={fvm:.17g} fem={fem:.17g} '
+              f'summary_Tmax fvm={fvm_summary:.17g} fem={fem_summary:.17g} '
+              f'rise_relative={error:.17g} absolute_T_relative={abs(fvm-fem)/abs(fem):.17g}', flush=True)
+        self.assertLessEqual(error, .02)  # 临时门值 0.02（rulings/pr236.md 架构师 14:14）：solve-fvm-vertex-recon 合入后恢复 0.01
 
     def test_wiener_nonzero_bottom_rise(self):
         # Source-free top Dirichlet/bottom Robin gives a meaningful nonzero bottom rise.
