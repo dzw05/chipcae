@@ -217,6 +217,7 @@ with tempfile.TemporaryDirectory() as tmp:
                 assert error <= 1e-10, (name, volume, area*thickness, error)
                 for quantity in ('T_max', 'warpage_pv'):
                     assert np.isfinite(summary[quantity]), (name, summary)
+                assert summary['warpage_pv'] > 0, (name, summary)
                 print(name, 'volume relative error', error, flush=True)
                 return summary
             summary = acceptance(name, positive)

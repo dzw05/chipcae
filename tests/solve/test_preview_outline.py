@@ -134,6 +134,9 @@ with tempfile.TemporaryDirectory(prefix='preview-outline-') as tmp:
         default, stem = preview_run('nonconvex-default', polygon)
         assert default.returncode == 13, (default.stdout, default.stderr)
         assert 'non-convex' in default.stdout + default.stderr
+        default_errors = [e for e in events(default) if e['stage'] in ('error', 'failure')]
+        assert default_errors, events(default)
+        assert any('non-convex' in e['message'] for e in default_errors), default_errors
         assert not list(root.glob(stem.name + '*.vtkhdf'))
         # Use fixture v_shape at its physical scale for the opt-in acceptance.
         stack['outline']['box'] = [0, 0, .02, .02]
@@ -151,6 +154,10 @@ with tempfile.TemporaryDirectory(prefix='preview-outline-') as tmp:
                     'preview', result.returncode, result.stdout, result.stderr,
                     'solve', kernel.returncode, kernel.stdout, kernel.stderr)
                 assert result.returncode == kernel.returncode, (result.returncode, kernel.returncode)
+                if expected == 0:
+                    digest = success(result)['mesh_sha256']
+                    mesh = json.loads((out / 'manifest.json').read_text())['mesh']
+                    assert digest == mesh['mesh_sha256'], (name, digest, mesh['mesh_sha256'])
                 if diagnostic:
                     assert diagnostic in result.stdout + result.stderr, (name, result.stdout, result.stderr)
                     assert diagnostic in kernel.stderr, (name, kernel.stderr)
