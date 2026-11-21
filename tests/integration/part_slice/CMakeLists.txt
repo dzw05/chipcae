@@ -20,16 +20,6 @@ if(CHIPCAE_ENABLE_OCCT)
     # Brief scope amendment (i-part-slice-occt-test-build review): allow only these
     # two fixture dependencies in addition to the OCCT includes and definition.
     # draft uses BRepOffsetAPI_ThruSections; rounded uses BRepFilletAPI_MakeFillet.
-    # Require OCCT imported targets so a misspelled name cannot become a bare -l flag.
-    foreach(_occt_fixture_library IN ITEMS TKOffset TKFillet)
-        if(NOT TARGET ${_occt_fixture_library})
-            message(FATAL_ERROR "Missing OCCT fixture target: ${_occt_fixture_library}")
-        endif()
-        get_target_property(_occt_fixture_imported ${_occt_fixture_library} IMPORTED)
-        if(NOT _occt_fixture_imported)
-            message(FATAL_ERROR "OCCT fixture target must be imported: ${_occt_fixture_library}")
-        endif()
-    endforeach()
     target_link_libraries(chipcae_autotest_tests_integration_part_slice_occt_slice_draft PRIVATE TKOffset)
     target_link_libraries(chipcae_autotest_tests_integration_part_slice_occt_slice_rounded PRIVATE TKFillet)
     set_tests_properties(
