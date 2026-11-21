@@ -454,17 +454,27 @@ int resultsStackAcceptance(const QString& samples) {
             if (spin && spin->decimals() == 9)
                 planeLabels << text;
         }
+        // Report every missing translation even when the first form label is still English.
+        QStringList labelFailures;
+        const auto expectLabel = [&](bool value, const QString& message) {
+            if (!value)
+                labelFailures << message;
+        };
         for (const auto& text : {QStringLiteral("单元编号"), QStringLiteral("步")})
-            require(formLabels.count(text) == 1,
-                    qPrintable(QStringLiteral("exactly one form label: %1").arg(text)));
-        require(planeLabels.size() == 6, "exactly six plane inputs");
-        require(planeLabels == QStringList{QStringLiteral("原点 x"),
-                                           QStringLiteral("原点 y"),
-                                           QStringLiteral("原点 z"),
-                                           QStringLiteral("法向 x"),
-                                           QStringLiteral("法向 y"),
-                                           QStringLiteral("法向 z")},
-                "Chinese origin and normal labels in layout order");
+            expectLabel(formLabels.count(text) == 1,
+                        QStringLiteral("exactly one form label: %1").arg(text));
+        const QStringList expectedPlaneLabels{QStringLiteral("原点 x"),
+                                              QStringLiteral("原点 y"),
+                                              QStringLiteral("原点 z"),
+                                              QStringLiteral("法向 x"),
+                                              QStringLiteral("法向 y"),
+                                              QStringLiteral("法向 z")};
+        expectLabel(planeLabels.size() == 6, "exactly six plane inputs");
+        expectLabel(planeLabels == expectedPlaneLabels,
+                    "Chinese origin and normal labels in layout order");
+        for (const auto& text : expectedPlaneLabels)
+            expectLabel(formLabels.count(text) == 1,
+                        QStringLiteral("exactly one form label: %1").arg(text));
         for (const auto& text : {"elem_gid",
                                  "Step",
                                  "Origin x",
@@ -473,25 +483,27 @@ int resultsStackAcceptance(const QString& samples) {
                                  "Normal x",
                                  "Normal y",
                                  "Normal z"})
-            require(formLabels.count(text) == 0,
-                    qPrintable(QString("obsolete form label absent: %1").arg(text)));
+            expectLabel(formLabels.count(text) == 0,
+                        QString("obsolete form label absent: %1").arg(text));
 
         QStringList checkTexts;
         for (auto* check : controls->findChildren<QCheckBox*>())
             checkTexts << check->text();
         for (const auto& text :
              {QStringLiteral("显示空洞单元"), QStringLiteral("剖切（正半空间）")})
-            require(checkTexts.count(text) == 1,
-                    qPrintable(QStringLiteral("exactly one checkbox: %1").arg(text)));
+            expectLabel(checkTexts.count(text) == 1,
+                        QStringLiteral("exactly one checkbox: %1").arg(text));
         for (const auto& text : {"Show void cells", "Clip (positive half-space)"})
-            require(checkTexts.count(text) == 0,
-                    qPrintable(QString("obsolete checkbox absent: %1").arg(text)));
+            expectLabel(checkTexts.count(text) == 0,
+                        QString("obsolete checkbox absent: %1").arg(text));
 
         QStringList buttonTexts;
         for (auto* button : controls->findChildren<QPushButton*>())
             buttonTexts << button->text();
-        require(buttonTexts.count(QStringLiteral("导出 PNG")) == 1, "exactly one 导出 PNG button");
-        require(buttonTexts.count("Export PNG") == 0, "obsolete Export PNG button absent");
+        expectLabel(buttonTexts.count(QStringLiteral("导出 PNG")) == 1,
+                    "exactly one 导出 PNG button");
+        expectLabel(buttonTexts.count("Export PNG") == 0, "obsolete Export PNG button absent");
+        require(labelFailures.isEmpty(), qPrintable(labelFailures.join('\n')));
     };
     run("Chinese form labels", [&] { chineseFormLabels(manifest); });
     run("Chinese form labels without void cells",
