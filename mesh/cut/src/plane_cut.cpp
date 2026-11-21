@@ -363,10 +363,25 @@ long double plane_distance(const Plane& plane, WidePoint p) {
     return plane.n[0] * p[0] + plane.n[1] * p[1] - plane.d;
 }
 
+long double plane_scale(const Plane& plane, WidePoint p) {
+    const auto evaluated =
+        std::abs(plane.n[0] * p[0]) + std::abs(plane.n[1] * p[1]) + std::abs(plane.d);
+    const auto normal = std::abs(static_cast<long double>(plane.n[0])) +
+                        std::abs(static_cast<long double>(plane.n[1]));
+    // A reconstructed vertex can suffer cancellation in a zero coordinate.
+    // Include the other coordinate even when this plane's corresponding normal
+    // component vanishes, and retain a nonzero plane scale at the origin.
+    const auto scale = std::max(evaluated, normal * std::max(std::abs(p[0]), std::abs(p[1])));
+    return scale > 0 ? scale : normal;
+}
+
 // Reconstruct a bounded xy intersection from the supplied half-spaces, never
-// from PieceUnion::ring. Unbounded or ill-conditioned inputs keep the I10 path.
+// from PieceUnion::ring. An empty ring is a supported zero-area intersection;
+// nullopt denotes unsupported or unbounded geometry and keeps the I10 path.
 std::optional<WideRing> halfspace_ring(const std::vector<Plane>& planes) {
     constexpr auto eps = 64 * std::numeric_limits<long double>::epsilon();
+    if (planes.empty())
+        return std::nullopt;
     for (const auto& a : planes) {
         if (a.n[2] != 0)
             return std::nullopt;
@@ -374,10 +389,11 @@ std::optional<WideRing> halfspace_ring(const std::vector<Plane>& planes) {
         for (const auto& b : planes) {
             const long double turn = static_cast<long double>(a.n[0]) * b.n[1] -
                                      static_cast<long double>(a.n[1]) * b.n[0];
-            positive |= turn > eps;
-            negative |= turn < -eps;
-            if (turn != 0 && std::abs(turn) <= eps)
-                return std::nullopt;
+            // Only exactly parallel normals have zero turn. A small nonzero
+            // turn can still close a bounded polygon and is solved below in
+            // long double, just like every other nonparallel pair.
+            positive |= turn > 0;
+            negative |= turn < 0;
         }
         // Neither direction tangent to a constraint may be a recession ray.
         if (!positive || !negative)
@@ -400,11 +416,8 @@ std::optional<WideRing> halfspace_ring(const std::vector<Plane>& planes) {
             if (!std::isfinite(p[0]) || !std::isfinite(p[1]))
                 return std::nullopt;
             bool inside = true;
-            for (const auto& plane : planes) {
-                const auto scale =
-                    std::abs(plane.n[0] * p[0]) + std::abs(plane.n[1] * p[1]) + std::abs(plane.d);
-                inside &= plane_distance(plane, p) <= eps * scale;
-            }
+            for (const auto& plane : planes)
+                inside &= plane_distance(plane, p) <= eps * plane_scale(plane, p);
             if (inside)
                 points.push_back(p);
         }
@@ -464,12 +477,9 @@ canonical_convex_union(const std::vector<detail::UnionPiece>& pieces) {
     constexpr auto eps = 64 * std::numeric_limits<Real>::epsilon();
     for (const auto& ring : rings)
         for (const auto& p : ring)
-            for (const auto& plane : exterior) {
-                const auto scale =
-                    std::abs(plane.n[0] * p[0]) + std::abs(plane.n[1] * p[1]) + std::abs(plane.d);
-                if (plane_distance(plane, p) > eps * scale)
+            for (const auto& plane : exterior)
+                if (plane_distance(plane, p) > eps * plane_scale(plane, p))
                     return std::nullopt;
-            }
     const auto tolerance = eps * std::max(area, ring_area(*boundary));
     if (std::abs(area - ring_area(*boundary)) > tolerance)
         return std::nullopt;
@@ -478,7 +488,11 @@ canonical_convex_union(const std::vector<detail::UnionPiece>& pieces) {
             auto planes = pieces[i].planes;
             planes.insert(planes.end(), pieces[j].planes.begin(), pieces[j].planes.end());
             const auto overlap = halfspace_ring(planes);
-            if (!overlap || ring_area(*overlap) > tolerance)
+            if (!overlap)
+                return std::nullopt;
+            if (overlap->empty())
+                continue;
+            if (ring_area(*overlap) > tolerance)
                 return std::nullopt;
         }
     detail::UnionPiece canonical;
@@ -488,9 +502,7 @@ canonical_convex_union(const std::vector<detail::UnionPiece>& pieces) {
         const Plane* support = nullptr;
         for (const auto& plane : exterior) {
             const auto on_plane = [&](WidePoint p) {
-                const auto scale =
-                    std::abs(plane.n[0] * p[0]) + std::abs(plane.n[1] * p[1]) + std::abs(plane.d);
-                return std::abs(plane_distance(plane, p)) <= eps * scale;
+                return std::abs(plane_distance(plane, p)) <= eps * plane_scale(plane, p);
             };
             if (on_plane(a) && on_plane(b) &&
                 (!support || std::tie(plane.n, plane.d) < std::tie(support->n, support->d)))
@@ -783,7 +795,9 @@ Expected<CutLayerArrays> generate(const HexMeshArrays& m,
         for (const auto& [body, list] : *body_pieces)
             for (const auto& piece : list)
                 body_bounds[body].push_back(piece_bounds(piece, o.snap_phi));
-        for (const auto& [name, body] : m.attr_table.bodies) {
+        // Preparation collects registry bodies and entry-only bodies, in
+        // stable BodyId order, with duplicate IDs removed.
+        for (const auto& [body, list] : *body_pieces) {
             BodyLevelSet ls{
                 body,
                 std::vector<Real>(m.vertices.size() / 3, -std::numeric_limits<Real>::infinity())};

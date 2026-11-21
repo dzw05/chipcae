@@ -1102,6 +1102,8 @@ void region_levels(const Output& out, const HexMeshArrays& original, const CutGe
     std::set<BodyId> bodies;
     for (const auto& [name, body] : original.attr_table.bodies)
         bodies.insert(body);
+    for (const auto& entry : original.attr_table.entries)
+        bodies.insert(entry.body);
     for (const auto& ls : out.cut.level_sets) {
         require(bodies.erase(ls.body) == 1, "one level set for each registered body");
         const auto u = std::find_if(
@@ -1693,6 +1695,99 @@ void subdivided_square_split(bool immutable) {
     exact(a.mesh, b.mesh, "collinear split preserves mesh fields");
     region_levels(b, m, split_geometry);
 }
+// Three strips include a pair with an empty feasible intersection. Adding a
+// redundant, almost parallel plane must not prevent convex certification.
+void separated_strip_split(bool near_parallel, bool immutable) {
+    const auto m = sp5::grid(region_stack({}), 8);
+    const auto body = m.attr_table.bodies.at("lid");
+    PieceUnion split;
+    split.body = body;
+    split.ring = square_ring();
+    const std::array<Real, 4> x{.004, .008, .012, .016};
+    for (std::size_t k = 0; k + 1 < x.size(); ++k) {
+        const Ring block{{x[k], .004}, {x[k + 1], .004}, {x[k + 1], .016}, {x[k], .016}};
+        auto p = piece(block, split.ring);
+        for (auto& plane : p.planes)
+            plane.body = body;
+        split.pieces.push_back(std::move(p.planes));
+        split.internal.push_back(std::move(p.internal));
+    }
+    if (near_parallel) {
+        split.pieces.front().push_back({body, {1, 1e-20, 0}, .016});
+        split.internal.front().push_back(false);
+    }
+    const auto a = direct(m, CutGeometry{{}, {manual_union(body, square_ring())}}, immutable);
+    const auto b = direct(m, CutGeometry{{}, {split}}, immutable);
+    equivalent(a.cut, b.cut);
+    exact(a.mesh, b.mesh, "separated strips preserve mesh fields");
+    closure(b);
+}
+
+void zero_coordinate_split(bool immutable) {
+    const auto m = sp5::grid(region_stack({}), 8);
+    const auto body = m.attr_table.bodies.at("lid");
+    // The first triangle touches x=0 at one vertex without carrying that
+    // exterior plane. Reconstructing the vertex can leave a tiny negative x;
+    // a tolerance based only on the x-plane's evaluated terms vanishes there.
+    const Ring ring{{0, .0001}, {.017, .006}, {.015, .018}, {0, .0144}};
+    PieceUnion split;
+    split.body = body;
+    split.ring = ring;
+    for (const Ring& block :
+         std::vector<Ring>{{ring[0], ring[1], ring[2]}, {ring[0], ring[2], ring[3]}}) {
+        auto p = piece(block, ring);
+        for (auto& plane : p.planes)
+            plane.body = body;
+        split.pieces.push_back(std::move(p.planes));
+        split.internal.push_back(std::move(p.internal));
+    }
+    const auto a = direct(m, CutGeometry{{}, {manual_union(body, ring)}}, immutable);
+    const auto b = direct(m, CutGeometry{{}, {split}}, immutable);
+    equivalent(a.cut, b.cut);
+    exact(a.mesh, b.mesh, "zero-coordinate split preserves mesh fields");
+    closure(b);
+}
+
+void entry_only_level_sets(bool immutable) {
+    auto m = sp5::grid(region_stack({}), 8);
+    const auto lid = m.attr_table.bodies.at("lid");
+    m.attr_table.bodies.erase("substrate");
+    // Duplicate registry values and repeated entries must still yield one field.
+    m.attr_table.bodies["lid_alias"] = lid;
+    auto extra = m.attr_table.entries.front();
+    extra.body = 91;
+    m.attr_table.entries.push_back(extra);
+    m.attr_table.entries.push_back(extra);
+    const CutGeometry g{{{lid, {0, 0, 1}, .0014}, {91, {1, 0, 0}, .01}},
+                        {manual_union(lid, l_ring())}};
+    region_levels(direct(m, g, immutable), m, g);
+}
+
+void balanced_overlap_rejected(bool immutable) {
+    auto m = sp5::grid(stack(), 8);
+    const auto before = m;
+    const auto body = m.attr_table.bodies.at("substrate");
+    PieceUnion u;
+    u.body = body;
+    u.ring = square_ring();
+    // The overlap [.008,.009] exactly balances the gap [.010,.011].
+    // Containment and summed area alone would incorrectly fill the square.
+    for (const auto& x : std::array<P2, 3>{{{.004, .009}, {.008, .010}, {.011, .016}}}) {
+        auto p = piece({{x[0], .004}, {x[1], .004}, {x[1], .016}, {x[0], .016}}, u.ring);
+        for (auto& plane : p.planes)
+            plane.body = body;
+        u.pieces.push_back(std::move(p.planes));
+        u.internal.push_back(std::move(p.internal));
+    }
+    const auto result =
+        immutable
+            ? build_cut_layer(static_cast<const HexMeshArrays&>(m), CutGeometry{{}, {u}}, options())
+            : build_cut_layer(m, CutGeometry{{}, {u}}, options());
+    require(!result, "balanced overlap/gap cannot certify a convex union");
+    exact_error(result.error(), "outline.unsupported", "outline: disconnected solid in one cell");
+    exact(m, before, "overlap rejection preserves every mesh field");
+}
+
 void supplied_piece_geometry(bool convex_pieces, int entry) {
     // Deliberately give diagnostics a different valid ring. Replacing supplied
     // half-spaces by that ring (or its convex hull) changes the physical solid.
@@ -1865,6 +1960,18 @@ int main(int argc, char** argv) {
         for (bool immutable : {false, true})
             run("I11_collinear_split_" + std::to_string(immutable),
                 [=] { subdivided_square_split(immutable); });
+        for (bool immutable : {false, true}) {
+            run("zero_coordinate_split_" + std::to_string(immutable),
+                [=] { zero_coordinate_split(immutable); });
+            run("entry_only_level_sets_" + std::to_string(immutable),
+                [=] { entry_only_level_sets(immutable); });
+            run("balanced_overlap_rejected_" + std::to_string(immutable),
+                [=] { balanced_overlap_rejected(immutable); });
+            for (bool near_parallel : {false, true})
+                run("separated_strip_split_" + std::to_string(near_parallel) + "_" +
+                        std::to_string(immutable),
+                    [=] { separated_strip_split(near_parallel, immutable); });
+        }
         for (bool convex : {false, true})
             for (int entry = 0; entry < 4; ++entry)
                 run("piece_geometry_" + std::to_string(convex) + "_entry_" + std::to_string(entry),
@@ -1874,6 +1981,22 @@ int main(int argc, char** argv) {
         run("source_dedupe", [] { source_dedupe(false); });
         run("source_distinct", [] { source_dedupe(true); });
         run("empty_sources", empty_sources);
+        const std::array<Real, 3> nonfinite{std::numeric_limits<Real>::quiet_NaN(),
+                                            std::numeric_limits<Real>::infinity(),
+                                            -std::numeric_limits<Real>::infinity()};
+        const std::array<Ring, 2> finite_rings{
+            square_ring(), Ring{{.004, .01}, {.01, .004}, {.016, .01}, {.01, .016}}};
+        for (std::size_t shape = 0; shape < finite_rings.size(); ++shape)
+            for (std::size_t k = 0; k < nonfinite.size(); ++k)
+                for (std::size_t vertex = 0; vertex < finite_rings[shape].size(); ++vertex)
+                    for (int axis = 0; axis < 2; ++axis)
+                        run("nonfinite_source_" + std::to_string(shape) + "_" + std::to_string(k) +
+                                "_" + std::to_string(vertex) + "_" + std::to_string(axis),
+                            [&, shape, k, vertex, axis] {
+                                auto ring = finite_rings[shape];
+                                ring[vertex][axis] = nonfinite[k];
+                                producer_error(ring, "degenerate polygon", false);
+                            });
         const std::vector<Ring> bad{
             {{0, 0}, {.01, 0}},
             {{0, 0}, {.01, 0}, {.02, 0}},

@@ -56,6 +56,10 @@ void clean_edges(Polygon& ring) {
 
 Expected<Polygon> normalized_polygon(const Inclusion& region) {
     auto ring = region.footprint.polygon;
+    if (std::any_of(ring.begin(), ring.end(), [](const auto& p) {
+            return !std::isfinite(p[0]) || !std::isfinite(p[1]);
+        }))
+        return Error{"CUT_UNSUPPORTED", region.name + ": degenerate polygon"};
     while (ring.size() > 1 && ring.front() == ring.back())
         ring.pop_back();
     clean_edges(ring);
