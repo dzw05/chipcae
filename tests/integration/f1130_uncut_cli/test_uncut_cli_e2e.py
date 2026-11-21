@@ -987,26 +987,25 @@ class TraceMapReferenceTests(unittest.TestCase):
                     ref.check_solution(mesh, given_rings, stack, {}, expected_areas={'In1.Cu': .5})
                 elif defect == 'series_kz':
                     phi,parallel = ref.reference_coefficients(mesh,given_rings,stack)
-                    self.assertTrue(np.any((0 < phi) & (phi < 1)))
-                    mixed_conductivity = ref.mixed_conductivity
-
-                    def series_kz(fractions):
-                        coefficients = mixed_conductivity(fractions).copy()
-                        coefficients[:,2] = 1/(fractions/390+(1-fractions)/.3)
-                        return coefficients
-
+                    mixed = (0 < phi) & (phi < 1)
+                    self.assertTrue(np.any(mixed))
+                    fields = mesh['fields']
+                    original_fraction = fields['copper_fraction'].copy()
+                    original_conductivity = fields['conductivity_diag'].copy()
+                    fields['conductivity_diag'][:,2] = 1/(phi/390+(1-phi)/.3)
+                    np.testing.assert_array_equal(fields['copper_fraction'],original_fraction)
+                    np.testing.assert_array_equal(fields['conductivity_diag'][:,:2],
+                                                  original_conductivity[:,:2])
+                    relative = float(np.max(abs(fields['conductivity_diag'][mixed,2]
+                                                -parallel[mixed,2])/abs(parallel[mixed,2])))
+                    self.assertGreater(relative,1e-14)
+                    # Other checks are pre-completed only to isolate record verdict handling.
                     measurements = dict(acceptance_checks={name: True
                         for name in ACCEPTANCE_CHECKS
                         if name not in ('cell_fractions','conductivity')})
-                    with patch.object(ref,'mixed_conductivity',side_effect=series_kz):
-                        mutated_phi,mutated = ref.reference_coefficients(mesh,given_rings,stack)
-                        np.testing.assert_array_equal(mutated_phi,phi)
-                        np.testing.assert_array_equal(mutated[:,:2],parallel[:,:2])
-                        relative = float(np.max(abs(mutated-parallel)/abs(parallel)))
-                        self.assertGreater(relative,1e-14)
-                        with self.assertRaisesRegex(AssertionError,'M3 conductivity mismatch') as failure:
-                            ref.check_solution(mesh,given_rings,stack,measurements,
-                                               expected_areas={'In1.Cu': .5})
+                    with self.assertRaisesRegex(AssertionError,'M3 conductivity mismatch') as failure:
+                        ref.check_solution(mesh,given_rings,stack,measurements,
+                                           expected_areas={'In1.Cu': .5})
                     self.assertIs(measurements['acceptance_checks']['cell_fractions'],True)
                     self.assertFalse(measurements['acceptance_checks'].get('conductivity',False))
                     with redirect_stdout(StringIO()):
@@ -1019,8 +1018,10 @@ class TraceMapReferenceTests(unittest.TestCase):
                         ['acceptance check incomplete: conductivity'])
                     print(f'series_kz relative_conductivity_difference={relative:.17g} '
                           f'failure={failure.exception} verdict={record["verdict"]}',flush=True)
-                    # The same export must pass again after restoring the parallel reference.
+                    # The same export must pass again after restoring its original input.
                     # This catches a leaked mutation or a checker that always rejects C4.
+                    fields['copper_fraction'][:] = original_fraction
+                    fields['conductivity_diag'][:] = original_conductivity
                     control = dict(acceptance_checks={name: True
                         for name in ACCEPTANCE_CHECKS
                         if name not in ('cell_fractions','conductivity','physics')})
