@@ -682,7 +682,7 @@ class TraceMapReferenceTests(unittest.TestCase):
             self.assertLessEqual(abs(sum(derivatives)), 1e-14)
         stack = synthetic_stack([.001])
         mesh = ref.tensor_mesh(stack, 1, 1)
-        operator, rhs, dofs = ref.assemble_q2(mesh, np.array([[195.15, 195.15, 780/1301]]))
+        operator, rhs, dofs = ref.assemble_q2(mesh, np.array([[195.15, 195.15, 195.15]]))
         matrix = operator.toarray() if hasattr(operator, 'toarray') else operator
         self.assertLessEqual(np.max(abs(matrix - matrix.T)) / np.max(abs(matrix)), 1e-12)
         self.assertEqual(len(dofs['points']), 27)
@@ -691,10 +691,10 @@ class TraceMapReferenceTests(unittest.TestCase):
     def test_single_column_known_fraction_and_numpy_fallback(self):
         import numpy as np
         import trace_map_ref as ref
-        # Analytic 50% copper/FR4 series solution, independent literal values.
+        # Analytic 50% copper/FR4 parallel mixture, independent literal values.
         stack = synthetic_stack([.001])
         mesh = ref.tensor_mesh(stack, 1, 1)
-        k = np.array([[195.15, 195.15, 780/1301]])
+        k = np.array([[195.15, 195.15, 195.15]])
         operator, rhs, dofs = ref.assemble_q2(mesh, k)
         sparse, _ = ref.solve_q2(operator, rhs, dofs)
         # Force assembly as well as the direct solve to operate without SciPy.
@@ -703,33 +703,34 @@ class TraceMapReferenceTests(unittest.TestCase):
             dense, reactions = ref.solve_q2(numpy_operator, numpy_rhs, numpy_dofs, use_scipy=False)
         self.assertIsInstance(numpy_operator, np.ndarray)
         for point, actual in zip(dofs['points'], dense, strict=True):
-            want = 298.15 + (float(point[2]) / .001) * (65050/2081)
+            want = 298.15 + (float(point[2]) / .001) * (1000/3923)
             self.assertLessEqual(abs(actual - want), 1e-8)
         self.assertLessEqual(np.max(abs(sparse - dense)), 1e-8)
         qtop, qbot, rlo, rhi = ref.thermal_checks(mesh, stack, k, dense, reactions, dofs)
         self.assertLessEqual(abs(qtop - qbot) / abs(qbot), 1e-9)
-        self.assertLessEqual(abs(qbot - .03748197981739548), 1e-11)
+        self.assertLessEqual(abs(qbot - 3903/39230), 1e-11)
         self.assertLessEqual(abs(rlo - rhi), 1e-9)
         corner = ref.corner_values(mesh, dense, dofs)
         recovered, recovered_reactions = ref.solve_q2(operator, rhs, dofs, corners=corner)
         self.assertLessEqual(np.max(abs(recovered - dense)), 1e-8)
         self.assertLessEqual(np.max(abs(recovered_reactions - reactions)), 1e-10)
 
-    def test_uniform_multilayer_series_solution(self):
+    def test_uniform_multilayer_stacked_resistance_solution(self):
         import numpy as np
         import trace_map_ref as ref
         stack = synthetic_stack([.0002, .001, .0003])
         mesh = ref.tensor_mesh(stack, 2, 1)
-        # Uniform f=(0, 1/2, 1); independent series resistance in SI.
-        kz = [.3, 780/1301, 390]
+        # Uniform f=(0, 1/2, 1); parallel mixtures within each layer.
+        # Independent series resistance across the stacked layers, in SI.
+        kz = [.3, 195.15, 390]
         k = np.array([[.3, .3, .3], [195.15, 195.15, kz[1]], [390, 390, 390]] * 2)
         operator, rhs, dofs = ref.assemble_q2(mesh, k)
         temperatures, reactions = ref.solve_q2(operator, rhs, dofs)
-        flux = 50 / (.0002/.3 + .001/(780/1301) + .0003/390 + .001)
+        flux = 50 / (.0002/.3 + .001/(195.15) + .0003/390 + .001)
         for point, actual in zip(dofs['points'], temperatures, strict=True):
             z = float(point[2])
             want = 298.15 + flux * (min(z, .0002)/.3 +
-                min(max(z-.0002, 0), .001)/(780/1301) + max(z-.0012, 0)/390)
+                min(max(z-.0002, 0), .001)/(195.15) + max(z-.0012, 0)/390)
             self.assertLessEqual(abs(actual - want), 1e-8)
         qtop, qbot, _, _ = ref.thermal_checks(mesh, stack, k, temperatures, reactions, dofs)
         self.assertLessEqual(abs(qtop-qbot)/abs(qbot), 1e-9)
@@ -988,8 +989,8 @@ class TraceMapReferenceTests(unittest.TestCase):
         self.assertLessEqual(abs(measurements['copper_areas_mm2']['In1.Cu']-.5), 1e-12)
         qtop,qbot,rlo,rhi = ref.thermal_checks(mesh,stack,k,temperatures,reactions,dofs)
         # A=2e-6; arithmetic/harmonic kz means are hand-derived.
-        expected_lo = .001/(((780/1301+.3)/2)*2e-6)+500
-        expected_hi = .001*((1301/780+1/.3)/2)/2e-6+500
+        expected_lo = .001/(((195.15+.3)/2)*2e-6)+500
+        expected_hi = .001*((1/195.15+1/.3)/2)/2e-6+500
         self.assertLessEqual(abs(rlo-expected_lo)/expected_lo,1e-14)
         self.assertLessEqual(abs(rhi-expected_hi)/expected_hi,1e-14)
         epsilon = 1e-9*max(50/rlo,50/rhi,abs(qbot),1e-30)
@@ -1014,7 +1015,7 @@ class TraceMapReferenceTests(unittest.TestCase):
             (((0,0),(1,0),(1,1),(0,1)),))}
         phi,k = ref.reference_coefficients(mesh,rings,stack)
         np.testing.assert_allclose(phi,[.5],rtol=0,atol=1e-15)
-        np.testing.assert_allclose(k,[[195.15,195.15,780/1301]],rtol=1e-14,atol=0)
+        np.testing.assert_allclose(k,[[195.15,195.15,195.15]],rtol=1e-14,atol=0)
         stack['layers'][0]['material'] = 'cu'
         with self.assertRaisesRegex(AssertionError,'Patterned matrix/metal'):
             ref.reference_coefficients(mesh,rings,stack)
@@ -1043,7 +1044,7 @@ def write_synthetic_hex(path, stack, order=(0, 1), patterned=False):
     import numpy as np
     import trace_map_ref as ref
     mesh = ref.tensor_mesh(stack, 2, 1)
-    k = np.array([[195.15, 195.15, 780/1301] if patterned and i == 0 else [.3]*3
+    k = np.array([[195.15, 195.15, 195.15] if patterned and i == 0 else [.3]*3
                   for i in range(2)])
     operator, rhs, dofs = ref.assemble_q2(mesh, k)
     temperatures, _ = ref.solve_q2(operator, rhs, dofs)
