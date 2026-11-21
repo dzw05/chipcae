@@ -5,11 +5,12 @@ import tempfile
 import unittest
 from pathlib import Path
 from steps_fixtures import fixture, cli, api, fixed_keys
+from fixtures import baseline_for_numpy
 
 
 # Captured from the unchanged merged #103 reader at baa0163, before this test
 # commit. Keep literal bytes/layout independent of the current reader output.
-BASELINE = '''{
+BASELINE = baseline_for_numpy('''{
   "schema": "chipcae.vv.result_summary/0.1",
   "step_file": "out/step-0.vtkhdf",
   "mesh_sha256": "synthetic-sha256",
@@ -59,7 +60,7 @@ BASELINE = '''{
     "warpage_pv": 0.1
   }
 }
-'''.encode('utf-8')
+''').encode('utf-8')
 
 
 class Legacy(unittest.TestCase):

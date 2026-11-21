@@ -9,7 +9,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'tests/unit/result_summary'))
 # Import first so missing h5py/numpy retains the shared fixture's exit code 77.
-from fixtures import fixture, save, fixed_keys
+from fixtures import baseline_for_numpy, fixture, save, fixed_keys
 
 sys.path.insert(0, str(ROOT))
 from tools.vv import result_summary as rs
@@ -71,6 +71,7 @@ BASELINE_TEXT = '''{
   }
 }
 '''
+BASELINE_TEXT = baseline_for_numpy(BASELINE_TEXT)
 BASELINE = BASELINE_TEXT.encode('utf-8')
 # These two variants were also captured independently before any production edit.
 BASELINE_NO_HASH = BASELINE.replace(b'"synthetic-sha256"', b'null')

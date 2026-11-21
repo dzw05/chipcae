@@ -7,6 +7,9 @@ Without either dependency the executable remains available and reports
 `NOT_IMPLEMENTED` (exit 2). The schema path is bound to this source tree at
 configure time; this entry point does not yet provide an installed schema layout.
 
+The Python preview acceptance tests require NumPy and h5py in the interpreter
+selected by CMake (`Python3_EXECUTABLE`).
+
 ```
 chipcae-preview input.stack.json --nx 2 --ny 2 --levels 0 -o output.vtkhdf
 ```
@@ -47,18 +50,45 @@ names. The grid's `VTKHDF/FieldData/layer_names` and `material_names` string
 arrays map index i to ID i+1, using the same attribute-table source as the cell IDs.
 `cell_kind` remains 0 for regular, 1 for cut, and 2 for void cells.
 
-Inline `outline.polygon` is clipped using the same convex half-space API as solve,
-after building the full bounding grid. Clockwise rings and repeated closing points
-are accepted. Non-convex or degenerate rings are rejected; vertices must be finite
-and inside `outline.box`. Clipping failures emit an error event before output is
-written. Holes are unsupported.
+By default, inline `outline.polygon` is clipped using the same convex half-space API
+as solve, after building the full bounding grid. Clockwise rings and repeated
+closing points are accepted. Non-convex or degenerate rings are rejected; vertices
+must be finite and inside `outline.box`. Clipping failures emit an error event
+before output is written. Holes are unsupported.
 
-The success event reports `cell_count`, `cut_cell_count`, and `mesh_sha256` after
-clipping. `cut_cell_count` agrees with the number of `cell_kind=1` entries in
-VTKHDF; `vol_frac` contains the retained volume fractions. Box-only grids have
-zero cut cells. Use identical integer grid parameters and ratio settings to compare
+`--nonconvex-outline` enables simple non-convex outlines through the mesh/cut
+general entry point, using convex decomposition and per-cell union. The option is
+off by default to keep preview consistent with `chipcae-solve`; the default will
+change together with solve's non-convex outline support. Self-intersecting outlines
+still exit 13, and holes remain unsupported. Convex and empty outlines delegate to
+the default cutter and retain identical output.
+
+```sh
+chipcae-preview input.stack.json --nx 8 --ny 8 --levels 1 --max-ratio 10 \
+  --nonconvex-outline -o output.vtkhdf
+```
+
+The flag takes no value. Repeating it exits 1 with
+`duplicate option: --nonconvex-outline`. A cut that leaves disconnected solid
+pieces within one background cell remains unsupported (exit 13).
+
+Regions with a `footprint.polygon` are clipped in the same pass as the outline:
+`region_cut_planes` supplies the extra planes to the selected cutter. Errors use
+the shared mapping: `CUT_UNSUPPORTED` and `outline.unsupported` exit 13;
+other clipping errors, including `INPUT_INVALID`, exit 14.
+
+The success event reports `cell_count`, `node_count`, `cut_cell_count`, and
+`mesh_sha256` after clipping. Non-convex cutting removes cells with no retained
+volume and their unused nodes. Each retained background cell is counted once,
+even when it intersects several decomposition pieces. `cell_count` matches the
+number of eight-node hexes in Connectivity, and `node_count` matches the number
+of Points. `cut_cell_count` agrees with the number of `cell_kind=1` entries in
+VTKHDF. `vol_frac` contains the retained volume fractions, relative to each
+original background hex. Grids with no outline or region polygons have zero cut
+cells. Use identical integer grid parameters and ratio settings to compare
 preview and solve digests.
 
 An external polyset layer named `outline` without an inline polygon is unsupported:
 preview exits with `CUT_UNSUPPORTED` (13) and explains that an inline polygon is
 required. It does not silently preview the bounding box in this case.
+This rejection also applies with `--nonconvex-outline`.

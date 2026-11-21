@@ -87,18 +87,32 @@ def main():
     except (ValueError, TypeError):
         reason = "invalid assembly JSON"
     try:
+        parts = [] if reason else assembly.get("parts", [])
+        defects = []
         if reason:
-            if args.report:
-                write_json(args.report, {"code": "IMPORT_REJECTED", "message": reason,
-                                         "defects": [{"message": reason}]})
-            return 7
-        parts = assembly.get("parts", [])
-        write_json(args.o, make_stack(parts))
+            defects = [{"defect_id": "assembly/input/1", "tier": "C", "kind": "INPUT_INVALID",
+                        "reason": 14, "dimension": "input", "size": None, "size_unit": "1",
+                        "suggestion": "Check assembly input", "action": "reject",
+                        "rejection_reason": reason, "material_ambiguous": False}]
+        sidecar = {"schema_version": "import-report/1.0", "L": 0, "t_min": 0,
+                   "eps_weld": 0, "tau_A": 0, "tau_B": 0, "delta_f": 0,
+                   "tier_counts": {"Weld": 0, "A": 0, "B": 0, "C": len(defects)},
+                   "b_tier_accepted": None, "defects": defects,
+                   "parts": {"split_layers": {}, "rewrite_targets": [],
+                             "material_approx": [
+                                 {"id": part["id"],
+                                  "material_approx": part.get("material_approx") is True,
+                                  "label": "近似材料" if part.get("material_approx") is True else ""}
+                                 for part in parts]},
+                   "welded_interfaces": 0}
+        write_json(Path(args.o).parent / "import_report.json", sidecar)
         if args.report:
-            write_json(args.report, {"code": "OK", "message": "", "defects": [],
-                                     "parts": [{"id": part["id"],
-                                                "material_approx": part.get("material_approx") is True}
-                                               for part in parts]})
+            write_json(args.report, {"schema_version": "import-report/1.0",
+                                     "code": "IMPORT_REJECTED" if reason else "OK",
+                                     "message": reason, "defects": defects})
+        if reason:
+            return 7
+        write_json(args.o, make_stack(parts))
     except (OSError, TypeError) as error:
         print(error, file=sys.stderr)
         return 1

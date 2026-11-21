@@ -23,7 +23,9 @@
 #ifdef CHIPCAE_PREVIEW_ENABLED
 #include "chipcae/mesh/background/tensor_grid.hpp"
 #include "chipcae/mesh/background/vtkhdf_writer.hpp"
+#include "chipcae/mesh/cut/detail/outline_nonconvex.hpp"
 #include "chipcae/mesh/cut/outline_cut.hpp"
+#include "chipcae/mesh/cut/region_cut.hpp"
 #include "mesh_digest.hpp"
 #include "mesh_error_map.hpp"
 #ifdef CHIPCAE_ENABLE_MPI
@@ -132,6 +134,7 @@ int run(int argc, char** argv) {
     using namespace chipcae::mesh;
     std::filesystem::path input, output, surface, polyset;
     GridOptions options;
+    bool nonconvex_outline = false;
 #ifdef CHIPCAE_ENABLE_MPI
     int world_size = 1;
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
@@ -169,6 +172,10 @@ int run(int argc, char** argv) {
                 options.max_ratio = ratio;
             } else
                 options.levels = integer(value, true);
+        } else if (arg == "--nonconvex-outline") {
+            if (!seen.insert(arg).second)
+                throw std::runtime_error("duplicate option: " + arg);
+            nonconvex_outline = true;
         } else if (arg.starts_with('-') || !input.empty()) {
             throw std::runtime_error("unexpected argument: " + arg);
         } else {
@@ -219,7 +226,11 @@ int run(int argc, char** argv) {
     event("mesh", 0.3, "Building tensor grid");
     auto mesh = sidecars.empty() ? checked(build_tensor_grid(bounding_stack, options))
                                  : checked(build_tensor_grid(bounding_stack, options, polygons));
-    auto cut = checked(cut::apply_outline_cut(mesh, stack.outline, {}));
+    auto region_planes = checked(cut::region_cut_planes(stack, mesh));
+    auto cut =
+        checked(nonconvex_outline
+                    ? cut::detail::apply_outline_cut_general(mesh, stack.outline, {}, region_planes)
+                    : cut::apply_outline_cut(mesh, stack.outline, {}, region_planes));
     event("write", 0.8, "Writing VTKHDF");
     auto files =
         checked_io(write_vtkhdf(stem, mesh, cut ? &*cut : nullptr, chipcae::Communicator::world()));
@@ -268,7 +279,8 @@ int main(int argc, char** argv) {
             event("help",
                   1,
                   "chipcae-preview <stack.json> [--polyset f] [--nx N --ny N] "
-                  "[--levels N] [--max-ratio R] -o <stem|out.vtkhdf> [--surface <exact-eb-file>] "
+                  "[--levels N] [--max-ratio R] [--nonconvex-outline] "
+                  "-o <stem|out.vtkhdf> [--surface <exact-eb-file>] "
                   "(--polyset overrides meshing sidecars; levels=0 is automatic)");
             return 0;
         }

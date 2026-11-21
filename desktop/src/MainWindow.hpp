@@ -51,6 +51,8 @@ public:
                             const QStringList& prefix = {});
     void cancelImport();
     bool openResultsPath(const QString& manifestPath);
+    // Wall-clock milliseconds from entry to stack fill/decision; -1 before the first call.
+    qint64 lastOpenResultsStackFillMs() const { return lastOpenResultsStackFillMs_; }
     enum class MeshDigestDialogChoice { Unset, Accept, Cancel };
     void setMeshDigestDialogChoice(MeshDigestDialogChoice choice);
     MeshDigestDialogChoice meshDigestDialogChoice() const;
@@ -125,6 +127,7 @@ private:
         chipcae::desktop::MeshSha256Compare::PreviewMissing;
     QString lastMeshDigestDetail_;
     bool lastOpenCancelledForMeshDigest_ = false;
+    qint64 lastOpenResultsStackFillMs_ = -1;
     bool previewDigestValid_ = false;
     bool previewDisplayed_ = false;
     bool previewDisplayStale_ = false;

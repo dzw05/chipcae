@@ -5,8 +5,8 @@ from assembly_test_support import enabled, solve_stack
 
 if all(enabled(flag) for flag in ('MFEM', 'MPI', 'HDF5')):
     root = Path(sys.argv[1])
-    first = solve_stack(root, root / 'original.json', 'original-solve')
-    second = solve_stack(root, root / 'rewritten.json', 'rewritten-solve')
+    first = solve_stack(root, root / 'original.json', 'original-solve', timeout=120)
+    second = solve_stack(root, root / 'rewritten.json', 'rewritten-solve', timeout=120)
     assert first['mesh']['mesh_sha256'] == second['mesh']['mesh_sha256']
     x = {v['name']: v['value'] for v in first['summary']}['warpage_pv']
     y = {v['name']: v['value'] for v in second['summary']}['warpage_pv']

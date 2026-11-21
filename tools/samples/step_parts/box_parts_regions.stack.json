@@ -1,0 +1,107 @@
+{
+  "id": "sp7",
+  "unit": "m",
+  "outline": {
+    "box": [
+      0,
+      0,
+      0.056,
+      0.044
+    ]
+  },
+  "symmetry": "none",
+  "package_type": "FCBGA",
+  "layers": [
+    {
+      "name": "base",
+      "kind": "Explicit",
+      "thickness": 0.0005,
+      "n_elem_min": 1,
+      "grading": 1,
+      "material": "silicon"
+    },
+    {
+      "name": "stiffener",
+      "kind": "Explicit",
+      "thickness": 0.001,
+      "n_elem_min": 1,
+      "grading": 1,
+      "regions": [
+        {
+          "name": "stiffener_bottom",
+          "body": "stiffener",
+          "material": "underfill",
+          "footprint": {
+            "box": [
+              0.006,
+              0.006,
+              0.05,
+              0.01
+            ]
+          }
+        },
+        {
+          "name": "stiffener_top",
+          "body": "stiffener",
+          "material": "underfill",
+          "footprint": {
+            "box": [
+              0.006,
+              0.034,
+              0.05,
+              0.038
+            ]
+          }
+        },
+        {
+          "name": "stiffener_left",
+          "body": "stiffener",
+          "material": "underfill",
+          "footprint": {
+            "box": [
+              0.006,
+              0.01,
+              0.01,
+              0.034
+            ]
+          }
+        },
+        {
+          "name": "stiffener_right",
+          "body": "stiffener",
+          "material": "underfill",
+          "footprint": {
+            "box": [
+              0.046,
+              0.01,
+              0.05,
+              0.034
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "lid",
+      "kind": "Explicit",
+      "thickness": 0.0005,
+      "n_elem_min": 1,
+      "grading": 1,
+      "regions": [
+        {
+          "name": "lid",
+          "body": "lid",
+          "material": "silicon",
+          "footprint": {
+            "box": [
+              0.006,
+              0.006,
+              0.05,
+              0.038
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

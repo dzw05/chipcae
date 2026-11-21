@@ -194,9 +194,11 @@ int main() {
         require(f.fake->starts.size() == 1, "launch failure must attempt start once");
         persisted(*manager, job);
     });
-    suite.test("default launcher reports transitional unavailable error", [] {
+    suite.test("injected launcher reports unavailable error", [] {
         Fixture f;
-        LocalJobManager manager(f.config);
+        f.fake->pid.reset();
+        f.fake->error = "process launcher not available in this build";
+        LocalJobManager manager(f.config, std::make_unique<FakeSpawner>(f.fake));
         const auto job = f.submit(manager);
         failure(job, jobs::FAILURE_CATEGORY_LAUNCH, "process launcher not available in this build");
         persisted(manager, job);

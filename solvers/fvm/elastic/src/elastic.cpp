@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
 #include <limits>
 #include <numeric>
 #include <petscksp.h>
@@ -67,7 +68,93 @@ bool spd(const C6& c) {
         }
     return true;
 }
-ElasticBoundary validate(const ElasticMesh& m, const ElasticProblem& p, MPI_Comm comm) {
+bool cut_cell(const ElasticMesh& m, Index c) {
+    return !m.is_cut.empty() && m.is_cut[static_cast<std::size_t>(c)] != 0;
+}
+bool cut_face(const ElasticMesh& m, std::size_t k) {
+    const auto& f = m.faces[k];
+    return m.is_embedded[k] || cut_cell(m, f.lo) || (f.hi >= 0 && cut_cell(m, f.hi));
+}
+[[noreturn]] void geometry_error(const ElasticMesh& m,
+                                 Index c,
+                                 const std::string& why,
+                                 std::size_t face = std::numeric_limits<std::size_t>::max()) {
+    std::ostringstream message;
+    message << "INTERNAL: gid=" << m.gid[c];
+    if (face != std::numeric_limits<std::size_t>::max())
+        message << " face=" << face;
+    message << " " << why;
+    throw std::runtime_error(message.str());
+}
+ElasticGeometry geometry(const ElasticMesh& m, MPI_Comm comm) {
+    ElasticGeometry out;
+    double minimum = std::numeric_limits<double>::infinity();
+    std::vector<double> rho(m.faces.size());
+    std::vector<M> moment(m.volume.size());
+    std::vector<V> closure(m.volume.size());
+    std::vector<double> area(m.volume.size());
+    for (std::size_t k = 0; k < m.faces.size(); ++k) {
+        const auto& f = m.faces[k];
+        const V d = subtract(f.hi < 0 ? f.centroid : m.centroid[f.hi], m.centroid[f.lo]);
+        const double distance = std::sqrt(dot(d, d));
+        if (!std::isfinite(distance) || !(distance > 0))
+            geometry_error(m, f.lo, "zero/nonfinite centroid distance", k);
+        rho[k] = dot(d, f.normal) / distance;
+        if (!std::isfinite(rho[k]))
+            geometry_error(m, f.lo, "nonfinite rho", k);
+        if (cut_face(m, k) && rho[k] <= 1e-6) {
+            std::ostringstream why;
+            why << std::setprecision(17) << "rho=" << rho[k] << " <= 1e-6";
+            geometry_error(m, f.lo, why.str(), k);
+        }
+        minimum = std::min(minimum, rho[k]);
+        for (int side = 0; side < (f.hi < 0 ? 1 : 2); ++side) {
+            const Index c = side == 0 ? f.lo : f.hi;
+            if (!cut_cell(m, c))
+                continue;
+            const V delta = subtract(f.centroid, m.centroid[c]);
+            area[c] += f.area;
+            for (int i = 0; i < 3; ++i) {
+                const double sf = (side == 0 ? 1 : -1) * f.area * f.normal[i];
+                closure[c][i] += sf;
+                for (int j = 0; j < 3; ++j)
+                    moment[c][3 * i + j] += sf * delta[j];
+            }
+        }
+    }
+    // Keep integer gids out of floating point reductions, including gids above 2^53.
+    MPI_Allreduce(&minimum, &out.min_dn_ratio, 1, MPI_DOUBLE, MPI_MIN, comm);
+    Index gid = std::numeric_limits<Index>::max();
+    for (std::size_t k = 0; k < m.faces.size(); ++k)
+        if (rho[k] == out.min_dn_ratio)
+            gid = std::min(gid, m.gid[m.faces[k].lo]);
+    MPI_Allreduce(&gid, &out.min_dn_gid, 1, MPI_INT64_T, MPI_MIN, comm);
+    double defect = 0;
+    for (std::size_t c = 0; c < m.volume.size(); ++c)
+        if (cut_cell(m, static_cast<Index>(c))) {
+            double error = 0, closure_error = 0;
+            for (int i = 0; i < 3; ++i) {
+                closure_error = std::max(closure_error, std::abs(closure[c][i]) / area[c]);
+                for (int j = 0; j < 3; ++j)
+                    error = std::max(
+                        error, std::abs(moment[c][3 * i + j] / m.volume[c] - (i == j ? 1 : 0)));
+            }
+            if (!std::isfinite(error) || error > 1e-10 || !std::isfinite(closure_error) ||
+                closure_error > 1e-10) {
+                std::ostringstream why;
+                why << std::setprecision(17) << "identity defect=" << error
+                    << " area-vector closure defect=" << closure_error;
+                geometry_error(m, static_cast<Index>(c), why.str());
+            }
+            defect = std::max(defect, error);
+        }
+    MPI_Allreduce(&defect, &out.max_identity_defect, 1, MPI_DOUBLE, MPI_MAX, comm);
+    return out;
+}
+ElasticBoundary validate(const ElasticMesh& m,
+                         const ElasticProblem& p,
+                         MPI_Comm comm,
+                         ElasticGeometry* diagnostics = nullptr) {
     int ranks = 0;
     require(comm != MPI_COMM_NULL && MPI_Comm_size(comm, &ranks) == MPI_SUCCESS,
             "invalid communicator");
@@ -82,6 +169,10 @@ ElasticBoundary validate(const ElasticMesh& m, const ElasticProblem& p, MPI_Comm
     require(nf > 0 && nf <= static_cast<std::size_t>(std::numeric_limits<int>::max() / 3) &&
                 m.is_embedded.size() == nf,
             "face array lengths/count");
+    require(m.is_cut.empty() || m.is_cut.size() == n, "is_cut length");
+    require(std::all_of(
+                m.is_cut.begin(), m.is_cut.end(), [](char flag) { return flag == 0 || flag == 1; }),
+            "is_cut must be binary");
     require(std::isfinite(m.z_top), "nonfinite z_top");
     require(p.preconditioner == "jacobi" || p.preconditioner == "gamg",
             "preconditioner must be jacobi or gamg");
@@ -92,8 +183,8 @@ ElasticBoundary validate(const ElasticMesh& m, const ElasticProblem& p, MPI_Comm
             "support");
     std::set<Index> gids;
     for (std::size_t c = 0; c < n; ++c) {
-        require(std::isfinite(m.volume[c]) && m.volume[c] > 0 && finite(m.centroid[c]),
-                "cell geometry");
+        if (!std::isfinite(m.volume[c]) || !(m.volume[c] > 0))
+            geometry_error(m, static_cast<Index>(c), "nonpositive/nonfinite volume");
         require(m.layer[c] >= 0 && m.rank[c] >= 0 && m.rank[c] < ranks, "cell layer/owner");
         require(gids.insert(m.gid[c]).second, "duplicate gid");
         require(finite(p.C[c]) && spd(p.C[c]), "C must be finite, symmetric positive definite");
@@ -110,20 +201,31 @@ ElasticBoundary validate(const ElasticMesh& m, const ElasticProblem& p, MPI_Comm
         require((m.is_embedded[k] == 0 || m.is_embedded[k] == 1) &&
                     (!m.is_embedded[k] || (f.hi == -1 && f.side == -1)),
                 "embedded face metadata");
-        // Cut-cell discretization belongs to fvm-thermoelastic-cut-concave.
-        require(!m.is_embedded[k], "embedded faces require cut-cell support");
-        require(std::isfinite(f.area) && f.area > 0 && finite(f.normal) && finite(f.centroid),
-                "face geometry");
+        if (!std::isfinite(f.area) || !(f.area > 0) || !finite(f.centroid) ||
+            !finite(m.centroid[f.lo]) || (f.hi >= 0 && !finite(m.centroid[f.hi])))
+            geometry_error(m, f.lo, "nonpositive/nonfinite face area or centroid geometry", k);
+        require(finite(f.normal), "nonfinite normal");
         require(std::abs(dot(f.normal, f.normal) - 1) < 1e-10, "face normal must be unit length");
-        const double distance_lo = dot(subtract(f.centroid, m.centroid[f.lo]), f.normal);
-        require(std::isfinite(distance_lo) && distance_lo > 0, "outward lo projected distance");
+    }
+    const auto measured = geometry(m, comm);
+    if (diagnostics)
+        *diagnostics = measured;
+    for (std::size_t k = 0; k < nf; ++k) {
+        if (cut_face(m, k))
+            continue;
+        const auto& f = m.faces[k];
+        const double dl = dot(subtract(f.centroid, m.centroid[f.lo]), f.normal);
+        if (dl == 0)
+            geometry_error(m, f.lo, "zero projected distance", k);
+        require(std::isfinite(dl) && dl > 0, "outward lo projected distance");
         if (f.hi >= 0) {
-            const double distance_hi = dot(subtract(m.centroid[f.hi], f.centroid), f.normal);
-            require(std::isfinite(distance_hi) && distance_hi > 0, "outward hi projected distance");
-            require(finite(subtract(m.centroid[f.hi], m.centroid[f.lo])),
-                    "internal centroid distance overflow");
+            const double dh = dot(subtract(m.centroid[f.hi], f.centroid), f.normal);
+            if (dh == 0)
+                geometry_error(m, f.lo, "zero projected distance", k);
+            require(std::isfinite(dh) && dh > 0, "outward hi projected distance");
         }
     }
+
     ElasticBoundary bc{std::vector<char>(nf), std::vector<V>(nf)};
     const bool fixed = p.support == ElasticProblem::Support::Fixed;
     require(fixed || (p.fixed_side.empty() && p.fixed_layer.empty() && p.prescribed.empty()),
@@ -305,6 +407,77 @@ gradients(const ElasticMesh& m, const ElasticProblem& p, const ElasticBoundary& 
                 }
             }
         }
+        // A terminal cut cell may have only one center neighbor. Its local
+        // traction equations cannot identify rotation about that direction.
+        // Complete only this cut prior with a connected geometric patch until
+        // displacement samples span space (or the body is exhausted). The final
+        // cut operator is still the constrained face-value GG operator below.
+        if (cut_cell(m, static_cast<Index>(c))) {
+            std::vector<V> directions;
+            auto direction = [&](V d) {
+                for (int j = 0; j < 3; ++j)
+                    d[j] /= scale[j];
+                const double original = std::sqrt(dot(d, d));
+                if (!(original > 0))
+                    return;
+                for (auto& v : d)
+                    v /= original;
+                for (int pass = 0; pass < 2; ++pass)
+                    for (const auto& axis : directions) {
+                        const double projection = dot(axis, d);
+                        for (int j = 0; j < 3; ++j)
+                            d[j] -= projection * axis[j];
+                    }
+                const double norm = std::sqrt(dot(d, d));
+                if (norm > 1e-10) {
+                    for (auto& v : d)
+                        v /= norm;
+                    directions.push_back(d);
+                }
+            };
+            std::set<Index> sampled;
+            for (auto k : incident[c]) {
+                const auto& f = m.faces[k];
+                const Index nb = f.lo == static_cast<Index>(c) ? f.hi : f.lo;
+                if (nb >= 0) {
+                    sampled.insert(nb);
+                    direction(subtract(m.centroid[nb], m.centroid[c]));
+                } else if (bc.prescribed[k])
+                    direction(subtract(f.centroid, m.centroid[c]));
+            }
+            std::vector<Index> queue{static_cast<Index>(c)};
+            std::set<Index> visited{static_cast<Index>(c)};
+            for (std::size_t head = 0; head < queue.size() && directions.size() < 3; ++head)
+                for (auto k : incident[queue[head]]) {
+                    const auto& f = m.faces[k];
+                    const Index nb = f.lo == queue[head] ? f.hi : f.lo;
+                    if (nb < 0 || !visited.insert(nb).second)
+                        continue;
+                    queue.push_back(nb);
+                    if (sampled.contains(nb))
+                        continue;
+                    V d = subtract(m.centroid[nb], m.centroid[c]);
+                    direction(d);
+                    for (int j = 0; j < 3; ++j)
+                        d[j] /= scale[j];
+                    const double norm = std::sqrt(dot(d, d));
+                    if (!(norm > 0))
+                        continue;
+                    const double w = 1 / norm;
+                    for (int i = 0; i < 3; ++i) {
+                        std::array<double, 9> row{};
+                        for (int j = 0; j < 3; ++j)
+                            row[3 * i + j] = d[j] * w;
+                        a.insert(a.end(), row.begin(), row.end());
+                        Load load;
+                        load.blocks[static_cast<Index>(c)][i] = -w;
+                        load.blocks[nb][i] = w;
+                        rhs.push_back(std::move(load));
+                    }
+                    if (directions.size() == 3)
+                        break;
+                }
+        }
         require(finite(a), "gradient scaling exceeds floating-point range");
         const int rows = static_cast<int>(rhs.size());
         const auto inv = pseudoinverse(std::move(a), rows, 9);
@@ -393,12 +566,194 @@ AffineMap prescribed_map(std::size_t face, const ElasticBoundary& bc) {
     a.boundary[static_cast<Index>(face)] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
     return a;
 }
-AffineMap extrapolation(const ElasticGradient& g, const V& d) {
+AffineMap extrapolation(const AffineMap& g, const V& d) {
     std::vector<double> t(27);
     for (int i = 0; i < 3; ++i)
         for (int j = 0; j < 3; ++j)
             t[9 * i + 3 * i + j] = d[j];
-    return transform(gradient_map(g), 3, t);
+    return transform(g, 3, t);
+}
+AffineMap extrapolation(const ElasticGradient& g, const V& d) {
+    return extrapolation(gradient_map(g), d);
+}
+// Shared by production assembly and the face-gradient diagnostic. Keeping the
+// full affine operator here includes its tangential and boundary derivatives.
+AffineMap compact_face_gradient(
+    const AffineMap& lo, const AffineMap& hi, const AffineMap& jump, const V& d, const V& normal) {
+    AffineMap mean;
+    add_map(mean, lo, hi.rows == 0 ? 1 : 0.5);
+    if (hi.rows != 0)
+        add_map(mean, hi, 0.5);
+    auto residual = jump;
+    add_map(residual, extrapolation(mean, d), -1);
+    std::vector<double> lift(27);
+    const double dn = dot(d, normal);
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            lift[3 * (3 * i + j) + i] = normal[j] / dn;
+    add_map(mean, transform(residual, 9, lift), 1);
+    return mean;
+}
+// Euclidean inverse-distance interpolation, including concave owners whose
+// individual projected face distances can have either sign.
+double cut_lo_weight(const ElasticMesh& m, const ElasticFace& f) {
+    const V dl = subtract(f.centroid, m.centroid[f.lo]);
+    const V dh = subtract(f.centroid, m.centroid[f.hi]);
+    const double l = std::sqrt(dot(dl, dl)), h = std::sqrt(dot(dh, dh));
+    require(std::isfinite(l) && std::isfinite(h) && l > 0 && h > 0,
+            "INTERNAL: invalid cell-to-face interpolation distance");
+    return h / (l + h);
+}
+AffineMap cut_face_value(const ElasticMesh& m,
+                         const ElasticBoundary& bc,
+                         const std::vector<ElasticGradient>& g,
+                         std::size_t k) {
+    if (bc.prescribed[k])
+        return prescribed_map(k, bc);
+    const auto& f = m.faces[k];
+    AffineMap uf;
+    const double wl = f.hi < 0 ? 1 : cut_lo_weight(m, f);
+    add_map(uf, displacement_map(f.lo), wl);
+    add_map(uf, extrapolation(g[f.lo], subtract(f.centroid, m.centroid[f.lo])), wl);
+    if (f.hi >= 0) {
+        add_map(uf, displacement_map(f.hi), 1 - wl);
+        add_map(uf, extrapolation(g[f.hi], subtract(f.centroid, m.centroid[f.hi])), 1 - wl);
+    }
+    return uf;
+}
+// Explicit closure: among gradients satisfying G = sum(U_face tensor S)/V,
+// minimize the Euclidean change from the parent's local constitutive closure.
+// Orthonormal row elimination supplies independent constraints. Dependent
+// equations are checked rather than choosing a pseudoinverse for a singular GG
+// system. Noncut gradients remain exactly the parent operators.
+std::vector<ElasticGradient> cut_gradients(const ElasticMesh& m,
+                                           const ElasticBoundary& bc,
+                                           const std::vector<ElasticGradient>& prior) {
+    std::vector<Index> cells;
+    std::vector<int> offset(m.volume.size(), -1);
+    for (std::size_t c = 0; c < m.volume.size(); ++c)
+        if (cut_cell(m, static_cast<Index>(c))) {
+            require(cells.size() < static_cast<std::size_t>(std::numeric_limits<int>::max() / 3),
+                    "cut gradient count");
+            offset[c] = static_cast<int>(3 * cells.size());
+            cells.push_back(static_cast<Index>(c));
+        }
+    if (cells.empty())
+        return prior;
+    const auto count = 3 * cells.size();
+    std::vector<std::vector<double>> matrix(count, std::vector<double>(count));
+    std::vector<AffineMap> rhs(count);
+    for (std::size_t r = 0; r < count; ++r) {
+        matrix[r][r] = 1;
+        rhs[r].rows = 3;
+        rhs[r].constant.resize(3);
+    }
+    auto known = prior;
+    for (auto c : cells)
+        known[c] = {};
+    for (std::size_t k = 0; k < m.faces.size(); ++k) {
+        const auto& f = m.faces[k];
+        if (!cut_cell(m, f.lo) && (f.hi < 0 || !cut_cell(m, f.hi)))
+            continue;
+        const auto uf = cut_face_value(m, bc, known, k);
+        const double wl = f.hi < 0 ? 1 : cut_lo_weight(m, f);
+        for (int side = 0; side < (f.hi < 0 ? 1 : 2); ++side) {
+            const Index c = side == 0 ? f.lo : f.hi;
+            if (offset[c] < 0)
+                continue;
+            for (int j = 0; j < 3; ++j) {
+                const auto row = static_cast<std::size_t>(offset[c] + j);
+                const double sf = (side == 0 ? 1 : -1) * f.area * f.normal[j] / m.volume[c];
+                add_map(rhs[row], uf, sf);
+                if (bc.prescribed[k])
+                    continue;
+                for (int neighbor = 0; neighbor < (f.hi < 0 ? 1 : 2); ++neighbor) {
+                    const Index nc = neighbor == 0 ? f.lo : f.hi;
+                    if (offset[nc] < 0)
+                        continue;
+                    const double weight = neighbor == 0 ? wl : 1 - wl;
+                    const V d = subtract(f.centroid, m.centroid[nc]);
+                    for (int q = 0; q < 3; ++q)
+                        matrix[row][static_cast<std::size_t>(offset[nc] + q)] -= sf * weight * d[q];
+                }
+            }
+        }
+    }
+    auto norm_map = [](const AffineMap& map) {
+        double n = 0;
+        for (double v : map.constant)
+            n = std::max(n, std::abs(v));
+        for (const auto* terms : {&map.cells, &map.boundary})
+            for (const auto& [key, value] : *terms) {
+                (void)key;
+                for (double v : value)
+                    n = std::max(n, std::abs(v));
+            }
+        return n;
+    };
+    // Scale threshold by the original equation norm, never by a vanishing
+    // residual row. This separates redundant free-face identities from data.
+    double matrix_scale = 1, rhs_scale = 1;
+    for (std::size_t r = 0; r < count; ++r) {
+        matrix_scale = std::max(matrix_scale,
+                                std::sqrt(std::inner_product(
+                                    matrix[r].begin(), matrix[r].end(), matrix[r].begin(), 0.0)));
+        rhs_scale = std::max(rhs_scale, norm_map(rhs[r]));
+    }
+    std::vector<std::vector<double>> basis;
+    std::vector<AffineMap> loads;
+    for (std::size_t r = 0; r < count; ++r) {
+        auto row = matrix[r];
+        auto load = rhs[r];
+        for (int pass = 0; pass < 2; ++pass)
+            for (std::size_t b = 0; b < basis.size(); ++b) {
+                const double projection =
+                    std::inner_product(row.begin(), row.end(), basis[b].begin(), 0.0);
+                for (std::size_t j = 0; j < count; ++j)
+                    row[j] -= projection * basis[b][j];
+                add_map(load, loads[b], -projection);
+            }
+        const double norm = std::sqrt(std::inner_product(row.begin(), row.end(), row.begin(), 0.0));
+        if (norm <= 1e-12 * matrix_scale) {
+            require(norm_map(load) <= 1e-10 * rhs_scale,
+                    "INTERNAL: incompatible Green-Gauss gradient constraints");
+            continue;
+        }
+        for (auto& v : row)
+            v /= norm;
+        AffineMap scaled;
+        add_map(scaled, load, 1 / norm);
+        basis.push_back(std::move(row));
+        loads.push_back(std::move(scaled));
+    }
+    auto out = prior;
+    for (std::size_t b = 0; b < basis.size(); ++b) {
+        AffineMap correction = loads[b];
+        for (std::size_t q = 0; q < cells.size(); ++q)
+            for (int j = 0; j < 3; ++j) {
+                V axis{};
+                axis[j] = 1;
+                add_map(correction, extrapolation(prior[cells[q]], axis), -basis[b][3 * q + j]);
+            }
+        for (std::size_t q = 0; q < cells.size(); ++q)
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j) {
+                    const double weight = basis[b][3 * q + j];
+                    auto& g = out[cells[q]];
+                    g.constant[3 * i + j] += weight * correction.constant[i];
+                    for (const auto& [col, value] : correction.cells)
+                        for (int d = 0; d < 3; ++d)
+                            g.blocks[col][3 * (3 * i + j) + d] += weight * value[3 * i + d];
+                    for (const auto& [face, value] : correction.boundary)
+                        for (int d = 0; d < 3; ++d)
+                            g.boundary[face][3 * (3 * i + j) + d] += weight * value[3 * i + d];
+                }
+    }
+    return out;
+}
+std::vector<ElasticGradient>
+reconstruction(const ElasticMesh& m, const ElasticProblem& p, const ElasticBoundary& bc) {
+    return cut_gradients(m, bc, gradients(m, p, bc));
 }
 // Summation-by-parts gradient: V G = sum_f (U_f-U_c) tensor n A.
 // A constant stress then passes an all-prescribed affine patch exactly, and
@@ -410,7 +765,9 @@ std::vector<AffineMap> gauss_gradients(const ElasticMesh& m,
     for (std::size_t k = 0; k < m.faces.size(); ++k) {
         const auto& f = m.faces[k];
         AffineMap uf;
-        if (bc.prescribed[k])
+        if (cut_face(m, k))
+            uf = cut_face_value(m, bc, ls, k);
+        else if (bc.prescribed[k])
             uf = prescribed_map(k, bc);
         else if (f.hi < 0) {
             uf = displacement_map(f.lo);
@@ -447,13 +804,14 @@ std::vector<AffineMap> gauss_gradients(const ElasticMesh& m,
     }
     return out;
 }
-C6 face_stiffness(const ElasticProblem& p, const ElasticFace& f, const ElasticMesh& m) {
+C6 face_stiffness(const ElasticProblem& p, const ElasticFace& f, const ElasticMesh& m, bool cut) {
     C6 cf = p.C[f.lo];
     if (f.hi < 0)
         return cf;
     const double dl = dot(subtract(f.centroid, m.centroid[f.lo]), f.normal);
     const double dh = dot(subtract(m.centroid[f.hi], f.centroid), f.normal);
-    const double wl = dh / (dl + dh), wh = dl / (dl + dh);
+    const double wl = cut ? cut_lo_weight(m, f) : dh / (dl + dh),
+                 wh = cut ? 1 - wl : dl / (dl + dh);
     for (int j = 0; j < 36; ++j) {
         const double a = cf[j], b = p.C[f.hi][j];
         if (a == 0 || b == 0)
@@ -591,6 +949,26 @@ ElasticAssembly assemble(const ElasticMesh& m,
         const double dn = dot(d, f.normal);
         AffineMap r = f.hi < 0 ? prescribed_map(k, bc) : displacement_map(f.hi);
         add_map(r, displacement_map(f.lo), -1);
+        if (cut_face(m, k)) {
+            auto face_gradient =
+                compact_face_gradient(gradient_map(ls[f.lo]),
+                                      f.hi < 0 ? AffineMap{} : gradient_map(ls[f.hi]),
+                                      r,
+                                      d,
+                                      f.normal);
+            // Retain the parent's cell-energy consistency and adjoint traction.
+            // Stabilize the full face strain relative to that same consistency
+            // gradient, rather than independently penalizing deltaU-Gbar*d.
+            // This includes tangential mismatch at cut/uncut interfaces and
+            // reduces to the parent acoustic penalty when the gradients agree.
+            add_map(face_gradient, g[f.lo], f.hi < 0 ? -1 : -0.5);
+            if (f.hi >= 0)
+                add_map(face_gradient, g[f.hi], -0.5);
+            const auto c = face_stiffness(p, f, m, true);
+            energy(
+                f.lo, transform(face_gradient, 6, engineering), {c.begin(), c.end()}, f.area * dn);
+            continue;
+        }
         if (f.hi < 0)
             add_map(r, extrapolation(ls[f.lo], d), -1);
         else {
@@ -598,7 +976,7 @@ ElasticAssembly assemble(const ElasticMesh& m,
             add_map(r, extrapolation(ls[f.lo], d), -wl);
             add_map(r, extrapolation(ls[f.hi], d), -(1 - wl));
         }
-        const auto t = traction_map(face_stiffness(p, f, m), f.normal);
+        const auto t = traction_map(face_stiffness(p, f, m, false), f.normal);
         std::vector<double> acoustic(9);
         for (int i = 0; i < 3; ++i)
             for (int j = 0; j < 3; ++j)
@@ -634,13 +1012,78 @@ ElasticAssembly assemble(const ElasticMesh& m,
     return out;
 }
 } // namespace
+Expected<std::vector<ElasticMatrix>> evaluate_cut_gradients(const ElasticMesh& m,
+                                                            const ElasticProblem& p,
+                                                            const std::vector<V>& u,
+                                                            MPI_Comm comm) {
+    try {
+        const auto bc = validate(m, p, comm);
+        require(u.size() == m.volume.size(), "gradient displacement length");
+        std::vector<M> out;
+        for (const auto& g : reconstruction(m, p, bc)) {
+            M value = g.constant;
+            for (const auto& [c, block] : g.blocks)
+                for (int i = 0; i < 9; ++i)
+                    for (int j = 0; j < 3; ++j)
+                        value[i] += block[3 * i + j] * u[c][j];
+            require(finite(value), "nonfinite gradient displacement");
+            out.push_back(value);
+        }
+        return out;
+    } catch (const Invalid& e) {
+        return chipcae::mesh::Error{"fvm.elastic", "INPUT_INVALID: " + std::string(e.what())};
+    } catch (const std::exception& e) {
+        return chipcae::mesh::Error{"fvm.elastic", e.what()};
+    }
+}
+Expected<ElasticMatrix> evaluate_cut_face_gradient(const ElasticMesh& m,
+                                                   std::size_t k,
+                                                   const std::vector<V>& u,
+                                                   const std::vector<M>& g,
+                                                   const V& boundary) {
+    try {
+        require(k < m.faces.size(), "face gradient index");
+        const auto& f = m.faces[k];
+        const auto n = m.volume.size();
+        require(u.size() == n && g.size() == n && m.centroid.size() == n && m.gid.size() == n &&
+                    f.lo >= 0 && static_cast<std::size_t>(f.lo) < n && f.hi >= -1 &&
+                    (f.hi < 0 || static_cast<std::size_t>(f.hi) < n),
+                "face gradient arrays/indices");
+        const V d = subtract(f.hi < 0 ? f.centroid : m.centroid[f.hi], m.centroid[f.lo]);
+        const double distance = std::sqrt(dot(d, d)), dn = dot(d, f.normal);
+        if (!finite(d) || !std::isfinite(distance) || !(distance > 0) || !std::isfinite(dn) ||
+            dn / distance <= 1e-6)
+            geometry_error(m, f.lo, "invalid compact face gradient distance", k);
+        AffineMap lo, hi, jump;
+        lo.rows = 9;
+        lo.constant.assign(g[f.lo].begin(), g[f.lo].end());
+        if (f.hi >= 0) {
+            hi.rows = 9;
+            hi.constant.assign(g[f.hi].begin(), g[f.hi].end());
+        }
+        jump.rows = 3;
+        const V delta = subtract(f.hi < 0 ? boundary : u[f.hi], u[f.lo]);
+        jump.constant.assign(delta.begin(), delta.end());
+        const auto gradient = compact_face_gradient(lo, hi, jump, d, f.normal);
+        M out{};
+        std::copy(gradient.constant.begin(), gradient.constant.end(), out.begin());
+        require(finite(out), "nonfinite face gradient");
+        return out;
+    } catch (const Invalid& e) {
+        return chipcae::mesh::Error{"fvm.elastic", "INPUT_INVALID: " + std::string(e.what())};
+    } catch (const std::exception& e) {
+        return chipcae::mesh::Error{"fvm.elastic", e.what()};
+    }
+}
 Expected<ElasticAssembly>
 assemble_elastic(const ElasticMesh& m, const ElasticProblem& p, MPI_Comm comm) {
     try {
         const auto bc = validate(m, p, comm);
-        return assemble(m, p, bc, gradients(m, p, bc));
+        return assemble(m, p, bc, reconstruction(m, p, bc));
     } catch (const Invalid& e) {
         return chipcae::mesh::Error{"fvm.elastic", "INPUT_INVALID: " + std::string(e.what())};
+    } catch (const std::exception& e) {
+        return chipcae::mesh::Error{"fvm.elastic", e.what()};
     }
 }
 } // namespace detail
@@ -773,7 +1216,14 @@ void reconstruct(const ElasticMesh& m,
     for (std::size_t k = 0; k < m.faces.size(); ++k) {
         const auto& f = m.faces[k];
         V u{};
-        if (bc.prescribed[k])
+        if (cut_face(m, k)) {
+            const auto face = cut_face_value(m, bc, gradients, k);
+            std::copy(face.constant.begin(), face.constant.end(), u.begin());
+            for (const auto& [c, value] : face.cells)
+                for (int i = 0; i < 3; ++i)
+                    for (int j = 0; j < 3; ++j)
+                        u[i] += value[3 * i + j] * r.U_cell[c][j];
+        } else if (bc.prescribed[k])
             u = bc.value[k];
         else {
             const V dl = subtract(f.centroid, m.centroid[f.lo]);
@@ -795,7 +1245,9 @@ void reconstruct(const ElasticMesh& m,
             }
         }
         r.U_face[k] = u;
-        if (f.hi < 0 && f.side == 5)
+        if (f.hi < 0 &&
+            ((!m.is_embedded[k] && f.side == 5) ||
+             (m.is_embedded[k] && f.normal[2] > 0.99 && f.centroid[2] >= m.z_top - 1e-13)))
             r.top_samples.push_back({f.centroid[0], f.centroid[1], u[2]});
     }
     for (const auto& u : r.U_cell)
@@ -1341,9 +1793,14 @@ ElasticResult solve_system(const ElasticMesh& m,
 Expected<ElasticResult>
 solve_elastic(const ElasticMesh& m, const ElasticProblem& p, MPI_Comm comm) {
     try {
-        const auto bc = detail::validate(m, p, comm);
-        const auto g = detail::gradients(m, p, bc);
-        return solve_system(m, p, comm, bc, g, detail::assemble(m, p, bc, g, false));
+        detail::ElasticGeometry measured;
+        const auto bc = detail::validate(m, p, comm, &measured);
+        const auto g = detail::reconstruction(m, p, bc);
+        auto result = solve_system(m, p, comm, bc, g, detail::assemble(m, p, bc, g, false));
+        result.min_dn_ratio = measured.min_dn_ratio;
+        result.min_dn_gid = measured.min_dn_gid;
+        result.max_identity_defect = measured.max_identity_defect;
+        return result;
     } catch (const detail::Invalid& e) {
         return chipcae::mesh::Error{"fvm.elastic", "INPUT_INVALID: " + std::string(e.what())};
     } catch (const std::exception& e) {

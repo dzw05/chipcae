@@ -44,7 +44,8 @@ inline void write_defect(std::ostream& out, const geometry::Defect& d) {
         out << std::setprecision(17) << d.size;
     else
         out << "null";
-    out << ",\"suggestion\":" << defect_json_quote(d.suggestion)
+    out << ",\"size_unit\":" << defect_json_quote(geometry::defect_size_unit(d))
+        << ",\"suggestion\":" << defect_json_quote(d.suggestion)
         << ",\"action\":" << defect_json_quote(d.action)
         << ",\"rejection_reason\":" << defect_json_quote(d.rejection_reason)
         << ",\"material_ambiguous\":" << (d.material_ambiguous ? "true" : "false");
@@ -54,8 +55,8 @@ inline void write_defects_json(std::ostream& out,
                                const std::string& code,
                                const std::string& message,
                                const std::vector<geometry::Defect>& defects) {
-    out << "{\"code\":" << defect_json_quote(code) << ",\"message\":" << defect_json_quote(message)
-        << ",\"defects\":[";
+    out << "{\"schema_version\":\"import-report/1.0\",\"code\":" << defect_json_quote(code)
+        << ",\"message\":" << defect_json_quote(message) << ",\"defects\":[";
     bool first = true;
     for (const auto& d : defects) {
         if (!first)
@@ -465,8 +466,10 @@ int run_assembly(const ImportOptions& options) {
     using J = jsoncons::json;
     std::vector<Defect> defects;
     ImportReportHeader header{};
+    header.welded_interfaces = 0;
     ImportReportParts parts;
     auto reports = [&](const std::string& code, const std::string& message) {
+        deduplicate_defect_ids(defects);
         std::string error;
         const auto dir = import_report_directory(options.output);
         if (!write_assembly_report(dir, header, defects, &error, &parts))
@@ -637,7 +640,7 @@ int run_assembly(const ImportOptions& options) {
         if (doc.contains("parts_from_step")) {
             const auto& f = doc["parts_from_step"];
             for (const auto& kv : f["bodies"].object_range()) {
-                auto id = std::string(kv.key());
+                auto id = kv.value()["id"].as<std::string>();
                 if (id == "void")
                     return fail("INPUT_INVALID", "INPUT_INVALID: part id void is reserved");
                 if (!ids.insert(id).second)
@@ -662,12 +665,15 @@ int run_assembly(const ImportOptions& options) {
                     } else
                         names.push_back(name);
                 }
+#ifndef CHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE
+                if (!names.empty())
+                    return fail("IMPORT_REJECTED", "parts_from_step geometry unavailable");
+#endif
             } else
                 for (const auto& kv : f["bodies"].object_range())
                     names.emplace_back(kv.key());
             for (const auto& name : names) {
                 J p = f["bodies"][name];
-                p["id"] = name;
                 p["step"] = f["step"];
                 p["body"] = name;
                 p["placement"]["frame"] = "step";
@@ -834,6 +840,7 @@ int run_assembly(const ImportOptions& options) {
             if (!m)
                 return fail(assembly_error_name(m.error().message), m.error().message);
             merged = m.value().stack;
+            header.welded_interfaces = m.value().welded_interfaces;
             defects.insert(defects.end(), m.value().defects.begin(), m.value().defects.end());
         }
         summarize_assembly_parts(base, merged, parts);

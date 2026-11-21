@@ -234,3 +234,4 @@ endif()
 
 # Keep this the last line: auto-adds test subdirectories that call chipcae_auto_tests().
 chipcae_auto_test_subdirs()
+add_subdirectory(integration/tracemap)

@@ -13,15 +13,23 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFileSystemModel>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QProcess>
 #include <QPushButton>
+#include <QRegularExpression>
+#include <QTableView>
 #include <QTemporaryDir>
+#include <QTextEdit>
 #include <QTimer>
+#include <cmath>
 #include <functional>
 #include <iostream>
+#include <set>
 #include <stdexcept>
 #include <type_traits>
 #ifdef Q_OS_UNIX
@@ -111,6 +119,724 @@ QPushButton* button(QDialog& dialog, const QString& text) {
             return b;
     return nullptr;
 }
+// Frozen fixtures are read-only. Only temporary copies are passed to the child process.
+QString reportFixture(const QString& sample) {
+    auto root = QString(FIXTURE_DIR) + "/../../tests/contract/fixtures/import-report-1.0";
+    if (!QDir(root).exists())
+        root = qEnvironmentVariable("CHIPCAE_IMPORT_REPORT_FIXTURE_DIR");
+    require(!root.isEmpty() && QDir(root).exists(),
+            "set CHIPCAE_IMPORT_REPORT_FIXTURE_DIR to the frozen import-report/1.0 fixtures");
+    return QDir(root).filePath(sample);
+}
+std::set<std::string> keys(const Json& value) {
+    std::set<std::string> result;
+    if (value.is_object())
+        for (const auto& member : value.object_range())
+            result.emplace(member.key());
+    return result;
+}
+const std::set<std::string> defectKeys{"defect_id",
+                                       "tier",
+                                       "kind",
+                                       "reason",
+                                       "dimension",
+                                       "size",
+                                       "size_unit",
+                                       "suggestion",
+                                       "action",
+                                       "rejection_reason",
+                                       "material_ambiguous"};
+void checkDefects(const Json& actual, const Json& expected) {
+    check(actual.is_array() && actual.size() == expected.size(), "C2 exact defect count");
+    if (!actual.is_array() || actual.size() != expected.size())
+        return;
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        const auto& a = actual[i];
+        const auto& e = expected[i];
+        check(a.is_object(), "C2 defect is object");
+        for (const auto& key : defectKeys) {
+            const bool present = a.contains(key);
+            check(present, "C2 required defect key " + QString::fromStdString(key));
+            if (!present)
+                continue;
+            if (key == "size") {
+                check(e.at(key).is_null()
+                          ? a.at(key).is_null()
+                          : a.at(key).is_number() &&
+                                std::abs(a.at(key).as<double>() - e.at(key).as<double>()) <= 1e-12,
+                      "C2 size absolute tolerance 1e-12 or matching null");
+            } else {
+                check(a.at(key) == e.at(key),
+                      "C2 exact defect field " + QString::fromStdString(key));
+                if (key == "reason")
+                    check(a.at(key).is_int64() || a.at(key).is_uint64(), "C2 integer reason");
+                else if (key == "material_ambiguous")
+                    check(a.at(key).is_bool(), "C2 boolean material_ambiguous");
+                else
+                    check(a.at(key).is_string(), "C2 string defect field");
+            }
+        }
+    }
+}
+void checkMockReports(const Json& summary, const Json& sidecar, bool hasDefects, bool accepted) {
+    const auto fixture =
+        Json::parse(read(reportFixture("board_2layer") + "/import_report.json").toStdString());
+    check(keys(summary) == std::set<std::string>{"schema_version", "code", "message", "defects"},
+          "ECAD mock summary exact fixture keys");
+    check(keys(sidecar) == keys(fixture), "ECAD mock sidecar exact fixture keys");
+    check(sidecar.contains("schema_version") && sidecar.at("schema_version") == "import-report/1.0",
+          "ECAD mock sidecar version");
+    for (const auto* key : {"L", "t_min", "eps_weld", "tau_A", "tau_B", "delta_f"})
+        check(sidecar.contains(key) && sidecar.at(key).is_number(), "mock numeric threshold");
+    if (sidecar.contains("tier_counts")) {
+        const auto& counts = sidecar.at("tier_counts");
+        check(keys(counts) == std::set<std::string>{"Weld", "A", "B", "C"}, "mock tier count keys");
+        for (const auto* tier : {"Weld", "A", "B", "C"})
+            check(counts.contains(tier) &&
+                      (counts.at(tier).is_int64() || counts.at(tier).is_uint64()) &&
+                      counts.at(tier).as<int>() >= 0,
+                  "mock nonnegative integer tier count");
+    }
+    check(sidecar.contains("b_tier_accepted") &&
+              (accepted ? sidecar.at("b_tier_accepted") == "all"
+                        : sidecar.at("b_tier_accepted").is_null()),
+          "mock accepted B state is all or null");
+    check(sidecar.contains("defects") && sidecar.at("defects").is_array(),
+          "mock sidecar defects array");
+    if (!sidecar.contains("defects") || !sidecar.at("defects").is_array())
+        return;
+    const auto& defects = sidecar.at("defects");
+    check(hasDefects ? !defects.empty() : defects.empty(), "mock sidecar has scenario defects");
+    std::set<std::string> ids;
+    for (const auto& d : defects.array_range()) {
+        check(keys(d) == defectKeys, "mock defect exact eleven fixture keys");
+        if (keys(d) != defectKeys)
+            continue;
+        check(d.at("defect_id").is_string() &&
+                  ids.insert(d.at("defect_id").as<std::string>()).second,
+              "mock unique defect IDs");
+        check(d.at("tier") == "Weld" || d.at("tier") == "A" || d.at("tier") == "B" ||
+                  d.at("tier") == "C",
+              "mock tier enum");
+        check(d.at("size_unit") == "1" || d.at("size_unit") == "m", "mock default SI/count units");
+        check(d.at("size").is_number() || d.at("size").is_null(), "mock size number/null");
+        check(d.at("material_ambiguous").is_bool() &&
+                  (d.at("reason").is_int64() || d.at("reason").is_uint64()),
+              "mock defect types");
+        for (const auto* key : {"kind", "dimension", "suggestion", "action", "rejection_reason"})
+            check(d.at(key).is_string(), "mock defect string type");
+    }
+}
+QStringList tableRows(QDialog& dialog) {
+    QStringList rows;
+    for (auto* table : dialog.findChildren<QTableView*>()) {
+        if (!table->isVisible() || !table->model())
+            continue;
+        const auto* model = table->model();
+        for (int row = 0; row < model->rowCount(); ++row) {
+            QStringList cells;
+            for (int col = 0; col < model->columnCount(); ++col) {
+                const auto index = model->index(row, col);
+                cells << model->data(index).toString();
+                check(!(model->flags(index) & Qt::ItemIsEditable), "defect table is read-only");
+            }
+            rows << cells.join(" | ");
+        }
+    }
+    return rows;
+}
+bool hasUnit(const QString& row, const QString& unit) {
+    const QRegularExpression token("(?:^|[\\s|0-9—])" + QRegularExpression::escape(unit) +
+                                   "(?=$|[\\s|])");
+    return token.match(row).hasMatch();
+}
+QString dialogText(QDialog& dialog) {
+    QStringList texts = tableRows(dialog);
+    for (auto* text : dialog.findChildren<QPlainTextEdit*>())
+        if (text->isVisible())
+            texts << text->toPlainText();
+    for (auto* text : dialog.findChildren<QTextEdit*>())
+        if (text->isVisible())
+            texts << text->toPlainText();
+    for (auto* label : dialog.findChildren<QLabel*>())
+        if (label->isVisible())
+            texts << label->text();
+    return texts.join('\n');
+}
+struct ReportReplay {
+    QTemporaryDir temp;
+    QByteArray summary, sidecar;
+    int exitCode = 0, serial = 0;
+    QString sidecarMode = "file";
+    ImportKind kind = ImportKind::Ecad;
+    QString outputPath, summaryPath, sidecarPath;
+    ImportRequest lastRequest;
+    explicit ReportReplay(const QString& sample) {
+        if (sample == "assembly_parts_synthetic")
+            kind = ImportKind::Assembly;
+        require(temp.isValid(), "report replay temporary directory");
+        const auto source = reportFixture(sample);
+        for (const auto* name : {"defects.json", "import_report.json", "exit_code"})
+            require(QFile::copy(source + '/' + name, temp.filePath(name)),
+                    "copy frozen fixture to temp");
+        summary = read(temp.filePath("defects.json"));
+        sidecar = read(temp.filePath("import_report.json"));
+        exitCode = read(temp.filePath("exit_code")).trimmed().toInt();
+        write(temp.filePath("input.xml"), "synthetic replay");
+        write(temp.filePath("map.json"), "{}");
+        write(temp.filePath("replay.py"), R"PY(import json,pathlib,runpy,shutil,sys
+root,mock,rc,mode=sys.argv[1:5]
+a=sys.argv[5:]
+def value(flag): return pathlib.Path(a[a.index(flag)+1])
+root=pathlib.Path(root)
+out=value('-o'); summary=value('--report'); sidecar=out.parent/'import_report.json'
+out.write_text(json.dumps(runpy.run_path(mock)['STACK']))
+shutil.copyfile(root/'defects.json',summary)
+if mode=='file': shutil.copyfile(root/'import_report.json',sidecar)
+if mode=='directory': sidecar.mkdir()
+(root/'paths.json').write_text(json.dumps([str(out),str(summary),str(sidecar)]))
+sys.exit(int(rc))
+)PY");
+    }
+    void run(ImportController& controller) {
+        write(temp.filePath("defects.json"), summary);
+        write(temp.filePath("import_report.json"), sidecar);
+        ImportRequest r;
+        r.kind = kind;
+        r.input = temp.filePath("input.xml");
+        r.output = temp.filePath(QString("result-%1.stack.json").arg(++serial));
+        r.report = r.output + ".summary.json";
+        r.materialMap = temp.filePath("map.json");
+        r.program = PYTHON_EXECUTABLE;
+        r.prefix = {temp.filePath("replay.py"),
+                    temp.path(),
+                    MOCK_SCRIPT,
+                    QString::number(exitCode),
+                    sidecarMode};
+        lastRequest = r;
+        waitFor(controller, [&] { check(controller.start(r), "start frozen report replay"); });
+        const auto paths = recorded(temp.filePath("paths.json"));
+        require(paths.size() == 3, "replay records all staged paths");
+        outputPath = paths[0];
+        summaryPath = paths[1];
+        sidecarPath = paths[2];
+        check(controller.exitCode() == exitCode, "replay preserves fixture exit code");
+        check(controller.reportBytes() == summary, "reportBytes remains byte-exact --report");
+    }
+};
+void reportAcceptance() {
+    auto test = [](const QString& name, const std::function<void()>& body) {
+        const auto before = failures;
+        try {
+            body();
+        } catch (const std::exception& e) {
+            check(false, name + ": " + e.what());
+        }
+        std::cout << (failures == before ? "PASS: " : "FAIL CASE: ") << name.toStdString() << '\n';
+    };
+    test("C2 frozen three B defects survive staging cleanup", [&] {
+        ReportReplay f("confirm_b_tier_synthetic");
+        CaseDocument doc;
+        require(doc.load(FIXTURE_DIR "/fcbga_demo.case.json"), "C2 baseline");
+        ImportController c(doc);
+        DefectsDialog dialog(c);
+        f.run(c);
+        check(c.exitCode() == 6 && c.outcome() == ImportOutcome::NeedsConfirmation,
+              "C2 exit 6 NeedsConfirmation");
+        check(Json::parse(c.reportBytes().toStdString()).at("defects").empty(),
+              "C2 summary defects intentionally empty");
+        check(c.importReportBytes() == f.sidecar, "C2 sidecar byte equality after child exits");
+        check(!QFile::exists(f.sidecarPath), "valid sidecar staging has been released");
+        const auto actual = c.importReport();
+        const auto expected = Json::parse(f.sidecar.toStdString());
+        check(actual.contains("schema_version") &&
+                  actual.at("schema_version") == "import-report/1.0",
+              "C2 exact frozen version");
+        check(actual == expected, "C2 parsed report deep equality");
+        checkDefects(actual.contains("defects") ? actual.at("defects") : Json::array(),
+                     expected.at("defects"));
+        dialog.show();
+        QApplication::processEvents();
+        const auto rows = tableRows(dialog);
+        check(rows.size() == 3, "C2 visible table has three defect rows");
+        for (int i = 0; i < 3 && i < rows.size(); ++i) {
+            const auto id = QString("board/Mystery%1/2").arg(QChar('A' + i));
+            check(rows[i].split(" | ").contains(id) && rows[i].split(" | ").contains("B") &&
+                      rows[i].contains("1") && rows[i].contains("计数") &&
+                      rows[i].contains("IMPORT_UNSUPPORTED_ELEMENT") &&
+                      rows[i].contains("confirm omitted metadata, components or text") &&
+                      rows[i].contains("tier B defect requires explicit confirmation"),
+                  "C2 row displays ID, tier, kind, both descriptions and count unit");
+        }
+        auto* confirm = button(dialog, "确认并继续");
+        check(confirm && confirm->isEnabled(), "C2 confirmation stays enabled");
+    });
+    test("success fixture preserves both reports and empty defect meaning", [&] {
+        ReportReplay f("board_2layer");
+        CaseDocument doc;
+        require(doc.load(FIXTURE_DIR "/fcbga_demo.case.json"), "success baseline");
+        ImportController c(doc);
+        DefectsDialog dialog(c);
+        f.run(c);
+        check(c.outcome() == ImportOutcome::Accepted, "success fixture accepted");
+        const auto summary = Json::parse(c.reportBytes().toStdString());
+        check(summary.at("schema_version") == "import-report/1.0" && summary.at("code") == "OK",
+              "summary exact schema_version and OK");
+        const auto expected = Json::parse(f.sidecar.toStdString());
+        const auto actual = c.importReport();
+        check(keys(actual) == keys(expected),
+              "success all common required keys, no fabricated assembly keys");
+        check(actual == expected && c.importReportBytes() == f.sidecar,
+              "success retained sidecar object and raw bytes");
+        dialog.show();
+        QApplication::processEvents();
+        check(dialogText(dialog).contains("无缺陷") &&
+                  !dialogText(dialog).contains("无旁路缺陷明细"),
+              "legal empty defects display no defects");
+    });
+    test("P5 unit/null matrix and stable severity grouping", [&] {
+        ReportReplay f("confirm_b_tier_synthetic");
+        auto j = QJsonDocument::fromJson(f.sidecar).object();
+        auto prototype = j["defects"].toArray()[0].toObject();
+        QJsonArray defects;
+        const QStringList units{"1", "m", "m2", "m3"};
+        const QStringList display{"计数", "m", "m²", "m³"};
+        const QStringList tiers{"A", "Weld", "C", "B", "C", "B", "A", "Weld"};
+        for (int i = 0; i < 8; ++i) {
+            auto d = prototype;
+            d["defect_id"] = QString("unit-row-%1").arg(i);
+            d["tier"] = tiers[i];
+            d["size_unit"] = units[i % 4];
+            d["size"] = i < 4 ? QJsonValue(0.125) : QJsonValue(QJsonValue::Null);
+            defects.append(d);
+        }
+        j["defects"] = defects;
+        f.sidecar = QJsonDocument(j).toJson();
+        CaseDocument doc;
+        ImportController c(doc);
+        DefectsDialog dialog(c);
+        f.run(c);
+        dialog.show();
+        QApplication::processEvents();
+        const auto rows = tableRows(dialog);
+        const QList<int> order{2, 4, 3, 5, 0, 6, 1, 7};
+        check(rows.size() == 8, "unit matrix has eight visible rows");
+        for (int row = 0; row < rows.size() && row < order.size(); ++row) {
+            const auto i = order[row];
+            check(rows[row].split(" | ").contains(QString("unit-row-%1").arg(i)) &&
+                      rows[row].split(" | ").contains(tiers[i]),
+                  "stable C B A Weld group order retains same-tier report order");
+            check(hasUnit(rows[row], display[i % 4]) && rows[row].contains(i < 4 ? "0.125" : "—"),
+                  "size is SI unchanged or em dash with its unit");
+        }
+        const auto actual = c.importReport();
+        checkDefects(actual.contains("defects") ? actual.at("defects") : Json::array(),
+                     Json::parse(f.sidecar.toStdString()).at("defects"));
+    });
+    test("duplicate defect IDs retain both rows with diagnostic", [&] {
+        ReportReplay f("confirm_b_tier_synthetic");
+        auto j = QJsonDocument::fromJson(f.sidecar).object();
+        auto d = j["defects"].toArray()[0];
+        j["defects"] = QJsonArray{d, d};
+        f.sidecar = QJsonDocument(j).toJson();
+        CaseDocument doc;
+        ImportController c(doc);
+        DefectsDialog dialog(c);
+        f.run(c);
+        dialog.show();
+        QApplication::processEvents();
+        const auto rows = tableRows(dialog);
+        check(rows.size() == 2 && rows[0].split(" | ").contains("board/MysteryA/2") &&
+                  rows[1].split(" | ").contains("board/MysteryA/2"),
+              "duplicate IDs are not dropped or rewritten");
+        check((c.error() + dialogText(dialog)).contains("报告内 defect_id 重复"),
+              "duplicate ID diagnostic");
+    });
+    for (bool summary : {true, false}) {
+        for (const auto& version : {QString("missing"),
+                                    QString("import-report/2.0"),
+                                    QString("import-report/1.0 "),
+                                    QString("number"),
+                                    QString("Import-report/1.0"),
+                                    QString("import-report/1.-1"),
+                                    QString("import-report/1.1x")}) {
+            test(QString("P1 %1 version %2").arg(summary ? "summary" : "sidecar", version), [&] {
+                ReportReplay f("board_2layer");
+                auto j = QJsonDocument::fromJson(summary ? f.summary : f.sidecar).object();
+                if (version == "missing")
+                    j.remove("schema_version");
+                else
+                    j["schema_version"] = version == "number" ? QJsonValue(1) : QJsonValue(version);
+                (summary ? f.summary : f.sidecar) = QJsonDocument(j).toJson();
+                CaseDocument doc;
+                require(doc.load(FIXTURE_DIR "/fcbga_demo.case.json"), "version baseline");
+                ImportController c(doc);
+                DefectsDialog dialog(c);
+                f.run(c);
+                dialog.show();
+                QApplication::processEvents();
+                check(c.outcome() == (summary ? ImportOutcome::Failed : ImportOutcome::Accepted),
+                      "P1 summary rejects acceptance; sidecar does not change matched outcome");
+                check(c.importReportBytes().isEmpty() == !summary,
+                      "P1 rejected sidecar bytes empty; independent valid sidecar retained");
+                check(c.importReport().empty() == !summary, "P1 rejected sidecar object empty");
+                const auto diagnostic = c.error() + dialogText(dialog);
+                check(diagnostic.contains("导入报告版本不受支持") &&
+                          diagnostic.contains(summary ? f.summaryPath : f.sidecarPath),
+                      "P1 diagnostic names unsupported version and source path");
+            });
+        }
+    }
+    test("P1 higher minor versions and additive fields remain readable", [&] {
+        ReportReplay f("board_2layer");
+        for (auto* bytes : {&f.summary, &f.sidecar}) {
+            auto j = QJsonDocument::fromJson(*bytes).object();
+            j["schema_version"] = "import-report/1.27";
+            j["future"] = QJsonObject{{"extra", true}};
+            *bytes = QJsonDocument(j).toJson();
+        }
+        CaseDocument doc;
+        require(doc.load(FIXTURE_DIR "/fcbga_demo.case.json"), "higher minor baseline");
+        ImportController c(doc);
+        f.run(c);
+        check(c.outcome() == ImportOutcome::Accepted && c.error().isEmpty(),
+              "higher minor accepted");
+        check(c.importReportBytes() == f.sidecar &&
+                  c.importReport() == Json::parse(f.sidecar.toStdString()),
+              "higher minor sidecar retains additive fields");
+    });
+    for (bool summary : {true, false}) {
+        test(summary ? "P4 malformed summary" : "P4 malformed sidecar", [&] {
+            ReportReplay f("board_2layer");
+            (summary ? f.summary : f.sidecar) = "{";
+            CaseDocument doc;
+            require(doc.load(FIXTURE_DIR "/fcbga_demo.case.json"), "syntax baseline");
+            ImportController c(doc);
+            DefectsDialog dialog(c);
+            f.run(c);
+            dialog.show();
+            QApplication::processEvents();
+            const auto path = summary ? f.summaryPath : f.sidecarPath;
+            const auto diagnostic = c.error() + dialogText(dialog);
+            check(diagnostic.contains(path) && diagnostic.contains("JSON", Qt::CaseInsensitive),
+                  "P4 JSON syntax diagnostic includes original path");
+            check(c.outcome() == (summary ? ImportOutcome::Failed : ImportOutcome::Accepted),
+                  "P4 corrupt summary fails; corrupt sidecar preserves legal OK summary");
+            check(QFile::exists(path) && read(path) == "{",
+                  "P4 original malformed bytes remain readable");
+            if (!summary)
+                check(c.importReportBytes().isEmpty() && c.importReport().empty(),
+                      "P4 invalid sidecar hidden");
+        });
+    }
+    // A matched exit/code pair must not bypass validation of any summary defect.
+    const auto summaryDefect =
+        QJsonDocument::fromJson(
+            read(reportFixture("confirm_b_tier_synthetic") + "/import_report.json"))
+            .object()["defects"]
+            .toArray()[0]
+            .toObject();
+    auto rejectSummaryDefect = [&](const QJsonValue& defect, int exitCode, const char* code) {
+        ReportReplay f("board_2layer");
+        auto j = QJsonDocument::fromJson(f.summary).object();
+        j["code"] = code;
+        j["grade"] = "B";
+        // Keep a valid first entry so checking only the first row cannot pass.
+        j["defects"] = QJsonArray{summaryDefect, defect};
+        f.summary = QJsonDocument(j).toJson();
+        f.exitCode = exitCode;
+        CaseDocument doc;
+        require(doc.load(FIXTURE_DIR "/fcbga_demo.case.json"), "summary defect baseline");
+        const auto before = doc.stackJson();
+        ImportController c(doc);
+        f.run(c);
+        check(c.outcome() == ImportOutcome::Failed && c.reportCode().isEmpty() &&
+                  c.grade().isEmpty() && !c.needsMaterialMapReselect(),
+              "malformed summary defect rejects matched pair and exposes no result fields");
+        check(doc.stackJson() == before && !doc.isDirty() && !QFile::exists(f.lastRequest.output) &&
+                  !QFile::exists(f.lastRequest.report),
+              "malformed summary defect preserves document and publishes no files");
+        check(c.error().contains("字段") && c.error().contains(f.summaryPath),
+              "malformed summary defect diagnostic identifies summary path");
+    };
+    for (const auto& key : defectKeys) {
+        for (bool missing : {true, false}) {
+            test(QString("summary defect %1 %2")
+                     .arg(missing ? "missing" : "wrong type", QString::fromStdString(key)),
+                 [&] {
+                     auto d = summaryDefect;
+                     const auto name = QString::fromStdString(key);
+                     if (missing)
+                         d.remove(name);
+                     else
+                         d[name] = QJsonArray{};
+                     rejectSummaryDefect(d, 6, "IMPORT_CONFIRMATION_REQUIRED");
+                 });
+        }
+    }
+    for (const auto& mutation : {std::pair{"defect_id", QJsonValue("")},
+                                 std::pair{"tier", QJsonValue("b")},
+                                 std::pair{"size_unit", QJsonValue("M")},
+                                 std::pair{"reason", QJsonValue(-1)},
+                                 std::pair{"reason", QJsonValue(0.5)},
+                                 std::pair{"reason", QJsonValue(true)},
+                                 std::pair{"size", QJsonValue(true)}}) {
+        test(QString("summary defect invalid %1 %2")
+                 .arg(mutation.first,
+                      QJsonDocument(QJsonArray{mutation.second}).toJson(QJsonDocument::Compact)),
+             [&] {
+                 auto d = summaryDefect;
+                 d[mutation.first] = mutation.second;
+                 rejectSummaryDefect(d, 6, "IMPORT_CONFIRMATION_REQUIRED");
+             });
+    }
+    for (const auto& pair : {std::pair{0, "OK"},
+                             {6, "IMPORT_CONFIRMATION_REQUIRED"},
+                             {7, "IMPORT_REJECTED"},
+                             {9, "MATERIAL_MAPPING_MISSING"}}) {
+        test(QString("summary non-object defect rejects matched pair %1").arg(pair.first),
+             [&] { rejectSummaryDefect(QJsonValue(QJsonValue::Null), pair.first, pair.second); });
+        test(QString("valid summary defects preserve matched pair %1").arg(pair.first), [&] {
+            ReportReplay f("board_2layer");
+            auto j = QJsonDocument::fromJson(f.summary).object();
+            j["code"] = pair.second;
+            j["schema_version"] = "import-report/1.27";
+            QJsonArray defects;
+            for (const auto& tierUnit : {std::pair{"Weld", "1"},
+                                         std::pair{"A", "m"},
+                                         std::pair{"B", "m2"},
+                                         std::pair{"C", "m3"}}) {
+                auto d = summaryDefect;
+                d["defect_id"] = tierUnit.first;
+                d["tier"] = tierUnit.first;
+                d["size_unit"] = tierUnit.second;
+                d["size"] = defects.isEmpty() ? QJsonValue(0.125) : QJsonValue(QJsonValue::Null);
+                d["future"] = QJsonObject{{"extra", true}};
+                defects.append(d);
+            }
+            j["defects"] = defects;
+            f.summary = QJsonDocument(j).toJson();
+            f.exitCode = pair.first;
+            CaseDocument doc;
+            require(doc.load(FIXTURE_DIR "/fcbga_demo.case.json"), "valid summary defect baseline");
+            ImportController c(doc);
+            f.run(c);
+            const auto outcome = pair.first == 0   ? ImportOutcome::Accepted
+                                 : pair.first == 6 ? ImportOutcome::NeedsConfirmation
+                                                   : ImportOutcome::Rejected;
+            check(c.outcome() == outcome && c.error().isEmpty() && c.reportCode() == pair.second,
+                  "valid summary entries accept all tiers/units, null size and additive keys");
+        });
+    }
+    for (const auto& pair : {std::pair{0, "OK"},
+                             {6, "IMPORT_CONFIRMATION_REQUIRED"},
+                             {7, "IMPORT_REJECTED"},
+                             {9, "MATERIAL_MAPPING_MISSING"}}) {
+        test(QString("missing sidecar preserves pair %1").arg(pair.first), [&] {
+            ReportReplay f("board_2layer");
+            auto j = QJsonDocument::fromJson(f.summary).object();
+            j["code"] = pair.second;
+            f.summary = QJsonDocument(j).toJson();
+            f.exitCode = pair.first;
+            f.sidecarMode = "missing";
+            CaseDocument doc;
+            require(doc.load(FIXTURE_DIR "/fcbga_demo.case.json"), "missing sidecar baseline");
+            ImportController c(doc);
+            DefectsDialog dialog(c);
+            f.run(c);
+            const auto outcome = pair.first == 0   ? ImportOutcome::Accepted
+                                 : pair.first == 6 ? ImportOutcome::NeedsConfirmation
+                                                   : ImportOutcome::Rejected;
+            check(c.outcome() == outcome, "missing sidecar preserves four-pair result");
+            check(c.importReportBytes().isEmpty() && c.importReport().empty(),
+                  "missing sidecar empty accessors");
+            dialog.show();
+            QApplication::processEvents();
+            check(dialogText(dialog).contains("无旁路缺陷明细"),
+                  "missing sidecar is distinct from empty defects");
+        });
+    }
+    test("sidecar read failure identifies path without changing outcome", [&] {
+        ReportReplay f("confirm_b_tier_synthetic");
+        f.sidecarMode = "directory";
+        CaseDocument doc;
+        ImportController c(doc);
+        DefectsDialog dialog(c);
+        f.run(c);
+        dialog.show();
+        QApplication::processEvents();
+        check(c.outcome() == ImportOutcome::NeedsConfirmation,
+              "unreadable sidecar preserves summary pair");
+        check(c.importReportBytes().isEmpty() && c.importReport().empty(),
+              "read failure empty accessors");
+        check((c.error() + dialogText(dialog)).contains(f.sidecarPath),
+              "read failure identifies sidecar path");
+    });
+    test("restart and local failure clear prior defects parts and diagnostics", [&] {
+        ReportReplay f("confirm_b_tier_synthetic");
+        auto j = QJsonDocument::fromJson(f.sidecar).object();
+        auto defects = j["defects"].toArray();
+        defects.append(defects[0]);
+        j["defects"] = defects;
+        const auto assembly =
+            QJsonDocument::fromJson(
+                read(reportFixture("assembly_parts_synthetic") + "/import_report.json"))
+                .object();
+        j["parts"] = assembly["parts"];
+        j["welded_interfaces"] = 0;
+        f.sidecar = QJsonDocument(j).toJson();
+        CaseDocument doc;
+        ImportController c(doc);
+        DefectsDialog dialog(c);
+        f.run(c);
+        check(!c.importReport().empty() &&
+                  (c.error() + dialogText(dialog)).contains("报告内 defect_id 重复"),
+              "reset test starts with defects parts and duplicate diagnostic");
+        f.sidecarMode = "missing";
+        f.run(c);
+        dialog.show();
+        QApplication::processEvents();
+        check(c.importReportBytes().isEmpty() && c.importReport().empty() &&
+                  tableRows(dialog).isEmpty() &&
+                  !(c.error() + dialogText(dialog)).contains("报告内 defect_id 重复") &&
+                  !dialogText(dialog).contains("board/Mystery"),
+              "next import has no stale sidecar state");
+        f.sidecarMode = "file";
+        f.run(c);
+        auto invalid = f.lastRequest;
+        invalid.materialMap.clear();
+        check(!c.start(invalid), "local failure after valid sidecar");
+        check(c.importReportBytes().isEmpty() && c.importReport().empty() &&
+                  !c.error().contains("报告内 defect_id 重复"),
+              "local start failure clears retained state");
+    });
+    // Each mutation has an otherwise valid, versioned report. A generic parse failure
+    // cannot accidentally satisfy these checks by rejecting every sidecar.
+    for (const auto& mutation : {"missing-L",
+                                 "number",
+                                 "counts",
+                                 "accepted",
+                                 "defects",
+                                 "tier",
+                                 "unit",
+                                 "reason",
+                                 "size",
+                                 "bool",
+                                 "missing-defect-key",
+                                 "empty-defect-id"}) {
+        test(QString("sidecar rejects field shape %1").arg(mutation), [&] {
+            ReportReplay f("confirm_b_tier_synthetic");
+            auto j = QJsonDocument::fromJson(f.sidecar).object();
+            auto defects = j["defects"].toArray();
+            auto d = defects[0].toObject();
+            const QString mode = mutation;
+            if (mode == "missing-L")
+                j.remove("L");
+            else if (mode == "number")
+                j["L"] = "zero";
+            else if (mode == "counts")
+                j["tier_counts"] = QJsonObject{{"Weld", 0}, {"A", 0}, {"B", true}, {"C", 0}};
+            else if (mode == "accepted")
+                j["b_tier_accepted"] = true;
+            else if (mode == "defects")
+                j["defects"] = QJsonObject{};
+            else {
+                if (mode == "tier")
+                    d["tier"] = "b";
+                if (mode == "unit")
+                    d["size_unit"] = "M";
+                if (mode == "reason")
+                    d["reason"] = 0.5;
+                if (mode == "size")
+                    d["size"] = "large";
+                if (mode == "bool")
+                    d["material_ambiguous"] = "false";
+                if (mode == "missing-defect-key")
+                    d.remove("suggestion");
+                if (mode == "empty-defect-id")
+                    d["defect_id"] = "";
+                defects[0] = d;
+                j["defects"] = defects;
+            }
+            f.sidecar = QJsonDocument(j).toJson();
+            CaseDocument doc;
+            ImportController c(doc);
+            DefectsDialog dialog(c);
+            f.run(c);
+            dialog.show();
+            QApplication::processEvents();
+            check(c.outcome() == ImportOutcome::NeedsConfirmation,
+                  "invalid sidecar does not regrade summary");
+            check(c.importReportBytes().isEmpty() && c.importReport().empty(),
+                  "invalid fields rejected");
+            const auto diagnostic = c.error() + dialogText(dialog);
+            check(diagnostic.contains(f.sidecarPath) && !diagnostic.contains("版本不受支持") &&
+                      (diagnostic.contains("字段") ||
+                       diagnostic.contains("field", Qt::CaseInsensitive) ||
+                       diagnostic.contains("structure", Qt::CaseInsensitive)),
+                  "field shape diagnostic differs from version/syntax");
+        });
+    }
+    for (const auto* mutation : {"parts-array",
+                                 "split-array",
+                                 "rewrite-object",
+                                 "material-object",
+                                 "weld-missing",
+                                 "weld-bool",
+                                 "weld-fraction",
+                                 "weld-negative"}) {
+        test(QString("assembly sidecar rejects %1").arg(mutation), [&] {
+            ReportReplay f("assembly_parts_synthetic");
+            auto j = QJsonDocument::fromJson(f.sidecar).object();
+            auto parts = j["parts"].toObject();
+            const QString mode = mutation;
+            if (mode == "split-array")
+                parts["split_layers"] = QJsonArray{};
+            if (mode == "rewrite-object")
+                parts["rewrite_targets"] = QJsonObject{};
+            if (mode == "material-object")
+                parts["material_approx"] = QJsonObject{};
+            j["parts"] = mode == "parts-array" ? QJsonValue(QJsonArray{}) : QJsonValue(parts);
+            if (mode == "weld-missing")
+                j.remove("welded_interfaces");
+            if (mode == "weld-bool")
+                j["welded_interfaces"] = true;
+            if (mode == "weld-fraction")
+                j["welded_interfaces"] = 0.5;
+            if (mode == "weld-negative")
+                j["welded_interfaces"] = -1;
+            f.sidecar = QJsonDocument(j).toJson();
+            CaseDocument doc;
+            require(doc.load(FIXTURE_DIR "/fcbga_demo.case.json"), "assembly field baseline");
+            ImportController c(doc);
+            DefectsDialog dialog(c);
+            f.run(c);
+            dialog.show();
+            QApplication::processEvents();
+            check(c.outcome() == ImportOutcome::Accepted,
+                  "invalid assembly sidecar preserves OK summary");
+            check(c.importReportBytes().isEmpty() && c.importReport().empty(),
+                  "invalid assembly fields rejected");
+            check((c.error() + dialogText(dialog)).contains(f.sidecarPath),
+                  "invalid assembly fields identify path");
+        });
+    }
+    for (const auto& pair : {std::pair{13, "CUT_UNSUPPORTED"}, {14, "INPUT_INVALID"}}) {
+        test(QString("protocol failure includes %1").arg(pair.second), [&] {
+            ReportReplay f("board_2layer");
+            auto j = QJsonDocument::fromJson(f.summary).object();
+            j["code"] = pair.second;
+            f.summary = QJsonDocument(j).toJson();
+            f.exitCode = pair.first;
+            CaseDocument doc;
+            ImportController c(doc);
+            f.run(c);
+            check(c.outcome() == ImportOutcome::Failed && c.error().contains(pair.second),
+                  "13/14 error contains protocol code");
+        });
+    }
+}
+
 // Non-native dialogs are driven through their actual widgets, with an independent timeout.
 QString pick(const std::function<QString()>& picker,
              const QString& path,
@@ -226,6 +952,7 @@ int main(int argc, char** argv) {
                       dirtyChanges == 0,
                   "failed document replacement preserves stack, dirty state and notifications");
         }
+        reportAcceptance();
         const auto map = dir.filePath("material map.JSON");
         write(map, "not parsed by desktop");
         const auto script = dir.filePath("record contract.py");
@@ -253,7 +980,10 @@ code,rc={'confirm':('IMPORT_CONFIRMATION_REQUIRED',6),'reject':('IMPORT_REJECTED
 'missing6':('OK',6),'lower':('ok',0)}.get(mode,('OK',0))
 if mode=='confirm' and '--accept-b-tier' in a: code,rc='OK',0
 if report and mode not in ('missing6','missing0'):
-    payload={'code':code,'message':'fixture message','defects':[] if code=='OK' else [{'code':'MOCK_GAP'}]}
+    defect={'defect_id':'fixture/gap','tier':'B','kind':'MOCK_GAP','reason':0,
+            'dimension':'element','size':1,'size_unit':'1','suggestion':'confirm gap',
+            'action':'','rejection_reason':'','material_ambiguous':False}
+    payload={'schema_version':'import-report/1.0','code':code,'message':'fixture message','defects':[] if code=='OK' else [defect]}
     if mode in ('grade-conflict','crash-map','cancel-report'): payload['grade']='C'
     if mode=='confirm': payload['grade']='B'
     if mode.startswith('bad-'):
@@ -347,10 +1077,23 @@ sys.exit(rc)
                         if (code == "OK")
                             check(j.contains("defects") && j.at("defects").empty(),
                                   "mock success empty defects");
-                        if (confirm || reject)
-                            check(j.contains("defects") && !j.at("defects").empty(),
-                                  "mock defects " + m);
-                    } catch (const std::exception&) {
+                        // ECAD summary defects may be empty; details belong to the sidecar.
+                        check(j.contains("schema_version") &&
+                                  j.at("schema_version") == "import-report/1.0",
+                              "mock summary schema_version " + m);
+                        if (m == "success" || m == "confirm" || m == "reject") {
+                            const auto sidecar =
+                                QFileInfo(output).dir().filePath("import_report.json");
+                            check(QFile::exists(sidecar), "mock writes sidecar " + m);
+                            if (QFile::exists(sidecar))
+                                checkMockReports(j,
+                                                 Json::parse(read(sidecar).toStdString()),
+                                                 confirm || reject,
+                                                 acceptBTier);
+                        }
+                    } catch (const std::exception& e) {
+                        if (m != "corrupt")
+                            check(false, "mock invalid JSON or field shape " + m + ": " + e.what());
                     }
                     check(parsed == (m != "corrupt"), "mock JSON presence " + m);
                     if (m == "invalid" && QFile::exists(output)) {
@@ -368,6 +1111,7 @@ sys.exit(rc)
             require(document.load(FIXTURE_DIR "/fcbga_demo.case.json"), "mock rerun baseline");
             const auto before = document.stackJson();
             ImportController controller(document);
+            DefectsDialog mockDialog(controller);
             ImportRequest request;
             request.input = dir.filePath(QString("shipped ") + mode + ".xml");
             request.output = request.input + ".stack.json";
@@ -381,12 +1125,25 @@ sys.exit(rc)
             check(controller.outcome() == ImportOutcome::NeedsConfirmation &&
                       document.stackJson() == before && !QFile::exists(request.output),
                   "shipped mock requires confirmation without publication");
+            mockDialog.show();
+            QApplication::processEvents();
+            const auto rows = tableRows(mockDialog);
+            check(!rows.empty() &&
+                      (hasUnit(rows.join(" | "), "计数") || hasUnit(rows.join(" | "), "m")),
+                  "shipped confirmation mock displays sidecar rows and units");
             waitFor(controller,
                     [&] { check(controller.restartAccepted(), "restart shipped mock"); });
             check(controller.outcome() == ImportOutcome::Accepted &&
                       controller.reportCode() == "OK" && controller.exitCode() == 0 &&
                       document.stackJson() != before && QFile::exists(request.output),
                   "shipped mock accepts and publishes confirmed rerun");
+            const auto acceptedReport = controller.importReport();
+            const auto successFixture = Json::parse(
+                read(reportFixture("accept_b_tier") + "/import_report.json").toStdString());
+            check(keys(acceptedReport) == keys(successFixture) &&
+                      acceptedReport.contains("b_tier_accepted") &&
+                      acceptedReport.at("b_tier_accepted") == "all",
+                  "shipped accepted B report contains common keys and all acceptance state");
         }
         // A valid previous report must never supply fields for a malformed later one.
         for (const auto& malformed : {"bad-code-type",
@@ -638,6 +1395,21 @@ sys.exit(rc)
                     wanted << "--accept-b-tier";
                 check(ImportControllerTestAccess::arguments(r) == wanted,
                       "full QStringList argv order and unchanged input " + suffix);
+                if (mode == "corrupt") {
+                    const auto reportIndex = actual.indexOf("--report");
+                    require(reportIndex >= 0 && reportIndex + 1 < actual.size(),
+                            "malformed report path recorded");
+                    const auto original = actual[reportIndex + 1];
+                    check(QFile::exists(original) && read(original) == "{" &&
+                              c.error().contains(original),
+                          "malformed original remains readable until the next import");
+                    // P4 retains syntax failures through inspection; the next start
+                    // releases that directory even if local validation rejects the request.
+                    auto next = r;
+                    next.output.clear();
+                    check(!c.start(next), "next local start releases malformed staging");
+                    check(!QFile::exists(original), "next import removes malformed original");
+                }
                 check(QDir(dir.path())
                           .entryList({".chipcae-import-*"},
                                      QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot)

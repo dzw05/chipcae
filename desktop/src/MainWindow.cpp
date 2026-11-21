@@ -17,6 +17,7 @@
 
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDebug>
 #include <QDir>
 #include <QDockWidget>
 #include <QElapsedTimer>
@@ -32,6 +33,7 @@
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTimer>
@@ -191,17 +193,27 @@ MainWindow::MainWindow(const QStringList& args,
     connect(importer_,
             &chipcae::desktop::ImportController::finished,
             this,
-            [this, cancel, logTimer, appendLog](bool replaced) {
+            [this, cancel, logTimer, appendLog, importLog](bool replaced) {
                 if (replaced && currentImportKind_ == chipcae::desktop::ImportKind::Assembly) {
-                    const auto report = QJsonDocument::fromJson(importer_->reportBytes()).object();
+                    const auto report = importer_->importReport();
+                    QJsonArray summary;
+                    if (report.contains("parts")) {
+                        for (const auto& entry :
+                             report.at("parts").at("material_approx").array_range())
+                            summary.append(QJsonObject{
+                                {"id", QString::fromStdString(entry.at("id").as<std::string>())},
+                                {"material_approx", entry.at("material_approx").as<bool>()}});
+                    }
                     if (auto* model = findChild<chipcae::desktop::CaseTreeModel*>())
-                        model->applyPartSummary(report.value("parts").toArray());
+                        model->applyPartSummary(summary);
                 }
                 if (importer_->outcome() != chipcae::desktop::ImportOutcome::NeedsConfirmation)
                     currentImportKind_.reset();
                 if (replaced)
                     clearPreviewMeshOptions();
                 appendLog();
+                if (!importer_->error().isEmpty())
+                    importLog->appendPlainText(importer_->error());
                 logTimer->stop();
                 cancel->hide();
                 for (auto* action : importBlockedActions_)
@@ -580,6 +592,12 @@ void MainWindow::clearPreviewMeshOptions() {
 }
 
 bool MainWindow::openResultsPath(const QString& manifestPath) {
+    QElapsedTimer timer;
+    timer.start();
+    const auto recordStackFill = qScopeGuard([this, &timer] {
+        lastOpenResultsStackFillMs_ = timer.elapsed();
+        qInfo().nospace() << "open_results_stack_fill_ms=" << lastOpenResultsStackFillMs_;
+    });
     lastOpenCancelledForMeshDigest_ = false;
     auto session = std::make_unique<chipcae::desktop::ResultSession>();
     if (!session->open(manifestPath) || session->steps().isEmpty())
@@ -626,6 +644,21 @@ bool MainWindow::openResultsPath(const QString& manifestPath) {
     watermarkLabel_->move(20, 20);
     watermarkLabel_->setStyleSheet("color: #cc8800; font-size: 28px; font-weight: bold;");
     refreshSourceUi();
+    if (casePath_.isEmpty() && !document_.stackJson().contains("layers")) {
+        if (auto* stack = findChild<chipcae::desktop::StackEditor*>()) {
+            const auto raw = session_->resultsStackJson();
+            chipcae::desktop::Json display = chipcae::desktop::Json::object();
+            display["layers"] = chipcae::desktop::Json::array();
+            if (!raw.isEmpty()) {
+                try {
+                    display = chipcae::desktop::Json::parse(raw.toStdString());
+                } catch (const std::exception& e) {
+                    qWarning() << "result stackup ignored:" << e.what();
+                }
+            }
+            stack->setResultsStack(display);
+        }
+    }
     return true;
 }
 

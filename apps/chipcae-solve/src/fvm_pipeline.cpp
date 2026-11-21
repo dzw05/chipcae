@@ -116,7 +116,7 @@ fv::ThermalProblem thermal_problem(const RunInputs& inputs,
         if (layer == inputs.stack.layers.end())
             throw InputError(ErrorCode::INPUT_INVALID, "attribute layer is missing");
         // load_inputs already evaluates E/nu/alpha with interpolate_property at
-        // T_ref. Thermal conductivity uses the same CV fraction as mechanics.
+        // T_ref. Thermal conductivity is scalar; mechanical mixture() is deferred.
         problem.k[c] = {base.k, base.k, base.k};
         if (layer->copper)
             material::copper_laminate_conductivity(base.k,
@@ -147,20 +147,42 @@ fv::ThermalProblem thermal_problem(const RunInputs& inputs,
                     if (c > static_cast<std::size_t>(std::numeric_limits<int>::max()))
                         throw InputError(ErrorCode::INPUT_INVALID, "fixed CV index overflow");
                     auto [it, inserted] = fixed.emplace(static_cast<int>(c), load.T);
-                    if (!inserted && it->second != load.T)
+                    // Kelvin: allow round-off with absolute and relative tolerances of 1e-12.
+                    const double tolerance =
+                        1e-12 + 1e-12 * std::max(std::abs(it->second), std::abs(load.T));
+                    if (!inserted && std::abs(it->second - load.T) > tolerance)
                         throw InputError(ErrorCode::INPUT_INVALID, "conflicting fixed CV");
                 }
         } else if (load.type == "fixed_temperature" || load.type == "convection") {
-            for (const auto& target : targets) {
-                fv::ThermalBc bc{};
-                bc.kind = load.type == "fixed_temperature" ? fv::ThermalBc::Kind::Dirichlet
-                                                           : fv::ThermalBc::Kind::Robin;
-                bc.target = target;
-                bc.T = load.T;
-                bc.h = load.h;
-                bc.T_inf = load.T_inf;
-                problem.bcs.push_back(std::move(bc));
-            }
+            fv::ThermalBc bc{};
+            bc.kind = load.type == "fixed_temperature" ? fv::ThermalBc::Kind::Dirichlet
+                                                       : fv::ThermalBc::Kind::Robin;
+            bc.T = load.T;
+            bc.h = load.h;
+            bc.T_inf = load.T_inf;
+            if (load.target.starts_with("layer:")) {
+                const std::array<std::string, 6> names{
+                    "face:xmin", "face:xmax", "face:ymin", "face:ymax", "face:zmin", "face:zmax"};
+                bool found = false;
+                // A layer load covers its whole exterior, including embedded faces.
+                // Select each face once across all slices of a split-layer alias.
+                for (std::size_t f = 0; f < grid.faces.size(); ++f) {
+                    const auto& face = grid.faces[f];
+                    if (face.hi >= 0 || !selected(static_cast<std::size_t>(face.lo)))
+                        continue;
+                    bc.target = face.side == 6 ? "boundary:embedded" : names.at(face.side);
+                    bc.face = f;
+                    problem.bcs.push_back(bc);
+                    found = true;
+                }
+                if (!found)
+                    throw InputError(ErrorCode::INPUT_INVALID,
+                                     "target has no boundary faces: " + load.target);
+            } else
+                for (const auto& target : targets) {
+                    bc.target = target;
+                    problem.bcs.push_back(bc);
+                }
         }
     }
     for (const auto& [cv, temperature] : fixed) {
@@ -168,6 +190,30 @@ fv::ThermalProblem thermal_problem(const RunInputs& inputs,
         problem.fixed_T.push_back(temperature);
     }
     return problem;
+}
+
+std::map<CellKey, std::size_t> constituent_lookup(const fv::FvGrid& grid,
+                                                  const mesh::HexMeshArrays& arrays) {
+    const auto nc = grid.cv_volume.size(), n = grid.constituent_gid.size();
+    if (grid.constituent_off.size() != nc + 1 || grid.constituent_off.front() != 0 ||
+        grid.constituent_off.back() != static_cast<std::int64_t>(n) ||
+        !std::is_sorted(grid.constituent_off.begin(), grid.constituent_off.end()) ||
+        grid.constituent_subcell.size() != n || grid.constituent_elem.size() != n)
+        throw InputError(ErrorCode::INTERNAL, "invalid FVM constituent CSR");
+    std::map<CellKey, std::size_t> result;
+    for (std::size_t c = 0; c < nc; ++c) {
+        if (grid.constituent_off[c] == grid.constituent_off[c + 1])
+            throw InputError(ErrorCode::INTERNAL, "empty FVM constituent set");
+        for (auto j = grid.constituent_off[c]; j < grid.constituent_off[c + 1]; ++j) {
+            const auto e = grid.constituent_elem[j];
+            if (e < 0 || static_cast<std::size_t>(e) >= arrays.elem_gid.size() ||
+                arrays.elem_gid[e] != grid.constituent_gid[j] || grid.constituent_subcell[j] < 0 ||
+                !result.emplace(CellKey{grid.constituent_gid[j], grid.constituent_subcell[j]}, c)
+                     .second)
+                throw InputError(ErrorCode::INTERNAL, "invalid or duplicate FVM constituent");
+        }
+    }
+    return result;
 }
 
 int stack_layer(const RunInputs& inputs, const std::string& name) {

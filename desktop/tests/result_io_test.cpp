@@ -2,9 +2,11 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
+#include <QProcess>
 #include <QTemporaryDir>
 #include <cmath>
 #include <functional>
@@ -509,6 +511,298 @@ void topology(vtkDataSet* data) {
             require(count == 1 && edges[{edge.second, edge.first}] == 1, "face rings not closed");
     }
 }
+namespace {
+void stackWrite(const QString& path, const QByteArray& bytes) {
+    QFile file(path);
+    require(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "open stack fixture " + path);
+    require(file.write(bytes) == bytes.size(), "write stack fixture " + path);
+}
+void copyStackPack(const QDir& root, const QString& target) {
+    const QDir source(root.filePath("default"));
+    QDirIterator it(source.path(), QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        const auto path = it.next();
+        const auto output = QDir(target).filePath(source.relativeFilePath(path));
+        require(QDir().mkpath(QFileInfo(output).absolutePath()), "create stack pack directory");
+        require(QFile::copy(path, output), "copy stack pack file");
+    }
+    // Modified synthetic HDF files no longer have the original checksum.
+    QFile file(QDir(target).filePath("manifest.json"));
+    require(file.open(QIODevice::ReadOnly), "read stack pack manifest");
+    auto manifest = QJsonDocument::fromJson(file.readAll()).object();
+    file.close();
+    QJsonArray steps;
+    for (auto value : manifest["steps"].toArray()) {
+        auto step = value.toObject();
+        step.remove("checksum");
+        steps.append(step);
+    }
+    manifest["steps"] = steps;
+    stackWrite(file.fileName(), QJsonDocument(manifest).toJson());
+}
+const QByteArray fallbackStack = R"({"id":"fallback","unit":"m","outline":{"box":[0,0,1,1]},
+    "symmetry":"none","package_type":"FCBGA","layers":[
+    {"name":" Base ","material":"Mixed_CASE","thickness":0.001,"kind":"Homogenized","n_elem_min":1,"grading":1},
+    {"name":" Base ","thickness":0.002,"kind":"Explicit","n_elem_min":1,"grading":1,
+     "regions":[{"name":"ignored_region","material":"not_a_fourth_material","footprint":{"box":[0,0,1,1]}}]},
+    {"name":"TOP","material":"","thickness":0.003,"kind":"Homogenized","n_elem_min":1,"grading":1}]})";
+const QStringList fallbackLayers{" Base ", " Base ", "TOP"};
+const QStringList fallbackMaterials{"Mixed_CASE", "", ""};
+void removeFieldNames(const QString& target,
+                      const QString& table,
+                      bool empty,
+                      bool alternating = false) {
+    // Mutate only copied synthetic fixtures, using the same h5py dependency as result_fixtures.py.
+    const QString script = R"(
+import h5py, pathlib, sys
+root, table, empty, alternating = sys.argv[1:]
+for path in pathlib.Path(root, 'out').glob('*.vtkhdf'):
+    if alternating == '1' and path.name == 'step-1.vtkhdf':
+        continue
+    with h5py.File(path, 'r+') as f:
+        def change(name, group):
+            if not isinstance(group, h5py.Group) or name.split('/')[-1] != 'FieldData':
+                return
+            for key in ('layer_names', 'material_names') if table == 'both' else (table,):
+                if key in group:
+                    del group[key]
+                if empty == '1':
+                    group.create_dataset(key, shape=(0,), dtype='S32')
+        f.visititems(change)
+)";
+    QProcess process;
+    const auto python = qEnvironmentVariable("CHIPCAE_FIXTURE_PYTHON", "python3");
+    process.start(python,
+                  {"-c", script, target, table, empty ? "1" : "0", alternating ? "1" : "0"});
+    require(process.waitForFinished(30000) && process.exitStatus() == QProcess::NormalExit &&
+                process.exitCode() == 0,
+            "h5py fixture mutation failed: " + QString::fromUtf8(process.readAllStandardError()));
+}
+void requireNames(const ResultSession& session,
+                  const QStringList& layers,
+                  const QStringList& materials) {
+    require(session.layerNames() == layers,
+            "layer fallback list: expected [" + layers.join(" | ") + "] got [" +
+                session.layerNames().join(" | ") + "]");
+    require(session.materialNames() == materials,
+            "material fallback list: expected [" + materials.join(" | ") + "] got [" +
+                session.materialNames().join(" | ") + "]");
+    for (int i = 0; i < layers.size(); ++i)
+        require(session.layerName(i + 1) == layers[i], "1-based layer name lookup");
+    for (int i = 0; i < materials.size(); ++i)
+        require(session.materialName(i + 1) == materials[i], "1-based material name lookup");
+    for (int id : {-1, 0, 99})
+        require(session.layerName(id).isEmpty() && session.materialName(id).isEmpty(),
+                "invalid IDs remain unmapped");
+    require(session.layerName(static_cast<int>(layers.size()) + 1).isEmpty() &&
+                session.materialName(static_cast<int>(materials.size()) + 1).isEmpty(),
+            "first out-of-range ID unmapped");
+}
+int stackNameAcceptance(const QDir& root) {
+    int failures = 0;
+    const auto run = [&](const QString& name, auto test) {
+        try {
+            test();
+            std::cout << "PASS stack names: " << name.toStdString() << '\n';
+        } catch (const std::exception& e) {
+            ++failures;
+            std::cerr << "FAIL stack names: " << name.toStdString() << ": " << e.what() << '\n';
+        }
+    };
+    ResultSession baseline;
+    require(baseline.open(root.filePath("default")) && baseline.loadStep(0) != nullptr,
+            "load FieldData reference");
+    const auto fieldLayers = baseline.layerNames();
+    const auto fieldMaterials = baseline.materialNames();
+    require(fieldLayers == QStringList{"substrate", "bump_eq", "die_layer"} &&
+                fieldMaterials ==
+                    QStringList{"organic_eq", "SAC305_ball_eq", "underfill", "silicon"},
+            "synthetic FieldData reference names");
+    for (const auto& mode :
+         {"both-missing", "both-empty", "layer-only", "material-only", "neither"}) {
+        run(mode, [&] {
+            QTemporaryDir temp;
+            require(temp.isValid(), "stack names directory");
+            copyStackPack(root, temp.path());
+            const QString variant(mode);
+            if (variant != "neither")
+                removeFieldNames(temp.path(),
+                                 variant == "layer-only"      ? "layer_names"
+                                 : variant == "material-only" ? "material_names"
+                                                              : "both",
+                                 variant == "both-empty");
+            // Control verifies the intended empty table(s) before any fallback file exists.
+            require(QFile::remove(temp.filePath("stackup.json")),
+                    "remove copied stack before control read");
+            ResultSession control;
+            require(control.open(temp.path()) && control.loadStep(0) != nullptr,
+                    "load no-stack control");
+            const bool fallbackLayer =
+                variant == "both-missing" || variant == "both-empty" || variant == "layer-only";
+            const bool fallbackMaterial =
+                variant == "both-missing" || variant == "both-empty" || variant == "material-only";
+            require(control.layerNames() == (fallbackLayer ? QStringList{} : fieldLayers) &&
+                        control.materialNames() ==
+                            (fallbackMaterial ? QStringList{} : fieldMaterials),
+                    "fixture has exactly the intended missing FieldData tables");
+            stackWrite(temp.filePath("stackup.json"), fallbackStack);
+            ResultSession session;
+            require(session.open(temp.path()), session.error());
+            for (int step : {0, 1, 2, 0}) {
+                auto data = session.loadStep(step);
+                require(data != nullptr, session.error());
+                const auto layers = fallbackLayer ? fallbackLayers : fieldLayers;
+                const auto materials = fallbackMaterial ? fallbackMaterials : fieldMaterials;
+                requireNames(session, layers, materials);
+                auto* ds = first(data);
+                require(ds && ds->GetFieldData(), "loaded partition has FieldData");
+                for (const auto& table :
+                     {qMakePair("layer_names", layers), qMakePair("material_names", materials)}) {
+                    auto* array = vtkStringArray::SafeDownCast(
+                        ds->GetFieldData()->GetAbstractArray(table.first));
+                    require(array && array->GetNumberOfValues() == table.second.size(),
+                            "effective names attached to VTK FieldData");
+                    for (int i = 0; i < table.second.size(); ++i)
+                        require(QString::fromStdString(array->GetValue(i)) == table.second[i],
+                                "attached name order and content");
+                }
+            }
+        });
+    }
+    run("each step reselects names and session reopen clears fallback", [&] {
+        QTemporaryDir temp;
+        require(temp.isValid(), "alternating names directory");
+        copyStackPack(root, temp.path());
+        removeFieldNames(temp.path(), "both", false, true);
+        stackWrite(temp.filePath("stackup.json"), fallbackStack);
+        ResultSession session;
+        require(session.open(temp.path()), session.error());
+        for (int step : {0, 1, 2, 1, 0}) {
+            require(session.loadStep(step) != nullptr, session.error());
+            requireNames(session,
+                         step == 1 ? fieldLayers : fallbackLayers,
+                         step == 1 ? fieldMaterials : fallbackMaterials);
+        }
+        require(session.open(root.filePath("viewer_mixed")) && session.loadStep(0) != nullptr,
+                "reopen unnamed directory without stack");
+        requireNames(session, {}, {});
+        require(session.open(root.filePath("default")) && session.loadStep(0) != nullptr,
+                "reopen named directory");
+        requireNames(session, fieldLayers, fieldMaterials);
+    });
+    for (const auto& fields : {QByteArray{},
+                               QByteArray(R"(,"thickness":null)"),
+                               QByteArray(R"(,"thickness":"invalid")"),
+                               QByteArray(R"(,"thickness":[])")}) {
+        run("name fallback ignores display-only fields: " + QString::fromUtf8(fields), [&] {
+            QTemporaryDir temp;
+            require(temp.isValid(), "names-only stack directory");
+            copyStackPack(root, temp.path());
+            removeFieldNames(temp.path(), "both", false);
+            stackWrite(temp.filePath("stackup.json"),
+                       R"({"layers":[{"name":" Base ","material":"Mixed_CASE")" + fields +
+                           R"(},{"name":" Base "},{"name":"TOP","material":""}]})");
+            ResultSession session;
+            require(session.open(temp.path()) && session.loadStep(0) != nullptr,
+                    "names-only stack must not prevent result loading");
+            requireNames(session, fallbackLayers, fallbackMaterials);
+            require(session.resultsStackJson().isEmpty(),
+                    "names-only stack is not eligible for row display");
+        });
+    }
+    run("open caches stack bytes for later step loading", [&] {
+        QTemporaryDir temp;
+        require(temp.isValid(), "cached stack directory");
+        copyStackPack(root, temp.path());
+        removeFieldNames(temp.path(), "both", false);
+        stackWrite(temp.filePath("stackup.json"), fallbackStack);
+        ResultSession session;
+        require(session.open(temp.path()), session.error());
+        require(QFile::remove(temp.filePath("stackup.json")), "delete stack after open");
+        for (int step : {0, 1, 0}) {
+            require(session.loadStep(step) != nullptr, session.error());
+            requireNames(session, fallbackLayers, fallbackMaterials);
+        }
+    });
+    for (const auto& bytes :
+         {QByteArray{},
+          QByteArray("{"),
+          QByteArray("[]"),
+          QByteArray("{}"),
+          QByteArray("{\"layers\":[]}"),
+          QByteArray("{\"layers\":true}"),
+          QByteArray("{\"layers\":[{\"name\":{},\"thickness\":0.1}]}"),
+          QByteArray("{\"layers\":[{\"name\":\"x\",\"thickness\":0.1,\"material\":[]}]}"),
+          QByteArray("missing")}) {
+        run("invalid stack: " + QString::fromUtf8(bytes), [&] {
+            QTemporaryDir temp;
+            require(temp.isValid(), "invalid stack directory");
+            copyStackPack(root, temp.path());
+            removeFieldNames(temp.path(), "both", false);
+            if (bytes == "missing")
+                require(QFile::remove(temp.filePath("stackup.json")), "remove stack fixture");
+            else
+                stackWrite(temp.filePath("stackup.json"), bytes);
+            ResultSession session;
+            require(session.open(temp.path()) && session.loadStep(0) != nullptr,
+                    "invalid stack must not prevent load");
+            requireNames(session, {}, {});
+        });
+    }
+    for (const auto& mode : {"relative", "absolute", "parent", "symlink", "missing"}) {
+        run(QString("manifest stackup path: ") + mode, [&] {
+            QTemporaryDir temp;
+            require(temp.isValid(), "stackup path directory");
+            const auto pack = temp.filePath("pack");
+            copyStackPack(root, pack);
+            removeFieldNames(pack, "both", false);
+            stackWrite(temp.filePath("outside.json"), fallbackStack);
+            stackWrite(pack + "/stackup.json", fallbackStack);
+            QFile file(pack + "/manifest.json");
+            require(file.open(QIODevice::ReadOnly), "read path manifest");
+            auto manifest = QJsonDocument::fromJson(file.readAll()).object();
+            file.close();
+            if (QString(mode) == "relative") {
+                require(QDir().mkpath(pack + "/Nested"), "create relative path");
+                stackWrite(pack + "/Nested/StackUP.json", fallbackStack);
+                stackWrite(pack + "/stackup.json", "{}");
+                manifest["stackup"] = "Nested/StackUP.json";
+            } else if (QString(mode) == "absolute")
+                manifest["stackup"] = temp.filePath("outside.json");
+            else if (QString(mode) == "parent")
+                manifest["stackup"] = "../outside.json";
+            else if (QString(mode) == "missing")
+                manifest["stackup"] = "absent.json";
+            else {
+                require(QFile::link(temp.filePath("outside.json"), pack + "/link.json"),
+                        "create escaping stack link");
+                manifest["stackup"] = "link.json";
+            }
+            stackWrite(file.fileName(), QJsonDocument(manifest).toJson());
+            ResultSession session;
+            require(session.open(pack) && session.loadStep(0) != nullptr,
+                    "stack path does not prevent result loading");
+            requireNames(session,
+                         QString(mode) == "relative" ? fallbackLayers : QStringList{},
+                         QString(mode) == "relative" ? fallbackMaterials : QStringList{});
+        });
+    }
+    const auto s1 = qEnvironmentVariable("CHIPCAE_S1");
+    if (s1.isEmpty() || !QFileInfo::exists(s1))
+        std::cout << "SKIP stack name fallback: CHIPCAE_S1 is unavailable\n";
+    else
+        run("official s1 fallback", [&] {
+            ResultSession session;
+            require(session.open(s1) && session.loadStep(0) != nullptr, "open official s1");
+            const QStringList expected{"substrate", "die_attach", "Si"};
+            require(session.layerNames() == expected, "official s1 fallback names");
+            for (int i = 0; i < expected.size(); ++i)
+                require(session.layerName(i + 1) == expected[i], "official s1 1-based names");
+        });
+    return failures;
+}
+} // namespace
+
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     try {
@@ -590,7 +884,9 @@ int main(int argc, char** argv) {
         require(
             !ResultSession::readEventLog(root.filePath("events/valid.caelog"), 2).error.isEmpty(),
             "format accepted");
-        const int eventDiscoveryStatus = eventLogDiscovery(root).isEmpty() ? 0 : 1;
+        const int stackNameStatus = stackNameAcceptance(root) == 0 ? 0 : 1;
+        const int eventDiscoveryStatus =
+            (eventLogDiscovery(root).isEmpty() ? 0 : 1) | stackNameStatus;
         require(s.open(root.filePath("temporal_ug.vtkhdf")), s.error());
         require(s.loadStep(0) != nullptr, s.error());
         require(s.open(root.filePath("bad_checksum")), s.error());

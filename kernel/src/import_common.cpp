@@ -8,7 +8,8 @@ void write_defects(const std::filesystem::path& file,
                    const std::string& message) {
     std::ofstream out(file);
     if (out)
-        out << "{\"code\":\"" << code << "\",\"message\":\"" << message << "\",\"defects\":[]}\n";
+        out << "{\"schema_version\":\"import-report/1.0\",\"code\":\"" << code
+            << "\",\"message\":\"" << message << "\",\"defects\":[]}\n";
 }
 void derive_output_paths(ImportOptions& options) {
     auto& output = options.output;

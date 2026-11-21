@@ -46,4 +46,9 @@ with tempfile.TemporaryDirectory() as tmp:
     check(a.run('--accept-b-tier'), 0)
     stack = a.stack()
     bodies = {r['body'] for l in stack['layers'] for r in l.get('regions', [])}
-    assert 'lid' in bodies and 'unmapped' not in bodies, bodies
+    assert 'alias' in bodies and 'lid' not in bodies and 'unmapped' not in bodies, bodies
+    report = a.import_report()
+    for defect in report['defects']:
+        defect_id = defect['defect_id']
+        if not defect_id.startswith(('unmapped/', 'board/')):
+            assert defect_id.startswith('alias/'), defect
