@@ -50,10 +50,14 @@ int parallel_acceptance() {
         const double m = 1 - f;
         const double E = f * Ec + m * Em, n = f * nc + m * nm;
         const double Gm = Em / (2 * (1 + nm)), Gc = Ec / (2 * (1 + nc));
-        const double G = E / (2 * (1 + n)), Gz = 1 / (f / Gc + m / Gm);
+        const double G = E / (2 * (1 + n));
+        // Endpoint expectations use the selected phase; interior formulas stay unchanged.
+        const double Gz = f == 0 ? Gm : f == 1 ? Gc : 1 / (f / Gc + m / Gm);
         const double expected[9] = {E, E, E, n, n, n, G, Gz, Gz};
         const double Mm = Em / (1 - nm), Mc = Ec / (1 - nc);
-        const double xy = (f * Mc * ac + m * Mm * am) / (f * Mc + m * Mm);
+        const double xy = f == 0   ? am
+                          : f == 1 ? ac
+                                   : (f * Mc * ac + m * Mm * am) / (f * Mc + m * Mm);
         const double z = (f * Ec * ac + m * Em * am) / E;
         double p[9]{}, th[3]{}, k[3]{}, repeated_p[9]{}, repeated_th[3]{}, repeated_k[3]{};
         chipcae::material::copper_laminate(Em, nm, Ec, nc, am, ac, f, p, th);
@@ -185,6 +189,7 @@ int main(int argc, char** argv) {
             const double Eb = f == 0 ? Em : Ec;
             const double nb = f == 0 ? nm : nc;
             const double ab = f == 0 ? am : ac;
+            // Pure-phase shear modulus definition, independent of the laminate helper.
             const double Gb = Eb / (2 * (1 + nb));
             const double expected[9] = {Eb, Eb, Eb, nb, nb, nb, Gb, Gb, Gb};
             double p[9]{}, th[3]{};
