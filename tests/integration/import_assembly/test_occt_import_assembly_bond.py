@@ -162,6 +162,24 @@ class AssemblyBond(unittest.TestCase):
         self.close(max(z1 - origin for _, z1, layer in intervals(stack)
                        if has_body(layer, 'lid')), -self.thickness)
 
+    def test_bottom_bond_roundoff_meets_attachment_face(self):
+        # Original roundoff witness from the architect's ruling: adding T to
+        # this placed face used to create a spurious lid.bond/thin#1 interval.
+        thickness = 7.000000000000001e-05
+        placed_z1 = -6.999999999999997e-05
+        self.close(placed_z1 + thickness, 4.0657581468206416e-20)
+        self.close(self.thickness, thickness)
+        self.place(thickness, bottom=True)
+        check(self.a.run(), 0)
+        stack = self.a.stack()
+        origin = next(z0 for z0, _, layer in intervals(stack)
+                      if layer['name'] == self.board_bottom_name)
+        self.assert_bond(stack, -thickness, 0.0, origin=origin)
+        bond_top = max(z1 for _, z1, layer in intervals(stack)
+                       if has_body(layer, 'lid.bond'))
+        # Exact shared interface, with no absolute tolerance at the zero face.
+        self.close(bond_top - origin, 0.0)
+
     def thin_bond(self):
         thickness = (self.eps_weld + self.t_min) / 2
         self.assertLess(self.eps_weld, thickness)
@@ -198,19 +216,18 @@ class AssemblyBond(unittest.TestCase):
 
     def test_gap_without_bond_stays_void(self):
         self.place(self.thickness, bond=False)
-        check(self.a.run('--accept-b-tier'), 0)
-        stack = self.a.stack()
-        layers = list(intervals(stack))
-        self.assertFalse(any(has_body(layer, 'lid.bond') for _, _, layer in layers))
-        gap = [(z0, z1, layer) for z0, z1, layer in layers
-               if overlaps(z0, z1, self.board_top, self.board_top + self.thickness)]
-        self.assertTrue(gap, stack)
-        self.close(gap[0][0], self.board_top)
-        self.close(gap[-1][1], self.board_top + self.thickness)
-        self.close(sum(layer['thickness'] for _, _, layer in gap), self.thickness)
-        for _, _, layer in gap:
-            self.assertFalse(layer.get('material'), layer)
-            self.assertFalse(layer.get('regions'), layer)
+        # Architect ruling: preserve main's schema rejection and publication
+        # behavior. 整层空腔待卡 assembly-floating-gap.
+        result = self.a.run('--accept-b-tier')
+        check(result, 14)
+        self.assertFalse(self.a.output.exists())
+        self.assertEqual(result.stdout, '')
+        self.assertEqual(result.stderr,
+                         'INPUT_INVALID: Must be valid against at least one schema, '
+                         'but found no matching schemas\n')
+        self.assertEqual(self.a.defects()['code'], 'INPUT_INVALID')
+        self.assertFalse([d for d in self.a.import_report()['defects']
+                          if d['defect_id'].startswith('lid.bond/')])
 
 
 if __name__ == '__main__':

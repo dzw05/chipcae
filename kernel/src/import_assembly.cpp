@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <random>
 #include <regex>
@@ -845,6 +846,24 @@ int run_assembly(const ImportOptions& options) {
                             });
                         bond_slab = Slab{s.z1, s.z1 + bond.thickness, s.sections};
                     }
+                    Real face = attach->resolved_z.value_or(0);
+                    if (!attach->resolved_z) {
+                        for (const auto& layer : base.layers) {
+                            if (layer.name == attach->target.substr(6)) {
+                                if (attach->side == AttachSide::top)
+                                    face += layer.thickness;
+                                break;
+                            }
+                            face += layer.thickness;
+                        }
+                    }
+                    // Undo placement roundoff only at the original attachment face.
+                    Real& outer = attach->side == AttachSide::top ? bond_slab.z0 : bond_slab.z1;
+                    const Real bound = 4 * std::numeric_limits<Real>::epsilon() *
+                                       std::max(std::abs(bond.thickness), std::abs(face));
+                    if (std::abs(outer - face) > bound)
+                        throw std::runtime_error("INTERNAL: bond does not meet attachment face");
+                    outer = face;
                     placed.push_back(PlacedPart{id + ".bond", bond.material, {bond_slab}});
                 }
             }
