@@ -66,7 +66,9 @@ class RehearsalAcceptance(unittest.TestCase):
         ) + "\n"
         self.listing_stderr = "synthetic discovery stderr\n"
         self.listing_rc = 0
+        self.listing_error = None
         self.execution_rc = 0
+        self.execution_error = None
         self.execution_stdout = "All tests Skipped"
         self.xml = junit()
         self.calls = []
@@ -98,12 +100,16 @@ class RehearsalAcceptance(unittest.TestCase):
         self.assertEqual(args[0], "ctest", f"Unexpected subprocess: {args}")
         if "-N" in args:
             self.assertEqual(args, ["ctest", "--test-dir", str(self.build), "-N"])
+            if self.listing_error is not None:
+                raise self.listing_error
             return subprocess.CompletedProcess(
                 args, self.listing_rc, self.listing, self.listing_stderr
             )
         self.assertEqual(args, self.execution_command())
         # The driver must remove its old result before invoking CTest.
         self.assertFalse((self.out / "junit.xml").exists(), "stale JUnit was not removed")
+        if self.execution_error is not None:
+            raise self.execution_error
         if self.xml is not None:
             (self.out / "junit.xml").write_text(self.xml, encoding="utf-8")
         # Console output deliberately contradicts XML and must not set verdicts.
@@ -137,6 +143,7 @@ class RehearsalAcceptance(unittest.TestCase):
         report = json.loads((self.out / "rehearsal.json").read_text(encoding="utf-8"))
         self.assertTrue(REQUIRED <= report.keys(), REQUIRED - report.keys())
         self.assertEqual(report["data_class"], "synthetic")
+        self.assertEqual(set(report["backends"]), set(KEYS))
         self.assertEqual([case["name"] for case in report["tests"]], list(NAMES))
         for case in report["tests"]:
             self.assertTrue({"name", "status", "time_s", "skip_or_fail_message"} <= case.keys())
@@ -196,7 +203,18 @@ class RehearsalAcceptance(unittest.TestCase):
         self.assertIn("```", markdown)
         self.assertIn(message, markdown)
         self.assertIn("original skip output", markdown)
-        self.assertIn("\\|", markdown)
+        row = next(line for line in markdown.splitlines() if line.startswith(f"| {NAMES[0]} |"))
+        self.assertIn("依赖缺失 \\| original skip<br>second line", row)
+
+    def test_markdown_escapes_backslashes_pipes_and_line_breaks_in_table(self):
+        message = "synthetic \\path | value\r\n```diagnostic\nsecond line"
+        self.xml = junit(tag="skipped", message=message, output="original skip output")
+        self.invoke(1)
+        report = self.report()
+        markdown = (self.out / "rehearsal.md").read_text(encoding="utf-8")
+        row = next(line for line in markdown.splitlines() if line.startswith(f"| {NAMES[0]} |"))
+        self.assertIn("synthetic \\\\path \\| value&#13;<br>```diagnostic<br>second line", row)
+        self.assertIn(message, report["tests"][0]["skip_or_fail_message"])
 
     def test_failure_and_error_never_pass(self):
         for tag in ("failure", "error"):
@@ -218,10 +236,31 @@ class RehearsalAcceptance(unittest.TestCase):
                 self.assertEqual(self.report()["overall"], "FAIL")
                 self.assertEqual(self.report()["tests"][0]["status"], "Not Run")
 
+    def test_junit_diagnostic_priority_overrides_skipped_and_non_run_status(self):
+        for tags, expected in ((("skipped", "failure"), "Failed"),
+                               (("skipped", "error"), "Failed"),
+                               (("failure", "skipped"), "Failed"),
+                               (("error", "skipped"), "Failed"),
+                               (("skipped",), "Skipped")):
+            for status in ("run", "notrun", None):
+                with self.subTest(tags=tags, status=status):
+                    root = ET.fromstring(junit(status=status))
+                    for tag in tags:
+                        ET.SubElement(root[0], tag, message=f"original {tag}")
+                    self.xml = ET.tostring(root, encoding="unicode")
+                    self.invoke(1)
+                    report = self.report()
+                    self.assertEqual(report["overall"], "FAIL")
+                    self.assertEqual(report["tests"][0]["status"], expected)
+                    for tag in tags:
+                        self.assertIn(f"original {tag}",
+                                      report["tests"][0]["skip_or_fail_message"])
+
     def test_each_missing_or_off_backend_blocks_all_ctest_calls(self):
         for key in KEYS:
             for value in (None, "OFF"):
                 with self.subTest(key=key, value=value):
+                    self.calls.clear()
                     self.cache = dict.fromkeys(KEYS, "ON")
                     if value is None:
                         del self.cache[key]
@@ -237,6 +276,10 @@ class RehearsalAcceptance(unittest.TestCase):
                     for case in report["tests"]:
                         self.assertEqual(case["status"], "Not Run")
                         self.assertIsNone(case["time_s"])
+                    self.assertEqual(report["backends"][key], value)
+                    self.assertEqual(report["ctest_command"], [])
+                    self.assertIsNone(report["ctest_returncode"])
+                    self.assertEqual(report["commit"], COMMIT)
 
     def test_cmake_boolean_forms_preserve_raw_values(self):
         for values in (("YES", "TRUE", "Y", "1"), ("on", "true", "yes", "2")):
@@ -259,7 +302,13 @@ class RehearsalAcceptance(unittest.TestCase):
         self.assertEqual(self.ctest_calls(), [])
         self.assertEqual(self.which_calls, ["mpiexec"])
         self.assertIn("mpiexec", self.diagnostics())
-        self.assertIsNone(self.report()["mpiexec"])
+        report = self.report()
+        self.assertIsNone(report["mpiexec"])
+        self.assertEqual(report["overall"], "NOT_RUN")
+        self.assertEqual([case["status"] for case in report["tests"]], ["Not Run"] * 4)
+        self.assertEqual(report["ctest_command"], [])
+        self.assertIsNone(report["ctest_returncode"])
+        self.assertEqual(report["commit"], COMMIT)
 
     def test_reports_every_missing_prerequisite(self):
         self.cache = {}
@@ -323,6 +372,7 @@ class RehearsalAcceptance(unittest.TestCase):
                 ) + f"\nWarning: {NAMES[0]}\n"
                 self.invoke(2)
                 self.assertEqual(len(self.ctest_calls()), 1)
+                self.assertIn("-N", self.ctest_calls()[0])
                 self.assertIn(NAMES[0], self.diagnostics())
 
     def test_discovery_nonzero_prevents_execution_and_retains_output(self):
@@ -332,6 +382,37 @@ class RehearsalAcceptance(unittest.TestCase):
         report = self.report()
         self.assertEqual(report["ctest_listing_returncode"], 8)
         self.assertIn(self.listing_stderr.strip(), report["ctest_listing"])
+
+    def test_discovery_launch_failure_reports_preflight_error_without_execution(self):
+        self.listing_error = FileNotFoundError("synthetic discovery launch failure")
+        self.invoke(2)
+        report = self.report()
+        self.assertEqual(self.ctest_calls(), [["ctest", "--test-dir", str(self.build), "-N"]])
+        self.assertEqual(report["commit"], COMMIT)
+        self.assertEqual(report["overall"], "NOT_RUN")
+        self.assertEqual([case["status"] for case in report["tests"]], ["Not Run"] * 4)
+        self.assertIsNone(report["ctest_listing_returncode"])
+        self.assertEqual(report["ctest_command"], [])
+        self.assertIsNone(report["ctest_returncode"])
+        self.assertIn("synthetic discovery launch failure", self.diagnostics())
+        self.assertIn("synthetic discovery launch failure", "\n".join(report["preflight_errors"]))
+
+    def test_execution_launch_failure_is_not_run_with_null_returncode(self):
+        self.out.mkdir()
+        (self.out / "junit.xml").write_text(junit(), encoding="utf-8")
+        self.execution_error = OSError("synthetic execution launch failure")
+        self.invoke(1)
+        report = self.report()
+        self.assertEqual(len(self.ctest_calls()), 2)
+        self.assertEqual(report["ctest_command"], self.execution_command())
+        self.assertEqual(report["ctest_listing_returncode"], 0)
+        self.assertIsNone(report["ctest_returncode"])
+        self.assertEqual(report["overall"], "NOT_RUN")
+        self.assertEqual([case["status"] for case in report["tests"]], ["Not Run"] * 4)
+        self.assertFalse((self.out / "junit.xml").exists())
+        self.assertIn("synthetic execution launch failure", report["ctest_output"])
+        self.assertIn("synthetic execution launch failure",
+                      (self.out / "rehearsal.md").read_text(encoding="utf-8"))
 
     def test_missing_empty_or_malformed_junit_is_not_run(self):
         for xml in (None, "", "<testsuite>"):
@@ -361,6 +442,25 @@ class RehearsalAcceptance(unittest.TestCase):
         self.invoke(0)
         self.report()
 
+    def test_reversed_mixed_xml_results_keep_status_time_and_markdown_manifest_order(self):
+        root = ET.fromstring(junit(tuple(reversed(NAMES))))
+        for case, elapsed in zip(root, ("0.125", "0.25", "0.5", "1.0")):
+            case.set("time", elapsed)
+        ET.SubElement(root[0], "skipped", message="last manifest test skipped")
+        self.xml = ET.tostring(root, encoding="unicode")
+        self.invoke(1)
+        report = self.report()
+        self.assertEqual(report["overall"], "FAIL")
+        self.assertEqual([case["status"] for case in report["tests"]],
+                         ["Passed", "Passed", "Passed", "Skipped"])
+        for case, elapsed in zip(report["tests"], (1.0, 0.5, 0.25, 0.125)):
+            self.assertAlmostEqual(case["time_s"], elapsed)
+        self.assertIn("last manifest test skipped", report["tests"][3]["skip_or_fail_message"])
+        markdown = (self.out / "rehearsal.md").read_text(encoding="utf-8")
+        rows = [line for line in markdown.splitlines()
+                if any(line.startswith(f"| {name} |") for name in NAMES)]
+        self.assertEqual([row.split(" | ")[0][2:] for row in rows], list(NAMES))
+
     def test_nonzero_ctest_with_passing_xml_is_failure(self):
         self.execution_rc = 8
         self.invoke(1)
@@ -370,14 +470,15 @@ class RehearsalAcceptance(unittest.TestCase):
         self.assertEqual([c["status"] for c in report["tests"]], ["Passed"] * 4)
 
     def test_invalid_ranks_are_parameter_errors_without_ctest(self):
-        for ranks in ("3", "", ",", "1,3", "2,no", "1,", ",2"):
+        for ranks in ("3", "", ",", "1,3", "2,no", "1,", ",2", "1,,2", "1, 2", "0"):
             with self.subTest(ranks=ranks):
                 self.calls.clear()
                 self.invoke(2, ["--ranks", ranks])
                 self.assertEqual(self.ctest_calls(), [])
 
     def test_valid_ranks_only_change_metadata(self):
-        for ranks, expected in (("1", [1]), ("2", [2]), ("1,2", [1, 2])):
+        for ranks, expected in (("1", [1]), ("2", [2]), ("1,2", [1, 2]),
+                                ("2,1,2", [2, 1, 2])):
             with self.subTest(ranks=ranks):
                 self.calls.clear()
                 self.invoke(0, ["--ranks", ranks])
