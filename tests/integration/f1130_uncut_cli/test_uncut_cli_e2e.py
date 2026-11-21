@@ -673,6 +673,25 @@ class TraceMapReferenceTests(unittest.TestCase):
                 with self.subTest(size=len(data)), self.assertRaises(AssertionError):
                     ref.read_polyset(bad)
 
+    def test_bcu_reference_kz_endpoints_are_bit_exact(self):
+        import numpy as np
+        import trace_map_ref as ref
+        root = SOURCE / 'tests/integration/import_cli/golden/board_4layer'
+        stack = read_json(root / 'stack.json')
+        rings = ref.read_polyset(root / 'stack.polyset')
+        mesh = ref.tensor_mesh(stack, 4, 4)
+        phi,k = ref.reference_coefficients(mesh,rings,stack)
+        lid = next(i for i,layer in enumerate(stack['layers'],1)
+                   if layer['name'] == 'B.Cu')
+        for fraction,conductivity in ((0, .3), (1, 390.)):
+            with self.subTest(fraction=fraction):
+                indices = np.flatnonzero((mesh['layer_ids'] == lid) & (phi == fraction))
+                self.assertGreater(len(indices),0)
+                # Endpoint representations are explicitly required to be bit exact.
+                actual = np.asarray(k[indices,2],dtype=np.float64).view(np.uint64)
+                expected = np.full(len(indices),conductivity,dtype=np.float64).view(np.uint64)
+                np.testing.assert_array_equal(actual,expected)
+
     def test_q2_basis_partition_derivatives_and_symmetric_assembly(self):
         import numpy as np
         import trace_map_ref as ref
@@ -691,7 +710,7 @@ class TraceMapReferenceTests(unittest.TestCase):
     def test_single_column_known_fraction_and_numpy_fallback(self):
         import numpy as np
         import trace_map_ref as ref
-        # Analytic 50% copper/FR4 parallel mixture, independent literal values.
+        # Given coefficients for Q2 assembly self-checks.
         stack = synthetic_stack([.001])
         mesh = ref.tensor_mesh(stack, 1, 1)
         k = np.array([[195.15, 195.15, 195.15]])
@@ -720,7 +739,7 @@ class TraceMapReferenceTests(unittest.TestCase):
         import trace_map_ref as ref
         stack = synthetic_stack([.0002, .001, .0003])
         mesh = ref.tensor_mesh(stack, 2, 1)
-        # Uniform f=(0, 1/2, 1); parallel mixtures within each layer.
+        # Given coefficients for Q2 assembly self-checks, uniform within each layer.
         # Independent series resistance across the stacked layers, in SI.
         kz = [.3, 195.15, 390]
         k = np.array([[.3, .3, .3], [195.15, 195.15, kz[1]], [390, 390, 390]] * 2)
@@ -926,7 +945,7 @@ class TraceMapReferenceTests(unittest.TestCase):
                 ref.tensor_mesh(stack,2,1)
 
     def test_cell_fraction_conductivity_and_temperature_mutations_fail(self):
-        import numpy  # noqa: F401
+        import numpy as np
         try:
             import h5py
         except ImportError:
@@ -939,7 +958,7 @@ class TraceMapReferenceTests(unittest.TestCase):
               (ref.rational('.0005'), ref.rational('.001')), (0, ref.rational('.001'))),))}
         for defect in (None, 'zero_copper', 'nan', 'inf', 'negative', 'above_one',
                        'conductivity', 'temperature', 'case', 'missing_layer', 'conductivity_nan',
-                       'conductivity_inf', 'area'):
+                       'conductivity_inf', 'area', 'series_kz'):
             with self.subTest(defect=defect), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / 'mesh.vtkhdf'
                 write_synthetic_hex(path, stack, patterned=True)
@@ -966,6 +985,40 @@ class TraceMapReferenceTests(unittest.TestCase):
                     mesh['temperatures'][-1] += 1e-6
                 if defect is None:
                     ref.check_solution(mesh, given_rings, stack, {}, expected_areas={'In1.Cu': .5})
+                elif defect == 'series_kz':
+                    phi,parallel = ref.reference_coefficients(mesh,given_rings,stack)
+                    self.assertTrue(np.any((0 < phi) & (phi < 1)))
+                    mixed_conductivity = ref.mixed_conductivity
+
+                    def series_kz(fractions):
+                        coefficients = mixed_conductivity(fractions).copy()
+                        coefficients[:,2] = 1/(fractions/390+(1-fractions)/.3)
+                        return coefficients
+
+                    measurements = dict(acceptance_checks={name: True
+                        for name in ACCEPTANCE_CHECKS
+                        if name not in ('cell_fractions','conductivity')})
+                    with patch.object(ref,'mixed_conductivity',side_effect=series_kz):
+                        mutated_phi,mutated = ref.reference_coefficients(mesh,given_rings,stack)
+                        np.testing.assert_array_equal(mutated_phi,phi)
+                        np.testing.assert_array_equal(mutated[:,:2],parallel[:,:2])
+                        relative = float(np.max(abs(mutated-parallel)/abs(parallel)))
+                        self.assertGreater(relative,1e-14)
+                        with self.assertRaisesRegex(AssertionError,'M3 conductivity mismatch') as failure:
+                            ref.check_solution(mesh,given_rings,stack,measurements,
+                                               expected_areas={'In1.Cu': .5})
+                    self.assertIs(measurements['acceptance_checks']['cell_fractions'],True)
+                    self.assertFalse(measurements['acceptance_checks'].get('conductivity',False))
+                    with redirect_stdout(StringIO()):
+                        write_result(Path(directory),1,measurements,{},[],[str(failure.exception)])
+                    record = read_json(Path(directory) / 'result.json')
+                    self.assertEqual(record['verdict'],'fail')
+                    self.assertIn('M3 conductivity mismatch',record['notes'])
+                    self.assertEqual([note for note in record['notes']
+                        if note.startswith('acceptance check incomplete:')],
+                        ['acceptance check incomplete: conductivity'])
+                    print(f'series_kz relative_conductivity_difference={relative:.17g} '
+                          f'failure={failure.exception} verdict={record["verdict"]}',flush=True)
                 else:
                     with self.assertRaises(AssertionError):
                         ref.check_solution(mesh, given_rings, stack, {}, expected_areas={'In1.Cu': .5})
