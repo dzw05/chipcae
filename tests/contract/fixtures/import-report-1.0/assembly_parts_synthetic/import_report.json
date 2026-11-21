@@ -39,7 +39,6 @@
       {
         "from": "interface:L|U",
         "to": [
-          "interface:L#0|U",
           "interface:L#1|U"
         ]
       }
