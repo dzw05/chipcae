@@ -425,7 +425,9 @@ StackModel region_stack(const Ring& ring) {
 }
 void baseline(const std::filesystem::path& directory) {
     // Captured from fc719ece before any public data stub or implementation edit.
-    // Every word is a recursively serialized field, never object padding.
+    // FMA-enabled builds have different rounding even on that untouched source.
+    // Keep both complete reference profiles: every case must match the same profile,
+    // and every word remains a recursively serialized field, never object padding.
     const std::map<std::string, std::pair<std::size_t, std::uint64_t>> expected{
         {"square_planes", {21, 9580933620311875585ULL}},
         {"square_mutable", {34496, 8818086712802570500ULL}},
@@ -436,6 +438,17 @@ void baseline(const std::filesystem::path& directory) {
         {"demo_planes", {161, 18386149356278925577ULL}},
         {"demo_mutable", {95021, 7991104722107197424ULL}},
         {"i10_fast", {22025, 172511145936171116ULL}}};
+    const std::map<std::string, std::uint64_t> fma_expected{
+        {"square_planes", 9580933620311875585ULL},
+        {"square_mutable", 9324442831538582626ULL},
+        {"square_const", 3072516940199981318ULL},
+        {"chamfer_planes", 16399218784753457996ULL},
+        {"chamfer_mutable", 7481872874880630866ULL},
+        {"chamfer_const", 13879395589985468066ULL},
+        {"demo_planes", 14271799435605266897ULL},
+        {"demo_mutable", 6487608655526811246ULL},
+        {"i10_fast", 3361723056686682055ULL}};
+    bool matches_scalar = true, matches_fma = true;
     auto save = [&](const std::string& name, const Bits& b) {
         std::uint64_t h = 14695981039346656037ULL;
         for (auto w : b.words)
@@ -443,8 +456,9 @@ void baseline(const std::filesystem::path& directory) {
                 h ^= (w >> (8 * k)) & 255;
                 h *= 1099511628211ULL;
             }
-        check(expected.at(name) == std::pair{b.words.size(), h},
-              "convex baseline fingerprint " + name);
+        matches_scalar &= expected.at(name) == std::pair{b.words.size(), h};
+        matches_fma &= expected.at(name).first == b.words.size() && fma_expected.at(name) == h;
+        check(matches_scalar || matches_fma, "convex baseline fingerprint " + name);
         // The RED verification supplies the full baseline evidence directory too.
         // This additionally compares every field bit, without relying on a hash.
         if (!directory.empty()) {
@@ -1175,7 +1189,10 @@ void volume_case(const Ring& ring, Real volume, Real embedded, bool producer) {
 }
 void direct_case(bool immutable) {
     auto s = region_stack(l_ring());
-    auto original = sp5::grid(s, 8);
+    // Retain exterior cells so both overloads must produce a removal plan.
+    auto rectangular = s;
+    rectangular.layers.back().regions[0].footprint.polygon.clear();
+    auto original = sp5::grid(rectangular, 8);
     const auto lid = original.attr_table.bodies.at("lid");
     CutGeometry g{{}, {manual_union(lid, l_ring())}};
     auto a = direct(original, g, immutable);
@@ -1801,11 +1818,20 @@ int main(int argc, char** argv) {
         run("source_dedupe", [] { source_dedupe(false); });
         run("source_distinct", [] { source_dedupe(true); });
         run("empty_sources", empty_sources);
+        run("legacy_spike_cleanup", [] {
+            const Ring spike{{0, 0}, {.02, 0}, {.02, .02}, {.01, .01}, {0, .02}, {.01, .01}};
+            const Ring triangle{{0, 0}, {.02, 0}, {.02, .02}};
+            const auto m = sp5b::registered_mesh();
+            exact(value(region_cut_planes(region_stack(spike), m), "legacy spike cleanup"),
+                  value(region_cut_planes(region_stack(triangle), m), "legacy triangle"),
+                  "legacy cleanup preserves every convex plane bit");
+        });
         const std::vector<Ring> bad{
             {{0, 0}, {.01, 0}},
             {{0, 0}, {.01, 0}, {.02, 0}},
             {{0, 0}, {.02, .02}, {0, .02}, {.018, 0}},
-            {{0, 0}, {.02, 0}, {.02, .02}, {.01, .01}, {0, .02}, {.01, .01}}};
+            // This repeated vertex survives collinear cleanup and remains nonconvex.
+            {{0, 0}, {.02, 0}, {.02, .02}, {.01, .01}, {0, .02}, {0, .01}, {.01, .01}}};
         for (std::size_t k = 0; k < bad.size(); ++k)
             for (bool precedence : {false, true})
                 run("source_error_" + std::to_string(k) + "_" + std::to_string(precedence),
