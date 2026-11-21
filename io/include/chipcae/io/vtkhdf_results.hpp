@@ -31,7 +31,8 @@ struct ResultsStep {
 };
 class ResultsWriter {
 public:
-    // Acceptance-test API stub; measurement is intentionally not implemented yet.
+    // Successful-call wall times in seconds; statistics stay in memory.
+    // Includes finalize() calls made internally by set_mesh().
     struct IoStats {
         double write_step_seconds = 0;
         double finalize_seconds = 0;
@@ -41,7 +42,7 @@ public:
         std::uint64_t bytes_written = 0;
         int write_step_count = 0;
     };
-    // The reference remains valid only for this writer's lifetime.
+    // The reference observes subsequent calls and is valid only for this writer's lifetime.
     const IoStats& io_stats() const noexcept { return io_stats_; }
 
     // Collective on MPI_COMM_WORLD when MPI is initialized. Partition count is
@@ -72,6 +73,7 @@ public:
 
 private:
     IoStats io_stats_;
+    std::uint64_t step_bytes_ = 0, manifest_bytes_ = 0;
     struct Step {
         int n;
         double time;
