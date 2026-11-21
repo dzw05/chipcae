@@ -292,8 +292,15 @@ Run pipeline(const StackModel& s, Local n, Shape shape, bool export_polyhedra = 
         for (const auto& plane : geometry.planes)
             check(plane.body == lid, "only lid emits control planes");
     }
-    auto result = value(apply_outline_cut(mesh, s.outline, cut_options(export_polyhedra), geometry),
-                        "apply_outline_cut");
+    std::optional<CutLayerArrays> result;
+    if (export_polyhedra) {
+        result = value(apply_outline_cut(mesh, s.outline, cut_options(true), geometry),
+                       "apply_outline_cut");
+    } else {
+        // The outline wrapper forces export on; region geometry suffices for this box outline.
+        check(s.outline.polygon.empty(), "direct cut requires a box outline");
+        result = value(build_cut_layer(mesh, geometry, cut_options(false)), "build_cut_layer");
+    }
     check(result.has_value() == (shape != Shape::Box), "cut optional matches polygon presence");
     auto cut = result ? std::move(*result) : CutLayerArrays{};
     validate(mesh, cut, shape != Shape::Box);
@@ -624,12 +631,12 @@ int main() {
                     const auto reversed = pipeline(stack(Shape::N, true), n, Shape::N);
                     deterministic(first, reversed);
                 }
-                context = "N n=" + std::to_string(n) + " export requested false";
+                context = "N n=" + std::to_string(n) + " export disabled";
                 {
-                    // apply_outline_cut currently forces export on: this verifies request
-                    // invariance, and cannot establish that an export-disabled implementation was
-                    // executed.
                     const auto without_export = pipeline(stack(), n, Shape::N, false);
+                    check(first.cut.polyhedra.has_value(), "export-enabled cut has polyhedra");
+                    check(!without_export.cut.polyhedra.has_value(),
+                          "export-disabled cut omits polyhedra");
                     same(first.stats.body_volume,
                          without_export.stats.body_volume,
                          "export body volumes");
