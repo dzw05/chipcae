@@ -452,7 +452,33 @@ std::optional<std::string> floating_gap_part(const mesh::StackModel& merged,
                                             (i < board_first && span->second.second + 1 == i)))
                 return part.id;
         }
-        // Without qualifying provenance, retain the existing schema failure.
+        // Missing body IDs may fall back only to an outer slab endpoint on the
+        // far side of this cavity. Anchor at the board faces, not stack z = 0:
+        // bottom extensions shift the merged stack's origin away from the board.
+        const bool above = i > board_last;
+        if (!above && i >= board_first)
+            return std::nullopt;
+        Real boundary = 0;
+        if (above) {
+            for (const auto& original : base.layers)
+                boundary += original.thickness;
+            for (std::size_t j = board_last + 1; j <= i; ++j)
+                boundary += merged.layers[j].thickness;
+        } else {
+            for (std::size_t j = board_first; j > i; --j)
+                boundary -= merged.layers[j - 1].thickness;
+        }
+        for (const auto& part : placed) {
+            if (body_span.contains(part.id) || part.slabs.empty() || part.id.empty())
+                continue;
+            Real endpoint = above ? part.slabs.front().z0 : part.slabs.front().z1;
+            for (const auto& slab : part.slabs)
+                endpoint = above ? std::min(endpoint, slab.z0) : std::max(endpoint, slab.z1);
+            // The fallback requires an exact shared boundary; do not add a tolerance.
+            if (endpoint == boundary)
+                return part.id;
+        }
+        // Keep schema rejection if the first cavity cannot be attributed safely.
         return std::nullopt;
     }
     return std::nullopt;
