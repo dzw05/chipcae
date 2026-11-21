@@ -50,3 +50,24 @@ pending. These tests validate fixture contract outcomes, not product parser or
 solver behavior. Generate the complete package with
 `python3 tests/contract/fixtures/fvm-io-1.0/gen.py --out <directory>`; the output
 includes both scripts and stable UTF-8/LF JSON with finite numbers only.
+
+The checker independently fixes the diagnostic units to `1` and `W/(m·K)`,
+so editing both metadata files cannot redefine them. Case shape checks cover
+references, mesh dimensions, thermal/mechanical coupling, loads, constraints,
+linear tolerance and output, following `field_compare/fixtures.py`. The package
+also rejects 158 independent invalid mutations, exercises the shared hook on a
+copy with missing hex input, and accepts reordered fields, omitted `T_cell` and
+changed finite summary values. Laminate temperatures use absolute tolerance
+`1e-10 K`; hex temperatures use relative tolerance `1e-12`, with positive input
+heat and relative energy imbalance at most `1e-9`. Field metadata and summary
+methods compare exactly; active field names compare as sets.
+
+The current product accepts FVM families, defaults to Jacobi, dispatches the
+thermal pipeline and supports `volume`. Its unsupported-preconditioner error
+text still differs from this draft, and mechanical summaries still use the
+thermal-only placeholder. `ResultsPartition` has no optional `T_cell` member.
+Elastic behavior follows I14; nonconvex geometry follows cutgeom-nc. Generator
+byte determinism is checked in the running NumPy/BLAS environment; cross-platform
+byte equality still needs verification, without relaxing numerical tolerances.
+`gen.py` returns 0 on success or 2 for usage/I/O/dependency errors; `check.py`
+returns 0 on success, 1 for contract mismatches or 2 for those operational errors.

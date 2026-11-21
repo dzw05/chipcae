@@ -240,9 +240,10 @@ def manifest(package, repo):
     active = {name for name, field in fields.items() if not field.get("reserved", False)}
     require(active in (required, required | {"T_cell"}), "unexpected active field names")
     require(set(metadata) == set(FIELD_TYPES), "expected field metadata incomplete")
-    # Diagnostic unit strings await an architect ruling; the package must declare them.
+    # Draft SI units are independent of both metadata files; approval is still pending.
     units = {"T": "K", "U": "m", "T_cell": "K", "volume": "m3",
-             "layer_id": "1", "material_id": "1", "cell_kind": "1", "elem_gid": "1"}
+             "layer_id": "1", "material_id": "1", "cell_kind": "1", "elem_gid": "1",
+             "copper_fraction": "1", "conductivity_diag": "W/(m·K)"}
     for name, spec in FIELD_TYPES.items():
         for field in ([metadata[name], fields[name]] if name in fields else [metadata[name]]):
             require(type(field["components"]) is int, f"{name}: integer component count")
@@ -270,6 +271,44 @@ def cases(package):
         require(doc["schema"] == "chipcae.case/1.0", f"{name}: case version")
         physics = named(doc["physics"], "id", string_ids=True)
         require(set(physics) == {"thermal", "mech"}, f"{name}: thermal and mech required")
+        for key in ("stack", "materials"):
+            ref = doc[key]["ref"]
+            require(isinstance(ref, str) and ref.strip(), f"{name}: {key} reference")
+        mesh = doc["mesh"]
+        require(mesh["type"] == "aligned_cartesian_cut", f"{name}: mesh type")
+        for key in ("nx", "ny", "levels"):
+            require(type(mesh[key]) is int and mesh[key] >= (0 if key == "levels" else 1),
+                    f"{name}: mesh {key}")
+        require(finite(mesh["max_ratio"]) > 1, f"{name}: mesh max_ratio")
+        require(physics["thermal"]["mode"] == "steady", f"{name}: thermal mode")
+        mech = physics["mech"]
+        require(mech["temp_from"] == "thermal", f"{name}: temperature coupling")
+        finite(mech["T_ref"])
+        require(mech["nonlinear"]["geometric"] is False, f"{name}: nonlinear flag")
+        loads = named(doc["loads"], "type")
+        require(set(loads) == {"fixed_temperature", "heat_source", "convection"},
+                f"{name}: required loads")
+        for kind, target, quantities in (
+            ("fixed_temperature", "face:zmin", ("T",)),
+            ("heat_source", "layer:heater", ("power",)),
+            ("convection", "face:zmax", ("h", "T_inf")),
+        ):
+            load = loads[kind]
+            require(load["target"] == target, f"{name}: {kind} target")
+            for quantity in quantities:
+                finite(load[quantity])
+        require(loads["convection"]["h"] >= 0, f"{name}: convection coefficient")
+        require(doc["constraints"]["rigid"] == "3-2-1", f"{name}: rigid constraints")
+        require(finite(doc["solver"]["linear"]["rtol"]) > 0, f"{name}: linear tolerance")
+        output = doc["output"]
+        require(output["format"] == "vtkhdf", f"{name}: output format")
+        require(output["warpage"]["standard"] == "JESD22-B112"
+                and output["warpage"]["remove_rigid"] == "best_fit_plane",
+                f"{name}: warpage standard/plane removal")
+        fields = output["fields"]
+        require(isinstance(fields, list) and len(fields) == len(set(fields))
+                and set(fields) == {"T", "U", "layer_id", "material_id", "cell_kind",
+                                    "elem_gid", "volume"}, f"{name}: output fields")
         solvers = {p["solver"] for p in physics.values()}
         require(solvers <= {"fem.conduction", "fem.solid", "fvm.conduction", "fvm.solid"},
                 f"{name}: unknown solver")
