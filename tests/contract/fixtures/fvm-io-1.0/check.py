@@ -4,6 +4,8 @@
 Exit status: 0 pass, 1 contract mismatch, 2 usage/I/O/dependency error.
 Input format is described in the contract test README. No generator is imported:
 reference temperatures are independently assembled from the fixture inputs.
+Regeneration byte equality is checked in the running NumPy/BLAS environment;
+cross-platform byte equality remains unverified.
 """
 import argparse
 import hashlib

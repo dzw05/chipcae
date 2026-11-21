@@ -36,7 +36,9 @@ Copies outside the repository, including handoff packages, require
 `--repo <source>` (otherwise exit 2 with `--repo required outside the repository`).
 The shared `fixture_selfchecks(root)` hook runs all discovered checkers without
 arguments, in sorted order with the repository as their working directory, and
-includes captured stdout/stderr in any failure assertion. The FVM checker
+includes captured stdout/stderr in any failure assertion. This follows brief
+revision 2, which supersedes the original hook specification requiring `--repo`;
+existing checkers such as `cut-union-1.0` do not accept that option. The FVM checker
 requires NumPy; jsonschema is optional (prints `SKIP-SCHEMA`, retaining structural
 checks). It checks synthetic laminate analytic temperatures, an independent dense
 TPFA solve for 3×2×4 hexes, conservation, completed-output manifest metadata and
