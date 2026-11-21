@@ -1030,6 +1030,7 @@ void offset_bowtie_error() {
                     (ring[i][1] - ring[0][1]) * (ring[i + 1][0] - ring[0][0]);
     std::ostringstream areas;
     areas << std::setprecision(17) << "raw_area=" << raw_area << ", fan_area=" << fan_area;
+    std::cout << "offset bowtie preconditions: " << areas.str() << '\n';
     // Exact comparisons intentionally prove the rounding discrepancy being tested.
     require(raw_area != 0, ("offset bowtie needs nonzero raw area: " + areas.str()).c_str());
     require(fan_area == 0,
@@ -1044,6 +1045,10 @@ void offset_bowtie_error() {
         x += X;
     for (auto& y : m.axes[1])
         y += Y;
+    for (const auto& p : ring)
+        require(m.axes[0].front() <= p[0] && p[0] <= m.axes[0].back() &&
+                    m.axes[1].front() <= p[1] && p[1] <= m.axes[1].back(),
+                "translated background must cover every offset bowtie vertex");
     rollback_sentinels(m);
 
     // Exercise both representations even if the first reports the wrong reason.
