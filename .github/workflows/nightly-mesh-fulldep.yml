@@ -281,6 +281,27 @@ jobs:
                       with self.subTest(option=option):
                           self.assertEqual(args.count(option), 1, f"Required configure argument: {option}")
 
+              def test_other_configure_arguments_are_preserved(self):
+                  command = re.search(r"^cmake -S .*?(?=\n[^ ])", shell, re.M | re.S).group()
+                  args = shlex.split(command.replace("\\\n", " "))
+                  self.assertEqual(
+                      [arg for arg in args if arg != "-DCHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE=ON"],
+                      [
+                          "cmake", "-S", ".", "-B", "build-k1-full", "-G", "Ninja",
+                          "-DCMAKE_BUILD_TYPE=Release", "-DCHIPCAE_WARNINGS_AS_ERRORS=ON",
+                          "-DCHIPCAE_RESULTS_FAULT_INJECTION=ON",
+                          "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+                          "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+                          "-DCMAKE_PREFIX_PATH=$PWD/build-k1-deps/prefix",
+                          "-DCHIPCAE_ENABLE_MPI=ON", "-DCHIPCAE_ENABLE_MFEM=ON",
+                          "-DCHIPCAE_ENABLE_HYPRE=ON", "-DCHIPCAE_ENABLE_HDF5=ON",
+                          "-DCHIPCAE_ENABLE_JSONCONS=ON", "-DCHIPCAE_ENABLE_ECAD=ON",
+                          "-DCHIPCAE_ENABLE_OCCT=ON", "-DPython3_EXECUTABLE=/usr/bin/python3",
+                          "-DCMAKE_DISABLE_FIND_PACKAGE_Clipper2=TRUE",
+                          "-DCMAKE_DISABLE_FIND_PACKAGE_EXPAT=TRUE",
+                      ],
+                  )
+
               def test_selector_contains_exactly_the_nine_expected_names(self):
                   result = subprocess.run(
                       ["bash", "-c", "set -euo pipefail\n" + self.selector() + 'printf "%s" "$n11_regex"'],
@@ -298,7 +319,7 @@ jobs:
                   ])
 
               def test_capability_accepts_only_the_exact_on_string(self):
-                  for value in ("ON", "OFF", "on", True, False, None, 1):
+                  for value in ("ON", "OFF", "on", True, False, None, 0, 1, -1, 1.5):
                       with self.subTest(value=value):
                           raw = json.dumps({"geometry": value})
                           self.capability.write_text(raw)
@@ -324,6 +345,26 @@ jobs:
                   self.assertIn("Passed=9, Skipped=0", result.stdout)
                   for name in names:
                       self.assertIn(f"{name}: status=run, time=0.01", result.stdout)
+
+              def test_case_results_are_printed_only_after_full_report_validation(self):
+                  for mutation in ("missing", "duplicate", "failure", "notrun"):
+                      with self.subTest(mutation=mutation):
+                          suite = self.passed_suite()
+                          if mutation == "missing":
+                              suite.remove(suite[-1])
+                          elif mutation == "duplicate":
+                              suite.append(copy.deepcopy(suite[-1]))
+                          elif mutation == "failure":
+                              ET.SubElement(suite[-1], "failure")
+                          else:
+                              suite[-1].set("status", "notrun")
+                          self.write_suite(suite)
+                          result = self.checker(1)
+                          self.assert_rejected(result)
+                          self.assertNotIn(
+                              f"{names[0]}: status=run, time=0.01", result.stdout,
+                              "Case results must be printed only after all nine cases are validated",
+                          )
 
               def test_missing_duplicate_renamed_and_unexpected_cases_are_rejected(self):
                   for index, name in enumerate(names):
