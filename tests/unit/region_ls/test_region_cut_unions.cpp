@@ -1096,20 +1096,20 @@ void surfaces(const Output& out, const Ring& ring, BodyId lid, Real expected) {
     }
 }
 void region_levels(const Output& out, const HexMeshArrays& original, const CutGeometry& g) {
-    // The legacy entry emits level sets only for bodies appearing in planes.
-    // Derive the oracle from the public constraints, including common planes
-    // and unconstrained bodies, rather than assuming that legacy output is dense.
+    // D2 preserves the legacy fields and adds only previously absent union bodies.
+    const auto legacy = value(build_cut_layer(original, CutGeometry{g.planes}, options()),
+                              "legacy level-set membership");
     std::set<BodyId> bodies;
-    for (const auto& [name, body] : original.attr_table.bodies)
-        bodies.insert(body);
-    for (const auto& entry : original.attr_table.entries)
-        bodies.insert(entry.body);
-    for (const auto& plane : g.planes)
-        if (plane.body != 0)
-            bodies.insert(plane.body);
+    for (const auto& ls : legacy.level_sets)
+        bodies.insert(ls.body);
+    for (const auto& u : g.unions)
+        bodies.insert(u.body);
+    require(out.cut.level_sets.size() == bodies.size(), "legacy plus new union-body field count");
+    for (std::size_t i = 1; i < out.cut.level_sets.size(); ++i)
+        require(out.cut.level_sets[i - 1].body < out.cut.level_sets[i].body,
+                "level sets in strictly increasing BodyId order");
     for (const auto& ls : out.cut.level_sets) {
-        require(bodies.erase(ls.body) == 1,
-                "one level set for each constrained or registered body");
+        require(bodies.erase(ls.body) == 1, "one field for each legacy or union body");
         const auto u = std::find_if(
             g.unions.begin(), g.unions.end(), [&](const auto& x) { return x.body == ls.body; });
         require(ls.phi.size() == out.mesh.node_gid.size(), "level set covers remapped nodes");
@@ -1130,7 +1130,7 @@ void region_levels(const Output& out, const HexMeshArrays& original, const CutGe
                       std::to_string(ls.body));
         }
     }
-    require(bodies.empty(), "region union retains every body level set");
+    require(bodies.empty(), "region union retains every required body level set");
 }
 void volume_case(const Ring& ring, Real volume, Real embedded, bool producer) {
     near(area(ring), volume / .0005, 1e-12, "analytic source ring area");
@@ -1238,6 +1238,37 @@ void combined(bool producer) {
                 expected = std::max(expected, signed_distance({xyz[0], xyz[1]}, region));
             require(std::isfinite(ls.phi.at(v)) && std::abs(ls.phi[v] - expected) <= 1e-14,
                     "combined outline and body-specific region level set");
+        }
+}
+void combined_convex_region() {
+    auto s = region_stack({});
+    s.outline.polygon = l_ring();
+    auto rectangular = s;
+    rectangular.outline.polygon.clear();
+    const auto m = sp5::grid(rectangular, 8);
+    const auto lid = m.attr_table.bodies.at("lid");
+    const auto out = applied(s,
+                             CutGeometry{{}, {manual_union(lid, square_ring())}},
+                             "nonconvex outline with convex region",
+                             true);
+    near(value(cut_stats(out.mesh, out.cut), "convex region intersection").body_volume.at(lid),
+         6.6595e-8,
+         1e-12,
+         "convex region retains the nonconvex outline constraint");
+    for (std::size_t v = 0; v < out.cut.polyhedra->points.size() / 3; ++v) {
+        const auto p = point(out.cut.polyhedra->points, v);
+        require(signed_distance({p[0], p[1]}, s.outline.polygon) <= 1e-14,
+                "every exported vertex stays inside the nonconvex outline");
+    }
+    closure(out);
+    for (const auto& ls : out.cut.level_sets)
+        for (std::size_t v = 0; v < out.mesh.node_gid.size(); ++v) {
+            const auto p = point(out.mesh.vertices, v);
+            auto expected = signed_distance({p[0], p[1]}, s.outline.polygon);
+            if (ls.body == lid)
+                expected = std::max(expected, signed_distance({p[0], p[1]}, square_ring()));
+            require(std::isfinite(ls.phi.at(v)) && std::abs(ls.phi[v] - expected) <= 1e-14,
+                    "convex region retains outline level-set values");
         }
 }
 void partition_identity() {
@@ -1630,7 +1661,7 @@ void equivalent(const CutLayerArrays& a, const CutLayerArrays& b, bool compare_l
     auto fields_a = a, fields_b = b;
     if (!compare_levels) {
         // Legacy planes have plane-distance fields; I11 uses signed ring
-        // distance and also emits unconstrained body fields. Check those
+        // distance and adds union-body fields. Check those
         // independently with region_levels instead of equating the two APIs.
         fields_a.level_sets.clear();
         fields_b.level_sets.clear();
@@ -1674,6 +1705,23 @@ void fixture_split() {
     equivalent(a.cut, b.cut);
     region_levels(a, m, single);
     region_levels(b, m, split);
+}
+void single_piece_legacy_bits() {
+    const auto m = sp5::grid(stack(), 8);
+    const auto body = m.attr_table.bodies.at("substrate");
+    // Span the grid in y so Euclidean ring and plane distances agree at every node.
+    const Ring ring{{.004, -.04}, {.016, -.04}, {.016, .06}, {.004, .06}};
+    const auto u = manual_union(body, ring);
+    require(u.pieces.size() == 1 && std::none_of(u.internal.front().begin(),
+                                                 u.internal.front().end(),
+                                                 [](bool internal) { return internal; }),
+            "single-piece compatibility fixture has no internal faces");
+    for (bool immutable : {false, true}) {
+        const auto legacy = direct(m, CutGeometry{u.pieces.front()}, immutable);
+        const auto actual = direct(m, CutGeometry{{}, {u}}, immutable);
+        exact(actual.mesh, legacy.mesh, "single body union preserves every legacy mesh field");
+        exact(actual.cut, legacy.cut, "single body union preserves every legacy cut field");
+    }
 }
 void subdivided_square_split(bool immutable) {
     // Redundant collinear exterior vertices must not survive canonicalization
@@ -2031,6 +2079,7 @@ int main(int argc, char** argv) {
                     [=] { forwarding(general, convex); });
         run("combined_outline_region", [] { combined(true); });
         run("combined_union_consumption", [] { combined(false); });
+        run("combined_convex_region", combined_convex_region);
         run("nodewise_region_level_sets", [] {
             auto m = sp5::grid(region_stack(l_ring()), 8);
             const auto lid = m.attr_table.bodies.at("lid");
@@ -2051,6 +2100,7 @@ int main(int argc, char** argv) {
         run("numeric_body_order", [] { multiple_bodies(true); });
         run("square_split_equivalence", square_split);
         run("I11_convex_split2", fixture_split);
+        run("single_piece_legacy_bits", single_piece_legacy_bits);
         for (bool immutable : {false, true})
             run("I11_collinear_split_" + std::to_string(immutable),
                 [=] { subdivided_square_split(immutable); });

@@ -805,9 +805,18 @@ Expected<CutLayerArrays> generate(const HexMeshArrays& m,
         for (const auto& [body, list] : *body_pieces)
             for (const auto& piece : list)
                 body_bounds[body].push_back(piece_bounds(piece, o.snap_phi));
-        // Preparation collects registry bodies and entry-only bodies, in
-        // stable BodyId order, with duplicate IDs removed.
-        for (const auto& [body, list] : *body_pieces) {
+        // Preserve the legacy field set, adding only bodies introduced by unions.
+        std::set<BodyId> level_bodies;
+        if (outline_phi) {
+            for (const auto& [name, body] : m.attr_table.bodies)
+                level_bodies.insert(body);
+        } else {
+            for (const auto& p : planes)
+                level_bodies.insert(p.body);
+        }
+        for (const auto& region : g.unions)
+            level_bodies.insert(region.body);
+        for (const auto body : level_bodies) {
             BodyLevelSet ls{
                 body,
                 std::vector<Real>(m.vertices.size() / 3, -std::numeric_limits<Real>::infinity())};
@@ -870,6 +879,8 @@ Expected<CutLayerArrays> generate(const HexMeshArrays& m,
         if (body_pieces)
             pieces = &body_pieces->at(body);
         const detail::UnionPiece* convex = nullptr;
+        // I11 §2: one piece without internal faces keeps the legacy convex path bitwise.
+        // Multiple pieces or any internal face must use clip_piece.
         if (body_pieces && pieces->size() == 1 &&
             std::none_of(pieces->front().internal.begin(),
                          pieces->front().internal.end(),
