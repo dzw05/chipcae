@@ -3,25 +3,34 @@
 from pathlib import Path
 import tempfile
 import unittest
-from partitions_fixtures import fixture, save, success
+from partitions_fixtures import fixture, save, invalid
 
 
 class Absent(unittest.TestCase):
-    def test_original_fixture_preserves_prechange_bytes_and_is_repeatable(self):
+    def test_missing_partitions_requires_object(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp) / 'run'
             _, manifest = fixture(run)
-            self.assertNotIn('partitions', manifest)
-            _, first = success(self, run)
-            self.assertEqual(success(self, run)[1], first)
+            manifest.pop('partitions', None)
+            save(run, manifest)
+            invalid(self, run, 'partitions:', 'required object')
 
-    def test_top_level_names_do_not_enable_partition_validation(self):
+    def test_top_level_names_cannot_replace_required_partitions(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp) / 'run'
             _, manifest = fixture(run)
+            manifest.pop('partitions', None)
             manifest.update(per_step=True, solver_fixed_per_run='invalid', Partitions=[])
             save(run, manifest)
-            success(self, run)
+            invalid(self, run, 'partitions:', 'required object')
+
+    def test_null_partitions_requires_object(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / 'run'
+            _, manifest = fixture(run)
+            manifest['partitions'] = None
+            save(run, manifest)
+            invalid(self, run, 'partitions:', 'required object')
 
 
 if __name__ == '__main__':
