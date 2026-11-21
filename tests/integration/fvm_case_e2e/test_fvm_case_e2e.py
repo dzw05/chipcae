@@ -199,14 +199,13 @@ class AdapterAcceptance(unittest.TestCase):
     def test_problem_laminate_engineering_order_temperature_and_options(self):
         import numpy as np
         got = self.actual('problem')
-        # Independent M7 compliance oracle, inverted by numpy, not solve::mixture.
-        # Different shear moduli and alpha_z expose Mandel/shear-order mistakes.
+        # Independent I1 1.2 compliance oracle, inverted by numpy, not solve::mixture.
+        # Parallel normal moduli, harmonic xz/yz shear; engineering order xx,yy,zz,yz,xz,xy.
         for cell, fraction in enumerate((0., .25, .75)):
             matrix, metal = 25e9, 110e9
             nm, nc, am, ac = .2, .34, 1e-5, 3e-5
             rest = 1-fraction
-            exy = rest*matrix + fraction*metal
-            ez = 1/(rest/matrix + fraction/metal)
+            exy = ez = rest*matrix + fraction*metal
             nu = rest*nm + fraction*nc
             gxy = exy/(2*(1+nu))
             gz = 1/(rest/(matrix/(2*(1+nm))) + fraction/(metal/(2*(1+nc))))
@@ -216,11 +215,13 @@ class AdapterAcceptance(unittest.TestCase):
             compliance[1, 2] = compliance[2, 1] = -nu/exy
             axy = ((rest*matrix*am/(1-nm) + fraction*metal*ac/(1-nc)) /
                    (rest*matrix/(1-nm) + fraction*metal/(1-nc)))
-            az = rest*(am-2*nm/(1-nm)*(axy-am)) + fraction*(ac-2*nc/(1-nc)*(axy-ac))
-            np.testing.assert_allclose(np.asarray(got['C'][cell]).reshape(6, 6),
-                                       np.linalg.inv(compliance), rtol=1e-12, atol=1e-5)
-            np.testing.assert_allclose(got['alpha'][cell], [axy, axy, az],
-                                       rtol=1e-12, atol=1e-16)
+            az = (rest*matrix*am + fraction*metal*ac)/ez
+            with self.subTest(fraction=fraction, quantity='stiffness'):
+                np.testing.assert_allclose(np.asarray(got['C'][cell]).reshape(6, 6),
+                                           np.linalg.inv(compliance), rtol=1e-12, atol=1e-5)
+            with self.subTest(fraction=fraction, quantity='CTE'):
+                np.testing.assert_allclose(got['alpha'][cell], [axy, axy, az],
+                                           rtol=1e-12, atol=1e-16)
         np.testing.assert_allclose(got['dT'], [10, 25, -8], rtol=0, atol=1e-14)
         np.testing.assert_allclose(got['uniform_dT'], [57, 57, 57], rtol=0, atol=1e-14)
         self.assertAlmostEqual(got['rtol'], 2e-9, delta=1e-23)

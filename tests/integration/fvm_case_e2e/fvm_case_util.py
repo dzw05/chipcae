@@ -1207,13 +1207,12 @@ def summary(manifest):
 
 
 def laminate_oracle(base, metal, fraction):
-    """Independent engineering compliance inversion; no production mixture call."""
+    """Independent I1 1.2 engineering compliance inversion; no production mixture call."""
     import numpy as np
     matrix, nm, am = (base[key] for key in ('E', 'nu', 'alpha'))
     copper, nc, ac = (metal[key] for key in ('E', 'nu', 'alpha'))
     rest = 1-fraction
-    exy = rest*matrix + fraction*copper
-    ez = 1/(rest/matrix + fraction/copper)
+    exy = ez = rest*matrix + fraction*copper
     nu = rest*nm + fraction*nc
     gxy = exy/(2*(1+nu))
     gz = 1/(rest/(matrix/(2*(1+nm))) + fraction/(copper/(2*(1+nc))))
@@ -1223,7 +1222,7 @@ def laminate_oracle(base, metal, fraction):
     compliance[1, 2] = compliance[2, 1] = -nu/exy
     axy = ((rest*matrix*am/(1-nm) + fraction*copper*ac/(1-nc)) /
            (rest*matrix/(1-nm) + fraction*copper/(1-nc)))
-    az = rest*(am-2*nm/(1-nm)*(axy-am)) + fraction*(ac-2*nc/(1-nc)*(axy-ac))
+    az = (rest*matrix*am + fraction*copper*ac)/ez
     return np.linalg.inv(compliance), [axy, axy, az]
 
 
@@ -1278,9 +1277,8 @@ def check_replay_input(snapshot, inputs):
         np.testing.assert_allclose(np.asarray(problem['C'][c]).reshape(6, 6), stiffness,
                                    rtol=1e-12, atol=1e-5)
         np.testing.assert_allclose(problem['alpha'][c], alpha, rtol=1e-12, atol=1e-16)
-        kxy = (1-fraction)*base['k'] + fraction*metal['k']
-        kz = 1/((1-fraction)/base['k'] + fraction/metal['k'])
-        np.testing.assert_allclose(raw['thermal_k'][c], [kxy, kxy, kz], rtol=1e-12, atol=1e-14)
+        k = (1-fraction)*base['k'] + fraction*metal['k']
+        np.testing.assert_allclose(raw['thermal_k'][c], [k, k, k], rtol=1e-12, atol=1e-14)
     if inputs['thermal']:
         temperature = np.asarray(raw['T_cell'])
         # Layer-prescribed CVs give an oracle independent of the thermal solver.
