@@ -377,6 +377,129 @@ def optional_schema_acceptance(package, repo):
                     f"without jsonschema: missing_T={missing_T}: {result.stdout} {result.stderr}")
 
 
+def missing_data_hook_acceptance(package, repo):
+    """A missing fixture must surface through the real shared self-check hook."""
+    import runpy
+
+    hook = runpy.run_path(str(repo / "tests/contract/validate_contracts.py"))["fixture_selfchecks"]
+    with tempfile.TemporaryDirectory(prefix="fvm-io-hook-") as temp:
+        root = Path(temp)
+        copy = root / "tests/contract/fixtures/fvm-io-1.0"
+        shutil.copytree(package, copy)
+        (copy / "hex_kdiag/input.json").unlink()
+        try:
+            hook(root)
+        except AssertionError as error:
+            message = str(error)
+            require(all(text in message for text in (
+                "fvm-io-1.0", "stdout:", "stderr:", "missing required fixture files",
+                "hex_kdiag/input.json")), f"shared hook lost failure context: {message}")
+        else:
+            raise AssertionError("shared hook accepted missing hex input")
+
+
+def extended_mutation_acceptance(package, repo):
+    """Reject malformed fixtures even when paired metadata agrees with the mutation.
+
+    These assertions exercise the fixture validator, not the product case loader.
+    Each mutation starts from a complete valid package and changes one contract rule.
+    """
+    def replace(document, path, value):
+        for key in path[:-1]:
+            document = document[key]
+        document[path[-1]] = value
+
+    manifest_path = "manifest_fvm_solid/manifest.json"
+    mutations = []
+
+    def add(label, relative, path, value):
+        mutations.append((label, [(relative, path, value)]))
+
+    for relative in ("laminate_1d/expected.json", "hex_kdiag/expected.json"):
+        add(f"{relative}: duplicate ID", relative, ("cells", 1, "id"), 0)
+        add(f"{relative}: missing ID", relative, ("cells", 1, "id"), 100)
+        add(f"{relative}: wrong temperature", relative, ("cells", 0, "T_K"), 1.0)
+    for relative in ("laminate_1d/input.json", "hex_kdiag/input.json"):
+        add(f"{relative}: duplicate ID", relative, ("cells", 1, "id"), 0)
+        add(f"{relative}: missing ID", relative, ("cells", 1, "id"), 100)
+        add(f"{relative}: wrong ijk", relative, ("cells", 0, "ijk"), [1, 0, 0])
+        for value in (0, -1, float("nan"), float("inf"), -float("inf")):
+            add(f"{relative}: conductivity {value}", relative,
+                ("cells", 0, "conductivity_diag", 0), value)
+    add("completed output has no steps", manifest_path, ("steps",), [])
+    add("partition counts do not match steps", manifest_path,
+        ("partitions", "per_step"), [])
+    for index in range(3):
+        add(f"summary {index}: wrong method", manifest_path,
+            ("summary", index, "method"), "wrong")
+        add(f"summary {index}: nonfinite value", manifest_path,
+            ("summary", index, "value"), float("inf"))
+    for field, unit in (("copper_fraction", "1"), ("conductivity_diag", "W/(m·K)")):
+        changes = []
+        for relative in (manifest_path, "expected.json"):
+            rows = read(package / relative)["fields"]
+            index = next(i for i, row in enumerate(rows) if row["name"] == field)
+            require(rows[index]["unit"] == unit, f"baseline {field}: expected SI unit {unit}")
+            changes.append((relative, ("fields", index, "unit"), "wrong-unit"))
+        mutations.append((f"{field}: jointly redefined diagnostic unit", changes))
+
+    # Shapes and names come from field_compare/fixtures.py and the brief, independently
+    # of cases(), which currently only classifies solver families/preconditioners.
+    case_shapes = (
+        ("stack reference", ("stack",), {"ref": ""}),
+        ("materials reference", ("materials",), {"ref": ""}),
+        ("mesh type", ("mesh", "type"), "unknown"),
+        ("mesh nx", ("mesh", "nx"), 0),
+        ("mesh ny", ("mesh", "ny"), 0),
+        ("mesh levels", ("mesh", "levels"), "one"),
+        ("mesh max_ratio", ("mesh", "max_ratio"), -1),
+        ("thermal mode", ("physics", 0, "mode"), "unknown"),
+        ("temperature coupling", ("physics", 1, "temp_from"), "missing-physics"),
+        ("reference temperature", ("physics", 1, "T_ref"), "300 K"),
+        ("nonlinear flag", ("physics", 1, "nonlinear", "geometric"), "false"),
+        ("loads required", ("loads",), []),
+        ("temperature target", ("loads", 0, "target"), "unknown"),
+        ("temperature value", ("loads", 0, "T"), "300 K"),
+        ("heater power", ("loads", 1, "power"), "10 W"),
+        ("convection coefficient", ("loads", 2, "h"), "10 W/m2/K"),
+        ("convection temperature", ("loads", 2, "T_inf"), "300 K"),
+        ("rigid constraints", ("constraints", "rigid"), "unknown"),
+        ("linear tolerance", ("solver", "linear", "rtol"), -1),
+        ("output format", ("output", "format"), "unknown"),
+        ("warpage standard", ("output", "warpage", "standard"), "unknown"),
+        ("plane removal", ("output", "warpage", "remove_rigid"), "unknown"),
+        ("output fields", ("output", "fields"), []),
+        ("duplicate physics ID", ("physics", 1, "id"), "thermal"),
+    )
+    for name in CASE_ERRORS:
+        for label, path, value in case_shapes:
+            add(f"{name}: {label}", f"cases/{name}.json", path, value)
+    for name in ("mixed_fem_fvm", "fvm_direct", "fvm_column_gmg"):
+        add(f"{name}: wrong error message", "expected.json",
+            ("cases", name, "message"), "invalid preconditioner")
+        add(f"{name}: wrong error code", "expected.json",
+            ("cases", name, "code"), "INTERNAL")
+
+    failures = []
+    for label, changes in mutations:
+        with tempfile.TemporaryDirectory(prefix="fvm-io-extended-") as temp:
+            copy = Path(temp) / "package"
+            shutil.copytree(package, copy)
+            for relative, path, value in changes:
+                target = copy / relative
+                doc = read(target)
+                replace(doc, path, value)
+                # Deliberately permit NaN/Infinity only for nonfinite rejection tests.
+                target.write_text(json.dumps(doc, sort_keys=True) + "\n", encoding="utf-8")
+            try:
+                validate(copy, repo)
+            except (AssertionError, KeyError, TypeError, ValueError):
+                pass
+            else:
+                failures.append(label)
+    require(not failures, "invalid mutations accepted:\n  " + "\n  ".join(failures))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, type=Path)
@@ -388,6 +511,8 @@ def main():
         generator_acceptance(HERE)
         mutation_acceptance(HERE, args.repo)
         optional_schema_acceptance(HERE, args.repo)
+        missing_data_hook_acceptance(HERE, args.repo)
+        extended_mutation_acceptance(HERE, args.repo)
         if args.handoff is not None:
             require(hashes(args.handoff) == hashes(HERE), "repository/handoff SHA-256 mismatch")
     except (OSError, ImportError) as error:
