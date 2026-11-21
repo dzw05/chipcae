@@ -121,6 +121,8 @@ struct Projection {
     }
     J value(const HexMeshArrays::GridReport& x) const {
         // Aggregate decomposition makes omitted/new members a compile error.
+        // Scope extension for copper-area reporting: keep this exhaustive projection
+        // compiling and independently cover the appended member and its value type.
         const auto& [levels,
                      rule,
                      N_L,
@@ -298,6 +300,32 @@ void roundtrip(const HexMeshArrays& m, const fs::path& p) {
     auto loaded = load_mesh_fixture(p);
     require(bool(loaded), loaded ? "" : "load succeeds: " + loaded.error().reason);
     equal(m, loaded.value());
+}
+void original_encoding(const fs::path& p) {
+    HexMeshArrays m;
+    m.nodes = {.1, -0., 1.};
+    m.snapped = {{'x', .1, .3, -0.}};
+    // The original writer emits fields in declaration order with 17-digit reals.
+    // Sorting object keys or switching to shortest reals breaks this byte contract.
+    const std::string expected =
+        R"({"mesh":{"vertices":[],"hex":[],"attribute":[],"bdr_quad":[],"bdr_attribute":[],)"
+        R"("elem_gid":[],"node_gid":[],"partitioning":[],"node_layer":[],)"
+        R"("copper_layer_of_layer":[],"copper_phi":[],"node_column":[],"attr_frame":[],)"
+        R"("nodes":[0.10000000000000001,-0.0,1.0],"internal_interfaces":false,"order":1,)"
+        R"("preparation_report":[],"grid_report":{"levels":1,"rule":0,"N_L":0,)"
+        R"("auto_selected":false,"padding":[0,0],"max_aspect_ratio":[],"level_axes":[],)"
+        R"("column_ranks":[],"warnings":[],"partition_imbalance":0.0,"void_cells":0},)"
+        R"("attr_table":{"layers":[],"entries":[],"references":[],"materials":[],"bodies":[],)"
+        R"("boundary_names":[]},"face_sets":[],"pending_cut":[],"snapped":[{"axis":"x",)"
+        R"("from":0.10000000000000001,"to":0.29999999999999999,"displacement":-0.0}],)"
+        R"("axes":[[],[],[]]},"mesh_sha256":null})"
+        "\n";
+    roundtrip(m, p);
+    require(bytes(p) == expected, "original serializer bytes with absent optional map");
+    auto loaded = load_mesh_fixture(p);
+    require(bool(loaded), "load original serializer bytes");
+    require(bool(save_mesh_fixture(loaded.value(), p)), "resave original serializer bytes");
+    require(bytes(p) == expected, "original serializer bytes survive load/save");
 }
 void rejects_bad(const fs::path& dir) {
     int failures = 0;
@@ -586,6 +614,7 @@ int main(int argc, char** argv) {
             require(recorded == preview::detail::digest(m.value()).sha256,
                     "recorded digest equals recomputed digest");
         } else if (test == "deterministic") {
+            original_encoding(dir / "original-encoding.json");
             const auto m = decorated();
             roundtrip(m, p);
             const auto first = bytes(p);

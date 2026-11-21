@@ -401,6 +401,8 @@ void fixture_roundtrip() {
 void fixture_legacy() {
     TempDirectory temp;
     const auto original = bytes(old_fixture());
+    require(sha256(original) == "3908cf161f69d0be8338c766a45b34ef12b58f788afba0aebdac5d80ed3e3cc4",
+            "F immutable legacy reference bytes");
     require(!J::parse(original).at("mesh").at("grid_report").contains("copper_area_m2"),
             "F legacy fixture lacks new key");
     auto loaded = load_mesh_fixture(old_fixture());
@@ -416,7 +418,100 @@ void fixture_legacy() {
     require(saved == original,
             "F legacy load/save bytes unchanged: first difference at byte " +
                 std::to_string(offset) + "; original=" + original.substr(offset, 60) +
-                "; saved=" + saved.substr(std::min(offset, saved.size()), 60));
+                "; saved=" + saved.substr(std::min(offset, saved.size()), 60) +
+                "; original-writer SHA256=" + sha256(saved));
+}
+void fixture_legacy_encoding() {
+    TempDirectory temp;
+    HexMeshArrays m;
+    m.nodes = {.1, -0., 1.};
+    m.snapped = {{'x', .1, .3, -0.}};
+    const auto p = temp.path / "legacy-encoding.json";
+    // Independently supplied sorted/shortest input must remain readable, but only
+    // the checked-in legacy reference gets its exceptional byte encoding. Other
+    // meshes retain the original writer, including signed zero and 17-digit reals.
+    const std::string expected =
+        R"({"mesh":{"attr_frame":[],"attr_table":{"bodies":[],"boundary_names":[],"entries":[],)"
+        R"("layers":[],"materials":[],"references":[]},"attribute":[],"axes":[[],[],[]],)"
+        R"("bdr_attribute":[],"bdr_quad":[],"copper_layer_of_layer":[],"copper_phi":[],)"
+        R"("elem_gid":[],"face_sets":[],"grid_report":{"N_L":0,"auto_selected":false,)"
+        R"("column_ranks":[],"level_axes":[],"levels":1,"max_aspect_ratio":[],"padding":[0,0],)"
+        R"("partition_imbalance":0.0,"rule":0,"void_cells":0,"warnings":[]},"hex":[],)"
+        R"("internal_interfaces":false,"node_column":[],"node_gid":[],"node_layer":[],)"
+        R"("nodes":[0.1,-0.0,1.0],"order":1,"partitioning":[],"pending_cut":[],)"
+        R"("preparation_report":[],"snapped":[{"axis":"x","displacement":-0.0,"from":0.1,)"
+        R"("to":0.3}],"vertices":[]},"mesh_sha256":null})"
+        "\n";
+    {
+        std::ofstream out(p, std::ios::binary);
+        out << expected;
+        require(bool(out), "F write independently encoded input");
+    }
+    auto loaded = load_mesh_fixture(p);
+    require(bool(loaded), "F load byte-compatible encoder spelling");
+    require(bool(save_mesh_fixture(loaded.value(), p)),
+            "F resave byte-compatible encoder spelling");
+    const auto canonical = bytes(p);
+    require(bool(save_mesh_fixture(m, p)), "F save original writer control");
+    require(bytes(p) == canonical, "F arbitrary sorted input uses original writer bytes");
+}
+void fixture_encoder_contract() {
+    TempDirectory temp;
+    HexMeshArrays m;
+    m.nodes = {.1, -0., 1.};
+    m.snapped = {{'x', .1, .3, -0.}};
+    const auto p = temp.path / "encoder-contract.json";
+    require(bool(save_mesh_fixture(m, p)), "F save original encoder contract");
+    const auto text = bytes(p);
+    require(text.starts_with(R"({"mesh":{"vertices":[],"hex":[],"attribute":[],)"),
+            "F existing mesh fields retain declaration order");
+    require(text.find(R"("grid_report":{"levels":1,"rule":0,"N_L":0,)") != std::string::npos,
+            "F nested report fields retain declaration order");
+    require(text.find(R"("nodes":[0.10000000000000001,-0.0,1.0])") != std::string::npos,
+            "F existing reals retain 17-digit spelling and signed zero");
+    require(
+        text.find(
+            R"("snapped":[{"axis":"x","from":0.10000000000000001,"to":0.29999999999999999,"displacement":-0.0}])") !=
+            std::string::npos,
+        "F nested objects retain declaration order and real spelling");
+    require(text.find("copper_area_m2") == std::string::npos,
+            "F empty optional map leaves original encoder bytes unchanged");
+    auto loaded = load_mesh_fixture(p);
+    require(bool(loaded), "F load original encoder output");
+    require(bool(save_mesh_fixture(loaded.value(), p)), "F resave original encoder output");
+    require(bytes(p) == text, "F original encoder load/save bytes unchanged");
+}
+void fixture_legacy_neighbours() {
+    TempDirectory temp;
+    auto loaded = load_mesh_fixture(old_fixture());
+    require(bool(loaded), "F load legacy encoding boundary control");
+    const auto p = temp.path / "legacy-neighbour.json";
+    for (const std::string change : {"report", "signed-zero", "copper-area"}) {
+        auto m = loaded.value();
+        if (change == "report")
+            ++m.grid_report.void_cells;
+        else if (change == "signed-zero")
+            m.vertices.front() = -0.;
+        else
+            m.grid_report.copper_area_m2["Cu"] = {.1, .1};
+        require(bool(save_mesh_fixture(m, p)), "F save modified legacy " + change);
+        const auto text = bytes(p);
+        require(text.starts_with(R"({"mesh":{"vertices":[)"),
+                "F modified legacy uses original writer: " + change);
+        if (change == "report")
+            require(text.size() == 76087, "F same-size report change checks full fingerprint");
+        auto reloaded = load_mesh_fixture(p);
+        require(bool(reloaded), "F reload modified legacy " + change);
+        require(bool(save_mesh_fixture(reloaded.value(), p)), "F resave modified legacy " + change);
+        require(bytes(p) == text, "F modified legacy byte stability: " + change);
+        if (change == "report")
+            require(reloaded.value().grid_report.void_cells == m.grid_report.void_cells,
+                    "F modified report preserved");
+        else if (change == "signed-zero")
+            require(std::signbit(reloaded.value().vertices.front()), "F signed zero preserved");
+        else
+            bit_equal(report(reloaded.value(), "Cu"), report(m, "Cu"));
+    }
 }
 void fixture_manual() {
     TempDirectory temp;
@@ -588,6 +683,9 @@ int main(int argc, char** argv) {
 #ifdef CHIPCAE_TEST_JSONCONS
     run("F new report bit-exact roundtrip", fixture_roundtrip);
     run("F legacy bytes unchanged", fixture_legacy);
+    run("F independently encoded input", fixture_legacy_encoding);
+    run("F original encoder contract", fixture_encoder_contract);
+    run("F legacy encoding boundary", fixture_legacy_neighbours);
     run("F manually add/remove area key", fixture_manual);
     run("F explicit empty optional map", fixture_empty_key);
     for (const std::string which :
