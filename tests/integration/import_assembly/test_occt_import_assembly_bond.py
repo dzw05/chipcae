@@ -120,6 +120,21 @@ class AssemblyBond(unittest.TestCase):
         self.assertTrue(any(has_body(layer, 'witness') for layer in stack['layers']))
         self.assertTrue(any(has_body(layer, 'lid.bond') for layer in stack['layers']),
                         'missing lid.bond regions: attach bond gap is still void')
+        bonded = [(z0, z1, layer) for z0, z1, layer in intervals(stack)
+                  if has_body(layer, 'lid.bond')]
+        self.close(min(z0 for z0, _, _ in bonded), self.board_top)
+        self.close(max(z1 for _, z1, _ in bonded), self.board_top + self.thickness)
+        for _, _, layer in bonded:
+            self.close(layer['thickness'], self.thickness)
+            for region in layer['regions']:
+                if region['body'] != 'lid.bond':
+                    continue
+                self.assertEqual(region['material'], 'fr4_eq')
+                self.assertTrue(region['name'].startswith('lid.bond#'), region)
+                box = region['footprint']['box']
+                self.assertEqual(len(box), len(self.lid_box))
+                for actual, expected in zip(box, self.lid_box):
+                    self.close(actual, expected)
 
     def test_bottom_bond_fills_gap(self):
         self.place(self.thickness, bottom=True)
