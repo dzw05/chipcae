@@ -15,9 +15,9 @@ SHA-256 checks precede parsing. The material library container is
 Cards must be constant isotropic thermoelastic materials with single-knot E,
 nu and alpha tables; steady conduction also requires positive `conductivity`
 in W/(m K). Layer and aligned region materials remain distinct. Copper fractions
-call the material module's shared M7 law also used by `CopperMixture`; conductivity is arithmetic in
-plane and harmonic through thickness. Polygon copper maps use the mesh module’s
-per-column fractions. Unsupported internal material cuts fail explicitly.
+call the material module's shared M7 law also used by `CopperMixture`; I1 1.2
+conductivity is arithmetic in all three directions. Polygon copper maps use
+the mesh module’s per-column fractions. Unsupported internal material cuts fail explicitly.
 
 A stack outline may be a convex polygon extruded through every layer, with or
 without a repeated closing vertex. Vertices must lie inside `outline.box`.
@@ -203,17 +203,17 @@ The complete original FEM PV comparison with its 0.10 bound is retained for
 `handoff/rulings/fvm-wire-elastic.md`. Demo failures must preserve the original
 library reason; convergence is not required by that ruling.
 
-The existing board temperature-rise gate and FEM public-input snapshots remain
-unchanged. The current implementation run has five assertion failures (that
-thermal gate and four loader snapshots), plus an np=2 direct-probe JSON decode
-error. It stops under the task's scope rule without changing the loader,
-thermal library or assertions. Current measurements and verification limits
-are recorded in the integration README; acceptance remains red.
+The board vertex-temperature rise retains upstream's temporary 0.02 gate and
+restoration comment; the demo retains its 0.01 gate. `FEM_SNAPSHOTS` and `probe`
+match merged main a6dd6c8 verbatim. The independent stiffness, CTE and conductivity
+oracles follow I1 1.2 with their original tolerances. CLI/direct-library
+equivalence is this card's numerical gate; FEM PV and displacement differences
+remain accuracy diagnostics for `solve-elastic-accuracy`.
 See [FVM acceptance](../../tests/integration/fvm_case_e2e/README.md) for measured
 values and remaining merge gates. Build and test through the shared wrappers,
 retaining their PATH precedence:
 
 ```sh
 cmake --build "$build" -j2
-ctest --test-dir "$build" -R '^fvm_fvm_case_e2e$' --output-on-failure
+ctest --test-dir "$build" -j1 -R '^fvm_fvm_case_e2e$' --output-on-failure
 ```
