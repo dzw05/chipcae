@@ -25,16 +25,16 @@ default of 2. Preview accepts ratio 1; solve requires a ratio greater than 1.
 applies `max(layer.n_elem_min, M)` to every layer. Omitting it preserves the stack's
 layer counts. Preview defaults differ from solve: preview uses ratio 10 and the
 stack layer counts, while solve defaults to ratio 2 and a layer minimum of 2.
-To reproduce a solve mesh, supply its case values explicitly, using the solve
-defaults for omitted case fields:
+To reproduce a solve mesh, supply its case values explicitly. For a case that
+omits all three controls, use the solve defaults:
 
 ```sh
 chipcae-preview input.stack.json --nx 4 --ny 2 --levels 1 \
-  --max-ratio <case-value-or-2> --min-elems-per-layer <case-value-or-2> \
-  --cell-budget <case-value-or-50000> -o output.vtkhdf
+  --max-ratio 2 --min-elems-per-layer 2 --cell-budget 50000 -o output.vtkhdf
 ```
 
-Use matching stack and integer grid settings as well. Budget rejection uses the
+Replace these defaults with any values set in the case's mesh object, and use
+matching stack and integer grid settings as well. Budget rejection uses the
 existing mesh error mapping; the acceptance cases exit 14 with a `cell_budget: `
 message and produce neither grid nor EB output.
 
