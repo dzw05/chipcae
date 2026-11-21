@@ -860,15 +860,16 @@ int run_assembly(const ImportOptions& options) {
                     const Real face = attach->resolved_z.value();
                     // Undo placement roundoff only at the original attachment face.
                     Real& outer = attach->side == AttachSide::top ? bond_slab.z0 : bond_slab.z1;
+                    // S includes |T|, |s.z| (the global face), and the largest source slab |z|.
+                    // See handoff/rulings/pr242.md (architect sign-off, 2026-11-21 18:02)
+                    // and handoff/rulings/i-assembly-bond-slab.md section 2 erratum.
                     Real scale = std::max(std::abs(bond.thickness), std::abs(face));
                     // Translation can cancel source z coordinates much larger than the bond.
                     for (const auto& slab : sliced.slabs)
                         scale = std::max({scale, std::abs(slab.z0), std::abs(slab.z1)});
                     const Real bound = 4 * std::numeric_limits<Real>::epsilon() * scale;
-                    if (std::abs(outer - face) > bound) {
-                        attachment_defect(id + ".bond", "bond does not meet attachment face");
-                        return;
-                    }
+                    if (std::abs(outer - face) > bound)
+                        throw std::runtime_error("INTERNAL: bond does not meet attachment face");
                     outer = face;
                     placed.push_back(PlacedPart{id + ".bond", bond.material, {bond_slab}});
                 }

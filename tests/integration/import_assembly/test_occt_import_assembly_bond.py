@@ -258,12 +258,11 @@ class AssemblyBond(unittest.TestCase):
                     'attach': f'layer:B.Cu@{side}', 'gap': gap,
                     'bond': {'material': 'fr4_eq', 'thickness': thickness}}
                 self.a.save()
-                check(self.a.run('--accept-b-tier'), 7)
+                check(self.a.run('--accept-b-tier'), 1)
                 self.assertFalse(self.a.output.exists())
-                self.assertEqual(self.a.defects()['code'], 'IMPORT_REJECTED')
-                self.assertEqual([(d['defect_id'], d['tier'], d['reason'])
-                                  for d in self.a.import_report()['defects']],
-                                 [('lid.bond/attach_invalid', 'C', 7)])
+                self.assertEqual(self.a.defects()['code'], 'INTERNAL')
+                self.assertNotIn('lid.bond/attach_invalid',
+                                 [d['defect_id'] for d in self.a.import_report()['defects']])
 
     def test_bond_uses_frame_target_global_face(self):
         # A binary-exact gap isolates target coordinates from thickness rounding.
