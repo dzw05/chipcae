@@ -81,8 +81,9 @@ Expected<std::optional<CutLayerArrays>> apply_outline_cut(HexMeshArrays& mesh,
 
 namespace chipcae::mesh::cut::detail {
 namespace {
-// Normalization has already failed; non-collinearity determines whether to check
-// for crossings. Collapsed and collinear inputs keep normalization's error.
+// Normalization has already failed; raw shoelace and translated fan areas can
+// disagree under coordinate offsets. Use non-collinearity to decide whether to
+// check for crossings. Collapsed and collinear inputs keep normalization's error.
 bool crossing_candidate(const Ring2& ring) {
     auto distinct = ring;
     std::sort(distinct.begin(), distinct.end());
