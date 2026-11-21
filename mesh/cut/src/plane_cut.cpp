@@ -1,6 +1,7 @@
 #include "chipcae/mesh/cut/plane_cut.hpp"
 
 #include "chipcae/mesh/background/activation.hpp"
+#include "chipcae/mesh/cut/detail/convex_pieces.hpp"
 #include "chipcae/mesh/cut/detail/plane_cut_union.hpp"
 
 #include <algorithm>
@@ -351,6 +352,258 @@ PieceBounds piece_bounds(const detail::UnionPiece& piece, Real snap) {
         return {{-inf, -inf}, {inf, inf}};
     return bounds;
 }
+// Prepared pieces use I10's zero-body planes; the public target key stays in
+// this map, so a region can never become a common outline constraint.
+using BodyPieces = std::map<BodyId, std::vector<detail::UnionPiece>>;
+
+using WidePoint = std::array<long double, 2>;
+using WideRing = std::vector<WidePoint>;
+
+long double plane_distance(const Plane& plane, WidePoint p) {
+    return plane.n[0] * p[0] + plane.n[1] * p[1] - plane.d;
+}
+
+long double plane_scale(const Plane& plane, WidePoint p) {
+    const auto evaluated =
+        std::abs(plane.n[0] * p[0]) + std::abs(plane.n[1] * p[1]) + std::abs(plane.d);
+    const auto normal = std::abs(static_cast<long double>(plane.n[0])) +
+                        std::abs(static_cast<long double>(plane.n[1]));
+    // A reconstructed vertex can suffer cancellation in a zero coordinate.
+    // Include the other coordinate even when this plane's corresponding normal
+    // component vanishes, and retain a nonzero plane scale at the origin.
+    const auto scale = std::max(evaluated, normal * std::max(std::abs(p[0]), std::abs(p[1])));
+    return scale > 0 ? scale : normal;
+}
+
+// Reconstruct a bounded xy intersection from the supplied half-spaces, never
+// from PieceUnion::ring. An empty ring is a supported zero-area intersection;
+// nullopt denotes unsupported or unbounded geometry and keeps the I10 path.
+std::optional<WideRing> halfspace_ring(const std::vector<Plane>& planes) {
+    constexpr auto eps = 64 * std::numeric_limits<long double>::epsilon();
+    if (planes.empty())
+        return std::nullopt;
+    for (const auto& a : planes) {
+        if (a.n[2] != 0)
+            return std::nullopt;
+        bool positive = false, negative = false;
+        for (const auto& b : planes) {
+            const long double turn = static_cast<long double>(a.n[0]) * b.n[1] -
+                                     static_cast<long double>(a.n[1]) * b.n[0];
+            // Only exactly parallel normals have zero turn. A small nonzero
+            // turn can still close a bounded polygon and is solved below in
+            // long double, just like every other nonparallel pair.
+            positive |= turn > 0;
+            negative |= turn < 0;
+        }
+        // Neither direction tangent to a constraint may be a recession ray.
+        if (!positive || !negative)
+            return std::nullopt;
+    }
+    WideRing points;
+    for (std::size_t i = 0; i < planes.size(); ++i)
+        for (std::size_t j = i + 1; j < planes.size(); ++j) {
+            const auto& a = planes[i];
+            const auto& b = planes[j];
+            const long double det = static_cast<long double>(a.n[0]) * b.n[1] -
+                                    static_cast<long double>(a.n[1]) * b.n[0];
+            if (det == 0)
+                continue;
+            const WidePoint p{
+                (static_cast<long double>(a.d) * b.n[1] - static_cast<long double>(a.n[1]) * b.d) /
+                    det,
+                (static_cast<long double>(a.n[0]) * b.d - static_cast<long double>(a.d) * b.n[0]) /
+                    det};
+            if (!std::isfinite(p[0]) || !std::isfinite(p[1]))
+                return std::nullopt;
+            bool inside = true;
+            for (const auto& plane : planes)
+                inside &= plane_distance(plane, p) <= eps * plane_scale(plane, p);
+            if (inside)
+                points.push_back(p);
+        }
+    std::sort(points.begin(), points.end());
+    points.erase(std::unique(points.begin(), points.end()), points.end());
+    if (points.size() < 3)
+        return WideRing{};
+    const auto turn = [](WidePoint a, WidePoint b, WidePoint c) {
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    };
+    WideRing hull;
+    for (const auto& p : points) {
+        while (hull.size() >= 2 && turn(hull[hull.size() - 2], hull.back(), p) <= 0)
+            hull.pop_back();
+        hull.push_back(p);
+    }
+    const auto lower = hull.size();
+    for (auto it = points.rbegin() + 1; it != points.rend(); ++it) {
+        while (hull.size() > lower && turn(hull[hull.size() - 2], hull.back(), *it) <= 0)
+            hull.pop_back();
+        hull.push_back(*it);
+    }
+    hull.pop_back();
+    return hull;
+}
+
+long double ring_area(const WideRing& ring) {
+    long double area = 0;
+    for (std::size_t i = 1; i + 1 < ring.size(); ++i)
+        area += (ring[i][0] - ring[0][0]) * (ring[i + 1][1] - ring[0][1]) -
+                (ring[i][1] - ring[0][1]) * (ring[i + 1][0] - ring[0][0]);
+    return area / 2;
+}
+
+// I11 alone requires convex split arrays to match legacy quadrature order.
+// External constraints define a candidate convex solid. Containment, disjoint
+// piece interiors and equal area certify coverage; a concavity, gap, overlap or
+// unsupported geometry conservatively retains the original piece traversal.
+std::optional<detail::UnionPiece>
+canonical_convex_union(const std::vector<detail::UnionPiece>& pieces) {
+    std::vector<Plane> exterior;
+    std::vector<WideRing> rings;
+    long double area = 0;
+    for (const auto& piece : pieces) {
+        auto ring = halfspace_ring(piece.planes);
+        if (!ring || !(ring_area(*ring) > 0))
+            return std::nullopt;
+        area += ring_area(*ring);
+        rings.push_back(std::move(*ring));
+        for (std::size_t i = 0; i < piece.planes.size(); ++i)
+            if (!piece.internal[i])
+                exterior.push_back(piece.planes[i]);
+    }
+    auto boundary = halfspace_ring(exterior);
+    if (!boundary || !(ring_area(*boundary) > 0))
+        return std::nullopt;
+    constexpr auto eps = 64 * std::numeric_limits<Real>::epsilon();
+    for (const auto& ring : rings)
+        for (const auto& p : ring)
+            for (const auto& plane : exterior)
+                if (plane_distance(plane, p) > eps * plane_scale(plane, p))
+                    return std::nullopt;
+    const auto tolerance = eps * std::max(area, ring_area(*boundary));
+    if (std::abs(area - ring_area(*boundary)) > tolerance)
+        return std::nullopt;
+    for (std::size_t i = 0; i < pieces.size(); ++i)
+        for (std::size_t j = i + 1; j < pieces.size(); ++j) {
+            auto planes = pieces[i].planes;
+            planes.insert(planes.end(), pieces[j].planes.begin(), pieces[j].planes.end());
+            const auto overlap = halfspace_ring(planes);
+            if (!overlap)
+                return std::nullopt;
+            if (overlap->empty())
+                continue;
+            if (ring_area(*overlap) > tolerance)
+                return std::nullopt;
+        }
+    detail::UnionPiece canonical;
+    for (std::size_t i = 0; i < boundary->size(); ++i) {
+        const auto& a = (*boundary)[i];
+        const auto& b = (*boundary)[(i + 1) % boundary->size()];
+        const Plane* support = nullptr;
+        for (const auto& plane : exterior) {
+            const auto on_plane = [&](WidePoint p) {
+                return std::abs(plane_distance(plane, p)) <= eps * plane_scale(plane, p);
+            };
+            if (on_plane(a) && on_plane(b) &&
+                (!support || std::tie(plane.n, plane.d) < std::tie(support->n, support->d)))
+                support = &plane;
+        }
+        if (!support)
+            return std::nullopt;
+        if (canonical.planes.empty() || canonical.planes.back().n != support->n ||
+            canonical.planes.back().d != support->d)
+            canonical.planes.push_back(*support);
+    }
+    if (canonical.planes.size() < 3)
+        return std::nullopt;
+    canonical.internal.resize(canonical.planes.size(), false);
+    return canonical;
+}
+
+std::string body_name(const HexMeshArrays& mesh, BodyId body) {
+    for (const auto& [name, id] : mesh.attr_table.bodies)
+        if (id == body)
+            return name;
+    return std::to_string(body);
+}
+
+Expected<BodyPieces> prepare_body_pieces(const HexMeshArrays& mesh,
+                                         const CutGeometry& geometry,
+                                         const std::vector<detail::UnionPiece>& outline) {
+    std::map<BodyId, const PieceUnion*> regions;
+    // Duplicate keys take precedence over all per-region validation.
+    for (const auto& region : geometry.unions)
+        if (!regions.emplace(region.body, &region).second)
+            return Error{"CUT_UNSUPPORTED",
+                         body_name(mesh, region.body) + ": duplicate piece union"};
+    for (const auto& [body, region] : regions) {
+        const auto prefix = body_name(mesh, body) + ": ";
+        auto ring = detail::normalize_ring(region->ring);
+        if (!ring)
+            return Error{"CUT_UNSUPPORTED", prefix + "degenerate polygon"};
+        auto topology = region->ring;
+        topology.erase(std::unique(topology.begin(), topology.end()), topology.end());
+        while (topology.size() > 1 && topology.front() == topology.back())
+            topology.pop_back();
+        if (detail::check_simple(topology) || detail::check_simple(ring.value()))
+            return Error{"CUT_UNSUPPORTED", prefix + "self-intersecting polygon"};
+        if (region->pieces.empty() || std::any_of(region->pieces.begin(),
+                                                  region->pieces.end(),
+                                                  [](const auto& piece) { return piece.empty(); }))
+            return Error{"CUT_UNSUPPORTED", prefix + "degenerate polygon"};
+        // At the I10 boundary, check public plane-body correspondence before
+        // adapting it to the private zero-body representation.
+        if (region->internal.size() != region->pieces.size())
+            return Error{"cut/union", "invalid piece"};
+        for (std::size_t k = 0; k < region->pieces.size(); ++k) {
+            if (region->internal[k].size() != region->pieces[k].size())
+                return Error{"cut/union", "invalid piece"};
+            for (const auto& plane : region->pieces[k])
+                if (plane.body != body)
+                    return Error{"cut/union", "invalid piece"};
+        }
+    }
+    std::set<BodyId> bodies;
+    for (const auto& [name, body] : mesh.attr_table.bodies)
+        bodies.insert(body);
+    for (const auto& entry : mesh.attr_table.entries)
+        bodies.insert(entry.body);
+    for (const auto& plane : geometry.planes)
+        if (plane.body != 0)
+            bodies.insert(plane.body);
+    BodyPieces prepared;
+    const std::vector<detail::UnionPiece> identity(1);
+    const auto& outer = outline.empty() ? identity : outline;
+    for (auto body : bodies) {
+        auto found = regions.find(body);
+        std::vector<detail::UnionPiece> target;
+        if (found == regions.end()) {
+            target = identity;
+        } else {
+            const auto& region = *found->second;
+            for (std::size_t l = 0; l < region.pieces.size(); ++l) {
+                auto planes = normalized_planes(region.pieces[l]);
+                if (!planes)
+                    return planes.error();
+                for (auto& plane : planes.value())
+                    plane.body = 0;
+                target.push_back({std::move(planes.value()), region.internal[l]});
+            }
+            if (auto canonical = canonical_convex_union(target))
+                target = {std::move(*canonical)};
+        }
+        auto& combined = prepared[body];
+        for (const auto& k : outer)
+            for (const auto& l : target) {
+                auto piece = k;
+                piece.planes.insert(piece.planes.end(), l.planes.begin(), l.planes.end());
+                piece.internal.insert(piece.internal.end(), l.internal.begin(), l.internal.end());
+                combined.push_back(std::move(piece));
+            }
+    }
+    return prepared;
+}
+
 bool caps_connected(const Polygon& a, V an, const Polygon& b, V bn, Real tau, Real length) {
     if (a.size() < 3 || b.size() < 3 || norm(add(an, bn)) > tau / length)
         return false;
@@ -482,15 +735,24 @@ void register_embedded(HexMeshArrays& m, const CutLayerArrays& c) {
         }
     }
 }
-Expected<CutLayerArrays> generate(const HexMeshArrays& m,
-                                  const CutGeometry& g,
-                                  const CutOptions& o,
-                                  const std::vector<detail::UnionPiece>* pieces = nullptr,
-                                  const std::vector<Real>* outline_phi = nullptr,
-                                  bool union_call = false) {
+std::optional<Error> validate_options(const CutOptions& o) {
     if (!(o.snap_phi >= 0) || !(o.small_sub_vf >= 0 && o.small_sub_vf < 1) ||
         (o.quad_degree != 2 && o.quad_degree != 4 && o.quad_degree != 6 && o.quad_degree != 8))
         return Error{"cut/options", "invalid thresholds"};
+    return std::nullopt;
+}
+Expected<CutLayerArrays> generate(const HexMeshArrays& m,
+                                  const CutGeometry& g,
+                                  const CutOptions& o,
+                                  const std::vector<detail::UnionPiece>* outline_pieces = nullptr,
+                                  const std::vector<Real>* outline_phi = nullptr,
+                                  bool union_call = false,
+                                  const BodyPieces* body_pieces = nullptr) {
+    if (auto error = validate_options(o))
+        return *error;
+    if (outline_phi && outline_phi->size() != m.vertices.size() / 3)
+        return Error{"cut/union", "outline_phi size mismatch"};
+    const auto* pieces = outline_pieces;
     CutLayerArrays c;
     if (o.export_polyhedra)
         c.polyhedra.emplace();
@@ -522,7 +784,7 @@ Expected<CutLayerArrays> generate(const HexMeshArrays& m,
             return Error{"cut/plane", "nonfinite or zero normal"};
         p.n = mul(p.n, 1 / length);
         p.d /= length;
-        if (pieces)
+        if (pieces || body_pieces)
             continue;
         BodyLevelSet ls;
         ls.body = p.body;
@@ -538,7 +800,47 @@ Expected<CutLayerArrays> generate(const HexMeshArrays& m,
                 existing->phi[i] = std::max(existing->phi[i], ls.phi[i]);
     }
     std::vector<PieceBounds> bounds;
-    if (pieces) {
+    std::map<BodyId, std::vector<PieceBounds>> body_bounds;
+    if (body_pieces) {
+        for (const auto& [body, list] : *body_pieces)
+            for (const auto& piece : list)
+                body_bounds[body].push_back(piece_bounds(piece, o.snap_phi));
+        // Preserve the legacy field set, adding only bodies introduced by unions.
+        std::set<BodyId> level_bodies;
+        if (outline_phi) {
+            for (const auto& [name, body] : m.attr_table.bodies)
+                level_bodies.insert(body);
+        } else {
+            for (const auto& p : planes)
+                level_bodies.insert(p.body);
+        }
+        for (const auto& region : g.unions)
+            level_bodies.insert(region.body);
+        for (const auto body : level_bodies) {
+            BodyLevelSet ls{
+                body,
+                std::vector<Real>(m.vertices.size() / 3, -std::numeric_limits<Real>::infinity())};
+            if (outline_phi)
+                ls.phi = *outline_phi;
+            const auto region = std::find_if(
+                g.unions.begin(), g.unions.end(), [&](const auto& u) { return u.body == body; });
+            for (std::size_t i = 0; i < ls.phi.size(); ++i) {
+                for (const auto& p : planes)
+                    if (p.body == 0 || p.body == body)
+                        ls.phi[i] = std::max(
+                            ls.phi[i],
+                            dot(p.n,
+                                {m.vertices[3 * i], m.vertices[3 * i + 1], m.vertices[3 * i + 2]}) -
+                                p.d);
+                if (region != g.unions.end())
+                    ls.phi[i] =
+                        std::max(ls.phi[i],
+                                 detail::signed_distance(
+                                     region->ring, {m.vertices[3 * i], m.vertices[3 * i + 1]}));
+            }
+            c.level_sets.push_back(std::move(ls));
+        }
+    } else if (pieces) {
         for (const auto& piece : *pieces)
             bounds.push_back(piece_bounds(piece, o.snap_phi));
         for (const auto& [name, body] : m.attr_table.bodies) {
@@ -574,14 +876,27 @@ Expected<CutLayerArrays> generate(const HexMeshArrays& m,
             faces.push_back({p, normals[f], false});
         }
         auto body = m.attr_table.entries[static_cast<std::size_t>(m.attribute[e] - 1)].body;
+        if (body_pieces)
+            pieces = &body_pieces->at(body);
+        const detail::UnionPiece* convex = nullptr;
+        // I11 §2: one piece without internal faces keeps the legacy convex path bitwise.
+        // Multiple pieces or any internal face must use clip_piece.
+        if (body_pieces && pieces->size() == 1 &&
+            std::none_of(pieces->front().internal.begin(),
+                         pieces->front().internal.end(),
+                         [](bool internal) { return internal; })) {
+            convex = &pieces->front();
+            pieces = nullptr;
+        }
+        const auto& cell_bounds = body_pieces ? body_bounds.at(body) : bounds;
         const Real length = std::max({size[0], size[1], size[2]});
         const Real physical_snap =
             std::max(o.snap_phi, 32 * std::numeric_limits<Real>::epsilon() * length);
         std::vector<std::vector<Face>> cells;
         if (pieces) {
             for (std::size_t k = 0; k < pieces->size(); ++k) {
-                if (bounds[k].hi[0] <= lo[0] || bounds[k].lo[0] >= lo[0] + size[0] ||
-                    bounds[k].hi[1] <= lo[1] || bounds[k].lo[1] >= lo[1] + size[1])
+                if (cell_bounds[k].hi[0] <= lo[0] || cell_bounds[k].lo[0] >= lo[0] + size[0] ||
+                    cell_bounds[k].hi[1] <= lo[1] || cell_bounds[k].lo[1] >= lo[1] + size[1])
                     continue;
                 auto result =
                     clip_piece(faces, (*pieces)[k], k, planes, body, o.snap_phi, physical_snap);
@@ -612,6 +927,9 @@ Expected<CutLayerArrays> generate(const HexMeshArrays& m,
                     if (!internal_face(f, *pieces))
                         faces.push_back(f);
         } else {
+            if (convex)
+                for (const auto& p : convex->planes)
+                    faces = clip(std::move(faces), p.n, p.d, o.snap_phi);
             for (const auto& p : planes)
                 if (p.body == 0 || p.body == body)
                     faces = clip(std::move(faces), p.n, p.d, o.snap_phi);
@@ -1098,11 +1416,31 @@ Expected<CutLayerArrays> finalize(HexMeshArrays& mesh,
 } // namespace
 Expected<CutLayerArrays>
 build_cut_layer(const HexMeshArrays& m, const CutGeometry& g, const CutOptions& o) {
-    return generate(m, g, o);
+    if (g.unions.empty())
+        return generate(m, g, o);
+    if (auto error = validate_options(o))
+        return *error;
+    auto prepared = prepare_body_pieces(m, g, {});
+    if (!prepared)
+        return prepared.error();
+    return generate(m, g, o, nullptr, nullptr, true, &prepared.value());
 }
 Expected<CutLayerArrays>
 build_cut_layer(HexMeshArrays& mesh, const CutGeometry& g, const CutOptions& o) {
-    return finalize(mesh, o, generate(mesh, g, o));
+    if (g.unions.empty())
+        return finalize(mesh, o, generate(mesh, g, o));
+    if (auto error = validate_options(o))
+        return *error;
+    auto prepared = prepare_body_pieces(mesh, g, {});
+    if (!prepared)
+        return prepared.error();
+    auto candidate = mesh;
+    auto result = finalize(
+        candidate, o, generate(candidate, g, o, nullptr, nullptr, true, &prepared.value()), true);
+    if (!result)
+        return result.error();
+    mesh = std::move(candidate);
+    return result;
 }
 } // namespace chipcae::mesh::cut
 
@@ -1124,9 +1462,10 @@ Expected<CutLayerArrays> build_cut_layer_union(HexMeshArrays& mesh,
     if (outline_phi.size() != mesh.vertices.size() / 3)
         return Error{"cut/union", "outline_phi size mismatch"};
     HexMeshArrays private_mesh = mesh;
-    const bool fast = pieces.size() == 1 && std::none_of(pieces[0].internal.begin(),
-                                                         pieces[0].internal.end(),
-                                                         [](bool v) { return v; });
+    const bool fast = extra.unions.empty() && pieces.size() == 1 &&
+                      std::none_of(pieces[0].internal.begin(),
+                                   pieces[0].internal.end(),
+                                   [](bool v) { return v; });
     CutGeometry geometry = extra;
     std::vector<UnionPiece> normalized = pieces;
     if (fast) {
@@ -1143,6 +1482,13 @@ Expected<CutLayerArrays> build_cut_layer_union(HexMeshArrays& mesh,
             piece.planes = std::move(planes.value());
         }
     }
+    std::optional<BodyPieces> prepared;
+    if (!extra.unions.empty()) {
+        auto bodies = prepare_body_pieces(mesh, extra, normalized);
+        if (!bodies)
+            return bodies.error();
+        prepared = std::move(bodies.value());
+    }
     // Same generator and transactional finalizer as the mutable legacy entry;
     // union-only cleanup is disabled for the bitwise single-piece fast path.
     auto result = finalize(private_mesh,
@@ -1152,7 +1498,8 @@ Expected<CutLayerArrays> build_cut_layer_union(HexMeshArrays& mesh,
                                     options,
                                     fast ? nullptr : &normalized,
                                     fast ? nullptr : &outline_phi,
-                                    true),
+                                    true,
+                                    prepared ? &*prepared : nullptr),
                            true);
     if (!result)
         return result.error();

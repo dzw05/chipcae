@@ -1,0 +1,5 @@
+{
+ "case": "E_plane",
+ "setup": "L, pieces[1].planes[0].n = {0,0,0}",
+ "source": "tests/unit/region_ls/test_plane_cut_union.cpp @ #202 0d97b59 :1080-1098 which=0"
+}

@@ -1,0 +1,5 @@
+{
+ "case": "E_phi_short",
+ "setup": "L, outline_phi.pop_back()",
+ "source": "tests/unit/region_ls/test_plane_cut_union.cpp @ #202 0d97b59 :1044-1058; plane_cut.cpp:1101-1102"
+}

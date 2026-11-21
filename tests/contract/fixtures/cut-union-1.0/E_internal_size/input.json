@@ -1,0 +1,5 @@
+{
+ "case": "E_internal_size",
+ "setup": "L, pieces[1].internal.pop_back()",
+ "source": "tests/unit/region_ls/test_plane_cut_union.cpp @ #202 0d97b59 :1036-1037 which=1; plane_cut.cpp:1095-1096"
+}

@@ -1,0 +1,7 @@
+{
+ "case": "E_phi_short",
+ "ok": false,
+ "path": "cut/union",
+ "reason": "outline_phi size mismatch",
+ "mesh_unchanged": true
+}
