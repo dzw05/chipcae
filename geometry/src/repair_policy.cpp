@@ -3,9 +3,32 @@
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace chipcae::geometry {
-void deduplicate_defect_ids(std::vector<Defect>&) {}
+void deduplicate_defect_ids(std::vector<Defect>& defects) {
+    // Reserve future original IDs so suffix allocation never renames a unique ID.
+    std::unordered_set<std::string> reserved, emitted;
+    for (auto& d : defects) {
+        d.defect_id = defect_id(d);
+        reserved.insert(d.defect_id);
+    }
+    std::unordered_map<std::string, std::size_t> next_suffix;
+    for (auto& d : defects) {
+        if (emitted.insert(d.defect_id).second)
+            continue;
+        const auto base = d.defect_id;
+        auto it = next_suffix.try_emplace(base, 2).first;
+        auto& suffix = it->second;
+        std::string candidate;
+        do {
+            candidate = base + "#" + std::to_string(suffix++);
+        } while (reserved.contains(candidate) || emitted.contains(candidate));
+        d.defect_id = std::move(candidate);
+        emitted.insert(d.defect_id);
+    }
+}
 
 std::string tier_name(Tier tier) {
     switch (tier) {
@@ -33,6 +56,7 @@ std::string defect_id(const Defect& d) {
 RepairPolicyResult apply_repair_policy(std::vector<Defect> defects,
                                        const std::vector<std::string>& accepted_ids,
                                        bool accept_all_b) {
+    deduplicate_defect_ids(defects);
     RepairPolicyResult out;
     for (const auto& id : accepted_ids) {
         if (std::none_of(defects.begin(), defects.end(), [&](const Defect& d) {
