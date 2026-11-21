@@ -1712,6 +1712,159 @@ void single_piece_legacy_bits() {
         exact(actual.cut, legacy.cut, "single body union preserves every legacy cut field");
     }
 }
+// Catch dropped applicable planes, non-idempotent clipping, and differences from
+// the legacy plane path, including its complete level-set representation.
+void single_piece_plane(bool common) {
+    auto rectangular = region_stack(square_ring());
+    rectangular.layers.back().regions[0].footprint.polygon.clear();
+    const auto m = sp5::grid(rectangular, 8);
+    const auto lid = m.attr_table.bodies.at("lid");
+    const auto substrate = m.attr_table.bodies.at("substrate");
+    const auto u = manual_union(lid, square_ring());
+    require(u.pieces.size() == 1 && u.internal.size() == 1 &&
+                std::none_of(u.internal.front().begin(),
+                             u.internal.front().end(),
+                             [](bool internal) { return internal; }),
+            "single-piece plane fixture has no internal faces");
+    const Plane extra{common ? BodyId(0) : lid, {1, 0, 0}, .0113};
+    CutGeometry legacy{u.pieces.front()};
+    legacy.planes.push_back(extra);
+    std::string legacy_failures;
+    for (bool immutable : {false, true}) {
+        const auto actual = direct(m, CutGeometry{{extra}, {u}}, immutable);
+        const auto old = direct(m, legacy, immutable);
+        const auto split = direct(m, CutGeometry{{extra}, {split_square(lid)}}, immutable);
+        const auto duplicate = direct(m, CutGeometry{{extra, extra}, {u}}, immutable);
+        const auto stats = value(cut_stats(actual.mesh, actual.cut), "single-piece volume stats");
+        near(stats.body_volume.at(lid),
+             (.0113 - .004) * .012 * .0005,
+             1e-12,
+             "single-piece clipped lid volume");
+        if (common)
+            near(stats.body_volume.at(substrate),
+                 (.0113 - 0) * (.02 - 0) * .001,
+                 1e-12,
+                 "body-0 plane clips substrate volume");
+        equivalent(actual.cut, split.cut);
+        exact(duplicate.mesh, actual.mesh, "duplicate extra plane preserves every mesh field");
+        exact(duplicate.cut, actual.cut, "duplicate extra plane preserves every cut field");
+        // Exercise both overloads even when the full-cut legacy contract fails.
+        try {
+            exact(actual.mesh,
+                  old.mesh,
+                  "single-piece extra plane preserves every legacy mesh field");
+            exact(actual.cut, old.cut, "single-piece extra plane preserves every legacy cut field");
+        } catch (const std::exception& e) {
+            legacy_failures += std::string(immutable ? "const: " : "mutable: ") + e.what() + "; ";
+        }
+    }
+    check(legacy_failures.empty(), legacy_failures);
+}
+// A plane belonging to substrate must leave every lid cut-row value unchanged,
+// even when substrate cutting shifts the global quadrature storage offsets.
+void single_piece_other_body_plane() {
+    auto rectangular = region_stack(square_ring());
+    rectangular.layers.back().regions[0].footprint.polygon.clear();
+    const auto m = sp5::grid(rectangular, 8);
+    const auto lid = m.attr_table.bodies.at("lid");
+    const auto substrate = m.attr_table.bodies.at("substrate");
+    const auto u = manual_union(lid, square_ring());
+    require(u.pieces.size() == 1 && u.internal.size() == 1 &&
+                std::none_of(u.internal.front().begin(),
+                             u.internal.front().end(),
+                             [](bool internal) { return internal; }),
+            "other-body fixture has one piece without internal faces");
+    for (bool immutable : {false, true}) {
+        const auto alone = direct(m, CutGeometry{{}, {u}}, immutable);
+        const auto extra = direct(m, CutGeometry{{{substrate, {1, 0, 0}, .0113}}, {u}}, immutable);
+        auto lid_rows = [](const Output& out) {
+            std::map<Index, std::size_t> rows;
+            const auto body = out.mesh.attr_table.bodies.at("lid");
+            for (std::size_t row = 0; row < out.cut.cut_elem.size(); ++row) {
+                const auto e = out.cut.cut_elem.at(row);
+                const auto a = out.mesh.attribute.at(e);
+                if (out.mesh.attr_table.entries.at(a - 1).body == body)
+                    require(rows.emplace(out.cut.cut_elem_gid.at(row), row).second,
+                            "unique lid cut gid");
+            }
+            return rows;
+        };
+        const auto a = lid_rows(alone), b = lid_rows(extra);
+        require(!a.empty() && a.size() == b.size(), "identical nonempty lid cut gid sets");
+        auto row_bits = [](const CutLayerArrays& c, std::size_t row) {
+            Bits bits;
+            const auto first = c.sub_off.at(row), last = c.sub_off.at(row + 1);
+            bits.add(last - first);
+            slice(bits, c.sub_attribute, first, last);
+            slice(bits, c.sub_volfrac, first, last);
+            for (Local sub = first; sub < last; ++sub) {
+                const auto v0 = c.vq_off.at(sub), v1 = c.vq_off.at(sub + 1);
+                const auto b0 = c.bq_off.at(sub), b1 = c.bq_off.at(sub + 1);
+                slice(bits, c.vq_w, v0, v1);
+                slice(bits, c.bq_w, b0, b1);
+                slice(bits, c.bq_bdr_attr, b0, b1);
+                for (std::size_t d = 0; d < 3; ++d) {
+                    slice(bits, c.vq_xi[d], v0, v1);
+                    slice(bits, c.bq_xi[d], b0, b1);
+                    slice(bits, c.bq_n[d], b0, b1);
+                }
+            }
+            return bits;
+        };
+        for (const auto& [gid, row] : a) {
+            const auto it = b.find(gid);
+            require(it != b.end(), "same lid cut gid");
+            exact(row_bits(alone.cut, row).words,
+                  row_bits(extra.cut, it->second).words,
+                  "other-body plane preserves lid subcell and quadrature bits");
+        }
+        near(value(cut_stats(extra.mesh, extra.cut), "other-body volume stats").body_volume.at(lid),
+             .012 * .012 * .0005,
+             1e-12,
+             "other-body plane leaves lid volume unchanged");
+    }
+}
+void outline_wrapper_union_error() {
+    auto s = region_stack(square_ring());
+    auto rectangular = s;
+    rectangular.layers.back().regions[0].footprint.polygon.clear();
+    auto m = sp5::grid(rectangular, 8);
+    sentinel(m);
+    const auto before = m;
+    auto u = manual_union(m.attr_table.bodies.at("lid"), square_ring());
+    u.internal.pop_back();
+    const CutGeometry g{{}, {u}};
+    const auto reference = build_cut_layer(m, g, options());
+    require(!reference, "malformed union fails direct entry");
+    exact_error(reference.error(), "cut/union", "invalid piece");
+    exact(m, before, "direct union error rolls back every mesh field");
+    for (bool general : {false, true}) {
+        auto copy = before;
+        const auto result =
+            general ? union_kernel::apply_outline_cut_general(copy, s.outline, options(), g)
+                    : apply_outline_cut(copy, s.outline, options(), g);
+        require(!result, "outline wrapper propagates malformed union error");
+        exact_error(result.error(), reference.error().path, reference.error().reason);
+        exact(copy, before, "outline union error rolls back every mesh field");
+    }
+}
+// Emit measurements on assertion failure as well as success.
+void measured(const char* name, const std::function<void()>& test) {
+    const auto start = std::chrono::steady_clock::now();
+    auto report = [&] {
+        const auto seconds =
+            std::chrono::duration<Real>(std::chrono::steady_clock::now() - start).count();
+        std::cout << "MEASURE " << name << " seconds=" << seconds << " peak_rss_MiB=" << rss_mib()
+                  << std::endl;
+    };
+    try {
+        test();
+    } catch (...) {
+        report();
+        throw;
+    }
+    report();
+}
 void small_sub_sum() {
     // Two disjoint-interior strips join on y=.0625. Each piece contributes
     // 1/16, while the cell union contributes exactly 1/8; thresholding occurs once.
@@ -1814,6 +1967,14 @@ int main(int argc, char** argv) {
         run("I11_convex_split2", [] { fixture_split(false); });
         run("I10_split_contract_probe", [] { fixture_split(true); });
         run("single_piece_legacy_bits", single_piece_legacy_bits);
+        run("single_piece_same_body_plane",
+            [] { measured("single_piece_same_body_plane", [] { single_piece_plane(false); }); });
+        run("single_piece_body0_plane",
+            [] { measured("single_piece_body0_plane", [] { single_piece_plane(true); }); });
+        run("single_piece_other_body_plane",
+            [] { measured("single_piece_other_body_plane", single_piece_other_body_plane); });
+        run("outline_wrapper_union_error",
+            [] { measured("outline_wrapper_union_error", outline_wrapper_union_error); });
         run("small_subs_sum_once", small_sub_sum);
         run("source_dedupe", [] { source_dedupe(false); });
         run("source_distinct", [] { source_dedupe(true); });
