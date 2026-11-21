@@ -19,19 +19,15 @@ call the material module's shared M7 law also used by `CopperMixture`; conductiv
 plane and harmonic through thickness. Polygon copper maps use the mesh module’s
 per-column fractions. Unsupported internal material cuts fail explicitly.
 
-A stack outline may be a simple polygon (convex or nonconvex, without holes or
-self-intersections) extruded through every layer, with or without a repeated
-closing vertex. Vertices must lie inside `outline.box`.
+A stack outline may be a convex polygon extruded through every layer, with or
+without a repeated closing vertex. Vertices must lie inside `outline.box`.
 When the inline polygon is absent, a hash-checked `external_refs` polyset may
 supply one ring in its `outline` layer. Clockwise and counterclockwise rings work.
 The solver constructs the complete bounding grid, clips it with mesh-owned plane
 half-spaces, removes exterior cells and their exclusive DOFs, and preserves
 surviving element/node GIDs. Layer interfaces remain aligned with z faces.
-Holes, general curved solids and internal material cuts are unsupported.
-Region polygons must remain convex. Self-intersecting outlines fail with exit
-code 13 and `self-intersecting outline`; a narrow slot that disconnects solid
-inside one cell fails with exit code 13 and `disconnected solid in one cell`.
-A sphere in numerical tests is an explicitly faceted convex
+Non-convex outlines, holes, general curved solids and internal material cuts
+are unsupported. A sphere in numerical tests is an explicitly faceted convex
 plane approximation, refined together with the background mesh.
 
 For example, `mesh.cut` accepts:
