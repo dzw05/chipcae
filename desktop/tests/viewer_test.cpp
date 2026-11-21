@@ -1979,10 +1979,11 @@ with h5py.File(sys.argv[1], 'r+') as f:
             auto entry = value.toObject();
             auto name = entry["name"].toString();
             if (entry["step"].toInteger() == 0 && (name == "warpage_pv" || name == "U_mag_max"))
-                require(view.summary(name) == QString("%1: %2 %3")
+                require(view.summary(name) == QString("%1: %2 %3 [%4]")
                                                   .arg(name)
                                                   .arg(entry["value"].toDouble(), 0, 'g', 16)
-                                                  .arg(entry["unit"].toString()),
+                                                  .arg(entry["unit"].toString())
+                                                  .arg(entry["method"].toString()),
                         "official summary regression");
         }
         require(view.tmaxText() == view.summary("T_max"), "T_max does not use official summary");
