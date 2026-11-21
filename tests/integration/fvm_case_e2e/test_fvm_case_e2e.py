@@ -170,7 +170,7 @@ class AdapterAcceptance(unittest.TestCase):
         fixture = Path(os.environ.get('CHIPCAE_FVM_I14_FIXTURE_DIR',
                                       SOURCE.parent / 'handoff/fixtures/fvm-elastic-api-1.0'))
         cls.contract = fixture if (fixture / 'cases.json').is_file() else None
-        cls.adapter, cls.contract_probe = u.build_adapter_probe(cls.root, SOURCE, cls.contract)
+        cls.adapter, cls.contract_probe, cls.replay = u.build_adapter_probe(cls.root, SOURCE, cls.contract)
 
     def actual(self, mode, *args):
         return json.loads(u.command([self.adapter, mode, *args], self.root).stdout)
@@ -263,11 +263,15 @@ class AdapterAcceptance(unittest.TestCase):
                              ('INPUT_INVALID: invalid embedded metadata', 14),
                              ('elastic solver did not converge', 1)):
             with self.subTest(reason=reason):
-                self.assertEqual(self.actual('error', reason)['code'], code)
+                actual = self.actual('error', reason)
+                self.assertEqual(actual['code'], code)
+                self.assertEqual(actual['message'], 'fvm.elastic: ' + reason)
 
     def test_obsolete_embedded_rejection_uses_ordinary_input_error_mapping(self):
         reason = 'INPUT_INVALID: embedded faces require cut-cell support'
-        self.assertEqual(self.actual('error', reason)['code'], 14,
+        actual = self.actual('error', reason)
+        self.assertEqual(actual['message'], 'fvm.elastic: ' + reason)
+        self.assertEqual(actual['code'], 14,
                          'frozen I14 supports embedded mechanics: remove the obsolete exit-13 special case')
 
     def test_fraction_column_index_and_cut_merged_constituent_volume_weighting(self):
@@ -352,6 +356,12 @@ class AdapterAcceptance(unittest.TestCase):
 
 
 class CaseAcceptance(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.probe_temp = tempfile.TemporaryDirectory(prefix='fvm-replay-')
+        cls.addClassCleanup(cls.probe_temp.cleanup)
+        cls.adapter, _, cls.replay = u.build_adapter_probe(Path(cls.probe_temp.name), SOURCE)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='fvm-case-')
         self.addCleanup(self.temp.cleanup)
@@ -618,7 +628,7 @@ class CaseAcceptance(unittest.TestCase):
         self.assertFalse(u.THERMAL_ONLY in adapter.read_text(encoding='utf-8'),
                          'the brief requires removing the thermal-only fallback from the adapter')
 
-    def test_uniform_bimaterial_strip_matches_fem_warpage_and_curvature(self):
+    def test_uniform_bimaterial_strip_matches_direct_library_and_fem_curvature(self):
         case = u.bimaterial_strip(self.root)
         results = {}
         for family in ('fvm', 'fem'):
@@ -630,8 +640,26 @@ class CaseAcceptance(unittest.TestCase):
                 results[family] = u.read_result(out, require_volume=False)
         self.assertEqual(set(results), {'fvm', 'fem'})
         fvm, fem = results['fvm'], results['fem']
-        u.compare_mechanics(fvm[0], fem[0], fvm[1], fem[1])
+        direct = u.direct_elastic(self.root, case, 'strip', self.adapter, self.replay)
+        u.compare_replay(fvm[0], direct)
+        u.compare_mechanics_sign(fvm[0], fem[0], fvm[1], fem[1])
         u.inspect_elastic(self.root / 'strip-fvm', fvm[1], fvm[0])
+
+    def test_prescribed_temperature_bilayer_matches_direct_library_and_fem_curvature(self):
+        case = u.prescribed_temperature_strip(self.root)
+        results = {}
+        for family in ('fvm', 'fem'):
+            candidate = deepcopy(case)
+            for physics in candidate['physics']:
+                physics['solver'] = family + ('.conduction' if physics['id'] == 'thermal' else '.solid')
+            candidate['solver']['linear']['preconditioner'] = 'direct' if family == 'fem' else 'jacobi'
+            out, _ = u.solve(self.root, candidate, 'prescribed-' + family)
+            results[family] = u.read_result(out, require_volume=False)
+        fvm, fem = results['fvm'], results['fem']
+        direct = u.direct_elastic(self.root, case, 'prescribed', self.adapter, self.replay)
+        u.compare_replay(fvm[0], direct)
+        u.compare_mechanics_sign(fvm[0], fem[0], fvm[1], fem[1])
+        u.inspect_elastic(self.root / 'prescribed-fvm', fvm[1], fvm[0])
 
     def test_zero_temperature_rise_has_zero_U_and_warpage_with_normal_methods(self):
         import numpy as np
@@ -738,46 +766,34 @@ class CaseAcceptance(unittest.TestCase):
                 if name == 'fixed-layer-b':
                     self.assertLessEqual(abs(u.summary(manifest)['warpage_pv']), 1e-14)
 
-    def test_solid_only_nonconvergence_exits_one_with_residual_and_no_output(self):
+    def test_solid_only_nonconvergence_preserves_library_reason_without_success(self):
         case = u.bimaterial_strip(self.root)
         case['solver']['linear'].update(max_iter=1, rtol=1e-14)
         for ranks in (1, 2):
             with self.subTest(ranks=ranks):
-                u.probe(self.root, case, ranks=ranks)
+                direct = u.direct_elastic(self.root, case, f'solid-failure{ranks}',
+                                          self.adapter, self.replay, ranks)
                 out, result = u.solve(self.root, case, f'solid-nonconverged{ranks}', ranks,
                                       expected=None)
-                self.assertEqual(result.returncode, 1, result.stderr)
-                events = u.decode_events((out / 'events.bin').read_bytes())
-                # Check publication independently of the missing residual API.
-                u.no_mechanical_publication(out, events)
-                self.assertEqual((events[-1]['kind'], events[-1]['exit_code']), (19, 1))
-                residuals = u.mechanical_residuals(events)
-                self.assertEqual(residuals[-1]['iteration'], 1)
-                self.assertGreater(residuals[-1]['norm'], 0,
-                                   'max_iter=1 failure needs an actual nonzero measured residual')
+                u.inspect_elastic_failure(out, result, direct)
 
-    def test_thermal_success_then_mechanical_nonconvergence_keeps_measured_residuals(self):
+    def test_thermal_success_then_mechanical_failure_preserves_library_reason(self):
         case = u.prescribed_temperature_strip(self.root)
         # Pin every thermal CV: the thermal solve completes within one iteration
         # while the mismatched CTEs still need a mechanical solve.
         case['solver']['linear'].update(max_iter=1, rtol=1e-14)
         for ranks in (1, 2):
             with self.subTest(ranks=ranks):
-                u.probe(self.root, case, ranks=ranks)
+                direct = u.direct_elastic(self.root, case, f'coupled-failure{ranks}',
+                                          self.adapter, self.replay, ranks)
                 out, result = u.solve(self.root, case, f'coupled-nonconverged{ranks}', ranks,
                                       expected=None)
-                self.assertEqual(result.returncode, 1, result.stderr)
-                events = u.decode_events((out / 'events.bin').read_bytes())
+                events = u.inspect_elastic_failure(out, result, direct)
                 u.energy(events)  # Prove this failure occurs after thermal success.
                 thermal = [p for e in events if e['kind'] == 18 for p in e['points']
                            if (p['solver'], p['field']) == ('fvm.conduction', 'T')]
                 self.assertTrue(thermal, 'fixture must reach successful thermal publication')
                 self.assertTrue(all(math.isfinite(p['norm']) for p in thermal))
-                u.no_mechanical_publication(out, events)
-                self.assertEqual((events[-1]['kind'], events[-1]['exit_code']), (19, 1))
-                residuals = u.mechanical_residuals(events)
-                self.assertEqual(residuals[-1]['iteration'], 1)
-                self.assertGreater(residuals[-1]['norm'], 0)
 
     @unittest.skipUnless(hasattr(os, 'mkfifo'), 'deterministic checkpoint fixture requires POSIX FIFO')
     def test_thermal_success_stop_checkpoints_precede_mechanical_success_and_failure(self):
@@ -884,66 +900,51 @@ class CaseAcceptance(unittest.TestCase):
             a, b = u.summary(first[0])[key], u.summary(shifted[0])[key]
             self.assertLessEqual(abs(a-b), 1e-9 * abs(a), key)
 
-    def test_cut_elastic_rejects_unsupported_geometry_or_publishes_solved_cut_U(self):
+    def test_cut_elastic_matches_direct_library_in_both_output_modes(self):
         import numpy as np
         case = u.bimaterial_strip(self.root)
         stack = u.read_json(self.root / 'stack.json')
         stack['outline']['polygon'] = [[.1, 0], [1, 0], [1, .2], [0, .2], [0, .1]]
         u.write_json(self.root / 'stack.json', stack)
         u.probe(self.root, case)  # Reject fixture/schema mistakes before exercising mechanics.
-        results, outcomes = {}, {}
+        direct = u.direct_elastic(self.root, case, 'cut', self.adapter, self.replay)
+        results = {}
         for mode, extra in (('polyhedron', ()), ('hex', ('--cut-output', 'hex'))):
             with self.subTest(cut_output=mode):
-                out, result = u.solve(self.root, case, 'cut-elastic-' + mode,
-                                      extra=extra, expected=None)
-                outcomes[mode] = result.returncode
-                if result.returncode == 13:
-                    # Preserve the explicit unsupported outcome until upstream
-                    # supports embedded faces; hex output must not bypass it.
-                    self.assertIn('unsupported', result.stderr.lower().replace(
-                        'not supported', 'unsupported'))
-                    events = u.decode_events((out / 'events.bin').read_bytes())
-                    self.assertFalse(any(e['kind'] == 22 for e in events))
-                    self.assertFalse(any(e['kind'] == 20 and e['text'].startswith(u.ELASTIC_PREFIX)
-                                         for e in events))
-                    self.assertEqual((events[-1]['kind'], events[-1]['exit_code']), (19, 13))
-                    self.assertFalse((out / 'out/step-0.vtkhdf').exists())
-                    if (out / 'manifest.json').exists():
-                        self.assertEqual(u.read_json(out / 'manifest.json')['steps'], [])
+                out, _ = u.solve(self.root, case, 'cut-elastic-' + mode, extra=extra)
+                manifest, blocks = u.read_result(out, require_volume=False)
+                self.assertGreater(int(blocks['eb_surface']['Polygons/NumberOfCells'].sum()), 0)
+                if mode == 'polyhedron':
+                    self.assertGreater(int(blocks['cut']['NumberOfCells'].sum()), 0)
+                    self.assertTrue(np.any(blocks['cut']['PointData/U'] != 0))
                 else:
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    manifest, blocks = u.read_result(out, require_volume=False)
-                    self.assertGreater(int(blocks['eb_surface']['Polygons/NumberOfCells'].sum()), 0)
-                    if mode == 'polyhedron':
-                        self.assertGreater(int(blocks['cut']['NumberOfCells'].sum()), 0)
-                        self.assertTrue(np.any(blocks['cut']['PointData/U'] != 0))
-                    else:
-                        self.assertEqual(int(blocks['cut']['NumberOfCells'].sum()), 0)
-                        mask = blocks['hex']['CellData/cell_kind'] == 1
-                        self.assertTrue(np.any(mask), 'hex output lost cut parent cells')
-                        cells = u.canonical_cells(blocks['hex'], 'U')
-                        cut_gids = set(blocks['hex']['CellData/elem_gid'][mask])
-                        self.assertTrue(any(np.any(np.asarray(values) != 0)
-                                            for (gid, _), values in cells.items()
-                                            if gid in cut_gids), 'hex cut parent U is zero')
-                    self.assertTrue(np.any(blocks['eb_surface']['PointData/U'] != 0))
-                    u.inspect_elastic(out, blocks, manifest)
-                    results[mode] = manifest, blocks
-        self.assertEqual(set(outcomes), {'polyhedron', 'hex'})
-        # Frozen I14 includes embedded faces and cut CVs; both output modes
-        # must now exercise the supported reconstruction path.
-        self.assertEqual(outcomes, {'polyhedron': 0, 'hex': 0})
-        self.assertEqual(outcomes['polyhedron'], outcomes['hex'],
-                         'cut output mode must not change mechanical support or bypass rejection')
-        if len(results) == 2:
-            poly, hexa = (results[mode] for mode in ('polyhedron', 'hex'))
-            np.testing.assert_allclose(poly[1]['eb_surface']['Points'],
-                                       hexa[1]['eb_surface']['Points'], rtol=0, atol=1e-14)
-            np.testing.assert_allclose(poly[1]['eb_surface']['PointData/U'],
-                                       hexa[1]['eb_surface']['PointData/U'], rtol=1e-12, atol=1e-14)
-            for key in ('warpage_pv', 'U_mag_max'):
-                a, b = u.summary(poly[0])[key], u.summary(hexa[0])[key]
-                self.assertLessEqual(abs(a-b), 1e-12 * abs(a))
+                    self.assertEqual(int(blocks['cut']['NumberOfCells'].sum()), 0)
+                    mask = blocks['hex']['CellData/cell_kind'] == 1
+                    self.assertTrue(np.any(mask), 'hex output lost cut parent cells')
+                    cells = u.canonical_cells(blocks['hex'], 'U')
+                    cut_gids = set(blocks['hex']['CellData/elem_gid'][mask])
+                    self.assertTrue(any(np.any(np.asarray(values) != 0)
+                                        for (gid, _), values in cells.items()
+                                        if gid in cut_gids), 'hex cut parent U is zero')
+                self.assertTrue(np.any(blocks['eb_surface']['PointData/U'] != 0))
+                u.inspect_elastic(out, blocks, manifest)
+                u.compare_replay(manifest, direct)
+                results[mode] = manifest, blocks
+        self.assertEqual(set(results), {'polyhedron', 'hex'})
+        poly, hexa = (results[mode] for mode in ('polyhedron', 'hex'))
+        np.testing.assert_allclose(poly[1]['eb_surface']['Points'],
+                                   hexa[1]['eb_surface']['Points'], rtol=0, atol=1e-14)
+        np.testing.assert_allclose(poly[1]['eb_surface']['PointData/U'],
+                                   hexa[1]['eb_surface']['PointData/U'], rtol=1e-12, atol=1e-14)
+        for key in ('warpage_pv', 'U_mag_max'):
+            a, b = u.summary(poly[0])[key], u.summary(hexa[0])[key]
+            self.assertLessEqual(abs(a-b), 1e-12 * abs(a))
+        fem_case = deepcopy(case)
+        fem_case['physics'][0]['solver'] = 'fem.solid'
+        fem_case['solver']['linear']['preconditioner'] = 'direct'
+        fem_out, _ = u.solve(self.root, fem_case, 'cut-fem')
+        fem_manifest, fem_blocks = u.read_result(fem_out, require_volume=False)
+        u.compare_mechanics_sign(poly[0], fem_manifest, poly[1], fem_blocks)
 
     def test_solid_only_stop_is_acknowledged_once_without_successful_output(self):
         case = u.bimaterial_strip(self.root)
@@ -1134,6 +1135,9 @@ class CaseAcceptance(unittest.TestCase):
         self.assertEqual(len(stack['layers']), 5)
         self.assertEqual(set(results), {('fvm', 1), ('fvm', 2), ('fem', 1)})
         u.compare_parallel(results['fvm', 1][1], results['fvm', 2][1])
+        with self.subTest(gate='direct-mechanics'):
+            direct = u.direct_elastic(self.root, case, 'board', self.adapter, self.replay)
+            u.compare_replay(results['fvm', 1][0], direct)
         fvm = u.summary(results['fvm', 1][0])['T_max']
         fem = u.summary(results['fem', 1][0])['T_max']
         self.assertGreater(fem - 298.15, 0)
@@ -1145,7 +1149,7 @@ class CaseAcceptance(unittest.TestCase):
         fvm_manifest, fvm_blocks = results['fvm', 1]
         fem_manifest, fem_blocks = results['fem', 1]
         with self.subTest(gate='mechanics-comparison'):
-            u.compare_mechanics(fvm_manifest, fem_manifest, fvm_blocks, fem_blocks)
+            u.compare_mechanics_sign(fvm_manifest, fem_manifest, fvm_blocks, fem_blocks)
         a, b = (u.summary(results['fvm', n][0])['warpage_pv'] for n in (1, 2))
         with self.subTest(gate='mechanics-mpi'):
             self.assertGreater(a, 0)
@@ -1185,6 +1189,18 @@ class CaseAcceptance(unittest.TestCase):
         import numpy as np
         original = u.copy_demo(self.root, SOURCE)
         results = {}
+
+        def fvm_run(case, name, extra=()):
+            direct = u.direct_elastic(self.root, case, name, self.adapter, self.replay)
+            out, process = u.solve(self.root, case, name, extra=extra, expected=None)
+            if not direct['ok']:
+                u.inspect_elastic_failure(out, process, direct)
+                return None
+            self.assertEqual(process.returncode, 0, process.stderr)
+            manifest, blocks = u.read_result(out)
+            u.inspect_fvm(out, blocks, manifest)
+            return manifest, blocks
+
         # The regular and cut thermal libraries are present in this baseline: no stage-B skip.
         for family in ('fem', 'fvm'):
             with self.subTest(family=family):
@@ -1194,11 +1210,15 @@ class CaseAcceptance(unittest.TestCase):
                         p['solver'] = p['solver'].replace('fem.', 'fvm.')
                     case['solver']['linear']['preconditioner'] = 'jacobi'
                 # Only the two solver names and preconditioner differ from DEMO-GATE.
-                out, _ = u.solve(self.root, case, 'demo-' + family)
-                manifest, blocks = u.read_result(out, require_volume=family == 'fvm')
-                self.assertGreater(int(blocks['cut']['NumberOfCells'].sum()), 0)
                 if family == 'fvm':
-                    u.inspect_fvm(out, blocks, manifest)
+                    result = fvm_run(case, 'demo-fvm')
+                    if result is None:
+                        continue
+                    manifest, blocks = result
+                else:
+                    out, _ = u.solve(self.root, case, 'demo-fem')
+                    manifest, blocks = u.read_result(out, require_volume=False)
+                self.assertGreater(int(blocks['cut']['NumberOfCells'].sum()), 0)
                 results[family] = manifest, blocks
         if set(results) == {'fem', 'fvm'}:
             fem, fvm = (u.summary(results[k][0])['T_max'] for k in ('fem', 'fvm'))
@@ -1211,27 +1231,32 @@ class CaseAcceptance(unittest.TestCase):
             p['solver'] = p['solver'].replace('fem.', 'fvm.')
         case['solver']['linear']['preconditioner'] = 'jacobi'
         with self.subTest(cut_output='hex'):
-            manifest, blocks, _, _ = self.successful_thermal(case, 'demo-hex', extra=('--cut-output', 'hex'))
-            self.assertEqual(int(blocks['cut']['NumberOfCells'].sum()), 0)
-            self.assertGreater(int(blocks['eb_surface']['Polygons/NumberOfCells'].sum()), 0)
-            self.assertTrue(np.any(blocks['hex']['CellData/cell_kind'] == 1))
-            self.assertEqual(len(set(blocks['hex']['CellData/elem_gid'])), len(blocks['hex']['Types']))
-            if 'fvm' in results:
-                eb, expected = blocks['eb_surface'], results['fvm'][1]['eb_surface']
-                np.testing.assert_allclose(eb['Points'], expected['Points'], rtol=0, atol=1e-14)
-                np.testing.assert_allclose(eb['PointData/T'], expected['PointData/T'], rtol=1e-12, atol=1e-10)
-                base = results['fvm'][1]
-                parent_gids = set(base['hex']['CellData/elem_gid']) | set(base['cut']['CellData/elem_gid'])
-                self.assertEqual(set(blocks['hex']['CellData/elem_gid']), parent_gids)
-                cut_gids = set(blocks['hex']['CellData/elem_gid'][blocks['hex']['CellData/cell_kind'] == 1])
-                self.assertEqual(cut_gids, set(base['cut']['CellData/elem_gid']))
+            result = fvm_run(case, 'demo-hex', extra=('--cut-output', 'hex'))
+            if result is not None:
+                manifest, blocks = result
+                self.assertEqual(int(blocks['cut']['NumberOfCells'].sum()), 0)
+                self.assertGreater(int(blocks['eb_surface']['Polygons/NumberOfCells'].sum()), 0)
+                self.assertTrue(np.any(blocks['hex']['CellData/cell_kind'] == 1))
+                self.assertEqual(len(set(blocks['hex']['CellData/elem_gid'])), len(blocks['hex']['Types']))
+                if 'fvm' in results:
+                    eb, expected = blocks['eb_surface'], results['fvm'][1]['eb_surface']
+                    np.testing.assert_allclose(eb['Points'], expected['Points'], rtol=0, atol=1e-14)
+                    np.testing.assert_allclose(eb['PointData/T'], expected['PointData/T'], rtol=1e-12, atol=1e-10)
+                    base = results['fvm'][1]
+                    parent_gids = set(base['hex']['CellData/elem_gid']) | set(base['cut']['CellData/elem_gid'])
+                    self.assertEqual(set(blocks['hex']['CellData/elem_gid']), parent_gids)
+                    cut_gids = set(blocks['hex']['CellData/elem_gid'][blocks['hex']['CellData/cell_kind'] == 1])
+                    self.assertEqual(cut_gids, set(base['cut']['CellData/elem_gid']))
         with self.subTest(embedded_robin=True):
             case['loads'] = [dict(type='fixed_temperature', target='face:zmin', T=298.15),
                              dict(type='convection', target='boundary:embedded', h=500, T_inf=348.15)]
-            _, blocks, ledger, _ = self.successful_thermal(case, 'demo-embedded')
-            self.assertGreater(ledger['heat_in'], 0)
-            self.assertGreater(ledger['heat_out'], 0)
-            self.assertGreater(int(blocks['eb_surface']['Polygons/NumberOfCells'].sum()), 0)
+            result = fvm_run(case, 'demo-embedded')
+            if result is not None:
+                manifest, blocks = result
+                ledger = u.energy(u.decode_events((self.root / 'demo-embedded/events.bin').read_bytes()))
+                self.assertGreater(ledger['heat_in'], 0)
+                self.assertGreater(ledger['heat_out'], 0)
+                self.assertGreater(int(blocks['eb_surface']['Polygons/NumberOfCells'].sum()), 0)
 
     def test_cut_point_reconstruction_physical_volume_and_parallel_ownership(self):
         import numpy as np

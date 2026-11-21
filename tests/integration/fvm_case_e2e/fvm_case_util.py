@@ -83,6 +83,7 @@ def build_adapter_probe(root, source, contract=None):
     for relative in ('schema/stack-0.2.schema.json', 'material/schema/material.v1.schema.json'):
         shutil.copyfile(source / relative, schemas / Path(relative).name)
     (root / 'adapter.cpp').write_text(ADAPTER_PROBE, encoding='utf-8')
+    (root / 'replay.cpp').write_text(ELASTIC_REPLAY, encoding='utf-8')
     cmake = ['cmake_minimum_required(VERSION 3.20)',
              'project(fvm_adapter_acceptance LANGUAGES CXX)',
              'add_executable(adapter_probe adapter.cpp)',
@@ -91,6 +92,9 @@ def build_adapter_probe(root, source, contract=None):
              quote('CHIPCAE_FVM_ADAPTER_SOURCE="' +
                    str(source / 'apps/chipcae-solve/src/fvm_pipeline.cpp') + '"') + ')',
              'target_link_libraries(adapter_probe PRIVATE ' + ' '.join(map(quote, libraries)) + ')']
+    cmake += ['add_executable(elastic_replay replay.cpp)',
+              'target_compile_options(elastic_replay PRIVATE ' + ' '.join(map(quote, flags)) + ')',
+              'target_link_libraries(elastic_replay PRIVATE ' + ' '.join(map(quote, libraries)) + ')']
     if contract is not None:
         cmake += ['add_executable(contract_probe ' + quote(contract / 'dump_actual.cpp') + ')',
                   'target_compile_options(contract_probe PRIVATE ' + ' '.join(map(quote, flags)) + ')',
@@ -102,7 +106,7 @@ def build_adapter_probe(root, source, contract=None):
                  ['cmake', '--build', str(build), '-j2']):
         result = subprocess.run(args, capture_output=True, text=True)
         assert result.returncode == 0, f'{shlex.join(args)}\n{result.stdout}\n{result.stderr}'
-    return build / 'adapter_probe', build / 'contract_probe'
+    return build / 'adapter_probe', build / 'contract_probe', build / 'elastic_replay'
 
 
 # The implementation is included only in this temporary test translation unit.
@@ -209,6 +213,120 @@ int main(int argc, char** argv) {
                 fail({"fvm.elastic", argv[2]}, true);
             } catch (const InputError& e) {
                 out["code"] = e.code;
+                out["message"] = e.what();
+            }
+        } else if (mode == "snapshot") {
+            const auto inputs = load_inputs(argv[2], argv[3], Communicator::world().size());
+            std::optional<mesh::cut::CutLayerArrays> cut;
+            const auto arrays = build_mesh(inputs, &cut);
+            const auto built = fv::build_grid(arrays, cut ? &*cut : nullptr);
+            if (!built)
+                throw std::runtime_error(built.error().reason);
+            const auto& grid = built.value();
+            const auto fractions = fv::copper_fraction(grid, arrays);
+            const auto thermal_input = thermal_problem(inputs, arrays, grid, fractions);
+            fv::ThermalResult thermal;
+            if (inputs.thermal) {
+                const auto solved =
+                    fv::solve_thermal(grid, arrays, thermal_input, Communicator::world());
+                if (!solved)
+                    throw std::runtime_error(solved.error().reason);
+                thermal = solved.value();
+            }
+            const auto mesh = to_elastic_mesh(grid, inputs, arrays);
+            const auto problem = to_elastic_problem(
+                inputs, grid, inputs.thermal ? &thermal : nullptr, arrays, fractions);
+            auto& m = out["mesh"];
+            m["volume"] = mesh.volume;
+            m["centroid"] = mesh.centroid;
+            m["gid"] = mesh.gid;
+            m["rank"] = mesh.rank;
+            m["layer"] = mesh.layer;
+            m["is_cut"] = std::vector<int>(mesh.is_cut.begin(), mesh.is_cut.end());
+            m["is_embedded"] = std::vector<int>(mesh.is_embedded.begin(), mesh.is_embedded.end());
+            m["z_top"] = mesh.z_top;
+            m["faces"] = Json::array();
+            for (const auto& face : mesh.faces) {
+                Json j;
+                j["lo"] = face.lo;
+                j["hi"] = face.hi;
+                j["side"] = face.side;
+                j["area"] = face.area;
+                j["normal"] = face.normal;
+                j["centroid"] = face.centroid;
+                m["faces"].push_back(j);
+            }
+            auto& p = out["problem"];
+            p["C"] = problem.C;
+            p["alpha"] = problem.alpha;
+            p["dT"] = problem.dT;
+            p["support"] =
+                problem.support == fv::ElasticProblem::Support::Rigid321 ? "Rigid321" : "Fixed";
+            p["fixed_side"] = problem.fixed_side;
+            p["fixed_layer"] = problem.fixed_layer;
+            p["rtol"] = problem.rtol;
+            p["max_iter"] = problem.max_iter;
+            p["preconditioner"] = problem.preconditioner;
+            // Raw library inputs, independent of the mechanics adapters under test.
+            auto& raw = out["raw"];
+            raw["volume"] = grid.cv_volume;
+            raw["centroid"] = grid.cv_centroid;
+            raw["gid"] = grid.cv_elem_gid;
+            raw["rank"] = grid.cv_rank;
+            raw["kind"] = grid.cv_kind;
+            raw["attribute"] = grid.cv_attribute;
+            raw["attributes"] = Json::array();
+            for (const auto& entry : arrays.attr_table.entries) {
+                Json j;
+                j["layer"] = entry.layer;
+                for (const auto& [name, id] : arrays.attr_table.materials)
+                    if (id == entry.material)
+                        j["material"] = name;
+                raw["attributes"].push_back(j);
+            }
+            raw["faces"] = Json::array();
+            for (const auto& face : grid.faces) {
+                Json j;
+                j["lo"] = face.lo;
+                j["hi"] = face.hi;
+                j["side"] = face.side;
+                j["area"] = face.area;
+                j["area_vector"] = face.area_vector;
+                j["centroid"] = face.centroid;
+                raw["faces"].push_back(j);
+            }
+            raw["axes"] = grid.axes;
+            raw["nz"] = grid.nz;
+            raw["fraction"] = fractions;
+            raw["thermal_k"] = thermal_input.k;
+            raw["T_cell"] = thermal.T_cell;
+            raw["constituent_off"] = grid.constituent_off;
+            raw["constituent_gid"] = grid.constituent_gid;
+            raw["copper_phi"] = arrays.copper_phi;
+            raw["copper_layer_of_layer"] = arrays.copper_layer_of_layer;
+            raw["parent_gid"] = arrays.elem_gid;
+            raw["parent_attribute"] = arrays.attribute;
+            raw["parent_volume"] = Json::array();
+            raw["parent_physical_volume"] = Json::array();
+            for (std::size_t e = 0; e < arrays.elem_gid.size(); ++e) {
+                Point lo{1e100, 1e100, 1e100}, hi{-1e100, -1e100, -1e100};
+                for (int v = 0; v < 8; ++v)
+                    for (int d = 0; d < 3; ++d) {
+                        const auto x = arrays.vertices[3 * arrays.hex[8 * e + v] + d];
+                        lo[d] = std::min(lo[d], x);
+                        hi[d] = std::max(hi[d], x);
+                    }
+                const double volume = (hi[0] - lo[0]) * (hi[1] - lo[1]) * (hi[2] - lo[2]);
+                double fraction = 1;
+                if (cut)
+                    for (std::size_t k = 0; k < cut->cut_elem_gid.size(); ++k)
+                        if (cut->cut_elem_gid[k] == arrays.elem_gid[e]) {
+                            fraction = 0;
+                            for (auto s = cut->sub_off[k]; s < cut->sub_off[k + 1]; ++s)
+                                fraction += cut->sub_volfrac[s];
+                        }
+                raw["parent_volume"].push_back(volume);
+                raw["parent_physical_volume"].push_back(volume * fraction);
             }
         } else if (mode == "lookup") {
             f.arrays.elem_gid = {81, 17, 45, 45, 93};
@@ -367,11 +485,95 @@ int main(int argc, char** argv) {
         } else {
             throw std::runtime_error("unknown adapter probe mode");
         }
-        std::cout << out << '\n';
+        if (Communicator::world().rank() == 0)
+            std::cout << out << '\n';
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;
     }
+}
+'''
+
+
+# Deliberately includes only public I14, PETSc and JSON headers. It never calls
+# private adapters, reconstruction, event writers or CLI result publication.
+ELASTIC_REPLAY = r'''
+#include "chipcae/solvers/fvm/elastic.hpp"
+
+#include <fstream>
+#include <iostream>
+#include <jsoncons/json.hpp>
+#include <petscsys.h>
+
+using Json = jsoncons::json;
+namespace fv = chipcae::solvers::fvm;
+
+int main(int argc, char** argv) {
+    PetscInitialize(&argc, &argv, nullptr, nullptr);
+    int code = 0, rank = 0;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    try {
+        if (argc != 2)
+            throw std::runtime_error("expected elastic input JSON path");
+        std::ifstream input(argv[1]);
+        const auto json = Json::parse(input);
+        const auto& m = json.at("mesh");
+        const auto& p = json.at("problem");
+        fv::ElasticMesh mesh;
+        mesh.volume = m.at("volume").as<decltype(mesh.volume)>();
+        mesh.centroid = m.at("centroid").as<decltype(mesh.centroid)>();
+        mesh.gid = m.at("gid").as<decltype(mesh.gid)>();
+        mesh.layer = m.at("layer").as<decltype(mesh.layer)>();
+        mesh.rank = m.at("rank").as<decltype(mesh.rank)>();
+        mesh.is_cut = m.at("is_cut").as<decltype(mesh.is_cut)>();
+        mesh.is_embedded = m.at("is_embedded").as<decltype(mesh.is_embedded)>();
+        mesh.z_top = m.at("z_top").as<double>();
+        for (const auto& f : m.at("faces").array_range())
+            mesh.faces.push_back({f.at("lo").as<std::int64_t>(),
+                                  f.at("hi").as<std::int64_t>(),
+                                  f.at("side").as<int>(),
+                                  f.at("area").as<double>(),
+                                  f.at("normal").as<std::array<double, 3>>(),
+                                  f.at("centroid").as<std::array<double, 3>>()});
+        fv::ElasticProblem problem;
+        problem.C = p.at("C").as<decltype(problem.C)>();
+        problem.alpha = p.at("alpha").as<decltype(problem.alpha)>();
+        problem.dT = p.at("dT").as<decltype(problem.dT)>();
+        const auto support = p.at("support").as<std::string>();
+        if (support != "Rigid321" && support != "Fixed")
+            throw std::runtime_error("unknown replay support");
+        problem.support = support == "Rigid321" ? fv::ElasticProblem::Support::Rigid321
+                                                : fv::ElasticProblem::Support::Fixed;
+        problem.fixed_side = p.at("fixed_side").as<decltype(problem.fixed_side)>();
+        problem.fixed_layer = p.at("fixed_layer").as<decltype(problem.fixed_layer)>();
+        problem.rtol = p.at("rtol").as<double>();
+        problem.max_iter = p.at("max_iter").as<int>();
+        problem.preconditioner = p.at("preconditioner").as<std::string>();
+        const auto solved = fv::solve_elastic(mesh, problem, MPI_COMM_WORLD);
+        Json result;
+        result["ok"] = static_cast<bool>(solved);
+        if (solved) {
+            const auto& r = solved.value();
+            result["warpage_pv"] = r.warpage_pv;
+            result["U_mag_max"] = r.U_mag_max;
+            result["warpage_method"] = r.warpage_method;
+            result["U_mag_method"] = r.U_mag_method;
+            result["min_dn_ratio"] = r.min_dn_ratio;
+            result["min_dn_gid"] = r.min_dn_gid;
+            result["gradient_corrections"] = r.gradient_corrections;
+            result["max_identity_defect"] = r.max_identity_defect;
+        } else {
+            result["path"] = solved.error().path;
+            result["reason"] = solved.error().reason;
+        }
+        if (rank == 0)
+            std::cout << result << '\n';
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << '\n';
+        code = 1;
+    }
+    PetscFinalize();
+    return code;
 }
 '''
 
@@ -765,7 +967,7 @@ def mechanical_residuals(events):
     # accidentally published with the default FEM solver name (or wrong field).
     points = [p for e in events if e['kind'] == 18 for p in e['points']
               if p['field'] == 'U' or p['solver'] == 'fvm.solid']
-    assert points, 'mechanics failure/success must publish measured fvm.solid/U residuals'
+    assert points, 'mechanics success must publish measured fvm.solid/U residuals'
     for point in points:
         assert (point['solver'], point['field']) == ('fvm.solid', 'U'), point
         assert math.isfinite(point['norm']) and point['norm'] >= 0, point
@@ -955,6 +1157,150 @@ def summary(manifest):
     return {x['name']: x['value'] for x in manifest['summary']}
 
 
+def laminate_oracle(base, metal, fraction):
+    """Independent engineering compliance inversion; no production mixture call."""
+    import numpy as np
+    matrix, nm, am = (base[key] for key in ('E', 'nu', 'alpha'))
+    copper, nc, ac = (metal[key] for key in ('E', 'nu', 'alpha'))
+    rest = 1-fraction
+    exy = rest*matrix + fraction*copper
+    ez = 1/(rest/matrix + fraction/copper)
+    nu = rest*nm + fraction*nc
+    gxy = exy/(2*(1+nu))
+    gz = 1/(rest/(matrix/(2*(1+nm))) + fraction/(copper/(2*(1+nc))))
+    compliance = np.diag([1/exy, 1/exy, 1/ez, 1/gz, 1/gz, 1/gxy])
+    compliance[0, 1] = compliance[1, 0] = -nu/exy
+    compliance[0, 2] = compliance[2, 0] = -nu/exy
+    compliance[1, 2] = compliance[2, 1] = -nu/exy
+    axy = ((rest*matrix*am/(1-nm) + fraction*copper*ac/(1-nc)) /
+           (rest*matrix/(1-nm) + fraction*copper/(1-nc)))
+    az = rest*(am-2*nm/(1-nm)*(axy-am)) + fraction*(ac-2*nc/(1-nc)*(axy-ac))
+    return np.linalg.inv(compliance), [axy, axy, az]
+
+
+def check_replay_input(snapshot, inputs):
+    """Check adapter arrays against raw grid data and independently loaded SI cards."""
+    import numpy as np
+    mesh, problem, raw = (snapshot[key] for key in ('mesh', 'problem', 'raw'))
+    layers = inputs['stack']['layers']
+    names = [layer['name'] for layer in layers]
+    attrs = raw['attributes']
+    for key in ('gid', 'rank'):
+        assert mesh[key] == raw[key], key
+    for key in ('volume', 'centroid'):
+        np.testing.assert_allclose(mesh[key], raw[key], rtol=0, atol=1e-14, err_msg=key)
+    assert mesh['layer'] == [names.index(attrs[a-1]['layer']) for a in raw['attribute']]
+    assert mesh['is_cut'] == [int(kind != 0) for kind in raw['kind']]
+    np.testing.assert_allclose(mesh['z_top'], raw['axes'][2][-1], rtol=0, atol=1e-14)
+    expected_embedded = []
+    for face, original in zip(mesh['faces'], raw['faces'], strict=True):
+        embedded = original['hi'] < 0 and original['side'] == 6
+        expected_embedded.append(int(embedded))
+        assert (face['lo'], face['hi'], face['side']) == (
+            original['lo'], original['hi'], -1 if embedded else original['side'])
+        for key in ('area', 'centroid'):
+            np.testing.assert_allclose(face[key], original[key], rtol=0, atol=1e-14)
+        np.testing.assert_allclose(face['normal'], np.asarray(original['area_vector'])/original['area'],
+                                   rtol=0, atol=1e-14)
+    assert mesh['is_embedded'] == expected_embedded
+    parents = {gid: (volume, physical, attrs[attr-1])
+               for gid, volume, physical, attr in zip(
+                   raw['parent_gid'], raw['parent_volume'], raw['parent_physical_volume'],
+                   raw['parent_attribute'], strict=True)}
+    ncol = (len(raw['axes'][0])-1)*(len(raw['axes'][1])-1)
+    fractions = []
+    for begin, end in zip(raw['constituent_off'], raw['constituent_off'][1:]):
+        values, weights = [], []
+        for gid in dict.fromkeys(raw['constituent_gid'][begin:end]):
+            volume, physical, attr = parents[gid]
+            layer = names.index(attr['layer'])
+            copper = raw['copper_layer_of_layer'][layer] if raw['copper_layer_of_layer'] else -1
+            phi = raw['copper_phi'][copper*ncol + gid//raw['nz']] if copper >= 0 else 0.
+            values.append(min(1., phi*volume/physical))
+            weights.append(physical)
+        fractions.append(np.average(values, weights=weights))
+    np.testing.assert_allclose(raw['fraction'], fractions, rtol=1e-12, atol=1e-14)
+    for c, (attribute, fraction) in enumerate(zip(raw['attribute'], fractions, strict=True)):
+        attr = attrs[attribute-1]
+        layer = layers[names.index(attr['layer'])]
+        base = inputs['materials'][attr['material']]
+        metal = inputs['materials'][layer['copper']['metal']] if layer['copper'] else base
+        stiffness, alpha = laminate_oracle(base, metal, fraction)
+        np.testing.assert_allclose(np.asarray(problem['C'][c]).reshape(6, 6), stiffness,
+                                   rtol=1e-12, atol=1e-5)
+        np.testing.assert_allclose(problem['alpha'][c], alpha, rtol=1e-12, atol=1e-16)
+        kxy = (1-fraction)*base['k'] + fraction*metal['k']
+        kz = 1/((1-fraction)/base['k'] + fraction/metal['k'])
+        np.testing.assert_allclose(raw['thermal_k'][c], [kxy, kxy, kz], rtol=1e-12, atol=1e-14)
+    if inputs['thermal']:
+        temperature = np.asarray(raw['T_cell'])
+        # Layer-prescribed CVs give an oracle independent of the thermal solver.
+        for load in inputs['loads']:
+            if load['type'] == 'fixed_temperature' and load['target'].startswith('layer:'):
+                index = names.index(load['target'][6:])
+                mask = np.asarray(mesh['layer']) == index
+                assert np.any(mask), load
+                np.testing.assert_allclose(temperature[mask], load['T'], rtol=0, atol=1e-14)
+    else:
+        temperature = next(load['T'] for load in inputs['loads']
+                           if load['type'] == 'uniform_temperature')
+    np.testing.assert_allclose(problem['dT'], temperature-inputs['T_ref'], rtol=0, atol=1e-14)
+    for key in ('max_iter', 'preconditioner'):
+        assert problem[key] == inputs['linear'][key], key
+    np.testing.assert_allclose(problem['rtol'], inputs['linear']['rtol'], rtol=0, atol=1e-23)
+    assert problem['support'] == ('Fixed' if inputs['fixed'] else 'Rigid321')
+    sides = ('xmin', 'xmax', 'ymin', 'ymax', 'zmin', 'zmax')
+    assert problem['fixed_side'] == [sides.index(target[5:]) for target in inputs['fixed']
+                                     if target.startswith('face:')]
+    assert problem['fixed_layer'] == [i for target in inputs['fixed'] if target.startswith('layer:')
+                                      for i, name in enumerate(names)
+                                      if name == target[6:] or name.startswith(target[6:]+'#')]
+
+
+def direct_elastic(root, case, name, adapter, replay, ranks=1):
+    inputs, _ = probe(root, case, ranks=ranks)
+    captured = command(mpi_command([adapter, 'snapshot', root / 'case.json',
+                                    root / f'profile{ranks}.json'], ranks), root)
+    snapshot = json.loads(captured.stdout)
+    check_replay_input(snapshot, inputs)
+    path = root / (name + '-elastic-input.json')
+    write_json(path, snapshot)
+    result = command(mpi_command([replay, path], ranks), root)
+    return json.loads(result.stdout)
+
+
+def compare_replay(manifest, direct):
+    assert direct['ok'], direct
+    assert direct['warpage_method'] == WARPAGE_METHOD, direct
+    assert direct['U_mag_method'] == DISPLACEMENT_METHOD, direct
+    values = summary(manifest)
+    for key in ('warpage_pv', 'U_mag_max'):
+        assert math.isfinite(direct[key]) and direct[key] > 0, direct
+        error = abs(values[key]-direct[key])/abs(direct[key])
+        print(f'实测 replay {key} CLI={values[key]:.17g} direct={direct[key]:.17g} '
+              f'relative={error:.17g}', flush=True)
+        assert math.isfinite(error) and error <= 1e-8, (key, values[key], direct[key], error)
+    diagnostics = {key: direct[key] for key in (
+        'min_dn_ratio', 'min_dn_gid', 'gradient_corrections', 'max_identity_defect')}
+    print('实测 replay diagnostics=' + json.dumps(diagnostics), flush=True)
+    assert all(math.isfinite(value) for value in diagnostics.values()), diagnostics
+
+
+def inspect_elastic_failure(out, process, direct):
+    assert not direct['ok'], 'fixture must reach the library failure path'
+    assert process.returncode == 1, process.stderr
+    # Compare the complete opaque reason. I14 1.0 exposes no failure residual
+    # structure; parsing the diagnostic numbers would fabricate an API.
+    original = direct['path'] + ': ' + direct['reason']
+    assert original in process.stderr, (original, process.stderr)
+    events = decode_events((out / 'events.bin').read_bytes())
+    assert (events[-1]['kind'], events[-1]['exit_code']) == (19, 1), events[-1]
+    assert any(e['kind'] == 20 and e['level'] == 3 and original in e['text']
+               for e in events), ('missing original library error LogLine', original)
+    no_mechanical_publication(out, events)
+    return events
+
+
 def curvature(blocks):
     """Signed quadratic curvature after removing the top surface's rigid plane."""
     import numpy as np
@@ -981,6 +1327,8 @@ def curvature(blocks):
     return signed
 
 
+# Retained verbatim for solve-elastic-accuracy, per the 18:02 ruling. This
+# stricter accuracy check is deliberately not called by this card's suite.
 def compare_mechanics(fvm, fem, fvm_blocks, fem_blocks):
     a, b = summary(fvm), summary(fem)
     assert b['warpage_pv'] > 0 and b['U_mag_max'] > 0, b
@@ -991,6 +1339,18 @@ def compare_mechanics(fvm, fem, fvm_blocks, fem_blocks):
           f'U_mag_max_fvm={a["U_mag_max"]:.17g} U_mag_max_fem={b["U_mag_max"]:.17g} '
           f'U_relative={u_error:.17g}', flush=True)
     assert error <= .10, f'FVM/FEM warpage relative difference {error:.17g} > 0.10'
+    assert curvature(fvm_blocks) * curvature(fem_blocks) > 0, 'opposite FVM/FEM curvature signs'
+
+
+def compare_mechanics_sign(fvm, fem, fvm_blocks, fem_blocks):
+    a, b = summary(fvm), summary(fem)
+    assert b['warpage_pv'] > 0 and b['U_mag_max'] > 0, b
+    error = abs(a['warpage_pv'] - b['warpage_pv']) / b['warpage_pv']
+    u_error = abs(a['U_mag_max'] - b['U_mag_max']) / b['U_mag_max']
+    print(f'实测 mechanics warpage_fvm={a["warpage_pv"]:.17g} '
+          f'warpage_fem={b["warpage_pv"]:.17g} relative={error:.17g} '
+          f'U_mag_max_fvm={a["U_mag_max"]:.17g} U_mag_max_fem={b["U_mag_max"]:.17g} '
+          f'U_relative={u_error:.17g}', flush=True)
     assert curvature(fvm_blocks) * curvature(fem_blocks) > 0, 'opposite FVM/FEM curvature signs'
 
 
