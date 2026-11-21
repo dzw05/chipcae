@@ -995,6 +995,11 @@ def plating(b):
     accepted_ds = report_contract(b, accepted)
     check([d['defect_id'] for d in ds] == [d['defect_id'] for d in accepted_ds],
           'acceptance changed via-plating IDs')
+
+@case('via_plating_exact_acceptance','ipc')
+def plating_exact_acceptance(b):
+    out,_,_ = b.run(data/'kicad_like/via_plating_mixed.xml',expected=6)
+    ds = report_contract(b, out)
     accept = b.root/'via.accept.json'
     accept.write_text(json.dumps({'accept':[{'defect_id':d['defect_id']} for d in ds]}))
     replayed,_,_ = b.run(data/'kicad_like/via_plating_mixed.xml',
@@ -1129,7 +1134,7 @@ selected = [(n,g,f) for n,g,f in CASES if (selector in ('all',g,n) or
 if selector in ('odb', 'ipc'):
     def follow_up(name):
         if (name.startswith('override_') and name != 'override_fill_missing') or name in (
-                'acceptance', 'dispatcher_values'):
+                'acceptance', 'via_plating_exact_acceptance', 'dispatcher_values'):
             return 'dispatcher forwarding of --accept/--stack-override'
         if name in ('cross_ipc', 'dir_and_zip', 'odb_skipped_layers_reported'):
             return 'full-board geometry/model support and archive root handling'

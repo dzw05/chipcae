@@ -1,5 +1,6 @@
 """Freeze parsed report fields, including row order and replacement semantics."""
 
+import argparse
 import csv
 import json
 import math
@@ -171,10 +172,14 @@ def replay(writer, directory, selection):
             assert defect["rejection_reason"] == "tier B defect requires explicit confirmation", defect
 
 
+def writer_build(writer):
+    return next(parent for parent in Path(writer).parents
+                if (parent / "CMakeCache.txt").is_file())
+
+
 def assembly_cli(writer, directory, mode):
     source = Path(__file__).resolve().parents[3]
-    build = next(parent for parent in Path(writer).parents
-                 if (parent / "CMakeCache.txt").is_file())
+    build = writer_build(writer)
     os.environ["CHIPCAE_SOURCE_DIR"] = str(source)
     os.environ["CHIPCAE_BINARY_DIR"] = str(build)
     sys.path.insert(0, str(source / "tests/integration/import_assembly"))
@@ -226,8 +231,19 @@ def assembly_cli(writer, directory, mode):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    # chipcae_auto_tests supplies the source directory as a positional argument.
+    parser.add_argument("source_dir", nargs="?")
+    parser.add_argument("--step-box-a1", action="store_true")
+    args = parser.parse_args()
     writer = os.environ["CHIPCAE_REPORTFIELDS_WRITER"]
     assert Path(writer).is_absolute() and Path(writer).is_file(), writer
+    build = writer_build(writer)
+    if args.step_box_a1:
+        capabilities = json.loads((build / "import-assets/assembly-capabilities.json").read_text())
+        if capabilities.get("geometry") != "ON":
+            print(f"SKIP STEP box A1: assembly geometry is not ON: {capabilities}", flush=True)
+            return 77
     reason = int(subprocess.run([writer, "--reason-value"], check=True,
                                 capture_output=True, text=True, timeout=10).stdout)
     failures = []
@@ -236,17 +252,14 @@ def main():
         # Run all cases even while the new contract is red, retaining overwrite coverage.
         modes = ["four", "replacement", "empty", "ids", "generated", "escaping", "units",
                  "assembly-zero", "assembly-count"]
-        build = next(parent for parent in Path(writer).parents
-                     if (parent / "CMakeCache.txt").is_file())
         cache = (build / "CMakeCache.txt").read_text()
         # Dependency-specific cases run when their parsers are configured.
-        # STEP A1 also checks the advertised geometry capability before importing.
         if "CHIPCAE_ENABLE_JSONCONS:BOOL=ON" in cache:
             modes += ["accept-one", "accept-both", "accept-second"]
             if "CHIPCAE_ENABLE_ECAD:BOOL=ON" in cache:
                 modes += ["cli-no-parts", "cli-failure"]
-                if "CHIPCAE_ENABLE_OCCT:BOOL=ON" in cache:
-                    modes += ["cli-box"]
+        if args.step_box_a1:
+            modes = ["cli-box"]
         for mode in modes:
             try:
                 if mode in TIER_COUNTS:
@@ -267,4 +280,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
