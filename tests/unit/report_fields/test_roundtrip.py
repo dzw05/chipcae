@@ -150,24 +150,25 @@ def extended(writer, directory, mode):
     read_report(directory)
 
 
-def replay(writer, directory, both):
+def replay(writer, directory, selection):
     directory.mkdir(parents=True)
-    ids = ["foo", "foo#2"] if both else ["foo"]
+    ids = {"one": ["foo"], "both": ["foo", "foo#2"], "second": ["foo#2"]}[selection]
     (directory / "accept.json").write_text(json.dumps({"accept": [
         {"defect_id": id_} for id_ in ids]}))
     result = subprocess.run([writer, str(directory), "replay"],
                             capture_output=True, text=True, timeout=10)
     # Check exit before schema so the red phase also exposes the acceptance bug.
-    assert result.returncode == (0 if both else 6), (result.returncode, result.stderr)
+    assert result.returncode == (0 if selection == "both" else 6), (result.returncode, result.stderr)
     assert "unknown defect_id" not in result.stderr, result.stderr
     ds = read_report(directory)["defects"]
     assert [d["defect_id"] for d in ds] == ["foo", "foo#2"]
-    assert ds[0]["action"] and not ds[0]["rejection_reason"]
-    if both:
-        assert ds[1]["action"] and not ds[1]["rejection_reason"]
-    else:
-        assert not ds[1]["action"]
-        assert ds[1]["rejection_reason"] == "tier B defect requires explicit confirmation"
+    # Each final ID controls only its own row, including accepting the suffix alone.
+    for defect in ds:
+        if defect["defect_id"] in ids:
+            assert defect["action"] and not defect["rejection_reason"], defect
+        else:
+            assert not defect["action"], defect
+            assert defect["rejection_reason"] == "tier B defect requires explicit confirmation", defect
 
 
 def assembly_cli(writer, directory, mode):
@@ -190,6 +191,10 @@ def assembly_cli(writer, directory, mode):
         check(result, 14)
         assert not a.output.exists()
     elif mode == "cli-box":
+        capabilities = json.loads((build / "import-assets/assembly-capabilities.json").read_text())
+        assert capabilities["geometry"] == "ON", (
+            "STEP A1 requires assembly geometry capability; OCCT alone is insufficient",
+            capabilities)
         a.boxes()
         result = a.run("--accept-b-tier")
         check(result, 0)
@@ -234,10 +239,10 @@ def main():
         build = next(parent for parent in Path(writer).parents
                      if (parent / "CMakeCache.txt").is_file())
         cache = (build / "CMakeCache.txt").read_text()
-        # Optional parsers and OCCT stay optional. The required acceptance build
-        # enables all three, so it executes every replay and real CLI case.
+        # Dependency-specific cases run when their parsers are configured.
+        # STEP A1 also checks the advertised geometry capability before importing.
         if "CHIPCAE_ENABLE_JSONCONS:BOOL=ON" in cache:
-            modes += ["accept-one", "accept-both"]
+            modes += ["accept-one", "accept-both", "accept-second"]
             if "CHIPCAE_ENABLE_ECAD:BOOL=ON" in cache:
                 modes += ["cli-no-parts", "cli-failure"]
                 if "CHIPCAE_ENABLE_OCCT:BOOL=ON" in cache:
@@ -251,7 +256,7 @@ def main():
                 elif mode.startswith("cli-"):
                     assembly_cli(writer, Path(temporary) / mode, mode)
                 elif mode.startswith("accept-"):
-                    replay(writer, Path(temporary) / mode, mode == "accept-both")
+                    replay(writer, Path(temporary) / mode, mode.split("-", 1)[1])
                 else:
                     extended(writer, Path(temporary) / mode, mode)
             except (AssertionError, KeyError, ValueError, subprocess.SubprocessError):
