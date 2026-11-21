@@ -826,8 +826,28 @@ int run_assembly(const ImportOptions& options) {
                 placement = FramePlacement{v["origin"].as<std::array<Real, 3>>()};
             auto pp = assembly_placement_result(
                 place(sliced.slabs, placement, base), id, p["material"].as<std::string>(), defects);
-            if (pp)
+            if (pp) {
                 placed.push_back(*pp);
+                if (const auto* attach = std::get_if<AttachPlacement>(&placement);
+                    attach && attach->bond) {
+                    const auto& bond = *attach->bond;
+                    Slab bond_slab;
+                    if (attach->side == AttachSide::top) {
+                        const auto& s = *std::min_element(
+                            pp->slabs.begin(), pp->slabs.end(), [](const Slab& a, const Slab& b) {
+                                return a.z0 < b.z0;
+                            });
+                        bond_slab = Slab{s.z0 - bond.thickness, s.z0, s.sections};
+                    } else {
+                        const auto& s = *std::max_element(
+                            pp->slabs.begin(), pp->slabs.end(), [](const Slab& a, const Slab& b) {
+                                return a.z1 < b.z1;
+                            });
+                        bond_slab = Slab{s.z1, s.z1 + bond.thickness, s.sections};
+                    }
+                    placed.push_back(PlacedPart{id + ".bond", bond.material, {bond_slab}});
+                }
+            }
         };
         for (const auto& p : ordered) {
             auto shared = shared_steps.find(p["id"].as<std::string>());

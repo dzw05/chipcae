@@ -1,5 +1,6 @@
 """CLI acceptance: attach bonds fill the gap and participate in thin-layer review."""
 from pathlib import Path
+import math
 import shutil
 import sys
 import tempfile
@@ -24,6 +25,13 @@ def intervals(stack):
 
 def has_body(layer, body):
     return any(r.get('body') == body for r in layer.get('regions', []))
+
+
+def overlaps(z0, z1, lower, upper):
+    # Board-relative subtraction can move a shared face by a few ULPs.
+    return (z0 < upper and z1 > lower
+            and not math.isclose(z0, upper, rel_tol=4 * sys.float_info.epsilon, abs_tol=0)
+            and not math.isclose(z1, lower, rel_tol=4 * sys.float_info.epsilon, abs_tol=0))
 
 
 class AssemblyBond(unittest.TestCase):
@@ -92,7 +100,7 @@ class AssemblyBond(unittest.TestCase):
                     self.close(actual, expected)
         # Check all layers intersecting the gap, not just the bond-bearing subset.
         gap = [(z0 - origin, z1 - origin, layer) for z0, z1, layer in layers
-               if z0 - origin < upper and z1 - origin > lower]
+               if overlaps(z0 - origin, z1 - origin, lower, upper)]
         self.assertTrue(gap)
         self.close(gap[0][0], lower)
         self.close(gap[-1][1], upper)
@@ -178,7 +186,7 @@ class AssemblyBond(unittest.TestCase):
         layers = list(intervals(stack))
         self.assertFalse(any(has_body(layer, 'lid.bond') for _, _, layer in layers))
         gap = [(z0, z1, layer) for z0, z1, layer in layers
-               if z0 < self.board_top + self.thickness and z1 > self.board_top]
+               if overlaps(z0, z1, self.board_top, self.board_top + self.thickness)]
         self.assertTrue(gap, stack)
         self.close(gap[0][0], self.board_top)
         self.close(gap[-1][1], self.board_top + self.thickness)
