@@ -117,12 +117,16 @@ class AssemblyBond(unittest.TestCase):
         self.close(min(z0 for z0, _, layer in intervals(stack) if has_body(layer, 'lid')),
                    self.board_top + self.thickness)
 
-    def test_top_bond_alongside_frame_part(self):
-        self.place(self.thickness)
-        # The disjoint frame part gives every gap layer a region. This isolates
-        # missing bond geometry from the existing schema rejection of void layers.
+    def add_frame_witness(self):
         self.a.part('witness', 'lid.step',
                     placement={'frame': 'step', 'origin': [.003, 0, self.board_top]})
+
+    def test_top_bond_alongside_frame_part(self):
+        self.place(self.thickness)
+        self.a.document['parts'][0]['material_approx'] = True
+        # The disjoint frame part gives every gap layer a region. This isolates
+        # missing bond geometry from the existing schema rejection of void layers.
+        self.add_frame_witness()
         check(self.a.run('--accept-b-tier'), 0)
         stack = self.a.stack()
         self.assertTrue(any(has_body(layer, 'witness') for layer in stack['layers']))
@@ -143,6 +147,9 @@ class AssemblyBond(unittest.TestCase):
                 self.assertEqual(len(box), len(self.lid_box))
                 for actual, expected in zip(box, self.lid_box):
                     self.close(actual, expected)
+        # Approximation belongs to the input lid, never its synthetic bond.
+        self.assertEqual(self.a.import_report()['parts']['material_approx'],
+                         [{'id': 'lid', 'material_approx': True, 'label': '近似材料'}])
 
     def test_bottom_bond_fills_gap(self):
         self.place(self.thickness, bottom=True)
@@ -161,10 +168,7 @@ class AssemblyBond(unittest.TestCase):
         self.assertLess(thickness, self.t_min)
         self.place(thickness)
 
-    def test_thin_bond_requires_acceptance(self):
-        self.thin_bond()
-        check(self.a.run(), 6)
-        self.assertFalse(self.a.output.exists())
+    def assert_thin_bond_report(self):
         report = self.a.import_report()
         matching = [id_ for id_ in b_ids(report) if id_.startswith('lid.bond/thin#')]
         self.assertTrue(matching, report)
@@ -173,6 +177,19 @@ class AssemblyBond(unittest.TestCase):
                 self.assertEqual(defect['tier'], 'B')
                 self.assertIs(type(defect['reason']), int)
                 self.assertEqual(defect['reason'], 1)
+
+    def test_thin_bond_requires_acceptance(self):
+        self.thin_bond()
+        check(self.a.run(), 6)
+        self.assertFalse(self.a.output.exists())
+        self.assert_thin_bond_report()
+
+    def test_thin_bond_alongside_frame_part_requires_acceptance(self):
+        self.thin_bond()
+        self.add_frame_witness()
+        check(self.a.run(), 6)
+        self.assertFalse(self.a.output.exists())
+        self.assert_thin_bond_report()
 
     def test_thin_bond_can_be_accepted(self):
         self.thin_bond()
