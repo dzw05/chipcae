@@ -17,7 +17,7 @@ if(CHIPCAE_ENABLE_OCCT)
             endif()
         endif()
     endforeach()
-    # Brief scope amendment (i-part-slice-occt-test-build review): allow only these
+    # Scope approved in handoff/rulings/pr238.md: allow only these
     # two fixture dependencies in addition to the OCCT includes and definition.
     # draft uses BRepOffsetAPI_ThruSections; rounded uses BRepFilletAPI_MakeFillet.
     target_link_libraries(chipcae_autotest_tests_integration_part_slice_occt_slice_draft PRIVATE TKOffset)
