@@ -84,6 +84,7 @@ def build_adapter_probe(root, source, contract=None):
         shutil.copyfile(source / relative, schemas / Path(relative).name)
     (root / 'adapter.cpp').write_text(ADAPTER_PROBE, encoding='utf-8')
     (root / 'replay.cpp').write_text(ELASTIC_REPLAY, encoding='utf-8')
+    (root / 'pipeline_failure.cpp').write_text(PIPELINE_FAILURE_PROBE, encoding='utf-8')
     cmake = ['cmake_minimum_required(VERSION 3.20)',
              'project(fvm_adapter_acceptance LANGUAGES CXX)',
              'add_executable(adapter_probe adapter.cpp)',
@@ -95,6 +96,14 @@ def build_adapter_probe(root, source, contract=None):
     cmake += ['add_executable(elastic_replay replay.cpp)',
               'target_compile_options(elastic_replay PRIVATE ' + ' '.join(map(quote, flags)) + ')',
               'target_link_libraries(elastic_replay PRIVATE ' + ' '.join(map(quote, libraries)) + ')']
+    cmake += ['add_executable(pipeline_failure_probe pipeline_failure.cpp)',
+              'target_compile_options(pipeline_failure_probe PRIVATE ' +
+              ' '.join(map(quote, flags)) + ')',
+              'target_compile_definitions(pipeline_failure_probe PRIVATE ' +
+              quote('CHIPCAE_FVM_ADAPTER_SOURCE="' +
+                    str(source / 'apps/chipcae-solve/src/fvm_pipeline.cpp') + '"') + ')',
+              'target_link_libraries(pipeline_failure_probe PRIVATE ' +
+              ' '.join(map(quote, libraries)) + ')']
     if contract is not None:
         cmake += ['add_executable(contract_probe ' + quote(contract / 'dump_actual.cpp') + ')',
                   'target_compile_options(contract_probe PRIVATE ' + ' '.join(map(quote, flags)) + ')',
@@ -489,6 +498,46 @@ int main(int argc, char** argv) {
             std::cout << out << '\n';
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
+        return 1;
+    }
+}
+'''
+
+
+# Supply an opaque I14 failure at the library boundary. The included production
+# pipeline still builds the mesh, solves thermal, adapts inputs and writes events.
+# The numerical solver has separate real-library coverage; it cannot reliably
+# generate every frozen error prefix from a valid public case.
+PIPELINE_FAILURE_PROBE = r'''
+#include CHIPCAE_FVM_ADAPTER_SOURCE
+#include <iostream>
+
+namespace {
+std::string failure_reason;
+}
+
+namespace chipcae::solvers::fvm {
+Expected<ElasticResult> solve_elastic(const ElasticMesh&, const ElasticProblem&, MPI_Comm comm) {
+    // Retain a collective boundary and fail visibly if a rank skips the call.
+    MPI_Barrier(comm);
+    return chipcae::mesh::Error{"fvm.elastic", failure_reason};
+}
+} // namespace chipcae::solvers::fvm
+
+int main(int argc, char** argv) {
+    chipcae::solve::PetscSession session;
+    try {
+        if (argc != 5)
+            throw std::runtime_error("expected case, profile, output and library reason");
+        failure_reason = argv[4];
+        const auto inputs =
+            chipcae::solve::load_inputs(argv[1], argv[2], chipcae::Communicator::world().size());
+        return chipcae::solve::run_fvm(inputs, argv[3]);
+    } catch (const chipcae::solve::InputError& error) {
+        std::cerr << error.what() << '\n';
+        return error.code;
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
         return 1;
     }
 }

@@ -795,6 +795,43 @@ class CaseAcceptance(unittest.TestCase):
                 self.assertTrue(thermal, 'fixture must reach successful thermal publication')
                 self.assertTrue(all(math.isfinite(p['norm']) for p in thermal))
 
+    def test_pipeline_maps_opaque_i14_failures_after_thermal_success_without_mechanics_output(self):
+        # A private fail() unit check cannot catch dropping mechanical=true at
+        # the run_fvm call site, rewriting the error event, or publishing success.
+        case = u.prescribed_temperature_strip(self.root)
+        u.write_json(self.root / 'case.json', case)
+        probe = self.adapter.parent / 'pipeline_failure_probe'
+        reasons = (
+            ('input', 'INPUT_INVALID: invalid embedded metadata', 14),
+            ('internal', 'INTERNAL: invalid face geometry', 1),
+            ('double-prefix', 'INPUT_INVALID: INTERNAL: invalid face geometry', 1),
+            ('nonconvergence', 'elastic solver did not converge; opaque producer detail: Ω', 1),
+            ('obsolete-cut', 'INPUT_INVALID: embedded faces require cut-cell support', 14),
+        )
+        for ranks in (1, 2):
+            for name, reason, code in reasons:
+                with self.subTest(ranks=ranks, reason=reason):
+                    out = self.root / f'pipeline-error-{name}-np{ranks}'
+                    result = u.command(u.mpi_command([
+                        probe, self.root / 'case.json', self.root / f'profile{ranks}.json',
+                        out, reason], ranks), self.root, expected=None)
+                    events = u.decode_events((out / 'events.bin').read_bytes())
+                    u.energy(events)  # The failure follows a real successful thermal solve.
+                    thermal = [p for e in events if e['kind'] == 18 for p in e['points']
+                               if (p['solver'], p['field']) == ('fvm.conduction', 'T')]
+                    self.assertTrue(thermal, 'fixture did not reach the mechanics boundary')
+                    u.no_mechanical_publication(out, events)
+                    errors = [e for e in events if e['kind'] == 20 and e['level'] == 3]
+                    self.assertEqual(len(errors), 1, errors)
+                    self.assertEqual(errors[0]['rank'], 0)
+                    self.assertEqual(errors[0]['text'], 'fvm.elastic: ' + reason)
+                    self.assertEqual(errors[0]['error_code'], code)
+                    exits = [e for e in events if e['kind'] == 19]
+                    self.assertEqual(len(exits), 1, exits)
+                    self.assertIs(exits[0], events[-1])
+                    self.assertEqual((exits[0]['exit_code'], exits[0]['reason']), (code, 'error'))
+                    self.assertEqual(result.returncode, code, result.stderr)
+
     @unittest.skipUnless(hasattr(os, 'mkfifo'), 'deterministic checkpoint fixture requires POSIX FIFO')
     def test_thermal_success_stop_checkpoints_precede_mechanical_success_and_failure(self):
         case = u.prescribed_temperature_strip(self.root)
