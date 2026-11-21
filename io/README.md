@@ -125,9 +125,10 @@ Specification: https://docs.vtk.org/en/latest/vtk_file_formats/vtkhdf_file_forma
 The target reader baseline is VTK 9.7.2 with independent outward faces.
 Manifest field descriptors include exact dtype strings; `partitions.per_step`
 lists the communicator size for each step, with `solver_fixed_per_run=true`.
-The `result_summary` readback tool validates these fields when `partitions` is
-present and cross-checks the selected step's `per_step` value against its VTKHDF
-partition array lengths; it skips these checks when `partitions` is omitted.
+The `result_summary` readback tool requires a `partitions` object; missing or null
+values fail with exit code 14 (`INPUT_INVALID`). It validates these fields and
+cross-checks the selected step's `per_step` value against its VTKHDF partition
+array lengths.
 The keys remain schema_version, steps[].n, fields[].location/components and
 U_mag_max; aliases are not emitted. After `set_mesh` is called, `finalize` emits
 `mesh` with exactly five JSON integer keys (`nx0`, `ny0`, `L`, `padded_cells`,
