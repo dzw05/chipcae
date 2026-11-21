@@ -529,6 +529,105 @@ void reportAcceptance() {
                       "P4 invalid sidecar hidden");
         });
     }
+    // A matched exit/code pair must not bypass validation of any summary defect.
+    const auto summaryDefect =
+        QJsonDocument::fromJson(
+            read(reportFixture("confirm_b_tier_synthetic") + "/import_report.json"))
+            .object()["defects"]
+            .toArray()[0]
+            .toObject();
+    auto rejectSummaryDefect = [&](const QJsonValue& defect, int exitCode, const char* code) {
+        ReportReplay f("board_2layer");
+        auto j = QJsonDocument::fromJson(f.summary).object();
+        j["code"] = code;
+        j["grade"] = "B";
+        // Keep a valid first entry so checking only the first row cannot pass.
+        j["defects"] = QJsonArray{summaryDefect, defect};
+        f.summary = QJsonDocument(j).toJson();
+        f.exitCode = exitCode;
+        CaseDocument doc;
+        require(doc.load(FIXTURE_DIR "/fcbga_demo.case.json"), "summary defect baseline");
+        const auto before = doc.stackJson();
+        ImportController c(doc);
+        f.run(c);
+        check(c.outcome() == ImportOutcome::Failed && c.reportCode().isEmpty() &&
+                  c.grade().isEmpty() && !c.needsMaterialMapReselect(),
+              "malformed summary defect rejects matched pair and exposes no result fields");
+        check(doc.stackJson() == before && !doc.isDirty() && !QFile::exists(f.lastRequest.output) &&
+                  !QFile::exists(f.lastRequest.report),
+              "malformed summary defect preserves document and publishes no files");
+        check(c.error().contains("字段") && c.error().contains(f.summaryPath),
+              "malformed summary defect diagnostic identifies summary path");
+    };
+    for (const auto& key : defectKeys) {
+        for (bool missing : {true, false}) {
+            test(QString("summary defect %1 %2")
+                     .arg(missing ? "missing" : "wrong type", QString::fromStdString(key)),
+                 [&] {
+                     auto d = summaryDefect;
+                     const auto name = QString::fromStdString(key);
+                     if (missing)
+                         d.remove(name);
+                     else
+                         d[name] = QJsonArray{};
+                     rejectSummaryDefect(d, 6, "IMPORT_CONFIRMATION_REQUIRED");
+                 });
+        }
+    }
+    for (const auto& mutation : {std::pair{"defect_id", QJsonValue("")},
+                                 std::pair{"tier", QJsonValue("b")},
+                                 std::pair{"size_unit", QJsonValue("M")},
+                                 std::pair{"reason", QJsonValue(-1)},
+                                 std::pair{"reason", QJsonValue(0.5)},
+                                 std::pair{"reason", QJsonValue(true)},
+                                 std::pair{"size", QJsonValue(true)}}) {
+        test(QString("summary defect invalid %1 %2")
+                 .arg(mutation.first,
+                      QJsonDocument(QJsonArray{mutation.second}).toJson(QJsonDocument::Compact)),
+             [&] {
+                 auto d = summaryDefect;
+                 d[mutation.first] = mutation.second;
+                 rejectSummaryDefect(d, 6, "IMPORT_CONFIRMATION_REQUIRED");
+             });
+    }
+    for (const auto& pair : {std::pair{0, "OK"},
+                             {6, "IMPORT_CONFIRMATION_REQUIRED"},
+                             {7, "IMPORT_REJECTED"},
+                             {9, "MATERIAL_MAPPING_MISSING"}}) {
+        test(QString("summary non-object defect rejects matched pair %1").arg(pair.first),
+             [&] { rejectSummaryDefect(QJsonValue(QJsonValue::Null), pair.first, pair.second); });
+        test(QString("valid summary defects preserve matched pair %1").arg(pair.first), [&] {
+            ReportReplay f("board_2layer");
+            auto j = QJsonDocument::fromJson(f.summary).object();
+            j["code"] = pair.second;
+            j["schema_version"] = "import-report/1.27";
+            QJsonArray defects;
+            for (const auto& tierUnit : {std::pair{"Weld", "1"},
+                                         std::pair{"A", "m"},
+                                         std::pair{"B", "m2"},
+                                         std::pair{"C", "m3"}}) {
+                auto d = summaryDefect;
+                d["defect_id"] = tierUnit.first;
+                d["tier"] = tierUnit.first;
+                d["size_unit"] = tierUnit.second;
+                d["size"] = defects.isEmpty() ? QJsonValue(0.125) : QJsonValue(QJsonValue::Null);
+                d["future"] = QJsonObject{{"extra", true}};
+                defects.append(d);
+            }
+            j["defects"] = defects;
+            f.summary = QJsonDocument(j).toJson();
+            f.exitCode = pair.first;
+            CaseDocument doc;
+            require(doc.load(FIXTURE_DIR "/fcbga_demo.case.json"), "valid summary defect baseline");
+            ImportController c(doc);
+            f.run(c);
+            const auto outcome = pair.first == 0   ? ImportOutcome::Accepted
+                                 : pair.first == 6 ? ImportOutcome::NeedsConfirmation
+                                                   : ImportOutcome::Rejected;
+            check(c.outcome() == outcome && c.error().isEmpty() && c.reportCode() == pair.second,
+                  "valid summary entries accept all tiers/units, null size and additive keys");
+        });
+    }
     for (const auto& pair : {std::pair{0, "OK"},
                              {6, "IMPORT_CONFIRMATION_REQUIRED"},
                              {7, "IMPORT_REJECTED"},
@@ -881,7 +980,10 @@ code,rc={'confirm':('IMPORT_CONFIRMATION_REQUIRED',6),'reject':('IMPORT_REJECTED
 'missing6':('OK',6),'lower':('ok',0)}.get(mode,('OK',0))
 if mode=='confirm' and '--accept-b-tier' in a: code,rc='OK',0
 if report and mode not in ('missing6','missing0'):
-    payload={'schema_version':'import-report/1.0','code':code,'message':'fixture message','defects':[] if code=='OK' else [{'code':'MOCK_GAP'}]}
+    defect={'defect_id':'fixture/gap','tier':'B','kind':'MOCK_GAP','reason':0,
+            'dimension':'element','size':1,'size_unit':'1','suggestion':'confirm gap',
+            'action':'','rejection_reason':'','material_ambiguous':False}
+    payload={'schema_version':'import-report/1.0','code':code,'message':'fixture message','defects':[] if code=='OK' else [defect]}
     if mode in ('grade-conflict','crash-map','cancel-report'): payload['grade']='C'
     if mode=='confirm': payload['grade']='B'
     if mode.startswith('bad-'):

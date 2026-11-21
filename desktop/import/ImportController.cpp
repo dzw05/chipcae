@@ -35,16 +35,7 @@ void stringArray(const Json& value, const std::string& name) {
     for (const auto& item : value.array_range())
         field(item.is_string(), name);
 }
-void validateSidecar(const Json& report, bool assembly) {
-    for (const auto* key : {"L", "t_min", "eps_weld", "tau_A", "tau_B", "delta_f"})
-        field(number(report.at(key)), key);
-    const auto& counts = report.at("tier_counts");
-    field(counts.is_object(), "tier_counts");
-    for (const auto* key : {"Weld", "A", "B", "C"})
-        field(unsignedInteger(counts.at(key)), std::string("tier_counts.") + key);
-    const auto& accepted = report.at("b_tier_accepted");
-    field(accepted.is_null() || (accepted.is_string() && accepted == "all"), "b_tier_accepted");
-    const auto& defects = report.at("defects");
+void validateDefects(const Json& defects) {
     field(defects.is_array(), "defects");
     for (const auto& defect : defects.array_range()) {
         field(defect.is_object(), "defects[]");
@@ -67,6 +58,17 @@ void validateSidecar(const Json& report, bool assembly) {
         field(size.is_null() || number(size), "defects[].size");
         field(defect.at("material_ambiguous").is_bool(), "defects[].material_ambiguous");
     }
+}
+void validateSidecar(const Json& report, bool assembly) {
+    for (const auto* key : {"L", "t_min", "eps_weld", "tau_A", "tau_B", "delta_f"})
+        field(number(report.at(key)), key);
+    const auto& counts = report.at("tier_counts");
+    field(counts.is_object(), "tier_counts");
+    for (const auto* key : {"Weld", "A", "B", "C"})
+        field(unsignedInteger(counts.at(key)), std::string("tier_counts.") + key);
+    const auto& accepted = report.at("b_tier_accepted");
+    field(accepted.is_null() || (accepted.is_string() && accepted == "all"), "b_tier_accepted");
+    validateDefects(report.at("defects"));
     if (assembly || report.contains("parts")) {
         const auto& parts = report.at("parts");
         field(parts.is_object(), "parts");
@@ -318,6 +320,7 @@ void ImportController::complete(int code, QProcess::ExitStatus status) {
             field(summary.at("code").is_string() && summary.at("message").is_string() &&
                       summary.at("defects").is_array(),
                   "code/message/defects");
+            validateDefects(summary.at("defects"));
             reportCode_ = QString::fromStdString(summary.at("code").as<std::string>());
             if (summary.contains("grade") && summary.at("grade").is_string())
                 grade_ = QString::fromStdString(summary.at("grade").as<std::string>());

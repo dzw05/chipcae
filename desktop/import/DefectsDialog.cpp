@@ -2,10 +2,12 @@
 
 #include "ImportController.hpp"
 
+#include <QAbstractItemView>
 #include <QDialogButtonBox>
 #include <QHeaderView>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QStringList>
 #include <QTableWidget>
 #include <QVBoxLayout>
 namespace chipcae::desktop {
