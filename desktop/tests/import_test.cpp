@@ -121,7 +121,7 @@ QPushButton* button(QDialog& dialog, const QString& text) {
 }
 // Frozen fixtures are read-only. Only temporary copies are passed to the child process.
 QString reportFixture(const QString& sample) {
-    auto root = QString(FIXTURE_DIR) + "/../tests/contract/fixtures/import-report-1.0";
+    auto root = QString(FIXTURE_DIR) + "/../../tests/contract/fixtures/import-report-1.0";
     if (!QDir(root).exists())
         root = qEnvironmentVariable("CHIPCAE_IMPORT_REPORT_FIXTURE_DIR");
     require(!root.isEmpty() && QDir(root).exists(),

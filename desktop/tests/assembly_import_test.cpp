@@ -33,7 +33,7 @@ static void write(const QString& path, const QByteArray& bytes) {
     require(file.write(bytes) == bytes.size(), "write complete");
 }
 static QString reportFixture(const QString& sample) {
-    auto root = QString(CASE_FIXTURE_DIR) + "/../tests/contract/fixtures/import-report-1.0";
+    auto root = QString(CASE_FIXTURE_DIR) + "/../../tests/contract/fixtures/import-report-1.0";
     if (!QDir(root).exists())
         root = qEnvironmentVariable("CHIPCAE_IMPORT_REPORT_FIXTURE_DIR");
     require(!root.isEmpty() && QDir(root).exists(),
