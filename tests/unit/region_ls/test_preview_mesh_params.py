@@ -148,19 +148,23 @@ class PreviewMeshParams(unittest.TestCase):
         context = diagnostics(baseline_run[0]) + diagnostics(exact_run[0])
         self.assertEqual(exact['mesh_sha256'], baseline['mesh_sha256'], context)
         self.assertEqual(exact['cell_count'], baseline['cell_count'], context)
+        self.assertEqual(exact.get('cell_budget'), baseline['cell_count'], context)
+        self.assertIn('min_elems_per_layer', exact, context)
+        self.assertIsNone(exact['min_elems_per_layer'], context)
         self.rejected(self.invoke('too-small', synthetic_stack(), ['--cell-budget', '1']),
                       14, 'cell_budget: ')
 
     def test_min_elems_override(self):
-        for original_minimum, expected_nz in ((1, 30), (3, 31)):
-            with self.subTest(original_minimum=original_minimum):
+        for minimum, original_minimum, expected_nz in ((1, 1, 15), (1, 3, 17),
+                                                       (2, 1, 30), (2, 3, 31)):
+            with self.subTest(minimum=minimum, original_minimum=original_minimum):
                 stack = synthetic_stack(15)
                 stack['layers'][0]['n_elem_min'] = original_minimum
-                invocation = self.invoke(f'min-{original_minimum}', stack,
-                                         ['--min-elems-per-layer', '2'])
+                invocation = self.invoke(f'min-{minimum}-{original_minimum}', stack,
+                                         ['--min-elems-per-layer', str(minimum)])
                 summary = self.success(invocation)
                 self.assertEqual(summary['nz'], expected_nz, diagnostics(invocation[0]))
-                self.assertEqual(summary.get('min_elems_per_layer'), 2,
+                self.assertEqual(summary.get('min_elems_per_layer'), minimum,
                                  diagnostics(invocation[0]))
 
     def test_defaults_unchanged(self):
