@@ -798,6 +798,40 @@ int methodSummaryAcceptance(const QDir& root) {
         equal(view.tmaxText(), "T_max: 987.5 K [fvm_cell_centers]");
         equal(view.summary("T_max"), "T_max: unavailable");
     });
+    for (bool firstHasMethod : {true, false}) {
+        run(firstHasMethod ? "global fallback uses only the first valid entry's method"
+                           : "global fallback cannot borrow another entry's method",
+            [&](auto equal) {
+                QTemporaryDir temp;
+                auto selected = temperature();
+                selected.remove("step");
+                auto invalidGlobal = selected;
+                invalidGlobal["value"] = "not a number";
+                invalidGlobal["method"] = "invalid global method";
+                auto invalidExact = invalidGlobal;
+                invalidExact["step"] = 0;
+                invalidExact["method"] = "invalid exact-step method";
+                auto otherStep = temperature();
+                otherStep["step"] = 1;
+                otherStep["method"] = "other step method";
+                auto duplicate = selected;
+                duplicate["value"] = -123;
+                duplicate["method"] = "later global method";
+                if (firstHasMethod)
+                    selected["method"] = "fvm_cell_centers";
+                writeSummaryFixture(
+                    root, temp, {invalidGlobal, invalidExact, otherStep, selected, duplicate});
+                ResultSession session;
+                require(session.open(temp.path()), qPrintable(session.error()));
+                ResultView view;
+                require(view.loadStep(session, 0), qPrintable(view.error()));
+                require(view.colorRange().valid, "global fallback lost PointData T range");
+                equal(view.colorBarTitle(), "T (K)");
+                equal(view.tmaxText(),
+                      firstHasMethod ? "T_max: 987.5 K [fvm_cell_centers]" : "T_max: 987.5 K");
+                equal(view.summary("T_max"), "T_max: unavailable");
+            });
+    }
     return failures;
 }
 // Two thin hexes have the shared face z=0.1 and continuous, nonzero affine U.
