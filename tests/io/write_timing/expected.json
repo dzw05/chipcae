@@ -43,11 +43,42 @@
     }
   },
   "before_finalize": {
+    "precondition": "No successful finalize call has occurred, explicitly or internally. In particular, set_mesh has not been called because it calls finalize to publish manifest.json.",
+    "finalize_seconds": {
+      "equals": 0
+    },
     "peak_rss_bytes": {
       "equals": 0
     },
     "bytes_written": {
       "equals": "sum of already written out/step-*.vtkhdf file sizes; manifest.json not yet counted"
+    }
+  },
+  "after_set_mesh_before_explicit_finalize": {
+    "note": "set_mesh has already called finalize internally; its statistics are visible immediately.",
+    "write_step_count": {
+      "equals": 0
+    },
+    "finalize_seconds": {
+      "finite": true,
+      "min": 0
+    },
+    "peak_rss_bytes": {
+      "min": 1
+    },
+    "bytes_written": {
+      "equals": "file_size(manifest.json)"
+    }
+  },
+  "after_set_mesh_and_write_step_before_explicit_finalize": {
+    "peak_rss_bytes": {
+      "equals": "sample from set_mesh's internal finalize"
+    },
+    "finalize_seconds": {
+      "equals": "sample from set_mesh's internal finalize"
+    },
+    "bytes_written": {
+      "equals": "sum of already written out/step-*.vtkhdf file sizes + file_size(currently published manifest.json)"
     }
   },
   "finalize_only_no_write_step": {

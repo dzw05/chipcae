@@ -104,6 +104,56 @@ void finalized(const Stats& s) {
     require(s.peak_rss_bytes > 0, "peak_rss_bytes must be positive after finalize");
 }
 
+// Catch eager RSS/manifest accounting before any finalize, or lost internal-finalize stats.
+void before_finalize(const fs::path& stackup) {
+    TemporaryRun without_mesh;
+    ResultsWriter meshless(without_mesh.path, stackup);
+    zero_stats(meshless.io_stats());
+    write_step(meshless, 0);
+    const auto& pending = meshless.io_stats();
+    require(pending.write_step_count == 1, "meshless write_step_count must be 1");
+    finite_time(pending.write_step_seconds, "meshless write_step_seconds");
+    finite_time(pending.last_write_step_seconds, "meshless last_write_step_seconds");
+    require(pending.peak_rss_bytes == 0 && pending.finalize_seconds == 0,
+            "RSS and finalize time must stay zero before any finalize call");
+    require(!fs::exists(without_mesh.path / "manifest.json"),
+            "write_step without set_mesh must not publish a manifest");
+    require(pending.bytes_written == fs::file_size(without_mesh.path / "out/step-0.vtkhdf"),
+            "before any finalize, bytes_written must count only step files");
+    meshless.finalize();
+    finalized(pending);
+    require(pending.bytes_written == fs::file_size(without_mesh.path / "out/step-0.vtkhdf") +
+                                         fs::file_size(without_mesh.path / "manifest.json"),
+            "first explicit finalize must add manifest bytes");
+
+    TemporaryRun run;
+    ResultsWriter writer(run.path, stackup);
+    const auto& s = writer.io_stats();
+    zero_stats(s);
+    set_mesh(writer);
+    // set_mesh publishes the manifest by calling finalize, before the caller calls it.
+    finalized(s);
+    require(s.write_step_count == 0 && s.write_step_seconds == 0 && s.last_write_step_seconds == 0,
+            "set_mesh must not fabricate step statistics");
+    const auto manifest_bytes = fs::file_size(run.path / "manifest.json");
+    require(s.bytes_written == manifest_bytes, "set_mesh must count its published manifest");
+    const auto rss = s.peak_rss_bytes;
+    const auto finalize_time = s.finalize_seconds;
+    write_step(writer, 0);
+    require(s.write_step_count == 1, "write_step after set_mesh must be counted");
+    require(s.peak_rss_bytes == rss && s.finalize_seconds == finalize_time,
+            "write_step must preserve the internal finalize's RSS and time samples");
+    require(s.bytes_written == fs::file_size(run.path / "out/step-0.vtkhdf") + manifest_bytes,
+            "before explicit finalize, bytes_written must include the published manifest");
+    require(fs::file_size(run.path / "manifest.json") == manifest_bytes,
+            "write_step must preserve the previously published manifest size");
+    writer.finalize();
+    finalized(s);
+    require(s.bytes_written == fs::file_size(run.path / "out/step-0.vtkhdf") +
+                                   fs::file_size(run.path / "manifest.json"),
+            "explicit finalize must replace the old manifest byte contribution");
+}
+
 // Catch absent accounting, invalid timings, and accidental inclusion of stackup/tmp files.
 void stats_after_write(const fs::path& stackup) {
     TemporaryRun run;
@@ -253,6 +303,8 @@ int main(int argc, char** argv) {
         const std::string mode = argv[1];
         if (mode == "stats_after_write")
             stats_after_write(argv[2]);
+        else if (mode == "before_finalize")
+            before_finalize(argv[2]);
         else if (mode == "two_steps")
             two_steps(argv[2]);
         else if (mode == "finalize_only")

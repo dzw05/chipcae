@@ -38,7 +38,9 @@ public:
         double finalize_seconds = 0;
         double last_write_step_seconds = 0;
         // Whole-process peak RSS, not an incremental I/O allocation measurement.
+        // Zero until the first successful finalize(), including one called by set_mesh().
         std::uint64_t peak_rss_bytes = 0;
+        // Step file sizes plus the latest manifest published by any successful finalize().
         std::uint64_t bytes_written = 0;
         int write_step_count = 0;
     };
