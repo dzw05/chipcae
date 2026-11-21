@@ -292,3 +292,89 @@ When a writer drops an event-log tail it writes `<path>.corrupt-<offset>`, or `<
 - No Ansys project files, APDL, or comparison results.
 - Open-source reference solvers are not dependencies and are not linked.
 - No cloud account, runner image, or credential.
+
+## Mac 高内存 runner
+
+`Mac highmem`（`.github/workflows/mac-highmem.yml`）每天 UTC 18:00（次日北京时间
+02:00）及手动 `workflow_dispatch` 运行，使用 `[self-hosted, macOS, ARM64]`。
+本仓库是公开仓库；为隔离 fork 提交，工作流不接 PR 事件，job 再限制
+`github.repository == 'dzw05/chipcae'`，只有 `contents: read` 权限。
+这补充了上文较早的 Linux/private 描述：Mac 已有独立的自托管工作流。
+该工作流仅供参考，不改变托管 CI 的测试选择、required checks 或 `ci-ok`；
+`CI / ci-ok` 的结果需要单独记录。
+
+工具链与 MPI/PETSc/HDF5/METIS/HYPRE/OpenBLAS 来自现有
+`$HOME/chipcae-env/env`，支持 conda-forge 的带前缀 Clang。额外依赖为
+`$HOME/chipcae-mac/deps/mfem`（MFEM 4.8，共享库，MPI/PETSc/METIS/HYPRE）及
+`$HOME/chipcae-mac/deps/jsoncons`（1.4.0）。conda 的 MFEM 若禁用了 PETSc 不能替代。
+构建在 runner 工作区的 `build`，Release 开启 MPI/HDF5/MFEM/JSONCONS，三者前缀
+一起传给 CMake。暂用 `-L$HOME/chipcae-env/env/lib -llapack -lblas` 解决求解器链接；
+`chipcae-solve` 的 `find_package(LAPACK)` 留给单独 M3 CMake 卡。
+
+首席在 Mac 上从已有工具链环境执行以下命令（CI 只执行 `--check`）：
+
+```bash
+bash .github/scripts/mac_highmem_deps.sh --check
+bash .github/scripts/mac_highmem_deps.sh --install
+# --prefix 是依赖根，子目录固定为 mfem 和 jsoncons。
+bash .github/scripts/mac_highmem_deps.sh --install --prefix "$HOME/chipcae-mac/custom-deps"
+bash .github/scripts/mac_highmem_deps.sh --check --prefix "$HOME/chipcae-mac/custom-deps"
+```
+
+`--check` 逐项输出 OK/MISSING，汇总缺失依赖并失败；缺少编译器、MPI launcher、
+HDF5、METIS 或 HYPRE 时须由 runner 所有者修复已有环境。`--install` 只从官方
+GitHub 发布标签归档安装 MFEM 4.8 和 jsoncons 1.4.0，不安装其它依赖，不修改工具链。
+构建选项依据 [MFEM 4.8 配置](https://github.com/mfem/mfem/blob/v4.8/config/defaults.cmake)
+及 [jsoncons 1.4.0 CMake](https://github.com/danielaparker/jsoncons/blob/v1.4.0/CMakeLists.txt)。
+脚本用 Python realpath 规范化路径，先检查根、两个安装目标及工作目录的符号链接和
+目录边界；越界时在创建目录或下载前退出。源码、归档、临时文件与构建树保留在
+`$HOME/chipcae-mac/.highmem-work/install.*`，可由所有者事后清理。
+有效安装分别跳过，重复安装不重写文件，安装后重跑检查；构建最多六路，关闭依赖的
+测试、示例和 miniapps。自定义前缀供手工使用，工作流仍使用默认前缀。
+
+测试在同一构建中分为互斥的四次调用：
+
+| 段 | 选择 | 并发 | 状态 |
+| --- | --- | --- | --- |
+| a | `-L highmem` | 1 | 必须通过 |
+| b1 | `-L mpi -LE highmem` | 2 | informational |
+| b2 | 命令任意位置出现实际 `mpiexec`/`mpirun` token，且无 mpi/highmem 标签 | 2 | informational |
+| c | `-LE 'highmem\|mpi'`，再排除 b2 | 6，timeout 900 s | informational |
+
+构建后仅获取一次 CTest JSON，读取 LABELS 和包括 Python wrapper 参数在内的全部
+命令 token，排序去重 b2 名单并转义正则元字符；b2 的包含和 c 的排除共用同一个
+锚定正则变量。b2 为空时日志写「无」，省略两边的正则过滤。
+预期 b2 为 `solve_pipeline`、`solve_preview_mesh_digest`、`solve_fem_thermal_bow`、
+`install_smoke`、`install_relocate`、`cpack_tgz`；其中 relocate 虽只 preview，仍携带
+launcher。实际配置名单以 Mac 日志为准；不能发现不暴露 launcher token 的内部 MPI
+调用，修改 wrapper/profile 后必须重新审计。
+
+当前 rank 审计：直接注册最大 4；求解/预览 wrapper 最大 2；parts 和
+`mesh_digest_mpi` 最大 3；install smoke/cpack 读取分布式 local profile 的 4 ranks，
+relocate 当前不启动 MPI。因此 b1/b2 用 N=2，约最多 8 个 MPI ranks；若显式命令超过
+4 ranks，自动改 N=1。构建/其余测试六路，`OMP_NUM_THREADS=1`、`OMP_PROC_BIND=false`。
+`mesh_hash_preview_np` 内部查找 MPI 并运行至 3 ranks，未暴露 launcher token 且无 mpi
+标签，所以仍在 c；这也使 N=2 不能作为整个 job 的 MPI 进程上界。
+已有部分 CTest 属性会把 OMP 改为 2，加上主机后台负载，仍需实测负载是否达标。
+三个 highmem 用例复用 `chipcae_highmem` 锁；独立 JUnit 断言即使 CTest 失败也执行，
+要求至少三个 testcase、包含三项指定验收名，且 skipped/failure/error 均为零。
+b1、b2、c 独立继续执行并保留退出码和墙钟时间；构建错误仍使工作流失败。
+
+checkout 后立即后台采样，每 10 秒将 epoch 时间和 `sysctl -n vm.loadavg` 写入
+`$RUNNER_TEMP/loadavg.log`，PID 同存 RUNNER_TEMP。always 清理停止采样并复制到
+`build/loadavg.log`，要求有效、非空、有限的样本，一分钟负载最大值 ≤12。
+日志打印构建、各次 CTest、整个配置/构建/测试窗口的墙钟秒数，以及每项 highmem
+耗时。持久工作区的旧报告在开始时清除。always 上传 `build/junit-highmem.xml`、
+`build/junit-mpi.xml`、`build/junit-mpi-unlabeled.xml`（有 b2 时）、`build/junit-rest.xml`
+及 `build/loadavg.log`，保留七天。
+
+全局 concurrency group `mac-highmem` 不取消在跑任务；Mac 离线时等待此 runner 上线，
+不切换到托管机。排队期限按 GitHub 默认规则，job 的 120 分钟超时从实际开始运行计算。
+现有单 runner 也使它与 Mac heavy 不会同时执行。ECAD/OCCT 尚未开启，PyYAML/SciPy/VTK
+尚未补齐，可能导致其余段失败/跳过；这些依赖和已知 Mac 编译可移植问题另卡处理。
+
+本工作流 Mac 验收 **未执行**，不能以本地 fixture 通过替代。首席运行后在 PR 记录：
+依赖全 OK、highmem Passed 且 Skipped=0、三项耗时与 271.17/285.05/400.58 秒的比较、
+总墙钟、负载峰值 ≤12、五类 artifact、实际 b2 名单/rank 审计，以及 b/c 通过/失败/跳过
+对比历史 JUnit 494 项（406 通过、30 运行失败、58 跳过，另 20 项未编出）。
+PR 开出时由首席助理通知 Zhiwei；托管 `CI / ci-ok` 独立记录。

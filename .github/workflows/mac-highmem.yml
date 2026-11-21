@@ -1,0 +1,302 @@
+name: Mac highmem
+
+# Informational only; hosted CI selection and ci-ok are unchanged.
+# Manual/scheduled execution in the public upstream repository only.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 18 * * *' # 02:00 Beijing the following day.
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-highmem
+  cancel-in-progress: false
+
+env:
+  CMAKE_BUILD_PARALLEL_LEVEL: "6"
+  CTEST_PARALLEL_LEVEL: "6"
+  OMP_NUM_THREADS: "1"
+  OMP_PROC_BIND: "false"
+
+jobs:
+  build-test:
+    name: Mac highmem build and test
+    if: github.repository == 'dzw05/chipcae'
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start load sampler
+        run: |
+          set -euo pipefail
+          date +%s > "$RUNNER_TEMP/mac-highmem-start"
+          rm -f build/junit-highmem.xml build/junit-mpi.xml \
+            build/junit-mpi-unlabeled.xml build/junit-rest.xml build/loadavg.log
+          : > "$RUNNER_TEMP/loadavg.log"
+          # Redirect every inherited descriptor; nohup survives step completion.
+          nohup bash -c 'while :; do
+            printf "%s %s\n" "$(date +%s)" "$(sysctl -n vm.loadavg)"
+            sleep 10
+          done' </dev/null >> "$RUNNER_TEMP/loadavg.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/mac-highmem-sampler.pid"
+
+      - name: Activate toolchain
+        run: |
+          set -euo pipefail
+          env_prefix="$HOME/chipcae-env/env"
+          test -x "$env_prefix/bin/cmake" || { echo "missing $env_prefix; repair the existing environment first"; exit 1; }
+          if [ -x "$env_prefix/bin/clang++" ]; then
+            cc="$env_prefix/bin/clang"
+            cxx="$env_prefix/bin/clang++"
+          else
+            cc=$(ls "$env_prefix"/bin/*-clang)
+            cxx=$(ls "$env_prefix"/bin/*-clang++)
+          fi
+          test -x "$cc" && test -x "$cxx"
+          {
+            echo "CONDA_PREFIX=$env_prefix"
+            echo "CC=$cc"
+            echo "CXX=$cxx"
+          } >> "$GITHUB_ENV"
+          echo "$env_prefix/bin" >> "$GITHUB_PATH"
+
+      - name: Toolchain versions
+        run: |
+          set -euo pipefail
+          cmake --version | head -1
+          ninja --version
+          "$CXX" --version | head -1
+          mpicxx --showme:version 2>/dev/null || true
+          sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize
+
+      - name: Check dependencies
+        run: bash .github/scripts/mac_highmem_deps.sh --check
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCHIPCAE_ENABLE_MPI=ON -DCHIPCAE_ENABLE_HDF5=ON \
+            -DCHIPCAE_ENABLE_MFEM=ON -DCHIPCAE_ENABLE_JSONCONS=ON \
+            -DCMAKE_PREFIX_PATH="$HOME/chipcae-env/env;$HOME/chipcae-mac/deps/mfem;$HOME/chipcae-mac/deps/jsoncons" \
+            -DCMAKE_EXE_LINKER_FLAGS="-L$HOME/chipcae-env/env/lib -llapack -lblas"
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          status=0
+          cmake --build build --parallel 6 || status=$?
+          echo "build seconds: $(( $(date +%s) - start )); exit status: $status"
+          exit "$status"
+
+      # Audited at a56c5dc: expected b2 candidates on the full Mac configuration:
+      # solve_pipeline, solve_preview_mesh_digest, solve_fem_thermal_bow,
+      # install_smoke, install_relocate, cpack_tgz (sorted in the runtime log).
+      # install_relocate exposes the launcher even though it currently previews.
+      # Rank audit: par_mpi_2/4=2/4; vtkhdf_results_mpi_2, cut_results_mpi_2,
+      # crashdiag_mpi_2=2; k1_vtkhdf/control_channel/run_control=2/4;
+      # k1_results_validation/k1_preview_mpi_surface=2; pipeline/preview_digest/
+      # thermal_bow/cut_pipeline/preview_outline/copper_trace_map=2; parts=3;
+      # mesh_digest_mpi=3. The internally launched mesh_hash_preview_np=3 is in c.
+      # install smoke/cpack read schema/examples/local.run-profile.json: ranks=4.
+      # Thus N=2 (at most 8 ranks); explicit future commands above 4 use N=1.
+      # Re-audit wrappers/profiles on changes; internally discovered launchers
+      # without a launcher token cannot be discovered from CTest commands alone.
+      # Actual configured Mac list/ranks and acceptance: 未执行; chief records in PR.
+      - name: Discover test partitions
+        id: selection
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -N --show-only=json-v1 > "$RUNNER_TEMP/mac-highmem-tests.json"
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+          tests = json.loads((Path(os.environ['RUNNER_TEMP']) / 'mac-highmem-tests.json').read_text())['tests']
+          def is_launcher(token):
+              if token.startswith(('--launcher=', '--mpiexec=', '--mpi=')):
+                  token = token.split('=', 1)[1]
+              return Path(token).name in ('mpiexec', 'mpirun')
+          names = set()
+          maximum = 4  # Includes the audited wrappers and distributed install profile.
+          for test in tests:
+              labels = set()
+              for prop in test.get('properties', []):
+                  if prop['name'] == 'LABELS':
+                      value = prop['value']
+                      labels.update(value.split(';') if isinstance(value, str) else value)
+              if 'highmem' in labels:
+                  continue
+              command = test.get('command', [])
+              launchers = [i for i, token in enumerate(command)
+                           if is_launcher(token)]
+              if launchers and 'mpi' not in labels:
+                  names.add(test['name'])
+              if 'mpi' in labels or launchers:
+                  for i, token in enumerate(command[:-1]):
+                      if token in ('-n', '-np', '--np', '--n') and command[i + 1].isdigit():
+                          maximum = max(maximum, int(command[i + 1]))
+                  for token in command:
+                      match = re.fullmatch(r'(?:-n|-np|--np=|--n=)(\d+)', token)
+                      if match:
+                          maximum = max(maximum, int(match[1]))
+          names = sorted(names)
+          # CTest's regex syntax: escape only regex metacharacters (not spaces).
+          def escape(name):
+              return re.sub(r'([\\.^$|?*+()\[\]{}])', r'\\\1', name)
+          unlabeled_regex = '^(' + '|'.join(map(escape, names)) + ')$' if names else ''
+          if any('\n' in name or '\r' in name for name in names):
+              raise SystemExit('CTest names must fit a single environment line')
+          n = 2 if maximum <= 4 else 1
+          print('b2 configured tests: ' + (', '.join(names) if names else '无'))
+          print(f'MPI rank audit: maximum={maximum}, N={n}; wrapper audit in workflow comments')
+          with open(os.environ['GITHUB_ENV'], 'a') as stream:
+              stream.write(f'unlabeled_regex={unlabeled_regex}\nN={n}\n')
+          PY
+
+      - name: Test highmem (a, mandatory)
+        id: highmem
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          status=0
+          ctest --test-dir build -L highmem -j 1 --output-on-failure \
+            --output-junit junit-highmem.xml || status=$?
+          elapsed=$(( $(date +%s) - start ))
+          echo "highmem seconds: $elapsed; exit status: $status"
+          echo "exit_status=$status" >> "$GITHUB_OUTPUT"
+          echo "elapsed_seconds=$elapsed" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Assert highmem JUnit
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          required = {'cutbim_cut_bimetal', 'solve_column_gmg_fcbga',
+                      'solve_column_gmg_fcbga_scaling'}
+          root = ET.parse('build/junit-highmem.xml').getroot()
+          cases = list(root.iter('testcase'))
+          names = {case.get('name') for case in cases}
+          for case in cases:
+              print(f"{case.get('name')}: {case.get('time', 'unknown')} seconds")
+          if len(cases) < 3 or not required <= names:
+              raise SystemExit('highmem must contain >=3 cases and all required acceptance names')
+          if any(list(root.iter(tag)) for tag in ('skipped', 'failure', 'error')):
+              raise SystemExit('highmem requires zero skipped/failure/error elements')
+          print(f'highmem: {len(cases)} passed, Skipped=0')
+          PY
+
+      - name: Test labeled MPI (b1, informational)
+        id: mpi
+        if: ${{ !cancelled() && steps.selection.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          status=0
+          ctest --test-dir build -L mpi -LE highmem -j "$N" --output-on-failure \
+            --output-junit junit-mpi.xml || status=$?
+          elapsed=$(( $(date +%s) - start ))
+          echo "mpi seconds: $elapsed; exit status: $status"
+          echo "exit_status=$status" >> "$GITHUB_OUTPUT"
+          echo "elapsed_seconds=$elapsed" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Test unlabeled MPI (b2, informational)
+        id: mpi_unlabeled
+        if: ${{ !cancelled() && steps.selection.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          status=0
+          if [ -n "$unlabeled_regex" ]; then
+            ctest --test-dir build -R "$unlabeled_regex" -LE highmem -j "$N" \
+              --output-on-failure --output-junit junit-mpi-unlabeled.xml || status=$?
+          else
+            echo "b2: 无"
+          fi
+          elapsed=$(( $(date +%s) - start ))
+          echo "mpi unlabeled seconds: $elapsed; exit status: $status"
+          echo "exit_status=$status" >> "$GITHUB_OUTPUT"
+          echo "elapsed_seconds=$elapsed" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Test rest (c, informational)
+        id: rest
+        if: ${{ !cancelled() && steps.selection.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          status=0
+          args=(--test-dir build -LE 'highmem|mpi')
+          if [ -n "$unlabeled_regex" ]; then
+            args+=(-E "$unlabeled_regex")
+          fi
+          ctest "${args[@]}" -j 6 --timeout 900 \
+            --output-on-failure --output-junit junit-rest.xml || status=$?
+          elapsed=$(( $(date +%s) - start ))
+          echo "rest seconds: $elapsed; exit status: $status"
+          echo "exit_status=$status" >> "$GITHUB_OUTPUT"
+          echo "elapsed_seconds=$elapsed" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Stop sampler and assert load
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f "$RUNNER_TEMP/mac-highmem-sampler.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/mac-highmem-sampler.pid")" 2>/dev/null || true
+            rm -f "$RUNNER_TEMP/mac-highmem-sampler.pid"
+          fi
+          mkdir -p build
+          cp "$RUNNER_TEMP/loadavg.log" build/loadavg.log
+          if [ -f "$RUNNER_TEMP/mac-highmem-start" ]; then
+            echo "job wall seconds: $(( $(date +%s) - $(cat "$RUNNER_TEMP/mac-highmem-start") ))"
+          fi
+          python3 - <<'PY'
+          import math
+          import re
+          from pathlib import Path
+          samples = []
+          for line in Path('build/loadavg.log').read_text().splitlines():
+              match = re.fullmatch(r'\d+\s+\{\s*(\S+)\s+(\S+)\s+(\S+)\s*\}\s*', line)
+              if not match:
+                  raise SystemExit('malformed load sample: ' + line)
+              values = list(map(float, match.groups()))
+              if not all(math.isfinite(value) and value >= 0 for value in values):
+                  raise SystemExit('invalid load sample: ' + line)
+              samples.append(values[0])
+          if not samples:
+              raise SystemExit('load samples must be nonempty')
+          peak = max(samples)
+          print(f'maximum one-minute load: {peak}; acceptance limit: 12; samples: {len(samples)}')
+          if peak > 12:
+              raise SystemExit('one-minute load exceeds 12')
+          PY
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-highmem-results-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            build/junit-highmem.xml
+            build/junit-mpi.xml
+            build/junit-mpi-unlabeled.xml
+            build/junit-rest.xml
+            build/loadavg.log
