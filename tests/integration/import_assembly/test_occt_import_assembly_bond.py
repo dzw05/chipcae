@@ -163,6 +163,7 @@ class AssemblyBond(unittest.TestCase):
         for defect in report['defects']:
             if defect['defect_id'] in matching:
                 self.assertEqual(defect['tier'], 'B')
+                self.assertIs(type(defect['reason']), int)
                 self.assertEqual(defect['reason'], 1)
 
     def test_thin_bond_can_be_accepted(self):
