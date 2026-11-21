@@ -1,6 +1,8 @@
+#include "chipcae/geometry/import_accept.hpp"
 #include "chipcae/geometry/import_report.hpp"
 
 #include <iostream>
+#include <limits>
 
 using namespace chipcae::geometry;
 
@@ -17,8 +19,7 @@ int main(int argc, char** argv) {
     }
     const std::filesystem::path directory(argv[1]);
     const std::string mode(argv[2]);
-    if (mode != "four" && mode != "empty" && mode != "replacement")
-        return 1;
+
     ImportReportHeader header;
     header.L = 1;
     header.t_min = .1;
@@ -29,7 +30,7 @@ int main(int argc, char** argv) {
     const std::string ids[] = {"caseA", "casea", "duplicate", "duplicate"};
     if (mode != "empty") {
         for (int tier = 0; tier < (mode == "four" ? 4 : 1); ++tier) {
-            Defect d;
+            Defect d{};
             d.tier = tiers[tier];
             d.reason = reason;
             d.dimension = std::string("L") + std::to_string(tier);
@@ -44,11 +45,89 @@ int main(int argc, char** argv) {
             defects.push_back(d);
         }
     }
+    if (mode == "assembly-zero" || mode == "assembly-count") {
+        defects.clear();
+        header.welded_interfaces = mode == "assembly-zero" ? 0 : 9007199254740993LL;
+    } else if (mode == "ids" || mode == "ids-twice" || mode == "generated" || mode == "replay") {
+        defects.clear();
+        const std::vector<std::string> ordered = {
+            "foo", "foo", "foo#2", "foo", "part/1", "part#status", "part#2"};
+        const auto ids_to_use = mode == "generated" ? std::vector<std::string>{"", ""}
+                                : mode == "replay"  ? std::vector<std::string>{"foo", "foo"}
+                                                    : ordered;
+        for (const auto& id : ids_to_use) {
+            Defect d{};
+            d.tier = Tier::B;
+            d.reason = reason;
+            d.defect_id = id;
+            d.dimension = "element";
+            d.suggestion = "synthetic repair";
+            defects.push_back(d);
+        }
+    } else if (mode == "escaping") {
+        auto& d = defects.front();
+        const std::string special =
+            std::string("quote\" backslash\\ newline\n tab\t return\r nul") + char(0) + " unit" +
+            char(0x1f);
+        d.defect_id = special;
+        d.kind = special;
+        d.dimension = special;
+        d.suggestion = special;
+        d.action = special;
+        d.rejection_reason = special;
+    } else if (mode == "units") {
+        defects.clear();
+        const std::string dimensions[] = {"element",
+                                          "",
+                                          "unknown",
+                                          "L",
+                                          "t_min",
+                                          "measured",
+                                          "delta",
+                                          "L",
+                                          "measured",
+                                          "element"};
+        for (int i = 0; i < 10; ++i) {
+            Defect d{};
+            d.tier = Tier::A;
+            d.reason = reason;
+            d.dimension = dimensions[i];
+            d.defect_id = "unit_" + std::to_string(i);
+            d.size = i == 7   ? std::numeric_limits<double>::quiet_NaN()
+                     : i == 8 ? std::numeric_limits<double>::infinity()
+                     : i == 9 ? -std::numeric_limits<double>::infinity()
+                              : 0.125 + i * 0.25;
+            defects.push_back(d);
+        }
+    } else if (mode != "four" && mode != "empty" && mode != "replacement") {
+        return 1;
+    }
     std::string error;
+    int exit_code = 0;
+    if (mode == "replay") {
+        const auto list = read_accept_file(directory / "accept.json", &error);
+        if (!list) {
+            std::cerr << error << '\n';
+            return 1;
+        }
+        // Exercise the production normalization point in policy, without a test-side rename.
+        auto result = apply_repair_policy(defects, accepted_ids(*list));
+        for (const auto& warning : result.warnings)
+            std::cerr << warning << '\n';
+        defects = std::move(result.defects);
+        exit_code = result.result == ImportResult::ConfirmationRequired ? 6
+                    : result.result == ImportResult::Rejected           ? 7
+                                                                        : 0;
+    } else {
+        deduplicate_defect_ids(defects);
+        if (mode == "ids-twice")
+            deduplicate_defect_ids(defects);
+    }
     if (!write_import_report(directory, header, defects, &error)) {
         std::cerr << error << '\n';
         return 1;
     }
     std::cout << (directory / "import_report.json").string() << '\n'
               << (directory / "import_report.csv").string() << '\n';
+    return exit_code;
 }
