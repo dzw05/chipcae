@@ -70,14 +70,6 @@ Expected<Polygon> normalized_polygon(const Inclusion& region) {
                 (ring[i][1] - ring[0][1]) * (ring[i + 1][0] - ring[0][0]);
     if (ring.size() < 3 || !std::isfinite(area) || area == 0)
         return Error{"CUT_UNSUPPORTED", region.name + ": degenerate polygon"};
-    // Cleanup must not erase a self-touching excursion before topology checks.
-    // Repeated closure/consecutive vertices remain accepted normalization input.
-    auto topology = region.footprint.polygon;
-    topology.erase(std::unique(topology.begin(), topology.end()), topology.end());
-    while (topology.size() > 1 && topology.front() == topology.back())
-        topology.pop_back();
-    if (detail::check_simple(topology) || detail::check_simple(ring))
-        return Error{"CUT_UNSUPPORTED", region.name + ": self-intersecting polygon"};
     if (area < 0)
         std::reverse(ring.begin(), ring.end());
     std::rotate(ring.begin(), std::min_element(ring.begin(), ring.end()), ring.end());
@@ -118,13 +110,25 @@ Expected<std::vector<Source>> polygon_sources(const StackModel& stack, const Hex
             auto normalized = normalized_polygon(region);
             if (!normalized)
                 return normalized.error();
+            auto ring = std::move(normalized.value());
+            const bool convex = legacy_convex(ring);
+            if (!convex) {
+                // Preserve legacy convex cleanup. Decomposition additionally
+                // checks the raw ring so cleanup cannot hide self-contact, and
+                // the cleaned ring because it is the triangulator's input.
+                auto topology = region.footprint.polygon;
+                topology.erase(std::unique(topology.begin(), topology.end()), topology.end());
+                while (topology.size() > 1 && topology.front() == topology.back())
+                    topology.pop_back();
+                if (detail::check_simple(topology) || detail::check_simple(ring))
+                    return Error{"CUT_UNSUPPORTED", region.name + ": self-intersecting polygon"};
+            }
             const auto& body = region.body.empty() ? region.name : region.body;
             const auto found = mesh.attr_table.bodies.find(body);
             if (found == mesh.attr_table.bodies.end())
                 return Error{"INPUT_INVALID", body + ": body not in attr_table"};
-            auto ring = std::move(normalized.value());
             std::optional<detail::ConvexPieces> decomposition;
-            if (!legacy_convex(ring)) {
+            if (!convex) {
                 auto canonical = detail::normalize_ring(ring);
                 if (!canonical)
                     return Error{"CUT_UNSUPPORTED", region.name + ": degenerate polygon"};

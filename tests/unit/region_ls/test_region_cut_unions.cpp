@@ -1104,8 +1104,12 @@ void region_levels(const Output& out, const HexMeshArrays& original, const CutGe
         bodies.insert(body);
     for (const auto& entry : original.attr_table.entries)
         bodies.insert(entry.body);
+    for (const auto& plane : g.planes)
+        if (plane.body != 0)
+            bodies.insert(plane.body);
     for (const auto& ls : out.cut.level_sets) {
-        require(bodies.erase(ls.body) == 1, "one level set for each registered body");
+        require(bodies.erase(ls.body) == 1,
+                "one level set for each constrained or registered body");
         const auto u = std::find_if(
             g.unions.begin(), g.unions.end(), [&](const auto& x) { return x.body == ls.body; });
         require(ls.phi.size() == out.mesh.node_gid.size(), "level set covers remapped nodes");
@@ -1763,6 +1767,96 @@ void entry_only_level_sets(bool immutable) {
     region_levels(direct(m, g, immutable), m, g);
 }
 
+void plane_only_level_sets(bool immutable) {
+    const auto m = sp5::grid(region_stack({}), 8);
+    const auto lid = m.attr_table.bodies.at("lid");
+    // Neither plane-only body is in the registry or any attribute entry.
+    // Include repeated planes and a common constraint to check merging/filtering.
+    const CutGeometry g{{{91, {2, 0, 0}, .02},
+                         {0, {0, 0, 2}, .0029},
+                         {91, {0, 4, 0}, .048},
+                         {90, {-3, 0, 0}, -.012}},
+                        {manual_union(lid, l_ring())}};
+    const auto out = direct(m, g, immutable);
+    region_levels(out, m, g);
+    for (std::size_t i = 1; i < out.cut.level_sets.size(); ++i)
+        require(out.cut.level_sets[i - 1].body < out.cut.level_sets[i].body,
+                "plane-only fields merge in strictly increasing BodyId order");
+}
+
+void union_outline_phi_mismatch(bool longer) {
+    auto m = sp5::grid(region_stack({}), 8);
+    sentinel(m);
+    const auto before = m;
+    const CutGeometry g{{}, {manual_union(m.attr_table.bodies.at("lid"), l_ring())}};
+    const std::vector<union_kernel::UnionPiece> outline{piece(square_ring(), square_ring())};
+    const auto nodes = m.vertices.size() / 3;
+    const std::vector<Real> phi(longer ? nodes + 1 : nodes - 1, -1);
+    const auto result = union_kernel::build_cut_layer_union(m, outline, g, options(), phi);
+    require(!result, "body unions reject short and long outline fields before indexing");
+    exact_error(result.error(), "cut/union", "outline_phi size mismatch");
+    exact(m, before, "outline field mismatch preserves every caller field");
+}
+
+void union_options_precedence(bool immutable, int which) {
+    auto m = sp5::grid(region_stack({}), 8);
+    sentinel(m);
+    const auto before = m;
+    const auto u = manual_union(m.attr_table.bodies.at("lid"), l_ring());
+    auto o = options();
+    if (which == 0)
+        o.snap_phi = -1;
+    else if (which == 1)
+        o.snap_phi = std::numeric_limits<Real>::quiet_NaN();
+    else if (which == 2)
+        o.small_sub_vf = -1;
+    else if (which == 3)
+        o.small_sub_vf = 1;
+    else if (which == 4)
+        o.small_sub_vf = std::numeric_limits<Real>::quiet_NaN();
+    else
+        o.quad_degree = 3;
+    std::array<CutGeometry, 4> invalid{
+        CutGeometry{{}, {u, u}}, CutGeometry{{}, {u}}, CutGeometry{{}, {u}}, CutGeometry{{}, {u}}};
+    invalid[1].unions[0].ring = {{0, 0}};
+    invalid[2].unions[0].internal.clear();
+    invalid[3].unions[0].pieces[0][0].n = {0, 0, 0};
+    for (const auto& g : invalid) {
+        const auto result = immutable ? build_cut_layer(static_cast<const HexMeshArrays&>(m), g, o)
+                                      : build_cut_layer(m, g, o);
+        require(!result, "invalid options and union must fail");
+        exact_error(result.error(), "cut/options", "invalid thresholds");
+        exact(m, before, "invalid options preserve every caller field");
+    }
+}
+
+void legacy_convex_cleanup(bool reverse) {
+    const auto m = sp5b::registered_mesh();
+    // Legacy cleanup removes a collinear out-and-back excursion from a square
+    // and a repeated diagonal excursion from a triangle before testing convexity.
+    const std::array<Ring, 2> raw{
+        Ring{{.004, .004},
+             {.016, .004},
+             {.016, .016},
+             {.01, .016},
+             {.01, .018},
+             {.01, .016},
+             {.004, .016}},
+        Ring{{0, 0}, {.02, 0}, {.02, .02}, {.01, .01}, {0, .02}, {.01, .01}}};
+    const std::array<Ring, 2> cleaned{square_ring(), Ring{{0, 0}, {.02, 0}, {.02, .02}}};
+    for (std::size_t k = 0; k < raw.size(); ++k) {
+        auto s = region_stack(cleaned[k]);
+        const auto expected = value(region_cut_planes(s, m), "clean convex reference");
+        auto ring = raw[k];
+        if (reverse)
+            std::reverse(ring.begin(), ring.end());
+        s.layers.back().regions[0].footprint.polygon = ring;
+        const auto actual = value(region_cut_planes(s, m), "legacy convex cleanup");
+        require(actual.unions.empty(), "legacy convex cleanup retains the planes path");
+        exact(actual, expected, "cleaned convex planes retain every bit and their order");
+    }
+}
+
 void balanced_overlap_rejected(bool immutable) {
     auto m = sp5::grid(stack(), 8);
     const auto before = m;
@@ -1965,6 +2059,12 @@ int main(int argc, char** argv) {
                 [=] { zero_coordinate_split(immutable); });
             run("entry_only_level_sets_" + std::to_string(immutable),
                 [=] { entry_only_level_sets(immutable); });
+            run("plane_only_level_sets_" + std::to_string(immutable),
+                [=] { plane_only_level_sets(immutable); });
+            for (int which = 0; which < 6; ++which)
+                run("union_options_precedence_" + std::to_string(immutable) + "_" +
+                        std::to_string(which),
+                    [=] { union_options_precedence(immutable, which); });
             run("balanced_overlap_rejected_" + std::to_string(immutable),
                 [=] { balanced_overlap_rejected(immutable); });
             for (bool near_parallel : {false, true})
@@ -1981,6 +2081,12 @@ int main(int argc, char** argv) {
         run("source_dedupe", [] { source_dedupe(false); });
         run("source_distinct", [] { source_dedupe(true); });
         run("empty_sources", empty_sources);
+        for (bool variant : {false, true}) {
+            run("union_outline_phi_mismatch_" + std::to_string(variant),
+                [=] { union_outline_phi_mismatch(variant); });
+            run("legacy_convex_cleanup_" + std::to_string(variant),
+                [=] { legacy_convex_cleanup(variant); });
+        }
         const std::array<Real, 3> nonfinite{std::numeric_limits<Real>::quiet_NaN(),
                                             std::numeric_limits<Real>::infinity(),
                                             -std::numeric_limits<Real>::infinity()};
@@ -1997,12 +2103,23 @@ int main(int argc, char** argv) {
                                 ring[vertex][axis] = nonfinite[k];
                                 producer_error(ring, "degenerate polygon", false);
                             });
-        const std::vector<Ring> bad{
-            {{0, 0}, {.01, 0}},
-            {{0, 0}, {.01, 0}, {.02, 0}},
-            {{0, 0}, {.02, .02}, {0, .02}, {.018, 0}},
-            {{0, 0}, {.02, 0}, {.02, .02}, {.01, .01}, {0, .02}, {.01, .01}},
-            {{0, 0}, {.02, .02}, {0, .02}, {.02, 0}}};
+        const std::vector<Ring> bad{{{0, 0}, {.01, 0}},
+                                    {{0, 0}, {.01, 0}, {.02, 0}},
+                                    {{0, 0}, {.02, .02}, {0, .02}, {.018, 0}},
+                                    {{0, 0},
+                                     {.02, 0},
+                                     {.02, .02},
+                                     {.012, .02},
+                                     {.012, .012},
+                                     {.008, .012},
+                                     {.008, .02},
+                                     {0, .02},
+                                     {0, .01},
+                                     {.004, .01},
+                                     {.004, .014},
+                                     {.004, .01},
+                                     {0, .01}},
+                                    {{0, 0}, {.02, .02}, {0, .02}, {.02, 0}}};
         for (std::size_t k = 0; k < bad.size(); ++k)
             for (bool precedence : {false, true})
                 run("source_error_" + std::to_string(k) + "_" + std::to_string(precedence),

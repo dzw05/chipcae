@@ -568,6 +568,9 @@ Expected<BodyPieces> prepare_body_pieces(const HexMeshArrays& mesh,
         bodies.insert(body);
     for (const auto& entry : mesh.attr_table.entries)
         bodies.insert(entry.body);
+    for (const auto& plane : geometry.planes)
+        if (plane.body != 0)
+            bodies.insert(plane.body);
     BodyPieces prepared;
     const std::vector<detail::UnionPiece> identity(1);
     const auto& outer = outline.empty() ? identity : outline;
@@ -732,6 +735,12 @@ void register_embedded(HexMeshArrays& m, const CutLayerArrays& c) {
         }
     }
 }
+std::optional<Error> validate_options(const CutOptions& o) {
+    if (!(o.snap_phi >= 0) || !(o.small_sub_vf >= 0 && o.small_sub_vf < 1) ||
+        (o.quad_degree != 2 && o.quad_degree != 4 && o.quad_degree != 6 && o.quad_degree != 8))
+        return Error{"cut/options", "invalid thresholds"};
+    return std::nullopt;
+}
 Expected<CutLayerArrays> generate(const HexMeshArrays& m,
                                   const CutGeometry& g,
                                   const CutOptions& o,
@@ -739,9 +748,10 @@ Expected<CutLayerArrays> generate(const HexMeshArrays& m,
                                   const std::vector<Real>* outline_phi = nullptr,
                                   bool union_call = false,
                                   const BodyPieces* body_pieces = nullptr) {
-    if (!(o.snap_phi >= 0) || !(o.small_sub_vf >= 0 && o.small_sub_vf < 1) ||
-        (o.quad_degree != 2 && o.quad_degree != 4 && o.quad_degree != 6 && o.quad_degree != 8))
-        return Error{"cut/options", "invalid thresholds"};
+    if (auto error = validate_options(o))
+        return *error;
+    if (outline_phi && outline_phi->size() != m.vertices.size() / 3)
+        return Error{"cut/union", "outline_phi size mismatch"};
     const auto* pieces = outline_pieces;
     CutLayerArrays c;
     if (o.export_polyhedra)
@@ -1397,6 +1407,8 @@ Expected<CutLayerArrays>
 build_cut_layer(const HexMeshArrays& m, const CutGeometry& g, const CutOptions& o) {
     if (g.unions.empty())
         return generate(m, g, o);
+    if (auto error = validate_options(o))
+        return *error;
     auto prepared = prepare_body_pieces(m, g, {});
     if (!prepared)
         return prepared.error();
@@ -1406,6 +1418,8 @@ Expected<CutLayerArrays>
 build_cut_layer(HexMeshArrays& mesh, const CutGeometry& g, const CutOptions& o) {
     if (g.unions.empty())
         return finalize(mesh, o, generate(mesh, g, o));
+    if (auto error = validate_options(o))
+        return *error;
     auto prepared = prepare_body_pieces(mesh, g, {});
     if (!prepared)
         return prepared.error();
