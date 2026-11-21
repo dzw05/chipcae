@@ -129,17 +129,21 @@ class PreviewMeshParams(unittest.TestCase):
             self.assertEqual(summary['nz'], 15, context)
             self.assertGreater(summary['cell_count'], 50000, context)
             self.assertLessEqual(summary['cell_count'], 100000, context)
-            self.assertEqual(summary['cell_budget'], 100000, context)
+            self.assertEqual(summary.get('cell_budget'), 100000, context)
+            self.assertIn('min_elems_per_layer', summary, context)
             self.assertIsNone(summary['min_elems_per_layer'], context)
         finally:
             self.measure('raised-budget')
 
     def test_budget_equal_cell_count(self):
-        baseline = self.success(self.invoke('baseline', synthetic_stack()))
-        exact = self.success(self.invoke('exact', synthetic_stack(),
-                                        ['--cell-budget', str(baseline['cell_count'])]))
-        self.assertEqual(exact['mesh_sha256'], baseline['mesh_sha256'])
-        self.assertEqual(exact['cell_count'], baseline['cell_count'])
+        baseline_run = self.invoke('baseline', synthetic_stack())
+        baseline = self.success(baseline_run)
+        exact_run = self.invoke('exact', synthetic_stack(),
+                                ['--cell-budget', str(baseline['cell_count'])])
+        exact = self.success(exact_run)
+        context = diagnostics(baseline_run[0]) + diagnostics(exact_run[0])
+        self.assertEqual(exact['mesh_sha256'], baseline['mesh_sha256'], context)
+        self.assertEqual(exact['cell_count'], baseline['cell_count'], context)
         self.rejected(self.invoke('too-small', synthetic_stack(), ['--cell-budget', '1']),
                       14, 'cell_budget: ')
 
@@ -152,18 +156,22 @@ class PreviewMeshParams(unittest.TestCase):
                                          ['--min-elems-per-layer', '2'])
                 summary = self.success(invocation)
                 self.assertEqual(summary['nz'], expected_nz, diagnostics(invocation[0]))
-                self.assertEqual(summary['min_elems_per_layer'], 2, diagnostics(invocation[0]))
+                self.assertEqual(summary.get('min_elems_per_layer'), 2,
+                                 diagnostics(invocation[0]))
 
     def test_defaults_unchanged(self):
         # Reuse the stem: success includes the output path, including in message.
-        plain = self.success(self.invoke('same-stem', synthetic_stack()))
-        explicit = self.success(self.invoke('same-stem', synthetic_stack(),
-                                           ['--cell-budget', '50000']))
-        self.assertEqual(set(plain), set(explicit))
+        plain_run = self.invoke('same-stem', synthetic_stack())
+        plain = self.success(plain_run)
+        explicit_run = self.invoke('same-stem', synthetic_stack(), ['--cell-budget', '50000'])
+        explicit = self.success(explicit_run)
+        context = diagnostics(plain_run[0]) + diagnostics(explicit_run[0])
+        self.assertEqual(set(plain), set(explicit), context)
         for key in plain:
-            self.assertEqual(plain[key], explicit[key], key)
-        self.assertEqual(plain['cell_budget'], 50000)
-        self.assertIsNone(plain['min_elems_per_layer'])
+            self.assertEqual(plain[key], explicit[key], f'{key}{context}')
+        self.assertEqual(plain.get('cell_budget'), 50000, context)
+        self.assertIn('min_elems_per_layer', plain, context)
+        self.assertIsNone(plain['min_elems_per_layer'], context)
 
     def test_matches_solve(self):
         solve = self.build / 'apps' / 'chipcae-solve' / 'chipcae-solve'
@@ -215,15 +223,19 @@ class PreviewMeshParams(unittest.TestCase):
         self.assertEqual(result.returncode, 0, diagnostics(result))
         kernel = json.loads((out / 'manifest.json').read_text(encoding='utf-8'))['mesh']
         try:
-            default = self.success(self.invoke('preview-default', stack, ny=2))
-            self.assertEqual(default['nz'], 2)
-            self.assertNotEqual(default['nz'], kernel['nz'])
-            aligned = self.success(self.invoke(
+            default_run = self.invoke('preview-default', stack, ny=2)
+            default = self.success(default_run)
+            context = diagnostics(result) + diagnostics(default_run[0])
+            self.assertEqual(default['nz'], 2, context)
+            self.assertNotEqual(default['nz'], kernel['nz'], context)
+            aligned_run = self.invoke(
                 'preview-aligned', stack, ['--max-ratio', '2', '--min-elems-per-layer', '2',
-                                           '--cell-budget', '50000'], ny=2))
-            self.assertEqual(aligned['nz'], 4)
+                                           '--cell-budget', '50000'], ny=2)
+            aligned = self.success(aligned_run)
+            context += diagnostics(aligned_run[0])
+            self.assertEqual(aligned['nz'], 4, context)
             for key in ('nx0', 'ny0', 'L', 'nz', 'padded_cells', 'mesh_sha256'):
-                self.assertEqual(aligned[key], kernel[key], key)
+                self.assertEqual(aligned[key], kernel[key], f'{key}{context}')
         finally:
             self.measure('solve-alignment')
 
