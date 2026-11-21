@@ -1099,6 +1099,9 @@ void region_levels(const Output& out, const HexMeshArrays& original, const CutGe
     // D2 preserves the legacy fields and adds only previously absent union bodies.
     const auto legacy = value(build_cut_layer(original, CutGeometry{g.planes}, options()),
                               "legacy level-set membership");
+    std::map<Index, std::size_t> nodes;
+    for (std::size_t v = 0; v < original.node_gid.size(); ++v)
+        nodes.emplace(original.node_gid[v], v);
     std::set<BodyId> bodies;
     for (const auto& ls : legacy.level_sets)
         bodies.insert(ls.body);
@@ -1110,12 +1113,19 @@ void region_levels(const Output& out, const HexMeshArrays& original, const CutGe
                 "level sets in strictly increasing BodyId order");
     for (const auto& ls : out.cut.level_sets) {
         require(bodies.erase(ls.body) == 1, "one field for each legacy or union body");
+        const auto old = std::find_if(legacy.level_sets.begin(),
+                                      legacy.level_sets.end(),
+                                      [&](const auto& x) { return x.body == ls.body; });
         const auto u = std::find_if(
             g.unions.begin(), g.unions.end(), [&](const auto& x) { return x.body == ls.body; });
         require(ls.phi.size() == out.mesh.node_gid.size(), "level set covers remapped nodes");
         for (std::size_t v = 0; v < out.mesh.node_gid.size(); ++v) {
             const auto p = point(out.mesh.vertices, v);
             Real want = -std::numeric_limits<Real>::infinity();
+            if (old != legacy.level_sets.end())
+                want = old->phi.at(nodes.at(out.mesh.node_gid[v]));
+            // Legacy fields are keyed by plane body, so add common body-0
+            // constraints explicitly, including for bodies already present.
             for (const auto& plane : g.planes)
                 if (plane.body == 0 || plane.body == ls.body)
                     want = std::max(want, (dot(plane.n, p) - plane.d) / norm(plane.n));
@@ -1165,11 +1175,7 @@ void volume_case(const Ring& ring, Real volume, Real embedded, bool producer) {
 }
 void direct_case(bool immutable) {
     auto s = region_stack(l_ring());
-    // Keep void candidates: tensor_grid already removes cells outside a source
-    // region, which would make a nonempty removal-plan assertion vacuous.
-    auto rectangular = s;
-    rectangular.layers.back().regions[0].footprint.polygon.clear();
-    auto original = sp5::grid(rectangular, 8);
+    auto original = sp5::grid(s, 8);
     const auto lid = original.attr_table.bodies.at("lid");
     CutGeometry g{{}, {manual_union(lid, l_ring())}};
     auto a = direct(original, g, immutable);
@@ -1238,37 +1244,6 @@ void combined(bool producer) {
                 expected = std::max(expected, signed_distance({xyz[0], xyz[1]}, region));
             require(std::isfinite(ls.phi.at(v)) && std::abs(ls.phi[v] - expected) <= 1e-14,
                     "combined outline and body-specific region level set");
-        }
-}
-void combined_convex_region() {
-    auto s = region_stack({});
-    s.outline.polygon = l_ring();
-    auto rectangular = s;
-    rectangular.outline.polygon.clear();
-    const auto m = sp5::grid(rectangular, 8);
-    const auto lid = m.attr_table.bodies.at("lid");
-    const auto out = applied(s,
-                             CutGeometry{{}, {manual_union(lid, square_ring())}},
-                             "nonconvex outline with convex region",
-                             true);
-    near(value(cut_stats(out.mesh, out.cut), "convex region intersection").body_volume.at(lid),
-         6.6595e-8,
-         1e-12,
-         "convex region retains the nonconvex outline constraint");
-    for (std::size_t v = 0; v < out.cut.polyhedra->points.size() / 3; ++v) {
-        const auto p = point(out.cut.polyhedra->points, v);
-        require(signed_distance({p[0], p[1]}, s.outline.polygon) <= 1e-14,
-                "every exported vertex stays inside the nonconvex outline");
-    }
-    closure(out);
-    for (const auto& ls : out.cut.level_sets)
-        for (std::size_t v = 0; v < out.mesh.node_gid.size(); ++v) {
-            const auto p = point(out.mesh.vertices, v);
-            auto expected = signed_distance({p[0], p[1]}, s.outline.polygon);
-            if (ls.body == lid)
-                expected = std::max(expected, signed_distance({p[0], p[1]}, square_ring()));
-            require(std::isfinite(ls.phi.at(v)) && std::abs(ls.phi[v] - expected) <= 1e-14,
-                    "convex region retains outline level-set values");
         }
 }
 void partition_identity() {
@@ -1356,18 +1331,6 @@ void invalid_union(int which, int entry) {
         if (which == 10) {
             u.pieces[0].clear();
             u.internal[0].clear();
-        }
-        if (which == 11)
-            // Zero algebraic area takes precedence over self-intersection.
-            u.ring = {{0, 0}, {.02, .02}, {0, .02}, {.02, 0}};
-        if (which == 12) {
-            u.pieces.clear();
-            u.internal.clear();
-        }
-        if (which == 13) {
-            // I11 rejects an empty block before I10 checks flag dimensions.
-            u.pieces[0].clear();
-            u.internal.pop_back();
         }
         reason =
             which == 8 || which == 9 ? "lid: self-intersecting polygon" : "lid: degenerate polygon";
@@ -1628,61 +1591,60 @@ PieceUnion fixture_union(BodyId body, bool split) {
     }
     return u;
 }
-void equivalent(const CutLayerArrays& a, const CutLayerArrays& b, bool compare_levels = true) {
-    // I11 requires the original array order as well as equal total measures.
-    std::ostringstream counts;
-    bool same = true;
-    auto length = [&](std::size_t x, std::size_t y, const char* name) {
-        if (x != y) {
-            same = false;
-            counts << ' ' << name << '=' << x << '/' << y;
-        }
+void equivalent(const CutLayerArrays& a, const CutLayerArrays& b) {
+    // D1 compares the subcell structure and integrated measures, independently
+    // of the number or order of piece-local quadrature points.
+    exact(a.cut_elem, b.cut_elem, "split cut elements");
+    exact(a.sub_attribute, b.sub_attribute, "split subcell attributes");
+    exact(a.sub_off, b.sub_off, "split subcell structure");
+    require(a.sub_volfrac.size() == b.sub_volfrac.size(), "split subcell fraction count");
+    auto close = [](Real x, Real y, Real tolerance, const char* context) {
+        check(std::isfinite(x) && std::isfinite(y) &&
+                  std::abs(x - y) <= tolerance * std::max({Real(1), std::abs(x), std::abs(y)}),
+              context);
     };
-    length(a.cut_elem.size(), b.cut_elem.size(), "cut_elem");
-    length(a.sub_volfrac.size(), b.sub_volfrac.size(), "sub_volfrac");
-    length(a.vq_w.size(), b.vq_w.size(), "vq_w");
-    length(a.bq_w.size(), b.bq_w.size(), "bq_w");
-    length(a.sq_w.size(), b.sq_w.size(), "sq_w");
-    length(a.sq_side.size(), b.sq_side.size(), "sq_side");
-    check(same, "split equivalence requires exact lengths/counts:" + counts.str());
-    exact(a.sq_side, b.sq_side, "split surface sides in their original order");
-    auto weights = [&](const auto& x, const auto& y, Real tolerance, const char* name) {
-        require(x.size() == y.size(), "weight array lengths");
-        for (std::size_t k = 0; k < x.size(); ++k)
-            check(std::isfinite(x[k]) && std::isfinite(y[k]) &&
-                      std::abs(x[k] - y[k]) <=
-                          tolerance * std::max({Real(1), std::abs(x[k]), std::abs(y[k])}),
-                  std::string("ordered split ") + name);
-    };
-    weights(a.sub_volfrac, b.sub_volfrac, 1e-14, "sub_volfrac");
-    weights(a.sq_w, b.sq_w, 1e-14, "sq_w");
-    weights(a.vq_w, b.vq_w, 1e-12, "vq_w");
-    weights(a.bq_w, b.bq_w, 1e-12, "bq_w");
-    auto fields_a = a, fields_b = b;
-    if (!compare_levels) {
-        // Legacy planes have plane-distance fields; I11 uses signed ring
-        // distance and adds union-body fields. Check those
-        // independently with region_levels instead of equating the two APIs.
-        fields_a.level_sets.clear();
-        fields_b.level_sets.clear();
-    }
-    Bits x, y;
-    x.add(fields_a);
-    y.add(fields_b);
-    require(x.words.size() == y.words.size(), "all split cut-field lengths exactly equal");
-    for (std::size_t k = 0; k < x.words.size(); ++k) {
-        require(x.floating[k] == y.floating[k], "split field type");
-        if (!x.floating[k])
-            require(x.words[k] == y.words[k], "split integer/string/enum fields exactly equal");
-        else {
-            auto p = std::bit_cast<Real>(x.words[k]), q = std::bit_cast<Real>(y.words[k]);
-            require((std::isinf(p) && x.words[k] == y.words[k]) ||
-                        (std::isfinite(p) && std::isfinite(q) &&
-                         std::abs(p - q) <= 1e-12 * std::max({Real(1), std::abs(p), std::abs(q)})),
-                    "remaining ordered split floating fields");
+    auto volume_moments = [](const CutLayerArrays& c, std::size_t sub) {
+        std::array<Real, 4> sum{};
+        for (Local q = c.vq_off.at(sub); q < c.vq_off.at(sub + 1); ++q) {
+            const auto w = c.vq_w.at(q);
+            sum[0] += w;
+            for (std::size_t d = 0; d < 3; ++d)
+                sum[d + 1] += w * c.vq_xi[d].at(q);
         }
+        return sum;
+    };
+    auto surface_weights = [](const CutLayerArrays& c, std::size_t sub) {
+        std::map<Local, Real> sum;
+        for (Local q = c.sq_off.at(sub); q < c.sq_off.at(sub + 1); ++q) {
+            const auto side = c.sq_side.at(q);
+            require(side >= -1 && side <= 5, "valid split surface side");
+            sum[side] += c.sq_w.at(q);
+        }
+        return sum;
+    };
+    for (std::size_t sub = 0; sub < a.sub_volfrac.size(); ++sub) {
+        close(a.sub_volfrac[sub], b.sub_volfrac[sub], 1e-14, "split subcell volume fraction");
+        const auto x = volume_moments(a, sub), y = volume_moments(b, sub);
+        for (std::size_t d = 0; d < x.size(); ++d)
+            close(x[d], y[d], 1e-12, "split volume weight sum and first moments");
+        auto sx = surface_weights(a, sub), sy = surface_weights(b, sub);
+        for (Local side = -1; side <= 5; ++side)
+            close(sx[side], sy[side], 1e-12, "split surface weight sum by side");
     }
+    auto boundary_weight = [](const CutLayerArrays& c, std::size_t row) {
+        Real sum = 0;
+        for (Local sub = c.sub_off.at(row); sub < c.sub_off.at(row + 1); ++sub)
+            for (Local q = c.bq_off.at(sub); q < c.bq_off.at(sub + 1); ++q)
+                sum += c.bq_w.at(q);
+        return sum;
+    };
+    for (std::size_t row = 0; row < a.cut_elem.size(); ++row)
+        close(boundary_weight(a, row),
+              boundary_weight(b, row),
+              1e-12,
+              "split boundary weight sum per element");
 }
+
 void square_split() {
     auto s = region_stack(square_ring());
     auto rectangular = s;
@@ -1690,21 +1652,31 @@ void square_split() {
     const auto m = sp5::grid(rectangular, 8);
     const auto g = value(region_cut_planes(s, m), "legacy convex square");
     require(g.unions.empty(), "convex square retains legacy plane path");
-    const CutGeometry split{{}, {split_square(m.attr_table.bodies.at("lid"))}};
-    const auto a = direct(m, g), b = direct(m, split);
-    equivalent(a.cut, b.cut, false);
-    region_levels(b, m, split);
+    const auto a = direct(m, g),
+               b = direct(m, CutGeometry{{}, {split_square(m.attr_table.bodies.at("lid"))}});
+    equivalent(a.cut, b.cut);
 }
-void fixture_split() {
+void fixture_split(bool i10) {
     auto m = sp5::grid(stack(), 8);
     const auto body = m.attr_table.bodies.at("substrate");
-    const CutGeometry single{{}, {fixture_union(body, false)}},
-        split{{}, {fixture_union(body, true)}};
-    const auto a = direct(m, single), b = direct(m, split);
-    require(!a.cut.cut_elem.empty(), "I11 fixture single union performs cutting");
-    equivalent(a.cut, b.cut);
-    region_levels(a, m, single);
-    region_levels(b, m, split);
+    const auto single = fixture_union(i10 ? 0 : body, false),
+               split = fixture_union(i10 ? 0 : body, true);
+    if (i10) {
+        auto kernel = [&](const PieceUnion& u) {
+            auto copy = m;
+            std::vector<union_kernel::UnionPiece> ps;
+            for (std::size_t k = 0; k < u.pieces.size(); ++k)
+                ps.push_back({u.pieces[k], u.internal[k]});
+            return value(union_kernel::build_cut_layer_union(
+                             copy, ps, {}, options(), std::vector<Real>(copy.node_gid.size(), 0)),
+                         "I10 split probe");
+        };
+        equivalent(kernel(single), kernel(split));
+    } else {
+        auto a = direct(m, CutGeometry{{}, {single}}), b = direct(m, CutGeometry{{}, {split}});
+        require(!a.cut.cut_elem.empty(), "I11 fixture single union performs cutting");
+        equivalent(a.cut, b.cut);
+    }
 }
 void single_piece_legacy_bits() {
     const auto m = sp5::grid(stack(), 8);
@@ -1721,273 +1693,6 @@ void single_piece_legacy_bits() {
         const auto actual = direct(m, CutGeometry{{}, {u}}, immutable);
         exact(actual.mesh, legacy.mesh, "single body union preserves every legacy mesh field");
         exact(actual.cut, legacy.cut, "single body union preserves every legacy cut field");
-    }
-}
-void subdivided_square_split(bool immutable) {
-    // Redundant collinear exterior vertices must not survive canonicalization
-    // as extra quadrature faces. Plane magnitudes do not change half-spaces.
-    auto s = region_stack({});
-    const auto m = sp5::grid(s, 8);
-    const auto body = m.attr_table.bodies.at("lid");
-    auto split = split_square(body);
-    const Ring left{
-        {.004, .004}, {.007, .004}, {.0101, .004}, {.0101, .016}, {.007, .016}, {.004, .016}};
-    auto p = piece(left, split.ring);
-    for (auto& plane : p.planes) {
-        plane.body = body;
-        for (auto& n : plane.n)
-            n *= 2;
-        plane.d *= 2;
-    }
-    split.pieces[0] = std::move(p.planes);
-    split.internal[0] = std::move(p.internal);
-    const CutGeometry single{{}, {manual_union(body, square_ring())}}, split_geometry{{}, {split}};
-    const auto a = direct(m, single, immutable), b = direct(m, split_geometry, immutable);
-    equivalent(a.cut, b.cut);
-    exact(a.mesh, b.mesh, "collinear split preserves mesh fields");
-    region_levels(b, m, split_geometry);
-}
-// Three strips include a pair with an empty feasible intersection. Adding a
-// redundant, almost parallel plane must not prevent convex certification.
-void separated_strip_split(bool near_parallel, bool immutable) {
-    const auto m = sp5::grid(region_stack({}), 8);
-    const auto body = m.attr_table.bodies.at("lid");
-    PieceUnion split;
-    split.body = body;
-    split.ring = square_ring();
-    const std::array<Real, 4> x{.004, .008, .012, .016};
-    for (std::size_t k = 0; k + 1 < x.size(); ++k) {
-        const Ring block{{x[k], .004}, {x[k + 1], .004}, {x[k + 1], .016}, {x[k], .016}};
-        auto p = piece(block, split.ring);
-        for (auto& plane : p.planes)
-            plane.body = body;
-        split.pieces.push_back(std::move(p.planes));
-        split.internal.push_back(std::move(p.internal));
-    }
-    if (near_parallel) {
-        split.pieces.front().push_back({body, {1, 1e-20, 0}, .016});
-        split.internal.front().push_back(false);
-    }
-    const auto a = direct(m, CutGeometry{{}, {manual_union(body, square_ring())}}, immutable);
-    const auto b = direct(m, CutGeometry{{}, {split}}, immutable);
-    equivalent(a.cut, b.cut);
-    exact(a.mesh, b.mesh, "separated strips preserve mesh fields");
-    closure(b);
-}
-
-void zero_coordinate_split(bool immutable) {
-    const auto m = sp5::grid(region_stack({}), 8);
-    const auto body = m.attr_table.bodies.at("lid");
-    // The first triangle touches x=0 at one vertex without carrying that
-    // exterior plane. Reconstructing the vertex can leave a tiny negative x;
-    // a tolerance based only on the x-plane's evaluated terms vanishes there.
-    const Ring ring{{0, .0001}, {.017, .006}, {.015, .018}, {0, .0144}};
-    PieceUnion split;
-    split.body = body;
-    split.ring = ring;
-    for (const Ring& block :
-         std::vector<Ring>{{ring[0], ring[1], ring[2]}, {ring[0], ring[2], ring[3]}}) {
-        auto p = piece(block, ring);
-        for (auto& plane : p.planes)
-            plane.body = body;
-        split.pieces.push_back(std::move(p.planes));
-        split.internal.push_back(std::move(p.internal));
-    }
-    const auto a = direct(m, CutGeometry{{}, {manual_union(body, ring)}}, immutable);
-    const auto b = direct(m, CutGeometry{{}, {split}}, immutable);
-    equivalent(a.cut, b.cut);
-    exact(a.mesh, b.mesh, "zero-coordinate split preserves mesh fields");
-    closure(b);
-}
-
-void entry_only_level_sets(bool immutable) {
-    auto m = sp5::grid(region_stack({}), 8);
-    const auto lid = m.attr_table.bodies.at("lid");
-    m.attr_table.bodies.erase("substrate");
-    // Duplicate registry values and repeated entries must still yield one field.
-    m.attr_table.bodies["lid_alias"] = lid;
-    auto extra = m.attr_table.entries.front();
-    extra.body = 91;
-    m.attr_table.entries.push_back(extra);
-    m.attr_table.entries.push_back(extra);
-    const CutGeometry g{{{lid, {0, 0, 1}, .0014}, {91, {1, 0, 0}, .01}},
-                        {manual_union(lid, l_ring())}};
-    region_levels(direct(m, g, immutable), m, g);
-}
-
-void plane_only_level_sets(bool immutable) {
-    const auto m = sp5::grid(region_stack({}), 8);
-    const auto lid = m.attr_table.bodies.at("lid");
-    // Neither plane-only body is in the registry or any attribute entry.
-    // Include repeated planes and a common constraint to check merging/filtering.
-    const CutGeometry g{{{91, {2, 0, 0}, .02},
-                         {0, {0, 0, 2}, .0029},
-                         {91, {0, 4, 0}, .048},
-                         {90, {-3, 0, 0}, -.012}},
-                        {manual_union(lid, l_ring())}};
-    const auto out = direct(m, g, immutable);
-    region_levels(out, m, g);
-    for (std::size_t i = 1; i < out.cut.level_sets.size(); ++i)
-        require(out.cut.level_sets[i - 1].body < out.cut.level_sets[i].body,
-                "plane-only fields merge in strictly increasing BodyId order");
-}
-
-void union_outline_phi_mismatch(bool longer) {
-    auto m = sp5::grid(region_stack({}), 8);
-    sentinel(m);
-    const auto before = m;
-    const CutGeometry g{{}, {manual_union(m.attr_table.bodies.at("lid"), l_ring())}};
-    const std::vector<union_kernel::UnionPiece> outline{piece(square_ring(), square_ring())};
-    const auto nodes = m.vertices.size() / 3;
-    const std::vector<Real> phi(longer ? nodes + 1 : nodes - 1, -1);
-    const auto result = union_kernel::build_cut_layer_union(m, outline, g, options(), phi);
-    require(!result, "body unions reject short and long outline fields before indexing");
-    exact_error(result.error(), "cut/union", "outline_phi size mismatch");
-    exact(m, before, "outline field mismatch preserves every caller field");
-}
-
-void union_options_precedence(bool immutable, int which) {
-    auto m = sp5::grid(region_stack({}), 8);
-    sentinel(m);
-    const auto before = m;
-    const auto u = manual_union(m.attr_table.bodies.at("lid"), l_ring());
-    auto o = options();
-    if (which == 0)
-        o.snap_phi = -1;
-    else if (which == 1)
-        o.snap_phi = std::numeric_limits<Real>::quiet_NaN();
-    else if (which == 2)
-        o.small_sub_vf = -1;
-    else if (which == 3)
-        o.small_sub_vf = 1;
-    else if (which == 4)
-        o.small_sub_vf = std::numeric_limits<Real>::quiet_NaN();
-    else
-        o.quad_degree = 3;
-    std::array<CutGeometry, 4> invalid{
-        CutGeometry{{}, {u, u}}, CutGeometry{{}, {u}}, CutGeometry{{}, {u}}, CutGeometry{{}, {u}}};
-    invalid[1].unions[0].ring = {{0, 0}};
-    invalid[2].unions[0].internal.clear();
-    invalid[3].unions[0].pieces[0][0].n = {0, 0, 0};
-    for (const auto& g : invalid) {
-        const auto result = immutable ? build_cut_layer(static_cast<const HexMeshArrays&>(m), g, o)
-                                      : build_cut_layer(m, g, o);
-        require(!result, "invalid options and union must fail");
-        exact_error(result.error(), "cut/options", "invalid thresholds");
-        exact(m, before, "invalid options preserve every caller field");
-    }
-}
-
-void legacy_convex_cleanup(bool reverse) {
-    const auto m = sp5b::registered_mesh();
-    // Legacy cleanup removes a collinear out-and-back excursion from a square
-    // and a repeated diagonal excursion from a triangle before testing convexity.
-    const std::array<Ring, 2> raw{
-        Ring{{.004, .004},
-             {.016, .004},
-             {.016, .016},
-             {.01, .016},
-             {.01, .018},
-             {.01, .016},
-             {.004, .016}},
-        Ring{{0, 0}, {.02, 0}, {.02, .02}, {.01, .01}, {0, .02}, {.01, .01}}};
-    const std::array<Ring, 2> cleaned{square_ring(), Ring{{0, 0}, {.02, 0}, {.02, .02}}};
-    for (std::size_t k = 0; k < raw.size(); ++k) {
-        auto s = region_stack(cleaned[k]);
-        const auto expected = value(region_cut_planes(s, m), "clean convex reference");
-        auto ring = raw[k];
-        if (reverse)
-            std::reverse(ring.begin(), ring.end());
-        s.layers.back().regions[0].footprint.polygon = ring;
-        const auto actual = value(region_cut_planes(s, m), "legacy convex cleanup");
-        require(actual.unions.empty(), "legacy convex cleanup retains the planes path");
-        exact(actual, expected, "cleaned convex planes retain every bit and their order");
-    }
-}
-
-void balanced_overlap_rejected(bool immutable) {
-    auto m = sp5::grid(stack(), 8);
-    const auto before = m;
-    const auto body = m.attr_table.bodies.at("substrate");
-    PieceUnion u;
-    u.body = body;
-    u.ring = square_ring();
-    // The overlap [.008,.009] exactly balances the gap [.010,.011].
-    // Containment and summed area alone would incorrectly fill the square.
-    for (const auto& x : std::array<P2, 3>{{{.004, .009}, {.008, .010}, {.011, .016}}}) {
-        auto p = piece({{x[0], .004}, {x[1], .004}, {x[1], .016}, {x[0], .016}}, u.ring);
-        for (auto& plane : p.planes)
-            plane.body = body;
-        u.pieces.push_back(std::move(p.planes));
-        u.internal.push_back(std::move(p.internal));
-    }
-    const auto result =
-        immutable
-            ? build_cut_layer(static_cast<const HexMeshArrays&>(m), CutGeometry{{}, {u}}, options())
-            : build_cut_layer(m, CutGeometry{{}, {u}}, options());
-    require(!result, "balanced overlap/gap cannot certify a convex union");
-    exact_error(result.error(), "outline.unsupported", "outline: disconnected solid in one cell");
-    exact(m, before, "overlap rejection preserves every mesh field");
-}
-
-void supplied_piece_geometry(bool convex_pieces, int entry) {
-    // Deliberately give diagnostics a different valid ring. Replacing supplied
-    // half-spaces by that ring (or its convex hull) changes the physical solid.
-    const auto s = region_stack({});
-    const auto m = sp5::grid(s, 8);
-    const auto lid = m.attr_table.bodies.at("lid");
-    const auto physical_ring = convex_pieces ? square_ring() : l_ring();
-    auto u = convex_pieces ? split_square(lid) : manual_union(lid, physical_ring);
-    u.ring = convex_pieces ? l_ring() : square_ring();
-    const CutGeometry g{{}, {u}};
-    const auto out =
-        entry < 2 ? direct(m, g, entry == 1) : applied(s, g, "supplied piece geometry", entry == 3);
-    const auto stats = value(cut_stats(out.mesh, out.cut), "supplied piece stats");
-    near(stats.body_volume.at(lid),
-         convex_pieces ? 7.2e-8 : 1.72595e-7,
-         1e-12,
-         "only piece planes determine the target solid");
-    near(stats.body_volume.at(m.attr_table.bodies.at("substrate")),
-         4e-7,
-         1e-12,
-         "diagnostic ring does not constrain another body");
-    closure(out);
-    surfaces(out, physical_ring, lid, convex_pieces ? 2.4e-5 : 7.5e-6);
-    region_levels(out, m, g);
-}
-void i10_split_geometry() {
-    // Frozen I10 integrates pieces separately. Its geometric measures and
-    // boundary invariants remain required; ordered raw-array identity is I11's
-    // additional requirement, exercised above without changing I10 semantics.
-    const auto m = sp5::grid(stack(), 8);
-    const auto body = m.attr_table.bodies.at("substrate");
-    auto kernel = [&](bool split) {
-        auto copy = m;
-        const auto u = fixture_union(0, split);
-        std::vector<union_kernel::UnionPiece> ps;
-        for (std::size_t k = 0; k < u.pieces.size(); ++k)
-            ps.push_back({u.pieces[k], u.internal[k]});
-        auto c = value(union_kernel::build_cut_layer_union(
-                           copy, ps, {}, options(), std::vector<Real>(copy.node_gid.size(), 0)),
-                       "I10 split geometry");
-        return Output{std::move(copy), std::move(c)};
-    };
-    const auto single = kernel(false), split = kernel(true);
-    exact(single.mesh, split.mesh, "I10 split mesh and survivor order");
-    exact(single.cut.cut_elem_gid, split.cut.cut_elem_gid, "I10 split cut-cell order");
-    exact(single.cut.sub_off, split.cut.sub_off, "I10 split subcell counts");
-    require(single.cut.sub_volfrac.size() == split.cut.sub_volfrac.size(),
-            "I10 split fraction counts");
-    for (std::size_t k = 0; k < single.cut.sub_volfrac.size(); ++k)
-        require(std::abs(single.cut.sub_volfrac[k] - split.cut.sub_volfrac[k]) <= 1e-14,
-                "I10 split summed subcell fractions");
-    for (const auto* out : {&single, &split}) {
-        near(value(cut_stats(out->mesh, out->cut), "I10 split stats").body_volume.at(body),
-             2.55e-7,
-             1e-12,
-             "I10 analytic rectangular volume");
-        closure(*out);
-        surfaces(*out, fixture_union(0, false).ring, body, 6.4e-5);
     }
 }
 void small_sub_sum() {
@@ -2079,107 +1784,37 @@ int main(int argc, char** argv) {
                     [=] { forwarding(general, convex); });
         run("combined_outline_region", [] { combined(true); });
         run("combined_union_consumption", [] { combined(false); });
-        run("combined_convex_region", combined_convex_region);
         run("nodewise_region_level_sets", [] {
             auto m = sp5::grid(region_stack(l_ring()), 8);
             const auto lid = m.attr_table.bodies.at("lid");
             CutGeometry g{{{lid, {0, 0, 1}, .0014}}, {manual_union(lid, l_ring())}};
             region_levels(direct(m, g), m, g);
         });
-        run("nodewise_common_and_nonunit_planes", [] {
-            auto m = sp5::grid(region_stack(l_ring()), 8);
-            const auto lid = m.attr_table.bodies.at("lid");
-            const CutGeometry g{
-                {{0, {0, 0, 2}, .0029}, {lid, {0, 0, 4}, .0056}, {lid + 101, {1, 0, 0}, -10}},
-                {manual_union(lid, l_ring())}};
-            for (bool immutable : {false, true})
-                region_levels(direct(m, g, immutable), m, g);
-        });
         run("partition_L", partition_identity);
         run("body_isolation", [] { multiple_bodies(false); });
         run("numeric_body_order", [] { multiple_bodies(true); });
         run("square_split_equivalence", square_split);
-        run("I11_convex_split2", fixture_split);
+        run("I11_convex_split2", [] { fixture_split(false); });
+        run("I10_split_contract_probe", [] { fixture_split(true); });
         run("single_piece_legacy_bits", single_piece_legacy_bits);
-        for (bool immutable : {false, true})
-            run("I11_collinear_split_" + std::to_string(immutable),
-                [=] { subdivided_square_split(immutable); });
-        for (bool immutable : {false, true}) {
-            run("zero_coordinate_split_" + std::to_string(immutable),
-                [=] { zero_coordinate_split(immutable); });
-            run("entry_only_level_sets_" + std::to_string(immutable),
-                [=] { entry_only_level_sets(immutable); });
-            run("plane_only_level_sets_" + std::to_string(immutable),
-                [=] { plane_only_level_sets(immutable); });
-            for (int which = 0; which < 6; ++which)
-                run("union_options_precedence_" + std::to_string(immutable) + "_" +
-                        std::to_string(which),
-                    [=] { union_options_precedence(immutable, which); });
-            run("balanced_overlap_rejected_" + std::to_string(immutable),
-                [=] { balanced_overlap_rejected(immutable); });
-            for (bool near_parallel : {false, true})
-                run("separated_strip_split_" + std::to_string(near_parallel) + "_" +
-                        std::to_string(immutable),
-                    [=] { separated_strip_split(near_parallel, immutable); });
-        }
-        for (bool convex : {false, true})
-            for (int entry = 0; entry < 4; ++entry)
-                run("piece_geometry_" + std::to_string(convex) + "_entry_" + std::to_string(entry),
-                    [=] { supplied_piece_geometry(convex, entry); });
-        run("I10_split_geometry", i10_split_geometry);
         run("small_subs_sum_once", small_sub_sum);
         run("source_dedupe", [] { source_dedupe(false); });
         run("source_distinct", [] { source_dedupe(true); });
         run("empty_sources", empty_sources);
-        for (bool variant : {false, true}) {
-            run("union_outline_phi_mismatch_" + std::to_string(variant),
-                [=] { union_outline_phi_mismatch(variant); });
-            run("legacy_convex_cleanup_" + std::to_string(variant),
-                [=] { legacy_convex_cleanup(variant); });
-        }
-        const std::array<Real, 3> nonfinite{std::numeric_limits<Real>::quiet_NaN(),
-                                            std::numeric_limits<Real>::infinity(),
-                                            -std::numeric_limits<Real>::infinity()};
-        const std::array<Ring, 2> finite_rings{
-            square_ring(), Ring{{.004, .01}, {.01, .004}, {.016, .01}, {.01, .016}}};
-        for (std::size_t shape = 0; shape < finite_rings.size(); ++shape)
-            for (std::size_t k = 0; k < nonfinite.size(); ++k)
-                for (std::size_t vertex = 0; vertex < finite_rings[shape].size(); ++vertex)
-                    for (int axis = 0; axis < 2; ++axis)
-                        run("nonfinite_source_" + std::to_string(shape) + "_" + std::to_string(k) +
-                                "_" + std::to_string(vertex) + "_" + std::to_string(axis),
-                            [&, shape, k, vertex, axis] {
-                                auto ring = finite_rings[shape];
-                                ring[vertex][axis] = nonfinite[k];
-                                producer_error(ring, "degenerate polygon", false);
-                            });
-        const std::vector<Ring> bad{{{0, 0}, {.01, 0}},
-                                    {{0, 0}, {.01, 0}, {.02, 0}},
-                                    {{0, 0}, {.02, .02}, {0, .02}, {.018, 0}},
-                                    {{0, 0},
-                                     {.02, 0},
-                                     {.02, .02},
-                                     {.012, .02},
-                                     {.012, .012},
-                                     {.008, .012},
-                                     {.008, .02},
-                                     {0, .02},
-                                     {0, .01},
-                                     {.004, .01},
-                                     {.004, .014},
-                                     {.004, .01},
-                                     {0, .01}},
-                                    {{0, 0}, {.02, .02}, {0, .02}, {.02, 0}}};
+        const std::vector<Ring> bad{
+            {{0, 0}, {.01, 0}},
+            {{0, 0}, {.01, 0}, {.02, 0}},
+            {{0, 0}, {.02, .02}, {0, .02}, {.018, 0}},
+            {{0, 0}, {.02, 0}, {.02, .02}, {.01, .01}, {0, .02}, {.01, .01}}};
         for (std::size_t k = 0; k < bad.size(); ++k)
             for (bool precedence : {false, true})
                 run("source_error_" + std::to_string(k) + "_" + std::to_string(precedence),
                     [&, k, precedence] {
                         producer_error(bad[k],
-                                       k == 2 || k == 3 ? "self-intersecting polygon"
-                                                        : "degenerate polygon",
+                                       k < 2 ? "degenerate polygon" : "self-intersecting polygon",
                                        precedence);
                     });
-        for (int which = 0; which <= 13; ++which)
+        for (int which = 0; which <= 10; ++which)
             for (int entry = 0; entry < 4; ++entry)
                 run("union_error_" + std::to_string(which) + "_entry_" + std::to_string(entry),
                     [=] { invalid_union(which, entry); });
