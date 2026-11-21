@@ -159,6 +159,198 @@ class DecoderAcceptance(unittest.TestCase):
         self.assertLess(u.curvature(blocks(-1, 10)), 0)
 
 
+class AdapterAcceptance(unittest.TestCase):
+    """Test the real private helpers, including deliberately non-GID input order."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory(prefix='fvm-adapter-')
+        cls.addClassCleanup(cls.temp.cleanup)
+        cls.root = Path(cls.temp.name)
+        fixture = Path(os.environ.get('CHIPCAE_FVM_I14_FIXTURE_DIR',
+                                      SOURCE.parent / 'handoff/fixtures/fvm-elastic-api-1.0'))
+        cls.contract = fixture if (fixture / 'cases.json').is_file() else None
+        cls.adapter, cls.contract_probe = u.build_adapter_probe(cls.root, SOURCE, cls.contract)
+
+    def actual(self, mode, *args):
+        return json.loads(u.command([self.adapter, mode, *args], self.root).stdout)
+
+    def test_mesh_preserves_regular_cut_merged_order_and_physical_faces(self):
+        import numpy as np
+        got = self.actual('mesh')
+        self.assertEqual(got['gid'], [81, 17, 45])
+        self.assertEqual(got['rank'], [1, 0, 1])
+        self.assertEqual(got['layer'], [1, 2, 0])
+        self.assertEqual(got['is_cut'], [0, 1, 1])
+        np.testing.assert_allclose(got['volume'], [3, 2, 7], rtol=0, atol=1e-14)
+        np.testing.assert_allclose(got['centroid'], [[.2, .3, 1], [.4, .6, 2], [.8, 1, 3]],
+                                   rtol=0, atol=1e-14)
+        self.assertAlmostEqual(got['z_top'], 9, delta=1e-14)
+        self.assertEqual(got['is_embedded'], [0, 1, 0])
+        for face, indices, area, normal, center in zip(
+                got['faces'], [(2, 0, -1), (1, -1, -1), (0, -1, 5)], [2, 5, 3],
+                [[1, 0, 0], [0, .6, .8], [0, 0, 1]],
+                [[.3, .5, 2], [.4, .5, 9], [.2, .3, 9]], strict=True):
+            self.assertEqual((face['lo'], face['hi'], face['side']), indices)
+            self.assertAlmostEqual(face['area'], area, delta=1e-14)
+            np.testing.assert_allclose(face['normal'], normal, rtol=0, atol=1e-14)
+            np.testing.assert_allclose(face['centroid'], center, rtol=0, atol=1e-14)
+
+    def test_problem_laminate_engineering_order_temperature_and_options(self):
+        import numpy as np
+        got = self.actual('problem')
+        # Independent M7 compliance oracle, inverted by numpy, not solve::mixture.
+        # Different shear moduli and alpha_z expose Mandel/shear-order mistakes.
+        for cell, fraction in enumerate((0., .25, .75)):
+            matrix, metal = 25e9, 110e9
+            nm, nc, am, ac = .2, .34, 1e-5, 3e-5
+            rest = 1-fraction
+            exy = rest*matrix + fraction*metal
+            ez = 1/(rest/matrix + fraction/metal)
+            nu = rest*nm + fraction*nc
+            gxy = exy/(2*(1+nu))
+            gz = 1/(rest/(matrix/(2*(1+nm))) + fraction/(metal/(2*(1+nc))))
+            compliance = np.diag([1/exy, 1/exy, 1/ez, 1/gz, 1/gz, 1/gxy])
+            compliance[0, 1] = compliance[1, 0] = -nu/exy
+            compliance[0, 2] = compliance[2, 0] = -nu/exy
+            compliance[1, 2] = compliance[2, 1] = -nu/exy
+            axy = ((rest*matrix*am/(1-nm) + fraction*metal*ac/(1-nc)) /
+                   (rest*matrix/(1-nm) + fraction*metal/(1-nc)))
+            az = rest*(am-2*nm/(1-nm)*(axy-am)) + fraction*(ac-2*nc/(1-nc)*(axy-ac))
+            np.testing.assert_allclose(np.asarray(got['C'][cell]).reshape(6, 6),
+                                       np.linalg.inv(compliance), rtol=1e-12, atol=1e-5)
+            np.testing.assert_allclose(got['alpha'][cell], [axy, axy, az],
+                                       rtol=1e-12, atol=1e-16)
+        np.testing.assert_allclose(got['dT'], [10, 25, -8], rtol=0, atol=1e-14)
+        np.testing.assert_allclose(got['uniform_dT'], [57, 57, 57], rtol=0, atol=1e-14)
+        self.assertAlmostEqual(got['rtol'], 2e-9, delta=1e-23)
+        self.assertEqual(got['max_iter'], 37)
+        self.assertEqual(got['preconditioner'], 'gamg')
+        self.assertFalse(got['fixed'])
+        self.assertEqual(got['fixed_side'], [])
+        self.assertEqual(got['fixed_layer'], [])
+
+    def test_problem_maps_all_sides_and_nonfirst_split_alias_by_stack_name(self):
+        for side, name in enumerate(('xmin', 'xmax', 'ymin', 'ymax', 'zmin', 'zmax')):
+            with self.subTest(side=name):
+                got = self.actual('problem', 'face:' + name)
+                self.assertTrue(got['fixed'])
+                self.assertEqual(got['fixed_side'], [side])
+                self.assertEqual(got['fixed_layer'], [])
+        for targets, layers in ((['layer:support#0'], [2]), (['layer:support'], [1, 2]),
+                                (['layer:base', 'layer:support#1'], [0, 1])):
+            with self.subTest(targets=targets):
+                got = self.actual('problem', *targets)
+                self.assertTrue(got['fixed'])
+                self.assertEqual(got['fixed_side'], [])
+                self.assertEqual(got['fixed_layer'], layers)
+
+    def test_merged_constituents_keep_parent_gid_and_subcell_ordinal(self):
+        self.assertEqual(self.actual('lookup'),
+                         [[17, 0, 1], [45, 0, 2], [45, 3, 2], [81, 0, 0], [93, 1, 2]])
+
+    def test_embedded_polygon_membership_includes_edges_and_excludes_box_notch(self):
+        self.assertEqual(self.actual('ring'), [True, False, True, True, True, False])
+
+    def test_top_result_validation_uses_i14_embedded_normal_and_height_predicate(self):
+        # Regular top + embedded within tolerance + embedded above z_top.
+        # Exclude exactly nz=.99, a lower embedded face, and an interior face.
+        self.assertEqual(self.actual('top'), [3])
+
+    def test_both_internal_prefixes_and_ordinary_input_and_solve_errors(self):
+        for reason, code in (('INTERNAL: geometry', 1),
+                             ('INPUT_INVALID: INTERNAL: geometry', 1),
+                             ('INPUT_INVALID: invalid embedded metadata', 14),
+                             ('elastic solver did not converge', 1)):
+            with self.subTest(reason=reason):
+                self.assertEqual(self.actual('error', reason)['code'], code)
+
+    def test_obsolete_embedded_rejection_uses_ordinary_input_error_mapping(self):
+        reason = 'INPUT_INVALID: embedded faces require cut-cell support'
+        self.assertEqual(self.actual('error', reason)['code'], 14,
+                         'frozen I14 supports embedded mechanics: remove the obsolete exit-13 special case')
+
+    def test_fraction_column_index_and_cut_merged_constituent_volume_weighting(self):
+        import numpy as np
+        for geometry in ('regular', 'cut', 'merged'):
+            with self.subTest(geometry=geometry):
+                root = self.root / geometry
+                stack = u.fixture(root)
+                if geometry != 'regular':
+                    stack['outline']['polygon'] = [[.1, 0], [1, 0], [1, 1], [0, 1], [0, .1]]
+                u.write_json(root / 'stack.json', stack)
+                case = u.solid_case()
+                case['mesh'].update(nx=2, ny=2)
+                u.write_json(root / 'case.json', case)
+                args = [root / 'case.json', root / 'profile1.json']
+                got = self.actual('fractions', *args, *(['merge'] if geometry == 'merged' else []))
+                self.assertIn({'regular': 0, 'cut': 1, 'merged': 2}[geometry], got['kind'])
+                parents = {gid: (layer, volume, vf) for gid, layer, volume, vf in zip(
+                    got['parent_gid'], got['parent_layer'], got['parent_volume'],
+                    got['parent_fraction'], strict=True)}
+                expected = []
+                for begin, end in zip(got['off'], got['off'][1:]):
+                    volumes, fractions = [], []
+                    for gid, ordinal in zip(got['constituent_gid'][begin:end],
+                                            got['constituent_subcell'][begin:end], strict=True):
+                        self.assertEqual(ordinal, 0)
+                        layer, volume, vf = parents[gid]
+                        # Deliberately reversed copper-layer map: stack 0 -> copper 1.
+                        phi = .05 + .1*(1-layer) + .02*(gid//got['nz'])
+                        volumes.append(volume*vf)
+                        fractions.append(min(1., phi/vf))
+                    expected.append(np.average(fractions, weights=volumes))
+                np.testing.assert_allclose(got['fraction'], expected, rtol=1e-12, atol=1e-14)
+
+    def test_vertex_weights_deduplicate_merged_constituents_and_copied_coordinates(self):
+        import numpy as np
+        root = self.root / 'reconstruct'
+        stack = u.fixture(root)
+        stack['layers'][0]['thickness'] = .02
+        stack['layers'][1]['thickness'] = .08
+        u.write_json(root / 'stack.json', stack)
+        case = u.solid_case()
+        case['mesh'].update(nx=2, ny=2)
+        u.write_json(root / 'case.json', case)
+        actual = self.actual('reconstruct', root / 'case.json', root / 'profile1.json')
+        for mode, vertices in actual.items():
+            with self.subTest(mode=mode):
+                values = {tuple(v['key']): np.asarray(v['U']) for v in vertices}
+                self.assertEqual(len(values), 27)
+                np.testing.assert_allclose([v['U'] for v in vertices], [v['before'] for v in vertices],
+                                           rtol=1e-9, atol=1e-14)
+                # Center: (3*1 + 2+3+4+5+6+7+8)/(3+7) = 3.8 micrometers.
+                # Top edge: two top faces (.25 m^2) and two xmin faces (.04 m^2).
+                for key, x in (((500000000000, 500000000000, 200000000000), 3.8e-6),
+                               ((500000000000, 500000000000, 1000000000000), 6e-6),
+                               ((0, 500000000000, 1000000000000), (6*.5+.08)/.58*1e-6)):
+                    np.testing.assert_allclose(values[key], [x, 2*x, -3*x], rtol=1e-9, atol=1e-14)
+                fixed = [value for key, value in values.items() if key[2] == 0]
+                self.assertEqual(len(fixed), 9)
+                np.testing.assert_allclose(fixed, 0, rtol=0, atol=1e-14)
+
+    def test_frozen_i14_fourteen_cases_including_embedded_top_and_bad_metadata(self):
+        if self.contract is None:
+            self.skipTest('set CHIPCAE_FVM_I14_FIXTURE_DIR to the frozen I14 fixture package')
+        cases = u.read_json(self.contract / 'cases.json')['cases']
+        self.assertEqual(len(cases), 14)
+        self.assertEqual(cases['P5_cut_step_embedded_top'], 'positive')
+        self.assertEqual(cases['E_embedded_face_metadata'], 'negative')
+        result = u.command([self.contract_probe, *(self.contract / name for name in sorted(cases))],
+                           self.root)
+        actual = json.loads(result.stdout)
+        self.assertEqual(set(actual), set(cases))
+        for name, value in actual.items():
+            if value['ok']:
+                diagnostic = {key: value[key] for key in (
+                    'min_dn_ratio', 'min_dn_gid', 'gradient_corrections', 'max_identity_defect')}
+                print(f'实测 I14 {name} diagnostics={json.dumps(diagnostic)}', flush=True)
+        path = self.root / 'i14-actual.json'
+        u.write_json(path, actual)
+        checked = u.command([sys.executable, self.contract / 'check.py', '--actual', path], self.root)
+        print(checked.stdout, flush=True)
+
+
 class CaseAcceptance(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='fvm-case-')
@@ -1159,7 +1351,7 @@ def main():
     u.REQUIRE_COPPER_FIELDS = json.loads(fields.stdout)
     print(f'ResultsPartition copper fields available: {u.REQUIRE_COPPER_FIELDS}', flush=True)
     suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(cls)
-                               for cls in (DecoderAcceptance, CaseAcceptance))
+                               for cls in (DecoderAcceptance, AdapterAcceptance, CaseAcceptance))
     return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
 
 

@@ -25,6 +25,357 @@ DISPLACEMENT_METHOD = 'FVM cell centers'
 REQUIRE_COPPER_FIELDS = False
 
 
+def build_adapter_probe(root, source, contract=None):
+    """Compile private adapters in a temporary TU, using the CLI's actual build flags.
+
+    No public hook or repository CMake change is needed. Ninja's command database
+    and Make's link.txt also work when compile_commands.json was not requested.
+    Build commands deliberately have no timeout: shared-slot queueing is expected.
+    """
+    binary = Path(os.environ['CHIPCAE_BINARY_DIR'])
+    executable = Path(os.environ['CHIPCAE_SOLVE_EXE'])
+    target = executable.relative_to(binary).as_posix()
+    if (binary / 'build.ninja').exists():
+        commands = subprocess.run(['ninja', '-C', str(binary), '-t', 'commands', target],
+                                  capture_output=True, text=True, check=True).stdout.splitlines()
+        compile_line = next(line for line in commands if ' -c ' in line
+                            and 'fvm_pipeline.cpp' in line)
+        link_line = commands[-1]
+        # CMake surrounds a Ninja link command with ': && ... && :'.
+        link_line = link_line.removeprefix(': && ').removesuffix(' && :')
+        link = shlex.split(link_line)
+        compile_flags = shlex.split(compile_line)
+        compiler = link[0]
+        compile_flags = compile_flags[compile_flags.index(compiler) + 1:]
+    else:
+        directory = executable.parent / 'CMakeFiles/chipcae-solve.dir'
+        link = shlex.split((directory / 'link.txt').read_text())
+        compiler = link[0]
+        variables = dict(line.split(' = ', 1) for line in
+                         (directory / 'flags.make').read_text().splitlines() if ' = ' in line)
+        compile_flags = shlex.split(' '.join(variables[key] for key in
+                                            ('CXX_DEFINES', 'CXX_INCLUDES', 'CXX_FLAGS')))
+    flags = []
+    options = iter(compile_flags)
+    for flag in options:
+        if flag in ('-o', '-c', '-MT', '-MF', '-MQ'):
+            next(options)
+        elif flag in ('-MD', '-MMD'):
+            continue
+        elif flag in ('-isystem', '-I', '-iquote'):
+            # CMake de-duplicates options; keep each include flag with its path.
+            flags.append(flag + next(options))
+        else:
+            flags.append(flag)
+    libraries = []
+    skip = False
+    for flag in link[1:]:
+        if skip:
+            skip = False
+        elif flag == '-o':
+            skip = True
+        elif not flag.endswith(('.o', '.obj')):
+            libraries.append(str(binary / flag) if (binary / flag).is_file() else flag)
+    quote = lambda value: '[=[' + str(value) + ']=]'
+    # The linked loader resolves installed schemas relative to its executable.
+    schemas = root / 'share/chipcae/schema'
+    schemas.mkdir(parents=True)
+    for relative in ('schema/stack-0.2.schema.json', 'material/schema/material.v1.schema.json'):
+        shutil.copyfile(source / relative, schemas / Path(relative).name)
+    (root / 'adapter.cpp').write_text(ADAPTER_PROBE, encoding='utf-8')
+    cmake = ['cmake_minimum_required(VERSION 3.20)',
+             'project(fvm_adapter_acceptance LANGUAGES CXX)',
+             'add_executable(adapter_probe adapter.cpp)',
+             'target_compile_options(adapter_probe PRIVATE ' + ' '.join(map(quote, flags)) + ')',
+             'target_compile_definitions(adapter_probe PRIVATE ' +
+             quote('CHIPCAE_FVM_ADAPTER_SOURCE="' +
+                   str(source / 'apps/chipcae-solve/src/fvm_pipeline.cpp') + '"') + ')',
+             'target_link_libraries(adapter_probe PRIVATE ' + ' '.join(map(quote, libraries)) + ')']
+    if contract is not None:
+        cmake += ['add_executable(contract_probe ' + quote(contract / 'dump_actual.cpp') + ')',
+                  'target_compile_options(contract_probe PRIVATE ' + ' '.join(map(quote, flags)) + ')',
+                  'target_link_libraries(contract_probe PRIVATE ' + ' '.join(map(quote, libraries)) + ')']
+    (root / 'CMakeLists.txt').write_text('\n'.join(cmake) + '\n', encoding='utf-8')
+    build = root / 'build'
+    for args in (['cmake', '-G', 'Ninja', '-S', str(root), '-B', str(build), '-DCMAKE_BUILD_TYPE=Release',
+                  '-DCMAKE_CXX_COMPILER=' + compiler],
+                 ['cmake', '--build', str(build), '-j2']):
+        result = subprocess.run(args, capture_output=True, text=True)
+        assert result.returncode == 0, f'{shlex.join(args)}\n{result.stdout}\n{result.stderr}'
+    return build / 'adapter_probe', build / 'contract_probe'
+
+
+# The implementation is included only in this temporary test translation unit.
+# JSON exposes actual adapter outputs; the Python tests derive their own oracle.
+ADAPTER_PROBE = r'''
+#include CHIPCAE_FVM_ADAPTER_SOURCE
+#include <iostream>
+
+using namespace chipcae;
+using namespace chipcae::solve;
+using Json = jsoncons::json;
+
+struct Fixture {
+    RunInputs inputs;
+    mesh::HexMeshArrays arrays;
+    fv::FvGrid grid;
+    Fixture() {
+        for (const auto* name : {"base", "support#1", "support#0"}) {
+            mesh::Layer layer;
+            layer.name = name;
+            layer.copper = mesh::CopperSpec{"metal", {}, {}};
+            inputs.stack.layers.push_back(layer);
+        }
+        inputs.materials["matrix"].E = 25e9;
+        inputs.materials["matrix"].nu = .2;
+        inputs.materials["matrix"].alpha = 1e-5;
+        inputs.materials["metal"].E = 110e9;
+        inputs.materials["metal"].nu = .34;
+        inputs.materials["metal"].alpha = 3e-5;
+        inputs.T_ref = 300;
+        inputs.linear.rtol = 2e-9;
+        inputs.linear.max_iter = 37;
+        inputs.linear.preconditioner = "gamg";
+        Load load;
+        load.type = "uniform_temperature";
+        load.T = 357;
+        inputs.loads.push_back(load);
+        arrays.attr_table.materials = {{"matrix", 17}, {"metal", 41}};
+        arrays.attr_table.entries = {
+            {"support#0", "", 17, 0}, {"base", "", 17, 0}, {"support#1", "", 17, 0}};
+        grid.axes = {{{0, 1}, {0, 2}, {-4, 9}}};
+        grid.cv_volume = {3, 2, 7};
+        grid.cv_centroid = {{.2, .3, 1}, {.4, .6, 2}, {.8, 1, 3}};
+        grid.cv_elem_gid = {81, 17, 45};
+        grid.cv_rank = {1, 0, 1};
+        grid.cv_attribute = {3, 1, 2};
+        grid.cv_layer = {99, 43, 7}; // Neither material IDs nor these IDs are stack indices.
+        grid.cv_kind = {0, 1, 2};
+        grid.cv_copper_fraction = {0, .25, .75};
+        grid.faces = {{2, 0, 0, -1, 2, {2, 0, 0}, {.3, .5, 2}, 0},
+                      {1, -1, -1, 6, 5, {0, 3, 4}, {.4, .5, 9}, 1},
+                      {0, -1, 2, 5, 3, {0, 0, 3}, {.2, .3, 9}, 2}};
+    }
+};
+
+int main(int argc, char** argv) {
+    PetscSession session;
+    try {
+        const std::string mode = argv[1];
+        Fixture f;
+        Json out;
+        if (mode == "mesh") {
+            const auto m = to_elastic_mesh(f.grid, f.inputs, f.arrays);
+            out["volume"] = m.volume;
+            out["centroid"] = m.centroid;
+            out["gid"] = m.gid;
+            out["rank"] = m.rank;
+            out["layer"] = m.layer;
+            out["is_cut"] = std::vector<int>(m.is_cut.begin(), m.is_cut.end());
+            out["is_embedded"] = std::vector<int>(m.is_embedded.begin(), m.is_embedded.end());
+            out["z_top"] = m.z_top;
+            out["faces"] = Json::array();
+            for (const auto& face : m.faces) {
+                Json j;
+                j["lo"] = face.lo;
+                j["hi"] = face.hi;
+                j["side"] = face.side;
+                j["area"] = face.area;
+                j["normal"] = face.normal;
+                j["centroid"] = face.centroid;
+                out["faces"].push_back(j);
+            }
+        } else if (mode == "problem") {
+            if (argc > 2)
+                for (int i = 2; i < argc; ++i)
+                    f.inputs.fixed.emplace_back(argv[i]);
+            fv::ThermalResult thermal;
+            thermal.T_cell = {310, 325, 292};
+            const auto fractions = fv::copper_fraction(f.grid, f.arrays);
+            const auto p = to_elastic_problem(f.inputs, f.grid, &thermal, f.arrays, fractions);
+            const auto uniform = to_elastic_problem(f.inputs, f.grid, nullptr, f.arrays, fractions);
+            out["C"] = p.C;
+            out["alpha"] = p.alpha;
+            out["dT"] = p.dT;
+            out["uniform_dT"] = uniform.dT;
+            out["rtol"] = p.rtol;
+            out["max_iter"] = p.max_iter;
+            out["preconditioner"] = p.preconditioner;
+            out["fixed"] = p.support == fv::ElasticProblem::Support::Fixed;
+            out["fixed_side"] = p.fixed_side;
+            out["fixed_layer"] = p.fixed_layer;
+        } else if (mode == "error") {
+            try {
+                fail({"fvm.elastic", argv[2]}, true);
+            } catch (const InputError& e) {
+                out["code"] = e.code;
+            }
+        } else if (mode == "lookup") {
+            f.arrays.elem_gid = {81, 17, 45, 45, 93};
+            f.grid.constituent_off = {0, 1, 2, 5};
+            f.grid.constituent_elem = {0, 1, 3, 2, 4};
+            f.grid.constituent_gid = {81, 17, 45, 45, 93};
+            f.grid.constituent_subcell = {0, 0, 3, 0, 1};
+            out = Json::array();
+            for (const auto& [key, cv] : constituent_lookup(f.grid, f.arrays))
+                out.push_back(std::array<std::int64_t, 3>{
+                    key.first, key.second, static_cast<std::int64_t>(cv)});
+        } else if (mode == "top") {
+            fv::ElasticMesh mesh;
+            mesh.volume = {1};
+            mesh.gid = {81};
+            mesh.z_top = 9;
+            mesh.faces = {{0, -1, 5, 1, {0, 0, 1}, {0, 0, 9}},
+                          {0, -1, -1, 1, {0, 0, 1}, {0, 0, 9 - 5e-14}},
+                          {0, -1, -1, 1, {0, 0, .99}, {0, 0, 9}},
+                          {0, -1, -1, 1, {0, 0, 1}, {0, 0, 9 - 2e-13}},
+                          {0, -1, -1, 1, {0, 0, 1}, {0, 0, 9 + 2e-13}},
+                          {0, 0, 5, 1, {0, 0, 1}, {0, 0, 9}}};
+            mesh.is_embedded = {0, 1, 1, 1, 1, 0};
+            fv::ElasticResult result;
+            result.U_cell.resize(1);
+            result.U_face.resize(6);
+            result.face_prescribed.resize(6);
+            result.min_dn_gid = 81;
+            out = Json::array();
+            for (int count = 0; count <= 6; ++count) {
+                result.top_samples.resize(count);
+                try {
+                    validate_elastic_result(mesh, result);
+                    out.push_back(count);
+                } catch (const InputError&) {
+                }
+            }
+        } else if (mode == "ring") {
+            const std::vector<Point> ring{
+                {0, 0, 0}, {2, 0, 2}, {2, 1, 2}, {1, 1, 1}, {1, 2, 1}, {0, 2, 0}};
+            fv::FvFace face;
+            face.side = 6;
+            face.area = 3 * std::sqrt(2.);
+            face.area_vector = {-3, 0, 3};
+            face.centroid = {.8, .8, .8};
+            out = Json::array();
+            for (const Point p : {Point{.5, 1.5, .5},
+                                  Point{1.5, 1.5, 1.5},
+                                  Point{1, 1.5, 1},
+                                  Point{1, 1, 1},
+                                  Point{0, 0, 0},
+                                  Point{.5, .5, .6}})
+                out.push_back(on_ring(p, ring, face, 1e-12));
+        } else if (mode == "reconstruct") {
+            const auto inputs = load_inputs(argv[2], argv[3], 1);
+            auto arrays = build_mesh(inputs);
+            const auto built = fv::build_grid(arrays);
+            if (!built)
+                throw std::runtime_error(built.error().reason);
+            auto grid = built.value();
+            // Manufactured CV data isolates reconstruction from the elastic solve.
+            // One merged CV has weight 3; its copied parent/subcell must count once.
+            grid.cv_volume.assign(8, 1);
+            grid.cv_volume[0] = 3;
+            grid.cv_kind[0] = 2;
+            fv::ElasticResult elastic;
+            for (int c = 0; c < 8; ++c) {
+                const double x = (c + 1) * 1e-6;
+                elastic.U_cell.push_back({x, 2 * x, -3 * x});
+            }
+            for (const auto& face : grid.faces) {
+                const double x = face.side == 4 ? 0 : (face.side + 1) * 1e-6;
+                elastic.U_face.push_back({x, 2 * x, -3 * x});
+                elastic.face_prescribed.push_back(face.hi < 0 && face.side == 4);
+            }
+            const auto original =
+                vertex_U(arrays, grid, elastic, nullptr, constituent_lookup(grid, arrays), false);
+            grid.constituent_elem.insert(grid.constituent_elem.begin(), 0);
+            grid.constituent_gid.insert(grid.constituent_gid.begin(), arrays.elem_gid[0]);
+            grid.constituent_subcell.insert(grid.constituent_subcell.begin(), 1);
+            for (std::size_t c = 1; c < grid.constituent_off.size(); ++c)
+                ++grid.constituent_off[c];
+            // Copied coordinates have distinct storage indices, as cut output does.
+            for (int v = 0; v < 8; ++v) {
+                const auto old = arrays.hex[v];
+                const Point p{arrays.vertices[3 * old],
+                              arrays.vertices[3 * old + 1],
+                              arrays.vertices[3 * old + 2]};
+                arrays.hex[v] = static_cast<mesh::Local>(arrays.vertices.size() / 3);
+                arrays.vertices.insert(arrays.vertices.end(), p.begin(), p.end());
+            }
+            const auto lookup = constituent_lookup(grid, arrays);
+            for (const bool hex : {false, true}) {
+                Json values = Json::array();
+                for (const auto& [key, value] :
+                     vertex_U(arrays, grid, elastic, nullptr, lookup, hex)) {
+                    Json j;
+                    j["key"] = key;
+                    j["U"] = value;
+                    j["before"] = original.at(key);
+                    values.push_back(j);
+                }
+                out[hex ? "hex" : "physical"] = values;
+            }
+        } else if (mode == "fractions") {
+            auto inputs = load_inputs(argv[2], argv[3], 1);
+            std::optional<mesh::cut::CutLayerArrays> cut;
+            auto arrays = build_mesh(inputs, &cut);
+            const auto columns = (arrays.axes[0].size() - 1) * (arrays.axes[1].size() - 1);
+            arrays.copper_layer_of_layer = {1, 0};
+            arrays.copper_phi.clear();
+            for (std::size_t layer = 0; layer < 2; ++layer)
+                for (std::size_t col = 0; col < columns; ++col)
+                    arrays.copper_phi.push_back(.05 + .1 * layer + .02 * col);
+            if (cut) {
+                cut->small_subs.clear();
+                if (argc > 4)
+                    cut->small_subs.push_back(0);
+            }
+            const auto result = fv::build_grid(arrays, cut ? &*cut : nullptr);
+            if (!result)
+                throw std::runtime_error(result.error().reason);
+            const auto& g = result.value();
+            out["fraction"] = fv::copper_fraction(g, arrays);
+            out["kind"] = g.cv_kind;
+            out["gid"] = g.cv_elem_gid;
+            out["volume"] = g.cv_volume;
+            out["nz"] = g.nz;
+            out["columns"] = columns;
+            out["off"] = g.constituent_off;
+            out["constituent_gid"] = g.constituent_gid;
+            out["constituent_subcell"] = g.constituent_subcell;
+            out["parent_volume"] = Json::array();
+            out["parent_fraction"] = Json::array();
+            out["parent_layer"] = Json::array();
+            for (std::size_t e = 0; e < arrays.elem_gid.size(); ++e) {
+                const auto gid = arrays.elem_gid[e];
+                const auto& record = arrays.attr_table.entries[arrays.attribute[e] - 1];
+                out["parent_layer"].push_back(stack_layer(inputs, record.layer));
+                Point lo{1e100, 1e100, 1e100}, hi{-1e100, -1e100, -1e100};
+                for (int v = 0; v < 8; ++v)
+                    for (int d = 0; d < 3; ++d) {
+                        const double x = arrays.vertices[3 * arrays.hex[8 * e + v] + d];
+                        lo[d] = std::min(lo[d], x);
+                        hi[d] = std::max(hi[d], x);
+                    }
+                out["parent_volume"].push_back((hi[0] - lo[0]) * (hi[1] - lo[1]) * (hi[2] - lo[2]));
+                double vf = 1;
+                if (cut)
+                    for (std::size_t k = 0; k < cut->cut_elem_gid.size(); ++k)
+                        if (cut->cut_elem_gid[k] == gid)
+                            vf = cut->sub_volfrac[cut->sub_off[k]];
+                out["parent_fraction"].push_back(vf);
+            }
+            out["parent_gid"] = arrays.elem_gid;
+        } else {
+            throw std::runtime_error("unknown adapter probe mode");
+        }
+        std::cout << out << '\n';
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << '\n';
+        return 1;
+    }
+}
+'''
+
+
 def write_json(path, value):
     path.write_text(json.dumps(value, indent=2, allow_nan=False) + '\n', encoding='utf-8')
 
