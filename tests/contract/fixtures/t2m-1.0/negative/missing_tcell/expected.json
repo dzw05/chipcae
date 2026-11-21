@@ -1,0 +1,8 @@
+{
+  "code": 12,
+  "code_name": "INPUT_REFERENCE_MISSING",
+  "dT": [],
+  "message": "missing T_cell",
+  "volume_weighted_T": 0.0,
+  "volume_weighted_dT": 0.0
+}
