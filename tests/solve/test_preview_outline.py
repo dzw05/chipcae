@@ -135,9 +135,13 @@ with tempfile.TemporaryDirectory(prefix='preview-outline-') as tmp:
         assert default.returncode == 13, (default.stdout, default.stderr)
         assert 'non-convex' in default.stdout + default.stderr
         assert not list(root.glob(stem.name + '*.vtkhdf'))
+        # Use fixture v_shape at its physical scale for the opt-in acceptance.
+        stack['outline']['box'] = [0, 0, .02, .02]
+        stack['layers'][0]['thickness'] = .001
+        polygon = [[0,0],[.0064,0],[.0103,.0087],[.0142,0],[.02,0],[.02,.02],[0,.02]]
         for name, ring, expected, diagnostic in (
             ('nonconvex', polygon, 0, None),
-            ('bow-tie', [[0,0],[1,1],[1,0],[0,1]], 13, 'self-intersecting outline'),
+            ('bow-tie', [[0,0],[.02,.02],[.02,0],[0,.02]], 13, 'self-intersecting outline'),
         ):
             result, stem = preview_run(name, ring, extra=['--nonconvex-outline'])
             kernel, out = solve_run(name+'-solve', 1)
