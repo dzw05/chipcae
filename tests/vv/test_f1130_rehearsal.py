@@ -291,6 +291,28 @@ class RehearsalAcceptance(unittest.TestCase):
         self.assertIn(NAMES[0], self.diagnostics())
         self.assertEqual(self.report()["overall"], "NOT_RUN")
 
+    def test_readiness_override_retains_raw_junit_status_and_failure(self):
+        self.cache[KEYS[0]] = "OFF"
+        self.write_cache()
+        self.xml = junit(tag="failure", message="original failure")
+        self.invoke(1, ["--allow-missing-backend"])
+        report = self.report()
+        self.assertEqual([case["status"] for case in report["tests"]],
+                         ["Failed", "Passed", "Skipped", "Skipped"])
+        for case in report["tests"]:
+            self.assertEqual(case["junit_status"], "run")
+        self.assertIn("original failure", report["tests"][0]["skip_or_fail_message"])
+        self.assertIn(KEYS[0], report["tests"][2]["skip_or_fail_message"])
+
+    def test_allow_missing_mpi_records_global_gap_without_test_mapping(self):
+        self.mpi = None
+        self.invoke(1, ["--allow-missing-backend"])
+        report = self.report()
+        self.assertEqual(report["overall"], "FAIL")
+        self.assertEqual([case["status"] for case in report["tests"]], ["Passed"] * 4)
+        self.assertEqual(report["readiness_gaps"][0]["status"], "Skipped")
+        self.assertIn("mpiexec", report["readiness_gaps"][0]["reason"])
+
     def test_discovery_requires_exact_case_sensitive_registration_lines(self):
         for replacement in (NAMES[0] + "_suffix", NAMES[0].upper(), "other"):
             with self.subTest(replacement=replacement):
