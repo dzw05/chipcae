@@ -187,6 +187,14 @@ void generate(const fs::path& stackup, const fs::path& run) {
     set_mesh(writer);
     write_step(writer, 0);
     writer.finalize();
+    const auto& s = writer.io_stats();
+    // Catch replacement of the total by a later call, including loss of set_mesh's sample.
+    for (int call = 0; call < 16; ++call) {
+        const double previous = s.finalize_seconds;
+        writer.finalize();
+        require(s.finalize_seconds > previous,
+                "every successful finalize must add to the accumulated duration");
+    }
 }
 
 // Inspect every object, including root attributes and attributes on datasets.
