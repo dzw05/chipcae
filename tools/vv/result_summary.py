@@ -434,8 +434,8 @@ def _summarize(run_dir, top_rel_tol, step):
                      f'mesh.{key}: expected integer')
     if 'mesh_sha256' in mesh:
         _require(isinstance(mesh['mesh_sha256'], str), 'mesh.mesh_sha256: expected string')
-    partitions = manifest.get('partitions')
-    _require(partitions is not None, 'partitions: required object')
+    _require('partitions' in manifest, 'partitions: required object')
+    partitions = manifest['partitions']
     _require(isinstance(partitions, dict), 'partitions: expected object')
     per_step = partitions.get('per_step')
     _require(isinstance(per_step, list), 'partitions.per_step: expected array')

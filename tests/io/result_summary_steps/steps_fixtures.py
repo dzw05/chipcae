@@ -44,6 +44,15 @@ def steps_fixture(run):
                 u[:, 2] = .125 + .25*x - .5*y - ((n+1)/16)*(x*x+y*y)
                 block['PointData/U'][...] = u
     manifest['steps'] = [{'n': n, 'file': f'out/step-{n}.vtkhdf'} for n in range(3)]
+    count_paths = ('hex/NumberOfCells', 'cut/NumberOfCells',
+                   'eb_surface/Polygons/NumberOfCells')
+    per_step = []
+    for record in manifest['steps']:
+        with h5py.File(run / record['file'], 'r') as f:
+            counts = [f['VTKHDF/' + path].shape[0] for path in count_paths]
+        assert all(count == counts[0] for count in counts), record['file']
+        per_step.append(counts[0])
+    manifest['partitions']['per_step'] = per_step
     # Interleave owners to make filtering preserve manifest encounter order.
     manifest['summary'] = [
         dict(name=name, value=value, unit=UNITS[name], step=n)
