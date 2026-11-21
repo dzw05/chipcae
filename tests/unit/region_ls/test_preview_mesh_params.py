@@ -67,6 +67,10 @@ class PreviewMeshParams(unittest.TestCase):
         stem = self.root / name
         command = [str(self.preview), str(source), '--nx', str(nx), '--ny', str(ny),
                    '--levels', str(levels), '-o', str(stem), *flags]
+        result, events = self.preview_command(command)
+        return result, events, stem
+
+    def preview_command(self, command):
         start = time.perf_counter()
         try:
             result = self.run_command(command)
@@ -82,7 +86,7 @@ class PreviewMeshParams(unittest.TestCase):
             events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
         except json.JSONDecodeError as error:
             self.fail(f'invalid stdout JSON: {error}{diagnostics(result)}')
-        return result, events, stem
+        return result, events
 
     def measure(self, label):
         print(f'MEASURE {label}: ' + json.dumps(self.measurements), flush=True)
@@ -259,7 +263,7 @@ class PreviewMeshParams(unittest.TestCase):
                                       ['--Cell-Budget', '2']),
                           1, 'unexpected argument: --Cell-Budget')
         with self.subTest(option='--help'):
-            result = self.run_command([str(self.preview), '--help'])
+            result, _ = self.preview_command([str(self.preview), '--help'])
             self.assertEqual(result.returncode, 0, diagnostics(result))
             for option in ('--cell-budget', '--min-elems-per-layer'):
                 self.assertIn(option, result.stdout, diagnostics(result))
