@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -35,11 +36,21 @@ std::vector<Real> rasterize_copper(const std::vector<Real>& xs,
 #else
     using namespace Clipper2Lib;
     struct IndexedPath {
-        Real min_x, max_x, min_y, max_y;
-        PathD path;
+        std::int64_t min_x, max_x;
+        Path64 path;
     };
     const Real scale_x = 1.0e6 / (xs.back() - xs.front());
     const Real scale_y = 1.0e6 / (ys.back() - ys.front());
+    // Candidate bounds, both clipping stages and union share a 1e-9
+    // normalized-coordinate lattice. A 1e-8 lattice loses too much relative
+    // area in narrow graded cells. Quantize each axis line and vertex once.
+    constexpr Real lattice = 1.0e9;
+    const auto tick = [](Real value) { return std::llround(value * lattice); };
+    std::vector<std::int64_t> x_ticks, y_ticks;
+    for (auto x : xs)
+        x_ticks.push_back(tick((x - xs.front()) * scale_x));
+    for (auto y : ys)
+        y_ticks.push_back(tick((y - ys.front()) * scale_y));
     std::vector<IndexedPath> indexed;
     indexed.reserve(paths.size());
     for (const auto& ring : paths) {
@@ -47,17 +58,17 @@ std::vector<Real> rasterize_copper(const std::vector<Real>& xs,
             continue;
         const auto tx = [&](Real x) { return (x - xs.front()) * scale_x; };
         const auto ty = [&](Real y) { return (y - ys.front()) * scale_y; };
-        IndexedPath entry{
-            tx(ring.front()[0]), tx(ring.front()[0]), ty(ring.front()[1]), ty(ring.front()[1]), {}};
+        IndexedPath entry{std::numeric_limits<std::int64_t>::max(),
+                          std::numeric_limits<std::int64_t>::lowest(),
+                          {}};
         entry.path.reserve(ring.size());
         for (const auto& point : ring) {
             if (!std::isfinite(point[0]) || !std::isfinite(point[1]))
                 throw std::invalid_argument("copper polygon coordinates must be finite");
-            entry.min_x = std::min(entry.min_x, tx(point[0]));
-            entry.max_x = std::max(entry.max_x, tx(point[0]));
-            entry.min_y = std::min(entry.min_y, ty(point[1]));
-            entry.max_y = std::max(entry.max_y, ty(point[1]));
-            entry.path.emplace_back(tx(point[0]), ty(point[1]));
+            const std::int64_t x = tick(tx(point[0])), y = tick(ty(point[1]));
+            entry.min_x = std::min(entry.min_x, x);
+            entry.max_x = std::max(entry.max_x, x);
+            entry.path.emplace_back(x, y);
         }
         indexed.push_back(std::move(entry));
     }
@@ -66,11 +77,11 @@ std::vector<Real> rasterize_copper(const std::vector<Real>& xs,
     });
     std::vector<std::vector<std::size_t>> x_candidates(xs.size() - 1);
     std::set<std::size_t> active;
-    std::multimap<Real, std::size_t> by_max_x;
+    std::multimap<std::int64_t, std::size_t> by_max_x;
     std::size_t next = 0;
     for (std::size_t i = 0; i + 1 < xs.size(); ++i) {
-        const Real left = (xs[i] - xs.front()) * scale_x;
-        const Real right = (xs[i + 1] - xs.front()) * scale_x;
+        const auto left = x_ticks[i];
+        const auto right = x_ticks[i + 1];
         while (next < indexed.size() && indexed[next].min_x < right) {
             active.insert(next);
             by_max_x.emplace(indexed[next].max_x, next);
@@ -83,16 +94,6 @@ std::vector<Real> rasterize_copper(const std::vector<Real>& xs,
         x_candidates[i].assign(active.begin(), active.end());
     }
     std::vector<Real> result((xs.size() - 1) * (ys.size() - 1));
-    // Both clipping stages and union share a 1e-9 normalized-coordinate lattice.
-    // A 1e-8 lattice loses too much relative area in narrow graded cells.
-    // Quantize each axis line once so neighbouring cells use the same boundary.
-    constexpr Real lattice = 1.0e9;
-    const auto tick = [](Real value) { return std::llround(value * lattice); };
-    std::vector<std::int64_t> x_ticks, y_ticks;
-    for (auto x : xs)
-        x_ticks.push_back(tick((x - xs.front()) * scale_x));
-    for (auto y : ys)
-        y_ticks.push_back(tick((y - ys.front()) * scale_y));
     struct StripPiece {
         Path64 path;
         std::int64_t min_y, max_y;
@@ -105,11 +106,7 @@ std::vector<Real> rasterize_copper(const std::vector<Real>& xs,
             x_ticks[i] - margin, y_ticks.front(), x_ticks[i + 1] + margin, y_ticks.back());
         std::vector<StripPiece> fragments;
         for (auto candidate : x_candidates[i]) {
-            Path64 path;
-            path.reserve(indexed[candidate].path.size());
-            for (const auto& point : indexed[candidate].path)
-                path.emplace_back(tick(point.x), tick(point.y));
-            for (auto& piece : RectClip(strip, path)) {
+            for (auto& piece : RectClip(strip, indexed[candidate].path)) {
                 auto min_y = piece.front().y, max_y = min_y;
                 for (const auto& point : piece) {
                     min_y = std::min(min_y, point.y);

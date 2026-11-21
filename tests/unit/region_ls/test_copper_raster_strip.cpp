@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -313,6 +314,21 @@ void edge_cases(const Fixture& rectangles) {
     for (std::size_t k = 0; k < empty_cases.size(); ++k)
         check_field(names[k], rasterize_copper(axis, axis, empty_cases[k]), zero, 4, 4, 1e-12L);
 
+    for (auto invalid : {std::numeric_limits<Real>::quiet_NaN(),
+                         std::numeric_limits<Real>::infinity(),
+                         -std::numeric_limits<Real>::infinity()}) {
+        for (std::size_t dimension = 0; dimension < 2; ++dimension) {
+            CopperPath path{{1, 1}, {2, 1}, {1, 2}};
+            path[1][dimension] = invalid;
+            try {
+                (void)rasterize_copper(axis, axis, {path});
+            } catch (const std::invalid_argument&) {
+                continue;
+            }
+            throw std::runtime_error("nonfinite polygon coordinate was accepted");
+        }
+    }
+
     Fixture one;
     one.rectangles.push_back({500'000'000, 1'250'000'000, 2'250'000'000, 3'500'000'000});
     one.paths.push_back(metres(rectangle_path(one.rectangles.front())));
@@ -349,6 +365,24 @@ void edge_cases(const Fixture& rectangles) {
                                    64,
                                    1e-12L);
     std::cout << "REFERENCE copper-raster-strip: nonuniform R n=64 max_error=" << error << '\n';
+}
+
+void lattice_boundaries() {
+    // One metre spans 1e15 ticks. The narrow cell rounds from [1000.4, 1010.6]
+    // to [1000, 1011], as do the rectangle's [1000.45, 1010.55] bounds.
+    // Its quantized area is 11 ticks times half the other axis; fractions still
+    // use the original cell area (10.2 ticks times the full other axis).
+    const std::vector<Real> narrow{0, 1000.4e-15, 1010.6e-15, 1};
+    const std::vector<Real> wide{0, 1};
+    CopperPath path{
+        {1000.45e-15, 0.25}, {1010.55e-15, 0.25}, {1010.55e-15, 0.75}, {1000.45e-15, 0.75}};
+    const std::vector<long double> expected{0, 5.5L / 10.2L, 0};
+    check_field(
+        "x lattice boundaries", rasterize_copper(narrow, wide, {path}), expected, 3, 1, 1e-12L);
+    for (auto& point : path)
+        std::swap(point[0], point[1]);
+    check_field(
+        "y lattice boundaries", rasterize_copper(wide, narrow, {path}), expected, 1, 3, 1e-12L);
 }
 
 void speed_guard() {
@@ -416,6 +450,7 @@ int main() {
             repeat_and_reverse("S", slanted, 5e-11L);
         });
         run("edge_cases", [&] { edge_cases(rectangles); });
+        run("lattice_boundaries", lattice_boundaries);
         run("speed_guard", speed_guard);
         return passed ? 0 : 1;
     } catch (const std::exception& error) {
