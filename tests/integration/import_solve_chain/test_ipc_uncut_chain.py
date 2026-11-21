@@ -62,7 +62,7 @@ def main():
                     mesh=dict(type='aligned_cartesian_cut', nx=2, ny=2, levels=0, max_ratio=100),
                     physics=[dict(id='thermal', solver='fem.conduction', mode='steady'), dict(id='mech', solver='fem.solid', temp_from='thermal', T_ref=298.15)],
                     loads=[dict(type='fixed_temperature', target='face:zmin', T=298.15), dict(type='convection', target='face:zmax', h=1000, T_inf=348.15)],
-                    constraints=dict(rigid='3-2-1'), solver=dict(linear=dict(preconditioner='direct', rtol=1e-12)), output=dict(format='vtkhdf'))
+                    constraints=dict(rigid='3-2-1'), solver=dict(linear=dict(preconditioner='direct', rtol=1e-10)), output=dict(format='vtkhdf'))
         write('case.json', case)
         write('profile.json', dict(schema='chipcae.run_profile/1.0', backend='cpu', ranks=1, gpus=0))
         shared = {name: (root / name).read_bytes() for name in

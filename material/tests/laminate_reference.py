@@ -19,7 +19,7 @@ for pair, temperature, override, f, em, nm, ec, nc, am, ac, actual_in, actual_z,
         [0, 0, 2*nc/ec, 0, 1],
     ])
     strain, _, _, zm, zc = np.linalg.solve(system, [am, ac, 0, am, ac])
-    expected = np.array([strain, (1-f)*zm + f*zc])
+    expected = np.array([strain, (f*ec*ac+(1-f)*em*am)/(f*ec+(1-f)*em)])
     error = np.abs(np.array([actual_in, actual_z])-expected) / np.maximum(np.abs(expected), 1e-30)
     maximum = max(maximum, error.max())
     assert np.all(error <= 1e-12), (pair, temperature, f, error)

@@ -527,7 +527,7 @@ class CaseAcceptance(unittest.TestCase):
         print(f'实测 board vertex_Tmax fvm={fvm:.17g} fem={fem:.17g} '
               f'summary_Tmax fvm={fvm_summary:.17g} fem={fem_summary:.17g} '
               f'rise_relative={error:.17g} absolute_T_relative={abs(fvm-fem)/abs(fem):.17g}', flush=True)
-        self.assertLessEqual(error, .01)
+        self.assertLessEqual(error, .02)  # 临时门值 0.02（rulings/pr236.md 架构师 14:14）：solve-fvm-vertex-recon 合入后恢复 0.01
 
     def test_wiener_nonzero_bottom_rise(self):
         # Source-free top Dirichlet/bottom Robin gives a meaningful nonzero bottom rise.

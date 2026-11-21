@@ -52,6 +52,7 @@ PointOutput run(const auto& model, PointInput in) {
     return out;
 }
 void composition();
+Mat6 inverse(Mat6 a);
 void limits() {
     auto a = kernel(card(false)), b = kernel(card(true));
     CopperMixture<MS> mix(a, b);
@@ -61,6 +62,18 @@ void limits() {
         for (Real T : {233., 400., 533.})
             for (bool override_zero : {false, true}) {
                 auto in = input(f, T);
+                // Check the normal component in material axes before the rotated endpoint checks.
+                auto unrotated_in = in;
+                unrotated_in.override_T_sf = override_zero;
+                unrotated_in.T_sf = 350;
+                auto unrotated = run(mix, unrotated_in);
+                auto S = inverse(unrotated.tangent);
+                const auto& phase = f == 0 ? a : b;
+                Real E, nu;
+                phase.isotropic_properties(unrotated_in, E, nu);
+                near(1 / S[14], E, 1e-14);
+                near(
+                    unrotated.thermal_strain[2], run(phase, unrotated_in).thermal_strain[2], 1e-14);
                 in.R = &R;
                 in.override_T_sf = override_zero;
                 in.T_sf = 350;
@@ -116,7 +129,57 @@ Mat6 inverse(Mat6 a) {
     }
     return b;
 }
+bool constant_longitudinal() {
+    constexpr Real Em = 25e9, Ec = 110e9, am = 10e-6, ac = 17e-6, f = .3;
+    auto m = card(false), c = card(true);
+    m.elastic_table = TemperatureTable({233, 533}, {{Em, Em}, {.3, .3}});
+    c.elastic_table = TemperatureTable({233, 533}, {{Ec, Ec}, {.34, .34}});
+    m.cte_table = TemperatureTable({233, 533}, {{am, am}});
+    c.cte_table = TemperatureTable({233, 533}, {{ac, ac}});
+    m.thermal.cte_type = c.thermal.cte_type = CteType::Tangent;
+    m.thermal.T_sf = c.thermal.T_sf = 300;
+    CopperMixture<MS> mix(kernel(m), kernel(c));
+    const Real E = f * Ec + (1 - f) * Em;
+    const Real alpha = (f * Ec * ac + (1 - f) * Em * am) / E;
+    bool ok = true;
+    for (Real T : {233., 400., 533.})
+        for (bool override_zero : {false, true}) {
+            auto in = input(f, T);
+            in.override_T_sf = override_zero;
+            in.T_sf = 350;
+            const Real delta_T = T - (override_zero ? in.T_sf : m.thermal.T_sf);
+            auto out = run(mix, in);
+            auto S = inverse(out.tangent);
+            auto expect = [&](Real actual, Real expected, Real tolerance, const char* name) {
+                if (!(std::abs(actual - expected) <= tolerance * std::abs(expected))) {
+                    std::cerr << std::setprecision(17) << "FAIL " << name << ": actual=" << actual
+                              << " expected=" << expected << " T=" << T
+                              << " override_T_sf=" << override_zero << '\n';
+                    ok = false;
+                }
+            };
+            expect(1 / S[14], E, 1e-12, "constant_longitudinal_Ez");
+            expect(out.thermal_strain[2] / delta_T, alpha, 1e-12, "constant_longitudinal_alpha_z");
+            expect(1 / S[14], 50.5e9, 1e-4, "displayed_Ez");
+            expect(out.thermal_strain[2] / delta_T, 14.574e-6, 1e-4, "displayed_alpha_z");
+            Mat6 L{};
+            for (int j = 0; j < 6; ++j)
+                for (int k = 0; k <= j; ++k) {
+                    near(out.tangent[6 * j + k], out.tangent[6 * k + j]);
+                    Real v = out.tangent[6 * j + k];
+                    for (int l = 0; l < k; ++l)
+                        v -= L[6 * j + l] * L[6 * k + l];
+                    if (j == k) {
+                        check(v > 0, "constant longitudinal non-SPD tangent");
+                        L[6 * j + k] = std::sqrt(v);
+                    } else
+                        L[6 * j + k] = v / L[6 * k + k];
+                }
+        }
+    return ok;
+}
 void laminate() {
+    const bool constant_ok = constant_longitudinal();
     auto m = card(false), c = card(true);
     auto a = kernel(m), b = kernel(c);
     CopperMixture<MS> mix(a, b);
@@ -129,8 +192,7 @@ void laminate() {
             Real Em, nm, Ec, nc;
             a.isotropic_properties(in, Em, nm);
             b.isotropic_properties(in, Ec, nc);
-            Real Ex = f * Ec + (1 - f) * Em, Ez = 1 / (f / Ec + (1 - f) / Em),
-                 n = f * nc + (1 - f) * nm;
+            Real Ex = f * Ec + (1 - f) * Em, Ez = Ex, n = f * nc + (1 - f) * nm;
             near(1 / S[0], Ex);
             near(1 / S[7], Ex);
             near(1 / S[14], Ez);
@@ -145,9 +207,7 @@ void laminate() {
                       (f * Mc + (1 - f) * Mm);
             near(out.thermal_strain[0], th);
             near(out.thermal_strain[2],
-                 f * (y.thermal_strain[0] - 2 * nc / (1 - nc) * (th - y.thermal_strain[0])) +
-                     (1 - f) *
-                         (x.thermal_strain[0] - 2 * nm / (1 - nm) * (th - x.thermal_strain[0])));
+                 (f * Ec * y.thermal_strain[0] + (1 - f) * Em * x.thermal_strain[0]) / Ex);
             in.override_T_sf = true;
             in.T_sf = T;
             out = run(mix, in);
@@ -161,6 +221,7 @@ void laminate() {
             for (int i = 0; i < 36; ++i)
                 near(rotated.tangent[i], expected[i]);
         }
+    check(constant_ok, "constant longitudinal acceptance");
     std::cout << "laminate max relative normal modulus error=" << max_error << '\n';
 }
 void spd() {
