@@ -1,1 +1,1 @@
-defect_id,tier,kind,reason,dimension,size,suggestion,action,rejection_reason,material_ambiguous
+defect_id,tier,kind,reason,dimension,size,size_unit,suggestion,action,rejection_reason,material_ambiguous

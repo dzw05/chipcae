@@ -731,17 +731,50 @@ for extension in ('.TgZ','.TaR.Gz','.ZiP'):
         shutil.copyfile(fixture/('kicad4l.zip' if extension == '.ZiP' else 'kicad4l.tgz'),path)
         b.run(path,['--accept-b-tier'])
 
+def report_contract(b, out):
+    report = load(out/'import_report.json')
+    summary = load(out/'defects.json')
+    check(report.get('schema_version') == 'import-report/1.0', 'import report schema')
+    check(summary.get('schema_version') == 'import-report/1.0', 'summary schema')
+    check('welded_interfaces' not in report and 'welded_interfaces' not in summary,
+          'ECAD must omit assembly weld count')
+    check(summary['defects'] == [], 'ECAD summary must retain empty defects')
+    ds = b.defect_rows(out)
+    ids = [d['defect_id'] for d in ds]
+    check(all(ids) and len(ids) == len(set(ids)), 'final IDs must be nonempty and unique')
+    check(all(d.get('size_unit') == '1' for d in ds), 'ECAD count units')
+    return ds
+
 @case('acceptance','ipc')
 def acceptance(b):
     local = b.root/'unsupported.xml'
     shutil.copyfile(data/'unsupported.xml',local)
     out,_,_ = b.run(local,expected=6)
-    ds = b.defect_rows(out)
+    ds = report_contract(b, out)
     ids = [d['defect_id'] for d in ds]
     accept = b.root/'import.accept.json'
     accept.write_text(json.dumps({'accept':[{'defect_id':i} for i in ids+ids]}))
     b.run(local,expected=6,name='no_implicit_accept',prior=True)
-    b.run(local,['--accept',accept],name='confirmed')
+    confirmed,_,_ = b.run(local,['--accept',accept],name='confirmed')
+    confirmed_ds = report_contract(b, confirmed)
+    check([d['defect_id'] for d in confirmed_ds] == ids, 'replay changed final IDs')
+    check(all(d['action'] and not d['rejection_reason'] for d in confirmed_ds),
+          'exact acceptance must repair every B defect')
+    # Repeated source paths exercise the existing ECAD /n IDs unchanged.
+    duplicate = b.root/'duplicate.xml'
+    text = local.read_text()
+    marker = '<MysteryA/>'
+    check(marker in text, 'synthetic unsupported fixture marker changed')
+    duplicate.write_text(text.replace(marker, marker + marker))
+    repeated,_,_ = b.run(duplicate,expected=6,name='repeated')
+    repeated_ds = report_contract(b, repeated)
+    check([d['defect_id'] for d in repeated_ds] ==
+          ['board/MysteryA/2', 'board/MysteryA/2/1', 'board/MysteryB/2', 'board/MysteryC/2'],
+          'unique ECAD /1 suffix must remain unchanged')
+    accept.write_text(json.dumps({'accept':[{'defect_id':d['defect_id']} for d in repeated_ds]}))
+    replayed,_,_ = b.run(duplicate,['--accept',accept],name='repeated_confirmed')
+    check([d['defect_id'] for d in report_contract(b, replayed)] ==
+          [d['defect_id'] for d in repeated_ds], 'accept replay changed /n IDs')
     accept.write_text(json.dumps({'accept':[{'defect_id':i.upper()} for i in ids]}))
     b.run(local,['--accept',accept],expected=6,name='case_changed',prior=True)
 
@@ -952,16 +985,27 @@ SE
 @case('via_plating_missing','ipc')
 def plating(b):
     out,_,_ = b.run(data/'kicad_like/via_plating_mixed.xml',expected=6)
-    ds = b.defect_rows(out)
+    ds = report_contract(b, out)
     d = next((d for d in ds if d['defect_id'] == 'board/via_plating_missing/F.Cu-B.Cu'),None)
     check(d is not None, 'missing board-scoped via-plating defect ID')
     check(d['tier'] == 'B' and d['kind'] == 'IMPORT_UNSUPPORTED_ELEMENT' and d['size'] == 2,
           'missing-plating count/tier/kind')
     accepted,_,_ = b.run(data/'kicad_like/via_plating_mixed.xml',
                          ['--accept-b-tier'],name='accepted')
-    accepted_ds = b.defect_rows(accepted)
+    accepted_ds = report_contract(b, accepted)
     check([d['defect_id'] for d in ds] == [d['defect_id'] for d in accepted_ds],
           'acceptance changed via-plating IDs')
+
+@case('via_plating_exact_acceptance','ipc')
+def plating_exact_acceptance(b):
+    out,_,_ = b.run(data/'kicad_like/via_plating_mixed.xml',expected=6)
+    ds = report_contract(b, out)
+    accept = b.root/'via.accept.json'
+    accept.write_text(json.dumps({'accept':[{'defect_id':d['defect_id']} for d in ds]}))
+    replayed,_,_ = b.run(data/'kicad_like/via_plating_mixed.xml',
+                         ['--accept',accept],name='exact_accepted')
+    check([d['defect_id'] for d in report_contract(b, replayed)] ==
+          [d['defect_id'] for d in ds], 'exact via-plating replay changed IDs')
 
 @case('report_and_preview')
 def report_preview(b):
@@ -1090,7 +1134,7 @@ selected = [(n,g,f) for n,g,f in CASES if (selector in ('all',g,n) or
 if selector in ('odb', 'ipc'):
     def follow_up(name):
         if (name.startswith('override_') and name != 'override_fill_missing') or name in (
-                'acceptance', 'dispatcher_values'):
+                'acceptance', 'via_plating_exact_acceptance', 'dispatcher_values'):
             return 'dispatcher forwarding of --accept/--stack-override'
         if name in ('cross_ipc', 'dir_and_zip', 'odb_skipped_layers_reported'):
             return 'full-board geometry/model support and archive root handling'
