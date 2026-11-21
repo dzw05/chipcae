@@ -715,12 +715,13 @@ class TraceMapReferenceTests(unittest.TestCase):
         self.assertLessEqual(np.max(abs(recovered - dense)), 1e-8)
         self.assertLessEqual(np.max(abs(recovered_reactions - reactions)), 1e-10)
 
-    def test_uniform_multilayer_series_solution(self):
+    def test_uniform_multilayer_stacked_resistance_solution(self):
         import numpy as np
         import trace_map_ref as ref
         stack = synthetic_stack([.0002, .001, .0003])
         mesh = ref.tensor_mesh(stack, 2, 1)
-        # Uniform f=(0, 1/2, 1); independent series resistance in SI.
+        # Uniform f=(0, 1/2, 1); parallel mixtures within each layer.
+        # Independent series resistance across the stacked layers, in SI.
         kz = [.3, 195.15, 390]
         k = np.array([[.3, .3, .3], [195.15, 195.15, kz[1]], [390, 390, 390]] * 2)
         operator, rhs, dofs = ref.assemble_q2(mesh, k)
