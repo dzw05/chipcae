@@ -312,7 +312,7 @@ def reference_coefficients(mesh, rings, stack):
 
 def mixed_conductivity(phi):
     parallel = phi*390+(1-phi)*.3
-    normal = phi*390+(1-phi)*.3
+    normal = parallel
     return np.column_stack((parallel,parallel,normal))
 
 
