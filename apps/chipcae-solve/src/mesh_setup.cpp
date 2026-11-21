@@ -1,4 +1,4 @@
-#include "chipcae/mesh/cut/outline_cut.hpp"
+#include "chipcae/mesh/cut/detail/outline_nonconvex.hpp"
 #include "chipcae/mesh/cut/region_cut.hpp"
 #include "chipcae/solve/case_loader.hpp"
 #include "mesh_error_map.hpp"
@@ -76,7 +76,7 @@ mesh::HexMeshArrays build_mesh(const RunInputs& inputs,
         return mesh;
     if (!cut)
         throw InputError(ErrorCode::CUT_UNSUPPORTED, "cut data receiver is required");
-    auto clipped = mesh::cut::apply_outline_cut(
+    auto clipped = mesh::cut::detail::apply_outline_cut_general(
         mesh, inputs.stack.outline, inputs.cut_options, region_planes.value());
     if (!clipped) {
         const auto& err = clipped.error();
