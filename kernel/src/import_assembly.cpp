@@ -414,12 +414,14 @@ inline void summarize_assembly_parts(const mesh::StackModel& base,
     }
 }
 
+namespace {
 // Merge preserves base layer identity (including split pieces) and part body IDs.
 // Use layer indices so bottom extensions and rounded serialized thicknesses cannot
 // change which body endpoint touches an empty layer.
-std::optional<std::string> floating_gap_part(const mesh::StackModel& merged,
-                                             const mesh::StackModel& base,
-                                             const std::vector<geometry::PlacedPart>& placed) {
+[[maybe_unused]] std::optional<std::string>
+floating_gap_part(const mesh::StackModel& merged,
+                  const mesh::StackModel& base,
+                  const std::vector<geometry::PlacedPart>& placed) {
     const auto count = merged.layers.size();
     std::size_t board_first = count, board_last = 0;
     std::map<std::string, std::pair<std::size_t, std::size_t>> body_span;
@@ -447,18 +449,24 @@ std::optional<std::string> floating_gap_part(const mesh::StackModel& merged,
         if (!layer.material.empty() || !layer.regions.empty())
             continue;
         for (const auto& part : placed) {
+            if (part.id.empty())
+                continue;
             const auto span = body_span.find(part.id);
             if (span != body_span.end() && ((i > board_last && span->second.first == i + 1) ||
                                             (i < board_first && span->second.second + 1 == i)))
                 return part.id;
         }
         // Missing body IDs may fall back only to an outer slab endpoint on the
-        // far side of this cavity. Anchor at the board faces, not stack z = 0:
-        // bottom extensions shift the merged stack's origin away from the board.
+        // far side of this cavity. Base thicknesses and placed slabs use the
+        // board's original frame. Translate both into the merged stack frame
+        // using the layers below the board, including any bottom extension.
         const bool above = i > board_last;
         if (!above && i >= board_first)
             return std::nullopt;
-        Real boundary = 0;
+        Real board_bottom = 0;
+        for (std::size_t j = 0; j < board_first; ++j)
+            board_bottom += merged.layers[j].thickness;
+        Real boundary = board_bottom;
         if (above) {
             for (const auto& original : base.layers)
                 boundary += original.thickness;
@@ -474,8 +482,12 @@ std::optional<std::string> floating_gap_part(const mesh::StackModel& merged,
             Real endpoint = above ? part.slabs.front().z0 : part.slabs.front().z1;
             for (const auto& slab : part.slabs)
                 endpoint = above ? std::min(endpoint, slab.z0) : std::max(endpoint, slab.z1);
-            // The fallback requires an exact shared boundary; do not add a tolerance.
-            if (endpoint == boundary)
+            endpoint += board_bottom;
+            // Independent thickness sums may round a shared endpoint differently.
+            // Use the default absolute (metres) and relative numeric tolerances.
+            constexpr Real abs_tol = 1e-10, rel_tol = 5.5e-6;
+            if (std::abs(endpoint - boundary) <=
+                abs_tol + rel_tol * std::max(std::abs(endpoint), std::abs(boundary)))
                 return part.id;
         }
         // Keep schema rejection if the first cavity cannot be attributed safely.
@@ -483,6 +495,7 @@ std::optional<std::string> floating_gap_part(const mesh::StackModel& merged,
     }
     return std::nullopt;
 }
+} // namespace
 
 bool assembly_display_only(const geometry::StepImportResult& result) {
     return std::any_of(result.body_names.begin(), result.body_names.end(), [](const auto& name) {
