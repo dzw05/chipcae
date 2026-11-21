@@ -414,6 +414,50 @@ inline void summarize_assembly_parts(const mesh::StackModel& base,
     }
 }
 
+// Merge preserves base layer identity (including split pieces) and part body IDs.
+// Use layer indices so bottom extensions and rounded serialized thicknesses cannot
+// change which body endpoint touches an empty layer.
+std::optional<std::string> floating_gap_part(const mesh::StackModel& merged,
+                                             const mesh::StackModel& base,
+                                             const std::vector<geometry::PlacedPart>& placed) {
+    const auto count = merged.layers.size();
+    std::size_t board_first = count, board_last = 0;
+    std::map<std::string, std::pair<std::size_t, std::size_t>> body_span;
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto& layer = merged.layers[i];
+        for (const auto& original : base.layers) {
+            const auto& body = original.body.empty() ? original.name : original.body;
+            if ((layer.name == original.name || layer.name.starts_with(original.name + "#")) &&
+                (layer.body == body || layer.body == original.body)) {
+                board_first = std::min(board_first, i);
+                board_last = i;
+                break;
+            }
+        }
+        for (const auto& region : layer.regions) {
+            auto [it, inserted] = body_span.try_emplace(region.body, i, i);
+            if (!inserted)
+                it->second.second = i;
+        }
+    }
+    if (board_first == count)
+        return std::nullopt;
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto& layer = merged.layers[i];
+        if (!layer.material.empty() || !layer.regions.empty())
+            continue;
+        for (const auto& part : placed) {
+            const auto span = body_span.find(part.id);
+            if (span != body_span.end() && ((i > board_last && span->second.first == i + 1) ||
+                                            (i < board_first && span->second.second + 1 == i)))
+                return part.id;
+        }
+        // Without qualifying provenance, retain the existing schema failure.
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
 bool assembly_display_only(const geometry::StepImportResult& result) {
     return std::any_of(result.body_names.begin(), result.body_names.end(), [](const auto& name) {
         return name.find("NOT_CAE_GEOMETRY") != std::string::npos;
@@ -908,6 +952,8 @@ int run_assembly(const ImportOptions& options) {
         if (policy.result == ImportResult::ConfirmationRequired)
             return fail("IMPORT_CONFIRMATION_REQUIRED",
                         "IMPORT_CONFIRMATION_REQUIRED: B-tier defects require acceptance");
+        if (auto id = floating_gap_part(merged, base, placed))
+            return fail("INPUT_INVALID", "gap without bond leaves " + *id + " floating");
         // Keep the staged stack beside its sidecars so relative references
         // resolve identically during validation and after publication.
         auto staged = options.output;
