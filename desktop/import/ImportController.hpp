@@ -39,6 +39,9 @@ public:
     QProcess::ExitStatus exitStatus() const { return exitStatus_; }
     QByteArray stderrText() const { return stderr_; }
     QByteArray reportBytes() const { return report_; }
+    // Test-first placeholders for the frozen D09c API; no report is consumed yet.
+    QByteArray importReportBytes() const { return {}; }
+    jsoncons::json importReport() const { return jsoncons::json::object(); }
     QString error() const { return error_; }
     QString grade() const { return grade_; }
 public slots:
