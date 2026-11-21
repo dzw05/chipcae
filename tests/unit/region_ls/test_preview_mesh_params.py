@@ -120,6 +120,57 @@ class PreviewMeshParams(unittest.TestCase):
         # Both grid and embedded-boundary files share the requested stem.
         self.assertEqual(list(self.root.glob(stem.name + '*.vtkhdf')), [], context)
 
+    def test_success_key_order(self):
+        expected = [
+            'grid', 'max_ratio', 'n0', 'nx0', 'ny0', 'L',
+            'padded_cells', 'void_cells', 'nz', 'node_count',
+            'cell_count', 'cut_cell_count', 'mesh_sha256',
+            'cell_budget', 'min_elems_per_layer',
+        ]
+        cases = (
+            ('default', [], None),
+            ('explicit', ['--cell-budget', '50000', '--min-elems-per-layer', '2'], 2),
+        )
+        try:
+            for name, flags, minimum in cases:
+                with self.subTest(name=name):
+                    invocation = self.invoke(f'key-order-{name}', synthetic_stack(), flags,
+                                             nx=4, ny=4, levels=1)
+                    summary = self.success(invocation)
+                    result = invocation[0]
+                    context = diagnostics(result)
+                    events = [json.loads(line, object_pairs_hook=list)
+                              for line in result.stdout.splitlines() if line.strip()]
+                    found = [event for event in events if ('stage', 'success') in event]
+                    self.assertEqual(len(found), 1, context)
+                    event = found[0]
+                    messages = [value for key, value in event if key == 'message']
+                    self.assertEqual(len(messages), 1, context)
+                    message = json.loads(messages[0], object_pairs_hook=list)
+                    message_keys = [key for key, _ in message]
+                    top_keys = [key for key, _ in event]
+                    self.assertEqual(message_keys, expected, context)
+                    self.assertEqual(top_keys, ['stage', 'progress', *expected, 'message'],
+                                     context)
+                    for keys in (message_keys, top_keys):
+                        self.assertEqual(keys.index('cell_budget'),
+                                         keys.index('mesh_sha256') + 1, context)
+                        self.assertEqual(keys.index('min_elems_per_layer'),
+                                         keys.index('mesh_sha256') + 2, context)
+                    self.assertEqual(message_keys[-2:], expected[-2:], context)
+                    self.assertEqual(top_keys[-3:-1], expected[-2:], context)
+                    for budget, actual_minimum in (
+                            (message[-2][1], message[-1][1]),
+                            (summary['cell_budget'], summary['min_elems_per_layer'])):
+                        self.assertEqual(budget, 50000, context)
+                        if minimum is None:
+                            self.assertIsNone(actual_minimum, context)
+                        else:
+                            self.assertIs(type(actual_minimum), int, context)
+                            self.assertEqual(actual_minimum, minimum, context)
+        finally:
+            self.measure('success_key_order')
+
     def test_budget_default_rejects(self):
         self.rejected(self.invoke('default-budget', synthetic_stack(15),
                                   nx=60, ny=60, levels=0), 14, 'cell_budget: ')
