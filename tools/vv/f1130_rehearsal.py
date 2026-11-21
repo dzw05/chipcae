@@ -223,6 +223,11 @@ def main(argv=None) -> int:
     try:
         out = Path(args.out).resolve()
         out.mkdir(parents=True, exist_ok=True)
+        # Keep provenance even when cache or dependency checks stop the rehearsal.
+        commit = _run(["git", "rev-parse", "HEAD"], cwd=_REPO)
+        if commit.returncode or not commit.stdout.strip():
+            raise OSError("Cannot obtain commit: " + _output(commit))
+        report["commit"] = commit.stdout.strip()
         build = Path(args.build_dir).resolve()
         report["build_dir"] = str(build)
         if not build.is_dir():
@@ -242,10 +247,6 @@ def main(argv=None) -> int:
     if gaps:
         report["readiness_gaps"] = [{"status": "Skipped", "reason": gap} for gap in gaps]
     try:
-        commit = _run(["git", "rev-parse", "HEAD"], cwd=_REPO)
-        if commit.returncode or not commit.stdout.strip():
-            raise OSError("Cannot obtain commit: " + _output(commit))
-        report["commit"] = commit.stdout.strip()
         discovery_errors = _discover(build, report)
         if discovery_errors:
             report["preflight_errors"].extend(discovery_errors)

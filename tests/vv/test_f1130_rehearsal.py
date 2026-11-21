@@ -69,6 +69,9 @@ class RehearsalAcceptance(unittest.TestCase):
         self.listing_error = None
         self.execution_rc = 0
         self.execution_error = None
+        self.git_error = None
+        self.git_rc = 0
+        self.git_stdout = COMMIT + "\n"
         self.execution_stdout = "All tests Skipped"
         self.xml = junit()
         self.calls = []
@@ -96,7 +99,11 @@ class RehearsalAcceptance(unittest.TestCase):
             self.assertEqual(
                 Path(kwargs["cwd"]).resolve(), Path(__file__).resolve().parents[2]
             )
-            return subprocess.CompletedProcess(args, 0, COMMIT + "\n", "")
+            if self.git_error is not None:
+                raise self.git_error
+            return subprocess.CompletedProcess(
+                args, self.git_rc, self.git_stdout, "synthetic git stderr"
+            )
         self.assertEqual(args[0], "ctest", f"Unexpected subprocess: {args}")
         if "-N" in args:
             self.assertEqual(args, ["ctest", "--test-dir", str(self.build), "-N"])
@@ -499,7 +506,28 @@ class RehearsalAcceptance(unittest.TestCase):
         self.assertEqual(self.ctest_calls(), [])
         report = self.report()
         self.assertEqual(report["overall"], "NOT_RUN")
+        self.assertEqual(report["commit"], COMMIT)
         self.assertIn("CMakeCache.txt", json.dumps(report["preflight_errors"]))
+
+    def test_git_failure_retains_null_provenance_and_prevents_ctest(self):
+        for error, returncode, stdout in (
+                (FileNotFoundError("synthetic git launch failure"), 0, COMMIT + "\n"),
+                (None, 128, ""), (None, 0, "\n")):
+            with self.subTest(error=error, returncode=returncode, stdout=stdout):
+                self.calls.clear()
+                self.git_error = error
+                self.git_rc = returncode
+                self.git_stdout = stdout
+                self.invoke(2)
+                report = self.report()
+                self.assertIsNone(report["commit"])
+                self.assertEqual(report["overall"], "NOT_RUN")
+                self.assertEqual(self.ctest_calls(), [])
+                self.assertEqual([case["status"] for case in report["tests"]],
+                                 ["Not Run"] * 4)
+                self.assertIn("git", "\n".join(report["preflight_errors"]).lower())
+                if error is None:
+                    self.assertIn("synthetic git stderr", self.diagnostics())
 
     def test_empty_output_argument_rejected(self):
         with patch("subprocess.run", side_effect=self.fake_run):

@@ -45,6 +45,9 @@ python -m tools.vv.f1130_rehearsal --build-dir "$BUILD_DIR" --out "$OUT_DIR" --r
 `CHIPCAE_ENABLE_HDF5` 均须开启。驱动保留缓存原值，接受标准 CMake 真值
 （ON/YES/TRUE/Y、非零数值，大小写不敏感），缺项与假值均列出诊断。
 MPI 仅用 `shutil.which("mpiexec")` 查找，`mpirun` 不作替代。
+输出目录建立后，驱动先读取 Git commit，再检查构建目录、缓存和依赖；
+因此缺缓存、后端或 mpiexec 的前检报告也保留 commit。
+Git 启动失败、返回非零或没有输出时，commit 为 null，记录原始诊断并退出 2。
 这四个开关不保证运行依赖完整；实测的求解流水线还需要启用 JSONCONS，
 测试解释器需有 NumPy、h5py。实际缺依赖时的失败或跳过会保留在报告中。
 先以 `ctest --test-dir "$BUILD_DIR" -N` 检查四个名字的精确注册，
@@ -107,6 +110,7 @@ JSON 字段：
 
 ```sh
 python -m py_compile tools/vv/f1130_rehearsal.py tests/vv/test_f1130_rehearsal.py
+python -m unittest tests.vv.test_f1130_rehearsal -v
 ctest --test-dir "$BUILD_DIR" -N -R '^vv_f1130_rehearsal_unit$'
 ctest --test-dir "$BUILD_DIR" -R '^vv_f1130_rehearsal_unit$' --output-on-failure
 ```
@@ -117,6 +121,20 @@ ctest --test-dir "$BUILD_DIR" -R '^vv_f1130_rehearsal_unit$' --output-on-failure
 记录 commit、完整命令、退出码和实际结果，报告标「实测」，不将 Skipped 当 Passed。
 负向实测用保留 shim 但排除所有 mpiexec 目录的受控 PATH，预期退出 `2`。
 仓库内不保存本地环境绝对路径或真实算例数据。
+
+在上述环境就绪后，实测命令如下。两个输出目录须不同，以同时保留正常与负向证据。
+先保存解释器路径，负向验证移除依赖 bin 后仍使用同一个解释器。
+
+```sh
+python -m tools.vv.f1130_rehearsal --build-dir "$BUILD_DIR" --out "$OUT_DIR" --ranks 1,2
+PYTHON_EXE="$(command -v python)"
+NO_MPI_PATH="$("$PYTHON_EXE" -c 'import os; from pathlib import Path; print(os.pathsep.join(p for p in os.environ["PATH"].split(os.pathsep) if p and not (Path(p) / "mpiexec").exists()))')"
+PATH="$NO_MPI_PATH" "$PYTHON_EXE" -m tools.vv.f1130_rehearsal --build-dir "$BUILD_DIR" --out "$NEGATIVE_OUT_DIR" --ranks 1,2
+```
+
+负向报告应为 `NOT_RUN`，保留 commit，四项均 `Not Run`，发现和执行均未调用。
+正常实测的 JSON、Markdown 和 JUnit 应随交付记录留存；实测红项/跳过原文交由对应模块处理，
+不修改本卡范围外的集成断言或数值门值。
 
 ## 许可
 
