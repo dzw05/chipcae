@@ -1019,6 +1019,18 @@ class TraceMapReferenceTests(unittest.TestCase):
                         ['acceptance check incomplete: conductivity'])
                     print(f'series_kz relative_conductivity_difference={relative:.17g} '
                           f'failure={failure.exception} verdict={record["verdict"]}',flush=True)
+                    # The same export must pass again after restoring the parallel reference.
+                    # This catches a leaked mutation or a checker that always rejects C4.
+                    control = dict(acceptance_checks={name: True
+                        for name in ACCEPTANCE_CHECKS
+                        if name not in ('cell_fractions','conductivity','physics')})
+                    ref.check_solution(mesh,given_rings,stack,control,
+                                       expected_areas={'In1.Cu': .5})
+                    self.assertTrue(all(control['acceptance_checks'][name]
+                                        for name in ACCEPTANCE_CHECKS))
+                    with redirect_stdout(StringIO()):
+                        write_result(Path(directory),1,control,{},[],[])
+                    self.assertEqual(read_json(Path(directory) / 'result.json')['verdict'],'pass')
                 else:
                     with self.assertRaises(AssertionError):
                         ref.check_solution(mesh, given_rings, stack, {}, expected_areas={'In1.Cu': .5})
