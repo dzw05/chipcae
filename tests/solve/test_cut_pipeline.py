@@ -37,8 +37,9 @@ with tempfile.TemporaryDirectory() as tmp:
         if error:
             assert result.returncode == error_code, (name, result.returncode, error_code, result.stderr)
             assert error in result.stderr, result.stderr
+            assert not list(out.glob('out/*.vtkhdf')), list(out.rglob('*.vtkhdf'))
             return
-        assert result.returncode == 0, result.stderr
+        assert result.returncode == 0, (name, ranks, result.returncode, result.stderr)
         manifest = json.loads((out/'manifest.json').read_text())
         assert [b['name'] for b in manifest['blocks']] == names
         summary = {s['name']: s['value'] for s in manifest['summary']}
@@ -83,7 +84,9 @@ with tempfile.TemporaryDirectory() as tmp:
             for rank in range(ranks):
                 assert data.GetPartition(i,rank) is not None
         assert sum(data.GetPartition(2,i).GetNumberOfCells() for i in range(ranks)) > 0
-        print(out.name, summary, flush=True)
+        print(out.name, summary, 'mesh_sha256', manifest['mesh']['mesh_sha256'],
+              'summary_bits', {quantity: struct.pack('>d', float(summary[quantity])).hex()
+                               for quantity in ('T_max', 'warpage_pv')}, flush=True)
         return summary
     one = run('one')
     with h5py.File(root/'one/out/step-0.vtkhdf') as file:
@@ -134,11 +137,148 @@ with tempfile.TemporaryDirectory() as tmp:
     fixed = copy.deepcopy(original)
     fixed['constraints'] = {'fixed':[{'target':'boundary:embedded'}]}
     run('fixed-displacement',fixed,error='Nitsche is not implemented')
-    invalid = copy.deepcopy(stack)
-    invalid['outline']['polygon'] = [[0,0],[.02,0],[.01,.01],[.02,.02],[0,.02]]
-    (root/'stack.json').write_text(json.dumps(invalid))
-    run('nonconvex',error='non-convex')
-    (root/'stack.json').write_text(json.dumps(stack))
+    # These acceptance cases catch a missing general-cutter call and convex-only
+    # summary sampling. Collect failures so every shape/rank/diagnostic executes.
+    def acceptance(name, action):
+        try:
+            return action()
+        except (AssertionError, KeyError, ValueError, subprocess.TimeoutExpired) as error:
+            acceptance_failures.append(f'{name}: {error}')
+            print(f'FAIL {name}: {error}', flush=True)
+        finally:
+            (root/'stack.json').write_text(json.dumps(stack))
+
+    def output_volume(name):
+        total = 0.0
+        seen = set()
+        with h5py.File(root/name/'out/step-0.vtkhdf') as file:
+            # Output contains owned cells. Check GIDs across both solid blocks
+            # rather than summing replicated meshes or EB/particle measures.
+            for block in ('hex', 'cut'):
+                grid = file['VTKHDF/'+block]
+                gids = grid['CellData/elem_gid'][:]
+                assert len(set(map(int, gids))) == len(gids), (name, block, 'duplicate GID')
+                assert not seen.intersection(map(int, gids)), (name, 'duplicate solid cell')
+                seen.update(map(int, gids))
+                if 'vtkGhostType' in grid['CellData']:
+                    assert np.all(grid['CellData/vtkGhostType'][:] == 0), name
+                if block == 'cut':
+                    volumes = grid['CellData/volume'][:]
+                    assert len(volumes) == len(gids)
+                    total += float(np.sum(volumes))
+                else:
+                    # VTKHDF connectivity uses indices local to each partition.
+                    point_start = cell_start = conn_start = 0
+                    for npart, ncell, nconn in zip(grid['NumberOfPoints'][:],
+                                                  grid['NumberOfCells'][:],
+                                                  grid['NumberOfConnectivityIds'][:]):
+                        npart, ncell, nconn = int(npart), int(ncell), int(nconn)
+                        assert nconn == 8*ncell
+                        points = grid['Points'][point_start:point_start+npart]
+                        conn = grid['Connectivity'][conn_start:conn_start+nconn].reshape(-1, 8)
+                        if ncell:
+                            corners = points[conn]
+                            total += float(np.sum(np.prod(np.ptp(corners, axis=1), axis=1)))
+                        point_start += npart
+                        cell_start += ncell
+                        conn_start += nconn
+                    assert cell_start == len(gids)
+        return total
+
+    coupled = copy.deepcopy(layered)
+    coupled['output']['fields'] = ['T', 'U', 'layer_id', 'material_id',
+                                   'cell_kind', 'elem_gid', 'volume']
+    outline_case = copy.deepcopy(coupled)
+    outline_case['output'].pop('fields')
+    thickness = sum(layer['thickness'] for layer in stack['layers']
+                    if layer['kind'].lower() != 'void')
+    # Exercise the volume reader on existing convex np1/np2 output as well,
+    # even while the new nonconvex cases still stop at input validation.
+    polygon = np.asarray(stack['outline']['polygon'])
+    convex_area = abs(np.sum(polygon[:, 0]*np.roll(polygon[:, 1], -1)
+                             - polygon[:, 1]*np.roll(polygon[:, 0], -1)))/2
+    for name in ('one', 'two'):
+        volume = output_volume(name)
+        assert abs(volume/(convex_area*thickness)-1) <= 1e-10, (name, volume)
+    shapes = {
+        'V': ([[0,0],[.02,0],[.01,.01],[.02,.02],[0,.02]], 3e-4),
+        'L': ([[0,0],[.02,0],[.02,.0137],[.0113,.0137],[.0113,.02],[0,.02]],
+              3.4519e-4),
+    }
+    for shape, (ring, area) in shapes.items():
+        results = {}
+        for ranks in (1, 2):
+            name = f'nonconvex-{shape}-np{ranks}'
+            def positive(name=name, ranks=ranks, ring=ring, area=area):
+                data = copy.deepcopy(stack)
+                data['outline']['polygon'] = ring
+                (root/'stack.json').write_text(json.dumps(data))
+                # Check outline support independently before explicit field
+                # selection: FEM currently rejects a requested volume field.
+                # Keep the volume request below as a required assertion too.
+                run(name+'-outline', outline_case, ranks=ranks)
+                summary = run(name, coupled, ranks=ranks)
+                volume = output_volume(name)
+                error = abs(volume/(area*thickness)-1)
+                assert error <= 1e-10, (name, volume, area*thickness, error)
+                for quantity in ('T_max', 'warpage_pv'):
+                    assert np.isfinite(summary[quantity]), (name, summary)
+                assert summary['warpage_pv'] > 0, (name, summary)
+                print(name, 'volume relative error', error, flush=True)
+                return summary
+            summary = acceptance(name, positive)
+            if summary is not None:
+                results[ranks] = summary
+        if len(results) == 2:
+            for quantity in ('T_max', 'warpage_pv'):
+                def compare(quantity=quantity):
+                    one, two = results[1][quantity], results[2][quantity]
+                    assert one != 0, (shape, quantity, one)
+                    difference = abs(two-one)/abs(one)
+                    print(shape, quantity, 'MPI relative difference', difference, flush=True)
+                    assert difference <= 1e-9, (shape, quantity, difference)
+                acceptance(f'{shape} MPI {quantity}', compare)
+
+    def l_robin():
+        data = copy.deepcopy(stack)
+        data['outline']['polygon'] = shapes['L'][0]
+        (root/'stack.json').write_text(json.dumps(data))
+        robin_case = copy.deepcopy(outline_case)
+        robin_case['loads'].append({'type':'convection', 'target':'boundary:embedded',
+                                    'h':1000, 'T_inf':350})
+        summary = run('nonconvex-L-robin', robin_case)
+        assert 300 < summary['T_max'] <= 400, summary
+    acceptance('L embedded Robin', l_robin)
+
+    def l_with_region_planes():
+        # A convex chamfered top body supplies nonempty extra planes while the
+        # outer L exercises the general outline path; preserve both cuts.
+        data = copy.deepcopy(stack)
+        data['outline']['polygon'] = shapes['L'][0]
+        lid = data['layers'][-1]
+        material = lid.pop('material')
+        lid['regions'] = [{'name':'lid-region', 'body':'lid', 'material':material,
+                           'footprint':copy.deepcopy(stack['outline'])}]
+        (root/'stack.json').write_text(json.dumps(data))
+        summary = run('nonconvex-L-region-planes', outline_case)
+        assert np.isfinite(summary['T_max']) and summary['warpage_pv'] > 0, summary
+    acceptance('L with nonempty region planes', l_with_region_planes)
+
+    for name, ring, diagnostic in (
+        ('bow-tie', [[0,0],[.02,.02],[.02,0],[0,.02]], 'self-intersecting outline'),
+        ('narrow-R', [[0,0],[.0105,0],[.0105,.0043],[.0043,.0043],
+                      [.0043,.0157],[.0157,.0157],[.0157,.0043],[.0115,.0043],
+                      [.0115,0],[.02,0],[.02,.02],[0,.02]],
+         'disconnected solid in one cell'),
+    ):
+        def rejected(name=name, ring=ring, diagnostic=diagnostic):
+            data = copy.deepcopy(stack)
+            data['outline']['polygon'] = ring
+            (root/'stack.json').write_text(json.dumps(data))
+            invalid_case = copy.deepcopy(outline_case)
+            invalid_case['mesh'].update(nx=8, ny=8, levels=1)
+            run(name, invalid_case, error=diagnostic, error_code=13)
+        acceptance(name, rejected)
     # Padded non-power-of-two grid exercises actual-cell 3-2-1 selection.
     padded = copy.deepcopy(original)
     padded['mesh'].update(nx=7,ny=5,levels=2)

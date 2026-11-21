@@ -128,14 +128,33 @@ with tempfile.TemporaryDirectory(prefix='preview-outline-') as tmp:
         assert all(p == k for _, p, k in comparisons), comparisons
         assert digests[0] == digests[1], digests
     elif test == 'preview_outline_nonconvex_rejected':
+        failures = []
         polygon = [[0, 0], [1, 0], [.5, .5], [1, 1], [0, 1]]
-        result, stem = preview_run('nonconvex', polygon)
-        kernel, _ = solve_run('nonconvex-solve', 1)
-        assert kernel.returncode != 0, (kernel.stdout, kernel.stderr)
-        assert result.returncode == kernel.returncode, (result.returncode, kernel.returncode)
-        failures = [e for e in events(result) if e['stage'] in ('error', 'failure')]
-        assert failures and any('non-convex' in e['message'] for e in failures), events(result)
-        assert not list(root.glob(stem.name + '*.vtkhdf')), list(root.iterdir())
+        # Keep default preview rejection covered while solve opts into general cuts.
+        default, stem = preview_run('nonconvex-default', polygon)
+        assert default.returncode == 13, (default.stdout, default.stderr)
+        assert 'non-convex' in default.stdout + default.stderr
+        assert not list(root.glob(stem.name + '*.vtkhdf'))
+        for name, ring, expected, diagnostic in (
+            ('nonconvex', polygon, 0, None),
+            ('bow-tie', [[0,0],[1,1],[1,0],[0,1]], 13, 'self-intersecting outline'),
+        ):
+            result, stem = preview_run(name, ring, extra=['--nonconvex-outline'])
+            kernel, out = solve_run(name+'-solve', 1)
+            try:
+                assert result.returncode == expected and kernel.returncode == expected, (
+                    name, 'expected', expected,
+                    'preview', result.returncode, result.stdout, result.stderr,
+                    'solve', kernel.returncode, kernel.stdout, kernel.stderr)
+                assert result.returncode == kernel.returncode, (result.returncode, kernel.returncode)
+                if diagnostic:
+                    assert diagnostic in result.stdout + result.stderr, (name, result.stdout, result.stderr)
+                    assert diagnostic in kernel.stderr, (name, kernel.stderr)
+                    assert not list(root.glob(stem.name + '*.vtkhdf'))
+                    assert not list(out.glob('out/*.vtkhdf'))
+            except AssertionError as error:
+                failures.append(str(error))
+        assert not failures, '\n'.join(failures)
     elif test == 'preview_outline_external_polyset_rejected':
         binary = b'CCPOLY01' + struct.pack('<dII', 1e-6, 1, 7) + b'outline'
         ring = [(200000, 0), (800000, 0), (1000000, 200000), (1000000, 800000),
