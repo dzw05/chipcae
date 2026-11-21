@@ -1713,7 +1713,8 @@ void single_piece_legacy_bits() {
     }
 }
 // Catch dropped applicable planes, non-idempotent clipping, and differences from
-// the legacy plane path, including its complete level-set representation.
+// the legacy plane path. M2's revised criterion compares level-set classifications:
+// Euclidean ring distance and max plane distance differ outside square corners.
 void single_piece_plane(bool common) {
     auto rectangular = region_stack(square_ring());
     rectangular.layers.back().regions[0].footprint.polygon.clear();
@@ -1750,12 +1751,40 @@ void single_piece_plane(bool common) {
         exact(actual.cut.small_subs, split.cut.small_subs, "split small-subcell membership");
         exact(duplicate.mesh, actual.mesh, "duplicate extra plane preserves every mesh field");
         exact(duplicate.cut, actual.cut, "duplicate extra plane preserves every cut field");
-        // Exercise both overloads even when the full-cut legacy contract fails.
+        // Exercise both overloads even when a legacy compatibility check fails.
         try {
             exact(actual.mesh,
                   old.mesh,
                   "single-piece extra plane preserves every legacy mesh field");
-            exact(actual.cut, old.cut, "single-piece extra plane preserves every legacy cut field");
+            auto actual_cut = actual.cut, legacy_cut = old.cut;
+            actual_cut.level_sets.clear();
+            legacy_cut.level_sets.clear();
+            exact(actual_cut,
+                  legacy_cut,
+                  "single-piece extra plane preserves every legacy cut field except level sets");
+            const std::vector<BodyId> bodies =
+                common ? std::vector<BodyId>{0, lid} : std::vector<BodyId>{lid};
+            require(actual.cut.level_sets.size() == bodies.size(),
+                    "one field for each plane or union body");
+            const auto snap = options().snap_phi;
+            auto classify = [snap](Real phi) { return phi < -snap ? -1 : phi > snap ? 1 : 0; };
+            for (std::size_t field = 0; field < bodies.size(); ++field) {
+                const auto& ls = actual.cut.level_sets.at(field);
+                require(ls.body == bodies[field], "level sets in ascending BodyId order");
+                require(ls.phi.size() == actual.mesh.node_gid.size(),
+                        "level set covers every output node");
+                for (std::size_t node = 0; node < ls.phi.size(); ++node) {
+                    const auto p = point(actual.mesh.vertices, node);
+                    Real want = -std::numeric_limits<Real>::infinity();
+                    for (const auto& plane : legacy.planes)
+                        if (plane.body == 0 || plane.body == ls.body)
+                            want = std::max(want, (dot(plane.n, p) - plane.d) / norm(plane.n));
+                    check(std::isfinite(ls.phi[node]) && std::isfinite(want) &&
+                              classify(ls.phi[node]) == classify(want),
+                          "legacy plane sign classification, body=" + std::to_string(ls.body) +
+                              ", node=" + std::to_string(node));
+                }
+            }
         } catch (const std::exception& e) {
             legacy_failures += std::string(immutable ? "const: " : "mutable: ") + e.what() + "; ";
         }
