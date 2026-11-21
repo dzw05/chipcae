@@ -1,0 +1,41 @@
+{
+  "negatives": [
+    {
+      "error": "expected manifest schema chipcae.results/1.0",
+      "file": "negative/schema_version.manifest.json",
+      "kind": "manifest"
+    },
+    {
+      "error": "summary: missing T_max",
+      "file": "negative/missing_tmax.manifest.json",
+      "kind": "manifest"
+    },
+    {
+      "error": "scale.cells: inconsistent with cells_source",
+      "file": "negative/scale_cells_inconsistent.vv_result.json",
+      "kind": "subset"
+    },
+    {
+      "error": "run.np: empty array",
+      "file": "negative/run_np_empty.vv_result.json",
+      "kind": "subset"
+    },
+    {
+      "error": "duplicate JSON key: schema_version",
+      "file": "negative/duplicate_keys.manifest.json",
+      "kind": "json"
+    },
+    {
+      "check_file": [
+        "real result must stay local (D03)"
+      ],
+      "file": "negative/d03_real.vv_result.json",
+      "kind": "d03"
+    }
+  ],
+  "positives": [
+    "manifest_fem/fem.manifest.json",
+    "manifest_fvm/fvm.manifest.json",
+    "vv_result_nightly/nightly.vv_result.json"
+  ]
+}

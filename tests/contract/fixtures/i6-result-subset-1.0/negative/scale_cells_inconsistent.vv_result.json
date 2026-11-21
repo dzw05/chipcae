@@ -1,0 +1,82 @@
+{
+  "case_id": "i6-subset-scale-inconsistent",
+  "commit": "e8e86ce",
+  "data_class": "synthetic",
+  "date": "20261120",
+  "determinism": {
+    "np1_digest": [
+      "727e922aaa3b3642bca88cf906a638325da427008d590f0e78c4d240c8b209a3",
+      "c40b5122fa63133234bf8664478ade0f7d914d9047a0f4e65816ea13bc7cacec",
+      "ca7630ebf48e675a0833eb7ec4a37336adda594524d329f15c74afe77c22269f"
+    ],
+    "np2_digest": [
+      "5b0273a793b6af9026e2aa0a957ed7268a8fc1a7c8275743cc80629dde307fc2",
+      "72292f4d82e4cfecdb8a45d04200cdcb2aa5c025170d645f1f9ca18d281ea634",
+      "c590b951046b14d52d75ccd6217586217783c5001c42475e458abb616cdd6f3b"
+    ],
+    "np_bitwise_equal": true,
+    "np_bitwise_pairs": [
+      true,
+      true,
+      true
+    ],
+    "np_violations": [
+      [],
+      [],
+      []
+    ]
+  },
+  "iterations": {
+    "T": 5,
+    "T.residual": 1.5e-12,
+    "U": 8,
+    "U.residual": 2.25e-12
+  },
+  "label": "计划值",
+  "qoi": {
+    "T_max": 370.0,
+    "U_mag_max": 2.5e-06,
+    "warpage_pv": 1.25e-06
+  },
+  "reference": {
+    "source": "synthetic i6-result-subset-1.0 nightly sample",
+    "type": "回归",
+    "value": null
+  },
+  "run": {
+    "np": [
+      1,
+      2
+    ]
+  },
+  "scale": {
+    "abs_residual": {
+      "T": 1e-15,
+      "U": 1e-15
+    },
+    "cells": 8,
+    "cells_source": null,
+    "dofs": {
+      "T": 8,
+      "U": 24
+    },
+    "dofs_source": "log:dofs",
+    "rel_residual": {
+      "T": 1.5e-12,
+      "U": 2.25e-12
+    },
+    "solver": {
+      "T": "fvm.conduction",
+      "U": "fvm.solid"
+    }
+  },
+  "schema": "chipcae.vv_result/0.2",
+  "timing": {
+    "stages": {
+      "mesh": {
+        "cell_count": 8
+      }
+    }
+  },
+  "verdict": "pass"
+}
