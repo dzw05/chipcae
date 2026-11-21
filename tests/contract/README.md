@@ -42,8 +42,8 @@ existing checkers such as `cut-union-1.0` do not accept that option. The FVM che
 requires NumPy; jsonschema is optional (prints `SKIP-SCHEMA`, retaining structural
 checks). It checks synthetic laminate analytic temperatures, an independent dense
 TPFA solve for 3×2×4 hexes, conservation, completed-output manifest metadata and
-five case contract outcomes, then tests `gen.py --out <directory>` determinism,
-overwrite behavior and checker mutations. Run it directly or through
+six case contract outcomes (including case-sensitive solver rejection), then tests
+`gen.py --out <directory>` determinism, overwrite behavior and checker mutations. Run it directly or through
 `python3 tests/contract/validate_contracts.py schemas <source>` / `contract_schemas`.
 Fixture IDs use `((k*ny)+j)*nx+i`; they are local keys, distinct from product
 Morton `elem_gid`. Add `--handoff <package>` to compare repository/handoff SHA-256
@@ -65,7 +65,7 @@ The checker independently fixes the diagnostic units to `1` and `W/(m·K)`,
 so editing both metadata files cannot redefine them. Case shape checks cover
 references, mesh dimensions, thermal/mechanical coupling, loads, constraints,
 linear tolerance and output, following `field_compare/fixtures.py`. The package
-also rejects 158 independent invalid mutations, exercises the shared hook on a
+also rejects independent invalid mutations, exercises the shared hook on a
 copy with missing hex input, and accepts reordered fields, omitted `T_cell` and
 changed finite summary values. Laminate temperatures use absolute tolerance
 `1e-10 K`; hex temperatures use relative tolerance `1e-12`, with positive input
@@ -81,3 +81,11 @@ byte determinism is checked in the running NumPy/BLAS environment; cross-platfor
 byte equality still needs verification, without relaxing numerical tolerances.
 `gen.py` returns 0 on success or 2 for usage/I/O/dependency errors; `check.py`
 returns 0 on success, 1 for contract mismatches or 2 for those operational errors.
+
+The FVM fixture checks every internal face against the distance-weighted harmonic
+conductivity formula and pins the first x/y/z face conductances to hand-derived
+values (`3/4000`, `1/2250`, `36/3125` W/K). `mesh_boundaries.json` records synthetic
+mesh-array inputs and literal expected codes for zero z cells, empty attributes,
+short/long copper arrays, valid copper data and an empty no-copper mapping.
+`manifest_fvm_solid/prepublication.json` has empty steps, partitions and summary;
+it is accepted before output publication and rejected as completed output.

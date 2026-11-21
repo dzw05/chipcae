@@ -37,7 +37,8 @@ def solve(inp):
     widths = [[b - a for a, b in zip(axis, axis[1:])] for axis in axes]
     count = len(inp["cells"])
     matrix, rhs = np.zeros((count, count)), np.zeros(count)
-    for cell in inp["cells"]:
+    cells = {cell["id"]: cell for cell in inp["cells"]}
+    for cell in cells.values():
         c, ijk, kd = cell["id"], cell["ijk"], cell["conductivity_diag"]
         for axis, stride in enumerate([1, shape[0], shape[0] * shape[1]]):
             area = 1.0
@@ -46,7 +47,7 @@ def solve(inp):
                     area *= widths[d][ijk[d]]
             distance = widths[axis][ijk[axis]] * 0.5
             if ijk[axis] < shape[axis] - 1:
-                neighbor = inp["cells"][c + stride]
+                neighbor = cells[c + stride]
                 resistance = distance / kd[axis] + (widths[axis][ijk[axis] + 1] * 0.5
                                                    / neighbor["conductivity_diag"][axis])
                 g = area / resistance
@@ -110,6 +111,26 @@ def generate(out):
                         ("warpage_pv", 1e-6, "m", "FVM top-face centroids; least-squares plane removal"),
                         ("T_max", 301.0, "K", "FVM cell centers"),
                         ("U_mag_max", 2e-6, "m", "FVM cell centers")]]})
+    prepublication = json.loads((out / "manifest_fvm_solid/manifest.json").read_text())
+    prepublication.update(steps=[], summary=[])
+    prepublication["partitions"]["per_step"] = []
+    write(out, "manifest_fvm_solid/prepublication.json", prepublication)
+    mesh = {"axes": [[0, 1, 3], [0, 1], [0, 1, 2]],
+            "attr_table": [{"layer": "copper_a"}, {"layer": "copper_b"}],
+            "copper_layer_of_layer": [0, 1], "copper_phi": [0.2, 0.3, 0.4, 0.5]}
+    boundaries = []
+    # Outcomes are opaque contract data, independent of the checker classifier.
+    for name, patch, code in (
+            ("valid_mesh", {}, None),
+            ("no_copper", {"copper_layer_of_layer": [], "copper_phi": []}, None),
+            ("nz_zero", {"axes": [[0, 1, 3], [0, 1], [0]]}, "INPUT_INVALID"),
+            ("empty_attr_table", {"attr_table": []}, "INPUT_INVALID"),
+            ("copper_short", {"copper_phi": [0.2, 0.3, 0.4]}, "INPUT_INVALID"),
+            ("copper_long", {"copper_phi": [0.2, 0.3, 0.4, 0.5, 0.6]}, "INPUT_INVALID")):
+        inp = copy.deepcopy(mesh)
+        inp.update(patch)
+        boundaries.append({"name": name, "input": inp, "expected_code": code})
+    write(out, "mesh_boundaries.json", boundaries)
     base = {"schema": "chipcae.case/1.0", "stack": {"ref": "stack.json"},
             "materials": {"ref": "materials.json"},
             "mesh": {"type": "aligned_cartesian_cut", "nx": 8, "ny": 8, "levels": 1, "max_ratio": 10},
@@ -125,11 +146,15 @@ def generate(out):
                            "T", "U", "layer_id", "material_id", "cell_kind", "elem_gid", "volume"]}}
     outcomes = {}
     for name, pc in [("valid_fvm", None), ("valid_fvm_gamg", "gamg"), ("mixed_fem_fvm", None),
-                     ("fvm_direct", "direct"), ("fvm_column_gmg", "column_gmg")]:
+                     ("fvm_direct", "direct"), ("fvm_column_gmg", "column_gmg"),
+                     ("solver_case", None)]:
         case, error = copy.deepcopy(base), None
         if pc:
             case["solver"]["linear"]["preconditioner"] = pc
-        if name == "mixed_fem_fvm":
+        if name == "solver_case":
+            case["physics"][0]["solver"] = "FVM.Conduction"
+            error = {"code": "INPUT_INVALID", "message": "invalid or duplicate physics"}
+        elif name == "mixed_fem_fvm":
             case["physics"][1]["solver"] = "fem.solid"
             error = {"code": "INPUT_INVALID", "message": "mixed fem/fvm physics not supported in case/1.0"}
         elif pc in ("direct", "column_gmg"):

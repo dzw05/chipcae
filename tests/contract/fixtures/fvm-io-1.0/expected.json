@@ -12,6 +12,10 @@
       "code": "INPUT_INVALID",
       "message": "mixed fem/fvm physics not supported in case/1.0"
     },
+    "solver_case": {
+      "code": "INPUT_INVALID",
+      "message": "invalid or duplicate physics"
+    },
     "valid_fvm": null,
     "valid_fvm_gamg": null
   },

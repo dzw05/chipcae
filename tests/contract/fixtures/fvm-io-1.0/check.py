@@ -24,11 +24,18 @@ REQUIRED = {
     "gen.py", "check.py", "expected.json",
     "laminate_1d/input.json", "laminate_1d/expected.json",
     "hex_kdiag/input.json", "hex_kdiag/expected.json",
-    "manifest_fvm_solid/manifest.json",
+    "manifest_fvm_solid/manifest.json", "manifest_fvm_solid/prepublication.json",
+    "mesh_boundaries.json",
     *(f"cases/{name}.json" for name in (
-        "valid_fvm", "valid_fvm_gamg", "mixed_fem_fvm", "fvm_direct", "fvm_column_gmg")),
+        "valid_fvm", "valid_fvm_gamg", "mixed_fem_fvm", "fvm_direct", "fvm_column_gmg", "solver_case")),
+}
+BOUNDARY_ERRORS = {
+    "valid_mesh": None, "no_copper": None, "nz_zero": "INPUT_INVALID",
+    "empty_attr_table": "INPUT_INVALID", "copper_short": "INPUT_INVALID",
+    "copper_long": "INPUT_INVALID",
 }
 CASE_ERRORS = {
+    "solver_case": {"code": "INPUT_INVALID", "message": "invalid or duplicate physics"},
     "valid_fvm": None,
     "valid_fvm_gamg": None,
     "mixed_fem_fvm": {"code": "INPUT_INVALID",
@@ -88,7 +95,7 @@ def temperatures(document, count):
     return [finite(cells[c]["T_K"]) for c in range(count)]
 
 
-def reference(inp):
+def reference(inp, faces=None):
     """Cell-centered TPFA with insulated lateral faces, bottom T and top inward q."""
     import numpy as np
 
@@ -122,6 +129,18 @@ def reference(inp):
                 resistance = (half / conductivities[c][d]
                               + widths[d][ijk[d] + 1] / (2 * conductivities[other][d]))
                 g = area / resistance
+                # Independently use normalized distance weights to form k_face,
+                # then Fourier's law over the center-to-center distance.
+                other_half = widths[d][ijk[d] + 1] / 2
+                distance = half + other_half
+                weight = half / distance
+                k_face = 1 / (weight / conductivities[c][d]
+                              + (1 - weight) / conductivities[other][d])
+                harmonic_g = k_face * area / distance
+                require(math.isclose(g, harmonic_g, rel_tol=1e-14, abs_tol=1e-18),
+                        f"face {c}/{other}: distance-weighted harmonic conductance")
+                if faces is not None:
+                    faces[c, other] = g
                 matrix[c, c] += g
                 matrix[other, other] += g
                 matrix[c, other] -= g
@@ -208,8 +227,8 @@ def numerical(package):
                 f"hex cell {c}: recomputed temperature {actual} != expected {expected}")
 
 
-def manifest(package, repo):
-    doc = read(package / "manifest_fvm_solid/manifest.json")
+def manifest(package, repo, completed=True, relative="manifest_fvm_solid/manifest.json"):
+    doc = read(package / relative)
     try:
         import jsonschema
     except ImportError:
@@ -219,7 +238,8 @@ def manifest(package, repo):
         jsonschema.validators.validator_for(schema)(schema).validate(doc)
     require(doc["schema_version"] == "chipcae.results/1.0", "manifest version")
     steps = doc["steps"]
-    require(isinstance(steps, list) and steps, "completed output requires nonempty steps")
+    require(isinstance(steps, list) and (steps or not completed),
+            "completed output requires nonempty steps")
     named(steps, "n")
     for step in steps:
         require(type(step["n"]) is int and step["n"] >= 0
@@ -230,7 +250,7 @@ def manifest(package, repo):
     require(len(per_step) == len(steps) and all(type(n) is int and n > 0 for n in per_step),
             "partition counts must match steps")
     if partitions["solver_fixed_per_run"]:
-        require(len(set(per_step)) == 1, "fixed partitions changed")
+        require(len(set(per_step)) <= 1, "fixed partitions changed")
     mesh = doc["mesh"]
     for key in ("nx0", "ny0", "L", "padded_cells", "nz"):
         require(type(mesh[key]) is int and mesh[key] >= 0, f"mesh.{key}")
@@ -312,8 +332,14 @@ def cases(package):
                 and set(fields) == {"T", "U", "layer_id", "material_id", "cell_kind",
                                     "elem_gid", "volume"}, f"{name}: output fields")
         solvers = {p["solver"] for p in physics.values()}
-        require(solvers <= {"fem.conduction", "fem.solid", "fvm.conduction", "fvm.solid"},
-                f"{name}: unknown solver")
+        unknown = solvers - {"fem.conduction", "fem.solid", "fvm.conduction", "fvm.solid"}
+        if unknown:
+            actual = {"code": "INPUT_INVALID", "message": "invalid or duplicate physics"}
+            require(name == "solver_case" and physics["thermal"]["solver"] == "FVM.Conduction"
+                    and physics["mech"]["solver"] == "fvm.solid",
+                    f"{name}: unexpected unknown solver")
+            require(actual == expected, f"{name}: unknown-solver outcome")
+            continue
         pc = doc["solver"]["linear"].get("preconditioner", "jacobi")
         families = {s.split(".")[0] for s in solvers}
         require(families == ({"fem", "fvm"} if name == "mixed_fem_fvm" else {"fvm"}),
@@ -322,7 +348,8 @@ def cases(package):
                 and physics["mech"]["solver"].endswith(".solid"), f"{name}: physics roles")
         actual = None
         if len(families) > 1:
-            actual = CASE_ERRORS["mixed_fem_fvm"]
+            actual = {"code": "INPUT_INVALID",
+                      "message": "mixed fem/fvm physics not supported in case/1.0"}
         elif pc in ("direct", "column_gmg"):
             actual = {"code": "INPUT_INVALID", "message": f"preconditioner {pc} not supported by fvm"}
         else:
@@ -331,6 +358,23 @@ def cases(package):
         if expected is None:
             require(solvers == {"fvm.conduction", "fvm.solid"}, f"{name}: FVM pair")
             require(pc == ("gamg" if name.endswith("gamg") else "jacobi"), f"{name}: preconditioner")
+
+
+def mesh_boundaries(package):
+    """Synthetic mesh-array shape checks; errors freeze codes, not new messages."""
+    rows = named(read(package / "mesh_boundaries.json"))
+    require(set(rows) == set(BOUNDARY_ERRORS), "missing/unexpected mesh boundary cases")
+    for name, expected in BOUNDARY_ERRORS.items():
+        row = rows[name]
+        require(row["expected_code"] == expected, f"{name}: expected mesh error code")
+        mesh = row["input"]
+        nx, ny, nz = (len(mesh["axes"][axis]) - 1 for axis in range(3))
+        mapping = mesh["copper_layer_of_layer"]
+        copper_layers = len({layer for layer in mapping if layer >= 0})
+        valid = (min(nx, ny, nz) > 0 and bool(mesh["attr_table"])
+                 and len(mesh["copper_phi"]) == copper_layers * nx * ny)
+        actual = None if valid else "INPUT_INVALID"
+        require(actual == expected, f"{name}: mesh outcome {actual} != {expected}")
 
 
 def validate(package, repo):
@@ -342,6 +386,9 @@ def validate(package, repo):
     numerical(package)
     manifest(package, repo)
     cases(package)
+    mesh_boundaries(package)
+    manifest(package, repo, completed=False,
+             relative="manifest_fvm_solid/prepublication.json")
 
 
 def hashes(package):
@@ -467,6 +514,22 @@ def extended_mutation_acceptance(package, repo):
         for value in (0, -1, float("nan"), float("inf"), -float("inf")):
             add(f"{relative}: conductivity {value}", relative,
                 ("cells", 0, "conductivity_diag", 0), value)
+    for label, index, path, value in (
+            ("valid mesh loses z cells", 0, ("axes", 2), [0]),
+            ("empty mapping remains copper-free", 1, ("copper_phi",), [0.5]),
+            ("zero-z input repaired", 2, ("axes", 2), [0, 1, 2]),
+            ("empty attributes repaired", 3, ("attr_table",), [{"layer": "copper"}]),
+            ("short copper input repaired", 4, ("copper_phi",), [0.2, 0.3, 0.4, 0.5]),
+            ("long copper input repaired", 5, ("copper_phi",), [0.2, 0.3, 0.4, 0.5])):
+        add(label, "mesh_boundaries.json", (index, "input", *path), value)
+    add("zero-z outcome incorrectly accepted", "mesh_boundaries.json",
+        (2, "expected_code"), None)
+    add("short copper outcome incorrectly accepted", "mesh_boundaries.json",
+        (4, "expected_code"), None)
+    add("uppercase solver changed to valid", "cases/solver_case.json",
+        ("physics", 0, "solver"), "fvm.conduction")
+    add("prepublication partitions mismatch", "manifest_fvm_solid/prepublication.json",
+        ("partitions", "per_step"), [1])
     add("completed output has no steps", manifest_path, ("steps",), [])
     add("partition counts do not match steps", manifest_path,
         ("partitions", "per_step"), [])
@@ -629,6 +692,26 @@ def argument_free_hook_acceptance(repo):
             raise AssertionError("shared hook accepted a failed checker")
 
 
+def boundary_acceptance(package, repo):
+    """Pin unequal-distance face values and publication-stage boundary behavior."""
+    faces = {}
+    reference(read(package / "hex_kdiag/input.json"), faces)
+    # First +x/+y/+z faces: hand-reduced A/(d_left/k_left+d_right/k_right).
+    for key, expected in (((0, 1), 3 / 4000), ((0, 3), 1 / 2250),
+                          ((0, 6), 36 / 3125)):
+        require(math.isclose(faces[key], expected, rel_tol=1e-14, abs_tol=1e-18),
+                f"distance-weighted harmonic conductance {key}: {faces[key]} != {expected}")
+    manifest(package, repo, completed=False,
+             relative="manifest_fvm_solid/prepublication.json")
+    try:
+        manifest(package, repo, completed=True,
+                 relative="manifest_fvm_solid/prepublication.json")
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("completed output accepted prepublication empty steps")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path)
@@ -643,6 +726,7 @@ def main():
     try:
         import numpy  # Required, unlike the optional jsonschema validator.
         validate(HERE, args.repo)
+        boundary_acceptance(HERE, args.repo)
         generator_acceptance(HERE)
         mutation_acceptance(HERE, args.repo)
         optional_schema_acceptance(HERE, args.repo)
