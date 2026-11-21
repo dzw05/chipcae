@@ -237,6 +237,7 @@ long double check_field(const std::string& name,
         throw std::runtime_error(name + " length actual=" + std::to_string(actual.size()) +
                                  " expected=" + std::to_string(nx * ny));
     long double max_error = 0;
+    std::size_t worst_i = 0, worst_j = 0;
     for (std::size_t j = 0; j < ny; ++j)
         for (std::size_t i = 0; i < nx; ++i) {
             const auto d = level0_dense(static_cast<std::uint32_t>(nx),
@@ -248,13 +249,22 @@ long double check_field(const std::string& name,
             if (!std::isfinite(value) || !std::isfinite(want) || value < 0 || value > 1)
                 cell_failure(name, i, j, value, want, "nonfinite or outside [0,1]");
             const auto error = std::abs(static_cast<long double>(value) - want);
-            if (error > tolerance) {
-                std::ostringstream reason;
-                reason << "tolerance=" << tolerance;
-                cell_failure(name, i, j, value, want, reason.str());
+            if (error > max_error) {
+                max_error = error;
+                worst_i = i;
+                worst_j = j;
             }
-            max_error = std::max(max_error, error);
         }
+    if (max_error > tolerance) {
+        const auto d = level0_dense(static_cast<std::uint32_t>(nx),
+                                    static_cast<std::uint32_t>(ny),
+                                    static_cast<std::uint32_t>(worst_i),
+                                    static_cast<std::uint32_t>(worst_j));
+        std::ostringstream reason;
+        reason << "maximum error exceeds tolerance=" << tolerance;
+        cell_failure(
+            name, worst_i, worst_j, actual[d], expected[worst_j * nx + worst_i], reason.str());
+    }
     return max_error;
 }
 
@@ -386,18 +396,28 @@ int main() {
         }
         const auto rectangles = rect_fixture();
         const auto slanted = slanted_fixture();
-        fixture_accuracy("R", rectangles, {32, 64, 128, 256}, 1e-12L);
-        std::cout << "copper-raster-strip: rect_fixture_accuracy ok\n";
-        fixture_accuracy("S", slanted, {32, 64, 128}, 5e-11L);
-        std::cout << "copper-raster-strip: slanted_fixture_accuracy ok\n";
-        repeat_and_reverse("R", rectangles, 1e-12L);
-        repeat_and_reverse("S", slanted, 5e-11L);
-        std::cout << "copper-raster-strip: repeat_and_reverse ok\n";
-        edge_cases(rectangles);
-        std::cout << "copper-raster-strip: edge_cases ok\n";
-        speed_guard();
-        std::cout << "copper-raster-strip: speed_guard ok\n";
-        return 0;
+        bool passed = true;
+        // Keep running independent cases so a precision failure cannot hide the speed measurement.
+        const auto run = [&](const char* name, auto&& test) {
+            try {
+                test();
+                std::cout << "copper-raster-strip: " << name << " ok\n";
+            } catch (const std::exception& error) {
+                passed = false;
+                std::cerr << "copper-raster-strip: " << name << " FAIL " << error.what() << '\n';
+            }
+        };
+        run("rect_fixture_accuracy",
+            [&] { fixture_accuracy("R", rectangles, {32, 64, 128, 256}, 1e-12L); });
+        run("slanted_fixture_accuracy",
+            [&] { fixture_accuracy("S", slanted, {32, 64, 128}, 5e-11L); });
+        run("repeat_and_reverse", [&] {
+            repeat_and_reverse("R", rectangles, 1e-12L);
+            repeat_and_reverse("S", slanted, 5e-11L);
+        });
+        run("edge_cases", [&] { edge_cases(rectangles); });
+        run("speed_guard", speed_guard);
+        return passed ? 0 : 1;
     } catch (const std::exception& error) {
         std::cerr << "copper-raster-strip: FAIL " << error.what() << '\n';
         return 1;
