@@ -539,6 +539,93 @@ def extended_mutation_acceptance(package, repo):
     require(not failures, "invalid mutations accepted:\n  " + "\n  ".join(failures))
 
 
+def invocation_acceptance(package, repo):
+    """Revision 2: discover from the script, preserve explicit roots and usage errors.
+
+    Run the real parser/main in children, disabling only the two new acceptance drivers to
+    prevent recursive acceptance runs. Existing numerical/mutation checks still run.
+    """
+    code = (
+        "import runpy, sys; "
+        "checker = runpy.run_path(sys.argv.pop(1)); "
+        "checker['main'].__globals__['invocation_acceptance'] = lambda *args: None; "
+        "checker['main'].__globals__['argument_free_hook_acceptance'] = lambda *args: None; "
+        "sys.exit(checker['main']())"
+    )
+    repo = repo.resolve()
+    failures = []
+
+    def check(label, script, arguments, cwd, status, diagnostic=None):
+        result = subprocess.run([sys.executable, "-c", code, str(script), *arguments],
+                                cwd=str(cwd), capture_output=True, text=True)
+        lines = (result.stdout + result.stderr).splitlines()
+        if (result.returncode != status or
+                (diagnostic is not None and diagnostic not in lines)):
+            failures.append(f"{label}: expected exit {status}, got {result.returncode}"
+                            f"\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+
+    with tempfile.TemporaryDirectory(prefix="fvm-io-invocation-") as temp:
+        unrelated = Path(temp)
+        check("no arguments from repository cwd", package / "check.py", [], repo, 0)
+        check("no arguments from unrelated cwd", package / "check.py", [], unrelated, 0)
+        check("explicit repository", package / "check.py", ["--repo", str(repo)], unrelated, 0)
+
+        handoff = unrelated / "handoff/fixtures/fvm-io-1.0"
+        shutil.copytree(package, handoff)
+        check("handoff explicit repository", handoff / "check.py",
+              ["--repo", str(repo), "--handoff", str(package)], unrelated, 0)
+        # This entire temporary hierarchy has no tests/contract ancestor.
+        check("outside repository", handoff / "check.py", [], repo, 2,
+              "--repo required outside the repository")
+
+        outer = unrelated / "outer"
+        (outer / "tests/contract").mkdir(parents=True)
+        # The outer qualifying root deliberately lacks schema and hook files.
+        # A wrong choice of ancestor fails even if jsonschema is unavailable.
+        nearest = outer / "nested/repository"
+        nested_package = nearest / "variable/depth/fvm-io-1.0"
+        (nearest / "tests/contract").mkdir(parents=True)
+        shutil.copytree(package, nested_package)
+        shutil.copytree(repo / "schema", nearest / "schema")
+        shutil.copy2(repo / "tests/contract/validate_contracts.py",
+                     nearest / "tests/contract/validate_contracts.py")
+        check("nearest qualifying ancestor", nested_package / "check.py", [], unrelated, 0)
+    require(not failures, "revision 2 invocation failures:\n" + "\n".join(failures))
+
+
+def argument_free_hook_acceptance(repo):
+    """Catch injected CLI flags, caller cwd leakage, ordering and lost diagnostics."""
+    import runpy
+
+    hook = runpy.run_path(str(repo / "tests/contract/validate_contracts.py"))["fixture_selfchecks"]
+    with tempfile.TemporaryDirectory(prefix="fvm-io-argument-free-hook-") as temp:
+        root = Path(temp)
+        # Create in reverse order so the recorded order tests sorted discovery.
+        for name in ("z-last", "a-first"):
+            directory = root / "tests/contract/fixtures" / name
+            directory.mkdir(parents=True)
+            (directory / "check.py").write_text(
+                "import argparse\nfrom pathlib import Path\n"
+                "argparse.ArgumentParser().parse_args()\n"
+                f"assert Path.cwd() == Path({str(root)!r}), 'wrong checker cwd'\n"
+                f"with Path('order.txt').open('a') as stream: print({name!r}, file=stream)\n",
+                encoding="utf-8")
+        hook(root)
+        require((root / "order.txt").read_text().splitlines() == ["a-first", "z-last"],
+                "shared hook must execute every checker in sorted order")
+        (root / "tests/contract/fixtures/a-first/check.py").write_text(
+            "import sys\nprint('checker stdout')\n"
+            "print('checker stderr', file=sys.stderr)\nsys.exit(1)\n", encoding="utf-8")
+        try:
+            hook(root)
+        except AssertionError as error:
+            require(all(part in str(error) for part in (
+                "a-first", "stdout:", "checker stdout", "stderr:", "checker stderr")),
+                f"shared hook lost captured output: {error}")
+        else:
+            raise AssertionError("shared hook accepted a failed checker")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, type=Path)
@@ -552,6 +639,15 @@ def main():
         optional_schema_acceptance(HERE, args.repo)
         missing_data_hook_acceptance(HERE, args.repo)
         extended_mutation_acceptance(HERE, args.repo)
+        failures = []
+        for acceptance, arguments in (
+                (invocation_acceptance, (HERE, args.repo)),
+                (argument_free_hook_acceptance, (args.repo,))):
+            try:
+                acceptance(*arguments)
+            except AssertionError as error:
+                failures.append(f"{acceptance.__name__}: {error}")
+        require(not failures, "\n".join(failures))
         if args.handoff is not None:
             require(hashes(args.handoff) == hashes(HERE), "repository/handoff SHA-256 mismatch")
     except (OSError, ImportError) as error:
