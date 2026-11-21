@@ -246,20 +246,30 @@ jobs:
           import xml.etree.ElementTree as ET
           from collections import Counter
 
+          required_names = {
+              "import_assembly_accept", "import_assembly_accept_default",
+              "import_assembly_exit6", "import_assembly_split_report",
+              "occt_import_assembly_box_parts", "occt_import_assembly_confirm",
+              "occt_import_assembly_ring_chamfer_lid", "occt_import_assembly_parts_from_step",
+              "reportfields_step_box_a1",
+          }
           cases = list(ET.parse("build-k1-full/n11-geometry-on.xml").getroot().iter("testcase"))
           for case in cases:
               print(f'{case.get("name")}: status={case.get("status")}, time={case.get("time")}',
                     flush=True)
           skipped = sum(1 for case in cases if case.find("skipped") is not None)
+          if Counter(case.get("name") for case in cases) != Counter(required_names):
+              raise SystemExit("N11 requires exactly nine unique expected testcases, "
+                               "including reportfields_step_box_a1")
           if Counter(case.get("name") for case in cases) != Counter(sys.argv[1:]):
-              raise SystemExit("N11 requires exactly eight unique expected testcases")
+              raise SystemExit("N11 requires the selected names to match all nine testcases")
           if skipped != 0 or any(
               case.get("status") != "run"
               or any(case.find(tag) is not None for tag in ("skipped", "failure", "error"))
               for case in cases
           ):
-              raise SystemExit(f"N11 requires all eight Passed, Skipped={skipped}")
-          print("Passed=8, Skipped=0")
+              raise SystemExit(f"N11 requires all nine Passed, Skipped={skipped}")
+          print("Passed=9, Skipped=0")
           PY
           if ((n11_status != 0)); then exit "$n11_status"; fi
           echo "build_secs=$build_secs" >> "$GITHUB_OUTPUT"
