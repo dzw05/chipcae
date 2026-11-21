@@ -15,3 +15,8 @@ add_test(NAME vv_result_schema
 set_tests_properties(vv_result_schema
     PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} TIMEOUT 60)
 add_subdirectory(calculix_demo_gate)
+
+add_test(NAME vv_f1130_rehearsal_unit
+    COMMAND ${Python3_EXECUTABLE} -m unittest tests.vv.test_f1130_rehearsal -v)
+set_tests_properties(vv_f1130_rehearsal_unit
+    PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} TIMEOUT 60 LABELS "vv")
