@@ -428,6 +428,7 @@ jobs:
             import_assembly_exit6 import_assembly_split_report
             occt_import_assembly_box_parts occt_import_assembly_confirm
             occt_import_assembly_ring_chamfer_lid occt_import_assembly_parts_from_step
+            reportfields_step_box_a1
           )
           n11_regex="^($(IFS='|'; echo "${n11_names[*]}"))$"
           n11_status=0
