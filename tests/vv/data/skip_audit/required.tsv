@@ -1,0 +1,3 @@
+# test_name	requires	note
+
+required_case	CHIPCAE_ENABLE_MPI,CHIPCAE_ENABLE_HDF5	Synthetic MPI and HDF5 gate
