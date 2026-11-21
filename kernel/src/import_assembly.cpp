@@ -444,6 +444,7 @@ floating_gap_part(const mesh::StackModel& merged,
     }
     if (board_first == count)
         return std::nullopt;
+    // Layers run bottom to top: report the lowest cavity first, then use placed order.
     for (std::size_t i = 0; i < count; ++i) {
         const auto& layer = merged.layers[i];
         if (!layer.material.empty() || !layer.regions.empty())

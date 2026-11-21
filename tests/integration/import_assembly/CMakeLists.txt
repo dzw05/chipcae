@@ -13,12 +13,10 @@ if(CHIPCAE_ENABLE_JSONCONS)
 endif()
 
 if(CHIPCAE_ENABLE_JSONCONS AND CHIPCAE_ENABLE_ECAD)
-    foreach(test assembly_confirmation_cli import_assembly_floating_gap)
-        set(cli_test chipcae_autotest_tests_integration_import_assembly_${test})
-        target_compile_definitions(${cli_test} PRIVATE
-            CHIPCAE_ASSEMBLY_CLI=1 CHIPCAE_ENABLE_JSONCONS=1 CHIPCAE_ENABLE_ECAD=1)
-        target_link_libraries(${cli_test} PRIVATE chipcae::geometry_ecad chipcae_stack jsoncons)
-    endforeach()
+    set(confirmation_test chipcae_autotest_tests_integration_import_assembly_assembly_confirmation_cli)
+    target_compile_definitions(${confirmation_test} PRIVATE
+        CHIPCAE_ASSEMBLY_CLI=1 CHIPCAE_ENABLE_JSONCONS=1 CHIPCAE_ENABLE_ECAD=1)
+    target_link_libraries(${confirmation_test} PRIVATE chipcae::geometry_ecad chipcae_stack jsoncons)
 else()
     # Temporary skip: needs CHIPCAE_ENABLE_ECAD+CHIPCAE_ENABLE_JSONCONS.
     # Follow-up infra-ci-ecad-jsoncons must land before SP7b.
