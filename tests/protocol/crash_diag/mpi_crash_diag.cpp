@@ -3,11 +3,26 @@
 #include <memory>
 #include <mpi.h>
 #include <spawn.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 
 extern char** environ;
 using namespace crashdiag_test;
 
 namespace {
+static fs::path executable_path() {
+#ifdef __APPLE__
+    uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    std::vector<char> buffer(size);
+    check(_NSGetExecutablePath(buffer.data(), &size) == 0, "could not resolve executable path");
+    return fs::canonical(buffer.data());
+#else
+    return fs::canonical("/proc/self/exe");
+#endif
+}
+
 void collectively_check(bool good, const char* why) {
     const int bad = good ? 0 : 1;
     int any_bad = 0;
@@ -66,7 +81,7 @@ int main(int argc, char** argv) {
         okay = true;
         if (rank == 1) {
             try {
-                std::string executable = fs::canonical("/proc/self/exe").string();
+                std::string executable = executable_path().string();
                 std::array<char*, 4> args{
                     executable.data(), const_cast<char*>("--signal-worker"), path.data(), nullptr};
                 pid_t child = -1;

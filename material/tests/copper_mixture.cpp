@@ -383,7 +383,7 @@ void batch(bool mixture) {
     }
 }
 template <class Exec, class Space>
-typename Kokkos::View<Real**, Space>::HostMirror execution() {
+typename Kokkos::View<Real**, Space>::host_mirror_type execution() {
     CopperMixture<Space> mix(
         ThermoElastic<Space>{ElasticSymmetry::Isotropic,
                              card(false).elastic_table,
