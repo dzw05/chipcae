@@ -53,9 +53,6 @@ struct PetscSession {
     }
 };
 [[noreturn]] void fail(const mesh::Error& error, bool mechanical = false) {
-    if (mechanical && error.reason == "INPUT_INVALID: embedded faces require cut-cell support")
-        throw InputError(ErrorCode::CUT_UNSUPPORTED,
-                         error.path + ": CUT_UNSUPPORTED: " + error.reason);
     // I14 1.0 retains two producer errors with this double prefix.
     if (mechanical && error.reason.starts_with("INPUT_INVALID: INTERNAL:"))
         throw InputError(ErrorCode::INTERNAL, error.path + ": " + error.reason);

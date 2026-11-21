@@ -184,22 +184,31 @@ the library diagnostics before publication.
 Named error prefixes keep their existing codes. Both `INTERNAL:` and the
 known I14 `INPUT_INVALID: INTERNAL:` producer prefix map to INTERNAL (1).
 Unclassified mechanical solver failures also exit 1, matching FEM; invalid
-metadata exits 14. The legacy embedded-face unsupported diagnostic retains
-its exit-13 mapping, but supported cut geometry follows the normal solve path.
-Failure residual publication remains blocked: I14 section 6 forbids parsing
-numerical diagnostics, and its error carrier has no structured failure
-iterations/residual. The acceptance assertion remains in place pending a
-producer/API ruling.
+metadata exits 14. The legacy embedded-face unsupported diagnostic uses
+ordinary INPUT_INVALID handling (exit 14); supported cut geometry follows the
+normal solve path.
 
-Local Release verification against the merged dependency baseline exercises
-both cut output modes, cut/EB displacement, MPI alignment, all six fixed
-faces, layer aliases, zero rise, unequal-volume reconstruction and STOP.
-Regular-hex physical volume output and the integration prerequisites now pass.
-Acceptance remains red: the synthetic board PV differs from FEM/direct by
-81.9810%, its temperature rise by 7.9555%, and uniform-bilayer PV by 10.1472%
-(the unchanged gates are 10%, 1% and 10%). Demo cut mechanics also reaches its
-case's 500-iteration limit; four pre-upstream FEM snapshots remain stale.
-No tolerance, snapshot or solver option is adjusted to hide these failures.
+On failure, the CLI preserves the library's opaque reason text, exits 1 for
+numerical failures and publishes no successful mechanics result. Frozen I14
+exposes no structured failure residual. The November 21 18:02 ruling removes
+that requirement; successful `fvm.solid` residual publication remains required.
+
+Acceptance compares CLI PV and maximum displacement with an independent
+public-I14 replay for the imported synthetic board, uniform bilayer,
+layer-prescribed-temperature bilayer and cut bilayer. All use the I14 relative
+tolerance of 1e-8 and retain independent material, temperature, geometry and
+support oracles. FEM curvature signs and np=1/2 agreement remain gates.
+The complete original FEM PV comparison with its 0.10 bound is retained for
+`solve-elastic-accuracy`, outside this card's gate, under
+`handoff/rulings/fvm-wire-elastic.md`. Demo failures must preserve the original
+library reason; convergence is not required by that ruling.
+
+The existing board temperature-rise gate and FEM public-input snapshots remain
+unchanged. The current implementation run has five assertion failures (that
+thermal gate and four loader snapshots), plus an np=2 direct-probe JSON decode
+error. It stops under the task's scope rule without changing the loader,
+thermal library or assertions. Current measurements and verification limits
+are recorded in the integration README; acceptance remains red.
 See [FVM acceptance](../../tests/integration/fvm_case_e2e/README.md) for measured
 values and remaining merge gates. Build and test through the shared wrappers,
 retaining their PATH precedence:

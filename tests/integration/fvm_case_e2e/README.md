@@ -10,7 +10,7 @@ return 77; configured command failures fail acceptance. Schema validation
 alone skips if jsonschema is missing.
 
 The mechanics gates require solved, finite, nonzero U and positive warpage
-for the board and heated bilayer. Summary methods must equal
+for each nonzero acceptance case. Summary methods must equal
 `FVM top-face centroids; least-squares plane removal` and `FVM cell centers`.
 The one rank-0 level-1 `FVM_ELASTIC ` record has exactly four unique keys:
 `iterations`, `residual`, `warpage_pv`, `U_mag_max`. Iterations must be a
@@ -18,8 +18,16 @@ nonnegative integer and all other values finite and nonnegative. The log,
 manifest and final `fvm.solid`/`U` residual agree to relative tolerance 1e-12.
 The former displacement fallback is forbidden in adapter source and output.
 
-Board and uniform bilayer FVM/FEM-direct PV must agree within 10%, with the
-same signed top quadratic curvature after plane removal. Tests print both
+Under the November 21 18:02 ruling (`handoff/rulings/fvm-wire-elastic.md`),
+board, uniform bilayer, layer-prescribed-temperature bilayer and cut cases
+compare CLI PV and maximum displacement with direct `solve_elastic` replay,
+using relative tolerance 1e-8. The temporary replay executable uses only public
+I14 headers; an independent NumPy oracle checks its captured inputs, including
+all 36 stiffness entries, three CTEs, copper fractions, dT and supports.
+FVM and FEM must retain the same signed top quadratic curvature after plane
+removal. The complete original `compare_mechanics` function, including its
+unchanged PV <= 0.10 assertion, remains in the helper for
+`solve-elastic-accuracy` and is not called by this card. Tests print both
 PVs, both U maxima and their relative differences. Each process reports wall
 time and measured peak child RSS where wait4 is available; MPI RSS is a
 maximum, not a rank sum. These measurements are not performance thresholds.
@@ -27,9 +35,19 @@ Zero temperature rise retains normal methods and requires PV <= 1e-14 times
 characteristic length and all displacement components <= 1e-14 m. MPI np=1/2
 aligns by parent GID and vertex coordinates, using global relative U and PV
 tolerances of 1e-8. Rigid321, fixed bottom and a nonfirst fixed layer exercise
-support mapping and prescribed zero vertices, including fixed/free edges.
+support mapping and prescribed zero vertices (<= 1e-14 m), including fixed/free
+edges.
 
-Nonconvergence must exit 1 with measured residuals and no successful output.
+Nonconvergence must exit 1, preserve the complete original I14 error reason,
+and publish no successful mechanics output or manifest step. I14 1.0 carries
+no structured failure residual; the ruling removes the four np=1/2 failure
+residual requirements. Successful residual checks remain. Demo failures are
+checked for original-reason passthrough without requiring convergence.
+The pipeline error fixture exercises `run_fvm` with five opaque I14 errors
+at np=1 and np=2: INPUT_INVALID, INTERNAL, double-prefixed INTERNAL, numerical
+failure and the obsolete embedded-face diagnostic. It requires unchanged
+reason text, the existing exit code, one rank-0 error and terminal exit,
+preserved thermal success and no successful mechanics output.
 STOP fixtures cover prequeued commands and a FIFO that queues STOP after the
 first control acknowledgment. The second checkpoint must acknowledge it once,
 end with `user_stop`, and publish no output. The FIFO tests checkpoint ordering,
@@ -38,9 +56,9 @@ not cancellation inside the elastic library.
 Cut mechanics tests exercise both polyhedron and `--cut-output hex` output.
 Frozen I14 1.0 supports embedded faces and cut CVs. Both output modes must
 succeed, publish finite nonzero cut/EB U, and agree on summaries and EB
-coordinates/U. The earlier exit-13 checks remain for diagnostic coverage,
-but cannot satisfy the supported-cut success gate. The adapter passes
-`is_cut` in caller order, including merged CVs, and converts grid side 6 to
+coordinates/U. A direct adapter regression requires the obsolete embedded-face
+rejection reason to use ordinary INPUT_INVALID handling (exit 14). The adapter
+passes `is_cut` in caller order, including merged CVs, and converts grid side 6 to
 I14's embedded side -1. No uncut substitution is used.
 
 All previous loader, schema, thermal, strict energy ledger, Wiener, MPI,
@@ -64,86 +82,94 @@ ctest --test-dir "$build" -N -L fvm
 ctest --test-dir "$build" -R '^fvm_fvm_case_e2e$' --output-on-failure
 ctest --test-dir "$build" -R 'fvm_|elastic' --output-on-failure
 ctest --test-dir "$build" -L integration -R 'f1130|demo_gate' --output-on-failure
-ctest --test-dir "$build" -R solve_ --output-on-failure
-ctest --test-dir "$build" --output-on-failure
+ctest --test-dir "$build" -R '^solve_' --output-on-failure -j1
 ```
 
 Supply local dependency prefixes as needed and retain the shared shim's PATH
 precedence. Full numerical builds require MFEM with MPI and PETSc, ECAD,
 jsoncons and HDF5. Bare configuration keeps those dependencies optional.
+During iteration, use the named selectors above or the task's related-test
+selector. The pipeline runs the complete suite after delivery.
 
-Local Release measurements (实测, synthetic inputs, MFEM with MPI/PETSc):
+Local Release measurements (实测, November 21, synthetic inputs, MFEM with
+MPI/PETSc). These values come from the current 55-method implementation run:
 
-| Fixture | FVM PV (m) | FEM/direct PV (m) | Relative PV difference | FVM U maximum (m) | FEM U maximum (m) | Relative U difference |
+| Fixture | FVM PV (m) | FEM/direct PV (m) | Relative PV difference | FVM maximum U (m) | FEM maximum U (m) | Relative U difference |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Imported board | 1.3821524030478399e-6 | 7.6705217582044357e-6 | 0.81980985823168007 | 9.2238241640278916e-7 | 7.5643159714428214e-6 | 0.87806135810759189 |
+| Imported board | 1.3821524030478399e-06 | 7.6705217582044357e-06 | 0.81980985823168007 | 9.2238241640278916e-07 | 7.5643159714428214e-06 | 0.87806135810759189 |
 | Uniform bilayer | 0.0017444475179898399 | 0.0019414505357316298 | 0.1014720767364541 | 0.0012533119660306468 | 0.0020458574104428601 | 0.3873903627724738 |
+| Prescribed-temperature bilayer | 0.0024422265251855396 | 0.0027174470566019389 | 0.10127907763566578 | 0.0016868846951422548 | 0.0028296925696029672 | 0.40386290960966803 |
+| Cut bilayer | 0.0017470475538252663 | 0.0022505694928693014 | 0.22373090039627422 | 0.0012549687104280432 | 0.0017169407779141516 | 0.26906697856366446 |
 
-| Fixture / process | Wall seconds | Measured peak RSS (KiB) |
-| --- | ---: | ---: |
-| Board FVM np=1 | 1.756074 | 54592 |
-| Board FVM np=2 | 1.782220 | 57248 |
-| Board FEM/direct | 1.689694 | 64276 |
-| Bilayer FVM | 1.598403 | 60916 |
-| Bilayer FEM/direct | 1.963532 | 107824 |
-
-RSS is the wait4 process/child maximum, including the MPI launcher, rather
-than a sum across ranks. Timings are observations under shared load.
-Supplemental fitted top curvatures have matching negative signs: board
-FVM -4.4003741123158115e-6 versus FEM -2.9873172891963482e-5; bilayer
-FVM -0.012207036266297606 versus FEM -0.014372943771064434.
-
-The four I14 diagnostics are measured through a local probe using the same
-adapter helpers and numerical libraries; the production event retains exactly
-its required four keys:
+FEM PV differences are diagnostics for `solve-elastic-accuracy`; curvature-sign
+checks pass in all four cases. They do not change the original accuracy bound.
+The maximum CLI/direct replay relative difference is 8.6075487040211334e-12,
+below the unchanged 1e-8 gate. Both cut output modes pass with nonzero U.
 
 | Fixture | min_dn_ratio | min_dn_gid | gradient_corrections | max_identity_defect |
 | --- | ---: | ---: | ---: | ---: |
-| Board (80 CVs) | 1 | 0 | 0 | 0 |
-| Bilayer (192 CVs) | 1 | 0 | 0 | 0 |
-| Cut bilayer (192 CVs, 12 cut) | 0.79262398910460019 | 8 | 0 | 4.4408920985006262e-16 |
+| Imported board | 1.0 | 0 | 0 | 0.0 |
+| Uniform bilayer | 1.0 | 0 | 0 | 0.0 |
+| Prescribed-temperature bilayer | 1.0 | 0 | 0 | 0.0 |
+| Cut bilayer | 0.7926239891046002 | 8 | 0 | 4.440892098500626e-16 |
 
-Board maximum CV temperature is 321.92657327984955 K versus FEM
-323.98160735460056 K, with reference 298.15 K. The temperature-rise relative
-difference is 0.079555021355843233, above the unchanged 1% gate. A supplemental
-thermal probe gives maximum face temperature 323.20710930981846 K and maximum
-vertex temperature 323.13920209610802 K; sampling location explains part of
-the gap, while the remaining thermal discretization difference is unresolved.
-The adapter retains the specified maximum-CV `T_max` semantics.
+The diagnostics are read by the temporary replay probe. Production
+`FVM_ELASTIC` retains exactly its four required keys.
 
-The focused adapter/contract harness passes 5/5 checks, including all 14 I14
-fixtures. It checks caller-order cut flags for regular/cut meshes, double-prefix
-INTERNAL routing, malformed-result rejection and the library contract. These
-supplemental checks are local artifacts; repository acceptance remains in the
-two Python files. The registered e2e runs 42 unittest methods with 14 assertion
-failures and zero errors. The FVM/library group passes 10/11 tests (only e2e
-fails); the selected integration group passes 2/2. The `solve_` regression group passes 95 tests, fails 3 and retains 10 existing
-disabled tests (108 registered / 98 enabled). The failures reproduce the prior
-column-GMG killed-process cases and FEM thermal-bow cross-run tolerance gate.
-The complete suite records 437 passed, 9 failed, 26 skipped and 10 existing
-disabled tests (482 registered / 472 enabled), 1569.39 seconds wall. Its e2e
-again reports 42 methods and 14 assertion failures. Additional failures include
-three field-comparison fixtures rejected by FEM input validation, a fine-grid
-cut-bimetal subprocess killed with signal 9, and the synthetic warpage driver's
-W5 auxiliary assertion. None of those fixtures or their gates is modified.
+| Fixture / process | Wall seconds | Measured peak RSS (KiB) |
+| --- | ---: | ---: |
+| Imported board / fvm1 | 1.727795 | 60804 |
+| Imported board / fvm2 | 1.958002 | 60804 |
+| Imported board / fem1 | 1.678256 | 65400 |
+| Uniform bilayer / strip-fvm | 1.598698 | 94788 |
+| Uniform bilayer / strip-fem | 1.939698 | 107888 |
+| Prescribed-temperature bilayer / prescribed-fvm | 1.587796 | 94788 |
+| Prescribed-temperature bilayer / prescribed-fem | 2.088682 | 110452 |
+| Cut bilayer / cut-elastic-polyhedron | 1.624042 | 65284 |
+| Cut bilayer / cut-elastic-hex | 1.608626 | 65284 |
+| Cut bilayer / cut-fem | 2.318108 | 125476 |
 
-Remaining gates and owners:
+RSS is the wait4 process/child maximum, including the MPI launcher, rather
+than a sum across ranks; it can include memory inherited at fork. Timings are
+observations under shared load, not performance gates.
 
-- Producer/API: I14 section 6 prohibits parsing failure diagnostic numbers,
-  while `Expected<ElasticResult>` exposes only `Error{path, reason}` on failure.
-  All four solid-only/coupled nonconvergence assertions (np=1/2) still require
-  measured residuals. No norm is fabricated and no frozen header is changed.
-- Solver/thermal investigation: the board and bilayer comparisons above exceed
-  their original gates. Adapter array mapping passes the local checks; the
-  numerical discrepancy is not corrected by rescaling output or changing case
-  options. Its full numerical root cause remains unresolved.
-- Elastic producer: demo geometry reaches the unchanged 500-iteration limit
-  in both output modes and with embedded Robin heat transfer. It returns exit 1
-  and no successful step. Supported synthetic cut reconstruction does pass.
-- Loader/fixture owner: four FEM snapshots omit current default copper diagnostic
-  fields; they remain unchanged under this brief's preservation requirement.
-- I14 is frozen as of November 21. Green `ci-ok` and elastic logs from the
-  specified nightly or Mac full-deps runner remain separate merge requirements.
-  Local green library logs do not establish the runner-origin gate.
-- Real-board runs and their commands, logs and result hashes remain local and
-  outside commits. No real-board result is claimed here.
+The current focused e2e runs 55 unittest methods in 328.813 seconds (329.05
+CTest seconds), with five assertion failures and one error. All 11 adapter
+methods pass, including the 14-case frozen I14 checker. Caller order,
+embedded-top selection, material and
+temperature oracles, reconstruction, fixed/free edges, zero rise, MPI, STOP,
+all ten pipeline error subcases and all four direct-library comparisons pass.
+
+The five remaining assertions are unchanged:
+
+- Board maximum CV temperature is 321.92657327984955 K versus FEM
+  323.98160735460056 K, with reference 298.15 K. The temperature-rise relative
+  difference is 0.079555021355843233, above the original 0.01 gate. `T_max`
+  retains the required maximum-CV semantics; no rescaling is applied.
+- Four FEM snapshots (`default`, `sources`, `solid`, `copper`) predate default
+  `copper_fraction`/`conductivity_diag` output fields. The solid-only snapshot
+  also predates conductivity loading (actual k=2/4, snapshot k=0/0).
+  Snapshot values and loader behavior remain unchanged in this card.
+
+The additional error is in
+`test_solid_only_nonconvergence_preserves_library_reason_without_success`
+at np=2: the temporary snapshot probe exits 0, then `direct_elastic` raises
+`JSONDecodeError: Extra data` while decoding its stdout. That subcase does not
+complete its original-reason comparison. The cause is not established or
+classified as outside scope. No assertion or decoder is relaxed.
+
+The implementation pass stops after reproducing the thermal and loader
+blockers, as required by the task. No numerical retries are made. Release
+configure/build, bare configure and `ctest -N -L fvm` pass; the latter lists
+15 tests, including the required elastic, bimetal and np2 registrations.
+
+The 20:40 ruling requires outside-scope failures to pass an individual `-j1`
+rerun or reproduce on starting main with the same build options. The current
+implementation pass stops at the e2e blockers under the task's stop rule;
+broader regressions are not rerun in this pass.
+
+Green `ci-ok` and the specified nightly/Mac full-deps runner's green elastic,
+bimetal and np2 logs remain merge requirements. Local full-dependency green
+logs do not establish that runner-origin gate. These external gates are
+未执行 in this pass. No remote workflow is dispatched or result inferred.
+Real-board inputs, commands, logs and hashes remain local and outside commits.
