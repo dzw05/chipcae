@@ -5,6 +5,8 @@ chipcae_auto_tests(LIBS chipcae::geometry chipcae_mesh_cut LABELS tierA TIMEOUT 
 # slice_no_occt is only meaningful without OCCT.
 # Keep the global C++ return-77-fails rule unchanged.
 if(CHIPCAE_ENABLE_OCCT)
+    # chipcae_auto_tests above creates these executables in this directory scope.
+    # Include slice_no_occt: the definition makes it return the registered skip code 77.
     get_property(_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
     foreach(_target IN LISTS _targets)
         if(_target MATCHES "^chipcae_autotest_tests_integration_part_slice_")
