@@ -4,6 +4,23 @@
 and always builds with `chipcae::core`. The existing `chipcae-jobmgr` executable
 retains its help/version interface; it does not submit jobs yet.
 
+The proposed one-command CLI adapter is blocked on process ownership across
+invocations. `Submit()` returns a RUNNING Job without polling. Destroying that
+manager terminates its owned children; constructing the manager for a subsequent
+`wait` marks the persisted nonterminal Job FAILED/JOB_MANAGER with
+`Launcher restarted without process ownership`. Even a solver that exits before
+destruction cannot produce a persisted COMPLETED Job without the owning manager
+consuming its exit. Separate `cancel` and `poll` invocations likewise cannot manage
+the previous invocation's children.
+
+A successful CLI `submit` followed by CLI `wait` therefore needs an architecture
+decision: authorize a persistent manager owner and command transport, or revise
+the CLI lifecycle and acceptance requirements. The current CLI brief permits only
+argument parsing and direct library calls, and excludes changes to the manager
+and launcher implementations. Its successful cross-process wait acceptance test
+remains required; implicit waiting during submit would change the specified
+behavior.
+
 When Protobuf and jsoncons are available, `chipcae::jobmgr_local` provides the
 Qt-free `chipcae::jobmgr::LocalJobManager`. CMake tries Protobuf CONFIG then module
 mode, uses `protobuf::protoc` to generate only run/jobs messages into the jobmgr
