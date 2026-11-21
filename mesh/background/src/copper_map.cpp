@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -82,23 +83,60 @@ std::vector<Real> rasterize_copper(const std::vector<Real>& xs,
         x_candidates[i].assign(active.begin(), active.end());
     }
     std::vector<Real> result((xs.size() - 1) * (ys.size() - 1));
-    for (std::size_t j = 0; j + 1 < ys.size(); ++j) {
-        for (std::size_t i = 0; i + 1 < xs.size(); ++i) {
-            const RectD rect((xs[i] - xs.front()) * scale_x,
-                             (ys[j] - ys.front()) * scale_y,
-                             (xs[i + 1] - xs.front()) * scale_x,
-                             (ys[j + 1] - ys.front()) * scale_y);
-            PathsD clipped;
-            for (auto candidate : x_candidates[i]) {
-                const auto& p = indexed[candidate];
-                if (p.max_y <= rect.top || p.min_y >= rect.bottom)
+    // Both clipping stages and union share a 1e-9 normalized-coordinate lattice.
+    // A 1e-8 lattice loses too much relative area in narrow graded cells.
+    // Quantize each axis line once so neighbouring cells use the same boundary.
+    constexpr Real lattice = 1.0e9;
+    const auto tick = [](Real value) { return std::llround(value * lattice); };
+    std::vector<std::int64_t> x_ticks, y_ticks;
+    for (auto x : xs)
+        x_ticks.push_back(tick((x - xs.front()) * scale_x));
+    for (auto y : ys)
+        y_ticks.push_back(tick((y - ys.front()) * scale_y));
+    struct StripPiece {
+        Path64 path;
+        std::int64_t min_y, max_y;
+    };
+    for (std::size_t i = 0; i + 1 < xs.size(); ++i) {
+        // Keep strip-generated intersections away from the final cell edges.
+        // At least one tick separates each strip edge from its cell edge.
+        const auto margin = std::max<std::int64_t>(1, (x_ticks[i + 1] - x_ticks[i]) / 4);
+        const Rect64 strip(
+            x_ticks[i] - margin, y_ticks.front(), x_ticks[i + 1] + margin, y_ticks.back());
+        std::vector<StripPiece> fragments;
+        for (auto candidate : x_candidates[i]) {
+            Path64 path;
+            path.reserve(indexed[candidate].path.size());
+            for (const auto& point : indexed[candidate].path)
+                path.emplace_back(tick(point.x), tick(point.y));
+            for (auto& piece : RectClip(strip, path)) {
+                auto min_y = piece.front().y, max_y = min_y;
+                for (const auto& point : piece) {
+                    min_y = std::min(min_y, point.y);
+                    max_y = std::max(max_y, point.y);
+                }
+                fragments.push_back({std::move(piece), min_y, max_y});
+            }
+        }
+        for (std::size_t j = 0; j + 1 < ys.size(); ++j) {
+            const Rect64 rect(x_ticks[i], y_ticks[j], x_ticks[i + 1], y_ticks[j + 1]);
+            Paths64 clipped;
+            for (const auto& fragment : fragments) {
+                if (fragment.max_y <= rect.top || fragment.min_y >= rect.bottom)
                     continue;
-                auto pieces = RectClip(rect, p.path, 8);
+                auto pieces = RectClip(rect, fragment.path);
                 clipped.insert(clipped.end(), pieces.begin(), pieces.end());
             }
             if (!clipped.empty()) {
-                const auto united = Union(clipped, FillRule::NonZero, 8);
-                const Real area = std::abs(Area(united));
+                auto united = Union(clipped, FillRule::NonZero);
+                // Cell-local coordinates reduce cancellation on graded axes.
+                // Preserve ring signs, including holes, until after Area sums them.
+                for (auto& ring : united)
+                    for (auto& point : ring) {
+                        point.x -= rect.left;
+                        point.y -= rect.top;
+                    }
+                const Real area = std::abs(Area(united)) / (lattice * lattice);
                 const Real cell_area =
                     (xs[i + 1] - xs[i]) * scale_x * (ys[j + 1] - ys[j]) * scale_y;
                 result[j * (xs.size() - 1) + i] = std::clamp(area / cell_area, Real(0), Real(1));
