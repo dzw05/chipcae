@@ -50,7 +50,7 @@ struct HexMeshArrays {
         std::vector<std::string> warnings;
         Real partition_imbalance = 0;
         std::int64_t void_cells = 0; // 没有 material 的层里不生成的单元数
-        // Interface-only stub for the copper area acceptance tests.
+        // Areas in m^2, keyed by case-sensitive stack layer name.
         struct CopperArea {
             Real polygons = 0;
             Real raster = 0;

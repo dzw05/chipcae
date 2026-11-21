@@ -12,6 +12,7 @@
 #include <jsoncons/json.hpp>
 #include <jsoncons/json_cursor.hpp>
 #include <limits>
+#include <map>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -51,6 +52,11 @@ void fields(HexMeshArrays::InterfaceReport& x, F&& f) {
     f("cut_area", x.cut_area);
 }
 template <class F>
+void fields(HexMeshArrays::GridReport::CopperArea& x, F&& f) {
+    f("polygons", x.polygons);
+    f("raster", x.raster);
+}
+template <class F>
 void fields(HexMeshArrays::GridReport& x, F&& f) {
     f("levels", x.levels);
     f("rule", x.rule);
@@ -63,6 +69,7 @@ void fields(HexMeshArrays::GridReport& x, F&& f) {
     f("warnings", x.warnings);
     f("partition_imbalance", x.partition_imbalance);
     f("void_cells", x.void_cells);
+    f.optional("copper_area_m2", x.copper_area_m2);
 }
 template <class F>
 void fields(AttributeTable& x, F&& f) {
@@ -110,6 +117,12 @@ struct Reader {
         check(j.contains(name), "missing required field");
         decode(j.at(name), x);
         ++count;
+    }
+    template <class T>
+    void optional(const char* name, T& x) {
+        x.clear();
+        if (j.contains(name))
+            (*this)(name, x);
     }
 };
 template <class T>
@@ -177,20 +190,19 @@ void decode(const J& j, T& x) {
         check(reader.count == j.size(), "unknown field");
     }
 }
-// Emit directly so floating point spelling is independent of JSON library defaults.
+// Keep object keys sorted and use the legacy fixture's shortest real spelling.
 template <class T>
 void encode(std::string& out, const T& x);
 struct Writer {
-    std::string& out;
-    bool first = true;
+    std::map<std::string, std::string> members;
     template <class T>
     void operator()(const char* name, const T& x) {
-        if (!first)
-            out += ',';
-        first = false;
-        encode(out, std::string(name));
-        out += ':';
-        encode(out, x);
+        encode(members[name], x);
+    }
+    template <class T>
+    void optional(const char* name, const T& x) {
+        if (!x.empty())
+            (*this)(name, x);
     }
 };
 template <class T>
@@ -199,22 +211,20 @@ void encode(std::string& out, const T& x) {
         out += x ? "true" : "false";
     else if constexpr (std::is_same_v<T, char>)
         encode(out, std::string(1, x));
-    else if constexpr (std::is_arithmetic_v<T>) {
+    else if constexpr (std::is_floating_point_v<T>) {
+        check(std::isfinite(x), "nonfinite real");
+        jsoncons::json_options options;
+        options.float_format(jsoncons::float_chars_format::general).precision(0);
+        // jsoncons' shortest formatter normalizes -0; retain its IEEE sign bit.
+        if (std::signbit(x) && std::fpclassify(x) == FP_ZERO)
+            out += "-0.0";
+        else
+            J(x).dump(out, options);
+    } else if constexpr (std::is_integral_v<T>) {
         char buffer[128];
-        auto result = [&] {
-            if constexpr (std::is_floating_point_v<T>) {
-                check(std::isfinite(x), "nonfinite real");
-                return std::to_chars(
-                    buffer, buffer + sizeof(buffer), x, std::chars_format::general, 17);
-            } else
-                return std::to_chars(buffer, buffer + sizeof(buffer), x);
-        }();
+        const auto result = std::to_chars(buffer, buffer + sizeof(buffer), x);
         check(result.ec == std::errc{}, "number encoding");
-        std::string number(buffer, result.ptr);
-        if constexpr (std::is_floating_point_v<T>)
-            if (number.find_first_of(".eE") == std::string::npos)
-                number += ".0";
-        out += number;
+        out.append(buffer, result.ptr);
     } else if constexpr (std::is_same_v<T, std::string>)
         out += J(x).to_string();
     else if constexpr (requires { typename T::mapped_type; }) {
@@ -247,9 +257,18 @@ void encode(std::string& out, const T& x) {
         out += ']';
     } else {
         out += '{';
-        Writer writer{out};
+        Writer writer;
         // fields only describes members; encoding never modifies them.
         fields(const_cast<T&>(x), writer);
+        bool first = true;
+        for (const auto& [name, value] : writer.members) {
+            if (!first)
+                out += ',';
+            first = false;
+            encode(out, name);
+            out += ':';
+            out += value;
+        }
         out += '}';
     }
 }
