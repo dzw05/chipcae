@@ -448,9 +448,11 @@ endforeach()
 # invalid retained runs can be checked without launching numerical tests again.
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/run_highmem_acceptance.py" [=[
 import argparse
+from contextlib import contextmanager
 import json
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -482,12 +484,52 @@ def kernel():
                           capture_output=True, text=True).stdout
 
 
+def wait_kernel_snapshot(path, snapshot, follower):
+    require(snapshot, "empty kernel snapshot")
+    deadline = time.monotonic() + 5
+    while True:
+        stream = path.read_text()
+        require(follower.poll() is None, "continuous kernel collector exited early")
+        require(not re.search(r"(?m)^dmesg:", stream), "kernel collector reported an error")
+        if snapshot in stream:
+            return stream
+        require(time.monotonic() < deadline, "kernel stream misses a complete snapshot")
+        time.sleep(.05)
+
+
+@contextmanager
+def capture_kernel(destination):
+    # Start before the first snapshot, so both complete snapshots must occur in
+    # the continuous stream. This bridges rotation without inventing a zero delta.
+    path = destination / "kernel-follow.log"
+    with path.open("w") as log:
+        follower = subprocess.Popen(["dmesg", "--follow", "--color=never"],
+                                    stdout=log, stderr=subprocess.STDOUT)
+        try:
+            before = kernel()
+            (destination / "kernel-before.log").write_text(before)
+            wait_kernel_snapshot(path, before, follower)
+            captured = {"before": before}
+            try:
+                yield captured
+            finally:
+                after = kernel()
+                (destination / "kernel-after.log").write_text(after)
+                captured["after"] = after
+                captured["stream"] = wait_kernel_snapshot(path, after, follower)
+        finally:
+            # Only the separate collector is stopped; CTest always runs to exit.
+            if follower.poll() is None:
+                follower.send_signal(signal.SIGINT)
+            follower.wait(timeout=5)
+            (destination / "kernel-follow-status.json").write_text(
+                json.dumps({"status": follower.returncode}))
+
+
 def run(name, jobs, selected, baseline=False):
     destination = args.evidence / name
     # Do not overwrite the baseline or raw evidence from a previous attempt.
     destination.mkdir()
-    before = kernel()
-    (destination / "kernel-before.log").write_text(before)
     command = ["ctest", "--test-dir", str(args.build), "-j" + str(jobs),
                "--output-on-failure", "--output-junit", str(destination / "results.xml")]
     (destination / "command.json").write_text(json.dumps(command, indent=2))
@@ -496,30 +538,31 @@ def run(name, jobs, selected, baseline=False):
     overlaps = []
     intervals = {}
     started = time.monotonic()
-    with (destination / "ctest.log").open("w") as log:
-        process = subprocess.Popen(command, stdout=subprocess.PIPE,
-                                   stderr=subprocess.STDOUT, text=True)
-        for line in process.stdout:
-            log.write(line)
-            log.flush()
-            start = re.match(r"\s*Start\s+\d+:\s+(\S+)\s*$", line)
-            end = re.match(r"\s*\d+/\d+ Test\s+#\d+:\s+(\S+)\s+", line)
-            if start:
-                test = start[1]
-                if test in selected and active & selected:
-                    overlaps.append((test, sorted(active & selected)))
-                active.add(test)
-                maximum = max(maximum, len(active))
-                intervals[test] = [time.monotonic() - started, None]
-            if end:
-                active.discard(end[1])
-                if end[1] in intervals:
-                    intervals[end[1]][1] = time.monotonic() - started
-        status = process.wait()
-    after = kernel()
-    (destination / "kernel-after.log").write_text(after)
+    with capture_kernel(destination) as captured, (destination / "ctest.log").open("w") as log:
+        with subprocess.Popen(command, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, text=True) as process:
+            for line in process.stdout:
+                log.write(line)
+                log.flush()
+                start = re.match(r"\s*Start\s+\d+:\s+(\S+)\s*$", line)
+                end = re.match(r"\s*\d+/\d+ Test\s+#\d+:\s+(\S+)\s+", line)
+                if start:
+                    test = start[1]
+                    if test in selected and active & selected:
+                        overlaps.append((test, sorted(active & selected)))
+                    active.add(test)
+                    maximum = max(maximum, len(active))
+                    intervals[test] = [time.monotonic() - started, None]
+                if end:
+                    active.discard(end[1])
+                    if end[1] in intervals:
+                        intervals[end[1]][1] = time.monotonic() - started
+            status = process.wait()
+    before, after, stream = captured["before"], captured["after"], captured["stream"]
     retained = after.startswith(before)
-    delta = after[len(before):] if retained else ""
+    start, end = stream.index(before), stream.rindex(after)
+    covered = start <= end
+    delta = stream[start + len(before):end + len(after)]
     oom = [line for line in delta.splitlines()
            if "chipcae" in line.lower()
            and re.search(r"oom|out of memory|killed process", line, re.I)]
@@ -530,20 +573,26 @@ def run(name, jobs, selected, baseline=False):
     outcomes = {}
     for case in cases:
         outcome = "passed"
-        for tag in ("skipped", "failure", "error"):
-            child = case.find(tag)
-            if child is not None:
-                outcome = tag + ":" + child.get("message", "")
+        if case.get("status") == "disabled":
+            outcome = "disabled"
+        else:
+            for tag in ("skipped", "failure", "error"):
+                child = case.find(tag)
+                if child is not None:
+                    outcome = tag + ":" + child.get("message", "")
+            if outcome == "passed" and case.get("status") != "run":
+                outcome = "notrun"
+        require(case.attrib["name"] not in outcomes, "duplicate JUnit outcome")
         outcomes[case.attrib["name"]] = outcome
     report = dict(build=str(args.build), jobs=jobs, status=status,
                   elapsed=float(elapsed[1]), outcomes=outcomes,
-                  kernel_retained=retained, oom=oom, max_active=maximum,
+                  kernel_retained=retained, kernel_covered=covered, oom=oom, max_active=maximum,
                   overlaps=overlaps, observed_intervals=intervals)
     (destination / "report.json").write_text(json.dumps(report, indent=2))
-    require(retained, "kernel log rotated; OOM delta is unverified: " + name)
+    require(covered, "continuous kernel coverage is unverified: " + name)
     require(not oom, "new chipcae OOM records: " + name)
     failed = {test for test, value in outcomes.items()
-              if value != "passed" and not value.startswith("skipped:")}
+              if value not in {"passed", "disabled"} and not value.startswith("skipped:")}
     # These two new tests are deliberately red in a pre-feature baseline. An
     # existing solver failure or OOM still invalidates the timing comparison.
     require(status == 0 or (baseline and status == 8 and failed == expected_red),
