@@ -277,6 +277,37 @@ class AssemblyBond(unittest.TestCase):
         # Exact shared interface, with no absolute tolerance at the zero face.
         self.close(bond_top - origin, 0.0, scale=0.0)
 
+    def test_tall_part_bottom_bond_meets_attachment_face(self):
+        # Stretch the synthetic 0.5 mm box to 10 mm. Bottom translation then
+        # accumulates roundoff at the part's scale, beyond the thin bond's scale.
+        path = self.a.root / 'lid.step'
+
+        def stretch(point):
+            coordinates = [float(c) for c in point[1].split(',')]
+            if len(coordinates) == 3:
+                coordinates[2] *= 20
+            return "CARTESIAN_POINT('',(" + ','.join(map(str, coordinates)) + '))'
+
+        path.write_text(re.sub(r"CARTESIAN_POINT\('',\(([^)]+)\)\)", stretch,
+                               path.read_text()))
+        self.place(self.thickness, bottom=True)
+        check(self.a.run(), 0)
+        layers = list(intervals(self.a.stack()))
+        origin = next(z0 for z0, _, layer in layers
+                      if layer['name'] == self.board_bottom_name)
+        lid = [(z0, z1) for z0, z1, layer in layers if has_body(layer, 'lid')]
+        self.close(sum(z1 - z0 for z0, z1 in lid), .01, scale=.01)
+        bonded = [(z0, z1, layer) for z0, z1, layer in layers
+                  if has_body(layer, 'lid.bond')]
+        self.assertEqual(len(bonded), 1)
+        z0, z1, layer = bonded[0]
+        self.close(z1 - origin, 0.0, scale=0.0)
+        self.close(z0 - origin, -self.thickness, scale=.01)
+        self.close(layer['thickness'], self.thickness, scale=.01)
+        self.close(max(top for _, top in lid), z0, scale=0.0)
+        self.assertFalse([d for d in self.a.import_report()['defects']
+                          if d['defect_id'].startswith('lid.bond/')])
+
     def thin_bond(self):
         thickness = (self.eps_weld + self.t_min) / 2
         self.assertLess(self.eps_weld, thickness)
