@@ -86,7 +86,9 @@ with tempfile.TemporaryDirectory() as tmp:
         assert sum(data.GetPartition(2,i).GetNumberOfCells() for i in range(ranks)) > 0
         print(out.name, summary, 'mesh_sha256', manifest['mesh']['mesh_sha256'],
               'summary_bits', {quantity: struct.pack('>d', float(summary[quantity])).hex()
-                               for quantity in ('T_max', 'warpage_pv')}, flush=True)
+                               for quantity in ('T_max', 'warpage_pv', 'U_mag_max')},
+              'summary_hex', {quantity: float(summary[quantity]).hex()
+                              for quantity in ('T_max', 'warpage_pv', 'U_mag_max')}, flush=True)
         return summary
     one = run('one')
     with h5py.File(root/'one/out/step-0.vtkhdf') as file:
@@ -185,6 +187,72 @@ with tempfile.TemporaryDirectory() as tmp:
                     assert cell_start == len(gids)
         return total
 
+    def boundary_tolerance(ring):
+        polygon = np.asarray(ring, dtype=float)
+        return 1e-12 * float(np.hypot(*np.ptp(polygon, axis=0)))
+
+    def segment_distance(point, a, b):
+        delta = b - a
+        length2 = float(np.dot(delta, delta))
+        fraction = (float(np.dot(point-a, delta))/length2 if length2 else 0.0)
+        closest = a + np.clip(fraction, 0.0, 1.0)*delta
+        return float(np.hypot(*(point-closest)))
+
+    def nonconvex_contains(ring, point):
+        # Independent finite-segment boundary check and even/odd ray predicate.
+        if not ring:
+            return True
+        polygon = np.asarray(ring, dtype=float)
+        while len(polygon) > 1 and np.array_equal(polygon[0], polygon[-1]):
+            polygon = polygon[:-1]
+        tolerance = boundary_tolerance(ring)
+        point = np.asarray(point[:2], dtype=float)
+        inside = False
+        for j, a in enumerate(polygon):
+            b = polygon[(j+1) % len(polygon)]
+            if segment_distance(point, a, b) <= tolerance:
+                return True
+            if ((a[1] > point[1]) != (b[1] > point[1]) and
+                    point[0] < (b[0]-a[0])*(point[1]-a[1])/(b[1]-a[1])+a[0]):
+                inside = not inside
+        return inside
+
+    def point_partitions(name, block):
+        with h5py.File(root/name/'out/step-0.vtkhdf') as file:
+            grid = file['VTKHDF/'+block]
+            start = 0
+            for count in grid['NumberOfPoints'][:]:
+                end = start + int(count)
+                yield grid['Points'][start:end], grid['PointData/T'][start:end]
+                start = end
+            assert start == len(grid['Points']) == len(grid['PointData/T'])
+
+    def node_sets(name, shape, ring):
+        tolerance = boundary_tolerance(ring)
+        counts = {'hex': [0, 0], 'cut': [0, 0]}
+        triangle = [[.0064, 0], [.0103, .0087], [.0142, 0]]
+        for block in ('hex', 'cut'):
+            for points, temperatures in point_partitions(name, block):
+                assert len(points) == len(temperatures)
+                for point in points:
+                    inside = nonconvex_contains(ring, point)
+                    counts[block][0 if inside else 1] += 1
+                    if block == 'hex':
+                        assert inside, (name, 'hex point outside', point)
+                        if shape == 'L':
+                            assert not (point[0] > .0113+tolerance and
+                                        point[1] > .0137+tolerance), (name, point)
+                        else:
+                            edges = zip(np.asarray(triangle),
+                                        np.roll(np.asarray(triangle), -1, axis=0))
+                            strict_notch = (nonconvex_contains(triangle, point) and
+                                            all(segment_distance(point[:2], a, b) > tolerance
+                                                for a, b in edges))
+                            assert not strict_notch, (name, 'V notch', point)
+        print(name, 'hex points', sum(counts['hex']), 'cut inside/outside',
+              *counts['cut'], flush=True)
+        assert counts['cut'][0] > 0, (name, counts)
+
     outline_case = copy.deepcopy(layered)
     thickness = sum(layer['thickness'] for layer in stack['layers']
                     if layer['kind'].lower() != 'void')
@@ -223,6 +291,10 @@ with tempfile.TemporaryDirectory() as tmp:
             summary = acceptance(name, positive)
             if summary is not None:
                 results[ranks] = summary
+        for ranks in (1, 2):
+            name = f'nonconvex-{shape}-np{ranks}'
+            acceptance(name+' node sets',
+                       lambda name=name, shape=shape, ring=ring: node_sets(name, shape, ring))
         if len(results) == 2:
             for quantity in ('T_max', 'warpage_pv'):
                 def compare(quantity=quantity):
@@ -235,6 +307,44 @@ with tempfile.TemporaryDirectory() as tmp:
                     print(shape, quantity, 'MPI relative difference', difference, flush=True)
                     assert difference <= 1e-9, (shape, quantity, difference)
                 acceptance(f'{shape} MPI {quantity}', compare)
+
+    hotspot_results = {}
+    for ranks in (1, 2):
+        name = f'nonconvex-L-hotspot-np{ranks}'
+        def l_hotspot(name=name, ranks=ranks):
+            ring = shapes['L'][0]
+            data = copy.deepcopy(stack)
+            data['outline']['polygon'] = ring
+            (root/'stack.json').write_text(json.dumps(data))
+            case = copy.deepcopy(outline_case)
+            case['loads'] = [
+                {'type':'heat_source', 'target':'layer:base', 'q_vol':1e6},
+                {'type':'convection', 'target':'face:xmax', 'h':1000, 'T_inf':300}]
+            summary = run(name, case, ranks=ranks)
+            arm, other = [], []
+            for block in ('hex', 'cut'):
+                for points, temperatures in point_partitions(name, block):
+                    for point, temperature in zip(points, temperatures):
+                        if nonconvex_contains(ring, point):
+                            region = arm if point[0] < .0113 and point[1] > .0137 else other
+                            region.append(float(temperature))
+            assert arm and other, (name, len(arm), len(other))
+            arm_max, other_max = max(arm), max(other)
+            print(name, 'arm_max', arm_max, 'other_max', other_max,
+                  'separation K', arm_max-other_max, flush=True)
+            assert arm_max > other_max, (name, arm_max, other_max)
+            assert arm_max-other_max >= 1e-6, (name, arm_max, other_max)
+            assert summary['T_max'] >= arm_max-1e-12*abs(summary['T_max']), (name, summary, arm_max)
+            return summary
+        summary = acceptance(name, l_hotspot)
+        if summary is not None:
+            hotspot_results[ranks] = summary
+    if len(hotspot_results) == 2:
+        def hotspot_mpi():
+            difference = abs(hotspot_results[1]['T_max']-hotspot_results[2]['T_max'])
+            print('L hotspot MPI absolute T_max difference', difference, flush=True)
+            assert difference <= 1e-9, difference
+        acceptance('L hotspot MPI T_max', hotspot_mpi)
 
     def l_robin():
         data = copy.deepcopy(stack)

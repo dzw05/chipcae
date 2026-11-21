@@ -29,6 +29,26 @@ bool legacy_contains(const Ring& ring, double x, double y) {
     }
     return true;
 }
+// Independent oracle for the original absolute-threshold convexity scan.
+bool legacy_is_convex(const Ring& ring) {
+    std::size_t n = ring.size();
+    while (n > 1 && ring[n - 1] == ring.front())
+        --n;
+    for (std::size_t j = 0; j < n; ++j) {
+        const auto a = ring[j], b = ring[(j + 1) % n];
+        double sign = 0;
+        for (std::size_t k = 0; k < n; ++k) {
+            const double v =
+                (b[0] - a[0]) * (ring[k][1] - a[1]) - (b[1] - a[1]) * (ring[k][0] - a[0]);
+            if (std::abs(v) < 1e-14)
+                continue;
+            if (sign * v < 0)
+                return false;
+            sign = v;
+        }
+    }
+    return true;
+}
 } // namespace
 
 int main() {
@@ -134,6 +154,43 @@ int main() {
     collinear_l.insert(collinear_l.begin() + 1, {.01, 0});
     check(outline_contains(collinear_l, .005, .017), "nonconvex collinear edge arm");
     check(!outline_contains(collinear_l, .015, .017), "nonconvex collinear edge notch");
+    const Ring v{{0, 0}, {.0064, 0}, {.0103, .0087}, {.0142, 0}, {.02, 0}, {.02, .02}, {0, .02}};
+    check(legacy_is_convex(octagon), "legacy original octagon is convex");
+    check(!legacy_is_convex(l), "legacy original L is nonconvex");
+    check(!legacy_is_convex(v), "legacy original V is nonconvex");
+    // The old absolute classification threshold loses the notch at tiny scales.
+    // Keep convex containment's legacy behavior, including its tiny-scale limit.
+    for (double scale : {1e-6, 1e-3, .1, 1., 1e3}) {
+        for (int reversed = 0; reversed < 2; ++reversed) {
+            for (const auto& [name, original] : std::vector<std::pair<std::string, Ring>>{
+                     {"L", l}, {"V", v}, {"octagon", octagon}}) {
+                auto ring = original;
+                for (auto& p : ring) {
+                    p[0] *= scale;
+                    p[1] *= scale;
+                }
+                if (reversed)
+                    std::reverse(ring.begin(), ring.end());
+                std::ostringstream label;
+                label << name << " scale " << scale << " reversed " << reversed;
+                if (name == "octagon") {
+                    for (double x : {.01, .025})
+                        check(outline_contains(ring, x * scale, .01 * scale) ==
+                                  legacy_contains(ring, x * scale, .01 * scale),
+                              label.str() + " legacy containment");
+                } else {
+                    const auto arm = name == "L" ? std::array<double, 2>{.005, .017}
+                                                 : std::array<double, 2>{.003, .004};
+                    const auto notch = name == "L" ? std::array<double, 2>{.015, .017}
+                                                   : std::array<double, 2>{.0103, .003};
+                    check(outline_contains(ring, arm[0] * scale, arm[1] * scale),
+                          label.str() + " arm must be inside");
+                    check(!outline_contains(ring, notch[0] * scale, notch[1] * scale),
+                          label.str() + " notch must be outside");
+                }
+            }
+        }
+    }
     std::cout << "1000 convex oracle points and containment boundary cases; " << failures
               << " failures\n";
     return failures == 0 ? 0 : 1;
