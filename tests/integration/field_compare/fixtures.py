@@ -267,3 +267,80 @@ def measured_comparison(ref_dir, other_dir, preset):
     assert {g["metric"] for g in result["gates"]} == GATE_KEYS, result
     assert len(result["gates"]) == 5 and all(g["pass"] for g in result["gates"]), result
     return result
+
+
+if __name__ == "__main__":
+    # Keep the request regression runnable without changing CTest registration
+    # or running a solver; importing this fixture retains its existing behavior.
+    import tempfile
+    import unittest
+    from unittest.mock import patch
+
+    class SolverInvocation(Exception):
+        """Stop at the external process boundary after inspecting real files."""
+
+    class SolveOutputFieldsTests(unittest.TestCase):
+        def setUp(self):
+            temporary = tempfile.TemporaryDirectory(prefix="field-request-")
+            self.addCleanup(temporary.cleanup)
+            self.root = Path(temporary.name)
+
+        def capture_request(self, name, **options):
+            work = self.root / name
+            captured = []
+
+            def intercept(command, **kwargs):
+                self.assertEqual(command, [
+                    "unused-solver", "--case", str(work / "case.json"),
+                    "--profile", str(work / "profile.json"), "--out", str(work / "solve"),
+                ])
+                self.assertEqual(kwargs, {
+                    "cwd": work, "capture_output": True, "text": True, "timeout": 600,
+                })
+                captured.append(json.loads((work / "case.json").read_text()))
+                self.assertEqual(json.loads((work / "profile.json").read_text()), {
+                    "schema": "chipcae.run_profile/1.0", "ranks": 1,
+                    "backend": "cpu", "gpus": 0,
+                })
+                raise SolverInvocation
+
+            with patch.object(subprocess, "run", side_effect=intercept):
+                with self.assertRaises(SolverInvocation):
+                    solve(self.root, name, "unused-solver", SOURCE, **options)
+            return captured[0]["output"]["fields"]
+
+        def test_omitted_fvm_requests_only_fem_fields(self):
+            self.assertEqual(self.capture_request("default"),
+                             ["T", "U", "layer_id", "material_id", "cell_kind", "elem_gid"])
+
+        def test_explicit_false_requests_only_fem_fields(self):
+            self.assertEqual(self.capture_request("fem", fvm=False),
+                             ["T", "U", "layer_id", "material_id", "cell_kind", "elem_gid"])
+
+        def test_fvm_requests_volume_once_at_the_end(self):
+            fields = self.capture_request("fvm", fvm=True)
+            self.assertEqual(fields,
+                             ["T", "U", "layer_id", "material_id", "cell_kind", "elem_gid",
+                              "volume"])
+            self.assertEqual(fields.count("volume"), 1)
+
+        def test_repeated_interleaved_calls_keep_independent_field_requests(self):
+            invocations = (
+                {}, {"fvm": False}, {"fvm": True}, {"fvm": True}, {},
+                {"fvm": False}, {"fvm": False}, {"fvm": True}, {},
+            )
+            for index, options in enumerate(invocations):
+                with self.subTest(index=index, options=options):
+                    fields = self.capture_request(f"call-{index}", **options)
+                    if options.get("fvm", False):
+                        self.assertEqual(fields, [
+                            "T", "U", "layer_id", "material_id", "cell_kind", "elem_gid",
+                            "volume",
+                        ])
+                        self.assertEqual(fields.count("volume"), 1)
+                    else:
+                        self.assertEqual(fields, [
+                            "T", "U", "layer_id", "material_id", "cell_kind", "elem_gid",
+                        ])
+
+    unittest.main(argv=[__file__], verbosity=2)
