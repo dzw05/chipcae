@@ -457,6 +457,7 @@ int assembly_error_exit(const std::string& message) {
 #include <jsoncons_ext/jsonschema/jsonschema.hpp>
 #ifdef CHIPCAE_ENABLE_ECAD
 #include "chipcae/geometry/ecad/ipc2581.hpp"
+#include "import_ecad_defects.hpp"
 #ifdef CHIPCAE_ASSEMBLY_ODBPP_AVAILABLE
 #include "chipcae/geometry/ecad/odbpp.hpp"
 #endif
@@ -584,6 +585,11 @@ int run_assembly(const ImportOptions& options) {
         if (!ecad::apply_material_map(
                 board.model, root / b["material_map"].as<std::string>(), &error))
             return fail("MATERIAL_MAPPING_MISSING", error);
+        {
+            auto bd = ecad_defects::board_defects(board.model.report,
+                                                  b["format"].as<std::string>() == "odbpp");
+            defects.insert(defects.end(), bd.begin(), bd.end());
+        }
         // Intermediate board JSON is removed before confirmation; the sidecar is retained.
         auto temp = options.output;
         temp += ".board.tmp";
