@@ -1,6 +1,7 @@
 #pragma once
 #include "chipcae/core/types.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -30,6 +31,19 @@ struct ResultsStep {
 };
 class ResultsWriter {
 public:
+    // Acceptance-test API stub; measurement is intentionally not implemented yet.
+    struct IoStats {
+        double write_step_seconds = 0;
+        double finalize_seconds = 0;
+        double last_write_step_seconds = 0;
+        // Whole-process peak RSS, not an incremental I/O allocation measurement.
+        std::uint64_t peak_rss_bytes = 0;
+        std::uint64_t bytes_written = 0;
+        int write_step_count = 0;
+    };
+    // The reference remains valid only for this writer's lifetime.
+    const IoStats& io_stats() const noexcept { return io_stats_; }
+
     // Collective on MPI_COMM_WORLD when MPI is initialized. Partition count is
     // fixed for the lifetime of the writer. stackup is a chipcae.stack 0.2 JSON.
     struct MeshSummary {
@@ -57,6 +71,7 @@ public:
     void finalize();
 
 private:
+    IoStats io_stats_;
     struct Step {
         int n;
         double time;
