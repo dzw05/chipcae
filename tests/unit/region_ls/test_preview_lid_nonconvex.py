@@ -163,8 +163,11 @@ class PreviewLidNonconvex(unittest.TestCase):
             self.assertEqual(summary[field], reference[field], f'{field}{context}')
 
     def test_notched_lid_volumes(self):
-        self.validated('N2', lid_stack(), 2)
-        self.reference_n4()
+        _, coarse, context = self.validated('N2', lid_stack(), 2)
+        _, fine, other = self.reference_n4()
+        for name in ('substrate', 'stiffener', 'lid'):
+            self.assertLessEqual(abs(coarse[name] - fine[name]) / fine[name],
+                                 1e-10, f'{name}: N2={coarse}, N4={fine}{context}{other}')
 
     def test_convex_lid_contrast(self):
         _, notched, context = self.reference_n4()
