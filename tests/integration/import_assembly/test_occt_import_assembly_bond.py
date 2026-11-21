@@ -1,6 +1,7 @@
 """CLI acceptance: attach bonds fill the gap and participate in thin-layer review."""
 from pathlib import Path
 import math
+import re
 import shutil
 import sys
 import tempfile
@@ -32,6 +33,44 @@ def overlaps(z0, z1, lower, upper):
     return (z0 < upper and z1 > lower
             and not math.isclose(z0, upper, rel_tol=4 * sys.float_info.epsilon, abs_tol=0)
             and not math.isclose(z1, lower, rel_tol=4 * sys.float_info.epsilon, abs_tol=0))
+
+
+def stepped_lid(source, destination):
+    """Reuse the generated box's STEP topology to add a translated upper box.
+
+    One product contains two touching solids: [1, 2] x [1, 2] at z=[0, .5]
+    and [1.5, 2.5] x [1, 2] at z=[.5, 1], all in millimetres.
+    """
+    text = source.read_text()
+    entities = {int(m[1]): m[2] for m in re.finditer(r'#(\d+)\s*=\s*(.*?);', text, re.S)}
+    solid, = [key for key, value in entities.items()
+              if value.startswith('MANIFOLD_SOLID_BREP(')]
+    # Copy only the solid and its dependencies; retain the product and units.
+    geometry = set()
+    pending = [solid]
+    while pending:
+        key = pending.pop()
+        if key not in geometry:
+            geometry.add(key)
+            pending.extend(int(ref) for ref in re.findall(r'#(\d+)', entities[key]))
+    first_new = max(entities) + 1
+    remap = {key: first_new + index for index, key in enumerate(sorted(geometry))}
+    upper = []
+    for key in sorted(geometry):
+        value = re.sub(r'#(\d+)', lambda m: f'#{remap[int(m[1])]}', entities[key])
+        point = re.fullmatch(r"CARTESIAN_POINT\('',\(([^)]+)\)\)", value)
+        if point:
+            coordinates = [float(c) for c in point[1].split(',')]
+            if len(coordinates) == 3:
+                coordinates[0] += .5
+                coordinates[2] += .5
+                value = "CARTESIAN_POINT('',(" + ','.join(map(str, coordinates)) + '))'
+        upper.append(f'#{remap[key]} = {value};')
+    text, count = re.subn(r'(ADVANCED_BREP_SHAPE_REPRESENTATION\([^;]*?)'
+                         + rf'#{solid}\)', rf'\g<1>#{solid},#{remap[solid]})', text)
+    assert count == 1, 'expected one generated box representation'
+    destination.write_text(text.replace('ENDSEC;\nEND-ISO',
+                                        '\n'.join(upper) + '\nENDSEC;\nEND-ISO'))
 
 
 class AssemblyBond(unittest.TestCase):
@@ -173,6 +212,38 @@ class AssemblyBond(unittest.TestCase):
         self.assert_bond(stack, -self.thickness, 0.0, face=0.0, origin=origin)
         self.close(max(z1 - origin for _, z1, layer in intervals(stack)
                        if has_body(layer, 'lid')), -self.thickness, scale=self.thickness)
+
+    def assert_stepped_bond(self, *, bottom):
+        stepped_lid(self.a.root / 'lid.step', self.a.root / 'stepped.step')
+        self.a.document['parts'][0]['step'] = 'stepped.step'
+        self.place(self.thickness, bottom=bottom)
+        # These box probes reach only the lower / upper slab's exclusive xy area.
+        # Their z intervals cover the bond without meeting a supported lid slab.
+        z = -.0005 if bottom else self.board_top
+        for name, dx in [('lower_probe', -.0006), ('upper_probe', .0011)]:
+            self.a.part(name, 'lid.step',
+                        placement={'frame': 'step', 'origin': [dx, 0, z]})
+        # merge_parts currently rejects distinct sections even for boxes, so the
+        # CLI publishes no stack. Its overlap diagnostics still expose the bond
+        # footprint: the whole-part bbox would intersect BOTH probes.
+        check(self.a.run('--accept-b-tier'), 7)
+        self.assertFalse(self.a.output.exists())
+        defects = self.a.import_report()['defects']
+        self.assertEqual([(d['defect_id'], d['tier'], d['reason'], d['details'])
+                          for d in defects if d['reason'] != 5],
+                         [('lid/cut_unsupported#1', 'C', 3,
+                           'cut_unsupported: multiple distinct cut sections')])
+        probe = 'upper_probe' if bottom else 'lower_probe'
+        self.assertEqual([(d['defect_id'], d['tier'], d['details'])
+                          for d in defects if d['reason'] == 5],
+                         [(probe + '#0/overlap/lid.bond#0#0', 'C',
+                           'overlap with lid.bond')])
+
+    def test_top_bond_uses_lowest_slab_footprint(self):
+        self.assert_stepped_bond(bottom=False)
+
+    def test_bottom_bond_uses_highest_slab_footprint(self):
+        self.assert_stepped_bond(bottom=True)
 
     def test_bottom_bond_roundoff_meets_attachment_face(self):
         # Original roundoff witness from the architect's ruling: adding T to
