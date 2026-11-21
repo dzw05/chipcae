@@ -1,6 +1,6 @@
 # F-1130 trace-map CLI acceptance
 
-This gate checks I1 1.1 C3/C4/C11 on the unchanged public synthetic
+This gate checks I1 铜层 1.2（2026-11-20） C3/C4/C11 on the unchanged public synthetic
 [board_4layer.xml](../ecad/data/board_4layer.xml): a 5 mm square board with
 local copper artwork on all four copper layers. T1 stripe validation is
 outside this gate. Feature author assignment remains CodeBuddy (`kimi-k3.1-pro`).
@@ -54,10 +54,10 @@ conductivity, physics, numerical or parallel completion checks force
 `verdict: fail`. Records must pass `tools.vv.check_result_data_class.check_file()`.
 Commands, stage wall times and records are printed before temporary cleanup.
 
-## I1 1.1 consumer expectations
+## I1 1.2 consumer expectations
 
 This gate consumes the per-cell coefficients specified by the I1 copper-base
-ruling 1.1 (2026-11-19, including its Q2 revision) and the producer brief
+ruling 1.2 (2026-11-20, retaining the Q2 reference) and the producer brief
 `solve-copper-trace-map` (M3). Producer implementation and public I/O contract
 changes belong to M3 and the I/O owner. This test card changes no public
 interface, manifest schema or VTKHDF version.
@@ -80,8 +80,8 @@ z membership; non-Patterned cells have zero copper and their material diagonal.
 The fixed FR4/Cu formula and numerical tolerances are specified below.
 
 Existing owner approvals of I1 1.1 are recorded in the project handoff. They
-approve the model used by this consumer; they do not establish a new public
-I/O contract in this card.
+are historical approvals of the earlier model. The current conductivity model
+follows I1 铜层 1.2（2026-11-20）; this card changes no public I/O contract.
 
 | Owner | Recorded approval (2026-11-19) | Evidence identifier / relevant condition |
 | --- | --- | --- |
@@ -104,7 +104,7 @@ and uses no Shapely.
 
 VTKHDF decoding respects `NumberOfPoints`, `NumberOfCells` and
 `NumberOfConnectivityIds`: offsets and connectivity restart in each partition.
-The [I1 1.1 consumer expectations](#i1-11-consumer-expectations) above describe
+The [I1 1.2 consumer expectations](#i1-12-consumer-expectations) above describe
 the two required coefficient fields and the recorded owner approvals.
 Cells are aligned by globally unique `elem_gid` when exported, with complete
 dense Morton column coverage and layer/z membership checked independently.
@@ -114,11 +114,12 @@ Dense coverage belongs to this uncut fixture. Vertices are
 aligned by rational coordinates; repeated boundary temperatures/displacements
 must agree before deduplication. Partition ordering cannot choose the column.
 
-For each copper cell, with independently calculated f:
+For each copper cell, with independently calculated f, I1 铜层 1.2（2026-11-20）
+uses parallel conductivity for all three components:
 
 ```text
 k_x = k_y = f*390 + (1-f)*0.3
-k_z = 1 / (f/390 + (1-f)/0.3)
+k_z = f*390 + (1-f)*0.3
 ```
 
 The matrix conductivity is fixed at 0.3 W/(m K), independent of the imported
@@ -200,14 +201,16 @@ SciPy is optional.
 cmake -S . -B "$build" -DCMAKE_BUILD_TYPE=Release \
   -DCHIPCAE_BUILD_TESTS=ON -DCHIPCAE_ENABLE_ECAD=ON \
   -DCHIPCAE_ENABLE_JSONCONS=ON -DCHIPCAE_ENABLE_MFEM=ON \
-  -DCHIPCAE_ENABLE_MPI=ON -DCHIPCAE_ENABLE_HDF5=ON
+  -DCHIPCAE_ENABLE_PETSC=ON -DCHIPCAE_ENABLE_MPI=ON -DCHIPCAE_ENABLE_HDF5=ON
 cmake --build "$build" -j2
 ctest --test-dir "$build" -V \
   -R '^(f1130_uncut_cli_records|f1130_uncut_cli_e2e|chain_ipc_uncut_chain)$'
-ctest --test-dir "$build" --output-on-failure -j2
 python3 -m unittest discover -s tests/integration/f1130_uncut_cli \
   -p test_uncut_cli_e2e.py -v
 ```
+
+During iteration, run only the related or named acceptance tests above. The
+pipeline runs full CTest once after local work, before the DONE gate.
 
 CMake supplies executable locations when ECAD, MFEM, MPI and HDF5 are enabled.
 Missing executable configuration returns the existing skip code 77. With
@@ -221,7 +224,7 @@ timeouts. A missing MPI launcher fails, and no retired fixture gate suppresses
 configured acceptance.
 
 The records discovery path includes 13 assertion/verdict tests and
-16 reference tests: exact clipping, signed holes and empty copper, binary
+17 reference tests: exact clipping, signed holes and empty copper, binary
 validation and exact fixture areas, Q2 partition/derivative sums (1e-14),
 symmetric assembly (relative 1e-12), analytic single-column and uniform
 multilayer solutions (1e-8 K), forced no-SciPy assembly/solve, hidden-DOF
@@ -230,162 +233,108 @@ malformed topology and unsupported outlines, optional gids with reordered/empty
 partitions, and coverage/membership defects without gids. Mutation checks reject
 duplicate or incorrect gids, missing fields/layers, wrong layer-name case, invalid
 fractions, all-zero In1 copper, wrong conductivity and 1e-6 K temperature errors.
+A series-kz input mutation overwrites only `conductivity_diag[:,2]` with
+`1/(phi/390+(1-phi)/0.3)`, using independent reference fractions. The reference
+keeps its parallel formula throughout. Mixed cells must exist; input fractions
+and x/y coefficients remain exactly unchanged, and at least one mixed cell
+must exceed relative 1e-14. Real C4 must raise `M3 conductivity mismatch` after
+C3 completes, and the validated fail record must have conductivity as its only
+incomplete check. Other flags are pre-completed solely for this record unit
+check. Restoring the original input must pass real C3/C4/physics and write a
+validated pass record.
+The four-layer B.Cu reference also checks nonempty zero/full-fraction selections
+and the exact float64 endpoint representations of 0.3 and 390. Core checks and
+given-coefficient Q2 self-checks retain their coefficients and tolerances; the
+multilayer series resistance describes layers stacked through thickness.
 
-## Verification (2026-11-20)
+## Verification (2026-11-21)
 
-实测 source: main `4a871e3` was merged in `708c8b9`, followed by dependency
-handling commit `867cb59`. Main advanced during verification, so a second
-`git merge origin/main` brought in `e6b72388cf2930e5f403f810f27a491a33fc6c42`
-in `7f791cc`. Commit `2cc8184` then moved the script self-test log to stdout
-so the missing-h5py stderr contains exactly the required line. The final
-verification source is `2cc8184`; all acceptance checks were rerun. History
-retains `817dbe1`; no rebase or revert was performed.
-The PR diff against main contains exactly the four permitted integration files,
-with no `.github/` changes. Main already installs h5py through `ec075e1` (#218).
-第 2 轮预审意见已裁定，见 rulings/pr200.md 第 2 轮。
+实测 main baseline: `c4e9eaeac95c7889cec1f9fa3c1ecc30fedb8d75`, containing
+#200 (`8ad1211`) and the parallel-formula change #236 (`c4e9eae`).
+Tested source: `f21f7a4b4730b54df150702d77833465cdaac297` (including the
+input-only series-kz mutation and restored parallel control); this delivery
+only updates this README. Local `origin/main` was observed at
+`e52baacb6f43d0c4c80bb5840f2c7dab3161ff88` during this pass. It was neither
+merged nor tested: the actual implementation baseline above is retained.
+The reference already implements parallel conductivity in all three directions,
+so no product or reference formula change was necessary.
 
-实测 the existing Release build was rebuilt successfully with tests, ECAD,
-JSONCONS, MFEM, MPI and HDF5 enabled, optional Kokkos disabled, and Python 3.12.
-The MPI launcher was available on PATH. NumPy 2.5.5 and h5py 3.16.0 were installed.
-No numerical threshold or solver input tolerance changed in this fix.
+The Release configuration enables tests, ECAD, JSONCONS, MFEM, PETSc, MPI and
+HDF5. Installed MFEM/PETSc, MPI-enabled HDF5 and JSONCONS packages were used;
+MPI launcher availability and NumPy/h5py imports were checked. PETSc discovery
+uses the installed MFEM PETSc finder and its two helper modules in an external
+module directory, avoiding MFEM's conflicting HDF5 finder. BLAS/LAPACK library
+search paths were supplied through the environment. CMake emitted runtime
+search-path warnings about competing `libgomp.so.1` locations; configuration,
+build and the three backend tests succeeded. These are environment
+adjustments, with no CMake or dependency source changes.
 
-The rs* CI failures came from old byte-for-byte fixtures comparing LAPACK
-rounding bits: `rel_diff=0.2500000000000008` versus the captured
-`0.2500000000000019`. Installing h5py exposed tests previously skipped in CI.
-The branch lacked main's `ec075e1` fixture fix, `baseline_for_numpy()`, which
-independently recomputes those last bits while retaining analytic checks.
-Historical failing run 44648224633 and passing main run 44666026940 contain
-exactly the same ten affected cases. 实测 after merging main, the isolated
-`rs*` selection was **21/21 Passed**, with no skips. The full-run stop is
-reported below. No baseline was regenerated or directly edited.
-The merged head's CI still requires a push and a fresh run.
+实测 targeted CTest: **3/3 passed, zero skips, 7.43 s**. The single e2e
+entry point performs both ranks=1 and ranks=2 solve/readback attempts; no
+second invocation with different flags is needed.
 
-实测 direct unittest discovery: **29 tests, OK, zero skips**. 实测 targeted
-CTest lists exactly these three registrations:
+实测 direct unittest discovery: **30 tests, OK, zero skips, 0.649 s**. The series-kz
+mutation has maximum componentwise relative difference `0.99692780519449054`,
+raises `M3 conductivity mismatch`, completes cell fractions and leaves only
+conductivity incomplete in its validated `verdict: fail` record. This is a
+caught negative assertion; the regression tests pass immediately on the
+already-parallel implementation. After restoring the original input, the same
+export passes C3/C4/Q2 physics and produces a validated `verdict: pass` record.
+No missing-feature RED is claimed.
 
-```text
-Test #212: f1130_uncut_cli_e2e
-Test #213: f1130_uncut_cli_records
-Test #243: chain_ipc_uncut_chain
-Total Tests: 3
-```
+实测 product measurements below are identical for ranks=1 and ranks=2. Both
+`chipcae.vv_result/0.2` records validate and have `verdict: pass`; all nine
+completion flags (`import`, `preview`, `solve_readback`, `inputs_unchanged`,
+`cell_fractions`, `conductivity`, `physics`, `numerical`, `parallel`) are true.
+C3 fractions/spatial variation/areas, finite C4 components and relative 1e-14,
+C11 1e-8 K, energy 1e-9 and the stated Wiener interval assertions all execute.
+Aligned fractions, conductivity, temperatures, displacement and QoIs pass the
+existing MPI comparison at 1e-8. Shared inputs remain unchanged; preview and
+both solves have 80 hexes and zero cut cells.
 
-实测 targeted CTest at `2cc8184`: **3/3 Passed**, no skips, **8.34 s**.
-Four-layer preview and each solve produced 80 uncut hexes. Both ranks completed solve/readback, preserved
-shared input bytes, and produced validated records with `verdict: pass`.
-Import, fractions, conductivity, physics, numerical and parallel completion
-checks were all true. QoI relative differences and readback relative errors
-were zero.
-
-实测 product measurements (identical for ranks=1 and ranks=2):
-
-| Measurement | Value |
+| Measurement (实测, both ranks) | Value |
 | --- | --- |
-| `max_temperature_error_K` | 5.348965714802034e-11 K |
-| `energy_relative_error` | 5.588270495424436e-15 |
-| `Q_top_W` | 0.6357447589033838 W |
-| `Q_bot_W` | 0.6357447589033802 W |
-| `R_lo_K_W` | 75.31414010424379 K/W |
-| `R_hi_K_W` | 78.93330782246156 K/W |
-| Wiener heat-flow interval | [0.6334461506726798, 0.6638859572823113] W |
+| `max_temperature_error_K` | 3.4083313948940486e-10 K |
+| `energy_relative_error` | 4.360084138426352e-12 |
+| `Q_top_W` | 0.6630653593688077 W |
+| `Q_bot_W` | 0.6630653593659167 W |
+| `R_lo_K_W` | 66.9897035386662 K/W |
+| `R_hi_K_W` | 76.13632975714098 K/W |
+| Wiener heat-flow interval, before epsilon | [0.6567167101367977, 0.7463833598120073] W |
 | F.Cu copper area | 0.307835 mm² |
 | In1.Cu copper area | 2.25 mm² |
 | In2.Cu copper area | 3.0000000000000004 mm² |
 | B.Cu copper area | 6.999999999999999 mm² |
-
-The maximum area relative error was 1.480297366166875e-16. Measurements agree
-with the architect's first-round probe; C11 remains 1e-8 K, readback rtol
-1e-12, MPI rtol 1e-8, K1 area rtol 1e-12, and solver.linear.rtol 1e-12.
+| Maximum copper-area relative error | 1.4802973661668751e-16 |
+| `warpage_pv` / independent readback | 7.270602005916752e-06 m |
+| `U_mag_max` | 7.1136040162876474e-06 m |
+| `T_max` | 323.333553639902 K |
+| Readback relative error | 0.0 |
+| Parallel QoI relative errors (all three) | 0.0 |
 
 实测 independent, non-gating Q2 diagnostics (K):
 
 ```text
-trace_map_vs_layer_average_dT_max=1.4087819663407117
-trace_map_nx_double_dT_max=0.20071960596669669
+trace_map_vs_layer_average_dT_max=5.0388880325680248
+trace_map_nx_double_dT_max=0.59059340053721598
 ```
 
-实测 two-layer chain: 24 uncut cells, `warpage_pv=4.385282668532796e-6` m,
-`T_max=340.53308548486064` K; import, per-cell reference checks and readback
-passed without calling the layer-average conversion tool.
+Full Release CTest: **未执行 in this pass**, reserved for the pipeline before
+the DONE gate. Prior full-suite logs are historical, not verification of the
+tested source above. No baseline comparison was run and no full-suite-green
+claim is made.
 
-实测 dependency checks used an isolated venv containing NumPy and no h5py:
-both entry-point `main()` functions returned 77 with empty stdout and exactly
-`SKIP: h5py missing (pending infra-ci-h5py)` plus a newline on stderr.
-Records ran 29 cases: 18 passed, 11 skipped with exactly
-`h5py missing (pending infra-ci-h5py)`. Injecting RuntimeError from h5py
-made both entry points and records fail; injecting missing NumPy likewise
-failed, with no NumPy skips. Before the fix, the entry points skipped missing
-NumPy, and missing h5py produced the wrong messages or record errors. Real
-script-entry probes also checked
-all six dependency scenarios: missing h5py exits 77 with exactly the one-line
-stderr; h5py RuntimeError and missing NumPy exit 1. The e2e script sends its
-unittest summary to stdout; discovery keeps the standard unittest stream.
+Complete evidence accompanies the local PR draft: `v-int-f1130-z-parallel-ref-`
+files with suffixes `input-delivery-configure.log`, `input-delivery-build.log`,
+`input-delivery-unittest.log`, `input-delivery-targeted.log` (the exact solver
+and readback commands and both complete rank records),
+`input-delivery-ranks1-result.json`, `input-delivery-ranks2-result.json`, and
+`input-delivery-rank-validation.log` (independent record validation). The
+records identify the tested SHA above. The README contains only current
+measurements; #200 old-versus-new differences are in the local PR draft.
 
-Only missing h5py qualifies for this dependency skip. Acceptance requires the
-backend-complete, h5py-installed local three-test run above. A CI skip never
-counts as F-1130 acceptance: main's CI installs h5py but leaves ECAD/MFEM off,
-so e2e and chain still skip for missing backends. Records may show CTest Passed
-with unittest skips; that is not product acceptance. CI for this unpushed head
-is 未执行; merge still requires green Build and test and ci-ok.
-
-实测 full Release CTest at `2cc8184`: exit **8**, **429 registrations =
-391 passed + 10 failed + 18 skipped + 10 disabled**, **1730.22 s**.
-All three F-1130/chain tests passed again in this full run. The existing
-feature-dependent skips and disabled registrations do not count as acceptance.
-Every failure was compared with a separately built main snapshot `e6b7238`,
-using the same Release, ECAD/MFEM/MPI/HDF5 configuration and dependencies:
-
-| Failed test | Branch elapsed (s) / observed failure | main e6b7238 control | Owner |
-| --- | --- | --- | --- |
-| `rspart_types` | 164.53; Timeout, no assertion/output; existing limit 60 s | Passed, 5.29 s | M5/io |
-| `convex_pieces` | 163.55; Timeout; existing limit 60 s | Passed, 3.06 s | M2 mesh |
-| `mesh_digest_mpi` | 3.12; JSONDecodeError: Expecting value: line 1 column 1 (char 0) | Passed, 4.73 s | M2 preview/mesh |
-| `ipc_zip_equals_xml` | 0.04; material mat.fr4 rejected by ID pattern | Failed, 0.03 s | M1 ECAD |
-| `solve_fem_thermal_bow` | 8.71; C-0/A cross-run U residual 9.5759468232801005e-13 > 2.5499999995493557e-15 | Failed, 8.25 s | M3 solver |
-| `field_compare_outline_bbox` | 1.65; plain-direct status 14: invalid output field | Failed, 1.62 s | INT/M3 |
-| `field_compare_ranks` | 1.64; np1 status 14: invalid output field | Failed, 1.60 s | INT/M3 |
-| `stack_writer_outline_polyset` | 1.57; exit 11: duplicate material id | Failed, 1.54 s | M1 import |
-| `import_assembly_cf_chain` | 1.67; exit 11: duplicate material id | Failed, 1.65 s | M1 import |
-| `solve_column_gmg_fcbga_scaling` | 119.53; scaling-fine-gmg solver exit -9 | Failed, 110.04 s | M3 solver |
-
-**Stop condition hit:** the isolated rs* selection passed 21/21, but
-`rspart_types` timed out in the full run. Its existing timeout is 60 s; CTest
-reported 164.53 s, with no assertion/output. The simultaneous `convex_pieces`
-timeout reported 163.55 s against its existing 60 s limit. Those reported
-values are retained without attributing a cause. Main passed both in one
-control run (5.37 s total); it also passed `mesh_digest_mpi` (4.75 s total).
-These are observations from different run contexts, not proof of a code cause.
-The rs* red triggers the brief's mandatory M5/io handoff. Code changes stopped;
-no failing branch case was rerun to obtain green and no timeout, baseline or
-out-of-scope product/test change was authored. Full-suite all-green status was
-**not achieved**.
-
-The ten original CI byte-comparison failures all passed in this final full
-run; no `rel_diff` rounding assertion recurred. The new `rspart_types` timeout
-is a separate unresolved failure, so the rs* full-run acceptance gate remains
-unmet despite the successful isolated selection.
-
-实测 full-run history (all registrations accounted for, including skips and
-existing disabled tests):
-
-| Source | Passed | Failed | Skipped | Disabled | CTest elapsed (s) |
-| --- | --- | --- | --- | --- | --- |
-| 867cb59 | 392 | 9 | 18 | 10 | 1472.68 |
-| 7f791cc | 392 | 9 | 18 | 10 | 1423.07 |
-| 2cc8184 | 391 | 10 | 18 | 10 | 1730.22 |
-
-The first full run additionally failed `solve_ghost_scan` (300.02 s timeout)
-and `cutbim_cut_bimetal` (solver exit -9); main `4a871e3` controls passed
-(227.97 s and 250.10 s). Both tests passed in the later full runs. The second
-full run additionally failed `k1_preview` (60.03 s timeout) and
-`k1_preview_mpi_surface` (`jsoncons::ser_error`, JSON syntax_error at line 1
-and column 1); main `e6b7238` controls passed (35.38 s and 43.60 s total).
-Both preview tests passed in the final full run. All preceding failures remain
-reported; none was removed by relaxing a check.
-
-After the stop condition, `origin/main` was observed at `d26326c`. It was not
-merged or tested further because code work had stopped. The measured branch
-and control baseline remains the explicitly named `e6b7238` snapshot.
-
+Remote `ci-ok`: **未执行** (no push); green `ci-ok` remains a merge requirement.
+Missing-backend and missing-h5py skips do not establish acceptance. Dependency
+failure-injection scenarios from #200 were not repeated in this pass: 未执行.
 This gate checks implementation of the agreed trace-map model; explicit finely
 resolved copper validation remains outside this gate.

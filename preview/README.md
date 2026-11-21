@@ -18,15 +18,36 @@ chipcae-preview input.stack.json --nx 2 --ny 2 --levels 0 -o output.vtkhdf
 must appear together and be positive integers. `--levels` accepts a nonnegative
 integer; 0 retains automatic hierarchy selection. Defaults come from `GridOptions`, except `--max-ratio R` defaults to 10 for preview (finite R >= 1): the K1
 FCBGA example has a 10:1 interface cell-height jump and fails the library
-default of 2. The library default and stack layer counts remain unchanged.
+default of 2. Preview accepts ratio 1; solve requires a ratio greater than 1.
+
+`--cell-budget B` accepts an integer in [1, INT_MAX] and sets the grid cell budget
+(default 50000). `--min-elems-per-layer M` accepts the same integer range and
+applies `max(layer.n_elem_min, M)` to every layer. Omitting it preserves the stack's
+layer counts. Preview defaults differ from solve: preview uses ratio 10 and the
+stack layer counts, while solve defaults to ratio 2 and a layer minimum of 2.
+To reproduce a solve mesh, supply its case values explicitly. For a case that
+omits all three controls, use the solve defaults:
+
+```sh
+chipcae-preview input.stack.json --nx 4 --ny 2 --levels 1 \
+  --max-ratio 2 --min-elems-per-layer 2 --cell-budget 50000 -o output.vtkhdf
+```
+
+Replace these defaults with any values set in the case's mesh object, and use
+matching stack and integer grid settings as well. Budget rejection uses the
+existing mesh error mapping; the acceptance cases exit 14 with a `cell_budget: `
+message and produce neither grid nor EB output.
+
 Unknown options, duplicate options, malformed numbers, and extra input paths fail.
 Every stdout line, including help, version, success, and errors, is a JSON object
 with `stage`, numeric `progress` in [0,1], and string `message`. Diagnostics and
 stack warnings go to stderr. Progress and success events come only from MPI rank 0;
 errors may come from any rank. The success `message` is itself valid JSON with
 `grid`, `max_ratio`, `L` (effective finest level, zero based), and `n0` (effective
-coarse grid dimensions, `AxB`). Use the same ratio in preview and solve to reproduce
-the mesh. Mesh failures use the shared solve error mapping: unsupported cuts
+coarse grid dimensions, `AxB`). The success object also reports the effective
+`cell_budget` and `min_elems_per_layer` (the supplied integer, or JSON `null` when
+omitted), both in `message` and as top-level keys. Mesh failures use the shared
+solve error mapping: unsupported cuts
 exit 13, invalid outline input exits 14. Other failures use `INTERNAL` (exit 1).
 
 `--polyset file` overrides the polygon data used for meshing. Stack loading still
