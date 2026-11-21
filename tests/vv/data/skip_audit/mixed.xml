@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="synthetic_first">
+    <testcase name="passed_case" status="run" time="1" />
+    <testcase name="failed_case" status="run" time="1"><failure message="synthetic failure" /></testcase>
+    <testcase name="required_case" status="notrun" time="0.125"><skipped message="synthetic MPI unavailable" /></testcase>
+  </testsuite>
+  <testsuite name="synthetic_second">
+    <testcase name="notrun_case" status="notrun" time="0" />
+    <testcase name="disabled_case" status="disabled" time="0"><skipped message="Disabled" /></testcase>
+  </testsuite>
+</testsuites>

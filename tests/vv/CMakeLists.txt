@@ -15,3 +15,8 @@ add_test(NAME vv_result_schema
 set_tests_properties(vv_result_schema
     PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} TIMEOUT 60)
 add_subdirectory(calculix_demo_gate)
+
+add_test(NAME vv_ctest_skip_audit_unit
+    COMMAND ${Python3_EXECUTABLE} -m unittest tests.vv.test_ctest_skip_audit -v)
+set_tests_properties(vv_ctest_skip_audit_unit
+    PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} TIMEOUT 60 LABELS vv)
