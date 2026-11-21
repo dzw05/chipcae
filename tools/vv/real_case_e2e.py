@@ -30,6 +30,7 @@ SOURCE_ROOT = Path(__file__).resolve().parents[2]
 QOI_KEYS = ("warpage_pv", "T_max", "U_mag_max")
 THERMAL_ONLY = "not solved: fvm thermal-only stage"
 WARPAGE_METHOD = "FVM top-face centroids; least-squares plane removal"
+W5_FEM_RTOL = 0.05
 TEMPERATURE_ATOL = 1e-8
 PARALLEL_RTOL = 1e-8
 DEFAULT_LOADS = [
@@ -805,7 +806,7 @@ def _missing(record, *, pending_checks=()):
     null_reasons = {
         "C6": ("bounds 待定",),
         "W3": ("tolerance 待定",),
-        "W5": ("comparison undefined", "comparison inapplicable", "real result diagnostic only"),
+        "W5": ("comparison inapplicable", "real result diagnostic only"),
     }
     inactive = {"status_detail"}
     if record.get("kind") != "assembly":
@@ -1171,6 +1172,65 @@ def _resource_retry(record, entry, folder, inputs, case, exes, mpi, timeout_s, s
     record["notes"].append("real solve retried once with halved nx/ny; original resource failure retained")
 
 
+def _w5_direction(run_dir, manifest):
+    """Center minus four corners on block tops; stable hex/cut and node order."""
+    import h5py
+    import numpy as np
+    xy, uz = [], []
+    with h5py.File(_vtk_path(run_dir, manifest), "r") as output:
+        for name in ("hex", "cut"):
+            block = output["VTKHDF/" + name]
+            points = block["Points"][...]
+            if not points.size:
+                continue
+            top = points[:, 2] == points[:, 2].max()
+            xy.append(points[top, :2])
+            uz.append(block["PointData/U"][...][top, 2])
+    if not xy:
+        return math.nan, 0
+    xy, uz = np.concatenate(xy), np.concatenate(uz)
+    lo, hi = xy.min(axis=0), xy.max(axis=0)
+    targets = [(lo + hi) / 2, lo, [lo[0], hi[1]], [hi[0], lo[1]], hi]
+    # argmin keeps the first candidate in a tie. No interpolation or PV recomputation.
+    values = [uz[np.argmin(np.sum((xy - target) ** 2, axis=1))] for target in targets]
+    delta = float(values[0] - np.mean(values[1:]))
+    return delta, int(np.sign(delta)) if math.isfinite(delta) else 0
+
+
+def _w5_comparison(primary, reference):
+    """Use manifest PV and primary method, with positivity and direction hard gates."""
+    fvm_manifest, fem_manifest = _manifest(primary), _manifest(reference)
+    fvm_qoi = next(q for q in fvm_manifest["summary"] if q["name"] == "warpage_pv")
+    fem = next(q["value"] for q in fem_manifest["summary"] if q["name"] == "warpage_pv")
+    fvm, method = fvm_qoi["value"], fvm_qoi.get("method")
+    diagnostic = dict(fvm_warpage_pv=fvm, fem_warpage_pv=fem, method=method,
+                      relative_difference=None, status="FAIL")
+    invalid = [f"{side}_pv={pv!r}" for side, pv in (("fvm", fvm), ("fem", fem))
+               if not (math.isfinite(pv) and pv > 0)]
+    if invalid:
+        diagnostic["reason"] = "W5: finite positive manifest PV required: " + ", ".join(invalid)
+        return False, diagnostic
+    relative = abs(fvm - fem) / fem
+    diagnostic["relative_difference"] = relative
+    fvm_delta, fvm_sign = _w5_direction(primary, fvm_manifest)
+    fem_delta, fem_sign = _w5_direction(reference, fem_manifest)
+    diagnostic.update(fvm_direction_delta=fvm_delta, fem_direction_delta=fem_delta,
+                      fvm_direction_sign=fvm_sign, fem_direction_sign=fem_sign)
+    if not (fvm_sign and fem_sign and fvm_sign == fem_sign):
+        diagnostic["reason"] = ("W5: 方向不可判 or opposite directions: "
+                                f"fvm_delta={fvm_delta!r}, fem_delta={fem_delta!r}")
+        return False, diagnostic
+    if method in (WARPAGE_METHOD, "fvm_cell_centers_lsq"):
+        mesh = fvm_manifest.get("mesh", {})
+        diagnostic.update(status="PROVISIONAL", nx=mesh.get("nx0"), ny=mesh.get("ny0"),
+                          nz=mesh.get("nz"), min_elems_per_layer=mesh.get("min_elems_per_layer"),
+                          mesh_source="primary manifest mesh.nx0/ny0")
+        return "PROVISIONAL", diagnostic
+    passed = relative <= W5_FEM_RTOL
+    diagnostic["status"] = "PASS" if passed else "FAIL"
+    return passed, diagnostic
+
+
 def _auxiliary(record, folder, inputs, case, exes, mpi, timeout_s, source_root, primary):
     if record["kind"] == "thermal" or "W1" not in record["checks"]:
         return
@@ -1213,15 +1273,31 @@ def _auxiliary(record, folder, inputs, case, exes, mpi, timeout_s, source_root, 
         elif name == "W4":
             record["checks"][name] = _check_w4(out, events, variant["physics"][1]["T_ref"])
         else:
-            fem = _summary(out)["warpage_pv"]["value"]
-            fvm = _summary(primary)["warpage_pv"]["value"]
-            record["diagnostic_fem_comparison"] = dict(fvm_warpage_pv=fvm, fem_warpage_pv=fem,
-                                                       relative_difference=abs(fvm - fem) / fem if fem else None)
-            if fem == 0:
-                record["checks"][name] = None
-                record["notes"].append("W5: zero FEM warpage denominator; comparison undefined")
-            else:
-                record["checks"][name] = bool(_finite([fem, fvm]) and fem > 0 and abs(fvm - fem) / fem <= .05)
+            result, diagnostic = _w5_comparison(primary, out)
+            record["checks"][name] = result
+            record["diagnostic_fem_comparison"] = diagnostic
+            if "reason" in diagnostic:
+                record["notes"].append(diagnostic["reason"])
+            if result == "PROVISIONAL":
+                if diagnostic["nx"] is None or diagnostic["ny"] is None:
+                    diagnostic.update(nx=case["mesh"]["nx"], ny=case["mesh"]["ny"],
+                                      mesh_source="case mesh.nx/ny (manifest nx0/ny0 unavailable)")
+                if diagnostic["min_elems_per_layer"] is None:
+                    diagnostic["min_elems_per_layer"] = case["mesh"].get("min_elems_per_layer")
+                message = (f"W5 PROVISIONAL: fvm_pv={diagnostic['fvm_warpage_pv']!r}, "
+                           f"fem_pv={diagnostic['fem_warpage_pv']!r}, "
+                           f"relative_difference={diagnostic['relative_difference']!r}, "
+                           f"nx={diagnostic['nx']}, ny={diagnostic['ny']}, "
+                           f"nz={diagnostic['nz']}, "
+                           f"min_elems_per_layer={diagnostic['min_elems_per_layer']}, "
+                           f"mesh_source={diagnostic['mesh_source']}, method={diagnostic['method']!r}")
+                follow_up = ("已知红：板级翘曲精度缺口，转 solve-elastic-accuracy；"
+                             "退出条件：FVM nx≥64、每层≥2 胞，对 FEM 两级加密 Richardson 外推参考值，"
+                             "相对差≤0.05")
+                diagnostic["follow_up"] = follow_up
+                record["notes"].extend((message, follow_up))
+                print(message)
+                print(follow_up)
         if record["checks"][name] is False:
             record["notes"].append(name + " auxiliary assertion failed")
 
