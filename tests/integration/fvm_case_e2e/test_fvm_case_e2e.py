@@ -46,6 +46,20 @@ def log_record(text, level=1, rank=0, seq=1):
 
 
 class DecoderAcceptance(unittest.TestCase):
+    def test_every_mechanical_residual_point_requires_solver_and_field(self):
+        good = dict(solver='fvm.solid', field='U', iteration=1, norm=1e-9)
+        thermal = dict(solver='fvm.conduction', field='T', iteration=1, norm=1e-10)
+        events = [dict(kind=18, points=[thermal, good])]
+        residuals = u.mechanical_residuals(events)
+        self.assertEqual(len(residuals), 1)
+        self.assertIs(residuals[0], good)
+        for change in (dict(solver='fem.solid'), dict(solver=''), dict(field='T'),
+                       dict(norm=float('nan')), dict(norm=float('inf')), dict(norm=-1)):
+            with self.subTest(change=change), self.assertRaises(AssertionError):
+                u.mechanical_residuals([dict(kind=18, points=[good, dict(good, **change)])])
+        with self.assertRaises(AssertionError):
+            u.mechanical_residuals([dict(kind=18, points=[thermal])])
+
     def test_elastic_log_requires_one_rank_zero_level_one_strict_finite_record(self):
         valid = 'FVM_ELASTIC {"iterations":2,"residual":1e-18,"warpage_pv":0.012345678901234567,"U_mag_max":0.02}'
         decoded = u.elastic(u.decode_events(log_record(valid)))
@@ -423,21 +437,148 @@ class CaseAcceptance(unittest.TestCase):
     def test_solid_only_nonconvergence_exits_one_with_residual_and_no_output(self):
         case = u.bimaterial_strip(self.root)
         case['solver']['linear'].update(max_iter=1, rtol=1e-14)
-        u.probe(self.root, case)
-        out, result = u.solve(self.root, case, 'solid-nonconverged', expected=None)
-        self.assertEqual(result.returncode, 1, result.stderr)
-        events = u.decode_events((out / 'events.bin').read_bytes())
-        residuals = [p for e in events if e['kind'] == 18 for p in e['points']
-                     if p['solver'] == 'fvm.solid' and p['field'] == 'U']
-        self.assertTrue(residuals, 'mechanics failure must publish measured residuals')
-        self.assertTrue(all(math.isfinite(p['norm']) and p['norm'] >= 0 for p in residuals))
-        self.assertFalse(any(e['kind'] == 20 and e['text'].startswith(u.ELASTIC_PREFIX)
-                             for e in events), 'failed mechanics must not publish success diagnostics')
-        self.assertFalse(any(e['kind'] == 22 for e in events))
-        self.assertFalse((out / 'out/step-0.vtkhdf').exists())
-        if (out / 'manifest.json').exists():
-            self.assertEqual(u.read_json(out / 'manifest.json')['steps'], [])
-        self.assertEqual((events[-1]['kind'], events[-1]['exit_code']), (19, 1))
+        for ranks in (1, 2):
+            with self.subTest(ranks=ranks):
+                u.probe(self.root, case, ranks=ranks)
+                out, result = u.solve(self.root, case, f'solid-nonconverged{ranks}', ranks,
+                                      expected=None)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                events = u.decode_events((out / 'events.bin').read_bytes())
+                # Check publication independently of the missing residual API.
+                u.no_mechanical_publication(out, events)
+                self.assertEqual((events[-1]['kind'], events[-1]['exit_code']), (19, 1))
+                residuals = u.mechanical_residuals(events)
+                self.assertEqual(residuals[-1]['iteration'], 1)
+                self.assertGreater(residuals[-1]['norm'], 0,
+                                   'max_iter=1 failure needs an actual nonzero measured residual')
+
+    def test_thermal_success_then_mechanical_nonconvergence_keeps_measured_residuals(self):
+        case = u.prescribed_temperature_strip(self.root)
+        # Pin every thermal CV: the thermal solve completes within one iteration
+        # while the mismatched CTEs still need a mechanical solve.
+        case['solver']['linear'].update(max_iter=1, rtol=1e-14)
+        for ranks in (1, 2):
+            with self.subTest(ranks=ranks):
+                u.probe(self.root, case, ranks=ranks)
+                out, result = u.solve(self.root, case, f'coupled-nonconverged{ranks}', ranks,
+                                      expected=None)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                events = u.decode_events((out / 'events.bin').read_bytes())
+                u.energy(events)  # Prove this failure occurs after thermal success.
+                thermal = [p for e in events if e['kind'] == 18 for p in e['points']
+                           if (p['solver'], p['field']) == ('fvm.conduction', 'T')]
+                self.assertTrue(thermal, 'fixture must reach successful thermal publication')
+                self.assertTrue(all(math.isfinite(p['norm']) for p in thermal))
+                u.no_mechanical_publication(out, events)
+                self.assertEqual((events[-1]['kind'], events[-1]['exit_code']), (19, 1))
+                residuals = u.mechanical_residuals(events)
+                self.assertEqual(residuals[-1]['iteration'], 1)
+                self.assertGreater(residuals[-1]['norm'], 0)
+
+    @unittest.skipUnless(hasattr(os, 'mkfifo'), 'deterministic checkpoint fixture requires POSIX FIFO')
+    def test_thermal_success_stop_checkpoints_precede_mechanical_success_and_failure(self):
+        case = u.prescribed_temperature_strip(self.root)
+        stop = json.dumps(dict(cmd_seq='1', action='STOP')) + '\n'
+        for ranks in (1, 2):
+            for phase in ('before-mechanics', 'during-success', 'during-failure'):
+                with self.subTest(ranks=ranks, phase=phase):
+                    candidate = deepcopy(case)
+                    if phase == 'during-failure':
+                        candidate['solver']['linear'].update(max_iter=1, rtol=1e-14)
+                    name = f'coupled-stop-{phase}{ranks}'
+                    if phase == 'before-mechanics':
+                        out, _ = u.solve(self.root, candidate, name, ranks, control=stop*2)
+                        expected_acks = [(1, 1)]
+                    else:
+                        out, _ = u.solve_with_late_stop(self.root, candidate, name, ranks)
+                        expected_acks = [(1, 3), (2, 1)]
+                    events = u.decode_events((out / 'events.bin').read_bytes())
+                    u.energy(events)  # The STOP must be handled after a real thermal success.
+                    self.assertEqual([(e['cmd_seq'], e['status']) for e in events if e['kind'] == 17],
+                                     expected_acks)
+                    self.assertEqual((events[-1]['kind'], events[-1]['exit_code'], events[-1]['reason']),
+                                     (19, 0, 'user_stop'))
+                    u.no_mechanical_publication(out, events)
+                    self.assertFalse(any(e['kind'] == 18 and any(p['field'] == 'U' for p in e['points'])
+                                         for e in events), 'STOP wins before mechanical publication')
+
+    def test_fixed_support_maps_all_six_exterior_faces(self):
+        import numpy as np
+        # A translated rectangular outline distinguishes all four lateral sides.
+        self.stack['outline']['box'] = [-.3, .4, .7, .9]
+        u.write_json(self.root / 'stack.json', self.stack)
+        for face, axis, coordinate in (('xmin', 0, -.3), ('xmax', 0, .7),
+                                       ('ymin', 1, .4), ('ymax', 1, .9),
+                                       ('zmin', 2, 0.), ('zmax', 2, .1)):
+            with self.subTest(face=face):
+                case = u.solid_case()
+                case['constraints'] = dict(fixed=[dict(target='face:' + face)])
+                out, _ = u.solve(self.root, case, 'fixed-' + face)
+                manifest, blocks = u.read_result(out, require_volume=False)
+                block = blocks['hex']
+                mask = np.abs(block['Points'][:, axis] - coordinate) <= 1e-14
+                self.assertTrue(np.any(mask), 'fixture has no vertices on the fixed face')
+                self.assertTrue(np.all(np.abs(block['PointData/U'][mask]) <= 1e-14),
+                                face + ': prescribed face and fixed/free edges must remain zero')
+                u.inspect_elastic(out, blocks, manifest, nonzero=False)
+                self.assertGreater(u.summary(manifest)['U_mag_max'], 0)
+                self.assertTrue(np.any(np.abs(block['PointData/U'][~mask]) > 1e-14),
+                                'clamping one face must not erase all thermal expansion')
+
+    def test_fixed_layer_alias_matches_explicit_nonfirst_stack_indices(self):
+        import numpy as np
+        self.stack['layers'][0]['thickness'] = .04
+        second = self.stack['layers'][1]
+        second.update(name='support#1', thickness=.03)
+        last = deepcopy(second)
+        last['name'] = 'support#0'  # Suffix order deliberately differs from stack order.
+        self.stack['layers'].append(last)
+        u.write_json(self.root / 'stack.json', self.stack)
+        results = {}
+        for name, targets in (('alias', ['support']), ('explicit', ['support#0', 'support#1'])):
+            with self.subTest(targets=name):
+                case = u.solid_case()
+                case['constraints'] = dict(fixed=[dict(target='layer:' + t) for t in targets])
+                u.probe(self.root, case)
+                out, _ = u.solve(self.root, case, 'layer-' + name)
+                manifest, blocks = u.read_result(out, require_volume=False)
+                block = blocks['hex']
+                x, y, z = block['Points'].T
+                exterior = ((np.abs(x) <= 1e-14) | (np.abs(x-1) <= 1e-14)
+                            | (np.abs(y) <= 1e-14) | (np.abs(y-1) <= 1e-14)
+                            | (np.abs(z-.1) <= 1e-14))
+                fixed = (z >= .04-1e-14) & exterior
+                self.assertTrue(np.any(fixed))
+                self.assertTrue(np.all(np.abs(block['PointData/U'][fixed]) <= 1e-14))
+                self.assertTrue(np.any(np.abs(block['PointData/U'][z < .04-1e-14]) > 1e-14),
+                                'nonfirst fixed layers must leave the bottom layer free to expand')
+                u.inspect_elastic(out, blocks, manifest, nonzero=False)
+                results[name] = manifest, blocks
+        self.assertEqual(set(results), {'alias', 'explicit'})
+        u.compare_parallel(results['alias'][1], results['explicit'][1])
+
+    def test_uniform_mechanics_uses_temperature_rise_instead_of_absolute_temperature(self):
+        import numpy as np
+        case = u.bimaterial_strip(self.root)
+        results = []
+        for offset in (0, 125):
+            candidate = deepcopy(case)
+            candidate['loads'][0].update(T_ref=300+offset, T_target=350+offset)
+            out, _ = u.solve(self.root, candidate, f'reference-offset{offset}')
+            manifest, blocks = u.read_result(out, require_volume=False)
+            u.inspect_elastic(out, blocks, manifest)
+            for block in blocks.values():
+                np.testing.assert_allclose(block['PointData/T'], 350+offset, rtol=0, atol=1e-10)
+            results.append((manifest, blocks))
+        first, shifted = results
+        for name in first[1]:
+            np.testing.assert_allclose(shifted[1][name]['Points'], first[1][name]['Points'],
+                                       rtol=0, atol=1e-14)
+            np.testing.assert_allclose(shifted[1][name]['PointData/U'], first[1][name]['PointData/U'],
+                                       rtol=1e-9, atol=1e-14)
+        for key in ('warpage_pv', 'U_mag_max'):
+            a, b = u.summary(first[0])[key], u.summary(shifted[0])[key]
+            self.assertLessEqual(abs(a-b), 1e-9 * abs(a), key)
 
     def test_cut_elastic_rejects_unsupported_geometry_or_publishes_solved_cut_U(self):
         import numpy as np
@@ -446,11 +587,12 @@ class CaseAcceptance(unittest.TestCase):
         stack['outline']['polygon'] = [[.1, 0], [1, 0], [1, .2], [0, .2], [0, .1]]
         u.write_json(self.root / 'stack.json', stack)
         u.probe(self.root, case)  # Reject fixture/schema mistakes before exercising mechanics.
-        results = {}
+        results, outcomes = {}, {}
         for mode, extra in (('polyhedron', ()), ('hex', ('--cut-output', 'hex'))):
             with self.subTest(cut_output=mode):
                 out, result = u.solve(self.root, case, 'cut-elastic-' + mode,
                                       extra=extra, expected=None)
+                outcomes[mode] = result.returncode
                 if result.returncode == 13:
                     # Preserve the explicit unsupported outcome until upstream
                     # supports embedded faces; hex output must not bypass it.
@@ -483,6 +625,9 @@ class CaseAcceptance(unittest.TestCase):
                     self.assertTrue(np.any(blocks['eb_surface']['PointData/U'] != 0))
                     u.inspect_elastic(out, blocks, manifest)
                     results[mode] = manifest, blocks
+        self.assertEqual(set(outcomes), {'polyhedron', 'hex'})
+        self.assertEqual(outcomes['polyhedron'], outcomes['hex'],
+                         'cut output mode must not change mechanical support or bypass rejection')
         if len(results) == 2:
             poly, hexa = (results[mode] for mode in ('polyhedron', 'hex'))
             np.testing.assert_allclose(poly[1]['eb_surface']['Points'],

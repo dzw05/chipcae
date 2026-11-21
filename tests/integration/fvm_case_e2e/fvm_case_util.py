@@ -86,6 +86,17 @@ def bimaterial_strip(root):
     return case
 
 
+def prescribed_temperature_strip(root):
+    strip = bimaterial_strip(root)
+    case = thermal_case()
+    case['mesh'] = strip['mesh']
+    # Prescribe every CV independently of mechanics. A finite heat flow between
+    # layers keeps the unchanged relative energy gate away from a 0/0 ledger.
+    case['loads'] = [dict(type='fixed_temperature', target='layer:a', T=340),
+                     dict(type='fixed_temperature', target='layer:b', T=360)]
+    return case
+
+
 def fixture(root):
     root.mkdir(parents=True, exist_ok=True)
     stack = dict(id='fvm_synthetic', unit='m', symmetry='none', package_type='FCBGA',
@@ -398,6 +409,31 @@ def elastic(events):
     return value
 
 
+def mechanical_residuals(events):
+    # Selecting only correctly labelled points would hide additional U points
+    # accidentally published with the default FEM solver name (or wrong field).
+    points = [p for e in events if e['kind'] == 18 for p in e['points']
+              if p['field'] == 'U' or p['solver'] == 'fvm.solid']
+    assert points, 'mechanics failure/success must publish measured fvm.solid/U residuals'
+    for point in points:
+        assert (point['solver'], point['field']) == ('fvm.solid', 'U'), point
+        assert math.isfinite(point['norm']) and point['norm'] >= 0, point
+    return points
+
+
+def no_mechanical_publication(out, events):
+    assert not any(e['kind'] == 22 for e in events), 'unexpected successful output event'
+    assert not any(e['kind'] == 21 and e['state'] == 4 for e in events), 'unexpected completed state'
+    assert not any(e['kind'] == 20 and e['text'].startswith(ELASTIC_PREFIX)
+                   for e in events), 'unexpected elastic success record'
+    assert not (out / 'out/step-0.vtkhdf').exists(), 'unexpected successful step file'
+    if (out / 'manifest.json').exists():
+        manifest = read_json(out / 'manifest.json')
+        assert manifest['steps'] == [], manifest['steps']
+        assert not any(s['name'] in ('warpage_pv', 'U_mag_max')
+                       for s in manifest.get('summary', [])), 'unexpected mechanical summary'
+
+
 def inspect_elastic(out, blocks, manifest, nonzero=True):
     import numpy as np
     events = decode_events((out / 'events.bin').read_bytes())
@@ -413,13 +449,17 @@ def inspect_elastic(out, blocks, manifest, nonzero=True):
         if nonzero:
             assert entry['value'] > 0, f'{key}: expected solved nonzero mechanics, got {entry}'
         assert abs(ledger[key] - entry['value']) <= 1e-12 * abs(entry['value']), (ledger, entry)
-    residuals = [p for e in events if e['kind'] == 18 for p in e['points']
-                 if p['solver'] == 'fvm.solid' and p['field'] == 'U']
-    assert residuals, 'missing fvm.solid/U ResidualBatch'
+        # The 17-significant-digit diagnostic must round-trip the same binary64
+        # result as the manifest, including digits beyond the relative PV gate.
+        assert struct.pack('<d', ledger[key]) == struct.pack('<d', entry['value']), (
+            f'FVM_ELASTIC {key} lost binary64 precision', ledger, entry)
+    residuals = mechanical_residuals(events)
     final = residuals[-1]
     assert final['iteration'] == ledger['iterations'], (final, ledger)
     assert math.isfinite(final['norm']) and final['norm'] >= 0, final
     assert abs(final['norm'] - ledger['residual']) <= 1e-12 * abs(ledger['residual']), (final, ledger)
+    assert struct.pack('<d', final['norm']) == struct.pack('<d', ledger['residual']), (
+        'FVM_ELASTIC residual lost binary64 precision', final, ledger)
     for name, data in blocks.items():
         assert np.all(np.isfinite(data['PointData/U'])), name
     if nonzero:
