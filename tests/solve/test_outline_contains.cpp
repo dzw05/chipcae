@@ -2,10 +2,12 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <random>
 #include <sstream>
 #include <string>
@@ -53,12 +55,43 @@ bool legacy_is_convex(const Ring& ring) {
 
 int main() {
     using chipcae::solve::detail::outline_contains;
+    using chipcae::solve::detail::outline_is_convex;
     int failures = 0;
     auto check = [&](bool ok, const std::string& context) {
         if (!ok) {
             ++failures;
             std::cerr << "FAIL " << context << '\n';
         }
+    };
+    // Guard original fixtures against a classification change between the two thresholds.
+    auto compatibility = [&](const Ring& ring, const std::string& name) {
+        check(outline_is_convex(ring) == legacy_is_convex(ring), name + " legacy classification");
+        auto lo = ring.front(), hi = ring.front();
+        std::size_t n = ring.size();
+        while (n > 1 && ring[n - 1] == ring.front())
+            --n;
+        for (const auto& p : ring)
+            for (std::size_t axis = 0; axis < 2; ++axis) {
+                lo[axis] = std::min(lo[axis], p[axis]);
+                hi[axis] = std::max(hi[axis], p[axis]);
+            }
+        const double diagonal = std::hypot(hi[0] - lo[0], hi[1] - lo[1]);
+        const double threshold = 1e-12 * diagonal * diagonal;
+        double minimum = std::numeric_limits<double>::infinity();
+        for (std::size_t j = 0; j < n; ++j) {
+            const auto a = ring[j], b = ring[(j + 1) % n];
+            for (std::size_t k = 0; k < n; ++k) {
+                const double v = std::abs((b[0] - a[0]) * (ring[k][1] - a[1]) -
+                                          (b[1] - a[1]) * (ring[k][0] - a[0]));
+                if (v > 0) {
+                    minimum = std::min(minimum, v);
+                    check(!(v >= threshold && v < 1e-14), name + " threshold-sensitive cross");
+                }
+            }
+        }
+        std::cout << std::setprecision(17) << "compatibility " << name
+                  << " convex=" << outline_is_convex(ring) << " min_nonzero_cross=" << minimum
+                  << " relative_threshold=" << threshold << '\n';
     };
     const Ring octagon{{.003, 0},
                        {.017, 0},
@@ -68,11 +101,15 @@ int main() {
                        {.003, .02},
                        {0, .017},
                        {0, .003}};
+    compatibility(octagon, "octagon");
+    const bool octagon_convex = outline_is_convex(octagon);
     std::mt19937 random(0x198224U);
     // Specify the integer-to-double mapping as well as the seed for reproducibility.
     for (int i = 0; i < 1000; ++i) {
         const double x = -.005 + .03 * static_cast<double>(random()) / 4294967296.;
         const double y = -.005 + .03 * static_cast<double>(random()) / 4294967296.;
+        check(outline_contains(octagon, octagon_convex, x, y) == outline_contains(octagon, x, y),
+              "octagon two-step point " + std::to_string(i));
         check(outline_contains(octagon, x, y) == legacy_contains(octagon, x, y),
               "convex octagon legacy oracle point " + std::to_string(i));
     }
@@ -81,6 +118,13 @@ int main() {
         check(outline_contains(octagon, .01, y) == legacy_contains(octagon, .01, y),
               "convex near-boundary arithmetic");
     check(outline_contains({}, 12, -9), "empty outline contains every point");
+
+    check(outline_is_convex({}), "empty outline is convex");
+    for (bool convex : {false, true})
+        check(outline_contains({}, convex, 12, -9), "empty two-step outline contains every point");
+    const Ring coincident{{.01, .01}, {.01, .01}, {.01, .01}};
+    check(outline_is_convex(coincident) == legacy_is_convex(coincident),
+          "coincident classification preserves legacy behavior");
 
     const Ring l{{0, 0}, {.02, 0}, {.02, .0137}, {.0113, .0137}, {.0113, .02}, {0, .02}};
     for (int variant = 0; variant < 16; ++variant) {
@@ -101,6 +145,8 @@ int main() {
             ring = std::move(subdivided);
         }
         const std::string label = "L variant " + std::to_string(variant) + ": ";
+        compatibility(ring, label);
+        const bool convex = outline_is_convex(ring);
         for (const auto& [point, expected] :
              std::vector<std::pair<std::array<double, 2>, bool>>{{{.015, .017}, false},
                                                                  {{.005, .017}, true},
@@ -122,6 +168,9 @@ int main() {
             context << std::setprecision(17) << label << "point (" << point[0] << "," << point[1]
                     << ") expected " << expected;
             check(outline_contains(ring, point[0], point[1]) == expected, context.str());
+            check(outline_contains(ring, convex, point[0], point[1]) ==
+                      outline_contains(ring, point[0], point[1]),
+                  context.str() + " two-step");
         }
     }
     // The L box diagonal is sqrt(2)*.02: the boundary tolerance is
@@ -155,6 +204,21 @@ int main() {
     check(outline_contains(collinear_l, .005, .017), "nonconvex collinear edge arm");
     check(!outline_contains(collinear_l, .015, .017), "nonconvex collinear edge notch");
     const Ring v{{0, 0}, {.0064, 0}, {.0103, .0087}, {.0142, 0}, {.02, 0}, {.02, .02}, {0, .02}};
+    compatibility(collinear, "collinear convex");
+    compatibility(collinear_l, "collinear L");
+    compatibility(v, "pipeline V");
+    compatibility(l, "pipeline L");
+    compatibility({{0, 0}, {.02, 0}, {.02, .015}, {.015, .02}, {0, .02}}, "fcbga outline");
+    // examples/s2_solve/stack.json:11, corner offsets .002 (test octagon uses .003).
+    compatibility({{.002, 0},
+                   {.018, 0},
+                   {.02, .002},
+                   {.02, .018},
+                   {.018, .02},
+                   {.002, .02},
+                   {0, .018},
+                   {0, .002}},
+                  "base stack octagon");
     check(legacy_is_convex(octagon), "legacy original octagon is convex");
     check(!legacy_is_convex(l), "legacy original L is nonconvex");
     check(!legacy_is_convex(v), "legacy original V is nonconvex");
@@ -173,6 +237,8 @@ int main() {
                     std::reverse(ring.begin(), ring.end());
                 std::ostringstream label;
                 label << name << " scale " << scale << " reversed " << reversed;
+                check(outline_is_convex(ring) == (name == "octagon"),
+                      label.str() + " scale-relative classification");
                 if (name == "octagon") {
                     for (double x : {.01, .025})
                         check(outline_contains(ring, x * scale, .01 * scale) ==
@@ -191,6 +257,21 @@ int main() {
             }
         }
     }
+    const bool l_convex = outline_is_convex(l);
+    std::size_t consumed = 0;
+    auto time_queries = [&](bool hoisted) {
+        const auto begin = std::chrono::steady_clock::now();
+        for (int i = 0; i < 100000; ++i) {
+            const double x = .025 * static_cast<double>(i % 997) / 997.;
+            const double y = .025 * static_cast<double>(i % 991) / 991.;
+            consumed += hoisted ? outline_contains(l, l_convex, x, y) : outline_contains(l, x, y);
+        }
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin)
+            .count();
+    };
+    const double per_call = time_queries(false), hoisted = time_queries(true);
+    std::cout << "实测 outline_contains 1e5 queries: per-call-convexity=" << per_call
+              << " hoisted=" << hoisted << " consumed=" << consumed << '\n';
     std::cout << "1000 convex oracle points and containment boundary cases; " << failures
               << " failures\n";
     return failures == 0 ? 0 : 1;

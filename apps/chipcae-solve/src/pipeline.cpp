@@ -987,12 +987,14 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
         int nd = scalar.GetNDofs();
         double tmax = -std::numeric_limits<double>::infinity(), umax = 0;
         std::vector<std::array<double, 3>> top;
+        const bool outline_convex =
+            !clipped || detail::outline_is_convex(inputs.stack.outline.polygon);
         auto in_domain = [&](double x, double y, double z) {
             if (!clipped)
                 return true;
-            // Simple nonconvex outlines also exclude extension nodes from maxima and PV.
+            // outline_contains excludes extension nodes from maxima and PV for nonconvex outlines.
             (void)z;
-            return detail::outline_contains(inputs.stack.outline.polygon, x, y);
+            return detail::outline_contains(inputs.stack.outline.polygon, outline_convex, x, y);
         };
         auto add_top = [&](double x, double y, double w) {
             top.push_back({x, y, w});

@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import h5py
 import numpy as np
 import vtk
@@ -33,7 +34,11 @@ with tempfile.TemporaryDirectory() as tmp:
         command = [exe, '--case', str(root/'case.json'), '--profile', str(root/'profile.json'), '--out', str(out)]
         if fallback: command += ['--cut-output', 'hex']
         if ranks > 1: command = [mpirun, '-np', str(ranks), *command]
+        started = time.perf_counter()
         result = subprocess.run(command, capture_output=True, text=True, timeout=240)
+        elapsed = time.perf_counter() - started
+        if name == "nonconvex-L-np1":
+            print(name, "CLI wall seconds", elapsed, flush=True)
         if error:
             assert result.returncode == error_code, (name, result.returncode, error_code, result.stderr)
             assert error in result.stderr, result.stderr
@@ -380,6 +385,10 @@ with tempfile.TemporaryDirectory() as tmp:
             if result.returncode == 0:
                 manifest = json.loads((out/'manifest.json').read_text())
                 print('L with nonempty region planes: summary', manifest['summary'], flush=True)
+                summary = {item['name']: item['value'] for item in manifest['summary']}
+                print('nonconvex-L-region-planes summary_hex',
+                      {quantity: float(summary[quantity]).hex()
+                       for quantity in ('T_max', 'warpage_pv', 'U_mag_max')}, flush=True)
         except subprocess.TimeoutExpired as error:
             print('L with nonempty region planes: timeout', error, flush=True)
         finally:
