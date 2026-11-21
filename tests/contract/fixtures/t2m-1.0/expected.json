@@ -1,0 +1,16 @@
+{
+  "negatives": [
+    "negative/unit",
+    "negative/missing_tcell",
+    "negative/length_mismatch",
+    "negative/nonfinite_tcell",
+    "negative/invalid_volume",
+    "negative/invalid_tref",
+    "negative/inconsistent_sources",
+    "negative/invalid_tuniform",
+    "negative/invalid_arithmetic"
+  ],
+  "positives": [
+    "valid_2x2x2"
+  ]
+}

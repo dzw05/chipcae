@@ -1,0 +1,25 @@
+{
+  "T_cell": [],
+  "T_ref": 300.0,
+  "T_uniform": {
+    "__nonfinite__": "nan"
+  },
+  "index_order": "x_fastest",
+  "mode": "uniform",
+  "shape": [
+    2,
+    2,
+    2
+  ],
+  "temperature_unit": "K",
+  "volume": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+  ]
+}
