@@ -23,6 +23,8 @@ parser.add_argument("--baseline", type=Path)
 parser.add_argument("--selection", type=Path)
 parser.add_argument("--measurements", type=Path)
 parser.add_argument("--pr-body", type=Path)
+parser.add_argument("--pinned-inventory", type=Path)
+parser.add_argument("--runtime-evidence", type=Path)
 args = parser.parse_args()
 # chipcae-solve is an unconditional top-level target. Demo/cut-bimetal use
 # these backend flags without GMG's additional MFEM_USE_PETSC condition.
@@ -159,6 +161,192 @@ class HighmemAcceptance(unittest.TestCase):
                     )
                 self.assertEqual(self.props[name], expected)
 
+    def test_measurement_coverage(self):
+        # A failed high-RSS candidate cannot disappear from the selection by
+        # filtering for successful runs. Reconcile the complete pinned inventory,
+        # including MPI/CUDA, before treating the RSS table as exhaustive.
+        self.assertIsNotNone(args.measurements, "provide --measurements raw-evidence-root")
+        self.assertIsNotNone(args.pinned_inventory, "provide --pinned-inventory inventory.json")
+        pinned = {test["name"]: test for test in
+                  json.loads(args.pinned_inventory.read_text())["tests"]}
+        mandatory = {"solve_column_gmg_fcbga", "solve_column_gmg_fcbga_scaling",
+                     "demogate_solve", "f1130_uncut_cli_e2e", "cutbim_cut_bimetal"}
+        if args.backend == "1":
+            self.assertTrue(mandatory <= pinned.keys(), "pinned full inventory omits candidates")
+        recorded, successful, high_failed = set(), set(), set()
+        for path in sorted(args.measurements.rglob("result.json")):
+            result = json.loads(path.read_text())
+            name = result.get("name")
+            if result.get("revision") != "eaed3e4" or name not in pinned:
+                continue
+            with self.subTest(raw=str(path)):
+                command = json.loads((path.parent / "command.json").read_text())
+                self.assertIn("ctest", command)
+                self.assertIn("-j1", command, "RSS profiling must execute serially")
+                self.assertEqual(command[command.index("-R") + 1],
+                                 "^" + re.escape(name) + "$")
+                measured_cache = (path.parent.parent / "cache.txt").read_text()
+                self.assertRegex(measured_cache, r"(?m)^CMAKE_BUILD_TYPE:STRING=Release$")
+                measured = {test["name"]: test for test in json.loads(
+                    (path.parent.parent / "inventory.json").read_text())["tests"]}
+                self.assertEqual(measured[name].get("command"), pinned[name].get("command"))
+                self.assertEqual(properties(measured[name]), properties(pinned[name]))
+                cases = ET.parse(path.parent / "results.xml").findall(".//testcase")
+                self.assertEqual(len(cases), 1)
+                case = cases[0]
+                self.assertEqual(case.get("name"), name)
+                raw = (path.parent / "time.txt").read_text()
+                peak = re.search(r"Maximum resident set size \(kbytes\):\s*(\d+)", raw)
+                self.assertIsNotNone(peak, "profiling attempt lacks raw RSS")
+                recorded.add(name)
+                passed = (result.get("status") == 0
+                          and result.get("outcomes") == {name: "passed"}
+                          and not result.get("disabled", False)
+                          and case.get("status") == "run"
+                          and all(case.find(tag) is None
+                                  for tag in ("skipped", "failure", "error")))
+                if passed:
+                    self.assertRegex(raw, r"Exit status:\s*0\s*$")
+                    successful.add(name)
+                    # MPI rank sums are not a single process's RSS. Qualifying
+                    # wrapper peaks need independent local process observations.
+                    if int(peak[1]) >= 1572864:
+                        processes = json.loads((path.parent / "process-peaks.json").read_text())
+                        self.assertTrue(any(process["peak_kib"] >= 1572864
+                                            for process in processes.values()),
+                                        "high RSS lacks per-process corroboration: " + name)
+                elif (not properties(pinned[name]).get("DISABLED", False)
+                      and case.find("skipped") is None and int(peak[1]) >= 1572864):
+                    high_failed.add(name)
+        self.assertEqual(recorded, set(pinned),
+                         "every pinned registration needs a raw profiling disposition; "
+                         "skips/disabled entries do not qualify as successful measurements")
+        self.assertFalse(high_failed - successful,
+                         "high-RSS candidates remain unresolved without a successful pinned "
+                         "Release measurement: " + str(sorted(high_failed - successful)))
+
+    def test_runtime_evidence(self):
+        # Read the actual full-suite logs/JUnit, independently of report.json's
+        # summaries (older summaries incorrectly counted disabled cases as passed).
+        # This is manual: registering a full-suite runner would recurse into itself.
+        self.assertIsNotNone(args.runtime_evidence, "provide --runtime-evidence suite-log-root")
+        root = args.runtime_evidence
+        outcomes, durations = {}, {}
+        self.assertTrue(self.highmem, "full runtime acceptance needs a measured selection")
+        expected_red = {"ctest_highmem_selection", "ctest_highmem_shared_lock"}
+        baseline_inventory = json.loads((root / "baseline-inventory.json").read_text())
+        self.assertEqual({test["name"] for test in baseline_inventory["tests"]}, set(self.tests))
+        with self.subTest(requirement="unchanged Release cache"):
+            self.assertEqual((root / "baseline-cache.txt").read_text(), cache,
+                             "runtime evidence used different build options or dependencies")
+        for test in baseline_inventory["tests"]:
+            if test["name"] in self.highmem:
+                with self.subTest(test=test["name"], requirement="unlocked baseline"):
+                    self.assertNotIn("chipcae_highmem", properties(test).get("RESOURCE_LOCK", []))
+                    self.assertNotIn("highmem", properties(test).get("LABELS", []))
+        for name, jobs in (("baseline-j4", 4), ("after-j1", 1),
+                           ("after-j4-1", 4), ("after-j4-2", 4)):
+            destination = root / name
+            command = json.loads((destination / "command.json").read_text())
+            log = (destination / "ctest.log").read_text()
+            cases = ET.parse(destination / "results.xml").findall(".//testcase")
+            results = {}
+            for case in cases:
+                outcome = "passed"
+                if case.get("status") == "disabled":
+                    outcome = "disabled"
+                else:
+                    for tag in ("skipped", "failure", "error"):
+                        child = case.find(tag)
+                        if child is not None:
+                            outcome = tag + ":" + child.get("message", "")
+                    if outcome == "passed" and case.get("status") != "run":
+                        outcome = "notrun"
+                self.assertNotIn(case.get("name"), results, "duplicate JUnit outcome")
+                results[case.get("name")] = outcome
+            outcomes[name] = results
+            elapsed = re.search(r"Total Test time \(real\) =\s*([\d.]+) sec", log)
+            self.assertIsNotNone(elapsed, "missing CTest duration: " + name)
+            durations[name] = float(elapsed[1])
+            with self.subTest(run=name, requirement="full inventory and command"):
+                self.assertEqual(set(results), set(self.tests))
+                self.assertEqual(command[:4], ["ctest", "--test-dir", args.build, "-j" + str(jobs)])
+                self.assertFalse(any(flag in command for flag in
+                                     ("-R", "-E", "-L", "-LE", "--rerun-failed", "--stop-on-failure")),
+                                 "runtime acceptance must execute the full inventory")
+            with self.subTest(run=name, requirement="no unexpected failures"):
+                failed = {test for test, outcome in results.items()
+                          if outcome != "passed" and outcome != "disabled"
+                          and not outcome.startswith("skipped:")}
+                self.assertFalse(failed - (expected_red if name == "baseline-j4" else set()),
+                                 "unexpected full-suite failures: " + str(sorted(failed)))
+            active, maximum, overlaps, completed = set(), 0, [], set()
+            for line in log.splitlines():
+                start = re.match(r"\s*Start\s+\d+:\s+(\S+)\s*$", line)
+                end = re.match(r"\s*\d+/\d+ Test\s+#\d+:\s+(\S+)\s+", line)
+                if start:
+                    test = start[1]
+                    if test in self.highmem and active & self.highmem:
+                        overlaps.append((test, sorted(active & self.highmem)))
+                    active.add(test)
+                    maximum = max(maximum, len(active))
+                if end:
+                    if end[1] in active:
+                        completed.add(end[1])
+                    active.discard(end[1])
+            with self.subTest(run=name, requirement="observed concurrency"):
+                self.assertFalse(active, "missing completion events")
+                if jobs == 4:
+                    self.assertGreaterEqual(maximum, 4,
+                                            "four-way execution was not observed; requested -j4 "
+                                            "does not prove runtime acceptance")
+                else:
+                    self.assertEqual(maximum, 1)
+            if name != "baseline-j4":
+                with self.subTest(run=name, requirement="highmem intervals"):
+                    self.assertFalse(overlaps, "selected wrappers overlap: " + str(overlaps))
+                    self.assertTrue(self.highmem <= completed)
+                    self.assertTrue(all(results[test] == "passed" for test in self.highmem),
+                                    "selected wrappers must execute and pass")
+            with self.subTest(run=name, requirement="complete kernel coverage and no OOM"):
+                before = (destination / "kernel-before.log").read_text()
+                after = (destination / "kernel-after.log").read_text()
+                self.assertTrue(before, "empty initial kernel snapshot")
+                self.assertTrue(after, "empty final kernel snapshot")
+                stream_path = destination / "kernel-follow.log"
+                self.assertTrue(stream_path.is_file(),
+                                "continuous kernel evidence missing; snapshots alone cannot "
+                                "establish the required coverage: " + name)
+                stream = stream_path.read_text()
+                self.assertNotRegex(stream, r"(?m)^dmesg:", "kernel collector reported an error")
+                self.assertIn(before, stream, "kernel stream misses its initial snapshot")
+                self.assertIn(after, stream, "kernel stream misses its final snapshot")
+                start, end = stream.index(before), stream.rindex(after)
+                self.assertLessEqual(start, end, "kernel snapshot anchors are out of order")
+                # The continuous stream bridges ring-buffer rotation; compare
+                # anchors before scanning only records from this CTest run.
+                delta = stream[start + len(before):end + len(after)]
+                self.assertFalse([line for line in delta.splitlines()
+                                  if "chipcae" in line.lower()
+                                  and re.search(r"oom|out of memory|killed process", line, re.I)],
+                                 "new chipcae OOM records")
+        for name in ("baseline-j4", "after-j4-1", "after-j4-2"):
+            with self.subTest(run=name, requirement="serial outcomes including skip/disabled"):
+                expected = dict(outcomes["after-j1"])
+                actual = dict(outcomes[name])
+                if name == "baseline-j4":
+                    for test in expected_red:
+                        expected.pop(test, None)
+                        actual.pop(test, None)
+                self.assertEqual({test: (expected.get(test), actual.get(test))
+                                  for test in expected.keys() | actual.keys()
+                                  if expected.get(test) != actual.get(test)}, {},
+                                 "per-test serial/parallel outcomes differ")
+        for name in ("after-j4-1", "after-j4-2"):
+            with self.subTest(run=name, requirement="parallel duration"):
+                self.assertGreater(durations["baseline-j4"], 0)
+                self.assertLessEqual(durations[name], durations["baseline-j4"] * 1.20)
+
     def test_measured_evidence(self):
         # Read the raw profiling artifacts, not a hand-maintained allowlist.
         # Failed/killed/skipped runs and current-revision peaks cannot justify
@@ -251,9 +439,13 @@ endforeach()
 # python run_highmem_acceptance.py --build <build> --evidence <outside-source-dir>
 #     --phase baseline
 # Repeat with --phase verify --selection <measured-PR-table-test-names.txt>
-#     --measurements <raw-profiling-root> --pr-body <pr-body.md> after
+#     --measurements <raw-profiling-root> --pr-body <pr-body.md>
+#     --pinned-inventory <pinned-profiling-root/inventory.json> after
 # implementing the properties. Raw inventories, JUnit, CTest and kernel logs stay
 # in the evidence directory. No solver instrumentation or fixtures are added.
+# The generated check_highmem.py also supports --case measurement_coverage and
+# --case runtime_evidence (--runtime-evidence <suite-log-root>) independently, so
+# invalid retained runs can be checked without launching numerical tests again.
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/run_highmem_acceptance.py" [=[
 import argparse
 import json
@@ -272,6 +464,7 @@ parser.add_argument("--phase", required=True, choices=("baseline", "verify"))
 parser.add_argument("--selection", type=Path)
 parser.add_argument("--measurements", type=Path)
 parser.add_argument("--pr-body", type=Path)
+parser.add_argument("--pinned-inventory", type=Path)
 args = parser.parse_args()
 args.build = args.build.resolve()
 args.evidence = args.evidence.resolve()
@@ -391,6 +584,8 @@ else:
     require(args.selection is not None, "provide the measured selection from the PR table")
     require(args.measurements is not None and args.pr_body is not None,
             "provide --measurements and --pr-body to verify pinned RSS and table membership")
+    require(args.pinned_inventory is not None,
+            "provide --pinned-inventory to reconcile every profiling candidate")
     require(cache == (args.evidence / "baseline-cache.txt").read_text(),
             "CMake cache changed; compiler/dependency/options comparison is unverified")
     selected = set(args.selection.read_text().splitlines())
@@ -405,6 +600,12 @@ else:
          "--build", str(args.build), "--backend", "1",
          "--case", "measured_evidence", "--measurements", str(args.measurements),
          "--pr-body", str(args.pr_body), "--selection", str(args.selection)], check=True,
+    )
+    subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("check_highmem.py")),
+         "--build", str(args.build), "--backend", "1",
+         "--case", "measurement_coverage", "--measurements", str(args.measurements),
+         "--pinned-inventory", str(args.pinned_inventory)], check=True,
     )
     (args.evidence / "after-inventory.json").write_text(inventory)
     baseline = json.loads((args.evidence / "baseline-j4" / "report.json").read_text())
@@ -429,5 +630,10 @@ else:
         require(parallel["outcomes"] == serial["outcomes"], "serial/parallel outcomes differ")
         require(parallel["elapsed"] <= baseline["elapsed"] * 1.20,
                 "parallel duration exceeds baseline +20%")
+    subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("check_highmem.py")),
+         "--build", str(args.build), "--backend", "1", "--case", "runtime_evidence",
+         "--runtime-evidence", str(args.evidence)], check=True,
+    )
     print("Highmem acceptance passed; raw evidence: " + str(args.evidence))
 ]=])
