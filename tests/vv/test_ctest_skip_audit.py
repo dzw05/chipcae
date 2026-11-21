@@ -289,6 +289,14 @@ class CTestSkipAuditTest(unittest.TestCase):
         (self.build / "CMakeCache.txt").unlink()
         self._assert_invalid(diagnostic=r"CMakeCache\.txt")
 
+    def test_nested_testcase_cannot_hide_an_unrun_required_test(self):
+        self.junit.write_text(
+            '<testsuite><testcase name="outer" status="run">'
+            '<testcase name="required_case" status="notrun"/>'
+            '</testcase></testsuite>', encoding="utf-8"
+        )
+        self._assert_invalid(diagnostic=r"(?i)structure|outside")
+
     def test_unreadable_required_file_is_input_error(self):
         self.required.unlink()
         self._assert_invalid(diagnostic=r"(?i)required")

@@ -1,0 +1,7 @@
+# test_name	requires	note
+field_compare_ranks	CHIPCAE_ENABLE_MPI	MPI rank field comparison; registration also needs MFEM/HDF5 and solver target
+f1130_uncut_cli_e2e	CHIPCAE_ENABLE_ECAD,CHIPCAE_ENABLE_MFEM,CHIPCAE_ENABLE_MPI,CHIPCAE_ENABLE_HDF5	Synthetic F-1130 CLI path
+chain_ipc_uncut_chain	CHIPCAE_ENABLE_ECAD,CHIPCAE_ENABLE_MFEM,CHIPCAE_ENABLE_MPI,CHIPCAE_ENABLE_HDF5	Synthetic IPC import/solve chain
+odbcli_odbpp_cli_e2e	CHIPCAE_ENABLE_ECAD,CHIPCAE_ENABLE_MFEM,CHIPCAE_ENABLE_MPI,CHIPCAE_ENABLE_HDF5	Synthetic ODB++ CLI path
+fvm_fvm_case_e2e	CHIPCAE_ENABLE_ECAD,CHIPCAE_ENABLE_MFEM,CHIPCAE_ENABLE_MPI,CHIPCAE_ENABLE_HDF5	Synthetic FVM CLI path
+vv_result_schema	-	V&V result schema and data classification
