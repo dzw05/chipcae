@@ -413,19 +413,46 @@ class AssemblyBond(unittest.TestCase):
         self.a.stack()
 
     def test_gap_without_bond_stays_void(self):
+        # assembly-floating-gap: reject whole-layer voids before stack validation.
+        for bottom in (False, True):
+            with self.subTest(bottom=bottom):
+                self.place(self.thickness, bottom=bottom, bond=False)
+                result = self.a.run('--accept-b-tier')
+                check(result, 14)
+                self.assertFalse(self.a.output.exists())
+                self.assertEqual(result.stdout, '')
+                self.assertEqual(result.stderr,
+                                 'INPUT_INVALID: gap without bond leaves lid floating\n')
+                self.assertEqual(self.a.defects()['code'], 'INPUT_INVALID')
+                self.assertEqual(self.a.defects()['message'],
+                                 'INPUT_INVALID: gap without bond leaves lid floating')
+                self.assertFalse([d for d in self.a.import_report()['defects']
+                                  if d['defect_id'].startswith('lid.bond/')])
+
+    def test_gap_without_bond_under_ring_is_partial_void(self):
+        self.assertGreater(self.thickness, 0)
+        self.assertLess(self.thickness, .0002)
         self.place(self.thickness, bond=False)
-        # Architect ruling: preserve main's schema rejection and publication
-        # behavior. 整层空腔待卡 assembly-floating-gap.
-        result = self.a.run('--accept-b-tier')
-        check(result, 14)
-        self.assertFalse(self.a.output.exists())
-        self.assertEqual(result.stdout, '')
-        self.assertEqual(result.stderr,
-                         'INPUT_INVALID: Must be valid against at least one schema, '
-                         'but found no matching schemas\n')
-        self.assertEqual(self.a.defects()['code'], 'INPUT_INVALID')
-        self.assertFalse([d for d in self.a.import_report()['defects']
-                          if d['defect_id'].startswith('lid.bond/')])
+        shutil.copyfile(Path(self.baseline_dir.name) / 'stiffener.step',
+                        self.a.root / 'stiffener.step')
+        self.a.part('stiffener', 'stiffener.step',
+                    placement={'attach': 'layer:B.Cu@top', 'gap': 0})
+        self.a.save()
+        check(self.a.run('--accept-b-tier'), 0)
+        layers = list(intervals(self.a.stack()))
+        upper = self.board_top + self.thickness
+        scale = max(self.thickness, abs(self.board_top))
+        gap = [(z0, z1, layer) for z0, z1, layer in layers
+               if overlaps(z0, z1, self.board_top, upper)]
+        self.assertTrue(gap)
+        self.close(gap[0][0], self.board_top, scale=scale)
+        self.close(gap[-1][1], upper, scale=scale)
+        for _, _, layer in gap:
+            self.assertTrue(has_body(layer, 'stiffener'), layer)
+            self.assertFalse(has_body(layer, 'lid'), layer)
+            self.assertFalse(layer.get('material'), layer)
+        self.close(min(z0 for z0, _, layer in layers if has_body(layer, 'lid')),
+                   upper, scale=scale)
 
 
 if __name__ == '__main__':
