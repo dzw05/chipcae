@@ -35,27 +35,65 @@ class AssemblyRewriteDuplicateIdTest(unittest.TestCase):
                         self.assertEqual(len(rewrite['to']), 1)
                         target = rewrite['to'][0]
                         self.assertTrue(target.startswith('interface:'))
-                        left, right = target.removeprefix('interface:').split('|')
+                        left, right = target[len('interface:'):].split('|')
                         self.assertEqual(layers.index(right), layers.index(left) + 1)
 
     def test_duplicate_id_reports_and_error_precedence(self):
-        # Body keys sort in this order too, so precedence does not depend on JSON
-        # object insertion order. Values are the part ids used by the CLI scan.
+        # Literal outcomes for baseline inputs and error-precedence regressions.
         cases = (
-            ('pair', ['lid', 'lid'], None, True, 'lid'),
-            ('triple', ['lid', 'lid', 'lid'], None, True, 'lid'),
-            ('two_ids', ['lid', 'x', 'lid', 'x'], None, True, 'lid', ('lid', 'x')),
-            ('duplicate_before_void', ['lid', 'lid', 'void'], None, True, 'lid'),
-            ('void_before_duplicate', ['void', 'lid', 'lid'], None, True, 'void'),
-            ('explicit_and_body', ['lid'], ['lid'], True, 'lid'),
-            ('two_bodies', [], ['a', 'a'], True, 'a'),
-            ('without_confirmation', ['lid', 'lid'], None, False, 'lid'),
-            ('duplicate_before_display', ['lid', 'lid', 'display'], None, True, 'lid'),
-            ('display_before_duplicate', ['display', 'lid', 'lid'], None, True, 'display'),
-            ('body_duplicate_before_void', [], ['a', 'a', 'void'], True, 'a'),
-            ('body_void_before_duplicate', [], ['void', 'a', 'a'], True, 'void'),
+            ('pair', ['lid', 'lid'], None, True,
+             7, 'IMPORT_REJECTED', 'IMPORT_REJECTED: duplicate part id lid',
+             {('lid/duplicate_id', 'C', 7, 'duplicate part id lid')},
+             {('lid/duplicate_id', 'C', 7)}),
+            ('triple', ['lid', 'lid', 'lid'], None, True,
+             7, 'IMPORT_REJECTED', 'IMPORT_REJECTED: duplicate part id lid',
+             {('lid/duplicate_id', 'C', 7, 'duplicate part id lid')},
+             {('lid/duplicate_id', 'C', 7)}),
+            ('two_ids', ['lid', 'x', 'lid', 'x'], None, True,
+             7, 'IMPORT_REJECTED', 'IMPORT_REJECTED: duplicate part id lid',
+             {('lid/duplicate_id', 'C', 7, 'duplicate part id lid'),
+              ('x/duplicate_id', 'C', 7, 'duplicate part id x')},
+             {('lid/duplicate_id', 'C', 7), ('x/duplicate_id', 'C', 7)}),
+            ('duplicate_before_void', ['lid', 'lid', 'void'], None, True,
+             7, 'IMPORT_REJECTED', 'IMPORT_REJECTED: duplicate part id lid',
+             {('lid/duplicate_id', 'C', 7, 'duplicate part id lid')},
+             {('lid/duplicate_id', 'C', 7)}),
+            ('void_before_duplicate', ['void', 'lid', 'lid'], None, True,
+             14, 'INPUT_INVALID', 'INPUT_INVALID: part id void is reserved',
+             set(), set()),
+            ('explicit_and_body', ['lid'], ['lid'], True,
+             7, 'IMPORT_REJECTED', 'IMPORT_REJECTED: duplicate part id lid',
+             {('lid/duplicate_id', 'C', 7, 'duplicate part id lid')},
+             {('lid/duplicate_id', 'C', 7)}),
+            ('two_bodies', [], ['a', 'a'], True,
+             7, 'IMPORT_REJECTED', 'IMPORT_REJECTED: duplicate part id a',
+             {('a/duplicate_id', 'C', 7, 'duplicate part id a')},
+             {('a/duplicate_id', 'C', 7)}),
+            ('without_confirmation', ['lid', 'lid'], None, False,
+             7, 'IMPORT_REJECTED', 'IMPORT_REJECTED: duplicate part id lid',
+             {('lid/duplicate_id', 'C', 7, 'duplicate part id lid')},
+             {('lid/duplicate_id', 'C', 7)}),
+            ('duplicate_before_display', ['lid', 'lid', 'display'], None, True,
+             7, 'IMPORT_REJECTED', 'IMPORT_REJECTED: duplicate part id lid',
+             {('lid/duplicate_id', 'C', 7, 'duplicate part id lid')},
+             {('lid/duplicate_id', 'C', 7)}),
+            ('display_before_duplicate', ['display', 'lid', 'lid'], None, True,
+             7, 'IMPORT_REJECTED',
+             'IMPORT_REJECTED: display-only geometry NOT_CAE_GEOMETRY',
+             set(), set()),
+            ('body_duplicate_before_void', [], ['a', 'a', 'void'], True,
+             14, 'INPUT_INVALID', 'INPUT_INVALID: part id void is reserved',
+             set(), set()),
+            ('body_void_before_duplicate', [], ['void', 'a', 'a'], True,
+             14, 'INPUT_INVALID', 'INPUT_INVALID: part id void is reserved',
+             set(), set()),
+            ('body_duplicate_before_display', [], ['a', 'a'], True,
+             7, 'IMPORT_REJECTED', 'IMPORT_REJECTED: duplicate part id a',
+             {('a/duplicate_id', 'C', 7, 'duplicate part id a')},
+             {('a/duplicate_id', 'C', 7)}),
         )
-        for name, ids, body_ids, accept, first, *duplicates in cases:
+        for (name, ids, body_ids, accept, exit_code, code, message,
+             expected_import, expected_defects) in cases:
             with self.subTest(case=name), tempfile.TemporaryDirectory() as tmp:
                 a = Assembly(tmp)
                 a.boxes()
@@ -72,35 +110,28 @@ class AssemblyRewriteDuplicateIdTest(unittest.TestCase):
                         'step': 'bulk.step', 'frame': 'step', 'origin': [0, 0, .00167],
                         'bodies': {f'body{i}': {'id': id_, 'material': 'copper'}
                                    for i, id_ in enumerate(body_ids)}}
+                if name == 'body_duplicate_before_display':
+                    a.document['parts_from_step']['step'] = 'NOT_CAE_GEOMETRY.step'
                 a.save()
                 result = a.run(*(['--accept-b-tier'] if accept else []))
-                reserved = first == 'void'
-                display = first == 'display'
-                code = 'INPUT_INVALID' if reserved else 'IMPORT_REJECTED'
-                message = ('part id void is reserved' if reserved else
-                           'display-only geometry NOT_CAE_GEOMETRY' if display else
-                           'duplicate part id ' + first)
-                check(result, 14 if reserved else 7)
+                check(result, exit_code)
                 self.assertEqual(a.defects()['code'], code)
-                self.assertEqual(a.defects()['message'], code + ': ' + message)
+                self.assertEqual(a.defects()['message'], message)
                 self.assertFalse(a.output.exists())
-                duplicate_ids = () if reserved or display else (
-                    duplicates[0] if duplicates else (first,))
-                expected = {(id_ + '/duplicate_id', 'C', 7, 'duplicate part id ' + id_)
-                            for id_ in duplicate_ids}
                 for report_name, report in (('import_report', a.import_report()),
                                             ('defects', a.defects())):
                     with self.subTest(report=report_name):
                         defects = [d for d in report['defects']
                                    if not d['defect_id'].startswith('board/')]
-                        self.assertEqual(len(defects), len(expected))
                         if report_name == 'import_report':
+                            self.assertEqual(len(defects), len(expected_import))
                             self.assertEqual({(d['defect_id'], d['tier'], d['reason'],
-                                               d['details']) for d in defects}, expected)
+                                               d['details']) for d in defects}, expected_import)
                         else:
+                            self.assertEqual(len(defects), len(expected_defects))
                             self.assertEqual({(d['defect_id'], d['tier'], d['reason'])
                                               for d in defects},
-                                             {item[:3] for item in expected})
+                                             expected_defects)
                             for defect in defects:
                                 self.assertNotIn('details', defect)
                         for defect in defects:
