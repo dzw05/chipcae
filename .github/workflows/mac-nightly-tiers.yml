@@ -1,0 +1,103 @@
+name: Mac nightly tiers
+
+on:
+  schedule:
+    - cron: '0 19 * * *' # 03:00 Beijing the following day.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-selfhosted
+  cancel-in-progress: false
+
+env:
+  CMAKE_BUILD_PARALLEL_LEVEL: "6"
+  CTEST_PARALLEL_LEVEL: "6"
+  OMP_NUM_THREADS: "1"
+  OMP_PROC_BIND: "false"
+
+jobs:
+  build-test:
+    name: Mac acceptance and perf
+    if: github.repository == 'dzw05/chipcae'
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Activate toolchain
+        run: |
+          set -euo pipefail
+          env_prefix="$HOME/chipcae-env/env"
+          test -x "$env_prefix/bin/cmake" || { echo "missing $env_prefix; repair the existing environment first"; exit 1; }
+          if [ -x "$env_prefix/bin/clang++" ]; then
+            cc="$env_prefix/bin/clang"
+            cxx="$env_prefix/bin/clang++"
+          else
+            cc=$(ls "$env_prefix"/bin/*-clang)
+            cxx=$(ls "$env_prefix"/bin/*-clang++)
+          fi
+          test -x "$cc" && test -x "$cxx"
+          {
+            echo "CONDA_PREFIX=$env_prefix"
+            echo "CC=$cc"
+            echo "CXX=$cxx"
+          } >> "$GITHUB_ENV"
+          echo "$env_prefix/bin" >> "$GITHUB_PATH"
+
+      - name: Toolchain versions
+        run: |
+          set -euo pipefail
+          cmake --version | head -1
+          ninja --version
+          "$CXX" --version | head -1
+          mpicxx --showme:version 2>/dev/null || true
+          sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize
+
+      - name: Check dependencies
+        run: bash .github/scripts/mac_highmem_deps.sh --check
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCHIPCAE_ENABLE_MPI=ON -DCHIPCAE_ENABLE_HDF5=ON \
+            -DCHIPCAE_ENABLE_MFEM=ON -DCHIPCAE_ENABLE_JSONCONS=ON \
+            -DCMAKE_PREFIX_PATH="$HOME/chipcae-env/env;$HOME/chipcae-mac/deps/mfem;$HOME/chipcae-mac/deps/jsoncons" \
+            -DCMAKE_EXE_LINKER_FLAGS="-L$HOME/chipcae-env/env/lib -llapack -lblas"
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          status=0
+          cmake --build build --parallel 6 || status=$?
+          echo "build seconds: $(( $(date +%s) - start )); exit status: $status"
+          exit "$status"
+
+      - name: Test acceptance
+        run: |
+          ctest --test-dir build -L '^acceptance$' -j 2 --timeout 2400 --output-on-failure \
+            --output-junit "$PWD/build/junit-acceptance.xml"
+
+      - name: Test perf (serial)
+        run: |
+          ctest --test-dir build -L '^perf$' -j 1 --no-tests=ignore --output-on-failure \
+            --output-junit "$PWD/build/junit-perf.xml"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-nightly-tiers-results-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            build/junit-acceptance.xml
+            build/junit-perf.xml

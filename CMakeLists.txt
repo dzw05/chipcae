@@ -70,3 +70,8 @@ endif()
 
 include(ChipcaeInstall)
 include(ChipcaePackaging)
+
+if(CHIPCAE_BUILD_TESTS)
+    include(ChipcaeTestTiers)
+    chipcae_apply_test_tiers()
+endif()
