@@ -75,12 +75,12 @@
         "nx": {
           "type": "integer",
           "minimum": 1,
-          "description": "Initial in-plane columns; omitted value is 1. Give this explicitly."
+          "description": "Minimum number of cells in each x feature interval (between consecutive snapped feature lines), not the total column count. Omitted value is 1. Give this explicitly."
         },
         "ny": {
           "type": "integer",
           "minimum": 1,
-          "description": "Initial in-plane columns; omitted value is 1. Give this explicitly."
+          "description": "Minimum number of cells in each y feature interval (between consecutive snapped feature lines), not the total row count. Omitted value is 1. Give this explicitly."
         },
         "max_ratio": {
           "type": "number",
