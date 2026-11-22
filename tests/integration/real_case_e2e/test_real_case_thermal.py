@@ -69,6 +69,14 @@ def run_synthetic(kind, source, make_params=thermal_params, inspect=None):
                               "notes": record["notes"]}, ensure_ascii=False))
             return rc
         assert record["verdict"] == "pass", record
+        paths = list((root / "outputs").rglob("run_record.json"))
+        assert len(paths) == 1, paths
+        folder = paths[0].parent
+        provisional_w5 = False
+        if kind == "warpage":
+            manifest = read_json(folder / "np1_r1/manifest.json")
+            method = next(q for q in manifest["summary"] if q["name"] == "warpage_pv").get("method")
+            provisional_w5 = method in (driver.WARPAGE_METHOD, "fvm_cell_centers_lsq")
         expected = {f"C{i}" for i in range(1, 11)}
         if kind == "warpage":
             expected |= {f"W{i}" for i in range(1, 6)}
@@ -82,13 +90,12 @@ def run_synthetic(kind, source, make_params=thermal_params, inspect=None):
         for key in expected:
             if key == "C8" and not mpi:
                 assert record["checks"][key] is None
+            elif key == "W5" and provisional_w5:
+                assert record["checks"][key] == "PROVISIONAL", record["checks"]
             else:
                 assert record["checks"][key] is True, (key, record["checks"], record["notes"])
         assert record["digests"]["np1_r1"] == record["digests"]["np1_r2"]
         assert ("np2_r1" in record["digests"]) == bool(mpi)
-        paths = list((root / "outputs").rglob("run_record.json"))
-        assert len(paths) == 1, paths
-        folder = paths[0].parent
         assert read_json(paths[0]) == record
         assert (folder / "run_record.md").is_file()
         from tools.vv.check_result_data_class import check_file
