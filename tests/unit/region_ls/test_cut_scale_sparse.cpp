@@ -199,7 +199,7 @@ std::uint64_t hash(const T& v) {
     h.add(v);
     return h.digest;
 }
-// Rollback checks cover the whole state, independently of the contracted golden
+// Full-state checks are independent of the contracted golden
 // digest. Unrelated mesh metadata must not invalidate pre-refactor goldens.
 std::uint64_t full_mesh_hash(const HexMeshArrays& m) {
     Hash h;
@@ -382,8 +382,7 @@ void remember_volume(std::vector<VolumeCheck>& volumes,
                      const CutLayerArrays& c) {
     volumes.push_back({name, value(cut_stats(m, c)), analytic_bodies(s, m)});
 }
-void volume_analytic(const std::vector<VolumeCheck>& volumes) {
-    check(volumes.size() == 10, "all correctness fixtures must contribute analytic volumes");
+void check_analytic_volumes(const std::vector<VolumeCheck>& volumes) {
     // Captured before production changes on ced6409 (same cut code as 784fe34),
     // GNU 14.2.0, Linux x86_64, Release. Keep n=64 accumulation bitwise fixed.
     const std::map<BodyId, std::uint64_t> scale_bodies{{1, 0x3e9a4e823b7b30f0ULL},
@@ -422,6 +421,10 @@ void volume_analytic(const std::vector<VolumeCheck>& volumes) {
             errors += v.name + ": DEMO-GATE volume 6.272e-7; ";
     }
     check(errors.empty(), errors);
+}
+void volume_analytic(const std::vector<VolumeCheck>& volumes) {
+    check(volumes.size() == 9, "all acceptance fixtures must contribute analytic volumes");
+    check_analytic_volumes(volumes);
 }
 
 Real rss_kib() {
@@ -469,35 +472,73 @@ Measurement scale_guard(std::vector<VolumeCheck>& volumes) {
 }
 
 void bitwise_outline(std::vector<VolumeCheck>& volumes) {
-    constexpr std::array<Local, 5> resolutions{4, 8, 16, 32, 10};
+    constexpr std::array<Local, 4> resolutions{4, 8, 16, 32};
     // Captured from untouched pre-refactor cut code (ced6409, identical to
     // 784fe34), GNU 14.2.0, Linux x86_64, Release. Mesh digests were recaptured
     // with only the brief's named fields; cut digests remain unchanged.
-    constexpr std::array<Golden, 5> expected{{
+    constexpr std::array<Golden, 4> expected{{
         {0xa704cc1efb6e7346ULL, 0x710e70433c2a85eeULL},
         {0xb7066576e2afffe0ULL, 0xd854e053fc2c3cefULL},
         {0x95d1f16842b0297dULL, 0xa1261a1ef02de996ULL},
         {0x4f3fe256a94ed292ULL, 0x2eb75ee8bb73c3c4ULL},
-        {0x0d4fac692083ee07ULL, 0x953382a220d2e108ULL},
     }};
     for (std::size_t i = 0; i < resolutions.size(); ++i) {
         const auto n = resolutions[i];
         const auto s = stack();
         auto m = grid(s, n);
-        if (n == 10)
-            for (std::size_t d = 0; d < 2; ++d)
-                check(std::ranges::any_of(m.axes[d],
-                                          [](Real x) {
-                                              return std::bit_cast<std::uint64_t>(x) ==
-                                                     std::bit_cast<std::uint64_t>(.002);
-                                          }),
-                      "snap fixture must contain the exact .002 grid line in x and y");
         const auto c = outline(m, s);
         const auto name = "outline_n" + std::to_string(n);
         golden(name, m, c, expected[i]);
         gp_reference(m, c);
         remember_volume(volumes, name, s, m, c);
     }
+}
+void bitwise_snap() {
+    const auto s = stack();
+    auto m = grid(s, 10);
+    for (std::size_t d = 0; d < 2; ++d)
+        check(std::ranges::any_of(m.axes[d],
+                                  [](Real x) {
+                                      return std::bit_cast<std::uint64_t>(x) ==
+                                             std::bit_cast<std::uint64_t>(.002);
+                                  }),
+              "snap fixture must contain the exact .002 grid line in x and y");
+    const auto c = outline(m, s);
+    golden("outline_n10", m, c, {0x0d4fac692083ee07ULL, 0x953382a220d2e108ULL});
+    gp_reference(m, c);
+    std::vector<VolumeCheck> volumes;
+    remember_volume(volumes, "outline_n10", s, m, c);
+    check_analytic_volumes(volumes);
+}
+
+// Nondefault metadata makes a whole-object replacement or missing compaction
+// observable even when the contracted mesh digest would stay unchanged.
+void seed_mesh_metadata(HexMeshArrays& m) {
+    for (std::size_t v = 0; v < m.node_gid.size(); ++v) {
+        m.node_layer[v] = static_cast<Local>(v % 7);
+        m.node_column[v] = static_cast<Index>(3 * v + 11);
+    }
+    m.copper_layer_of_layer = {2, -1, 0};
+    m.copper_phi = {.25, -.5, .75};
+    m.attr_frame.assign(9 * m.attr_table.entries.size(), .25);
+    m.nodes = {.125, -.25, .5};
+    m.internal_interfaces = true;
+    m.order = 2;
+    m.preparation_report.push_back({"metadata", {"substrate"}, {"die"}, 2, 3, .25, .5});
+    m.grid_report.levels = 2;
+    m.grid_report.rule = 3;
+    m.grid_report.N_L = 19;
+    m.grid_report.auto_selected = true;
+    m.grid_report.padding = {2, 3};
+    m.grid_report.max_aspect_ratio = {1.25, 2.5};
+    m.grid_report.level_axes = {{{{0, .01, .02}, {0, .02}}}};
+    m.grid_report.column_ranks = {{0, 1}, {1, 0}};
+    m.grid_report.warnings = {"synthetic grid metadata"};
+    m.grid_report.partition_imbalance = .125;
+    m.grid_report.void_cells = 17;
+    m.pending_cut = {
+        0, static_cast<Local>(m.attribute.size() / 2), static_cast<Local>(m.attribute.size() - 1)};
+    m.snapped.push_back({'x', .001, .002, .001});
 }
 void bitwise_lid(std::vector<VolumeCheck>& volumes, Lid lid) {
     const auto s = stack(lid);
@@ -567,6 +608,36 @@ void keep_void_both(std::vector<VolumeCheck>& volumes) {
         remember_volume(volumes, name, s, m, c);
     }
 }
+void successful_mesh_state() {
+    // Captured from unchanged ced6409 cut sources, GNU 14.2.0, Linux x86_64,
+    // Release. Keep these separate from the brief's named-field goldens.
+    constexpr std::array<std::uint64_t, 3> outline_expected{
+        0xb0bfd3e93428442bULL, 0x23583fe378c251c9ULL, 0xfe4e8beccf17b066ULL};
+    constexpr std::array<std::uint64_t, 2> direct_expected{0xb0bfd3e93428442bULL,
+                                                           0x0fced36ddccee91aULL};
+    const auto verify = [](const HexMeshArrays& m, std::uint64_t expected) {
+        const auto actual = full_mesh_hash(m);
+        std::cout << "FULL_MESH_DIGEST actual=0x" << std::hex << actual << " expected=0x"
+                  << expected << std::dec << '\n';
+        check(actual == expected, "successful cut must match every pre-refactor mesh field");
+    };
+    std::size_t i = 0;
+    for (const auto lid : {Lid::Box, Lid::Convex, Lid::Notched}) {
+        const auto s = stack(lid);
+        auto m = grid(s, 8);
+        seed_mesh_metadata(m);
+        outline(m, s);
+        verify(m, outline_expected[i++]);
+    }
+    for (const bool keep : {false, true}) {
+        auto m = grid(stack(), 8);
+        seed_mesh_metadata(m);
+        auto options = cut_options();
+        options.keep_void = keep;
+        value(build_cut_layer(m, outer_planes(), options));
+        verify(m, direct_expected[keep]);
+    }
+}
 void error_leaves_mesh() {
     const auto s = stack();
     auto m = grid(s, 8);
@@ -610,6 +681,52 @@ void digest_scope() {
     m.attr_table.boundary_names.emplace(22, "unrelated boundary");
     check(hash(m) == before, "mesh baseline digest must include only the brief's named fields");
     check(full_mesh_hash(m) != full_before, "rollback digest must still cover unrelated fields");
+}
+void sequential_snap() {
+    HexMeshArrays initial;
+    initial.vertices = {0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1};
+    initial.hex = {0, 1, 2, 3, 4, 5, 6, 7};
+    initial.node_gid = {0, 1, 2, 3, 4, 5, 6, 7};
+    initial.node_layer.resize(8);
+    initial.node_column.resize(8);
+    initial.attribute = {1};
+    initial.elem_gid = {7};
+    initial.partitioning = {0};
+    initial.attr_table.entries.push_back({"solid", "", 1, 1});
+    initial.attr_table.bodies.emplace("solid", 1);
+    const auto before = full_mesh_hash(initial);
+    auto options = cut_options();
+    options.snap_phi = .001;
+    const Plane first{1, {1, 0, 0}, .99925};
+    const Plane later{1, {1, 1, 0}, 1.99825};
+    // The first plane snaps phi at x=1 to zero without moving those vertices.
+    // The later plane must still cut a triangular prism of area .00175^2/2.
+    // Projecting x=1 onto the first plane would incorrectly leave the cell whole.
+    for (int mode = 0; mode < 3; ++mode) {
+        CutGeometry g;
+        if (mode == 0) {
+            g.planes = {first, later};
+        } else {
+            PieceUnion region;
+            region.body = 1;
+            region.pieces = {{first, {1, {-1, 0, 0}, 0}, {1, {0, -1, 0}, 0}, {1, {0, 1, 0}, 1}}};
+            region.ring = {{0, 0}, {.99925, 0}, {.99925, 1}, {0, 1}};
+            if (mode == 2) {
+                region.pieces[0].push_back(later);
+                region.ring = {{0, 0}, {.99925, 0}, {.99925, .999}, {.99825, 1}, {0, 1}};
+            } else {
+                g.planes = {later};
+            }
+            region.internal = {std::vector<bool>(region.pieces[0].size(), false)};
+            g.unions.push_back(std::move(region));
+        }
+        const auto c = value(build_cut_layer(std::as_const(initial), g, options));
+        check(c.cut_elem == std::vector<Local>{0} && c.sub_volfrac.size() == 1,
+              "later plane must cut after an earlier plane snaps only phi");
+        check(std::abs(c.sub_volfrac[0] - (1 - .00175 * .00175 / 2)) <= 1e-12,
+              "sequential snap volume must match the analytic triangular prism within 1e-12");
+        check(full_mesh_hash(initial) == before, "const clipping must preserve the entire mesh");
+    }
 }
 void gp_nonmanifold() {
     HexMeshArrays initial;
@@ -682,11 +799,14 @@ int main() {
         // ru_maxrss is monotonic: no other fixture may precede this measurement.
         run("scale_guard measurement", [&] { measured = scale_guard(volumes); });
         run("bitwise_outline", [&] { bitwise_outline(volumes); });
+        run("bitwise_snap", bitwise_snap);
         run("bitwise_region_lid", [&] { bitwise_lid(volumes, Lid::Convex); });
         run("bitwise_union", [&] { bitwise_lid(volumes, Lid::Notched); });
         run("keep_void_both", [&] { keep_void_both(volumes); });
         run("error_leaves_mesh", error_leaves_mesh);
         run("digest_scope", digest_scope);
+        run("successful_mesh_state", successful_mesh_state);
+        run("sequential_snap", sequential_snap);
         run("volume_analytic", [&] { volume_analytic(volumes); });
         run("gp_nonmanifold", gp_nonmanifold);
         run("gp_reordered_gids", gp_reordered_gids);
