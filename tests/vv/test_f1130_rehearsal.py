@@ -180,6 +180,7 @@ class RehearsalAcceptance(unittest.TestCase):
         self.assertEqual(report["ctest_listing_returncode"], 0)
         self.assertEqual(report["ctest_command"], self.execution_command())
         self.assertEqual(report["ctest_returncode"], 0)
+        self.assertNotIn("ctest_error", report)
         self.assertAlmostEqual(report["wall_time_s"], 3.25)
         for case in report["tests"]:
             self.assertAlmostEqual(case["time_s"], 0.125)
@@ -470,11 +471,16 @@ class RehearsalAcceptance(unittest.TestCase):
 
     def test_nonzero_ctest_with_passing_xml_is_failure(self):
         self.execution_rc = 8
+        self.execution_stdout = "synthetic CTest execution failure"
         self.invoke(1)
         report = self.report()
         self.assertEqual(report["overall"], "FAIL")
         self.assertEqual(report["ctest_returncode"], 8)
         self.assertEqual([c["status"] for c in report["tests"]], ["Passed"] * 4)
+        self.assertIn("CTest execution returned 8", report.get("ctest_error", ""))
+        self.assertIn(self.execution_stdout, report["ctest_output"])
+        markdown = (self.out / "rehearsal.md").read_text(encoding="utf-8")
+        self.assertIn(report["ctest_error"], markdown.split("## Complete report")[0])
 
     def test_invalid_ranks_are_parameter_errors_without_ctest(self):
         for ranks in ("3", "", ",", "1,3", "2,no", "1,", ",2", "1,,2", "1, 2", "0"):

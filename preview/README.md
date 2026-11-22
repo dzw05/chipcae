@@ -35,7 +35,7 @@ chipcae-preview input.stack.json --nx 4 --ny 2 --levels 1 \
 
 Replace these defaults with any values set in the case's mesh object, and use
 matching stack and integer grid settings as well. Budget rejection uses the
-existing mesh error mapping; the acceptance cases exit 14 with a `cell_budget: `
+existing mesh error mapping; rejected runs exit 14 with a `cell_budget: `
 message and produce neither grid nor EB output.
 
 Unknown options, duplicate options, malformed numbers, and extra input paths fail.
@@ -46,7 +46,10 @@ errors may come from any rank. The success `message` is itself valid JSON with
 `grid`, `max_ratio`, `L` (effective finest level, zero based), and `n0` (effective
 coarse grid dimensions, `AxB`). The success object also reports the effective
 `cell_budget` and `min_elems_per_layer` (the supplied integer, or JSON `null` when
-omitted), both in `message` and as top-level keys. Mesh failures use the shared
+omitted), both in `message` and as top-level keys. The keys `cell_budget`, then
+`min_elems_per_layer`, immediately follow `mesh_sha256` and are the final two keys
+in the message object. The top-level order is `stage`, `progress`, the same message
+keys in order, then `message`. Mesh failures use the shared
 solve error mapping: unsupported cuts
 exit 13, invalid outline input exits 14. Other failures use `INTERNAL` (exit 1).
 

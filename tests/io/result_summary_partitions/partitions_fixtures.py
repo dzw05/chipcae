@@ -94,6 +94,15 @@ def two_steps(run):
                 group[name] = np.array([total], dtype='int64')
     manifest['steps'] = [{'n': 4, 'file': 'out/step-4.vtkhdf'},
                          {'n': 9, 'file': 'out/step-9.vtkhdf'}]
+    per_step = []
+    for record in manifest['steps']:
+        with h5py.File(run / record['file'], 'r') as f:
+            counts = [f[f'VTKHDF/{block}/{cells}'].shape[0]
+                      for block, cells in BLOCK_COUNTS]
+        assert all(count == counts[0] for count in counts), record['file']
+        per_step.append(counts[0])
+    manifest['partitions']['per_step'] = per_step
+    manifest['partitions']['solver_fixed_per_run'] = False
     save(run, manifest)
     return second, manifest
 

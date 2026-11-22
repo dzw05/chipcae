@@ -414,6 +414,90 @@ inline void summarize_assembly_parts(const mesh::StackModel& base,
     }
 }
 
+namespace {
+// Merge preserves base layer identity (including split pieces) and part body IDs.
+// Use layer indices so bottom extensions and rounded serialized thicknesses cannot
+// change which body endpoint touches an empty layer.
+[[maybe_unused]] std::optional<std::string>
+floating_gap_part(const mesh::StackModel& merged,
+                  const mesh::StackModel& base,
+                  const std::vector<geometry::PlacedPart>& placed) {
+    const auto count = merged.layers.size();
+    std::size_t board_first = count, board_last = 0;
+    std::map<std::string, std::pair<std::size_t, std::size_t>> body_span;
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto& layer = merged.layers[i];
+        for (const auto& original : base.layers) {
+            const auto& body = original.body.empty() ? original.name : original.body;
+            if ((layer.name == original.name || layer.name.starts_with(original.name + "#")) &&
+                (layer.body == body || layer.body == original.body)) {
+                board_first = std::min(board_first, i);
+                board_last = i;
+                break;
+            }
+        }
+        for (const auto& region : layer.regions) {
+            auto [it, inserted] = body_span.try_emplace(region.body, i, i);
+            if (!inserted)
+                it->second.second = i;
+        }
+    }
+    if (board_first == count)
+        return std::nullopt;
+    // Layers run bottom to top: report the lowest cavity first, then use placed order.
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto& layer = merged.layers[i];
+        if (!layer.material.empty() || !layer.regions.empty())
+            continue;
+        for (const auto& part : placed) {
+            if (part.id.empty())
+                continue;
+            const auto span = body_span.find(part.id);
+            if (span != body_span.end() && ((i > board_last && span->second.first == i + 1) ||
+                                            (i < board_first && span->second.second + 1 == i)))
+                return part.id;
+        }
+        // Missing body IDs may fall back only to an outer slab endpoint on the
+        // far side of this cavity. Base thicknesses and placed slabs use the
+        // board's original frame. Translate both into the merged stack frame
+        // using the layers below the board, including any bottom extension.
+        const bool above = i > board_last;
+        if (!above && i >= board_first)
+            return std::nullopt;
+        Real board_bottom = 0;
+        for (std::size_t j = 0; j < board_first; ++j)
+            board_bottom += merged.layers[j].thickness;
+        Real boundary = board_bottom;
+        if (above) {
+            for (const auto& original : base.layers)
+                boundary += original.thickness;
+            for (std::size_t j = board_last + 1; j <= i; ++j)
+                boundary += merged.layers[j].thickness;
+        } else {
+            for (std::size_t j = board_first; j > i; --j)
+                boundary -= merged.layers[j - 1].thickness;
+        }
+        for (const auto& part : placed) {
+            if (body_span.contains(part.id) || part.slabs.empty() || part.id.empty())
+                continue;
+            Real endpoint = above ? part.slabs.front().z0 : part.slabs.front().z1;
+            for (const auto& slab : part.slabs)
+                endpoint = above ? std::min(endpoint, slab.z0) : std::max(endpoint, slab.z1);
+            endpoint += board_bottom;
+            // Independent thickness sums may round a shared endpoint differently.
+            // Use the default absolute (metres) and relative numeric tolerances.
+            constexpr Real abs_tol = 1e-10, rel_tol = 5.5e-6;
+            if (std::abs(endpoint - boundary) <=
+                abs_tol + rel_tol * std::max(std::abs(endpoint), std::abs(boundary)))
+                return part.id;
+        }
+        // Keep schema rejection if the first cavity cannot be attributed safely.
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+} // namespace
+
 bool assembly_display_only(const geometry::StepImportResult& result) {
     return std::any_of(result.body_names.begin(), result.body_names.end(), [](const auto& name) {
         return name.find("NOT_CAE_GEOMETRY") != std::string::npos;
@@ -908,6 +992,8 @@ int run_assembly(const ImportOptions& options) {
         if (policy.result == ImportResult::ConfirmationRequired)
             return fail("IMPORT_CONFIRMATION_REQUIRED",
                         "IMPORT_CONFIRMATION_REQUIRED: B-tier defects require acceptance");
+        if (auto id = floating_gap_part(merged, base, placed))
+            return fail("INPUT_INVALID", "gap without bond leaves " + *id + " floating");
         // Keep the staged stack beside its sidecars so relative references
         // resolve identically during validation and after publication.
         auto staged = options.output;

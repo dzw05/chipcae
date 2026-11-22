@@ -167,9 +167,11 @@ def _fence(value, language="text"):
 
 
 def _markdown(report):
-    lines = ["# F-1130 rehearsal", "", f"Overall: {report['overall']}", "",
-             "| name | status | time_s | skip_or_fail_message |",
-             "| --- | --- | --- | --- |"]
+    lines = ["# F-1130 rehearsal", "", f"Overall: {report['overall']}", ""]
+    if "ctest_error" in report:
+        lines.extend([report["ctest_error"], ""])
+    lines.extend(["| name | status | time_s | skip_or_fail_message |",
+                  "| --- | --- | --- | --- |"])
     for entry in report["tests"]:
         lines.append("| " + " | ".join(_cell(entry[key]) for key in
                      ("name", "status", "time_s", "skip_or_fail_message")) + " |")
@@ -264,6 +266,8 @@ def main(argv=None) -> int:
         process = _run(command)
         report["ctest_returncode"] = process.returncode
         report["ctest_output"] = _output(process)
+        if process.returncode:
+            report["ctest_error"] = f"CTest execution returned {process.returncode}"
     except OSError as exc:
         report["ctest_output"] = str(exc)
         return finish(1)

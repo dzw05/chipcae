@@ -292,3 +292,24 @@ if(_solve_backend)
     set_tests_properties(solve_fem_thermal_bow PROPERTIES
         TIMEOUT 600 LABELS "solve;numerical" SKIP_RETURN_CODE 77)
 endif()
+
+# Nonconvex outline acceptance; containment needs no numerical backend.
+add_executable(chipcae_test_solve_outline_contains test_outline_contains.cpp)
+target_compile_features(chipcae_test_solve_outline_contains PRIVATE cxx_std_20)
+target_include_directories(chipcae_test_solve_outline_contains PRIVATE
+    ${PROJECT_SOURCE_DIR}/apps/chipcae-solve/src)
+chipcae_set_warnings(chipcae_test_solve_outline_contains)
+add_test(NAME solve_outline_contains COMMAND chipcae_test_solve_outline_contains)
+set_tests_properties(solve_outline_contains PROPERTIES TIMEOUT 30 LABELS "solve;cut")
+
+if(_solve_backend)
+    add_executable(chipcae_test_solve_cutgeom_nc_consume_outline test_cutgeom_nc_consume_outline.cpp)
+    target_link_libraries(chipcae_test_solve_cutgeom_nc_consume_outline PRIVATE
+        chipcae_mesh_cut jsoncons)
+    chipcae_set_warnings(chipcae_test_solve_cutgeom_nc_consume_outline)
+    add_test(NAME solve_cutgeom_nc_consume_outline
+        COMMAND chipcae_test_solve_cutgeom_nc_consume_outline
+        ${PROJECT_SOURCE_DIR}/tests/contract/fixtures/cutgeom-nc-1.0)
+    set_tests_properties(solve_cutgeom_nc_consume_outline PROPERTIES
+        TIMEOUT 180 LABELS "cut;contract")
+endif()
