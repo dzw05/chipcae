@@ -743,7 +743,7 @@ void copperPhiAcceptance(Acceptance& a) {
         expectCopper(view, "NaN-padded copper selection");
     }
     {
-        // These integer payloads differ in bits that a double cannot preserve.
+        // Integer inputs must obey the float64 preview contract, including rounding above 2^53.
         auto first = grid();
         auto second = grid();
         vtkNew<vtkUnsignedLongLongArray> firstPhi;
@@ -768,28 +768,44 @@ void copperPhiAcceptance(Acceptance& a) {
         a.expect(view.show(composite, layers, materials, {selected, block}, options),
                  "wide integer copper blocks accepted");
         a.cells(view, 4, 2, "wide integer copper blocks");
-        auto shown = view.displayed();
-        auto values = shown ? vtkUnsignedLongLongArray::SafeDownCast(
-                                  shown->GetCellData()->GetArray("copper_phi"))
-                            : nullptr;
-        a.expect(values != nullptr, "copper retains its unsigned 64-bit array type");
-        if (values) {
-            a.expect(values->GetNumberOfTuples() == 4, "wide integer copper tuple count");
-            if (values->GetNumberOfTuples() == 4) {
-                a.expect(values->GetValue(0) == 9007199254740993ULL &&
-                             values->GetValue(1) == 9007199254740997ULL &&
-                             values->GetValue(2) == 18446744073709551615ULL &&
-                             values->GetValue(3) == 18446744073709551613ULL,
-                         "copper preserves all integer bits in visible cell and block order");
-                firstPhi->SetValue(0, 0);
-                secondPhi->SetValue(0, 0);
-                a.expect(values->GetValue(0) == 9007199254740993ULL &&
-                             values->GetValue(2) == 18446744073709551615ULL,
-                         "copied copper values are independent of later input changes");
-            }
-        }
+        a.doubleValues(view,
+                       "copper_phi",
+                       {9007199254740992.0,
+                        9007199254740996.0,
+                        18446744073709551616.0,
+                        18446744073709551616.0},
+                       "integer copper converted to doubles in visible cell and block order");
+        firstPhi->SetValue(0, 0);
+        secondPhi->SetValue(0, 0);
+        a.doubleValues(view,
+                       "copper_phi",
+                       {9007199254740992.0,
+                        9007199254740996.0,
+                        18446744073709551616.0,
+                        18446744073709551616.0},
+                       "converted copper values are independent of later input changes");
         view.setColorMode(PreviewColorMode::CopperPhi);
         expectCopper(view, "wide integer copper selection");
+        auto precise = grid();
+        addDoubleCells(precise, "copper_phi", {0.5000000000000001, 0.9999999999999999, 1.0});
+        composite->SetBlock(2, precise);
+        composite->SetBlock(3, missing);
+        a.expect(view.show(composite, layers, materials, {selected, block, block, block}, options),
+                 "mixed integer, double and missing copper blocks accepted");
+        a.cells(view, 8, 4, "mixed copper blocks");
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        a.doubleValues(view,
+                       "copper_phi",
+                       {0.0,
+                        9007199254740996.0,
+                        0.0,
+                        18446744073709551616.0,
+                        0.5000000000000001,
+                        0.9999999999999999,
+                        nan,
+                        nan},
+                       "mixed copper uses float64, preserves doubles and pads missing cells");
+        expectCopper(view, "mixed copper selection");
     }
     for (const char* alias : {"Copper_Phi", "copper_PHI", "copperphi"}) {
         auto aliased = grid();
