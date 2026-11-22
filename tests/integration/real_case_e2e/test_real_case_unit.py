@@ -23,6 +23,7 @@ SOURCE = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(SOURCE))
 from tools.vv import real_case_e2e as driver
 from tools.vv.check_result_data_class import check_file
+from test_real_case_warpage import W5Acceptance
 
 THERMAL_ONLY = "not solved: fvm thermal-only stage"
 WARPAGE_METHOD = "FVM top-face centroids; least-squares plane removal"
@@ -811,7 +812,6 @@ class RecordChecks(ContractTest):
         for check, note in (
                 ("C6", "C6: custom loads / body-source bounds 待定; no invented temperature threshold"),
                 ("W3", "W3: Rigid321 mean diagnostic only, tolerance 待定"),
-                ("W5", "W5: zero FEM warpage denominator; comparison undefined"),
                 ("W5", "W5: noncut FEM comparison inapplicable to cut input"),
                 ("W5", "W5: FEM comparison is a synthetic noncut assertion; real result diagnostic only")):
             with self.subTest(check=check, note=note):
@@ -826,6 +826,17 @@ class RecordChecks(ContractTest):
                     record["data_class"] = "real"
                 self.assertNotIn(f"checks.{check}", driver._missing(record))
                 self.assertIs(driver._check_c9(record), True)
+
+        # A zero reference PV is a hard W5 failure, never a nullable comparison.
+        record = complete_record()
+        record["kind"] = "warpage"
+        record["displacement"] = dict(U_fixed_face_max_abs=0., U_mean=[0., 0., 0.],
+                                      warpage_pv_vertex_recompute=0.)
+        record["checks"].update(dict.fromkeys((f"W{i}" for i in range(1, 6)), True))
+        record["checks"]["W5"] = None
+        record["notes"].append("W5: zero FEM warpage denominator; comparison undefined")
+        self.assertIn("checks.W5", driver._missing(record))
+        self.assertIs(driver._check_c9(record), False)
 
     def test_c9_dependency_interruption_allows_unavailable_fields(self):
         record = complete_record()
