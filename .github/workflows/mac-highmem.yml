@@ -224,6 +224,7 @@ jobs:
           PY
 
       - name: Test FVM acceptance (mandatory)
+        if: ${{ !cancelled() && steps.selection.outcome == 'success' }}
         run: |
           set -euo pipefail
           start=$(date +%s)

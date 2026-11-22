@@ -368,6 +368,8 @@ GitHub 发布标签归档安装 MFEM 4.8 和 jsoncons 1.4.0，不安装其它依
 测试、示例和 miniapps。自定义前缀供手工使用，工作流仍使用默认前缀。
 
 测试在同一构建中分为互斥的五次调用，依次经过两个 mandatory 门再跑信息段：
+分区发现成功且未取消时，即使 highmem 测试或其 JUnit 断言失败，FVM mandatory 段仍执行；
+两个 mandatory 门各自保留失败状态。
 
 | 段 | 选择 | 并发 | 状态 |
 | --- | --- | --- | --- |
@@ -429,6 +431,7 @@ checkout 后立即后台采样，每 10 秒将 epoch 时间和 `sysctl -n vm.loa
 一分钟负载最大值 ≤12；全 job 峰值另作信息记录。
 日志打印构建、各次 CTest（含 FVM 成败两条路径）、整个配置/构建/测试窗口的墙钟秒数，
 以及每项 highmem/FVM 耗时。持久工作区的旧报告（含 FVM）在开始时清除。
+CTest 自身逐项输出已完成测试的耗时；即使 JUnit 缺失或损坏，该输出仍可用于排查。
 always 上传 `build/junit-highmem.xml`、`build/junit-fvm-acceptance.xml`、
 `build/junit-mpi.xml`、`build/junit-mpi-unlabeled.xml`（有 b2 时）、`build/junit-rest.xml`
 及 `build/loadavg.log`，保留七天。
@@ -463,3 +466,20 @@ PR 开出时由首席助理通知 Zhiwei；托管 `CI / ci-ok` 独立记录。
 未副签不得合入；此 checkout 未含该文件，须由所有者在指定状态位置记录。
 另有待裁定差异：brief 写 FEM 温升误差 ≤1%，现有 E2E 源码引用架构裁定为 ≤2%。
 本卡保持源码不变，澄清前不能宣称满足 brief 的 1% 数值判据。
+
+本卡不新增测试源码或 CTest 注册；工作流改动由维护者手动检查并记录结果：
+
+1. 在装有 PyYAML 的本地检查环境解析工作流（不要求 Mac runner 安装 PyYAML）：
+   `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/mac-highmem.yml'))"`。
+   对 YAML 中每个 `run` 块执行 `bash -n`；确认无 PR 触发或 secrets 引用，
+   `git diff origin/main -- .github/workflows/ci.yml` 为空，净改动只有本工作流与本文档。
+2. 以配置后的 CTest JSON 检查分区发现脚本输出：七项 FVM 不进 b2/c，其他测试保持原分区，
+   两个 `_np2` 仍参与 rank 审计；b2 为空时 c 仍排除七项。用临时 JSON 将一个 `_np2`
+   命令设为超过 4 ranks，确认 N 降至 1，验证后保留实际配置的输出作为运行证据。
+3. 在临时目录执行工作流原有 JUnit 断言：恰好七名且全部成功的报告须通过；缺失、损坏、
+   空报告、缺名、多名、重名、大小写变化或任意层级含 skipped/failure/error 均须失败。
+   这些临时检查不替代 Mac 上真实生成的 JUnit，也不改测试断言或门值。
+4. 确认 FVM 步骤的条件为 `!cancelled() && steps.selection.outcome == 'success'`，
+   两个 JUnit 断言仍为 `always()`；highmem 失败后 FVM 仍能报告自身结果，整个 job 仍失败。
+   检查实际负载解析脚本只对 highmem MARK 窗口应用 ≤12 门值，并与基线脚本比较；
+   分支和 main 的数值、耗时与负载验收仍按上文要求分别留证。
