@@ -153,7 +153,7 @@ class W5Acceptance(unittest.TestCase):
 
     def compare(self, *, method=FVM_METHODS[0], fvm_pv=2., fem_pv=11.,
                 fvm_delta=1., fem_delta=2., blocks=None, reference_method="FEM nodes",
-                missing_dimensions=()):
+                missing_dimensions=(), manifest_min_elems_per_layer=None):
         with tempfile.TemporaryDirectory(prefix="chipcae-w5-contract-") as tmp:
             root = Path(tmp)
             inputs = root / "inputs"
@@ -161,6 +161,8 @@ class W5Acceptance(unittest.TestCase):
             primary = root / "np1_r1"
             write_w5_run(primary, fvm_pv, method, fvm_delta, blocks)
             manifest = read_json(primary / "manifest.json")
+            if manifest_min_elems_per_layer is not None:
+                manifest["mesh"]["min_elems_per_layer"] = manifest_min_elems_per_layer
             for key in missing_dimensions:
                 del manifest["mesh"][key]
             write_json(primary / "manifest.json", manifest)
@@ -247,8 +249,30 @@ class W5Acceptance(unittest.TestCase):
                     for key, expected in (("fvm_direction_delta", a), ("fem_direction_delta", b)):
                         if math.isfinite(expected):
                             self.assertAlmostEqual(diagnostic[key], expected)
+                        else:
+                            self.assertIsNone(diagnostic[key])
+                            self.assertEqual(diagnostic[key.replace("delta", "sign")], 0)
+                            self.assertIn(str(expected), " ".join(record["notes"]))
+                    with tempfile.TemporaryDirectory(prefix="chipcae-w5-json-") as tmp:
+                        path = Path(tmp) / "run_record.json"
+                        driver._write_json(path, record)
+                        self.assertEqual(read_json(path), record)
                     if a == 0 or b == 0:
                         self.assertIn("方向不可判", " ".join(record["notes"]))
+
+    def test_empty_node_blocks_record_failure_without_nonfinite_json(self):
+        for method in (*FVM_METHODS, "FEM nodes"):
+            with self.subTest(method=method):
+                record, _ = self.compare(method=method, blocks={})
+                self.assertIs(record["checks"]["W5"], False)
+                diagnostic = record["diagnostic_fem_comparison"]
+                self.assertIsNone(diagnostic["fvm_direction_delta"])
+                self.assertEqual(diagnostic["fvm_direction_sign"], 0)
+                self.assertIn("fvm_delta=nan", " ".join(record["notes"]))
+                with tempfile.TemporaryDirectory(prefix="chipcae-w5-empty-json-") as tmp:
+                    path = Path(tmp) / "run_record.json"
+                    driver._write_json(path, record)
+                    self.assertEqual(read_json(path), record)
 
     def test_top_nodes_use_xy_coordinates_and_stable_hex_then_cut_ties(self):
         # Both blocks are nonempty and have their own top z. The two center
@@ -300,7 +324,7 @@ class W5Acceptance(unittest.TestCase):
         diagnostic = record["diagnostic_fem_comparison"]
         self.assertEqual(diagnostic["status"], "PROVISIONAL")
         self.assertEqual(diagnostic["method"], FVM_METHODS[0])
-        for key, expected in (("nx", 4), ("ny", 6), ("nz", 12), ("min_elems_per_layer", 2),
+        for key, expected in (("nx", 4), ("ny", 6), ("nz", 12), ("min_elems_per_layer", None),
                               ("fvm_direction_sign", 1), ("fem_direction_sign", 1)):
             self.assertEqual(diagnostic[key], expected)
         self.assertAlmostEqual(diagnostic["fvm_warpage_pv"], 2.)
@@ -321,6 +345,15 @@ class W5Acceptance(unittest.TestCase):
                 self.assertIsNotNone(value, (key, output))
                 self.assertTrue(math.isclose(float(value[1]), expected, rel_tol=1e-3, abs_tol=1e-12))
 
+
+    def test_layer_resolution_uses_only_primary_manifest(self):
+        for value in (None, 3):
+            with self.subTest(manifest_min_elems_per_layer=value):
+                record, printed = self.compare(manifest_min_elems_per_layer=value)
+                self.assertEqual(record["checks"]["W5"], "PROVISIONAL")
+                self.assertEqual(record["diagnostic_fem_comparison"]["min_elems_per_layer"], value)
+                for output in (" ".join(record["notes"]), printed):
+                    self.assertIn(f"min_elems_per_layer={value}", output)
 
     def test_missing_manifest_dimensions_never_report_case_requested_dimensions(self):
         for missing in (("nx0",), ("ny0",), ("nx0", "ny0")):

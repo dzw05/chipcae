@@ -1222,7 +1222,8 @@ def _w5_comparison(primary, reference):
     diagnostic["relative_difference"] = relative
     fvm_delta, fvm_sign = _w5_direction(primary, fvm_manifest)
     fem_delta, fem_sign = _w5_direction(reference, fem_manifest)
-    diagnostic.update(fvm_direction_delta=fvm_delta, fem_direction_delta=fem_delta,
+    diagnostic.update(fvm_direction_delta=fvm_delta if math.isfinite(fvm_delta) else None,
+                      fem_direction_delta=fem_delta if math.isfinite(fem_delta) else None,
                       fvm_direction_sign=fvm_sign, fem_direction_sign=fem_sign)
     if not (fvm_sign and fem_sign and fvm_sign == fem_sign):
         diagnostic["reason"] = ("W5: 方向不可判 or opposite directions: "
@@ -1289,8 +1290,6 @@ def _auxiliary(record, folder, inputs, case, exes, mpi, timeout_s, source_root, 
             if result == "PROVISIONAL":
                 if diagnostic["nx"] is None or diagnostic["ny"] is None:
                     diagnostic["mesh_source"] += " (actual FVM dimensions unavailable)"
-                if diagnostic["min_elems_per_layer"] is None:
-                    diagnostic["min_elems_per_layer"] = case["mesh"].get("min_elems_per_layer")
                 message = (f"W5 PROVISIONAL: fvm_pv={diagnostic['fvm_warpage_pv']!r}, "
                            f"fem_pv={diagnostic['fem_warpage_pv']!r}, "
                            f"relative_difference={diagnostic['relative_difference']!r}, "
