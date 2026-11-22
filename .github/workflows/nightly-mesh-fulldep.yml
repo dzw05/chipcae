@@ -201,6 +201,247 @@ jobs:
           echo "secs=$((SECONDS - start))" >> "$GITHUB_OUTPUT"
           echo "Dependency build and verify wall time: $((SECONDS - start))s"
 
+      - name: Test N11 acceptance guards
+        if: steps.changes.outputs.run == 'true'
+        run: |
+          python3 - <<'PY'
+          import copy
+          import json
+          from pathlib import Path
+          import re
+          import shlex
+          import subprocess
+          import sys
+          import tempfile
+          import textwrap
+          import unittest
+          import xml.etree.ElementTree as ET
+
+          workflow = Path(".github/workflows/nightly-mesh-fulldep.yml").read_text()
+          step = workflow.split("      - name: Build project and run mesh tests\n", 1)[1]
+          shell = textwrap.dedent(step.split("        run: |\n", 1)[1].split("      - uses:", 1)[0])
+          scripts = re.findall(r"python3[^\n]* <<'PY'\n(.*?)\nPY", shell, re.S)
+          names = (
+              "import_assembly_accept", "import_assembly_accept_default",
+              "import_assembly_exit6", "import_assembly_split_report",
+              "occt_import_assembly_box_parts", "occt_import_assembly_confirm",
+              "occt_import_assembly_ring_chamfer_lid", "occt_import_assembly_parts_from_step",
+              "reportfields_step_box_a1",
+          )
+
+          class N11Acceptance(unittest.TestCase):
+              def setUp(self):
+                  temp = tempfile.TemporaryDirectory()
+                  self.addCleanup(temp.cleanup)
+                  self.root = Path(temp.name)
+                  build = self.root / "build-k1-full"
+                  (build / "import-assets").mkdir(parents=True)
+                  self.capability = build / "import-assets/assembly-capabilities.json"
+                  self.report = build / "n11-geometry-on.xml"
+
+              def checker(self, index, selected=names):
+                  self.assertEqual(len(scripts), 2, "Both inline N11 guards must be present")
+                  return subprocess.run(
+                      [sys.executable, "-c", scripts[index], *selected],
+                      cwd=self.root, text=True, capture_output=True,
+                  )
+
+              def passed_suite(self):
+                  suite = ET.Element("testsuite", tests="9", failures="0", skipped="0")
+                  for name in names:
+                      ET.SubElement(suite, "testcase", name=name, status="run", time="0.01")
+                  return suite
+
+              def write_suite(self, suite):
+                  ET.ElementTree(suite).write(self.report)
+
+              def assert_rejected(self, result):
+                  self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                  self.assertNotIn("Passed=9, Skipped=0", result.stdout)
+                  self.assertNotRegex(
+                      result.stdout, r"(?m)^.*: status=",
+                      "Invalid reports must not print partial per-case success output",
+                  )
+
+              def selector(self):
+                  self.assertIn("n11_names=(", shell, "The dedicated N11 selector is required")
+                  return shell[shell.index("n11_names=("):shell.index("n11_status=0")]
+
+              def test_inline_shell_and_python_syntax(self):
+                  result = subprocess.run(["bash", "-n"], input=shell, text=True, capture_output=True)
+                  self.assertEqual(result.returncode, 0, result.stderr)
+                  self.assertEqual(len(scripts), 2)
+                  for script in scripts:
+                      compile(script, "inline N11 guard", "exec")
+
+              def test_configure_explicitly_enables_geometry_once(self):
+                  command = re.search(r"^cmake -S .*?(?=\n[^ ])", shell, re.M | re.S).group()
+                  args = shlex.split(command.replace("\\\n", " "))
+                  for option in (
+                      "-DCMAKE_BUILD_TYPE=Release", "-DCHIPCAE_ENABLE_ECAD=ON",
+                      "-DCHIPCAE_ENABLE_OCCT=ON", "-DCHIPCAE_ENABLE_JSONCONS=ON",
+                      "-DCHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE=ON",
+                  ):
+                      with self.subTest(option=option):
+                          self.assertEqual(args.count(option), 1, f"Required configure argument: {option}")
+
+              def test_other_configure_arguments_are_preserved(self):
+                  command = re.search(r"^cmake -S .*?(?=\n[^ ])", shell, re.M | re.S).group()
+                  args = shlex.split(command.replace("\\\n", " "))
+                  self.assertEqual(
+                      [arg for arg in args if arg != "-DCHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE=ON"],
+                      [
+                          "cmake", "-S", ".", "-B", "build-k1-full", "-G", "Ninja",
+                          "-DCMAKE_BUILD_TYPE=Release", "-DCHIPCAE_WARNINGS_AS_ERRORS=ON",
+                          "-DCHIPCAE_RESULTS_FAULT_INJECTION=ON",
+                          "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+                          "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+                          "-DCMAKE_PREFIX_PATH=$PWD/build-k1-deps/prefix",
+                          "-DCHIPCAE_ENABLE_MPI=ON", "-DCHIPCAE_ENABLE_MFEM=ON",
+                          "-DCHIPCAE_ENABLE_HYPRE=ON", "-DCHIPCAE_ENABLE_HDF5=ON",
+                          "-DCHIPCAE_ENABLE_JSONCONS=ON", "-DCHIPCAE_ENABLE_ECAD=ON",
+                          "-DCHIPCAE_ENABLE_OCCT=ON", "-DPython3_EXECUTABLE=/usr/bin/python3",
+                          "-DCMAKE_DISABLE_FIND_PACKAGE_Clipper2=TRUE",
+                          "-DCMAKE_DISABLE_FIND_PACKAGE_EXPAT=TRUE",
+                      ],
+                  )
+
+              def test_selector_contains_exactly_the_nine_expected_names(self):
+                  result = subprocess.run(
+                      ["bash", "-c", "set -euo pipefail\n" + self.selector() + 'printf "%s" "$n11_regex"'],
+                      text=True, capture_output=True,
+                  )
+                  self.assertEqual(result.returncode, 0, result.stderr)
+                  self.assertEqual(result.stdout, "^(" + "|".join(names) + ")$")
+
+              def test_existing_three_ctest_commands_are_preserved(self):
+                  commands = [line for line in shell.splitlines() if line.startswith("ctest ")]
+                  self.assertEqual(commands[:3], [
+                      'ctest --test-dir build-k1-full -L "mesh|occt" -LE gpu --output-on-failure --output-junit mesh-results.xml',
+                      "ctest --test-dir build-k1-full -R '^mesh_digest_mpi$' --no-tests=error --output-on-failure",
+                      'ctest --test-dir build-k1-full -R "^vtkhdf_results_" --no-tests=error --output-on-failure',
+                  ])
+
+              def test_capability_accepts_only_the_exact_on_string(self):
+                  for value in ("ON", "OFF", "on", True, False, None, 0, 1, -1, 1.5):
+                      with self.subTest(value=value):
+                          raw = json.dumps({"geometry": value})
+                          self.capability.write_text(raw)
+                          result = self.checker(0)
+                          self.assertIn(raw, result.stdout)
+                          if value == "ON":
+                              self.assertEqual(result.returncode, 0, result.stderr)
+                          else:
+                              self.assert_rejected(result)
+                  for raw in ("{}", "{broken"):
+                      with self.subTest(raw=raw):
+                          self.capability.write_text(raw)
+                          self.assert_rejected(self.checker(0))
+                  self.capability.unlink()
+                  self.assert_rejected(self.checker(0))
+
+              def test_nine_unique_run_cases_print_names_status_times_and_success(self):
+                  for reordered in (False, True):
+                      with self.subTest(reordered=reordered):
+                          suite = self.passed_suite()
+                          if reordered:
+                              suite[:] = list(reversed(suite))
+                          self.write_suite(suite)
+                          result = self.checker(1)
+                          self.assertEqual(result.returncode, 0, result.stderr)
+                          self.assertCountEqual(result.stdout.splitlines(), [
+                              *(f"{name}: status=run, time=0.01" for name in names),
+                              "Passed=9, Skipped=0",
+                          ])
+
+              def test_case_results_are_printed_only_after_full_report_validation(self):
+                  for mutation in ("missing", "duplicate", "failure", "notrun"):
+                      with self.subTest(mutation=mutation):
+                          suite = self.passed_suite()
+                          if mutation == "missing":
+                              suite.remove(suite[-1])
+                          elif mutation == "duplicate":
+                              suite.append(copy.deepcopy(suite[-1]))
+                          elif mutation == "failure":
+                              ET.SubElement(suite[-1], "failure")
+                          else:
+                              suite[-1].set("status", "notrun")
+                          self.write_suite(suite)
+                          result = self.checker(1)
+                          self.assert_rejected(result)
+                          self.assertNotIn(
+                              f"{names[0]}: status=run, time=0.01", result.stdout,
+                              "Case results must be printed only after all nine cases are validated",
+                          )
+
+              def test_missing_duplicate_renamed_and_unexpected_cases_are_rejected(self):
+                  for index, name in enumerate(names):
+                      for mutation in ("missing", "duplicate", "renamed", "unexpected"):
+                          with self.subTest(name=name, mutation=mutation):
+                              suite = self.passed_suite()
+                              if mutation == "missing":
+                                  suite.remove(suite[index])
+                              elif mutation == "duplicate":
+                                  suite.append(copy.deepcopy(suite[index]))
+                              elif mutation == "renamed":
+                                  suite[index].set("name", "assembly_no_occt")
+                              else:
+                                  ET.SubElement(suite, "testcase", name="assembly_no_occt", status="run")
+                              self.write_suite(suite)
+                              self.assert_rejected(self.checker(1))
+                  self.write_suite(ET.Element("testsuite"))
+                  self.assert_rejected(self.checker(1))
+
+              def test_junit_names_must_equal_the_selected_name_multiset(self):
+                  self.write_suite(self.passed_suite())
+                  for selected in (names[:-1], (*names, names[0]), (*names[:-1], "assembly_no_occt")):
+                      with self.subTest(selected=selected):
+                          self.assert_rejected(self.checker(1, selected))
+
+              def test_skipped_failed_errored_disabled_and_not_run_cases_are_rejected(self):
+                  for index, name in enumerate(names):
+                      for mutation in (
+                          "skipped", "failure", "error", "disabled", "notrun", "fail", "missing-status",
+                      ):
+                          with self.subTest(name=name, mutation=mutation):
+                              suite = self.passed_suite()
+                              if mutation in ("skipped", "failure", "error"):
+                                  ET.SubElement(suite[index], mutation)
+                              elif mutation == "missing-status":
+                                  del suite[index].attrib["status"]
+                              else:
+                                  suite[index].set("status", mutation)
+                              self.write_suite(suite)
+                              self.assert_rejected(self.checker(1))
+
+              def test_missing_and_malformed_junit_are_rejected(self):
+                  self.assert_rejected(self.checker(1))
+                  self.report.write_text("<testsuite")
+                  self.assert_rejected(self.checker(1))
+
+              def test_ctest_failure_is_propagated_after_inspecting_a_valid_report(self):
+                  self.write_suite(self.passed_suite())
+                  block = shell[shell.index("n11_status=0"):shell.index('echo "build_secs=')]
+                  for status in (0, 19):
+                      with self.subTest(status=status):
+                          # Isolate CTest's process status; execute the real shell and JUnit guard.
+                          setup = "set -euo pipefail\n" + self.selector()
+                          setup += "ctest() { printf '%s\\0' \"$@\" > ctest-args; return " + str(status) + "; }\n"
+                          result = subprocess.run(
+                              ["bash", "-c", setup + block], cwd=self.root, text=True, capture_output=True,
+                          )
+                          self.assertIn("Passed=9, Skipped=0", result.stdout, result.stderr)
+                          self.assertEqual(result.returncode, status, result.stderr)
+                          self.assertEqual((self.root / "ctest-args").read_bytes().split(b"\0")[:-1], [
+                              arg.encode() for arg in (
+                                  "--test-dir", "build-k1-full", "-R", "^(" + "|".join(names) + ")$",
+                                  "--no-tests=error", "--output-on-failure", "--output-junit", "n11-geometry-on.xml",
+                              )
+                          ])
+
+          unittest.main(verbosity=2)
+          PY
+
       - name: Build project and run mesh tests
         id: tests
         if: steps.changes.outputs.run == 'true'
@@ -213,15 +454,66 @@ jobs:
             -DCMAKE_PREFIX_PATH="$PWD/build-k1-deps/prefix" \
             -DCHIPCAE_ENABLE_MPI=ON -DCHIPCAE_ENABLE_MFEM=ON \
             -DCHIPCAE_ENABLE_HYPRE=ON -DCHIPCAE_ENABLE_HDF5=ON -DCHIPCAE_ENABLE_JSONCONS=ON \
-            -DCHIPCAE_ENABLE_ECAD=ON -DCHIPCAE_ENABLE_OCCT=ON -DPython3_EXECUTABLE=/usr/bin/python3 \
+            -DCHIPCAE_ENABLE_ECAD=ON -DCHIPCAE_ENABLE_OCCT=ON -DCHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE=ON -DPython3_EXECUTABLE=/usr/bin/python3 \
             -DCMAKE_DISABLE_FIND_PACKAGE_Clipper2=TRUE \
             -DCMAKE_DISABLE_FIND_PACKAGE_EXPAT=TRUE
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          raw = Path("build-k1-full/import-assets/assembly-capabilities.json").read_text()
+          print(raw, flush=True)
+          if json.loads(raw).get("geometry") != "ON":
+              raise SystemExit('N11 requires geometry == "ON"')
+          PY
           cmake --build build-k1-full --parallel 2
           build_secs=$((SECONDS - start))
           test_start=$SECONDS
           ctest --test-dir build-k1-full -L "mesh|occt" -LE gpu --output-on-failure --output-junit mesh-results.xml
           ctest --test-dir build-k1-full -R '^mesh_digest_mpi$' --no-tests=error --output-on-failure
           ctest --test-dir build-k1-full -R "^vtkhdf_results_" --no-tests=error --output-on-failure
+          n11_names=(
+            import_assembly_accept import_assembly_accept_default
+            import_assembly_exit6 import_assembly_split_report
+            occt_import_assembly_box_parts occt_import_assembly_confirm
+            occt_import_assembly_ring_chamfer_lid occt_import_assembly_parts_from_step
+            reportfields_step_box_a1
+          )
+          n11_regex="^($(IFS='|'; echo "${n11_names[*]}"))$"
+          n11_status=0
+          ctest --test-dir build-k1-full -R "$n11_regex" --no-tests=error --output-on-failure \
+            --output-junit n11-geometry-on.xml || n11_status=$?
+          python3 - "${n11_names[@]}" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          from collections import Counter
+
+          required_names = {
+              "import_assembly_accept", "import_assembly_accept_default",
+              "import_assembly_exit6", "import_assembly_split_report",
+              "occt_import_assembly_box_parts", "occt_import_assembly_confirm",
+              "occt_import_assembly_ring_chamfer_lid", "occt_import_assembly_parts_from_step",
+              "reportfields_step_box_a1",
+          }
+          cases = list(ET.parse("build-k1-full/n11-geometry-on.xml").getroot().iter("testcase"))
+          skipped = sum(1 for case in cases if case.find("skipped") is not None)
+          if Counter(case.get("name") for case in cases) != Counter(required_names):
+              raise SystemExit("N11 requires exactly nine unique expected testcases, "
+                               "including reportfields_step_box_a1")
+          if Counter(case.get("name") for case in cases) != Counter(sys.argv[1:]):
+              raise SystemExit("N11 requires the selected names to match all nine testcases")
+          if skipped != 0 or any(
+              case.get("status") != "run"
+              or any(case.find(tag) is not None for tag in ("skipped", "failure", "error"))
+              for case in cases
+          ):
+              raise SystemExit(f"N11 requires all nine Passed, Skipped={skipped}")
+          for case in cases:
+              print(f'{case.get("name")}: status={case.get("status")}, time={case.get("time")}',
+                    flush=True)
+          print("Passed=9, Skipped=0")
+          PY
+          if ((n11_status != 0)); then exit "$n11_status"; fi
           echo "build_secs=$build_secs" >> "$GITHUB_OUTPUT"
           echo "test_secs=$((SECONDS - test_start))" >> "$GITHUB_OUTPUT"
           echo "Project build ${build_secs}s, ctest $((SECONDS - test_start))s"
@@ -232,6 +524,7 @@ jobs:
           name: mesh-full-results
           path: |
             build-k1-full/mesh-results.xml
+            build-k1-full/n11-geometry-on.xml
             build-k1-full/Testing/Temporary/LastTest.log
 
       - name: Fail if a cache key could not be replaced
