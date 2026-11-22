@@ -1,6 +1,7 @@
 #include "PreviewController.hpp"
 
 #include <QColor>
+#include <QComboBox>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -9,6 +10,7 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QRegularExpression>
+#include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <QVTKOpenGLNativeWidget.h>
 #include <algorithm>
@@ -326,10 +328,9 @@ vtkSmartPointer<vtkUnstructuredGrid> extract(vtkDataSet* data, const QList<vtkId
 }
 vtkSmartPointer<vtkUnstructuredGrid>
 append(std::vector<vtkSmartPointer<vtkUnstructuredGrid>>& pieces) {
-    // vtkAppendFilter intersects array schemas. Normalize classification to doubles,
-    // padding absent ids with NaN so a partial name table never loses known ids or
-    // invents a category for cells whose classification is unknown.
-    for (const char* name : {"layer_id", "material_id"}) {
+    // vtkAppendFilter intersects array schemas. Normalize classifications and copper
+    // fractions to doubles, preserving double values and padding absent cells with NaN.
+    for (const char* name : {"layer_id", "material_id", "copper_phi"}) {
         const bool present = std::any_of(pieces.begin(), pieces.end(), [name](const auto& p) {
             return p->GetCellData()->GetArray(name) != nullptr;
         });
@@ -370,6 +371,7 @@ struct PreviewView::State {
     PreviewColorMode mode = PreviewColorMode::Layer;
     QString title = "layer_id";
     QLabel* summaryLabel = nullptr;
+    QComboBox* colorSelector = nullptr;
     PreviewRenderWidget* widget = nullptr;
     vtkSmartPointer<vtkGenericOpenGLRenderWindow> window =
         vtkSmartPointer<vtkGenericOpenGLRenderWindow>::New();
@@ -381,7 +383,24 @@ struct PreviewView::State {
     vtkSmartPointer<vtkScalarBarActor> bar = vtkSmartPointer<vtkScalarBarActor>::New();
 
     const char* arrayName() const {
+        if (mode == PreviewColorMode::CopperPhi)
+            return "copper_phi";
         return mode == PreviewColorMode::Layer ? "layer_id" : "material_id";
+    }
+    void syncSelector() {
+        const QSignalBlocker blocker(colorSelector);
+        colorSelector->setCurrentIndex(colorSelector->findData(static_cast<int>(mode)));
+    }
+    void rebuildSelector(bool copper) {
+        const QSignalBlocker blocker(colorSelector);
+        colorSelector->clear();
+        colorSelector->addItem(QString::fromUtf8("层"), static_cast<int>(PreviewColorMode::Layer));
+        colorSelector->addItem(QString::fromUtf8("材料"),
+                               static_cast<int>(PreviewColorMode::Material));
+        if (copper)
+            colorSelector->addItem(QString::fromUtf8("铜占比"),
+                                   static_cast<int>(PreviewColorMode::CopperPhi));
+        colorSelector->setCurrentIndex(colorSelector->findData(static_cast<int>(mode)));
     }
     void color() {
         mapper->SetScalarModeToUseCellFieldData();
@@ -389,6 +408,22 @@ struct PreviewView::State {
         mapper->SetColorModeToMapScalars();
         mapper->UseLookupTableScalarRangeOn();
         auto values = result.data ? result.data->GetCellData()->GetArray(arrayName()) : nullptr;
+        if (mode == PreviewColorMode::CopperPhi) {
+            vtkNew<vtkLookupTable> colors;
+            colors->IndexedLookupOff();
+            colors->SetNumberOfTableValues(256);
+            colors->SetTableRange(0.0, 1.0);
+            colors->SetHueRange(0.667, 0.0);
+            colors->SetNanColor(0.65, 0.65, 0.65, 1);
+            colors->Build();
+            title = QString::fromUtf8("铜占比");
+            mapper->SetLookupTable(colors);
+            mapper->SetScalarVisibility(values != nullptr);
+            bar->SetLookupTable(colors);
+            bar->SetTitle(title.toUtf8().constData());
+            bar->SetVisibility(values && result.data->GetNumberOfCells() > 0);
+            return;
+        }
         std::set<int> ids;
         if (values)
             for (vtkIdType i = 0; i < values->GetNumberOfTuples(); ++i) {
@@ -432,8 +467,16 @@ PreviewView::PreviewView(QWidget* parent) : QWidget(parent), d(std::make_unique<
     layout->setContentsMargins(0, 0, 0, 0);
     d->summaryLabel = new QLabel(this);
     d->summaryLabel->setWordWrap(true);
+    d->colorSelector = new QComboBox(this);
+    d->colorSelector->setObjectName("previewColorMode");
+    d->rebuildSelector(false);
+    connect(d->colorSelector, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (index >= 0)
+            setColorMode(static_cast<PreviewColorMode>(d->colorSelector->itemData(index).toInt()));
+    });
     d->widget = new PreviewRenderWidget(this);
     layout->addWidget(d->summaryLabel);
+    layout->addWidget(d->colorSelector);
     layout->addWidget(d->widget);
     d->widget->setRenderWindow(d->window);
     d->window->AddRenderer(d->renderer);
@@ -508,6 +551,10 @@ bool PreviewView::show(vtkDataObject* mesh,
     if (downgrade)
         next.summary += "\nhex cut downgrade";
     d->result = std::move(next);
+    const bool copper = hasCopperPhi();
+    if (d->mode == PreviewColorMode::CopperPhi && !copper)
+        d->mode = PreviewColorMode::Layer;
+    d->rebuildSelector(copper);
     d->mapper->SetInputData(d->result.data);
     d->highlightMapper->SetInputData(d->result.highlights);
     d->actor->SetVisibility(d->result.data->GetNumberOfCells() > 0);
@@ -519,7 +566,10 @@ bool PreviewView::show(vtkDataObject* mesh,
     return true;
 }
 void PreviewView::setColorMode(PreviewColorMode mode) {
+    if (mode == PreviewColorMode::CopperPhi && !hasCopperPhi())
+        return;
     d->mode = mode;
+    d->syncSelector();
     d->color();
     d->widget->requestRender();
 }
@@ -534,6 +584,14 @@ QString PreviewView::colorBarTitle() const {
 }
 QString PreviewView::scalarArrayName() const {
     return d->arrayName();
+}
+bool PreviewView::hasCopperPhi() const {
+    auto data = displayed();
+    return data && data->GetCellData()->GetArray("copper_phi") != nullptr;
+}
+std::array<double, 2> PreviewView::colorRange() const {
+    const auto range = d->mapper->GetLookupTable()->GetRange();
+    return {range[0], range[1]};
 }
 vtkDataSet* PreviewView::displayed() const {
     return d->result.data;
