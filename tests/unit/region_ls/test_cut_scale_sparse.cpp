@@ -377,25 +377,41 @@ void remember_volume(std::vector<VolumeCheck>& volumes,
 }
 void volume_analytic(const std::vector<VolumeCheck>& volumes) {
     check(volumes.size() == 10, "all correctness fixtures must contribute analytic volumes");
+    // Captured before production changes on ced6409 (same cut code as 784fe34),
+    // GNU 14.2.0, Linux x86_64, Release. Keep n=64 accumulation bitwise fixed.
+    const std::map<BodyId, std::uint64_t> scale_bodies{{1, 0x3e9a4e823b7b30f0ULL},
+                                                       {2, 0x3e650b9b62c9466aULL},
+                                                       {3, 0x3e83988594cc3858ULL},
+                                                       {4, 0x3e6ad7f29abc9f05ULL}};
+    constexpr std::uint64_t scale_total = 0x3ea50b9b62c8ff8eULL;
     std::string errors;
     for (const auto& v : volumes) {
+        const bool scale = v.name == "scale_n64";
+        const Real tolerance = scale ? 1e-11 : 1e-12;
         Real total = 0;
         check(v.actual.body_volume.size() == v.expected.size(), v.name + ": body count");
         for (const auto& [body, expected] : v.expected) {
             total += expected;
             const auto actual = v.actual.body_volume.at(body);
+            if (scale && std::bit_cast<std::uint64_t>(actual) != scale_bodies.at(body))
+                errors += v.name + ": body " + std::to_string(body) + " baseline bits; ";
             const Real error = std::abs(actual / expected - 1);
             std::cout << "BODY_VOLUME " << v.name << " body=" << body << " actual=" << actual
+                      << " bits=0x" << std::hex << std::bit_cast<std::uint64_t>(actual) << std::dec
                       << " expected=" << expected << " relative_error=" << error << '\n';
-            if (!(error <= 1e-12))
+            if (!(error <= tolerance))
                 errors += v.name + ": body " + std::to_string(body) + " volume; ";
         }
+        if (scale && std::bit_cast<std::uint64_t>(v.actual.solid_volume) != scale_total)
+            errors += v.name + ": total baseline bits; ";
         const Real error = std::abs(v.actual.solid_volume / total - 1);
-        std::cout << "VOLUME " << v.name << " expected=" << total << " relative_error=" << error
-                  << '\n';
-        if (!(error <= 1e-12))
+        std::cout << "VOLUME " << v.name << " bits=0x" << std::hex
+                  << std::bit_cast<std::uint64_t>(v.actual.solid_volume) << std::dec
+                  << " expected=" << total << " relative_error=" << error << '\n';
+        if (!(error <= tolerance))
             errors += v.name + ": total volume; ";
-        if (v.expected.size() == 4 && !(std::abs(v.actual.solid_volume / 6.272e-7 - 1) <= 1e-12))
+        if (v.expected.size() == 4 &&
+            !(std::abs(v.actual.solid_volume / 6.272e-7 - 1) <= tolerance))
             errors += v.name + ": DEMO-GATE volume 6.272e-7; ";
     }
     check(errors.empty(), errors);
