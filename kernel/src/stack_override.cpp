@@ -1,6 +1,7 @@
 #include "stack_override.hpp"
 
-#include <charconv>
+#include "chipcae/core/parse_floating.hpp"
+
 #include <cmath>
 #include <fstream>
 #include <iterator>
@@ -200,9 +201,8 @@ class OverrideReader {
                 ++pos_;
         }
         double value = 0;
-        const auto [end, error] = std::from_chars(text_.data() + start, text_.data() + pos_, value);
-        if (error != std::errc{} || end != text_.data() + pos_ || !std::isfinite(value) ||
-            value <= 0)
+        if (!chipcae::parse_floating(text_.substr(start, pos_ - start), value) ||
+            !std::isfinite(value) || value <= 0)
             fail("thickness_m must be finite and positive");
         return value;
     }

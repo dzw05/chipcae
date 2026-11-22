@@ -1,6 +1,7 @@
 #pragma once
 
 #include "chipcae/core/crash_diag.hpp"
+#include "chipcae/core/parse_floating.hpp"
 
 #include <array>
 #include <cerrno>
@@ -20,6 +21,7 @@
 #include <string_view>
 #include <sys/resource.h>
 #include <sys/wait.h>
+#include <type_traits>
 #include <unistd.h>
 #include <vector>
 
@@ -109,9 +111,13 @@ struct Json {
         const auto& value = values.at(key);
         check(!value.is_string, "expected JSON number");
         Number result{};
-        const auto end = value.text.data() + value.text.size();
-        const auto parsed = std::from_chars(value.text.data(), end, result);
-        check(parsed.ec == std::errc{} && parsed.ptr == end, "invalid or out of range number");
+        if constexpr (std::is_integral_v<Number>) {
+            const auto end = value.text.data() + value.text.size();
+            const auto parsed = std::from_chars(value.text.data(), end, result);
+            check(parsed.ec == std::errc{} && parsed.ptr == end, "invalid or out of range number");
+        } else {
+            check(chipcae::parse_floating(value.text, result), "invalid or out of range number");
+        }
         return result;
     }
 };
