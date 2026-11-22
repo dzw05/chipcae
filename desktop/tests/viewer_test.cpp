@@ -675,7 +675,9 @@ int methodSummaryAcceptance(const QDir& root) {
                     t["method"] = method;
                     w["method"] = method;
                 }
-                writeSummaryFixture(root, temp, {t, w});
+                auto u = w;
+                u["name"] = "U_mag_max";
+                writeSummaryFixture(root, temp, {t, w, u});
                 ResultSession session;
                 require(session.open(temp.path()), qPrintable(session.error()));
                 ResultView view;
@@ -683,6 +685,7 @@ int methodSummaryAcceptance(const QDir& root) {
                 equal(view.tmaxText(), "T_max: 987.5 K");
                 equal(view.summary("T_max"), "T_max: 987.5 K");
                 equal(view.summary("warpage_pv"), "warpage_pv: 0 m");
+                equal(view.summary("U_mag_max"), "U_mag_max: 0 m");
             });
     }
     run("preserve method whitespace and empty unit spacing", [&](auto equal) {
@@ -2012,13 +2015,16 @@ with h5py.File(sys.argv[1], 'r+') as f:
         for (auto value : session.summary()) {
             auto entry = value.toObject();
             auto name = entry["name"].toString();
-            if (entry["step"].toInteger() == 0 && (name == "warpage_pv" || name == "U_mag_max"))
-                require(view.summary(name) == QString("%1: %2 %3 [%4]")
-                                                  .arg(name)
-                                                  .arg(entry["value"].toDouble(), 0, 'g', 16)
-                                                  .arg(entry["unit"].toString())
-                                                  .arg(entry["method"].toString()),
-                        "official summary regression");
+            if (entry["step"].toInteger() == 0 && (name == "warpage_pv" || name == "U_mag_max")) {
+                auto expected = QString("%1: %2 %3")
+                                    .arg(name)
+                                    .arg(entry["value"].toDouble(), 0, 'g', 16)
+                                    .arg(entry["unit"].toString());
+                const auto method = entry["method"];
+                if (method.isString() && !method.toString().isEmpty())
+                    expected += QString(" [%1]").arg(method.toString());
+                require(view.summary(name) == expected, "official summary regression");
+            }
         }
         require(view.tmaxText() == view.summary("T_max"), "T_max does not use official summary");
         ResultControls controls(view, session);
