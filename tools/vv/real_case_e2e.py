@@ -711,8 +711,8 @@ def _case(params):
 
 
 def _rss_kib(ru_maxrss: int, platform: str | None = None) -> int:
-    # Test-first placeholder: retain the current units until conversion is implemented.
-    return int(ru_maxrss)
+    platform = sys.platform if platform is None else platform
+    return -(-ru_maxrss // 1024) if platform == "darwin" else int(ru_maxrss)
 
 
 def _measured(argv, stage, folder, record, timeout_s):
@@ -748,7 +748,7 @@ def _measured(argv, stage, folder, record, timeout_s):
             done.set()
             watcher.join()
         entry.update(exit_code="timeout" if timed_out.is_set() else process.returncode,
-                     wall_s=time.monotonic() - start, peak_rss_kib=usage.ru_maxrss)
+                     wall_s=time.monotonic() - start, peak_rss_kib=_rss_kib(usage.ru_maxrss))
         if timed_out.is_set():
             entry["status_detail"] = "timeout"
         elif process.returncode < 0:
