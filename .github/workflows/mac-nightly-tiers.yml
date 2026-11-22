@@ -77,7 +77,7 @@ jobs:
       - name: Guard CMakeCache against chipcae-ci
         run: |
           set -euo pipefail
-          matches=$(grep 'chipcae-ci' build/CMakeCache.txt | grep -Ev 'CHIPCAE_CCACHE_EXECUTABLE|CMAKE_.*_COMPILER_LAUNCHER' || true)
+          matches=$(grep 'chipcae-ci' build/CMakeCache.txt | grep -Ev '^CMAKE_IGNORE_PREFIX_PATH|CHIPCAE_CCACHE_EXECUTABLE|CMAKE_.*_COMPILER_LAUNCHER' || true)
           if [ -n "$matches" ]; then
             printf '%s\n' "$matches"
             exit 1
