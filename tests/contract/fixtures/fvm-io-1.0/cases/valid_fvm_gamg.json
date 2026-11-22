@@ -1,0 +1,75 @@
+{
+  "constraints": {
+    "rigid": "3-2-1"
+  },
+  "loads": [
+    {
+      "T": 300,
+      "target": "face:zmin",
+      "type": "fixed_temperature"
+    },
+    {
+      "power": 10,
+      "target": "layer:heater",
+      "type": "heat_source"
+    },
+    {
+      "T_inf": 300,
+      "h": 10,
+      "target": "face:zmax",
+      "type": "convection"
+    }
+  ],
+  "materials": {
+    "ref": "materials.json"
+  },
+  "mesh": {
+    "levels": 1,
+    "max_ratio": 10,
+    "nx": 8,
+    "ny": 8,
+    "type": "aligned_cartesian_cut"
+  },
+  "output": {
+    "fields": [
+      "T",
+      "U",
+      "layer_id",
+      "material_id",
+      "cell_kind",
+      "elem_gid",
+      "volume"
+    ],
+    "format": "vtkhdf",
+    "warpage": {
+      "remove_rigid": "best_fit_plane",
+      "standard": "JESD22-B112"
+    }
+  },
+  "physics": [
+    {
+      "id": "thermal",
+      "mode": "steady",
+      "solver": "fvm.conduction"
+    },
+    {
+      "T_ref": 300,
+      "id": "mech",
+      "nonlinear": {
+        "geometric": false
+      },
+      "solver": "fvm.solid",
+      "temp_from": "thermal"
+    }
+  ],
+  "schema": "chipcae.case/1.0",
+  "solver": {
+    "linear": {
+      "preconditioner": "gamg",
+      "rtol": 1e-10
+    }
+  },
+  "stack": {
+    "ref": "stack.json"
+  }
+}

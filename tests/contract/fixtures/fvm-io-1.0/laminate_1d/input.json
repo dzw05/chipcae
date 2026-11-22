@@ -1,0 +1,118 @@
+{
+  "boundary": {
+    "bottom_T_K": 300,
+    "sides": "insulated",
+    "top_q_in_W_m2": 100
+  },
+  "cells": [
+    {
+      "conductivity_diag": [
+        1,
+        1,
+        1
+      ],
+      "id": 0,
+      "ijk": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "conductivity_diag": [
+        1,
+        1,
+        1
+      ],
+      "id": 1,
+      "ijk": [
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "conductivity_diag": [
+        2,
+        2,
+        2
+      ],
+      "id": 2,
+      "ijk": [
+        0,
+        0,
+        2
+      ]
+    },
+    {
+      "conductivity_diag": [
+        2,
+        2,
+        2
+      ],
+      "id": 3,
+      "ijk": [
+        0,
+        0,
+        3
+      ]
+    },
+    {
+      "conductivity_diag": [
+        4,
+        4,
+        4
+      ],
+      "id": 4,
+      "ijk": [
+        0,
+        0,
+        4
+      ]
+    },
+    {
+      "conductivity_diag": [
+        4,
+        4,
+        4
+      ],
+      "id": 5,
+      "ijk": [
+        0,
+        0,
+        5
+      ]
+    }
+  ],
+  "layers": [
+    {
+      "conductivity_W_mK": 1,
+      "thickness_m": 0.001
+    },
+    {
+      "conductivity_W_mK": 2,
+      "thickness_m": 0.002
+    },
+    {
+      "conductivity_W_mK": 4,
+      "thickness_m": 0.003
+    }
+  ],
+  "x_m": [
+    0,
+    0.01
+  ],
+  "y_m": [
+    0,
+    0.01
+  ],
+  "z_m": [
+    0,
+    0.0005,
+    0.001,
+    0.002,
+    0.003,
+    0.0045,
+    0.006
+  ]
+}
