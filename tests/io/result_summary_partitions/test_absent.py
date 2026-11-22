@@ -11,7 +11,7 @@ class Absent(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp) / 'run'
             _, manifest = fixture(run)
-            manifest.pop('partitions', None)
+            manifest.pop('partitions')
             save(run, manifest)
             invalid(self, run, 'partitions:', 'required object')
 
@@ -23,7 +23,7 @@ class Absent(unittest.TestCase):
             with self.subTest(aliases=aliases), tempfile.TemporaryDirectory() as tmp:
                 run = Path(tmp) / 'run'
                 _, manifest = fixture(run)
-                manifest.pop('partitions', None)
+                manifest.pop('partitions')
                 manifest.update(aliases)
                 save(run, manifest)
                 invalid(self, run, 'partitions:', 'required object')

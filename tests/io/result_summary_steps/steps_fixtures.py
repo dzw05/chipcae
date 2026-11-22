@@ -53,6 +53,7 @@ def steps_fixture(run):
         assert all(count == counts[0] for count in counts), record['file']
         per_step.append(counts[0])
     manifest['partitions']['per_step'] = per_step
+    manifest['partitions']['solver_fixed_per_run'] = True
     # Interleave owners to make filtering preserve manifest encounter order.
     manifest['summary'] = [
         dict(name=name, value=value, unit=UNITS[name], step=n)
