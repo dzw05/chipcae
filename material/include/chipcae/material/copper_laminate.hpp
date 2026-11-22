@@ -16,6 +16,17 @@ CHIPCAE_LAMINATE_INLINE void copper_laminate(double Em,
                                              double f,
                                              double* p,
                                              double* th) {
+    if (f == 0 || f == 1) {
+        const double Eb = f == 0 ? Em : Ec;
+        const double nb = f == 0 ? nm : nc;
+        const double ab = f == 0 ? am : ac;
+        const double Gb = Eb / (2 * (1 + nb));
+        const double values[9] = {Eb, Eb, Eb, nb, nb, nb, Gb, Gb, Gb};
+        for (int i = 0; i < 9; ++i)
+            p[i] = values[i];
+        th[0] = th[1] = th[2] = ab;
+        return;
+    }
     const double m = 1 - f;
     const double Gm = Em / (2 * (1 + nm)), Gc = Ec / (2 * (1 + nc));
     const double E = f * Ec + m * Em, n = f * nc + m * nm;

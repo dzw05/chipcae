@@ -53,6 +53,12 @@
 
 namespace chipcae::desktop {
 namespace {
+QString methodSuffix(const QJsonObject& entry) {
+    const auto method = entry["method"];
+    if (!method.isString() || method.toString().isEmpty())
+        return {};
+    return " [" + method.toString() + "]";
+}
 QString canonical(QString n) {
     if (n == "cut_poly")
         return "cut";
@@ -423,6 +429,7 @@ QString ResultView::tmaxText() const {
                 QString text = QString("T_max: %1 %2")
                                    .arg(entry["value"].toDouble(), 0, 'g', 16)
                                    .arg(entry["unit"].toString());
+                text += methodSuffix(entry);
                 for (auto key : {"region", "region_id", "body"}) {
                     auto region = entry[key].toString();
                     if (!region.isEmpty()) {
@@ -533,9 +540,10 @@ QString ResultView::summary(const QString& name) const {
             auto s = v.toObject();
             if (s["name"] == name && s["step"].toInteger(-1) == d->step && s["value"].isDouble())
                 return QString("%1: %2 %3")
-                    .arg(name)
-                    .arg(s["value"].toDouble(), 0, 'g', 16)
-                    .arg(s["unit"].toString());
+                           .arg(name)
+                           .arg(s["value"].toDouble(), 0, 'g', 16)
+                           .arg(s["unit"].toString()) +
+                       methodSuffix(s);
         }
     return name + ": unavailable";
 }

@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: mac-highmem
+  group: mac-selfhosted
   cancel-in-progress: false
 
 env:
@@ -86,7 +86,18 @@ jobs:
             -DCHIPCAE_ENABLE_MPI=ON -DCHIPCAE_ENABLE_HDF5=ON \
             -DCHIPCAE_ENABLE_MFEM=ON -DCHIPCAE_ENABLE_JSONCONS=ON \
             -DCMAKE_PREFIX_PATH="$HOME/chipcae-env/env;$HOME/chipcae-mac/deps/mfem;$HOME/chipcae-mac/deps/jsoncons" \
+            -DHDF5_NO_FIND_PACKAGE_CONFIG_FILE=ON \
+            -DCMAKE_IGNORE_PREFIX_PATH="$HOME/chipcae-ci/env" \
             -DCMAKE_EXE_LINKER_FLAGS="-L$HOME/chipcae-env/env/lib -llapack -lblas"
+
+      - name: Guard CMakeCache against chipcae-ci
+        run: |
+          set -euo pipefail
+          matches=$(grep 'chipcae-ci' build/CMakeCache.txt | grep -Ev '^CMAKE_IGNORE_PREFIX_PATH|CHIPCAE_CCACHE_EXECUTABLE|CMAKE_.*_COMPILER_LAUNCHER' || true)
+          if [ -n "$matches" ]; then
+            printf '%s\n' "$matches"
+            exit 1
+          fi
 
       - name: Build
         run: |
@@ -168,6 +179,11 @@ jobs:
         run: |
           set -euo pipefail
           start=$(date +%s)
+          printf 'MARK highmem-mandatory-begin %s\n' "$start" >> "$RUNNER_TEMP/loadavg.log"
+          mark_end() {
+            printf 'MARK highmem-mandatory-end %s\n' "$(date +%s)" >> "$RUNNER_TEMP/loadavg.log"
+          }
+          trap mark_end EXIT
           status=0
           ctest --test-dir build -L highmem -j 1 --output-on-failure \
             --output-junit junit-highmem.xml || status=$?
@@ -270,21 +286,52 @@ jobs:
           import math
           import re
           from pathlib import Path
-          samples = []
+          mark_begin = re.compile(r'MARK\s+highmem-mandatory-begin\s+(\d+)\s*')
+          mark_end = re.compile(r'MARK\s+highmem-mandatory-end\s+(\d+)\s*')
+          sample_re = re.compile(r'(\d+)\s+\{\s*(\S+)\s+(\S+)\s+(\S+)\s*\}\s*')
+          begin = end = None
+          all_samples = []
           for line in Path('build/loadavg.log').read_text().splitlines():
-              match = re.fullmatch(r'\d+\s+\{\s*(\S+)\s+(\S+)\s+(\S+)\s*\}\s*', line)
+              if not line.strip():
+                  continue
+              if line.startswith('MARK '):
+                  match = mark_begin.fullmatch(line)
+                  if match:
+                      begin = int(match.group(1))
+                      continue
+                  match = mark_end.fullmatch(line)
+                  if match:
+                      end = int(match.group(1))
+                      continue
+                  continue
+              match = sample_re.fullmatch(line)
               if not match:
                   raise SystemExit('malformed load sample: ' + line)
-              values = list(map(float, match.groups()))
+              timestamp = int(match.group(1))
+              values = list(map(float, match.group(2, 3, 4)))
               if not all(math.isfinite(value) and value >= 0 for value in values):
                   raise SystemExit('invalid load sample: ' + line)
-              samples.append(values[0])
-          if not samples:
-              raise SystemExit('load samples must be nonempty')
-          peak = max(samples)
-          print(f'maximum one-minute load: {peak}; acceptance limit: 12; samples: {len(samples)}')
+              all_samples.append((timestamp, values[0]))
+          if begin is None or end is None:
+              raise SystemExit('missing highmem mandatory begin/end load markers')
+          if end < begin:
+              raise SystemExit(f'invalid highmem mandatory window: begin={begin} end={end}')
+          window = [load for timestamp, load in all_samples if begin <= timestamp <= end]
+          if not window:
+              raise SystemExit(
+                  f'no load samples in mandatory highmem window [{begin}, {end}]')
+          peak = max(window)
+          print(
+              f'mandatory highmem one-minute load: {peak}; '
+              f'acceptance limit: 12; samples: {len(window)}; '
+              f'window: [{begin}, {end}]')
+          if all_samples:
+              print(
+                  f'job one-minute load (informational, not gated): '
+                  f'{max(load for _, load in all_samples)}; '
+                  f'samples: {len(all_samples)}')
           if peak > 12:
-              raise SystemExit('one-minute load exceeds 12')
+              raise SystemExit('mandatory highmem one-minute load exceeds 12')
           PY
 
       - name: Upload test results

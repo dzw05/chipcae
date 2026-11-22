@@ -3,6 +3,8 @@
 #include <Kokkos_Core.hpp>
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -157,6 +159,19 @@ int main(int argc, char** argv) {
         const auto parsed = parse_material_library_json(json);
         require(parsed.size() == 1, "extension must preserve the card count");
         same_card(parsed[0], parse_material_json(card));
+    });
+    run("JSON_number_conversion", [&] {
+        // Extension values still pass through the JSON reader before validation.
+        for (const auto* token : {"1e-310", "5e-324", "2.2250738585072012e-308", "0e-99999"})
+            valid(validate_material_library_json(
+                with_member(library, std::string("\"x-number\":") + token)));
+        for (const auto* token : {"1e999", "1e-324", "+1", "01", "0x10", "1e", "1x"})
+            invalid(with_member(library, std::string("\"x-number\":") + token));
+        const auto precise =
+            replace_once(card, R"("density": 1000)", R"("density": 1.0000000000000002)");
+        require(std::bit_cast<std::uint64_t>(parse_material_json(precise).density) ==
+                    UINT64_C(0x3ff0000000000001),
+                "JSON number must round to the same double");
     });
     run("missing_schema", [&] {
         invalid(read(material_dir / "schema/examples/negative-library-missing-schema.json"),

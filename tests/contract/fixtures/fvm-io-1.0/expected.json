@@ -1,0 +1,94 @@
+{
+  "cases": {
+    "fvm_column_gmg": {
+      "code": "INPUT_INVALID",
+      "message": "preconditioner column_gmg not supported by fvm"
+    },
+    "fvm_direct": {
+      "code": "INPUT_INVALID",
+      "message": "preconditioner direct not supported by fvm"
+    },
+    "mixed_fem_fvm": {
+      "code": "INPUT_INVALID",
+      "message": "mixed fem/fvm physics not supported in case/1.0"
+    },
+    "solver_case": {
+      "code": "INPUT_INVALID",
+      "message": "invalid or duplicate physics"
+    },
+    "valid_fvm": null,
+    "valid_fvm_gamg": null
+  },
+  "fields": [
+    {
+      "components": 1,
+      "dtype": "float64",
+      "location": "point",
+      "name": "T",
+      "unit": "K"
+    },
+    {
+      "components": 3,
+      "dtype": "float64",
+      "location": "point",
+      "name": "U",
+      "unit": "m"
+    },
+    {
+      "components": 1,
+      "dtype": "int32",
+      "location": "cell",
+      "name": "layer_id",
+      "unit": "1"
+    },
+    {
+      "components": 1,
+      "dtype": "int32",
+      "location": "cell",
+      "name": "material_id",
+      "unit": "1"
+    },
+    {
+      "components": 1,
+      "dtype": "int32",
+      "location": "cell",
+      "name": "cell_kind",
+      "unit": "1"
+    },
+    {
+      "components": 1,
+      "dtype": "int64",
+      "location": "cell",
+      "name": "elem_gid",
+      "unit": "1"
+    },
+    {
+      "components": 1,
+      "dtype": "float64",
+      "location": "cell",
+      "name": "volume",
+      "unit": "m3"
+    },
+    {
+      "components": 1,
+      "dtype": "float64",
+      "location": "cell",
+      "name": "copper_fraction",
+      "unit": "1"
+    },
+    {
+      "components": 3,
+      "dtype": "float64",
+      "location": "cell",
+      "name": "conductivity_diag",
+      "unit": "W/(m\u00b7K)"
+    },
+    {
+      "components": 1,
+      "dtype": "float64",
+      "location": "cell",
+      "name": "T_cell",
+      "unit": "K"
+    }
+  ]
+}

@@ -135,6 +135,7 @@ def synthetic_run(run, *, t_cell=False, empty_cut=False, empty_hex=False, permut
         "mesh": {"nx0": 3, "ny0": 1, "L": 1, "padded_cells": 3, "nz": 1,
                  "mesh_sha256": "a"*64},
         "steps": [{"n": 0, "file": "out/step-0.vtkhdf"}],
+        "partitions": {"per_step": [2], "solver_fixed_per_run": True},
         "summary": [{"name": name, "value": value, "method": "synthetic",
                      "unit": "K" if name == "T_max" else "m"}
                     for name, value in (("T_max", 347.), ("U_mag_max", 17.),

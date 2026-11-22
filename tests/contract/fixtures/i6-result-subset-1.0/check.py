@@ -2,6 +2,7 @@
 """Check i6-result-subset/1.0 fixtures. Standard library only (jsonschema optional).
 
   python3 check.py --repo PATH
+Inside the repository, --repo is discovered from the checker location if omitted.
 Exit 0 = pass, 1 = mismatch, 2 = usage / import failure.
 Without jsonschema: print SKIP-SCHEMA and keep structural checks (not a failure).
 Importing tools.vv.check_result_data_class.check_file is required; failure exits 1.
@@ -345,8 +346,14 @@ def load_check_file(repo: Path):
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--repo", type=Path, required=True, help="origin/main work tree")
+    parser.add_argument("--repo", type=Path, help="repository work tree (auto-detected in repo)")
     args = parser.parse_args(argv)
+    if args.repo is None:
+        args.repo = next((root for root in HERE.parents
+                          if (root / "tests/contract").is_dir()), None)
+        if args.repo is None:
+            sys.stderr.write("--repo required outside the repository\n")
+            return 2
     repo = args.repo
     if not repo.exists():
         sys.stderr.write(f"--repo not found: {repo}\n")
