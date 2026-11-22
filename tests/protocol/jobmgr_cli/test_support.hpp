@@ -79,7 +79,8 @@ struct Result {
 };
 
 // Capture files avoid pipe-buffer deadlocks; argv is never interpreted by a shell.
-inline Result cli(const std::vector<std::string>& arguments) {
+inline Result cli(const std::vector<std::string>& arguments,
+                  const std::vector<std::pair<std::string, std::string>>& environment = {}) {
     auto capture = std::make_shared<TempDirectory>();
     const auto stdout_path = (capture->path / "stdout").string();
     const auto stderr_path = (capture->path / "stderr").string();
@@ -99,6 +100,9 @@ inline Result cli(const std::vector<std::string>& arguments) {
             _exit(126);
         close(output);
         close(error);
+        for (const auto& [name, value] : environment)
+            if (setenv(name.c_str(), value.c_str(), 1) != 0)
+                _exit(126);
         execv(argv.front(), argv.data());
         _exit(127);
     }

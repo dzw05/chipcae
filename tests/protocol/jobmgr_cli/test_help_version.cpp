@@ -12,6 +12,8 @@ int main() {
             for (const auto* command : {"submit", "list", "get", "wait", "cancel", "poll"})
                 require(result.out.find(command) != std::string::npos,
                         std::string("help missing command ") + command + ": " + result.out);
+            require(result.out.find("[--wait [--timeout-ms <n>]]") != std::string::npos,
+                    "help missing optional submit wait syntax");
         });
     }
     for (const auto* alias : {"--version", "-v"}) {

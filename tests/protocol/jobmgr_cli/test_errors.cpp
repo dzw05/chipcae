@@ -74,8 +74,26 @@ int main() {
             name += " [" + arg + "]";
         suite.test(name, [&] { usage_error(arguments); });
     }
+    for (const auto& tail : {std::vector<std::string>{"--timeout-ms", "0"},
+                             {"--wait", "--wait"},
+                             {"--wait", "value"},
+                             {"--wait", "--timeout-ms"},
+                             {"--wait", "--timeout-ms", "0", "--timeout-ms", "1"}}) {
+        suite.test("invalid submit wait options", [&] {
+            Fixture fixture;
+            auto arguments = fixture.submit_args();
+            arguments.insert(arguments.end(), tail.begin(), tail.end());
+            usage_error(arguments);
+        });
+    }
     for (const auto* number :
          {"", "abc", "1ms", "1.5", "--1", "9223372036854775808", "-9223372036854775809"}) {
+        suite.test(std::string("submit timeout ") + number, [&] {
+            Fixture fixture;
+            auto arguments = fixture.submit_args();
+            arguments.insert(arguments.end(), {"--wait", "--timeout-ms", number});
+            usage_error(arguments);
+        });
         for (const bool wait : {true, false}) {
             suite.test(std::string(wait ? "timeout " : "grace ") + number, [&] {
                 Fixture fixture;

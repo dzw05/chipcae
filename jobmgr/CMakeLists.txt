@@ -47,3 +47,8 @@ if(Protobuf_FOUND AND TARGET jsoncons::jsoncons)
 else()
     message(STATUS "jobmgr: LocalJobManager skipped (Protobuf or jsoncons not found)")
 endif()
+
+if(TARGET chipcae::jobmgr_local)
+    target_link_libraries(chipcae-jobmgr PRIVATE chipcae::jobmgr_local)
+    target_compile_definitions(chipcae-jobmgr PRIVATE CHIPCAE_JOBMGR_LOCAL=1)
+endif()
