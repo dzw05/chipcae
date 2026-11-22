@@ -50,6 +50,7 @@ if(CHIPCAE_ENABLE_JSONCONS)
 endif()
 chipcae_set_warnings(k1_copper_phi_report)
 add_test(NAME mesh_copper_phi_report COMMAND k1_copper_phi_report)
+# Full CI builds this target; the mesh-only job builds an explicit target list.
 set_tests_properties(mesh_copper_phi_report PROPERTIES LABELS "copper;tierA" TIMEOUT 60)
 add_executable(k1_cut cut.cpp)
 target_link_libraries(k1_cut PRIVATE chipcae_mesh_cut)

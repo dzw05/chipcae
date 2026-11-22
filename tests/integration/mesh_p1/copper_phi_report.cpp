@@ -608,6 +608,7 @@ void fixture_nonfinite_save() {
         }
 }
 #endif
+// The brief retains this synthetic timing/RSS check after dropping real-substrate timing.
 // One process per sample: ru_maxrss is a process high-water mark.
 int benchmark(int argc, char** argv) {
 #ifdef CHIPCAE_ENABLE_ECAD
