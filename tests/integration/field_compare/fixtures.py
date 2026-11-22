@@ -210,8 +210,10 @@ def solve(root, name, exe, source, *, ranks=1, launcher=None, levels=1,
         "solver": {"linear": {"preconditioner": preconditioner, "rtol": 1e-10}},
         "output": {"format": "vtkhdf",
                    "warpage": {"standard": "JESD22-B112", "remove_rigid": "best_fit_plane"},
-                   "fields": ["T", "U", "layer_id", "material_id", "cell_kind", "elem_gid", "volume"]},
+                   "fields": ["T", "U", "layer_id", "material_id", "cell_kind", "elem_gid"]},
     }
+    if fvm:
+        case["output"]["fields"].append("volume")
     if elastic:
         case["physics"].append({"id": "mech", "solver": "fvm.solid" if fvm else "fem.solid",
                                 "temp_from": "thermal", "T_ref": AMBIENT,
