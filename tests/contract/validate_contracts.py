@@ -98,6 +98,9 @@ def fixture_selfchecks(root):
     for path in sorted(root.glob("tests/contract/fixtures/*/check.py")):
         result = subprocess.run([sys.executable, str(path)], cwd=str(root),
                                 capture_output=True, text=True)
+        if result.returncode == 77:
+            print(f"SKIP: fixture {path.parent.name}:\n{result.stdout}{result.stderr}")
+            continue
         assert result.returncode == 0, (
             f"fixture {path.parent.name}:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )

@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Acceptance tests for the synthetic fvm-io/1.0 package, not the product parser.
 
-Exit status: 0 pass, 1 contract mismatch, 2 usage/I/O/dependency error.
+Exit status: 0 pass, 1 contract mismatch, 2 usage/I/O/dependency error, 77 no NumPy.
 Input format is described in the contract test README. No generator is imported:
 reference temperatures are independently assembled from the fixture inputs.
-Regeneration byte equality is checked in the running NumPy/BLAS environment;
-cross-platform byte equality remains unverified.
+Regeneration preserves exact scripts/structural data and validates floating-point
+goldens with numerical(), allowing NumPy/BLAS roundoff at the existing tolerances.
 """
 import argparse
+import copy
 import hashlib
 import json
 import math
@@ -360,20 +361,42 @@ def cases(package):
             require(pc == ("gamg" if name.endswith("gamg") else "jacobi"), f"{name}: preconditioner")
 
 
+def mesh_error(mesh):
+    def finite_attributes(value):
+        if isinstance(value, dict):
+            for item in value.values():
+                finite_attributes(item)
+        elif isinstance(value, list):
+            for item in value:
+                finite_attributes(item)
+        elif type(value) in (int, float):
+            finite(value)
+
+    try:
+        for axis in mesh["axes"]:
+            for value in axis:
+                finite(value)
+        finite_attributes(mesh["attr_table"])
+        for value in mesh["copper_phi"]:
+            finite(value)
+    except AssertionError:
+        return "INPUT_INVALID"
+    nx, ny, nz = (len(mesh["axes"][axis]) - 1 for axis in range(3))
+    mapping = mesh["copper_layer_of_layer"]
+    copper_layers = len({layer for layer in mapping if layer >= 0})
+    valid = (min(nx, ny, nz) > 0 and bool(mesh["attr_table"])
+             and len(mesh["copper_phi"]) == copper_layers * nx * ny)
+    return None if valid else "INPUT_INVALID"
+
+
 def mesh_boundaries(package):
-    """Synthetic mesh-array shape checks; errors freeze codes, not new messages."""
+    """Synthetic mesh-array shape/finiteness checks with literal expected codes."""
     rows = named(read(package / "mesh_boundaries.json"))
     require(set(rows) == set(BOUNDARY_ERRORS), "missing/unexpected mesh boundary cases")
     for name, expected in BOUNDARY_ERRORS.items():
         row = rows[name]
         require(row["expected_code"] == expected, f"{name}: expected mesh error code")
-        mesh = row["input"]
-        nx, ny, nz = (len(mesh["axes"][axis]) - 1 for axis in range(3))
-        mapping = mesh["copper_layer_of_layer"]
-        copper_layers = len({layer for layer in mapping if layer >= 0})
-        valid = (min(nx, ny, nz) > 0 and bool(mesh["attr_table"])
-                 and len(mesh["copper_phi"]) == copper_layers * nx * ny)
-        actual = None if valid else "INPUT_INVALID"
+        actual = mesh_error(row["input"])
         require(actual == expected, f"{name}: mesh outcome {actual} != {expected}")
 
 
@@ -396,6 +419,38 @@ def hashes(package):
             for p in sorted(package.rglob("*")) if p.is_file()}
 
 
+def golden_structure(actual, expected):
+    """Compare golden JSON exactly except for finite floating-point values."""
+    require(type(actual) is type(expected), "generator golden JSON type mismatch")
+    if isinstance(actual, dict):
+        require(actual.keys() == expected.keys(), "generator golden JSON key mismatch")
+        for key in expected:
+            golden_structure(actual[key], expected[key])
+    elif isinstance(actual, list):
+        require(len(actual) == len(expected), "generator golden JSON length mismatch")
+        for a, e in zip(actual, expected):
+            golden_structure(a, e)
+    elif type(actual) is float:
+        finite(actual)
+        finite(expected)
+    else:
+        require(actual == expected, "generator golden JSON value mismatch")
+
+
+def compare_generated(actual, expected):
+    actual_hashes, expected_hashes = hashes(actual), hashes(expected)
+    require(set(actual_hashes) == set(expected_hashes) == REQUIRED, "generator file set mismatch")
+    numerical_goldens = {"laminate_1d/expected.json", "hex_kdiag/expected.json"}
+    for relative in sorted(REQUIRED):
+        if relative in numerical_goldens:
+            golden_structure(read(actual / relative), read(expected / relative))
+        else:
+            require(actual_hashes[relative] == expected_hashes[relative],
+                    f"generator SHA-256 mismatch: {relative}")
+    # Reuse the existing analytic/relative comparisons and conservation checks.
+    numerical(actual)
+
+
 def generator_acceptance(package):
     with tempfile.TemporaryDirectory(prefix="fvm-io-gen-") as temp:
         first, second = Path(temp) / "first", Path(temp) / "second"
@@ -403,7 +458,109 @@ def generator_acceptance(package):
             result = subprocess.run([sys.executable, str(package / "gen.py"), "--out", str(out)],
                                     capture_output=True, text=True)
             require(result.returncode == 0, f"gen.py --out: {result.stdout}\n{result.stderr}")
-            require(hashes(out) == hashes(package), "generator file set/SHA-256 mismatch")
+            compare_generated(out, package)
+
+
+def generator_comparison_acceptance(package):
+    """Allow roundoff only in golden floats; keep structure and file coverage exact."""
+    with tempfile.TemporaryDirectory(prefix="fvm-io-compare-") as temp:
+        generated = Path(temp) / "package"
+        shutil.copytree(package, generated)
+        for relative in ("laminate_1d/expected.json", "hex_kdiag/expected.json"):
+            target = generated / relative
+            original = target.read_bytes()
+            doc = read(target)
+            doc["cells"][0]["T_K"] += 1e-11
+            target.write_text(json.dumps(doc) + "\n", encoding="utf-8")
+            compare_generated(generated, package)
+            target.write_bytes(original)
+
+        changes = (
+            ("hex_kdiag/expected.json", lambda d: d["cells"][0].update(
+                T_K=d["cells"][0]["T_K"] + 1e-9)),
+            ("laminate_1d/expected.json", lambda d: d["cells"][0].update(
+                T_K=d["cells"][0]["T_K"] + 1e-9)),
+            ("hex_kdiag/expected.json", lambda d: d["cells"][0].update(T_K=300)),
+            ("hex_kdiag/expected.json", lambda d: d["cells"][0].update(id=0.0)),
+            ("hex_kdiag/expected.json", lambda d: d["cells"][0].update(id=False)),
+            ("hex_kdiag/expected.json", lambda d: d["cells"][0].update(extra="K")),
+            ("hex_kdiag/expected.json", lambda d: d.update(extra=[])),
+            ("hex_kdiag/expected.json", lambda d: d["cells"].reverse()),
+            ("hex_kdiag/expected.json", lambda d: d["cells"].pop()),
+            ("hex_kdiag/expected.json", lambda d: d["cells"][0].update(T_K=float("inf"))),
+            ("expected.json", lambda d: d["fields"][0].update(unit="wrong")),
+            ("manifest_fvm_solid/manifest.json", lambda d: d["summary"][0].update(value=2e-6)),
+        )
+        for relative, mutate in changes:
+            target = generated / relative
+            original = target.read_bytes()
+            doc = read(target)
+            mutate(doc)
+            target.write_text(json.dumps(doc) + "\n", encoding="utf-8")
+            try:
+                compare_generated(generated, package)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError(f"generator comparison accepted invalid change: {relative}")
+            target.write_bytes(original)
+        for relative in (*sorted(REQUIRED), "unexpected.json"):
+            target = generated / relative
+            original = target.read_bytes() if target.exists() else None
+            if original is None:
+                target.write_text("{}\n", encoding="utf-8")
+            else:
+                target.unlink()
+            try:
+                compare_generated(generated, package)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError(f"generator comparison accepted wrong file set: {relative}")
+            if original is None:
+                target.unlink()
+            else:
+                target.write_bytes(original)
+        for relative in ("check.py", "gen.py", "hex_kdiag/input.json"):
+            target = generated / relative
+            original = target.read_bytes()
+            target.write_bytes(original + b"\n")
+            try:
+                compare_generated(generated, package)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError(f"generator comparison accepted changed bytes: {relative}")
+            target.write_bytes(original)
+
+
+def dependency_acceptance(package, repo):
+    """Missing NumPy skips the real checker and remains visible through the hook."""
+    import contextlib
+    import io
+    import runpy
+
+    code = ("import runpy, sys; sys.modules['numpy'] = None; "
+            "sys.argv = [sys.argv[1], '--repo', sys.argv[2]]; "
+            "runpy.run_path(sys.argv[0], run_name='__main__')")
+    result = subprocess.run([sys.executable, "-c", code, str(package / "check.py"), str(repo)],
+                            capture_output=True, text=True)
+    require(result.returncode == 77 and "SKIP" in result.stdout and "NumPy" in result.stdout,
+            f"missing NumPy must skip: {result.returncode}: {result.stdout} {result.stderr}")
+    hook = runpy.run_path(str(repo / "tests/contract/validate_contracts.py"))["fixture_selfchecks"]
+    with tempfile.TemporaryDirectory(prefix="fvm-io-skip-hook-") as temp:
+        root = Path(temp)
+        for name, source in (
+                ("a-skip", "import sys\nprint('SKIP: optional dependency')\nsys.exit(77)\n"),
+                ("z-pass", "from pathlib import Path\nPath('continued').touch()\n")):
+            directory = root / "tests/contract/fixtures" / name
+            directory.mkdir(parents=True)
+            (directory / "check.py").write_text(source, encoding="utf-8")
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            hook(root)
+        require("a-skip" in output.getvalue() and "SKIP: optional dependency" in output.getvalue()
+                and (root / "continued").exists(), "shared hook must report skips and continue")
 
 
 def mutation_acceptance(package, repo):
@@ -693,7 +850,40 @@ def argument_free_hook_acceptance(repo):
 
 
 def boundary_acceptance(package, repo):
-    """Pin unequal-distance face values and publication-stage boundary behavior."""
+    """Reject nonfinite meshes; pin face values and publication-stage behavior."""
+    baseline = named(read(package / "mesh_boundaries.json"))["valid_mesh"]["input"]
+    for value in (float("nan"), float("inf"), -float("inf")):
+        for axis in range(3):
+            mesh = copy.deepcopy(baseline)
+            mesh["axes"][axis][-1] = value
+            require(mesh_error(mesh) == "INPUT_INVALID", f"nonfinite mesh axis {axis}: {value}")
+        for attribute in (value, {"conductivity_diag": [1.0, value, 1.0]}):
+            mesh = copy.deepcopy(baseline)
+            mesh["attr_table"][-1]["layer"] = attribute
+            require(mesh_error(mesh) == "INPUT_INVALID", f"nonfinite mesh attribute: {value}")
+        mesh = copy.deepcopy(baseline)
+        mesh["copper_phi"][-1] = value
+        require(mesh_error(mesh) == "INPUT_INVALID", f"nonfinite copper fraction: {value}")
+    # 1e309 is valid JSON but decodes to infinity without invoking parse_constant.
+    # Exercise the on-disk validator too, rather than only the extracted classifier.
+    with tempfile.TemporaryDirectory(prefix="fvm-io-nonfinite-") as temp:
+        for field in ("axes", "attr_table", "copper_phi"):
+            rows = read(package / "mesh_boundaries.json")
+            mesh = rows[0]["input"]
+            if field == "axes":
+                mesh[field][0][-1] = float("inf")
+            elif field == "attr_table":
+                mesh[field][-1]["layer"] = float("inf")
+            else:
+                mesh[field][-1] = float("inf")
+            (Path(temp) / "mesh_boundaries.json").write_text(
+                json.dumps(rows).replace("Infinity", "1e309") + "\n", encoding="utf-8")
+            try:
+                mesh_boundaries(Path(temp))
+            except AssertionError as error:
+                require("mesh outcome INPUT_INVALID != None" in str(error), str(error))
+            else:
+                raise AssertionError(f"mesh boundary validator accepted nonfinite {field}")
     faces = {}
     reference(read(package / "hex_kdiag/input.json"), faces)
     # First +x/+y/+z faces: hand-reduced A/(d_left/k_left+d_right/k_right).
@@ -724,10 +914,16 @@ def main():
             print("--repo required outside the repository", file=sys.stderr)
             return 2
     try:
-        import numpy  # Required, unlike the optional jsonschema validator.
+        try:
+            import numpy
+        except ImportError:
+            print("SKIP: NumPy unavailable; fvm-io/1.0 acceptance requires NumPy")
+            return 77
         validate(HERE, args.repo)
         boundary_acceptance(HERE, args.repo)
         generator_acceptance(HERE)
+        generator_comparison_acceptance(HERE)
+        dependency_acceptance(HERE, args.repo)
         mutation_acceptance(HERE, args.repo)
         optional_schema_acceptance(HERE, args.repo)
         missing_data_hook_acceptance(HERE, args.repo)

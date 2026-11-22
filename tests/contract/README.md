@@ -36,14 +36,22 @@ Copies outside the repository, including handoff packages, require
 `--repo <source>` (otherwise exit 2 with `--repo required outside the repository`).
 The shared `fixture_selfchecks(root)` hook runs all discovered checkers without
 arguments, in sorted order with the repository as their working directory, and
-includes captured stdout/stderr in any failure assertion. This follows brief
-revision 2, which supersedes the original hook specification requiring `--repo`;
+includes captured stdout/stderr in any failure assertion.
+Checkers must finish in bounded time, declare any third-party dependencies,
+and produce deterministic output. Exit 77 reports a visible skip and lets the
+hook continue with the remaining checkers. A green `contract_schemas` validates
+fixtures; it does not establish product compliance or approve contract freezing.
+This follows brief revision 2, which supersedes the original hook specification
+requiring `--repo`;
 existing checkers such as `cut-union-1.0` do not accept that option. The FVM checker
-requires NumPy; jsonschema is optional (prints `SKIP-SCHEMA`, retaining structural
-checks). It checks synthetic laminate analytic temperatures, an independent dense
-TPFA solve for 3×2×4 hexes, conservation, completed-output manifest metadata and
-six case contract outcomes (including case-sensitive solver rejection), then tests
-`gen.py --out <directory>` determinism, overwrite behavior and checker mutations. Run it directly or through
+returns 77 (`SKIP`) when NumPy is absent; jsonschema is optional (prints
+`SKIP-SCHEMA`, retaining structural checks). It checks synthetic laminate analytic
+temperatures, an independent dense TPFA solve for 3×2×4 hexes, conservation,
+completed-output manifest metadata and
+the five required case fragments (`valid_fvm`, `valid_fvm_gamg`, `mixed_fem_fvm`,
+`fvm_direct`, `fvm_column_gmg`), plus `solver_case` for case-sensitive solver rejection,
+then tests `gen.py --out <directory>` determinism, overwrite behavior and checker
+mutations. Run it directly or through
 `python3 tests/contract/validate_contracts.py schemas <source>` / `contract_schemas`.
 Fixture IDs use `((k*ny)+j)*nx+i`; they are local keys, distinct from product
 Morton `elem_gid`. Add `--handoff <package>` to compare repository/handoff SHA-256
@@ -76,16 +84,23 @@ The current product accepts FVM families, defaults to Jacobi, dispatches the
 thermal pipeline and supports `volume`. Its unsupported-preconditioner error
 text still differs from this draft, and mechanical summaries still use the
 thermal-only placeholder. `ResultsPartition` has no optional `T_cell` member.
-Elastic behavior follows I14; nonconvex geometry follows cutgeom-nc. Generator
-byte determinism is checked in the running NumPy/BLAS environment; cross-platform
-byte equality still needs verification, without relaxing numerical tolerances.
+Elastic behavior follows I14; nonconvex geometry follows cutgeom-nc. Regenerated
+file sets must match `REQUIRED` exactly. Scripts and structural JSON remain byte
+identical; numerical golden JSON preserves exact keys, types, integer IDs and
+ordering, while floating values use the existing `numerical()` comparisons
+(laminate absolute `1e-10 K`, hex relative `1e-12`, conservation `1e-9`).
 `gen.py` returns 0 on success or 2 for usage/I/O/dependency errors; `check.py`
-returns 0 on success, 1 for contract mismatches or 2 for those operational errors.
+returns 0 on success, 1 for contract mismatches, 2 for operational errors or 77
+when NumPy is absent. Unsupported-preconditioner messages, `T_cell`, diagnostic
+units and mechanical summaries still require architect and mesh/solver/vv
+signatures before a separate freeze; this PR does not open that gate.
 
 The FVM fixture checks every internal face against the distance-weighted harmonic
 conductivity formula and pins the first x/y/z face conductances to hand-derived
 values (`3/4000`, `1/2250`, `36/3125` W/K). `mesh_boundaries.json` records synthetic
 mesh-array inputs and literal expected codes for zero z cells, empty attributes,
 short/long copper arrays, valid copper data and an empty no-copper mapping.
+Nonfinite axes, numeric attributes (including nested values) and copper fractions
+must produce `INPUT_INVALID`; in-memory NaN/±Inf mutations check this directly.
 `manifest_fvm_solid/prepublication.json` has empty steps, partitions and summary;
 it is accepted before output publication and rejected as completed output.
