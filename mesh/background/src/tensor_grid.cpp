@@ -668,6 +668,7 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
                     area.raster += m.copper_phi[offset + level0_dense(nx, ny, i, j)] *
                                    (axes[0][i + 1] - axes[0][i]) * (axes[1][j + 1] - axes[1][j]);
             if (s.layers[li].copper->fraction)
+                // Fraction layers report their uniform fill over the padded grid in both fields.
                 area.polygons = area.raster;
             m.grid_report.copper_area_m2[s.layers[li].name] = area;
         }

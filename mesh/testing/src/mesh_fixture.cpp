@@ -270,22 +270,6 @@ void encode(std::string& out, const T& x) {
         out += '}';
     }
 }
-void preserve_i5_reference_encoding(std::string& text) {
-    // i5_fcbga_small.mesh.json predates this writer: its independent generator
-    // used sorted keys and shortest reals. Preserve that immutable golden's
-    // bytes without changing the declaration-order/17-digit writer contract.
-    // Fingerprint the ENTIRE original-writer document, including metadata and
-    // signed zeros; mesh_sha256 alone excludes reports and is insufficient.
-    if (text.size() != 76087 ||
-        sha256(text) != "978caa20d84a9c1c34aad3b52f1911d256f8c6ad670b43e37658046282817591")
-        return;
-    const auto document = J::parse(text);
-    jsoncons::json_options options;
-    options.float_format(jsoncons::float_chars_format::general).precision(0);
-    text.clear();
-    document.dump(text, options);
-    text += '\n';
-}
 void reject_duplicate_fields(const std::string& text) {
     jsoncons::json_string_cursor cursor(text);
     std::vector<std::set<std::string>> objects;
@@ -397,7 +381,6 @@ Expected<void> save_mesh_fixture(const HexMeshArrays& mesh, const std::filesyste
         else
             encode(text, chipcae::preview::detail::digest(mesh).sha256);
         text += "}\n";
-        preserve_i5_reference_encoding(text);
     } catch (const std::exception& e) {
         return Error{"INPUT_INVALID", e.what()};
     }

@@ -412,14 +412,18 @@ void fixture_legacy() {
     const auto p = temp.path / "legacy.json";
     require(bool(save_mesh_fixture(loaded.value(), p)), "F save legacy fixture");
     const auto saved = bytes(p);
-    const auto mismatch =
-        std::mismatch(original.begin(), original.end(), saved.begin(), saved.end());
-    const auto offset = static_cast<std::size_t>(mismatch.first - original.begin());
-    require(saved == original,
-            "F legacy load/save bytes unchanged: first difference at byte " +
-                std::to_string(offset) + "; original=" + original.substr(offset, 60) +
-                "; saved=" + saved.substr(std::min(offset, saved.size()), 60) +
-                "; original-writer SHA256=" + sha256(saved));
+    require(!J::parse(saved).at("mesh").at("grid_report").contains("copper_area_m2"),
+            "F legacy save omits empty optional map");
+    // Independently generated input may use a different spelling. Repeated saves
+    // must use the original writer consistently, including this legacy fixture.
+    require(saved.starts_with(R"({"mesh":{"vertices":[)"),
+            "F legacy fixture uses original writer declaration order");
+    require(bool(save_mesh_fixture(loaded.value(), p)), "F save legacy fixture again");
+    require(bytes(p) == saved, "F legacy repeated saves have identical bytes");
+    auto reloaded = load_mesh_fixture(p);
+    require(bool(reloaded), "F reload saved legacy fixture");
+    require(bool(save_mesh_fixture(reloaded.value(), p)), "F resave loaded legacy fixture");
+    require(bytes(p) == saved, "F legacy writer bytes stable across load/save");
 }
 void fixture_legacy_encoding() {
     TempDirectory temp;
@@ -427,9 +431,8 @@ void fixture_legacy_encoding() {
     m.nodes = {.1, -0., 1.};
     m.snapped = {{'x', .1, .3, -0.}};
     const auto p = temp.path / "legacy-encoding.json";
-    // Independently supplied sorted/shortest input must remain readable, but only
-    // the checked-in legacy reference gets its exceptional byte encoding. Other
-    // meshes retain the original writer, including signed zero and 17-digit reals.
+    // Independently supplied sorted/shortest input must remain readable. All
+    // meshes use the original writer, including signed zero and 17-digit reals.
     const std::string expected =
         R"({"mesh":{"attr_frame":[],"attr_table":{"bodies":[],"boundary_names":[],"entries":[],)"
         R"("layers":[],"materials":[],"references":[]},"attribute":[],"axes":[[],[],[]],)"
@@ -486,20 +489,23 @@ void fixture_legacy_neighbours() {
     auto loaded = load_mesh_fixture(old_fixture());
     require(bool(loaded), "F load legacy encoding boundary control");
     const auto p = temp.path / "legacy-neighbour.json";
-    for (const std::string change : {"report", "signed-zero", "copper-area"}) {
+    std::size_t reference_size = 0;
+    for (const std::string change : {"unchanged", "report", "signed-zero", "copper-area"}) {
         auto m = loaded.value();
         if (change == "report")
             ++m.grid_report.void_cells;
         else if (change == "signed-zero")
             m.vertices.front() = -0.;
-        else
+        else if (change == "copper-area")
             m.grid_report.copper_area_m2["Cu"] = {.1, .1};
         require(bool(save_mesh_fixture(m, p)), "F save modified legacy " + change);
         const auto text = bytes(p);
         require(text.starts_with(R"({"mesh":{"vertices":[)"),
                 "F modified legacy uses original writer: " + change);
-        if (change == "report")
-            require(text.size() == 76087, "F same-size report change checks full fingerprint");
+        if (change == "unchanged")
+            reference_size = text.size();
+        else if (change == "report")
+            require(text.size() == reference_size, "F same-size report change uses same encoder");
         auto reloaded = load_mesh_fixture(p);
         require(bool(reloaded), "F reload modified legacy " + change);
         require(bool(save_mesh_fixture(reloaded.value(), p)), "F resave modified legacy " + change);
@@ -509,7 +515,7 @@ void fixture_legacy_neighbours() {
                     "F modified report preserved");
         else if (change == "signed-zero")
             require(std::signbit(reloaded.value().vertices.front()), "F signed zero preserved");
-        else
+        else if (change == "copper-area")
             bit_equal(report(reloaded.value(), "Cu"), report(m, "Cu"));
     }
 }
@@ -543,7 +549,13 @@ void fixture_empty_key() {
     require(loaded.value().grid_report.copper_area_m2.empty(),
             "F explicit empty key decodes empty");
     require(bool(save_mesh_fixture(loaded.value(), p)), "F save explicit empty map");
-    require(bytes(p) == bytes(old_fixture()), "F writer omits explicit empty map");
+    require(!J::parse(bytes(p)).at("mesh").at("grid_report").contains("copper_area_m2"),
+            "F writer omits explicit empty map");
+    const auto absent = load_mesh_fixture(old_fixture());
+    require(bool(absent), "F load absent optional map control");
+    const auto control = temp.path / "absent-key.json";
+    require(bool(save_mesh_fixture(absent.value(), control)), "F save absent optional map control");
+    require(bytes(p) == bytes(control), "F empty and absent optional maps encode identically");
 }
 void fixture_reject(const std::string& which) {
     TempDirectory temp;
