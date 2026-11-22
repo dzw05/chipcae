@@ -361,11 +361,11 @@ inline_assembly_outline_references(mesh::StackModel& stack,
 #endif
 std::vector<std::string> interface_rewrite_targets(const std::vector<std::string>& lower,
                                                    const std::vector<std::string>& upper) {
-    std::vector<std::string> targets;
-    for (const auto& a : lower)
-        for (const auto& b : upper)
-            targets.push_back("interface:" + a + "|" + b);
-    return targets;
+    // Same rule as assembly.cpp activation_groups: I2 续七-3 / SP3 ③,
+    // see handoff/rulings/m1-rewrite-dupid-1122.md §1.
+    if (lower.empty() || upper.empty())
+        return {};
+    return {"interface:" + lower.back() + "|" + upper.front()};
 }
 inline void summarize_assembly_parts(const mesh::StackModel& base,
                                      const mesh::StackModel& merged,
@@ -630,16 +630,36 @@ int run_assembly(const ImportOptions& options) {
                                        : !std::filesystem::exists(resolved_board)))
             return fail("INPUT_INVALID", "json_path=$/board/path: invalid or missing board path");
         std::set<std::string> ids;
+        std::set<std::string> duplicate_ids;
+        std::vector<std::string> duplicate_order;
+        auto record_id = [&](const std::string& id) {
+            if (!ids.insert(id).second && duplicate_ids.insert(id).second)
+                duplicate_order.push_back(id);
+        };
+        auto reject_duplicates = [&]() {
+            for (const auto& id : duplicate_order) {
+                Defect d{};
+                d.tier = Tier::C;
+                d.reason = DefectReason::PART_ATTACH_INVALID;
+                d.defect_id = id + "/duplicate_id";
+                d.details = "duplicate part id " + id;
+                defects.push_back(d);
+            }
+            return fail("IMPORT_REJECTED", "duplicate part id " + duplicate_order.front());
+        };
         for (const auto& p : doc["parts"].array_range()) {
             auto id = p["id"].as<std::string>();
-            if (id == "void")
+            if (duplicate_order.empty() && id == "void")
                 return fail("INPUT_INVALID", "INPUT_INVALID: part id void is reserved");
-            if (!ids.insert(id).second)
-                return fail("IMPORT_REJECTED", "duplicate part id " + id);
+            record_id(id);
+            if (!duplicate_order.empty())
+                continue;
             if (p["step"].as<std::string>().find("NOT_CAE_GEOMETRY") != std::string::npos)
                 return fail("IMPORT_REJECTED",
                             "IMPORT_REJECTED: display-only geometry NOT_CAE_GEOMETRY");
         }
+        if (!duplicate_order.empty())
+            return reject_duplicates();
         std::vector<std::string> accepted;
         try {
             accepted = read_acceptance_list(options, root);
@@ -732,11 +752,12 @@ int run_assembly(const ImportOptions& options) {
             const auto& f = doc["parts_from_step"];
             for (const auto& kv : f["bodies"].object_range()) {
                 auto id = kv.value()["id"].as<std::string>();
-                if (id == "void")
+                if (duplicate_order.empty() && id == "void")
                     return fail("INPUT_INVALID", "INPUT_INVALID: part id void is reserved");
-                if (!ids.insert(id).second)
-                    return fail("IMPORT_REJECTED", "duplicate part id " + id);
+                record_id(id);
             }
+            if (!duplicate_order.empty())
+                return reject_duplicates();
             if (f["step"].as<std::string>().find("NOT_CAE_GEOMETRY") != std::string::npos)
                 return fail("IMPORT_REJECTED", "IMPORT_REJECTED: display-only geometry");
             std::optional<StepImportResult> imported;
