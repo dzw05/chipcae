@@ -265,6 +265,19 @@ class PeakRssUnits(ContractTest):
         self.assertIs(type(entry["peak_rss_kib"]), int)
         self.assertEqual(entry["peak_rss_kib"], 1205152)
 
+    def test_rss_kib_platform_boundaries(self):
+        for value, darwin_expected in ((0, 0), (1, 1), (1023, 1), (1024, 1), (1025, 2)):
+            for platform, expected in (("darwin", darwin_expected), ("linux", value)):
+                with self.subTest(ru_maxrss=value, platform=platform):
+                    actual = driver._rss_kib(value, platform)
+                    self.assertIs(type(actual), int)
+                    self.assertEqual(actual, expected)
+        for platform in ("win32", "Darwin"):
+            with self.subTest(ru_maxrss=1025, platform=platform):
+                actual = driver._rss_kib(1025, platform)
+                self.assertIs(type(actual), int)
+                self.assertEqual(actual, 1025)
+
 
 class FixtureValidity(ContractTest):
     def test_generated_vtkhdf_is_accepted_by_existing_reader(self):

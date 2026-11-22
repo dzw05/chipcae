@@ -710,6 +710,11 @@ def _case(params):
                 output=dict(format="vtkhdf"))
 
 
+def _rss_kib(ru_maxrss: int, platform: str | None = None) -> int:
+    # Test-first placeholder: retain the current units until conversion is implemented.
+    return int(ru_maxrss)
+
+
 def _measured(argv, stage, folder, record, timeout_s):
     """One child, redirected logs, per-child wait4 metrics and a group watchdog."""
     argv = [str(arg) for arg in argv]
