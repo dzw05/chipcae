@@ -30,6 +30,7 @@
 #include <vtkMultiBlockDataSet.h>
 #include <vtkNew.h>
 #include <vtkPoints.h>
+#include <vtkUnsignedLongLongArray.h>
 #include <vtkUnstructuredGrid.h>
 using namespace chipcae::desktop;
 void check(bool value, const char* message) {
@@ -740,6 +741,55 @@ void copperPhiAcceptance(Acceptance& a) {
         a.colorSelector(view, withCopper, layer, "partial copper selector");
         view.setColorMode(PreviewColorMode::CopperPhi);
         expectCopper(view, "NaN-padded copper selection");
+    }
+    {
+        // These integer payloads differ in bits that a double cannot preserve.
+        auto first = grid();
+        auto second = grid();
+        vtkNew<vtkUnsignedLongLongArray> firstPhi;
+        firstPhi->SetName("copper_phi");
+        firstPhi->InsertNextValue(9007199254740993ULL);
+        firstPhi->InsertNextValue(9007199254740995ULL);
+        firstPhi->InsertNextValue(9007199254740997ULL);
+        first->GetCellData()->AddArray(firstPhi);
+        vtkNew<vtkUnsignedLongLongArray> secondPhi;
+        secondPhi->SetName("copper_phi");
+        secondPhi->InsertNextValue(18446744073709551615ULL);
+        secondPhi->InsertNextValue(18446744073709551613ULL);
+        secondPhi->InsertNextValue(18446744073709551611ULL);
+        second->GetCellData()->AddArray(secondPhi);
+        vtkNew<vtkMultiBlockDataSet> composite;
+        composite->SetBlock(0, first);
+        composite->SetBlock(1, second);
+        PreviewBlock selected;
+        selected.visibleCells = {0, 2};
+        selected.highlightedCells = {2};
+        PreviewView view;
+        a.expect(view.show(composite, layers, materials, {selected, block}, options),
+                 "wide integer copper blocks accepted");
+        a.cells(view, 4, 2, "wide integer copper blocks");
+        auto shown = view.displayed();
+        auto values = shown ? vtkUnsignedLongLongArray::SafeDownCast(
+                                  shown->GetCellData()->GetArray("copper_phi"))
+                            : nullptr;
+        a.expect(values != nullptr, "copper retains its unsigned 64-bit array type");
+        if (values) {
+            a.expect(values->GetNumberOfTuples() == 4, "wide integer copper tuple count");
+            if (values->GetNumberOfTuples() == 4) {
+                a.expect(values->GetValue(0) == 9007199254740993ULL &&
+                             values->GetValue(1) == 9007199254740997ULL &&
+                             values->GetValue(2) == 18446744073709551615ULL &&
+                             values->GetValue(3) == 18446744073709551613ULL,
+                         "copper preserves all integer bits in visible cell and block order");
+                firstPhi->SetValue(0, 0);
+                secondPhi->SetValue(0, 0);
+                a.expect(values->GetValue(0) == 9007199254740993ULL &&
+                             values->GetValue(2) == 18446744073709551615ULL,
+                         "copied copper values are independent of later input changes");
+            }
+        }
+        view.setColorMode(PreviewColorMode::CopperPhi);
+        expectCopper(view, "wide integer copper selection");
     }
     for (const char* alias : {"Copper_Phi", "copper_PHI", "copperphi"}) {
         auto aliased = grid();

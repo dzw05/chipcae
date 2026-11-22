@@ -18,6 +18,7 @@
 #include <limits>
 #include <set>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 #include <vtkActor.h>
 #include <vtkAppendFilter.h>
@@ -328,9 +329,9 @@ vtkSmartPointer<vtkUnstructuredGrid> extract(vtkDataSet* data, const QList<vtkId
 }
 vtkSmartPointer<vtkUnstructuredGrid>
 append(std::vector<vtkSmartPointer<vtkUnstructuredGrid>>& pieces) {
-    // vtkAppendFilter intersects array schemas. Normalize classification and copper
-    // fractions to doubles, padding absent values with NaN so partial arrays retain
-    // known values without inventing categories or fractions for unknown cells.
+    // vtkAppendFilter intersects array schemas. Normalize classifications to doubles
+    // and pad absent arrays with NaN. Copy copper in its original type so its values
+    // never pass through double during normalization.
     for (const char* name : {"layer_id", "material_id", "copper_phi"}) {
         const bool present = std::any_of(pieces.begin(), pieces.end(), [name](const auto& p) {
             return p->GetCellData()->GetArray(name) != nullptr;
@@ -339,6 +340,13 @@ append(std::vector<vtkSmartPointer<vtkUnstructuredGrid>>& pieces) {
             continue;
         for (auto& piece : pieces) {
             auto source = piece->GetCellData()->GetArray(name);
+            if (source && std::string_view(name) == "copper_phi") {
+                auto copy = vtkSmartPointer<vtkDataArray>::Take(source->NewInstance());
+                copy->DeepCopy(source);
+                piece->GetCellData()->RemoveArray(name);
+                piece->GetCellData()->AddArray(copy);
+                continue;
+            }
             vtkNew<vtkDoubleArray> ids;
             ids->SetName(name);
             ids->SetNumberOfTuples(piece->GetNumberOfCells());
