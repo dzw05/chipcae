@@ -535,6 +535,13 @@ QString PreviewView::colorBarTitle() const {
 QString PreviewView::scalarArrayName() const {
     return d->arrayName();
 }
+// Test-first API stubs: copper availability and coloring are not implemented yet.
+bool PreviewView::hasCopperPhi() const {
+    return false;
+}
+std::array<double, 2> PreviewView::colorRange() const {
+    return {};
+}
 vtkDataSet* PreviewView::displayed() const {
     return d->result.data;
 }

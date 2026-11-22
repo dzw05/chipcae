@@ -2,6 +2,7 @@
 #include "PreviewOptions.hpp"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QEventLoop>
@@ -82,6 +83,43 @@ struct Acceptance {
         for (qsizetype i = 0; i < expected.size(); ++i)
             expect(values->GetComponent(i, 0) == expected[i],
                    context + ": cell order at " + QString::number(i));
+    }
+    void doubleValues(const PreviewView& view,
+                      const char* name,
+                      const QList<double>& expected,
+                      const QString& context) {
+        auto data = view.displayed();
+        auto values =
+            data ? vtkDoubleArray::SafeDownCast(data->GetCellData()->GetArray(name)) : nullptr;
+        expect(values != nullptr, context + ": displayed vtkDoubleArray exists");
+        if (!values)
+            return;
+        expect(values->GetNumberOfTuples() == expected.size(), context + ": double tuple count");
+        expect(values->GetNumberOfComponents() == 1, context + ": one double component");
+        if (values->GetNumberOfTuples() != expected.size())
+            return;
+        for (qsizetype i = 0; i < expected.size(); ++i)
+            expect(std::isnan(expected[i]) ? std::isnan(values->GetValue(i))
+                                           : values->GetValue(i) == expected[i],
+                   context + ": exact double value at " + QString::number(i));
+    }
+    QComboBox* colorSelector(PreviewView& view,
+                             const QStringList& entries,
+                             const QString& selected,
+                             const QString& context) {
+        auto selector = view.findChild<QComboBox*>("previewColorMode");
+        expect(selector != nullptr, context + ": previewColorMode selector exists");
+        if (!selector)
+            return nullptr;
+        expect(selector->count() == entries.size(), context + ": exact selector entry count");
+        for (int i = 0; i < entries.size() && i < selector->count(); ++i) {
+            expect(selector->itemText(i) == entries[i],
+                   context + ": ordered selector text at " + QString::number(i));
+            expect(selector->itemData(i).toInt() == i,
+                   context + ": selector enum data at " + QString::number(i));
+        }
+        expect(selector->currentText() == selected, context + ": selected text");
+        return selector;
     }
 };
 // Catch lost optional presence, clamped invalid values, rounded ratios and rewritten paths.
@@ -290,6 +328,13 @@ void addCells(vtkDataSet* data, const char* name, const QList<int>& values) {
     vtkNew<vtkIntArray> array;
     array->SetName(name);
     for (int value : values)
+        array->InsertNextValue(value);
+    data->GetCellData()->AddArray(array);
+}
+void addDoubleCells(vtkDataSet* data, const char* name, const QList<double>& values) {
+    vtkNew<vtkDoubleArray> array;
+    array->SetName(name);
+    for (double value : values)
         array->InsertNextValue(value);
     data->GetCellData()->AddArray(array);
 }
@@ -557,6 +602,170 @@ void viewAcceptance(Acceptance& a) {
         a.expect(view.colorBarTitle().contains(utfMaterials[0]) ||
                      view.colorBarTitle().contains(utfMaterials[1]),
                  "Material title preserves an exact UTF-8 name");
+    }
+}
+// Catch lost copper tuples, categorical copper coloring and stale selector state on replacement.
+void copperPhiAcceptance(Acceptance& a) {
+    const QString layer = QString::fromUtf8("层");
+    const QString material = QString::fromUtf8("材料");
+    const QString copper = QString::fromUtf8("铜占比");
+    const QStringList categories{layer, material};
+    const QStringList withCopper{layer, material, copper};
+    const QStringList layers{"die", "solder"}, materials{"cu", "uf"};
+    const auto options = explicitOptions();
+    const auto block = visibleBlock();
+    auto data = grid();
+    addDoubleCells(data, "copper_phi", {0.0, 0.25, 1.0});
+    auto missing = grid();
+    const auto expectCopper = [&](PreviewView& view, const QString& context) {
+        a.expect(view.colorMode() == PreviewColorMode::CopperPhi, context + ": CopperPhi mode");
+        a.expect(view.scalarArrayName() == "copper_phi", context + ": exact scalar name");
+        a.expect(view.colorBarTitle() == copper, context + ": exact copper title");
+        const auto range = view.colorRange();
+        a.expect(range[0] == 0.0 && range[1] == 1.0, context + ": exact fixed range [0,1]");
+        a.colorSelector(view, withCopper, copper, context);
+    };
+    {
+        PreviewView view;
+        a.expect(!view.hasCopperPhi(), "initial view has no copper array");
+        a.colorSelector(view, categories, layer, "initial view");
+        a.expect(view.show(data, layers, materials, {block}, options), "copper mesh accepted");
+        a.cells(view, 2, 1, "copper mesh");
+        a.expect(view.hasCopperPhi(), "displayed exact-name copper array is available");
+        a.doubleValues(view, "copper_phi", {0.0, 0.25}, "visible copper tuples");
+        a.expect(view.colorMode() == PreviewColorMode::Layer, "copper mesh initially uses Layer");
+        auto selector = a.colorSelector(view, withCopper, layer, "first copper show");
+        view.setColorMode(PreviewColorMode::CopperPhi);
+        expectCopper(view, "programmatic copper selection");
+        if (selector) {
+            selector->setCurrentIndex(1);
+            a.expect(view.colorMode() == PreviewColorMode::Material &&
+                         view.scalarArrayName() == "material_id",
+                     "selector index 1 drives Material coloring");
+            a.colorSelector(view, withCopper, material, "selector Material selection");
+            selector->setCurrentIndex(2);
+            expectCopper(view, "selector index 2 drives copper coloring");
+        }
+        view.setColorMode(PreviewColorMode::CopperPhi);
+        const auto shown = view.displayed();
+        const auto title = view.colorBarTitle();
+        const auto range = view.colorRange();
+        const auto summary = view.summaryText();
+        const auto highlights = view.highlightedCount();
+        const auto mode = view.colorMode();
+        const auto scalar = view.scalarArrayName();
+        view.setColorMode(PreviewColorMode::CopperPhi);
+        expectCopper(view, "repeated copper selection");
+        a.expect(view.displayed() == shown && view.colorBarTitle() == title &&
+                     view.colorRange() == range && view.summaryText() == summary &&
+                     view.highlightedCount() == highlights && view.colorMode() == mode &&
+                     view.scalarArrayName() == scalar,
+                 "repeated CopperPhi selection preserves observable state");
+        const auto expectPreserved = [&] {
+            a.expect(view.displayed() == shown && view.colorMode() == mode &&
+                         view.colorBarTitle() == title && view.colorRange() == range &&
+                         view.scalarArrayName() == scalar && view.summaryText() == summary &&
+                         view.highlightedCount() == highlights && view.hasCopperPhi(),
+                     "invalid replacement preserves complete copper view");
+            a.colorSelector(view, withCopper, copper, "rejected copper replacement");
+        };
+        a.expect(!view.show(nullptr, {}, {}, {}, {}), "null copper replacement rejected");
+        expectPreserved();
+        auto invalid = block;
+        invalid.visibleCells = {3};
+        a.expect(!view.show(missing, layers, materials, {invalid}, options),
+                 "out-of-range copper replacement rejected");
+        expectPreserved();
+        invalid = block;
+        invalid.highlightedCells = {2};
+        a.expect(!view.show(missing, layers, materials, {invalid}, options),
+                 "invisible-highlight copper replacement rejected");
+        expectPreserved();
+        a.expect(!view.show(missing, layers, materials, {block, block}, options),
+                 "mismatched-block copper replacement rejected");
+        expectPreserved();
+        for (int i = 0; i < 2; ++i) {
+            a.expect(view.show(data, layers, materials, {block}, options),
+                     "repeated copper show accepted");
+            a.expect(view.hasCopperPhi(), "repeated copper show retains availability");
+            expectCopper(view, "repeated copper show retains mode and exactly three entries");
+        }
+        a.expect(view.show(missing, layers, materials, {block}, options),
+                 "missing copper replaces copper display");
+        a.expect(!view.hasCopperPhi(), "copper-to-missing replacement clears availability");
+        a.expect(view.colorMode() == PreviewColorMode::Layer &&
+                     view.scalarArrayName() == "layer_id",
+                 "copper-to-missing replacement falls back to Layer");
+        a.colorSelector(view, categories, layer, "copper-to-missing replacement");
+    }
+    {
+        PreviewView view;
+        a.expect(view.show(missing, layers, materials, {block}, options),
+                 "mesh without copper accepted");
+        a.expect(!view.hasCopperPhi(), "missing exact-name copper array is unavailable");
+        for (auto mode : {PreviewColorMode::Layer, PreviewColorMode::Material}) {
+            view.setColorMode(mode);
+            const auto scalar = view.scalarArrayName();
+            const auto title = view.colorBarTitle();
+            const auto range = view.colorRange();
+            const auto selected = mode == PreviewColorMode::Layer ? layer : material;
+            a.colorSelector(view, categories, selected, "missing copper before request");
+            view.setColorMode(PreviewColorMode::CopperPhi);
+            a.expect(view.colorMode() == mode && view.scalarArrayName() == scalar &&
+                         view.colorBarTitle() == title && view.colorRange() == range,
+                     "unavailable CopperPhi request preserves mode, scalar, title and range");
+            a.expect(view.scalarArrayName() ==
+                         (mode == PreviewColorMode::Layer ? "layer_id" : "material_id"),
+                     "unavailable CopperPhi request retains classification array");
+            a.colorSelector(view, categories, selected, "missing copper after request");
+        }
+    }
+    {
+        auto first = grid();
+        addDoubleCells(first, "copper_phi", {0.5, 0.75, 1.0});
+        vtkNew<vtkMultiBlockDataSet> composite;
+        composite->SetBlock(0, first);
+        composite->SetBlock(1, missing);
+        PreviewView view;
+        a.expect(view.show(composite, layers, materials, {block, block}, options),
+                 "partially missing copper blocks accepted");
+        a.cells(view, 4, 2, "partially missing copper blocks");
+        a.expect(view.hasCopperPhi(), "partial copper array survives append");
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        a.doubleValues(view,
+                       "copper_phi",
+                       {0.5, 0.75, nan, nan},
+                       "known copper fractions and NaN padding in block order");
+        a.values(view, "layer_id", {1, 2, 1, 2}, "copper append preserves layer order");
+        a.colorSelector(view, withCopper, layer, "partial copper selector");
+        view.setColorMode(PreviewColorMode::CopperPhi);
+        expectCopper(view, "NaN-padded copper selection");
+    }
+    for (const char* alias : {"Copper_Phi", "copper_PHI", "copperphi"}) {
+        auto aliased = grid();
+        addDoubleCells(aliased, alias, {0.0, 0.25, 1.0});
+        PreviewView view;
+        const QString context = QString("copper alias ") + alias;
+        a.expect(view.show(aliased, layers, materials, {block}, options), context + ": accepted");
+        a.expect(!view.hasCopperPhi(), context + ": exact-name availability is false");
+        a.colorSelector(view, categories, layer, context);
+    }
+    for (bool emptyBlocks : {true, false}) {
+        PreviewView view;
+        const QString context = emptyBlocks ? "copper empty blocks" : "copper empty extraction";
+        a.expect(
+            view.show(data,
+                      layers,
+                      materials,
+                      emptyBlocks ? QList<PreviewBlock>{} : QList<PreviewBlock>{PreviewBlock{}},
+                      options),
+            context + ": accepted");
+        a.cells(view, 0, 0, context);
+        auto shown = view.displayed();
+        const bool present = shown && shown->GetCellData()->GetArray("copper_phi") != nullptr;
+        a.expect(view.hasCopperPhi() == present,
+                 context + ": availability follows displayed schema");
+        a.colorSelector(view, present ? withCopper : categories, layer, context);
     }
 }
 void controllerViewAcceptance(Acceptance& a, const PreviewController& controller) {
@@ -868,9 +1077,16 @@ int main(int argc, char** argv) {
         }
         std::cout << "D10 existing preview regressions passed\n";
         viewAcceptance(acceptance);
+        Acceptance copperTests;
+        copperTests.label = "D14f-1";
+        copperPhiAcceptance(copperTests);
+        std::cout << "D14f-1 acceptance: " << copperTests.expectations << " expectations, "
+                  << copperTests.failures << " failures\n";
         std::cout << "D10b-1 acceptance: " << acceptance.expectations << " expectations, "
                   << acceptance.failures << " failures\n";
-        return acceptance.failures == 0 && panelTests.failures == 0 ? 0 : 1;
+        return acceptance.failures == 0 && panelTests.failures == 0 && copperTests.failures == 0
+                   ? 0
+                   : 1;
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;
