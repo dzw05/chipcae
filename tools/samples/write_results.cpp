@@ -34,8 +34,6 @@ int main(int argc, char** argv) {
                     (argc == 5 && std::string(argv[4]) == "s1")
                 ? std::vector<std::string>{"substrate", "die_attach", "Si"}
                 : std::vector<std::string>{});
-        writer.set_mesh(
-            {1, 1, 0, 0, 1, "e25348ef6d6da75e755b74c34e455ee893a3e79aea5e646e6bb4c5191e206a3c"});
         chipcae::io::ResultsStep step;
         auto& p = step.hex;
         double pv = 0.001, umax = 0.002;
@@ -214,6 +212,9 @@ int main(int argc, char** argv) {
         writer.add_summary("warpage_pv", pv, "m", 0, "fem_q2_nodes");
         writer.add_summary("T_max", 193.15, "K", 0, "fem_q2_nodes");
         writer.add_summary("U_mag_max", umax, "m", 0, "fem_q2_nodes");
+        // set_mesh publishes a manifest; wait until step 0 and its summaries are complete.
+        writer.set_mesh(
+            {1, 1, 0, 0, 1, "e25348ef6d6da75e755b74c34e455ee893a3e79aea5e646e6bb4c5191e206a3c"});
         writer.finalize();
         if (argc == 3) {
             // Validation errors must be collective even when only rank zero is bad.
