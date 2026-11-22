@@ -752,7 +752,7 @@ int run_assembly(const ImportOptions& options) {
             const auto& f = doc["parts_from_step"];
             for (const auto& kv : f["bodies"].object_range()) {
                 auto id = kv.value()["id"].as<std::string>();
-                if (id == "void")
+                if (duplicate_order.empty() && id == "void")
                     return fail("INPUT_INVALID", "INPUT_INVALID: part id void is reserved");
                 record_id(id);
             }
