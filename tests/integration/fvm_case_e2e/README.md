@@ -74,7 +74,7 @@ physical volume, copper diagnostics, negative input and FEM snapshot
 assertions remain. The merge retains four additional upstream tests for
 FVM-only volume selection, loader error precedence, fixed-temperature
 roundoff and split-layer convection. `FEM_SNAPSHOTS` and `probe` match merged
-main a6dd6c8 verbatim. The board compares maximum vertex `PointData/T` rise
+main b1cf5fa verbatim. The board compares maximum vertex `PointData/T` rise
 with the unchanged upstream temporary 0.02 gate and its restoration comment;
 the demo retains its 0.01 gate. Summary `T_max` still means maximum CV temperature.
 
@@ -101,30 +101,30 @@ jsoncons and HDF5. Bare configuration keeps those dependencies optional.
 During iteration, use the named selectors above or the task's related-test
 selector. The pipeline runs the complete suite after delivery.
 
-Local Release measurements (实测, November 21, synthetic inputs, MFEM with
-MPI/PETSc), after merging main a6dd6c8 and aligning the test oracles with I1 1.2.
-The completion run measures CLI/direct-library equivalence as follows:
+Local Release measurements (实测, November 22, synthetic inputs, MFEM with
+MPI/PETSc), at branch 6f6eb7a after merging main b1cf5fa. I1 1.2 oracle
+correction 829a26b and the production adapter are unchanged. The numerical gate
+compares CLI summaries with direct public-I14 replay:
 
 | Fixture | CLI PV (m) | Direct PV (m) | Relative PV difference | CLI maximum U (m) | Direct maximum U (m) | Relative U difference |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Board | 1.3390363596270016e-06 | 1.3390363596148202e-06 | 9.0971335357950544e-12 | 8.9774886012461824e-07 | 8.9774886011437316e-07 | 1.1411961307277355e-11 |
-| Uniform bilayer | 0.0017444475179898623 | 0.0017444475179896589 | 1.1659641546148618e-13 | 0.0012533119660306606 | 0.0012533119660305598 | 8.0451479578942537e-14 |
-| Prescribed bilayer | 0.0024422265251854217 | 0.0024422265251855656 | 5.8955239008852762e-14 | 0.0016868846951421761 | 0.0016868846951422548 | 4.6661800862334436e-14 |
-| Cut bilayer | 0.0017470475538252004 | 0.0017470475538251566 | 2.5071880655171928e-14 | 0.0012549687104281072 | 0.0012549687104281013 | 4.6652093257564498e-15 |
+| Board | 1.3390363596305975e-06 | 1.3390363596321188e-06 | 1.1360939994838312e-12 | 8.9774886012789001e-07 | 8.9774886012865869e-07 | 8.5623322264437705e-13 |
+| Uniform bilayer | 0.0017444475179894906 | 0.0017444475179894832 | 4.2263093024423551e-15 | 0.0012533119660304633 | 0.0012533119660304583 | 3.9793204953028564e-15 |
+| Prescribed bilayer | 0.0024422265251852707 | 0.0024422265251854893 | 8.9498314639947958e-14 | 0.0016868846951421125 | 0.0016868846951422305 | 6.992842884052423e-14 |
+| Cut bilayer | 0.0017470475538247138 | 0.0017470475538247849 | 4.0710776509396741e-14 | 0.0012549687104278643 | 0.0012549687104278218 | 3.3865963994387696e-14 |
 
-The maximum measured CLI/direct relative difference, including both cut output
-modes, is 1.1411961307277355e-11, below 1e-8. All four FEM curvature-sign
-checks pass. FEM comparisons remain accuracy diagnostics for
-`solve-elastic-accuracy`; the complete original PV <= 0.10 assertion is retained.
-These results establish the integration equivalence, without establishing FEM
-accuracy agreement.
+The maximum CLI/direct relative difference, including both cut output modes,
+is 1.1360939994838312e-12, below 1e-8. All four FEM curvature-sign checks pass.
+FEM PV/U differences remain diagnostics for `solve-elastic-accuracy`; its complete
+original PV <= 0.10 assertion is retained. These results establish wiring
+equivalence; FEM accuracy agreement remains deferred.
 
 | Fixture | FVM PV (m) | FEM PV (m) | Relative PV difference | FVM maximum U (m) | FEM maximum U (m) | Relative U difference |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Board | 1.3390363596270016e-06 | 7.6382250699617392e-06 | 0.82469273327740411 | 8.9774886012461824e-07 | 7.5633328348133282e-06 | 0.88130247871779976 |
-| Uniform bilayer | 0.0017444475179898623 | 0.0019414505357316298 | 0.1014720767364426 | 0.0012533119660306606 | 0.0020458574104428601 | 0.38739036277246702 |
-| Prescribed bilayer | 0.0024422265251854217 | 0.0027174470566019389 | 0.10127907763570919 | 0.0016868846951421761 | 0.0028296925696029672 | 0.40386290960969584 |
-| Cut bilayer | 0.0017470475538252004 | 0.0022505694928693014 | 0.22373090039630353 | 0.0012549687104281072 | 0.0017169407779141516 | 0.26906697856362721 |
+| Board | 1.3390363596305975e-06 | 7.6382250700526953e-06 | 0.82469273327902082 | 8.9774886012789001e-07 | 7.5633328349347987e-06 | 0.88130247871927359 |
+| Uniform bilayer | 0.0017444475179894906 | 0.0019414505357316298 | 0.10147207673663404 | 0.0012533119660304633 | 0.0020458574104428601 | 0.38739036277256345 |
+| Prescribed bilayer | 0.0024422265251852707 | 0.0027174470566019389 | 0.10127907763576473 | 0.0016868846951421125 | 0.0028296925696029672 | 0.40386290960971832 |
+| Cut bilayer | 0.0017470475538247138 | 0.0022505694928693014 | 0.22373090039651972 | 0.0012549687104278643 | 0.0017169407779141516 | 0.26906697856376866 |
 
 | Fixture | min_dn_ratio | min_dn_gid | gradient_corrections | max_identity_defect |
 | --- | ---: | ---: | ---: | ---: |
@@ -133,65 +133,69 @@ accuracy agreement.
 | Prescribed bilayer | 1 | 0 | 0 | 0 |
 | Cut bilayer | 0.79262398910460019 | 8 | 0 | 4.4408920985006262e-16 |
 
-The diagnostics are read by the temporary direct-library replay probe.
-Production `FVM_ELASTIC` retains exactly its four required keys.
+The temporary direct-library probe reads these diagnostics. Production
+`FVM_ELASTIC` retains exactly its four required keys.
 
 | Fixture / process | Wall seconds | Measured peak RSS (KiB) |
 | --- | ---: | ---: |
-| Board / fvm1 | 1.901692 | 54844 |
-| Board / fvm2 | 2.234879 | 54844 |
-| Board / fem1 | 1.766255 | 65528 |
-| Uniform bilayer / strip-fvm | 1.592581 | 99460 |
-| Uniform bilayer / strip-fem | 1.958119 | 107764 |
-| Prescribed bilayer / prescribed-fvm | 1.654005 | 99460 |
-| Prescribed bilayer / prescribed-fem | 2.196742 | 110544 |
-| Cut bilayer / cut-elastic-polyhedron | 1.722992 | 54844 |
-| Cut bilayer / cut-elastic-hex | 1.741614 | 54844 |
-| Cut bilayer / cut-fem | 2.466877 | 125204 |
+| Board / fvm1 | 1.858702 | 55268 |
+| Board / fvm2 | 2.059942 | 55268 |
+| Board / fem1 | 2.202291 | 64968 |
+| Uniform bilayer / strip-fvm | 1.598318 | 95848 |
+| Uniform bilayer / strip-fem | 2.040973 | 107664 |
+| Prescribed bilayer / prescribed-fvm | 2.255176 | 95848 |
+| Prescribed bilayer / prescribed-fem | 2.390781 | 109880 |
+| Cut bilayer / cut-elastic-polyhedron | 1.789898 | 55268 |
+| Cut bilayer / cut-elastic-hex | 1.662002 | 55268 |
+| Cut bilayer / cut-fem | 2.597915 | 125112 |
 
 RSS is the wait4 process/child maximum, including the MPI launcher, rather
-than a sum across ranks; it can include memory inherited at fork. Timings are
-observations under shared load, not performance gates.
+than a sum across ranks; it can include memory inherited at fork. Timings reflect
+shared load and are observations, not performance gates.
 
-Fresh completion verification (实测): the branch e2e passes all 55 methods in
-382.303 unittest seconds within the 11/11 passing FVM/elastic group
-(466.93 total CTest seconds). This includes all 14 frozen I14 fixtures,
-caller order, independent materials and temperature oracles, reconstruction,
-fixed/free edges, zero rise, MPI, STOP, error mapping and both cut output modes.
-The board vertex-temperature rise relative difference is 0.014728203110031465,
-below the unchanged 0.02 gate. Matching-main a6dd6c8 passes its original 22-method
-e2e in 158.923 unittest seconds (159.16 CTest seconds);
-it does not contain this branch's added adapter tests. The integration selector
-passes 2/2 tests in 11.56 CTest seconds; no separate
-`demo_gate`-named CTest is registered, while the demo method runs within e2e.
+Current-HEAD verification (实测): all 55 e2e methods pass in 366.994 unittest
+seconds within the 11/11 passing FVM/elastic group (432.33 CTest
+seconds). This covers all 14 I14 fixtures, independent material and temperature
+oracles, reconstruction, fixed/free edges, zero rise, MPI, STOP, error mapping
+and both cut output modes. The board vertex-temperature rise relative difference
+is 0.014728203110031465, below the unchanged 0.02 gate.
+Matching-baseline main a6dd6c8 passes its original 22 e2e methods in
+365.132 unittest seconds (365.64 CTest seconds); that suite
+does not contain the branch's added adapter tests. Both builds use matching
+Release dependency options. The integration selector passes 2/2 in
+8.98 CTest seconds. No separate `demo_gate` CTest is registered;
+the demo method runs in e2e.
 
-Before the oracle correction, branch 627f255 failed exactly two stiffness checks
-(9/36 entries each) in its 55-method e2e. The independent references still used
-the pre-I1-1.2 Ez/alpha_z/kz rules. Correcting both mechanical oracles and replay
-conductivity resolved those failures without changing production or tolerances.
-The older thermal/snapshot failure reports predate the main merge and are
-superseded by the passing runs above.
+The original unchanged-branch RED evidence is preserved: 627f255 failed exactly
+two stiffness checks (9/36 entries each) in 55 methods. Both independent
+references still used pre-I1-1.2 Ez/alpha_z/kz rules. Commit 829a26b corrected
+those formulas without changing production behavior or tolerances. This pass
+inherits that correction and does not recreate a failing commit.
 
-The earlier `^solve_` selector on the same implementation and oracles recorded
-93/97 active passes, four failures and ten preexisting disabled tests. Its
-outside-scope results were resolved or classified under the 20:40 ruling:
+The fresh `^solve_` selector records 98 passes,
+1 failure, 0 skips and
+10 preexisting disabled tests in 1642.83 CTest seconds.
 
-| Outside-scope test | Selector result | Isolated / matching-main evidence | Classification |
-| --- | --- | --- | --- |
-| solve_ghost_scan | Timeout at 300.11 s | Final isolated branch PASS 203.60 s; main PASS 239.89 s | 资源争用，-j1 通过 |
-| solve_column_gmg_fcbga | MPI exit 137 | Isolated branch PASS 118.45 s | 资源争用，-j1 通过 |
-| solve_column_gmg_fcbga_scaling | Child SIGKILL at 89.10 s | Matching-main child SIGKILL at 64.39 s | 基线红/环境项 |
-| solve_fem_thermal_bow | C-0/A residual assertion | Main has the same residual 9.5759468232801005e-13 and limit 2.5499999995493557e-15 | 基线红 |
+Failures in this selector: `solve_column_gmg_fcbga_scaling`. See the local task report for causes and scope classification. No out-of-scope source is changed or test retried.
 
-Fresh evidence is retained in local task logs with prefix
-`fvm-wire-elastic-completion-current-`: `fvm-elastic.log`, `main-e2e.log`,
-`integration.log`, `metrics.json`, `results.json` and `audit.json`. The earlier
-RED, broader solve selector, isolated and matching-main evidence use prefix
-`fvm-wire-elastic-tdd-current-`. No numerical tests or solver options change in
-this documentation pass, and the complete CTest suite is left to the pipeline.
+Scaling's fine-GMG child returns -9 (SIGKILL) in 136.78 seconds. The historical
+matching-main a6dd6c8 run with the same options also records SIGKILL
+(`fvm-wire-elastic-tdd-current-main-fcbga-scaling.log`), classified as 基线红/环境项
+under the ruling. This pass reports `BLOCKED-OUT-OF-SCOPE` for the broader
+regression result and makes no attempt to change that module. Ghost scan and
+FCBGA reference pass this run. The upstream thermal-bow correction is included
+via merge 76277ae; `solve_fem_thermal_bow` passes in 18.53 seconds.
 
-Green `ci-ok` and the specified nightly/Mac full-deps runner's green elastic,
-bimetal and np2 logs remain merge requirements. Local full-dependency green
-logs do not establish that runner-origin gate. These external gates are
-未执行/未验证; no workflow is dispatched or result inferred. Real-board inputs,
-commands, logs and hashes remain local and outside commits.
+Evidence files in the local task log directory use prefix
+`fvm-wire-elastic-resume-`: `build.log`, `registered.log`, `main-build.log`,
+`fvm-elastic.log`, `main-e2e.log`, `integration.log`, `solve.log`, `metrics.json`,
+`results.json`, `statuses.json` and `audit.json`. Original RED and broader
+historical evidence retain prefix `fvm-wire-elastic-tdd-current-`.
+No numerical source, assertion, solver option, skip, xfail or timeout is changed.
+The complete CTest suite is left to the pipeline.
+
+Green `ci-ok` and nightly/Mac full-deps runner green elastic, bimetal and np2
+logs remain merge requirements. They are 未执行/未验证 for these local commits;
+local green tests do not satisfy runner provenance. No push, PR or workflow
+dispatch is performed. Real-board inputs, commands, logs and hashes stay local
+and outside commits.

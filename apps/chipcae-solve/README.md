@@ -205,7 +205,7 @@ library reason; convergence is not required by that ruling.
 
 The board vertex-temperature rise retains upstream's temporary 0.02 gate and
 restoration comment; the demo retains its 0.01 gate. `FEM_SNAPSHOTS` and `probe`
-match merged main a6dd6c8 verbatim. The independent stiffness, CTE and conductivity
+match merged main b1cf5fa verbatim. The independent stiffness, CTE and conductivity
 oracles follow I1 1.2 with their original tolerances. CLI/direct-library
 equivalence is this card's numerical gate; FEM PV and displacement differences
 remain accuracy diagnostics for `solve-elastic-accuracy`.
