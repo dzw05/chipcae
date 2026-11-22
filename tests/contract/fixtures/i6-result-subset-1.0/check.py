@@ -290,6 +290,12 @@ def check_vv_subset(obj) -> None:
             not isinstance(x, bool) for x in pairs
         ):
             fail("determinism.np_bitwise_pairs: expected 3 booleans")
+        for index, pair in enumerate(pairs):
+            if pair != (det["np1_digest"][index] == det["np2_digest"][index]):
+                fail(
+                    f"determinism.np_bitwise_pairs[{index}]: "
+                    "must match np1_digest/np2_digest equality"
+                )
         equal = det.get("np_bitwise_equal")
         if not isinstance(equal, bool):
             fail("determinism.np_bitwise_equal: expected boolean")

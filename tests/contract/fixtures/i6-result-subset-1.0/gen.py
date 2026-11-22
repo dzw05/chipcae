@@ -23,11 +23,6 @@ DIGESTS = [
     hashlib.sha256(b"i6-np1-r2").hexdigest(),
     hashlib.sha256(b"i6-np1-r3").hexdigest(),
 ]
-DIGESTS2 = [
-    hashlib.sha256(b"i6-np2-r1").hexdigest(),
-    hashlib.sha256(b"i6-np2-r2").hexdigest(),
-    hashlib.sha256(b"i6-np2-r3").hexdigest(),
-]
 RES_T = 1.5e-12
 RES_U = 2.25e-12
 METHODS = {
@@ -159,13 +154,25 @@ def nightly_vv() -> dict:
             },
             "determinism": {
                 "np1_digest": DIGESTS,
-                "np2_digest": DIGESTS2,
+                "np2_digest": list(DIGESTS),
                 "np_violations": [[], [], []],
                 "np_bitwise_pairs": [True, True, True],
                 "np_bitwise_equal": True,
             },
         }
     )
+    return obj
+
+
+def incorrect_pair(index: int, claimed_equal: bool) -> dict:
+    obj = nightly_vv()
+    obj["case_id"] = f"i6-subset-incorrect-pair-{index}-{claimed_equal}"
+    det = obj["determinism"]
+    det["np2_digest"] = list(det["np1_digest"])
+    if claimed_equal:
+        det["np2_digest"][index] = "0" * 64
+    det["np_bitwise_pairs"][index] = claimed_equal
+    det["np_bitwise_equal"] = all(det["np_bitwise_pairs"])
     return obj
 
 
@@ -228,6 +235,18 @@ def expected_doc() -> dict:
             "vv_result_nightly/nightly.vv_result.json",
         ],
         "negatives": [
+            *[
+                {
+                    "file": f"negative/incorrect_pair_{index}_{claimed_equal}.vv_result.json",
+                    "kind": "subset",
+                    "error": (
+                        f"determinism.np_bitwise_pairs[{index}]: "
+                        "must match np1_digest/np2_digest equality"
+                    ),
+                }
+                for index in range(3)
+                for claimed_equal in (True, False)
+            ],
             {
                 "file": "negative/schema_version.manifest.json",
                 "kind": "manifest",
@@ -274,6 +293,12 @@ def generate(out: Path) -> None:
     dump(out / "negative/run_np_empty.vv_result.json", run_np_empty())
     write_duplicate_keys(out / "negative/duplicate_keys.manifest.json")
     dump(out / "negative/d03_real.vv_result.json", d03_real())
+    for index in range(3):
+        for claimed_equal in (True, False):
+            dump(
+                out / f"negative/incorrect_pair_{index}_{claimed_equal}.vv_result.json",
+                incorrect_pair(index, claimed_equal),
+            )
     dump(out / "expected.json", expected_doc())
     for name in ("gen.py", "check.py"):
         src = HERE / name

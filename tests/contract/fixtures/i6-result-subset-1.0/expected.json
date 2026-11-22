@@ -1,6 +1,36 @@
 {
   "negatives": [
     {
+      "error": "determinism.np_bitwise_pairs[0]: must match np1_digest/np2_digest equality",
+      "file": "negative/incorrect_pair_0_True.vv_result.json",
+      "kind": "subset"
+    },
+    {
+      "error": "determinism.np_bitwise_pairs[0]: must match np1_digest/np2_digest equality",
+      "file": "negative/incorrect_pair_0_False.vv_result.json",
+      "kind": "subset"
+    },
+    {
+      "error": "determinism.np_bitwise_pairs[1]: must match np1_digest/np2_digest equality",
+      "file": "negative/incorrect_pair_1_True.vv_result.json",
+      "kind": "subset"
+    },
+    {
+      "error": "determinism.np_bitwise_pairs[1]: must match np1_digest/np2_digest equality",
+      "file": "negative/incorrect_pair_1_False.vv_result.json",
+      "kind": "subset"
+    },
+    {
+      "error": "determinism.np_bitwise_pairs[2]: must match np1_digest/np2_digest equality",
+      "file": "negative/incorrect_pair_2_True.vv_result.json",
+      "kind": "subset"
+    },
+    {
+      "error": "determinism.np_bitwise_pairs[2]: must match np1_digest/np2_digest equality",
+      "file": "negative/incorrect_pair_2_False.vv_result.json",
+      "kind": "subset"
+    },
+    {
       "error": "expected manifest schema chipcae.results/1.0",
       "file": "negative/schema_version.manifest.json",
       "kind": "manifest"
