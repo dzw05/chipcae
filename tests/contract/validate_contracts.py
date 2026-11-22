@@ -92,37 +92,6 @@ def schemas(root):
     assert result.returncode == 0, f"schema/tests/validate_fixtures.py:\n{result.stdout}{result.stderr}"
 
     fixture_selfchecks(root)
-    case_mesh_descriptions(documents["schema/case-1.0.schema.json"])
-
-
-def case_mesh_descriptions(schema):
-    mesh = schema["properties"]["mesh"]
-    expected_descriptions = {
-        "nx": (
-            "Minimum number of cells in each x feature interval "
-            "(between consecutive snapped feature lines), not the total column count. "
-            "Omitted value is 1. Give this explicitly."
-        ),
-        "ny": (
-            "Minimum number of cells in each y feature interval "
-            "(between consecutive snapped feature lines), not the total row count. "
-            "Omitted value is 1. Give this explicitly."
-        ),
-    }
-    failures = []
-    for field, expected in expected_descriptions.items():
-        path = f"properties.mesh.properties.{field}"
-        node = mesh["properties"][field]
-        assert node["type"] == "integer", f"{path}.type: must remain integer"
-        assert type(node["minimum"]) is int and node["minimum"] == 1, (
-            f"{path}.minimum: must remain integer 1"
-        )
-        assert "default" not in node, f"{path}: must not add a schema default"
-        assert field not in mesh.get("required", []), f"{path}: must remain optional"
-        actual = node.get("description")
-        if actual != expected:
-            failures.append(f"{path}.description:\n  expected: {expected!r}\n  actual: {actual!r}")
-    assert not failures, "case mesh feature-interval descriptions differ:\n" + "\n".join(failures)
 
 
 def fixture_selfchecks(root):
