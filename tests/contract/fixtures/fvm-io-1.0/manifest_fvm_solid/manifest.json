@@ -1,0 +1,118 @@
+{
+  "fields": [
+    {
+      "components": 1,
+      "dtype": "float64",
+      "location": "point",
+      "name": "T",
+      "unit": "K"
+    },
+    {
+      "components": 3,
+      "dtype": "float64",
+      "location": "point",
+      "name": "U",
+      "unit": "m"
+    },
+    {
+      "components": 1,
+      "dtype": "int32",
+      "location": "cell",
+      "name": "layer_id",
+      "unit": "1"
+    },
+    {
+      "components": 1,
+      "dtype": "int32",
+      "location": "cell",
+      "name": "material_id",
+      "unit": "1"
+    },
+    {
+      "components": 1,
+      "dtype": "int32",
+      "location": "cell",
+      "name": "cell_kind",
+      "unit": "1"
+    },
+    {
+      "components": 1,
+      "dtype": "int64",
+      "location": "cell",
+      "name": "elem_gid",
+      "unit": "1"
+    },
+    {
+      "components": 1,
+      "dtype": "float64",
+      "location": "cell",
+      "name": "volume",
+      "unit": "m3"
+    },
+    {
+      "components": 1,
+      "dtype": "float64",
+      "location": "cell",
+      "name": "copper_fraction",
+      "unit": "1"
+    },
+    {
+      "components": 3,
+      "dtype": "float64",
+      "location": "cell",
+      "name": "conductivity_diag",
+      "unit": "W/(m\u00b7K)"
+    },
+    {
+      "components": 1,
+      "dtype": "float64",
+      "location": "cell",
+      "name": "T_cell",
+      "unit": "K"
+    }
+  ],
+  "mesh": {
+    "L": 0,
+    "mesh_sha256": "18c7c5aae828206107ef20984afd2fe0f526402570b16f9aa09d73bd27a12795",
+    "nx0": 3,
+    "ny0": 2,
+    "nz": 4,
+    "padded_cells": 6
+  },
+  "partitions": {
+    "per_step": [
+      1
+    ],
+    "solver_fixed_per_run": true
+  },
+  "schema_version": "chipcae.results/1.0",
+  "steps": [
+    {
+      "file": "step-0.vtkhdf",
+      "n": 0
+    }
+  ],
+  "summary": [
+    {
+      "method": "FVM top-face centroids; least-squares plane removal",
+      "name": "warpage_pv",
+      "step": 0,
+      "unit": "m",
+      "value": 1e-06
+    },
+    {
+      "method": "FVM cell centers",
+      "name": "T_max",
+      "step": 0,
+      "unit": "K",
+      "value": 301.0
+    },
+    {
+      "method": "FVM cell centers",
+      "name": "U_mag_max",
+      "step": 0,
+      "unit": "m",
+      "value": 2e-06
+    }
+  ]
+}

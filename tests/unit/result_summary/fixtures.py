@@ -62,6 +62,7 @@ def fixture(run, cut=False, two=False):
         eb['Polygons/NumberOfCells'] = np.array([1, 2], dtype='int64')
     manifest = {'schema_version': 'chipcae.results/1.0', 'steps': [{'n': 0, 'file': 'out/step-0.vtkhdf'}],
                 'mesh': {'mesh_sha256': 'synthetic-sha256'},
+                'partitions': {'per_step': [2], 'solver_fixed_per_run': True},
                 'summary': [{'name': 'T_max', 'value': 309., 'unit': 'K'},
                             {'name': 'warpage_pv', 'value': .1, 'unit': 'm'}]}
     save(run, manifest)

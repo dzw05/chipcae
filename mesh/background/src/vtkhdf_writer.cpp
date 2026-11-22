@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <limits>
 #include <numeric>
 #include <set>
 #include <stdexcept>
@@ -210,7 +211,12 @@ Expected<VtkhdfFiles> write_vtkhdf(const std::filesystem::path& stem,
                 H5 cd(H5Gcreate2(root, "CellData", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT),
                       H5Gclose);
                 std::map<std::string, std::vector<Local>> fields;
-                std::vector<Real> vf;
+                std::vector<Real> vf, phi;
+                phi.reserve(cells.size());
+                const auto ncopper =
+                    static_cast<std::size_t>(std::count_if(m.copper_layer_of_layer.begin(),
+                                                           m.copper_layer_of_layer.end(),
+                                                           [](auto cl) { return cl >= 0; }));
                 std::map<std::string, Local> layers, regions;
                 for (const auto& a : m.attr_table.entries) {
                     if (!layers.contains(a.layer))
@@ -241,6 +247,33 @@ Expected<VtkhdfFiles> write_vtkhdf(const std::filesystem::path& stem,
                     vf.push_back(voids.contains(e)  ? 0
                                  : cuts.contains(e) ? cut->sub_volfrac[cuts[e]]
                                                     : 1);
+                    Real copper = 0;
+                    const auto layer = m.attr_table.layers.find(a.layer);
+                    if (layer != m.attr_table.layers.end() && !m.copper_layer_of_layer.empty()) {
+                        if (layer->second <= 0 || static_cast<std::size_t>(layer->second - 1) >=
+                                                      m.copper_layer_of_layer.size())
+                            throw std::runtime_error("inconsistent copper arrays");
+                        const auto cl =
+                            m.copper_layer_of_layer[static_cast<std::size_t>(layer->second - 1)];
+                        if (cl >= 0) {
+                            if (m.axes[0].size() < 2 || m.axes[1].size() < 2 ||
+                                m.axes[2].size() < 2 ||
+                                static_cast<std::size_t>(e) >= m.elem_gid.size() ||
+                                m.elem_gid[e] < 0)
+                                throw std::runtime_error("inconsistent copper arrays");
+                            const auto nx = m.axes[0].size() - 1, ny = m.axes[1].size() - 1;
+                            if (nx > std::numeric_limits<std::size_t>::max() / ny)
+                                throw std::runtime_error("inconsistent copper arrays");
+                            const auto ncol = nx * ny, nz = m.axes[2].size() - 1;
+                            const auto column = static_cast<std::size_t>(m.elem_gid[e]) / nz;
+                            if (ncopper > std::numeric_limits<std::size_t>::max() / ncol ||
+                                m.copper_phi.size() != ncopper * ncol ||
+                                static_cast<std::size_t>(cl) >= ncopper || column >= ncol)
+                                throw std::runtime_error("inconsistent copper arrays");
+                            copper = m.copper_phi[static_cast<std::size_t>(cl) * ncol + column];
+                        }
+                    }
+                    phi.push_back(copper);
                 }
                 for (auto name : {"attribute",
                                   "layer_id",
@@ -251,6 +284,7 @@ Expected<VtkhdfFiles> write_vtkhdf(const std::filesystem::path& stem,
                                   "cell_kind"})
                     dataset(cd, name, fields[name], ctx);
                 dataset(cd, "vol_frac", vf, ctx);
+                dataset(cd, "copper_phi", phi, ctx);
                 check(H5Fflush(file, H5F_SCOPE_GLOBAL));
             }
             {

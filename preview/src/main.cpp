@@ -2,6 +2,7 @@
 #include <Kokkos_Core.hpp>
 #endif
 #include "chipcae/core/error_code.hpp"
+#include "chipcae/core/parse_floating.hpp"
 #include "chipcae/core/version.hpp"
 #include "data_path.hpp"
 
@@ -171,10 +172,7 @@ int run(int argc, char** argv) {
                 min_elems_per_layer = integer(value, false);
             else if (arg == "--max-ratio") {
                 double ratio = 0;
-                auto [end, error] =
-                    std::from_chars(value.data(), value.data() + value.size(), ratio);
-                if (error != std::errc{} || end != value.data() + value.size() ||
-                    !std::isfinite(ratio) || ratio < 1)
+                if (!chipcae::parse_floating(value, ratio) || !std::isfinite(ratio) || ratio < 1)
                     throw std::runtime_error("invalid max ratio: " + value);
                 options.max_ratio = ratio;
             } else

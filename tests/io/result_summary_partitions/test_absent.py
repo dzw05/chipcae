@@ -3,25 +3,38 @@
 from pathlib import Path
 import tempfile
 import unittest
-from partitions_fixtures import fixture, save, success
+from partitions_fixtures import fixture, save, invalid
 
 
 class Absent(unittest.TestCase):
-    def test_original_fixture_preserves_prechange_bytes_and_is_repeatable(self):
+    def test_missing_partitions_requires_object(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp) / 'run'
             _, manifest = fixture(run)
-            self.assertNotIn('partitions', manifest)
-            _, first = success(self, run)
-            self.assertEqual(success(self, run)[1], first)
-
-    def test_top_level_names_do_not_enable_partition_validation(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            run = Path(tmp) / 'run'
-            _, manifest = fixture(run)
-            manifest.update(per_step=True, solver_fixed_per_run='invalid', Partitions=[])
+            manifest.pop('partitions')
             save(run, manifest)
-            success(self, run)
+            invalid(self, run, 'partitions:', 'required object')
+
+    def test_top_level_names_cannot_replace_required_partitions(self):
+        cases = [dict(per_step=True), dict(solver_fixed_per_run='invalid'),
+                 dict(Partitions=[]),
+                 dict(per_step=True, solver_fixed_per_run='invalid', Partitions=[])]
+        for aliases in cases:
+            with self.subTest(aliases=aliases), tempfile.TemporaryDirectory() as tmp:
+                run = Path(tmp) / 'run'
+                _, manifest = fixture(run)
+                manifest.pop('partitions')
+                manifest.update(aliases)
+                save(run, manifest)
+                invalid(self, run, 'partitions:', 'required object')
+
+    def test_null_partitions_reports_expected_object(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / 'run'
+            _, manifest = fixture(run)
+            manifest['partitions'] = None
+            save(run, manifest)
+            invalid(self, run, 'partitions:', 'expected object')
 
 
 if __name__ == '__main__':

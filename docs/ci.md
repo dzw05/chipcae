@@ -70,7 +70,33 @@ An older combined prefix+ccache entry named `k1-linux-metis5.1.0-hypre3.2.1-hdf5
 
 ### Artifacts
 
-The build job uploads `build/junit.xml` from `ctest --output-junit`, plus the perf summary and compare JSON. Retention is 7 days. The nightly clang job uploads its own JUnit file.
+The build job uploads `build/junit.xml` and `build/junit-rest.xml` from the two CTest tier selections, plus the perf summary and compare JSON. Retention is 7 days. The nightly clang job uploads its own JUnit file.
+
+### CTest tier and owner labels
+
+Every test has exactly one tier (`unit`, `module`, `highmem`, `perf`, `acceptance`)
+and one `owner:<MODULE>` label (`M1`–`M7`, `INT`, `ARCH`, `INFRA`). Existing topic
+labels remain available. `cmake/ChipcaeTestTiers.cmake` assigns and validates labels
+centrally; its longest source-prefix table defines ownership. Auto-collected tests
+record their source file; manual tests use their registration directory and the
+documented name overrides. Add a specific prefix there when a new area needs one.
+
+For a new test, choose `unit` for checks taking seconds, `module` for numerical,
+MPI, MMS/convergence or module integration checks (including TIMEOUT ≥ 120 s),
+`perf` for timing/throughput, and `acceptance` for install, nightly, real-case and
+end-to-end checks. An explicit tier wins; conflicting tiers fail configuration.
+Without an explicit tier, perf takes precedence over acceptance, then module,
+then unit. Auto-collected tests default to TIMEOUT 120 s and therefore module.
+`highmem` is reserved for the three measured tests sharing `chipcae_highmem`;
+never add it based only on timeout or test size. Run `ctest -R '^ctest_tier_labels$'`
+to audit the full configured inventory (also required with CMake < 3.28, where
+automatic assignment warns and is skipped).
+
+Hosted PR CI runs `-L '^(unit|module)$'` first, then `-LE '^(unit|module)$'`, so
+all previously configured merge-gating tests still run. Hosted lacks MFEM/PETSc,
+so it configures no highmem tests. The Mac runs highmem at 02:00 Beijing and
+acceptance plus serial perf at 03:00. To offload highmem for a branch, run
+`gh workflow run mac-highmem.yml --ref <branch>`.
 
 ### E8 validation (2026-11-17)
 
@@ -368,8 +394,12 @@ checkout 后立即后台采样，每 10 秒将 epoch 时间和 `sysctl -n vm.loa
 `build/junit-mpi.xml`、`build/junit-mpi-unlabeled.xml`（有 b2 时）、`build/junit-rest.xml`
 及 `build/loadavg.log`，保留七天。
 
-全局 concurrency group `mac-highmem` 不取消在跑任务；Mac 离线时等待此 runner 上线，
+全局 concurrency group `mac-selfhosted` 不取消在跑任务；Mac 离线时等待此 runner 上线，
 不切换到托管机。排队期限按 GitHub 默认规则，job 的 120 分钟超时从实际开始运行计算。
+`Mac nightly tiers`（`mac-nightly-tiers.yml`）每天北京时间 03:00 或手动运行，复用同一
+工具链、依赖检查及配置/构建步骤，以 `-L '^acceptance$' -j 2 --timeout 2400` 和
+`-L '^perf$' -j 1 --no-tests=ignore` 分别测试，JUnit 保留七天，job 超时 150 分钟。
+两个工作流共享 `mac-selfhosted`，避免同时加载 Mac；均不接 PR 事件。
 现有单 runner 也使它与 Mac heavy 不会同时执行。ECAD/OCCT 尚未开启，PyYAML/SciPy/VTK
 尚未补齐，可能导致其余段失败/跳过；这些依赖和已知 Mac 编译可移植问题另卡处理。
 
