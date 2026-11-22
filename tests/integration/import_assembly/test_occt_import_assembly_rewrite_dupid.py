@@ -94,8 +94,15 @@ class AssemblyRewriteDuplicateIdTest(unittest.TestCase):
                         defects = [d for d in report['defects']
                                    if not d['defect_id'].startswith('board/')]
                         self.assertEqual(len(defects), len(expected))
-                        self.assertEqual({(d['defect_id'], d['tier'], d['reason'],
-                                           d.get('details')) for d in defects}, expected)
+                        if report_name == 'import_report':
+                            self.assertEqual({(d['defect_id'], d['tier'], d['reason'],
+                                               d['details']) for d in defects}, expected)
+                        else:
+                            self.assertEqual({(d['defect_id'], d['tier'], d['reason'])
+                                              for d in defects},
+                                             {item[:3] for item in expected})
+                            for defect in defects:
+                                self.assertNotIn('details', defect)
                         for defect in defects:
                             self.assertEqual(defect['kind'], '')
 
