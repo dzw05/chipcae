@@ -326,21 +326,30 @@ When a writer drops an event-log tail it writes `<path>.corrupt-<offset>`, or `<
 本仓库是公开仓库；为隔离 fork 提交，工作流不接 PR 事件，job 再限制
 `github.repository == 'dzw05/chipcae'`，只有 `contents: read` 权限。
 这补充了上文较早的 Linux/private 描述：Mac 已有独立的自托管工作流。
-该工作流仅供参考，不改变托管 CI 的测试选择、required checks 或 `ci-ok`；
+该工作流独立验收 highmem 与 FVM，不改变托管 CI 的测试选择、required checks 或 `ci-ok`；
 `CI / ci-ok` 的结果需要单独记录。
 
 工具链与 MPI/PETSc/HDF5/METIS/HYPRE/OpenBLAS 来自现有
 `$HOME/chipcae-env/env`，支持 conda-forge 的带前缀 Clang。额外依赖为
 `$HOME/chipcae-mac/deps/mfem`（MFEM 4.8，共享库，MPI/PETSc/METIS/HYPRE）及
 `$HOME/chipcae-mac/deps/jsoncons`（1.4.0）。conda 的 MFEM 若禁用了 PETSc 不能替代。
-构建在 runner 工作区的 `build`，Release 开启 MPI/HDF5/MFEM/JSONCONS，三者前缀
-一起传给 CMake。暂用 `-L$HOME/chipcae-env/env/lib -llapack -lblas` 解决求解器链接；
+构建在 runner 工作区的 `build`，Release 开启 MPI/HDF5/MFEM/JSONCONS/ECAD，仍关闭
+OCCT 和 assembly geometry；ECAD 所需 Clipper2/Expat/miniz 由现有 FetchContent 下载。
+三个依赖前缀一起传给 CMake。暂用 `-L$HOME/chipcae-env/env/lib -llapack -lblas` 解决求解器链接；
 `chipcae-solve` 的 `find_package(LAPACK)` 留给单独 M3 CMake 卡。
 
-首席在 Mac 上从已有工具链环境执行以下命令（CI 只执行 `--check`）：
+首席在 Mac 上从已有工具链环境先执行检查（CI 只检查，不安装）：
 
 ```bash
 bash .github/scripts/mac_highmem_deps.sh --check
+python3 -c "import numpy, h5py"
+```
+
+Python 检查位于工具链激活之后、测试之前，导入失败直接使 job 失败。缺依赖时先报告，
+取得确认后才允许向 `~/chipcae-env` 或 `~/chipcae-mac` 安装；不得修改
+`~/chipcae-ci` 或 `~/actions-runner`。以下安装命令仅供获确认后的所有者使用：
+
+```bash
 bash .github/scripts/mac_highmem_deps.sh --install
 # --prefix 是依赖根，子目录固定为 mfem 和 jsoncons。
 bash .github/scripts/mac_highmem_deps.sh --install --prefix "$HOME/chipcae-mac/custom-deps"
@@ -358,18 +367,46 @@ GitHub 发布标签归档安装 MFEM 4.8 和 jsoncons 1.4.0，不安装其它依
 有效安装分别跳过，重复安装不重写文件，安装后重跑检查；构建最多六路，关闭依赖的
 测试、示例和 miniapps。自定义前缀供手工使用，工作流仍使用默认前缀。
 
-测试在同一构建中分为互斥的四次调用：
+测试在同一构建中分为互斥的五次调用，依次经过两个 mandatory 门再跑信息段：
 
 | 段 | 选择 | 并发 | 状态 |
 | --- | --- | --- | --- |
 | a | `-L highmem` | 1 | 必须通过 |
+| FVM acceptance | 下列七名精确锚定正则，`--no-tests=error` | 1 | 必须通过 |
 | b1 | `-L mpi -LE highmem` | 2 | informational |
-| b2 | 命令任意位置出现实际 `mpiexec`/`mpirun` token，且无 mpi/highmem 标签 | 2 | informational |
-| c | `-LE 'highmem\|mpi'`，再排除 b2 | 6，timeout 900 s | informational |
+| b2 | 命令任意位置出现实际 `mpiexec`/`mpirun` token，且无 mpi/highmem 标签，再排除七项 FVM | 2 | informational |
+| c | `-LE 'highmem\|mpi'`，再排除 b2 与七项 FVM 的并集 | 6，timeout 900 s | informational |
+
+FVM acceptance 在仓库根目录执行，沿用各测试已有 TIMEOUT，不加超时覆盖：
+
+```bash
+ctest --test-dir build -R '^(fvm_fvm_case_e2e|solve_fvm_thermal|solve_fvm_thermal_cut|solve_fvm_thermal_np2|solve_fvm_elastic|solve_fvm_bimetal|solve_fvm_elastic_np2)$' --no-tests=error -j 1 --output-on-failure --output-junit "$PWD/build/junit-fvm-acceptance.xml"
+```
+
+这七项逐字为 `fvm_fvm_case_e2e`、`solve_fvm_thermal`、`solve_fvm_thermal_cut`、
+`solve_fvm_thermal_np2`、`solve_fvm_elastic`、`solve_fvm_bimetal`、`solve_fvm_elastic_np2`。
+六个 solver 测试要求 MFEM 启用 PETSc，两个 `_np2` 还要求 MPI。E2E 要求 ECAD、
+MFEM、MPI、HDF5 及应用目标可用，现有 CMake 才会注入应用和 launcher 环境变量。
+Mac 构建后须检查 `ctest --test-dir build -N --show-only=json-v1` 的实际输出：七项全部
+注册；E2E 的 `CHIPCAE_IMPORT_EXE`、`CHIPCAE_PREVIEW_EXE`、`CHIPCAE_SOLVE_EXE`、
+`CHIPCAE_FVM_LOADER_PROBE` 分别指向可执行的三个应用和生成的 `fvm_case_loader_probe`；
+`CHIPCAE_MPIEXEC` 指向可执行 launcher，`CHIPCAE_MPIEXEC_NUMPROC_FLAG`、
+`CHIPCAE_MPIEXEC_PREFLAGS`、`CHIPCAE_MPIEXEC_POSTFLAGS` 已注入（前后 flags 可为空）。
+还须用 JSON 中 E2E command 选定的 Python 解释器执行 `-c "import numpy, h5py"`，
+核对与激活后的 `python3` 一致。
+
+独立的 `Assert FVM acceptance JUnit` 以 `if: always()` 解析
+`build/junit-fvm-acceptance.xml`，打印每个 testcase 名称和秒数，要求
+`names == required` 且 `len(cases) == 7`，全 XML 的 `skipped`、`failure`、`error`
+元素均为零。文件缺失、XML 损坏、空报告、缺项、多项、重复、大小写不符或 SKIP（77）
+都失败；CTest 非零退出码原样传播，不以 JUnit 门覆盖。
 
 构建后仅获取一次 CTest JSON，读取 LABELS 和包括 Python wrapper 参数在内的全部
-命令 token，排序去重 b2 名单并转义正则元字符；b2 的包含和 c 的排除共用同一个
-锚定正则变量。b2 为空时日志写「无」，省略两边的正则过滤。
+命令 token，排序去重 b2 名单并转义正则元字符；`unlabeled_regex` 只包含 b2，另以
+`c_exclusion_regex` 锚定排除 b2 与七项 FVM 的并集。b2 为空时日志写「无」，省略 b2
+调用，但 c 仍排除七项 FVM。两个 `_np2` 从 b2 移入 mandatory，仍参与 rank 审计；
+b1 与 highmem 的选取不变，七项当前均无 mpi 标签。其他 FVM 测试（含
+`solve_fvm_elastic_concave` 与 `solve_fvm_elastic_benchmark`）保留原分区。
 预期 b2 为 `solve_pipeline`、`solve_preview_mesh_digest`、`solve_fem_thermal_bow`、
 `install_smoke`、`install_relocate`、`cpack_tgz`；其中 relocate 虽只 preview，仍携带
 launcher。实际配置名单以 Mac 日志为准；不能发现不暴露 launcher token 的内部 MPI
@@ -388,9 +425,11 @@ b1、b2、c 独立继续执行并保留退出码和墙钟时间；构建错误�
 
 checkout 后立即后台采样，每 10 秒将 epoch 时间和 `sysctl -n vm.loadavg` 写入
 `$RUNNER_TEMP/loadavg.log`，PID 同存 RUNNER_TEMP。always 清理停止采样并复制到
-`build/loadavg.log`，要求有效、非空、有限的样本，一分钟负载最大值 ≤12。
-日志打印构建、各次 CTest、整个配置/构建/测试窗口的墙钟秒数，以及每项 highmem
-耗时。持久工作区的旧报告在开始时清除。always 上传 `build/junit-highmem.xml`、
+`build/loadavg.log`，要求有效、非空、有限的样本，highmem mandatory 起止标记窗口内的
+一分钟负载最大值 ≤12；全 job 峰值另作信息记录。
+日志打印构建、各次 CTest（含 FVM 成败两条路径）、整个配置/构建/测试窗口的墙钟秒数，
+以及每项 highmem/FVM 耗时。持久工作区的旧报告（含 FVM）在开始时清除。
+always 上传 `build/junit-highmem.xml`、`build/junit-fvm-acceptance.xml`、
 `build/junit-mpi.xml`、`build/junit-mpi-unlabeled.xml`（有 b2 时）、`build/junit-rest.xml`
 及 `build/loadavg.log`，保留七天。
 
@@ -400,11 +439,27 @@ checkout 后立即后台采样，每 10 秒将 epoch 时间和 `sysctl -n vm.loa
 工具链、依赖检查及配置/构建步骤，以 `-L '^acceptance$' -j 2 --timeout 2400` 和
 `-L '^perf$' -j 1 --no-tests=ignore` 分别测试，JUnit 保留七天，job 超时 150 分钟。
 两个工作流共享 `mac-selfhosted`，避免同时加载 Mac；均不接 PR 事件。
-现有单 runner 也使它与 Mac heavy 不会同时执行。ECAD/OCCT 尚未开启，PyYAML/SciPy/VTK
-尚未补齐，可能导致其余段失败/跳过；这些依赖和已知 Mac 编译可移植问题另卡处理。
+现有单 runner 也使它与 Mac heavy 不会同时执行。Mac highmem 已开 ECAD、仍不开 OCCT；
+其余段所需 PyYAML/SciPy/VTK 等依赖和已知 Mac 编译可移植问题另卡处理。
 
 本工作流 Mac 验收 **未执行**，不能以本地 fixture 通过替代。首席运行后在 PR 记录：
-依赖全 OK、highmem Passed 且 Skipped=0、三项耗时与 271.17/285.05/400.58 秒的比较、
-总墙钟、负载峰值 ≤12、五类 artifact、实际 b2 名单/rank 审计，以及 b/c 通过/失败/跳过
+本分支 `workflow_dispatch` 的可点击 Actions 链接；合入后再补 main schedule/dispatch
+的同等链接与证据。两次均需依赖全 OK、上述注册/可执行文件/Python 检查、七项 FVM 的
+CTest **Passed** 和严格 JUnit 零 skipped/failure/error、各项及该步墙钟秒数，并确认每项
+仅在 mandatory 分区运行一次。实测与 main `03fd1ed` 的六项历史耗时比较：thermal
+0.48 s、thermal_cut 0.82 s、thermal_np2 0.47 s、elastic 2.34 s、bimetal 64.79 s、
+elastic_np2 1.95 s；历史 E2E 为 SKIP 0.07 s，不算通过，本地约 97 s 仅供时长参考。
+还需 highmem 三项 `cutbim_cut_bimetal`、`solve_column_gmg_fcbga`、
+`solve_column_gmg_fcbga_scaling` Passed 且 Skipped=0、三项耗时与
+271.17/285.05/400.58 秒的比较、总墙钟、mandatory 窗口负载峰值 ≤12、六类 artifact、
+实际 b2 名单/rank 审计，以及 b/c 通过/失败/跳过
 对比历史 JUnit 494 项（406 通过、30 运行失败、58 跳过，另 20 项未编出）。
 PR 开出时由首席助理通知 Zhiwei；托管 `CI / ci-ok` 独立记录。
+
+当前分支 Mac、合入后 main Mac、托管 `CI / ci-ok`、通知均为 **未执行**。
+任何真实 FVM Failed（非 SKIP）立即升级求解器所有者，INFRA 不改断言、容差、TIMEOUT
+或 `SKIP_RETURN_CODE`；下载/依赖失败或超出现有 120 分钟也须报告。M3 必须在指定的
+`status/solver.md` 顶部记录「副签｜infra-ci-fvm-acceptance-run 同意/不同意+理由」，
+未副签不得合入；此 checkout 未含该文件，须由所有者在指定状态位置记录。
+另有待裁定差异：brief 写 FEM 温升误差 ≤1%，现有 E2E 源码引用架构裁定为 ≤2%。
+本卡保持源码不变，澄清前不能宣称满足 brief 的 1% 数值判据。
