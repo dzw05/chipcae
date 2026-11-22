@@ -2,6 +2,7 @@
 #include "chipcae/io/vtkhdf_results.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -201,12 +202,20 @@ void two_steps(const fs::path& stackup) {
                        fs::file_size(run.path / "out/step-1.vtkhdf") +
                        fs::file_size(run.path / "manifest.json");
     require(s.bytes_written == bytes, "bytes_written must include both steps and current manifest");
-    writer.finalize();
-    require(s.bytes_written == bytes, "repeated finalize must not double-count manifest bytes");
-    finalized(s);
-    require(s.write_step_count == 2 && s.write_step_seconds == total &&
-                s.last_write_step_seconds == last,
-            "repeated finalize must preserve step statistics");
+    for (int call = 0; call < 16; ++call) {
+        const auto start = std::chrono::steady_clock::now();
+        writer.finalize();
+        const double elapsed =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        finalized(s);
+        // A single call's internal interval fits within its caller's interval, even at zero ticks.
+        require(s.finalize_seconds <= elapsed,
+                "finalize_seconds must measure only the most recent finalize call");
+        require(s.bytes_written == bytes, "repeated finalize must not double-count manifest bytes");
+        require(s.write_step_count == 2 && s.write_step_seconds == total &&
+                    s.last_write_step_seconds == last,
+                "repeated finalize must preserve step statistics");
+    }
 }
 
 // Catch fabricated step samples or accounting of the constructor's stackup copy.
@@ -236,15 +245,8 @@ void generate(const fs::path& stackup, const fs::path& run) {
     ResultsWriter writer(run, stackup);
     set_mesh(writer);
     write_step(writer, 0);
+    write_step(writer, 1);
     writer.finalize();
-    const auto& s = writer.io_stats();
-    // Catch replacement of the total by a later call, including loss of set_mesh's sample.
-    for (int call = 0; call < 16; ++call) {
-        const double previous = s.finalize_seconds;
-        writer.finalize();
-        require(s.finalize_seconds > previous,
-                "every successful finalize must add to the accumulated duration");
-    }
 }
 
 // Inspect every object, including root attributes and attributes on datasets.

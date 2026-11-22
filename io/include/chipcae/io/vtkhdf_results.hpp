@@ -32,9 +32,11 @@ struct ResultsStep {
 class ResultsWriter {
 public:
     // Successful-call wall times in seconds; statistics stay in memory.
-    // Includes finalize() calls made internally by set_mesh().
+    // Internal finalize() calls made by set_mesh() also update finalize statistics.
     struct IoStats {
+        // Sum of successful write_step() durations over this writer's lifetime.
         double write_step_seconds = 0;
+        // Wall time of the most recent successful finalize() call.
         double finalize_seconds = 0;
         double last_write_step_seconds = 0;
         // Whole-process peak RSS, not an incremental I/O allocation measurement.

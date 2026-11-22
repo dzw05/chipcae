@@ -1012,7 +1012,7 @@ void ResultsWriter::finalize() {
     manifest_bytes_ = manifest_bytes;
     io_stats_.bytes_written = step_bytes_ + manifest_bytes_;
     io_stats_.peak_rss_bytes = peak_rss_bytes;
-    io_stats_.finalize_seconds +=
+    io_stats_.finalize_seconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 }
 } // namespace chipcae::io
