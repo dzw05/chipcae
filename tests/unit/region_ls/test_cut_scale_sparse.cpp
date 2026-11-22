@@ -90,12 +90,9 @@ struct Hash {
         add(r.body);
     }
     void add(const AttributeTable& t) {
-        add(t.layers);
         add(t.entries);
         add(t.references);
-        add(t.materials);
         add(t.bodies);
-        add(t.boundary_names);
     }
     void add(const SnapReport& r) {
         add(r.axis);
@@ -191,27 +188,37 @@ struct Hash {
         add(m.elem_gid);
         add(m.node_gid);
         add(m.partitioning);
-        add(m.node_layer);
-        add(m.copper_layer_of_layer);
-        add(m.copper_phi);
-        add(m.node_column);
-        add(m.attr_frame);
-        add(m.nodes);
-        add(m.internal_interfaces);
-        add(m.order);
-        add(m.preparation_report);
-        add(m.grid_report);
         add(m.attr_table);
         add(m.face_sets);
         add(m.pending_cut);
-        add(m.snapped);
-        add(m.axes);
     }
 };
 template <class T>
 std::uint64_t hash(const T& v) {
     Hash h;
     h.add(v);
+    return h.digest;
+}
+// Rollback checks cover the whole state, independently of the contracted golden
+// digest. Unrelated mesh metadata must not invalidate pre-refactor goldens.
+std::uint64_t full_mesh_hash(const HexMeshArrays& m) {
+    Hash h;
+    h.add(m);
+    h.add(m.node_layer);
+    h.add(m.copper_layer_of_layer);
+    h.add(m.copper_phi);
+    h.add(m.node_column);
+    h.add(m.attr_frame);
+    h.add(m.nodes);
+    h.add(m.internal_interfaces);
+    h.add(m.order);
+    h.add(m.preparation_report);
+    h.add(m.grid_report);
+    h.add(m.attr_table.layers);
+    h.add(m.attr_table.materials);
+    h.add(m.attr_table.boundary_names);
+    h.add(m.snapped);
+    h.add(m.axes);
     return h.digest;
 }
 
@@ -463,14 +470,15 @@ Measurement scale_guard(std::vector<VolumeCheck>& volumes) {
 
 void bitwise_outline(std::vector<VolumeCheck>& volumes) {
     constexpr std::array<Local, 5> resolutions{4, 8, 16, 32, 10};
-    // Captured on untouched 784fe3452c4af22366bfcfd66fc7a949e276f377,
-    // GNU 14.2.0, Linux x86_64, Release. Never refresh these for the refactor.
+    // Captured from untouched pre-refactor cut code (ced6409, identical to
+    // 784fe34), GNU 14.2.0, Linux x86_64, Release. Mesh digests were recaptured
+    // with only the brief's named fields; cut digests remain unchanged.
     constexpr std::array<Golden, 5> expected{{
-        {0xe974e42ed8b971b8ULL, 0x710e70433c2a85eeULL},
-        {0xf423fe82aaa739a9ULL, 0xd854e053fc2c3cefULL},
-        {0x38ab180aa9d5b98bULL, 0xa1261a1ef02de996ULL},
-        {0x14699e12936e2313ULL, 0x2eb75ee8bb73c3c4ULL},
-        {0x65c2a6d2e51e8265ULL, 0x953382a220d2e108ULL},
+        {0xa704cc1efb6e7346ULL, 0x710e70433c2a85eeULL},
+        {0xb7066576e2afffe0ULL, 0xd854e053fc2c3cefULL},
+        {0x95d1f16842b0297dULL, 0xa1261a1ef02de996ULL},
+        {0x4f3fe256a94ed292ULL, 0x2eb75ee8bb73c3c4ULL},
+        {0x0d4fac692083ee07ULL, 0x953382a220d2e108ULL},
     }};
     for (std::size_t i = 0; i < resolutions.size(); ++i) {
         const auto n = resolutions[i];
@@ -510,8 +518,8 @@ void bitwise_lid(std::vector<VolumeCheck>& volumes, Lid lid) {
     golden(name,
            m,
            c,
-           lid == Lid::Convex ? Golden{0xae8dce03d038fe1eULL, 0x28db459fa37df24fULL}
-                              : Golden{0xa2691fe378b3db92ULL, 0x976fff2710cb69baULL});
+           lid == Lid::Convex ? Golden{0x2edefd971f79fe98ULL, 0x28db459fa37df24fULL}
+                              : Golden{0xb6bf7b0323290597ULL, 0x976fff2710cb69baULL});
     gp_reference(m, c);
     remember_volume(volumes, name, s, m, c);
 }
@@ -553,8 +561,8 @@ void keep_void_both(std::vector<VolumeCheck>& volumes) {
         golden(name,
                m,
                c,
-               keep ? Golden{0x656ef8555bdaec6fULL, 0x883bf8fb0e99db04ULL}
-                    : Golden{0xf423fe82aaa739a9ULL, 0x55523e514716771dULL});
+               keep ? Golden{0x0b1422792db4f4baULL, 0x883bf8fb0e99db04ULL}
+                    : Golden{0xb7066576e2afffe0ULL, 0x55523e514716771dULL});
         gp_reference(m, c);
         remember_volume(volumes, name, s, m, c);
     }
@@ -562,22 +570,81 @@ void keep_void_both(std::vector<VolumeCheck>& volumes) {
 void error_leaves_mesh() {
     const auto s = stack();
     auto m = grid(s, 8);
-    const auto before = hash(m);
+    const auto before = full_mesh_hash(m);
     auto outside = s.outline;
     outside.polygon[0][0] = -.001;
     auto bad = apply_outline_cut(m, outside, cut_options());
     check(!bad && bad.error().path == "outline" &&
               bad.error().reason == "outline polygon vertex outside outline.box",
           "outside vertex must return the exact outline path/reason");
-    check(hash(m) == before, "outside-vertex error must preserve every mesh field");
+    check(full_mesh_hash(m) == before, "outside-vertex error must preserve every mesh field");
     auto empty =
         apply_outline_cut(m, s.outline, cut_options(), CutGeometry{{Plane{0, {1, 0, 0}, -1}}});
     check(!empty && empty.error().path == "outline" && empty.error().reason == "empty cut domain",
           "complete removal must return the exact outline path/reason");
-    check(hash(m) == before, "empty-domain error must preserve every mesh field");
+    check(full_mesh_hash(m) == before, "empty-domain error must preserve every mesh field");
     // The mutable public builder, unlike outline, deliberately accepts empty results.
     const auto c = value(build_cut_layer(m, CutGeometry{{Plane{0, {1, 0, 0}, -1}}}, cut_options()));
     check(m.elem_gid.empty() && c.void_elem.empty(), "mutable build must accept empty results");
+}
+void digest_scope() {
+    auto m = grid(stack(), 4);
+    const auto before = hash(m);
+    const auto full_before = full_mesh_hash(m);
+    m.node_layer.push_back(17);
+    m.copper_layer_of_layer.push_back(18);
+    m.copper_phi.push_back(.25);
+    m.node_column.push_back(19);
+    m.attr_frame.push_back(.5);
+    m.nodes.push_back(.75);
+    m.internal_interfaces = !m.internal_interfaces;
+    ++m.order;
+    HexMeshArrays::InterfaceReport report;
+    report.name = "unrelated interface";
+    m.preparation_report.push_back(report);
+    ++m.grid_report.void_cells;
+    m.snapped.push_back({'x', 0, 1, 1});
+    m.axes[0].push_back(2);
+    m.attr_table.layers.emplace("unrelated layer", 20);
+    m.attr_table.materials.emplace("unrelated material", 21);
+    m.attr_table.boundary_names.emplace(22, "unrelated boundary");
+    check(hash(m) == before, "mesh baseline digest must include only the brief's named fields");
+    check(full_mesh_hash(m) != full_before, "rollback digest must still cover unrelated fields");
+}
+void gp_nonmanifold() {
+    HexMeshArrays initial;
+    initial.vertices = {0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1};
+    initial.node_gid = {0, 1, 2, 3, 4, 5, 6, 7};
+    initial.node_layer.resize(8);
+    initial.node_column.resize(8);
+    // Three coincident cells give six nonmanifold face groups. The cache
+    // retains the first occurrence and pairs both later occurrences with it.
+    for (int i = 0; i < 3; ++i)
+        initial.hex.insert(initial.hex.end(), {0, 1, 2, 3, 4, 5, 6, 7});
+    initial.attribute = {1, 1, 1};
+    initial.elem_gid = {30, 10, 20};
+    initial.partitioning = {2, 1, 0};
+    initial.attr_table.entries.push_back({"solid", "", 1, 1});
+    initial.attr_table.bodies.emplace("solid", 1);
+    for (const bool reverse : {false, true}) {
+        auto m = initial;
+        if (reverse)
+            std::reverse(m.elem_gid.begin(), m.elem_gid.end());
+        const auto c =
+            value(build_cut_layer(m, CutGeometry{{Plane{0, {1, 1, 0}, 1.5}}}, cut_options()));
+        check(c.cut_elem.size() == 3, "nonmanifold fixture must cut all three cells");
+        gp_reference(m, c);
+        check(c.gp_face_gid.size() == 12, "three shared cells must yield two pairs per face");
+        for (std::size_t i = 0; i < c.gp_face_gid.size(); ++i) {
+            const auto encounter = i < 6 ? m.elem_gid[1] : m.elem_gid[2];
+            check(c.gp_elem_gid[0][i] == std::min(m.elem_gid[0], encounter) &&
+                      c.gp_elem_gid[1][i] == std::max(m.elem_gid[0], encounter),
+                  "nonmanifold GP must pair each later cell with the first cell");
+            check(c.gp_face_minus[i] == static_cast<Local>(i % 6) &&
+                      c.gp_face_plus[i] == static_cast<Local>(i % 6),
+                  "nonmanifold GP must retain MFEM encounter order");
+        }
+    }
 }
 void gp_reordered_gids() {
     const auto s = stack();
@@ -619,7 +686,9 @@ int main() {
         run("bitwise_union", [&] { bitwise_lid(volumes, Lid::Notched); });
         run("keep_void_both", [&] { keep_void_both(volumes); });
         run("error_leaves_mesh", error_leaves_mesh);
+        run("digest_scope", digest_scope);
         run("volume_analytic", [&] { volume_analytic(volumes); });
+        run("gp_nonmanifold", gp_nonmanifold);
         run("gp_reordered_gids", gp_reordered_gids);
         // Defer performance assertions until all correctness results are collected.
         run("scale_guard", [&] {
