@@ -1,5 +1,5 @@
 {
-  "case_id": "i6-subset-incorrect-pair-1-True",
+  "case_id": "i6-subset-incorrect-and-True",
   "commit": "e8e86ce",
   "data_class": "synthetic",
   "date": "20261120",
@@ -11,10 +11,10 @@
     ],
     "np2_digest": [
       "727e922aaa3b3642bca88cf906a638325da427008d590f0e78c4d240c8b209a3",
-      "0000000000000000000000000000000000000000000000000000000000000000",
+      "c40b5122fa63133234bf8664478ade0f7d914d9047a0f4e65816ea13bc7cacec",
       "ca7630ebf48e675a0833eb7ec4a37336adda594524d329f15c74afe77c22269f"
     ],
-    "np_bitwise_equal": true,
+    "np_bitwise_equal": false,
     "np_bitwise_pairs": [
       true,
       true,

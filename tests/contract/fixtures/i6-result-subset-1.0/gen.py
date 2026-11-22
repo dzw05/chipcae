@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import shutil
 import sys
 from pathlib import Path
 
@@ -164,9 +163,10 @@ def nightly_vv() -> dict:
     return obj
 
 
-def incorrect_pair(index: int, claimed_equal: bool) -> dict:
+def independent_pair(index: int, claimed_equal: bool) -> dict:
+    # Cross-np comparison flags are independent of same-np repeatability digests.
     obj = nightly_vv()
-    obj["case_id"] = f"i6-subset-incorrect-pair-{index}-{claimed_equal}"
+    obj["case_id"] = f"i6-subset-independent-pair-{index}-{claimed_equal}"
     det = obj["determinism"]
     det["np2_digest"] = list(det["np1_digest"])
     if claimed_equal:
@@ -233,18 +233,19 @@ def expected_doc() -> dict:
             "manifest_fem/fem.manifest.json",
             "manifest_fvm/fvm.manifest.json",
             "vv_result_nightly/nightly.vv_result.json",
+            *[
+                f"vv_result_nightly/independent_pair_{index}_{claimed_equal}.vv_result.json"
+                for index in range(3)
+                for claimed_equal in (True, False)
+            ],
         ],
         "negatives": [
             *[
                 {
-                    "file": f"negative/incorrect_pair_{index}_{claimed_equal}.vv_result.json",
+                    "file": f"negative/incorrect_and_{claimed_equal}.vv_result.json",
                     "kind": "subset",
-                    "error": (
-                        f"determinism.np_bitwise_pairs[{index}]: "
-                        "must match np1_digest/np2_digest equality"
-                    ),
+                    "error": "determinism.np_bitwise_equal: must be AND of np_bitwise_pairs",
                 }
-                for index in range(3)
                 for claimed_equal in (True, False)
             ],
             {
@@ -296,9 +297,15 @@ def generate(out: Path) -> None:
     for index in range(3):
         for claimed_equal in (True, False):
             dump(
-                out / f"negative/incorrect_pair_{index}_{claimed_equal}.vv_result.json",
-                incorrect_pair(index, claimed_equal),
+                out / f"vv_result_nightly/independent_pair_{index}_{claimed_equal}.vv_result.json",
+                independent_pair(index, claimed_equal),
             )
+    for claimed_equal in (True, False):
+        obj = nightly_vv()
+        obj["case_id"] = f"i6-subset-incorrect-and-{claimed_equal}"
+        obj["determinism"]["np_bitwise_pairs"] = [claimed_equal, True, True]
+        obj["determinism"]["np_bitwise_equal"] = not claimed_equal
+        dump(out / f"negative/incorrect_and_{claimed_equal}.vv_result.json", obj)
     dump(out / "expected.json", expected_doc())
     for name in ("gen.py", "check.py"):
         src = HERE / name

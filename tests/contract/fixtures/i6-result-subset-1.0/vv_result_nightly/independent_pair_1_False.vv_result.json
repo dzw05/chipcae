@@ -1,5 +1,5 @@
 {
-  "case_id": "i6-subset-incorrect-pair-0-False",
+  "case_id": "i6-subset-independent-pair-1-False",
   "commit": "e8e86ce",
   "data_class": "synthetic",
   "date": "20261120",
@@ -16,8 +16,8 @@
     ],
     "np_bitwise_equal": false,
     "np_bitwise_pairs": [
-      false,
       true,
+      false,
       true
     ],
     "np_violations": [
