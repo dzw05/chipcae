@@ -111,13 +111,16 @@ Otherwise it exits with NOT_IMPLEMENTED (2) and
 pairings exit with INPUT_INVALID (14). Device selection keeps the existing
 solve path; it does not promise GPU execution or acceleration.
 
-The CUDA-enabled MFEM branch has a compile-only acceptance requirement; this
-requirement has **not been verified (未实测)**. The branch has not been compiled
-or runtime-tested on this box, and current CI does not compile it. No successful
-CUDA-enabled MFEM compilation or GPU execution is claimed.
-`cuda-kokkos-core-compile` covers Kokkos and core only; a `cuda-solve-compile`
-job is outside this task. Selecting the global MFEM device
-may expose host/device memory incompatibilities in the existing PETSc solve path.
+Nightly `cuda-solve-compile` is configured to compile the solver, FEM and all
+`tests/solve` executables with CUDA 12.6, CUDA-enabled MFEM and CPU PETSc/Hypre
+on a hosted runner without a GPU. Hosted CUDA compilation is **not yet verified
+(未实测)**; no first green run has been recorded. Local acceptance checks the
+compile-fault switch using a test-only header, which does not validate CUDA MFEM.
+GPU execution and acceleration remain **未实测**. The nightly job does not run
+solver or test binaries; dependency configuration uses native CPU feature probes.
+The optional dispatch input `inject_cuda_fault` checks that the CUDA branch fails
+compilation and defaults to false. Selecting the global MFEM device may expose
+host/device memory incompatibilities in the existing PETSc solve path.
 
 The amended X1 brief permits the additive public `RunInputs::backend` string
 member (default `"cpu"`) in `include/chipcae/solve/case_loader.hpp`. This changes
