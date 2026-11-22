@@ -86,7 +86,18 @@ jobs:
             -DCHIPCAE_ENABLE_MPI=ON -DCHIPCAE_ENABLE_HDF5=ON \
             -DCHIPCAE_ENABLE_MFEM=ON -DCHIPCAE_ENABLE_JSONCONS=ON \
             -DCMAKE_PREFIX_PATH="$HOME/chipcae-env/env;$HOME/chipcae-mac/deps/mfem;$HOME/chipcae-mac/deps/jsoncons" \
+            -DHDF5_NO_FIND_PACKAGE_CONFIG_FILE=ON \
+            -DCMAKE_IGNORE_PREFIX_PATH="$HOME/chipcae-ci/env" \
             -DCMAKE_EXE_LINKER_FLAGS="-L$HOME/chipcae-env/env/lib -llapack -lblas"
+
+      - name: Guard CMakeCache against chipcae-ci
+        run: |
+          set -euo pipefail
+          matches=$(grep 'chipcae-ci' build/CMakeCache.txt | grep -Ev 'CHIPCAE_CCACHE_EXECUTABLE|CMAKE_.*_COMPILER_LAUNCHER' || true)
+          if [ -n "$matches" ]; then
+            printf '%s\n' "$matches"
+            exit 1
+          fi
 
       - name: Build
         run: |
