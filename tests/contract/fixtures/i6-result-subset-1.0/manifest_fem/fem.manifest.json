@@ -1,0 +1,107 @@
+{
+  "fields": [
+    {
+      "components": 1,
+      "dtype": "float64",
+      "location": "point",
+      "name": "T",
+      "unit": "K"
+    },
+    {
+      "components": 3,
+      "dtype": "float64",
+      "location": "point",
+      "name": "U",
+      "unit": "m"
+    },
+    {
+      "components": 1,
+      "dtype": "int32",
+      "location": "cell",
+      "name": "layer_id",
+      "unit": "1"
+    },
+    {
+      "components": 1,
+      "dtype": "int32",
+      "location": "cell",
+      "name": "material_id",
+      "unit": "1"
+    },
+    {
+      "components": 1,
+      "dtype": "int32",
+      "location": "cell",
+      "name": "cell_kind",
+      "unit": "1"
+    },
+    {
+      "components": 1,
+      "dtype": "int64",
+      "location": "cell",
+      "name": "elem_gid",
+      "unit": "1"
+    },
+    {
+      "components": 1,
+      "dtype": "float64",
+      "location": "cell",
+      "name": "volume",
+      "unit": "m3"
+    },
+    {
+      "components": 1,
+      "dtype": "float64",
+      "location": "cell",
+      "name": "sigma_vm",
+      "reserved": true,
+      "unit": "Pa"
+    }
+  ],
+  "mesh": {
+    "L": 0,
+    "mesh_sha256": "c41b2e5d9f0e3e7c2629d314b916d0ad44e55cfe19e5ce205e4e6313d5c84d29",
+    "nx0": 2,
+    "ny0": 2,
+    "nz": 2,
+    "padded_cells": 0
+  },
+  "partitions": {
+    "per_step": [
+      1
+    ],
+    "solver_fixed_per_run": true
+  },
+  "schema_version": "chipcae.results/1.0",
+  "stackup": "stackup.json",
+  "steps": [
+    {
+      "file": "out/step-0.vtkhdf",
+      "n": 0
+    }
+  ],
+  "summary": [
+    {
+      "method": "fem_q2_nodes",
+      "name": "warpage_pv",
+      "step": 0,
+      "unit": "m",
+      "value": 1.25e-06
+    },
+    {
+      "method": "fem_q2_nodes",
+      "name": "T_max",
+      "step": 0,
+      "unit": "K",
+      "value": 370.0
+    },
+    {
+      "method": "fem_q2_nodes",
+      "name": "U_mag_max",
+      "step": 0,
+      "unit": "m",
+      "value": 2.5e-06
+    }
+  ],
+  "units": "SI"
+}

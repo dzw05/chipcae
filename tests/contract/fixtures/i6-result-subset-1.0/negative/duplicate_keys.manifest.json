@@ -1,0 +1,8 @@
+{
+  "schema_version": "chipcae.results/1.0",
+  "schema_version": "chipcae.results/0.9",
+  "steps": [{"n": 0, "file": "out/step-0.vtkhdf"}],
+  "fields": [],
+  "partitions": {"per_step": [1], "solver_fixed_per_run": true},
+  "summary": []
+}

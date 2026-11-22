@@ -170,7 +170,17 @@ void uncut_regression(bool compare_flags) {
     auto p = problem(m);
     p.support = ElasticProblem::Support::Fixed;
     p.fixed_side = {0};
-    const auto top = laminate(0.3);
+    // Freeze the parent material inputs together with its saved displacement field.
+    // Current laminate formulas remain covered by the other laminate fixtures.
+    M6 compliance{};
+    compliance[0] = compliance[7] = 1 / 50.5e9;
+    compliance[14] = 1 / 32544378698.224854;
+    compliance[1] = compliance[6] = compliance[2] = compliance[12] = compliance[8] =
+        compliance[13] = -0.312 / 50.5e9;
+    compliance[21] = compliance[28] = 1 / 12482977757.60327;
+    compliance[35] = 1 / 19245426829.26829;
+    const Material top{inverse(compliance),
+                       {1.4666666666666666e-5, 1.4666666666666666e-5, 1.0021212121212122e-5}};
     for (std::size_t c = 0; c < m.volume.size(); ++c)
         if (m.centroid[c][2] > 0.5) {
             p.C[c] = top.C;

@@ -1,0 +1,14 @@
+{
+  "case_id": "i6-subset-d03-real",
+  "commit": "e8e86ce",
+  "data_class": "real",
+  "date": "20261120",
+  "label": "实测",
+  "qoi": {
+    "T_max": 370.0,
+    "U_mag_max": 2.5e-06,
+    "warpage_pv": 1.25e-06
+  },
+  "schema": "chipcae.vv_result/0.2",
+  "verdict": "pass"
+}

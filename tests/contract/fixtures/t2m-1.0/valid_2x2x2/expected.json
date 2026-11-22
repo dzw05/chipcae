@@ -1,0 +1,17 @@
+{
+  "code": 0,
+  "code_name": "NONE",
+  "dT": [
+    0.0,
+    10.0,
+    20.0,
+    30.0,
+    40.0,
+    50.0,
+    60.0,
+    70.0
+  ],
+  "message": "",
+  "volume_weighted_T": 335.0,
+  "volume_weighted_dT": 35.0
+}

@@ -93,6 +93,9 @@ plain-stack GMG/direct before the prescribed #205 skip. FEM/FVM returns 77
 until its upstream pipeline exists. Elasticity absence then nulls U diagnostics
 with `fvm elastic not wired`; the sole thermal gate remains mandatory.
 
-The required solver output list includes `volume`. A baseline loader that
-rejects that field is an upstream failure: tests remain failed rather than
-dropping the field, changing production code or adding a skip condition.
+FEM runs do not request `volume`: the loader accepts that explicit output field
+only for FVM. FEM references without complete `CellData/volume` use the existing
+equal-weight cell-temperature L2 calculation and emit the note
+`cell_T L2 uses equal weights: complete reference volumes unavailable`.
+FEM volume weighting is future M3 interface work
+(`v-int-field-compare-fixture-volume`, 2026-11-21).

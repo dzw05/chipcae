@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -10,6 +11,7 @@
 #include <limits>
 #include <set>
 #include <stdexcept>
+#include <sys/resource.h>
 #ifdef CHIPCAE_ENABLE_HDF5
 #include "chipcae/io/detail/hdf5.hpp"
 #endif
@@ -314,12 +316,14 @@ ResultsWriter::ResultsWriter(std::filesystem::path run,
     agree(ok);
 }
 void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
+    [[maybe_unused]] const auto start = std::chrono::steady_clock::now();
 #ifndef CHIPCAE_ENABLE_HDF5
     (void)n;
     (void)time;
     (void)local;
     throw std::runtime_error("ResultsWriter requires CHIPCAE_ENABLE_HDF5");
 #else
+    agree(io_stats_.write_step_count < std::numeric_limits<int>::max());
 #ifdef CHIPCAE_ENABLE_MPI
     if (size_ > 1) {
         int lo, hi;
@@ -827,6 +831,7 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
         ok = false;
     }
     agree(ok);
+    std::uint64_t step_bytes = 0;
     if (rank_ == 0)
         try {
             {
@@ -844,14 +849,29 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                 metadata_file.id = -1;
             }
             std::filesystem::rename(tmp, run_ / filename);
+            const auto bytes = std::filesystem::file_size(run_ / filename);
+            if (bytes > std::numeric_limits<std::uint64_t>::max() - step_bytes_ - manifest_bytes_)
+                throw std::overflow_error("results step byte count overflow");
+            step_bytes = static_cast<std::uint64_t>(bytes);
         } catch (...) {
             ok = false;
         }
     agree(ok);
+#ifdef CHIPCAE_ENABLE_MPI
+    if (size_ > 1)
+        MPI_Bcast(&step_bytes, 1, MPI_UINT64_T, 0, MPI_COMM_WORLD);
+#endif
+    phase([&] { steps_.push_back({n, time, std::move(filename)}); });
     diagnostic_fields_ |= emitted_diagnostics;
     gids_ = gid_any != 0;
     cut_fields_ = cut_fields_ || cut_any != 0;
-    steps_.push_back({n, time, std::move(filename)});
+    step_bytes_ += step_bytes;
+    io_stats_.bytes_written = step_bytes_ + manifest_bytes_;
+    const double duration =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    io_stats_.last_write_step_seconds = duration;
+    io_stats_.write_step_seconds += duration;
+    ++io_stats_.write_step_count;
 #endif
 }
 void ResultsWriter::add_summary(
@@ -864,6 +884,8 @@ void ResultsWriter::add_summary(
     summary_.push_back({std::move(name), value, std::move(unit), step, std::move(method)});
 }
 void ResultsWriter::finalize() {
+    const auto start = std::chrono::steady_clock::now();
+    std::uint64_t manifest_bytes = 0;
     bool ok = true;
     if (rank_ == 0)
         try {
@@ -959,9 +981,38 @@ void ResultsWriter::finalize() {
             out << "\n}\n";
             out.close();
             std::filesystem::rename(tmp, run_ / "manifest.json");
+            const auto bytes = std::filesystem::file_size(run_ / "manifest.json");
+            if (bytes > std::numeric_limits<std::uint64_t>::max() - step_bytes_)
+                throw std::overflow_error("results manifest byte count overflow");
+            manifest_bytes = static_cast<std::uint64_t>(bytes);
         } catch (...) {
             ok = false;
         }
     agree(ok);
+#ifdef CHIPCAE_ENABLE_MPI
+    if (size_ > 1)
+        MPI_Bcast(&manifest_bytes, 1, MPI_UINT64_T, 0, MPI_COMM_WORLD);
+#endif
+    std::uint64_t peak_rss_bytes = 0;
+    phase([&] {
+        struct rusage usage{};
+        if (getrusage(RUSAGE_SELF, &usage) != 0)
+            throw std::runtime_error("results getrusage failed");
+#if defined(__APPLE__)
+        constexpr std::uint64_t rss_scale = 1;
+#else
+        constexpr std::uint64_t rss_scale = 1024;
+#endif
+        if (usage.ru_maxrss < 0 || static_cast<std::uintmax_t>(usage.ru_maxrss) >
+                                       std::numeric_limits<std::uint64_t>::max() / rss_scale)
+            throw std::overflow_error("results peak RSS byte count overflow");
+        peak_rss_bytes = static_cast<std::uint64_t>(usage.ru_maxrss) * rss_scale;
+    });
+    // Publish statistics only after every rank has completed successfully.
+    manifest_bytes_ = manifest_bytes;
+    io_stats_.bytes_written = step_bytes_ + manifest_bytes_;
+    io_stats_.peak_rss_bytes = peak_rss_bytes;
+    io_stats_.finalize_seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 }
 } // namespace chipcae::io
