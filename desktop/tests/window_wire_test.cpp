@@ -8,6 +8,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
 #include <QDirIterator>
@@ -19,6 +20,8 @@
 #include <QFormLayout>
 #include <QJsonDocument>
 #include <QLabel>
+#include <QPushButton>
+#include <QRegularExpression>
 #include <QSurfaceFormat>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -399,9 +402,9 @@ int resultsStackAcceptance(const QString& samples) {
         require(stackEditor(window)->isReadOnly(),
                 "failed replacement keeps read-only result stack");
     });
-    run("Chinese form labels", [&] {
+    const auto chineseFormLabels = [&](const QString& resultManifest) {
         MainWindow window;
-        require(window.openResultsPath(manifest), "open result for controls");
+        require(window.openResultsPath(resultManifest), "open result for controls");
         auto* controls = resultControls(window);
         require(controls != nullptr, "result controls installed");
         auto* form = qobject_cast<QFormLayout*>(controls->layout());
@@ -431,6 +434,94 @@ int resultsStackAcceptance(const QString& samples) {
         require(scale && label(scale) == QStringLiteral("翘曲放大系数"), "warpage scale label");
         require(layer->itemText(0) == QStringLiteral("全部层") && layer->itemData(0).toInt() == 0,
                 "all-layers item and data");
+        const QStringList expectedFields{QStringLiteral("温度"),
+                                         QStringLiteral("位移幅值"),
+                                         QStringLiteral("翘曲"),
+                                         QStringLiteral("叠层"),
+                                         QStringLiteral("材料")};
+        require(field->count() == expectedFields.size(), "exactly five field choices");
+        for (int i = 0; i < field->count(); ++i)
+            require(field->itemText(i) == expectedFields[i], "Chinese field choices in order");
+
+        QStringList formLabels, planeLabels;
+        for (int row = 0; row < form->rowCount(); ++row) {
+            auto* item = form->itemAt(row, QFormLayout::FieldRole);
+            if (!item || !item->widget() || !form->labelForField(item->widget()))
+                continue;
+            const auto text = label(item->widget());
+            formLabels << text;
+            auto* spin = qobject_cast<QDoubleSpinBox*>(item->widget());
+            if (spin && spin->decimals() == 9)
+                planeLabels << text;
+        }
+        // Report every missing translation even when the first form label is still English.
+        QStringList labelFailures;
+        const auto expectLabel = [&](bool value, const QString& message) {
+            if (!value)
+                labelFailures << message;
+        };
+        for (const auto& text : {QStringLiteral("单元编号"), QStringLiteral("步")})
+            expectLabel(formLabels.count(text) == 1,
+                        QStringLiteral("exactly one form label: %1").arg(text));
+        const QStringList expectedPlaneLabels{QStringLiteral("原点 x"),
+                                              QStringLiteral("原点 y"),
+                                              QStringLiteral("原点 z"),
+                                              QStringLiteral("法向 x"),
+                                              QStringLiteral("法向 y"),
+                                              QStringLiteral("法向 z")};
+        expectLabel(planeLabels.size() == 6, "exactly six plane inputs");
+        expectLabel(planeLabels == expectedPlaneLabels,
+                    "Chinese origin and normal labels in layout order");
+        for (const auto& text : expectedPlaneLabels)
+            expectLabel(formLabels.count(text) == 1,
+                        QStringLiteral("exactly one form label: %1").arg(text));
+        for (const auto& text : {"elem_gid",
+                                 "Step",
+                                 "Origin x",
+                                 "Origin y",
+                                 "Origin z",
+                                 "Normal x",
+                                 "Normal y",
+                                 "Normal z"})
+            expectLabel(formLabels.count(text) == 0,
+                        QString("obsolete form label absent: %1").arg(text));
+
+        QStringList checkTexts;
+        for (auto* check : controls->findChildren<QCheckBox*>())
+            checkTexts << check->text();
+        for (const auto& text :
+             {QStringLiteral("显示空洞单元"), QStringLiteral("剖切（正半空间）")})
+            expectLabel(checkTexts.count(text) == 1,
+                        QStringLiteral("exactly one checkbox: %1").arg(text));
+        for (const auto& text : {"Show void cells", "Clip (positive half-space)"})
+            expectLabel(checkTexts.count(text) == 0,
+                        QString("obsolete checkbox absent: %1").arg(text));
+
+        QStringList buttonTexts;
+        for (auto* button : controls->findChildren<QPushButton*>())
+            buttonTexts << button->text();
+        expectLabel(buttonTexts.count(QStringLiteral("导出 PNG")) == 1,
+                    "exactly one 导出 PNG button");
+        expectLabel(buttonTexts.count("Export PNG") == 0, "obsolete Export PNG button absent");
+        require(labelFailures.isEmpty(), qPrintable(labelFailures.join('\n')));
+    };
+    run("Chinese form labels", [&] { chineseFormLabels(manifest); });
+    run("Chinese form labels without void cells",
+        [&] { chineseFormLabels(samples + "/temporal.json"); });
+    run("Chinese screenshot dialog caption", [&] {
+        // Lock the caption argument without opening a modal file dialog on offscreen platforms.
+        QFile source(QString(CHIPCAE_REPOSITORY) + "/desktop/viewer/ResultControls.cpp");
+        require(source.open(QIODevice::ReadOnly), "read result controls for dialog caption");
+        const auto text = QString::fromUtf8(source.readAll());
+        const QRegularExpression call(QStringLiteral(
+            R"re(QFileDialog::getSaveFileName\s*\(\s*this\s*,\s*(QStringLiteral\("[^"]*"\)|"[^"]*")\s*,\s*\{\s*\}\s*,\s*(?:QStringLiteral\()?"([^"]*)"\)?\s*\))re"));
+        const auto match = call.match(text);
+        require(match.hasMatch(), "save dialog call and literal arguments found");
+        require(match.captured(2) == QStringLiteral("PNG (*.png)"), "PNG filter preserved");
+        require(match.captured(1) == QStringLiteral("QStringLiteral(\"导出截图\")"),
+                "save dialog caption is QStringLiteral(导出截图)");
+        require(!text.contains(QStringLiteral("\"Export screenshot\"")),
+                "obsolete Export screenshot caption absent");
     });
     run("layer dropdown consumes fallback names in order", [&] {
         MainWindow window;

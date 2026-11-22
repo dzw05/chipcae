@@ -30,7 +30,7 @@ ResultControls::ResultControls(ResultView& view, ResultSession& session, QWidget
         field->setCurrentIndex(static_cast<int>(view.colorField()));
     });
     auto picked = new QLabel(QStringLiteral("未知"), this);
-    layout->addRow("elem_gid", picked);
+    layout->addRow(QStringLiteral("单元编号"), picked);
     connect(&view, &ResultView::elementPicked, picked, &QLabel::setText);
     auto scale = new QDoubleSpinBox(this);
     scale->setRange(-1e9, 1e9);
@@ -55,10 +55,10 @@ ResultControls::ResultControls(ResultView& view, ResultSession& session, QWidget
             view.setBlockVisible(name, on);
         });
     }
-    auto voids = new QCheckBox("Show void cells", this);
+    auto voids = new QCheckBox(QStringLiteral("显示空洞单元"), this);
     layout->addRow(voids);
     connect(voids, &QCheckBox::toggled, &view, &ResultView::setShowVoid);
-    auto clip = new QCheckBox("Clip (positive half-space)", this);
+    auto clip = new QCheckBox(QStringLiteral("剖切（正半空间）"), this);
     layout->addRow(clip);
     std::array<QDoubleSpinBox*, 6> plane{};
     for (int i = 0; i < 6; ++i) {
@@ -66,7 +66,9 @@ ResultControls::ResultControls(ResultView& view, ResultSession& session, QWidget
         plane[i]->setDecimals(9);
         plane[i]->setRange(-1e9, 1e9);
         plane[i]->setValue(i == 3 ? 1 : 0);
-        layout->addRow(QString("%1 %2").arg(i < 3 ? "Origin" : "Normal").arg("xyz"[i % 3]),
+        layout->addRow(QStringLiteral("%1 %2")
+                           .arg(i < 3 ? QStringLiteral("原点") : QStringLiteral("法向"))
+                           .arg("xyz"[i % 3]),
                        plane[i]);
     }
     auto updateClip = [&view, clip, plane] {
@@ -82,7 +84,7 @@ ResultControls::ResultControls(ResultView& view, ResultSession& session, QWidget
         auto o = s.toObject();
         steps->addItem(QString::number(o["n"].toInteger()), o["n"].toInteger());
     }
-    layout->addRow("Step", steps);
+    layout->addRow(QStringLiteral("步"), steps);
     auto summary = new QLabel(this);
     summary->setWordWrap(true);
     layout->addRow(summary);
@@ -104,11 +106,11 @@ ResultControls::ResultControls(ResultView& view, ResultSession& session, QWidget
     });
     connect(&view, &ResultView::displayChanged, summary, refresh);
     refresh();
-    auto capture = new QPushButton("Export PNG", this);
+    auto capture = new QPushButton(QStringLiteral("导出 PNG"), this);
     layout->addRow(capture);
     connect(capture, &QPushButton::clicked, &view, [&view, this] {
         const auto path =
-            QFileDialog::getSaveFileName(this, "Export screenshot", {}, "PNG (*.png)");
+            QFileDialog::getSaveFileName(this, QStringLiteral("导出截图"), {}, "PNG (*.png)");
         if (!path.isEmpty())
             view.capture(path);
     });
