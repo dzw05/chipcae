@@ -12,7 +12,7 @@ import struct
 import subprocess
 import sys
 import tempfile
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
 import zlib
@@ -228,6 +228,42 @@ class ContractTest(unittest.TestCase):
         value = read_json(path)
         callback(value)
         write_json(path, value)
+
+
+class PeakRssUnits(ContractTest):
+    def test_linux_measured_rss_preserves_kib(self):
+        real_wait4 = os.wait4
+
+        def wait4(pid, options):
+            child_pid, status, _ = real_wait4(pid, options)
+            return child_pid, status, SimpleNamespace(ru_maxrss=2097152)
+
+        record = {"commands": [], "logs": []}
+        with patch.object(driver.sys, "platform", "linux"), \
+                patch.object(driver.os, "wait4", side_effect=wait4):
+            entry = driver._measured(
+                [sys.executable, "-c", "pass"], "probe", self.root, record, 60)
+        self.assertIs(record["commands"][-1], entry)
+        self.assertEqual(entry["exit_code"], 0)
+        self.assertIs(type(entry["peak_rss_kib"]), int)
+        self.assertEqual(entry["peak_rss_kib"], 2097152)
+
+    def test_darwin_measured_rss_converts_bytes(self):
+        real_wait4 = os.wait4
+
+        def wait4(pid, options):
+            child_pid, status, _ = real_wait4(pid, options)
+            return child_pid, status, SimpleNamespace(ru_maxrss=1234075648)
+
+        record = {"commands": [], "logs": []}
+        with patch.object(driver.sys, "platform", "darwin"), \
+                patch.object(driver.os, "wait4", side_effect=wait4):
+            entry = driver._measured(
+                [sys.executable, "-c", "pass"], "probe", self.root, record, 60)
+        self.assertIs(record["commands"][-1], entry)
+        self.assertEqual(entry["exit_code"], 0)
+        self.assertIs(type(entry["peak_rss_kib"]), int)
+        self.assertEqual(entry["peak_rss_kib"], 1205152)
 
 
 class FixtureValidity(ContractTest):
