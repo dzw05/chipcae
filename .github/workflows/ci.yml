@@ -307,13 +307,21 @@ jobs:
           cmake --build build --parallel "$jobs"
           ccache --show-stats
 
-      - name: Test
+      - name: Test unit+module
         env:
           OMP_NUM_THREADS: 2
           OMP_PROC_BIND: "false"
         run: |
           set -euo pipefail
-          ctest --test-dir build --output-on-failure --output-junit "$PWD/build/junit.xml"
+          ctest --test-dir build -L '^(unit|module)$' --output-on-failure --output-junit "$PWD/build/junit.xml"
+
+      - name: Test remaining tiers (hosted-configured acceptance/perf/highmem)
+        env:
+          OMP_NUM_THREADS: 2
+          OMP_PROC_BIND: "false"
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -LE '^(unit|module)$' --no-tests=ignore --output-on-failure --output-junit "$PWD/build/junit-rest.xml"
 
       - name: Perf microbenchmark (informational timing)
         id: perf
@@ -359,11 +367,12 @@ jobs:
           if-no-files-found: warn
           path: |
             build/junit.xml
+            build/junit-rest.xml
             build/perf-summary.json
             build/perf-compare.json
 
       - name: Install acceptance
-        run: ctest --test-dir build -L install --output-on-failure
+        run: ctest --test-dir build -L '^install$' --output-on-failure
 
   mesh:
     name: Mesh

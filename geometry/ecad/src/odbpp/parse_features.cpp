@@ -1,3 +1,4 @@
+#include "chipcae/core/parse_floating.hpp"
 #include "parser.hpp"
 
 #include <algorithm>
@@ -9,14 +10,19 @@
 #include <numbers>
 #include <numeric>
 #include <sstream>
+#include <type_traits>
 
 namespace chipcae::geometry::ecad::detail {
 namespace {
 template <typename T>
 bool number_value(std::string_view text, T& value) {
-    const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
-    return error == std::errc{} && end == text.data() + text.size() &&
-           std::isfinite(static_cast<double>(value));
+    if constexpr (std::is_integral_v<T>) {
+        const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+        return error == std::errc{} && end == text.data() + text.size() &&
+               std::isfinite(static_cast<double>(value));
+    } else {
+        return chipcae::parse_floating(text, value) && std::isfinite(static_cast<double>(value));
+    }
 }
 bool exists(const ArchiveReader& reader, const std::string& path) {
     return std::any_of(reader.entries().begin(), reader.entries().end(), [&](const auto& e) {

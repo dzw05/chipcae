@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: mac-highmem
+  group: mac-selfhosted
   cancel-in-progress: false
 
 env:

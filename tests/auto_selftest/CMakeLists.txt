@@ -59,6 +59,20 @@ def properties(test):
     return {prop["name"]: prop["value"] for prop in test["properties"]}
 
 
+def baseline_properties(props):
+    # Tier/owner metadata is orthogonal to the pinned highmem change. Keep
+    # highmem itself: selection and historical resource-lock assertions rely on it.
+    result = dict(props)
+    labels = [label for label in result.get("LABELS", [])
+              if label not in {"unit", "module", "perf", "acceptance"}
+              and not label.startswith("owner:")]
+    if labels:
+        result["LABELS"] = labels
+    else:
+        result.pop("LABELS", None)
+    return result
+
+
 def killed(output):
     # Wrapper exit 1/CTest exit 8 alone says nothing about a child's signal.
     return bool(re.search(
@@ -163,7 +177,8 @@ class HighmemAcceptance(unittest.TestCase):
                 props = self.props[name]
                 self.assertEqual(props["TIMEOUT"], timeout)
                 self.assertEqual([label for label in props.get("LABELS", [])
-                                  if label != "highmem"], sorted(labels))
+                                  if label not in {"unit", "module", "highmem", "perf", "acceptance"}
+                                  and not label.startswith("owner:")], sorted(labels))
                 self.assertFalse(props.get("DISABLED", False))
                 self.assertFalse(props.get("RUN_SERIAL", False))
                 if name.startswith("solve_column_gmg"):
@@ -193,7 +208,7 @@ class HighmemAcceptance(unittest.TestCase):
         if args.backend == "1" or solve_backend:
             self.assertTrue(selection, "the measured selection must not be empty")
         added = {"ctest_highmem_selection", "ctest_highmem_shared_lock",
-                 "ctest_highmem_existing_metadata"}
+                 "ctest_highmem_existing_metadata", "ctest_tier_labels"}
         self.assertEqual(set(self.tests) - set(baseline), added - set(baseline))
         self.assertFalse(set(baseline) - set(self.tests), "baseline inventory drift")
         self.assertTrue((args.baseline.parent / "baseline-cache.txt").is_file(),
@@ -210,7 +225,7 @@ class HighmemAcceptance(unittest.TestCase):
                 current = self.tests[name]
                 self.assertEqual(normalized(current.get("command"), cache),
                                  normalized(old.get("command"), old_cache))
-                expected = normalized(properties(old), old_cache)
+                expected = normalized(baseline_properties(properties(old)), old_cache)
                 if name in selection:
                     expected["LABELS"] = sorted(
                         set(expected.get("LABELS", [])) | {"highmem"}
@@ -218,7 +233,7 @@ class HighmemAcceptance(unittest.TestCase):
                     expected["RESOURCE_LOCK"] = sorted(
                         set(expected.get("RESOURCE_LOCK", [])) | {"chipcae_highmem"}
                     )
-                self.assertEqual(normalized(self.props[name], cache), expected)
+                self.assertEqual(normalized(baseline_properties(self.props[name]), cache), expected)
 
     def profile(self, path, pinned):
         result = json.loads(path.read_text())
@@ -234,7 +249,8 @@ class HighmemAcceptance(unittest.TestCase):
         measured = {test["name"]: test for test in json.loads(
             (path.parent.parent / "inventory.json").read_text())["tests"]}
         self.assertEqual(measured[name].get("command"), pinned[name].get("command"))
-        self.assertEqual(properties(measured[name]), properties(pinned[name]))
+        self.assertEqual(baseline_properties(properties(measured[name])),
+                         baseline_properties(properties(pinned[name])))
         cases = ET.parse(path.parent / "results.xml").findall(".//testcase")
         self.assertEqual(len(cases), 1)
         case = cases[0]
@@ -306,7 +322,7 @@ class HighmemAcceptance(unittest.TestCase):
         baseline = {test["name"]: test for test in
                     json.loads((root / "baseline-inventory.json").read_text())["tests"]}
         added = {"ctest_highmem_selection", "ctest_highmem_shared_lock",
-                 "ctest_highmem_existing_metadata"}
+                 "ctest_highmem_existing_metadata", "ctest_tier_labels"}
         self.assertEqual(set(self.tests) - set(baseline), added)
         self.assertFalse(set(baseline) - set(self.tests), "baseline inventory drift")
         old_cache = (root / "baseline-cache.txt").read_text()
@@ -323,14 +339,14 @@ class HighmemAcceptance(unittest.TestCase):
         self.assertEqual((root / "baseline-status.txt").read_text(), "",
                          "baseline must be untouched reopening origin/main")
         for name, old in baseline.items():
-            expected = normalized(properties(old), old_cache)
+            expected = normalized(baseline_properties(properties(old)), old_cache)
             if name in self.highmem:
                 self.assertNotIn("chipcae_highmem", expected.get("RESOURCE_LOCK", []))
                 self.assertNotIn("highmem", expected.get("LABELS", []))
                 expected["LABELS"] = sorted(expected.get("LABELS", []) + ["highmem"])
                 expected["RESOURCE_LOCK"] = sorted(expected.get("RESOURCE_LOCK", [])
                                                    + ["chipcae_highmem"])
-            self.assertEqual(normalized(self.props[name], cache), expected, name)
+            self.assertEqual(normalized(baseline_properties(self.props[name]), cache), expected, name)
             self.assertEqual(normalized(self.tests[name].get("command"), cache),
                              normalized(old.get("command"), old_cache), name)
         outcomes, durations, exit_evidence = {}, {}, {}
