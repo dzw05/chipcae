@@ -23,6 +23,7 @@ SOURCE = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(SOURCE))
 from tools.vv import real_case_e2e as driver
 from tools.vv.check_result_data_class import check_file
+from test_real_case_warpage import W5Acceptance
 
 THERMAL_ONLY = "not solved: fvm thermal-only stage"
 WARPAGE_METHOD = "FVM top-face centroids; least-squares plane removal"

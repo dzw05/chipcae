@@ -1,29 +1,27 @@
 """Synthetic fixed-face, zero-dT and independent FEM warpage acceptance."""
 import contextlib
 import io
-import json
 import math
-import os
 from pathlib import Path
 import re
-import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from test_real_case_thermal import (
-    driver, read_json, ready, solve_runs, source_root, thermal_params, write_json,
+    driver, read_json, run_synthetic, solve_runs, source_root, write_json,
 )
 
 FVM_METHODS = ("FVM top-face centroids; least-squares plane removal", "fvm_cell_centers_lsq")
 KNOWN_RED = "已知红：板级翘曲精度缺口，转 solve-elastic-accuracy"
+W5_FEM_RTOL = 0.05
 
 
 def top_direction(out, manifest):
-    """Independent oracle: block tops, coordinate nearest nodes, stable ties."""
+    """Independent oracle: local Points targets, top nodes, closest block wins."""
     import h5py
     import numpy as np
-    candidates = []
+    selected = [None] * 5
     with h5py.File(out / manifest["steps"][0]["file"]) as output:
         for name in ("hex", "cut"):
             block = output["VTKHDF/" + name]
@@ -31,14 +29,18 @@ def top_direction(out, manifest):
             if points.size:
                 u = block["PointData/U"][...]
                 top = points[:, 2] == points[:, 2].max()
-                candidates.extend(zip(points[top, :2], u[top, 2]))
-    assert candidates, "W5 requires top-face nodes"
-    xy = np.array([point for point, _ in candidates])
-    uz = np.array([value for _, value in candidates])
-    lo, hi = xy.min(axis=0), xy.max(axis=0)
-    targets = [(lo + hi) / 2, lo, [lo[0], hi[1]], [hi[0], lo[1]], hi]
-    values = [uz[np.argmin(np.sum((xy - target) ** 2, axis=1))] for target in targets]
-    delta = float(values[0] - np.mean(values[1:]))
+                xmin, ymin = points[:, :2].min(axis=0)
+                xmax, ymax = points[:, :2].max(axis=0)
+                targets = [((xmin + xmax) / 2, (ymin + ymax) / 2),
+                           (xmin, ymin), (xmin, ymax), (xmax, ymin), (xmax, ymax)]
+                for role, (x, y) in enumerate(targets):
+                    distance, node = min(((points[i, 0] - x) ** 2 + (points[i, 1] - y) ** 2, i)
+                                         for i in np.flatnonzero(top))
+                    # Strict improvement preserves hex/cut order on equal distances.
+                    if selected[role] is None or distance < selected[role][0]:
+                        selected[role] = (distance, float(u[node, 2]))
+    assert all(item is not None for item in selected), "W5 requires top-face nodes"
+    delta = selected[0][1] - sum(item[1] for item in selected[1:]) / 4
     assert math.isfinite(delta), f"W5 nonfinite direction delta={delta}"
     return delta, int(np.sign(delta))
 
@@ -77,48 +79,7 @@ def inspect_w5(record, primary, reference):
             assert text in notes, (text, notes)
     else:
         assert record["checks"]["W5"] is True, record["checks"]
-        assert relative <= .05, (fvm_pv, fem_pv, relative)
-
-
-def run_warpage_synthetic(source):
-    # Preserve the shared runner's safeguards with only the manifest-confirmed W5 exception.
-    if not ready("warpage", source):
-        return 77
-    with tempfile.TemporaryDirectory(prefix="chipcae-realcase-warpage-") as tmp:
-        root = Path(tmp)
-        params = thermal_params(root, source)
-        mpi = os.environ.get("CHIPCAE_MPIEXEC") or shutil.which("mpiexec") or shutil.which("mpirun")
-        record = driver.run_item("warpage", params, root / "outputs", [1, 2] if mpi else [1], 2, source)
-        assert isinstance(record, dict), "run_item must return its finalized record"
-        rc = record["exit_code"]
-        if rc:
-            print(json.dumps({key: record.get(key) for key in
-                              ("verdict", "needs_attention", "checks", "notes", "diagnostic_fem_comparison")},
-                             ensure_ascii=False))
-            return rc
-        assert record["verdict"] == "pass", record
-        expected = {f"C{i}" for i in range(1, 11)} | {f"W{i}" for i in range(1, 6)}
-        assert set(record["checks"]) == expected, record["checks"]
-        paths = list((root / "outputs").rglob("run_record.json"))
-        assert len(paths) == 1, paths
-        folder = paths[0].parent
-        manifest = read_json(folder / "np1_r1/manifest.json")
-        method = next(q for q in manifest["summary"] if q["name"] == "warpage_pv").get("method")
-        for key in expected:
-            if key == "C8" and not mpi:
-                assert record["checks"][key] is None
-            elif key == "W5" and method in FVM_METHODS:
-                assert record["checks"][key] == "PROVISIONAL", record["checks"]
-            else:
-                assert record["checks"][key] is True, (key, record["checks"], record["notes"])
-        assert record["digests"]["np1_r1"] == record["digests"]["np1_r2"]
-        assert ("np2_r1" in record["digests"]) == bool(mpi)
-        assert read_json(paths[0]) == record
-        assert (folder / "run_record.md").is_file()
-        from tools.vv.check_result_data_class import check_file
-        assert check_file(folder / "result.json") == []
-        inspect_warpage(record, folder)
-    return rc
+        assert relative <= W5_FEM_RTOL, (fvm_pv, fem_pv, relative)
 
 
 def inspect_warpage(record, folder):
@@ -191,13 +152,18 @@ class W5Acceptance(unittest.TestCase):
     """Exercise the existing W5 consumer; replace solving, never W5 evaluation."""
 
     def compare(self, *, method=FVM_METHODS[0], fvm_pv=2., fem_pv=11.,
-                fvm_delta=1., fem_delta=2., blocks=None, reference_method="FEM nodes"):
+                fvm_delta=1., fem_delta=2., blocks=None, reference_method="FEM nodes",
+                missing_dimensions=()):
         with tempfile.TemporaryDirectory(prefix="chipcae-w5-contract-") as tmp:
             root = Path(tmp)
             inputs = root / "inputs"
             inputs.mkdir()
             primary = root / "np1_r1"
             write_w5_run(primary, fvm_pv, method, fvm_delta, blocks)
+            manifest = read_json(primary / "manifest.json")
+            for key in missing_dimensions:
+                del manifest["mesh"][key]
+            write_json(primary / "manifest.json", manifest)
             case = {"mesh": {"nx": 99, "ny": 98, "min_elems_per_layer": 2},
                     "physics": [{"solver": "fvm.conduction"},
                                 {"solver": "fvm.elasticity", "T_ref": 298.15}],
@@ -217,6 +183,10 @@ class W5Acceptance(unittest.TestCase):
                     patch.object(driver, "_check_w4", return_value=True), \
                     contextlib.redirect_stdout(io.StringIO()) as printed:
                 driver._auxiliary(record, root, inputs, case, {}, None, 30, source_root(), primary)
+            delta = record.get("diagnostic_fem_comparison", {}).get("fvm_direction_delta")
+            if delta is not None and math.isfinite(delta):
+                oracle_delta, _ = top_direction(primary, read_json(primary / "manifest.json"))
+                self.assertTrue(math.isclose(delta, oracle_delta, rel_tol=1e-12, abs_tol=1e-15))
             return record, printed.getvalue()
 
     def test_fvm_methods_keep_large_pv_gap_provisional(self):
@@ -282,14 +252,47 @@ class W5Acceptance(unittest.TestCase):
 
     def test_top_nodes_use_xy_coordinates_and_stable_hex_then_cut_ties(self):
         # Both blocks are nonempty and have their own top z. The two center
-        # candidates tie in xy distance; first hex node must win over cut.
+        # candidates in each block tie at distance .5 from its own center.
+        # First hex node wins both the node-order and hex/cut ties.
         corners = [[0, 0, 1], [0, 2, 1], [2, 0, 1], [2, 2, 1]]
+        cut_corners = [[10, 10, 2], [10, 12, 2], [12, 10, 2], [12, 12, 2]]
         for order, expected in (([1., -1.], True), ([-1., 1.], False)):
             with self.subTest(order=order):
                 blocks = {"hex": ([[.5, 1, 1], [1.5, 1, 1]] + corners, order + [0.] * 4),
-                          "cut": ([[1, .5, 2]], [-100.])}
+                          "cut": ([[10.5, 11, 2], [11.5, 11, 2]] + cut_corners,
+                                  [-100., 100.] + [0.] * 4)}
                 record, _ = self.compare(method="FEM nodes", fvm_pv=20., fem_pv=20., blocks=blocks)
                 self.assertIs(record["checks"]["W5"], expected)
+                self.assertAlmostEqual(record["diagnostic_fem_comparison"]["fvm_direction_delta"], order[0])
+
+    def test_block_local_targets_reverse_the_global_bounds_direction(self):
+        # Local centers/corners tie exactly between blocks, so hex supplies
+        # 1 - mean(0, 0, 0, -4) = +2. Global bounds instead put the center at
+        # (6, 6), select hex (2, 2), and produce -4 - mean(0, 0, 0, 0) = -4.
+        blocks = {"hex": ([[1, 1, 1], [0, 0, 1], [0, 2, 1], [2, 0, 1], [2, 2, 1]],
+                          [1., 0., 0., 0., -4.]),
+                  "cut": ([[11, 11, 2], [10, 10, 2], [10, 12, 2], [12, 10, 2], [12, 12, 2]],
+                          [-100., 0., 0., 0., 0.])}
+        for method, expected in ((FVM_METHODS[0], "PROVISIONAL"),
+                                 (FVM_METHODS[1], "PROVISIONAL"), ("FEM nodes", True)):
+            with self.subTest(method=method):
+                record, _ = self.compare(method=method, fvm_pv=20., fem_pv=20., blocks=blocks)
+                self.assertEqual(record["checks"]["W5"], expected)
+                diagnostic = record["diagnostic_fem_comparison"]
+                self.assertAlmostEqual(diagnostic["fvm_direction_delta"], 2.)
+                self.assertEqual(diagnostic["fvm_direction_sign"], 1)
+
+    def test_cut_candidate_wins_when_closer_to_its_block_target(self):
+        # Hex has only off-center top nodes. Cut has an exact center; its
+        # lower-z corners define its Points bounds but cannot supply Uz.
+        # Hex's exact corners win over cut's distant top node for each corner.
+        blocks = {"hex": ([[.5, 1, 1], [1.5, 1, 1], [0, 0, 1], [0, 2, 1], [2, 0, 1], [2, 2, 1]],
+                          [-1., -1., 0., 0., 0., 0.]),
+                  "cut": ([[11, 11, 2], [10, 10, 0], [10, 12, 0], [12, 10, 0], [12, 12, 0]],
+                          [2., -100., -100., -100., -100.])}
+        record, _ = self.compare(method="FEM nodes", fvm_pv=20., fem_pv=20., blocks=blocks)
+        self.assertIs(record["checks"]["W5"], True)
+        self.assertAlmostEqual(record["diagnostic_fem_comparison"]["fvm_direction_delta"], 2.)
 
     def test_provisional_diagnostics_notes_and_stdout_preserve_manifest_values(self):
         record, printed = self.compare()
@@ -319,12 +322,22 @@ class W5Acceptance(unittest.TestCase):
                 self.assertTrue(math.isclose(float(value[1]), expected, rel_tol=1e-3, abs_tol=1e-12))
 
 
+    def test_missing_manifest_dimensions_never_report_case_requested_dimensions(self):
+        for missing in (("nx0",), ("ny0",), ("nx0", "ny0")):
+            with self.subTest(missing=missing):
+                record, printed = self.compare(missing_dimensions=missing)
+                self.assertEqual(record["checks"]["W5"], "PROVISIONAL")
+                diagnostic = record["diagnostic_fem_comparison"]
+                for key, value in (("nx", None if "nx0" in missing else 4),
+                                   ("ny", None if "ny0" in missing else 6)):
+                    self.assertEqual(diagnostic[key], value)
+                    for output in (" ".join(record["notes"]), printed):
+                        self.assertIn(f"{key}={value}", output)
+                self.assertEqual(diagnostic["nz"], 12)
+                self.assertIn("primary manifest", diagnostic["mesh_source"])
+                for output in (diagnostic["mesh_source"], " ".join(record["notes"]), printed):
+                    self.assertIn("actual FVM dimensions unavailable", output)
+
+
 if __name__ == "__main__":
-    source = source_root()
-    # Preserve K3: upstream readiness precedes fixture generation and solving.
-    if not ready("warpage", source):
-        raise SystemExit(77)
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(W5Acceptance)
-    result = unittest.TextTestRunner(verbosity=2).run(suite)
-    rc = run_warpage_synthetic(source)
-    raise SystemExit(rc or (0 if result.wasSuccessful() else 1))
+    raise SystemExit(run_synthetic("warpage", source_root(), inspect=inspect_warpage))

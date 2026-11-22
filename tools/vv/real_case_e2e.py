@@ -1173,10 +1173,14 @@ def _resource_retry(record, entry, folder, inputs, case, exes, mpi, timeout_s, s
 
 
 def _w5_direction(run_dir, manifest):
-    """Center minus four corners on block tops; stable hex/cut and node order."""
+    """Use each block's Points bounds and nearest top nodes for center/corners.
+
+    For each target role, merge block candidates by squared distance to their
+    own targets; ties keep hex before cut, then original node order.
+    """
     import h5py
     import numpy as np
-    xy, uz = [], []
+    candidates = []
     with h5py.File(_vtk_path(run_dir, manifest), "r") as output:
         for name in ("hex", "cut"):
             block = output["VTKHDF/" + name]
@@ -1184,15 +1188,19 @@ def _w5_direction(run_dir, manifest):
             if not points.size:
                 continue
             top = points[:, 2] == points[:, 2].max()
-            xy.append(points[top, :2])
-            uz.append(block["PointData/U"][...][top, 2])
-    if not xy:
+            xy, uz = points[top, :2], block["PointData/U"][...][top, 2]
+            lo, hi = points[:, :2].min(axis=0), points[:, :2].max(axis=0)
+            targets = [(lo + hi) / 2, lo, [lo[0], hi[1]], [hi[0], lo[1]], hi]
+            nearest = []
+            for target in targets:
+                distances = np.sum((xy - target) ** 2, axis=1)
+                node = np.argmin(distances)
+                nearest.append((distances[node], uz[node]))
+            candidates.append(nearest)
+    if not candidates:
         return math.nan, 0
-    xy, uz = np.concatenate(xy), np.concatenate(uz)
-    lo, hi = xy.min(axis=0), xy.max(axis=0)
-    targets = [(lo + hi) / 2, lo, [lo[0], hi[1]], [hi[0], lo[1]], hi]
-    # argmin keeps the first candidate in a tie. No interpolation or PV recomputation.
-    values = [uz[np.argmin(np.sum((xy - target) ** 2, axis=1))] for target in targets]
+    # min and argmin keep the first candidate in ties. No interpolation or PV recomputation.
+    values = [min(role, key=lambda candidate: candidate[0])[1] for role in zip(*candidates)]
     delta = float(values[0] - np.mean(values[1:]))
     return delta, int(np.sign(delta)) if math.isfinite(delta) else 0
 
@@ -1280,8 +1288,7 @@ def _auxiliary(record, folder, inputs, case, exes, mpi, timeout_s, source_root, 
                 record["notes"].append(diagnostic["reason"])
             if result == "PROVISIONAL":
                 if diagnostic["nx"] is None or diagnostic["ny"] is None:
-                    diagnostic.update(nx=case["mesh"]["nx"], ny=case["mesh"]["ny"],
-                                      mesh_source="case mesh.nx/ny (manifest nx0/ny0 unavailable)")
+                    diagnostic["mesh_source"] += " (actual FVM dimensions unavailable)"
                 if diagnostic["min_elems_per_layer"] is None:
                     diagnostic["min_elems_per_layer"] = case["mesh"].get("min_elems_per_layer")
                 message = (f"W5 PROVISIONAL: fvm_pv={diagnostic['fvm_warpage_pv']!r}, "
