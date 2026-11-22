@@ -527,6 +527,316 @@ void writeFixture(const QDir& root,
     writer->SetInputData(data);
     require(writer->Write() == 1, "write temporary VTKHDF fixture");
 }
+// Synthetic summary packages keep method tests independent of solver output and frozen fixtures.
+void writeSummaryFixture(const QDir& root, const QTemporaryDir& temp, const QJsonArray& summary) {
+    require(temp.isValid(), "summary fixture directory");
+    writeFixture(root, temp.filePath("step.vtkhdf"), [](vtkUnstructuredGrid*) {});
+    const QJsonObject manifest{
+        {"schema_version", "chipcae.results/1.0"},
+        {"fields", QJsonArray{}},
+        {"steps", QJsonArray{QJsonObject{{"n", 0}, {"time", 0}, {"file", "step.vtkhdf"}}}},
+        {"summary", summary}};
+    QFile file(temp.filePath("manifest.json"));
+    require(file.open(QIODevice::WriteOnly), "summary fixture manifest open");
+    const auto bytes = QJsonDocument(manifest).toJson();
+    require(file.write(bytes) == bytes.size(), "summary fixture manifest write");
+}
+int methodSummaryAcceptance(const QDir& root) {
+    int failures = 0;
+    auto run = [&](const QString& name, auto test) {
+        const auto before = failures;
+        try {
+            // Accumulate text mismatches so every QoI is checked even during the RED pass.
+            auto equal = [&](const QString& actual, const QString& expected) {
+                if (actual != expected) {
+                    ++failures;
+                    std::cerr << "FAIL D14e-3 " << name.toStdString() << ": expected ["
+                              << expected.toStdString() << "] got [" << actual.toStdString()
+                              << "]\n";
+                }
+            };
+            test(equal);
+        } catch (const std::exception& e) {
+            ++failures;
+            std::cerr << "FAIL D14e-3 " << name.toStdString() << ": " << e.what() << '\n';
+        }
+        if (failures == before)
+            std::cout << "PASS D14e-3 " << name.toStdString() << '\n';
+    };
+    auto temperature = [] {
+        return QJsonObject{{"step", 0}, {"name", "T_max"}, {"value", 987.5}, {"unit", "K"}};
+    };
+    auto warpage = [] {
+        return QJsonObject{{"step", 0}, {"name", "warpage_pv"}, {"value", 0}, {"unit", "m"}};
+    };
+    run("long sentences, frozen enums and disabled mechanics stay distinct", [&](auto equal) {
+        struct Example {
+            QString thermalMethod;
+            QString mechanicalMethod;
+            QString expectedTmax;
+            QString expectedWarpage;
+            QString expectedMagnitude;
+        };
+        const std::array<Example, 3> examples{{
+            {"FVM cell centers",
+             "not solved: fvm thermal-only stage",
+             "T_max: 300.2803835909066 K [FVM cell centers]",
+             "warpage_pv: 0 m [not solved: fvm thermal-only stage]",
+             "U_mag_max: 0 m [not solved: fvm thermal-only stage]"},
+            {"fvm_cell_centers",
+             "not_solved",
+             "T_max: 300.2803835909066 K [fvm_cell_centers]",
+             "warpage_pv: 0 m [not_solved]",
+             "U_mag_max: 0 m [not_solved]"},
+            {"fvm_cell_centers",
+             "mechanical_disabled",
+             "T_max: 300.2803835909066 K [fvm_cell_centers]",
+             "warpage_pv: 0 m [mechanical_disabled]",
+             "U_mag_max: 0 m [mechanical_disabled]"},
+        }};
+        std::array<QString, 3> warpages, magnitudes;
+        for (std::size_t i = 0; i < examples.size(); ++i) {
+            const auto& example = examples[i];
+            QTemporaryDir temp; // A, B and C each own a separate package directory.
+            auto t = temperature();
+            t["value"] = 300.2803835909066;
+            t["method"] = example.thermalMethod;
+            auto w = warpage();
+            w["method"] = example.mechanicalMethod;
+            auto u = w;
+            u["name"] = "U_mag_max";
+            writeSummaryFixture(root, temp, {t, w, u});
+            ResultSession session;
+            require(session.open(temp.path()), qPrintable(session.error()));
+            ResultView view;
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            // Summary metadata must not replace the already working PointData T coloring.
+            require(view.colorRange().valid, "method package lost PointData T range");
+            equal(view.colorBarTitle(), "T (K)");
+            equal(view.tmaxText(), example.expectedTmax);
+            equal(view.summary("T_max"), example.expectedTmax);
+            equal(view.tmaxText(), view.summary("T_max"));
+            warpages[i] = view.summary("warpage_pv");
+            magnitudes[i] = view.summary("U_mag_max");
+            equal(warpages[i], example.expectedWarpage);
+            equal(magnitudes[i], example.expectedMagnitude);
+        }
+        for (std::size_t i = 0; i < examples.size(); ++i) {
+            require(warpages[i] != "warpage_pv: 0 m", "mechanical placeholder looks solved");
+            require(magnitudes[i] != "U_mag_max: 0 m", "displacement placeholder looks solved");
+            for (std::size_t j = i + 1; j < examples.size(); ++j) {
+                require(warpages[i] != warpages[j], "mechanical methods conflated");
+                require(magnitudes[i] != magnitudes[j], "displacement methods conflated");
+            }
+        }
+    });
+    struct Location {
+        QJsonObject fields;
+        QString expected;
+    };
+    for (const auto& location : std::vector<Location>{
+             {{{"region", "die"}}, "T_max: 987.5 K [fvm_cell_centers] region=die"},
+             {{{"region", "die"},
+               {"region_id", "ignored"},
+               {"position", QJsonArray{1, 2, 3}},
+               {"xyz", QJsonArray{4, 5, 6}},
+               {"location", "surface"}},
+              "T_max: 987.5 K [fvm_cell_centers] region=die at=(1,2,3)"},
+             {{{"region", "die"}, {"location", "surface"}},
+              "T_max: 987.5 K [fvm_cell_centers] region=die location=surface"}}) {
+        run("method precedes location: " + location.expected, [&](auto equal) {
+            QTemporaryDir temp;
+            auto t = temperature();
+            t["method"] = "fvm_cell_centers";
+            for (auto it = location.fields.begin(); it != location.fields.end(); ++it)
+                t[it.key()] = it.value();
+            writeSummaryFixture(root, temp, {t});
+            ResultSession session;
+            require(session.open(temp.path()), qPrintable(session.error()));
+            ResultView view;
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            equal(view.tmaxText(), location.expected);
+            equal(view.summary("T_max"), "T_max: 987.5 K [fvm_cell_centers]");
+        });
+    }
+    for (const auto& method : std::vector<QJsonValue>{QJsonValue(QJsonValue::Undefined),
+                                                      "",
+                                                      QJsonValue(QJsonValue::Null),
+                                                      17,
+                                                      true,
+                                                      QJsonArray{"not_solved"},
+                                                      QJsonObject{{"method", "not_solved"}}}) {
+        run("absent, empty or non-string method type " + QString::number(method.type()),
+            [&](auto equal) {
+                QTemporaryDir temp;
+                auto t = temperature();
+                auto w = warpage();
+                if (!method.isUndefined()) {
+                    t["method"] = method;
+                    w["method"] = method;
+                }
+                auto u = w;
+                u["name"] = "U_mag_max";
+                writeSummaryFixture(root, temp, {t, w, u});
+                ResultSession session;
+                require(session.open(temp.path()), qPrintable(session.error()));
+                ResultView view;
+                require(view.loadStep(session, 0), qPrintable(view.error()));
+                equal(view.tmaxText(), "T_max: 987.5 K");
+                equal(view.summary("T_max"), "T_max: 987.5 K");
+                equal(view.summary("warpage_pv"), "warpage_pv: 0 m");
+                equal(view.summary("U_mag_max"), "U_mag_max: 0 m");
+            });
+    }
+    run("preserve method whitespace and empty unit spacing", [&](auto equal) {
+        QTemporaryDir temp;
+        auto t = temperature();
+        t["method"] = " FVM cell centers ";
+        auto w = warpage();
+        w["unit"] = "";
+        w["method"] = "not_solved";
+        writeSummaryFixture(root, temp, {t, w});
+        ResultSession session;
+        require(session.open(temp.path()), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        equal(view.tmaxText(), "T_max: 987.5 K [ FVM cell centers ]");
+        equal(view.summary("T_max"), "T_max: 987.5 K [ FVM cell centers ]");
+        equal(view.summary("warpage_pv"), "warpage_pv: 0  [not_solved]");
+    });
+    for (bool absent : {false, true}) {
+        run(absent ? "missing names stay unavailable" : "non-numeric values stay unavailable",
+            [&](auto equal) {
+                QTemporaryDir temp;
+                auto t = temperature();
+                auto w = warpage();
+                t["method"] = "fvm_cell_centers";
+                w["method"] = "not_solved";
+                if (absent) {
+                    t.remove("name");
+                    w.remove("name");
+                } else {
+                    t["value"] = "987.5";
+                    w["value"] = QJsonValue(QJsonValue::Null);
+                }
+                writeSummaryFixture(root, temp, {t, w});
+                ResultSession session;
+                require(session.open(temp.path()), qPrintable(session.error()));
+                ResultView view;
+                equal(view.tmaxText(), "T_max: unavailable");
+                equal(view.summary("T_max"), "T_max: unavailable");
+                equal(view.summary("warpage_pv"), "warpage_pv: unavailable");
+                require(view.loadStep(session, 0), qPrintable(view.error()));
+                equal(view.tmaxText(), "T_max: unavailable");
+                equal(view.summary("T_max"), "T_max: unavailable");
+                equal(view.summary("warpage_pv"), "warpage_pv: unavailable");
+            });
+    }
+    for (bool firstHasMethod : {true, false}) {
+        run(firstHasMethod ? "only selected exact-step method is displayed"
+                           : "selected entry cannot borrow a later method",
+            [&](auto equal) {
+                QTemporaryDir temp;
+                auto t = temperature();
+                auto w = warpage();
+                auto global = t;
+                global.remove("step");
+                global["value"] = -123;
+                global["method"] = "global method";
+                auto other = t;
+                other["step"] = 1;
+                other["value"] = -456;
+                other["method"] = "other step method";
+                auto invalid = t;
+                invalid["value"] = "not a number";
+                invalid["method"] = "invalid value method";
+                auto invalidW = invalid;
+                invalidW["name"] = "warpage_pv";
+                auto globalW = global;
+                globalW["name"] = "warpage_pv";
+                auto otherW = other;
+                otherW["name"] = "warpage_pv";
+                auto duplicateT = t;
+                duplicateT["method"] = "later thermal method";
+                auto duplicateW = w;
+                duplicateW["method"] = "later mechanical method";
+                if (firstHasMethod) {
+                    t["method"] = "fvm_cell_centers_lsq";
+                    w["method"] = "not_solved";
+                }
+                writeSummaryFixture(root,
+                                    temp,
+                                    {global,
+                                     globalW,
+                                     other,
+                                     otherW,
+                                     invalid,
+                                     invalidW,
+                                     t,
+                                     w,
+                                     duplicateT,
+                                     duplicateW});
+                ResultSession session;
+                require(session.open(temp.path()), qPrintable(session.error()));
+                ResultView view;
+                require(view.loadStep(session, 0), qPrintable(view.error()));
+                equal(view.tmaxText(),
+                      firstHasMethod ? "T_max: 987.5 K [fvm_cell_centers_lsq]" : "T_max: 987.5 K");
+                equal(view.summary("T_max"),
+                      firstHasMethod ? "T_max: 987.5 K [fvm_cell_centers_lsq]" : "T_max: 987.5 K");
+                equal(view.summary("warpage_pv"),
+                      firstHasMethod ? "warpage_pv: 0 m [not_solved]" : "warpage_pv: 0 m");
+            });
+    }
+    run("global T_max fallback does not change summary step matching", [&](auto equal) {
+        QTemporaryDir temp;
+        auto t = temperature();
+        t.remove("step");
+        t["method"] = "fvm_cell_centers";
+        writeSummaryFixture(root, temp, {t});
+        ResultSession session;
+        require(session.open(temp.path()), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        equal(view.tmaxText(), "T_max: 987.5 K [fvm_cell_centers]");
+        equal(view.summary("T_max"), "T_max: unavailable");
+    });
+    for (bool firstHasMethod : {true, false}) {
+        run(firstHasMethod ? "global fallback uses only the first valid entry's method"
+                           : "global fallback cannot borrow another entry's method",
+            [&](auto equal) {
+                QTemporaryDir temp;
+                auto selected = temperature();
+                selected.remove("step");
+                auto invalidGlobal = selected;
+                invalidGlobal["value"] = "not a number";
+                invalidGlobal["method"] = "invalid global method";
+                auto invalidExact = invalidGlobal;
+                invalidExact["step"] = 0;
+                invalidExact["method"] = "invalid exact-step method";
+                auto otherStep = temperature();
+                otherStep["step"] = 1;
+                otherStep["method"] = "other step method";
+                auto duplicate = selected;
+                duplicate["value"] = -123;
+                duplicate["method"] = "later global method";
+                if (firstHasMethod)
+                    selected["method"] = "fvm_cell_centers";
+                writeSummaryFixture(
+                    root, temp, {invalidGlobal, invalidExact, otherStep, selected, duplicate});
+                ResultSession session;
+                require(session.open(temp.path()), qPrintable(session.error()));
+                ResultView view;
+                require(view.loadStep(session, 0), qPrintable(view.error()));
+                require(view.colorRange().valid, "global fallback lost PointData T range");
+                equal(view.colorBarTitle(), "T (K)");
+                equal(view.tmaxText(),
+                      firstHasMethod ? "T_max: 987.5 K [fvm_cell_centers]" : "T_max: 987.5 K");
+                equal(view.summary("T_max"), "T_max: unavailable");
+            });
+    }
+    return failures;
+}
 // Two thin hexes have the shared face z=0.1 and continuous, nonzero affine U.
 // Extracting each cell into its own partition duplicates the four interface points.
 void twoLayers(vtkUnstructuredGrid* grid, const QString& variant = {}) {
@@ -1705,12 +2015,16 @@ with h5py.File(sys.argv[1], 'r+') as f:
         for (auto value : session.summary()) {
             auto entry = value.toObject();
             auto name = entry["name"].toString();
-            if (entry["step"].toInteger() == 0 && (name == "warpage_pv" || name == "U_mag_max"))
-                require(view.summary(name) == QString("%1: %2 %3")
-                                                  .arg(name)
-                                                  .arg(entry["value"].toDouble(), 0, 'g', 16)
-                                                  .arg(entry["unit"].toString()),
-                        "official summary regression");
+            if (entry["step"].toInteger() == 0 && (name == "warpage_pv" || name == "U_mag_max")) {
+                auto expected = QString("%1: %2 %3")
+                                    .arg(name)
+                                    .arg(entry["value"].toDouble(), 0, 'g', 16)
+                                    .arg(entry["unit"].toString());
+                const auto method = entry["method"];
+                if (method.isString() && !method.toString().isEmpty())
+                    expected += QString(" [%1]").arg(method.toString());
+                require(view.summary(name) == expected, "official summary regression");
+            }
         }
         require(view.tmaxText() == view.summary("T_max"), "T_max does not use official summary");
         ResultControls controls(view, session);
@@ -2279,6 +2593,7 @@ int main(int argc, char** argv) {
         std::cerr << "FAIL legacy viewer checks: " << e.what() << '\n';
         ++failures;
     }
+    failures += methodSummaryAcceptance(root);
     failures += acceptance(root);
     failures += obliqueAndTemperatureAcceptance(root);
     return failures ? 1 : 0;

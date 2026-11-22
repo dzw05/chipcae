@@ -22,3 +22,9 @@ add_test(NAME part_headers_no_mpi_geometry COMMAND cmake
 add_test(NAME part_headers_no_mpi_cut COMMAND cmake
     -DHEADER_DIR=${PROJECT_SOURCE_DIR}/mesh/cut/include/chipcae/mesh/cut
     -P ${PROJECT_SOURCE_DIR}/tests/core/check_public_headers.cmake)
+
+# The CLI currently gates --stack-override; exercise its numeric reader directly.
+target_sources(chipcae_autotest_tests_unit_assembly_stack_override_numbers
+    PRIVATE ${PROJECT_SOURCE_DIR}/kernel/src/stack_override.cpp)
+target_include_directories(chipcae_autotest_tests_unit_assembly_stack_override_numbers
+    PRIVATE ${PROJECT_SOURCE_DIR}/kernel/src)

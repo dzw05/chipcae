@@ -413,19 +413,136 @@ class AssemblyBond(unittest.TestCase):
         self.a.stack()
 
     def test_gap_without_bond_stays_void(self):
+        # assembly-floating-gap: reject whole-layer voids before stack validation.
+        for bottom in (False, True):
+            with self.subTest(bottom=bottom):
+                self.place(self.thickness, bottom=bottom, bond=False)
+                result = self.a.run('--accept-b-tier')
+                check(result, 14)
+                self.assertFalse(self.a.output.exists())
+                self.assertEqual(result.stdout, '')
+                self.assertEqual(result.stderr,
+                                 'INPUT_INVALID: gap without bond leaves lid floating\n')
+                self.assertEqual(self.a.defects()['code'], 'INPUT_INVALID')
+                self.assertEqual(self.a.defects()['message'],
+                                 'INPUT_INVALID: gap without bond leaves lid floating')
+                self.assertFalse([d for d in self.a.import_report()['defects']
+                                  if d['defect_id'].startswith('lid.bond/')])
+
+    def test_gap_without_bond_under_ring_is_partial_void(self):
+        self.assertGreater(self.thickness, 0)
+        self.assertLess(self.thickness, .0002)
         self.place(self.thickness, bond=False)
-        # Architect ruling: preserve main's schema rejection and publication
-        # behavior. 整层空腔待卡 assembly-floating-gap.
-        result = self.a.run('--accept-b-tier')
-        check(result, 14)
-        self.assertFalse(self.a.output.exists())
-        self.assertEqual(result.stdout, '')
-        self.assertEqual(result.stderr,
-                         'INPUT_INVALID: Must be valid against at least one schema, '
-                         'but found no matching schemas\n')
-        self.assertEqual(self.a.defects()['code'], 'INPUT_INVALID')
-        self.assertFalse([d for d in self.a.import_report()['defects']
-                          if d['defect_id'].startswith('lid.bond/')])
+        shutil.copyfile(Path(self.baseline_dir.name) / 'stiffener.step',
+                        self.a.root / 'stiffener.step')
+        self.a.part('stiffener', 'stiffener.step',
+                    placement={'attach': 'layer:B.Cu@top', 'gap': 0})
+        self.a.save()
+        check(self.a.run('--accept-b-tier'), 0)
+        layers = list(intervals(self.a.stack()))
+        upper = self.board_top + self.thickness
+        scale = max(self.thickness, abs(self.board_top))
+        gap = [(z0, z1, layer) for z0, z1, layer in layers
+               if overlaps(z0, z1, self.board_top, upper)]
+        self.assertTrue(gap)
+        self.close(gap[0][0], self.board_top, scale=scale)
+        self.close(gap[-1][1], upper, scale=scale)
+        for _, _, layer in gap:
+            self.assertTrue(has_body(layer, 'stiffener'), layer)
+            self.assertFalse(has_body(layer, 'lid'), layer)
+            self.assertFalse(layer.get('material'), layer)
+        self.close(min(z0 for z0, _, layer in layers if has_body(layer, 'lid')),
+                   upper, scale=scale)
+
+    def test_gap_without_bond_requires_b_tier_acceptance_first(self):
+        thin = (self.eps_weld + self.t_min) / 2
+        self.assertLess(self.eps_weld, thin)
+        self.assertLess(thin, self.t_min)
+        for bottom in (False, True):
+            with self.subTest(bottom=bottom):
+                self.a.document['parts'] = self.a.document['parts'][:1]
+                self.place(self.thickness, bottom=bottom, bond=False)
+                # A thin bond on the opposite board face leaves the lid gap empty.
+                attach = ('layer:B.Cu@top' if bottom
+                          else f'layer:{self.board_bottom_name}@bottom')
+                self.a.part('review', placement={
+                    'attach': attach, 'gap': thin,
+                    'bond': {'material': 'fr4_eq', 'thickness': thin}})
+                result = self.a.run()
+                check(result, 6)
+                self.assertFalse(self.a.output.exists())
+                self.assertEqual(self.a.defects()['code'], 'IMPORT_CONFIRMATION_REQUIRED')
+                self.assertTrue([id_ for id_ in b_ids(self.a.import_report())
+                                 if id_.startswith('review.bond/thin#')])
+                result = self.a.run('--accept-b-tier')
+                check(result, 14)
+                self.assertFalse(self.a.output.exists())
+                self.assertEqual(result.stderr,
+                                 'INPUT_INVALID: gap without bond leaves lid floating\n')
+
+    def test_gap_without_bond_reports_lowest_cavity_first(self):
+        for bottom in (False, True):
+            with self.subTest(bottom=bottom):
+                self.a.document['parts'] = []
+                attach = (f'layer:{self.board_bottom_name}@bottom' if bottom
+                          else 'layer:B.Cu@top')
+                # Two board attachments create two separate empty intervals;
+                # input order is deliberately opposite the cavities' z order.
+                parts = [('near', self.thickness),
+                         ('far', self.lid_height + 2 * self.thickness)]
+                if not bottom:
+                    parts.reverse()
+                for name, gap in parts:
+                    self.a.part(name, placement={'attach': attach, 'gap': gap})
+                result = self.a.run('--accept-b-tier')
+                check(result, 14)
+                self.assertFalse(self.a.output.exists())
+                self.assertEqual(result.stdout, '')
+                name = 'far' if bottom else 'near'
+                message = f'INPUT_INVALID: gap without bond leaves {name} floating'
+                self.assertEqual(result.stderr, message + '\n')
+                self.assertEqual(self.a.defects()['code'], 'INPUT_INVALID')
+                self.assertEqual(self.a.defects()['message'], message)
+
+    def test_gap_without_bond_uses_placed_order_for_adjacent_parts(self):
+        xy = {'z_first': [0, 0], 'a_second': [.003, 0]}
+        for bottom in (False, True):
+            for names in (('z_first', 'a_second'), ('a_second', 'z_first')):
+                with self.subTest(bottom=bottom, names=names):
+                    self.a.document['parts'] = []
+                    attach = (f'layer:{self.board_bottom_name}@bottom' if bottom
+                              else 'layer:B.Cu@top')
+                    for name in names:
+                        self.a.part(name, placement={'attach': attach,
+                                                    'gap': self.thickness,
+                                                    'xy': xy[name]})
+                    result = self.a.run('--accept-b-tier')
+                    check(result, 14)
+                    self.assertFalse(self.a.output.exists())
+                    self.assertEqual(result.stdout, '')
+                    message = f'INPUT_INVALID: gap without bond leaves {names[0]} floating'
+                    self.assertEqual(result.stderr, message + '\n')
+                    self.assertEqual(self.a.defects()['code'], 'INPUT_INVALID')
+                    self.assertEqual(self.a.defects()['message'], message)
+
+    def test_gap_without_bond_with_frame_witness_is_partial_void(self):
+        self.place(self.thickness, bond=False)
+        self.add_frame_witness()
+        check(self.a.run('--accept-b-tier'), 0)
+        layers = list(intervals(self.a.stack()))
+        upper = self.board_top + self.thickness
+        scale = max(self.thickness, abs(self.board_top))
+        gap = [(z0, z1, layer) for z0, z1, layer in layers
+               if overlaps(z0, z1, self.board_top, upper)]
+        self.assertTrue(gap)
+        self.close(gap[0][0], self.board_top, scale=scale)
+        self.close(gap[-1][1], upper, scale=scale)
+        for _, _, layer in gap:
+            self.assertTrue(has_body(layer, 'witness'), layer)
+            self.assertFalse(has_body(layer, 'lid'), layer)
+            self.assertFalse(layer.get('material'), layer)
+        self.close(min(z0 for z0, _, layer in layers if has_body(layer, 'lid')),
+                   upper, scale=scale)
 
 
 if __name__ == '__main__':

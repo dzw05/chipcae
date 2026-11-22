@@ -2,11 +2,11 @@
 
 #include "chipcae/material/thermo_elastic.hpp"
 
-#include <charconv>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <limits>
+#include <locale>
 #include <map>
 #include <regex>
 #include <set>
@@ -189,8 +189,21 @@ struct Reader {
                 if (pos == begin)
                     throw std::runtime_error("bad exponent");
             }
-            auto result = std::from_chars(s.data() + start, s.data() + pos, j.number);
-            if (result.ec != std::errc{} || !std::isfinite(j.number))
+            // The grammar above already validates the entire JSON numeric token.
+            // Keep standalone material builds independent of chipcae::core.
+            const auto token = s.substr(start, pos - start);
+            std::istringstream input{std::string(token)};
+            input.imbue(std::locale::classic());
+            input >> std::noskipws >> j.number;
+            const auto significand = token.substr(0, token.find_first_of("eE"));
+            const bool nonzero = significand.find_first_of("123456789") != std::string_view::npos;
+            // As with libstdc++ double from_chars, accept representable subnormals,
+            // but reject nonzero values that underflow to zero (streams may not fail).
+            // libc++ can set failbit for representable underflow results too.
+            const bool tiny = std::fpclassify(j.number) != FP_ZERO &&
+                              std::abs(j.number) <= std::numeric_limits<Real>::min();
+            if (input.bad() || (input.fail() && !tiny) || !input.eof() ||
+                !std::isfinite(j.number) || (nonzero && std::fpclassify(j.number) == FP_ZERO))
                 throw std::runtime_error("invalid finite JSON number");
             j.kind = Json::Number;
         }
