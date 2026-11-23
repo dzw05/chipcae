@@ -313,3 +313,21 @@ if(_solve_backend)
     set_tests_properties(solve_cutgeom_nc_consume_outline PROPERTIES
         TIMEOUT 180 LABELS "cut;contract")
 endif()
+
+if(_solve_backend)
+    add_test(NAME solve_fvm_solver_convergence COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_fvm_solver_convergence.py
+        $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE})
+    set_tests_properties(solve_fvm_solver_convergence PROPERTIES
+        TIMEOUT 600 LABELS "solve;fvm;numerical;mpi"
+        ENVIRONMENT "OMP_NUM_THREADS=2;OPENBLAS_NUM_THREADS=1")
+endif()
+
+if(_solve_backend)
+    add_test(NAME solve_fvm_elastic_convergence COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_fvm_elastic_convergence.py
+        $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE})
+    set_tests_properties(solve_fvm_elastic_convergence PROPERTIES
+        TIMEOUT 600 SKIP_RETURN_CODE 77 LABELS "solve;fvm;numerical"
+        ENVIRONMENT "OMP_NUM_THREADS=2;OPENBLAS_NUM_THREADS=1")
+endif()
