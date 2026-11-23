@@ -101,6 +101,16 @@ struct Parser {
         std::vector<EcadLayer> retained;
         std::vector<UnsupportedElement> additions;
         std::set<std::string> seen, omitted_masks;
+        auto resolve_material = [&](EcadLayer& layer, std::size_t i) {
+            if (layer.material.empty() && !explicit_materials.count(i)) {
+                const auto ref = stack_specs.find(i);
+                if (ref != stack_specs.end()) {
+                    const auto material = materials.find(ref->second);
+                    if (material != materials.end())
+                        layer.material = material->second;
+                }
+            }
+        };
         layer_index.clear();
         for (std::size_t i = 0; i < model.layers.size(); ++i) {
             auto& layer = model.layers[i];
@@ -114,8 +124,11 @@ struct Parser {
                     if (first) {
                         const auto& f = layer.function;
                         const auto k = classify(f);
-                        if (k == Kind::mask)
+                        if (k == Kind::mask) {
                             omitted_masks.insert(layer.name);
+                            resolve_material(layer, i);
+                            model.omitted_masks.push_back({layer, retained.size()});
+                        }
                         const auto element = k == Kind::mask ? "SolderMask:" + layer.name
                                              : k == Kind::skipped
                                                  ? "SkippedLayer:" + layer.name + ":" + f
@@ -126,14 +139,7 @@ struct Parser {
                 }
                 layer.copper = layer.copper || classify(layer.function) == Kind::copper;
             }
-            if (layer.material.empty() && !explicit_materials.count(i)) {
-                const auto ref = stack_specs.find(i);
-                if (ref != stack_specs.end()) {
-                    const auto material = materials.find(ref->second);
-                    if (material != materials.end())
-                        layer.material = material->second;
-                }
-            }
+            resolve_material(layer, i);
             layer_index[layer.name] = retained.size();
             retained.push_back(std::move(layer));
         }
