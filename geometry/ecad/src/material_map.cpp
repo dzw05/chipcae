@@ -51,6 +51,11 @@ void whitespace(const std::string& s, std::size_t& p) {
 }
 } // namespace
 
+// TEST-FIRST placeholder: acceptance tests must fail until restoration is implemented.
+bool restore_solder_masks(EcadModel&, const std::filesystem::path&, std::string*) {
+    return true;
+}
+
 bool apply_material_map(EcadModel& model, const std::filesystem::path& file, std::string* error) {
     auto fail = [&](std::string message) {
         if (error)
