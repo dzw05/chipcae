@@ -20,6 +20,7 @@ struct EcadLayer {
     std::vector<Polygon> polygons;
     std::string metal{}; // Mapped copper metal ID; material stores the base dielectric ID.
 };
+// First occurrence of a mask name, in source stack order. Position counts retained layers.
 struct OmittedMask {
     EcadLayer layer;
     std::size_t position = 0;
@@ -84,6 +85,8 @@ bool apply_material_map(EcadModel& model,
                         const std::filesystem::path& file,
                         std::string* error = nullptr);
 
+// Restore masks with finite positive source thickness and a matching material-map key.
+// Captures stay unchanged; repeated calls preserve existing layers and add no duplicates.
 bool restore_solder_masks(EcadModel& model,
                           const std::filesystem::path& material_map,
                           std::string* error = nullptr);

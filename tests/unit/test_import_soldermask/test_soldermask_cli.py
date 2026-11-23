@@ -45,14 +45,14 @@ def source_layers():
     """Read source keys to catch report rows shifted by inserted masks."""
     tree = ET.parse(FIXTURE)
     specs = {}
-    for spec in tree.findall(".//Spec"):
-        for prop in spec.findall("./General[@type='MATERIAL']/Property"):
+    for spec in tree.findall(".//{*}Spec"):
+        for prop in spec.findall("./{*}General[@type='MATERIAL']/{*}Property"):
             if prop.get("text"):
                 specs[spec.get("name")] = prop.get("text")
                 break
     result = {}
-    for entry in tree.findall(".//StackupLayer"):
-        ref = entry.find("SpecRef")
+    for entry in tree.findall(".//{*}StackupLayer"):
+        ref = entry.find("{*}SpecRef")
         result[entry.get("layerOrGroupRef")] = entry.get(
             "matDes", specs.get(ref.get("id") if ref is not None else None, ""))
     return result

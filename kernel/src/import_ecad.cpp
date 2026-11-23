@@ -204,6 +204,20 @@ int run_ecad(const ImportOptions& options) {
         auto& model = imported.model;
         if (odb && records.size() != model.layers.size())
             return reject("IMPORT_REJECTED: ODB thickness record count does not match layers");
+        // Modeling notices are stderr-only; ordinary warnings also enter the layer report.
+        std::vector<std::string> mask_notices;
+        if (!odb) {
+            std::set<std::string> original_names;
+            for (const auto& layer : model.layers)
+                original_names.insert(layer.name);
+            std::string error;
+            if (!ecad::restore_solder_masks(model, options.material_map, &error))
+                return reject(error, error.find("MATERIAL_MAPPING_MISSING") != std::string::npos);
+            for (const auto& layer : model.layers)
+                if (!original_names.contains(layer.name))
+                    mask_notices.push_back(
+                        "solder mask modeled as full-coverage homogenized layer: " + layer.name);
+        }
         std::vector<LayerSourceRow> rows;
         std::vector<std::string> warnings;
         std::vector<std::string> missing_thickness;
@@ -344,6 +358,8 @@ int run_ecad(const ImportOptions& options) {
         if (!chipcae::geometry::write_import_report(
                 import_report_directory(options.output), header, policy.defects, &error))
             return reject("IMPORT_REJECTED: " + error);
+        for (const auto& notice : mask_notices)
+            std::cerr << notice << '\n';
         for (const auto& warning : warnings)
             std::cerr << warning << '\n';
         if (has_c)

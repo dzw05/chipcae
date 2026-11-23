@@ -399,6 +399,61 @@ int main() {
                     records(before, {"SolderMask:First", "SolderMask:Second", "SolderMask:Last"}),
                 "stable filter must preserve ineligible and nonexact report entries");
     });
+    test("partial restoration preserves original slots and existing via references", [] {
+        const Temporary tmp;
+        EcadModel model;
+        model.layers = {{"F.Cu", "", "CONDUCTOR", 35e-6, true, {}},
+                        {"Core", "FR4", "DIELCORE", 1e-3, false, {}},
+                        {"B.Cu", "", "CONDUCTOR", 35e-6, true, {}}};
+        for (const auto& name : {"First", "Second", "Last"})
+            model.omitted_masks.push_back({{name, "SOLDERMASK", "SOLDERMASK", 1e-5, false, {}},
+                                           std::string(name) == "Last" ? 3u : 0u});
+        Via via;
+        via.id = "through";
+        via.start_layer = "F.Cu";
+        via.end_layer = "B.Cu";
+        via.position = {12, 34};
+        via.outer_radius_dbu = 20;
+        via.inner_radius_dbu = 15;
+        via.dielectric_layers = {1};
+        model.vias.push_back(via);
+        ViaFraction cell;
+        cell.layer = 1;
+        cell.lower = {0, 0};
+        cell.upper = {40, 40};
+        cell.fraction = 0.25;
+        cell.via_count = 1;
+        model.via_fractions.push_back(cell);
+        restore(model, tmp.write("first.json", mapping(R"("layer:Second":"mask_eq")")));
+        require(names(model) == std::vector<std::string>{"Second", "F.Cu", "Core", "B.Cu"},
+                "partial equal-position restoration");
+        require(model.vias.front().dielectric_layers == std::vector<std::size_t>{2} &&
+                    model.via_fractions.front().layer == 2,
+                "via indices must track Core after partial restoration");
+        const auto full = tmp.write("full.json", mapping(R"("SOLDERMASK":"mask_eq")"));
+        restore(model, full);
+        const std::vector<std::string> expected{"First", "Second", "F.Cu", "Core", "B.Cu", "Last"};
+        require(names(model) == expected, "later restoration must use original capture slots");
+        restore(model, full);
+        require(names(model) == expected, "repeat restoration must preserve order and count");
+        const auto& after = model.vias.front();
+        require(after.dielectric_layers == std::vector<std::size_t>{3} &&
+                    model.via_fractions.front().layer == 3,
+                "via indices must still identify Core after later and repeat restoration");
+        require(after.id == via.id && after.start_layer == via.start_layer &&
+                    after.end_layer == via.end_layer && after.position == via.position &&
+                    same_number(after.outer_radius_dbu, via.outer_radius_dbu) &&
+                    same_number(after.inner_radius_dbu, via.inner_radius_dbu),
+                "restoration must preserve via geometry");
+        const auto& fraction = model.via_fractions.front();
+        require(same_number(fraction.lower[0], cell.lower[0]) &&
+                    same_number(fraction.lower[1], cell.lower[1]) &&
+                    same_number(fraction.upper[0], cell.upper[0]) &&
+                    same_number(fraction.upper[1], cell.upper[1]) &&
+                    same_number(fraction.fraction, cell.fraction) &&
+                    fraction.via_count == cell.via_count,
+                "restoration must preserve existing via fractions and cell bounds");
+    });
     std::cout << failures << " acceptance case(s) failed\n";
     return failures == 0 ? 0 : 1;
 }
