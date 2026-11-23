@@ -230,7 +230,12 @@ class ContractTest(unittest.TestCase):
         write_json(path, value)
 
 
-class PeakRssUnits(ContractTest):
+class PeakRssUnits(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="chipcae-peak-rss-test-")
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
     def test_linux_measured_rss_preserves_kib(self):
         real_wait4 = os.wait4
 
