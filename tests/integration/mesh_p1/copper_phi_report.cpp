@@ -40,6 +40,8 @@ void require(bool ok, const std::string& reason) {
 }
 Real relative_error(Real actual, Real reference) {
     require(std::isfinite(actual) && std::isfinite(reference), "area values must be finite");
+    // Match the specified 1e-30 reference floor. At zero, close() therefore allows
+    // an absolute error of tolerance * 1e-30.
     return std::abs(actual - reference) / std::max(std::abs(reference), Real(1e-30));
 }
 void close(Real actual, Real reference, Real tolerance, const std::string& reason) {
