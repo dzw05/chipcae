@@ -52,7 +52,9 @@ struct HexMeshArrays {
         std::int64_t void_cells = 0; // 没有 material 的层里不生成的单元数
         // Areas in m^2, keyed by case-sensitive stack layer name.
         struct CopperArea {
+            // NonZero polygon union; fraction layers use the padded-grid uniform fill.
             Real polygons = 0;
+            // Integral of column fractions over the padded grid.
             Real raster = 0;
         };
         std::map<std::string, CopperArea> copper_area_m2;

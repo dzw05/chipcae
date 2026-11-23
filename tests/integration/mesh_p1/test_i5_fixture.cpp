@@ -121,8 +121,6 @@ struct Projection {
     }
     J value(const HexMeshArrays::GridReport& x) const {
         // Aggregate decomposition makes omitted/new members a compile error.
-        // Scope extension for copper-area reporting: keep this exhaustive projection
-        // compiling and independently cover the appended member and its value type.
         const auto& [levels,
                      rule,
                      N_L,

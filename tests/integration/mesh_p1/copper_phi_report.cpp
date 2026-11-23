@@ -12,6 +12,7 @@
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -367,9 +368,10 @@ J area_pairs() {
         R"([["cu",{"polygons":0.30000000000000004,"raster":0.3}],["Cu",{"polygons":0.12500000000000003,"raster":0.125}]])");
 }
 void bit_equal(const Area& a, const Area& b) {
-    require(std::bit_cast<std::uint64_t>(a.polygons) == std::bit_cast<std::uint64_t>(b.polygons),
+    using Bits = std::array<std::byte, sizeof(Real)>;
+    require(std::bit_cast<Bits>(a.polygons) == std::bit_cast<Bits>(b.polygons),
             "F polygon IEEE bits preserved");
-    require(std::bit_cast<std::uint64_t>(a.raster) == std::bit_cast<std::uint64_t>(b.raster),
+    require(std::bit_cast<Bits>(a.raster) == std::bit_cast<Bits>(b.raster),
             "F raster IEEE bits preserved");
 }
 void fixture_roundtrip() {
