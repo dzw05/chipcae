@@ -327,12 +327,19 @@ CutLayerArrays outline(HexMeshArrays& m, const StackModel& s) {
 struct Golden {
     std::uint64_t mesh, cut;
 };
-void golden(const std::string& name, const HexMeshArrays& m, const CutLayerArrays& c, Golden g) {
+// Collect every fixture before failing so a pre-refactor run on another platform
+// can report its complete baseline. Mismatches still fail the containing case.
+[[nodiscard]] std::string
+golden(const std::string& name, const HexMeshArrays& m, const CutLayerArrays& c, Golden g) {
     const Golden actual{hash(m), hash(c)};
     std::cout << "DIGEST " << name << " mesh=0x" << std::hex << actual.mesh << " cut=0x"
               << actual.cut << std::dec << '\n';
-    check(actual.mesh == g.mesh, name + ": mesh differs from the pre-refactor baseline");
-    check(actual.cut == g.cut, name + ": cut differs from the pre-refactor baseline");
+    std::string errors;
+    if (actual.mesh != g.mesh)
+        errors += name + ": mesh differs from the pre-refactor baseline; ";
+    if (actual.cut != g.cut)
+        errors += name + ": cut differs from the pre-refactor baseline; ";
+    return errors;
 }
 
 // This reference remains independent of finalize's proposed compact face table.
@@ -504,16 +511,18 @@ void bitwise_outline(std::vector<VolumeCheck>& volumes) {
         {0x95d1f16842b0297dULL, 0xa1261a1ef02de996ULL},
         {0x4f3fe256a94ed292ULL, 0x2eb75ee8bb73c3c4ULL},
     }};
+    std::string errors;
     for (std::size_t i = 0; i < resolutions.size(); ++i) {
         const auto n = resolutions[i];
         const auto s = stack();
         auto m = grid(s, n);
         const auto c = outline(m, s);
         const auto name = "outline_n" + std::to_string(n);
-        golden(name, m, c, expected[i]);
+        errors += golden(name, m, c, expected[i]);
         gp_reference(m, c);
         remember_volume(volumes, name, s, m, c);
     }
+    check(errors.empty(), errors);
 }
 void bitwise_snap() {
     const auto s = stack();
@@ -526,11 +535,12 @@ void bitwise_snap() {
                                   }),
               "snap fixture must contain the exact .002 grid line in x and y");
     const auto c = outline(m, s);
-    golden("outline_n10", m, c, {0x0d4fac692083ee07ULL, 0x953382a220d2e108ULL});
+    const auto errors = golden("outline_n10", m, c, {0x0d4fac692083ee07ULL, 0x953382a220d2e108ULL});
     gp_reference(m, c);
     std::vector<VolumeCheck> volumes;
     remember_volume(volumes, "outline_n10", s, m, c);
     check_analytic_volumes(volumes);
+    check(errors.empty(), errors);
 }
 
 // Nondefault metadata makes a whole-object replacement or missing compaction
@@ -578,13 +588,15 @@ void bitwise_lid(std::vector<VolumeCheck>& volumes, Lid lid) {
     }
     const auto c = outline(m, s);
     const std::string name = lid == Lid::Convex ? "region_lid" : "union";
-    golden(name,
-           m,
-           c,
-           lid == Lid::Convex ? Golden{0x2edefd971f79fe98ULL, 0x28db459fa37df24fULL}
-                              : Golden{0xb6bf7b0323290597ULL, 0x976fff2710cb69baULL});
+    const auto errors =
+        golden(name,
+               m,
+               c,
+               lid == Lid::Convex ? Golden{0x2edefd971f79fe98ULL, 0x28db459fa37df24fULL}
+                                  : Golden{0xb6bf7b0323290597ULL, 0x976fff2710cb69baULL});
     gp_reference(m, c);
     remember_volume(volumes, name, s, m, c);
+    check(errors.empty(), errors);
 }
 CutGeometry outer_planes() {
     CutGeometry g;
@@ -603,6 +615,7 @@ void keep_void_both(std::vector<VolumeCheck>& volumes) {
     const auto g = outer_planes();
     const auto plan = value(build_cut_layer(initial, g, cut_options()));
     check(!plan.void_elem.empty(), "fixture must contain entirely exterior cells");
+    std::string errors;
     for (const bool keep : {false, true}) {
         auto m = initial;
         auto options = cut_options();
@@ -621,14 +634,15 @@ void keep_void_both(std::vector<VolumeCheck>& volumes) {
                       "removed void GID must disappear");
         }
         const std::string name = keep ? "void_keep" : "void_remove";
-        golden(name,
-               m,
-               c,
-               keep ? Golden{0x0b1422792db4f4baULL, 0x883bf8fb0e99db04ULL}
-                    : Golden{0xb7066576e2afffe0ULL, 0x55523e514716771dULL});
+        errors += golden(name,
+                         m,
+                         c,
+                         keep ? Golden{0x0b1422792db4f4baULL, 0x883bf8fb0e99db04ULL}
+                              : Golden{0xb7066576e2afffe0ULL, 0x55523e514716771dULL});
         gp_reference(m, c);
         remember_volume(volumes, name, s, m, c);
     }
+    check(errors.empty(), errors);
 }
 void successful_mesh_state() {
     // Captured from unchanged ced6409 cut sources, GNU 14.2.0, Linux x86_64,
@@ -637,19 +651,23 @@ void successful_mesh_state() {
         0xb0bfd3e93428442bULL, 0x23583fe378c251c9ULL, 0xfe4e8beccf17b066ULL};
     constexpr std::array<std::uint64_t, 2> direct_expected{0xb0bfd3e93428442bULL,
                                                            0x0fced36ddccee91aULL};
-    const auto verify = [](const HexMeshArrays& m, std::uint64_t expected) {
-        const auto actual = full_mesh_hash(m);
-        std::cout << "FULL_MESH_DIGEST actual=0x" << std::hex << actual << " expected=0x"
-                  << expected << std::dec << '\n';
-        check(actual == expected, "successful cut must match every pre-refactor mesh field");
-    };
+    std::string errors;
+    const auto verify =
+        [&](const std::string& name, const HexMeshArrays& m, std::uint64_t expected) {
+            const auto actual = full_mesh_hash(m);
+            std::cout << "FULL_MESH_DIGEST " << name << " actual=0x" << std::hex << actual
+                      << " expected=0x" << expected << std::dec << '\n';
+            if (actual != expected)
+                errors += name + ": successful cut must match every pre-refactor mesh field; ";
+        };
     std::size_t i = 0;
     for (const auto lid : {Lid::Box, Lid::Convex, Lid::Notched}) {
         const auto s = stack(lid);
         auto m = grid(s, 8);
         seed_mesh_metadata(m);
         outline(m, s);
-        verify(m, outline_expected[i++]);
+        verify("outline_" + std::to_string(i), m, outline_expected[i]);
+        ++i;
     }
     for (const bool keep : {false, true}) {
         auto m = grid(stack(), 8);
@@ -657,8 +675,36 @@ void successful_mesh_state() {
         auto options = cut_options();
         options.keep_void = keep;
         value(build_cut_layer(m, outer_planes(), options));
-        verify(m, direct_expected[keep]);
+        verify(keep ? "void_keep" : "void_remove", m, direct_expected[keep]);
     }
+    check(errors.empty(), errors);
+}
+void attribute_frame_identity() {
+    // Finalization must allocate every identity frame, including a newly added
+    // void attribute, regardless of whether the input frames are empty or stale.
+    for (const bool keep : {false, true})
+        for (const bool empty : {false, true}) {
+            auto m = grid(stack(), 4);
+            if (empty)
+                m.attr_frame.clear();
+            else
+                m.attr_frame.assign(9 * m.attr_table.entries.size(), .25);
+            auto options = cut_options();
+            options.keep_void = keep;
+            const auto c = value(build_cut_layer(m, outer_planes(), options));
+            check(!c.cut_elem.empty(), "frame fixture must exercise cut finalization");
+            check(!keep || c.void_attribute > 0, "frame fixture must add a void attribute");
+            check(m.attr_frame.size() == 9 * m.attr_table.entries.size(),
+                  "finalization must size frames for every output attribute");
+            for (std::size_t a = 0; a < m.attr_table.entries.size(); ++a)
+                for (std::size_t row = 0; row < 3; ++row)
+                    for (std::size_t col = 0; col < 3; ++col) {
+                        const Real expected = row == col ? 1 : 0;
+                        check(std::bit_cast<std::uint64_t>(m.attr_frame[9 * a + 3 * row + col]) ==
+                                  std::bit_cast<std::uint64_t>(expected),
+                              "finalization must initialize the complete identity frame");
+                    }
+        }
 }
 void error_leaves_mesh() {
     const auto s = stack();
@@ -828,6 +874,7 @@ int main() {
         run("error_leaves_mesh", error_leaves_mesh);
         run("digest_scope", digest_scope);
         run("successful_mesh_state", successful_mesh_state);
+        run("attribute_frame_identity", attribute_frame_identity);
         run("sequential_snap", sequential_snap);
         run("volume_analytic", [&] { volume_analytic(volumes); });
         run("gp_nonmanifold", gp_nonmanifold);
