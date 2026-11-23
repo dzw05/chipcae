@@ -62,6 +62,7 @@ class SoldermaskCLI(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.executable = Path(os.environ["CHIPCAE_IMPORT_EXE"])
+        cls.reference = Path(os.environ["CHIPCAE_BASELINE_IMPORT_EXE"])
         cls.temporary = tempfile.TemporaryDirectory(prefix="soldermask-cli-")
         cls.addClassCleanup(cls.temporary.cleanup)
         cls.directory = Path(cls.temporary.name)
@@ -77,7 +78,7 @@ class SoldermaskCLI(unittest.TestCase):
         cls.fixture.write_text(text, encoding="utf-8")
         cls.baseline = {}
         for accept in (False, True):
-            cls.baseline[accept] = invoke(cls.executable, cls.directory / f"unmapped-{accept}",
+            cls.baseline[accept] = invoke(cls.reference, cls.directory / f"unmapped-{accept}",
                                           BASE_MAP, accept, cls.fixture)
 
     def assert_no_masks(self, products):
@@ -154,8 +155,11 @@ class SoldermaskCLI(unittest.TestCase):
         self.assertIsNone(products["import_layers.json"])
 
     def test_unmapped_defects_and_accepted_stack_are_unchanged(self):
-        for accept, (process, products) in self.baseline.items():
+        for accept, (reference, reference_products) in self.baseline.items():
             with self.subTest(accept=accept):
+                process, products = invoke(
+                    self.executable, self.directory / f"unmapped-current-{accept}",
+                    BASE_MAP, accept, self.fixture)
                 self.assertEqual(process.returncode, 0 if accept else 6, process.stderr.decode())
                 report = document(products, "import_report.json")
                 mask_defects = [d for d in report["defects"]
@@ -168,16 +172,50 @@ class SoldermaskCLI(unittest.TestCase):
                 if accept:
                     layers = document(products, "stack.json")["layers"]
                     self.assertFalse(any(layer["name"].endswith(".Mask") for layer in layers))
-                # Same output basenames also make polyset references byte-comparable.
-                # A saved pre-change executable enables the full baseline comparison in TDD runs.
-                reference = os.environ.get("CHIPCAE_BASELINE_IMPORT_EXE", str(self.executable))
-                repeated, repeated_products = invoke(
-                    reference, self.directory / f"reference-{accept}", BASE_MAP, accept, self.fixture)
-                self.assertEqual(process.returncode, repeated.returncode)
-                self.assertEqual(process.stdout, repeated.stdout)
-                self.assertEqual(process.stderr, repeated.stderr)
-                for name in ARTIFACTS:
-                    self.assertEqual(products[name], repeated_products[name], name)
+                self.assert_outputs_identical(process, products, reference, reference_products)
+
+    def assert_outputs_identical(self, process, products, reference, reference_products):
+        self.assertEqual(process.returncode, reference.returncode)
+        self.assertEqual(process.stdout, reference.stdout)
+        self.assertEqual(process.stderr, reference.stderr)
+        for name in ARTIFACTS:
+            self.assertEqual(products[name], reference_products[name], name)
+
+    def test_missing_thickness_precedes_invalid_material_map(self):
+        for masks in (False, True):
+            for mapping in (None, "not JSON", "{}"):
+                with self.subTest(masks=masks, mapping=mapping):
+                    fixture = self.directory / "missing-thickness.xml"
+                    text = self.fixture.read_text(encoding="utf-8")
+                    if not masks:
+                        text = text.replace('layerFunction="SOLDERMASK"',
+                                            'layerFunction="DOCUMENT"')
+                    text, removed = re.subn(
+                        r'(<StackupLayer\b[^>]*layerOrGroupRef="F.Cu"[^>]*?)'
+                        r'thickness="[^"]*"', r'\1', text)
+                    self.assertEqual(removed, 1)
+                    fixture.write_text(text, encoding="utf-8")
+                    results = []
+                    for label, executable in (("reference", self.reference),
+                                              ("current", self.executable)):
+                        directory = self.directory / f"thickness-{masks}-{mapping}-{label}"
+                        directory.mkdir()
+                        map_file = directory / "map.json"
+                        if mapping is not None:
+                            map_file.write_text(mapping, encoding="utf-8")
+                        process = subprocess.run(
+                            [str(executable), str(fixture), "-o", str(directory / "stack.json"),
+                             "--polyset", str(directory / "board.polyset"),
+                             "--report", str(directory / "defects.json"),
+                             "--material-map", str(map_file)],
+                            capture_output=True, timeout=45)
+                        results.append((process, {
+                            name: (directory / name).read_bytes()
+                            if (directory / name).exists() else None for name in ARTIFACTS}))
+                    reference, reference_products = results[0]
+                    self.assertIn(b"IMPORT_REJECTED: missing thickness for layers: F.Cu",
+                                  reference.stderr)
+                    self.assert_outputs_identical(*results[1], reference, reference_products)
 
     def test_synthetic_board_restores_full_coverage_masks(self):
         # No material parameters: callers supply the library entries for these IDs.
@@ -212,7 +250,7 @@ class SoldermaskCLI(unittest.TestCase):
         for accept in (False, True):
             with self.subTest(accept=accept):
                 baseline_process, baseline = invoke(
-                    self.executable, self.directory / f"raw-baseline-{accept}", BASE_MAP, accept)
+                    self.reference, self.directory / f"raw-baseline-{accept}", BASE_MAP, accept)
                 process, products = invoke(
                     self.executable, self.directory / f"raw-mapped-{accept}",
                     dict(BASE_MAP, SOLDERMASK="mask_eq"), accept)
@@ -227,9 +265,14 @@ class SoldermaskCLI(unittest.TestCase):
 
 
 def main():
-    executable = os.environ.get("CHIPCAE_IMPORT_EXE")
-    if not executable or not Path(executable).is_file() or not os.access(executable, os.X_OK):
-        print("CHIPCAE_IMPORT_EXE must name an executable importer", file=sys.stderr)
+    for name in ("CHIPCAE_IMPORT_EXE", "CHIPCAE_BASELINE_IMPORT_EXE"):
+        executable = os.environ.get(name)
+        if not executable or not Path(executable).is_file() or not os.access(executable, os.X_OK):
+            print(f"{name} must name an executable importer", file=sys.stderr)
+            return 1
+    if Path(os.environ["CHIPCAE_IMPORT_EXE"]).samefile(os.environ["CHIPCAE_BASELINE_IMPORT_EXE"]):
+        print("CHIPCAE_BASELINE_IMPORT_EXE must be the pre-change importer, "
+              "not CHIPCAE_IMPORT_EXE", file=sys.stderr)
         return 1
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(SoldermaskCLI)
     try:

@@ -175,6 +175,11 @@ bool restore_solder_masks(EcadModel& model,
     if (restored.empty())
         return true;
 
+    // The reader emits an omission record for every captured mask. It remains
+    // until restoration, including when a preexisting layer has the same name.
+    std::unordered_set<std::string> pending;
+    for (const auto& entry : model.report.unsupported)
+        pending.insert(entry.element);
     // Include masks restored by earlier calls so original capture positions remain
     // meaningful when a later map selects additional masks, including equal slots.
     struct Placement {
@@ -186,7 +191,12 @@ bool restore_solder_masks(EcadModel& model,
     std::unordered_set<std::string> seen;
     for (const auto& mask : model.omitted_masks) {
         const auto found = existing.find(mask.layer.name);
-        if ((found != existing.end() || restored.contains("SolderMask:" + mask.layer.name)) &&
+        const auto element = "SolderMask:" + mask.layer.name;
+        const bool previously_restored =
+            found != existing.end() && !pending.contains(element) &&
+            !model.layers[found->second].copper &&
+            folded(model.layers[found->second].function) == "SOLDERMASK";
+        if ((previously_restored || restored.contains(element)) &&
             seen.insert(mask.layer.name).second) {
             const auto index = found == existing.end() ? model.layers.size() : found->second;
             placements.push_back({&mask, index});
@@ -194,6 +204,10 @@ bool restore_solder_masks(EcadModel& model,
                 placed[index] = true;
         }
     }
+    // Merge in insertion-slot order, retaining capture order for equal slots.
+    std::stable_sort(placements.begin(), placements.end(), [](const auto& a, const auto& b) {
+        return a.mask->position < b.mask->position;
+    });
     std::vector<EcadLayer> layers;
     layers.reserve(model.layers.size() + restored.size());
     std::vector<std::size_t> remap(model.layers.size());

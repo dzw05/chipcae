@@ -210,13 +210,14 @@ int run_ecad(const ImportOptions& options) {
             std::set<std::string> original_names;
             for (const auto& layer : model.layers)
                 original_names.insert(layer.name);
-            std::string error;
-            if (!ecad::restore_solder_masks(model, options.material_map, &error))
-                return reject(error, error.find("MATERIAL_MAPPING_MISSING") != std::string::npos);
-            for (const auto& layer : model.layers)
-                if (!original_names.contains(layer.name))
-                    mask_notices.push_back(
-                        "solder mask modeled as full-coverage homogenized layer: " + layer.name);
+            // A failed map read leaves the model unchanged. Defer its rejection to
+            // apply_material_map below, preserving the original thickness-error precedence.
+            if (ecad::restore_solder_masks(model, options.material_map))
+                for (const auto& layer : model.layers)
+                    if (!original_names.contains(layer.name))
+                        mask_notices.push_back(
+                            "solder mask modeled as full-coverage homogenized layer: " +
+                            layer.name);
         }
         std::vector<LayerSourceRow> rows;
         std::vector<std::string> warnings;

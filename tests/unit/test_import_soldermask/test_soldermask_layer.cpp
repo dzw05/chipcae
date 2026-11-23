@@ -454,6 +454,81 @@ int main() {
                     fraction.via_count == cell.via_count,
                 "restoration must preserve existing via fractions and cell bounds");
     });
+    test("restoring a mask preserves preexisting same-named layers and via references", [] {
+        const Temporary tmp;
+        for (const auto& [thickness, function] :
+             std::vector<std::pair<double, std::string>>{{0.0, "DIELCORE"},
+                                                         {1e-5, "DIELCORE"},
+                                                         {0.0, "SOLDERMASK"},
+                                                         {1e-5, "SOLDERMASK"}}) {
+            auto model = read(tmp.write("board.xml", board()));
+            model.omitted_masks.front().layer.thickness_m = thickness;
+            // This layer was already present, rather than inserted by restoration.
+            model.layers.back() = {"F.Mask", "FR4", function, 2e-5, false, {}};
+            Via via;
+            via.dielectric_layers = {1, 2};
+            model.vias.push_back(via);
+            ViaFraction cell;
+            cell.layer = 2;
+            model.via_fractions.push_back(cell);
+            const auto before = model;
+            restore(model, tmp.write("map.json", mapping(R"("SOLDERMASK":"mask_eq")")));
+            auto expected = names(before);
+            expected.push_back("B.Mask");
+            require(names(model) == expected, "preexisting F.Mask must retain its original slot");
+            auto retained = model;
+            retained.layers.pop_back();
+            require(same_layers(retained, before), "preexisting layers must remain identical");
+            require(records(model) == records(before, {"SolderMask:B.Mask"}),
+                    "preexisting F.Mask must retain its omission diagnostic");
+            require(model.vias.front().dielectric_layers == via.dielectric_layers &&
+                        model.via_fractions.front().layer == cell.layer,
+                    "preexisting layer indices must remain unchanged");
+            restore(model, tmp.path / "map.json");
+            require(names(model) == expected, "repeat call must preserve preexisting layer slots");
+        }
+    });
+    test("partial then full restoration sorts insertion slots with stable ties", [] {
+        const Temporary tmp;
+        EcadModel model;
+        model.layers = {{"F.Cu", "", "CONDUCTOR", 35e-6, true, {}},
+                        {"Core", "FR4", "DIELCORE", 1e-3, false, {}},
+                        {"B.Cu", "", "CONDUCTOR", 35e-6, true, {}}};
+        for (const auto& [name, position] : std::vector<std::pair<std::string, std::size_t>>{
+                 {"Last", 3}, {"Middle", 1}, {"First", 0}, {"Peer", 1}})
+            model.omitted_masks.push_back(
+                {{name, "SOLDERMASK", "SOLDERMASK", 1e-5, false, {}}, position});
+        Via via;
+        via.dielectric_layers = {1};
+        model.vias.push_back(via);
+        ViaFraction cell;
+        cell.layer = 1;
+        model.via_fractions.push_back(cell);
+
+        restore(model, tmp.write("partial.json", mapping(R"("layer:First":"mask_eq")")));
+        require(names(model) == std::vector<std::string>{"First", "F.Cu", "Core", "B.Cu"},
+                "partial restoration must insert First before F.Cu");
+        require(model.vias.front().dielectric_layers == std::vector<std::size_t>{2} &&
+                    model.via_fractions.front().layer == 2,
+                "partial restoration must remap Core references");
+        // Track the already-restored mask as well as the original dielectric.
+        model.vias.front().dielectric_layers.push_back(0);
+        model.via_fractions.push_back({});
+        const auto full = tmp.write("full.json", mapping(R"("SOLDERMASK":"mask_eq")"));
+        restore(model, full);
+        require(model.vias.front().dielectric_layers == std::vector<std::size_t>{4, 0} &&
+                    model.via_fractions[0].layer == 4 && model.via_fractions[1].layer == 0,
+                "full restoration must preserve Core and already-restored mask references");
+        const std::vector<std::string> expected{
+            "First", "F.Cu", "Middle", "Peer", "Core", "B.Cu", "Last"};
+        require(names(model) == expected,
+                "insertion slots must be sorted while equal slots retain capture order");
+        restore(model, full);
+        require(names(model) == expected &&
+                    model.vias.front().dielectric_layers == std::vector<std::size_t>{4, 0} &&
+                    model.via_fractions[0].layer == 4 && model.via_fractions[1].layer == 0,
+                "repeat restoration must preserve layer order and via references");
+    });
     std::cout << failures << " acceptance case(s) failed\n";
     return failures == 0 ? 0 : 1;
 }
