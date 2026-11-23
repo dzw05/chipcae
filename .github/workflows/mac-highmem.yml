@@ -37,7 +37,7 @@ jobs:
         run: |
           set -euo pipefail
           date +%s > "$RUNNER_TEMP/mac-highmem-start"
-          rm -f build/junit-highmem.xml build/junit-mpi.xml \
+          rm -f build/junit-highmem.xml build/junit-fvm-acceptance.xml build/junit-mpi.xml \
             build/junit-mpi-unlabeled.xml build/junit-rest.xml build/loadavg.log
           : > "$RUNNER_TEMP/loadavg.log"
           # Redirect every inherited descriptor; nohup survives step completion.
@@ -79,12 +79,15 @@ jobs:
       - name: Check dependencies
         run: bash .github/scripts/mac_highmem_deps.sh --check
 
+      - name: Check FVM Python prerequisites
+        run: python3 -c "import numpy, h5py"
+
       - name: Configure
         run: |
           set -euo pipefail
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DCHIPCAE_ENABLE_MPI=ON -DCHIPCAE_ENABLE_HDF5=ON \
-            -DCHIPCAE_ENABLE_MFEM=ON -DCHIPCAE_ENABLE_JSONCONS=ON \
+            -DCHIPCAE_ENABLE_MFEM=ON -DCHIPCAE_ENABLE_JSONCONS=ON -DCHIPCAE_ENABLE_ECAD=ON \
             -DCMAKE_PREFIX_PATH="$HOME/chipcae-env/env;$HOME/chipcae-mac/deps/mfem;$HOME/chipcae-mac/deps/jsoncons" \
             -DHDF5_NO_FIND_PACKAGE_CONFIG_FILE=ON \
             -DCMAKE_IGNORE_PREFIX_PATH="$HOME/chipcae-ci/env" \
@@ -133,6 +136,11 @@ jobs:
           import re
           from pathlib import Path
           tests = json.loads((Path(os.environ['RUNNER_TEMP']) / 'mac-highmem-tests.json').read_text())['tests']
+          required_fvm_names = {
+              'fvm_fvm_case_e2e', 'solve_fvm_thermal', 'solve_fvm_thermal_cut',
+              'solve_fvm_thermal_np2', 'solve_fvm_elastic', 'solve_fvm_bimetal',
+              'solve_fvm_elastic_np2',
+          }
           def is_launcher(token):
               if token.startswith(('--launcher=', '--mpiexec=', '--mpi=')):
                   token = token.split('=', 1)[1]
@@ -150,7 +158,7 @@ jobs:
               command = test.get('command', [])
               launchers = [i for i, token in enumerate(command)
                            if is_launcher(token)]
-              if launchers and 'mpi' not in labels:
+              if launchers and 'mpi' not in labels and test['name'] not in required_fvm_names:
                   names.add(test['name'])
               if 'mpi' in labels or launchers:
                   for i, token in enumerate(command[:-1]):
@@ -165,13 +173,15 @@ jobs:
           def escape(name):
               return re.sub(r'([\\.^$|?*+()\[\]{}])', r'\\\1', name)
           unlabeled_regex = '^(' + '|'.join(map(escape, names)) + ')$' if names else ''
+          c_exclusion_names = sorted(set(names) | required_fvm_names)
+          c_exclusion_regex = '^(' + '|'.join(map(escape, c_exclusion_names)) + ')$'
           if any('\n' in name or '\r' in name for name in names):
               raise SystemExit('CTest names must fit a single environment line')
           n = 2 if maximum <= 4 else 1
           print('b2 configured tests: ' + (', '.join(names) if names else '无'))
           print(f'MPI rank audit: maximum={maximum}, N={n}; wrapper audit in workflow comments')
           with open(os.environ['GITHUB_ENV'], 'a') as stream:
-              stream.write(f'unlabeled_regex={unlabeled_regex}\nN={n}\n')
+              stream.write(f'unlabeled_regex={unlabeled_regex}\nc_exclusion_regex={c_exclusion_regex}\nN={n}\n')
           PY
 
       - name: Test highmem (a, mandatory)
@@ -211,6 +221,39 @@ jobs:
           if any(list(root.iter(tag)) for tag in ('skipped', 'failure', 'error')):
               raise SystemExit('highmem requires zero skipped/failure/error elements')
           print(f'highmem: {len(cases)} passed, Skipped=0')
+          PY
+
+      - name: Test FVM acceptance (mandatory)
+        if: ${{ !cancelled() && steps.selection.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          status=0
+          ctest --test-dir build -R '^(fvm_fvm_case_e2e|solve_fvm_thermal|solve_fvm_thermal_cut|solve_fvm_thermal_np2|solve_fvm_elastic|solve_fvm_bimetal|solve_fvm_elastic_np2)$' --no-tests=error -j 1 --output-on-failure --output-junit "$PWD/build/junit-fvm-acceptance.xml" || status=$?
+          echo "fvm acceptance seconds: $(( $(date +%s) - start )); exit status: $status"
+          exit "$status"
+
+      - name: Assert FVM acceptance JUnit
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          required = {
+              'fvm_fvm_case_e2e', 'solve_fvm_thermal', 'solve_fvm_thermal_cut',
+              'solve_fvm_thermal_np2', 'solve_fvm_elastic', 'solve_fvm_bimetal',
+              'solve_fvm_elastic_np2',
+          }
+          root = ET.parse('build/junit-fvm-acceptance.xml').getroot()
+          cases = list(root.iter('testcase'))
+          names = {case.get('name') for case in cases}
+          for case in cases:
+              print(f"{case.get('name')}: {case.get('time', 'unknown')} seconds")
+          if names != required or len(cases) != 7:
+              raise SystemExit('FVM acceptance requires exactly seven unique required cases')
+          if any(list(root.iter(tag)) for tag in ('skipped', 'failure', 'error')):
+              raise SystemExit('FVM acceptance requires zero skipped/failure/error elements')
+          print('FVM acceptance: 7 passed, Skipped=0')
           PY
 
       - name: Test labeled MPI (b1, informational)
@@ -257,10 +300,7 @@ jobs:
           set -euo pipefail
           start=$(date +%s)
           status=0
-          args=(--test-dir build -LE 'highmem|mpi')
-          if [ -n "$unlabeled_regex" ]; then
-            args+=(-E "$unlabeled_regex")
-          fi
+          args=(--test-dir build -LE 'highmem|mpi' -E "$c_exclusion_regex")
           ctest "${args[@]}" -j 6 --timeout 900 \
             --output-on-failure --output-junit junit-rest.xml || status=$?
           elapsed=$(( $(date +%s) - start ))
@@ -343,6 +383,7 @@ jobs:
           if-no-files-found: warn
           path: |
             build/junit-highmem.xml
+            build/junit-fvm-acceptance.xml
             build/junit-mpi.xml
             build/junit-mpi-unlabeled.xml
             build/junit-rest.xml
