@@ -3,6 +3,8 @@
 #include "chipcae/mesh/cut/region_cut.hpp"
 #include "support.hpp"
 
+#include <algorithm>
+#include <array>
 #include <bit>
 #include <chrono>
 #include <cstdint>
@@ -445,29 +447,49 @@ Measurement scale_guard(std::vector<VolumeCheck>& volumes) {
     background.outline.polygon.clear();
     const auto options = grid_options(64);
     const auto cutting = cut_options();
-    const Real r0 = rss_kib();
-    const auto start = std::chrono::steady_clock::now();
-    auto built_mesh = build_tensor_grid(background, options);
-    const auto built = std::chrono::steady_clock::now();
-    auto m = value(std::move(built_mesh));
-    const Real r1 = rss_kib();
-    const auto cells = m.attribute.size();
-    const auto cut_start = std::chrono::steady_clock::now();
-    const auto extra = value(region_cut_planes(s, m));
-    auto c = value(apply_outline_cut(m, s.outline, cutting, extra));
-    const auto cut_end = std::chrono::steady_clock::now();
-    const Real r2 = rss_kib();
-    check(c.has_value(), "scale_guard must exercise outline cutting");
-    const Measurement result{std::chrono::duration<Real>(built - start).count(),
-                             std::chrono::duration<Real>(cut_end - cut_start).count(),
-                             r0,
-                             r1,
-                             r2};
+    // Five same-process samples reduce scheduler noise on both platforms. Use
+    // each duration's median, retaining the original time and RSS thresholds.
+    // ru_maxrss only grows: measure memory on the first build/cut, before later
+    // samples can reuse allocations or inherit an earlier sample's high-water mark.
+    std::array<Real, 5> grid_times{}, cut_times{};
+    Measurement result{};
+    std::size_t cells = 0, cut_cells = 0;
+    for (std::size_t sample = 0; sample < grid_times.size(); ++sample) {
+        const Real r0 = rss_kib();
+        const auto start = std::chrono::steady_clock::now();
+        auto built_mesh = build_tensor_grid(background, options);
+        const auto built = std::chrono::steady_clock::now();
+        auto m = value(std::move(built_mesh));
+        const Real r1 = rss_kib();
+        const auto built_cells = m.attribute.size();
+        const auto cut_start = std::chrono::steady_clock::now();
+        const auto extra = value(region_cut_planes(s, m));
+        auto c = value(apply_outline_cut(m, s.outline, cutting, extra));
+        const auto cut_end = std::chrono::steady_clock::now();
+        const Real r2 = rss_kib();
+        check(c.has_value(), "scale_guard must exercise outline cutting");
+        grid_times[sample] = std::chrono::duration<Real>(built - start).count();
+        cut_times[sample] = std::chrono::duration<Real>(cut_end - cut_start).count();
+        std::cout << "MEASURE_SAMPLE cut-scale-sparse: {\"sample\":" << sample + 1
+                  << ",\"t_grid\":" << grid_times[sample] << ",\"t_cut\":" << cut_times[sample]
+                  << "}" << std::endl;
+        if (sample == 0) {
+            result.r0 = r0;
+            result.r1 = r1;
+            result.r2 = r2;
+            cells = built_cells;
+            cut_cells = c->cut_elem.size();
+            remember_volume(volumes, "scale_n64", s, m, *c);
+        }
+    }
+    std::ranges::sort(grid_times);
+    std::ranges::sort(cut_times);
+    result.t_grid = grid_times[grid_times.size() / 2];
+    result.t_cut = cut_times[cut_times.size() / 2];
     std::cout << "MEASURE cut-scale-sparse: {\"n\":64,\"cells\":" << cells
-              << ",\"cut_cells\":" << c->cut_elem.size() << ",\"t_grid\":" << result.t_grid
-              << ",\"t_cut\":" << result.t_cut << ",\"r0_kib\":" << r0 << ",\"r1_kib\":" << r1
-              << ",\"r2_kib\":" << r2 << "}" << std::endl;
-    remember_volume(volumes, "scale_n64", s, m, *c);
+              << ",\"cut_cells\":" << cut_cells << ",\"t_grid\":" << result.t_grid
+              << ",\"t_cut\":" << result.t_cut << ",\"r0_kib\":" << result.r0
+              << ",\"r1_kib\":" << result.r1 << ",\"r2_kib\":" << result.r2 << "}" << std::endl;
     return result;
 }
 
