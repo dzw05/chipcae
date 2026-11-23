@@ -1,0 +1,44 @@
+{
+  "schema": "chipcae.material_library/1",
+  "materials": [
+    {
+      "id": "soldermask_lpi_eq",
+      "schema_version": "1",
+      "unit_system": "SI",
+      "model": "thermo_elastic",
+      "conductivity": 0.23,
+      "density": 1390,
+      "elastic": {
+        "symmetry": "isotropic",
+        "table": {
+          "temperatures": [298.15],
+          "columns": {
+            "E": [2.7e9],
+            "nu": [0.3]
+          },
+          "interpolation": "constant",
+          "extrapolation": "clamp"
+        }
+      },
+      "thermal_expansion": {
+        "cte_type": "tangent",
+        "symmetry": "isotropic",
+        "stress_free_temperature": 298.15,
+        "table": {
+          "temperatures": [298.15],
+          "columns": {
+            "alpha": [55e-6]
+          },
+          "interpolation": "constant",
+          "extrapolation": "clamp"
+        }
+      },
+      "provenance": {
+        "source_type": "literature",
+        "confidence": "low",
+        "reference": "conductivity / elastic.E / thermal_expansion.alpha: 有马聖夫 (Masao Arima, 太陽インキ製造), 次世代電子回路基板用ソルダーレジスト, エレクトロニクス実装学会誌 Vol.13 No.5 (2010), pp.396–399, Table 2, AUS 703 (Type: Liquid): k = 0.23 W/(m·K), E = 2.7 GPa, CTE α1 = 55 ppm/K; https://www.jstage.jst.go.jp/article/jiep/13/5/13_5_396/_pdf/-char/en ; elastic.nu: F.X. Che, M. Kawano, M.Z. Ding, Y. Han, S. Bhattacharya (A*STAR IME), Co-design for Low Warpage and High Reliability in Advanced Package with TSV-Free Interposer (TFI), Table I, Solder mask 行 ν = 0.3，有限元文献取值，非实测; https://oar.a-star.edu.sg/storage/o/o13nom862y/co-design-for-low-warpage-and-high-reliability-in-advanced-package-yvith-tsvfree-interposer-tfi.pdf ; density: Taiyo America, PSR-4000BN Series LPI Solder Mask 技术数据表, Revised March 2005, p.2, Mixed Properties 表 (无表号), Specific Gravity = 1.39，换算为 1390 kg/m³；这是另一型号的液态混合油墨比重，非固化膜密度，不得用于质量/瞬态热容计算; https://docs.oshpark.com/resources/rigid-soldermask-taiyo-PSR-4000BN.pdf",
+        "notes": "近似（典型值）：不同来源、不同型号拼合的 LPI 阻焊等效各向同性常数，仅适用于约 100 °C 以下的稳态导热与静力线弹性分析。k、E、α1 采用 AUS 703；α1 仅适用于 Tg 以下段，不描述 Tg 以上行为。原文 k/E 的测量温度未注明，E 的测法未注明，按室温、Tg 以下近似；导热原表单位 (w/K) 按 W/(m·K) 理解，属于原文笔误判断。ν 来自有限元文献取值，非实测，未按具体产品标定。density 仅因 schema 必填而采用另一型号 PSR-4000BN 的液态混合油墨比重，非固化膜密度，不得用于质量/瞬态热容计算；固化膜密度未找到可靠来源，新增瞬态或惯性消费者前必须另行替换。298.15 K 为与相邻材料统一参考温度的方法选择，并非材料实测或固化无应力温度；未采用固化温度作为无应力温度。表温度仅是该参考点，单点 clamp 不会强制执行约 100 °C 的适用上限。"
+      }
+    }
+  ]
+}
