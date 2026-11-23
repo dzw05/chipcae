@@ -12,7 +12,7 @@ import struct
 import subprocess
 import sys
 import tempfile
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
 import zlib
@@ -228,6 +228,60 @@ class ContractTest(unittest.TestCase):
         value = read_json(path)
         callback(value)
         write_json(path, value)
+
+
+class PeakRssUnits(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="chipcae-peak-rss-test-")
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def test_linux_measured_rss_preserves_kib(self):
+        real_wait4 = os.wait4
+
+        def wait4(pid, options):
+            child_pid, status, _ = real_wait4(pid, options)
+            return child_pid, status, SimpleNamespace(ru_maxrss=2097152)
+
+        record = {"commands": [], "logs": []}
+        with patch.object(driver.sys, "platform", "linux"), \
+                patch.object(driver.os, "wait4", side_effect=wait4):
+            entry = driver._measured(
+                [sys.executable, "-c", "pass"], "probe", self.root, record, 60)
+        self.assertIs(record["commands"][-1], entry)
+        self.assertEqual(entry["exit_code"], 0)
+        self.assertIs(type(entry["peak_rss_kib"]), int)
+        self.assertEqual(entry["peak_rss_kib"], 2097152)
+
+    def test_darwin_measured_rss_converts_bytes(self):
+        real_wait4 = os.wait4
+
+        def wait4(pid, options):
+            child_pid, status, _ = real_wait4(pid, options)
+            return child_pid, status, SimpleNamespace(ru_maxrss=1234075648)
+
+        record = {"commands": [], "logs": []}
+        with patch.object(driver.sys, "platform", "darwin"), \
+                patch.object(driver.os, "wait4", side_effect=wait4):
+            entry = driver._measured(
+                [sys.executable, "-c", "pass"], "probe", self.root, record, 60)
+        self.assertIs(record["commands"][-1], entry)
+        self.assertEqual(entry["exit_code"], 0)
+        self.assertIs(type(entry["peak_rss_kib"]), int)
+        self.assertEqual(entry["peak_rss_kib"], 1205152)
+
+    def test_rss_kib_platform_boundaries(self):
+        for value, darwin_expected in ((0, 0), (1, 1), (1023, 1), (1024, 1), (1025, 2)):
+            for platform, expected in (("darwin", darwin_expected), ("linux", value)):
+                with self.subTest(ru_maxrss=value, platform=platform):
+                    actual = driver._rss_kib(value, platform)
+                    self.assertIs(type(actual), int)
+                    self.assertEqual(actual, expected)
+        for platform in ("win32", "Darwin"):
+            with self.subTest(ru_maxrss=1025, platform=platform):
+                actual = driver._rss_kib(1025, platform)
+                self.assertIs(type(actual), int)
+                self.assertEqual(actual, 1025)
 
 
 class FixtureValidity(ContractTest):
