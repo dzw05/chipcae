@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <jsoncons/json.hpp>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -27,14 +28,6 @@ std::string read(const std::filesystem::path& path) {
     return text.str();
 }
 
-// MaterialParams does not retain provenance. Check literal, single-line fields in this
-// controlled fixture; the existing library APIs perform JSON and semantic validation.
-std::string_view fixture_line(std::string_view text, std::string_view prefix) {
-    const auto start = text.find(prefix);
-    require(start != std::string_view::npos, "expected literal provenance field is missing");
-    const auto value = text.substr(start + prefix.size());
-    return value.substr(0, value.find('\n'));
-}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -88,15 +81,19 @@ int main(int argc, char** argv) {
         require(cte.interpolation() == Interpolation::Linear,
                 "single-point CTE interpolation must normalize to linear");
 
-        require(json.find(R"("source_type": "literature")") != std::string::npos,
+        // MaterialParams does not retain provenance. Inspect the decoded fixture after
+        // the library APIs above have performed JSON and semantic validation.
+        const auto document = jsoncons::json::parse(json);
+        const auto& provenance = document.at("materials").at(0).at("provenance");
+        require(provenance.at("source_type").as<std::string>() == "literature",
                 "provenance source_type must be literature");
-        require(json.find(R"("confidence": "low")") != std::string::npos,
+        require(provenance.at("confidence").as<std::string>() == "low",
                 "provenance confidence must be low");
-        const auto reference = fixture_line(json, R"("reference": ")");
+        const auto reference = provenance.at("reference").as<std::string>();
         for (const auto* source : {"13_5_396", "oar.a-star.edu.sg", "PSR-4000BN", "非固化膜密度"})
             require(reference.find(source) != std::string_view::npos,
                     "reference must contain all three sources and the density limitation");
-        const auto notes = fixture_line(json, R"("notes": ")");
+        const auto notes = provenance.at("notes").as<std::string>();
         require(notes.starts_with("近似"), "notes must start with 近似");
         require(notes.find("非固化膜密度") != std::string_view::npos,
                 "notes must state that density is not cured-film density");
