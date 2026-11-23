@@ -4,6 +4,8 @@
 #include "chipcae/io/event_log.hpp"
 #include "chipcae/io/vtkhdf_results.hpp"
 #include "chipcae/material/copper_laminate.hpp"
+#include "chipcae/solve/mixture.hpp"
+#include "chipcae/solvers/fvm/elastic.hpp"
 #include "chipcae/solvers/fvm/thermal.hpp"
 #include "sha256.hpp"
 
@@ -30,7 +32,6 @@ namespace {
 namespace fv = solvers::fvm;
 using Point = std::array<double, 3>;
 using CellKey = std::pair<Index, int>;
-constexpr const char* thermal_only = "not solved: fvm thermal-only stage";
 
 void check(PetscErrorCode code) {
     if (code)
@@ -51,7 +52,10 @@ struct PetscSession {
             PetscFinalize();
     }
 };
-[[noreturn]] void fail(const mesh::Error& error) {
+[[noreturn]] void fail(const mesh::Error& error, bool mechanical = false) {
+    // I14 1.0 retains two producer errors with this double prefix.
+    if (mechanical && error.reason.starts_with("INPUT_INVALID: INTERNAL:"))
+        throw InputError(ErrorCode::INTERNAL, error.path + ": " + error.reason);
     // The FVM library carries existing code names as reason prefixes.
     for (auto value : {ErrorCode::INPUT_INVALID,
                        ErrorCode::NOT_IMPLEMENTED,
@@ -63,7 +67,8 @@ struct PetscSession {
         if (error.reason.starts_with(std::string(code.name()) + ":"))
             throw InputError(static_cast<int>(code.code()), error.path + ": " + error.reason);
     }
-    throw InputError(ErrorCode::INTERNAL, error.path + ": " + error.reason);
+    throw InputError(mechanical ? 1 : static_cast<int>(ErrorCode::INTERNAL),
+                     error.path + ": " + error.reason);
 }
 std::string file_bytes(const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);
@@ -185,6 +190,153 @@ fv::ThermalProblem thermal_problem(const RunInputs& inputs,
         problem.fixed_T.push_back(temperature);
     }
     return problem;
+}
+
+int stack_layer(const RunInputs& inputs, const std::string& name) {
+    const auto found = std::find_if(inputs.stack.layers.begin(),
+                                    inputs.stack.layers.end(),
+                                    [&](const auto& layer) { return layer.name == name; });
+    if (found == inputs.stack.layers.end())
+        throw InputError(ErrorCode::INPUT_INVALID, "attribute layer is missing: " + name);
+    const auto index = std::distance(inputs.stack.layers.begin(), found);
+    if (index > std::numeric_limits<int>::max())
+        throw InputError(ErrorCode::INPUT_INVALID, "stack layer index overflow");
+    return static_cast<int>(index);
+}
+
+bool finite_point(const Point& p) {
+    return std::all_of(p.begin(), p.end(), [](double v) { return std::isfinite(v); });
+}
+
+fv::ElasticMesh to_elastic_mesh(const fv::FvGrid& grid,
+                                const RunInputs& inputs,
+                                const mesh::HexMeshArrays& arrays) {
+    const auto nc = grid.cv_volume.size();
+    if (nc == 0 || grid.cv_centroid.size() != nc || grid.cv_elem_gid.size() != nc ||
+        grid.cv_rank.size() != nc || grid.cv_attribute.size() != nc || grid.cv_kind.size() != nc)
+        throw InputError(ErrorCode::INPUT_INVALID, "invalid FVM mechanical cell array lengths");
+    fv::ElasticMesh mesh;
+    mesh.volume = grid.cv_volume;
+    mesh.centroid = grid.cv_centroid;
+    mesh.gid = grid.cv_elem_gid;
+    mesh.rank = grid.cv_rank;
+    std::set<std::int64_t> gids;
+    for (std::size_t c = 0; c < nc; ++c) {
+        if (!(mesh.volume[c] > 0) || !std::isfinite(mesh.volume[c]) ||
+            !finite_point(mesh.centroid[c]) || !gids.insert(mesh.gid[c]).second)
+            throw InputError(ErrorCode::INPUT_INVALID, "invalid FVM mechanical geometry or gid");
+        const auto& record = arrays.attr_table.entries.at(grid.cv_attribute[c] - 1);
+        mesh.layer.push_back(stack_layer(inputs, record.layer));
+        mesh.is_cut.push_back(grid.cv_kind[c] != 0);
+    }
+    for (const auto& face : grid.faces) {
+        if (!(face.area > 0) || !std::isfinite(face.area) || !finite_point(face.centroid))
+            throw InputError(ErrorCode::INPUT_INVALID, "invalid FVM mechanical face geometry");
+        Point normal{};
+        for (int d = 0; d < 3; ++d)
+            normal[d] = face.area_vector[d] / face.area;
+        if (!finite_point(normal))
+            throw InputError(ErrorCode::INPUT_INVALID, "nonfinite FVM mechanical face normal");
+        // FvGrid currently uses side 6 for EB; I14 uses -1 plus is_embedded.
+        const bool embedded = face.hi < 0 && (face.side == -1 || face.side == 6);
+        mesh.faces.push_back(
+            {face.lo, face.hi, embedded ? -1 : face.side, face.area, normal, face.centroid});
+        mesh.is_embedded.push_back(embedded ? 1 : 0);
+    }
+    if (grid.axes[2].empty())
+        throw InputError(ErrorCode::INPUT_INVALID, "missing FVM z axis");
+    mesh.z_top = grid.axes[2].back();
+    return mesh;
+}
+
+fv::ElasticProblem to_elastic_problem(const RunInputs& inputs,
+                                      const fv::FvGrid& grid,
+                                      const fv::ThermalResult* thermal,
+                                      const mesh::HexMeshArrays& arrays,
+                                      const std::vector<double>& fractions) {
+    fv::ElasticProblem problem;
+    problem.support = fv::ElasticProblem::Support::Rigid321;
+    problem.rtol = inputs.linear.rtol;
+    problem.max_iter = inputs.linear.max_iter;
+    problem.preconditioner = inputs.linear.preconditioner;
+    const auto nc = grid.cv_volume.size();
+    if (fractions.size() != nc || (thermal && thermal->T_cell.size() != nc))
+        throw InputError(ErrorCode::INTERNAL, "invalid FVM mechanical thermal array lengths");
+    double uniform = inputs.T_ref;
+    if (!thermal) {
+        const auto found =
+            std::find_if(inputs.loads.begin(), inputs.loads.end(), [](const auto& load) {
+                return load.type == "uniform_temperature";
+            });
+        if (found == inputs.loads.end())
+            throw InputError(ErrorCode::INPUT_INVALID, "inconsistent temperature sources");
+        uniform = found->T;
+    }
+    std::map<MaterialId, const Material*> materials;
+    for (const auto& [name, id] : arrays.attr_table.materials)
+        materials.emplace(id, &inputs.materials.at(name));
+    problem.C.resize(nc);
+    problem.alpha.resize(nc);
+    problem.dT.resize(nc);
+    for (std::size_t c = 0; c < nc; ++c) {
+        const auto& record = arrays.attr_table.entries.at(grid.cv_attribute[c] - 1);
+        const auto& base = *materials.at(record.material);
+        const auto& layer = inputs.stack.layers.at(stack_layer(inputs, record.layer));
+        const auto& metal = layer.copper ? inputs.materials.at(layer.copper->metal) : base;
+        const auto constitutive = mixture(base, metal, fractions[c]);
+        for (int i = 0; i < 6; ++i)
+            for (int j = 0; j < 6; ++j)
+                problem.C[c][6 * i + j] = constitutive.C(i, j);
+        for (int d = 0; d < 3; ++d)
+            problem.alpha[c][d] = constitutive.alpha[d];
+        problem.dT[c] = (thermal ? thermal->T_cell[c] : uniform) - inputs.T_ref;
+    }
+    if (!inputs.fixed.empty()) {
+        problem.support = fv::ElasticProblem::Support::Fixed;
+        const std::array<std::string, 6> names{
+            "face:xmin", "face:xmax", "face:ymin", "face:ymax", "face:zmin", "face:zmax"};
+        for (const auto& target : inputs.fixed)
+            for (const auto& expanded : layer_targets(inputs, target)) {
+                if (expanded.starts_with("layer:"))
+                    problem.fixed_layer.push_back(stack_layer(inputs, expanded.substr(6)));
+                else {
+                    const auto found = std::find(names.begin(), names.end(), expanded);
+                    if (found == names.end())
+                        throw InputError(ErrorCode::INPUT_INVALID, "invalid target: " + expanded);
+                    problem.fixed_side.push_back(static_cast<int>(found - names.begin()));
+                }
+            }
+    }
+    return problem;
+}
+
+void validate_elastic_result(const fv::ElasticMesh& mesh, const fv::ElasticResult& result) {
+    std::size_t top_count = 0;
+    for (std::size_t f = 0; f < mesh.faces.size(); ++f) {
+        const auto& face = mesh.faces[f];
+        if (face.hi < 0 && ((!mesh.is_embedded[f] && face.side == 5) ||
+                            (mesh.is_embedded[f] && face.normal[2] > 0.99 &&
+                             face.centroid[2] >= mesh.z_top - 1e-13)))
+            ++top_count;
+    }
+    if (result.U_cell.size() != mesh.volume.size() || result.U_face.size() != mesh.faces.size() ||
+        result.face_prescribed.size() != mesh.faces.size() ||
+        result.top_samples.size() != top_count || result.iterations < 0 ||
+        !std::isfinite(result.residual) || result.residual < 0 ||
+        !std::isfinite(result.warpage_pv) || result.warpage_pv < 0 ||
+        !std::isfinite(result.U_mag_max) || result.U_mag_max < 0 ||
+        !std::isfinite(result.min_dn_ratio) ||
+        std::find(mesh.gid.begin(), mesh.gid.end(), result.min_dn_gid) == mesh.gid.end() ||
+        result.gradient_corrections < 0 || !std::isfinite(result.max_identity_defect) ||
+        result.max_identity_defect < 0 ||
+        !std::all_of(result.U_cell.begin(), result.U_cell.end(), finite_point) ||
+        !std::all_of(result.U_face.begin(), result.U_face.end(), finite_point) ||
+        !std::all_of(result.top_samples.begin(), result.top_samples.end(), finite_point) ||
+        !std::all_of(
+            result.face_prescribed.begin(),
+            result.face_prescribed.end(),
+            [](char value) { return value == 0 || value == 1; }))
+        throw InputError(ErrorCode::INTERNAL, "invalid FVM elastic result");
 }
 
 std::map<CellKey, std::size_t> constituent_lookup(const fv::FvGrid& grid,
@@ -373,6 +525,200 @@ public:
     }
 };
 
+using PointKey = std::array<std::int64_t, 3>;
+PointKey point_key(const fv::FvGrid& grid, const Point& p) {
+    PointKey key{};
+    for (int d = 0; d < 3; ++d)
+        key[d] = std::llround(1e12 * (p[d] - grid.axes[d].front()) /
+                              (grid.axes[d].back() - grid.axes[d].front()));
+    return key;
+}
+
+// Test the actual planar ring, including its edges, rather than its parent box.
+// Projection onto the dominant normal plane also handles nonconvex face rings.
+bool on_ring(const Point& p,
+             const std::vector<Point>& ring,
+             const fv::FvFace& face,
+             double tolerance) {
+    if (ring.size() < 3)
+        throw InputError(ErrorCode::INTERNAL, "incomplete FVM boundary ring");
+    Point n{};
+    for (int d = 0; d < 3; ++d)
+        n[d] = face.area_vector[d] / face.area;
+    auto distance = [&](const Point& q) {
+        double value = 0;
+        for (int d = 0; d < 3; ++d)
+            value += (q[d] - face.centroid[d]) * n[d];
+        return std::abs(value);
+    };
+    if (distance(p) > tolerance || std::any_of(ring.begin(), ring.end(), [&](const auto& q) {
+            return distance(q) > tolerance;
+        }))
+        return false;
+    int axis = 0;
+    for (int d = 1; d < 3; ++d)
+        if (std::abs(n[d]) > std::abs(n[axis]))
+            axis = d;
+    const int x = (axis + 1) % 3, y = (axis + 2) % 3;
+    bool inside = false;
+    for (std::size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++) {
+        const auto& a = ring[j];
+        const auto& b = ring[i];
+        const double dx = b[x] - a[x], dy = b[y] - a[y];
+        const double length2 = dx * dx + dy * dy;
+        const double t =
+            length2 > 0 ? std::clamp(((p[x] - a[x]) * dx + (p[y] - a[y]) * dy) / length2, 0.0, 1.0)
+                        : 0;
+        if (std::hypot(p[x] - a[x] - t * dx, p[y] - a[y] - t * dy) <= tolerance)
+            return true;
+        if ((a[y] > p[y]) != (b[y] > p[y]) && p[x] < a[x] + (p[y] - a[y]) * dx / dy)
+            inside = !inside;
+    }
+    return inside;
+}
+
+std::map<PointKey, Point> vertex_U(const mesh::HexMeshArrays& arrays,
+                                   const fv::FvGrid& grid,
+                                   const fv::ElasticResult& elastic,
+                                   const mesh::cut::CutLayerArrays* cut,
+                                   const std::map<CellKey, std::size_t>& lookup,
+                                   bool cut_as_hex) {
+    struct Incident {
+        Point point{};
+        std::set<std::size_t> cells, faces;
+    };
+    std::map<PointKey, Incident> incident;
+    auto add = [&](const Point& p, std::size_t cv) {
+        auto [it, inserted] = incident.try_emplace(point_key(grid, p));
+        if (inserted)
+            it->second.point = p;
+        it->second.cells.insert(cv);
+    };
+    using Ring = std::vector<Point>;
+    std::map<Index, std::vector<std::pair<std::size_t, Ring>>> cut_rings;
+    if (cut && cut->polyhedra) {
+        const auto& poly = *cut->polyhedra;
+        std::map<Index, int> ordinal;
+        for (std::size_t cell = 0; cell < poly.volume.size(); ++cell) {
+            const auto gid = poly.parent_elem_gid[cell];
+            const auto cv = lookup.at({gid, ordinal[gid]++});
+            for (auto j = poly.poly_off[cell]; j < poly.poly_off[cell + 1]; ++j) {
+                const auto f = poly.poly_faces[j];
+                Ring ring;
+                for (auto k = poly.face_off[f]; k < poly.face_off[f + 1]; ++k) {
+                    const auto v = poly.face_conn[k];
+                    Point p{poly.points[3 * v], poly.points[3 * v + 1], poly.points[3 * v + 2]};
+                    ring.push_back(p);
+                    add(p, cv);
+                }
+                cut_rings[gid].emplace_back(cv, std::move(ring));
+            }
+        }
+    }
+    for (std::size_t c = 0; c < grid.cv_volume.size(); ++c)
+        for (auto j = grid.constituent_off[c]; j < grid.constituent_off[c + 1]; ++j) {
+            const auto e = grid.constituent_elem[j];
+            if (!cut_as_hex && cut_rings.contains(arrays.elem_gid[e]))
+                continue;
+            for (int v = 0; v < 8; ++v) {
+                const auto n = arrays.hex[8 * e + v];
+                add({arrays.vertices[3 * n],
+                     arrays.vertices[3 * n + 1],
+                     arrays.vertices[3 * n + 2]},
+                    c);
+            }
+        }
+    // Each face retains its original parent even when CVs have been merged.
+    std::vector<std::vector<Ring>> rings(grid.faces.size());
+    constexpr int corners[6][4] = {
+        {0, 3, 7, 4}, {1, 2, 6, 5}, {0, 1, 5, 4}, {3, 2, 6, 7}, {0, 1, 2, 3}, {4, 5, 6, 7}};
+    double tolerance = 0;
+    for (const auto& axis : grid.axes)
+        tolerance = std::max(tolerance, 1e-12 * (axis.back() - axis.front()));
+    std::map<Index, std::vector<std::size_t>> parent_faces;
+    for (std::size_t f = 0; f < grid.faces.size(); ++f) {
+        const auto& face = grid.faces[f];
+        if (face.hi >= 0)
+            continue;
+        const auto e = face.parent_elem;
+        const auto gid = arrays.elem_gid.at(e);
+        parent_faces[e].push_back(f);
+        if (const auto found = cut_rings.find(gid); found != cut_rings.end()) {
+            for (const auto& [cv, ring] : found->second)
+                if (cv == static_cast<std::size_t>(face.lo) &&
+                    on_ring(ring.front(), ring, face, tolerance))
+                    rings[f].push_back(ring);
+        } else {
+            if (face.side < 0 || face.side >= 6)
+                throw InputError(ErrorCode::INTERNAL, "missing embedded boundary ring");
+            Ring ring;
+            for (const auto corner : corners[face.side]) {
+                const auto v = arrays.hex.at(8 * e + corner);
+                ring.push_back({arrays.vertices[3 * v],
+                                arrays.vertices[3 * v + 1],
+                                arrays.vertices[3 * v + 2]});
+            }
+            rings[f].push_back(std::move(ring));
+        }
+        if (rings[f].empty())
+            throw InputError(ErrorCode::INTERNAL, "missing FVM boundary face geometry");
+    }
+    auto on_face = [&](const Point& p, std::size_t f) {
+        return std::any_of(rings[f].begin(), rings[f].end(), [&](const auto& ring) {
+            return on_ring(p, ring, grid.faces[f], tolerance);
+        });
+    };
+    if (cut)
+        for (std::size_t v = 0; v < cut->eb_parent_elem.size(); ++v) {
+            const Point p{
+                cut->eb_points[3 * v], cut->eb_points[3 * v + 1], cut->eb_points[3 * v + 2]};
+            bool found = false;
+            for (auto f : parent_faces[cut->eb_parent_elem[v]])
+                if (on_face(p, f)) {
+                    add(p, static_cast<std::size_t>(grid.faces[f].lo));
+                    found = true;
+                }
+            if (!found)
+                throw InputError(ErrorCode::INTERNAL, "embedded vertex has no incident face");
+        }
+    std::map<PointKey, Point> values;
+    for (auto& [key, item] : incident) {
+        for (auto c : item.cells)
+            for (auto j = grid.cv_face_off[c]; j < grid.cv_face_off[c + 1]; ++j) {
+                const auto f = static_cast<std::size_t>(grid.cv_faces[j]);
+                if (grid.faces[f].hi < 0 && on_face(item.point, f))
+                    item.faces.insert(f);
+            }
+        const bool prescribed = std::any_of(item.faces.begin(), item.faces.end(), [&](auto f) {
+            return elastic.face_prescribed[f];
+        });
+        std::array<long double, 3> sum{};
+        long double weight = 0;
+        if (!item.faces.empty()) {
+            for (auto f : item.faces)
+                if (!prescribed || elastic.face_prescribed[f]) {
+                    for (int d = 0; d < 3; ++d)
+                        sum[d] +=
+                            grid.faces[f].area * static_cast<long double>(elastic.U_face[f][d]);
+                    weight += grid.faces[f].area;
+                }
+        } else {
+            for (auto c : item.cells) {
+                for (int d = 0; d < 3; ++d)
+                    sum[d] += grid.cv_volume[c] * static_cast<long double>(elastic.U_cell[c][d]);
+                weight += grid.cv_volume[c];
+            }
+        }
+        Point value{};
+        for (int d = 0; d < 3; ++d)
+            value[d] = static_cast<double>(sum[d] / weight);
+        if (!(weight > 0) || !finite_point(value))
+            throw InputError(ErrorCode::INTERNAL, "invalid reconstructed FVM displacement");
+        values.emplace(key, value);
+    }
+    return values;
+}
+
 template <class Partition>
 void diagnostic_fields(std::vector<std::string>& fields) {
     if constexpr (requires(Partition p) {
@@ -404,6 +750,7 @@ io::ResultsStep results(const RunInputs& inputs,
                         const fv::FvGrid& grid,
                         const fv::ThermalProblem& problem,
                         const fv::ThermalResult& thermal,
+                        const fv::ElasticResult& elastic,
                         const std::vector<double>& fractions,
                         int rank) {
     const auto lookup = constituent_lookup(grid, arrays);
@@ -413,6 +760,7 @@ io::ResultsStep results(const RunInputs& inputs,
                 k.begin(), k.end(), [](double v) { return v > 0 && std::isfinite(v); });
         });
     Reconstruction reconstruction(arrays, grid, thermal, problem, cut, lookup);
+    const auto displacement = vertex_U(arrays, grid, elastic, cut, lookup, inputs.cut_as_hex);
     io::ResultsStep step;
     step.cut_as_hex = inputs.cut_as_hex;
     std::map<Index, double> cut_volumes;
@@ -421,7 +769,8 @@ io::ResultsStep results(const RunInputs& inputs,
     auto sample = [&](io::ResultsPartition& out, const Point& p, std::size_t cv) {
         out.points.insert(out.points.end(), p.begin(), p.end());
         out.T.push_back(reconstruction.at(p, cv));
-        out.U.insert(out.U.end(), 3, 0);
+        const auto& U = displacement.at(point_key(grid, p));
+        out.U.insert(out.U.end(), U.begin(), U.end());
     };
     if (cut) {
         if (!cut->polyhedra)
@@ -506,7 +855,10 @@ io::ResultsStep results(const RunInputs& inputs,
                                   arrays.vertices.begin() + 3 * v,
                                   arrays.vertices.begin() + 3 * v + 3);
                 out.T.push_back(thermal.T_vertex.at(v));
-                out.U.insert(out.U.end(), 3, 0);
+                const Point p{
+                    arrays.vertices[3 * v], arrays.vertices[3 * v + 1], arrays.vertices[3 * v + 2]};
+                const auto& U = displacement.at(point_key(grid, p));
+                out.U.insert(out.U.end(), U.begin(), U.end());
             }
         }
         const auto& record = arrays.attr_table.entries.at(arrays.attribute[e] - 1);
@@ -624,7 +976,6 @@ int run_fvm(const RunInputs& inputs, const std::filesystem::path& output) {
         io::ResultsWriter writer(output, inputs.stack_path, layers, materials, fields);
         writer.set_mesh(mesh_summary(arrays));
         state(io::State::Value::running);
-        emit(io::LogLine{2, rank, thermal_only, "", 0});
         fv::ThermalResult thermal;
         if (inputs.thermal) {
             auto solved = fv::solve_thermal(grid, arrays, problem, world);
@@ -667,20 +1018,58 @@ int run_fvm(const RunInputs& inputs, const std::filesystem::path& output) {
             thermal.T_face.assign(grid.faces.size(), uniform->T);
             thermal.T_vertex.assign(arrays.vertices.size() / 3, uniform->T);
         }
-        if (thermal.T_cell.empty())
-            throw InputError(ErrorCode::INPUT_INVALID, "FVM grid has no control volumes");
         if (stop())
             return 0;
-        const auto step = results(
-            inputs, arrays, clipped ? &*clipped : nullptr, grid, problem, thermal, fractions, rank);
+        const auto elastic_mesh = to_elastic_mesh(grid, inputs, arrays);
+        const auto elastic_problem = to_elastic_problem(
+            inputs, grid, inputs.thermal ? &thermal : nullptr, arrays, fractions);
+        auto solved = fv::solve_elastic(elastic_mesh, elastic_problem, MPI_COMM_WORLD);
+        // Match FEM checkpoints: STOP received during the collective solve wins
+        // over either failure handling or successful mechanics publication.
+        if (stop())
+            return 0;
+        // I14 1.0 exposes no structured failure residual and prohibits parsing
+        // its numerical error text. Failure ResidualBatch needs a producer API patch.
+        if (!solved)
+            fail(solved.error(), true);
+        const auto& elastic = solved.value();
+        validate_elastic_result(elastic_mesh, elastic);
+        ++window;
+        emit(io::ResidualBatch{window,
+                               0,
+                               {{"fvm.solid",
+                                 "U",
+                                 static_cast<std::uint32_t>(elastic.iterations),
+                                 elastic.residual,
+                                 64,
+                                 static_cast<std::uint32_t>(elastic.iterations),
+                                 0}},
+                               0});
+        if (rank == 0) {
+            std::ostringstream line;
+            line.imbue(std::locale::classic());
+            line << std::setprecision(17) << "FVM_ELASTIC {\"iterations\":" << elastic.iterations
+                 << ",\"residual\":" << elastic.residual << ",\"warpage_pv\":" << elastic.warpage_pv
+                 << ",\"U_mag_max\":" << elastic.U_mag_max << '}';
+            emit(io::LogLine{1, 0, line.str(), "", 0});
+        }
+        const auto step = results(inputs,
+                                  arrays,
+                                  clipped ? &*clipped : nullptr,
+                                  grid,
+                                  problem,
+                                  thermal,
+                                  elastic,
+                                  fractions,
+                                  rank);
         writer.write_step(0, 0, step);
         writer.add_summary("T_max",
                            *std::max_element(thermal.T_cell.begin(), thermal.T_cell.end()),
                            "K",
                            0,
                            "FVM cell centers");
-        writer.add_summary("warpage_pv", 0, "m", 0, thermal_only);
-        writer.add_summary("U_mag_max", 0, "m", 0, thermal_only);
+        writer.add_summary("warpage_pv", elastic.warpage_pv, "m", 0, elastic.warpage_method);
+        writer.add_summary("U_mag_max", elastic.U_mag_max, "m", 0, elastic.U_mag_method);
         writer.finalize();
         emit(io::OutputAvailable{window,
                                  0,
