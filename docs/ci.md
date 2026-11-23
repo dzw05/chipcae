@@ -387,6 +387,9 @@ ctest --test-dir build -R '^(fvm_fvm_case_e2e|solve_fvm_thermal|solve_fvm_therma
 
 这七项逐字为 `fvm_fvm_case_e2e`、`solve_fvm_thermal`、`solve_fvm_thermal_cut`、
 `solve_fvm_thermal_np2`、`solve_fvm_elastic`、`solve_fvm_bimetal`、`solve_fvm_elastic_np2`。
+按 PR #290 首席裁定，本卡只验收这七项真跑、0 SKIP 和 JUnit 形状正确，不作精度达标声明。
+`fvm_fvm_case_e2e` 沿用 PR #236 裁定：0.02 为暂行门，待 vertex-recon 恢复 0.01；
+恢复工作归 `solve-fvm-vertex-recon` / `solve-fvm-tmax-vertex` 卡，本卡不改测试源码。
 六个 solver 测试要求 MFEM 启用 PETSc，两个 `_np2` 还要求 MPI。E2E 要求 ECAD、
 MFEM、MPI、HDF5 及应用目标可用，现有 CMake 才会注入应用和 launcher 环境变量。
 Mac 构建后须检查 `ctest --test-dir build -N --show-only=json-v1` 的实际输出：七项全部
@@ -457,15 +460,13 @@ elastic_np2 1.95 s；历史 E2E 为 SKIP 0.07 s，不算通过，本地约 97 s 
 271.17/285.05/400.58 秒的比较、总墙钟、mandatory 窗口负载峰值 ≤12、六类 artifact、
 实际 b2 名单/rank 审计，以及 b/c 通过/失败/跳过
 对比历史 JUnit 494 项（406 通过、30 运行失败、58 跳过，另 20 项未编出）。
-PR 开出时由首席助理通知 Zhiwei；托管 `CI / ci-ok` 独立记录。
+PR 开出时由首席助理通知 Zhiwei，合入时再次通知；托管 `CI / ci-ok` 独立记录，
+仅在 `ci-ok` 绿时合入。
 
 当前分支 Mac、合入后 main Mac、托管 `CI / ci-ok`、通知均为 **未执行**。
 任何真实 FVM Failed（非 SKIP）立即升级求解器所有者，INFRA 不改断言、容差、TIMEOUT
-或 `SKIP_RETURN_CODE`；下载/依赖失败或超出现有 120 分钟也须报告。M3 必须在指定的
-`status/solver.md` 顶部记录「副签｜infra-ci-fvm-acceptance-run 同意/不同意+理由」，
-未副签不得合入；此 checkout 未含该文件，须由所有者在指定状态位置记录。
-另有待裁定差异：brief 写 FEM 温升误差 ≤1%，现有 E2E 源码引用架构裁定为 ≤2%。
-本卡保持源码不变，澄清前不能宣称满足 brief 的 1% 数值判据。
+或 `SKIP_RETURN_CODE`；下载/依赖失败或超出现有 120 分钟也须报告。按 PR #290 首席裁定，
+求解器已会签移除越界测试，继续以 head `558053d` 为基础，仅改本工作流与 CI 文档。
 
 本卡不新增测试源码或 CTest 注册；工作流改动由维护者手动检查并记录结果：
 
