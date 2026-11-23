@@ -322,20 +322,57 @@ int main() {
         restore(model, tmp.write("map.json", mapping(R"("SOLDERMASK":"mask_eq")")));
         unchanged(model, before);
     });
-    for (const auto& explicit_value : {"matDes=\"EXPLICIT\"", "matDes=\"\""})
-        test(std::string("explicit matDes beats SpecRef: ") + explicit_value, [&] {
+    struct ExplicitMaterial {
+        std::string name, attribute, source, keys, expected;
+    };
+    for (const auto& c : std::vector<ExplicitMaterial>{
+             {"mapped matDes wins over mapped SpecRef",
+              "matDes=\"EXPLICIT\"",
+              "EXPLICIT",
+              R"("EXPLICIT":"explicit_eq","SOLDERMASK":"spec_eq")",
+              "explicit_eq"},
+             {"unmapped matDes does not fall back to mapped SpecRef",
+              "matDes=\"EXPLICIT\"",
+              "EXPLICIT",
+              R"("SOLDERMASK":"spec_eq")",
+              ""},
+             {"empty matDes does not fall back to mapped SpecRef",
+              "matDes=\"\"",
+              "",
+              R"("SOLDERMASK":"spec_eq")",
+              ""},
+             {"empty matDes permits layer-key fallback",
+              "matDes=\"\"",
+              "",
+              R"("SOLDERMASK":"spec_eq","layer:F.Mask":"layer_eq","layer:B.Mask":"layer_eq")",
+              "layer_eq"}}) {
+        test(c.name, [&] {
             const Temporary tmp;
             auto model = read(tmp.write(
-                "board.xml", board("thickness=\"0.010\"", true, "SOLDERMASK", explicit_value)));
+                "board.xml", board("thickness=\"0.010\"", true, "SOLDERMASK", c.attribute)));
             require(model.omitted_masks.size() == 2, "explicit-material masks must be captured");
-            const std::string expected =
-                std::string(explicit_value) == "matDes=\"\"" ? "" : "EXPLICIT";
             for (const auto& mask : model.omitted_masks)
-                require(mask.layer.material == expected, "explicit source material must win");
+                require(mask.layer.material == c.source, "explicit source material must win");
             const auto before = model;
-            restore(model, tmp.write("map.json", mapping(R"("SOLDERMASK":"mask_eq")")));
-            unchanged(model, before);
+            const auto map = tmp.write("map.json", mapping(c.keys));
+            restore(model, map);
+            if (c.expected.empty()) {
+                unchanged(model, before);
+            } else {
+                require(names(model) ==
+                            std::vector<std::string>{"F.Mask", "F.Cu", "Core", "B.Cu", "B.Mask"},
+                        "explicit-material lookup must restore both masks in source order");
+                require(records(model) ==
+                            records(before, {"SolderMask:F.Mask", "SolderMask:B.Mask"}),
+                        "explicit-material lookup must remove only restored-mask diagnostics");
+                for (const auto& name : {"F.Mask", "B.Mask"})
+                    check_mask(layer(model, name), c.source);
+                map_layers(model, map);
+                for (const auto& name : {"F.Mask", "B.Mask"})
+                    check_mask(layer(model, name), c.expected);
+            }
         });
+    }
     test("invalid target restored and mapped before normal validation rejects", [] {
         const Temporary tmp;
         auto model = read(tmp.write("board.xml", board()));
@@ -453,6 +490,65 @@ int main() {
                     same_number(fraction.fraction, cell.fraction) &&
                     fraction.via_count == cell.via_count,
                 "restoration must preserve existing via fractions and cell bounds");
+    });
+    test("duplicate mask captures stay omitted even when one source is mapped", [] {
+        const Temporary tmp;
+        for (const auto& source : {"FIRST", "SECOND"}) {
+            auto model = read(tmp.write("board.xml", board()));
+            model.omitted_masks.back().layer.name = "F.Mask";
+            model.omitted_masks.front().layer.material = "FIRST";
+            model.omitted_masks.back().layer.material = "SECOND";
+            model.report.unsupported = {{"before", "metadata", 1},
+                                        {"IMPORT_UNSUPPORTED_ELEMENT", "SolderMask:F.Mask", 2},
+                                        {"keep", "SolderMask:F.Mask:artwork", 3},
+                                        {"after", "metadata", 4}};
+            const auto before = model;
+            const auto map =
+                tmp.write("map.json", mapping("\"" + std::string(source) + "\":\"mask_eq\""));
+            restore(model, map);
+            unchanged(model, before);
+            restore(model, map);
+            unchanged(model, before);
+        }
+    });
+    test("unmapped mask with a same-named existing SOLDERMASK layer stays unchanged", [] {
+        const Temporary tmp;
+        auto model = read(tmp.write("board.xml", board()));
+        model.layers.back() = {
+            "F.Mask", "retained_eq", "SOLDERMASK", 2e-5, false, {{{{0, 0}, {1, 0}, {0, 1}}}}};
+        const auto before = model;
+        const auto map = tmp.write("map.json", mapping(""));
+        restore(model, map);
+        unchanged(model, before);
+        restore(model, map);
+        unchanged(model, before);
+    });
+    test("duplicate captures cannot identify a previously restored same-named layer", [] {
+        const Temporary tmp;
+        auto model = read(tmp.write("board.xml", board()));
+        auto duplicate = model.omitted_masks.front();
+        duplicate.position = 2;
+        model.omitted_masks.push_back(duplicate);
+        model.layers.back() = {
+            "F.Mask", "retained_eq", "soldermask", 2e-5, false, {{{{0, 0}, {1, 0}, {0, 1}}}}};
+        // A shared diagnostic may already be absent; duplicate captures still cannot move a layer.
+        std::erase_if(model.report.unsupported,
+                      [](const auto& entry) { return entry.element == "SolderMask:F.Mask"; });
+        const auto before = model;
+        const auto map = tmp.write("map.json", mapping(R"("layer:B.Mask":"mask_eq")"));
+        restore(model, map);
+        auto expected = names(before);
+        expected.push_back("B.Mask");
+        require(names(model) == expected, "duplicate captures must not move the existing F.Mask");
+        auto retained = model;
+        retained.layers.pop_back();
+        require(same_layers(retained, before),
+                "duplicate captures must preserve retained contents");
+        require(records(model) == records(before, {"SolderMask:B.Mask"}),
+                "only the unique restored mask's diagnostic may change");
+        const auto restored = model;
+        restore(model, map);
+        unchanged(model, restored);
     });
     test("restoring a mask preserves preexisting same-named layers and via references", [] {
         const Temporary tmp;

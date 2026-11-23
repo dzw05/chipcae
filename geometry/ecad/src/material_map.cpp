@@ -164,19 +164,25 @@ bool restore_solder_masks(EcadModel& model,
     if (!read_material_map(material_map, map, error))
         return false;
 
+    // Duplicate capture names share diagnostics, so neither capture can be restored safely.
+    std::unordered_map<std::string, std::size_t> capture_counts;
+    for (const auto& mask : model.omitted_masks)
+        ++capture_counts[mask.layer.name];
     std::unordered_map<std::string, std::size_t> existing;
     for (std::size_t i = 0; i < model.layers.size(); ++i)
         existing.emplace(model.layers[i].name, i);
     std::unordered_set<std::string> restored;
     for (const auto& mask : model.omitted_masks)
-        if (!existing.contains(mask.layer.name) && std::isfinite(mask.layer.thickness_m) &&
-            mask.layer.thickness_m > 0 && lookup_material(mask.layer, map, false).id)
+        if (capture_counts.at(mask.layer.name) == 1 && !existing.contains(mask.layer.name) &&
+            std::isfinite(mask.layer.thickness_m) && mask.layer.thickness_m > 0 &&
+            lookup_material(mask.layer, map, false).id)
             restored.insert("SolderMask:" + mask.layer.name);
     if (restored.empty())
         return true;
 
-    // The reader emits an omission record for every captured mask. It remains
-    // until restoration, including when a preexisting layer has the same name.
+    // The reader emits an omission record for every captured mask. Callers must not remove it
+    // before restoration, including when a preexisting layer has the same name. Only unique
+    // capture names can use its absence to identify a mask restored by an earlier call.
     std::unordered_set<std::string> pending;
     for (const auto& entry : model.report.unsupported)
         pending.insert(entry.element);
@@ -190,6 +196,8 @@ bool restore_solder_masks(EcadModel& model,
     std::vector<bool> placed(model.layers.size(), false);
     std::unordered_set<std::string> seen;
     for (const auto& mask : model.omitted_masks) {
+        if (capture_counts.at(mask.layer.name) != 1)
+            continue;
         const auto found = existing.find(mask.layer.name);
         const auto element = "SolderMask:" + mask.layer.name;
         const bool previously_restored =
