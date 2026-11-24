@@ -23,6 +23,9 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <tuple>
+#include <type_traits>
+#include <utility>
 #include <vector>
 #if defined(__linux__) || defined(__APPLE__)
 #include <sys/resource.h>
@@ -52,6 +55,47 @@ void close(Real actual, Real reference, Real tolerance, const std::string& reaso
             << " reference=" << reference << " relative error=" << error
             << " tolerance=" << tolerance;
     require(error <= tolerance, message.str());
+}
+void legacy_report_binding() {
+    using Report = HexMeshArrays::GridReport;
+    using Warnings = std::vector<std::string>;
+    static_assert(std::tuple_size_v<Report> == 11);
+    static_assert(std::is_same_v<std::tuple_element_t<8, Report>, Warnings>);
+    static_assert(std::is_same_v<decltype(get<8>(std::declval<Report&>())), Warnings&>);
+    static_assert(std::is_same_v<decltype(get<8>(std::declval<const Report&>())), const Warnings&>);
+    static_assert(std::is_same_v<decltype(get<8>(std::declval<Report&&>())), Warnings&&>);
+    static_assert(
+        std::is_same_v<decltype(get<8>(std::declval<const Report&&>())), const Warnings&&>);
+    Report report;
+    report.void_cells = 7;
+    report.copper_area_m2["Cu"] = {.25, .5};
+    const auto inspect = [](auto&& source) {
+        auto&& [levels,
+                rule,
+                N_L,
+                auto_selected,
+                padding,
+                max_aspect_ratio,
+                level_axes,
+                column_ranks,
+                warnings,
+                partition_imbalance,
+                void_cells] = std::forward<decltype(source)>(source);
+        require(void_cells == 7, "legacy binding retains the last original member");
+        if constexpr (!std::is_const_v<std::remove_reference_t<decltype(source)>>)
+            warnings.push_back("legacy binding");
+        require(!warnings.empty() && warnings.front() == "legacy binding",
+                "legacy binding exposes report warnings");
+    };
+    inspect(report);
+    require(report.warnings == Warnings{"legacy binding"},
+            "mutable binding writes through to the report");
+    inspect(std::as_const(report));
+    inspect(std::move(report));
+    inspect(std::move(std::as_const(report)));
+    require(report.copper_area_m2.size() == 1, "legacy binding preserves the added report map");
+    close(report.copper_area_m2.at("Cu").polygons, .25, tight, "binding preserves polygon area");
+    close(report.copper_area_m2.at("Cu").raster, .5, tight, "binding preserves raster area");
 }
 GridOptions options(Local n = 32) {
     GridOptions o;
@@ -680,6 +724,7 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
+    run("legacy report binding with copper areas", legacy_report_binding);
 #ifdef CHIPCAE_ENABLE_ECAD
     run("A nonuniform multiring, hole, L, stack names and case", multiring);
     run("aligned multiring", aligned);

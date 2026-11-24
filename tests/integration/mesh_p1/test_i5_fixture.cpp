@@ -124,11 +124,7 @@ struct Projection {
                      column_ranks,
                      warnings,
                      partition_imbalance,
-                     void_cells,
-                     copper_area_m2] = x;
-        // Nonempty copper reports are covered by mesh_copper_phi_report.
-        require(copper_area_m2.empty(),
-                "legacy fixture projection requires an empty copper report");
+                     void_cells] = x;
         J j;
         FIELD(levels);
         FIELD(rule);

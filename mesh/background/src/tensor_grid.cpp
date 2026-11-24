@@ -652,8 +652,8 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
                     std::copy(phi.begin(),
                               phi.end(),
                               m.copper_phi.begin() + static_cast<std::ptrdiff_t>(offset));
-                    // The same NonZero union includes holes and overlapping rings,
-                    // including copper outside the background grid.
+                    // One bounding-box column measures the full NonZero union, including
+                    // holes, overlapping rings and copper outside the background grid.
                     if (xmax > xmin && ymax > ymin) {
                         const auto whole = rasterize_copper({xmin, xmax}, {ymin, ymax}, paths);
                         area.polygons = whole[0] * (xmax - xmin) * (ymax - ymin);
