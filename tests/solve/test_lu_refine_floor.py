@@ -130,7 +130,8 @@ def residuals(decoded):
 
 
 class LuRefineFloor(unittest.TestCase):
-    def run_case(self, rtol, ranks=1, is_board=False, zero=False, subdivisions=None, contrast=1300):
+    def run_case(self, rtol, ranks=1, is_board=False, zero=False, subdivisions=None,
+                 contrast=1300, load_scale=1):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             case = copy.deepcopy(CASE)
@@ -142,6 +143,9 @@ class LuRefineFloor(unittest.TestCase):
                 case['physics'][1]['T_ref'] = 298.15
             else:
                 synthetic(root)
+            if load_scale != 1:
+                case['loads'][1]['T_inf'] = 300 + 100 * load_scale
+                case['loads'][2]['q_vol'] *= load_scale
             if zero:
                 case['loads'] = [dict(type='fixed_temperature', target='face:zmin', T=0)]
                 case['physics'][1]['T_ref'] = 0
@@ -196,8 +200,26 @@ class LuRefineFloor(unittest.TestCase):
             self.assertEqual(method, 'PETSc.LU')
             self.assertTrue(math.isfinite(value))
             self.assertGreaterEqual(value, 0)
-            self.assertLessEqual(value, rtol)
-            self.assertEqual(f'{value:.3e}', timings[0, field]['omega'])
+            omega = float(timings[0, field]['omega'])
+            self.assertLessEqual(omega, rtol)
+            # Residual retains ||r||_2/max(||b||_2,1); rel is ||r||_2/||b||_2.
+            if zero:
+                self.assertEqual(value, 0.0)
+            else:
+                self.assertLessEqual(value, float(timings[0, field]['rel']) * 1.001)
+                self.assertGreater(value, omega)
+
+    def test_residual_event_keeps_relative_norm(self):
+        # This load makes ||b||_2 > 1 for both systems, so the legacy event
+        # equals rel. It must remain distinct from componentwise omega.
+        result, decoded = self.run_case(1e-12, load_scale=1e4)
+        self.check_success(result, decoded, 1e-12)
+        timings = {message.split()[0]: dict(re.findall(r'(\w+)=([^ ]+)', message))
+                   for _, rank, message in log_lines(decoded)
+                   if rank == 0 and ' assembly_seconds=' in message}
+        for field, (_, value) in residuals(decoded).items():
+            self.assertEqual(f'{value:.3e}', timings[field]['rel'])
+            self.assertGreater(value, 10 * float(timings[field]['omega']))
 
     def test_trace_explicit_tolerance(self):
         self.check_success(*self.run_case(1e-14), 1e-14)

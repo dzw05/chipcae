@@ -136,8 +136,14 @@ struct Direct {
         refine_seconds =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - refine_begin).count();
         iterations = static_cast<std::uint32_t>(refinement.iterations);
-        if (refinement.accepted)
-            return refinement.omega;
+        if (refinement.accepted) {
+            // Keep the structured Residual event's existing normwise definition.
+            // Acceptance uses omega; report the residual of the restored best x.
+            Vector residual(n);
+            a.Mult(x, residual);
+            residual -= b;
+            return residual.Norml2() / std::max(b.Norml2(), 1.0);
+        }
         throw std::runtime_error(
             "LU refinement failed residual tolerance: omega=" + scientific(refinement.omega) +
             " (rtol=" + scientific(options.rtol) + ", eta=" + scientific(refinement.eta) +

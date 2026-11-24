@@ -147,7 +147,8 @@ eta = ||r||_inf / (||A||_inf ||x||_inf + ||b||_inf)
 此上限包含初次评估，因此最多进行 7 次修正；不以 omega 达到 rtol 提前停止。
 停止后恢复所有已评估解中 omega 最小的解，以其 omega 判定接受。保存最优解
 是相对 LAPACK xGERFS 停止规则的扩展。Residual 事件仍使用 `method="PETSc.LU"`，
-其 residual 值现在是 omega。计时日志另报 eta、rel、refine_iterations 和
+其 residual 值仍为 `||r||_2/max(||b||_2,1)`，使用最终返回的 x 计算。
+日志中的 omega 和诊断 rel 与此字段分别解释。计时日志另报 eta、rel、refine_iterations 和
 refine_seconds，后者包含误差评估、修正求解及最优解维护。
 
 旧判据 `||r||_2/max(||b||_2,1)` 的舍入下限约为
@@ -156,7 +157,8 @@ refine_seconds，后者包含误差评估、修正求解及最优解维护。
 `2.6e-16` 至 `7.0e-16`；board kz2 的热场 rel 为 `1.49e-12` 至 `2.42e-12`、
 omega 不超过 `5.5e-16`，力学 rel 为 `2.48e-12`、omega 为 `8.6e-16`。
 这些 rel 下限会误拒绝已有很小后向误差的解。rtol 数值及默认值 `1e-8` 未调整。
-这是 direct rtol 对外语义的变化，不改变冻结契约字段。
+这是 direct 内部接受判据的缺陷修复，按用户给定的 rtol 检查 omega，不放宽 rtol。
+公开签名、schema 和结构化事件字段的含义均不变。
 
 出处：
 
