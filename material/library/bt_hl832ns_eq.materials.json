@@ -1,0 +1,44 @@
+{
+  "schema": "chipcae.material_library/1",
+  "materials": [
+    {
+      "id": "bt_hl832ns_eq",
+      "schema_version": "1",
+      "unit_system": "SI",
+      "model": "thermo_elastic",
+      "conductivity": 0.6,
+      "density": 1900,
+      "elastic": {
+        "symmetry": "isotropic",
+        "table": {
+          "temperatures": [298.15],
+          "columns": {
+            "E": [27e9],
+            "nu": [0.18]
+          },
+          "interpolation": "constant",
+          "extrapolation": "clamp"
+        }
+      },
+      "thermal_expansion": {
+        "cte_type": "tangent",
+        "symmetry": "isotropic",
+        "stress_free_temperature": 298.15,
+        "table": {
+          "temperatures": [298.15],
+          "columns": {
+            "alpha": [10e-6]
+          },
+          "interpolation": "constant",
+          "extrapolation": "clamp"
+        }
+      },
+      "provenance": {
+        "source_type": "datasheet",
+        "confidence": "low",
+        "reference": "Mitsubishi Gas Chemical Company, Inc.（三菱瓦斯化学），产品页 Non-haloganated Low CTE BT Resin Laminate for IC Plastic Packages，第一张 Typical properties of Materials 表（无表号），HL832NS 列：conductivity = 0.6 W/(m·K)；elastic.E = 27 GPa = 27e9 Pa；elastic.nu = 0.18（无量纲）；thermal_expansion.alpha：X,Y α1 = 10 ppm/°C = 10e-6 1/K；density = 1.9 g/cm³ = 1900 kg/m³；Tg（TMA）= 230 °C；https://www.mgc.co.jp/eng/products/sc/btprint/lineup/hfbt.html",
+        "notes": "近似（典型值）：采用同一厂商、同一 HL832NS 牌号的公开典型值，避免拼合不同牌号。HL832NS 仅为 BT 树脂层压板的代表性牌号，实际板的介质牌号未指定，未针对实际板标定。α1 仅适用于 Tg（TMA 230 °C）以下段，不描述 Tg 以上行为。Z 向 CTE 原表未给，各向同性取 XY α1；这是等效建模选择，可能低估厚度方向的热膨胀。k、E、ν 的测量方法、方向及温度原表未注明，按室温、Tg 以下作各向同性近似。stress_free_temperature = 298.15 K 为与相邻材料共用参考温度的建模约定，不是厂商数据或材料实测无应力温度；未采用层压或固化温度作为无应力温度。两个表的 298.15 K 仅为该建模参考点，不表示厂商的测量温度。单点 constant/clamp 表不会强制执行 Tg 以下的物理适用温度上限。"
+      }
+    }
+  ]
+}
