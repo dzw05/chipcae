@@ -134,6 +134,29 @@ T checked_io(chipcae::mesh::Expected<T> result) {
         throw std::runtime_error(result.error().path + ": " + result.error().reason);
     return std::move(result.value());
 }
+struct CopperColumnAreas {
+    chipcae::Real background = 0;
+    chipcae::Real raster = 0;
+};
+CopperColumnAreas copper_column_areas(const chipcae::mesh::HexMeshArrays& mesh, std::size_t li) {
+    using chipcae::mesh::level0_dense;
+    const auto& x = mesh.axes[0];
+    const auto& y = mesh.axes[1];
+    const std::size_t nx = x.size() - 1, ny = y.size() - 1;
+    const std::size_t offset = static_cast<std::size_t>(mesh.copper_layer_of_layer[li]) * nx * ny;
+    CopperColumnAreas result;
+    for (std::size_t j = 0; j < ny; ++j)
+        for (std::size_t i = 0; i < nx; ++i) {
+            const auto c = level0_dense(static_cast<std::uint32_t>(nx),
+                                        static_cast<std::uint32_t>(ny),
+                                        static_cast<std::uint32_t>(i),
+                                        static_cast<std::uint32_t>(j));
+            const chipcae::Real area = (x[i + 1] - x[i]) * (y[j + 1] - y[j]);
+            result.background += area;
+            result.raster += mesh.copper_phi[offset + c] * area;
+        }
+    return result;
+}
 int run(int argc, char** argv) {
     using namespace chipcae::mesh;
     std::filesystem::path input, output, surface, polyset;
@@ -280,27 +303,13 @@ int run(int argc, char** argv) {
               << ",\"cell_budget\":" << options.cell_budget << ",\"min_elems_per_layer\":"
               << (min_elems_per_layer ? std::to_string(*min_elems_per_layer) : "null")
               << ",\"copper_area_m2\":{";
-    const auto& x = mesh.axes[0];
-    const auto& y = mesh.axes[1];
-    const std::size_t nx = x.size() - 1, ny = y.size() - 1;
     bool first_copper = true;
     for (std::size_t li = 0; li < stack.layers.size(); ++li) {
         const auto& layer = stack.layers[li];
         if (!layer.copper)
             continue;
-        const std::size_t offset =
-            static_cast<std::size_t>(mesh.copper_layer_of_layer[li]) * nx * ny;
-        chipcae::Real background_area = 0, raster_area = 0, polygon_area = 0;
-        for (std::size_t j = 0; j < ny; ++j)
-            for (std::size_t i = 0; i < nx; ++i) {
-                const auto c = level0_dense(static_cast<std::uint32_t>(nx),
-                                            static_cast<std::uint32_t>(ny),
-                                            static_cast<std::uint32_t>(i),
-                                            static_cast<std::uint32_t>(j));
-                const chipcae::Real area = (x[i + 1] - x[i]) * (y[j + 1] - y[j]);
-                background_area += area;
-                raster_area += mesh.copper_phi[offset + c] * area;
-            }
+        auto [background_area, raster_area] = copper_column_areas(mesh, li);
+        chipcae::Real polygon_area = 0;
         if (layer.copper->fraction) {
             // A shared constant-field reduction keeps both values bitwise identical.
             polygon_area = raster_area = *layer.copper->fraction * background_area;

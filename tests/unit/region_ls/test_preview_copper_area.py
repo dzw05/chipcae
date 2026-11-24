@@ -83,6 +83,9 @@ class PreviewCopperArea(unittest.TestCase):
     def setUpClass(cls):
         cls.build = Path(os.environ['CHIPCAE_BINARY_DIR'])
         cls.cache = (cls.build / 'CMakeCache.txt').read_text(encoding='utf-8')
+        for feature in ('CHIPCAE_ENABLE_JSONCONS', 'CHIPCAE_ENABLE_HDF5'):
+            if f'{feature}:BOOL=OFF' in cls.cache:
+                raise unittest.SkipTest(f'preview requires {feature}=ON')
         cls.preview = cls.build / 'preview' / 'chipcae-preview'
 
     def setUp(self):
@@ -136,6 +139,11 @@ class PreviewCopperArea(unittest.TestCase):
         self.assertEqual([key for key, _ in message_pairs], MESSAGE_KEYS, context)
         self.assertEqual([key for key, _ in event],
                          ['stage', 'progress', *MESSAGE_KEYS, 'message'], context)
+        # Check every promoted value on the ordered event representation too.
+        for (event_key, event_value), (message_key, message_value) in zip(
+                event[2:-1], message_pairs):
+            self.assertEqual(event_key, message_key, context)
+            self.assertEqual(event_value, message_value, f'{message_key}{context}')
         report = message['copper_area_m2']
         self.assertIsInstance(report, dict, context)
         report_pairs = dict(message_pairs)['copper_area_m2']
@@ -170,6 +178,88 @@ class PreviewCopperArea(unittest.TestCase):
         self.assertEqual(summary['copper_area_m2'], {})
         self.assertEqual(pairs, [])
 
+    def test_raster_column_contributions(self):
+        # Compile the real private preview reduction, with unused CLI code removed
+        # by the linker. No report schema or production test hook is needed.
+        source = Path(os.environ['CHIPCAE_SOURCE_DIR']) / 'preview/src/main.cpp'
+        commands = json.loads((self.build / 'compile_commands.json').read_text())
+        entry = next(item for item in commands if Path(item['file']).resolve() == source.resolve())
+        arguments = iter(entry.get('arguments') or shlex.split(entry['command']))
+        options = []
+        for argument in arguments:
+            if argument in ('-I', '-isystem', '-imsvc', '-D', '/I', '/D'):
+                options.extend((argument, next(arguments)))
+            elif (argument.startswith(('-I', '-D'))
+                  or (os.name == 'nt' and argument.startswith(('/I', '/D')))):
+                options.append(argument)
+        compiler = next(line.split('=', 1)[1] for line in self.cache.splitlines()
+                        if line.startswith(('CMAKE_CXX_COMPILER:FILEPATH=',
+                                            'CMAKE_CXX_COMPILER:STRING=')))
+        generator = next(line.split('=', 1)[1] for line in self.cache.splitlines()
+                         if line.startswith('CMAKE_GENERATOR:INTERNAL='))
+        harness = self.root / 'columns.cpp'
+        harness.write_text('#define main unused_preview_main\n#include '
+                           + json.dumps(str(source)) + '\n#undef main\n' + r'''
+int main() {
+    chipcae::mesh::HexMeshArrays mesh;
+    mesh.axes[0] = {0, 1, 3, 7};
+    mesh.axes[1] = {0, 2, 5};
+    mesh.copper_layer_of_layer = {0, -1, 1};
+    constexpr std::size_t ncol = 6;
+    for (std::size_t li : {0u, 2u}) {
+        const auto offset = static_cast<std::size_t>(mesh.copper_layer_of_layer[li]) * ncol;
+        for (std::uint32_t j = 0; j < 2; ++j)
+            for (std::uint32_t i = 0; i < 3; ++i) {
+                mesh.copper_phi.assign(2 * ncol, 0.875);
+                std::fill_n(mesh.copper_phi.begin() + offset, ncol, 0.0);
+                const auto c = chipcae::mesh::level0_dense(3, 2, i, j);
+                mesh.copper_phi[offset + c] = 0.125 * (c + 1);
+                const auto actual = copper_column_areas(mesh, li);
+                const auto expected = mesh.copper_phi[offset + c] *
+                    (mesh.axes[0][i + 1] - mesh.axes[0][i]) *
+                    (mesh.axes[1][j + 1] - mesh.axes[1][j]);
+                if (!std::isfinite(actual.raster) || !std::isfinite(actual.background) ||
+                    std::abs(actual.raster - expected) > 1e-12 * std::abs(expected) ||
+                    std::abs(actual.background - 35.0) > 1e-12 * 35.0) {
+                    std::cerr << "column contribution: layer=" << li << " i=" << i
+                              << " j=" << j << " dense=" << c << " actual=" << actual.raster
+                              << " expected=" << expected << '\n';
+                    return 1;
+                }
+            }
+    }
+}
+''', encoding='utf-8')
+        flags = ' '.join(f'[==[{option}]==]' for option in options)
+        (self.root / 'CMakeLists.txt').write_text('''cmake_minimum_required(VERSION 3.20)
+project(preview_columns LANGUAGES CXX)
+add_executable(columns columns.cpp)
+target_compile_features(columns PRIVATE cxx_std_20)
+target_compile_options(columns PRIVATE ''' + flags + ''')
+if(MSVC)
+  target_compile_options(columns PRIVATE /O2 /Gy /Gw)
+  target_link_options(columns PRIVATE /OPT:REF)
+else()
+  target_compile_options(columns PRIVATE -O2 -ffunction-sections -fdata-sections)
+  if(APPLE)
+    target_link_options(columns PRIVATE LINKER:-dead_strip)
+  else()
+    target_link_options(columns PRIVATE LINKER:--gc-sections)
+  endif()
+endif()
+enable_testing()
+add_test(NAME column_contributions COMMAND columns)
+''', encoding='utf-8')
+        binary = self.root / 'build'
+        for command in (
+                ['cmake', '-S', str(self.root), '-B', str(binary), '-G', generator,
+                 f'-DCMAKE_CXX_COMPILER={compiler}'],
+                ['cmake', '--build', str(binary), '-j1'],
+                ['ctest', '--test-dir', str(binary), '--output-on-failure']):
+            result = subprocess.run(command, capture_output=True, text=True,
+                                    env=self.env, timeout=40)
+            self.assertEqual(result.returncode, 0, diagnostics(result))
+
     def test_fraction_layers_bitwise(self):
         summary, _, _ = self.invoke(
             'fraction', self.source('fraction', fraction_stack()), unpadded=True)
@@ -185,6 +275,11 @@ class PreviewCopperArea(unittest.TestCase):
 
     def test_polygon_conservation_and_pattern(self):
         self.require_ecad()
+        for nonuniform in (False, True):
+            with self.subTest(nonuniform=nonuniform):
+                self.check_polygon_conservation_and_pattern(nonuniform)
+
+    def check_polygon_conservation_and_pattern(self, nonuniform):
         outer = (250000, 250000, 2750000, 2250000)
         hole = (1250000, 750000, 1750000, 1250000)
         rings = []
@@ -206,6 +301,12 @@ class PreviewCopperArea(unittest.TestCase):
         stack['layers'][1]['copper'] = dict(
             metal='cu', polygons=dict(file=sidecar.name, layer='L1'))
         stack['external_refs'] = [dict(path=sidecar.name, sha256=hashlib.sha256(data).hexdigest())]
+        if nonuniform:
+            # Region boundaries introduce unequal column areas. With equal areas,
+            # any permutation of copper_phi leaves the report's total unchanged.
+            stack['layers'][0]['regions'] = [dict(
+                name='mesh-feature', body='feature', material='fr4_eq',
+                footprint=dict(box=[.001, 0, .0022, .003]))]
         reference = signed_area(rings, 1e-9)
         self.assert_area(reference, 4.75e-6)
         summary, _, stem = self.invoke('polygon', self.source('polygon', stack), nx=8, ny=6)
@@ -229,7 +330,11 @@ class PreviewCopperArea(unittest.TestCase):
             integer_bounds = tuple(int(round(float(x) / 1e-9)) for x in bounds)
             self.assertTrue(np.all(np.abs(bounds - np.asarray(integer_bounds) * 1e-9) <= 1e-15))
             columns.setdefault(integer_bounds, []).append(float(value))
-        self.assertEqual(len(columns), 8 * 6)
+        self.assertEqual(len(columns), summary['nx0'] * summary['ny0'])
+        self.assertEqual(len(columns), (33 if nonuniform else 8) * 6)
+        if nonuniform:
+            areas = [(c - a) * (d - b) for a, b, c, d in columns]
+            self.assertGreater(max(areas), min(areas))
         categories = [0, 0, 0]
         independent_sum = 0.
         for (x0, y0, x1, y1), values in columns.items():
@@ -262,6 +367,29 @@ class PreviewCopperArea(unittest.TestCase):
         self.assertEqual(list(report), ['F.Cu'])
         for value in report['F.Cu'].values():
             self.assert_area(value, reference)
+
+    def test_polyset_override_missing_layer(self):
+        self.require_ecad()
+        source, _ = self.fixture()
+        sidecar = self.root / 'override.polyset'
+        data = bytearray(b'CCPOLY01')
+        data.extend(struct.pack('<dII', 1e-6, 1, 7))
+        data.extend(b'Missing')
+        data.extend(struct.pack('<I2q', 1, 0, 4))
+        for point in [(250, 250), (1250, 250), (1250, 1250), (250, 1250)]:
+            data.extend(struct.pack('<2q', *point))
+        sidecar.write_bytes(data)
+        stem = self.root / 'missing-layer'
+        command = [str(self.preview), str(source), '--polyset', str(sidecar),
+                   '--nx', '4', '--ny', '4', '--levels', '1', '-o', str(stem)]
+        result = subprocess.run(command, capture_output=True, text=True,
+                                env=self.env, timeout=8)
+        context = diagnostics(result)
+        self.assertGreater(result.returncode, 0, context)
+        events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+        self.assertEqual([event['stage'] for event in events], ['load', 'mesh', 'error'], context)
+        self.assertIn('polyset does not contain layer F.Cu', events[-1]['message'], context)
+        self.assertFalse(list(self.root.glob('missing-layer*')), context)
 
     def test_mpi_partition_equal(self):
         mpi = shutil.which('mpiexec') or shutil.which('mpirun')
