@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <iomanip>
 #include <limits>
+#include <numeric>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -1202,13 +1203,22 @@ Expected<CutLayerArrays> generate(const HexMeshArrays& m,
 // Face records are released on return, before allocating compact node arrays.
 void rebuild_faces(const HexMeshArrays& mesh, HexMeshArrays& m, CutLayerArrays& c) {
     // Rebuild exposed quadrilaterals; trimmed exterior pieces remain in cut quadrature.
-    std::map<std::array<Local, 4>, Local> original_boundary;
-    for (std::size_t i = 0; i < mesh.bdr_attribute.size(); ++i) {
+    struct OriginalFace {
         std::array<Local, 4> key;
-        std::copy_n(mesh.bdr_quad.begin() + 4 * i, 4, key.begin());
-        std::sort(key.begin(), key.end());
-        original_boundary[key] = mesh.bdr_attribute[i];
+        std::size_t source;
+    };
+    std::vector<OriginalFace> original_boundary;
+    original_boundary.reserve(mesh.bdr_attribute.size());
+    for (std::size_t i = 0; i < mesh.bdr_attribute.size(); ++i) {
+        OriginalFace record{{}, i};
+        std::copy_n(mesh.bdr_quad.begin() + 4 * i, 4, record.key.begin());
+        std::sort(record.key.begin(), record.key.end());
+        original_boundary.push_back(record);
     }
+    // Descending source breaks ties with the old map's last assignment first.
+    std::sort(original_boundary.begin(), original_boundary.end(), [](const auto& a, const auto& b) {
+        return a.key != b.key ? a.key < b.key : a.source > b.source;
+    });
     m.bdr_quad.clear();
     m.bdr_attribute.clear();
     constexpr int fi[6][4] = {
@@ -1217,22 +1227,24 @@ void rebuild_faces(const HexMeshArrays& mesh, HexMeshArrays& m, CutLayerArrays& 
         std::array<Local, 4> key;
         Local elem, face;
     };
-    std::vector<FaceRecord> boundary;
-    boundary.reserve(6 * m.attribute.size());
+    // A face belongs to the bucket of its smallest vertex. Keep only a packed
+    // source per occurrence, rather than six full keys per cell. Inclusive sums
+    // followed by decrementing insertion leave the bucket starts in offsets.
+    const auto minimum_vertex = [&](std::size_t e, Local f) {
+        Local v = m.hex[8 * e + fi[f][0]];
+        for (int j = 1; j < 4; ++j)
+            v = std::min(v, m.hex[8 * e + fi[f][j]]);
+        return static_cast<std::size_t>(v);
+    };
+    std::vector<std::size_t> offsets(mesh.vertices.size() / 3 + 1);
     for (std::size_t e = 0; e < m.attribute.size(); ++e)
-        for (Local f = 0; f < 6; ++f) {
-            FaceRecord record{{}, static_cast<Local>(e), f};
-            for (int j = 0; j < 4; ++j)
-                record.key[j] = m.hex[e * 8 + fi[f][j]];
-            std::sort(record.key.begin(), record.key.end());
-            boundary.push_back(record);
-        }
-    std::sort(boundary.begin(), boundary.end(), [](const auto& a, const auto& b) {
-        for (std::size_t i = 0; i < a.key.size(); ++i)
-            if (a.key[i] != b.key[i])
-                return a.key[i] < b.key[i];
-        return std::tie(a.elem, a.face) < std::tie(b.elem, b.face);
-    });
+        for (Local f = 0; f < 6; ++f)
+            ++offsets[minimum_vertex(e, f)];
+    std::partial_sum(offsets.begin(), offsets.end(), offsets.begin());
+    std::vector<std::size_t> sources(offsets.back());
+    for (std::size_t e = 0; e < m.attribute.size(); ++e)
+        for (Local f = 0; f < 6; ++f)
+            sources[--offsets[minimum_vertex(e, f)]] = 6 * e + static_cast<std::size_t>(f);
     // A group retains the first source and its full count, including nonmanifold
     // duplicates. Reconstruct orientation from connectivity, never the sorted key.
     const auto quad = [&](const FaceRecord& record) {
@@ -1242,12 +1254,32 @@ void rebuild_faces(const HexMeshArrays& mesh, HexMeshArrays& m, CutLayerArrays& 
         return v;
     };
     const auto visit_groups = [&](auto visit) {
-        for (std::size_t begin = 0; begin < boundary.size();) {
-            auto end = begin + 1;
-            while (end < boundary.size() && boundary[end].key == boundary[begin].key)
-                ++end;
-            visit(begin, end);
-            begin = end;
+        std::vector<FaceRecord> boundary;
+        for (std::size_t v = 0; v + 1 < offsets.size(); ++v) {
+            boundary.clear();
+            for (auto i = offsets[v]; i < offsets[v + 1]; ++i) {
+                const auto source = sources[i];
+                FaceRecord record{
+                    {}, static_cast<Local>(source / 6), static_cast<Local>(source % 6)};
+                record.key = quad(record);
+                std::sort(record.key.begin(), record.key.end());
+                boundary.push_back(record);
+            }
+            std::sort(boundary.begin(), boundary.end(), [](const auto& a, const auto& b) {
+                for (std::size_t i = 0; i < a.key.size(); ++i)
+                    if (a.key[i] != b.key[i])
+                        return a.key[i] < b.key[i];
+                return std::tie(a.elem, a.face) < std::tie(b.elem, b.face);
+            });
+            // Ascending buckets and local key order together give the original
+            // global map order, even with permuted nodes or nonmanifold faces.
+            for (std::size_t begin = 0; begin < boundary.size();) {
+                auto end = begin + 1;
+                while (end < boundary.size() && boundary[end].key == boundary[begin].key)
+                    ++end;
+                visit(boundary, begin, end);
+                begin = end;
+            }
         }
     };
     auto quad_area = [&](const std::array<Local, 4>& q) {
@@ -1279,22 +1311,22 @@ void rebuild_faces(const HexMeshArrays& mesh, HexMeshArrays& m, CutLayerArrays& 
         for (auto a : list)
             next_attr = std::max(next_attr, a + 1);
     std::map<BodyId, Local> exposed_attr;
-    std::vector<FaceRecord> aligned;
+    std::vector<std::pair<FaceRecord, Local>> aligned;
     auto original = original_boundary.begin();
-    visit_groups([&](std::size_t begin, std::size_t end) {
+    const auto visit_boundary = [&](const auto& boundary, std::size_t begin, std::size_t end) {
         const auto& rec = boundary[begin];
         const auto& key = rec.key;
         // Both sequences have the same key order. A merge avoids a tree lookup
         // for every interior face, while retaining the original attribute map's
         // last-write rule for duplicate input boundary keys.
-        while (original != original_boundary.end() && original->first < key)
+        while (original != original_boundary.end() && original->key < key)
             ++original;
-        const bool was_boundary = original != original_boundary.end() && original->first == key;
+        const bool was_boundary = original != original_boundary.end() && original->key == key;
         if (end - begin == 1) {
             const auto v = quad(rec);
             m.bdr_quad.insert(m.bdr_quad.end(), v.begin(), v.end());
             if (was_boundary) {
-                m.bdr_attribute.push_back(original->second);
+                m.bdr_attribute.push_back(mesh.bdr_attribute[original->source]);
                 return;
             }
             auto elem = rec.elem;
@@ -1317,14 +1349,8 @@ void rebuild_faces(const HexMeshArrays& mesh, HexMeshArrays& m, CutLayerArrays& 
                     r.aligned_area += quad_area(v);
                 }
         } else if (end - begin == 2 && was_boundary)
-            aligned.push_back(rec);
-    });
-    // Aligned internal patches follow all exposed faces, in the same key order.
-    for (const auto& rec : aligned) {
-        const auto v = quad(rec);
-        m.bdr_quad.insert(m.bdr_quad.end(), v.begin(), v.end());
-        m.bdr_attribute.push_back(original_boundary.at(rec.key));
-    }
+            aligned.emplace_back(rec, mesh.bdr_attribute[original->source]);
+    };
 
     // Reuse these groups for finalize's single activation mask. The public cache
     // also stores a complete mesh and a second face map, neither needed here.
@@ -1346,7 +1372,8 @@ void rebuild_faces(const HexMeshArrays& mesh, HexMeshArrays& m, CutLayerArrays& 
         Local a, b, fa, fb, encounter_elem, encounter_face;
     };
     std::vector<Neighbor> pairs;
-    visit_groups([&](std::size_t begin, std::size_t end) {
+    visit_groups([&](const auto& boundary, std::size_t begin, std::size_t end) {
+        visit_boundary(boundary, begin, end);
         // The cache's map retains the minimum (element, MFEM face) occurrence
         // of each key and pairs every later occurrence with it. The boundary
         // comparator uses fi order, so find that cache occurrence explicitly.
@@ -1370,6 +1397,12 @@ void rebuild_faces(const HexMeshArrays& mesh, HexMeshArrays& m, CutLayerArrays& 
             pairs.push_back({a, b, fa, fb, encounter_elem, encounter_face});
         }
     });
+    // Aligned internal patches follow all exposed faces, in the same key order.
+    for (const auto& [rec, attribute] : aligned) {
+        const auto v = quad(rec);
+        m.bdr_quad.insert(m.bdr_quad.end(), v.begin(), v.end());
+        m.bdr_attribute.push_back(attribute);
+    }
     // The cache emits a neighbor when its second face is encountered in MFEM
     // traversal order. Each occurrence has a unique (element, MFEM face), so
     // sorting the later occurrences reproduces that traversal exactly, even

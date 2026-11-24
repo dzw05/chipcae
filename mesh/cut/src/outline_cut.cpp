@@ -9,6 +9,7 @@
 #include <utility>
 
 namespace chipcae::mesh::cut {
+// The four-argument overload shares the private finalize transaction in plane_cut.cpp.
 Expected<std::optional<CutLayerArrays>>
 apply_outline_cut(HexMeshArrays& mesh, const Footprint& outline, const CutOptions& options) {
     return apply_outline_cut(mesh, outline, options, CutGeometry{});

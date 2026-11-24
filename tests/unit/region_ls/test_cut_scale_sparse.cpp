@@ -334,12 +334,31 @@ struct Baselines {
     std::uint64_t scale_total;
 };
 const Baselines* platform_baselines() {
-#if defined(__APPLE__)
-    // The architect requires an ARM64 Mac capture of pre-refactor main with the
-    // implementation's compiler and Release options. Until that capture exists,
-    // fail every baseline comparison after reporting its actual values. Never
-    // substitute GNU/Linux values or this implementation's output for Mac goldens.
-    return nullptr;
+#if defined(__APPLE__) && defined(__aarch64__)
+    // Captured on ARM64 macOS from pre-refactor main 655864ab, clang 21.1.8,
+    // Release with the mac-highmem options. These expectations come only from
+    // the old-source capture approved in the 2026-11-24 architect ruling.
+    static const Baselines macos_arm64{
+        {{"outline_n4", {0xa704cc1efb6e7346ULL, 0x8262d53b56dd3c01ULL}},
+         {"outline_n8", {0xb7066576e2afffe0ULL, 0x7f395e6250b1d13fULL}},
+         {"outline_n16", {0x95d1f16842b0297dULL, 0xba36d759c02fc343ULL}},
+         {"outline_n32", {0x4f3fe256a94ed292ULL, 0xfbe9ff272c6f5882ULL}},
+         {"outline_n10", {0x0d4fac692083ee07ULL, 0xde061a057e2c0cf2ULL}},
+         {"region_lid", {0x2edefd971f79fe98ULL, 0xefde208c13dc0209ULL}},
+         {"union", {0xb6bf7b0323290597ULL, 0x3a97cb7f641858aeULL}},
+         {"void_remove", {0xb7066576e2afffe0ULL, 0x8d81cecc6e90de36ULL}},
+         {"void_keep", {0x0b1422792db4f4baULL, 0x61d0be43418381d7ULL}}},
+        {{"outline_0", 0x293a59be6980a2cdULL},
+         {"outline_1", 0x21fc8f4b37c309d9ULL},
+         {"outline_2", 0x5105a2d7f0e2749aULL},
+         {"void_remove", 0x293a59be6980a2cdULL},
+         {"void_keep", 0xbb04892742eb9038ULL}},
+        {{1, 0x3e9a4e823b7b30f0ULL},
+         {2, 0x3e650b9b62c9466aULL},
+         {3, 0x3e83988594cc3858ULL},
+         {4, 0x3e6ad7f29abc9f05ULL}},
+        0x3ea50b9b62c8ff8eULL};
+    return &macos_arm64;
 #elif defined(__linux__) && defined(__x86_64__)
     // GNU/Linux x86_64, GNU 14.2.0, Release: untouched ced6409 cut sources
     // (identical to 784fe34). Named-field mesh hashes were captured from those
@@ -366,8 +385,7 @@ const Baselines* platform_baselines() {
         0x3ea50b9b62c8ff8eULL};
     // Captured from the same untouched ced6409 sources, GNU 15.2.0, Release
     // with -mfma throughout. All nine pairs, five full-state digests and n=64
-    // volume bits match the corresponding implementation run. This reproduces
-    // the hosted CI digests without using implementation output as expectations.
+    // volume bits below originate only from that pre-refactor capture.
     static const Baselines gnu_linux_fma = [] {
         auto b = gnu_linux_generic;
         b.geometry.at("outline_n4").cut = 0xd09c521369a9fc63ULL;
@@ -970,6 +988,58 @@ void gp_permuted_faces() {
                           "GP must preserve first-source pairing before activation filtering");
                 }
 }
+void boundary_group_order() {
+    HexMeshArrays m;
+    for (int z = 0; z < 2; ++z)
+        for (int y = 0; y < 2; ++y)
+            for (int x = 0; x < 3; ++x) {
+                m.vertices.insert(m.vertices.end(), {Real(x), Real(y), Real(z)});
+                m.node_gid.push_back(static_cast<Index>(m.node_gid.size()));
+                m.node_layer.push_back(0);
+                m.node_column.push_back(0);
+            }
+    m.hex = {0, 1, 4, 3, 6, 7, 10, 9, 1, 2, 5, 4, 7, 8, 11, 10};
+    m.attribute = {1, 1};
+    m.elem_gid = {10, 20};
+    m.partitioning = {0, 1};
+    m.attr_table.entries = {{"solid", "", 1, 1}};
+    m.attr_table.bodies = {{"solid", 1}};
+    const std::array<std::array<Local, 4>, 12> faces{{{0, 3, 4, 1},
+                                                      {6, 7, 10, 9},
+                                                      {0, 1, 7, 6},
+                                                      {3, 9, 10, 4},
+                                                      {0, 6, 9, 3},
+                                                      {1, 4, 10, 7},
+                                                      {1, 4, 5, 2},
+                                                      {7, 8, 11, 10},
+                                                      {1, 2, 8, 7},
+                                                      {4, 10, 11, 5},
+                                                      {1, 7, 10, 4},
+                                                      {2, 5, 11, 8}}};
+    for (std::size_t i = 0; i < faces.size(); ++i) {
+        m.bdr_quad.insert(m.bdr_quad.end(), faces[i].begin(), faces[i].end());
+        m.bdr_attribute.push_back(20 + static_cast<Local>(i));
+    }
+    // Duplicate input keys have new orientations and attributes. Last assignment
+    // wins for the attribute; output orientation still comes from the first cell.
+    m.bdr_quad.insert(m.bdr_quad.end(), {3, 4, 1, 0, 7, 10, 4, 1});
+    m.bdr_attribute.insert(m.bdr_attribute.end(), {98, 99});
+    const auto c =
+        value(build_cut_layer(m, CutGeometry{{Plane{0, {0, 1, 1}, 1.5}}}, cut_options()));
+    check(c.cut_elem.size() == 2 && m.attribute.size() == 2,
+          "boundary fixture must partially cut both cells without removing nodes");
+    // Hand-sorted exposed keys interleave the two cells. The shared patch's key
+    // would fall in the middle, but aligned internal patches must be appended.
+    constexpr std::array<std::size_t, 11> order{0, 2, 4, 6, 8, 11, 3, 9, 1, 7, 5};
+    std::vector<Local> expected;
+    for (const auto i : order)
+        expected.insert(expected.end(), faces[i].begin(), faces[i].end());
+    check(m.bdr_quad == expected,
+          "boundary groups must retain global key order, first orientation and aligned suffix");
+    check(m.bdr_attribute == std::vector<Local>{98, 22, 24, 26, 28, 31, 23, 29, 21, 27, 99},
+          "duplicate exposed and aligned boundary keys must retain the last input attribute");
+    gp_reference(m, c);
+}
 void gp_encounter_order() {
     HexMeshArrays m;
     for (int z = 0; z < 2; ++z)
@@ -1039,6 +1109,7 @@ int main() {
         run("gp_nonmanifold", gp_nonmanifold);
         run("gp_reordered_gids", gp_reordered_gids);
         run("gp_permuted_faces", gp_permuted_faces);
+        run("boundary_group_order", boundary_group_order);
         run("gp_encounter_order", gp_encounter_order);
         // Defer performance assertions until all correctness results are collected.
         run("scale_guard", [&] {
