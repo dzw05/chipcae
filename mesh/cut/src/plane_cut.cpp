@@ -1228,7 +1228,10 @@ void rebuild_faces(const HexMeshArrays& mesh, HexMeshArrays& m, CutLayerArrays& 
             boundary.push_back(record);
         }
     std::sort(boundary.begin(), boundary.end(), [](const auto& a, const auto& b) {
-        return std::tie(a.key, a.elem, a.face) < std::tie(b.key, b.elem, b.face);
+        for (std::size_t i = 0; i < a.key.size(); ++i)
+            if (a.key[i] != b.key[i])
+                return a.key[i] < b.key[i];
+        return std::tie(a.elem, a.face) < std::tie(b.elem, b.face);
     });
     // A group retains the first source and its full count, including nonmanifold
     // duplicates. Reconstruct orientation from connectivity, never the sorted key.
@@ -1276,14 +1279,22 @@ void rebuild_faces(const HexMeshArrays& mesh, HexMeshArrays& m, CutLayerArrays& 
         for (auto a : list)
             next_attr = std::max(next_attr, a + 1);
     std::map<BodyId, Local> exposed_attr;
+    std::vector<FaceRecord> aligned;
+    auto original = original_boundary.begin();
     visit_groups([&](std::size_t begin, std::size_t end) {
+        const auto& rec = boundary[begin];
+        const auto& key = rec.key;
+        // Both sequences have the same key order. A merge avoids a tree lookup
+        // for every interior face, while retaining the original attribute map's
+        // last-write rule for duplicate input boundary keys.
+        while (original != original_boundary.end() && original->first < key)
+            ++original;
+        const bool was_boundary = original != original_boundary.end() && original->first == key;
         if (end - begin == 1) {
-            const auto& rec = boundary[begin];
-            const auto& key = rec.key;
             const auto v = quad(rec);
             m.bdr_quad.insert(m.bdr_quad.end(), v.begin(), v.end());
-            if (original_boundary.contains(key)) {
-                m.bdr_attribute.push_back(original_boundary[key]);
+            if (was_boundary) {
+                m.bdr_attribute.push_back(original->second);
                 return;
             }
             auto elem = rec.elem;
@@ -1305,17 +1316,15 @@ void rebuild_faces(const HexMeshArrays& mesh, HexMeshArrays& m, CutLayerArrays& 
                     ++r.aligned_faces;
                     r.aligned_area += quad_area(v);
                 }
-        }
+        } else if (end - begin == 2 && was_boundary)
+            aligned.push_back(rec);
     });
-    // Retain aligned internal patches only when both adjacent cells survive.
-    visit_groups([&](std::size_t begin, std::size_t end) {
-        const auto& rec = boundary[begin];
-        if (end - begin == 2 && original_boundary.contains(rec.key)) {
-            const auto v = quad(rec);
-            m.bdr_quad.insert(m.bdr_quad.end(), v.begin(), v.end());
-            m.bdr_attribute.push_back(original_boundary[rec.key]);
-        }
-    });
+    // Aligned internal patches follow all exposed faces, in the same key order.
+    for (const auto& rec : aligned) {
+        const auto v = quad(rec);
+        m.bdr_quad.insert(m.bdr_quad.end(), v.begin(), v.end());
+        m.bdr_attribute.push_back(original_boundary.at(rec.key));
+    }
 
     // Reuse these groups for finalize's single activation mask. The public cache
     // also stores a complete mesh and a second face map, neither needed here.

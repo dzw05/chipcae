@@ -327,13 +327,89 @@ CutLayerArrays outline(HexMeshArrays& m, const StackModel& s) {
 struct Golden {
     std::uint64_t mesh, cut;
 };
+struct Baselines {
+    std::map<std::string_view, Golden> geometry;
+    std::map<std::string_view, std::uint64_t> full_mesh;
+    std::map<BodyId, std::uint64_t> scale_bodies;
+    std::uint64_t scale_total;
+};
+const Baselines* platform_baselines() {
+#if defined(__APPLE__)
+    // The architect requires an ARM64 Mac capture of pre-refactor main with the
+    // implementation's compiler and Release options. Until that capture exists,
+    // fail every baseline comparison after reporting its actual values. Never
+    // substitute GNU/Linux values or this implementation's output for Mac goldens.
+    return nullptr;
+#elif defined(__linux__) && defined(__x86_64__)
+    // GNU/Linux x86_64, GNU 14.2.0, Release: untouched ced6409 cut sources
+    // (identical to 784fe34). Named-field mesh hashes were captured from those
+    // old sources; all cut, full-state and n=64 volume literals are unchanged.
+    static const Baselines gnu_linux_generic{
+        {{"outline_n4", {0xa704cc1efb6e7346ULL, 0x710e70433c2a85eeULL}},
+         {"outline_n8", {0xb7066576e2afffe0ULL, 0xd854e053fc2c3cefULL}},
+         {"outline_n16", {0x95d1f16842b0297dULL, 0xa1261a1ef02de996ULL}},
+         {"outline_n32", {0x4f3fe256a94ed292ULL, 0x2eb75ee8bb73c3c4ULL}},
+         {"outline_n10", {0x0d4fac692083ee07ULL, 0x953382a220d2e108ULL}},
+         {"region_lid", {0x2edefd971f79fe98ULL, 0x28db459fa37df24fULL}},
+         {"union", {0xb6bf7b0323290597ULL, 0x976fff2710cb69baULL}},
+         {"void_remove", {0xb7066576e2afffe0ULL, 0x55523e514716771dULL}},
+         {"void_keep", {0x0b1422792db4f4baULL, 0x883bf8fb0e99db04ULL}}},
+        {{"outline_0", 0xb0bfd3e93428442bULL},
+         {"outline_1", 0x23583fe378c251c9ULL},
+         {"outline_2", 0xfe4e8beccf17b066ULL},
+         {"void_remove", 0xb0bfd3e93428442bULL},
+         {"void_keep", 0x0fced36ddccee91aULL}},
+        {{1, 0x3e9a4e823b7b30f0ULL},
+         {2, 0x3e650b9b62c9466aULL},
+         {3, 0x3e83988594cc3858ULL},
+         {4, 0x3e6ad7f29abc9f05ULL}},
+        0x3ea50b9b62c8ff8eULL};
+    // Captured from the same untouched ced6409 sources, GNU 15.2.0, Release
+    // with -mfma throughout. All nine pairs, five full-state digests and n=64
+    // volume bits match the corresponding implementation run. This reproduces
+    // the hosted CI digests without using implementation output as expectations.
+    static const Baselines gnu_linux_fma = [] {
+        auto b = gnu_linux_generic;
+        b.geometry.at("outline_n4").cut = 0xd09c521369a9fc63ULL;
+        b.geometry.at("outline_n8").cut = 0x8d47c8146b4d24ceULL;
+        b.geometry.at("outline_n16").cut = 0x2d911ed130e67f3bULL;
+        b.geometry.at("outline_n32").cut = 0x30dde733f361bc76ULL;
+        b.geometry.at("outline_n10").cut = 0x61c30b97f0788287ULL;
+        b.geometry.at("region_lid").cut = 0x05cef98c6116ec0fULL;
+        b.geometry.at("union").cut = 0xe17cedf5b143424cULL;
+        b.geometry.at("void_remove").cut = 0x241bace5e2f9b8ceULL;
+        b.geometry.at("void_keep").cut = 0xf4280968a9dbcf97ULL;
+        b.full_mesh.at("outline_0") = b.full_mesh.at("void_remove") = 0x70a1cc9dbf111f5eULL;
+        b.full_mesh.at("outline_1") = 0x68d32fc21809aa0eULL;
+        b.full_mesh.at("outline_2") = 0x9c75305c9cd2807dULL;
+        b.full_mesh.at("void_keep") = 0x93b0c93ea2a899bbULL;
+        return b;
+    }();
+    // Probe the compiler's contraction mode independently of mesh/cut output.
+    // Volatile inputs prevent constant folding: an unfused product rounds to 1,
+    // while a fused multiply-add retains the exact residual -2^-54. This also
+    // selects the generic profile when an FMA target uses -ffp-contract=off.
+    static const bool fused = [] {
+        volatile Real a = 1 + 0x1p-27, b = 1 - 0x1p-27;
+        const Real residual = a * b - 1;
+        return std::bit_cast<std::uint64_t>(residual) == std::bit_cast<std::uint64_t>(-0x1p-54);
+    }();
+    return fused ? &gnu_linux_fma : &gnu_linux_generic;
+#else
+    return nullptr;
+#endif
+}
 // Collect every fixture before failing so a pre-refactor run on another platform
 // can report its complete baseline. Mismatches still fail the containing case.
 [[nodiscard]] std::string
-golden(const std::string& name, const HexMeshArrays& m, const CutLayerArrays& c, Golden g) {
+golden(const std::string& name, const HexMeshArrays& m, const CutLayerArrays& c) {
     const Golden actual{hash(m), hash(c)};
     std::cout << "DIGEST " << name << " mesh=0x" << std::hex << actual.mesh << " cut=0x"
               << actual.cut << std::dec << '\n';
+    const auto* baselines = platform_baselines();
+    if (!baselines)
+        return name + ": same-platform pre-refactor baseline unavailable; ";
+    const auto g = baselines->geometry.at(name);
     std::string errors;
     if (actual.mesh != g.mesh)
         errors += name + ": mesh differs from the pre-refactor baseline; ";
@@ -392,23 +468,20 @@ void remember_volume(std::vector<VolumeCheck>& volumes,
     volumes.push_back({name, value(cut_stats(m, c)), analytic_bodies(s, m)});
 }
 void check_analytic_volumes(const std::vector<VolumeCheck>& volumes) {
-    // Captured before production changes on ced6409 (same cut code as 784fe34),
-    // GNU 14.2.0, Linux x86_64, Release. Keep n=64 accumulation bitwise fixed.
-    const std::map<BodyId, std::uint64_t> scale_bodies{{1, 0x3e9a4e823b7b30f0ULL},
-                                                       {2, 0x3e650b9b62c9466aULL},
-                                                       {3, 0x3e83988594cc3858ULL},
-                                                       {4, 0x3e6ad7f29abc9f05ULL}};
-    constexpr std::uint64_t scale_total = 0x3ea50b9b62c8ff8eULL;
+    const auto* baselines = platform_baselines();
     std::string errors;
     for (const auto& v : volumes) {
         const bool scale = v.name == "scale_n64";
         const Real tolerance = scale ? 1e-11 : 1e-12;
+        if (scale && !baselines)
+            errors += v.name + ": same-platform pre-refactor volume baseline unavailable; ";
         Real total = 0;
         check(v.actual.body_volume.size() == v.expected.size(), v.name + ": body count");
         for (const auto& [body, expected] : v.expected) {
             total += expected;
             const auto actual = v.actual.body_volume.at(body);
-            if (scale && std::bit_cast<std::uint64_t>(actual) != scale_bodies.at(body))
+            if (scale && baselines &&
+                std::bit_cast<std::uint64_t>(actual) != baselines->scale_bodies.at(body))
                 errors += v.name + ": body " + std::to_string(body) + " baseline bits; ";
             const Real error = std::abs(actual / expected - 1);
             std::cout << "BODY_VOLUME " << v.name << " body=" << body << " actual=" << actual
@@ -417,7 +490,8 @@ void check_analytic_volumes(const std::vector<VolumeCheck>& volumes) {
             if (!(error <= tolerance))
                 errors += v.name + ": body " + std::to_string(body) + " volume; ";
         }
-        if (scale && std::bit_cast<std::uint64_t>(v.actual.solid_volume) != scale_total)
+        if (scale && baselines &&
+            std::bit_cast<std::uint64_t>(v.actual.solid_volume) != baselines->scale_total)
             errors += v.name + ": total baseline bits; ";
         const Real error = std::abs(v.actual.solid_volume / total - 1);
         std::cout << "VOLUME " << v.name << " bits=0x" << std::hex
@@ -502,15 +576,6 @@ Measurement scale_guard(std::vector<VolumeCheck>& volumes) {
 
 void bitwise_outline(std::vector<VolumeCheck>& volumes) {
     constexpr std::array<Local, 4> resolutions{4, 8, 16, 32};
-    // Captured from untouched pre-refactor cut code (ced6409, identical to
-    // 784fe34), GNU 14.2.0, Linux x86_64, Release. Mesh digests were recaptured
-    // with only the brief's named fields; cut digests remain unchanged.
-    constexpr std::array<Golden, 4> expected{{
-        {0xa704cc1efb6e7346ULL, 0x710e70433c2a85eeULL},
-        {0xb7066576e2afffe0ULL, 0xd854e053fc2c3cefULL},
-        {0x95d1f16842b0297dULL, 0xa1261a1ef02de996ULL},
-        {0x4f3fe256a94ed292ULL, 0x2eb75ee8bb73c3c4ULL},
-    }};
     std::string errors;
     for (std::size_t i = 0; i < resolutions.size(); ++i) {
         const auto n = resolutions[i];
@@ -518,7 +583,7 @@ void bitwise_outline(std::vector<VolumeCheck>& volumes) {
         auto m = grid(s, n);
         const auto c = outline(m, s);
         const auto name = "outline_n" + std::to_string(n);
-        errors += golden(name, m, c, expected[i]);
+        errors += golden(name, m, c);
         gp_reference(m, c);
         remember_volume(volumes, name, s, m, c);
     }
@@ -535,7 +600,7 @@ void bitwise_snap() {
                                   }),
               "snap fixture must contain the exact .002 grid line in x and y");
     const auto c = outline(m, s);
-    const auto errors = golden("outline_n10", m, c, {0x0d4fac692083ee07ULL, 0x953382a220d2e108ULL});
+    const auto errors = golden("outline_n10", m, c);
     gp_reference(m, c);
     std::vector<VolumeCheck> volumes;
     remember_volume(volumes, "outline_n10", s, m, c);
@@ -588,12 +653,7 @@ void bitwise_lid(std::vector<VolumeCheck>& volumes, Lid lid) {
     }
     const auto c = outline(m, s);
     const std::string name = lid == Lid::Convex ? "region_lid" : "union";
-    const auto errors =
-        golden(name,
-               m,
-               c,
-               lid == Lid::Convex ? Golden{0x2edefd971f79fe98ULL, 0x28db459fa37df24fULL}
-                                  : Golden{0xb6bf7b0323290597ULL, 0x976fff2710cb69baULL});
+    const auto errors = golden(name, m, c);
     gp_reference(m, c);
     remember_volume(volumes, name, s, m, c);
     check(errors.empty(), errors);
@@ -634,39 +694,32 @@ void keep_void_both(std::vector<VolumeCheck>& volumes) {
                       "removed void GID must disappear");
         }
         const std::string name = keep ? "void_keep" : "void_remove";
-        errors += golden(name,
-                         m,
-                         c,
-                         keep ? Golden{0x0b1422792db4f4baULL, 0x883bf8fb0e99db04ULL}
-                              : Golden{0xb7066576e2afffe0ULL, 0x55523e514716771dULL});
+        errors += golden(name, m, c);
         gp_reference(m, c);
         remember_volume(volumes, name, s, m, c);
     }
     check(errors.empty(), errors);
 }
 void successful_mesh_state() {
-    // Captured from unchanged ced6409 cut sources, GNU 14.2.0, Linux x86_64,
-    // Release. Keep these separate from the brief's named-field goldens.
-    constexpr std::array<std::uint64_t, 3> outline_expected{
-        0xb0bfd3e93428442bULL, 0x23583fe378c251c9ULL, 0xfe4e8beccf17b066ULL};
-    constexpr std::array<std::uint64_t, 2> direct_expected{0xb0bfd3e93428442bULL,
-                                                           0x0fced36ddccee91aULL};
+    const auto* baselines = platform_baselines();
     std::string errors;
-    const auto verify =
-        [&](const std::string& name, const HexMeshArrays& m, std::uint64_t expected) {
-            const auto actual = full_mesh_hash(m);
-            std::cout << "FULL_MESH_DIGEST " << name << " actual=0x" << std::hex << actual
-                      << " expected=0x" << expected << std::dec << '\n';
-            if (actual != expected)
-                errors += name + ": successful cut must match every pre-refactor mesh field; ";
-        };
+    const auto verify = [&](const std::string& name, const HexMeshArrays& m) {
+        const auto actual = full_mesh_hash(m);
+        std::cout << "FULL_MESH_DIGEST " << name << " actual=0x" << std::hex << actual << std::dec
+                  << '\n';
+        if (!baselines) {
+            errors += name + ": same-platform pre-refactor full-mesh baseline unavailable; ";
+        } else if (actual != baselines->full_mesh.at(name)) {
+            errors += name + ": successful cut must match every pre-refactor mesh field; ";
+        }
+    };
     std::size_t i = 0;
     for (const auto lid : {Lid::Box, Lid::Convex, Lid::Notched}) {
         const auto s = stack(lid);
         auto m = grid(s, 8);
         seed_mesh_metadata(m);
         outline(m, s);
-        verify("outline_" + std::to_string(i), m, outline_expected[i]);
+        verify("outline_" + std::to_string(i), m);
         ++i;
     }
     for (const bool keep : {false, true}) {
@@ -675,7 +728,7 @@ void successful_mesh_state() {
         auto options = cut_options();
         options.keep_void = keep;
         value(build_cut_layer(m, outer_planes(), options));
-        verify(keep ? "void_keep" : "void_remove", m, direct_expected[keep]);
+        verify(keep ? "void_keep" : "void_remove", m);
     }
     check(errors.empty(), errors);
 }
@@ -847,6 +900,42 @@ void gp_reordered_gids() {
               "GP identity must use the MFEM minus-face number");
     }
 }
+void gp_encounter_order() {
+    HexMeshArrays m;
+    for (int z = 0; z < 2; ++z)
+        for (int y = 0; y < 3; ++y)
+            for (int x = 0; x < 3; ++x) {
+                m.vertices.insert(m.vertices.end(), {Real(x), Real(y), Real(z)});
+                m.node_gid.push_back(static_cast<Index>(m.node_gid.size()));
+                m.node_layer.push_back(0);
+                m.node_column.push_back(0);
+            }
+    for (int y = 0; y < 2; ++y)
+        for (int x = 0; x < 2; ++x) {
+            const Local v = x + 3 * y;
+            m.hex.insert(m.hex.end(), {v, v + 1, v + 4, v + 3, v + 9, v + 10, v + 13, v + 12});
+        }
+    m.attribute = {1, 1, 1, 1};
+    m.elem_gid = {40, 10, 30, 20};
+    m.partitioning = {3, 1, 2, 0};
+    m.attr_table.entries.push_back({"solid", "", 1, 1});
+    m.attr_table.bodies.emplace("solid", 1);
+    const auto c =
+        value(build_cut_layer(m, CutGeometry{{Plane{0, {1, 1, 0}, 2.5}}}, cut_options()));
+    check(c.cut_elem == std::vector<Local>{1, 2, 3}, "GP fixture must retain an uncut neighbor");
+    // Hand-traced MFEM encounters: (cell 1, xmin), (cell 2, ymin),
+    // (cell 3, ymin), (cell 3, xmin). GID orientation is independent of that order.
+    check(c.gp_elem_gid[0] == std::vector<Index>{10, 30, 10, 20} &&
+              c.gp_elem_gid[1] == std::vector<Index>{40, 40, 20, 30},
+          "GP pairs must follow second-face encounters, independently of GID order");
+    check(c.gp_face == std::vector<Local>{-1, -1, -1, -1} &&
+              c.gp_face_gid == std::vector<Index>{64, 181, 63, 124} &&
+              c.gp_face_minus == std::vector<Local>{4, 1, 3, 4} &&
+              c.gp_face_plus == std::vector<Local>{2, 3, 1, 2} &&
+              c.gp_owner_rank == std::vector<Local>{1, 2, 1, 0},
+          "GP identities, local faces and owners must match the hand-traced neighbors");
+    gp_reference(m, c);
+}
 } // namespace
 
 int main() {
@@ -879,6 +968,7 @@ int main() {
         run("volume_analytic", [&] { volume_analytic(volumes); });
         run("gp_nonmanifold", gp_nonmanifold);
         run("gp_reordered_gids", gp_reordered_gids);
+        run("gp_encounter_order", gp_encounter_order);
         // Defer performance assertions until all correctness results are collected.
         run("scale_guard", [&] {
             check(measured.has_value(), "scale measurement unavailable");
