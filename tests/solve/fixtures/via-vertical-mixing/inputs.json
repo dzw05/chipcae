@@ -1,0 +1,128 @@
+{
+  "schema": "via-vertical-mixing-inputs/1.0",
+  "materials": {
+    "typical": {
+      "matrix": {
+        "id": "matrix",
+        "E": 25000000000.0,
+        "nu": 0.3,
+        "alpha": 1e-05,
+        "k": 2.0
+      },
+      "copper": {
+        "id": "copper",
+        "E": 110000000000.0,
+        "nu": 0.34,
+        "alpha": 1.7e-05,
+        "k": 400.0
+      }
+    },
+    "zero_contrast": {
+      "matrix": {
+        "id": "matrix",
+        "E": 25000000000.0,
+        "nu": 0.3,
+        "alpha": 1e-05,
+        "k": 2.0
+      },
+      "copper": {
+        "id": "copper",
+        "E": 25000000000.0,
+        "nu": 0.3,
+        "alpha": 1e-05,
+        "k": 2.0
+      }
+    }
+  },
+  "volume_fractions": [
+    0.0,
+    0.05,
+    0.3,
+    1.0
+  ],
+  "robustness": {
+    "k_ratio_kc_over_km": [
+      1.0,
+      10.0,
+      200.0,
+      2000.0
+    ],
+    "nu_values": [
+      0.0,
+      0.3,
+      0.34,
+      0.45
+    ],
+    "note": "oracle 与 HS 包络在 typical 及该对比度/泊松组合上均须 1e-12；demo 规模证据至少包含 typical 与一组 k_c/k_m>=200。",
+    "soft_inclusion": {
+      "k_ratio_ki_over_km": [
+        0.001,
+        0.1
+      ],
+      "E_ratio_Ei_over_Em": [
+        0.001,
+        0.1
+      ],
+      "note": "软夹杂时第 2、4、5、6 条为 HS 上界，仍须落在包络内，oracle 1e-12。"
+    }
+  },
+  "illegal": {
+    "f": [
+      -1e-16,
+      1.0
+    ],
+    "materials": [
+      {
+        "why": "nonpositive_k",
+        "k_m": 0.0,
+        "k_c": 400.0
+      },
+      {
+        "why": "poisson_half",
+        "nu_m": 0.5,
+        "nu_c": 0.34
+      },
+      {
+        "why": "nonpositive_E",
+        "E_m": 0.0,
+        "E_c": 110000000000.0
+      }
+    ]
+  },
+  "kz_plate": {
+    "family": "fvm",
+    "orientation": "vertical",
+    "f": 0.3,
+    "thickness_m": 0.001,
+    "lx_m": 0.01,
+    "ly_m": 0.01,
+    "T_hot_K": 400.0,
+    "T_cold_K": 300.0,
+    "sides": "adiabatic",
+    "source": "none",
+    "material": "typical",
+    "rel_tol_vs_analytic": 0.005,
+    "tol_rationale": "一维均匀网格上 MFD/FVM 对线性温度场应达机器精度量级；0.5% 是未拟合的保守离散门，大约 1e12 倍宽于 1e-12 的闭式门，只用于排除接错 k_z。"
+  },
+  "oracle_rel_tol": 1e-12,
+  "oracle_tol_rationale": "双精度机器 epsilon 约 2e-16，1e-12 约为这些闭式（含 O(1e11) 的模量）保留约 4 位十进制余量，不是对某次运行拟合的门。",
+  "levin_cavity": {
+    "E_i_over_E_m": [
+      1e-06,
+      0.001
+    ],
+    "alpha_i": 0.0,
+    "alpha_star_rel_tol_to_alpha_m": 1e-08,
+    "note": "E_i→0、α_i=0 时 Levin 精确解 α*=α_m。1e-8 是空腔正则化残留门，不是对某次运行拟合的。另须报出 typical 铜柱 Levin α_z 与 Schapery 纵向式的差值（只报告，不设门）。"
+  },
+  "opening_ereg": {
+    "E_i_over_E_m": [
+      0.001,
+      0.0001
+    ],
+    "nu_i": 0.0,
+    "alpha_i": 0.0,
+    "demo_pv_rel_tol": 0.001,
+    "note": "修订一 C：单元级（阶段 A）计算两档 C/alpha/k，须有限且 C SPD 并打印工程常数；demo 规模（阶段 B）两档翘曲 PV 相对差 ≤1e-3，两档 KSP 都收敛并报迭代数。E_mask 取测试生成的阻焊基体 E，不写入真实材料库路径。"
+  }
+}
