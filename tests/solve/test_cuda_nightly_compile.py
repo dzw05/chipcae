@@ -6,9 +6,11 @@ No test executes a solver or claims GPU validation.
 """
 
 import argparse
+import json
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 
 
@@ -23,7 +25,45 @@ def run(command, **kwargs):
     return result
 
 
-def workflow_contract(source):
+def registration_contract(source, compiler, generator):
+    expected = {
+        "solve_cuda_nightly_workflow", "solve_cuda_nightly_dependencies",
+        "solve_cuda_nightly_cuda_default", "solve_cuda_nightly_cuda_injected",
+        "solve_cuda_nightly_cpu_injected", "solve_cuda_nightly_no_mfem_injected",
+    }
+    with tempfile.TemporaryDirectory(prefix="solve-cuda-registration-") as temporary:
+        cpu_tests = None
+        for name, definitions, enabled in (
+            ("cpu", [], False),
+            ("cpu_off", ["-DMFEM_USE_CUDA=OFF", "-DCHIPCAE_CI_INJECT_CUDA_FAULT=OFF"], False),
+            ("cuda", ["-DMFEM_USE_CUDA=ON"], True),
+            ("injected", ["-DCHIPCAE_CI_INJECT_CUDA_FAULT=ON"], True),
+        ):
+            build = Path(temporary) / name
+            command = [
+                "cmake", "-S", str(source), "-B", str(build), "-G", generator,
+                "-DCMAKE_BUILD_TYPE=Release", "-DCHIPCAE_BUILD_TESTS=ON",
+                f"-DPython3_EXECUTABLE={sys.executable}", *definitions,
+            ]
+            if compiler:
+                command.append(f"-DCMAKE_CXX_COMPILER={compiler}")
+            configured = run(command)
+            assert configured.returncode == 0, f"{name}: registration must configure"
+            inventory = run([
+                "ctest", "--test-dir", str(build), "--show-only=json-v1", "-R", "^solve_",
+            ])
+            assert inventory.returncode == 0, f"{name}: cannot list solver tests"
+            tests = {test["name"] for test in json.loads(inventory.stdout)["tests"]}
+            nightly = {test for test in tests if test.startswith("solve_cuda_nightly_")}
+            assert nightly == (expected if enabled else set()), (
+                f"{name}: unexpected CUDA nightly registrations: {sorted(nightly)}"
+            )
+            if cpu_tests is None:
+                cpu_tests = tests
+            assert tests - nightly == cpu_tests, f"{name}: existing solver tests changed"
+
+
+def workflow_contract(source, compiler, generator):
     # PyYAML is installed by ci.yml for the existing contract tests as well.
     import yaml
 
@@ -57,6 +97,7 @@ def workflow_contract(source):
             checked = run(["bash", "-n"], input=step["run"])
             assert checked.returncode == 0, "invalid CUDA job shell syntax"
     print("CUDA solver nightly entry point and default-false dispatch accepted")
+    registration_contract(source, compiler, generator)
 
 
 def lock_values(path):
@@ -161,7 +202,7 @@ def main():
     parser.add_argument("--generator", default="Ninja")
     args = parser.parse_args()
     if args.case == "workflow":
-        workflow_contract(args.source)
+        workflow_contract(args.source, args.compiler, args.generator)
     elif args.case == "dependencies":
         dependency_contract(args.source)
     else:
