@@ -313,3 +313,11 @@ if(_solve_backend)
     set_tests_properties(solve_cutgeom_nc_consume_outline PROPERTIES
         TIMEOUT 180 LABELS "cut;contract")
 endif()
+
+if(_solve_backend)
+    add_test(NAME solve_fvm_trace_map COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_fvm_trace_map.py
+        $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE})
+    set_tests_properties(solve_fvm_trace_map PROPERTIES
+        TIMEOUT 900 LABELS "fvm;numerical" SKIP_RETURN_CODE 77)
+endif()
