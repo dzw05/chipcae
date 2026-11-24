@@ -150,7 +150,7 @@ struct Direct {
             "LU refinement failed residual tolerance: omega=" + scientific(refinement.omega) +
             " (rtol=" + scientific(options.rtol) + ", eta=" + scientific(refinement.eta) +
             ", rel=" + scientific(refinement.rel) + ", iterations=" + std::to_string(iterations) +
-            ", field=" + name + ")");
+            ", refine_seconds=" + scientific(refine_seconds) + ", field=" + name + ")");
     }
 };
 class ThermalForce : public LinearFormIntegrator {
@@ -843,34 +843,51 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             }
             if (!solved) {
                 Direct direct;
-                residual = direct.solve(*matrix, b, x, inputs.linear, name);
-                iterations = direct.iterations;
-                auto solve_end = std::chrono::steady_clock::now();
-                const std::string timing =
-                    name + " assembly_seconds=" +
-                    std::to_string(
-                        std::chrono::duration<double>(solve_start - assembly_start).count()) +
-                    " PETSc_CSR_seconds=" + std::to_string(direct.assembly_seconds) +
-                    " factor_seconds=" + std::to_string(direct.factor_seconds) +
-                    " LU_solve_seconds=" +
-                    std::to_string(std::chrono::duration<double>(solve_end - solve_start).count()) +
-                    " omega=" + Direct::scientific(direct.refinement.omega) +
-                    " eta=" + Direct::scientific(direct.refinement.eta) +
-                    " rel=" + Direct::scientific(direct.refinement.rel) +
-                    " refine_iterations=" + std::to_string(direct.iterations) +
-                    " refine_seconds=" + Direct::scientific(direct.refine_seconds);
-                // Only rank zero owns the event writer. Relay each rank's measured timing
-                // here so the direct solve remains observable without changing event handling.
+                std::string timing, failure;
+                try {
+                    residual = direct.solve(*matrix, b, x, inputs.linear, name);
+                    iterations = direct.iterations;
+                    auto solve_end = std::chrono::steady_clock::now();
+                    timing =
+                        name + " assembly_seconds=" +
+                        std::to_string(
+                            std::chrono::duration<double>(solve_start - assembly_start).count()) +
+                        " PETSc_CSR_seconds=" + std::to_string(direct.assembly_seconds) +
+                        " factor_seconds=" + std::to_string(direct.factor_seconds) +
+                        " LU_solve_seconds=" +
+                        std::to_string(
+                            std::chrono::duration<double>(solve_end - solve_start).count()) +
+                        " omega=" + Direct::scientific(direct.refinement.omega) +
+                        " eta=" + Direct::scientific(direct.refinement.eta) +
+                        " rel=" + Direct::scientific(direct.refinement.rel) +
+                        " refine_iterations=" + std::to_string(direct.iterations) +
+                        " refine_seconds=" + Direct::scientific(direct.refine_seconds);
+                } catch (const std::exception& error) {
+                    failure = error.what();
+                }
                 int log_ranks = 1;
                 MPI_Comm_size(MPI_COMM_WORLD, &log_ranks);
-                for (int source = 0; source < log_ranks; ++source) {
-                    std::string line = rank == source ? timing : std::string{};
+                auto relay = [&](const std::string& local, int source) {
+                    std::string line = rank == source ? local : std::string{};
                     int length = static_cast<int>(line.size());
                     MPI_Bcast(&length, 1, MPI_INT, source, MPI_COMM_WORLD);
                     line.resize(static_cast<std::size_t>(length));
                     MPI_Bcast(line.data(), length, MPI_CHAR, source, MPI_COMM_WORLD);
-                    emit(io::LogLine{1, source, line, "", 0});
-                }
+                    return line;
+                };
+                // Every direct solve participates, including a rank that threw before timing.
+                // Propagate the first failing rank's diagnostic before relaying success logs.
+                int failed_rank = failure.empty() ? log_ranks : rank;
+                MPI_Allreduce(MPI_IN_PLACE, &failed_rank, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+                if (failed_rank < log_ranks)
+                    throw std::runtime_error(relay(failure, failed_rank));
+                // Only rank zero owns the writer. Finish all collectives before emitting so
+                // a writer failure cannot leave another rank waiting for the next broadcast.
+                std::vector<std::string> timings;
+                for (int source = 0; source < log_ranks; ++source)
+                    timings.push_back(relay(timing, source));
+                for (int source = 0; source < log_ranks; ++source)
+                    emit(io::LogLine{1, source, timings[static_cast<std::size_t>(source)], "", 0});
             }
             form.RecoverFEMSolution(x, rhs, field);
             ++window;

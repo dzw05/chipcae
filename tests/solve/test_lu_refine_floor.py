@@ -18,7 +18,8 @@ SOURCE = Path(__file__).resolve().parents[2]
 SCI = r"[-+]?(?:[0-9]\.[0-9]{3}e[+-][0-9]+|inf)"
 FAILURE = re.compile(
     rf"LU refinement failed residual tolerance: omega=({SCI}) "
-    rf"\(rtol=({SCI}), eta=({SCI}), rel=({SCI}), iterations=([1-8]), field=(T|U)\)"
+    rf"\(rtol=({SCI}), eta=({SCI}), rel=({SCI}), iterations=([1-8]), "
+    rf"refine_seconds=({SCI}), field=(T|U)\)"
 )
 
 
@@ -131,7 +132,7 @@ def residuals(decoded):
 
 class LuRefineFloor(unittest.TestCase):
     def run_case(self, rtol, ranks=1, is_board=False, zero=False, subdivisions=None,
-                 contrast=1300, load_scale=1):
+                 contrast=1300, load_scale=1, failing_rank=None):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             case = copy.deepcopy(CASE)
@@ -144,8 +145,12 @@ class LuRefineFloor(unittest.TestCase):
             else:
                 synthetic(root)
             if load_scale != 1:
-                case['loads'][1]['T_inf'] = 300 + 100 * load_scale
-                case['loads'][2]['q_vol'] *= load_scale
+                reference = case['physics'][1]['T_ref']
+                for load in case['loads']:
+                    if load['type'] == 'convection':
+                        load['T_inf'] = reference + (load['T_inf'] - reference) * load_scale
+                    elif load['type'] == 'heat_source':
+                        load['q_vol'] *= load_scale
             if zero:
                 case['loads'] = [dict(type='fixed_temperature', target='face:zmin', T=0)]
                 case['physics'][1]['T_ref'] = 0
@@ -157,12 +162,28 @@ class LuRefineFloor(unittest.TestCase):
                 'materials': [card('fr4_eq', 25e9, .3, 12e-6 if is_board else 1e-5, .3),
                               card('cu', 110e9, .34, 17e-6, .3 * contrast)]})
             write_json(root / 'case.json', case)
+            if failing_rank is not None:
+                failing_case = copy.deepcopy(case)
+                failing_case['solver']['linear']['rtol'] = 1e-16
+                write_json(root / 'failing_case.json', failing_case)
             write_json(root / 'profile.json', dict(schema='chipcae.run_profile/1.0',
                        ranks=ranks, backend='cpu', gpus=0))
             command = [exe, '--case', 'case.json', '--profile', 'profile.json', '--out', 'out']
-            if ranks > 1:
+            if failing_rank is not None:
+                # MPMD keeps one communicator while only one rank rejects its solve.
+                self.assertEqual(ranks, 2)
+                self.assertIn(failing_rank, (0, 1))
+                command = [mpirun]
+                for rank in range(ranks):
+                    if rank:
+                        command.append(':')
+                    case_file = 'failing_case.json' if rank == failing_rank else 'case.json'
+                    command.extend(['-np', '1', exe, '--case', case_file,
+                                    '--profile', 'profile.json', '--out', 'out'])
+            elif ranks > 1:
                 command = [mpirun, '-np', str(ranks), *command]
-            result = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=180)
+            result = subprocess.run(command, cwd=root, capture_output=True, text=True,
+                                    timeout=30 if failing_rank is not None else 180)
             path = root / 'out/events.bin'
             return result, events(path) if path.exists() else []
 
@@ -212,14 +233,16 @@ class LuRefineFloor(unittest.TestCase):
     def test_residual_event_keeps_relative_norm(self):
         # This load makes ||b||_2 > 1 for both systems, so the legacy event
         # equals rel. It must remain distinct from componentwise omega.
-        result, decoded = self.run_case(1e-12, load_scale=1e4)
-        self.check_success(result, decoded, 1e-12)
-        timings = {message.split()[0]: dict(re.findall(r'(\w+)=([^ ]+)', message))
-                   for _, rank, message in log_lines(decoded)
-                   if rank == 0 and ' assembly_seconds=' in message}
-        for field, (_, value) in residuals(decoded).items():
-            self.assertEqual(f'{value:.3e}', timings[field]['rel'])
-            self.assertGreater(value, 10 * float(timings[field]['omega']))
+        for is_board in (False, True):
+            with self.subTest(board=is_board):
+                result, decoded = self.run_case(1e-12, load_scale=1e4, is_board=is_board)
+                self.check_success(result, decoded, 1e-12)
+                timings = {message.split()[0]: dict(re.findall(r'(\w+)=([^ ]+)', message))
+                           for _, rank, message in log_lines(decoded)
+                           if rank == 0 and ' assembly_seconds=' in message}
+                for field, (_, value) in residuals(decoded).items():
+                    self.assertEqual(f'{value:.3e}', timings[field]['rel'])
+                    self.assertGreater(value, 10 * float(timings[field]['omega']))
 
     def test_trace_explicit_tolerance(self):
         self.check_success(*self.run_case(1e-14), 1e-14)
@@ -247,7 +270,19 @@ class LuRefineFloor(unittest.TestCase):
                             subdivisions=subdivisions, contrast=contrast), 1e-12)
 
     def test_failure_diagnostic(self):
-        result, decoded = self.run_case(1e-16)
+        for ranks in (1, 2):
+            with self.subTest(ranks=ranks):
+                self.check_failure(*self.run_case(1e-16, ranks=ranks))
+
+    def test_mpi_rank_local_failure(self):
+        for failing_rank in (0, 1):
+            with self.subTest(failing_rank=failing_rank):
+                result, decoded = self.run_case(1e-14, ranks=2, failing_rank=failing_rank)
+                self.check_failure(result, decoded)
+                self.assertFalse(any(' assembly_seconds=' in message
+                                     for _, _, message in log_lines(decoded)))
+
+    def check_failure(self, result, decoded):
         self.assertEqual(result.returncode, 1, result.stderr)
         prefix = 'chipcae-solve: '
         messages = [line[len(prefix):] for line in result.stderr.splitlines() if line.startswith(prefix)]
@@ -256,13 +291,15 @@ class LuRefineFloor(unittest.TestCase):
         self.assertEqual(failures, [(3, 0, messages[0])])
         match = FAILURE.fullmatch(messages[0])
         self.assertIsNotNone(match, f'wrong LU refinement diagnostic: {messages[0]!r}')
-        omega, rtol, eta, rel, iterations, field = match.groups()
+        omega, rtol, eta, rel, iterations, refine_seconds, field = match.groups()
         self.assertTrue(math.isfinite(float(omega)))
         self.assertGreater(float(omega), 1e-16)
         self.assertEqual(rtol, '1.000e-16')
         self.assertTrue(math.isfinite(float(eta)))
         self.assertTrue(math.isfinite(float(rel)))
         self.assertIn(int(iterations), range(1, 9))
+        self.assertTrue(math.isfinite(float(refine_seconds)))
+        self.assertGreaterEqual(float(refine_seconds), 0)
         self.assertEqual(field, 'T')
 
 
