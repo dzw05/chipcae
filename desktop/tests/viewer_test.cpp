@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -29,6 +30,7 @@
 #include <vtkCellData.h>
 #include <vtkCompositeDataIterator.h>
 #include <vtkCompositeDataSet.h>
+#include <vtkCoordinate.h>
 #include <vtkDataSet.h>
 #include <vtkDataSetMapper.h>
 #include <vtkDoubleArray.h>
@@ -528,9 +530,13 @@ void writeFixture(const QDir& root,
     require(writer->Write() == 1, "write temporary VTKHDF fixture");
 }
 // Synthetic summary packages keep method tests independent of solver output and frozen fixtures.
-void writeSummaryFixture(const QDir& root, const QTemporaryDir& temp, const QJsonArray& summary) {
+void writeSummaryFixture(
+    const QDir& root,
+    const QTemporaryDir& temp,
+    const QJsonArray& summary,
+    const std::function<void(vtkUnstructuredGrid*)>& mutate = [](vtkUnstructuredGrid*) {}) {
     require(temp.isValid(), "summary fixture directory");
-    writeFixture(root, temp.filePath("step.vtkhdf"), [](vtkUnstructuredGrid*) {});
+    writeFixture(root, temp.filePath("step.vtkhdf"), mutate);
     const QJsonObject manifest{
         {"schema_version", "chipcae.results/1.0"},
         {"fields", QJsonArray{}},
@@ -541,6 +547,509 @@ void writeSummaryFixture(const QDir& root, const QTemporaryDir& temp, const QJso
     const auto bytes = QJsonDocument(manifest).toJson();
     require(file.write(bytes) == bytes.size(), "summary fixture manifest write");
 }
+// D14g-1 compares metadata-only variants against identical geometry without methods.
+// Equality is deliberately exact, as required by this viewer presentation contract.
+bool exactRange(const ColorRange& a, const ColorRange& b) {
+    return a.valid == b.valid && a.min == b.min && a.max == b.max && a.unit == b.unit;
+}
+bool exactCoordinates(const Coordinates& a, const Coordinates& b) {
+    if (a.size() != b.size())
+        return false;
+    for (std::size_t block = 0; block < a.size(); ++block) {
+        if (a[block].size() != b[block].size())
+            return false;
+        for (std::size_t point = 0; point < a[block].size(); ++point)
+            for (int axis = 0; axis < 3; ++axis)
+                if (a[block][point][axis] != b[block][point][axis])
+                    return false;
+    }
+    return true;
+}
+std::vector<vtkTextActor*>
+matchingTextActors(ResultView& view, const QString& input, bool visibleOnly = true) {
+    std::vector<vtkTextActor*> matches;
+    auto props = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetViewProps();
+    props->InitTraversal();
+    while (auto prop = props->GetNextProp())
+        if (auto text = vtkTextActor::SafeDownCast(prop))
+            if (QString::fromUtf8(text->GetInput()) == input &&
+                (!visibleOnly || text->GetVisibility()))
+                matches.push_back(text);
+    return matches;
+}
+int scalarBarCount(ResultView& view) {
+    int count = 0;
+    auto props = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetViewProps();
+    props->InitTraversal();
+    while (auto prop = props->GetNextProp())
+        if (vtkScalarBarActor::SafeDownCast(prop))
+            ++count;
+    return count;
+}
+bool geometryScalarsOff(ResultView& view) {
+    int count = 0;
+    auto actors = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetActors();
+    actors->InitTraversal();
+    while (auto actor = actors->GetNextActor()) {
+        auto mapper = vtkDataSetMapper::SafeDownCast(actor->GetMapper());
+        if (!mapper || actor->GetObjectName() == "layerBoundaries")
+            continue;
+        mapper->Update();
+        auto input = mapper->GetInput();
+        if (input && input->GetNumberOfCells()) {
+            ++count;
+            if (mapper->GetScalarVisibility())
+                return false;
+        }
+    }
+    return count > 0;
+}
+bool exactStatus(ResultView& view, const QString& expected) {
+    auto label = view.findChild<QLabel*>("fieldStatusLabel");
+    return label && label->text() == expected && label->isHidden() == expected.isEmpty();
+}
+int fvmNoticeAcceptance(const QDir& root) {
+    int failures = 0;
+    QString context;
+    auto run = [&](const QString& name, auto test) {
+        const auto before = failures;
+        context.clear();
+        auto check = [&](bool ok, const char* message) {
+            if (!ok) {
+                ++failures;
+                std::cerr << "FAIL D14g-1 " << name.toStdString() << " [" << context.toStdString()
+                          << "]: " << message << '\n';
+            }
+        };
+        try {
+            test(check);
+        } catch (const std::exception& e) {
+            check(false, e.what());
+        }
+        if (failures == before)
+            std::cout << "PASS D14g-1 " << name.toStdString() << '\n';
+    };
+    const QString notice = "FVM elastic: accuracy unverified - demo only";
+    const QString fvmStatus = QStringLiteral("FVM 弹性结果：精度未验证，仅供演示");
+    const QString unsolvedStatus = QStringLiteral("力学未求解：不显示位移／翘曲");
+    const std::array fields = {ResultColorField::Temperature,
+                               ResultColorField::DisplacementMagnitude,
+                               ResultColorField::WarpageUz,
+                               ResultColorField::LayerId,
+                               ResultColorField::MaterialId};
+    // The three entries are copied literally from the frozen manifest_fvm sample.
+    const QJsonArray enums{QJsonObject{{"step", 0},
+                                       {"name", "warpage_pv"},
+                                       {"value", 1.25e-06},
+                                       {"unit", "m"},
+                                       {"method", "fvm_cell_centers_lsq"}},
+                           QJsonObject{{"step", 0},
+                                       {"name", "T_max"},
+                                       {"value", 370.0},
+                                       {"unit", "K"},
+                                       {"method", "fvm_cell_centers"}},
+                           QJsonObject{{"step", 0},
+                                       {"name", "U_mag_max"},
+                                       {"value", 2.5e-06},
+                                       {"unit", "m"},
+                                       {"method", "fvm_cell_centers"}}};
+    auto withoutMethods = enums;
+    auto sentences = enums;
+    for (qsizetype i = 0; i < enums.size(); ++i) {
+        auto entry = enums[i].toObject();
+        entry.remove("method");
+        withoutMethods[i] = entry;
+        entry["method"] =
+            i == 0 ? "FVM top-face centroids; least-squares plane removal" : "FVM cell centers";
+        sentences[i] = entry;
+    }
+    auto mechanical = [&](const QString& name, const QJsonValue& method) {
+        auto entry = enums[name == "warpage_pv" ? 0 : 2].toObject();
+        entry["method"] = method;
+        return entry;
+    };
+    QTemporaryDir baselineTemp;
+    ResultSession baselineSession;
+    ResultView baseline;
+    std::array<ColorRange, 5> baselineRanges;
+    std::array<Coordinates, 5> baselineDeformed;
+    Coordinates undeformed;
+    run("fixture has nonzero Uz and scale moves baseline", [&](auto check) {
+        writeSummaryFixture(root, baselineTemp, withoutMethods);
+        require(baselineSession.open(baselineTemp.path()), qPrintable(baselineSession.error()));
+        require(baseline.loadStep(baselineSession, 0), qPrintable(baseline.error()));
+        baseline.setWarpageScale(0);
+        undeformed = coordinates(baseline);
+        bool nonzeroZ = false;
+        for (const auto& name : displayedBlocks)
+            if (auto block = baseline.displayed(name))
+                if (auto u = block->GetPointData()->GetArray("U"))
+                    for (vtkIdType i = 0; i < u->GetNumberOfTuples(); ++i)
+                        nonzeroZ |= u->GetComponent(i, 2) != 0;
+        check(nonzeroZ, "fixture must have nonzero U_z to detect suppressed deformation");
+        baseline.setWarpageScale(1000);
+        check(!exactCoordinates(undeformed, coordinates(baseline)),
+              "baseline scale 0 and 1000 must produce different coordinates");
+        for (std::size_t i = 0; i < fields.size(); ++i) {
+            baseline.setColorField(fields[i]);
+            baselineRanges[i] = baseline.colorRange();
+            baselineDeformed[i] = coordinates(baseline);
+        }
+        check(baselineRanges[0].valid, "baseline temperature must be available");
+    });
+    if (failures)
+        return failures; // Fixture errors must not masquerade as missing-feature failures.
+    auto withPackage = [&](const QJsonArray& summary,
+                           auto test,
+                           bool missingT = false,
+                           bool absentSummary = false) {
+        QTemporaryDir temp;
+        writeSummaryFixture(root, temp, summary, [&](vtkUnstructuredGrid* grid) {
+            if (missingT)
+                grid->GetPointData()->RemoveArray("T");
+        });
+        if (absentSummary) {
+            QFile file(temp.filePath("manifest.json"));
+            require(file.open(QIODevice::ReadOnly), "read absent-summary manifest");
+            auto manifest = QJsonDocument::fromJson(file.readAll()).object();
+            file.close();
+            manifest.remove("summary");
+            require(file.open(QIODevice::WriteOnly | QIODevice::Truncate),
+                    "rewrite absent-summary manifest");
+            const auto bytes = QJsonDocument(manifest).toJson();
+            require(file.write(bytes) == bytes.size(), "write absent-summary manifest");
+        }
+        ResultSession session;
+        require(session.open(temp.path()), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        test(view, session);
+    };
+    auto noNotice = [&](ResultView& view, auto check) {
+        check(matchingTextActors(view, notice, false).empty(), "notice actor must be absent");
+        auto label = view.findChild<QLabel*>("fieldStatusLabel");
+        check(label && !label->text().contains(fvmStatus) &&
+                  !label->text().contains(unsolvedStatus),
+              "unexpected new status text");
+    };
+    auto checkFvm = [&](ResultView& view, auto check) {
+        const auto variant = context;
+        for (std::size_t i = 0; i < fields.size(); ++i) {
+            context = variant + " field=" + QString::number(static_cast<int>(fields[i]));
+            view.setColorField(fields[i]);
+            view.setWarpageScale(0);
+            check(exactCoordinates(coordinates(view), undeformed), "scale-zero geometry changed");
+            view.setWarpageScale(1000);
+            check(exactRange(view.colorRange(), baselineRanges[i]), "FVM range or unit changed");
+            check(exactCoordinates(coordinates(view), baselineDeformed[i]),
+                  "FVM deformed geometry changed");
+            check(exactStatus(view, fvmStatus), "missing exact visible FVM status");
+            check(matchingTextActors(view, notice).size() == 1,
+                  "expected exactly one visible FVM notice actor");
+        }
+    };
+    auto checkOrdinary = [&](ResultView& view, auto check) {
+        const auto variant = context;
+        for (std::size_t i = 0; i < fields.size(); ++i) {
+            context = variant + " field=" + QString::number(static_cast<int>(fields[i]));
+            view.setColorField(fields[i]);
+            view.setWarpageScale(1000);
+            check(exactRange(view.colorRange(), baselineRanges[i]), "ordinary range changed");
+            check(exactCoordinates(coordinates(view), baselineDeformed[i]),
+                  "ordinary deformed geometry changed");
+            check(exactStatus(view, {}), "ordinary status changed");
+            noNotice(view, check);
+        }
+    };
+    auto checkUnsolved = [&](ResultView& view, auto check) {
+        const auto variant = context;
+        for (std::size_t i = 0; i < fields.size(); ++i) {
+            context = variant + " field=" + QString::number(static_cast<int>(fields[i]));
+            view.setColorField(fields[i]);
+            for (double scale : {0.0, 1000.0}) {
+                view.setWarpageScale(scale);
+                check(exactCoordinates(coordinates(view), undeformed),
+                      "unsolved mechanics must leave every block undeformed");
+            }
+            check(matchingTextActors(view, notice, false).empty(),
+                  "unsolved mechanics must not show FVM notice");
+            if (fields[i] == ResultColorField::DisplacementMagnitude ||
+                fields[i] == ResultColorField::WarpageUz) {
+                check(!view.colorRange().valid, "unsolved mechanical range must be invalid");
+                check(view.colorBarTitle().isEmpty(), "unsolved mechanical title must be empty");
+                check(scalarBarCount(view) == 0, "unsolved mechanics must omit scalar bar");
+                check(geometryScalarsOff(view), "unsolved geometry mapper scalars must be off");
+                check(exactStatus(view, unsolvedStatus), "missing exact visible unsolved status");
+            } else {
+                check(exactRange(view.colorRange(), baselineRanges[i]),
+                      "unsolved mechanics changed temperature or ID coloring");
+                check(exactStatus(view, {}), "unexpected non-mechanical unsolved status");
+                if (fields[i] == ResultColorField::Temperature)
+                    check(view.colorRange().valid, "unsolved mechanics lost temperature");
+            }
+        }
+    };
+    run("fvm elastic enum shows unverified notice", [&](auto check) {
+        withPackage(enums, [&](auto& view, auto&) {
+            checkFvm(view, check);
+            check(view.summary("warpage_pv") == "warpage_pv: 1.25e-06 m [fvm_cell_centers_lsq]",
+                  "enum summary changed");
+            check(view.tmaxText() == "T_max: 370 K [fvm_cell_centers]", "enum Tmax changed");
+        });
+    });
+    run("fvm elastic long sentences show unverified notice", [&](auto check) {
+        withPackage(sentences, [&](auto& view, auto&) {
+            checkFvm(view, check);
+            check(
+                view.summary("warpage_pv") ==
+                    "warpage_pv: 1.25e-06 m [FVM top-face centroids; least-squares plane removal]",
+                "long warpage summary changed");
+            check(view.summary("U_mag_max") == "U_mag_max: 2.5e-06 m [FVM cell centers]",
+                  "long magnitude summary changed");
+            check(view.tmaxText() == "T_max: 370 K [FVM cell centers]", "long Tmax changed");
+        });
+    });
+    run("single fvm mechanical entry is enough", [&](auto check) {
+        for (const auto& entry : {enums.at(0), sentences.at(2)})
+            withPackage({entry}, [&](auto& view, auto&) { checkFvm(view, check); });
+    });
+    run("not solved hides displacement and warpage", [&](auto check) {
+        for (const auto& method : {"not_solved", "not solved: fvm thermal-only stage"})
+            for (int names : {1, 2, 3}) {
+                context = QString(method) + " names=" + QString::number(names);
+                QJsonArray summary;
+                if (names & 1)
+                    summary.append(mechanical("warpage_pv", method));
+                if (names & 2)
+                    summary.append(mechanical("U_mag_max", method));
+                withPackage(summary, [&](auto& view, auto&) { checkUnsolved(view, check); });
+            }
+    });
+    run("not solved wins over fvm method", [&](auto check) {
+        for (const auto& method : {"not_solved", "not solved: fvm thermal-only stage"})
+            for (bool reversed : {false, true}) {
+                context = QString(method) + (reversed ? " U unsolved" : " warpage unsolved");
+                withPackage({mechanical("warpage_pv", reversed ? "fvm_cell_centers_lsq" : method),
+                             mechanical("U_mag_max", reversed ? method : "fvm_cell_centers")},
+                            [&](auto& view, auto&) { checkUnsolved(view, check); });
+            }
+    });
+    run("non fvm methods unchanged", [&](auto check) {
+        const std::vector<QJsonValue> methods{
+            QJsonValue(QJsonValue::Undefined),
+            "",
+            QJsonValue(QJsonValue::Null),
+            1,
+            true,
+            QJsonArray{"not_solved"},
+            QJsonObject{{"method", "fvm_cell_centers"}},
+            "fem_q2_nodes",
+            "mechanical_disabled",
+            "mechanical physics disabled; zero displacement",
+            "FVM_CELL_CENTERS_LSQ",
+            "FVM_CELL_CENTERS",
+            "Not_Solved",
+            "not_SOLVED",
+            " fvm_cell_centers_lsq",
+            "fvm_cell_centers_lsq ",
+            " fvm_cell_centers",
+            "fvm_cell_centers ",
+            " not_solved",
+            "not_solved ",
+            "prefix_fvm_cell_centers_lsq",
+            "fvm_cell_centers_lsq_suffix",
+            "prefix_fvm_cell_centers",
+            "fvm_cell_centers_suffix",
+            "prefix_not_solved",
+            "not_solved_suffix",
+            " FVM cell centers ",
+            "FVM top-face centroids; least-squares plane removal suffix",
+            "not solved: fvm thermal-only stage suffix"};
+        for (std::size_t i = 0; i < methods.size(); ++i) {
+            context = "method variant=" + QString::number(i);
+            withPackage({mechanical("warpage_pv", methods[i]), mechanical("U_mag_max", methods[i])},
+                        [&](auto& view, auto&) { checkOrdinary(view, check); });
+        }
+        for (const auto& entry : {enums.at(1), sentences.at(1)}) {
+            context = "only thermal FVM";
+            withPackage({entry}, [&](auto& view, auto&) { checkOrdinary(view, check); });
+        }
+        auto wrongStep = enums;
+        for (qsizetype i = 0; i < wrongStep.size(); ++i) {
+            auto entry = wrongStep[i].toObject();
+            entry["step"] = 1;
+            wrongStep[i] = entry;
+        }
+        context = "wrong step";
+        withPackage(wrongStep, [&](auto& view, auto&) { checkOrdinary(view, check); });
+        context = "empty summary";
+        withPackage({}, [&](auto& view, auto&) { checkOrdinary(view, check); });
+        context = "absent summary";
+        withPackage({}, [&](auto& view, auto&) { checkOrdinary(view, check); }, false, true);
+        // Methods are specific to each mechanical quantity.
+        context = "swapped FVM enums";
+        withPackage({mechanical("warpage_pv", "fvm_cell_centers"),
+                     mechanical("U_mag_max", "fvm_cell_centers_lsq")},
+                    [&](auto& view, auto&) { checkOrdinary(view, check); });
+    });
+    run("first qualifying mechanical summary entry wins", [&](auto check) {
+        for (const auto& name : {"warpage_pv", "U_mag_max"}) {
+            const auto fvm = mechanical(
+                name, QString(name) == "warpage_pv" ? "fvm_cell_centers_lsq" : "fvm_cell_centers");
+            const auto unsolved = mechanical(name, "not_solved");
+            for (bool fvmFirst : {true, false}) {
+                context = QString(name) + (fvmFirst ? " first FVM" : " first unsolved");
+                withPackage(fvmFirst ? QJsonArray{fvm, unsolved} : QJsonArray{unsolved, fvm},
+                            [&](auto& view, auto&) {
+                                if (fvmFirst)
+                                    checkFvm(view, check);
+                                else
+                                    checkUnsolved(view, check);
+                            });
+            }
+            for (const auto& method :
+                 std::vector<QJsonValue>{QJsonValue(QJsonValue::Undefined),
+                                         "",
+                                         QJsonValue(QJsonValue::Null),
+                                         1,
+                                         true,
+                                         "fem_q2_nodes",
+                                         QJsonArray{"not_solved"},
+                                         QJsonObject{{"method", "fvm_cell_centers"}}}) {
+                context = QString(name) +
+                          " selected blocking method type=" + QString::number(method.type());
+                withPackage({mechanical(name, method), fvm, unsolved},
+                            [&](auto& view, auto&) { checkOrdinary(view, check); });
+            }
+            for (bool selectedFvm : {true, false}) {
+                auto invalid = selectedFvm ? unsolved : fvm;
+                invalid["value"] = "not numeric";
+                auto otherStep = selectedFvm ? unsolved : fvm;
+                otherStep["step"] = 1;
+                auto noStep = otherStep;
+                noStep.remove("step");
+                auto noValue = invalid;
+                noValue.remove("value");
+                context = QString(name) + (selectedFvm ? " skip to FVM" : " skip to unsolved");
+                withPackage({invalid, otherStep, noStep, noValue, selectedFvm ? fvm : unsolved},
+                            [&](auto& view, auto&) {
+                                if (selectedFvm)
+                                    checkFvm(view, check);
+                                else
+                                    checkUnsolved(view, check);
+                            });
+            }
+        }
+    });
+    run("missing temperature and notice share label", [&](auto check) {
+        withPackage(
+            enums,
+            [&](auto& view, auto&) {
+                view.setColorField(ResultColorField::Temperature);
+                check(!view.colorRange().valid, "missing T fixture unexpectedly has temperature");
+                check(exactStatus(view,
+                                  QStringLiteral("无温度场\nFVM 弹性结果：精度未验证，仅供演示")),
+                      "missing exact two-line temperature/FVM status");
+                check(matchingTextActors(view, notice).size() == 1, "missing T lost FVM notice");
+            },
+            true);
+        withPackage(
+            {mechanical("warpage_pv", "not_solved")},
+            [&](auto& view, auto&) {
+                view.setColorField(ResultColorField::Temperature);
+                check(exactStatus(view, QStringLiteral("无温度场")),
+                      "unsolved missing-T status changed");
+                check(!view.colorRange().valid, "unsolved missing-T range must be invalid");
+                check(matchingTextActors(view, notice, false).empty(), "unsolved missing-T notice");
+            },
+            true);
+    });
+    run("notice coexists with provenance watermark", [&](auto check) {
+        withPackage(enums, [&](auto& view, auto&) {
+            for (const auto& source : {"mock", "precomputed"}) {
+                context = source;
+                require(
+                    view.setProvenance({{"schema", "chipcae.provenance/0.1"}, {"source", source}}),
+                    "valid provenance rejected");
+                check(matchingTextActors(view, source == QString("mock") ? "MOCK" : "PRECOMPUTED")
+                              .size() == 1,
+                      "missing visible provenance actor");
+                check(matchingTextActors(view, notice).size() == 1,
+                      "provenance and exactly one FVM notice must coexist");
+                check(exactStatus(view, fvmStatus), "provenance lost FVM status");
+            }
+        });
+    });
+    run("notice actor has fixed viewport properties", [&](auto check) {
+        withPackage(enums, [&](auto& view, auto&) {
+            const auto actors = matchingTextActors(view, notice);
+            check(actors.size() == 1, "missing unique notice actor for properties");
+            for (auto actor : actors) {
+                check(actor->GetPositionCoordinate()->GetCoordinateSystem() ==
+                          VTK_NORMALIZED_VIEWPORT,
+                      "notice coordinates must be normalized viewport");
+                check(actor->GetPosition()[0] == 0.02 && actor->GetPosition()[1] == 0.02,
+                      "notice position must be exactly (0.02, 0.02)");
+                check(actor->GetTextProperty()->GetFontSize() == 18, "notice font must be 18");
+                check(!actor->GetPickable(), "notice must not intercept picking");
+            }
+        });
+    });
+    run("reload clears notice", [&](auto check) {
+        withPackage(enums, [&](auto& view, auto& session) {
+            check(matchingTextActors(view, notice).size() == 1, "reload needs initial FVM notice");
+            require(view.loadStep(baselineSession, 0), qPrintable(view.error()));
+            checkOrdinary(view, check);
+            // Reload FVM immediately before failing: the retained session has FVM metadata.
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            check(matchingTextActors(view, notice).size() == 1, "FVM reload lost notice");
+            require(!view.loadStep(session, 999), "nonexistent step unexpectedly loaded");
+            noNotice(view, check);
+            check(exactStatus(view, {}), "failed load did not clear status");
+            for (auto field : fields) {
+                view.setColorField(field);
+                view.setWarpageScale(1000);
+                noNotice(view, check);
+                check(exactStatus(view, {}), "rebuild resurrected failed-load status");
+            }
+        });
+    });
+    run("status updated before displayChanged", [&](auto check) {
+        withPackage(enums, [&](auto& view, auto&) {
+            int signalCount = 0;
+            QObject::connect(&view, &ResultView::displayChanged, &view, [&] {
+                ++signalCount;
+                check(exactStatus(view, fvmStatus), "FVM signal preceded status update");
+                check(matchingTextActors(view, notice).size() == 1,
+                      "FVM signal preceded notice update");
+            });
+            for (auto field : fields)
+                view.setColorField(field);
+            check(signalCount == static_cast<int>(fields.size()), "missing field-change signals");
+        });
+        withPackage({mechanical("warpage_pv", "not_solved")}, [&](auto& view, auto&) {
+            int signalCount = 0;
+            QObject::connect(&view, &ResultView::displayChanged, &view, [&] {
+                ++signalCount;
+                const bool mechanics =
+                    view.colorField() == ResultColorField::DisplacementMagnitude ||
+                    view.colorField() == ResultColorField::WarpageUz;
+                check(exactStatus(view, mechanics ? unsolvedStatus : QString{}),
+                      "unsolved signal preceded status update");
+                check(matchingTextActors(view, notice, false).empty(),
+                      "unsolved signal has notice");
+            });
+            for (auto field : {ResultColorField::WarpageUz,
+                               ResultColorField::Temperature,
+                               ResultColorField::DisplacementMagnitude,
+                               ResultColorField::LayerId})
+                view.setColorField(field);
+            check(signalCount == 4, "missing unsolved transition signals");
+        });
+    });
+    return failures;
+}
+
 int methodSummaryAcceptance(const QDir& root) {
     int failures = 0;
     auto run = [&](const QString& name, auto test) {
@@ -2593,6 +3102,7 @@ int main(int argc, char** argv) {
         std::cerr << "FAIL legacy viewer checks: " << e.what() << '\n';
         ++failures;
     }
+    failures += fvmNoticeAcceptance(root);
     failures += methodSummaryAcceptance(root);
     failures += acceptance(root);
     failures += obliqueAndTemperatureAcceptance(root);
