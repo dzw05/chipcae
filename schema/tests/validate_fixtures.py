@@ -586,9 +586,9 @@ assert copper["thermal_expansion"]["cte_type"] == "tangent"
 assert copper["thermal_expansion"]["stress_free_temperature"] == 298.15
 
 # This read-only mapping is an explicit MAT-CU acceptance requirement after SP0 (#87).
-assembly_path = examples / "assembly/package_bulk_parts.assembly.json"
+assembly_path = examples / "assembly/step_frame_parts.assembly.json"
 assert assembly_path.is_file(), (
-    "SP0 (#87) prerequisite missing: schema/examples/assembly/package_bulk_parts.assembly.json; "
+    "SP0 (#87) prerequisite missing: schema/examples/assembly/step_frame_parts.assembly.json; "
     "stop and report the base mismatch; do not create the fixture"
 )
 assembly = json.loads(assembly_path.read_text(encoding="utf-8"))

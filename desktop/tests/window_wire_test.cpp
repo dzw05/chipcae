@@ -167,7 +167,7 @@ void selectableEcadFilters(MainWindow& w) {
 }
 void assemblyWiring(MainWindow& w) {
     const auto input =
-        QString(CHIPCAE_REPOSITORY) + "/schema/examples/assembly/package_bulk_parts.assembly.json";
+        QString(CHIPCAE_REPOSITORY) + "/schema/examples/assembly/step_frame_parts.assembly.json";
     const auto mock = QString(CHIPCAE_REPOSITORY) + "/desktop/tools/mock_assembly_import.py";
     require(isAssemblyPath(input), "I2 is an assembly path");
     QTemporaryDir temp;
