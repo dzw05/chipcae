@@ -315,6 +315,7 @@ bool ResultView::loadStep(ResultSession& session, qint64 step) {
         d->loaded = false;
         d->blocks.clear();
         d->renderer->RemoveAllViewProps();
+        d->fvmNotice->VisibilityOff();
         d->boundaries = nullptr;
         d->boundarySetupMs = 0;
         d->range = {};
@@ -567,6 +568,7 @@ QString ResultView::summary(const QString& name) const {
 void ResultView::rebuild() {
     d->error.clear();
     d->renderer->RemoveAllViewProps();
+    d->fvmNotice->VisibilityOff();
     d->boundaries = nullptr;
     d->boundarySetupMs = 0;
     d->fieldStatusLabel->clear();
@@ -729,6 +731,7 @@ void ResultView::rebuild() {
             if (!status.isEmpty())
                 status += '\n';
             status += QStringLiteral("FVM 弹性结果：精度未验证，仅供演示");
+            d->fvmNotice->VisibilityOn();
             d->renderer->AddViewProp(d->fvmNotice);
         } else if (notSolved && (d->field == ResultColorField::DisplacementMagnitude ||
                                  d->field == ResultColorField::WarpageUz))

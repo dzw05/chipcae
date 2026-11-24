@@ -997,19 +997,34 @@ int fvmNoticeAcceptance(const QDir& root) {
     });
     run("reload clears notice", [&](auto check) {
         withPackage(enums, [&](auto& view, auto& session) {
-            check(matchingTextActors(view, notice).size() == 1, "reload needs initial FVM notice");
+            const auto actors = matchingTextActors(view, notice);
+            check(actors.size() == 1, "reload needs initial FVM notice");
+            require(actors.size() == 1, "reload needs notice actor for visibility checks");
+            vtkSmartPointer<vtkTextActor> actor = actors.front();
             require(view.loadStep(baselineSession, 0), qPrintable(view.error()));
             checkOrdinary(view, check);
+            check(!actor->GetVisibility(), "ordinary reload must hide retained FVM notice");
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            check(actor->GetVisibility(), "FVM reload must show retained notice again");
+            withPackage(
+                {mechanical("warpage_pv", "not_solved")}, [&](auto&, auto& unsolvedSession) {
+                    require(view.loadStep(unsolvedSession, 0), qPrintable(view.error()));
+                    checkUnsolved(view, check);
+                    check(!actor->GetVisibility(), "unsolved reload must hide retained FVM notice");
+                });
             // Reload FVM immediately before failing: the retained session has FVM metadata.
             require(view.loadStep(session, 0), qPrintable(view.error()));
             check(matchingTextActors(view, notice).size() == 1, "FVM reload lost notice");
+            check(actor->GetVisibility(), "FVM reload must restore notice after unsolved");
             require(!view.loadStep(session, 999), "nonexistent step unexpectedly loaded");
             noNotice(view, check);
+            check(!actor->GetVisibility(), "failed load must hide retained FVM notice");
             check(exactStatus(view, {}), "failed load did not clear status");
             for (auto field : fields) {
                 view.setColorField(field);
                 view.setWarpageScale(1000);
                 noNotice(view, check);
+                check(!actor->GetVisibility(), "unloaded rebuild must hide retained FVM notice");
                 check(exactStatus(view, {}), "rebuild resurrected failed-load status");
             }
         });
