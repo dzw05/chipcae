@@ -9,6 +9,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <random>
 #include <set>
 #include <sstream>
@@ -136,6 +137,11 @@ std::string counts_json(const std::array<int, 4>& counts) {
            ",\"A\":" + std::to_string(counts[1]) + ",\"B\":" + std::to_string(counts[2]) +
            ",\"C\":" + std::to_string(counts[3]) + "}";
 }
+std::string occurrence_base(const std::string& id) {
+    // Board IDs encode slashes in element names. Only the fourth component is a suffix.
+    const auto element_end = id.find('/', id.find('/') + 1);
+    return id.substr(0, id.find('/', element_end + 1));
+}
 void verify_report(const Snapshot& baseline,
                    const ecad::EcadModel& model,
                    const Temporary& tmp,
@@ -144,6 +150,7 @@ void verify_report(const Snapshot& baseline,
     const auto before = defect_objects(frozen);
     auto counts = baseline.tier_counts;
     std::set<std::string> deleted;
+    std::map<std::string, std::size_t> removed_counts;
     for (const auto& deletion : baseline.deleted) {
         const auto found = std::find_if(before.begin(), before.end(), [&](const auto& object) {
             return field(object, "defect_id") == deletion.defect_id;
@@ -157,11 +164,26 @@ void verify_report(const Snapshot& baseline,
             throw std::runtime_error("unknown baseline tier");
         --counts[static_cast<std::size_t>(position - tiers.begin())];
         deleted.insert(deletion.defect_id);
+        ++removed_counts[occurrence_base(deletion.defect_id)];
     }
     std::vector<std::string> expected;
-    for (const auto& object : before)
-        if (!deleted.contains(field(object, "defect_id")))
-            expected.push_back(object);
+    std::map<std::string, std::size_t> occurrences;
+    for (auto object : before) {
+        const auto id = field(object, "defect_id");
+        if (deleted.contains(id))
+            continue;
+        const auto base = occurrence_base(id);
+        if (removed_counts.contains(base)) {
+            // Revision 1: independently apply the frozen occurrence rule after filtering.
+            // Retain the other ten serialized fields byte-for-byte from the original snapshot.
+            const auto count = occurrences[base]++;
+            const auto renumbered = base + (count ? "/" + std::to_string(count) : "");
+            const auto value =
+                object.find("\"defect_id\":\"") + std::string("\"defect_id\":\"").size();
+            object.replace(value, id.size(), renumbered);
+        }
+        expected.push_back(std::move(object));
+    }
     auto defects = chipcae::importer::ecad_defects::board_defects(model.report, false);
     const auto policy = geometry::apply_repair_policy(std::move(defects), {}, accept);
     std::string error;
@@ -173,9 +195,15 @@ void verify_report(const Snapshot& baseline,
               (accept ? "accepted" : "unaccepted"));
     check(actual.find(counts_json(counts)) != std::string::npos,
           baseline.name + ": all tier_counts keys equal baseline minus explicit deletions");
-    for (const auto& object : defect_objects(actual))
-        check(!deleted.contains(field(object, "defect_id")),
-              baseline.name + ": consumed ID remains: " + field(object, "defect_id"));
+    const auto after = defect_objects(actual);
+    for (const auto& [base, removed] : removed_counts) {
+        const auto matches = [&](const auto& object) {
+            return occurrence_base(field(object, "defect_id")) == base;
+        };
+        check(std::count_if(after.begin(), after.end(), matches) + removed ==
+                  static_cast<std::size_t>(std::count_if(before.begin(), before.end(), matches)),
+              baseline.name + ": exact consumed count for " + base);
+    }
 }
 
 // All snapshots were captured with read_ipc2581() before changing the reader.
@@ -1505,8 +1533,7 @@ void verify(const Snapshot& baseline) {
             check(close(area(layer.polygons[j], model.dbu_m), frozen.polygon_areas[j]),
                   baseline.name + ": ordered polygon area on " + frozen.name);
     }
-    // Include same-line survivors: the brief requires their original occurrence suffixes.
-    // This deliberately exposes the frozen classifier's renumbering conflict after filtering.
+    // Revision 1 permits occurrence suffix changes only for the filtered element/line groups.
     verify_report(baseline, model, tmp, false);
     if (!baseline.accepted.empty())
         verify_report(baseline, model, tmp, true);
@@ -1534,13 +1561,12 @@ void verify(const Snapshot& baseline) {
         for (const auto& via : model.vias)
             check(close(via.outer_radius_dbu, 250) && close(via.inner_radius_dbu, 230),
                   via.id + ": PLATING_THICKNESS still sets radial copper thickness");
-        // Acceptance item 4 requires this unconsumed material-name Property to remain reported.
-        // The actual baseline above has no line-8 record: the existing plating branch already
-        // consumes it silently. Keep that provenance intact and expose the conflicting demand.
+        // Revision 1 preserves the plating-only branch's existing silent reporting state.
         const Record plating_only{"IMPORT_UNSUPPORTED_ELEMENT", "Property", 8};
-        check(std::find(actual.begin(), actual.end(), plating_only) != actual.end(),
-              "properties: acceptance requires the plating-only Property report at line 8; "
-              "the unchanged reader already omits it (baseline contract conflict)");
+        check(std::find(baseline.raw.begin(), baseline.raw.end(), plating_only) ==
+                      baseline.raw.end() &&
+                  std::find(actual.begin(), actual.end(), plating_only) == actual.end(),
+              "properties: plating-only Property stays absent before and after filtering");
     }
     if (baseline.name == "kicad10") {
         const double pi = std::acos(-1.0);
