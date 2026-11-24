@@ -50,9 +50,8 @@ if(CHIPCAE_ENABLE_JSONCONS)
 endif()
 chipcae_set_warnings(k1_copper_phi_report)
 add_test(NAME mesh_copper_phi_report COMMAND k1_copper_phi_report)
-# The architect requires copper;tierA: full CI builds this target, whereas
-# the mesh-only job's explicit target list omits it.
-set_tests_properties(mesh_copper_phi_report PROPERTIES LABELS "copper;tierA" TIMEOUT 60)
+# The current architect ruling includes this acceptance test in the mesh tier.
+set_tests_properties(mesh_copper_phi_report PROPERTIES LABELS "mesh;tierA" TIMEOUT 60)
 add_executable(k1_cut cut.cpp)
 target_link_libraries(k1_cut PRIVATE chipcae_mesh_cut)
 target_compile_definitions(k1_cut PRIVATE K1_ROOT="${PROJECT_SOURCE_DIR}")
