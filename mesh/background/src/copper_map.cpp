@@ -198,12 +198,20 @@ Real copper_union_area_m2(const PolysetLayer& layer, Real dbu_m) {
         throw std::invalid_argument("copper database unit must be finite and positive");
     if (layer.ring_offsets.size() < 2 || layer.coordinates.size() % 2 != 0)
         throw std::invalid_argument("invalid polyset geometry");
-    Clipper2Lib::Paths64 paths;
     const auto point_count = layer.coordinates.size() / 2;
+    if (layer.ring_offsets.front() != 0 || layer.ring_offsets.back() < 0 ||
+        static_cast<std::uint64_t>(layer.ring_offsets.back()) != point_count)
+        throw std::invalid_argument("invalid polyset ring offsets");
+    // Validate the entire array before constructing any polygon paths.
+    for (std::size_t i = 0; i < layer.ring_offsets.size(); ++i) {
+        const auto offset = layer.ring_offsets[i];
+        if (offset < 0 || static_cast<std::uint64_t>(offset) > point_count ||
+            (i > 0 && offset <= layer.ring_offsets[i - 1]))
+            throw std::invalid_argument("invalid polyset ring offsets");
+    }
+    Clipper2Lib::Paths64 paths;
     for (std::size_t r = 0; r + 1 < layer.ring_offsets.size(); ++r) {
         const auto begin = layer.ring_offsets[r], end = layer.ring_offsets[r + 1];
-        if (begin < 0 || end <= begin || static_cast<std::uint64_t>(end) > point_count)
-            throw std::invalid_argument("invalid polyset ring offsets");
         if (end - begin < 3)
             continue;
         auto& path = paths.emplace_back();
@@ -214,6 +222,7 @@ Real copper_union_area_m2(const PolysetLayer& layer, Real dbu_m) {
     }
     const auto united = Clipper2Lib::Union(paths, Clipper2Lib::FillRule::NonZero);
     const Real area = Clipper2Lib::Area(united) * dbu_m * dbu_m;
+    // Normalize signed zero for JSON output.
     return area == 0 ? Real(0) : area;
 #endif
 }

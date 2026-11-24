@@ -178,19 +178,23 @@ class PreviewCopperArea(unittest.TestCase):
         self.assertEqual(summary['copper_area_m2'], {})
         self.assertEqual(pairs, [])
 
-    def test_raster_column_contributions(self):
-        # Compile the real private preview reduction, with unused CLI code removed
-        # by the linker. No report schema or production test hook is needed.
-        source = Path(os.environ['CHIPCAE_SOURCE_DIR']) / 'preview/src/main.cpp'
+    def run_cpp_harness(self, source, body, extra_cmake=''):
         commands = json.loads((self.build / 'compile_commands.json').read_text())
         entry = next(item for item in commands if Path(item['file']).resolve() == source.resolve())
         arguments = iter(entry.get('arguments') or shlex.split(entry['command']))
+        next(arguments)  # The compiler is selected separately below.
         options = []
         for argument in arguments:
-            if argument in ('-I', '-isystem', '-imsvc', '-D', '/I', '/D'):
-                options.extend((argument, next(arguments)))
-            elif (argument.startswith(('-I', '-D'))
-                  or (os.name == 'nt' and argument.startswith(('/I', '/D')))):
+            # Keep toolchain flags too: Kokkos OpenMP headers require -fopenmp.
+            # Only the original compile action, source and output are replaced.
+            if argument in ('-o', '-MF', '-MT', '-MQ'):
+                next(arguments)
+            elif argument in ('-I', '-isystem', '-imsvc', '-D', '-Xpreprocessor',
+                              '-isysroot', '-target', '-arch', '/I', '/D'):
+                # CMake must not deduplicate repeated paired options such as -isystem.
+                options.append('SHELL:' + shlex.join((argument, next(arguments))))
+            elif (argument not in ('-c', '-MD', '-MMD', '/c', str(source))
+                  and not argument.startswith('/Fo')):
                 options.append(argument)
         compiler = next(line.split('=', 1)[1] for line in self.cache.splitlines()
                         if line.startswith(('CMAKE_CXX_COMPILER:FILEPATH=',
@@ -199,7 +203,44 @@ class PreviewCopperArea(unittest.TestCase):
                          if line.startswith('CMAKE_GENERATOR:INTERNAL='))
         harness = self.root / 'columns.cpp'
         harness.write_text('#define main unused_preview_main\n#include '
-                           + json.dumps(str(source)) + '\n#undef main\n' + r'''
+                           + json.dumps(str(source)) + '\n#undef main\n' + body,
+                           encoding='utf-8')
+        flags = ' '.join(f'[==[{option}]==]' for option in options)
+        (self.root / 'CMakeLists.txt').write_text('''cmake_minimum_required(VERSION 3.20)
+project(preview_columns LANGUAGES CXX)
+add_executable(columns columns.cpp)
+target_compile_features(columns PRIVATE cxx_std_20)
+target_compile_options(columns PRIVATE ''' + flags + ''')
+if(MSVC)
+  target_compile_options(columns PRIVATE /O2 /Gy /Gw)
+  target_link_options(columns PRIVATE /OPT:REF)
+else()
+  target_compile_options(columns PRIVATE -O2 -ffunction-sections -fdata-sections)
+  if(APPLE)
+    target_link_options(columns PRIVATE LINKER:-dead_strip)
+  else()
+    target_link_options(columns PRIVATE LINKER:--gc-sections)
+  endif()
+endif()
+''' + extra_cmake + '''
+enable_testing()
+add_test(NAME column_contributions COMMAND columns)
+''', encoding='utf-8')
+        binary = self.root / 'build'
+        for command in (
+                ['cmake', '-S', str(self.root), '-B', str(binary), '-G', generator,
+                 f'-DCMAKE_CXX_COMPILER={compiler}'],
+                ['cmake', '--build', str(binary), '-j1'],
+                ['ctest', '--test-dir', str(binary), '--output-on-failure']):
+            result = subprocess.run(command, capture_output=True, text=True,
+                                    env=self.env, timeout=40)
+            self.assertEqual(result.returncode, 0, diagnostics(result))
+
+    def test_raster_column_contributions(self):
+        # Compile the real private preview reduction, with unused CLI code removed
+        # by the linker. No report schema or production test hook is needed.
+        source = Path(os.environ['CHIPCAE_SOURCE_DIR']) / 'preview/src/main.cpp'
+        self.run_cpp_harness(source, r'''
 int main() {
     chipcae::mesh::HexMeshArrays mesh;
     mesh.axes[0] = {0, 1, 3, 7};
@@ -229,36 +270,51 @@ int main() {
             }
     }
 }
-''', encoding='utf-8')
-        flags = ' '.join(f'[==[{option}]==]' for option in options)
-        (self.root / 'CMakeLists.txt').write_text('''cmake_minimum_required(VERSION 3.20)
-project(preview_columns LANGUAGES CXX)
-add_executable(columns columns.cpp)
-target_compile_features(columns PRIVATE cxx_std_20)
-target_compile_options(columns PRIVATE ''' + flags + ''')
-if(MSVC)
-  target_compile_options(columns PRIVATE /O2 /Gy /Gw)
-  target_link_options(columns PRIVATE /OPT:REF)
+''')
+
+    def test_union_area_ring_offsets(self):
+        self.require_ecad()
+        source = Path(os.environ['CHIPCAE_SOURCE_DIR']) / 'mesh/background/src/copper_map.cpp'
+        clipper_paths = [line.split('=', 1)[1] for line in self.cache.splitlines()
+                         if line.startswith(('Clipper2_BINARY_DIR:', 'Clipper2_DIR:'))
+                         and not line.endswith('-NOTFOUND')]
+        paths = ' '.join(f'[==[{path}]==]' for path in clipper_paths)
+        self.run_cpp_harness(source, r'''
+#include <iostream>
+int main() {
+    chipcae::mesh::PolysetLayer layer;
+    layer.coordinates = {0, 0, 2, 0, 2, 2, 0, 2, 4, 0, 6, 0, 6, 2, 4, 2};
+    layer.ring_offsets = {0, 4, 8};
+    const auto area = chipcae::mesh::copper_union_area_m2(layer, 0.5);
+    if (!std::isfinite(area) || std::abs(area - 2.0) > 1e-12)
+        return 1;
+    for (const auto& offsets : {std::vector<std::int64_t>{0, 5, 3, 8},
+                               std::vector<std::int64_t>{0, 4, 4, 8},
+                               std::vector<std::int64_t>{0, 9, 8},
+                               std::vector<std::int64_t>{0, -1, 8},
+                               std::vector<std::int64_t>{1, 4, 8},
+                               std::vector<std::int64_t>{0, 4, 7}}) {
+        layer.ring_offsets = offsets;
+        try {
+            (void)chipcae::mesh::copper_union_area_m2(layer, 0.5);
+        } catch (const std::invalid_argument&) {
+            continue;
+        }
+        std::cerr << "accepted invalid ring offsets:";
+        for (auto offset : offsets)
+            std::cerr << ' ' << offset;
+        std::cerr << '\n';
+        return 2;
+    }
+}
+''', 'find_package(Clipper2 CONFIG QUIET PATHS ' + paths + ''' NO_DEFAULT_PATH)
+if(TARGET Clipper2)
+  target_link_libraries(columns PRIVATE Clipper2)
 else()
-  target_compile_options(columns PRIVATE -O2 -ffunction-sections -fdata-sections)
-  if(APPLE)
-    target_link_options(columns PRIVATE LINKER:-dead_strip)
-  else()
-    target_link_options(columns PRIVATE LINKER:--gc-sections)
-  endif()
+  find_library(clipper2 NAMES Clipper2 PATHS ''' + paths + ''' NO_DEFAULT_PATH REQUIRED)
+  target_link_libraries(columns PRIVATE "${clipper2}")
 endif()
-enable_testing()
-add_test(NAME column_contributions COMMAND columns)
-''', encoding='utf-8')
-        binary = self.root / 'build'
-        for command in (
-                ['cmake', '-S', str(self.root), '-B', str(binary), '-G', generator,
-                 f'-DCMAKE_CXX_COMPILER={compiler}'],
-                ['cmake', '--build', str(binary), '-j1'],
-                ['ctest', '--test-dir', str(binary), '--output-on-failure']):
-            result = subprocess.run(command, capture_output=True, text=True,
-                                    env=self.env, timeout=40)
-            self.assertEqual(result.returncode, 0, diagnostics(result))
+''')
 
     def test_fraction_layers_bitwise(self):
         summary, _, _ = self.invoke(
