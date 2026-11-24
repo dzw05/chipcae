@@ -1339,12 +1339,17 @@ void rebuild_faces(const HexMeshArrays& mesh, HexMeshArrays& m, CutLayerArrays& 
         activated[e] = std::binary_search(ids.begin(), ids.end(), m.elem_gid[e]);
         cut_cell[e] = cut.contains(m.elem_gid[e]);
     }
+    // fi lists bottom, top, ymin, ymax, xmin, xmax; the cache traverses
+    // MFEM faces as bottom, ymin, xmax, ymax, xmin, top.
     constexpr Local mfem_face[6] = {0, 5, 1, 3, 4, 2};
     struct Neighbor {
         Local a, b, fa, fb, encounter_elem, encounter_face;
     };
     std::vector<Neighbor> pairs;
     visit_groups([&](std::size_t begin, std::size_t end) {
+        // The cache's map retains the minimum (element, MFEM face) occurrence
+        // of each key and pairs every later occurrence with it. The boundary
+        // comparator uses fi order, so find that cache occurrence explicitly.
         auto first = begin;
         for (auto i = begin + 1; i < end; ++i)
             if (std::pair{boundary[i].elem, mfem_face[boundary[i].face]} <
@@ -1366,7 +1371,9 @@ void rebuild_faces(const HexMeshArrays& mesh, HexMeshArrays& m, CutLayerArrays& 
         }
     });
     // The cache emits a neighbor when its second face is encountered in MFEM
-    // traversal order. Boundary key order must not change this independent order.
+    // traversal order. Each occurrence has a unique (element, MFEM face), so
+    // sorting the later occurrences reproduces that traversal exactly, even
+    // for nonmanifold groups. GID orientation never changes the saved encounter.
     std::sort(pairs.begin(), pairs.end(), [](const auto& a, const auto& b) {
         return std::tie(a.encounter_elem, a.encounter_face) <
                std::tie(b.encounter_elem, b.encounter_face);

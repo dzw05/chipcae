@@ -900,6 +900,76 @@ void gp_reordered_gids() {
               "GP identity must use the MFEM minus-face number");
     }
 }
+void gp_permuted_faces() {
+    HexMeshArrays initial;
+    for (int z = 0; z < 3; ++z)
+        for (int y = 0; y < 3; ++y)
+            for (int x = 0; x < 4; ++x) {
+                initial.vertices.insert(initial.vertices.end(), {Real(x), Real(y), Real(z)});
+                initial.node_gid.push_back(static_cast<Index>(initial.node_gid.size()));
+                initial.node_layer.push_back(0);
+                initial.node_column.push_back(0);
+            }
+    const auto cell = [&](Local x, Local y, Local z) {
+        const Local v = x + 4 * y + 12 * z;
+        initial.hex.insert(initial.hex.end(),
+                           {v, v + 1, v + 5, v + 4, v + 12, v + 13, v + 17, v + 16});
+    };
+    for (Local z = 0; z < 2; ++z)
+        for (Local y = 0; y < 2; ++y)
+            for (Local x = 0; x < 2; ++x)
+                cell(x, y, z);
+    cell(1, 1, 1); // A duplicate of cell 7 exercises nonmanifold face groups.
+    cell(2, 1, 1); // Wholly outside, sharing a face with both copies of cell 7.
+    initial.attr_table.entries = {{"solid", "", 1, 1}};
+    initial.attr_table.bodies = {{"solid", 1}};
+    // Permute traversal, GID orientation and boundary-key order independently.
+    // These are axis-aligned cells: rotated connectivity is outside cut's contract.
+    for (const bool reverse_nodes : {false, true})
+        for (const bool reverse_cells : {false, true})
+            for (Local shift = 0; shift < 10; ++shift)
+                for (const bool keep : {false, true}) {
+                    auto m = initial;
+                    m.hex.clear();
+                    Local first_shared = -1;
+                    for (Local e = 0; e < 10; ++e) {
+                        const Local source =
+                            reverse_cells ? (shift + 10 - e) % 10 : (shift + e) % 10;
+                        m.hex.insert(m.hex.end(),
+                                     initial.hex.begin() + 8 * source,
+                                     initial.hex.begin() + 8 * (source + 1));
+                        m.attribute.push_back(1);
+                        m.elem_gid.push_back(1 + (37 * source + 11) % 101);
+                        m.partitioning.push_back(source % 3);
+                        if (first_shared < 0 && source >= 7)
+                            first_shared = source;
+                    }
+                    if (reverse_nodes) {
+                        const auto last = static_cast<Local>(m.node_gid.size() - 1);
+                        for (auto& v : m.hex)
+                            v = last - v;
+                        for (Local v = 0; v <= last; ++v)
+                            std::copy_n(initial.vertices.begin() + 3 * (last - v),
+                                        3,
+                                        m.vertices.begin() + 3 * v);
+                        std::reverse(m.node_gid.begin(), m.node_gid.end());
+                    }
+                    auto options = cut_options();
+                    options.keep_void = keep;
+                    const auto c =
+                        value(build_cut_layer(m, CutGeometry{{Plane{0, {1, 1, 1}, 3.5}}}, options));
+                    check(c.cut_elem.size() == 8 && m.attribute.size() == (keep ? 10u : 9u),
+                          "permuted GP fixture must exercise cut, uncut and void cells");
+                    gp_reference(m, c);
+                    // The cube has 12 interior faces; the duplicate contributes six
+                    // more pairs. If a retained void is encountered first on the
+                    // three-way face, the cache pairs both solids with that inactive
+                    // source, so neither pair is emitted and the count falls by one.
+                    const std::size_t expected = keep && first_shared == 9 ? 17 : 18;
+                    check(c.gp_face_gid.size() == expected,
+                          "GP must preserve first-source pairing before activation filtering");
+                }
+}
 void gp_encounter_order() {
     HexMeshArrays m;
     for (int z = 0; z < 2; ++z)
@@ -968,6 +1038,7 @@ int main() {
         run("volume_analytic", [&] { volume_analytic(volumes); });
         run("gp_nonmanifold", gp_nonmanifold);
         run("gp_reordered_gids", gp_reordered_gids);
+        run("gp_permuted_faces", gp_permuted_faces);
         run("gp_encounter_order", gp_encounter_order);
         // Defer performance assertions until all correctness results are collected.
         run("scale_guard", [&] {
