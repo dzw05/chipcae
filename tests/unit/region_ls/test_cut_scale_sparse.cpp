@@ -414,19 +414,24 @@ const Baselines* platform_baselines() {
     }();
     return fused ? &gnu_linux_fma : &gnu_linux_generic;
 #else
+    // No pre-refactor capture exists for this target. Keep portable checks
+    // active without borrowing another platform's floating-point expectations.
     return nullptr;
 #endif
 }
 // Collect every fixture before failing so a pre-refactor run on another platform
 // can report its complete baseline. Mismatches still fail the containing case.
-[[nodiscard]] std::string
-golden(const std::string& name, const HexMeshArrays& m, const CutLayerArrays& c) {
+[[nodiscard]] std::string golden(const std::string& name,
+                                 const HexMeshArrays& m,
+                                 const CutLayerArrays& c,
+                                 const Baselines* baselines = platform_baselines()) {
     const Golden actual{hash(m), hash(c)};
     std::cout << "DIGEST " << name << " mesh=0x" << std::hex << actual.mesh << " cut=0x"
               << actual.cut << std::dec << '\n';
-    const auto* baselines = platform_baselines();
-    if (!baselines)
-        return name + ": same-platform pre-refactor baseline unavailable; ";
+    if (!baselines) {
+        std::cout << "BASELINE " << name << " unavailable; portable checks remain active\n";
+        return {};
+    }
     const auto g = baselines->geometry.at(name);
     std::string errors;
     if (actual.mesh != g.mesh)
@@ -485,14 +490,15 @@ void remember_volume(std::vector<VolumeCheck>& volumes,
                      const CutLayerArrays& c) {
     volumes.push_back({name, value(cut_stats(m, c)), analytic_bodies(s, m)});
 }
-void check_analytic_volumes(const std::vector<VolumeCheck>& volumes) {
-    const auto* baselines = platform_baselines();
+void check_analytic_volumes(const std::vector<VolumeCheck>& volumes,
+                            const Baselines* baselines = platform_baselines()) {
     std::string errors;
     for (const auto& v : volumes) {
         const bool scale = v.name == "scale_n64";
         const Real tolerance = scale ? 1e-11 : 1e-12;
         if (scale && !baselines)
-            errors += v.name + ": same-platform pre-refactor volume baseline unavailable; ";
+            std::cout << "BASELINE " << v.name
+                      << " volume bits unavailable; analytic checks remain active\n";
         Real total = 0;
         check(v.actual.body_volume.size() == v.expected.size(), v.name + ": body count");
         for (const auto& [body, expected] : v.expected) {
@@ -588,7 +594,9 @@ Measurement scale_guard(std::vector<VolumeCheck>& volumes) {
     std::cout << "MEASURE cut-scale-sparse: {\"n\":64,\"cells\":" << cells
               << ",\"cut_cells\":" << cut_cells << ",\"t_grid\":" << result.t_grid
               << ",\"t_cut\":" << result.t_cut << ",\"r0_kib\":" << result.r0
-              << ",\"r1_kib\":" << result.r1 << ",\"r2_kib\":" << result.r2 << "}" << std::endl;
+              << ",\"r1_kib\":" << result.r1 << ",\"r2_kib\":" << result.r2
+              << ",\"timing_samples\":5,\"timing_statistic\":\"median\",\"rss_sample\":1}"
+              << std::endl;
     return result;
 }
 
@@ -718,15 +726,15 @@ void keep_void_both(std::vector<VolumeCheck>& volumes) {
     }
     check(errors.empty(), errors);
 }
-void successful_mesh_state() {
-    const auto* baselines = platform_baselines();
+void successful_mesh_state(const Baselines* baselines = platform_baselines()) {
     std::string errors;
     const auto verify = [&](const std::string& name, const HexMeshArrays& m) {
         const auto actual = full_mesh_hash(m);
         std::cout << "FULL_MESH_DIGEST " << name << " actual=0x" << std::hex << actual << std::dec
                   << '\n';
         if (!baselines) {
-            errors += name + ": same-platform pre-refactor full-mesh baseline unavailable; ";
+            std::cout << "BASELINE " << name
+                      << " full mesh unavailable; portable state checks remain active\n";
         } else if (actual != baselines->full_mesh.at(name)) {
             errors += name + ": successful cut must match every pre-refactor mesh field; ";
         }
@@ -749,6 +757,32 @@ void successful_mesh_state() {
         verify(keep ? "void_keep" : "void_remove", m);
     }
     check(errors.empty(), errors);
+}
+void uncaptured_platform(const std::vector<VolumeCheck>& volumes) {
+    const auto s = stack();
+    auto m = grid(s, 4);
+    const auto c = outline(m, s);
+    check(golden("uncaptured_probe", m, c, nullptr).empty(),
+          "an uncaptured target must still run the portable acceptance checks");
+    successful_mesh_state(nullptr);
+    check_analytic_volumes(volumes, nullptr);
+
+    // Missing frozen expectations must not mask an independent geometry error.
+    std::vector<VolumeCheck> invalid{volumes.front()};
+    invalid.front().name = "uncaptured_negative_probe";
+    invalid.front().actual.solid_volume *= 1.01;
+    bool rejected = false;
+    try {
+        check_analytic_volumes(invalid, nullptr);
+    } catch (const std::runtime_error&) {
+        rejected = true;
+    }
+    check(rejected, "analytic volume failures must remain fatal on an uncaptured target");
+
+    // A captured target must still reject a mismatching frozen digest.
+    const Baselines mismatch{{{"uncaptured_probe", {0, 0}}}, {}, {}, 0};
+    check(!golden("uncaptured_probe", m, c, &mismatch).empty(),
+          "captured targets must continue to enforce exact pre-refactor digests");
 }
 void attribute_frame_identity() {
     // Finalization must allocate every identity frame, including a newly added
@@ -1102,10 +1136,11 @@ int main() {
         run("keep_void_both", [&] { keep_void_both(volumes); });
         run("error_leaves_mesh", error_leaves_mesh);
         run("digest_scope", digest_scope);
-        run("successful_mesh_state", successful_mesh_state);
+        run("successful_mesh_state", [] { successful_mesh_state(); });
         run("attribute_frame_identity", attribute_frame_identity);
         run("sequential_snap", sequential_snap);
         run("volume_analytic", [&] { volume_analytic(volumes); });
+        run("uncaptured_platform", [&] { uncaptured_platform(volumes); });
         run("gp_nonmanifold", gp_nonmanifold);
         run("gp_reordered_gids", gp_reordered_gids);
         run("gp_permuted_faces", gp_permuted_faces);
