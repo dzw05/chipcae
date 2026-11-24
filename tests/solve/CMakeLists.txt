@@ -1,3 +1,17 @@
+# Offline acceptance for the nightly job and the real main.cpp compile-fault switch.
+if(MFEM_USE_CUDA OR CHIPCAE_CI_INJECT_CUDA_FAULT)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    foreach(_cuda_nightly_case IN ITEMS workflow dependencies cuda_default cuda_injected
+            cpu_injected no_mfem_injected)
+        add_test(NAME solve_cuda_nightly_${_cuda_nightly_case}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_cuda_nightly_compile.py
+            ${PROJECT_SOURCE_DIR} ${_cuda_nightly_case}
+            --compiler ${CMAKE_CXX_COMPILER} --generator ${CMAKE_GENERATOR})
+        set_tests_properties(solve_cuda_nightly_${_cuda_nightly_case} PROPERTIES
+            TIMEOUT 180 LABELS "solve;cuda;ci;tierA")
+    endforeach()
+endif()
+
 # Input validation also runs in builds without the optional numerical backend.
 if(TARGET chipcae_solve_inputs)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
