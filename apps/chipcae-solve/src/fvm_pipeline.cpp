@@ -503,7 +503,8 @@ public:
         const auto found = incident.find(key(p));
         const std::set<std::size_t> single{fallback};
         const auto& cells = found == incident.end() ? single : found->second;
-        long double sum = 0, weight = 0, boundary_sum = 0, boundary_weight = 0;
+        long double sum = 0, weight = 0, dirichlet_sum = 0, dirichlet_weight = 0;
+        long double boundary_sum = 0, boundary_weight = 0;
         std::set<std::size_t> visited;
         for (auto c : cells) {
             double value = thermal.T_cell[c];
@@ -513,15 +514,21 @@ public:
             weight += grid.cv_volume[c];
             for (auto j = grid.cv_face_off[c]; j < grid.cv_face_off[c + 1]; ++j) {
                 const auto f = static_cast<std::size_t>(grid.cv_faces[j]);
-                if (dirichlet.contains(f) && visited.insert(f).second &&
-                    on_face(p, grid.faces[f])) {
-                    boundary_sum += grid.faces[f].area * thermal.T_face[f];
-                    boundary_weight += grid.faces[f].area;
+                const auto& face = grid.faces[f];
+                if (face.hi < 0 && visited.insert(f).second && on_face(p, face)) {
+                    if (dirichlet.contains(f)) {
+                        dirichlet_sum += face.area * thermal.T_face[f];
+                        dirichlet_weight += face.area;
+                    } else {
+                        boundary_sum += face.area * thermal.T_face[f];
+                        boundary_weight += face.area;
+                    }
                 }
             }
         }
-        return static_cast<double>(boundary_weight > 0 ? boundary_sum / boundary_weight
-                                                       : sum / weight);
+        return static_cast<double>(dirichlet_weight > 0  ? dirichlet_sum / dirichlet_weight
+                                   : boundary_weight > 0 ? boundary_sum / boundary_weight
+                                                         : sum / weight);
     }
 };
 
