@@ -123,3 +123,46 @@ The amended X1 brief permits the additive public `RunInputs::backend` string
 member (default `"cpu"`) in `include/chipcae/solve/case_loader.hpp`. This changes
 the struct layout/ABI and requires consumers to rebuild; function signatures
 and solver/kernel interfaces are unchanged.
+
+## direct 求解的 rtol 含义
+
+当 `preconditioner=direct` 时，`solver.linear.rtol` 是物理（未缩放）系统的
+Oettli–Prager 分量后向误差上限：
+
+```text
+r = b - Ax
+omega = max_i |r_i| / (|A||x| + |b|)_i
+eta = ||r||_inf / (||A||_inf ||x||_inf + ||b||_inf)
+```
+
+`omega <= rtol` 表示返回的 x 是邻近系统 `(A+ΔA)x=b+Δb` 的精确解，扰动满足
+`|ΔA| <= omega |A|`、`|Δb| <= omega |b|`。零分母且零分子记 0，否则记正无穷；
+非有限计算拒绝接受。`eta` 是 Rigal–Gaches 范数后向误差，仅作报告。
+`rel=||r||_2/||b||_2` 也仅作报告，零 RHS 时为 `inf`；全零解的 omega、eta 为 0。
+迭代法（jacobi、gamg、column_gmg）的 rtol 仍表示相对残差。
+前向误差估计约为 `cond(A,x) * omega`，病态系统仍可能有较大的解误差。
+
+初次 LU 解后即评估误差，随后复用同一分解求物理残差的修正。omega 不大于
+`u=epsilon/2`、较上次下降不足一半，或评估次数达到 `min(max_iter,8)` 时停止。
+此上限包含初次评估，因此最多进行 7 次修正；不以 omega 达到 rtol 提前停止。
+停止后恢复所有已评估解中 omega 最小的解，以其 omega 判定接受。保存最优解
+是相对 LAPACK xGERFS 停止规则的扩展。Residual 事件仍使用 `method="PETSc.LU"`，
+其 residual 值现在是 omega。计时日志另报 eta、rel、refine_iterations 和
+refine_seconds，后者包含误差评估、修正求解及最优解维护。
+
+旧判据 `||r||_2/max(||b||_2,1)` 的舍入下限约为
+`u ||A||_inf ||x||_inf / max(||b||_2,1)`，且分母中的 1 与物理 RHS 量纲不一致。
+此前诊断实测：trace-map 的 rel 为 `1.54e-13` 至 `2.54e-13`、omega 为
+`2.6e-16` 至 `7.0e-16`；board kz2 的热场 rel 为 `1.49e-12` 至 `2.42e-12`、
+omega 不超过 `5.5e-16`，力学 rel 为 `2.48e-12`、omega 为 `8.6e-16`。
+这些 rel 下限会误拒绝已有很小后向误差的解。rtol 数值及默认值 `1e-8` 未调整。
+这是 direct rtol 对外语义的变化，不改变冻结契约字段。
+
+出处：
+
+- W. Oettli & W. Prager, *Numerische Mathematik* 6 (1964), 405–409；
+  N. J. Higham, *Accuracy and Stability of Numerical Algorithms*, 2nd ed., SIAM (2002),
+  Thm 7.3、§7.2（分量后向误差及前向误差估计）。
+- J. L. Rigal & J. Gaches, *J. ACM* 14 (1967), 543–548；Higham Thm 7.1（范数后向误差）。
+- M. Arioli, J. W. Demmel & I. S. Duff, *SIAM J. Matrix Anal. Appl.* 10(2) (1989),
+  165–190；LAPACK xGERFS（精化停止规则）。

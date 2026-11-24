@@ -140,6 +140,41 @@ void zero_case() {
     require(std::isinf(result.rel) && result.rel > 0, "zero RHS relative residual must be +inf");
 }
 
+void nonfinite_case(double invalid) {
+    SparseMatrix A(1);
+    A.Add(0, 0, 1.0);
+    A.Finalize();
+    Vector b(1), x(1);
+    b = 1.0;
+    x = 0.0;
+    int calls = 0;
+    auto result = refine(
+        A,
+        b,
+        x,
+        [&](const Vector&, Vector& d) {
+            ++calls;
+            d = invalid;
+        },
+        2.0,
+        8);
+    require(!result.accepted, "nonfinite correction must reject even an acceptable best iterate");
+    require(result.iterations == 2 && calls == 1, "must stop at the first nonfinite evaluation");
+    require(std::abs(x[0]) <= 0 && std::abs(result.omega - 1) <= 1e-15,
+            "nonfinite correction must preserve the best finite solution and metrics");
+    b = invalid;
+    result = refine(A, b, x, [](const Vector&, Vector&) {}, 2.0, 8);
+    require(!result.accepted && std::isinf(result.omega), "nonfinite RHS must reject");
+    b = 1.0;
+    x = invalid;
+    result = refine(A, b, x, [](const Vector&, Vector&) {}, 2.0, 8);
+    require(!result.accepted && std::isinf(result.omega), "nonfinite solution must reject");
+    x = 0.0;
+    A.GetData()[0] = invalid;
+    result = refine(A, b, x, [](const Vector&, Vector&) {}, 2.0, 8);
+    require(!result.accepted && std::isinf(result.omega), "nonfinite matrix must reject");
+}
+
 void best_case(int max_steps) {
     SparseMatrix A(1);
     A.Add(0, 0, 1.0);
@@ -191,6 +226,8 @@ int main() {
         const double value = backward_error_ratio(1, 0);
         require(std::isinf(value) && value > 0, "positive/0 must contribute +inf");
     });
+    test("NaN rejection", [] { nonfinite_case(std::numeric_limits<double>::quiet_NaN()); });
+    test("infinity rejection", [] { nonfinite_case(std::numeric_limits<double>::infinity()); });
     test("best iterate", [] { best_case(8); });
     test("one evaluation", [] { best_case(1); });
     return failures ? 1 : 0;
