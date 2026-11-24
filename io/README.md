@@ -130,6 +130,10 @@ with exit code 14 (`INPUT_INVALID`), reporting `partitions: required object`.
 An explicit null retains `partitions: expected object` with the same exit code.
 It validates these fields and cross-checks the selected step's `per_step` value
 against its VTKHDF partition array lengths.
+When present, `CellData/copper_fraction` (cells,) and
+`CellData/conductivity_diag` (cells,3) in hex, cut, and eb_surface must have the
+specified shapes, float64 dtype, and finite values; validation failure exits 14,
+and absent fields are skipped.
 The keys remain schema_version, steps[].n, fields[].location/components and
 U_mag_max; aliases are not emitted. After `set_mesh` is called, `finalize` emits
 `mesh` with exactly five JSON integer keys (`nx0`, `ny0`, `L`, `padded_cells`,
