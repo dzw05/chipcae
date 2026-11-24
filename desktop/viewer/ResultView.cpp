@@ -59,6 +59,17 @@ QString methodSuffix(const QJsonObject& entry) {
         return {};
     return " [" + method.toString() + "]";
 }
+QString mechMethod(const QJsonArray& summary, const QString& name, qint64 step) {
+    for (const auto value : summary) {
+        const auto entry = value.toObject();
+        if (entry["name"] == name && entry["step"].toInteger(-1) == step &&
+            entry["value"].isDouble()) {
+            const auto method = entry["method"];
+            return method.isString() ? method.toString() : QString{};
+        }
+    }
+    return {};
+}
 QString canonical(QString n) {
     if (n == "cut_poly")
         return "cut";
@@ -244,6 +255,7 @@ struct ResultView::State {
     double boundarySetupMs = 0;
     vtkSmartPointer<vtkActor> boundaries;
     vtkSmartPointer<vtkTextActor> overlay = vtkSmartPointer<vtkTextActor>::New();
+    vtkSmartPointer<vtkTextActor> fvmNotice = vtkSmartPointer<vtkTextActor>::New();
     double scale = 1;
     int layer = 0;
     bool showVoid = false, clip = false;
@@ -277,6 +289,11 @@ ResultView::ResultView(QWidget* parent) : QWidget(parent), d(std::make_unique<St
     d->overlay->GetTextProperty()->SetOpacity(0.3);
     // ASCII viewport text uses VTK's built-in font on every supported system.
     d->overlay->PickableOff();
+    d->fvmNotice->SetInput("FVM elastic: accuracy unverified - demo only");
+    d->fvmNotice->GetPositionCoordinate()->SetCoordinateSystemToNormalizedViewport();
+    d->fvmNotice->SetPosition(0.02, 0.02);
+    d->fvmNotice->GetTextProperty()->SetFontSize(18);
+    d->fvmNotice->PickableOff();
     widget->setRenderWindow(d->window);
     d->window->AddRenderer(d->renderer);
     d->renderer->SetBackground(0.12, 0.14, 0.18);
@@ -562,6 +579,20 @@ void ResultView::rebuild() {
         emit displayChanged();
         return;
     }
+    bool notSolved = false, fvmElastic = false;
+    if (d->loaded) {
+        const auto summary = d->session->summary();
+        const auto warpageMethod = mechMethod(summary, "warpage_pv", d->step);
+        const auto umagMethod = mechMethod(summary, "U_mag_max", d->step);
+        auto isNotSolved = [](const QString& method) {
+            return method == "not_solved" || method == "not solved: fvm thermal-only stage";
+        };
+        notSolved = isNotSolved(warpageMethod) || isNotSolved(umagMethod);
+        fvmElastic =
+            !notSolved && (warpageMethod == "fvm_cell_centers_lsq" ||
+                           warpageMethod == "FVM top-face centroids; least-squares plane removal" ||
+                           umagMethod == "fvm_cell_centers" || umagMethod == "FVM cell centers");
+    }
     vtkNew<vtkLookupTable> lut;
     lut->SetHueRange(0.667, 0);
     lut->Build();
@@ -596,7 +627,7 @@ void ResultView::rebuild() {
             shown.push_back({b.shown, reference});
         }
         auto u = b.shown->GetPointData()->GetArray("U");
-        if (u && u->GetNumberOfComponents() == 3)
+        if (!notSolved && u && u->GetNumberOfComponents() == 3)
             for (vtkIdType i = 0; i < b.shown->GetNumberOfPoints(); ++i) {
                 double p[3];
                 b.shown->GetPoint(i, p);
@@ -621,7 +652,7 @@ void ResultView::rebuild() {
             break;
         case ResultColorField::DisplacementMagnitude:
         case ResultColorField::WarpageUz: {
-            if (!u || u->GetNumberOfComponents() != 3)
+            if (notSolved || !u || u->GetNumberOfComponents() != 3)
                 break;
             vtkNew<vtkDoubleArray> derived;
             derived->SetName(d->field == ResultColorField::DisplacementMagnitude ? "Result_U_mag"
@@ -691,8 +722,19 @@ void ResultView::rebuild() {
                 .count();
         if (d->boundaries)
             d->renderer->AddActor(d->boundaries);
-        if (d->field == ResultColorField::Temperature && !d->range.valid) {
-            d->fieldStatusLabel->setText(QStringLiteral("无温度场"));
+        QString status;
+        if (d->field == ResultColorField::Temperature && !d->range.valid)
+            status = QStringLiteral("无温度场");
+        if (fvmElastic) {
+            if (!status.isEmpty())
+                status += '\n';
+            status += QStringLiteral("FVM 弹性结果：精度未验证，仅供演示");
+            d->renderer->AddViewProp(d->fvmNotice);
+        } else if (notSolved && (d->field == ResultColorField::DisplacementMagnitude ||
+                                 d->field == ResultColorField::WarpageUz))
+            status = QStringLiteral("力学未求解：不显示位移／翘曲");
+        if (!status.isEmpty()) {
+            d->fieldStatusLabel->setText(status);
             d->fieldStatusLabel->show();
         }
     }
