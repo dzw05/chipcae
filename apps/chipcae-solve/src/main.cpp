@@ -75,6 +75,9 @@ int main(int argc, char** argv) {
         auto inputs =
             chipcae::solve::load_inputs(args.at("--case"), args.at("--profile"), mpi.size);
 #if defined(MFEM_USE_CUDA) && defined(CHIPCAE_SOLVE_MFEM)
+#if defined(CHIPCAE_CI_INJECT_CUDA_FAULT) && defined(MFEM_USE_CUDA)
+#error "injected CUDA-branch compile fault (CI self-test)"
+#endif
         // MFEM device state is process-global; keep it alive through solve::run below.
         // Device selection alone does not guarantee CUDA support in downstream solver operators.
         std::unique_ptr<mfem::Device> device;
