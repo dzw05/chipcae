@@ -323,6 +323,19 @@ int main(int argc, char** argv) {
         sweep("identical",
               material(fixture.at("materials").at("zero_contrast").at("matrix")),
               material(fixture.at("materials").at("zero_contrast").at("copper")));
+        // Finite equal conductivities must not overflow in the MG numerator product.
+        for (const double k :
+             {std::numeric_limits<double>::max(), std::numeric_limits<double>::min()}) {
+            for (const double f : fractions)
+                cases.run("extreme equal conductivity k=" + std::to_string(k) +
+                              " f=" + std::to_string(f),
+                          [&] {
+                              double actual[3]{};
+                              chipcae::solve::copper_vertical_conductivity(k, k, f, actual);
+                              for (int d = 0; d < 3; ++d)
+                                  near(actual[d], k, "equal conductivity identity", tol);
+                          });
+        }
         for (double ratio : robust.at("k_ratio_kc_over_km").as<std::vector<double>>())
             for (double nm : nus)
                 for (double ni : nus) {
