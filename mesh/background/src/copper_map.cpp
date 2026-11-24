@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -34,11 +36,21 @@ std::vector<Real> rasterize_copper(const std::vector<Real>& xs,
 #else
     using namespace Clipper2Lib;
     struct IndexedPath {
-        Real min_x, max_x, min_y, max_y;
-        PathD path;
+        std::int64_t min_x, max_x;
+        Path64 path;
     };
     const Real scale_x = 1.0e6 / (xs.back() - xs.front());
     const Real scale_y = 1.0e6 / (ys.back() - ys.front());
+    // Candidate bounds, both clipping stages and union share a 1e-9
+    // normalized-coordinate lattice. A 1e-8 lattice loses too much relative
+    // area in narrow graded cells. Quantize each axis line and vertex once.
+    constexpr Real lattice = 1.0e9;
+    const auto tick = [](Real value) { return std::llround(value * lattice); };
+    std::vector<std::int64_t> x_ticks, y_ticks;
+    for (auto x : xs)
+        x_ticks.push_back(tick((x - xs.front()) * scale_x));
+    for (auto y : ys)
+        y_ticks.push_back(tick((y - ys.front()) * scale_y));
     std::vector<IndexedPath> indexed;
     indexed.reserve(paths.size());
     for (const auto& ring : paths) {
@@ -46,17 +58,17 @@ std::vector<Real> rasterize_copper(const std::vector<Real>& xs,
             continue;
         const auto tx = [&](Real x) { return (x - xs.front()) * scale_x; };
         const auto ty = [&](Real y) { return (y - ys.front()) * scale_y; };
-        IndexedPath entry{
-            tx(ring.front()[0]), tx(ring.front()[0]), ty(ring.front()[1]), ty(ring.front()[1]), {}};
+        IndexedPath entry{std::numeric_limits<std::int64_t>::max(),
+                          std::numeric_limits<std::int64_t>::lowest(),
+                          {}};
         entry.path.reserve(ring.size());
         for (const auto& point : ring) {
             if (!std::isfinite(point[0]) || !std::isfinite(point[1]))
                 throw std::invalid_argument("copper polygon coordinates must be finite");
-            entry.min_x = std::min(entry.min_x, tx(point[0]));
-            entry.max_x = std::max(entry.max_x, tx(point[0]));
-            entry.min_y = std::min(entry.min_y, ty(point[1]));
-            entry.max_y = std::max(entry.max_y, ty(point[1]));
-            entry.path.emplace_back(tx(point[0]), ty(point[1]));
+            const std::int64_t x = tick(tx(point[0])), y = tick(ty(point[1]));
+            entry.min_x = std::min(entry.min_x, x);
+            entry.max_x = std::max(entry.max_x, x);
+            entry.path.emplace_back(x, y);
         }
         indexed.push_back(std::move(entry));
     }
@@ -65,11 +77,11 @@ std::vector<Real> rasterize_copper(const std::vector<Real>& xs,
     });
     std::vector<std::vector<std::size_t>> x_candidates(xs.size() - 1);
     std::set<std::size_t> active;
-    std::multimap<Real, std::size_t> by_max_x;
+    std::multimap<std::int64_t, std::size_t> by_max_x;
     std::size_t next = 0;
     for (std::size_t i = 0; i + 1 < xs.size(); ++i) {
-        const Real left = (xs[i] - xs.front()) * scale_x;
-        const Real right = (xs[i + 1] - xs.front()) * scale_x;
+        const auto left = x_ticks[i];
+        const auto right = x_ticks[i + 1];
         while (next < indexed.size() && indexed[next].min_x < right) {
             active.insert(next);
             by_max_x.emplace(indexed[next].max_x, next);
@@ -82,23 +94,46 @@ std::vector<Real> rasterize_copper(const std::vector<Real>& xs,
         x_candidates[i].assign(active.begin(), active.end());
     }
     std::vector<Real> result((xs.size() - 1) * (ys.size() - 1));
-    for (std::size_t j = 0; j + 1 < ys.size(); ++j) {
-        for (std::size_t i = 0; i + 1 < xs.size(); ++i) {
-            const RectD rect((xs[i] - xs.front()) * scale_x,
-                             (ys[j] - ys.front()) * scale_y,
-                             (xs[i + 1] - xs.front()) * scale_x,
-                             (ys[j + 1] - ys.front()) * scale_y);
-            PathsD clipped;
-            for (auto candidate : x_candidates[i]) {
-                const auto& p = indexed[candidate];
-                if (p.max_y <= rect.top || p.min_y >= rect.bottom)
+    struct StripPiece {
+        Path64 path;
+        std::int64_t min_y, max_y;
+    };
+    for (std::size_t i = 0; i + 1 < xs.size(); ++i) {
+        // Keep strip-generated intersections away from the final cell edges.
+        // At least one tick separates each strip edge from its cell edge.
+        const auto margin = std::max<std::int64_t>(1, (x_ticks[i + 1] - x_ticks[i]) / 4);
+        const Rect64 strip(
+            x_ticks[i] - margin, y_ticks.front(), x_ticks[i + 1] + margin, y_ticks.back());
+        std::vector<StripPiece> fragments;
+        for (auto candidate : x_candidates[i]) {
+            for (auto& piece : RectClip(strip, indexed[candidate].path)) {
+                auto min_y = piece.front().y, max_y = min_y;
+                for (const auto& point : piece) {
+                    min_y = std::min(min_y, point.y);
+                    max_y = std::max(max_y, point.y);
+                }
+                fragments.push_back({std::move(piece), min_y, max_y});
+            }
+        }
+        for (std::size_t j = 0; j + 1 < ys.size(); ++j) {
+            const Rect64 rect(x_ticks[i], y_ticks[j], x_ticks[i + 1], y_ticks[j + 1]);
+            Paths64 clipped;
+            for (const auto& fragment : fragments) {
+                if (fragment.max_y <= rect.top || fragment.min_y >= rect.bottom)
                     continue;
-                auto pieces = RectClip(rect, p.path, 8);
+                auto pieces = RectClip(rect, fragment.path);
                 clipped.insert(clipped.end(), pieces.begin(), pieces.end());
             }
             if (!clipped.empty()) {
-                const auto united = Union(clipped, FillRule::NonZero, 8);
-                const Real area = std::abs(Area(united));
+                auto united = Union(clipped, FillRule::NonZero);
+                // Cell-local coordinates reduce cancellation on graded axes.
+                // Preserve ring signs, including holes, until after Area sums them.
+                for (auto& ring : united)
+                    for (auto& point : ring) {
+                        point.x -= rect.left;
+                        point.y -= rect.top;
+                    }
+                const Real area = std::abs(Area(united)) / (lattice * lattice);
                 const Real cell_area =
                     (xs[i + 1] - xs[i]) * scale_x * (ys[j + 1] - ys[j]) * scale_y;
                 result[j * (xs.size() - 1) + i] = std::clamp(area / cell_area, Real(0), Real(1));
@@ -152,5 +187,43 @@ std::vector<Real> aggregate_phi(const std::vector<Real>& fine,
     for (std::size_t p = 0; p < result.size(); ++p)
         result[p] = sums[p] / areas[p];
     return result;
+}
+Real copper_union_area_m2(const PolysetLayer& layer, Real dbu_m) {
+#ifndef CHIPCAE_ENABLE_ECAD
+    (void)layer;
+    (void)dbu_m;
+    throw std::runtime_error("polygon copper rasterization requires CHIPCAE_ENABLE_ECAD");
+#else
+    if (!std::isfinite(dbu_m) || !(dbu_m > 0))
+        throw std::invalid_argument("copper database unit must be finite and positive");
+    if (layer.ring_offsets.size() < 2 || layer.coordinates.size() % 2 != 0)
+        throw std::invalid_argument("invalid polyset geometry");
+    const auto point_count = layer.coordinates.size() / 2;
+    if (layer.ring_offsets.front() != 0 || layer.ring_offsets.back() < 0 ||
+        static_cast<std::uint64_t>(layer.ring_offsets.back()) != point_count)
+        throw std::invalid_argument("invalid polyset ring offsets");
+    // Validate the entire array before constructing any polygon paths.
+    for (std::size_t i = 0; i < layer.ring_offsets.size(); ++i) {
+        const auto offset = layer.ring_offsets[i];
+        if (offset < 0 || static_cast<std::uint64_t>(offset) > point_count ||
+            (i > 0 && offset <= layer.ring_offsets[i - 1]))
+            throw std::invalid_argument("invalid polyset ring offsets");
+    }
+    Clipper2Lib::Paths64 paths;
+    for (std::size_t r = 0; r + 1 < layer.ring_offsets.size(); ++r) {
+        const auto begin = layer.ring_offsets[r], end = layer.ring_offsets[r + 1];
+        if (end - begin < 3)
+            continue;
+        auto& path = paths.emplace_back();
+        path.reserve(static_cast<std::size_t>(end - begin));
+        for (auto point = static_cast<std::size_t>(begin); point < static_cast<std::size_t>(end);
+             ++point)
+            path.emplace_back(layer.coordinates[2 * point], layer.coordinates[2 * point + 1]);
+    }
+    const auto united = Clipper2Lib::Union(paths, Clipper2Lib::FillRule::NonZero);
+    const Real area = Clipper2Lib::Area(united) * dbu_m * dbu_m;
+    // Normalize signed zero for JSON output.
+    return area == 0 ? Real(0) : area;
+#endif
 }
 } // namespace chipcae::mesh

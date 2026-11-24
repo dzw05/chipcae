@@ -8,10 +8,20 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QDir>
+#include <QDirIterator>
+#include <QDoubleSpinBox>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileDialog>
+#include <QFileInfo>
+#include <QFormLayout>
+#include <QJsonDocument>
+#include <QLabel>
+#include <QPushButton>
+#include <QRegularExpression>
 #include <QSurfaceFormat>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -209,9 +219,452 @@ void assemblyWiring(MainWindow& w) {
     require(QFile::copy(input, upper) && isAssemblyPath(upper), "uppercase assembly fixture");
     import(upper);
 }
+namespace {
+void writeBytes(const QString& path, const QByteArray& bytes) {
+    require(QDir().mkpath(QFileInfo(path).absolutePath()), "create fixture parent");
+    QFile file(path);
+    require(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "open fixture output");
+    require(file.write(bytes) == bytes.size(), "write complete fixture");
+}
+void copyResults(const QString& source, const QString& target) {
+    require(QDir().mkpath(target), "create result copy directory");
+    QDirIterator it(source, QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        const auto path = it.next();
+        const auto destination = QDir(target).filePath(QDir(source).relativeFilePath(path));
+        require(QDir().mkpath(QFileInfo(destination).absolutePath()), "create result subdirectory");
+        require(QFile::copy(path, destination), "copy synthetic result fixture");
+    }
+}
+Json resultStack() {
+    return Json::parse(R"({"id":"result_stack","unit":"m","outline":{"box":[0,0,0.02,0.02]},
+        "symmetry":"none","package_type":"FCBGA","layers":[
+        {"name":" Base ","material":"Organic_EQ","thickness":0.0012345678901234567,
+         "kind":"Homogenized","n_elem_min":2,"grading":1},
+        {"name":"tOP","material":"Si_mixed","thickness":0.00023456789012345678,
+         "kind":"Explicit","n_elem_min":2,"grading":1}]})");
+}
+void requireRows(LayerModel* model, const Json& stack) {
+    const auto& layers = stack.at("layers");
+    require(model->rowCount() == static_cast<int>(layers.size()),
+            qPrintable(QString("result stack row count: expected %1, got %2")
+                           .arg(layers.size())
+                           .arg(model->rowCount())));
+    for (int row = 0; row < model->rowCount(); ++row) {
+        const auto& layer = layers.at(row);
+        require(model->index(row, LayerModel::Name).data().toString().toStdString() ==
+                    layer.at("name").as<std::string>(),
+                "stack name preserves case and whitespace");
+        require(model->index(row, LayerModel::Material).data().toString().toStdString() ==
+                    layer.get_value_or<std::string>("material", ""),
+                "stack material matches JSON");
+        // This is a display transport check: the brief requires the identical parsed double.
+        require(model->index(row, LayerModel::Thickness).data().toDouble() ==
+                    layer.at("thickness").as<double>(),
+                "stack thickness preserves the parsed double exactly");
+    }
+}
+StackEditor* stackEditor(MainWindow& window) {
+    auto* editor = window.findChild<StackEditor*>();
+    require(editor != nullptr, "existing StackEditor is installed");
+    return editor;
+}
+ResultControls* resultControls(MainWindow& window) {
+    // ResultControls is a QWidget without Q_OBJECT; use C++ RTTI, not Qt metaobject casts.
+    for (auto* widget : window.findChildren<QWidget*>())
+        if (auto* controls = dynamic_cast<ResultControls*>(widget))
+            return controls;
+    return nullptr;
+}
+int resultsStackAcceptance(const QString& samples) {
+    int failures = 0;
+    const auto run = [&](const QString& name, auto test) {
+        try {
+            test();
+            std::cout << "PASS results stack: " << name.toStdString() << '\n';
+        } catch (const std::exception& e) {
+            ++failures;
+            std::cerr << "FAIL results stack: " << name.toStdString() << ": " << e.what() << '\n';
+        }
+    };
+    QTemporaryDir temp;
+    require(temp.isValid(), "results acceptance temporary directory");
+    const auto pack = temp.filePath("with-stack");
+    copyResults(samples + "/viewer_mixed", pack);
+    const auto stack = resultStack();
+    writeBytes(pack + "/stackup.json", QByteArray::fromStdString(stack.to_string()));
+    const auto manifest = pack + "/manifest.json";
+    run("result-only rows and document isolation", [&] {
+        MainWindow window;
+        auto* editor = stackEditor(window);
+        const auto before = window.document()->toJson();
+        const auto beforeStack = window.document()->stackJson();
+        const auto stale = editor->previewStale();
+        const auto displayStale = window.previewDisplayStale();
+        int invalidated = 0;
+        QObject::connect(editor, &StackEditor::previewInvalidated, &window, [&] { ++invalidated; });
+        require(window.lastOpenResultsStackFillMs() == -1, "initial stack fill time is -1");
+        require(window.openResultsPath(manifest), "open result-only pack");
+        requireRows(editor->model(), stack);
+        require(editor->isReadOnly(), "result-only stack is read-only");
+        require(!window.caseIsOpen(), "result display is not an open case");
+        require(!window.document()->isDirty() && window.document()->toJson() == before &&
+                    window.document()->stackJson() == beforeStack,
+                "result display does not mutate or dirty CaseDocument");
+        require(editor->previewStale() == stale && window.previewDisplayStale() == displayStale &&
+                    invalidated == 0,
+                "result display leaves preview state and signals untouched");
+        require(!window.submitCurrentCase(), "result-only submit remains rejected");
+        require(!window.previewMesh("missing-preview-program", {}),
+                "result-only preview remains rejected");
+        require(window.lastOpenResultsStackFillMs() >= 0, "successful stack fill records time");
+    });
+    run("timing on success and early failure", [&] {
+        MainWindow window;
+        require(window.lastOpenResultsStackFillMs() == -1, "timer initially unset");
+        require(!window.openResultsPath(temp.filePath("missing/manifest.json")),
+                "missing results rejected");
+        require(window.lastOpenResultsStackFillMs() >= 0, "early failure records stack fill time");
+        require(window.openResultsPath(manifest), "open timed result");
+        require(window.lastOpenResultsStackFillMs() >= 0,
+                "successful open records stack fill time");
+    });
+    run("existing case keeps every cell and editability", [&] {
+        MainWindow window;
+        require(
+            window.openCase(QString(CHIPCAE_REPOSITORY) + "/schema/examples/fcbga_demo.case.json"),
+            "open case before result");
+        auto* editor = stackEditor(window);
+        const auto before = window.document()->toJson();
+        const auto beforeStack = window.document()->stackJson();
+        const auto dirty = window.document()->isDirty();
+        const auto stale = editor->previewStale();
+        QList<QVariant> cells;
+        for (int row = 0; row < editor->model()->rowCount(); ++row)
+            for (int col = 0; col < editor->model()->columnCount(); ++col)
+                cells << editor->model()->index(row, col).data();
+        int invalidated = 0;
+        QObject::connect(editor, &StackEditor::previewInvalidated, &window, [&] { ++invalidated; });
+        require(window.openResultsPath(manifest), "open results after case");
+        requireRows(editor->model(), beforeStack);
+        QList<QVariant> afterCells;
+        for (int row = 0; row < editor->model()->rowCount(); ++row)
+            for (int col = 0; col < editor->model()->columnCount(); ++col)
+                afterCells << editor->model()->index(row, col).data();
+        require(afterCells == cells, "all case cells survive result open");
+        require(window.caseIsOpen() && !editor->isReadOnly() &&
+                    (editor->model()->flags(editor->model()->index(0, 0)) & Qt::ItemIsEditable),
+                "case remains open and editable");
+        require(window.document()->toJson() == before && window.document()->isDirty() == dirty &&
+                    editor->previewStale() == stale && invalidated == 0,
+                "case and preview unchanged by results");
+    });
+    run("document stack without case path takes priority", [&] {
+        MainWindow window;
+        require(window.loadHandwrittenStack(), "load handwritten case stack");
+        const auto before = window.document()->stackJson();
+        require(window.openResultsPath(manifest), "open result after handwritten stack");
+        requireRows(stackEditor(window)->model(), before);
+        require(!stackEditor(window)->isReadOnly() && window.document()->stackJson() == before,
+                "handwritten stack remains editable and unchanged");
+    });
+    run("result to empty result clears old rows", [&] {
+        MainWindow window;
+        require(window.openResultsPath(manifest), "open populated results");
+        requireRows(stackEditor(window)->model(), stack);
+        require(window.openResultsPath(samples + "/viewer_mixed/manifest.json"),
+                "open result without stackup");
+        require(stackEditor(window)->model()->rowCount() == 0, "no stale result rows");
+        stackEditor(window)->setReadOnly(false);
+        require(stackEditor(window)->isReadOnly() && !stackEditor(window)->actionsAllowed(),
+                "empty replacement remains read-only");
+        require(!window.caseIsOpen() && !window.document()->isDirty(),
+                "empty result stays result-only");
+    });
+    run("result to case restores editable document rows", [&] {
+        MainWindow window;
+        require(window.openResultsPath(manifest), "open results before case");
+        require(
+            window.openCase(QString(CHIPCAE_REPOSITORY) + "/schema/examples/fcbga_demo.case.json"),
+            "open case after result");
+        auto* editor = stackEditor(window);
+        requireRows(editor->model(), window.document()->stackJson());
+        require(
+            window.caseIsOpen() && !editor->isReadOnly() &&
+                editor->model()->setData(editor->model()->index(0, LayerModel::Name), "renamed"),
+            "case editing restored after results");
+    });
+    run("failed result open preserves existing rows", [&] {
+        MainWindow window;
+        require(window.openResultsPath(manifest), "open results before failed replacement");
+        require(!window.openResultsPath(temp.filePath("absent.json")), "replacement fails");
+        requireRows(stackEditor(window)->model(), stack);
+        require(stackEditor(window)->isReadOnly(),
+                "failed replacement keeps read-only result stack");
+    });
+    const auto chineseFormLabels = [&](const QString& resultManifest) {
+        MainWindow window;
+        require(window.openResultsPath(resultManifest), "open result for controls");
+        auto* controls = resultControls(window);
+        require(controls != nullptr, "result controls installed");
+        auto* form = qobject_cast<QFormLayout*>(controls->layout());
+        require(form != nullptr, "controls form layout");
+        QComboBox *field = nullptr, *layer = nullptr;
+        for (auto* combo : controls->findChildren<QComboBox*>()) {
+            if (combo->itemText(0) == QStringLiteral("温度"))
+                field = combo;
+            else if (combo->count() && combo->itemData(0).isValid() &&
+                     combo->itemData(0).toInt() == 0 &&
+                     (combo->itemText(0) == QStringLiteral("全部层") ||
+                      combo->itemText(0) == "All layers"))
+                layer = combo;
+        }
+        require(field && layer, "field and layer controls found by role");
+        const auto label = [&](QWidget* widget) {
+            auto* text = qobject_cast<QLabel*>(form->labelForField(widget));
+            require(text != nullptr, "form field has a label");
+            return text->text();
+        };
+        require(label(field) == QStringLiteral("字段"), "field label is 字段");
+        require(label(layer) == QStringLiteral("叠层"), "layer label is 叠层");
+        QDoubleSpinBox* scale = nullptr;
+        for (auto* spin : controls->findChildren<QDoubleSpinBox*>())
+            if (spin->decimals() == 6 && spin->value() == 1)
+                scale = spin;
+        require(scale && label(scale) == QStringLiteral("翘曲放大系数"), "warpage scale label");
+        require(layer->itemText(0) == QStringLiteral("全部层") && layer->itemData(0).toInt() == 0,
+                "all-layers item and data");
+        const QStringList expectedFields{QStringLiteral("温度"),
+                                         QStringLiteral("位移幅值"),
+                                         QStringLiteral("翘曲"),
+                                         QStringLiteral("叠层"),
+                                         QStringLiteral("材料")};
+        require(field->count() == expectedFields.size(), "exactly five field choices");
+        for (int i = 0; i < field->count(); ++i)
+            require(field->itemText(i) == expectedFields[i], "Chinese field choices in order");
+
+        QStringList formLabels, planeLabels;
+        for (int row = 0; row < form->rowCount(); ++row) {
+            auto* item = form->itemAt(row, QFormLayout::FieldRole);
+            if (!item || !item->widget() || !form->labelForField(item->widget()))
+                continue;
+            const auto text = label(item->widget());
+            formLabels << text;
+            auto* spin = qobject_cast<QDoubleSpinBox*>(item->widget());
+            if (spin && spin->decimals() == 9)
+                planeLabels << text;
+        }
+        // Report every missing translation even when the first form label is still English.
+        QStringList labelFailures;
+        const auto expectLabel = [&](bool value, const QString& message) {
+            if (!value)
+                labelFailures << message;
+        };
+        for (const auto& text : {QStringLiteral("单元编号"), QStringLiteral("步")})
+            expectLabel(formLabels.count(text) == 1,
+                        QStringLiteral("exactly one form label: %1").arg(text));
+        const QStringList expectedPlaneLabels{QStringLiteral("原点 x"),
+                                              QStringLiteral("原点 y"),
+                                              QStringLiteral("原点 z"),
+                                              QStringLiteral("法向 x"),
+                                              QStringLiteral("法向 y"),
+                                              QStringLiteral("法向 z")};
+        expectLabel(planeLabels.size() == 6, "exactly six plane inputs");
+        expectLabel(planeLabels == expectedPlaneLabels,
+                    "Chinese origin and normal labels in layout order");
+        for (const auto& text : expectedPlaneLabels)
+            expectLabel(formLabels.count(text) == 1,
+                        QStringLiteral("exactly one form label: %1").arg(text));
+        for (const auto& text : {"elem_gid",
+                                 "Step",
+                                 "Origin x",
+                                 "Origin y",
+                                 "Origin z",
+                                 "Normal x",
+                                 "Normal y",
+                                 "Normal z"})
+            expectLabel(formLabels.count(text) == 0,
+                        QString("obsolete form label absent: %1").arg(text));
+
+        QStringList checkTexts;
+        for (auto* check : controls->findChildren<QCheckBox*>())
+            checkTexts << check->text();
+        for (const auto& text :
+             {QStringLiteral("显示空洞单元"), QStringLiteral("剖切（正半空间）")})
+            expectLabel(checkTexts.count(text) == 1,
+                        QStringLiteral("exactly one checkbox: %1").arg(text));
+        for (const auto& text : {"Show void cells", "Clip (positive half-space)"})
+            expectLabel(checkTexts.count(text) == 0,
+                        QString("obsolete checkbox absent: %1").arg(text));
+
+        QStringList buttonTexts;
+        for (auto* button : controls->findChildren<QPushButton*>())
+            buttonTexts << button->text();
+        expectLabel(buttonTexts.count(QStringLiteral("导出 PNG")) == 1,
+                    "exactly one 导出 PNG button");
+        expectLabel(buttonTexts.count("Export PNG") == 0, "obsolete Export PNG button absent");
+        require(labelFailures.isEmpty(), qPrintable(labelFailures.join('\n')));
+    };
+    run("Chinese form labels", [&] { chineseFormLabels(manifest); });
+    run("Chinese form labels without void cells",
+        [&] { chineseFormLabels(samples + "/temporal.json"); });
+    run("Chinese screenshot dialog caption", [&] {
+        // Lock the caption argument without opening a modal file dialog on offscreen platforms.
+        QFile source(QString(CHIPCAE_REPOSITORY) + "/desktop/viewer/ResultControls.cpp");
+        require(source.open(QIODevice::ReadOnly), "read result controls for dialog caption");
+        const auto text = QString::fromUtf8(source.readAll());
+        const QRegularExpression call(QStringLiteral(
+            R"re(QFileDialog::getSaveFileName\s*\(\s*this\s*,\s*(QStringLiteral\("[^"]*"\)|"[^"]*")\s*,\s*\{\s*\}\s*,\s*(?:QStringLiteral\()?"([^"]*)"\)?\s*\))re"));
+        const auto match = call.match(text);
+        require(match.hasMatch(), "save dialog call and literal arguments found");
+        require(match.captured(2) == QStringLiteral("PNG (*.png)"), "PNG filter preserved");
+        require(match.captured(1) == QStringLiteral("QStringLiteral(\"导出截图\")"),
+                "save dialog caption is QStringLiteral(导出截图)");
+        require(!text.contains(QStringLiteral("\"Export screenshot\"")),
+                "obsolete Export screenshot caption absent");
+    });
+    run("layer dropdown consumes fallback names in order", [&] {
+        MainWindow window;
+        require(window.openResultsPath(manifest), "open unnamed pack with stack");
+        auto* controls = resultControls(window);
+        require(controls != nullptr, "fallback controls present");
+        QComboBox* layer = nullptr;
+        auto* form = qobject_cast<QFormLayout*>(controls->layout());
+        require(form != nullptr, "fallback controls form");
+        for (auto* combo : controls->findChildren<QComboBox*>()) {
+            auto* label = qobject_cast<QLabel*>(form->labelForField(combo));
+            if (label && (label->text() == QStringLiteral("叠层") || label->text() == "Layer"))
+                layer = combo;
+        }
+        require(layer && layer->count() == 3, "layer dropdown includes two fallback names");
+        for (int row = 0; row < 2; ++row)
+            require(layer->itemText(row + 1).toStdString() ==
+                            stack.at("layers").at(row).at("name").as<std::string>() &&
+                        layer->itemData(row + 1).toInt() == row + 1,
+                    "fallback dropdown name and 1-based data");
+    });
+    for (const auto& name : {"missing",
+                             "empty",
+                             "corrupt",
+                             "array",
+                             "no-layers",
+                             "empty-layers",
+                             "wrong-layers",
+                             "wrong-row",
+                             "wrong-name",
+                             "wrong-thickness",
+                             "wrong-material",
+                             "absolute",
+                             "parent",
+                             "symlink",
+                             "specified-missing",
+                             "relative"}) {
+        run(QString("stack path and JSON: ") + name, [&] {
+            const auto target = temp.filePath(name);
+            copyResults(samples + "/viewer_mixed", target);
+            QFile file(target + "/manifest.json");
+            require(file.open(QIODevice::ReadOnly), "read manifest for path fixture");
+            auto m = QJsonDocument::fromJson(file.readAll()).object();
+            file.close();
+            const auto valid = QByteArray::fromStdString(stack.to_string());
+            const QMap<QString, QByteArray> invalid{
+                {"empty", ""},
+                {"corrupt", "{"},
+                {"array", "[]"},
+                {"no-layers", "{}"},
+                {"empty-layers", "{\"layers\":[]}"},
+                {"wrong-layers", "{\"layers\":3}"},
+                {"wrong-row", "{\"layers\":[3]}"},
+                {"wrong-name", "{\"layers\":[{\"name\":3,\"thickness\":0.1}]}"},
+                {"wrong-thickness", "{\"layers\":[{\"name\":\"x\",\"thickness\":[]}]}"},
+                {"wrong-material",
+                 "{\"layers\":[{\"name\":\"x\",\"thickness\":0.1,\"material\":{}}]}"}};
+            if (invalid.contains(name))
+                writeBytes(target + "/stackup.json", invalid.value(name));
+            if (QString(name) == "relative") {
+                m["stackup"] = "Nested/StackUP.json";
+                writeBytes(target + "/Nested/StackUP.json", valid);
+                writeBytes(target + "/stackup.json", "{}");
+            } else if (QString(name) == "absolute" || QString(name) == "parent" ||
+                       QString(name) == "symlink" || QString(name) == "specified-missing") {
+                writeBytes(temp.filePath("outside.json"), valid);
+                // A valid default must not mask an explicitly invalid manifest path.
+                writeBytes(target + "/stackup.json", valid);
+                if (QString(name) == "absolute")
+                    m["stackup"] = temp.filePath("outside.json");
+                else if (QString(name) == "parent")
+                    m["stackup"] = "../outside.json";
+                else if (QString(name) == "specified-missing")
+                    m["stackup"] = "absent.json";
+                else {
+                    require(QFile::link(temp.filePath("outside.json"), target + "/escape.json"),
+                            "create escaping stackup symlink");
+                    m["stackup"] = "escape.json";
+                }
+            }
+            writeBytes(target + "/manifest.json", QJsonDocument(m).toJson());
+            MainWindow window;
+            require(window.openResultsPath(target + "/manifest.json"),
+                    "invalid stack does not reject results");
+            require(!window.caseIsOpen() && !window.document()->isDirty(),
+                    "path test preserves document");
+            if (QString(name) == "relative")
+                requireRows(stackEditor(window)->model(), stack);
+            else {
+                auto* editor = stackEditor(window);
+                require(editor->model()->rowCount() == 0,
+                        "invalid or absent stack gives zero rows");
+                editor->setReadOnly(false);
+                require(editor->isReadOnly() && !editor->actionsAllowed(),
+                        "invalid or absent stack remains result-only and read-only");
+                require(window.openCase(QString(CHIPCAE_REPOSITORY) +
+                                        "/schema/examples/fcbga_demo.case.json"),
+                        "open case after invalid or absent result stack");
+                require(!editor->isReadOnly() && editor->model()->rowCount() == 3 &&
+                            editor->model()->setData(editor->model()->index(0, LayerModel::Name),
+                                                     "restored"),
+                        "case loading restores editing after no-stack results");
+            }
+        });
+    }
+    for (const auto& entry :
+         {qMakePair("CHIPCAE_S1", QStringList{"substrate", "die_attach", "Si"}),
+          qMakePair("CHIPCAE_S1B", QStringList{"substrate", "die_attach", "Si"}),
+          qMakePair("CHIPCAE_DEMO_GATE", QStringList{"substrate", "bump_eq", "die_layer"})}) {
+        const auto path = qEnvironmentVariable(entry.first);
+        if (path.isEmpty() || !QFileInfo::exists(path)) {
+            std::cout << "SKIP official results stack: " << entry.first << " is unavailable\n";
+            continue;
+        }
+        run(entry.first, [&] {
+            const auto manifestPath =
+                QFileInfo(path).isDir() ? QDir(path).filePath("manifest.json") : path;
+            QFile manifestFile(manifestPath);
+            require(manifestFile.open(QIODevice::ReadOnly), "read official manifest");
+            const auto manifest = QJsonDocument::fromJson(manifestFile.readAll()).object();
+            QFile stackFile(QFileInfo(manifestPath)
+                                .dir()
+                                .filePath(manifest.value("stackup").toString("stackup.json")));
+            require(stackFile.open(QIODevice::ReadOnly), "read official stackup");
+            const auto officialStack = Json::parse(stackFile.readAll().toStdString());
+            MainWindow window;
+            require(window.openResultsPath(manifestPath), "open optional official results");
+            auto* model = stackEditor(window)->model();
+            requireRows(model, officialStack);
+            require(model->rowCount() == 3, "official stack has three layers");
+            for (int row = 0; row < 3; ++row)
+                require(model->index(row, LayerModel::Name).data().toString() == entry.second[row],
+                        "official stack layer order");
+        });
+    }
+    return failures;
+}
+} // namespace
+
 int main(int argc, char** argv) {
     QSurfaceFormat::setDefaultFormat(QVTKOpenGLNativeWidget::defaultFormat());
     QApplication app(argc, argv);
+    int failures = 0;
     try {
         require(argc > 1, "result samples argument required");
         MainWindow w;
@@ -228,6 +681,9 @@ int main(int argc, char** argv) {
         std::cout << "window wiring checks passed\n";
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
-        return 1;
+        ++failures;
     }
+    if (argc > 1)
+        failures += resultsStackAcceptance(QString::fromLocal8Bit(argv[1]));
+    return failures ? 1 : 0;
 }

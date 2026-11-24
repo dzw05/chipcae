@@ -1,0 +1,109 @@
+{
+  "contract": "m5-io-stats/1.0",
+  "ruling": "handoff/rulings/m5-io-stats-1.0.md",
+  "note": "Synthetic invariants for ResultsWriter::io_stats() after in-process writes. Tests construct a mesh at runtime; this directory does not store VTKHDF or real-case data.",
+  "synthetic_setup": {
+    "mesh": "1 hex cell, 8 vertices (Q2 vertex nodes)",
+    "write_step_count": 2,
+    "steps": [
+      0,
+      1
+    ],
+    "set_mesh": true,
+    "finalize": true,
+    "stackup": "temporary synthetic chipcae.stack/0.2 JSON, or schema/examples/fcbga_demo.stack.json read-only"
+  },
+  "positive_after_two_steps_and_finalize": {
+    "write_step_count": {
+      "equals": 2
+    },
+    "write_step_seconds": {
+      "finite": true,
+      "min": 0,
+      "equals": "measured_step_0 + measured_step_1"
+    },
+    "last_write_step_seconds": {
+      "finite": true,
+      "min": 0,
+      "equals": "measured_step_1"
+    },
+    "finalize_seconds": {
+      "finite": true,
+      "min": 0
+    },
+    "peak_rss_bytes": {
+      "type": "uint64",
+      "min": 1,
+      "unit": "bytes",
+      "source": "getrusage(RUSAGE_SELF).ru_maxrss converted: Linux KiB*1024, macOS already bytes"
+    },
+    "bytes_written": {
+      "equals": "file_size(out/step-0.vtkhdf) + file_size(out/step-1.vtkhdf) + file_size(manifest.json)",
+      "api": "std::filesystem::file_size"
+    }
+  },
+  "before_finalize": {
+    "peak_rss_bytes": {
+      "equals": 0
+    },
+    "bytes_written": {
+      "equals": "sum of already written out/step-*.vtkhdf file sizes; manifest.json not yet counted"
+    }
+  },
+  "finalize_only_no_write_step": {
+    "write_step_count": {
+      "equals": 0
+    },
+    "write_step_seconds": {
+      "equals": 0
+    },
+    "last_write_step_seconds": {
+      "equals": 0
+    },
+    "finalize_seconds": {
+      "finite": true,
+      "min": 0
+    },
+    "bytes_written": "file_size(manifest.json) if existing writer emits it, else 0"
+  },
+  "ondisk_invariant": {
+    "criterion": "single",
+    "description": "Timing stays in memory. On-disk manifest.json and step VTKHDF must not gain timing keys/attributes; existing top-level manifest keys stay exactly the frozen set below. Two consecutive writes of the same synthetic input must produce byte-identical manifest.json and step-*.vtkhdf (SHA-256 of the whole file).",
+    "manifest_keys_required": [
+      "schema_version",
+      "units",
+      "stackup",
+      "steps",
+      "partitions",
+      "fields",
+      "blocks",
+      "summary",
+      "mesh"
+    ],
+    "manifest_keys_forbidden": [
+      "io_stats",
+      "write_step_seconds",
+      "last_write_step_seconds",
+      "finalize_seconds",
+      "peak_rss",
+      "peak_rss_bytes",
+      "bytes_written",
+      "write_step_count",
+      "perf",
+      "timing"
+    ],
+    "vtkhdf_forbidden_names": [
+      "io_stats",
+      "write_step_seconds",
+      "last_write_step_seconds",
+      "finalize_seconds",
+      "peak_rss",
+      "peak_rss_bytes",
+      "bytes_written",
+      "write_step_count",
+      "perf",
+      "timing"
+    ],
+    "repeat_write_sha256": "required: second run of the same input, whole-file SHA-256 must match for manifest.json and each step-*.vtkhdf"
+  }
+}

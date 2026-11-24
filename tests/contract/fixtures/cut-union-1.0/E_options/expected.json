@@ -1,0 +1,7 @@
+{
+ "case": "E_options",
+ "ok": false,
+ "path": "cut/options",
+ "reason": "invalid thresholds",
+ "mesh_unchanged": true
+}

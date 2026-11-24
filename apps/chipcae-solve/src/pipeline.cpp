@@ -1,5 +1,6 @@
 #include "chipcae/io/event_log.hpp"
 #include "chipcae/io/vtkhdf_results.hpp"
+#include "chipcae/material/copper_laminate.hpp"
 #include "chipcae/solve/case_loader.hpp"
 #include "chipcae/solve/mixture.hpp"
 #include "chipcae/solvers/fem/column_gmg.hpp"
@@ -8,6 +9,7 @@
 #include "cut_convection.hpp"
 #include "cut_output.hpp"
 #include "direct_refine.hpp"
+#include "outline_contains.hpp"
 #include "sha256.hpp"
 
 #include <algorithm>
@@ -694,9 +696,8 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             // Omit that diagnostic for the whole run instead of inventing a value.
             conductivity_available &= base.k > 0 && (!metal || metal->k > 0);
             if (metal && base.k > 0 && metal->k > 0) {
-                const double kxy = f * metal->k + (1 - f) * base.k;
-                const double kz = 1 / (f / metal->k + (1 - f) / base.k);
-                conductivities[e] = {kxy, kxy, kz};
+                chipcae::material::copper_laminate_conductivity(
+                    base.k, metal->k, f, conductivities[e].data());
             }
             if (mechanical)
                 mixtures[e] = mixture(base, metal ? *metal : base, f);
@@ -1018,23 +1019,14 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
         int nd = scalar.GetNDofs();
         double tmax = -std::numeric_limits<double>::infinity(), umax = 0;
         std::vector<std::array<double, 3>> top;
+        const bool outline_convex =
+            !clipped || detail::outline_is_convex(inputs.stack.outline.polygon);
         auto in_domain = [&](double x, double y, double z) {
             if (!clipped)
                 return true;
-            // Convex extruded outline; nodal maxima and PV exclude extension nodes.
-            const auto& ring = inputs.stack.outline.polygon;
-            double sign = 0;
-            for (std::size_t j = 0; j < ring.size(); ++j) {
-                auto a = ring[j], b = ring[(j + 1) % ring.size()];
-                double v = (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]);
-                if (std::abs(v) < 1e-14)
-                    continue;
-                if (sign * v < 0)
-                    return false;
-                sign = v;
-            }
+            // outline_contains excludes extension nodes from maxima and PV for nonconvex outlines.
             (void)z;
-            return true;
+            return detail::outline_contains(inputs.stack.outline.polygon, outline_convex, x, y);
         };
         auto add_top = [&](double x, double y, double w) {
             top.push_back({x, y, w});

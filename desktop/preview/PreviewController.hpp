@@ -6,6 +6,7 @@
 
 #include <QPointer>
 #include <QWidget>
+#include <array>
 #include <memory>
 #include <vtkType.h>
 
@@ -60,7 +61,7 @@ private:
     PreviewOptions effective_;
 };
 
-enum class PreviewColorMode { Layer, Material };
+enum class PreviewColorMode { Layer, Material, CopperPhi };
 
 class PreviewView : public QWidget {
     Q_OBJECT
@@ -80,6 +81,8 @@ public:
     QString summaryText() const;
     QString colorBarTitle() const;
     QString scalarArrayName() const;
+    bool hasCopperPhi() const;
+    std::array<double, 2> colorRange() const;
     vtkDataSet* displayed() const;
     int highlightedCount() const;
 

@@ -107,9 +107,23 @@ def main():
     }.get(mode, ("OK", 0))
     if mode in ("confirm", "b") and args.accept_b_tier:
         code, exit_code = "OK", 0
-    report = {"code": code, "message": "Mock import: " + mode, "defects": []}
+    report = {"schema_version": "import-report/1.0", "code": code,
+              "message": "Mock import: " + mode, "defects": []}
+    defects = []
     if code in ("IMPORT_CONFIRMATION_REQUIRED", "IMPORT_REJECTED"):
-        report["defects"] = [{"code": "MOCK_GAP", "reason": "Review fixture gap"}]
+        defects = [{"defect_id": "mock/gap/1", "tier": "B" if exit_code == 6 else "C",
+                    "kind": "MOCK_GAP", "reason": 8, "dimension": "edge", "size": 1,
+                    "size_unit": "1", "suggestion": "Review fixture gap", "action": "review",
+                    "rejection_reason": "" if exit_code == 6 else "Fixture rejected",
+                    "material_ambiguous": False}]
+    sidecar = {"schema_version": "import-report/1.0", "L": 0, "t_min": 0,
+               "eps_weld": 0, "tau_A": 0, "tau_B": 0, "delta_f": 0,
+               "tier_counts": {tier: sum(d["tier"] == tier for d in defects)
+                               for tier in ("Weld", "A", "B", "C")},
+               "b_tier_accepted": "all" if args.accept_b_tier else None,
+               "defects": defects}
+    if mode != "missing":
+        (pathlib.Path(args.o).parent / "import_report.json").write_text(json.dumps(sidecar))
     report_path = (pathlib.Path(args.report) if args.report
                    else pathlib.Path(args.o).parent / "defects.json")
     if mode != "missing":

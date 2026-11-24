@@ -10,7 +10,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'tests/unit/result_summary'))
 # Import first to retain the shared fixture's dependency-missing exit code 77.
-from fixtures import fixture, save, fixed_keys, h5py, np
+from fixtures import baseline_for_numpy, fixture, save, fixed_keys, h5py, np
 
 sys.path.insert(0, str(ROOT))
 from tools.vv import result_summary as rs
@@ -20,7 +20,7 @@ BLOCK_COUNTS = (('hex', 'NumberOfCells'), ('cut', 'NumberOfCells'),
                 ('eb_surface', 'Polygons/NumberOfCells'))
 
 # Captured from the unchanged CLI at 80dcd16 before writing these tests.
-BASELINE = '''{
+BASELINE = baseline_for_numpy('''{
   "schema": "chipcae.vv.result_summary/0.1",
   "step_file": "out/step-0.vtkhdf",
   "mesh_sha256": "synthetic-sha256",
@@ -70,7 +70,7 @@ BASELINE = '''{
     "warpage_pv": 0.1
   }
 }
-'''.encode('utf-8')
+''').encode('utf-8')
 # Each variant was independently captured and checked against these replacements.
 BASELINE_NO_SURFACE = BASELINE.replace(b'"points": 7,\n      "polygons": 3',
                                        b'"points": 0,\n      "polygons": 0')
@@ -94,6 +94,15 @@ def two_steps(run):
                 group[name] = np.array([total], dtype='int64')
     manifest['steps'] = [{'n': 4, 'file': 'out/step-4.vtkhdf'},
                          {'n': 9, 'file': 'out/step-9.vtkhdf'}]
+    per_step = []
+    for record in manifest['steps']:
+        with h5py.File(run / record['file'], 'r') as f:
+            counts = [f[f'VTKHDF/{block}/{cells}'].shape[0]
+                      for block, cells in BLOCK_COUNTS]
+        assert all(count == counts[0] for count in counts), record['file']
+        per_step.append(counts[0])
+    manifest['partitions']['per_step'] = per_step
+    manifest['partitions']['solver_fixed_per_run'] = False
     save(run, manifest)
     return second, manifest
 

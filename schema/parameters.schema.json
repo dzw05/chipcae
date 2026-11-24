@@ -12,7 +12,7 @@
       "properties": {
         "rtol": { "type": "number", "exclusiveMinimum": 0, "default": 1e-8 },
         "max_iter": { "type": "integer", "minimum": 1, "default": 500 },
-        "preconditioner": { "enum": ["column_gmg", "direct"], "default": "column_gmg" }
+        "preconditioner": { "enum": ["column_gmg", "direct", "jacobi", "gamg"], "default": "column_gmg" }
       }
     }
   }

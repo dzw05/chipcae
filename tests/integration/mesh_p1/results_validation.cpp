@@ -1,5 +1,6 @@
 #include "chipcae/io/vtkhdf_results.hpp"
 
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <hdf5.h>
@@ -80,6 +81,69 @@ int main(int argc, char** argv) {
                 valid &= json.find(std::string("\"name\":\"") + name + "\"") != std::string::npos;
             if (!valid)
                 throw std::runtime_error("cut field selection lost required metadata");
+        }
+        // Only rank zero owns hexes: empty ranks must join the volume collectives.
+        for (bool with_volume : {false, true}) {
+            auto hex_run = run / (with_volume ? "hex-volume" : "hex-no-volume");
+            ResultsWriter hex_writer(hex_run,
+                                     std::string(K1_ROOT) + "/tools/samples/s1.stack.json");
+            auto hex_step = step;
+            if (rank == 0) {
+                auto& hex = hex_step.hex;
+                hex.points = p.points;
+                for (int i = 0; i < 3; ++i)
+                    hex.hex.insert(hex.hex.end(), p.connectivity.begin(), p.connectivity.end());
+                hex.T.assign(8, 300);
+                hex.U.assign(24, 0);
+                hex.elem_gid = {ranks, 0, ranks + 1};
+                hex.layer_id = {1, 1, 1};
+                hex.material_id = {2, 2, 2};
+                hex.cell_kind = {0, 1, 0};
+                if (with_volume)
+                    hex.volume = {0.25, 1, 0.75};
+            }
+            hex_writer.write_step(0, 0, hex_step);
+            if (rank == 0) {
+                auto file =
+                    H5Fopen((hex_run / "out/step-0.vtkhdf").c_str(), H5F_ACC_RDONLY, H5P_DEFAULT);
+                if (file < 0)
+                    throw std::runtime_error("hex output missing");
+                const auto* path = "/VTKHDF/hex/CellData/volume";
+                bool valid = H5Lexists(file, path, H5P_DEFAULT) == (with_volume ? 1 : 0);
+                if (with_volume && valid) {
+                    auto dataset = H5Dopen2(file, path, H5P_DEFAULT);
+                    auto space = H5Dget_space(dataset);
+                    valid &= H5Sget_simple_extent_npoints(space) == 2;
+                    double values[2]{};
+                    if (valid)
+                        valid &= H5Dread(dataset,
+                                         H5T_NATIVE_DOUBLE,
+                                         H5S_ALL,
+                                         H5S_ALL,
+                                         H5P_DEFAULT,
+                                         values) >= 0;
+                    valid &= std::abs(values[0] - 0.25) <= 1e-14 * 0.25 &&
+                             std::abs(values[1] - 0.75) <= 1e-14 * 0.75;
+                    H5Sclose(space);
+                    H5Dclose(dataset);
+                }
+                H5Fclose(file);
+                if (!valid)
+                    throw std::runtime_error("hex volume output differs from input selection");
+            }
+            for (std::size_t count : {1, 4}) {
+                auto bad = hex_step;
+                if (rank == 0)
+                    bad.hex.volume.assign(count, 1);
+                bool rejected = false;
+                try {
+                    hex_writer.write_step(1, 0, bad);
+                } catch (const std::exception&) {
+                    rejected = true;
+                }
+                if (!rejected)
+                    throw std::runtime_error("invalid hex volume length accepted");
+            }
         }
         for (int trial = 0; trial < 13; ++trial) {
             auto bad = step;

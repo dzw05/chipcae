@@ -1,0 +1,5 @@
+{
+ "case": "E_empty",
+ "setup": "pieces = {}",
+ "source": "tests/unit/region_ls/test_plane_cut_union.cpp @ #202 0d97b59 :1030-1043 which=0; plane_cut.cpp:1092-1093"
+}

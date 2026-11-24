@@ -5,8 +5,13 @@ using namespace crashdiag_test;
 namespace {
 void previous_handler(int) {}
 std::size_t descriptor_count() {
+#ifdef __APPLE__
+    const auto* directory = "/dev/fd";
+#else
+    const auto* directory = "/proc/self/fd";
+#endif
     return static_cast<std::size_t>(
-        std::distance(fs::directory_iterator("/proc/self/fd"), fs::directory_iterator{}));
+        std::distance(fs::directory_iterator(directory), fs::directory_iterator{}));
 }
 
 struct SavedActions {
@@ -32,8 +37,7 @@ struct SavedActions {
             check(::sigaction(sig, nullptr, &action) == 0, "query restored signal action");
             check(action.sa_handler == previous_handler, "previous signal handler not restored");
             check((action.sa_flags & SA_RESTART) != 0, "previous signal flags not restored");
-            check(::sigismember(&action.sa_mask, SIGUSR1) == 1,
-                  "previous signal mask not restored");
+            check(sigismember(&action.sa_mask, SIGUSR1) == 1, "previous signal mask not restored");
         }
     }
 };

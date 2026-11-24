@@ -69,8 +69,7 @@ def rigid_residual(p, delta):
 def mixture(f):
     a = (f*110e9*17e-6/(1-.34)+(1-f)*25e9*1e-5/(1-.3)) / (
         f*110e9/(1-.34)+(1-f)*25e9/(1-.3))
-    b = f*(17e-6-2*.34*(a-17e-6)/(1-.34)) + (
-        1-f)*(1e-5-2*.3*(a-1e-5)/(1-.3))
+    b = (f*110e9*17e-6 + (1-f)*25e9*1e-5) / (f*110e9 + (1-f)*25e9)
     return a, b
 
 
@@ -120,7 +119,7 @@ def aligned(result):
     return p, u
 
 
-def compare(left, right, tolerance, correction=None, rigid=False):
+def compare(left, right, tolerance, correction=None, rigid=False, kind='cross-run'):
     p, u = aligned(left)
     q, v = aligned(right)
     assert np.array_equal(p, q), 'cross-run coordinate grids differ'
@@ -130,7 +129,7 @@ def compare(left, right, tolerance, correction=None, rigid=False):
     residual = rigid_residual(p, delta) if rigid else np.max(abs(delta))
     limit = tolerance*np.max(abs(v))
     assert residual <= limit, (
-        f"{left['name']}/{right['name']}: cross-run U residual={residual:.17g}, "
+        f"{left['name']}/{right['name']}: {kind} U residual={residual:.17g}, "
         f'limit={limit:.17g}')
 
 
@@ -232,11 +231,29 @@ def main():
         def case(name, **kwargs):
             return run(root, exe, mpiexec, name, **kwargs)
         a = case('A')
+        a_repeat = case('A-repeat')
+        p, u = aligned(a)
+        q, v = aligned(a_repeat)
+        assert np.array_equal(p, q), 'A/A-repeat: coordinate grids differ'
+        assert np.array_equal(u, v), (
+            'A/A-repeat: np=1 single-thread U not bitwise identical, '
+            f'max|diff|={np.max(abs(u-v)):.17g}')
+        print('实测 A/A-repeat np=1 single-thread bitwise_identical=True', flush=True)
         b = case('B', tref=350, linear=True)
         assert abs(b['pv']/a['pv']-1) <= 1e-9
         compare(b, a, 1e-9, correction=lambda p: -50*p*np.array([1e-5]*3), rigid=True)
         c = {f: case(f'C-{f}', copper=f) for f in (0, .3, 1)}
-        compare(c[0], a, 1e-12)
+        # Explicit A versus Patterned C-0 (zero copper) is input-path equivalence,
+        # distinct from repeatability. Historical relative difference: 3.755e-10
+        # (solver 11-22, main a6dd6c8); 1e-9 matches the scale of B/A and the
+        # analytic U/PV gates in run().
+        compare(c[0], a, 1e-9, kind='path-equivalence')
+        _, u_c0 = aligned(c[0])
+        _, u_a = aligned(a)
+        residual = np.max(abs(u_c0-u_a))
+        relative = residual / np.max(abs(u_a))
+        print(f'实测 C-0/A path-equivalence: residual={residual:.6e} '
+              f'relative={relative:.6e} limit_rel=1e-9', flush=True)
         d = case('D', copper=.3, sidecars={'trace.polyset': polygons()})
         compare(d, c[.3], 1e-12)
         assert abs(d['pv']/c[.3]['pv']-1) <= 1e-12

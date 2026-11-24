@@ -1,16 +1,24 @@
 #include "ResultView.hpp"
 
+#include <QDebug>
 #include <QFileInfo>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QVBoxLayout>
 #include <QVTKOpenGLNativeWidget.h>
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <map>
+#include <set>
 #include <vtkActor.h>
 #include <vtkAppendFilter.h>
+#include <vtkBoundingBox.h>
 #include <vtkCallbackCommand.h>
+#include <vtkCamera.h>
 #include <vtkCell.h>
+#include <vtkCellArray.h>
 #include <vtkCellData.h>
 #include <vtkCellPicker.h>
 #include <vtkClipDataSet.h>
@@ -29,8 +37,10 @@
 #include <vtkPartitionedDataSetCollection.h>
 #include <vtkPlane.h>
 #include <vtkPointData.h>
+#include <vtkPointLocator.h>
 #include <vtkPointSet.h>
 #include <vtkPoints.h>
+#include <vtkPolyData.h>
 #include <vtkProperty.h>
 #include <vtkRenderWindowInteractor.h>
 #include <vtkRenderer.h>
@@ -43,6 +53,12 @@
 
 namespace chipcae::desktop {
 namespace {
+QString methodSuffix(const QJsonObject& entry) {
+    const auto method = entry["method"];
+    if (!method.isString() || method.toString().isEmpty())
+        return {};
+    return " [" + method.toString() + "]";
+}
 QString canonical(QString n) {
     if (n == "cut_poly")
         return "cut";
@@ -87,6 +103,126 @@ double determinant(const double* a, const double* b, const double* c, const doub
     vtkMath::Cross(y, z, cross);
     return vtkMath::Dot(x, cross);
 }
+struct BoundaryGrid {
+    vtkUnstructuredGrid* shown;
+    vtkSmartPointer<vtkPoints> reference;
+};
+// Use undeformed face connectivity to find neighbors. Canonicalize duplicate vertices only
+// in this temporary topology table; each owner keeps its own displayed solution points.
+vtkSmartPointer<vtkActor> layerBoundaries(const std::vector<BoundaryGrid>& grids) {
+    using Edge = std::pair<vtkIdType, vtkIdType>;
+    struct Owner {
+        std::size_t cell;
+        double layer;
+        std::vector<Edge> edges;
+    };
+    vtkBoundingBox bounds;
+    vtkIdType pointCount = 0;
+    auto finite = [](const double* p) {
+        return std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]);
+    };
+    for (const auto& grid : grids)
+        for (vtkIdType i = 0; i < grid.reference->GetNumberOfPoints(); ++i) {
+            double p[3];
+            grid.reference->GetPoint(i, p);
+            if (finite(p)) {
+                bounds.AddPoint(p);
+                ++pointCount;
+            }
+        }
+    if (!bounds.IsValid())
+        return nullptr;
+    double box[6], lengths[3];
+    bounds.GetBounds(box);
+    bounds.GetLengths(lengths);
+    double magnitude = 0;
+    for (double value : box)
+        magnitude = std::max(magnitude, std::abs(value));
+    // Absolute distance: 1e-10 of the undeformed extent, with a coordinate-roundoff floor.
+    // This joins numerical duplicates without merging displayed points or averaging U.
+    const double tolerance = std::max(1e-10 * std::max({lengths[0], lengths[1], lengths[2]}),
+                                      64 * std::numeric_limits<double>::epsilon() * magnitude);
+    vtkNew<vtkPoints> vertices;
+    vertices->SetDataTypeToDouble();
+    vtkNew<vtkPointLocator> locator;
+    locator->SetTolerance(tolerance);
+    locator->InitPointInsertion(vertices, box, pointCount);
+    std::map<std::vector<vtkIdType>, std::vector<Owner>> faces;
+    vtkNew<vtkPoints> points;
+    points->SetDataTypeToDouble();
+    std::size_t cellId = 0;
+    for (const auto& entry : grids) {
+        auto grid = entry.shown;
+        auto layers = grid->GetCellData()->GetArray("layer_id");
+        if (!layers)
+            continue;
+        std::vector<vtkIdType> topology(grid->GetNumberOfPoints(), -1);
+        std::vector<vtkIdType> displayed(grid->GetNumberOfPoints(), -1);
+        for (vtkIdType i = 0; i < grid->GetNumberOfPoints(); ++i) {
+            double reference[3], shown[3];
+            entry.reference->GetPoint(i, reference);
+            grid->GetPoint(i, shown);
+            if (finite(reference) && finite(shown)) {
+                locator->InsertUniquePoint(reference, topology[i]);
+                displayed[i] = points->InsertNextPoint(shown);
+            }
+        }
+        for (vtkIdType i = 0; i < grid->GetNumberOfCells(); ++i, ++cellId) {
+            auto cell = grid->GetCell(i);
+            const double layer = layers->GetComponent(i, 0);
+            if (cell->GetCellDimension() != 3 || !std::isfinite(layer))
+                continue;
+            for (int f = 0; f < cell->GetNumberOfFaces(); ++f) {
+                auto face = cell->GetFace(f);
+                std::vector<vtkIdType> key;
+                for (vtkIdType j = 0; j < face->GetNumberOfPoints(); ++j)
+                    key.push_back(topology[face->GetPointId(j)]);
+                std::sort(key.begin(), key.end());
+                if (key.size() < 3 || key.front() < 0 ||
+                    std::adjacent_find(key.begin(), key.end()) != key.end())
+                    continue;
+                Owner owner{cellId, layer, {}};
+                // Preserve the face's actual edges; sorting the face key loses its perimeter.
+                for (int e = 0; e < face->GetNumberOfEdges(); ++e) {
+                    auto edge = face->GetEdge(e);
+                    const auto a = displayed[edge->GetPointId(0)];
+                    const auto b = displayed[edge->GetPointId(1)];
+                    if (a >= 0 && b >= 0 && a != b)
+                        owner.edges.emplace_back(std::min(a, b), std::max(a, b));
+                }
+                faces[key].push_back(std::move(owner));
+            }
+        }
+    }
+    std::set<Edge> edges;
+    for (const auto& [key, owners] : faces) {
+        for (const auto& owner : owners)
+            if (std::any_of(owners.begin(), owners.end(), [&](const Owner& other) {
+                    return owner.cell != other.cell && owner.layer != other.layer;
+                }))
+                edges.insert(owner.edges.begin(), owner.edges.end());
+    }
+    if (edges.empty())
+        return nullptr;
+    vtkNew<vtkCellArray> lines;
+    for (const auto& [a, b] : edges) {
+        const vtkIdType ids[] = {a, b};
+        lines->InsertNextCell(2, ids);
+    }
+    vtkNew<vtkPolyData> data;
+    data->SetPoints(points);
+    data->SetLines(lines);
+    vtkNew<vtkDataSetMapper> mapper;
+    mapper->SetInputData(data);
+    mapper->ScalarVisibilityOff();
+    auto actor = vtkSmartPointer<vtkActor>::New();
+    actor->SetObjectName("layerBoundaries");
+    actor->SetMapper(mapper);
+    actor->PickableOff();
+    actor->GetProperty()->SetColor(0.12, 0.12, 0.12);
+    actor->GetProperty()->SetLineWidth(2);
+    return actor;
+}
 } // namespace
 struct ResultView::State {
     struct Block {
@@ -102,6 +238,11 @@ struct ResultView::State {
     ColorRange range;
     QString watermark, banner;
     QLabel* bannerLabel = nullptr;
+    QLabel* fieldStatusLabel = nullptr;
+    bool loaded = false;
+    bool cameraInitialized = false;
+    double boundarySetupMs = 0;
+    vtkSmartPointer<vtkActor> boundaries;
     vtkSmartPointer<vtkTextActor> overlay = vtkSmartPointer<vtkTextActor>::New();
     double scale = 1;
     int layer = 0;
@@ -120,7 +261,14 @@ ResultView::ResultView(QWidget* parent) : QWidget(parent), d(std::make_unique<St
     d->bannerLabel = new QLabel(this);
     d->bannerLabel->setWordWrap(true);
     d->bannerLabel->hide();
-    layout->addWidget(d->bannerLabel);
+    d->fieldStatusLabel = new QLabel(this);
+    d->fieldStatusLabel->setObjectName("fieldStatusLabel");
+    d->fieldStatusLabel->setWordWrap(true);
+    d->fieldStatusLabel->hide();
+    auto status = new QHBoxLayout;
+    status->addWidget(d->bannerLabel);
+    status->addWidget(d->fieldStatusLabel);
+    layout->addLayout(status);
     layout->addWidget(widget);
     d->overlay->GetPositionCoordinate()->SetCoordinateSystemToNormalizedViewport();
     d->overlay->SetPosition(0.25, 0.3);
@@ -147,6 +295,20 @@ bool ResultView::loadStep(ResultSession& session, qint64 step) {
     auto object = session.loadStep(step);
     if (!object) {
         d->error = session.error();
+        d->loaded = false;
+        d->blocks.clear();
+        d->renderer->RemoveAllViewProps();
+        d->boundaries = nullptr;
+        d->boundarySetupMs = 0;
+        d->range = {};
+        d->fieldStatusLabel->clear();
+        d->fieldStatusLabel->hide();
+        if (!d->watermark.isEmpty())
+            d->renderer->AddViewProp(d->overlay);
+        emit displayChanged();
+        if (isVisible())
+            d->window->Render();
+        update();
         return false;
     }
     d->blocks.clear();
@@ -186,9 +348,29 @@ bool ResultView::loadStep(ResultSession& session, qint64 step) {
         filter->Update();
         add(name, filter->GetOutput());
     }
+    d->loaded = true;
     rebuild();
-    d->renderer->ResetCamera();
-    return d->error.isEmpty();
+    if (!d->error.isEmpty())
+        return false;
+    const auto start = std::chrono::steady_clock::now();
+    if (!d->cameraInitialized) {
+        auto camera = d->renderer->GetActiveCamera();
+        camera->SetFocalPoint(0, 0, 0);
+        camera->SetPosition(0, 0, 1);
+        camera->SetViewUp(0, 1, 0);
+        d->renderer->ResetCamera();
+        camera->Azimuth(45);
+        camera->Elevation(30);
+        camera->OrthogonalizeViewUp();
+        d->renderer->ResetCameraClippingRange();
+        d->cameraInitialized = true;
+    }
+    const double cameraSetupMs =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    qInfo() << "result_default_view_setup_ms" << d->boundarySetupMs + cameraSetupMs;
+    if (isVisible())
+        d->window->Render();
+    return true;
 }
 void ResultView::setColorField(ResultColorField field) {
     d->field = field;
@@ -213,12 +395,24 @@ QString ResultView::colorBarTitle() const {
     case ResultColorField::LayerId:
     case ResultColorField::MaterialId: {
         const bool layer = d->field == ResultColorField::LayerId;
-        const int id = static_cast<int>(d->range.min);
-        auto name = d->session ? (layer ? d->session->layerName(id) : d->session->materialName(id))
-                               : QString{};
-        if (name.isEmpty())
-            name = QString("%1 %2").arg(layer ? "layer" : "material").arg(id);
-        return QString("%1: %2").arg(layer ? "layer_id" : "material_id", name);
+        const double first = std::ceil(d->range.min), last = std::floor(d->range.max);
+        if (!std::isfinite(first) || !std::isfinite(last) || first > last ||
+            first < std::numeric_limits<int>::min() || last > std::numeric_limits<int>::max())
+            return {};
+        QStringList names;
+        const int end = static_cast<int>(last);
+        for (int id = static_cast<int>(first);; ++id) {
+            auto name = d->session
+                            ? (layer ? d->session->layerName(id) : d->session->materialName(id))
+                            : QString{};
+            if (name.isEmpty())
+                name = QString("%1 %2").arg(layer ? "layer" : "material").arg(id);
+            names << name;
+            if (id == end)
+                break;
+        }
+        return QStringLiteral("%1: %2").arg(layer ? QStringLiteral("叠层") : QStringLiteral("材料"),
+                                            names.join(", "));
     }
     }
     return {};
@@ -235,6 +429,7 @@ QString ResultView::tmaxText() const {
                 QString text = QString("T_max: %1 %2")
                                    .arg(entry["value"].toDouble(), 0, 'g', 16)
                                    .arg(entry["unit"].toString());
+                text += methodSuffix(entry);
                 for (auto key : {"region", "region_id", "body"}) {
                     auto region = entry[key].toString();
                     if (!region.isEmpty()) {
@@ -345,15 +540,20 @@ QString ResultView::summary(const QString& name) const {
             auto s = v.toObject();
             if (s["name"] == name && s["step"].toInteger(-1) == d->step && s["value"].isDouble())
                 return QString("%1: %2 %3")
-                    .arg(name)
-                    .arg(s["value"].toDouble(), 0, 'g', 16)
-                    .arg(s["unit"].toString());
+                           .arg(name)
+                           .arg(s["value"].toDouble(), 0, 'g', 16)
+                           .arg(s["unit"].toString()) +
+                       methodSuffix(s);
         }
     return name + ": unavailable";
 }
 void ResultView::rebuild() {
     d->error.clear();
     d->renderer->RemoveAllViewProps();
+    d->boundaries = nullptr;
+    d->boundarySetupMs = 0;
+    d->fieldStatusLabel->clear();
+    d->fieldStatusLabel->hide();
     d->range = {};
     if (!d->watermark.isEmpty())
         d->renderer->AddViewProp(d->overlay);
@@ -365,6 +565,7 @@ void ResultView::rebuild() {
     vtkNew<vtkLookupTable> lut;
     lut->SetHueRange(0.667, 0);
     lut->Build();
+    std::vector<BoundaryGrid> shown;
     for (auto& b : d->blocks) {
         vtkNew<vtkIdList> ids;
         auto kinds = b.raw->GetCellData()->GetArray("cell_kind");
@@ -388,6 +589,11 @@ void ResultView::rebuild() {
                 continue;
             }
             b.shown = clipped(t, d->origin, d->normal);
+        }
+        if (b.shown->GetNumberOfCells() && b.shown->GetCellData()->HasArray("layer_id")) {
+            vtkNew<vtkPoints> reference;
+            reference->DeepCopy(b.shown->GetPoints());
+            shown.push_back({b.shown, reference});
         }
         auto u = b.shown->GetPointData()->GetArray("U");
         if (u && u->GetNumberOfComponents() == 3)
@@ -476,6 +682,19 @@ void ResultView::rebuild() {
         ha->GetProperty()->SetColor(1, 0.7, 0.05);
         ha->GetProperty()->SetLineWidth(2);
         d->renderer->AddActor(ha);
+    }
+    if (d->loaded && d->error.isEmpty()) {
+        const auto start = std::chrono::steady_clock::now();
+        d->boundaries = layerBoundaries(shown);
+        d->boundarySetupMs =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+                .count();
+        if (d->boundaries)
+            d->renderer->AddActor(d->boundaries);
+        if (d->field == ResultColorField::Temperature && !d->range.valid) {
+            d->fieldStatusLabel->setText(QStringLiteral("无温度场"));
+            d->fieldStatusLabel->show();
+        }
     }
     for (auto& b : d->blocks)
         if (b.actor)

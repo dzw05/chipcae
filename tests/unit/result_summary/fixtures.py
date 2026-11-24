@@ -62,6 +62,7 @@ def fixture(run, cut=False, two=False):
         eb['Polygons/NumberOfCells'] = np.array([1, 2], dtype='int64')
     manifest = {'schema_version': 'chipcae.results/1.0', 'steps': [{'n': 0, 'file': 'out/step-0.vtkhdf'}],
                 'mesh': {'mesh_sha256': 'synthetic-sha256'},
+                'partitions': {'per_step': [2], 'solver_fixed_per_run': True},
                 'summary': [{'name': 'T_max', 'value': 309., 'unit': 'K'},
                             {'name': 'warpage_pv', 'value': .1, 'unit': 'm'}]}
     save(run, manifest)
@@ -81,3 +82,29 @@ def fixed_keys(test, result):
         test.assertEqual(list(result['temperature']), ['min', 'max', 'top_min', 'top_max', 'top_mean'])
     test.assertEqual(list(result['warpage']), ['manifest_warpage_pv_m', 'w_bfp_m', 'rel_diff', 'n_top_points'])
     test.assertEqual(result['schema'], 'chipcae.vv.result_summary/0.1')
+
+
+def baseline_for_numpy(text):
+    """Keep captured JSON bytes, with the pre-validation fit on this LAPACK.
+
+    The historical reader fitted these nine lexicographically ordered points.
+    Freeze that calculation here, independently of result_summary and its QoI
+    helper: different LAPACK backends differ in the final rounding bits. Exact
+    comparisons still catch any change from the old reader on the same backend.
+    """
+    xy = np.array([(x, y) for x in (-1., 0., 1.) for y in (-1., 0., 1.)])
+    x, y = xy.T
+    displacement = .125 + .25*x - .5*y - .0625*(x*x + y*y)
+    design = np.column_stack((np.ones(9), x, y))
+    coef = np.linalg.lstsq(design, displacement, rcond=None)[0]
+    residual = displacement - (coef[0] + coef[1]*x + coef[2]*y)
+    warpage = float(np.ptp(residual))
+    relative = abs(warpage - .1)/.1
+    # Independent analytic oracle: the quadratic has peak-to-valley 1/8.
+    # Absolute tolerance 1e-15 m; relative-difference tolerance 1e-14.
+    np.testing.assert_allclose(warpage, .125, rtol=0., atol=1e-15)
+    np.testing.assert_allclose(relative, .25, rtol=0., atol=1e-14)
+    return (text.replace('"w_bfp_m": 0.1250000000000002',
+                         '"w_bfp_m": ' + json.dumps(warpage))
+                .replace('"rel_diff": 0.2500000000000019',
+                         '"rel_diff": ' + json.dumps(relative)))

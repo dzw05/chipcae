@@ -1,6 +1,10 @@
 #include "chipcae/core/error_code.hpp"
 #include "chipcae/core/version.hpp"
 
+#ifdef CHIPCAE_SOLVE_BACKEND
+#include "fvm_pipeline.hpp"
+#endif
+
 #include <iostream>
 #include <map>
 #include <memory>
@@ -71,6 +75,9 @@ int main(int argc, char** argv) {
         auto inputs =
             chipcae::solve::load_inputs(args.at("--case"), args.at("--profile"), mpi.size);
 #if defined(MFEM_USE_CUDA) && defined(CHIPCAE_SOLVE_MFEM)
+#if defined(CHIPCAE_CI_INJECT_CUDA_FAULT) && defined(MFEM_USE_CUDA)
+#error "injected CUDA-branch compile fault (CI self-test)"
+#endif
         // MFEM device state is process-global; keep it alive through solve::run below.
         // Device selection alone does not guarantee CUDA support in downstream solver operators.
         std::unique_ptr<mfem::Device> device;
@@ -87,7 +94,8 @@ int main(int argc, char** argv) {
         }
 #ifdef CHIPCAE_SOLVE_BACKEND
         inputs.cut_as_hex = args.contains("--cut-output");
-        return chipcae::solve::run(inputs, args.at("--out"));
+        return inputs.family == "fvm" ? chipcae::solve::run_fvm(inputs, args.at("--out"))
+                                      : chipcae::solve::run(inputs, args.at("--out"));
 #else
         (void)inputs;
 #endif

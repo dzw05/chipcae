@@ -25,8 +25,8 @@ TEMPERATURE_ATOL = 1e-8
 READBACK_RTOL = 1e-12
 PARALLEL_RTOL = 1e-8
 QOIS = ('warpage_pv', 'U_mag_max', 'T_max')
-ACCEPTANCE_CHECKS = ('import', 'fractions', 'preview', 'solve_readback',
-                     'inputs_unchanged', 'numerical', 'parallel')
+ACCEPTANCE_CHECKS = ('import', 'cell_fractions', 'conductivity', 'physics', 'preview',
+                     'solve_readback', 'inputs_unchanged', 'numerical', 'parallel')
 
 
 def write_json(path, obj):
@@ -69,52 +69,19 @@ def run_command(stage, args, root, timings):
 
 
 def compare_import(imported, golden):
-    actual, expected = imported['layers'], deepcopy(golden)['layers']
-    material_ids = {'mat.fr4': 'fr4_eq', 'mat.cu': 'cu'}
-    for layer in expected:
-        layer['material'] = material_ids.get(layer['material'], layer['material'])
-    assert len(actual) == len(expected), (
-        f'M1 layer count: actual={len(actual)} expected={len(expected)}')
+    actual, expected = imported['layers'], golden['layers']
+    assert len(actual) == len(expected), 'M1 layer count'
     for index, (got, want) in enumerate(zip(actual, expected, strict=True)):
         context = f'M1 layer[{index}] {got.get("name")!r}'
-        for key in ('name', 'material'):
-            assert got[key] == want[key], (
-                f'{context} {key}: actual={got[key]!r} expected={want[key]!r}')
-        assert math.isclose(got['thickness'], want['thickness'], rel_tol=1e-12, abs_tol=0), (
-            f'{context} thickness: actual={got["thickness"]!r} '
-            f'expected={want["thickness"]!r}')
-
-
-def compare_fractions(report, converted, imported, measurements):
-    copper_names = ['F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu']
-    entries = report['layers']
-    names = [entry['layer'] for entry in entries]
-    assert len(names) == 4 and sorted(names) == sorted(copper_names), (
-        f'M1 copper report: actual={names!r} expected exactly once={copper_names!r}')
-    fractions = {entry['layer']: entry['fraction'] for entry in entries}
-    measurements['copper_fractions'] = {
-        name: value if math.isfinite(value) else None for name, value in fractions.items()
-    }
-    print(f'实测 copper fractions: {fractions}', flush=True)
-    assert len(converted['layers']) == len(imported['layers'])
-    for index, (layer, original) in enumerate(zip(converted['layers'], imported['layers'], strict=True)):
-        assert layer['name'] == original['name'], f'converted layer[{index}] order changed'
-        assert layer['material'] == original['material'], f'converted layer[{index}] material changed'
-        if layer['name'] in fractions:
-            copper = layer['copper']
-            assert copper['metal'] == original['copper']['metal'], layer
-            assert 'polygons' not in copper, layer
-            assert math.isclose(copper['fraction'], fractions[layer['name']],
-                                rel_tol=1e-12, abs_tol=0), layer
-    for name in copper_names:
-        fraction = fractions[name]
-        valid = 0 < fraction <= 1 if name == 'F.Cu' else fraction == 0
-        assert math.isfinite(fraction) and valid, (
-            f'M1 copper fraction {name}: actual={fraction!r} '
-            f'expected {"0 < fraction <= 1" if name == "F.Cu" else "fraction == 0"}; '
-            f'all fractions={fractions!r}')
-    # Independent trace-area reference: 0.307835 mm² / 25 mm².
-    assert math.isclose(fractions['F.Cu'], .0123134, rel_tol=1e-12, abs_tol=0), fractions
+        for key in ('name', 'material', 'kind'):
+            assert got[key] == want[key], f'{context} {key}: {got[key]!r} != {want[key]!r}'
+        assert math.isclose(got['thickness'], want['thickness'], rel_tol=1e-12, abs_tol=0), context
+        if got['kind'] == 'Patterned':
+            assert got['material'] == 'fr4_eq', f'{context} matrix'
+            copper = got['copper']
+            assert copper['metal'] == 'cu', f'{context} copper metal'
+            assert 'polygons' in copper and 'fraction' not in copper, f'{context} polygons required'
+            assert copper['polygons']['layer'] == got['name'], f'{context} polygon layer'
 
 
 def write_solver_inputs(root):
@@ -135,7 +102,7 @@ def write_solver_inputs(root):
             provenance=dict(source_type='illustrative', confidence='illustrative')))
     write_json(root / 'materials.json', dict(schema='chipcae.material_library/1', materials=materials))
     write_json(root / 'case.json', dict(
-        schema='chipcae.case/1.0', stack=dict(ref='solve.stack.json'),
+        schema='chipcae.case/1.0', stack=dict(ref='stack.json'),
         materials=dict(ref='materials.json'),
         mesh=dict(type='aligned_cartesian_cut', nx=4, ny=4, levels=0, max_ratio=100,
                   min_elems_per_layer=1),
@@ -143,7 +110,7 @@ def write_solver_inputs(root):
                  dict(id='mech', solver='fem.solid', temp_from='thermal', T_ref=298.15)],
         loads=[dict(type='fixed_temperature', target='face:zmin', T=298.15),
                dict(type='convection', target='face:zmax', h=1000, T_inf=348.15)],
-        constraints=dict(rigid='3-2-1'), solver=dict(linear=dict(preconditioner='direct')),
+        constraints=dict(rigid='3-2-1'), solver=dict(linear=dict(preconditioner='direct', rtol=1e-12)),
         output=dict(format='vtkhdf')))
     for ranks in (1, 2):
         write_json(root / f'profile_r{ranks}.json', dict(
@@ -152,8 +119,9 @@ def write_solver_inputs(root):
     assert p1.pop('ranks') == 1 and p2.pop('ranks') == 2 and p1 == p2
 
 
-def inspect_run(run_dir, stack, preview_count, measurements, np, h5py):
-    """Inspect exported points; analytic values never come from the solver."""
+def inspect_run(run_dir, stack, rings, preview_count, measurements, np, h5py, failures):
+    import trace_map_ref as ref
+
     manifest = read_json(run_dir / 'manifest.json')
     assert manifest['schema_version'] == 'chipcae.results/1.0', manifest.get('schema_version')
     summary = {entry['name']: entry['value'] for entry in manifest['summary']}
@@ -162,53 +130,34 @@ def inspect_run(run_dir, stack, preview_count, measurements, np, h5py):
         if key != 'T_max':
             assert summary[key] > 0, (key, summary)
     measurements['qoi'] = {key: summary[key] for key in QOIS}
-    conductivity = {'cu': 390, 'fr4_eq': .3}
-    layers = []
-    for layer in stack['layers']:
-        k = conductivity[layer['material']]
-        if 'copper' in layer:
-            copper = layer['copper']
-            f = copper['fraction']
-            k = 1 / (f / conductivity[copper['metal']] + (1 - f) / conductivity['fr4_eq'])
-        layers.append((layer['thickness'], k))
-    heat_flux = 50 / (sum(t / k for t, k in layers) + 1 / 1000)
     with h5py.File(artifact(run_dir / 'out/step-0.vtkhdf'), 'r') as file:
         cut_count = int(np.sum(file['VTKHDF/cut/NumberOfCells'][:]))
         hexes = file['VTKHDF/hex']
         count = int(np.sum(hexes['NumberOfCells'][:]))
         measurements.update(cut_cells=cut_count, hex_cells=count, preview_cells=preview_count)
         assert cut_count == 0, f'M3 cut cells={cut_count}'
-        assert count > 0 and count == preview_count, (
-            f'M2/M3 hex cells={count} preview cell_count={preview_count}')
-        assert np.all(hexes['CellData/cell_kind'][:] == 0), 'M3 nonzero hex cell_kind'
-        z = hexes['Points'][:, 2]
-        assert math.isclose(float(np.min(z)), 0.0, abs_tol=1e-15), 'M3 zmin'
-        assert math.isclose(float(np.max(z)), sum(t for t, _ in layers), rel_tol=1e-12), 'M3 zmax'
-        resistance = np.zeros_like(z)
-        bottom = 0.0
-        for thickness, k in layers:
-            resistance += np.clip(z - bottom, 0, thickness) / k
-            bottom += thickness
-        expected = 298.15 + heat_flux * resistance
-        temperatures = hexes['PointData/T'][:]
-        assert temperatures.shape == expected.shape, (temperatures.shape, expected.shape)
-        assert np.all(np.isfinite(temperatures)), 'M3 nonfinite temperatures'
-        error = float(np.max(np.abs(temperatures - expected)))
-        assert math.isfinite(error), 'M3 nonfinite temperature error'
-        measurements['max_temperature_error_K'] = error
-    warpage = read_json(run_dir / 'summary.json')['warpage']
-    print(f'实测 {run_dir.name} w_bfp_m={warpage["w_bfp_m"]!r}', flush=True)
-    readback = warpage['manifest_warpage_pv_m']
-    assert readback is not None and math.isfinite(readback), f'M5 readback warpage={readback!r}'
-    relative = abs(readback - summary['warpage_pv']) / abs(summary['warpage_pv'])
-    measurements.update(readback_warpage_m=readback, readback_relative_error=relative)
+        assert count > 0 and count == preview_count, f'M2/M3 hex cells={count}, preview={preview_count}'
+        mesh = ref.read_hex_mesh(hexes, stack, require_fields=False)
+    inspection_failures = []
+    try:
+        ref.check_solution(mesh, rings, stack, measurements,
+                           expected_areas=ref.COPPER_AREAS_MM2)
+    except (AssertionError, OSError, ValueError, KeyError) as exc:
+        inspection_failures.append(f'{run_dir.name}: {exc}')
+    try:
+        warpage = read_json(run_dir / 'summary.json')['warpage']
+        print(f'实测 {run_dir.name} w_bfp_m={warpage["w_bfp_m"]!r}', flush=True)
+        readback = warpage['manifest_warpage_pv_m']
+        assert readback is not None and math.isfinite(readback), f'M5 readback warpage={readback!r}'
+        relative = abs(readback-summary['warpage_pv'])/abs(summary['warpage_pv'])
+        measurements.update(readback_warpage_m=readback, readback_relative_error=relative)
+        assert relative <= READBACK_RTOL, f'M3/M5 warpage readback relative error={relative}'
+    except (AssertionError, OSError, ValueError, KeyError) as exc:
+        inspection_failures.append(f'{run_dir.name}: {exc}')
     print(f'实测 {run_dir.name}: {json.dumps(measurements, ensure_ascii=False)}', flush=True)
-    # Both solves/readbacks have completed before either numerical assertion.
-    assert error <= TEMPERATURE_ATOL, (
-        f'M3 {run_dir.name} max temperature error={error:.17g} K > {TEMPERATURE_ATOL} K')
-    assert relative <= READBACK_RTOL, (
-        f'M3/M5 {run_dir.name} warpage readback relative error={relative:.17g} > {READBACK_RTOL}')
-    measurements['acceptance_checks']['numerical'] = True
+    measurements['acceptance_checks']['numerical'] = not inspection_failures
+    failures.extend(inspection_failures)
+    return mesh
 
 
 def get_commit(notes):
@@ -241,7 +190,7 @@ def write_result(run_dir, ranks, measurements, timings, notes, failures):
         schema='chipcae.vv_result/0.2', case_id='f1130_uncut_board4',
         data_class='synthetic', label='实测', date=datetime.now().strftime('%Y%m%d'),
         commit=commit, verdict='fail' if failures else 'pass',
-        reference=dict(value=None, type='解析', source='1D 串联热阻，test_ipc_uncut_chain.py 同口径'),
+        reference=dict(value=None, type='独立代码', source='trace_map_ref.py: exact clipping + independent Q2'),
         qoi=measurements.get('qoi', {}), run={**measurements, 'ranks': ranks},
         error=dict(value=measurements.get('max_temperature_error_K'), metric='max_abs_temperature_K'),
         tolerance=dict(value=TEMPERATURE_ATOL, metric='max_abs_temperature_K',
@@ -263,18 +212,18 @@ def main():
     if not importer or not previewer or not solver:
         print('SKIP: importer/preview/solver executable environment unavailable')
         return 77
+    import numpy as np
     try:
-        import numpy as np
         import h5py
-    except ImportError as exc:
-        print(f'SKIP: numpy/h5py unavailable: {exc}')
+    except ImportError:
+        print('SKIP: h5py missing (pending infra-ci-h5py)', file=sys.stderr)
         return 77
 
     started = time.monotonic()
     timings, notes, failures = {}, [], []
     with tempfile.TemporaryDirectory(prefix='f1130-uncut-') as directory:
         root = Path(directory)
-        # Keep an auditable failure record even if import/conversion blocks solving.
+        # Keep an auditable failure record even if import/preview blocks solving.
         run1 = root / 'ranks1'
         run1.mkdir()
         runs = {1: dict(path=run1, measurements=dict(acceptance_checks={}),
@@ -294,13 +243,15 @@ def main():
             golden = read_json(SOURCE / 'tests/integration/import_cli/golden/board_4layer/stack.json')
             compare_import(imported, golden)
             setup_checks['import'] = True
-            run_command('fraction conversion', [sys.executable, SOURCE / 'tools/stack/copper_fraction.py',
-                                               'stack.json', '-o', 'solve.stack.json',
-                                               '--report', 'cf.json'], root, timings)
-            stack = read_json(root / 'solve.stack.json')
-            compare_fractions(read_json(root / 'cf.json'), stack, imported, runs[1]['measurements'])
-            setup_checks['fractions'] = True
-            stdout = run_command('preview', [previewer, 'solve.stack.json', '-o', 'preview',
+            import trace_map_ref as ref
+            stack = imported
+            rings = ref.read_polyset(root / 'stack.polyset')
+            # Record diagnostic failures without suppressing product evidence.
+            try:
+                ref.diagnostics(ref.tensor_mesh(stack, 4, 4), rings, stack)
+            except Exception as exc:
+                failures.append(f'diagnostics: {exc}')
+            stdout = run_command('preview', [previewer, root / 'stack.json', '-o', 'preview',
                                             '--nx', '4', '--ny', '4', '--levels', '0',
                                             '--max-ratio', '100'], root, timings)
             artifact(root / 'preview.vtkhdf')
@@ -313,7 +264,7 @@ def main():
             setup_checks['preview'] = True
             write_solver_inputs(root)
             shared = {name: (root / name).read_bytes() for name in
-                      ('solve.stack.json', 'case.json', 'materials.json',
+                      ('stack.json', 'stack.polyset', 'case.json', 'materials.json',
                        'profile_r1.json', 'profile_r2.json')}
             run2 = root / 'ranks2'
             run2.mkdir()
@@ -347,7 +298,8 @@ def main():
             for ranks, run in runs.items():
                 if run['completed']:
                     try:
-                        inspect_run(run['path'], stack, preview_count, run['measurements'], np, h5py)
+                        run['mesh'] = inspect_run(run['path'], stack, rings, preview_count,
+                                                  run['measurements'], np, h5py, run['failures'])
                     except (AssertionError, OSError, ValueError, KeyError) as exc:
                         run['failures'].append(f'ranks={ranks}: {exc}')
             if len(runs) == 2 and all('qoi' in run['measurements'] for run in runs.values()):
@@ -363,6 +315,13 @@ def main():
                     if relative > PARALLEL_RTOL:
                         parallel_failures.append(
                             f'M3 parallel {key} relative error={relative} > {PARALLEL_RTOL}')
+                if all('mesh' in run for run in runs.values()):
+                    try:
+                        ref.compare_aligned(runs[1]['mesh'], runs[2]['mesh'], PARALLEL_RTOL)
+                    except AssertionError as exc:
+                        parallel_failures.append(str(exc))
+                else:
+                    parallel_failures.append('parallel aligned cell/vertex fields unavailable')
                 for run in runs.values():
                     run['measurements']['parallel_relative_errors'] = differences
                     run['failures'].extend(parallel_failures)
@@ -399,59 +358,42 @@ class AcceptanceRecords(unittest.TestCase):
                                                 levels=0, max_ratio=100, min_elems_per_layer=1))
             materials = read_json(root / 'materials.json')['materials']
             self.assertEqual([material['id'] for material in materials], ['cu', 'fr4_eq'])
+            self.assertEqual(case['stack'], dict(ref='stack.json'))
+            self.assertLessEqual(abs(case['solver']['linear']['rtol']-1e-12), 1e-28)
+            self.assertEqual(case['loads'], [dict(type='fixed_temperature',target='face:zmin',T=298.15),
+                dict(type='convection',target='face:zmax',h=1000,T_inf=348.15)])
 
-    def test_import_normalizes_golden_copy_and_rejects_unmapped_material_id(self):
+    def test_import_compares_golden_directly_and_rejects_wrong_material(self):
         golden = read_json(SOURCE / 'tests/integration/import_cli/golden/board_4layer/stack.json')
-        legacy = deepcopy(golden)
-        for layer in legacy['layers']:
-            layer['material'] = {'fr4_eq': 'mat.fr4', 'cu': 'mat.cu'}[layer['material']]
-        for expected in (golden, legacy):
-            with self.subTest(material=expected['layers'][0]['material']):
-                original = json.dumps(expected)
-                imported = json.loads(original)
-                for layer in imported['layers']:
-                    layer['material'] = {'mat.fr4': 'fr4_eq', 'mat.cu': 'cu'}.get(
-                        layer['material'], layer['material'])
-                compare_import(imported, expected)
-                imported['layers'][0]['material'] = 'mat_cu'
-                with self.assertRaisesRegex(AssertionError, 'material:'):
-                    compare_import(imported, expected)
-                self.assertEqual(json.dumps(expected), original)
+        original = json.dumps(golden)
+        imported = deepcopy(golden)
+        compare_import(imported, golden)
+        imported['layers'][0]['material'] = 'cu'
+        with self.assertRaisesRegex(AssertionError, 'material:'):
+            compare_import(imported, golden)
+        self.assertEqual(json.dumps(golden), original)
 
-    def test_fixture_fractions_accept_empty_inner_and_bottom_copper_only(self):
-        imported = read_json(SOURCE / 'tests/integration/import_cli/golden/board_4layer/stack.json')
-        for layer in imported['layers']:
-            layer['material'] = {'mat.fr4': 'fr4_eq', 'mat.cu': 'cu'}.get(
-                layer['material'], layer['material'])
-            if 'copper' in layer:
-                layer['copper']['metal'] = 'cu'
-        converted = json.loads(json.dumps(imported))
-        entries = []
-        for layer in converted['layers']:
-            if 'copper' in layer:
-                fraction = .0123134 if layer['name'] == 'F.Cu' else 0.0
-                layer['copper'] = dict(metal='cu', fraction=fraction)
-                entries.append(dict(layer=layer['name'], fraction=fraction))
-        measurements = {}
-        with redirect_stdout(StringIO()):
-            compare_fractions(dict(layers=entries), converted, imported, measurements)
-        self.assertTrue(math.isclose(measurements['copper_fractions']['In1.Cu'], 0.0,
-                                     rel_tol=0, abs_tol=1e-15))
-        for entry in entries:
-            invalid_fractions = ((-.01, 0, .5, 1.01, float('nan'), float('inf'))
-                                 if entry['layer'] == 'F.Cu'
-                                 else (-.01, .01, float('nan'), float('inf')))
-            for invalid in invalid_fractions:
-                with self.subTest(layer=entry['layer'], invalid=invalid):
-                    original_fraction = entry['fraction']
-                    entry['fraction'] = invalid
-                    layer = next(layer for layer in converted['layers']
-                                 if layer['name'] == entry['layer'])
-                    layer['copper']['fraction'] = invalid
-                    with redirect_stdout(StringIO()), self.assertRaises(AssertionError):
-                        compare_fractions(dict(layers=entries), converted, imported, {})
-                    entry['fraction'] = original_fraction
-                    layer['copper']['fraction'] = original_fraction
+    def test_import_requires_patterned_base_metal_polygons_and_exact_layer_case(self):
+        golden = read_json(SOURCE / 'tests/integration/import_cli/golden/board_4layer/stack.json')
+        for defect in ('matrix', 'metal', 'fraction', 'polygons', 'case', 'missing', 'duplicate'):
+            imported = deepcopy(golden)
+            layer = imported['layers'][1]
+            if defect == 'matrix':
+                layer['material'] = 'cu'
+            elif defect == 'metal':
+                layer['copper']['metal'] = 'fr4_eq'
+            elif defect == 'fraction':
+                layer['copper']['fraction'] = 0
+            elif defect == 'polygons':
+                layer['copper'].pop('polygons')
+            elif defect == 'case':
+                layer['name'] = 'in1.cu'
+            elif defect == 'missing':
+                imported['layers'].pop(1)
+            else:
+                imported['layers'].insert(1, deepcopy(layer))
+            with self.subTest(defect=defect), self.assertRaises(AssertionError):
+                compare_import(imported, golden)
 
     def write_record(self, root, checks, failures=(), ranks=1):
         measurements = dict(
@@ -488,11 +430,11 @@ class AcceptanceRecords(unittest.TestCase):
             self.assertIn('acceptance check incomplete: parallel', result['notes'])
 
     def test_missing_launcher_fails_main_and_result_record(self):
+        import numpy  # noqa: F401
         try:
-            import numpy  # noqa: F401
             import h5py  # noqa: F401
         except ImportError:
-            self.skipTest('main requires numpy/h5py')
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
         output = StringIO()
         env = dict(CHIPCAE_IMPORT_EXE='unused-importer', CHIPCAE_PREVIEW_EXE='unused-previewer',
                    CHIPCAE_SOLVE_EXE='unused-solver')
@@ -526,11 +468,11 @@ class AcceptanceRecords(unittest.TestCase):
                     self.assertEqual(passed['verdict'], 'pass')
 
     def test_main_raises_accumulated_failures_after_writing_results(self):
+        import numpy  # noqa: F401
         try:
-            import numpy  # noqa: F401
             import h5py  # noqa: F401
         except ImportError:
-            self.skipTest('main requires numpy/h5py')
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
         output = StringIO()
         with tempfile.TemporaryDirectory() as directory:
             absent = str(Path(directory) / 'absent-executable')
@@ -544,11 +486,11 @@ class AcceptanceRecords(unittest.TestCase):
         self.assertEqual(record['qoi'], {})
 
     def test_retired_fixture_gate_does_not_skip_configured_backends(self):
+        import numpy  # noqa: F401
         try:
-            import numpy  # noqa: F401
             import h5py  # noqa: F401
         except ImportError:
-            self.skipTest('main requires numpy/h5py')
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
         output = StringIO()
         with tempfile.TemporaryDirectory() as directory:
             absent = str(Path(directory) / 'absent-executable')
@@ -562,65 +504,640 @@ class AcceptanceRecords(unittest.TestCase):
         self.assertIn('RESULT ranks1/result.json', output.getvalue())
 
     def test_numerical_check_completes_only_after_all_inspection_assertions(self):
+        import numpy as np
         try:
-            import numpy as np
             import h5py
         except ImportError:
-            self.skipTest('inspection requires numpy/h5py')
-        # Hand-derived reference points for a 1 mm layer at z=0, 0.5 and 1 mm.
-        # FR4 (also f=0 copper): R=1/300, q=150000/13;
-        # T(mid/top)=298.15+(250/13, 500/13).
-        # 50% copper in FR4: R=1301/780000, q=39000000/2081;
-        # T(mid/top)=298.15+(32525/2081, 65050/2081). A copper matrix is wrong.
-        cases = [
-            (dict(material='fr4_eq', thickness=.001),
-             [298.15, 317.3807692307692, 336.61153846153843]),
-            (dict(material='cu', thickness=.001,
-                  copper=dict(metal='cu', fraction=0)),
-             [298.15, 317.3807692307692, 336.61153846153843]),
-            (dict(material='cu', thickness=.001,
-                  copper=dict(metal='cu', fraction=.5)),
-             [298.15, 313.7795050456511, 329.40901009130225]),
-        ]
-        for layer, reference in cases:
-            for failure in (None, 'temperature', 'readback', 'qoi'):
-                with self.subTest(layer=layer, failure=failure), \
-                        tempfile.TemporaryDirectory() as directory:
-                    root = Path(directory)
-                    (root / 'out').mkdir()
-                    warpage = -1e-6 if failure == 'qoi' else 1e-6
-                    write_json(root / 'manifest.json', dict(
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
+        import trace_map_ref as ref
+        stack = synthetic_stack([.001])
+        rings = {'In1.Cu': ref.PolyLayer(ref.rational(1),
+            (((0,0),(ref.rational('.0005'),0),
+              (ref.rational('.0005'),ref.rational('.001')),(0,ref.rational('.001'))),))}
+        for failure in (None, 'temperature', 'readback', 'qoi'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / 'out').mkdir()
+                warpage = -1e-6 if failure == 'qoi' else 1e-6
+                write_json(root / 'manifest.json', dict(
+                    schema_version='chipcae.results/1.0', summary=[
+                        dict(name='warpage_pv',value=warpage),
+                        dict(name='U_mag_max',value=2e-6), dict(name='T_max',value=336.62)]))
+                write_json(root / 'summary.json', dict(warpage=dict(
+                    manifest_warpage_pv_m=warpage*(1+6.8e-12) if failure == 'readback' else warpage,
+                    w_bfp_m=2e-6)))
+                write_synthetic_hex(root / 'out/step-0.vtkhdf',stack,patterned=True)
+                if failure == 'temperature':
+                    with h5py.File(root / 'out/step-0.vtkhdf','r+') as file:
+                        # Unique external vertex: avoid triggering the boundary-copy check.
+                        file['VTKHDF/hex/PointData/T'][0] += 1e-6
+                measurements = dict(acceptance_checks={})
+                failures = []
+                # Geometry-specific area expectation; all numerical checks stay real.
+                with patch.object(ref, 'COPPER_AREAS_MM2', {'In1.Cu': .5}), redirect_stdout(StringIO()):
+                    if failure == 'qoi':
+                        with self.assertRaises(AssertionError):
+                            inspect_run(root,stack,rings,2,measurements,np,h5py,failures)
+                    else:
+                        inspect_run(root,stack,rings,2,measurements,np,h5py,failures)
+                self.assertEqual(bool(failures),failure in ('temperature','readback'))
+                self.assertEqual(measurements['acceptance_checks'].get('numerical',False),
+                                 failure is None)
+
+    def test_diagnostics_and_c11_failures_keep_readback_and_aligned_rank_comparison(self):
+        import numpy  # noqa: F401
+        try:
+            import h5py
+        except ImportError:
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
+        import struct
+        import trace_map_ref as ref
+
+        stack = synthetic_stack([.001])
+        output = StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            golden = source / 'tests/integration/import_cli/golden/board_4layer/stack.json'
+            golden.parent.mkdir(parents=True)
+            write_json(golden, stack)
+
+            # Replace only the external CLI stages; inspection, comparisons and
+            # verdict/record generation consume real JSON and VTKHDF artifacts.
+            def command(stage, args, root, timings):
+                timings[stage] = .001
+                if stage == 'import':
+                    write_json(root / 'stack.json', stack)
+                    write_json(root / 'defects.json', {})
+                    ring = ((0,0),(500,0),(500,1000),(0,1000))
+                    name = b'In1.Cu'
+                    data = (b'CCPOLY01' + struct.pack('<dI',1e-6,1)
+                            + struct.pack('<I',len(name)) + name
+                            + struct.pack('<Iqq',1,0,4)
+                            + b''.join(struct.pack('<qq',*p) for p in ring))
+                    (root / 'stack.polyset').write_bytes(data)
+                elif stage == 'preview':
+                    (root / 'preview.vtkhdf').write_bytes(b'preview')
+                    return json.dumps(dict(stage='success',cell_count=2))
+                elif stage.startswith('solve ranks='):
+                    ranks = int(stage.rsplit('=',1)[1])
+                    run_dir = root / f'ranks{ranks}'
+                    (run_dir / 'out').mkdir()
+                    write_json(run_dir / 'manifest.json', dict(
                         schema_version='chipcae.results/1.0', summary=[
-                            dict(name='warpage_pv', value=warpage),
-                            dict(name='U_mag_max', value=2e-6), dict(name='T_max', value=336.62)]))
-                    write_json(root / 'summary.json', dict(
-                        warpage=dict(manifest_warpage_pv_m=(
-                            warpage * (1 + 6.8e-12) if failure == 'readback' else warpage),
-                            w_bfp_m=2e-6)))
-                    with h5py.File(root / 'out/step-0.vtkhdf', 'w') as file:
-                        file['VTKHDF/cut/NumberOfCells'] = [0]
-                        file['VTKHDF/hex/NumberOfCells'] = [1]
-                        file['VTKHDF/hex/CellData/cell_kind'] = [0]
-                        file['VTKHDF/hex/Points'] = [[0., 0., 0.], [.001, .001, .0005],
-                                                   [.001, .001, .001]]
-                        temperatures = list(reference)
-                        if failure == 'temperature':
-                            temperatures[1] += .001
-                        file['VTKHDF/hex/PointData/T'] = temperatures
-                    measurements = dict(acceptance_checks={})
-                    stack = dict(layers=[layer])
+                            dict(name='warpage_pv',value=1e-6),
+                            dict(name='U_mag_max',value=2e-6),
+                            dict(name='T_max',value=336.62)]))
+                    path = run_dir / 'out/step-0.vtkhdf'
+                    write_synthetic_hex(path,stack,patterned=True)
+                    with h5py.File(path,'r+') as file:
+                        # A unique top vertex; rank differences exceed the
+                        # existing parallel tolerance as well as C11's limit.
+                        file['VTKHDF/hex/PointData/T'][4] += ranks*1e-4
+                elif stage.startswith('readback ranks='):
+                    ranks = int(stage.rsplit('=',1)[1])
+                    write_json(root / f'ranks{ranks}/summary.json', dict(warpage=dict(
+                        manifest_warpage_pv_m=1e-6,w_bfp_m=2e-6)))
+                else:
+                    raise AssertionError(f'unexpected command stage {stage}')
+                return ''
+
+            env = dict(CHIPCAE_IMPORT_EXE='synthetic-importer',
+                       CHIPCAE_PREVIEW_EXE='synthetic-previewer',
+                       CHIPCAE_SOLVE_EXE='synthetic-solver',CHIPCAE_GIT_SHA='1234567')
+            with patch.dict(os.environ,env), patch.dict(globals(),SOURCE=source), \
+                    patch.object(shutil,'which',return_value='synthetic-mpiexec'), \
+                    patch.dict(globals(),run_command=command), \
+                    patch.object(ref,'COPPER_AREAS_MM2',{'In1.Cu': .5}), \
+                    patch.object(ref,'diagnostics',side_effect=RuntimeError('diagnostic probe')), \
+                    redirect_stdout(output), redirect_stderr(StringIO()):
+                with self.assertRaisesRegex(AssertionError,'max temperature error'):
+                    main()
+
+        for ranks in (1,2):
+            record, _ = json.JSONDecoder().raw_decode(
+                output.getvalue().split(f'RESULT ranks{ranks}/result.json\n',1)[1])
+            with self.subTest(ranks=ranks):
+                self.assertEqual(record['verdict'],'fail')
+                self.assertGreater(record['error']['value'],TEMPERATURE_ATOL)
+                self.assertIn('readback_warpage_m',record['run'])
+                self.assertLessEqual(abs(record['run']['readback_warpage_m']-1e-6),1e-18)
+                self.assertLessEqual(record['run']['readback_relative_error'],READBACK_RTOL)
+                self.assertTrue(record['run']['acceptance_checks']['solve_readback'])
+                self.assertFalse(record['run']['acceptance_checks'].get('numerical',False))
+                self.assertFalse(record['run']['acceptance_checks'].get('parallel',False))
+                self.assertEqual(set(record['run']['parallel_relative_errors']),set(QOIS))
+                self.assertTrue(any('max temperature error' in note for note in record['notes']))
+                self.assertIn('diagnostics: diagnostic probe',record['notes'])
+                self.assertIn('parallel temperatures',record['notes'])
+                self.assertNotIn('parallel aligned cell/vertex fields unavailable',record['notes'])
+
+
+class TraceMapReferenceTests(unittest.TestCase):
+    """Independent oracle checks: geometry, Q2 physics and exported identities."""
+
+    def test_exact_clipping_intersections_holes_and_empty_copper(self):
+        from fractions import Fraction as F
+        import trace_map_ref as ref
+        square = ((1, 1), (3, 1), (3, 3), (1, 3))
+        self.assertEqual(ref.column_fraction([square], (0, 0, 2, 2)), F(1, 4))
+        self.assertEqual(ref.column_fraction([square], (0, 0, 1, 1)), F(0))
+        self.assertEqual(ref.column_fraction([square], (0, 0, 4, 4)), F(1, 4))
+        self.assertEqual(ref.column_fraction([square], (4, 4, 5, 5)), F(0))
+        self.assertEqual(ref.column_fraction([], (0, 0, 4, 4)), F(0))
+        outer = ((0, 0), (4, 0), (4, 4), (0, 4))
+        hole = tuple(reversed(square))
+        self.assertEqual(ref.column_fraction([outer, hole], (0, 0, 4, 4)), F(3, 4))
+        triangle = ((0, 0), (2, 0), (0, 2))
+        self.assertEqual(ref.column_fraction([triangle], (0, 0, 1, 1)), F(1))
+        self.assertEqual(ref.column_fraction([triangle], (1, 0, 2, 1)), F(1, 2))
+        for rings in ([square, square], [hole], [((0, 0), (2, 2), (0, 2), (2, 0))]):
+            with self.subTest(rings=rings), self.assertRaisesRegex(AssertionError, 'ring|overlap|hole'):
+                ref.column_fraction(rings, (0, 0, 4, 4))
+
+    def test_polyset_binary_validation_and_exact_fixture_areas(self):
+        from fractions import Fraction as F
+        import trace_map_ref as ref
+        path = SOURCE / 'tests/integration/import_cli/golden/board_4layer/stack.polyset'
+        rings = ref.read_polyset(path)
+        expected = {'F.Cu': F('0.307835'), 'In1.Cu': F('2.25'),
+                    'In2.Cu': F(3), 'B.Cu': F(7)}
+        for name, area in expected.items():
+            layer = rings[name]
+            actual = sum(ref.signed_area(r) for r in layer.rings) * layer.scale**2 * 10**6
+            self.assertEqual(actual, area)
+        with tempfile.TemporaryDirectory() as directory:
+            bad = Path(directory) / 'bad.polyset'
+            payload = path.read_bytes()
+            for data in (b'', b'XXXXXXXX' + payload[8:], payload[:-1], payload + b'x'):
+                bad.write_bytes(data)
+                with self.subTest(size=len(data)), self.assertRaises(AssertionError):
+                    ref.read_polyset(bad)
+
+    def test_bcu_reference_kz_endpoints_are_bit_exact(self):
+        import numpy as np
+        import trace_map_ref as ref
+        root = SOURCE / 'tests/integration/import_cli/golden/board_4layer'
+        stack = read_json(root / 'stack.json')
+        rings = ref.read_polyset(root / 'stack.polyset')
+        mesh = ref.tensor_mesh(stack, 4, 4)
+        phi,k = ref.reference_coefficients(mesh,rings,stack)
+        lid = next(i for i,layer in enumerate(stack['layers'],1)
+                   if layer['name'] == 'B.Cu')
+        for fraction,conductivity in ((0, .3), (1, 390.)):
+            with self.subTest(fraction=fraction):
+                indices = np.flatnonzero((mesh['layer_ids'] == lid) & (phi == fraction))
+                self.assertGreater(len(indices),0)
+                # Endpoint representations are explicitly required to be bit exact.
+                actual = np.asarray(k[indices,2],dtype=np.float64).view(np.uint64)
+                expected = np.full(len(indices),conductivity,dtype=np.float64).view(np.uint64)
+                np.testing.assert_array_equal(actual,expected)
+
+    def test_q2_basis_partition_derivatives_and_symmetric_assembly(self):
+        import numpy as np
+        import trace_map_ref as ref
+        for x in (0, .13, .5, .81, 1):
+            values, derivatives = ref.basis(x)
+            self.assertLessEqual(abs(sum(values) - 1), 1e-14)
+            self.assertLessEqual(abs(sum(derivatives)), 1e-14)
+        stack = synthetic_stack([.001])
+        mesh = ref.tensor_mesh(stack, 1, 1)
+        operator, rhs, dofs = ref.assemble_q2(mesh, np.array([[195.15, 195.15, 195.15]]))
+        matrix = operator.toarray() if hasattr(operator, 'toarray') else operator
+        self.assertLessEqual(np.max(abs(matrix - matrix.T)) / np.max(abs(matrix)), 1e-12)
+        self.assertEqual(len(dofs['points']), 27)
+        self.assertTrue(np.all(np.isfinite(rhs)))
+
+    def test_single_column_known_fraction_and_numpy_fallback(self):
+        import numpy as np
+        import trace_map_ref as ref
+        # Given coefficients for Q2 assembly self-checks.
+        stack = synthetic_stack([.001])
+        mesh = ref.tensor_mesh(stack, 1, 1)
+        k = np.array([[195.15, 195.15, 195.15]])
+        operator, rhs, dofs = ref.assemble_q2(mesh, k)
+        sparse, _ = ref.solve_q2(operator, rhs, dofs)
+        # Force assembly as well as the direct solve to operate without SciPy.
+        with patch.dict(sys.modules, {'scipy': None, 'scipy.sparse': None}):
+            numpy_operator, numpy_rhs, numpy_dofs = ref.assemble_q2(mesh, k)
+            dense, reactions = ref.solve_q2(numpy_operator, numpy_rhs, numpy_dofs, use_scipy=False)
+        self.assertIsInstance(numpy_operator, np.ndarray)
+        for point, actual in zip(dofs['points'], dense, strict=True):
+            want = 298.15 + (float(point[2]) / .001) * (1000/3923)
+            self.assertLessEqual(abs(actual - want), 1e-8)
+        self.assertLessEqual(np.max(abs(sparse - dense)), 1e-8)
+        qtop, qbot, rlo, rhi = ref.thermal_checks(mesh, stack, k, dense, reactions, dofs)
+        self.assertLessEqual(abs(qtop - qbot) / abs(qbot), 1e-9)
+        self.assertLessEqual(abs(qbot - 3903/39230), 1e-11)
+        self.assertLessEqual(abs(rlo - rhi), 1e-9)
+        corner = ref.corner_values(mesh, dense, dofs)
+        recovered, recovered_reactions = ref.solve_q2(operator, rhs, dofs, corners=corner)
+        self.assertLessEqual(np.max(abs(recovered - dense)), 1e-8)
+        self.assertLessEqual(np.max(abs(recovered_reactions - reactions)), 1e-10)
+
+    def test_uniform_multilayer_stacked_resistance_solution(self):
+        import numpy as np
+        import trace_map_ref as ref
+        stack = synthetic_stack([.0002, .001, .0003])
+        mesh = ref.tensor_mesh(stack, 2, 1)
+        # Given coefficients for Q2 assembly self-checks, uniform within each layer.
+        # Independent series resistance across the stacked layers, in SI.
+        kz = [.3, 195.15, 390]
+        k = np.array([[.3, .3, .3], [195.15, 195.15, kz[1]], [390, 390, 390]] * 2)
+        operator, rhs, dofs = ref.assemble_q2(mesh, k)
+        temperatures, reactions = ref.solve_q2(operator, rhs, dofs)
+        flux = 50 / (.0002/.3 + .001/(195.15) + .0003/390 + .001)
+        for point, actual in zip(dofs['points'], temperatures, strict=True):
+            z = float(point[2])
+            want = 298.15 + flux * (min(z, .0002)/.3 +
+                min(max(z-.0002, 0), .001)/(195.15) + max(z-.0012, 0)/390)
+            self.assertLessEqual(abs(actual - want), 1e-8)
+        qtop, qbot, _, _ = ref.thermal_checks(mesh, stack, k, temperatures, reactions, dofs)
+        self.assertLessEqual(abs(qtop-qbot)/abs(qbot), 1e-9)
+
+    def test_energy_reconstruction_preserves_exported_temperature_errors(self):
+        import numpy as np
+        import trace_map_ref as ref
+
+        stack = synthetic_stack([.001])
+        mesh = ref.tensor_mesh(stack,1,1)
+        k = np.full((1,3),.3)
+        operator,rhs,dofs = ref.assemble_q2(mesh,k)
+        # A=2e-6 m2, t=.001 m, k=.3 W/(m K), h=1000:
+        # Q = 50 / (t/(k*A) + 1/(h*A)) = 3/130 W.
+        for offset in (0.,-1.,1.):
+            with self.subTest(top_offset_K=offset):
+                corners = {p:298.15 if p[2] == 0 else 298.15+500/13+offset
+                           for p in mesh['vertices']}
+                recovered,reactions = ref.solve_q2(operator,rhs,dofs,corners=corners)
+                for point,temperature in corners.items():
+                    self.assertLessEqual(abs(recovered[dofs['index'][point]]-temperature),1e-12)
+                qtop,qbot,_,_ = ref.thermal_checks(mesh,stack,k,recovered,reactions,dofs)
+                relative = abs(qtop-qbot)/max(abs(qtop),abs(qbot),1e-30)
+                top_corners = [dofs['index'][p] for p in corners if p[2] != 0]
+                self.assertLessEqual(abs(qbot-qtop-np.sum(reactions[top_corners])),1e-12)
+                print(f'energy_reconstruction top_offset_K={offset} '
+                      f'Q_top_W={qtop:.17g} Q_bot_W={qbot:.17g} '
+                      f'energy_relative_error={relative:.17g}',flush=True)
+                if offset == 0:
+                    self.assertLessEqual(abs(qtop-3/130),1e-12)
+                    self.assertLessEqual(abs(qbot-3/130),1e-12)
+                    self.assertLessEqual(relative,1e-9)
+                else:
+                    self.assertGreater(abs(qtop-3/130),1e-6)
+                    self.assertGreater(abs(qbot-3/130),1e-6)
+                    self.assertGreater(relative,1e-9)
+
+    def test_partition_permutations_align_cells_and_vertices(self):
+        import numpy  # noqa: F401
+        try:
+            import h5py
+        except ImportError:
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
+        import trace_map_ref as ref
+        stack = synthetic_stack([.001])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            meshes = []
+            for order in ((0, 1), (1, 0)):
+                path = root / f'{order[0]}.vtkhdf'
+                write_synthetic_hex(path, stack, order=order)
+                with h5py.File(path) as file:
+                    meshes.append(ref.read_hex_mesh(file['VTKHDF/hex'], stack))
+            self.assertEqual(meshes[0]['bounds'], meshes[1]['bounds'])
+            self.assertEqual(meshes[0]['vertices'], meshes[1]['vertices'])
+            ref.compare_aligned(meshes[0], meshes[1], PARALLEL_RTOL)
+            for field in ('copper_fraction', 'conductivity_diag', 'temperatures', 'displacement'):
+                mutated = deepcopy(meshes[1])
+                values = mutated['fields'][field] if field in mutated['fields'] else mutated[field]
+                values.flat[0] += .001
+                with self.subTest(field=field), self.assertRaisesRegex(AssertionError, 'parallel'):
+                    ref.compare_aligned(meshes[0], mutated, PARALLEL_RTOL)
+
+    def test_invalid_topology_identity_and_missing_fields_fail(self):
+        import numpy  # noqa: F401
+        try:
+            import h5py
+        except ImportError:
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
+        import trace_map_ref as ref
+        stack = synthetic_stack([.001])
+        for defect in ('duplicate_gid', 'missing_field', 'layer_id', 'connectivity',
+                       'boundary_temperature', 'missing_cell', 'wrong_gid', 'missing_fraction'):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'mesh.vtkhdf'
+                write_synthetic_hex(path, stack)
+                with h5py.File(path, 'r+') as file:
+                    group = file['VTKHDF/hex']
+                    if defect == 'duplicate_gid':
+                        group['CellData/elem_gid'][1] = 0
+                    elif defect == 'wrong_gid':
+                        group['CellData/elem_gid'][:] = [1, 0]
+                    elif defect == 'missing_field':
+                        del group['CellData/conductivity_diag']
+                    elif defect == 'missing_fraction':
+                        del group['CellData/copper_fraction']
+                    elif defect == 'layer_id':
+                        group['CellData/layer_id'][0] = 2
+                    elif defect == 'connectivity':
+                        group['Connectivity'][1] = 0
+                    elif defect == 'boundary_temperature':
+                        group['PointData/T'][8] += 1e-6
+                    else:
+                        group['NumberOfCells'][1] = 0
+                    with self.assertRaises(AssertionError):
+                        ref.read_hex_mesh(group, stack)
+
+    def test_optional_elem_gid_preserves_partition_alignment(self):
+        import numpy  # noqa: F401
+        try:
+            import h5py
+        except ImportError:
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
+        import trace_map_ref as ref
+        stack = synthetic_stack([.001])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'mesh.vtkhdf'
+            write_synthetic_hex(path, stack, patterned=True)
+            with h5py.File(path) as file:
+                expected = ref.read_hex_mesh(file['VTKHDF/hex'], stack)
+            for order in ((0, 1), (1, 0)):
+                for empty_partition in (False, True):
+                    with self.subTest(order=order, empty_partition=empty_partition):
+                        write_synthetic_hex(path, stack, order=order, patterned=True)
+                        with h5py.File(path, 'r+') as file:
+                            group = file['VTKHDF/hex']
+                            del group['CellData/elem_gid']
+                            if empty_partition:
+                                for name, values in dict(NumberOfPoints=[0,8,8],
+                                        NumberOfCells=[0,1,1],
+                                        NumberOfConnectivityIds=[0,8,8],
+                                        Offsets=[0,0,8,0,8]).items():
+                                    del group[name]
+                                    group[name] = values
+                            actual = ref.read_hex_mesh(group, stack)
+                        self.assertNotIn('elem_gid', actual['fields'])
+                        self.assertEqual(actual['bounds'], expected['bounds'])
+                        self.assertEqual(actual['vertices'], expected['vertices'])
+                        ref.compare_aligned(expected, actual, PARALLEL_RTOL)
+
+    def test_missing_elem_gid_keeps_coverage_and_membership_checks(self):
+        import numpy as np
+        try:
+            import h5py
+        except ImportError:
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
+        import trace_map_ref as ref
+        stack = synthetic_stack([.001])
+        for defect in ('duplicate_cell', 'missing_cell', 'layer_id'):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'mesh.vtkhdf'
+                write_synthetic_hex(path, stack)
+                with h5py.File(path, 'r+') as file:
+                    group = file['VTKHDF/hex']
+                    del group['CellData/elem_gid']
+                    if defect == 'duplicate_cell':
+                        # Duplicate the first cell without losing either board edge.
+                        for name, values in dict(NumberOfCells=[2,1],
+                                NumberOfConnectivityIds=[16,8],
+                                Connectivity=list(range(8))*3,
+                                Offsets=[0,8,16,0,8], Types=[12,12,12]).items():
+                            del group[name]
+                            group[name] = values
+                        for name in list(group['CellData']):
+                            values = group['CellData/'+name][:]
+                            del group['CellData/'+name]
+                            group['CellData/'+name] = np.concatenate((values[:1],values))
+                    elif defect == 'missing_cell':
+                        group['NumberOfCells'][1] = 0
+                    else:
+                        group['CellData/layer_id'][0] = 2
+                    with self.assertRaisesRegex(AssertionError,
+                            'cell coverage|topology length|layer_id membership'):
+                        ref.read_hex_mesh(group, stack)
+
+    def test_distinct_hex_corners_with_crossed_connectivity_are_rejected(self):
+        import numpy  # noqa: F401
+        try:
+            import h5py
+        except ImportError:
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
+        import trace_map_ref as ref
+        stack = synthetic_stack([.001])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'mesh.vtkhdf'
+            write_synthetic_hex(path, stack)
+            with h5py.File(path, 'r+') as file:
+                group = file['VTKHDF/hex']
+                # All eight corners remain present, but the bottom face crosses.
+                group['Connectivity'][:2] = [1, 0]
+                with self.assertRaisesRegex(AssertionError, 'hex connectivity'):
+                    ref.read_hex_mesh(group, stack)
+
+    def test_tensor_reference_rejects_nonrectangular_board_outlines(self):
+        import trace_map_ref as ref
+        stack = synthetic_stack([.001])
+        # The box alone must not silently replace a different physical domain.
+        for polygon in ([[0,0],[.002,0],[0,.001]],
+                        [[0,0],[.002,.001],[.002,0],[0,.001]]):
+            stack['outline']['polygon'] = polygon
+            with self.subTest(polygon=polygon), self.assertRaisesRegex(
+                    AssertionError, 'unsupported board outline'):
+                ref.tensor_mesh(stack,2,1)
+
+    def test_cell_fraction_conductivity_and_temperature_mutations_fail(self):
+        import numpy as np
+        try:
+            import h5py
+        except ImportError:
+            self.skipTest('h5py missing (pending infra-ci-h5py)')
+        import trace_map_ref as ref
+        stack = synthetic_stack([.001])
+        # Half of the first xy column is copper, second is empty.
+        rings = {'In1.Cu': ref.PolyLayer(ref.rational(1),
+            (((0, 0), (ref.rational('.0005'), 0),
+              (ref.rational('.0005'), ref.rational('.001')), (0, ref.rational('.001'))),))}
+        for defect in (None, 'zero_copper', 'nan', 'inf', 'negative', 'above_one',
+                       'conductivity', 'temperature', 'case', 'missing_layer', 'conductivity_nan',
+                       'conductivity_inf', 'area', 'series_kz'):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'mesh.vtkhdf'
+                write_synthetic_hex(path, stack, patterned=True)
+                with h5py.File(path) as file:
+                    mesh = ref.read_hex_mesh(file['VTKHDF/hex'], stack)
+                given_rings = dict(rings)
+                if defect in ('zero_copper', 'nan', 'inf', 'negative', 'above_one'):
+                    mesh['fields']['copper_fraction'][0] = {
+                        'zero_copper': 0, 'nan': float('nan'), 'inf': float('inf'),
+                        'negative': -.01, 'above_one': 1.01}[defect]
+                elif defect == 'area':
+                    # Below the cell tolerance, but above relative 1e-12 for area.
+                    mesh['fields']['copper_fraction'][0] += 8e-13
+                elif defect in ('conductivity_nan', 'conductivity_inf'):
+                    mesh['fields']['conductivity_diag'][0,0] = float(
+                        'nan' if defect == 'conductivity_nan' else 'inf')
+                elif defect == 'conductivity':
+                    mesh['fields']['conductivity_diag'][0, 2] *= 1.000001
+                elif defect == 'case':
+                    given_rings['in1.cu'] = given_rings.pop('In1.Cu')
+                elif defect == 'missing_layer':
+                    given_rings.clear()
+                elif defect == 'temperature':
+                    mesh['temperatures'][-1] += 1e-6
+                if defect is None:
+                    ref.check_solution(mesh, given_rings, stack, {}, expected_areas={'In1.Cu': .5})
+                elif defect == 'series_kz':
+                    phi,parallel = ref.reference_coefficients(mesh,given_rings,stack)
+                    mixed = (0 < phi) & (phi < 1)
+                    self.assertTrue(np.any(mixed))
+                    fields = mesh['fields']
+                    original_fraction = fields['copper_fraction'].copy()
+                    original_conductivity = fields['conductivity_diag'].copy()
+                    fields['conductivity_diag'][:,2] = 1/(phi/390+(1-phi)/.3)
+                    np.testing.assert_array_equal(fields['copper_fraction'],original_fraction)
+                    np.testing.assert_array_equal(fields['conductivity_diag'][:,:2],
+                                                  original_conductivity[:,:2])
+                    relative = float(np.max(abs(fields['conductivity_diag'][mixed,2]
+                                                -parallel[mixed,2])/abs(parallel[mixed,2])))
+                    self.assertGreater(relative,1e-14)
+                    # Other checks are pre-completed only to isolate record verdict handling.
+                    measurements = dict(acceptance_checks={name: True
+                        for name in ACCEPTANCE_CHECKS
+                        if name not in ('cell_fractions','conductivity')})
+                    with self.assertRaisesRegex(AssertionError,'M3 conductivity mismatch') as failure:
+                        ref.check_solution(mesh,given_rings,stack,measurements,
+                                           expected_areas={'In1.Cu': .5})
+                    self.assertIs(measurements['acceptance_checks']['cell_fractions'],True)
+                    self.assertFalse(measurements['acceptance_checks'].get('conductivity',False))
                     with redirect_stdout(StringIO()):
-                        if failure is None:
-                            inspect_run(root, stack, 1, measurements, np, h5py)
-                        else:
-                            with self.assertRaises(AssertionError):
-                                inspect_run(root, stack, 1, measurements, np, h5py)
-                    self.assertEqual(measurements['acceptance_checks'].get('numerical', False),
-                                     failure is None)
+                        write_result(Path(directory),1,measurements,{},[],[str(failure.exception)])
+                    record = read_json(Path(directory) / 'result.json')
+                    self.assertEqual(record['verdict'],'fail')
+                    self.assertIn('M3 conductivity mismatch',record['notes'])
+                    self.assertEqual([note for note in record['notes']
+                        if note.startswith('acceptance check incomplete:')],
+                        ['acceptance check incomplete: conductivity'])
+                    print(f'series_kz relative_conductivity_difference={relative:.17g} '
+                          f'failure={failure.exception} verdict={record["verdict"]}',flush=True)
+                    # The same export must pass again after restoring its original input.
+                    # This catches a leaked mutation or a checker that always rejects C4.
+                    fields['copper_fraction'][:] = original_fraction
+                    fields['conductivity_diag'][:] = original_conductivity
+                    control = dict(acceptance_checks={name: True
+                        for name in ACCEPTANCE_CHECKS
+                        if name not in ('cell_fractions','conductivity','physics')})
+                    ref.check_solution(mesh,given_rings,stack,control,
+                                       expected_areas={'In1.Cu': .5})
+                    self.assertTrue(all(control['acceptance_checks'][name]
+                                        for name in ACCEPTANCE_CHECKS))
+                    with redirect_stdout(StringIO()):
+                        write_result(Path(directory),1,control,{},[],[])
+                    self.assertEqual(read_json(Path(directory) / 'result.json')['verdict'],'pass')
+                else:
+                    with self.assertRaises(AssertionError):
+                        ref.check_solution(mesh, given_rings, stack, {}, expected_areas={'In1.Cu': .5})
+
+    def test_multiz_copper_areas_and_wiener_bounds_use_volume_weights(self):
+        import numpy as np
+        import trace_map_ref as ref
+        stack = synthetic_stack([.001])
+        mesh = ref.tensor_mesh(stack,2,1,[ref.rational(0),ref.rational('.0004'),ref.rational('.001')])
+        rings = {'In1.Cu': ref.PolyLayer(ref.rational(1),
+            (((0,0),(ref.rational('.0005'),0),
+              (ref.rational('.0005'),ref.rational('.001')),(0,ref.rational('.001'))),))}
+        phi,k = ref.reference_coefficients(mesh,rings,stack)
+        np.testing.assert_allclose(phi,[.5,.5,0,0],rtol=0,atol=1e-15)
+        op,rhs,dofs = ref.assemble_q2(mesh,k)
+        temperatures,reactions = ref.solve_q2(op,rhs,dofs)
+        mesh['temperatures'] = np.array(list(ref.corner_values(mesh,temperatures,dofs).values()))
+        mesh['fields'] = dict(copper_fraction=phi,conductivity_diag=k)
+        measurements = {}
+        ref.check_solution(mesh,rings,stack,measurements,expected_areas={'In1.Cu': .5})
+        self.assertLessEqual(abs(measurements['copper_areas_mm2']['In1.Cu']-.5), 1e-12)
+        qtop,qbot,rlo,rhi = ref.thermal_checks(mesh,stack,k,temperatures,reactions,dofs)
+        # A=2e-6; arithmetic/harmonic kz means are hand-derived.
+        expected_lo = .001/(((195.15+.3)/2)*2e-6)+500
+        expected_hi = .001*((1/195.15+1/.3)/2)/2e-6+500
+        self.assertLessEqual(abs(rlo-expected_lo)/expected_lo,1e-14)
+        self.assertLessEqual(abs(rhi-expected_hi)/expected_hi,1e-14)
+        epsilon = 1e-9*max(50/rlo,50/rhi,abs(qbot),1e-30)
+        self.assertLessEqual(50/rhi-epsilon,qbot)
+        self.assertLessEqual(qbot,50/rlo+epsilon)
+        self.assertLessEqual(abs(qtop-qbot)/abs(qbot),1e-9)
+
+    def test_missing_layer_extent_and_cross_layer_cells_are_rejected(self):
+        import trace_map_ref as ref
+        stack = synthetic_stack([.0002,.001,.0003])
+        for z in ([0,.0002,.0012], [0,.0002,.0015], [0,.0015],
+                  [0,.0002,.0012,.0012,.0015]):
+            with self.subTest(z=z), self.assertRaises(AssertionError):
+                ref.tensor_mesh(stack,1,1,list(map(ref.rational,z)))
+
+    def test_base_coefficients_are_fixed_fr4_and_core_has_zero_copper(self):
+        import numpy as np
+        import trace_map_ref as ref
+        stack = synthetic_stack([.001])
+        mesh = ref.tensor_mesh(stack,1,1)
+        rings = {'In1.Cu': ref.PolyLayer(ref.rational('.001'),
+            (((0,0),(1,0),(1,1),(0,1)),))}
+        phi,k = ref.reference_coefficients(mesh,rings,stack)
+        np.testing.assert_allclose(phi,[.5],rtol=0,atol=1e-15)
+        np.testing.assert_allclose(k,[[195.15,195.15,195.15]],rtol=1e-14,atol=0)
+        stack['layers'][0]['material'] = 'cu'
+        with self.assertRaisesRegex(AssertionError,'Patterned matrix/metal'):
+            ref.reference_coefficients(mesh,rings,stack)
+        stack['layers'][0] = dict(name='Core',kind='Homogenized',material='fr4_eq',thickness=.001)
+        mesh = ref.tensor_mesh(stack,1,1)
+        phi,k = ref.reference_coefficients(mesh,{},stack)
+        np.testing.assert_allclose(phi,[0],rtol=0,atol=1e-15)
+        np.testing.assert_allclose(k,[[.3,.3,.3]],rtol=1e-14,atol=0)
+        stack['layers'][0]['material'] = 'cu'
+        with self.assertRaisesRegex(AssertionError,'non-copper material'):
+            ref.reference_coefficients(mesh,{},stack)
+
+
+def synthetic_stack(thicknesses):
+    return dict(outline=dict(box=[0, 0, .002, .001]), layers=[
+        dict(name='In1.Cu' if len(thicknesses) == 1 else f'L{i}',
+             material='fr4_eq', kind='Patterned', thickness=t,
+             copper=dict(metal='cu', polygons=dict(file='synthetic.polyset',
+                 layer='In1.Cu' if len(thicknesses) == 1 else f'L{i}')))
+        for i, t in enumerate(thicknesses)])
+
+
+def write_synthetic_hex(path, stack, order=(0, 1), patterned=False):
+    """Two true hex partitions, each with local connectivity restarting at zero."""
+    import h5py
+    import numpy as np
+    import trace_map_ref as ref
+    mesh = ref.tensor_mesh(stack, 2, 1)
+    k = np.array([[195.15, 195.15, 195.15] if patterned and i == 0 else [.3]*3
+                  for i in range(2)])
+    operator, rhs, dofs = ref.assemble_q2(mesh, k)
+    temperatures, _ = ref.solve_q2(operator, rhs, dofs)
+    corners = ref.corner_values(mesh, temperatures, dofs)
+    points, values = [], []
+    for i in order:
+        x0, y0, z0, x1, y1, z1 = mesh['bounds'][i]
+        vertices = [(x0,y0,z0), (x1,y0,z0), (x1,y1,z0), (x0,y1,z0),
+                    (x0,y0,z1), (x1,y0,z1), (x1,y1,z1), (x0,y1,z1)]
+        points.extend(vertices)
+        values.extend(corners[p] for p in vertices)
+    with h5py.File(path, 'w') as file:
+        file['VTKHDF/cut/NumberOfCells'] = [0, 0]
+        group = file.create_group('VTKHDF/hex')
+        for name, data in dict(NumberOfPoints=[8,8], NumberOfCells=[1,1],
+                NumberOfConnectivityIds=[8,8], Connectivity=list(range(8))*2,
+                Offsets=[0,8,0,8], Types=[12,12], Points=np.array(points, dtype=float),
+                **{'PointData/T': values, 'PointData/U': np.zeros((16,3)),
+                   'CellData/elem_gid': list(order), 'CellData/layer_id': [1,1],
+                   'CellData/cell_kind': [0,0],
+                   'CellData/copper_fraction': [.5 if patterned and i == 0 else 0. for i in order],
+                   'CellData/conductivity_diag': k[list(order)]}).items():
+            group[name] = data
 
 
 if __name__ == '__main__':
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(AcceptanceRecords)
-    if not unittest.TextTestRunner().run(suite).wasSuccessful():
+    suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
+    if not unittest.TextTestRunner(stream=sys.stdout).run(suite).wasSuccessful():
         raise SystemExit(1)
     raise SystemExit(main())

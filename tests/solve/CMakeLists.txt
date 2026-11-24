@@ -1,3 +1,17 @@
+# Offline acceptance for the nightly job and the real main.cpp compile-fault switch.
+if(MFEM_USE_CUDA OR CHIPCAE_CI_INJECT_CUDA_FAULT)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    foreach(_cuda_nightly_case IN ITEMS workflow dependencies cuda_default cuda_injected
+            cpu_injected no_mfem_injected)
+        add_test(NAME solve_cuda_nightly_${_cuda_nightly_case}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_cuda_nightly_compile.py
+            ${PROJECT_SOURCE_DIR} ${_cuda_nightly_case}
+            --compiler ${CMAKE_CXX_COMPILER} --generator ${CMAKE_GENERATOR})
+        set_tests_properties(solve_cuda_nightly_${_cuda_nightly_case} PROPERTIES
+            TIMEOUT 180 LABELS "solve;cuda;ci;tierA")
+    endforeach()
+endif()
+
 # Input validation also runs in builds without the optional numerical backend.
 if(TARGET chipcae_solve_inputs)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
@@ -177,6 +191,12 @@ if(_solve_backend AND TARGET chipcae-solve AND MFEM_USE_PETSC)
         PROPERTIES TIMEOUT 120 LABELS "gmg;numerical")
     set_tests_properties(solve_column_gmg_fcbga solve_column_gmg_fcbga_scaling
         PROPERTIES TIMEOUT 900 LABELS "gmg;numerical")
+    # Pinned Release RSS, including the killed scaling run, selects lock members.
+    # The lock covers each complete Python wrapper, including its MPI children.
+    set_tests_properties(solve_column_gmg_fcbga solve_column_gmg_fcbga_scaling
+        PROPERTIES RESOURCE_LOCK chipcae_highmem)
+    set_property(TEST solve_column_gmg_fcbga solve_column_gmg_fcbga_scaling
+        APPEND PROPERTY LABELS highmem)
 endif()
 
 if(_solve_backend)
@@ -285,6 +305,27 @@ if(_solve_backend)
         $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE})
     set_tests_properties(solve_fem_thermal_bow PROPERTIES
         TIMEOUT 600 LABELS "solve;numerical" SKIP_RETURN_CODE 77)
+endif()
+
+# Nonconvex outline acceptance; containment needs no numerical backend.
+add_executable(chipcae_test_solve_outline_contains test_outline_contains.cpp)
+target_compile_features(chipcae_test_solve_outline_contains PRIVATE cxx_std_20)
+target_include_directories(chipcae_test_solve_outline_contains PRIVATE
+    ${PROJECT_SOURCE_DIR}/apps/chipcae-solve/src)
+chipcae_set_warnings(chipcae_test_solve_outline_contains)
+add_test(NAME solve_outline_contains COMMAND chipcae_test_solve_outline_contains)
+set_tests_properties(solve_outline_contains PROPERTIES TIMEOUT 30 LABELS "solve;cut")
+
+if(_solve_backend)
+    add_executable(chipcae_test_solve_cutgeom_nc_consume_outline test_cutgeom_nc_consume_outline.cpp)
+    target_link_libraries(chipcae_test_solve_cutgeom_nc_consume_outline PRIVATE
+        chipcae_mesh_cut jsoncons)
+    chipcae_set_warnings(chipcae_test_solve_cutgeom_nc_consume_outline)
+    add_test(NAME solve_cutgeom_nc_consume_outline
+        COMMAND chipcae_test_solve_cutgeom_nc_consume_outline
+        ${PROJECT_SOURCE_DIR}/tests/contract/fixtures/cutgeom-nc-1.0)
+    set_tests_properties(solve_cutgeom_nc_consume_outline PROPERTIES
+        TIMEOUT 180 LABELS "cut;contract")
 endif()
 
 if(_solve_backend)

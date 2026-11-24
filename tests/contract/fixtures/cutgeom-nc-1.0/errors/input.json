@@ -1,0 +1,232 @@
+{
+  "contract": "cutgeom-nc/1.0",
+  "region": "region0",
+  "cases": [
+    {
+      "case": "empty_pieces",
+      "pieces": [],
+      "internal": []
+    },
+    {
+      "case": "internal_mismatch",
+      "pieces": [
+        [
+          {
+            "n": [
+              "1",
+              "0",
+              "0"
+            ],
+            "d": ".01",
+            "body": 0
+          }
+        ]
+      ],
+      "internal": [
+        []
+      ]
+    },
+    {
+      "case": "nonzero_plane_body",
+      "pieces": [
+        [
+          {
+            "n": [
+              "1",
+              "0",
+              "0"
+            ],
+            "d": ".01",
+            "body": 1
+          }
+        ]
+      ],
+      "internal": [
+        [
+          false
+        ]
+      ]
+    },
+    {
+      "case": "outline_phi_mismatch",
+      "node_count": 8,
+      "outline_phi": [
+        "0"
+      ]
+    },
+    {
+      "case": "short_ring",
+      "outline": [
+        [
+          "0",
+          "0"
+        ],
+        [
+          ".02",
+          "0"
+        ]
+      ]
+    },
+    {
+      "case": "zero_area_ring",
+      "outline": [
+        [
+          "0",
+          "0"
+        ],
+        [
+          ".01",
+          "0"
+        ],
+        [
+          ".02",
+          "0"
+        ]
+      ]
+    },
+    {
+      "case": "self_intersection",
+      "outline": [
+        [
+          "0",
+          "0"
+        ],
+        [
+          ".02",
+          ".02"
+        ],
+        [
+          "0",
+          ".02"
+        ],
+        [
+          ".015",
+          "0"
+        ]
+      ]
+    },
+    {
+      "case": "multiple_rings",
+      "rings": [
+        [
+          [
+            "0",
+            "0"
+          ],
+          [
+            ".02",
+            "0"
+          ],
+          [
+            "0",
+            ".02"
+          ]
+        ],
+        [
+          [
+            ".001",
+            ".001"
+          ],
+          [
+            ".002",
+            ".001"
+          ],
+          [
+            ".001",
+            ".002"
+          ]
+        ]
+      ]
+    },
+    {
+      "case": "duplicate_body",
+      "body_label": "body0",
+      "unions": [
+        {
+          "body": 0
+        },
+        {
+          "body": 0
+        }
+      ]
+    },
+    {
+      "case": "zero_normal",
+      "plane": {
+        "n": [
+          "0",
+          "0",
+          "0"
+        ],
+        "d": ".01",
+        "body": 0
+      }
+    },
+    {
+      "case": "invalid_thresholds",
+      "options": {
+        "small_sub_vf": "-0.001"
+      }
+    },
+    {
+      "case": "nonpositive_box",
+      "mesh_box": [
+        [
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "0",
+          ".02",
+          ".001"
+        ]
+      ]
+    },
+    {
+      "case": "disconnected_cell",
+      "pieces": [
+        [
+          [
+            "0",
+            "0"
+          ],
+          [
+            ".02",
+            "0"
+          ],
+          [
+            "0",
+            ".02"
+          ]
+        ],
+        [
+          [
+            ".03",
+            ".03"
+          ],
+          [
+            ".04",
+            ".03"
+          ],
+          [
+            ".03",
+            ".04"
+          ]
+        ]
+      ],
+      "cell_box": [
+        [
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          ".05",
+          ".05",
+          ".001"
+        ]
+      ]
+    }
+  ]
+}

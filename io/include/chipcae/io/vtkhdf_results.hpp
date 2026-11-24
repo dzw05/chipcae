@@ -1,6 +1,7 @@
 #pragma once
 #include "chipcae/core/types.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -30,6 +31,24 @@ struct ResultsStep {
 };
 class ResultsWriter {
 public:
+    // Successful-call wall times in seconds; statistics stay in memory.
+    // Internal finalize() calls made by set_mesh() also update finalize statistics.
+    struct IoStats {
+        // Sum of successful write_step() durations over this writer's lifetime.
+        double write_step_seconds = 0;
+        // Wall time of the most recent successful finalize() call.
+        double finalize_seconds = 0;
+        double last_write_step_seconds = 0;
+        // Whole-process peak RSS, not an incremental I/O allocation measurement.
+        // Zero until the first successful finalize(), including one called by set_mesh().
+        std::uint64_t peak_rss_bytes = 0;
+        // Step file sizes plus the latest manifest published by any successful finalize().
+        std::uint64_t bytes_written = 0;
+        int write_step_count = 0;
+    };
+    // The reference observes subsequent calls and is valid only for this writer's lifetime.
+    const IoStats& io_stats() const noexcept { return io_stats_; }
+
     // Collective on MPI_COMM_WORLD when MPI is initialized. Partition count is
     // fixed for the lifetime of the writer. stackup is a chipcae.stack 0.2 JSON.
     struct MeshSummary {
@@ -57,6 +76,8 @@ public:
     void finalize();
 
 private:
+    IoStats io_stats_;
+    std::uint64_t step_bytes_ = 0, manifest_bytes_ = 0;
     struct Step {
         int n;
         double time;

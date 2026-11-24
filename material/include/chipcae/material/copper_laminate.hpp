@@ -16,17 +16,27 @@ CHIPCAE_LAMINATE_INLINE void copper_laminate(double Em,
                                              double f,
                                              double* p,
                                              double* th) {
+    if (f == 0 || f == 1) {
+        const double Eb = f == 0 ? Em : Ec;
+        const double nb = f == 0 ? nm : nc;
+        const double ab = f == 0 ? am : ac;
+        const double Gb = Eb / (2 * (1 + nb));
+        const double values[9] = {Eb, Eb, Eb, nb, nb, nb, Gb, Gb, Gb};
+        for (int i = 0; i < 9; ++i)
+            p[i] = values[i];
+        th[0] = th[1] = th[2] = ab;
+        return;
+    }
     const double m = 1 - f;
     const double Gm = Em / (2 * (1 + nm)), Gc = Ec / (2 * (1 + nc));
     const double E = f * Ec + m * Em, n = f * nc + m * nm;
     const double G = E / (2 * (1 + n)), Gz = 1 / (f / Gc + m / Gm);
-    const double values[9] = {E, E, 1 / (f / Ec + m / Em), n, n, n, G, Gz, Gz};
+    const double values[9] = {E, E, E, n, n, n, G, Gz, Gz};
     for (int i = 0; i < 9; ++i)
         p[i] = values[i];
     const double Mm = Em / (1 - nm), Mc = Ec / (1 - nc);
     th[0] = th[1] = (f * Mc * ac + m * Mm * am) / (f * Mc + m * Mm);
-    th[2] =
-        f * (ac - 2 * nc / (1 - nc) * (th[0] - ac)) + m * (am - 2 * nm / (1 - nm) * (th[0] - am));
+    th[2] = (f * Ec * ac + m * Em * am) / E;
 }
 
 // Conductivity in W/(m*K), output as (kxx, kyy, kzz), with z normal to the layers.
@@ -35,7 +45,7 @@ CHIPCAE_LAMINATE_INLINE void
 copper_laminate_conductivity(double km, double kc, double f, double* k) {
     const double m = 1 - f;
     k[0] = k[1] = f * kc + m * km;
-    k[2] = 1 / (f / kc + m / km);
+    k[2] = f * kc + m * km;
 }
 } // namespace chipcae::material
 #undef CHIPCAE_LAMINATE_INLINE

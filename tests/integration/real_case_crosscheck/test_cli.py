@@ -311,7 +311,6 @@ class CrosscheckCliTests(unittest.TestCase):
             outside.rename(destination)
             outside = destination
         self.addCleanup(shutil.rmtree, outside)
-        self.assertNotRegex(str(outside), r"\d\.\d")
         fem, fvm = self.make_pair()
         for args, kind, verdict in ((self.mesh_args(), "mesh_seq", "report"),
                                     (self.pair_args(fem, fvm), "pair", "pass")):
@@ -319,10 +318,10 @@ class CrosscheckCliTests(unittest.TestCase):
                 out = outside / "report.json"
                 completed = self.invoke(args, data_class="real", out=out)
                 self.report(kind=kind, verdict=verdict, data_class="real", out=out)
-                self.assertNotRegex(completed.stdout, r"\d\.\d")
+                remaining = completed.stdout.replace(str(out), "").replace(str(out.with_suffix(".md")), "")
+                self.assertNotRegex(remaining, r"\d\.\d")
                 self.assertIn(verdict, completed.stdout)
                 self.assertIn(str(out), completed.stdout)
-                remaining = completed.stdout.replace(str(out), "").replace(str(out.with_suffix(".md")), "")
                 self.assertEqual(re.findall(r"[A-Za-z_]+", remaining), [verdict])
 
     def test_public_data_class_and_explicit_case_id_are_preserved(self):

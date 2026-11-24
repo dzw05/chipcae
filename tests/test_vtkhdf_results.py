@@ -213,7 +213,22 @@ class ResultsTest(unittest.TestCase):
             for field in m['fields']:
                 self.assertEqual(field['dtype'], 'int64' if field['name']=='elem_gid' else
                                  'int32' if field['name'] in ('layer_id','material_id','cell_kind') else 'float64')
-            self.assertEqual(m['summary'][0]['method'], 'top surface (z=max) Q2 nodes; least-squares plane w=a+bx+cy removed; PV=max-min residual')
+            with self.subTest(summary='first'):
+                self.assertEqual(m['summary'][0]['method'], 'fem_q2_nodes')
+            for s in m['summary']:
+                if s['name'] in ('warpage_pv', 'T_max', 'U_mag_max'):
+                    with self.subTest(step=s['step'], summary=s['name']):
+                        self.assertIn('method', s)
+                        self.assertEqual(s['method'], 'fem_q2_nodes')
+            with self.subTest(metadata='mesh'):
+                self.assertIsInstance(m.get('mesh'), dict)
+                mesh = m['mesh']
+                for key, expected in [('nx0', 1), ('ny0', 1), ('L', 0),
+                                      ('padded_cells', 0), ('nz', 1)]:
+                    self.assertIs(type(mesh[key]), int, key)
+                    self.assertEqual(mesh[key], expected, key)
+                self.assertEqual(mesh['mesh_sha256'],
+                                 'e25348ef6d6da75e755b74c34e455ee893a3e79aea5e646e6bb4c5191e206a3c')
             self.assertEqual([s['n'] for s in m['steps']], [0,1])
             self.assertEqual(len(m['summary']),6)
             self.assertEqual(next(s['value'] for s in m['summary'] if s['name']=='warpage_pv'),0.001)

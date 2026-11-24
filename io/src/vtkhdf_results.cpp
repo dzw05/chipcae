@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -10,6 +11,7 @@
 #include <limits>
 #include <set>
 #include <stdexcept>
+#include <sys/resource.h>
 #ifdef CHIPCAE_ENABLE_HDF5
 #include "chipcae/io/detail/hdf5.hpp"
 #endif
@@ -314,12 +316,14 @@ ResultsWriter::ResultsWriter(std::filesystem::path run,
     agree(ok);
 }
 void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
+    [[maybe_unused]] const auto start = std::chrono::steady_clock::now();
 #ifndef CHIPCAE_ENABLE_HDF5
     (void)n;
     (void)time;
     (void)local;
     throw std::runtime_error("ResultsWriter requires CHIPCAE_ENABLE_HDF5");
 #else
+    agree(io_stats_.write_step_count < std::numeric_limits<int>::max());
 #ifdef CHIPCAE_ENABLE_MPI
     if (size_ > 1) {
         int lo, hi;
@@ -337,7 +341,8 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
     agree(p.hex.size() % 8 == 0 && p.points.size() % 3 == 0 && p.T.size() == p.points.size() / 3 &&
           p.U.size() == p.points.size() && p.layer_id.size() == input_cells &&
           p.material_id.size() == input_cells && p.cell_kind.size() == input_cells &&
-          (p.elem_gid.empty() || p.elem_gid.size() == input_cells));
+          (p.elem_gid.empty() || p.elem_gid.size() == input_cells) &&
+          (p.volume.empty() || p.volume.size() == input_cells));
     auto diagnostics_valid = [](const ResultsPartition& q, std::size_t cells) {
         bool valid = (q.copper_fraction.empty() || q.copper_fraction.size() == cells) &&
                      (q.conductivity_diag.empty() || q.conductivity_diag.size() == 3 * cells);
@@ -392,6 +397,7 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
             filtered.layer_id.clear();
             filtered.material_id.clear();
             filtered.cell_kind.clear();
+            filtered.volume.clear();
             filtered.copper_fraction.clear();
             filtered.conductivity_diag.clear();
             for (std::size_t i = 0; i < p.hex.size() / 8; ++i) {
@@ -407,6 +413,8 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                     filtered.material_id.push_back(p.material_id[i]);
                 if (i < p.cell_kind.size())
                     filtered.cell_kind.push_back(p.cell_kind[i]);
+                if (!p.volume.empty())
+                    filtered.volume.push_back(p.volume[i]);
                 if (!p.copper_fraction.empty())
                     filtered.copper_fraction.push_back(p.copper_fraction[i]);
                 if (!p.conductivity_diag.empty())
@@ -521,10 +529,14 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
         valid = valid && s.n != n;
     agree(valid);
     int gid_present = !p.elem_gid.empty() || !cut.elem_gid.empty(), gid_any = gid_present;
+    int hex_volume_present = !p.volume.empty(), hex_volume_any = hex_volume_present;
 #ifdef CHIPCAE_ENABLE_MPI
-    if (size_ > 1)
+    if (size_ > 1) {
         MPI_Allreduce(&gid_present, &gid_any, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+        MPI_Allreduce(&hex_volume_present, &hex_volume_any, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+    }
 #endif
+    agree(!hex_volume_any || nc == 0 || !p.volume.empty());
     agree(!gid_any || ((nc == 0 || !p.elem_gid.empty()) && (cn == 0 || !cut.elem_gid.empty())));
     agree(steps_.empty() || gids_ == (gid_any != 0));
     const auto& eb = local.embedded_boundary;
@@ -786,6 +798,8 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                     emit(cd, "cell_kind", q.cell_kind);
                 if ((gid_any && selected("elem_gid")) || block == 1)
                     emit(cd, "elem_gid", q.elem_gid);
+                if (block == 0 && hex_volume_any)
+                    emit(cd, "volume", q.volume);
                 if (block == 1 && (selected("volume") || cut_any))
                     emit(cd, "volume", q.volume);
                 if (selected("copper_fraction") && (diagnostic_schema[block] & 1))
@@ -817,6 +831,7 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
         ok = false;
     }
     agree(ok);
+    std::uint64_t step_bytes = 0;
     if (rank_ == 0)
         try {
             {
@@ -834,14 +849,29 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                 metadata_file.id = -1;
             }
             std::filesystem::rename(tmp, run_ / filename);
+            const auto bytes = std::filesystem::file_size(run_ / filename);
+            if (bytes > std::numeric_limits<std::uint64_t>::max() - step_bytes_ - manifest_bytes_)
+                throw std::overflow_error("results step byte count overflow");
+            step_bytes = static_cast<std::uint64_t>(bytes);
         } catch (...) {
             ok = false;
         }
     agree(ok);
+#ifdef CHIPCAE_ENABLE_MPI
+    if (size_ > 1)
+        MPI_Bcast(&step_bytes, 1, MPI_UINT64_T, 0, MPI_COMM_WORLD);
+#endif
+    phase([&] { steps_.push_back({n, time, std::move(filename)}); });
     diagnostic_fields_ |= emitted_diagnostics;
     gids_ = gid_any != 0;
     cut_fields_ = cut_fields_ || cut_any != 0;
-    steps_.push_back({n, time, std::move(filename)});
+    step_bytes_ += step_bytes;
+    io_stats_.bytes_written = step_bytes_ + manifest_bytes_;
+    const double duration =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    io_stats_.last_write_step_seconds = duration;
+    io_stats_.write_step_seconds += duration;
+    ++io_stats_.write_step_count;
 #endif
 }
 void ResultsWriter::add_summary(
@@ -854,6 +884,8 @@ void ResultsWriter::add_summary(
     summary_.push_back({std::move(name), value, std::move(unit), step, std::move(method)});
 }
 void ResultsWriter::finalize() {
+    const auto start = std::chrono::steady_clock::now();
+    std::uint64_t manifest_bytes = 0;
     bool ok = true;
     if (rank_ == 0)
         try {
@@ -949,9 +981,38 @@ void ResultsWriter::finalize() {
             out << "\n}\n";
             out.close();
             std::filesystem::rename(tmp, run_ / "manifest.json");
+            const auto bytes = std::filesystem::file_size(run_ / "manifest.json");
+            if (bytes > std::numeric_limits<std::uint64_t>::max() - step_bytes_)
+                throw std::overflow_error("results manifest byte count overflow");
+            manifest_bytes = static_cast<std::uint64_t>(bytes);
         } catch (...) {
             ok = false;
         }
     agree(ok);
+#ifdef CHIPCAE_ENABLE_MPI
+    if (size_ > 1)
+        MPI_Bcast(&manifest_bytes, 1, MPI_UINT64_T, 0, MPI_COMM_WORLD);
+#endif
+    std::uint64_t peak_rss_bytes = 0;
+    phase([&] {
+        struct rusage usage{};
+        if (getrusage(RUSAGE_SELF, &usage) != 0)
+            throw std::runtime_error("results getrusage failed");
+#if defined(__APPLE__)
+        constexpr std::uint64_t rss_scale = 1;
+#else
+        constexpr std::uint64_t rss_scale = 1024;
+#endif
+        if (usage.ru_maxrss < 0 || static_cast<std::uintmax_t>(usage.ru_maxrss) >
+                                       std::numeric_limits<std::uint64_t>::max() / rss_scale)
+            throw std::overflow_error("results peak RSS byte count overflow");
+        peak_rss_bytes = static_cast<std::uint64_t>(usage.ru_maxrss) * rss_scale;
+    });
+    // Publish statistics only after every rank has completed successfully.
+    manifest_bytes_ = manifest_bytes;
+    io_stats_.bytes_written = step_bytes_ + manifest_bytes_;
+    io_stats_.peak_rss_bytes = peak_rss_bytes;
+    io_stats_.finalize_seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 }
 } // namespace chipcae::io

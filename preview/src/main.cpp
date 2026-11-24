@@ -2,6 +2,7 @@
 #include <Kokkos_Core.hpp>
 #endif
 #include "chipcae/core/error_code.hpp"
+#include "chipcae/core/parse_floating.hpp"
 #include "chipcae/core/version.hpp"
 #include "data_path.hpp"
 
@@ -14,6 +15,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -21,9 +23,13 @@
 #include <vector>
 
 #ifdef CHIPCAE_PREVIEW_ENABLED
+#include "chipcae/mesh/background/column_hierarchy.hpp"
+#include "chipcae/mesh/background/copper_map.hpp"
 #include "chipcae/mesh/background/tensor_grid.hpp"
 #include "chipcae/mesh/background/vtkhdf_writer.hpp"
+#include "chipcae/mesh/cut/detail/outline_nonconvex.hpp"
 #include "chipcae/mesh/cut/outline_cut.hpp"
+#include "chipcae/mesh/cut/region_cut.hpp"
 #include "mesh_digest.hpp"
 #include "mesh_error_map.hpp"
 #ifdef CHIPCAE_ENABLE_MPI
@@ -128,10 +134,35 @@ T checked_io(chipcae::mesh::Expected<T> result) {
         throw std::runtime_error(result.error().path + ": " + result.error().reason);
     return std::move(result.value());
 }
+struct CopperColumnAreas {
+    chipcae::Real background = 0;
+    chipcae::Real raster = 0;
+};
+CopperColumnAreas copper_column_areas(const chipcae::mesh::HexMeshArrays& mesh, std::size_t li) {
+    using chipcae::mesh::level0_dense;
+    const auto& x = mesh.axes[0];
+    const auto& y = mesh.axes[1];
+    const std::size_t nx = x.size() - 1, ny = y.size() - 1;
+    const std::size_t offset = static_cast<std::size_t>(mesh.copper_layer_of_layer[li]) * nx * ny;
+    CopperColumnAreas result;
+    for (std::size_t j = 0; j < ny; ++j)
+        for (std::size_t i = 0; i < nx; ++i) {
+            const auto c = level0_dense(static_cast<std::uint32_t>(nx),
+                                        static_cast<std::uint32_t>(ny),
+                                        static_cast<std::uint32_t>(i),
+                                        static_cast<std::uint32_t>(j));
+            const chipcae::Real area = (x[i + 1] - x[i]) * (y[j + 1] - y[j]);
+            result.background += area;
+            result.raster += mesh.copper_phi[offset + c] * area;
+        }
+    return result;
+}
 int run(int argc, char** argv) {
     using namespace chipcae::mesh;
     std::filesystem::path input, output, surface, polyset;
     GridOptions options;
+    std::optional<int> min_elems_per_layer;
+    bool nonconvex_outline = false;
 #ifdef CHIPCAE_ENABLE_MPI
     int world_size = 1;
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
@@ -143,7 +174,8 @@ int run(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-o" || arg == "--surface" || arg == "--polyset" || arg == "--nx" ||
-            arg == "--ny" || arg == "--levels" || arg == "--max-ratio") {
+            arg == "--ny" || arg == "--levels" || arg == "--max-ratio" || arg == "--cell-budget" ||
+            arg == "--min-elems-per-layer") {
             if (!seen.insert(arg).second)
                 throw std::runtime_error("duplicate option: " + arg);
             if (++i == argc || std::string(argv[i]).empty())
@@ -159,16 +191,21 @@ int run(int argc, char** argv) {
                 options.nx = integer(value, false);
             else if (arg == "--ny")
                 options.ny = integer(value, false);
+            else if (arg == "--cell-budget")
+                options.cell_budget = integer(value, false);
+            else if (arg == "--min-elems-per-layer")
+                min_elems_per_layer = integer(value, false);
             else if (arg == "--max-ratio") {
                 double ratio = 0;
-                auto [end, error] =
-                    std::from_chars(value.data(), value.data() + value.size(), ratio);
-                if (error != std::errc{} || end != value.data() + value.size() ||
-                    !std::isfinite(ratio) || ratio < 1)
+                if (!chipcae::parse_floating(value, ratio) || !std::isfinite(ratio) || ratio < 1)
                     throw std::runtime_error("invalid max ratio: " + value);
                 options.max_ratio = ratio;
             } else
                 options.levels = integer(value, true);
+        } else if (arg == "--nonconvex-outline") {
+            if (!seen.insert(arg).second)
+                throw std::runtime_error("duplicate option: " + arg);
+            nonconvex_outline = true;
         } else if (arg.starts_with('-') || !input.empty()) {
             throw std::runtime_error("unexpected argument: " + arg);
         } else {
@@ -188,6 +225,9 @@ int run(int argc, char** argv) {
         throw std::runtime_error("surface and grid paths must differ");
     event("load", 0, "Loading stack 0.2");
     auto stack = checked_io(load_stack(input, chipcae::data_path(CHIPCAE_PREVIEW_SCHEMA)));
+    if (min_elems_per_layer)
+        for (auto& layer : stack.layers)
+            layer.n_elem_min = std::max(layer.n_elem_min, *min_elems_per_layer);
     for (const auto& warning : stack.warnings)
         std::cerr << warning << '\n';
     std::set<std::filesystem::path> sidecars;
@@ -219,7 +259,11 @@ int run(int argc, char** argv) {
     event("mesh", 0.3, "Building tensor grid");
     auto mesh = sidecars.empty() ? checked(build_tensor_grid(bounding_stack, options))
                                  : checked(build_tensor_grid(bounding_stack, options, polygons));
-    auto cut = checked(cut::apply_outline_cut(mesh, stack.outline, {}));
+    auto region_planes = checked(cut::region_cut_planes(stack, mesh));
+    auto cut =
+        checked(nonconvex_outline
+                    ? cut::detail::apply_outline_cut_general(mesh, stack.outline, {}, region_planes)
+                    : cut::apply_outline_cut(mesh, stack.outline, {}, region_planes));
     event("write", 0.8, "Writing VTKHDF");
     auto files =
         checked_io(write_vtkhdf(stem, mesh, cut ? &*cut : nullptr, chipcae::Communicator::world()));
@@ -255,7 +299,34 @@ int run(int argc, char** argv) {
               << ",\"void_cells\":" << summary.void_cells << ",\"nz\":" << summary.nz
               << ",\"node_count\":" << summary.nodes << ",\"cell_count\":" << summary.cells
               << ",\"cut_cell_count\":" << (cut ? cut->cut_elem.size() : 0)
-              << ",\"mesh_sha256\":" << quote(summary.sha256) << "}";
+              << ",\"mesh_sha256\":" << quote(summary.sha256)
+              << ",\"cell_budget\":" << options.cell_budget << ",\"min_elems_per_layer\":"
+              << (min_elems_per_layer ? std::to_string(*min_elems_per_layer) : "null")
+              << ",\"copper_area_m2\":{";
+    bool first_copper = true;
+    for (std::size_t li = 0; li < stack.layers.size(); ++li) {
+        const auto& layer = stack.layers[li];
+        if (!layer.copper)
+            continue;
+        auto [background_area, raster_area] = copper_column_areas(mesh, li);
+        chipcae::Real polygon_area = 0;
+        if (layer.copper->fraction) {
+            // A shared constant-field reduction keeps both values bitwise identical.
+            polygon_area = raster_area = *layer.copper->fraction * background_area;
+        } else if (layer.copper->polygons) {
+            const auto source =
+                std::find_if(polygons.layers.begin(), polygons.layers.end(), [&](const auto& p) {
+                    return p.name == layer.copper->polygons->layer;
+                });
+            polygon_area = copper_union_area_m2(*source, polygons.dbu_m);
+        }
+        if (!first_copper)
+            effective << ',';
+        first_copper = false;
+        effective << quote(layer.name) << ":{\"polygons\":" << polygon_area
+                  << ",\"raster\":" << raster_area << '}';
+    }
+    effective << "}}";
     event("success", 1, effective.str());
     return 0;
 }
@@ -268,7 +339,9 @@ int main(int argc, char** argv) {
             event("help",
                   1,
                   "chipcae-preview <stack.json> [--polyset f] [--nx N --ny N] "
-                  "[--levels N] [--max-ratio R] -o <stem|out.vtkhdf> [--surface <exact-eb-file>] "
+                  "[--levels N] [--max-ratio R] [--cell-budget B] [--min-elems-per-layer M] "
+                  "[--nonconvex-outline] "
+                  "-o <stem|out.vtkhdf> [--surface <exact-eb-file>] "
                   "(--polyset overrides meshing sidecars; levels=0 is automatic)");
             return 0;
         }

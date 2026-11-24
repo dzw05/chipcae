@@ -2,6 +2,7 @@
 
 #include "chipcae/io/event_log.hpp"
 
+#include <QByteArray>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QMap>
@@ -45,17 +46,23 @@ public:
     QStringList materialNames() const;
     QString layerName(int id) const;
     QString materialName(int id) const;
+    // Validated stackup bytes, read once at open. Empty if absent or invalid.
+    QByteArray resultsStackJson() const { return resultsStackJson_; }
     const EventLogResult& eventLog() const { return log_; }
     // cell_kind=2 stays in raw data; views should hide these cells by default.
     static constexpr int hiddenCellKind = 2;
 
 private:
     QString checkedPath(const QString& relative) const;
+    void cacheResultsStack();
     bool preflight(const QString& file);
     QJsonObject manifest_;
     QString root_, direct_, error_;
     QStringList warnings_;
     QMap<QString, QStringList> names_;
+    QByteArray resultsStackJson_;
+    QStringList stackLayerNames_, stackMaterialNames_;
+    QStringList fallbackLayerNames_, fallbackMaterialNames_;
     EventLogResult log_;
 };
 } // namespace chipcae::desktop

@@ -270,3 +270,15 @@ if(CHIPCAE_MATERIAL_ENABLE_TESTS)
     set_tests_properties(material_tableview_single_point_cuda PROPERTIES LABELS nightly TIMEOUT 60
         ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false" SKIP_RETURN_CODE 77)
 endif()
+
+if(CHIPCAE_MATERIAL_ENABLE_TESTS)
+    add_executable(material_library_soldermask_lpi tests/library_soldermask_lpi.cpp)
+    target_link_libraries(material_library_soldermask_lpi PRIVATE chipcae_material)
+    # Keep the fixture parser available in standalone builds without an optional package.
+    target_include_directories(material_library_soldermask_lpi SYSTEM PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../desktop/third_party/jsoncons/include)
+    add_test(NAME material_library_soldermask_lpi COMMAND material_library_soldermask_lpi
+        ${CMAKE_CURRENT_SOURCE_DIR}/library/soldermask_lpi_eq.materials.json)
+    set_tests_properties(material_library_soldermask_lpi PROPERTIES LABELS tierA TIMEOUT 60
+        ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
+endif()

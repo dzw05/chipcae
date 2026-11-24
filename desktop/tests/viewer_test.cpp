@@ -10,10 +10,13 @@
 #include <QImage>
 #include <QJsonDocument>
 #include <QLabel>
+#include <QLayout>
+#include <QProcess>
 #include <QSurfaceFormat>
 #include <QTemporaryDir>
 #include <QVTKOpenGLNativeWidget.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -21,19 +24,25 @@
 #include <vector>
 #include <vtkActor.h>
 #include <vtkActorCollection.h>
+#include <vtkCamera.h>
+#include <vtkCell.h>
 #include <vtkCellData.h>
 #include <vtkCompositeDataIterator.h>
 #include <vtkCompositeDataSet.h>
 #include <vtkDataSet.h>
 #include <vtkDataSetMapper.h>
 #include <vtkDoubleArray.h>
+#include <vtkExtractCells.h>
 #include <vtkHDFWriter.h>
 #include <vtkIdList.h>
 #include <vtkIntArray.h>
 #include <vtkNew.h>
+#include <vtkPartitionedDataSet.h>
+#include <vtkPartitionedDataSetCollection.h>
 #include <vtkPointData.h>
 #include <vtkPoints.h>
 #include <vtkPropCollection.h>
+#include <vtkProperty.h>
 #include <vtkRenderWindow.h>
 #include <vtkRenderer.h>
 #include <vtkRendererCollection.h>
@@ -103,6 +112,132 @@ Coordinates coordinates(ResultView& view) {
     }
     return out;
 }
+vtkCamera* camera(ResultView& view) {
+    return view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetActiveCamera();
+}
+std::array<double, 3> cameraDirection(ResultView& view) {
+    const auto position = camera(view)->GetPosition();
+    const auto focal = camera(view)->GetFocalPoint();
+    std::array<double, 3> direction;
+    double norm = 0;
+    for (int axis = 0; axis < 3; ++axis) {
+        direction[axis] = focal[axis] - position[axis];
+        norm += direction[axis] * direction[axis];
+    }
+    norm = std::sqrt(norm);
+    require(std::isfinite(norm) && norm > 0, "camera direction must be finite and nonzero");
+    for (auto& value : direction) {
+        value /= norm;
+        require(std::isfinite(value), "normalized camera direction must be finite");
+    }
+    near(direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2],
+         1,
+         1e-12);
+    return direction;
+}
+void checkCameraDirection(ResultView& view, const std::array<double, 3>& expected) {
+    const auto actual = cameraDirection(view);
+    for (int axis = 0; axis < 3; ++axis)
+        require(std::abs(actual[axis] - expected[axis]) <= 1e-12,
+                "rebuild/reload changed camera direction");
+}
+void checkOblique(ResultView& view) {
+    const auto direction = cameraDirection(view);
+    constexpr double cos20 = 0.9396926207859084;
+    for (auto value : direction)
+        require(std::abs(value) <= cos20, "default camera is almost aligned with a world axis");
+    double bounds[6] = {std::numeric_limits<double>::infinity(),
+                        -std::numeric_limits<double>::infinity(),
+                        std::numeric_limits<double>::infinity(),
+                        -std::numeric_limits<double>::infinity(),
+                        std::numeric_limits<double>::infinity(),
+                        -std::numeric_limits<double>::infinity()};
+    auto hex = view.displayed("hex");
+    bool found = false;
+    for (const auto& name : displayedBlocks) {
+        auto block = view.displayed(name);
+        if (!block || !block->GetNumberOfCells() ||
+            (hex && hex->GetNumberOfCells() && name != "hex"))
+            continue;
+        double blockBounds[6];
+        block->GetBounds(blockBounds);
+        for (int axis = 0; axis < 3; ++axis) {
+            bounds[2 * axis] = std::min(bounds[2 * axis], blockBounds[2 * axis]);
+            bounds[2 * axis + 1] = std::max(bounds[2 * axis + 1], blockBounds[2 * axis + 1]);
+        }
+        found = true;
+    }
+    require(found, "oblique assertion needs visible geometry");
+    const std::array lengths = {
+        bounds[1] - bounds[0], bounds[3] - bounds[2], bounds[5] - bounds[4]};
+    for (int axis = 0; axis < 3; ++axis) {
+        const double a = lengths[axis], b = lengths[(axis + 1) % 3], c = lengths[(axis + 2) % 3];
+        if (a < b && a < c && b - a >= 1e-6 * b && c - a >= 1e-6 * c)
+            require(std::abs(direction[axis]) <= cos20,
+                    "default camera is almost aligned with the strict shortest bounding axis");
+    }
+}
+vtkActor* boundaryActor(ResultView& view) {
+    vtkActor* found = nullptr;
+    auto actors = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetActors();
+    actors->InitTraversal();
+    while (auto actor = actors->GetNextActor())
+        if (actor->GetObjectName() == "layerBoundaries") {
+            require(!found, "multiple layerBoundaries actors");
+            found = actor;
+        }
+    return found;
+}
+vtkDataSet* boundaryInput(ResultView& view) {
+    auto actor = boundaryActor(view);
+    if (!actor)
+        return nullptr;
+    require(actor->GetMapper(), "layer boundary mapper missing");
+    actor->GetMapper()->Update();
+    return vtkDataSet::SafeDownCast(actor->GetMapper()->GetInputDataObject(0, 0));
+}
+void checkNoBoundaries(ResultView& view) {
+    auto input = boundaryInput(view);
+    require(!input || input->GetNumberOfCells() == 0, "unexpected layer interface edges");
+}
+// QLabel::isVisible() needs a visible ancestor. Hide QVTK first so showing the Qt
+// status row does not initialize an embedded OpenGL context on offscreen runners.
+class VisibleStatusView {
+public:
+    explicit VisibleStatusView(ResultView& view) : view(view) {
+        auto vtk = view.findChild<QVTKOpenGLNativeWidget*>();
+        require(vtk, "QVTK child missing");
+        vtk->hide();
+        view.resize(1000, 200);
+        view.show();
+        view.layout()->activate();
+    }
+    ~VisibleStatusView() { view.hide(); }
+
+private:
+    ResultView& view;
+};
+void checkFieldStatus(ResultView& view, bool missingTemperature) {
+    VisibleStatusView visible(view);
+    auto label = view.findChild<QLabel*>("fieldStatusLabel");
+    if (missingTemperature) {
+        require(label, "missing fieldStatusLabel for absent PointData T");
+        require(label->text() == QStringLiteral("无温度场"), "missing-temperature status text");
+        require(label->isVisible(), "missing-temperature status is not visible");
+    } else {
+        require(!label || (label->text().isEmpty() && !label->isVisible()),
+                "unexpected temperature status on empty, valid, or non-temperature view");
+    }
+}
+void checkTemperatureControls(ResultControls& controls) {
+    bool found = false;
+    for (auto label : controls.findChildren<QLabel*>()) {
+        found |= label->text().contains(QStringLiteral("无温度场"));
+        require(!label->text().contains("Field: unavailable"),
+                "temperature controls retain English unavailable message");
+    }
+    require(found, "temperature controls do not explain absent PointData T");
+}
 void checkScalarBar(ResultView& view) {
     auto props = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetViewProps();
     int count = 0;
@@ -120,6 +255,40 @@ void checkScalarBar(ResultView& view) {
                 "scalar bar LUT range");
     }
     require(count == (view.colorRange().valid ? 1 : 0), "scalar bar presence");
+}
+void checkLoadedResultScene(ResultView& view) {
+    auto actors = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetActors();
+    int blockActors = 0;
+    for (const auto& name : displayedBlocks) {
+        auto block = view.displayed(name);
+        if (!block || !block->GetNumberOfCells())
+            continue;
+        actors->InitTraversal();
+        while (auto actor = actors->GetNextActor()) {
+            auto mapper = vtkDataSetMapper::SafeDownCast(actor->GetMapper());
+            if (mapper && mapper->GetInput() == block)
+                ++blockActors;
+        }
+    }
+    require(blockActors > 0, "failed reload fixture needs displayed cells and result block actors");
+    require(boundaryActor(view), "failed reload fixture needs a layer boundary actor");
+}
+void checkClearedResultScene(ResultView& view) {
+    auto actors = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetActors();
+    require(actors->GetNumberOfItems() == 0,
+            qPrintable(QString("failed reload retained %1 stale result/highlight actors")
+                           .arg(actors->GetNumberOfItems())));
+    require(!boundaryActor(view), "failed reload retained layer boundary actor");
+    for (const auto& name : displayedBlocks)
+        require(!view.displayed(name), "failed reload retained displayed block data");
+    const auto range = view.colorRange();
+    require(!range.valid, "failed reload retained a valid color range");
+    near(range.min, 0);
+    near(range.max, 0);
+    require(range.unit.isEmpty(), "failed reload retained color range unit");
+    require(view.colorBarTitle().isEmpty(), "failed reload retained color bar title");
+    checkScalarBar(view);
+    checkFieldStatus(view, false);
 }
 void checkRange(ResultView& view, ResultColorField field, const QStringList& hidden = {}) {
     checkScalarBar(view);
@@ -181,7 +350,7 @@ void checkRange(ResultView& view, ResultColorField field, const QStringList& hid
     require(range.min == low && range.max == high, "displayed point range differs");
     require(range.unit == (field == ResultColorField::Temperature ? "K" : "m"), "range unit");
 }
-void checkUnavailable(ResultView& view) {
+void checkUnavailable(ResultView& view, bool loadedMissingTemperature = false) {
     checkScalarBar(view);
     const auto range = view.colorRange();
     require(!range.valid && range.min == 0 && range.max == 0 && range.unit.isEmpty(),
@@ -189,6 +358,7 @@ void checkUnavailable(ResultView& view) {
     require(view.colorBarTitle().isEmpty(), "unavailable field title");
     require(view.tmaxText() == "T_max: unavailable", "unavailable official T_max");
     require(view.error().isEmpty(), "unavailable field set error");
+    checkFieldStatus(view, loadedMissingTemperature);
 }
 const char* idArrayName(ResultColorField field) {
     require(field == ResultColorField::LayerId || field == ResultColorField::MaterialId,
@@ -200,7 +370,6 @@ void checkIdRange(ResultView& view, ResultSession& session, ResultColorField fie
     const auto name = idArrayName(field);
     int low = std::numeric_limits<int>::max();
     int high = std::numeric_limits<int>::min();
-    bool titleMatches = false;
     bool nonempty = false;
     const auto range = view.colorRange();
     for (const auto& blockName : displayedBlocks) {
@@ -240,13 +409,6 @@ void checkIdRange(ResultView& view, ResultSession& session, ResultColorField fie
             require(value == static_cast<double>(id), "fixture ID is not integral");
             low = std::min(low, id);
             high = std::max(high, id);
-            auto label = field == ResultColorField::LayerId ? session.layerName(id)
-                                                            : session.materialName(id);
-            if (label.isEmpty())
-                label = QString("%1 %2")
-                            .arg(field == ResultColorField::LayerId ? "layer" : "material")
-                            .arg(id);
-            titleMatches |= view.colorBarTitle().contains(label);
         }
     }
     require(nonempty, "ID fixture has no displayed cells");
@@ -255,7 +417,24 @@ void checkIdRange(ResultView& view, ResultSession& session, ResultColorField fie
     // IDs are integers; the acceptance contract requires exact double equality.
     require(range.min == static_cast<double>(low) && range.max == static_cast<double>(high),
             "ID range differs from visible cell IDs");
-    require(titleMatches, "ID title lacks a visible session name or fallback");
+    QStringList labels;
+    for (int id = low;; ++id) {
+        auto label =
+            field == ResultColorField::LayerId ? session.layerName(id) : session.materialName(id);
+        if (label.isEmpty())
+            label = QString("%1 %2")
+                        .arg(field == ResultColorField::LayerId ? "layer" : "material")
+                        .arg(id);
+        labels << label;
+        if (id == high)
+            break;
+    }
+    const auto expected =
+        (field == ResultColorField::LayerId ? QStringLiteral("叠层: ") : QStringLiteral("材料: ")) +
+        labels.join(", ");
+    require(view.colorBarTitle() == expected,
+            qPrintable("ID title must list every ID in ascending order: expected [" + expected +
+                       "] got [" + view.colorBarTitle() + "]"));
     checkScalarBar(view);
 }
 void checkIdBounds(ResultView& view, double low, double high) {
@@ -291,17 +470,21 @@ void checkSummaryLabel(ResultControls& controls, ResultView& view) {
     bool found = false;
     for (auto label : controls.findChildren<QLabel*>()) {
         const auto text = label->text();
-        found |=
-            text.contains(view.tmaxText()) && text.contains(QString::number(range.min, 'g', 16)) &&
-            text.contains(QString::number(range.max, 'g', 16)) &&
-            text.contains(view.summary("warpage_pv")) && text.contains(view.summary("U_mag_max"));
+        found |= text.contains(view.tmaxText()) && text.contains("min=") && text.contains("max=") &&
+                 text.contains(QString::number(range.min, 'g', 16)) &&
+                 text.contains(QString::number(range.max, 'g', 16)) &&
+                 text.contains(view.summary("warpage_pv")) &&
+                 text.contains(view.summary("U_mag_max"));
     }
     require(found, "controls summary missing official T_max, range or existing QoIs");
 }
 // Read through the production session and write a temporary VTKHDF fixture. Mutations
 // use VTK arrays and cell connectivity rather than HDF paths or point ordering.
 template <typename Mutate>
-void writeFixture(const QDir& root, const QString& path, Mutate mutate) {
+void writeFixture(const QDir& root,
+                  const QString& path,
+                  Mutate mutate,
+                  bool partitionCells = false) {
     ResultSession source;
     require(source.open(root.filePath("viewer_mixed")), qPrintable(source.error()));
     auto data = source.loadStep(0);
@@ -317,10 +500,1027 @@ void writeFixture(const QDir& root, const QString& path, Mutate mutate) {
         }
     }
     require(grids > 0, "synthetic fixture has no grids");
+    if (partitionCells) {
+        auto pdc = vtkPartitionedDataSetCollection::SafeDownCast(data);
+        require(pdc && pdc->GetNumberOfPartitionedDataSets() == 1,
+                "partition fixture requires one volume block");
+        auto pd = pdc->GetPartitionedDataSet(0);
+        auto grid = vtkUnstructuredGrid::SafeDownCast(pd->GetPartition(0));
+        require(grid && grid->GetNumberOfCells() == 2, "partition fixture requires two cells");
+        std::array<vtkSmartPointer<vtkUnstructuredGrid>, 2> partitions;
+        for (vtkIdType cell = 0; cell < 2; ++cell) {
+            vtkNew<vtkIdList> ids;
+            ids->InsertNextId(cell);
+            vtkNew<vtkExtractCells> extract;
+            extract->SetInputData(grid);
+            extract->SetCellList(ids);
+            extract->Update();
+            partitions[cell] = vtkSmartPointer<vtkUnstructuredGrid>::New();
+            partitions[cell]->DeepCopy(extract->GetOutput());
+        }
+        pd->SetNumberOfPartitions(2);
+        for (unsigned cell = 0; cell < 2; ++cell)
+            pd->SetPartition(cell, partitions[cell]);
+    }
     vtkNew<vtkHDFWriter> writer;
     writer->SetFileName(path.toUtf8().constData());
     writer->SetInputData(data);
     require(writer->Write() == 1, "write temporary VTKHDF fixture");
+}
+// Synthetic summary packages keep method tests independent of solver output and frozen fixtures.
+void writeSummaryFixture(const QDir& root, const QTemporaryDir& temp, const QJsonArray& summary) {
+    require(temp.isValid(), "summary fixture directory");
+    writeFixture(root, temp.filePath("step.vtkhdf"), [](vtkUnstructuredGrid*) {});
+    const QJsonObject manifest{
+        {"schema_version", "chipcae.results/1.0"},
+        {"fields", QJsonArray{}},
+        {"steps", QJsonArray{QJsonObject{{"n", 0}, {"time", 0}, {"file", "step.vtkhdf"}}}},
+        {"summary", summary}};
+    QFile file(temp.filePath("manifest.json"));
+    require(file.open(QIODevice::WriteOnly), "summary fixture manifest open");
+    const auto bytes = QJsonDocument(manifest).toJson();
+    require(file.write(bytes) == bytes.size(), "summary fixture manifest write");
+}
+int methodSummaryAcceptance(const QDir& root) {
+    int failures = 0;
+    auto run = [&](const QString& name, auto test) {
+        const auto before = failures;
+        try {
+            // Accumulate text mismatches so every QoI is checked even during the RED pass.
+            auto equal = [&](const QString& actual, const QString& expected) {
+                if (actual != expected) {
+                    ++failures;
+                    std::cerr << "FAIL D14e-3 " << name.toStdString() << ": expected ["
+                              << expected.toStdString() << "] got [" << actual.toStdString()
+                              << "]\n";
+                }
+            };
+            test(equal);
+        } catch (const std::exception& e) {
+            ++failures;
+            std::cerr << "FAIL D14e-3 " << name.toStdString() << ": " << e.what() << '\n';
+        }
+        if (failures == before)
+            std::cout << "PASS D14e-3 " << name.toStdString() << '\n';
+    };
+    auto temperature = [] {
+        return QJsonObject{{"step", 0}, {"name", "T_max"}, {"value", 987.5}, {"unit", "K"}};
+    };
+    auto warpage = [] {
+        return QJsonObject{{"step", 0}, {"name", "warpage_pv"}, {"value", 0}, {"unit", "m"}};
+    };
+    run("long sentences, frozen enums and disabled mechanics stay distinct", [&](auto equal) {
+        struct Example {
+            QString thermalMethod;
+            QString mechanicalMethod;
+            QString expectedTmax;
+            QString expectedWarpage;
+            QString expectedMagnitude;
+        };
+        const std::array<Example, 3> examples{{
+            {"FVM cell centers",
+             "not solved: fvm thermal-only stage",
+             "T_max: 300.2803835909066 K [FVM cell centers]",
+             "warpage_pv: 0 m [not solved: fvm thermal-only stage]",
+             "U_mag_max: 0 m [not solved: fvm thermal-only stage]"},
+            {"fvm_cell_centers",
+             "not_solved",
+             "T_max: 300.2803835909066 K [fvm_cell_centers]",
+             "warpage_pv: 0 m [not_solved]",
+             "U_mag_max: 0 m [not_solved]"},
+            {"fvm_cell_centers",
+             "mechanical_disabled",
+             "T_max: 300.2803835909066 K [fvm_cell_centers]",
+             "warpage_pv: 0 m [mechanical_disabled]",
+             "U_mag_max: 0 m [mechanical_disabled]"},
+        }};
+        std::array<QString, 3> warpages, magnitudes;
+        for (std::size_t i = 0; i < examples.size(); ++i) {
+            const auto& example = examples[i];
+            QTemporaryDir temp; // A, B and C each own a separate package directory.
+            auto t = temperature();
+            t["value"] = 300.2803835909066;
+            t["method"] = example.thermalMethod;
+            auto w = warpage();
+            w["method"] = example.mechanicalMethod;
+            auto u = w;
+            u["name"] = "U_mag_max";
+            writeSummaryFixture(root, temp, {t, w, u});
+            ResultSession session;
+            require(session.open(temp.path()), qPrintable(session.error()));
+            ResultView view;
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            // Summary metadata must not replace the already working PointData T coloring.
+            require(view.colorRange().valid, "method package lost PointData T range");
+            equal(view.colorBarTitle(), "T (K)");
+            equal(view.tmaxText(), example.expectedTmax);
+            equal(view.summary("T_max"), example.expectedTmax);
+            equal(view.tmaxText(), view.summary("T_max"));
+            warpages[i] = view.summary("warpage_pv");
+            magnitudes[i] = view.summary("U_mag_max");
+            equal(warpages[i], example.expectedWarpage);
+            equal(magnitudes[i], example.expectedMagnitude);
+        }
+        for (std::size_t i = 0; i < examples.size(); ++i) {
+            require(warpages[i] != "warpage_pv: 0 m", "mechanical placeholder looks solved");
+            require(magnitudes[i] != "U_mag_max: 0 m", "displacement placeholder looks solved");
+            for (std::size_t j = i + 1; j < examples.size(); ++j) {
+                require(warpages[i] != warpages[j], "mechanical methods conflated");
+                require(magnitudes[i] != magnitudes[j], "displacement methods conflated");
+            }
+        }
+    });
+    struct Location {
+        QJsonObject fields;
+        QString expected;
+    };
+    for (const auto& location : std::vector<Location>{
+             {{{"region", "die"}}, "T_max: 987.5 K [fvm_cell_centers] region=die"},
+             {{{"region", "die"},
+               {"region_id", "ignored"},
+               {"position", QJsonArray{1, 2, 3}},
+               {"xyz", QJsonArray{4, 5, 6}},
+               {"location", "surface"}},
+              "T_max: 987.5 K [fvm_cell_centers] region=die at=(1,2,3)"},
+             {{{"region", "die"}, {"location", "surface"}},
+              "T_max: 987.5 K [fvm_cell_centers] region=die location=surface"}}) {
+        run("method precedes location: " + location.expected, [&](auto equal) {
+            QTemporaryDir temp;
+            auto t = temperature();
+            t["method"] = "fvm_cell_centers";
+            for (auto it = location.fields.begin(); it != location.fields.end(); ++it)
+                t[it.key()] = it.value();
+            writeSummaryFixture(root, temp, {t});
+            ResultSession session;
+            require(session.open(temp.path()), qPrintable(session.error()));
+            ResultView view;
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            equal(view.tmaxText(), location.expected);
+            equal(view.summary("T_max"), "T_max: 987.5 K [fvm_cell_centers]");
+        });
+    }
+    for (const auto& method : std::vector<QJsonValue>{QJsonValue(QJsonValue::Undefined),
+                                                      "",
+                                                      QJsonValue(QJsonValue::Null),
+                                                      17,
+                                                      true,
+                                                      QJsonArray{"not_solved"},
+                                                      QJsonObject{{"method", "not_solved"}}}) {
+        run("absent, empty or non-string method type " + QString::number(method.type()),
+            [&](auto equal) {
+                QTemporaryDir temp;
+                auto t = temperature();
+                auto w = warpage();
+                if (!method.isUndefined()) {
+                    t["method"] = method;
+                    w["method"] = method;
+                }
+                auto u = w;
+                u["name"] = "U_mag_max";
+                writeSummaryFixture(root, temp, {t, w, u});
+                ResultSession session;
+                require(session.open(temp.path()), qPrintable(session.error()));
+                ResultView view;
+                require(view.loadStep(session, 0), qPrintable(view.error()));
+                equal(view.tmaxText(), "T_max: 987.5 K");
+                equal(view.summary("T_max"), "T_max: 987.5 K");
+                equal(view.summary("warpage_pv"), "warpage_pv: 0 m");
+                equal(view.summary("U_mag_max"), "U_mag_max: 0 m");
+            });
+    }
+    run("preserve method whitespace and empty unit spacing", [&](auto equal) {
+        QTemporaryDir temp;
+        auto t = temperature();
+        t["method"] = " FVM cell centers ";
+        auto w = warpage();
+        w["unit"] = "";
+        w["method"] = "not_solved";
+        writeSummaryFixture(root, temp, {t, w});
+        ResultSession session;
+        require(session.open(temp.path()), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        equal(view.tmaxText(), "T_max: 987.5 K [ FVM cell centers ]");
+        equal(view.summary("T_max"), "T_max: 987.5 K [ FVM cell centers ]");
+        equal(view.summary("warpage_pv"), "warpage_pv: 0  [not_solved]");
+    });
+    for (bool absent : {false, true}) {
+        run(absent ? "missing names stay unavailable" : "non-numeric values stay unavailable",
+            [&](auto equal) {
+                QTemporaryDir temp;
+                auto t = temperature();
+                auto w = warpage();
+                t["method"] = "fvm_cell_centers";
+                w["method"] = "not_solved";
+                if (absent) {
+                    t.remove("name");
+                    w.remove("name");
+                } else {
+                    t["value"] = "987.5";
+                    w["value"] = QJsonValue(QJsonValue::Null);
+                }
+                writeSummaryFixture(root, temp, {t, w});
+                ResultSession session;
+                require(session.open(temp.path()), qPrintable(session.error()));
+                ResultView view;
+                equal(view.tmaxText(), "T_max: unavailable");
+                equal(view.summary("T_max"), "T_max: unavailable");
+                equal(view.summary("warpage_pv"), "warpage_pv: unavailable");
+                require(view.loadStep(session, 0), qPrintable(view.error()));
+                equal(view.tmaxText(), "T_max: unavailable");
+                equal(view.summary("T_max"), "T_max: unavailable");
+                equal(view.summary("warpage_pv"), "warpage_pv: unavailable");
+            });
+    }
+    for (bool firstHasMethod : {true, false}) {
+        run(firstHasMethod ? "only selected exact-step method is displayed"
+                           : "selected entry cannot borrow a later method",
+            [&](auto equal) {
+                QTemporaryDir temp;
+                auto t = temperature();
+                auto w = warpage();
+                auto global = t;
+                global.remove("step");
+                global["value"] = -123;
+                global["method"] = "global method";
+                auto other = t;
+                other["step"] = 1;
+                other["value"] = -456;
+                other["method"] = "other step method";
+                auto invalid = t;
+                invalid["value"] = "not a number";
+                invalid["method"] = "invalid value method";
+                auto invalidW = invalid;
+                invalidW["name"] = "warpage_pv";
+                auto globalW = global;
+                globalW["name"] = "warpage_pv";
+                auto otherW = other;
+                otherW["name"] = "warpage_pv";
+                auto duplicateT = t;
+                duplicateT["method"] = "later thermal method";
+                auto duplicateW = w;
+                duplicateW["method"] = "later mechanical method";
+                if (firstHasMethod) {
+                    t["method"] = "fvm_cell_centers_lsq";
+                    w["method"] = "not_solved";
+                }
+                writeSummaryFixture(root,
+                                    temp,
+                                    {global,
+                                     globalW,
+                                     other,
+                                     otherW,
+                                     invalid,
+                                     invalidW,
+                                     t,
+                                     w,
+                                     duplicateT,
+                                     duplicateW});
+                ResultSession session;
+                require(session.open(temp.path()), qPrintable(session.error()));
+                ResultView view;
+                require(view.loadStep(session, 0), qPrintable(view.error()));
+                equal(view.tmaxText(),
+                      firstHasMethod ? "T_max: 987.5 K [fvm_cell_centers_lsq]" : "T_max: 987.5 K");
+                equal(view.summary("T_max"),
+                      firstHasMethod ? "T_max: 987.5 K [fvm_cell_centers_lsq]" : "T_max: 987.5 K");
+                equal(view.summary("warpage_pv"),
+                      firstHasMethod ? "warpage_pv: 0 m [not_solved]" : "warpage_pv: 0 m");
+            });
+    }
+    run("global T_max fallback does not change summary step matching", [&](auto equal) {
+        QTemporaryDir temp;
+        auto t = temperature();
+        t.remove("step");
+        t["method"] = "fvm_cell_centers";
+        writeSummaryFixture(root, temp, {t});
+        ResultSession session;
+        require(session.open(temp.path()), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        equal(view.tmaxText(), "T_max: 987.5 K [fvm_cell_centers]");
+        equal(view.summary("T_max"), "T_max: unavailable");
+    });
+    for (bool firstHasMethod : {true, false}) {
+        run(firstHasMethod ? "global fallback uses only the first valid entry's method"
+                           : "global fallback cannot borrow another entry's method",
+            [&](auto equal) {
+                QTemporaryDir temp;
+                auto selected = temperature();
+                selected.remove("step");
+                auto invalidGlobal = selected;
+                invalidGlobal["value"] = "not a number";
+                invalidGlobal["method"] = "invalid global method";
+                auto invalidExact = invalidGlobal;
+                invalidExact["step"] = 0;
+                invalidExact["method"] = "invalid exact-step method";
+                auto otherStep = temperature();
+                otherStep["step"] = 1;
+                otherStep["method"] = "other step method";
+                auto duplicate = selected;
+                duplicate["value"] = -123;
+                duplicate["method"] = "later global method";
+                if (firstHasMethod)
+                    selected["method"] = "fvm_cell_centers";
+                writeSummaryFixture(
+                    root, temp, {invalidGlobal, invalidExact, otherStep, selected, duplicate});
+                ResultSession session;
+                require(session.open(temp.path()), qPrintable(session.error()));
+                ResultView view;
+                require(view.loadStep(session, 0), qPrintable(view.error()));
+                require(view.colorRange().valid, "global fallback lost PointData T range");
+                equal(view.colorBarTitle(), "T (K)");
+                equal(view.tmaxText(),
+                      firstHasMethod ? "T_max: 987.5 K [fvm_cell_centers]" : "T_max: 987.5 K");
+                equal(view.summary("T_max"), "T_max: unavailable");
+            });
+    }
+    return failures;
+}
+// Two thin hexes have the shared face z=0.1 and continuous, nonzero affine U.
+// Extracting each cell into its own partition duplicates the four interface points.
+void twoLayers(vtkUnstructuredGrid* grid, const QString& variant = {}) {
+    grid->Initialize();
+    require(grid->AllocateEstimate(2, 8), "allocate adjacent fixture connectivity");
+    vtkNew<vtkPoints> points;
+    points->SetDataTypeToDouble();
+    for (double z : {0.0, 0.1, 0.2})
+        for (auto xy : {std::array<double, 2>{0, 0}, {2, 0}, {2, 3}, {0, 3}})
+            points->InsertNextPoint(xy[0], xy[1], z);
+    grid->SetPoints(points);
+    vtkIdType lower[] = {0, 1, 2, 3, 4, 5, 6, 7};
+    vtkIdType upper[] = {4, 5, 6, 7, 8, 9, 10, 11};
+    if (variant == "separated layers")
+        for (int i = 0; i < 8; ++i) {
+            double point[3];
+            points->GetPoint(upper[i], point);
+            point[0] += 4;
+            upper[i] = points->InsertNextPoint(point);
+        }
+    if (variant == "roundoff coordinates" || variant == "discontinuous displacement")
+        for (int i = 0; i < 8; ++i) {
+            double point[3];
+            points->GetPoint(upper[i], point);
+            if (variant == "roundoff coordinates")
+                point[0] += 1e-12;
+            upper[i] = points->InsertNextPoint(point);
+        }
+    if (variant == "surface cells" || variant == "particles") {
+        const int type = variant == "surface cells" ? VTK_QUAD : VTK_VERTEX;
+        const vtkIdType count = variant == "surface cells" ? 4 : 1;
+        grid->InsertNextCell(type, count, upper);
+        grid->InsertNextCell(type, count, upper);
+    } else {
+        grid->InsertNextCell(VTK_HEXAHEDRON, 8, lower);
+        grid->InsertNextCell(VTK_HEXAHEDRON, 8, upper);
+    }
+    vtkNew<vtkDoubleArray> temperature;
+    temperature->SetName("T");
+    vtkNew<vtkDoubleArray> displacement;
+    displacement->SetName("U");
+    displacement->SetNumberOfComponents(3);
+    for (vtkIdType i = 0; i < points->GetNumberOfPoints(); ++i) {
+        double point[3];
+        points->GetPoint(i, point);
+        temperature->InsertNextValue(300 + point[0] + point[2]);
+        displacement->InsertNextTuple3(1e-3 * (1 + point[0]),
+                                       2e-3 * (1 + point[1]),
+                                       1e-3 * (1 + point[0] + point[1] + point[2]));
+    }
+    if (variant == "discontinuous displacement")
+        for (vtkIdType i = 12; i < points->GetNumberOfPoints(); ++i)
+            displacement->SetComponent(i, 0, displacement->GetComponent(i, 0) + 0.025);
+    grid->GetPointData()->AddArray(temperature);
+    grid->GetPointData()->AddArray(displacement);
+    for (auto name : {"cell_kind", "layer_id", "material_id"}) {
+        vtkNew<vtkIntArray> array;
+        array->SetName(name);
+        array->InsertNextValue(QString(name) == "cell_kind" ? 0 : 1);
+        array->InsertNextValue(QString(name) == "cell_kind" ? 1 : 2);
+        grid->GetCellData()->AddArray(array);
+    }
+    if (variant == "equal layers")
+        grid->GetCellData()->GetArray("layer_id")->SetComponent(1, 0, 1);
+    if (variant == "missing layer_id")
+        grid->GetCellData()->RemoveArray("layer_id");
+}
+void checkWarpedInterface(ResultView& view, double scale) {
+    auto input = boundaryInput(view);
+    require(input && input->GetNumberOfCells() >= 1,
+            "adjacent layers have no layerBoundaries cells");
+    auto actor = boundaryActor(view);
+    require(!actor->GetPickable(), "layer boundaries must not intercept picking");
+    require(!actor->GetMapper()->GetScalarVisibility(), "layer boundaries use field coloring");
+    require(actor->GetProperty()->GetLineWidth() >= 2, "layer boundary line is too thin");
+    const auto color = actor->GetProperty()->GetColor();
+    require(std::max({color[0], color[1], color[2]}) < 0.5, "layer boundary lines must be dark");
+    // Expected coordinates come from the manufactured affine U, independently of shown.
+    std::array<std::array<double, 3>, 4> corners = {
+        std::array<double, 3>{0, 0, 0.1}, {2, 0, 0.1}, {2, 3, 0.1}, {0, 3, 0.1}};
+    for (auto& p : corners) {
+        const auto original = p;
+        p[0] += scale * 1e-3 * (1 + original[0]);
+        p[1] += scale * 2e-3 * (1 + original[1]);
+        p[2] += scale * 1e-3 * (1 + original[0] + original[1] + original[2]);
+    }
+    auto corner = [&](const double* point) {
+        for (int i = 0; i < 4; ++i) {
+            bool matches = true;
+            for (int axis = 0; axis < 3; ++axis)
+                matches &= std::abs(point[axis] - corners[i][axis]) <=
+                           1e-10 + 5.5e-6 * std::abs(corners[i][axis]);
+            if (matches)
+                return i;
+        }
+        return -1;
+    };
+    std::array<bool, 4> seen{};
+    for (vtkIdType i = 0; i < input->GetNumberOfCells(); ++i) {
+        auto cell = input->GetCell(i);
+        require(cell->GetCellDimension() == 1 && cell->GetNumberOfPoints() >= 2,
+                "layer boundary input contains a non-line cell");
+        for (vtkIdType segment = 1; segment < cell->GetNumberOfPoints(); ++segment) {
+            double a[3], b[3];
+            input->GetPoint(cell->GetPointId(segment - 1), a);
+            input->GetPoint(cell->GetPointId(segment), b);
+            const int first = corner(a), second = corner(b);
+            require(first >= 0 && second >= 0,
+                    "boundary endpoint is not on the currently warped shared face");
+            require((first + 1) % 4 == second || (second + 1) % 4 == first,
+                    "boundary segment is an exterior edge, diagonal, or degenerate edge");
+            seen[(first + 1) % 4 == second ? first : second] = true;
+        }
+    }
+    require(std::all_of(seen.begin(), seen.end(), [](bool edge) { return edge; }),
+            "layer boundary omits part of the shared-face perimeter");
+}
+int obliqueAndTemperatureAcceptance(const QDir& root) {
+    int failures = 0;
+    auto run = [&](const QString& name, auto test) {
+        try {
+            test();
+            std::cout << "PASS D14e-2 " << name.toStdString() << '\n';
+        } catch (const std::exception& e) {
+            ++failures;
+            std::cerr << "FAIL D14e-2 " << name.toStdString() << ": " << e.what() << '\n';
+        }
+    };
+    run("default camera is oblique", [&] {
+        ResultSession session;
+        require(session.open(root.filePath("default")), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        checkOblique(view);
+        checkNoBoundaries(view);
+    });
+    run("default single layer has no boundaries", [&] {
+        ResultSession session;
+        require(session.open(root.filePath("default")), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        checkNoBoundaries(view);
+    });
+    for (bool manual : {false, true})
+        run(manual ? "rebuild preserves manually rotated camera" : "rebuild preserves load camera",
+            [&] {
+                ResultSession session;
+                require(session.open(root.filePath("default")), qPrintable(session.error()));
+                ResultView view;
+                require(view.loadStep(session, 0), qPrintable(view.error()));
+                if (manual) {
+                    camera(view)->Azimuth(17);
+                    camera(view)->Elevation(-11);
+                    camera(view)->OrthogonalizeViewUp();
+                }
+                const auto direction = cameraDirection(view);
+                view.setColorField(ResultColorField::LayerId);
+                checkCameraDirection(view, direction);
+                view.setWarpageScale(10);
+                checkCameraDirection(view, direction);
+                view.setLayer(1);
+                checkCameraDirection(view, direction);
+                view.setLayer(0);
+                checkCameraDirection(view, direction);
+                view.setShowVoid(true);
+                checkCameraDirection(view, direction);
+                view.setShowVoid(false);
+                checkCameraDirection(view, direction);
+                view.setBlockVisible("hex", false);
+                checkCameraDirection(view, direction);
+                view.setBlockVisible("hex", true);
+                checkCameraDirection(view, direction);
+                view.setClip(true, {0.2, 0, 0}, {1, 0, 0});
+                require(view.error().isEmpty(), qPrintable(view.error()));
+                checkCameraDirection(view, direction);
+                view.setClip(false);
+                checkCameraDirection(view, direction);
+            });
+    run("reload preserves camera orientation and roll", [&] {
+        ResultSession session;
+        require(session.open(root.filePath("default")), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        checkOblique(view);
+        for (int repeat = 0; repeat < 3; ++repeat) {
+            camera(view)->Azimuth(37);
+            camera(view)->Elevation(-13);
+            camera(view)->Roll(23);
+            camera(view)->OrthogonalizeViewUp();
+            const auto direction = cameraDirection(view);
+            std::array<double, 3> up;
+            camera(view)->GetViewUp(up.data());
+            if (repeat == 1)
+                require(!view.loadStep(session, 999), "invalid reload unexpectedly succeeded");
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            checkCameraDirection(view, direction);
+            for (int axis = 0; axis < 3; ++axis)
+                near(camera(view)->GetViewUp()[axis], up[axis], 1e-12);
+        }
+    });
+    run("failed first load still initializes an oblique camera", [&] {
+        ResultSession session;
+        require(session.open(root.filePath("default")), qPrintable(session.error()));
+        ResultView view;
+        require(!view.loadStep(session, 999), "invalid first load unexpectedly succeeded");
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        checkOblique(view);
+    });
+    run("thin adjacent stack has oblique default and no default clipping", [&] {
+        QTemporaryDir temp;
+        require(temp.isValid(), "adjacent fixture directory");
+        const auto path = temp.filePath("stack.vtkhdf");
+        writeFixture(root, path, [](vtkUnstructuredGrid* grid) { twoLayers(grid); });
+        ResultSession session;
+        require(session.open(path), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        auto hex = view.displayed("hex");
+        require(hex && hex->GetNumberOfCells() == 2 && hex->GetCellType(0) == VTK_HEXAHEDRON &&
+                    hex->GetCellType(1) == VTK_HEXAHEDRON,
+                "default load clipped or hid part of the adjacent stack");
+        checkOblique(view);
+    });
+    for (bool partitioned : {false, true})
+        run(partitioned ? "partition duplicate-point interface follows warpage"
+                        : "shared-point interface follows warpage",
+            [&] {
+                QTemporaryDir temp;
+                require(temp.isValid(), "boundary fixture directory");
+                const auto path = temp.filePath("stack.vtkhdf");
+                writeFixture(
+                    root, path, [](vtkUnstructuredGrid* grid) { twoLayers(grid); }, partitioned);
+                ResultSession session;
+                require(session.open(path), qPrintable(session.error()));
+                ResultView view;
+                require(view.loadStep(session, 0), qPrintable(view.error()));
+                auto hex = view.displayed("hex");
+                require(hex && hex->GetNumberOfCells() == 2 &&
+                            hex->GetNumberOfPoints() == (partitioned ? 16 : 12),
+                        "boundary fixture lost its intended shared/partition point topology");
+                checkWarpedInterface(view, 1);
+                view.setWarpageScale(10);
+                checkWarpedInterface(view, 10);
+                view.setColorField(ResultColorField::LayerId);
+                checkWarpedInterface(view, 10);
+                view.setLayer(1);
+                checkNoBoundaries(view);
+                view.setLayer(0);
+                checkWarpedInterface(view, 10);
+                view.setBlockVisible("hex", false);
+                checkNoBoundaries(view);
+                view.setBlockVisible("hex", true);
+                checkWarpedInterface(view, 10);
+            });
+    for (const auto& variant : {"roundoff coordinates", "discontinuous displacement"})
+        run(QString("undeformed adjacency survives ") + variant, [&] {
+            QTemporaryDir temp;
+            require(temp.isValid(), "duplicate interface fixture directory");
+            const auto path = temp.filePath("stack.vtkhdf");
+            writeFixture(root, path, [&](vtkUnstructuredGrid* grid) { twoLayers(grid, variant); });
+            ResultSession session;
+            require(session.open(path), qPrintable(session.error()));
+            ResultView view;
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            for (double scale : {0.0, 1.0, 10.0}) {
+                view.setWarpageScale(scale);
+                auto input = boundaryInput(view);
+                require(input && input->GetNumberOfCells() > 0,
+                        "undeformed adjacent layers lost their boundary actor");
+                // Both interface perimeters must follow their own displayed solution points.
+                const auto shown = view.displayed("hex");
+                require(shown && shown->GetNumberOfCells() == 2,
+                        "duplicate interface fixture lost its cells");
+                std::array<std::array<vtkIdType, 4>, 2> faces;
+                for (int corner = 0; corner < 4; ++corner) {
+                    faces[0][corner] = shown->GetCell(0)->GetPointId(4 + corner);
+                    faces[1][corner] = shown->GetCell(1)->GetPointId(corner);
+                    require(faces[0][corner] != faces[1][corner],
+                            "interface solution points were merged");
+                }
+                for (const auto& face : faces)
+                    for (int edge = 0; edge < 4; ++edge) {
+                        double expectedA[3], expectedB[3];
+                        shown->GetPoint(face[edge], expectedA);
+                        shown->GetPoint(face[(edge + 1) % 4], expectedB);
+                        auto matches = [](const double* a, const double* b) {
+                            for (int axis = 0; axis < 3; ++axis)
+                                if (std::abs(a[axis] - b[axis]) > 1e-10)
+                                    return false;
+                            return true;
+                        };
+                        bool found = false;
+                        for (vtkIdType i = 0; i < input->GetNumberOfCells(); ++i) {
+                            auto line = input->GetCell(i);
+                            require(line->GetNumberOfPoints() == 2, "boundary must be an edge");
+                            double a[3], b[3];
+                            input->GetPoint(line->GetPointId(0), a);
+                            input->GetPoint(line->GetPointId(1), b);
+                            found |= (matches(a, expectedA) && matches(b, expectedB)) ||
+                                     (matches(a, expectedB) && matches(b, expectedA));
+                        }
+                        require(found, "boundary edge does not follow its displayed face");
+                    }
+            }
+            view.setLayer(1);
+            checkNoBoundaries(view);
+            view.setLayer(0);
+            require(boundaryInput(view), "restoring layer visibility lost interface");
+        });
+    run("warpage cannot create adjacency between disconnected layers", [&] {
+        QTemporaryDir temp;
+        require(temp.isValid(), "disconnected interface fixture directory");
+        const auto path = temp.filePath("stack.vtkhdf");
+        writeFixture(root, path, [](vtkUnstructuredGrid* grid) {
+            twoLayers(grid, "separated layers");
+            auto u = grid->GetPointData()->GetArray("U");
+            for (vtkIdType i = 0; i < grid->GetNumberOfPoints(); ++i) {
+                u->SetComponent(i, 0, i >= 12 ? -4 : 0);
+                u->SetComponent(i, 1, 0);
+                u->SetComponent(i, 2, 0);
+            }
+        });
+        ResultSession session;
+        require(session.open(path), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        checkNoBoundaries(view);
+    });
+    for (const auto& variant :
+         {"equal layers", "missing layer_id", "separated layers", "surface cells", "particles"})
+        run(QString("no interface for ") + variant, [&] {
+            QTemporaryDir temp;
+            require(temp.isValid(), "negative boundary fixture directory");
+            const auto path = temp.filePath("stack.vtkhdf");
+            writeFixture(root, path, [&](vtkUnstructuredGrid* grid) { twoLayers(grid, variant); });
+            ResultSession session;
+            require(session.open(path), qPrintable(session.error()));
+            ResultView view;
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            checkNoBoundaries(view);
+            view.setWarpageScale(10);
+            checkNoBoundaries(view);
+            checkOblique(view);
+        });
+    run("void filtering removes one side of interface", [&] {
+        QTemporaryDir temp;
+        require(temp.isValid(), "void interface fixture directory");
+        const auto path = temp.filePath("stack.vtkhdf");
+        writeFixture(root, path, [](vtkUnstructuredGrid* grid) {
+            twoLayers(grid);
+            grid->GetCellData()
+                ->GetArray("cell_kind")
+                ->SetComponent(1, 0, ResultSession::hiddenCellKind);
+        });
+        ResultSession session;
+        require(session.open(path), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        checkNoBoundaries(view);
+        view.setShowVoid(true);
+        checkWarpedInterface(view, 1);
+        view.setShowVoid(false);
+        checkNoBoundaries(view);
+    });
+    run("mesh-only temperature status", [&] {
+        ResultSession session;
+        require(session.open(root.filePath("viewer_mesh")), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        view.setColorField(ResultColorField::Temperature);
+        checkUnavailable(view, true);
+    });
+    run("mesh-only controls explain missing temperature", [&] {
+        ResultSession session;
+        require(session.open(root.filePath("viewer_mesh")), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        ResultControls controls(view, session);
+        checkTemperatureControls(controls);
+    });
+    run("no PointData T retains U and shows temperature status", [&] {
+        QTemporaryDir temp;
+        require(temp.isValid(), "missing T fixture directory");
+        const auto path = temp.filePath("no-T.vtkhdf");
+        writeFixture(
+            root, path, [](vtkUnstructuredGrid* grid) { grid->GetPointData()->RemoveArray("T"); });
+        ResultSession session;
+        require(session.open(path), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        require(view.displayed("hex")->GetPointData()->HasArray("U"), "missing T fixture lost U");
+        checkUnavailable(view, true);
+        ResultControls controls(view, session);
+        checkTemperatureControls(controls);
+    });
+    for (auto field : {ResultColorField::DisplacementMagnitude,
+                       ResultColorField::WarpageUz,
+                       ResultColorField::LayerId,
+                       ResultColorField::MaterialId})
+        run("missing T status follows selected field " + QString::number(static_cast<int>(field)),
+            [&] {
+                QTemporaryDir temp;
+                require(temp.isValid(), "field transition fixture directory");
+                const auto path = temp.filePath("no-T.vtkhdf");
+                writeFixture(root, path, [](vtkUnstructuredGrid* grid) {
+                    addMaterialIds(grid);
+                    grid->GetPointData()->RemoveArray("T");
+                });
+                ResultSession session;
+                require(session.open(path), qPrintable(session.error()));
+                ResultView view;
+                require(view.loadStep(session, 0), qPrintable(view.error()));
+                ResultControls controls(view, session);
+                view.setColorField(field);
+                checkFieldStatus(view, false);
+                require(view.colorRange().valid, "removing T made another field unavailable");
+                if (field == ResultColorField::DisplacementMagnitude ||
+                    field == ResultColorField::WarpageUz)
+                    checkRange(view, field);
+                else
+                    checkIdRange(view, session, field);
+                checkSummaryLabel(controls, view);
+                view.setColorField(ResultColorField::Temperature);
+                checkUnavailable(view, true);
+                checkTemperatureControls(controls);
+            });
+    run("missing temperature status is ready at displayChanged", [&] {
+        ResultSession session;
+        require(session.open(root.filePath("viewer_mesh")), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        view.setColorField(ResultColorField::LayerId);
+        bool observed = false, correct = false;
+        QObject::connect(&view, &ResultView::displayChanged, &view, [&] {
+            observed = true;
+            auto label = view.findChild<QLabel*>("fieldStatusLabel");
+            correct = label && label->text() == QStringLiteral("无温度场") && !label->isHidden();
+        });
+        view.setColorField(ResultColorField::Temperature);
+        require(observed && correct, "displayChanged precedes missing-temperature status update");
+        checkFieldStatus(view, true);
+    });
+    run("mock provenance and missing temperature remain simultaneously readable", [&] {
+        ResultSession session;
+        require(session.open(root.filePath("viewer_mesh")), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        require(view.setProvenance({{"schema", "chipcae.provenance/0.1"}, {"source", "mock"}}),
+                "valid mock provenance rejected");
+        require(!view.provenanceBanner().isEmpty(), "mock provenance banner empty");
+        checkFieldStatus(view, true);
+        VisibleStatusView visible(view);
+        auto status = view.findChild<QLabel*>("fieldStatusLabel");
+        QLabel* banner = nullptr;
+        for (auto label : view.findChildren<QLabel*>())
+            if (label->text() == view.provenanceBanner())
+                banner = label;
+        require(banner && banner->isVisible() && status && status->isVisible(),
+                "provenance or missing-temperature label hidden");
+        const QRect bannerRect(banner->mapTo(&view, QPoint{}), banner->size());
+        const QRect statusRect(status->mapTo(&view, QPoint{}), status->size());
+        require(!bannerRect.isEmpty() && !statusRect.isEmpty() &&
+                    !bannerRect.intersects(statusRect),
+                "provenance and missing-temperature labels overlap");
+    });
+    run("empty and failed load have no new overlays", [&] {
+        ResultView view;
+        checkUnavailable(view);
+        checkNoBoundaries(view);
+        ResultSession session;
+        require(session.open(root.filePath("default")), qPrintable(session.error()));
+        require(!view.loadStep(session, 999), "nonexistent step unexpectedly loaded");
+        require(!view.error().isEmpty(), "failed load lost existing error path");
+        checkFieldStatus(view, false);
+        checkNoBoundaries(view);
+    });
+    struct FailedReloadCase {
+        const char* name;
+        bool missingT, missingFile, provenance;
+    };
+    for (const auto& test :
+         {FailedReloadCase{
+              "failed reload clears boundary overlay and result scene", false, false, false},
+          FailedReloadCase{
+              "failed reload clears temperature overlay and result scene", true, false, false},
+          FailedReloadCase{"missing file reload clears result scene", false, true, false},
+          FailedReloadCase{"missing file reload preserves provenance while clearing results",
+                           false,
+                           true,
+                           true}})
+        run(test.name, [&] {
+            QTemporaryDir temp;
+            require(temp.isValid(), "failed reload fixture directory");
+            const auto path = temp.filePath("stack.vtkhdf");
+            writeFixture(root, path, [&](vtkUnstructuredGrid* grid) {
+                twoLayers(grid);
+                if (test.missingT)
+                    grid->GetPointData()->RemoveArray("T");
+            });
+            ResultSession session;
+            require(session.open(path), qPrintable(session.error()));
+            ResultView view;
+            if (test.provenance)
+                require(
+                    view.setProvenance({{"schema", "chipcae.provenance/0.1"}, {"source", "mock"}}),
+                    "valid failed reload provenance rejected");
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            checkLoadedResultScene(view);
+            if (test.missingT)
+                checkUnavailable(view, true);
+            else
+                checkRange(view, ResultColorField::Temperature);
+            camera(view)->Azimuth(17);
+            camera(view)->Elevation(-11);
+            camera(view)->OrthogonalizeViewUp();
+            const auto direction = cameraDirection(view);
+            const auto watermark = view.provenanceWatermark();
+            const auto banner = view.provenanceBanner();
+            auto checkProvenance = [&] {
+                if (!test.provenance)
+                    return;
+                require(watermark == "MOCK" && !banner.isEmpty(),
+                        "failed reload provenance fixture needs watermark and banner");
+                require(view.provenanceWatermark() == watermark &&
+                            view.provenanceBanner() == banner,
+                        "failed reload changed provenance");
+                auto props =
+                    view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetViewProps();
+                bool foundWatermark = false;
+                props->InitTraversal();
+                while (auto prop = props->GetNextProp())
+                    if (auto text = vtkTextActor::SafeDownCast(prop))
+                        foundWatermark |= QString::fromUtf8(text->GetInput()) == watermark &&
+                                          text->GetVisibility();
+                require(foundWatermark, "failed reload removed provenance watermark actor");
+                VisibleStatusView visible(view);
+                bool foundBanner = false;
+                for (auto label : view.findChildren<QLabel*>())
+                    foundBanner |= label->text() == banner && label->isVisible();
+                require(foundBanner, "failed reload hid provenance banner");
+            };
+            checkProvenance();
+            if (test.missingFile)
+                require(QFile::remove(path), "could not remove loaded result fixture");
+            require(!view.loadStep(session, test.missingFile ? 0 : 999),
+                    "failed reload unexpectedly succeeded");
+            require(view.error() == session.error(), "failed reload changed session error");
+            if (!test.missingFile)
+                require(!view.error().isEmpty(), "failed reload lost existing error path");
+            checkProvenance();
+            checkClearedResultScene(view);
+            checkCameraDirection(view, direction);
+            // Exercise rebuilds: retained raw blocks must not resurrect stale geometry.
+            // No public loaded() accessor exists; hidden missing-T status also checks
+            // the observable unloaded state after rebuilding.
+            view.setColorField(ResultColorField::Temperature);
+            checkClearedResultScene(view);
+            checkProvenance();
+            view.setWarpageScale(2);
+            checkClearedResultScene(view);
+            checkProvenance();
+            checkCameraDirection(view, direction);
+            writeFixture(root, path, [](vtkUnstructuredGrid* grid) { twoLayers(grid); });
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            require(view.error().isEmpty(), "successful recovery retained load error");
+            checkLoadedResultScene(view);
+            checkRange(view, ResultColorField::Temperature);
+            checkFieldStatus(view, false);
+            checkWarpedInterface(view, 2);
+            checkProvenance();
+            checkCameraDirection(view, direction);
+        });
+    run("restoring PointData T clears missing-temperature status", [&] {
+        ResultSession mesh, withT;
+        require(mesh.open(root.filePath("viewer_mesh")), qPrintable(mesh.error()));
+        require(withT.open(root.filePath("default")), qPrintable(withT.error()));
+        ResultView view;
+        require(view.loadStep(mesh, 0), qPrintable(view.error()));
+        require(view.loadStep(withT, 0), qPrintable(view.error()));
+        checkRange(view, ResultColorField::Temperature);
+        require(view.colorBarTitle() == "T (K)", "restored temperature title");
+        checkFieldStatus(view, false);
+    });
+    run("summary T_max and T_cell cannot supply missing PointData T", [&] {
+        QTemporaryDir temp;
+        require(temp.isValid(), "cell temperature fixture directory");
+        const auto path = temp.filePath("no-T.vtkhdf");
+        writeFixture(root, path, [](vtkUnstructuredGrid* grid) {
+            grid->GetPointData()->RemoveArray("T");
+            vtkNew<vtkDoubleArray> cellT;
+            cellT->SetName("T_cell");
+            for (vtkIdType i = 0; i < grid->GetNumberOfCells(); ++i)
+                cellT->InsertNextValue(900 + i);
+            grid->GetCellData()->AddArray(cellT);
+        });
+        const QJsonObject manifest{
+            {"schema_version", "chipcae.results/1.0"},
+            {"fields", QJsonArray{}},
+            {"steps", QJsonArray{QJsonObject{{"n", 0}, {"time", 0}, {"file", "no-T.vtkhdf"}}}},
+            {"summary",
+             QJsonArray{
+                 QJsonObject{{"step", 0}, {"name", "T_max"}, {"value", 1234}, {"unit", "K"}}}}};
+        QFile file(temp.filePath("manifest.json"));
+        require(file.open(QIODevice::WriteOnly), "cell temperature manifest open");
+        const auto bytes = QJsonDocument(manifest).toJson();
+        require(file.write(bytes) == bytes.size(), "cell temperature manifest write");
+        file.close();
+        ResultSession session;
+        require(session.open(temp.path()), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        require(view.tmaxText().contains("1234"), "summary temperature fixture not loaded");
+        require(!view.colorRange().valid && view.colorBarTitle().isEmpty() &&
+                    view.error().isEmpty(),
+                "cell or summary temperature supplied point coloring");
+        checkScalarBar(view);
+        checkFieldStatus(view, true);
+    });
+    run("PointData T keeps valid temperature title and no missing status", [&] {
+        ResultSession session;
+        require(session.open(root.filePath("default")), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        checkRange(view, ResultColorField::Temperature);
+        require(view.colorBarTitle() == "T (K)", "temperature title regression");
+        checkFieldStatus(view, false);
+        ResultControls controls(view, session);
+        checkSummaryLabel(controls, view);
+    });
+    // Optional local packages are supplied by the caller; never commit real data
+    // or developer-machine paths. Each check runs separately so camera failures
+    // do not hide missing interfaces or temperature status on the same sample.
+    struct LocalSample {
+        QString name, path;
+        bool missingT;
+    };
+    const auto sampleRoot = qEnvironmentVariable("CHIPCAE_VIEWER_SAMPLE_ROOT");
+    const std::array<LocalSample, 4> samples = {
+        LocalSample{
+            "s1", sampleRoot.isEmpty() ? QString{} : QDir(sampleRoot).filePath("s1"), false},
+        {"s1b", sampleRoot.isEmpty() ? QString{} : QDir(sampleRoot).filePath("s1b"), false},
+        {"DEMO-GATE", qEnvironmentVariable("CHIPCAE_VIEWER_DEMO_GATE"), false},
+        {"WP-0", qEnvironmentVariable("CHIPCAE_VIEWER_WP0"), true}};
+    for (const auto& sample : samples) {
+        if (sample.path.isEmpty() || !QFileInfo::exists(sample.path)) {
+            std::cout << "SKIP D14e-2 optional local " << sample.name.toStdString() << '\n';
+            continue;
+        }
+        for (int check = 0; check < 3; ++check)
+            run("local " + sample.name +
+                    (check == 0   ? " default camera"
+                     : check == 1 ? " layer boundaries"
+                                  : " temperature"),
+                [&] {
+                    ResultSession session;
+                    require(session.open(sample.path), qPrintable(session.error()));
+                    ResultView view;
+                    require(view.loadStep(session, 0), qPrintable(view.error()));
+                    if (check == 0) {
+                        checkOblique(view);
+                    } else if (check == 1) {
+                        for (double scale : {1.0, 10.0}) {
+                            view.setWarpageScale(scale);
+                            auto input = boundaryInput(view);
+                            require(input && input->GetNumberOfCells() >= 1,
+                                    "local stacked package has no layer interface edges");
+                        }
+                    } else {
+                        require(view.error().isEmpty(), "local package failed in temperature mode");
+                        if (sample.missingT) {
+                            require(!view.colorRange().valid && view.colorBarTitle().isEmpty(),
+                                    "local missing T used cell/summary temperature");
+                            checkFieldStatus(view, true);
+                            ResultControls controls(view, session);
+                            checkTemperatureControls(controls);
+                        } else {
+                            require(view.colorRange().valid && view.colorBarTitle() == "T (K)",
+                                    "local PointData T unavailable");
+                            checkFieldStatus(view, false);
+                        }
+                    }
+                });
+    }
+    return failures;
 }
 int acceptance(const QDir& root) {
     int failures = 0;
@@ -417,10 +1617,12 @@ int acceptance(const QDir& root) {
                 const double factor = material ? 10 : 1;
                 checkIdBounds(view, (stage == 1 ? 1 : 2) * factor, (stage == 2 ? 2 : 3) * factor);
                 checkIdRange(view, session, field);
-                require(view.colorBarTitle().contains(
-                            material ? (stage == 1 ? "material 10" : "material 20")
-                                     : (stage == 1 ? "layer 1" : "layer 2")),
-                        "ID title missing fallback for representative visible ID");
+                if (!material)
+                    require(view.colorBarTitle() ==
+                                (stage == 0   ? QStringLiteral("叠层: layer 2, layer 3")
+                                 : stage == 1 ? QStringLiteral("叠层: layer 1, layer 2, layer 3")
+                                              : QStringLiteral("叠层: layer 2")),
+                            "unnamed layer title matches independent fixture IDs");
                 if (stage == 2)
                     for (const auto& blockName : displayedBlocks)
                         if (auto block = view.displayed(blockName)) {
@@ -520,12 +1722,110 @@ int acceptance(const QDir& root) {
             require(unnamed.layerNames().isEmpty() && unnamed.materialNames().isEmpty(),
                     "replacement session must have no names");
             require(view.colorField() == field, "session replacement lost ID field selection");
-            require(view.colorBarTitle().contains(
-                        field == ResultColorField::LayerId ? "layer 2" : "material 20"),
-                    "replacement session title did not use fallback name");
             checkIdRange(view, unnamed, field);
         });
     }
+    // Unlike default (whose cells all have id 1), this fixture exercises a named multi-ID range.
+    for (auto field : {ResultColorField::LayerId, ResultColorField::MaterialId})
+        for (int stage : {0, 1, 2})
+            run(qPrintable(QString(idArrayName(field)) + " exact named range stage " +
+                           QString::number(stage)),
+                [&] {
+                    QTemporaryDir temp;
+                    require(temp.isValid(), "named multi-ID directory");
+                    const auto path = temp.filePath("step.vtkhdf");
+                    writeFixture(root, path, [](vtkUnstructuredGrid* grid) {
+                        addMaterialIds(grid);
+                        auto materials = grid->GetCellData()->GetArray("material_id");
+                        for (vtkIdType cell = 0; cell < grid->GetNumberOfCells(); ++cell)
+                            materials->SetComponent(cell, 0, materials->GetComponent(cell, 0) / 10);
+                    });
+                    QProcess python;
+                    python.start(qEnvironmentVariable("CHIPCAE_FIXTURE_PYTHON", "python3"),
+                                 {"-c",
+                                  QString::fromUtf8(R"(
+import h5py, numpy as np, sys
+with h5py.File(sys.argv[1], 'r+') as f:
+    groups = []
+    f.visititems(lambda name, obj: groups.append(obj) if isinstance(obj, h5py.Group) and 'CellData' in obj else None)
+    assert groups, 'synthetic VTKHDF has no data blocks'
+    for group in groups:
+        fields = group.require_group('FieldData')
+        for key, names in [('layer_names', ['Base_CASE', 'die_attach', 'Si']),
+                           ('material_names', ['Organic_EQ', 'Solder', 'Si_Mat'])]:
+            if key in fields:
+                del fields[key]
+            fields.create_dataset(key, data=np.array(names, dtype='S32'))
+)"),
+                                  path});
+                    require(python.waitForFinished(30000) &&
+                                python.exitStatus() == QProcess::NormalExit &&
+                                python.exitCode() == 0,
+                            qPrintable("write named fixture: " +
+                                       QString::fromUtf8(python.readAllStandardError())));
+                    ResultSession session;
+                    require(session.open(path), qPrintable(session.error()));
+                    ResultView view;
+                    require(view.loadStep(session, 0), qPrintable(view.error()));
+                    require(session.layerNames() == QStringList{"Base_CASE", "die_attach", "Si"} &&
+                                session.materialNames() ==
+                                    QStringList{"Organic_EQ", "Solder", "Si_Mat"},
+                            "independent named multi-ID fixture tables");
+                    if (stage >= 1)
+                        view.setShowVoid(true);
+                    if (stage == 2)
+                        view.setLayer(2);
+                    view.setColorField(field);
+                    const bool layer = field == ResultColorField::LayerId;
+                    const QString expected =
+                        stage == 0   ? (layer ? QStringLiteral("叠层: die_attach, Si")
+                                              : QStringLiteral("材料: Solder, Si_Mat"))
+                        : stage == 1 ? (layer ? QStringLiteral("叠层: Base_CASE, die_attach, Si")
+                                              : QStringLiteral("材料: Organic_EQ, Solder, Si_Mat"))
+                                     : (layer ? QStringLiteral("叠层: die_attach")
+                                              : QStringLiteral("材料: Solder"));
+                    require(view.colorBarTitle() == expected,
+                            qPrintable("named range title expected [" + expected + "] got [" +
+                                       view.colorBarTitle() + "]"));
+                    checkIdRange(view, session, field);
+                    checkScalarBar(view);
+                });
+    for (auto field : {ResultColorField::LayerId, ResultColorField::MaterialId})
+        for (bool single : {false, true})
+            run(qPrintable(QString(idArrayName(field)) + " range ending at INT_MAX " +
+                           (single ? "single" : "multiple")),
+                [&] {
+                    QTemporaryDir temp;
+                    require(temp.isValid(), "INT_MAX fixture directory");
+                    const auto path = temp.filePath("step.vtkhdf");
+                    writeFixture(root, path, [&](vtkUnstructuredGrid* grid) {
+                        vtkNew<vtkIntArray> ids;
+                        ids->SetName(idArrayName(field));
+                        for (vtkIdType cell = 0; cell < grid->GetNumberOfCells(); ++cell)
+                            ids->InsertNextValue(std::numeric_limits<int>::max() -
+                                                 (single ? 0 : static_cast<int>(cell % 2)));
+                        grid->GetCellData()->AddArray(ids);
+                    });
+                    ResultSession session;
+                    require(session.open(path), qPrintable(session.error()));
+                    ResultView view;
+                    require(view.loadStep(session, 0), qPrintable(view.error()));
+                    view.setColorField(field);
+                    checkIdBounds(view,
+                                  std::numeric_limits<int>::max() - (single ? 0 : 1),
+                                  std::numeric_limits<int>::max());
+                    const bool layer = field == ResultColorField::LayerId;
+                    const auto expected =
+                        single ? (layer ? QStringLiteral("叠层: layer 2147483647")
+                                        : QStringLiteral("材料: material 2147483647"))
+                               : (layer ? QStringLiteral("叠层: layer 2147483646, layer 2147483647")
+                                        : QStringLiteral(
+                                              "材料: material 2147483646, material 2147483647"));
+                    require(view.colorBarTitle() == expected,
+                            "range ending at INT_MAX lists all IDs and terminates");
+                    checkIdRange(view, session, field);
+                    checkScalarBar(view);
+                });
     run("five field repeated switching", [&] {
         ResultSession session;
         require(session.open(root.filePath("default")), qPrintable(session.error()));
@@ -599,7 +1899,7 @@ int acceptance(const QDir& root) {
         require(session.open(root.filePath("viewer_mesh")), qPrintable(session.error()));
         require(view.loadStep(session, 0), qPrintable(view.error()));
         view.setColorField(ResultColorField::Temperature);
-        checkUnavailable(view);
+        checkUnavailable(view, true);
     });
     for (int components : {0, 2}) {
         run(components == 0 ? "T-only derived fields" : "two-component U derived fields", [&] {
@@ -715,12 +2015,16 @@ int acceptance(const QDir& root) {
         for (auto value : session.summary()) {
             auto entry = value.toObject();
             auto name = entry["name"].toString();
-            if (entry["step"].toInteger() == 0 && (name == "warpage_pv" || name == "U_mag_max"))
-                require(view.summary(name) == QString("%1: %2 %3")
-                                                  .arg(name)
-                                                  .arg(entry["value"].toDouble(), 0, 'g', 16)
-                                                  .arg(entry["unit"].toString()),
-                        "official summary regression");
+            if (entry["step"].toInteger() == 0 && (name == "warpage_pv" || name == "U_mag_max")) {
+                auto expected = QString("%1: %2 %3")
+                                    .arg(name)
+                                    .arg(entry["value"].toDouble(), 0, 'g', 16)
+                                    .arg(entry["unit"].toString());
+                const auto method = entry["method"];
+                if (method.isString() && !method.toString().isEmpty())
+                    expected += QString(" [%1]").arg(method.toString());
+                require(view.summary(name) == expected, "official summary regression");
+            }
         }
         require(view.tmaxText() == view.summary("T_max"), "T_max does not use official summary");
         ResultControls controls(view, session);
@@ -1289,6 +2593,8 @@ int main(int argc, char** argv) {
         std::cerr << "FAIL legacy viewer checks: " << e.what() << '\n';
         ++failures;
     }
+    failures += methodSummaryAcceptance(root);
     failures += acceptance(root);
+    failures += obliqueAndTemperatureAcceptance(root);
     return failures ? 1 : 0;
 }

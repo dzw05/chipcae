@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <exception>
 #include <fstream>
 #include <jsoncons/json.hpp>
 #include <jsoncons_ext/jsonschema/jsonschema.hpp>
@@ -213,6 +214,49 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
             invalid("backend=cpu requires gpus=0");
         if (out.backend == "cuda" && gpus == 0)
             invalid("backend=cuda requires gpus>=1");
+        // Only fully validated physics may select family-specific mesh rules. Defer
+        // physics errors to their original position after reference/mesh validation.
+        bool mechanical = false, temp_from = false;
+        std::exception_ptr physics_error;
+        try {
+            bool thermal = false, saw_fem = false, saw_fvm = false;
+            double T_ref = out.T_ref;
+            for (const auto& physics : c.at("physics").array_range()) {
+                const auto id = physics.at("id").as<std::string>();
+                std::string solver;
+                if (id == "thermal" && !thermal) {
+                    solver = physics.at("solver").as<std::string>();
+                    if ((solver != "fem.conduction" && solver != "fvm.conduction") ||
+                        physics.at("mode").as<std::string>() != "steady")
+                        invalid("invalid or duplicate physics");
+                    thermal = true;
+                } else if (id == "mech" && !mechanical) {
+                    solver = physics.at("solver").as<std::string>();
+                    if (solver != "fem.solid" && solver != "fvm.solid")
+                        invalid("invalid or duplicate physics");
+                    mechanical = true;
+                    if (physics.contains("temp_from")) {
+                        if (physics.at("temp_from").as<std::string>() != "thermal")
+                            invalid("invalid temp_from");
+                        temp_from = true;
+                        T_ref = finite(physics, "T_ref");
+                    }
+                } else
+                    invalid("invalid or duplicate physics");
+                saw_fem |= solver.starts_with("fem.");
+                saw_fvm |= solver.starts_with("fvm.");
+            }
+            if (saw_fem && saw_fvm)
+                invalid("mixed fem/fvm physics not supported in case/1.0");
+            if (saw_fvm) {
+                out.family = "fvm";
+                out.linear.preconditioner = "jacobi";
+            }
+            out.thermal = thermal;
+            out.T_ref = T_ref;
+        } catch (const std::exception&) {
+            physics_error = std::current_exception();
+        }
         out.stack_path = reference(c.at("stack"), out.case_path.parent_path());
         out.material_path = reference(c.at("materials"), out.case_path.parent_path());
         auto stack_json = read(out.stack_path);
@@ -266,12 +310,12 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
             if (out.cut_options.quad_degree != 2 && out.cut_options.quad_degree != 4 &&
                 out.cut_options.quad_degree != 6 && out.cut_options.quad_degree != 8)
                 invalid("cut quad_degree must be 2, 4, 6 or 8");
-            if (co.contains("gamma_g")) {
+            if (out.family == "fem" && co.contains("gamma_g")) {
                 out.ghost_penalty = finite(co, "gamma_g");
                 if (out.ghost_penalty < 0)
                     invalid("gamma_g must be nonnegative");
             }
-            if (co.contains("stabilization") &&
+            if (out.family == "fem" && co.contains("stabilization") &&
                 co.at("stabilization").as<std::string>() != "ghost_penalty")
                 invalid("unsupported cut stabilization");
         }
@@ -330,25 +374,8 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
             }
             invalid("invalid target: " + target);
         };
-        bool mechanical = false, temp_from = false;
-        for (const auto& physics : c.at("physics").array_range()) {
-            auto id = physics.at("id").as<std::string>();
-            if (id == "thermal" && !out.thermal &&
-                physics.at("solver").as<std::string>() == "fem.conduction" &&
-                physics.at("mode").as<std::string>() == "steady")
-                out.thermal = true;
-            else if (id == "mech" && !mechanical &&
-                     physics.at("solver").as<std::string>() == "fem.solid") {
-                mechanical = true;
-                if (physics.contains("temp_from")) {
-                    if (physics.at("temp_from").as<std::string>() != "thermal")
-                        invalid("invalid temp_from");
-                    temp_from = true;
-                    out.T_ref = finite(physics, "T_ref");
-                }
-            } else
-                invalid("invalid or duplicate physics");
-        }
+        if (physics_error)
+            std::rethrow_exception(physics_error);
         int uniform = 0, thermal_loads = 0, anchors = 0;
         for (const auto& obj : c.at("loads").array_range()) {
             Load load;
@@ -421,7 +448,10 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
                 out.linear.max_iter = integer(linear, "max_iter", 1);
             if (linear.contains("preconditioner"))
                 out.linear.preconditioner = linear.at("preconditioner").as<std::string>();
-            if (out.linear.preconditioner != "direct" && out.linear.preconditioner != "column_gmg")
+            if (out.family == "fvm"
+                    ? (out.linear.preconditioner != "jacobi" && out.linear.preconditioner != "gamg")
+                    : (out.linear.preconditioner != "direct" &&
+                       out.linear.preconditioner != "column_gmg"))
                 invalid("invalid preconditioner");
         }
         const auto& output = c.at("output");
@@ -439,7 +469,8 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
             std::set<std::string> selected;
             for (const auto& field : output.at("fields").array_range()) {
                 auto name = field.as<std::string>();
-                if (std::find(out.fields.begin(), out.fields.end(), name) == out.fields.end() ||
+                if ((std::find(out.fields.begin(), out.fields.end(), name) == out.fields.end() &&
+                     !(out.family == "fvm" && name == "volume")) ||
                     !selected.insert(name).second)
                     invalid("invalid output field");
             }

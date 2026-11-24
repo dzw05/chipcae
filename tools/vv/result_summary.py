@@ -294,6 +294,10 @@ def _read(root):
             if c or path in block:
                 fields[field] = _array(block, path, (c,),
                                        'int64' if field == 'elem_gid' else 'int32')
+        if 'CellData/copper_fraction' in block:
+            _array(block, 'CellData/copper_fraction', (c,), 'float64')
+        if 'CellData/conductivity_diag' in block:
+            _array(block, 'CellData/conductivity_diag', (c, 3), 'float64')
         types = _array(block, 'Types', (c,), 'uint8')
         expected_type = 12 if name == 'hex' else 42
         _require(np.all(types == expected_type),
@@ -320,6 +324,10 @@ def _read(root):
         _require(eb['NumberOfPoints'].shape == eb['Polygons/NumberOfCells'].shape,
                  'eb_surface: partition count mismatch')
         _array(eb, 'Points', (n, 3), 'float64')
+        if 'CellData/copper_fraction' in eb:
+            _array(eb, 'CellData/copper_fraction', (c,), 'float64')
+        if 'CellData/conductivity_diag' in eb:
+            _array(eb, 'CellData/conductivity_diag', (c, 3), 'float64')
         _partitions(eb, 'Polygons/NumberOfCells')
         blocks['eb_surface'] = dict(points=n, polygons=c)
     particles = root.get('particles')
@@ -434,22 +442,21 @@ def _summarize(run_dir, top_rel_tol, step):
                      f'mesh.{key}: expected integer')
     if 'mesh_sha256' in mesh:
         _require(isinstance(mesh['mesh_sha256'], str), 'mesh.mesh_sha256: expected string')
-    per_step = None
-    if 'partitions' in manifest:
-        partitions = manifest['partitions']
-        _require(isinstance(partitions, dict), 'partitions: expected object')
-        per_step = partitions.get('per_step')
-        _require(isinstance(per_step, list), 'partitions.per_step: expected array')
-        _require(len(per_step) == len(steps),
-                 f'partitions.per_step: expected length {len(steps)}')
-        for index, value in enumerate(per_step):
-            _require(isinstance(value, int) and not isinstance(value, bool) and value >= 1,
-                     f'partitions.per_step[{index}]: expected integer >= 1')
-        fixed = partitions.get('solver_fixed_per_run')
-        _require(isinstance(fixed, bool), 'partitions.solver_fixed_per_run: expected boolean')
-        if fixed:
-            _require(all(value == per_step[0] for value in per_step),
-                     'partitions.per_step: expected identical values')
+    _require('partitions' in manifest, 'partitions: required object')
+    partitions = manifest['partitions']
+    _require(isinstance(partitions, dict), 'partitions: expected object')
+    per_step = partitions.get('per_step')
+    _require(isinstance(per_step, list), 'partitions.per_step: expected array')
+    _require(len(per_step) == len(steps),
+             f'partitions.per_step: expected length {len(steps)}')
+    for index, value in enumerate(per_step):
+        _require(isinstance(value, int) and not isinstance(value, bool) and value >= 1,
+                 f'partitions.per_step[{index}]: expected integer >= 1')
+    fixed = partitions.get('solver_fixed_per_run')
+    _require(isinstance(fixed, bool), 'partitions.solver_fixed_per_run: expected boolean')
+    if fixed:
+        _require(all(value == per_step[0] for value in per_step),
+                 'partitions.per_step: expected identical values')
     path = Path(step_file)
     if not path.is_absolute():
         path = run_dir / path

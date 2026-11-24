@@ -1,0 +1,54 @@
+{
+  "contract": "cutgeom-nc/1.0",
+  "status": "draft",
+  "units": "m",
+  "cases": [
+    "l_shape",
+    "v_shape",
+    "r_shape",
+    "l1_corner",
+    "convex_split2",
+    "chamfer_lid_octagon",
+    "errors"
+  ],
+  "source": {
+    "tip": "0d97b5974c6f81d3b2765c631f7b4b6d4962bedf",
+    "file": "tests/unit/region_ls/test_plane_cut_union.cpp",
+    "tables": "l_shape/v_shape/r_shape",
+    "l1_parameters": [
+      ".012501",
+      ".012501"
+    ],
+    "octagon": "single_piece_bitwise synthetic ring"
+  },
+  "files": [
+    "gen.py",
+    "check.py",
+    "test_acceptance.py",
+    "expected.json",
+    "chamfer_lid_octagon/expected.json",
+    "chamfer_lid_octagon/input.json",
+    "convex_split2/expected.json",
+    "convex_split2/input.json",
+    "errors/expected.json",
+    "errors/input.json",
+    "l1_corner/expected.json",
+    "l1_corner/input.json",
+    "l_shape/expected.json",
+    "l_shape/input.json",
+    "r_shape/expected.json",
+    "r_shape/input.json",
+    "v_shape/expected.json",
+    "v_shape/input.json"
+  ],
+  "tolerance": {
+    "area_volume_rel": "1e-12",
+    "embedded_area_rel": "1e-12",
+    "closure_abs": "1e-12",
+    "l1_sub_volfrac_rel": "1e-10",
+    "convex_sub_volfrac_rel": "1e-14",
+    "convex_sq_w_rel": "1e-14"
+  },
+  "numeric_format": "decimal strings; exact Fraction except irrational embedded areas",
+  "scope": "synthetic fixture checks; runtime C++ assertions belong to consumer cards"
+}
