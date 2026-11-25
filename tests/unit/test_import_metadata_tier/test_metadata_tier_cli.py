@@ -37,7 +37,7 @@ ARTIFACT_SHA256 = {
     "board.polyset": "e22082e4d3775aac3e97c01a16552f5948bcd20b154f6a67189e01b0814696aa",
     "import_layers.json": "ac0de18e34ce03a1582683541b251cf31f510618b7ce6adee34a3f27d97e460f",
 }
-FIXTURE_PROMOTIONS = {'Avl': 1, 'AvlHeader': 1, 'AvlItem': 1, 'AvlRef': 1, 'BomHeader': 1, 'BomItem': 1, 'BomRef': 1, 'Certification': 1, 'Characteristics': 1, 'Conductor': 4, 'Datum': 1, 'DictionaryColor': 1, 'DictionaryFillDesc': 1, 'Dielectric': 8, 'Enterprise': 1, 'EntryLineDesc': 1, 'Features': 1, 'FileRevision': 1, 'FunctionMode': 1, 'LayerRef': 13, 'NonstandardAttribute': 1, 'Person': 1, 'PickupPoint': 1, 'PinRef': 12, 'Property': 12, 'RefDes': 1, 'Role': 1, 'SoftwarePackage': 1, 'StepRef': 1, 'Textual': 1}
+FIXTURE_PROMOTIONS = {'Avl': 1, 'AvlHeader': 1, 'AvlItem': 1, 'AvlRef': 1, 'BomHeader': 1, 'BomItem': 1, 'BomRef': 1, 'Certification': 1, 'Characteristics': 1, 'Conductor': 4, 'Datum': 1, 'DictionaryColor': 1, 'DictionaryFillDesc': 1, 'Dielectric': 8, 'Enterprise': 1, 'EntryLineDesc': 1, 'Features': 1, 'FileRevision': 1, 'FunctionMode': 1, 'LayerRef': 13, 'NonstandardAttribute': 1, 'Person': 1, 'PickupPoint': 1, 'PinRef': 12, 'Property': 25, 'RefDes': 1, 'Role': 1, 'SoftwarePackage': 1, 'StepRef': 2, 'Textual': 1}
 DEFINITIONS_XML = '''<IPC-2581>
 <DictionaryStandard><EntryStandard id="disk"><Circle diameter="1"/></EntryStandard></DictionaryStandard><DictionaryUser><EntryUser id="user"><UserSpecial><Circle diameter="1"/></UserSpecial></EntryUser></DictionaryUser><DictionaryLineDesc><EntryLineDesc id="line"><LineDesc lineWidth="0"/></EntryLineDesc></DictionaryLineDesc>
 <CadHeader units="MILLIMETER"></CadHeader>
