@@ -18,5 +18,6 @@ public:
 private:
     QJsonObject profile_;
     QSpinBox *ranks_, *threads_, *nx_;
+    bool meshNxLocked_ = false;
 };
 } // namespace chipcae::desktop

@@ -40,6 +40,8 @@
 #include <QUuid>
 #include <QVBoxLayout>
 #include <QVTKOpenGLNativeWidget.h>
+#include <algorithm>
+#include <limits>
 #include <vtkActor.h>
 #include <vtkConeSource.h>
 #include <vtkGenericOpenGLRenderWindow.h>
@@ -105,9 +107,19 @@ MainWindow::MainWindow(const QStringList& args,
         chipcae::desktop::SubmitDialog dialog(this);
         dialog.setProfile(profile_);
         dialog.setMeshNx(meshNx_);
+        dialog.setMeshNxLocked(previewMeshLocked());
+        if (dialog.meshNxLocked()) {
+            const auto mesh = document_.toJson().at("mesh");
+            if (mesh.contains("nx")) {
+                const auto nx = mesh.at("nx").as<int64_t>();
+                dialog.setMeshNx(
+                    static_cast<int>(std::min<int64_t>(nx, std::numeric_limits<int>::max())));
+            }
+        }
         if (dialog.exec() == QDialog::Accepted) {
             profile_ = dialog.profile();
-            meshNx_ = dialog.meshNx();
+            if (!dialog.meshNxLocked())
+                meshNx_ = dialog.meshNx();
             submitCurrentCase();
         }
     });
@@ -209,8 +221,10 @@ MainWindow::MainWindow(const QStringList& args,
                 }
                 if (importer_->outcome() != chipcae::desktop::ImportOutcome::NeedsConfirmation)
                     currentImportKind_.reset();
-                if (replaced)
+                if (replaced) {
                     clearPreviewMeshOptions();
+                    previewWrittenMesh_.reset();
+                }
                 appendLog();
                 if (!importer_->error().isEmpty())
                     importLog->appendPlainText(importer_->error());
@@ -458,6 +472,7 @@ bool MainWindow::openCase(const QString& path) {
     if (!document_.load(path))
         return false;
     clearPreviewMeshOptions();
+    previewWrittenMesh_.reset();
     casePath_ = path;
     manualStack_ = false;
     refreshSourceUi();
@@ -549,6 +564,7 @@ bool MainWindow::loadHandwrittenStack(const QString& path) {
         if (!document_.setStackJson(chipcae::desktop::Json::parse(file.readAll().toStdString())))
             return false;
         clearPreviewMeshOptions();
+        previewWrittenMesh_.reset();
         manualStack_ = true;
         refreshSourceUi();
         return true;
@@ -578,12 +594,20 @@ bool MainWindow::writePreviewToCase() {
     const auto options = *previewMeshOptions_;
     document_.setMeshOptions(options);
     const bool finalized = document_.finalizeMeshForSubmit();
+    if (finalized)
+        previewWrittenMesh_ = document_.toJson().at("mesh");
     if (!finalized && !document_.errors().empty())
         statusBar()->showMessage(document_.errors().front().message);
     return finalized;
 }
 bool MainWindow::writePreviewToCaseEnabled() const {
     return previewMeshOptions_.has_value();
+}
+bool MainWindow::previewMeshLocked() const {
+    if (!previewWrittenMesh_)
+        return false;
+    const auto document = document_.toJson();
+    return document.contains("mesh") && document.at("mesh") == *previewWrittenMesh_;
 }
 void MainWindow::clearPreviewMeshOptions() {
     previewDigestValid_ = false;
@@ -750,7 +774,8 @@ bool MainWindow::submitCurrentCase() {
     const auto& config = DesktopConfig::current();
     try {
         QDir().mkpath(config.runRoot());
-        document_.setValue("/mesh/nx", Json(meshNx_));
+        if (!previewMeshLocked())
+            document_.setValue("/mesh/nx", Json(meshNx_));
         const auto caseFile = config.runRoot() + "/submit-case.json";
         if (!document_.save(caseFile))
             return false;
