@@ -2,7 +2,7 @@
 
 kicad4l retains its baseline C-tier rejection (three Ovals), so it has no
 CLI geometry artifacts. A successful synthetic side-outline case additionally
-checks geometry bytes; this does not resolve the brief's fixture conflict.
+checks geometry bytes as required by the revised brief.
 """
 import copy
 import hashlib

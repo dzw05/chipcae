@@ -1358,6 +1358,20 @@ const std::map<std::string, Frozen> snapshots =
                  {"board/Features/1351", "outline-doc"},
                  {"board/EntryLineDesc/23", "def-instanced"},
                  {"board/PickupPoint/355", "def-instanced"},
+                 {"board/StepRef/72", "bom"},
+                 {"board/Property/86", "spec-text"},
+                 {"board/Property/87", "spec-text"},
+                 {"board/Property/92", "spec-text"},
+                 {"board/Property/98", "spec-text"},
+                 {"board/Property/99", "spec-text"},
+                 {"board/Property/116", "spec-text"},
+                 {"board/Property/136", "spec-text"},
+                 {"board/Property/156", "spec-text"},
+                 {"board/Property/176", "spec-text"},
+                 {"board/Property/177", "spec-text"},
+                 {"board/Property/185", "spec-text"},
+                 {"board/Property/191", "spec-text"},
+                 {"board/Property/192", "spec-text"},
              },
              // END kicad4l promotions
              "a15331713ee9ea661600c9f11ac322423478892700d6f70b19c2b52087927fc2",
@@ -1759,7 +1773,7 @@ const std::map<std::string, Frozen> snapshots =
 {"defect_id":"board/Property/3/2","tier":"B","kind":"IMPORT_UNSUPPORTED_ELEMENT","reason":0,"dimension":"element","size":1,"size_unit":"1","suggestion":"confirm omitted metadata, components or text","action":"confirm omitted metadata, components or text","rejection_reason":"","material_ambiguous":false}]})REPORT",
              // END spec_text_guards accepted
              // BEGIN spec_text_guards promotions
-             {},
+             {{"board/Property/3/1", "spec-text"}},
              // END spec_text_guards promotions
              "37bb85dc77d4f3bea85f816ec2f7d88e295f0459a5aa9e3ff88bfb72839a76df",
          }},
@@ -2252,11 +2266,11 @@ const std::map<std::string, int> fixture_promotions = {
     {"Person", 1},
     {"PickupPoint", 1},
     {"PinRef", 12},
-    {"Property", 12},
+    {"Property", 25},
     {"RefDes", 1},
     {"Role", 1},
     {"SoftwarePackage", 1},
-    {"StepRef", 1},
+    {"StepRef", 2},
     {"Textual", 1},
 };
 const std::map<std::string, std::string> fixture_geometry = {
