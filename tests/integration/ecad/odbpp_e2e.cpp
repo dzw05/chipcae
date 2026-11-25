@@ -1022,8 +1022,8 @@ def report_preview(b):
           '--report moved layer/import report')
     preview = build/'preview/chipcae-preview'
     check(preview.is_file(), 'build chipcae-preview for smoke acceptance')
-    # Refine Z counts for the thick core, preserving imported geometry and the
-    # preview's default max_ratio. Keep the original import artifacts untouched.
+    # Refine Z counts for the thick core and explicitly use the fixture's ratio 10.
+    # Preserve imported geometry and keep the original import artifacts untouched.
     mesh_stack = load(out/'board.stack.json')
     spacing = min(layer['thickness'] for layer in mesh_stack['layers'])
     for layer in mesh_stack['layers']:
@@ -1031,7 +1031,7 @@ def report_preview(b):
     mesh_input = out/'preview.stack.json'
     mesh_input.write_text(json.dumps(mesh_stack))
     result = subprocess.run([str(preview),str(mesh_input),'--nx','4','--ny','4',
-                             '-o',str(out/'mesh')],capture_output=True,text=True,timeout=20)
+                             '--max-ratio','10','-o',str(out/'mesh')],capture_output=True,text=True,timeout=20)
     check(result.returncode == 0, f'preview exit {result.returncode}: {result.stdout}{result.stderr}')
     meshes = list(out.glob('mesh*.vtkhdf'))
     check(meshes and all(p.stat().st_size > 0 for p in meshes), 'preview generated no mesh')
