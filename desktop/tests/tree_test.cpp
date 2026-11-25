@@ -287,6 +287,12 @@ static void heatSourceOutsideThermalAcceptance() {
     loadHeatSourceFixture(doc);
     CaseTreeModel tree(&doc);
     requireHeatSourceRejected(tree, "die_layer", 1.0);
+
+    auto emptyLoads = doc.toJson();
+    emptyLoads["loads"] = Json::array();
+    doc.applyJson(emptyLoads);
+    require(doc.toJson() == emptyLoads, "nonthermal fixture has no loads");
+    requireHeatSourceRejected(tree, "die_layer", 1.0);
 }
 
 static void heatSourceAddedAcceptance() {

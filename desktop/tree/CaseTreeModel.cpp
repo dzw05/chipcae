@@ -203,6 +203,14 @@ QString CaseTreeModel::addLoad(Json load) {
     return apply(copy) ? "case:" + id : QString();
 }
 QString CaseTreeModel::addHeatSource(const QString& layerName, double power) {
+    const auto data = document_->toJson();
+    bool thermal = false;
+    if (data.contains("physics") && data.at("physics").is_array())
+        for (const auto& physics : data.at("physics").array_range())
+            if (physics.is_object() && physics.contains("id") && physics.at("id") == "thermal")
+                thermal = true;
+    if (!thermal)
+        return {};
     if (layerName.isEmpty() || !std::isfinite(power))
         return {};
     const auto stack = document_->stackJson();
@@ -219,7 +227,6 @@ QString CaseTreeModel::addHeatSource(const QString& layerName, double power) {
     if (!found)
         return {};
     const auto target = "layer:" + name;
-    const auto data = document_->toJson();
     if (data.contains("loads") && data.at("loads").is_array())
         for (const auto& load : data.at("loads").array_range())
             if (load.is_object() && load.contains("type") && load.at("type") == "heat_source" &&
