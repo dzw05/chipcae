@@ -12,6 +12,8 @@ public:
     void setProfile(const QJsonObject& value);
     int meshNx() const;
     void setMeshNx(int nx);
+    void setMeshNxLocked(bool locked);
+    bool meshNxLocked() const;
 
 private:
     QJsonObject profile_;

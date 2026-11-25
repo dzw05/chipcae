@@ -69,6 +69,11 @@ int SubmitDialog::meshNx() const {
 void SubmitDialog::setMeshNx(int nx) {
     nx_->setValue(nx);
 }
+// TEST-FIRST stubs: keep existing behavior until preview mesh locking is implemented.
+void SubmitDialog::setMeshNxLocked(bool) {}
+bool SubmitDialog::meshNxLocked() const {
+    return false;
+}
 bool SubmitDialog::loadProfile(const QString& path) {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly))
