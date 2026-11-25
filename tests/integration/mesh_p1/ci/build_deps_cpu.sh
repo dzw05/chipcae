@@ -17,6 +17,8 @@ jobs=${CMAKE_BUILD_PARALLEL_LEVEL:-2}
 # ECAD dependencies use the matching version pins in deps.lock and are fetched
 # by the project configure via FetchContent, so they remain static and identical
 # between PR and nightly builds. Include deps.lock in the local prefix stamp too.
+# Keep this expression identical to verify_prefix.sh: fixed relative filenames
+# make the ordered sha256sum records independent of invocation and worktree paths.
 key=$(cd "$here" && sha256sum build_deps_cpu.sh deps.lock | sha256sum | cut -d' ' -f1)
 if [[ -f "$prefix/.k1-ready" && $(cat "$prefix/.k1-ready") == "$key" && -f "$prefix/.k1-manifest" ]]; then
   echo "Dependency prefix at $prefix is already complete."
