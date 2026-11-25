@@ -385,6 +385,7 @@ struct Parser {
         Bounds bounds;
         std::string owner;
         std::size_t read_points = 0;
+        bool side_outline = false;
     };
     std::vector<BoundsScope> bounds_scopes;
     std::vector<std::size_t> active_bounds;
@@ -432,6 +433,7 @@ struct Parser {
     };
     std::vector<DefinitionRef> definition_refs;
     static constexpr auto no_slot = std::numeric_limits<std::size_t>::max();
+    std::size_t text_property_slot = no_slot, text_property_depth = 0;
 
     bool ancestor(std::string_view name) const {
         return std::find(path.begin(), path.end() - 1, name) != path.end() - 1;
@@ -470,6 +472,11 @@ struct Parser {
         b.add(p);
     }
     void metadata_start(const std::string& name, const XML_Char** a, const std::string& parent) {
+        if (text_property_slot != no_slot) {
+            // Only the new text-only branch is invalidated by child elements.
+            model.report.unsupported[text_property_slot].context.clear();
+            text_property_slot = no_slot;
+        }
         for (auto& d : empty_dictionaries)
             d.empty = false;
         if (!active_dictionaries.empty()) {
@@ -527,8 +534,10 @@ struct Parser {
                 owner = active_bounds.back();
             definition_refs.push_back({value(a, "id"), user, owner});
         }
+        const bool side_outline = name == "Outline" && parent == "OtherSideView" &&
+                                  path.size() >= 3 && path[path.size() - 3] == "Package";
         if ((name == "Profile" && package.empty()) ||
-            (name == "Outline" && parent == "Package" && !package.empty())) {
+            (name == "Outline" && (parent == "Package" || side_outline) && !package.empty())) {
             const bool profile = name == "Profile";
             active_bounds.push_back(bounds_scopes.size());
             bounds_scopes.push_back({path.size(),
@@ -536,7 +545,8 @@ struct Parser {
                                      profile ? BoundsKind::profile : BoundsKind::package_outline,
                                      {},
                                      package,
-                                     profile ? 0 : package_points[package].size()});
+                                     profile ? 0 : package_points[package].size(),
+                                     side_outline});
         }
     }
     void annotate_report(std::size_t slot,
@@ -553,15 +563,17 @@ struct Parser {
                   is({"LayerRef", "StepRef", "FunctionMode", "BomRef", "AvlRef"})) ||
                  (name == "StepRef" && parent == "Bom"))
             context = kContent;
-        else if (is({"BomHeader",
-                     "BomItem",
-                     "RefDes",
-                     "Characteristics",
-                     "Textual",
-                     "Avl",
-                     "AvlHeader",
-                     "AvlItem"}) &&
-                 (ancestor("Bom") || ancestor("Avl") || name == "Avl"))
+        else if ((name == "StepRef" && parent == "BomHeader" && path.size() >= 3 &&
+                  path[path.size() - 3] == "Bom") ||
+                 (is({"BomHeader",
+                      "BomItem",
+                      "RefDes",
+                      "Characteristics",
+                      "Textual",
+                      "Avl",
+                      "AvlHeader",
+                      "AvlItem"}) &&
+                  (ancestor("Bom") || ancestor("Avl") || name == "Avl")))
             context = kBom;
         else if (is({"Role",
                      "Enterprise",
@@ -585,6 +597,35 @@ struct Parser {
                    !value(a, "name").empty() && value(a, "name") != "PLATING_THICKNESS" &&
                    !(attr(a, "value") && attr(a, "unit")))
             context = kSpecText;
+        else if (name == "Property" && parent == "General" && path.size() >= 3 &&
+                 path[path.size() - 3] == "Spec" && material_general_depth == path.size() - 1) {
+            bool valid = true;
+            for (auto p = a; p && *p; p += 2)
+                valid &= std::string_view(*p) == "text";
+            auto text = value(a, "text");
+            for (auto& c : text) {
+                if (c >= '0' && c <= '9')
+                    valid = false;
+                if (c >= 'A' && c <= 'Z')
+                    c = static_cast<char>(c - 'A' + 'a');
+            }
+            for (const auto keyword : {"conduct",
+                                       "thermal",
+                                       "cte",
+                                       "expansion",
+                                       "modulus",
+                                       "young",
+                                       "poisson",
+                                       "heat",
+                                       "density",
+                                       "thick"})
+                valid &= text.find(keyword) == std::string::npos;
+            if (valid) {
+                context = kSpecText;
+                text_property_slot = slot;
+                text_property_depth = path.size();
+            }
+        }
 
         if ((name == "Dielectric" || name == "Conductor") && parent == "Spec") {
             const auto type = value(a, "type");
@@ -645,6 +686,8 @@ struct Parser {
         }
     }
     void metadata_end() {
+        if (path.size() == text_property_depth)
+            text_property_slot = no_slot;
         if (!electrical.empty() && path.size() == electrical.back().depth) {
             const auto& e = electrical.back();
             if (e.valid && e.slots.size() > 1)
@@ -741,7 +784,8 @@ struct Parser {
                     valid = instanced.contains(r.owner);
                 else {
                     const auto& b = bounds_scopes[r.owner];
-                    valid = b.bounds.area() && package_counts[b.owner] == 1;
+                    valid = b.bounds.area() && package_counts[b.owner] == 1 &&
+                            (!b.side_outline || placed.contains(b.owner));
                 }
             }
             const auto [it, inserted] = refs.emplace(EntryKey{r.user, r.id}, valid);
