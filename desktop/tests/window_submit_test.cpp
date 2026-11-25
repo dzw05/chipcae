@@ -47,6 +47,7 @@
 #include <QVTKOpenGLNativeWidget.h>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <vtkDataObject.h>
@@ -1856,6 +1857,32 @@ int main(int argc, char** argv) {
             check(spin->isEnabled(), "unlock leaves all numeric inputs enabled");
         checkSubmitMeshState(locked, true, 8);
         checkSubmitMeshState(unlocked, false, 8);
+
+        SubmitDialog large;
+        large.setMeshNx(1000001);
+        check(large.meshNx() == 1000000, "unlocked Mesh nx retains its existing editable limit");
+        large.setMeshNxLocked(true);
+        for (const auto nx : {1000001, std::numeric_limits<int>::max()}) {
+            large.setMeshNx(nx);
+            checkSubmitMeshState(submitMeshState(large), true, nx);
+        }
+        large.setMeshNxLocked(false);
+        checkSubmitMeshState(submitMeshState(large), false, std::numeric_limits<int>::max());
+
+        Fixture f(argv[1]);
+        f.configure();
+        MainWindow w;
+        f.openCase(w);
+        auto options = specifiedOptions();
+        options.nx = 1000001;
+        successfulPreview(w, f, options);
+        check(w.writePreviewToCase(), "preview above editable nx limit writes to case");
+        const auto expected = documentMesh(w);
+        checkSubmitMeshState(rejectSubmitMenu(w), true, 1000001);
+        check(documentMesh(w) == expected && expected["nx"].toInt() == 1000001,
+              "displaying large locked nx preserves the written mesh");
+        check(runDirectories(f.root()).isEmpty(),
+              "large locked nx dialog rejection creates no job");
     });
     test("Submit menu keeps preview lock after cache invalidation", [&] {
         Fixture f(argv[1]);

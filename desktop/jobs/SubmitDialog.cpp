@@ -68,6 +68,9 @@ int SubmitDialog::meshNx() const {
     return nx_->value();
 }
 void SubmitDialog::setMeshNx(int nx) {
+    // Written preview values may exceed the editable session limit.
+    if (meshNxLocked_ && nx > nx_->maximum())
+        nx_->setMaximum(nx);
     nx_->setValue(nx);
 }
 void SubmitDialog::setMeshNxLocked(bool locked) {
