@@ -40,6 +40,9 @@ struct CopperSpec {
     std::string metal;
     std::optional<Real> fraction;
     std::optional<CopperPolygons> polygons;
+    // Test-first interface stubs; parsing and serialization are not implemented yet.
+    std::string orientation = "planar";
+    std::string role = "metal";
 };
 struct Layer {
     std::string name, kind, material, body;
