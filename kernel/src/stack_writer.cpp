@@ -54,6 +54,10 @@ mesh::Expected<bool> write_stack(const mesh::StackModel& model, const std::files
             if (l.copper) {
                 J c;
                 c["metal"] = l.copper->metal;
+                if (l.copper->orientation == "vertical")
+                    c["orientation"] = l.copper->orientation;
+                if (l.copper->role == "opening")
+                    c["role"] = l.copper->role;
                 if (l.copper->fraction)
                     c["fraction"] = *l.copper->fraction;
                 if (l.copper->polygons) {

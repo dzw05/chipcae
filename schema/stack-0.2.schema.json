@@ -83,6 +83,22 @@
               "type": "string"
             }
           }
+        },
+        "orientation": {
+          "type": "string",
+          "enum": [
+            "planar",
+            "vertical"
+          ],
+          "default": "planar"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "metal",
+            "opening"
+          ],
+          "default": "metal"
         }
       },
       "oneOf": [
@@ -96,7 +112,21 @@
             "polygons"
           ]
         }
-      ]
+      ],
+      "not": {
+        "required": [
+          "role",
+          "orientation"
+        ],
+        "properties": {
+          "role": {
+            "const": "opening"
+          },
+          "orientation": {
+            "const": "vertical"
+          }
+        }
+      }
     }
   },
   "properties": {
