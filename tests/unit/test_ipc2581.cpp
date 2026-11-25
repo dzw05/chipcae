@@ -419,7 +419,7 @@ static bool geometry_acceptance() {
                               geometry_line(3, "<LineDesc lineWidth='0.2'/>") +
                               "</UserSpecial></Features>");
         area(m, 100 + round_area(10, .2));
-        reports(m, {"Features"});
+        reports(m, {});
     });
     run("ipc_user_special_cutout_rejected", [&] {
         auto m = geometry_xml("<Features><UserSpecial><Contour>" + square +
@@ -533,8 +533,8 @@ static bool geometry_acceptance() {
             geometry_xml(pad("disk", 20) + geometry_line(3, "<LineDesc lineWidth='0.2'/>"), disk);
         area(m, pi / 4 + round_area(10, .2));
         absent(m, "Circle");
-        present(m, "EntryStandard");
-        present(m, "StandardPrimitiveRef");
+        absent(m, "EntryStandard");
+        absent(m, "StandardPrimitiveRef");
         check(m.vias.empty(), "artwork creates no drilled via");
     });
     run("ipc_standard_circle_unmodeled_ref", [&] {
