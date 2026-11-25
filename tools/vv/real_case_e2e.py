@@ -855,6 +855,13 @@ def _check_names(kind, w_ready):
 
 def _missing(record, *, pending_checks=()):
     """List unavailable applicable data, independently of caller-supplied missing[]."""
+    schema = record.get("schema")
+    if schema == "chipcae.vv_real_case_run/0.1":
+        byte_fields = False
+    elif schema == "chipcae.vv_real_case_run/0.2":
+        byte_fields = True
+    else:
+        raise RuntimeError(f"unsupported run record schema: {schema!r}")
     missing = []
     notes = " ".join(record.get("notes", []))
     null_reasons = {
@@ -874,17 +881,22 @@ def _missing(record, *, pending_checks=()):
             missing.append(key)
     def walk(value, path):
         if isinstance(value, dict):
+            command = re.fullmatch(r"commands\[\d+\]", path)
+            if command and byte_fields:
+                stage = value.get("stage", "")
+                for field, applicable in (
+                        ("bytes_in", stage == "import" or stage.startswith("readback_")),
+                        ("bytes_out", stage.startswith("solve_"))):
+                    if applicable and value.get(field) is None:
+                        missing.append(f"{path}.{field}")
             for key, item in value.items():
                 name = f"{path}.{key}"
+                # Byte fields are undefined in 0.1 and handled above in 0.2.
+                if command and key in ("bytes_in", "bytes_out"):
+                    continue
                 if item is None:
                     if path.startswith("commands[") and key == "status_detail":
                         continue
-                    if re.fullmatch(r"commands\[\d+\]", path) and key in ("bytes_in", "bytes_out"):
-                        stage = value.get("stage", "")
-                        applicable = ((stage == "import" or stage.startswith("readback_"))
-                                      if key == "bytes_in" else stage.startswith("solve_"))
-                        if not applicable:
-                            continue
                     if name.startswith("checks."):
                         check = key
                         if check in pending_checks:
@@ -981,7 +993,7 @@ def _new_folder(out_root, commit, kind):
 def _blank_record(kind, params, source_root, w_ready):
     params = params if isinstance(params, dict) else {}
     record = dict.fromkeys(_REQUIRED)
-    record.update(schema="chipcae.vv_real_case_run/0.1", kind=kind, case_id=params.get("case_id"),
+    record.update(schema="chipcae.vv_real_case_run/0.2", kind=kind, case_id=params.get("case_id"),
                   data_class=params.get("data_class"), materials_provenance=None,
                   commit=_commit(source_root), date=datetime.now().strftime("%Y%m%d"), host=_host(),
                   readiness=dict(ready=False, reason="not evaluated: input validation pending"),
@@ -1202,7 +1214,7 @@ def _solve_run(record, folder, inputs, output, stage, ranks, exes, mpi, timeout_
     entry["bytes_out"] = _i6_bytes(output)
     readback = _measured([sys.executable, source_root / "tools/vv/result_summary.py", output,
                           "-o", output / "readback.json"], "readback_" + stage, folder, record, timeout_s,
-                         bytes_in=_i6_bytes(output))
+                         bytes_in=entry["bytes_out"])
     if readback["exit_code"]:
         _stage_error(record, readback, folder)
         record["notes"].append(f"readback_{stage}: downstream checks and digest interrupted")
@@ -1582,7 +1594,21 @@ def _metric_tables(record):
     return tables
 
 
+def _validate_run_record(record) -> None:
+    """Reject malformed writer records before sanitization or persistence."""
+    if record.get("schema") != "chipcae.vv_real_case_run/0.2":
+        raise RuntimeError("run record schema must be chipcae.vv_real_case_run/0.2")
+    for index, command in enumerate(record["commands"]):
+        for field in ("bytes_in", "bytes_out"):
+            if field not in command:
+                raise RuntimeError(f"commands[{index}].{field} is required")
+            value = command[field]
+            if value is not None and not (type(value) is int and value >= 0):
+                raise RuntimeError(f"commands[{index}].{field} must be null or a nonnegative integer")
+
+
 def _finalize(record, folder, usage):
+    _validate_run_record(record)
     inputs = folder / "inputs"
     record["inputs"] = {p.relative_to(inputs).as_posix(): _sha(p) for p in sorted(inputs.rglob("*")) if p.is_file()}
     invalid_numbers, notes = [], []
