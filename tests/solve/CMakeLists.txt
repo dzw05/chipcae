@@ -328,6 +328,14 @@ if(_solve_backend)
         TIMEOUT 180 LABELS "cut;contract")
 endif()
 
+if(_solve_backend AND TARGET chipcae-solve AND MFEM_USE_PETSC)
+    add_test(NAME solve_fvm_cut_vertex_recon COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_fvm_cut_vertex_recon.py $<TARGET_FILE:chipcae-solve>
+        ${PROJECT_SOURCE_DIR} --with-fem)
+    set_tests_properties(solve_fvm_cut_vertex_recon PROPERTIES
+        TIMEOUT 1200 LABELS "solve;numerical;cut" SKIP_RETURN_CODE 77)
+endif()
+
 if(_solve_backend)
     add_executable(chipcae_test_direct_refine test_direct_refine.cpp)
     target_include_directories(chipcae_test_direct_refine PRIVATE ${PROJECT_SOURCE_DIR}/apps/chipcae-solve/src)
