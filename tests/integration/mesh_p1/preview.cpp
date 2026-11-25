@@ -327,6 +327,21 @@ int main(int argc, char** argv) {
             }
         };
         for (bool use_mpi : (argc == 4 ? std::vector<bool>{false, true} : std::vector<bool>{false}))
+            acceptance(use_mpi ? "K1 omitted ratio MPI" : "K1 omitted ratio serial", [&] {
+                auto stem = dir / (use_mpi ? "k1-default-mpi" : "k1-default-serial");
+                invoke(ratio_free_base + " -o " + shell(stem.string()),
+                       14,
+                       2.0,
+                       -1,
+                       "",
+                       use_mpi,
+                       "layers");
+                stderr_contains("interface adjacent size ratio exceeds max_ratio");
+                expect(!fs::exists(stem.string() + ".vtkhdf") &&
+                           !fs::exists(stem.string() + ".eb.vtkhdf"),
+                       "no K1 omitted ratio output");
+            });
+        for (bool use_mpi : (argc == 4 ? std::vector<bool>{false, true} : std::vector<bool>{false}))
             acceptance(use_mpi ? "default max ratio MPI" : "default max ratio serial", [&] {
                 auto default_stack = chipcae::mesh::load_stack(
                     tiny, fs::path(K1_ROOT) / "schema/stack-0.2.schema.json");
