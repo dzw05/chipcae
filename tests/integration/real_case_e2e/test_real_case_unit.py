@@ -693,7 +693,7 @@ class ReadinessAndLeaks(ContractTest):
 
 def complete_record():
     return {
-        "schema": "chipcae.vv_real_case_run/0.1", "kind": "thermal", "case_id": "generated-board",
+        "schema": "chipcae.vv_real_case_run/0.2", "kind": "thermal", "case_id": "generated-board",
         "data_class": "synthetic", "materials_provenance": "illustrative", "commit": "1234567",
         "date": "20261119", "host": {"nproc": 2, "mem_total_kib": 1024},
         "readiness": {"ready": True, "reason": "available"}, "needs_attention": [],
@@ -938,6 +938,77 @@ class RecordChecks(ContractTest):
                 self.assertIs(driver._check_c10(path, data_class), False)
 
 
+class RunRecordValidation(ContractTest):
+    def validator(self):
+        validate = getattr(driver, "_validate_run_record", None)
+        self.assertTrue(callable(validate), "missing internal run-record validation gate")
+        return validate
+
+    def malformed_records(self):
+        for field in ("bytes_in", "bytes_out"):
+            for label, value in (("omitted", None), ("wrong_case", None),
+                                 ("true", True), ("false", False), ("fraction", 1.5),
+                                 ("negative", -1), ("string", "1"),
+                                 ("nan", float("nan")), ("infinity", float("inf"))):
+                record = complete_record()
+                record["commands"] = [copy.deepcopy(record["commands"][0]) for _ in range(3)]
+                command = record["commands"][2]
+                if label in ("omitted", "wrong_case"):
+                    del command[field]
+                    if label == "wrong_case":
+                        command[field.title()] = 0
+                else:
+                    command[field] = value
+                yield field, label, record
+
+    def test_validator_accepts_independent_nullable_nonnegative_integer_bytes(self):
+        validate = self.validator()
+        for bytes_in in (None, 0, 17):
+            for bytes_out in (None, 0, 29):
+                with self.subTest(bytes_in=bytes_in, bytes_out=bytes_out):
+                    record = complete_record()
+                    record["commands"][0].update(bytes_in=bytes_in, bytes_out=bytes_out)
+                    self.assertIsNone(validate(record))
+
+    def test_validator_accepts_empty_command_list(self):
+        record = complete_record()
+        record["commands"] = []
+        self.assertIsNone(self.validator()(record))
+
+    def test_validator_rejects_writer_schema_other_than_exact_0_2(self):
+        validate = self.validator()
+        for schema in ("omitted", None, "chipcae.vv_real_case_run/0.1",
+                       "CHIPCAE.vv_real_case_run/0.2", "chipcae.vv_real_case_run/0.3"):
+            with self.subTest(schema=schema):
+                record = complete_record()
+                if schema == "omitted":
+                    del record["schema"]
+                else:
+                    record["schema"] = schema
+                with self.assertRaisesRegex(RuntimeError, "schema"):
+                    validate(record)
+
+    def test_validator_rejects_malformed_bytes_with_command_index_and_field(self):
+        validate = self.validator()
+        for field, label, record in self.malformed_records():
+            with self.subTest(field=field, value=label):
+                with self.assertRaises(RuntimeError) as raised:
+                    validate(record)
+                self.assertIn(field, str(raised.exception))
+                self.assertRegex(str(raised.exception), r"\b2\b")
+
+    def test_finalize_rejects_malformed_bytes_before_sanitization_or_persistence(self):
+        for field, label, record in self.malformed_records():
+            with self.subTest(field=field, value=label):
+                folder = self.root / f"{field}-{label}"
+                (folder / "inputs").mkdir(parents=True)
+                with patch.object(driver, "_clean_json", wraps=driver._clean_json) as clean:
+                    with self.assertRaises(RuntimeError):
+                        driver._finalize(record, folder, False)
+                clean.assert_not_called()
+                self.assertFalse((folder / "run_record.json").exists())
+
+
 class IOByteContracts(ContractTest):
     """N20 A: file sizes and applicability, without a numerical reader dependency."""
 
@@ -1008,7 +1079,9 @@ class IOByteContracts(ContractTest):
         value = count(self.root)
         self.assertIs(type(value), int)
         self.assertEqual(value, os.stat(manifest).st_size)
-        self.assertEqual(self.byte_helper("_regular_file_bytes")([path]), 0)
+        zero = self.byte_helper("_regular_file_bytes")([path])
+        self.assertIs(type(zero), int)
+        self.assertEqual(zero, 0)
         record = complete_record()
         record["commands"][0]["bytes_out"] = value
         self.assertNotIn("commands[0].bytes_out", driver._missing(record))
@@ -1142,17 +1215,23 @@ class IOByteContracts(ContractTest):
                 record = complete_record()
                 # Put unrelated commands first so hard-coded command indices cannot pass.
                 record["commands"] = [dict(record["commands"][0])]
-                with patch.object(driver.os, "stat", side_effect=stat):
+                with patch.object(driver.os, "stat", side_effect=stat), \
+                        patch.object(driver, "_i6_bytes", wraps=driver._i6_bytes) as sample:
                     driver._solve_run(record, self.root, inputs, output, mode, 1, exes, None, 5, source)
+                missing_paths = []
                 for stage, field in (("solve_" + mode, "bytes_out"), ("readback_" + mode, "bytes_in")):
                     index = next(i for i, entry in enumerate(record["commands"]) if entry["stage"] == stage)
                     entry = record["commands"][index]
                     self.assertIn(field, entry)
                     self.assertIsNone(entry[field])
                     self.assertIn(f"commands[{index}].{field}", driver._missing(record))
+                    missing_paths.append(f"commands[{index}].{field}")
                 driver._finalize(record, self.root, False)
                 self.assertIs(record["checks"]["C9"], False)
-                self.assertIn(f"commands[{index}].{field}", record["missing"])
+                for path in missing_paths:
+                    self.assertIn(path, record["missing"])
+                    self.assertIn(path, read_json(self.root / "run_record.json")["missing"])
+                sample.assert_called_once_with(output)
 
     def test_same_suffix_pairs_keep_each_output(self):
         inputs, exes, source = self.solve_fixture()
@@ -1175,7 +1254,7 @@ class IOByteContracts(ContractTest):
             self.assertIs(type(solve["bytes_out"]), int)
             self.assertIs(type(readback["bytes_in"]), int)
 
-    def test_solve_and_readback_sample_i6_independently_and_zero_byte_targets_are_not_missing(self):
+    def test_solve_and_readback_share_one_sample_and_zero_byte_targets_are_not_missing(self):
         inputs, exes, source = self.solve_fixture()
         paths, _ = self.known_files(self.root / "template")
         for path in paths[1:]:
@@ -1195,8 +1274,8 @@ class IOByteContracts(ContractTest):
 
         def observe_command(argv, stage, *args, **kwargs):
             if stage.startswith("readback_"):
-                self.assertEqual(sampled, [(output, expected), (output, expected)],
-                                 "readback bytes must be sampled before starting its command")
+                self.assertEqual(sampled, [(output, expected)],
+                                 "the shared bytes must be sampled before starting readback")
             return measured(argv, stage, *args, **kwargs)
 
         record = complete_record()
@@ -1204,11 +1283,61 @@ class IOByteContracts(ContractTest):
         with patch.object(driver, "_i6_bytes", side_effect=observe), \
                 patch.object(driver, "_measured", side_effect=observe_command):
             driver._solve_run(record, self.root, inputs, output, "empty", 1, exes, None, 5, source)
-        self.assertEqual(sampled, [(output, expected), (output, expected)])
+        self.assertEqual(sampled, [(output, expected)])
         solve, readback = record["commands"]
+        self.assertIs(type(solve["bytes_out"]), int)
+        self.assertIs(type(readback["bytes_in"]), int)
         self.assertEqual(solve["bytes_out"], expected)
         self.assertEqual(readback["bytes_in"], expected)
         self.assertEqual(driver._missing(record), [])
+
+    def test_readback_keeps_solve_snapshot_when_target_grows_after_sampling(self):
+        inputs, exes, source = self.solve_fixture()
+        paths, _ = self.known_files(self.root / "template")
+        (paths[0].parent / "events.bin").write_bytes(event_bytes())
+        # Explicit fixture paths provide an oracle independent of _i6_bytes.
+        original_total = sum(os.stat(path).st_size for path in paths)
+        output = self.root / "growing-target"
+        output_paths = [output / path.relative_to(paths[0].parent) for path in paths]
+        sample = driver._i6_bytes
+        sampled = []
+
+        def sample_then_grow(path):
+            value = sample(path)
+            sampled.append((Path(path), value))
+            with output_paths[1].open("ab") as target:
+                target.write(b"grew after solve snapshot")
+            return value
+
+        measured = driver._measured
+        readback_snapshots = []
+
+        def observe_readback(argv, stage, *args, **kwargs):
+            if stage.startswith("readback_"):
+                before = [os.stat(path).st_size for path in output_paths]
+                entry = measured(argv, stage, *args, **kwargs)
+                after = [os.stat(path).st_size for path in output_paths]
+                readback_snapshots.append((before, after))
+                return entry
+            return measured(argv, stage, *args, **kwargs)
+
+        record = complete_record()
+        record["commands"] = []
+        with patch.object(driver, "_i6_bytes", side_effect=sample_then_grow), \
+                patch.object(driver, "_measured", side_effect=observe_readback):
+            driver._solve_run(record, self.root, inputs, output, "growing", 1, exes, None, 5, source)
+        self.assertEqual(len(readback_snapshots), 1)
+        before, after = readback_snapshots[0]
+        self.assertNotEqual(sum(before), original_total, "mutation must precede readback")
+        self.assertEqual(before, after, "readback must leave the I6 collection unchanged")
+        solve, readback = record["commands"]
+        self.assertEqual(solve["exit_code"], 0)
+        self.assertEqual(readback["exit_code"], 0)
+        self.assertIs(type(solve["bytes_out"]), int)
+        self.assertIs(type(readback["bytes_in"]), int)
+        self.assertEqual(solve["bytes_out"], original_total)
+        self.assertEqual(readback["bytes_in"], original_total)
+        self.assertEqual(sampled, [(output, original_total)], "one sample per solve/readback pair")
 
 
 # External programs provide stage fixtures. Stage-only tests also model package
@@ -1434,9 +1563,49 @@ class DriverControlFlow(ContractTest):
         matches = [p for p in paths if read_json(p) == record]
         self.assertTrue(matches, "returned record must be the finalized persisted record")
         folder = matches[-1].parent
+        persisted = read_json(matches[-1])
+        self.assertEqual(persisted["schema"], "chipcae.vv_real_case_run/0.2")
+        validate = getattr(driver, "_validate_run_record", None)
+        self.assertTrue(callable(validate), "missing internal run-record validation gate")
+        self.assertIsNone(validate(persisted))
+        for index, entry in enumerate(persisted["commands"]):
+            for field in ("bytes_in", "bytes_out"):
+                self.assertIn(field, entry, f"commands[{index}].{field}")
+                value = entry[field]
+                self.assertTrue(value is None or (type(value) is int and value >= 0),
+                                f"commands[{index}].{field}: {value!r}")
         self.assertTrue((folder / "run_record.md").is_file())
         self.assertTrue((folder / "result.json").is_file())
         return folder
+
+    def test_cli_rejects_invalid_writer_bytes_as_internal_error_without_persisting(self):
+        params = write_json(self.root / "params.json", self.params)
+        script = r'''
+import sys
+from pathlib import Path
+from tools.vv import real_case_e2e as driver
+
+def invalid_pipeline(record, *args, **kwargs):
+    record["commands"].append(dict(stage="preview", argv=["injected"], exit_code=0,
+                                 wall_s=0., peak_rss_kib=0, status_detail=None,
+                                 bytes_in=True, bytes_out=None))
+
+driver._pipeline = invalid_pipeline
+driver._safe_temp_root = lambda: Path(sys.argv[1]) / "fallback"
+raise SystemExit(driver.main(sys.argv[2:]))
+'''
+        result = subprocess.run([sys.executable, "-c", script, str(self.root), "thermal",
+                                 "--params", str(params), "--source-root", str(self.source),
+                                 "--out-root", str(self.out)], cwd=SOURCE,
+                                capture_output=True, text=True, timeout=10)
+        with self.subTest(check="internal-error exit"):
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        with self.subTest(check="validation diagnostic"):
+            self.assertIn("RuntimeError", result.stderr)
+            self.assertIn("bytes_in", result.stderr)
+        with self.subTest(check="no malformed or fallback record"):
+            self.assertEqual(list(self.root.rglob("run_record.json")), [],
+                             "a driver defect must not persist a malformed or usage-error record")
 
     def assembly_params(self):
         inputs = self.root / "assembly inputs"
@@ -1642,6 +1811,7 @@ class DriverControlFlow(ContractTest):
                         self.assertIs(type(entry[field]), int)
                         self.assertGreaterEqual(entry[field], 0)
                 if entry["stage"].startswith("solve_"):
+                    self.assertIsNone(pending)
                     pending = entry
                 elif entry["stage"].startswith("readback_"):
                     self.assertIsNotNone(pending)
@@ -1653,6 +1823,7 @@ class DriverControlFlow(ContractTest):
                     self.assertEqual(entry["bytes_in"], expected)
                     pairs.append(entry["stage"])
                     pending = None
+        self.assertIsNone(pending)
         self.assertEqual(len(pairs), len(snapshots))
         self.assertEqual(record["missing"], [])
         self.persisted(record)
