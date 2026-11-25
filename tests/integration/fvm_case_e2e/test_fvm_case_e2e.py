@@ -13,6 +13,7 @@ import unittest
 import zlib
 
 import fvm_case_util as u
+import mac_static_miniz_acceptance
 
 SOURCE = Path(__file__).resolve().parents[3]
 
@@ -1396,6 +1397,8 @@ class CaseAcceptance(unittest.TestCase):
 
 
 def main():
+    if not unittest.TextTestRunner(verbosity=2).run(mac_static_miniz_acceptance.suite()).wasSuccessful():
+        return 1
     required = ('CHIPCAE_IMPORT_EXE', 'CHIPCAE_PREVIEW_EXE', 'CHIPCAE_SOLVE_EXE',
                 'CHIPCAE_FVM_LOADER_PROBE', 'CHIPCAE_MPIEXEC', 'CHIPCAE_MPIEXEC_NUMPROC_FLAG')
     missing = [key for key in required if not os.environ.get(key)]

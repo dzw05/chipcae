@@ -25,6 +25,23 @@ DISPLACEMENT_METHOD = 'FVM cell centers'
 REQUIRE_COPPER_FIELDS = False
 
 
+def _option_tokens(tokens):
+    """Keep driver options and their operands together before CMake sees them."""
+    paired = {'-arch', '-target', '--target', '-framework', '-Xlinker', '-isysroot',
+              '--sysroot', '-F', '-L', '-iframework', '-isystem', '-I', '-iquote',
+              '-o', '-c', '-MT', '-MF', '-MQ'}
+    options = iter(tokens)
+    for flag in options:
+        if flag in paired:
+            try:
+                value = next(options)
+            except StopIteration:
+                raise ValueError(f'missing argument for {flag}') from None
+            yield (flag, value)
+        else:
+            yield (flag,)
+
+
 def build_adapter_probe(root, source, contract=None):
     """Compile private adapters in a temporary TU, using the CLI's actual build flags.
 
@@ -56,26 +73,38 @@ def build_adapter_probe(root, source, contract=None):
         compile_flags = shlex.split(' '.join(variables[key] for key in
                                             ('CXX_DEFINES', 'CXX_INCLUDES', 'CXX_FLAGS')))
     flags = []
-    options = iter(compile_flags)
-    for flag in options:
+    for option in _option_tokens(compile_flags):
+        flag = option[0]
         if flag in ('-o', '-c', '-MT', '-MF', '-MQ'):
-            next(options)
+            continue
         elif flag in ('-MD', '-MMD'):
             continue
         elif flag in ('-isystem', '-I', '-iquote'):
             # CMake de-duplicates options; keep each include flag with its path.
-            flags.append(flag + next(options))
+            flags.append(flag + option[1])
+        elif len(option) == 2:
+            flags.append('SHELL:' + shlex.join(option))
         else:
             flags.append(flag)
     libraries = []
-    skip = False
-    for flag in link[1:]:
-        if skip:
-            skip = False
-        elif flag == '-o':
-            skip = True
-        elif not flag.endswith(('.o', '.obj')):
+    link_options = []
+    linker_controls = {'--start-group', '--end-group', '--whole-archive', '--no-whole-archive',
+                       '--push-state', '--pop-state', '--as-needed', '--no-as-needed',
+                       '-Bstatic', '-Bdynamic'}
+    for option in _option_tokens(link[1:]):
+        flag = option[0]
+        if flag == '-o' or (len(option) == 1 and flag.endswith(('.o', '.obj'))):
+            continue
+        # These controls must stay between their libraries. LINK_OPTIONS would
+        # move them ahead of every archive and change the meaning of the link.
+        if (flag in linker_controls or
+                (flag.startswith('-Wl,') and linker_controls.intersection(flag[4:].split(','))) or
+                (flag == '-Xlinker' and option[1] in linker_controls)):
+            libraries.append(shlex.join(option) if len(option) == 2 else flag)
+        elif flag.startswith('-l') or not flag.startswith('-'):
             libraries.append(str(binary / flag) if (binary / flag).is_file() else flag)
+        else:
+            link_options.append('SHELL:' + shlex.join(option) if len(option) == 2 else flag)
     quote = lambda value: '[=[' + str(value) + ']=]'
     # The linked loader resolves installed schemas relative to its executable.
     schemas = root / 'share/chipcae/schema'
@@ -108,6 +137,12 @@ def build_adapter_probe(root, source, contract=None):
         cmake += ['add_executable(contract_probe ' + quote(contract / 'dump_actual.cpp') + ')',
                   'target_compile_options(contract_probe PRIVATE ' + ' '.join(map(quote, flags)) + ')',
                   'target_link_libraries(contract_probe PRIVATE ' + ' '.join(map(quote, libraries)) + ')']
+    probe_targets = ['adapter_probe', 'elastic_replay', 'pipeline_failure_probe']
+    if contract is not None:
+        probe_targets.append('contract_probe')
+    for probe in probe_targets:
+        cmake.append('target_link_options(' + probe + ' PRIVATE ' +
+                     ' '.join(map(quote, link_options)) + ')')
     (root / 'CMakeLists.txt').write_text('\n'.join(cmake) + '\n', encoding='utf-8')
     build = root / 'build'
     for args in (['cmake', '-G', 'Ninja', '-S', str(root), '-B', str(build), '-DCMAKE_BUILD_TYPE=Release',
