@@ -74,6 +74,10 @@ inline std::filesystem::path demo(const char* name) {
     const auto path = std::filesystem::path(dir) / name;
     return std::filesystem::is_regular_file(path) ? path : std::filesystem::path{};
 }
+// Test-first placeholder: configured regular files must fail the lookup assertion.
+inline std::filesystem::path demo_env(const char*) {
+    return {};
+}
 inline TopoDS_Wire square(double inset, double z) {
     BRepBuilderAPI_MakePolygon p;
     p.Add(gp_Pnt(inset, inset, z));

@@ -2,7 +2,13 @@
 
 #include <set>
 using namespace slice_test;
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 3 && std::string(argv[1]) == "--check-demo-env") {
+        return run([&] {
+            require(demo_env("CHIPCAE_DEMO_IHP_STEP") == std::filesystem::path(argv[2]),
+                    "CHIPCAE_DEMO_IHP_STEP resolves only configured regular files");
+        });
+    }
     const auto path = demo("IHP_NATIVE_CONTACT_CONVERSION_EXAMPLE.step");
     if (path.empty())
         return 77;
