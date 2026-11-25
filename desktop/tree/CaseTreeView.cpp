@@ -1,4 +1,8 @@
 #include "CaseTreeView.hpp"
+
+#include <QMenu>
+#include <QRegularExpression>
+
 namespace chipcae::desktop {
 CaseTreeView::CaseTreeView(CaseTreeModel* model,
                            SchemaForm* form,
@@ -7,15 +11,54 @@ CaseTreeView::CaseTreeView(CaseTreeModel* model,
     : QTreeView(parent), tree_(model), form_(form), schemas_(schemaDirectory) {
     setModel(model);
     setHeaderHidden(true);
+    setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(this, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
+        if (auto* menu = contextMenuFor(indexAt(pos))) {
+            menu->exec(viewport()->mapToGlobal(pos));
+            menu->deleteLater();
+        }
+    });
     connect(selectionModel(),
             &QItemSelectionModel::currentChanged,
             this,
             [this](const QModelIndex& index) { bind(index); });
     connect(model, &QAbstractItemModel::modelAboutToBeReset, this, [this] { source_.clear(); });
 }
-QMenu* CaseTreeView::contextMenuFor(const QModelIndex&) {
-    // TEST-FIRST stub: layer context menus are intentionally unimplemented.
-    return nullptr;
+QMenu* CaseTreeView::contextMenuFor(const QModelIndex& index) {
+    if (!index.isValid() || index.model() != tree_ ||
+        index.data(CaseTreeModel::SourceRole) != "stack")
+        return nullptr;
+    static const QRegularExpression layerPath(QStringLiteral("\\A/layers/([0-9]+)\\z"));
+    const auto match = layerPath.match(index.data(CaseTreeModel::PointerRole).toString());
+    if (!match.hasMatch())
+        return nullptr;
+    bool valid = false;
+    const auto layerIndex = match.captured(1).toULongLong(&valid);
+    const auto stack = tree_->document()->stackJson();
+    if (!valid || !stack.contains("layers") || !stack.at("layers").is_array() ||
+        layerIndex >= stack.at("layers").size())
+        return nullptr;
+    const auto& layer = stack.at("layers").at(static_cast<std::size_t>(layerIndex));
+    if (!layer.is_object() || !layer.contains("name") || !layer.at("name").is_string())
+        return nullptr;
+    const auto layerName = QString::fromStdString(layer.at("name").as<std::string>());
+    bool thermal = false;
+    const auto data = tree_->document()->toJson();
+    if (data.contains("physics") && data.at("physics").is_array())
+        for (const auto& physics : data.at("physics").array_range())
+            if (physics.is_object() && physics.contains("id") && physics.at("id") == "thermal")
+                thermal = true;
+    auto* menu = new QMenu(this);
+    auto* action = menu->addAction(QStringLiteral("在此层添加热源"));
+    action->setEnabled(thermal);
+    action->setToolTip(thermal ? QStringLiteral("") : QStringLiteral("需先切换到 Thermal 模式"));
+    connect(action, &QAction::triggered, this, [this, layerName] {
+        if (tree_->addHeatSource(layerName, 1.0).isEmpty())
+            return;
+        const auto loads = tree_->document()->toJson().at("loads");
+        setCurrentIndex(tree_->locate("/loads/" + QString::number(loads.size() - 1)));
+    });
+    return menu;
 }
 void CaseTreeView::bind(const QModelIndex& index) {
     source_ = index.data(CaseTreeModel::SourceRole).toString();
