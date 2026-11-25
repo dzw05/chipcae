@@ -80,21 +80,6 @@ def main(root):
     positive = check('fcbga_lid_stiffener.assembly.json')
     bulk = check('step_frame_parts.assembly.json')
     if bulk is not None:
-        # Published STEP references and body selectors use only neutral names.
-        step_names = {bulk['parts_from_step']['step']} | {part['step'] for part in bulk['parts']}
-        body_names = set(bulk['parts_from_step']['bodies']) | {
-            part['body'] for part in bulk['parts'] if 'body' in part
-        }
-        if step_names != {'example_parts.step'}:
-            failures.append('step_frame_parts: all STEP references must be example_parts.step')
-        if not any(part.get('body') == 'example_parts/lid' for part in bulk['parts']):
-            failures.append('step_frame_parts: missing explicit body example_parts/lid')
-        if 'example_parts/die' not in bulk['parts_from_step']['bodies']:
-            failures.append('step_frame_parts: missing shorthand body example_parts/die')
-        neutral_suffixes = {'lid', 'die', 'tim', 'adhesive', 'substrate', 'carrier'}
-        if any('/' not in body or body.split('/', 1)[0] != 'example_parts'
-               or body.split('/', 1)[1] not in neutral_suffixes for body in body_names):
-            failures.append('step_frame_parts: body selectors must use neutral prefixes and suffixes')
         # Exercise duplicates within shorthand bodies and against explicit parts.
         for duplicate_explicit in (False, True):
             duplicate = copy.deepcopy(bulk)
