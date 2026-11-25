@@ -2,8 +2,14 @@
 
 #include <map>
 using namespace slice_test;
-int main() {
-    const auto path = demo("PACKAGE_BULK_PARTS.step");
+int main(int argc, char** argv) {
+    if (argc == 3 && std::string(argv[1]) == "--check-demo-env") {
+        return run([&] {
+            require(demo_env("CHIPCAE_DEMO_BULK_STEP") == std::filesystem::path(argv[2]),
+                    "CHIPCAE_DEMO_BULK_STEP resolves only configured regular files");
+        });
+    }
+    const auto path = demo_env("CHIPCAE_DEMO_BULK_STEP");
     if (path.empty())
         return 77;
     return run([&] {
