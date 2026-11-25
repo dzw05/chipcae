@@ -21,6 +21,14 @@ std::vector<Real> rasterize_copper(const std::vector<Real>& x_lines,
 // With ECAD disabled, throws the same runtime_error as rasterize_copper.
 Real copper_union_area_m2(const PolysetLayer& layer, Real dbu_m);
 
+// Per-cell copper fraction from an independent Clipper2 reference.
+// Output layout is identical to rasterize_copper on the same axes.
+// TEST-FIRST: declaration and empty-result stub only; reference is not implemented.
+std::vector<Real> copper_column_ref_phi(const std::vector<Real>& x_lines,
+                                        const std::vector<Real>& y_lines,
+                                        const PolysetLayer& layer,
+                                        Real dbu_m);
+
 // Aggregate a dense Morton-ordered fine field into `level` coarser levels.
 // Fine cell widths are taken from the axes; children use dense >> 2.
 std::vector<Real> aggregate_phi(const std::vector<Real>& fine,

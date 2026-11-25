@@ -188,6 +188,18 @@ std::vector<Real> aggregate_phi(const std::vector<Real>& fine,
         result[p] = sums[p] / areas[p];
     return result;
 }
+// TEST-FIRST stub: deliberately provides no reference values or input validation.
+std::vector<Real> copper_column_ref_phi(const std::vector<Real>&,
+                                        const std::vector<Real>&,
+                                        const PolysetLayer&,
+                                        Real) {
+#ifndef CHIPCAE_ENABLE_ECAD
+    throw std::runtime_error("polygon copper rasterization requires CHIPCAE_ENABLE_ECAD");
+#else
+    return {};
+#endif
+}
+
 Real copper_union_area_m2(const PolysetLayer& layer, Real dbu_m) {
 #ifndef CHIPCAE_ENABLE_ECAD
     (void)layer;
