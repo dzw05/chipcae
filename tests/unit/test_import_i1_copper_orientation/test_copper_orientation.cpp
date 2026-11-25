@@ -211,6 +211,30 @@ void import_i1_copper_orientation_schema() {
                 rejected(checks, f, j, f.path() + "/" + suffix, form + variant + " " + defect);
             }
     }
+    // A compiled schema may be reused only while its complete contents match.
+    // Keep rereading caller-supplied schemas, including edits at the same path.
+    Fixture f(false);
+    auto vertical = f.input;
+    f.copper(vertical)["orientation"] = "vertical";
+    write_json(f.dir / "input.json", vertical);
+    const auto alternate = f.dir / "schema.json";
+    auto specification = read_json(schema);
+    write_json(alternate, specification);
+    checks.expect(static_cast<bool>(chipcae::mesh::load_stack(f.dir / "input.json", alternate)),
+                  "identical schema at another path rejected vertical");
+    specification["$defs"]["copper"]["properties"]["orientation"]["enum"] =
+        J::parse(R"(["planar"])");
+    write_json(alternate, specification);
+    const auto restricted = chipcae::mesh::load_stack(f.dir / "input.json", alternate);
+    checks.expect(!restricted, "edited caller schema was ignored");
+    if (!restricted) {
+        checks.expect(restricted.error().path == f.path() + "/copper/orientation",
+                      "edited schema error path changed");
+        checks.expect(!restricted.error().reason.empty(), "edited schema error reason empty");
+    }
+    write_json(alternate, read_json(schema));
+    checks.expect(static_cast<bool>(chipcae::mesh::load_stack(f.dir / "input.json", alternate)),
+                  "restored schema rejected vertical");
     checks.finish();
 }
 

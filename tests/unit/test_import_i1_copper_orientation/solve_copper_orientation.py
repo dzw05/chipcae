@@ -1,9 +1,10 @@
 """I1 CLI acceptance matrix, using public stacks and synthetic material cards.
 
-Set CHIPCAE_I1_BASELINE_SOLVE_EXE to an independently built frozen-baseline solver,
-and CHIPCAE_I1_BRANCHPOINT_SOLVE_EXE to an independently built branch-point solver,
-to enable byte comparisons of every default case. Neither executable may be the
-solver under test. Baseline builds/configurations are recorded outside the repo.
+Set CHIPCAE_I1_BRANCHPOINT_SOLVE_EXE to an independently built branch-point solver
+to compare every default case: exact stdout, HDF structure and non-solver data,
+and global relative L2 error <= 1e-8 for PointData/U. The frozen baseline remains
+the reference for legacy stack writing and performance, outside this CLI test.
+Baseline builds/configurations are recorded outside the repo.
 
 Mechanical-only FVM still traverses thermal_problem first. Its CLI rejection does
 not independently prove execution of the elastic adapter's guard; the direct C++
@@ -83,10 +84,55 @@ def execute(executable, root, name):
 
 
 def numerical_artifacts(out):
-    """Read complete deterministic result files; event logs contain wall-clock times."""
+    """Find numerical result files; event logs contain wall-clock times."""
     files = sorted(out.rglob('*.vtkhdf'))
     assert files, f'no numerical result artifacts in {out}'
-    return {file.relative_to(out).as_posix(): file.read_bytes() for file in files}
+    return {file.relative_to(out).as_posix(): file for file in files}
+
+
+def compare_artifacts(actual, expected):
+    """Apply the brief's branch-point comparison to every HDF object and U value."""
+    import h5py
+    import numpy as np
+
+    assert actual.keys() == expected.keys(), 'artifact names differ'
+    displacement, reference_displacement = [], []
+
+    def exact_value(x, y, context):
+        x, y = np.asarray(x), np.asarray(y)
+        assert x.shape == y.shape, f'{context}: shape differs'
+        assert x.dtype == y.dtype, f'{context}: dtype differs'
+        # Object-valued HDF strings contain Python pointers in tobytes().
+        same = np.array_equal(x, y) if x.dtype.hasobject else x.tobytes() == y.tobytes()
+        assert same, f'{context}: values differ'
+
+    for name in actual:
+        with h5py.File(actual[name], 'r') as first, h5py.File(expected[name], 'r') as second:
+            objects, reference_objects = {'/': first}, {'/': second}
+            first.visititems(lambda key, value: objects.update({key: value}))
+            second.visititems(lambda key, value: reference_objects.update({key: value}))
+            assert objects.keys() == reference_objects.keys(), f'{name}: HDF object names differ'
+            for key, x in objects.items():
+                y = reference_objects[key]
+                context = f'{name}:{key}'
+                assert type(x) is type(y), f'{context}: object type differs'
+                assert x.attrs.keys() == y.attrs.keys(), f'{context}: attribute names differ'
+                for attribute in x.attrs:
+                    exact_value(x.attrs[attribute], y.attrs[attribute], f'{context}@{attribute}')
+                if isinstance(x, h5py.Dataset):
+                    assert x.shape == y.shape, f'{context}: shape differs'
+                    assert x.dtype == y.dtype, f'{context}: dtype differs'
+                    if key.endswith('/PointData/U'):
+                        displacement.append(np.asarray(x[...]).ravel())
+                        reference_displacement.append(np.asarray(y[...]).ravel())
+                    else:
+                        exact_value(x[...], y[...], context)
+    assert displacement, 'no PointData/U datasets compared'
+    x, y = np.concatenate(displacement), np.concatenate(reference_displacement)
+    assert np.all(np.isfinite(x)) and np.all(np.isfinite(y)), 'nonfinite displacement'
+    error = float(np.linalg.norm(x - y)) / max(float(np.linalg.norm(y)), 1e-300)
+    assert error <= 1e-8, f'global U relative difference {error:.17g} > 1e-8'
+    return error
 
 
 def run_case(root, executable, baselines, path, polygons, fraction, variant):
@@ -113,13 +159,10 @@ def run_case(root, executable, baselines, path, polygons, fraction, variant):
             assert reference.returncode == 0, (label, reference.returncode, reference.stderr)
             assert result.stdout == reference.stdout, f'{label}: stdout differs'
             expected = numerical_artifacts(reference_out)
-            assert artifacts.keys() == expected.keys(), f'{label}: artifact names differ'
-            for name, data in artifacts.items():
-                assert data == expected[name], f'{label}: result file differs: {name}'
-            print(f'PASS {label} stdout and result bytes', flush=True)
+            error = compare_artifacts(artifacts, expected)
+            print(f'PASS {label} stdout, HDF structure/data, U relative L2 {error:.17g}',
+                  flush=True)
         except AssertionError as error:
-            # Compare both baselines even when inherited changes differ from the
-            # frozen baseline. Every original byte assertion remains mandatory.
             differences.append(f'{label}: {error}')
     assert not differences, differences
 
@@ -127,16 +170,16 @@ def run_case(root, executable, baselines, path, polygons, fraction, variant):
 def main():
     executable = Path(os.environ['CHIPCAE_SOLVE_EXE']).resolve(strict=True)
     baselines = []
-    for label, variable in (
-        ('frozen-baseline', 'CHIPCAE_I1_BASELINE_SOLVE_EXE'),
-        ('branchpoint-baseline', 'CHIPCAE_I1_BRANCHPOINT_SOLVE_EXE'),
-    ):
+    if os.environ.get('CHIPCAE_I1_BASELINE_SOLVE_EXE'):
+        print('CHIPCAE_I1_BASELINE_SOLVE_EXE is not used for solver comparisons; '
+              'the revised brief uses only the branch-point solver', flush=True)
+    for label, variable in (('branchpoint-baseline', 'CHIPCAE_I1_BRANCHPOINT_SOLVE_EXE'),):
         if os.environ.get(variable):
             baseline = Path(os.environ[variable]).resolve(strict=True)
             assert not baseline.samefile(executable), f'{variable} must be independently built'
             baselines.append((label, baseline))
         else:
-            print(f'Baseline byte comparison not configured: set {variable}', flush=True)
+            print(f'Baseline comparison not configured: set {variable}', flush=True)
     failures = []
     count = 0
     with tempfile.TemporaryDirectory(prefix='chipcae-i1-solve-') as temp:

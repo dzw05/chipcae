@@ -61,7 +61,15 @@ Expected<StackModel> load_stack(const std::filesystem::path& file,
         if (!input || !specification)
             return Error{"$", "cannot open instance or schema"};
         J j = J::parse(input), s = J::parse(specification);
-        auto validator = jsoncons::jsonschema::make_json_schema(std::move(s));
+        // Reuse one immutable compiled schema, but reread and compare the complete
+        // document on every call so edits and caller-supplied schemas remain effective.
+        using Validator = jsoncons::jsonschema::json_schema<J>;
+        static const std::pair<J, Validator> cached_schema{
+            s, jsoncons::jsonschema::make_json_schema(s)};
+        std::optional<Validator> other_schema;
+        if (s != cached_schema.first)
+            other_schema.emplace(jsoncons::jsonschema::make_json_schema(std::move(s)));
+        const auto& validator = other_schema ? *other_schema : cached_schema.second;
         Error failure;
         validator.validate(j, [&](const jsoncons::jsonschema::validation_message& m) {
             if (failure.reason.empty())
