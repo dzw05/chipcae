@@ -1,0 +1,4 @@
+# physical line 1
+required_case	*	first
+
+required_case	mac-highmem	duplicate

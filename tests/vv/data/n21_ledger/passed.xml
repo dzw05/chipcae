@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Handwritten synthetic CI evidence; no solver data. -->
+<testsuites><testsuite name="synthetic">
+  <testcase name="required_case" status="run"><system-out>完成</system-out></testcase>
+  <testcase name="another_case" status="run"/>
+</testsuite></testsuites>

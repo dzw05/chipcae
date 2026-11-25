@@ -1,0 +1,4 @@
+<testsuite name="synthetic">
+  <testcase name="required_case" status="notrun" time="0"><skipped message="earlier skip"/></testcase>
+  <testcase name="required_case" status="run"><system-out>final pass</system-out></testcase>
+</testsuite>
