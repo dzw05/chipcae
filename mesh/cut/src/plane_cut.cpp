@@ -1209,15 +1209,21 @@ void rebuild_faces(const HexMeshArrays& mesh, HexMeshArrays& m, CutLayerArrays& 
         std::sort(key.begin(), key.end());
         return key;
     };
-    // Retain only a permutation of the immutable input boundary, not its keys.
+    // Retain a permutation of the immutable input boundary. Its sorted keys are
+    // computed once (input boundary size only) so the sort comparator does not
+    // re-sort two keys per comparison; they are released before the face scan.
     std::vector<std::size_t> original_boundary(mesh.bdr_attribute.size());
     std::iota(original_boundary.begin(), original_boundary.end(), std::size_t{0});
-    // Descending source breaks ties with the old map's last assignment first.
-    std::sort(
-        original_boundary.begin(), original_boundary.end(), [&](const auto& a, const auto& b) {
-            const auto ka = original_key(a), kb = original_key(b);
-            return ka != kb ? ka < kb : a > b;
-        });
+    {
+        std::vector<std::array<Local, 4>> keys(original_boundary.size());
+        for (std::size_t i = 0; i < keys.size(); ++i)
+            keys[i] = original_key(i);
+        // Descending source breaks ties with the old map's last assignment first.
+        std::sort(
+            original_boundary.begin(), original_boundary.end(), [&](std::size_t a, std::size_t b) {
+                return keys[a] != keys[b] ? keys[a] < keys[b] : a > b;
+            });
+    }
     m.bdr_quad.clear();
     m.bdr_attribute.clear();
     constexpr int fi[6][4] = {
