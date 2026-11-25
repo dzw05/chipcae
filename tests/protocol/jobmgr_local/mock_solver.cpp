@@ -1,3 +1,4 @@
+#include "chipcae/io/control_file.hpp"
 #include "chipcae/io/event_log.hpp"
 #include "test_support.hpp"
 
@@ -46,6 +47,43 @@ int main(int argc, char** argv) {
             return 98;
         }
         const auto file = out / profile.get_value_or<std::string>("x-events-file", "events.bin");
+        if (mode == "control") {
+            const auto timeout =
+                std::chrono::milliseconds(profile.get_value_or<int>("x-control-timeout-ms", 5000));
+            chipcae::io::EventLogWriter writer(file);
+            std::uint64_t sequence = 0;
+            writer.append({++sequence, 0, chipcae::io::KernelHello{}});
+            chipcae::io::ControlFileReader reader(out / "control.jsonl");
+            const auto deadline = std::chrono::steady_clock::now() + timeout;
+            while (std::chrono::steady_clock::now() < deadline) {
+                for (const auto& command : reader.read_available()) {
+                    const bool stop = command.action == chipcae::io::ControlAction::stop;
+                    const bool checkpoint =
+                        command.action == chipcae::io::ControlAction::checkpoint_and_stop;
+                    writer.append({++sequence,
+                                   0,
+                                   chipcae::io::ControlAck{
+                                       command.cmd_seq,
+                                       command.client_request_id,
+                                       stop || checkpoint ? 1u : 3u,
+                                       0,
+                                       stop || checkpoint ? "mock STOP" : "mock supports STOP only",
+                                       0}});
+                    if (stop || checkpoint) {
+                        writer.append({++sequence,
+                                       0,
+                                       chipcae::io::KernelExit{
+                                           0, 0, stop ? "user_stop" : "checkpoint_and_stop"}});
+                        writer.close();
+                        return 0;
+                    }
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            writer.append({++sequence, 0, chipcae::io::KernelExit{0, 0, "end_reached"}});
+            writer.close();
+            return 0;
+        }
         if (mode != "missing") {
             {
                 chipcae::io::EventLogWriter writer(file);

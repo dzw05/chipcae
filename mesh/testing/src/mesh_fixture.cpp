@@ -51,6 +51,11 @@ void fields(HexMeshArrays::InterfaceReport& x, F&& f) {
     f("cut_area", x.cut_area);
 }
 template <class F>
+void fields(HexMeshArrays::GridReport::CopperArea& x, F&& f) {
+    f("polygons", x.polygons);
+    f("raster", x.raster);
+}
+template <class F>
 void fields(HexMeshArrays::GridReport& x, F&& f) {
     f("levels", x.levels);
     f("rule", x.rule);
@@ -63,6 +68,7 @@ void fields(HexMeshArrays::GridReport& x, F&& f) {
     f("warnings", x.warnings);
     f("partition_imbalance", x.partition_imbalance);
     f("void_cells", x.void_cells);
+    f.optional("copper_area_m2", x.copper_area_m2);
 }
 template <class F>
 void fields(AttributeTable& x, F&& f) {
@@ -110,6 +116,12 @@ struct Reader {
         check(j.contains(name), "missing required field");
         decode(j.at(name), x);
         ++count;
+    }
+    template <class T>
+    void optional(const char* name, T& x) {
+        x.clear();
+        if (j.contains(name))
+            (*this)(name, x);
     }
 };
 template <class T>
@@ -191,6 +203,11 @@ struct Writer {
         encode(out, std::string(name));
         out += ':';
         encode(out, x);
+    }
+    template <class T>
+    void optional(const char* name, const T& x) {
+        if (!x.empty())
+            (*this)(name, x);
     }
 };
 template <class T>
