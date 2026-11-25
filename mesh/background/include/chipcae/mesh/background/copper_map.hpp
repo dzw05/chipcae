@@ -23,7 +23,13 @@ Real copper_union_area_m2(const PolysetLayer& layer, Real dbu_m);
 
 // Per-cell copper fraction from an independent Clipper2 reference.
 // Output layout is identical to rasterize_copper on the same axes.
-// TEST-FIRST: declaration and empty-result stub only; reference is not implemented.
+// For each cell, returns Area(Union(NonZero)(layer) intersect cell) / Area(cell).
+// Uses native int64 paths and dbu_m, without the rasterizer's lattice or calls.
+// Shares copper_union_area_m2's full-array ring-offset validation.
+// Nonzero unions currently require cell boundaries at integer DBU coordinates;
+// other boundaries throw invalid_argument pending a fractional-DBU contract.
+// Coordinates outside Clipper2's signed 62-bit range throw invalid_argument.
+// With ECAD disabled, throws the same runtime_error text as rasterize_copper.
 std::vector<Real> copper_column_ref_phi(const std::vector<Real>& x_lines,
                                         const std::vector<Real>& y_lines,
                                         const PolysetLayer& layer,

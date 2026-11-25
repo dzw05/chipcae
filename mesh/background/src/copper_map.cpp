@@ -23,6 +23,38 @@ void validate_axes(const std::vector<Real>& lines) {
         if (!std::isfinite(lines[i]) || (i && !(lines[i] > lines[i - 1])))
             throw std::invalid_argument("copper map axes must be finite and strictly increasing");
 }
+#ifdef CHIPCAE_ENABLE_ECAD
+// Keep the shared validation order and original integer ring traversal unchanged.
+Clipper2Lib::Paths64 native_copper_paths(const PolysetLayer& layer, Real dbu_m) {
+    if (!std::isfinite(dbu_m) || !(dbu_m > 0))
+        throw std::invalid_argument("copper database unit must be finite and positive");
+    if (layer.ring_offsets.size() < 2 || layer.coordinates.size() % 2 != 0)
+        throw std::invalid_argument("invalid polyset geometry");
+    const auto point_count = layer.coordinates.size() / 2;
+    if (layer.ring_offsets.front() != 0 || layer.ring_offsets.back() < 0 ||
+        static_cast<std::uint64_t>(layer.ring_offsets.back()) != point_count)
+        throw std::invalid_argument("invalid polyset ring offsets");
+    // Validate the entire array before constructing any polygon paths.
+    for (std::size_t i = 0; i < layer.ring_offsets.size(); ++i) {
+        const auto offset = layer.ring_offsets[i];
+        if (offset < 0 || static_cast<std::uint64_t>(offset) > point_count ||
+            (i > 0 && offset <= layer.ring_offsets[i - 1]))
+            throw std::invalid_argument("invalid polyset ring offsets");
+    }
+    Clipper2Lib::Paths64 paths;
+    for (std::size_t r = 0; r + 1 < layer.ring_offsets.size(); ++r) {
+        const auto begin = layer.ring_offsets[r], end = layer.ring_offsets[r + 1];
+        if (end - begin < 3)
+            continue;
+        auto& path = paths.emplace_back();
+        path.reserve(static_cast<std::size_t>(end - begin));
+        for (auto point = static_cast<std::size_t>(begin); point < static_cast<std::size_t>(end);
+             ++point)
+            path.emplace_back(layer.coordinates[2 * point], layer.coordinates[2 * point + 1]);
+    }
+    return paths;
+}
+#endif
 } // namespace
 
 std::vector<Real> rasterize_copper(const std::vector<Real>& xs,
@@ -188,15 +220,72 @@ std::vector<Real> aggregate_phi(const std::vector<Real>& fine,
         result[p] = sums[p] / areas[p];
     return result;
 }
-// TEST-FIRST stub: deliberately provides no reference values or input validation.
-std::vector<Real> copper_column_ref_phi(const std::vector<Real>&,
-                                        const std::vector<Real>&,
-                                        const PolysetLayer&,
-                                        Real) {
+std::vector<Real> copper_column_ref_phi(const std::vector<Real>& xs,
+                                        const std::vector<Real>& ys,
+                                        const PolysetLayer& layer,
+                                        Real dbu_m) {
+    validate_axes(xs);
+    validate_axes(ys);
 #ifndef CHIPCAE_ENABLE_ECAD
+    (void)layer;
+    (void)dbu_m;
     throw std::runtime_error("polygon copper rasterization requires CHIPCAE_ENABLE_ECAD");
 #else
-    return {};
+    using namespace Clipper2Lib;
+    const auto paths = native_copper_paths(layer, dbu_m);
+    const auto nx = xs.size() - 1, ny = ys.size() - 1;
+    if (nx > std::numeric_limits<std::uint32_t>::max() ||
+        ny > std::numeric_limits<std::uint32_t>::max() ||
+        nx > std::numeric_limits<std::size_t>::max() / ny)
+        throw std::invalid_argument("copper reference grid dimensions are out of range");
+    // Clipper2 requires coordinates within its signed 62-bit range. Check before
+    // Union as well as before converting any floating-point cell boundaries.
+    constexpr std::int64_t limit = (std::int64_t{1} << 61) - 1;
+    for (const auto& path : paths)
+        for (const auto& p : path)
+            if (p.x < -limit || p.x > limit || p.y < -limit || p.y > limit)
+                throw std::invalid_argument("copper reference coordinates are out of range");
+    const auto united = Union(paths, FillRule::NonZero);
+    std::vector<Real> result(nx * ny, Real(0));
+    if (Area(united) == 0)
+        return result;
+    const auto ticks = [&](const std::vector<Real>& lines) {
+        std::vector<std::int64_t> values;
+        values.reserve(lines.size());
+        for (const auto line : lines) {
+            const long double native = static_cast<long double>(line) / dbu_m;
+            if (!std::isfinite(native) || native < -static_cast<long double>(limit) ||
+                native > static_cast<long double>(limit))
+                throw std::invalid_argument("copper reference coordinates are out of range");
+            const auto rounded = std::round(native);
+            // Accept only floating-point representation error around native integer
+            // boundaries; fractional DBU boundaries require a contract ruling.
+            if (std::abs(native - rounded) >
+                8 * std::numeric_limits<Real>::epsilon() * std::max(1.L, std::abs(native)))
+                throw std::invalid_argument(
+                    "copper reference cell boundaries must be native integers");
+            values.push_back(static_cast<std::int64_t>(rounded));
+            if (values.size() > 1 && values.back() <= values[values.size() - 2])
+                throw std::invalid_argument(
+                    "copper reference cell boundaries must be native integers");
+        }
+        return values;
+    };
+    const auto xt = ticks(xs), yt = ticks(ys);
+    for (std::size_t j = 0; j < ny; ++j)
+        for (std::size_t i = 0; i < nx; ++i) {
+            const Paths64 cell{
+                {{xt[i], yt[j]}, {xt[i + 1], yt[j]}, {xt[i + 1], yt[j + 1]}, {xt[i], yt[j + 1]}}};
+            const auto clipped = Intersect(united, cell, FillRule::NonZero);
+            const Real area = std::abs(Area(clipped)) * dbu_m * dbu_m;
+            const Real cell_area = (xs[i + 1] - xs[i]) * (ys[j + 1] - ys[j]);
+            result[level0_dense(static_cast<std::uint32_t>(nx),
+                                static_cast<std::uint32_t>(ny),
+                                static_cast<std::uint32_t>(i),
+                                static_cast<std::uint32_t>(j))] =
+                std::clamp(area / cell_area, Real(0), Real(1));
+        }
+    return result;
 #endif
 }
 
@@ -206,32 +295,7 @@ Real copper_union_area_m2(const PolysetLayer& layer, Real dbu_m) {
     (void)dbu_m;
     throw std::runtime_error("polygon copper rasterization requires CHIPCAE_ENABLE_ECAD");
 #else
-    if (!std::isfinite(dbu_m) || !(dbu_m > 0))
-        throw std::invalid_argument("copper database unit must be finite and positive");
-    if (layer.ring_offsets.size() < 2 || layer.coordinates.size() % 2 != 0)
-        throw std::invalid_argument("invalid polyset geometry");
-    const auto point_count = layer.coordinates.size() / 2;
-    if (layer.ring_offsets.front() != 0 || layer.ring_offsets.back() < 0 ||
-        static_cast<std::uint64_t>(layer.ring_offsets.back()) != point_count)
-        throw std::invalid_argument("invalid polyset ring offsets");
-    // Validate the entire array before constructing any polygon paths.
-    for (std::size_t i = 0; i < layer.ring_offsets.size(); ++i) {
-        const auto offset = layer.ring_offsets[i];
-        if (offset < 0 || static_cast<std::uint64_t>(offset) > point_count ||
-            (i > 0 && offset <= layer.ring_offsets[i - 1]))
-            throw std::invalid_argument("invalid polyset ring offsets");
-    }
-    Clipper2Lib::Paths64 paths;
-    for (std::size_t r = 0; r + 1 < layer.ring_offsets.size(); ++r) {
-        const auto begin = layer.ring_offsets[r], end = layer.ring_offsets[r + 1];
-        if (end - begin < 3)
-            continue;
-        auto& path = paths.emplace_back();
-        path.reserve(static_cast<std::size_t>(end - begin));
-        for (auto point = static_cast<std::size_t>(begin); point < static_cast<std::size_t>(end);
-             ++point)
-            path.emplace_back(layer.coordinates[2 * point], layer.coordinates[2 * point + 1]);
-    }
+    const auto paths = native_copper_paths(layer, dbu_m);
     const auto united = Clipper2Lib::Union(paths, Clipper2Lib::FillRule::NonZero);
     const Real area = Clipper2Lib::Area(united) * dbu_m * dbu_m;
     // Normalize signed zero for JSON output.
