@@ -256,7 +256,7 @@ class Board:
         check(ds, 'import_report.json.defects must contain real unsupported entries')
         for d in ds:
             check(d['kind'] == 'IMPORT_UNSUPPORTED_ELEMENT', 'unsupported defect kind')
-            check(d['tier'] in ('B','C'), 'unsupported defect tier')
+            check(d['tier'] in ('B','C') or (d['tier'] == 'A' and d['action'] in ('non-physical metadata ignored', 'definition expressed by modeled instances')), 'unsupported defect tier')
             check(d['defect_id'].startswith('board/'), 'ECAD defect IDs require board/ prefix')
             check(str(self.root) not in d['defect_id'], 'defect ID depends on source path')
         return ds

@@ -125,6 +125,26 @@ classify_unsupported(const ecad::ImportReport& report, std::vector<SkippedRow>& 
             defect.tier = Tier::B;
             defect.suggestion = "confirm omitted metadata, components or text";
         }
+        static const std::set<std::string> kAWhitelist{
+            "netlist",         // M-1
+            "content",         // M-2/M-3
+            "bom",             // M-3
+            "header",          // M-4
+            "step-attr",       // M-5
+            "datum",           // M-6
+            "spec-electrical", // M-7
+            "spec-text",       // M-8
+            "doc-layer",       // M-9
+            "outline-doc",     // M-10
+            "empty-dict",      // M-11
+            "def-instanced"    // Definition instances, proposal §3
+        };
+        if (!odb && defect.tier == Tier::B && kAWhitelist.contains(entry.context)) {
+            defect.tier = Tier::A;
+            defect.suggestion = entry.context == "def-instanced"
+                                    ? "definition expressed by modeled instances"
+                                    : "non-physical metadata ignored";
+        }
         if (text.starts_with("SolderMask:"))
             defect.suggestion = "solder mask not modeled";
         if (text.starts_with("ViaPlatingMissing:")) {
