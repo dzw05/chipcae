@@ -352,3 +352,10 @@ if(_solve_backend AND TARGET chipcae-import AND TARGET chipcae-preview)
     set_tests_properties(solve_lu_refine_floor PROPERTIES TIMEOUT 600 LABELS "solve;numerical;mpi;io"
         ENVIRONMENT "OMP_NUM_THREADS=2;OPENBLAS_NUM_THREADS=1;OMPI_ALLOW_RUN_AS_ROOT=1;OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1")
 endif()
+if(_solve_backend)
+    add_test(NAME solve_fvm_trace_map COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_fvm_trace_map.py
+        $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE})
+    set_tests_properties(solve_fvm_trace_map PROPERTIES
+        TIMEOUT 900 LABELS "fvm;numerical" SKIP_RETURN_CODE 77)
+endif()
