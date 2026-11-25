@@ -115,6 +115,7 @@ step paths, field descriptors, four blocks, stackup.json, and summary entries.
 The input chipcae.stack 0.2 JSON is copied verbatim as stackup.json; the caller
 must validate it against schema/stack-0.2.schema.json. The legacy ResultManifest
 and ResultWriter APIs remain available unchanged.
+Step VTKHDF files omit HDF5 object timestamps and are byte-identical for identical input.
 
 Every published step requires solver summaries warpage_pv (m), T_max (K), and
 U_mag_max (m). warpage_pv must come from the solver's full Q2 field with the

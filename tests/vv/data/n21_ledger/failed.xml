@@ -1,0 +1,3 @@
+<testsuite name="synthetic">
+  <testcase name="required_case" status="run"><failure message="synthetic failure"/><system-out>failed check</system-out></testcase>
+</testsuite>
