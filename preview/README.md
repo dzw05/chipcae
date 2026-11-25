@@ -16,15 +16,17 @@ chipcae-preview input.stack.json --nx 2 --ny 2 --levels 0 -o output.vtkhdf
 
 `-o` accepts a stem or a filename ending in `.vtkhdf`. `--nx` and `--ny`
 must appear together and be positive integers. `--levels` accepts a nonnegative
-integer; 0 retains automatic hierarchy selection. Defaults come from `GridOptions`, except `--max-ratio R` defaults to 10 for preview (finite R >= 1): the K1
-FCBGA example has a 10:1 interface cell-height jump and fails the library
-default of 2. Preview accepts ratio 1; solve requires a ratio greater than 1.
+integer; 0 retains automatic hierarchy selection. Defaults come from `GridOptions`:
+`--max-ratio R` defaults to 2 (finite R >= 1), matching solve when `mesh.max_ratio`
+is omitted. The K1 / FCBGA demo fixture requires explicit `--max-ratio 10` because
+it has a 10:1 interface cell-height jump. Preview accepts ratio 1; solve requires
+a ratio greater than 1.
 
 `--cell-budget B` accepts an integer in [1, INT_MAX] and sets the grid cell budget
 (default 50000). `--min-elems-per-layer M` accepts the same integer range and
 applies `max(layer.n_elem_min, M)` to every layer. Omitting it preserves the stack's
-layer counts. Preview defaults differ from solve: preview uses ratio 10 and the
-stack layer counts, while solve defaults to ratio 2 and a layer minimum of 2.
+layer counts. Preview and solve both default to ratio 2. Preview retains the stack
+layer counts, while solve defaults to a layer minimum of 2.
 To reproduce a solve mesh, supply its case values explicitly. For a case that
 omits all three controls, use the solve defaults:
 

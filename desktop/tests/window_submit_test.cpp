@@ -34,6 +34,7 @@
 #include <QProcessEnvironment>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QSpinBox>
 #include <QStatusBar>
 #include <QStringList>
 #include <QSurfaceFormat>
@@ -41,10 +42,12 @@
 #include <QTemporaryDir>
 #include <QTextEdit>
 #include <QThread>
+#include <QTimer>
 #include <QUuid>
 #include <QVTKOpenGLNativeWidget.h>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <vtkDataObject.h>
@@ -657,6 +660,65 @@ jobs::Job persistedJob(const QString& root) {
     check(job.ParseFromString(read(dirs.first() + "/job.pb").toStdString()),
           "valid persisted service Job");
     return job;
+}
+QJsonObject documentMesh(MainWindow& w) {
+    return QJsonDocument::fromJson(
+               QByteArray::fromStdString(w.document()->toJson()["mesh"].to_string()))
+        .object();
+}
+QJsonObject submittedMesh(const jobs::Job& job) {
+    return QJsonDocument::fromJson(
+               read(QString::fromStdString(job.result_dir()) + "/inputs/case.json"))
+        .object()["mesh"]
+        .toObject();
+}
+struct SubmitMeshState {
+    int nx = 0;
+    bool locked = false;
+    bool named = false;
+    bool enabled = true;
+    QString tooltip;
+};
+SubmitMeshState submitMeshState(const SubmitDialog& dialog) {
+    SubmitMeshState state;
+    state.nx = dialog.meshNx();
+    state.locked = dialog.meshNxLocked();
+    if (auto* spin = dialog.findChild<QSpinBox*>("meshNx")) {
+        state.named = true;
+        state.enabled = spin->isEnabled();
+        state.tooltip = spin->toolTip();
+    }
+    return state;
+}
+SubmitMeshState rejectSubmitMenu(MainWindow& w) {
+    QAction* submit = nullptr;
+    for (auto* action : w.findChildren<QAction*>())
+        if (action->text() == QStringLiteral("Submit")) {
+            check(!submit, "one Submit menu action");
+            submit = action;
+        }
+    check(submit != nullptr, "Submit menu action exists");
+    SubmitMeshState state;
+    bool inspected = false;
+    // Inspect during exec(), and reject before making assertions that can throw.
+    QTimer::singleShot(0, &w, [&] {
+        if (auto* dialog = dynamic_cast<SubmitDialog*>(QApplication::activeModalWidget())) {
+            state = submitMeshState(*dialog);
+            inspected = true;
+            dialog->reject();
+        }
+    });
+    submit->trigger();
+    check(inspected, "queued callback inspects the actual modal SubmitDialog");
+    return state;
+}
+void checkSubmitMeshState(const SubmitMeshState& state, bool locked, int nx) {
+    check(state.nx == nx, "Submit menu displays the expected document or session nx");
+    check(state.locked == locked, "Submit dialog reports expected preview mesh lock");
+    check(state.named, "Mesh nx spin has stable object name meshNx");
+    check(state.enabled == !locked, "only an unlocked Mesh nx spin is enabled");
+    check(state.tooltip == (locked ? QStringLiteral("沿用预览写入 case 的网格参数") : QString()),
+          "Mesh nx tooltip reflects preview lock exactly");
 }
 QPushButton* button(MainWindow& w, const QString& text) {
     for (auto* b : w.findChildren<QPushButton*>())
@@ -1645,6 +1707,283 @@ int main(int argc, char** argv) {
                  check(w.meshDigestDialogChoice() == Choice::Cancel &&
                            w.property("meshDigestWarningText") == warning,
                        "early failure does not consume or replace digest warning");
+             });
+    }
+    test("submit after write-case keeps specified preview mesh", [&] {
+        Fixture f(argv[1]);
+        f.configure();
+        MainWindow w;
+        f.openCase(w);
+        successfulPreview(w, f, specifiedOptions());
+        check(w.writePreviewToCase(), "specified preview writes to case");
+        const auto expected = documentMesh(w);
+        w.setMeshDigestDialogChoice(Choice::Accept);
+        check(w.submitCurrentCase(), "case with written specified preview submits");
+        const auto job = persistedJob(f.root());
+        const auto submitted = submittedMesh(job);
+        f.release();
+        check(waitFor([&] { return persistedJob(f.root()).state() == jobs::JOB_STATE_COMPLETED; }),
+              "specified preview job completes");
+        check(documentMesh(w) == expected, "submit preserves the full written specified mesh");
+        check(submitted == documentMesh(w), "submitted mesh equals current document mesh");
+        check(submitted["nx"].toInt() == 8 && submitted["ny"].toInt() == 9 &&
+                  submitted["levels"].toInt() == 3 && submitted["max_ratio"].toDouble() == 12,
+              "submitted specified nx=8 ny=9 levels=3 max_ratio=12 exactly");
+        check(submitted["cell_budget"].toInt() == expected["cell_budget"].toInt() &&
+                  submitted["cell_budget"] == expected["cell_budget"],
+              "submit preserves cell_budget exactly");
+    });
+    test("submit after write-case keeps automatic preview mesh", [&] {
+        Fixture f(argv[1]);
+        f.configure();
+        MainWindow w;
+        f.openCase(w);
+        successfulPreview(w, f, PreviewOptions{});
+        const auto effective = previewController(w)->effectiveOptions();
+        check(effective.nx && effective.ny, "automatic preview provides effective dimensions");
+        check(w.writePreviewToCase(), "automatic preview writes to case");
+        const auto expected = documentMesh(w);
+        w.setMeshDigestDialogChoice(Choice::Accept);
+        check(w.submitCurrentCase(), "case with written automatic preview submits");
+        const auto submitted = submittedMesh(persistedJob(f.root()));
+        f.release();
+        check(waitFor([&] { return persistedJob(f.root()).state() == jobs::JOB_STATE_COMPLETED; }),
+              "automatic preview job completes");
+        check(documentMesh(w) == expected, "submit preserves the full written automatic mesh");
+        check(submitted == documentMesh(w), "submitted automatic mesh equals current document");
+        check(submitted.contains("nx") && submitted.contains("ny") &&
+                  submitted["nx"].toInt() == *effective.nx &&
+                  submitted["ny"].toInt() == *effective.ny,
+              "automatic preview submission preserves effective nx and ny");
+    });
+    test("submit twice after write-case keeps mesh", [&] {
+        Fixture f(argv[1]);
+        f.configure();
+        MainWindow w;
+        f.openCase(w);
+        successfulPreview(w, f, PreviewOptions{});
+        const auto effective = previewController(w)->effectiveOptions();
+        check(effective.nx && effective.ny, "automatic preview provides effective dimensions");
+        check(w.writePreviewToCase(), "automatic preview writes before repeated submit");
+        const auto expected = documentMesh(w);
+        w.setMeshDigestDialogChoice(Choice::Accept);
+        check(w.submitCurrentCase(), "first preview case submit succeeds");
+        const auto first = persistedJob(f.root());
+        const auto firstDirectories = runDirectories(f.root());
+        f.release();
+        check(waitFor([&] { return persistedJob(f.root()).state() == jobs::JOB_STATE_COMPLETED; }),
+              "first job reaches COMPLETED before another submit");
+        // Allow the completion handler to open synthetic results before replacing its monitor.
+        check(waitFor([&] { return w.resultView() != nullptr; }), "first results open");
+        const auto afterFirst = documentMesh(w);
+        check(w.submitCurrentCase(), "second preview case submit succeeds");
+        auto newDirectories = runDirectories(f.root());
+        check(newDirectories.size() == 2, "two submits persist exactly two run directories");
+        for (const auto& dir : firstDirectories)
+            newDirectories.removeAll(dir);
+        check(newDirectories.size() == 1, "second submit creates one distinct run directory");
+        jobs::Job second;
+        const auto secondDirectory = newDirectories.first();
+        auto readSecond = [&] {
+            check(second.ParseFromString(read(secondDirectory + "/job.pb").toStdString()),
+                  "second job.pb parses independently of directory iteration order");
+            return second.state();
+        };
+        check(waitFor([&] { return readSecond() == jobs::JOB_STATE_COMPLETED; }),
+              "second job completes with the released solver gate");
+        check(second.run_id() != first.run_id() && second.result_dir() != first.result_dir(),
+              "repeated submissions have distinct run IDs and result directories");
+        check(afterFirst == expected && documentMesh(w) == expected,
+              "both submits preserve the saved automatic document mesh");
+        const auto firstMesh = submittedMesh(first);
+        const auto secondMesh = submittedMesh(second);
+        check(firstMesh == expected && secondMesh == expected && firstMesh == documentMesh(w) &&
+                  secondMesh == documentMesh(w),
+              "both submitted meshes equal the saved and current document mesh");
+        check(firstMesh.contains("nx") && firstMesh.contains("ny") && secondMesh.contains("nx") &&
+                  secondMesh.contains("ny") && firstMesh["nx"].toInt() == *effective.nx &&
+                  firstMesh["ny"].toInt() == *effective.ny &&
+                  secondMesh["nx"].toInt() == *effective.nx &&
+                  secondMesh["ny"].toInt() == *effective.ny,
+              "both automatic submissions preserve effective nx and ny");
+    });
+    test("mesh edit after write-case releases lock", [&] {
+        Fixture f(argv[1]);
+        f.configure();
+        MainWindow w;
+        f.openCase(w);
+        successfulPreview(w, f, specifiedOptions());
+        check(w.writePreviewToCase(), "specified preview writes before mesh edit");
+        w.document()->setValue("/mesh/levels", Json(2));
+        w.setMeshDigestDialogChoice(Choice::Accept);
+        check(w.submitCurrentCase(), "edited preview case submits");
+        const auto submitted = submittedMesh(persistedJob(f.root()));
+        f.release();
+        check(waitFor([&] { return persistedJob(f.root()).state() == jobs::JOB_STATE_COMPLETED; }),
+              "edited mesh job completes");
+        check(submitted["nx"].toInt() == 4 && submitted["levels"].toInt() == 2,
+              "mesh edit releases lock and preserves edited levels while using session nx=4");
+    });
+    test("reopen case clears preview lock", [&] {
+        Fixture f(argv[1]);
+        f.configure();
+        MainWindow w;
+        f.openCase(w);
+        successfulPreview(w, f, specifiedOptions());
+        check(w.writePreviewToCase(), "specified preview writes before reopen");
+        f.openCase(w);
+        w.setMeshDigestDialogChoice(Choice::Accept);
+        check(w.submitCurrentCase(), "reopened case submits");
+        const auto submitted = submittedMesh(persistedJob(f.root()));
+        f.release();
+        check(waitFor([&] { return persistedJob(f.root()).state() == jobs::JOB_STATE_COMPLETED; }),
+              "reopened case job completes");
+        check(submitted["nx"].toInt() == 4, "reopening case restores session nx=4 submission");
+    });
+    test("submit dialog mesh nx lock", [&] {
+        SubmitDialog d;
+        d.setMeshNx(8);
+        d.setMeshNxLocked(true);
+        const auto locked = submitMeshState(d);
+        auto* meshNx = d.findChild<QSpinBox*>("meshNx");
+        for (auto* spin : d.findChildren<QSpinBox*>())
+            if (spin != meshNx)
+                check(spin->isEnabled(), "locking Mesh nx leaves profile numeric inputs enabled");
+        d.setMeshNxLocked(false);
+        const auto unlocked = submitMeshState(d);
+        check(d.meshNx() == 8 && locked.nx == 8 && unlocked.nx == 8,
+              "lock toggles preserve Mesh nx value");
+        for (auto* spin : d.findChildren<QSpinBox*>())
+            check(spin->isEnabled(), "unlock leaves all numeric inputs enabled");
+        checkSubmitMeshState(locked, true, 8);
+        checkSubmitMeshState(unlocked, false, 8);
+
+        SubmitDialog large;
+        large.setMeshNx(1000001);
+        check(large.meshNx() == 1000000, "unlocked Mesh nx retains its existing editable limit");
+        large.setMeshNxLocked(true);
+        for (const auto nx : {1000001, std::numeric_limits<int>::max()}) {
+            large.setMeshNx(nx);
+            checkSubmitMeshState(submitMeshState(large), true, nx);
+        }
+        large.setMeshNxLocked(false);
+        checkSubmitMeshState(submitMeshState(large), false, std::numeric_limits<int>::max());
+
+        Fixture f(argv[1]);
+        f.configure();
+        MainWindow w;
+        f.openCase(w);
+        auto options = specifiedOptions();
+        options.nx = 1000001;
+        successfulPreview(w, f, options);
+        check(w.writePreviewToCase(), "preview above editable nx limit writes to case");
+        const auto expected = documentMesh(w);
+        checkSubmitMeshState(rejectSubmitMenu(w), true, 1000001);
+        check(documentMesh(w) == expected && expected["nx"].toInt() == 1000001,
+              "displaying large locked nx preserves the written mesh");
+        check(runDirectories(f.root()).isEmpty(),
+              "large locked nx dialog rejection creates no job");
+    });
+    test("Submit menu keeps preview lock after cache invalidation", [&] {
+        Fixture f(argv[1]);
+        f.configure();
+        MainWindow w;
+        f.openCase(w);
+        successfulPreview(w, f, specifiedOptions());
+        check(w.writePreviewToCase(), "write specified mesh before inspecting Submit menu");
+        const auto expected = documentMesh(w);
+        const auto written = rejectSubmitMenu(w);
+        check(!w.openCase(f.temp.filePath("missing.json")) &&
+                  !w.loadHandwrittenStack(f.temp.filePath("missing-stack.json")),
+              "failed replacements are rejected");
+        const auto failedReplacement = rejectSubmitMenu(w);
+        QObject receiver;
+        bool finished = false, success = true;
+        QObject::connect(
+            previewController(w), &PreviewController::finished, &receiver, [&](bool ok) {
+                finished = true;
+                success = ok;
+            });
+        check(w.previewMesh(PYTHON_EXECUTABLE, {f.previewScript({}, true)}, specifiedOptions()),
+              "next preview starts and clears the successful preview cache");
+        check(waitFor([&] { return finished; }) && !success,
+              "failed next preview completes without replacing the mesh");
+        check(!w.writePreviewToCaseEnabled(), "failed next preview leaves its write cache empty");
+        check(documentMesh(w) == expected, "cache invalidation leaves written mesh unchanged");
+        const auto invalidated = rejectSubmitMenu(w);
+        check(runDirectories(f.root()).isEmpty(), "rejected Submit dialogs create no jobs");
+        checkSubmitMeshState(written, true, 8);
+        checkSubmitMeshState(failedReplacement, true, 8);
+        checkSubmitMeshState(invalidated, true, 8);
+    });
+    test("restoring written mesh restores Submit lock", [&] {
+        Fixture f(argv[1]);
+        f.configure();
+        MainWindow w;
+        f.openCase(w);
+        successfulPreview(w, f, specifiedOptions());
+        check(w.writePreviewToCase(), "write specified mesh before restoring an edit");
+        const Json expected = w.document()->toJson().at("mesh");
+        w.document()->setValue("/mesh/levels", Json(2));
+        const auto edited = rejectSubmitMenu(w);
+        w.document()->setValue("/mesh", expected);
+        const auto restored = rejectSubmitMenu(w);
+        check(runDirectories(f.root()).isEmpty(), "restore-lock dialog inspection creates no job");
+        checkSubmitMeshState(restored, true, 8);
+        checkSubmitMeshState(edited, false, 4);
+    });
+    for (auto replacement : {"case", "handwritten stack", "ECAD", "assembly"}) {
+        test((QString("document replacement clears written preview lock: ") + replacement)
+                 .toUtf8()
+                 .constData(),
+             [&] {
+                 Fixture f(argv[1]);
+                 f.configure();
+                 MainWindow w;
+                 f.openCase(w);
+                 successfulPreview(w, f, specifiedOptions());
+                 check(w.writePreviewToCase(), "write mesh before successful replacement");
+                 const Json expected = w.document()->toJson().at("mesh");
+                 const auto written = rejectSubmitMenu(w);
+                 if (QString(replacement) == "case") {
+                     f.openCase(w);
+                 } else if (QString(replacement) == "handwritten stack") {
+                     check(w.loadHandwrittenStack(), "handwritten replacement succeeds");
+                 } else if (QString(replacement) == "assembly") {
+                     importAssembly(w, assemblyInput());
+                 } else {
+                     ImportRequest request;
+                     request.input = f.temp.filePath("fixture.xml");
+                     request.output = f.temp.filePath("import.stack.json");
+                     request.materialMap = f.temp.filePath("material-map.json");
+                     request.polyset = f.temp.filePath("import.polyset");
+                     request.report = f.temp.filePath("defects.json");
+                     request.program = PYTHON_EXECUTABLE;
+                     request.prefix = {QString(CHIPCAE_REPOSITORY) +
+                                       "/desktop/tools/mock_import.py"};
+                     write(request.input, "success");
+                     write(request.materialMap, "{}");
+                     QObject receiver;
+                     bool finished = false, replaced = false;
+                     QObject::connect(w.importController(),
+                                      &ImportController::finished,
+                                      &receiver,
+                                      [&](bool ok) {
+                                          finished = true;
+                                          replaced = ok;
+                                      });
+                     check(w.importController()->start(request), "ECAD replacement starts");
+                     check(waitFor([&] { return finished; }) && replaced,
+                           "ECAD successfully replaces the document");
+                 }
+                 const auto replaced = rejectSubmitMenu(w);
+                 // Equal mesh in a new document must not revive the old document's snapshot.
+                 w.document()->setValue("/mesh", expected);
+                 const auto sameMesh = rejectSubmitMenu(w);
+                 check(runDirectories(f.root()).isEmpty(), "replacement dialog creates no job");
+                 checkSubmitMeshState(written, true, 8);
+                 checkSubmitMeshState(replaced, false, 4);
+                 checkSubmitMeshState(sameMesh, false, 4);
              });
     }
     test("write preview restores every field repeatedly and through action", [&] {

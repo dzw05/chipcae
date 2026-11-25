@@ -3,6 +3,7 @@
 #include "SchemaForm.hpp"
 
 #include <QTreeView>
+class QMenu;
 namespace chipcae::desktop {
 class CaseTreeView : public QTreeView {
     Q_OBJECT
@@ -11,6 +12,7 @@ public:
                  SchemaForm* form,
                  const QString& schemaDirectory,
                  QWidget* parent = nullptr);
+    QMenu* contextMenuFor(const QModelIndex& index);
     bool commitEdit();
     void cancelEdit();
     bool highlight(const DocumentError& error);

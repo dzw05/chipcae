@@ -34,6 +34,7 @@ int main(int argc, char** argv) {
         auto output = dir / "grid";
         auto invoke = [&](const std::string& args,
                           int expected_code,
+                          double expected_max_ratio,
                           int expected_levels = -1,
                           std::string expected_n0 = "",
                           bool use_mpi = true,
@@ -68,8 +69,10 @@ int main(int argc, char** argv) {
                 if (last == "success") {
                     auto params = jsoncons::json::parse(event.at("message").as<std::string>());
                     expect(params.at("grid").is_string(), "effective grid");
-                    expect(params.at("max_ratio").as<double>() ==
-                               (args.find("--max-ratio 12.5") != std::string::npos ? 12.5 : 10),
+                    if (params.at("max_ratio").as<double>() != expected_max_ratio)
+                        std::cerr << "Expected max_ratio " << expected_max_ratio << ", actual "
+                                  << params.at("max_ratio").as<double>() << '\n';
+                    expect(params.at("max_ratio").as<double>() == expected_max_ratio,
                            "effective max ratio");
                     expect(
                         params.at("L").as<int>() ==
@@ -91,8 +94,9 @@ int main(int argc, char** argv) {
                    "terminal JSON event");
             return summary;
         };
-        auto base = shell(fixture.string()) + " --nx 2 --ny 2 --levels 0";
-        invoke(base + " -o " + shell(output.string()), 0);
+        auto ratio_free_base = shell(fixture.string()) + " --nx 2 --ny 2 --levels 0";
+        auto base = ratio_free_base + " --max-ratio 10";
+        invoke(base + " -o " + shell(output.string()), 0, 10);
         auto grid = fs::path(output.string() + ".vtkhdf");
         expect(fs::exists(grid), "grid output exists");
         hid_t file = H5Fopen(grid.c_str(), H5F_ACC_RDONLY, H5P_DEFAULT);
@@ -199,17 +203,20 @@ int main(int argc, char** argv) {
         H5Fclose(file);
         std::cout << "K1 NumberOfCells=" << nc
                   << "; layer_id/material_id int32 values and shape verified\n";
-        invoke(base + " --max-ratio 12.5 -o " + shell((dir / "ratio").string()), 0);
+        invoke(
+            ratio_free_base + " --max-ratio 12.5 -o " + shell((dir / "ratio").string()), 0, 12.5);
         auto exact = dir / "exact.vtkhdf";
         auto surface = dir / "custom.eb.vtkhdf";
-        invoke(base + " -o " + shell(exact.string()) + " --surface " + shell(surface.string()), 0);
+        invoke(
+            base + " -o " + shell(exact.string()) + " --surface " + shell(surface.string()), 0, 10);
         expect(fs::exists(exact) && fs::exists(surface) && !fs::exists(exact.string() + ".vtkhdf"),
                "exact output paths");
         invoke(base + " -o " + shell((dir / "rename-failure").string()) + " --surface " +
                    shell((dir / "missing/surface.vtkhdf").string()),
-               1);
+               1,
+               10);
         auto dot = dir / ".vtkhdf";
-        invoke(base + " -o " + shell(dot.string()), 0);
+        invoke(base + " -o " + shell(dot.string()), 0, 10);
         expect(fs::exists(dot) && !fs::exists(dot.string() + ".vtkhdf"), "leading dot output");
         auto real = dir / "real";
         fs::create_directory(real);
@@ -217,9 +224,13 @@ int main(int argc, char** argv) {
         auto alias_grid = real / "alias.vtkhdf";
         invoke(base + " -o " + shell(alias_grid.string()) + " --surface " +
                    shell((dir / "link/alias.vtkhdf").string()),
-               1);
+               1,
+               10);
         expect(!fs::exists(alias_grid), "symlink alias rejected before writing");
-        invoke(shell(fixture.string()) + " --levels 32 -o " + shell((dir / "levels").string()), 4);
+        invoke(shell(fixture.string()) + " --levels 32 --max-ratio 10 -o " +
+                   shell((dir / "levels").string()),
+               4,
+               10);
 #ifdef CHIPCAE_TEST_ECAD
         std::ifstream copper_in(fs::path(K1_ROOT) / "schema/examples/fcbga_cu.stack.json");
         auto copper = jsoncons::json::parse(copper_in);
@@ -249,34 +260,50 @@ int main(int argc, char** argv) {
         expect(bool(chipcae::mesh::load_stack(two,
                                               fs::path(K1_ROOT) / "schema/stack-0.2.schema.json")),
                "valid two-sidecar stack");
-        invoke(shell(two.string()) + " -o " + shell((dir / "two").string()), 1);
+        invoke(shell(two.string()) + " -o " + shell((dir / "two").string()), 1, 10);
         std::ifstream diagnostic(dir / "stderr");
         std::string message((std::istreambuf_iterator<char>(diagnostic)), {});
         expect(message.find("duplicate polyset layer name: L1") != std::string::npos,
                "reject ambiguous sidecar names");
         expect(!fs::exists(dir / "two.vtkhdf"), "no ambiguous copper output");
 #endif
+        auto stderr_contains = [&](const char* path) {
+            std::ifstream diagnostic(dir / "stderr");
+            std::string message((std::istreambuf_iterator<char>(diagnostic)), {});
+            expect(message.find(path) != std::string::npos, "mesh error path in stderr");
+        };
         auto bad = dir / "bad";
         for (const auto& args : std::vector<std::string>{
                  base,
                  shell((dir / "absent.stack.json").string()) + " -o " + shell(bad.string()),
                  shell(fixture.string()) + " --nx 2 -o " + shell(bad.string()),
                  base + " --nx 3 -o " + shell(bad.string()),
-                 base + " --max-ratio nan -o " + shell(bad.string()),
-                 base + " --max-ratio 0.5 -o " + shell(bad.string()),
-                 base + " --max-ratio 10junk -o " + shell(bad.string()),
                  base + " --levels nope -o " + shell(bad.string())}) {
-            invoke(args, 1);
+            invoke(args, 1, 10);
             expect(!fs::exists(bad.string() + ".vtkhdf") &&
                        !fs::exists(bad.string() + ".eb.vtkhdf"),
                    "no failed output");
         }
+        for (const auto& [ratio_args, diagnostic] :
+             std::vector<std::pair<std::string, std::string>>{
+                 {"--max-ratio nan", "invalid max ratio: nan"},
+                 {"--max-ratio 0.5", "invalid max ratio: 0.5"},
+                 {"--max-ratio 10junk", "invalid max ratio: 10junk"},
+                 {"--max-ratio", "missing value for --max-ratio"},
+                 {"--max-ratio 10 --max-ratio 12.5", "duplicate option: --max-ratio"}}) {
+            invoke(ratio_free_base + " -o " + shell(bad.string()) + " " + ratio_args, 1, 10);
+            stderr_contains(diagnostic.c_str());
+            expect(!fs::exists(bad.string() + ".vtkhdf") &&
+                       !fs::exists(bad.string() + ".eb.vtkhdf"),
+                   "no invalid ratio output");
+        }
         invoke(shell((dir / std::string("invalid-\xff.stack.json")).string()) + " -o " +
                    shell(bad.string()),
-               1);
+               1,
+               10);
         auto invalid = dir / "invalid.stack.json";
         std::ofstream(invalid) << "{\"bad\": true}";
-        invoke(shell(invalid.string()) + " -o " + shell(bad.string()), 1);
+        invoke(shell(invalid.string()) + " -o " + shell(bad.string()), 1, 10);
         expect(!fs::exists(bad.string() + ".vtkhdf"), "no invalid stack output");
         auto tiny = dir / "tiny.stack.json";
         const std::string tiny_input = R"({"id":"tiny","unit":"m","outline":{"box":[0,0,7,5]},
@@ -301,19 +328,72 @@ int main(int argc, char** argv) {
                 std::cerr << name << ": " << error.what() << '\n';
             }
         };
-        auto stderr_contains = [&](const char* path) {
-            std::ifstream diagnostic(dir / "stderr");
-            std::string message((std::istreambuf_iterator<char>(diagnostic)), {});
-            expect(message.find(path) != std::string::npos, "mesh error path in stderr");
-        };
+        for (bool use_mpi : (argc == 4 ? std::vector<bool>{false, true} : std::vector<bool>{false}))
+            acceptance(use_mpi ? "K1 omitted ratio MPI" : "K1 omitted ratio serial", [&] {
+                auto stem = dir / (use_mpi ? "k1-default-mpi" : "k1-default-serial");
+                invoke(ratio_free_base + " -o " + shell(stem.string()),
+                       14,
+                       2.0,
+                       -1,
+                       "",
+                       use_mpi,
+                       "layers");
+                stderr_contains("interface adjacent size ratio exceeds max_ratio");
+                expect(!fs::exists(stem.string() + ".vtkhdf") &&
+                           !fs::exists(stem.string() + ".eb.vtkhdf"),
+                       "no K1 omitted ratio output");
+            });
+        for (bool use_mpi : (argc == 4 ? std::vector<bool>{false, true} : std::vector<bool>{false}))
+            acceptance(use_mpi ? "default max ratio MPI" : "default max ratio serial", [&] {
+                auto default_stack = chipcae::mesh::load_stack(
+                    tiny, fs::path(K1_ROOT) / "schema/stack-0.2.schema.json");
+                expect(bool(default_stack), "default ratio stack");
+                chipcae::mesh::GridOptions default_options{};
+                default_options.nx = 7;
+                default_options.ny = 5;
+                default_options.levels = 1;
+                default_options.ranks = argc == 4 && use_mpi ? 2 : 1;
+                expect(default_options.max_ratio == 2.0, "reference default max ratio is 2");
+                auto default_mesh =
+                    chipcae::mesh::build_tensor_grid(default_stack.value(), default_options);
+                expect(bool(default_mesh), "default ratio reference mesh");
+                auto stem = dir / (use_mpi ? "default-mpi" : "default-serial");
+                invoke(shell(tiny.string()) + " --nx 7 --ny 5 --levels 1 -o " +
+                           shell(stem.string()),
+                       0,
+                       2.0,
+                       0,
+                       "7x5",
+                       use_mpi);
+                auto default_grid = fs::path(stem.string() + ".vtkhdf");
+                expect(fs::exists(default_grid), "default ratio grid output exists");
+                hid_t default_file = H5Fopen(default_grid.c_str(), H5F_ACC_RDONLY, H5P_DEFAULT);
+                expect(default_file >= 0, "open default ratio output");
+                hid_t default_cells = H5Dopen2(default_file, "VTKHDF/NumberOfCells", H5P_DEFAULT);
+                std::int64_t default_nc = 0;
+                expect(default_cells >= 0 && H5Dread(default_cells,
+                                                     H5T_NATIVE_INT64,
+                                                     H5S_ALL,
+                                                     H5S_ALL,
+                                                     H5P_DEFAULT,
+                                                     &default_nc) >= 0,
+                       "read default ratio cell count");
+                H5Dclose(default_cells);
+                H5Fclose(default_file);
+                expect(default_nc > 0, "positive default ratio cell count");
+                expect(static_cast<std::size_t>(default_nc) ==
+                           default_mesh.value().attribute.size(),
+                       "default ratio cell coverage matches GridOptions reference");
+            });
         for (bool use_mpi : (argc == 4 ? std::vector<bool>{false, true} : std::vector<bool>{false}))
             acceptance(use_mpi ? "tiny padding and SHA MPI" : "tiny padding and SHA serial", [&] {
                 constexpr int nx_req = 7, ny_req = 5;
                 auto summary =
                     invoke(shell(tiny.string()) + " --nx " + std::to_string(nx_req) + " --ny " +
-                               std::to_string(ny_req) + " --levels 2 -o " +
+                               std::to_string(ny_req) + " --levels 2 --max-ratio 10 -o " +
                                shell((dir / (use_mpi ? "padded-mpi" : "padded-serial")).string()),
                            0,
+                           10,
                            1,
                            "4x3",
                            use_mpi);
@@ -345,9 +425,10 @@ int main(int argc, char** argv) {
         for (bool use_mpi :
              (argc == 4 ? std::vector<bool>{false, true} : std::vector<bool>{false})) {
             auto summary =
-                invoke(shell(multi_path.string()) + " --nx 7 --ny 4 --levels 2 -o " +
+                invoke(shell(multi_path.string()) + " --nx 7 --ny 4 --levels 2 --max-ratio 10 -o " +
                            shell((dir / (use_mpi ? "multi-mpi" : "multi-serial")).string()),
                        0,
+                       10,
                        1,
                        "4x2",
                        use_mpi);
@@ -360,15 +441,17 @@ int main(int argc, char** argv) {
         invoke(base + " --polyset " + shell((dir / "missing.poly").string()) + " -o " +
                    shell((dir / "missing-polyset").string()),
                1,
+               10,
                -1,
                "",
                false);
         fs::create_directory(dir / "blocked.vtkhdf");
-        invoke(base + " -o " + shell((dir / "blocked").string()), 1, -1, "", false);
+        invoke(base + " -o " + shell((dir / "blocked").string()), 1, 10, -1, "", false);
         acceptance("tiny cell budget", [&] {
-            invoke(shell(tiny.string()) + " --nx 50001 --ny 1 --levels 1 -o " +
+            invoke(shell(tiny.string()) + " --nx 50001 --ny 1 --levels 1 --max-ratio 10 -o " +
                        shell((dir / "budget").string()),
                    14,
+                   10,
                    -1,
                    "",
                    false);
@@ -376,9 +459,10 @@ int main(int argc, char** argv) {
         });
         if (argc == 4)
             acceptance("tiny hierarchy alias", [&] {
-                invoke(shell(tiny.string()) + " --nx 2 --ny 2 --levels 2 -o " +
+                invoke(shell(tiny.string()) + " --nx 2 --ny 2 --levels 2 --max-ratio 10 -o " +
                            shell((dir / "hierarchy").string()),
                        4,
+                       10,
                        -1,
                        "",
                        true,
