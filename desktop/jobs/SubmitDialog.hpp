@@ -12,9 +12,12 @@ public:
     void setProfile(const QJsonObject& value);
     int meshNx() const;
     void setMeshNx(int nx);
+    void setMeshNxLocked(bool locked);
+    bool meshNxLocked() const;
 
 private:
     QJsonObject profile_;
     QSpinBox *ranks_, *threads_, *nx_;
+    bool meshNxLocked_ = false;
 };
 } // namespace chipcae::desktop
