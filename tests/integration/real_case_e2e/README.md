@@ -121,9 +121,11 @@ schema and these fields before number sanitization or persistence. A malformed
 writer record raises `RuntimeError` as an internal driver error (CLI exit 1),
 without writing `run_record.json`. This is an exception to normal invocation
 persistence. Version 0.1 records lack the byte keys; readers must not classify
-their absence in 0.1 as missing data. Version 0.2 also applies stage-specific
-byte-field exemptions in `missing[]`; other record fields and semantics stay
-the same.
+their absence in 0.1 as missing data. The driver's completeness reader explicitly
+dispatches on the schema: 0.1 ignores byte fields, while 0.2 reports absent or
+null applicable byte fields in `missing[]` and exempts inapplicable byte fields.
+A missing or unsupported reader schema raises `RuntimeError`. Other record
+fields and missing-data rules stay the same.
 
 | Stage | Applicable byte field | Collection |
 |---|---|---|

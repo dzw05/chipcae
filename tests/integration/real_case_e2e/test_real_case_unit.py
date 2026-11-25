@@ -738,6 +738,35 @@ def complete_assembly_record(w_ready=True):
 
 
 class RecordChecks(ContractTest):
+    def test_missing_dispatches_byte_rules_by_persisted_schema(self):
+        for schema, expected in (
+                ("chipcae.vv_real_case_run/0.1", []),
+                ("chipcae.vv_real_case_run/0.2",
+                 ["commands[1].bytes_in", "commands[2].bytes_out", "commands[3].bytes_in"])):
+            with self.subTest(schema=schema):
+                record = complete_record()
+                record["schema"] = schema
+                record["commands"] = [dict(stage=stage, argv=[stage], exit_code=0,
+                                            wall_s=0., peak_rss_kib=0, status_detail=None)
+                                      for stage in ("preview", "import", "solve_main", "readback_main")]
+                record = read_json(write_json(self.root / "run_record.json", record))
+                self.assertEqual(driver._missing(record), expected)
+                self.assertIs(driver._check_c9(record), not expected)
+                record["energy"]["heat_in"] = None
+                self.assertEqual(driver._missing(record), expected + ["energy.heat_in"])
+                self.assertIs(driver._check_c9(record), False)
+
+    def test_missing_rejects_unsupported_schema_instead_of_assuming_byte_rules(self):
+        for schema in (None, "CHIPCAE.vv_real_case_run/0.2", "chipcae.vv_real_case_run/0.3"):
+            with self.subTest(schema=schema):
+                record = complete_record()
+                if schema is None:
+                    del record["schema"]
+                else:
+                    record["schema"] = schema
+                with self.assertRaisesRegex(RuntimeError, "schema"):
+                    driver._missing(record)
+
     def test_darwin_host_memory_keeps_complete_record_passing(self):
         with patch.object(sys, "platform", "darwin"), \
                 patch.object(Path, "read_text", side_effect=FileNotFoundError), \

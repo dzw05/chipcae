@@ -855,6 +855,13 @@ def _check_names(kind, w_ready):
 
 def _missing(record, *, pending_checks=()):
     """List unavailable applicable data, independently of caller-supplied missing[]."""
+    schema = record.get("schema")
+    if schema == "chipcae.vv_real_case_run/0.1":
+        byte_fields = False
+    elif schema == "chipcae.vv_real_case_run/0.2":
+        byte_fields = True
+    else:
+        raise RuntimeError(f"unsupported run record schema: {schema!r}")
     missing = []
     notes = " ".join(record.get("notes", []))
     null_reasons = {
@@ -874,17 +881,22 @@ def _missing(record, *, pending_checks=()):
             missing.append(key)
     def walk(value, path):
         if isinstance(value, dict):
+            command = re.fullmatch(r"commands\[\d+\]", path)
+            if command and byte_fields:
+                stage = value.get("stage", "")
+                for field, applicable in (
+                        ("bytes_in", stage == "import" or stage.startswith("readback_")),
+                        ("bytes_out", stage.startswith("solve_"))):
+                    if applicable and value.get(field) is None:
+                        missing.append(f"{path}.{field}")
             for key, item in value.items():
                 name = f"{path}.{key}"
+                # Byte fields are undefined in 0.1 and handled above in 0.2.
+                if command and key in ("bytes_in", "bytes_out"):
+                    continue
                 if item is None:
                     if path.startswith("commands[") and key == "status_detail":
                         continue
-                    if re.fullmatch(r"commands\[\d+\]", path) and key in ("bytes_in", "bytes_out"):
-                        stage = value.get("stage", "")
-                        applicable = ((stage == "import" or stage.startswith("readback_"))
-                                      if key == "bytes_in" else stage.startswith("solve_"))
-                        if not applicable:
-                            continue
                     if name.startswith("checks."):
                         check = key
                         if check in pending_checks:
