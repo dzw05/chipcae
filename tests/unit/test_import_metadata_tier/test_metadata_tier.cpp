@@ -2454,6 +2454,25 @@ void verify(const Case& item, const Frozen& frozen) {
                   item.name + ": " + file + " is byte-identical to baseline");
     }
 }
+void verify_definition_context_guards() {
+    Temporary tmp;
+    const auto result = ecad::read_ipc2581(
+        tmp.write("orphan-entries.xml",
+                  board(package + placed + padstack + pad(),
+                        disk + "<EntryUser id=\"user\"/><EntryLineDesc id=\"line\"/>")));
+    check(static_cast<bool>(result), "orphan definition entries parse");
+    const auto defects = chipcae::importer::ecad_defects::board_defects(result.model.report, false);
+    int entries = 0;
+    for (const auto& d : defects) {
+        if (d.defect_id.starts_with("board/EntryUser/") ||
+            d.defect_id.starts_with("board/EntryLineDesc/")) {
+            ++entries;
+            check(d.tier == geometry::Tier::B && d.suggestion == confirm,
+                  "referenced entries outside their dictionary must remain B");
+        }
+    }
+    check(entries == 2, "both orphan entry diagnostics remain present");
+}
 // Legacy aggregate callers default to fail-closed metadata behavior. Geometry C and
 // SolderMask/ViaPlatingMissing suggestions must survive the new classification branch.
 void verify_legacy_classifier() {
@@ -2477,6 +2496,28 @@ void verify_legacy_classifier() {
               defects[3].suggestion == "confirm missing via plating" &&
               defects[3].defect_id == "board/via_plating_missing/Cu-Cu",
           "ViaPlatingMissing tier, suggestion and stable span ID");
+
+    Temporary tmp;
+    std::string error;
+    const auto odb_baseline = geometry::apply_repair_policy(
+        chipcae::importer::ecad_defects::board_defects(report, true), {}, true);
+    if (!geometry::write_import_report(tmp.path, {}, odb_baseline.defects, &error))
+        throw std::runtime_error(error);
+    const auto odb_bytes = bytes(tmp.path / "import_report.json");
+    for (auto& entry : report.unsupported)
+        entry.context = "netlist";
+    const auto annotated_odb = geometry::apply_repair_policy(
+        chipcae::importer::ecad_defects::board_defects(report, true), {}, true);
+    if (!geometry::write_import_report(tmp.path, {}, annotated_odb.defects, &error))
+        throw std::runtime_error(error);
+    check(bytes(tmp.path / "import_report.json") == odb_bytes,
+          "manually supplied whitelist context leaves every ODB report byte unchanged");
+    report.unsupported[0].context = "unknown-context";
+    const auto guarded = chipcae::importer::ecad_defects::board_defects(report, false);
+    check(guarded[0].tier == geometry::Tier::B && guarded[0].suggestion == confirm,
+          "unknown context keeps metadata B");
+    check(guarded[1].tier == geometry::Tier::C,
+          "manually supplied whitelist context cannot promote geometry C");
 }
 } // namespace
 int main() {
@@ -2491,6 +2532,7 @@ int main() {
         std::cout << (failures == before ? "PASS " : "FAIL ") << item.name << '\n';
     }
     verify_legacy_classifier();
+    verify_definition_context_guards();
     std::cout << "Assertion failures: " << failures << '\n';
     return failures ? 1 : 0;
 }
