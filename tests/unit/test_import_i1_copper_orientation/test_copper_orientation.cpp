@@ -173,7 +173,7 @@ void import_i1_copper_orientation_schema() {
         for (const std::string key : {"orient", "Role"}) {
             auto j = f.input;
             f.copper(j)[key] = "vertical";
-            rejected(checks, f, j, f.path() + "/copper", form + "unknown " + key);
+            rejected(checks, f, j, f.path() + "/copper/" + key, form + "unknown " + key);
         }
         auto neither = f.input;
         f.copper(neither).erase("fraction");
@@ -253,9 +253,20 @@ void roundtrip(Checks& checks, const Fixture& f, const J& input, bool legacy) {
     if (!written)
         return;
     const auto output = read_json(out);
-    if (legacy)
-        checks.expect(output == input,
-                      "brief literal whole-document equality (existing body defaults need ruling)");
+    if (legacy) {
+        // The revised brief permits only the baseline loader's body defaults.
+        // Build the complete expected document from the input, never the writer output.
+        auto expected = input;
+        for (auto& layer : expected["layers"].array_range()) {
+            if (!layer.contains("body"))
+                layer["body"] = layer.at("name");
+            if (layer.contains("regions"))
+                for (auto& region : layer["regions"].array_range())
+                    if (!region.contains("body"))
+                        region["body"] = region.at("name");
+        }
+        checks.expect(output == expected, "legacy document changed beyond baseline body defaults");
+    }
     if (input.contains("external_refs"))
         checks.expect(output.at("external_refs") == input.at("external_refs"),
                       "sidecar hash changed");

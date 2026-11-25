@@ -106,14 +106,22 @@ def run_case(root, executable, baselines, path, polygons, fraction, variant):
         return
     assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
     artifacts = numerical_artifacts(out)
+    differences = []
     for label, baseline in baselines:
         reference, reference_out = execute(baseline, root, label)
-        assert reference.returncode == 0, (label, reference.returncode, reference.stderr)
-        assert result.stdout == reference.stdout, f'{label}: stdout differs'
-        expected = numerical_artifacts(reference_out)
-        assert artifacts.keys() == expected.keys(), f'{label}: artifact names differ'
-        for name, data in artifacts.items():
-            assert data == expected[name], f'{label}: result file differs: {name}'
+        try:
+            assert reference.returncode == 0, (label, reference.returncode, reference.stderr)
+            assert result.stdout == reference.stdout, f'{label}: stdout differs'
+            expected = numerical_artifacts(reference_out)
+            assert artifacts.keys() == expected.keys(), f'{label}: artifact names differ'
+            for name, data in artifacts.items():
+                assert data == expected[name], f'{label}: result file differs: {name}'
+            print(f'PASS {label} stdout and result bytes', flush=True)
+        except AssertionError as error:
+            # Compare both baselines even when inherited changes differ from the
+            # frozen baseline. Every original byte assertion remains mandatory.
+            differences.append(f'{label}: {error}')
+    assert not differences, differences
 
 
 def main():

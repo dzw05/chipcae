@@ -12,6 +12,7 @@
 #include <set>
 #include <sstream>
 #include <type_traits>
+#include <utility>
 namespace chipcae::mesh {
 namespace {
 using J = jsoncons::json;
@@ -60,7 +61,7 @@ Expected<StackModel> load_stack(const std::filesystem::path& file,
         if (!input || !specification)
             return Error{"$", "cannot open instance or schema"};
         J j = J::parse(input), s = J::parse(specification);
-        auto validator = jsoncons::jsonschema::make_json_schema(s);
+        auto validator = jsoncons::jsonschema::make_json_schema(std::move(s));
         Error failure;
         validator.validate(j, [&](const jsoncons::jsonschema::validation_message& m) {
             if (failure.reason.empty())
