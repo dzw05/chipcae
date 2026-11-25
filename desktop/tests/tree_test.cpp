@@ -409,7 +409,9 @@ static void layerContextMenuAcceptance(bool thermal) {
     const auto* action = menu->actions().front();
     require(action->text() == QStringLiteral("在此层添加热源"), "exact heat source action text");
     require(action->isEnabled() == thermal, "heat source action enabled only in thermal mode");
-    require(action->toolTip() == (thermal ? QString() : QStringLiteral("需先切换到 Thermal 模式")),
+    // Per the brief revision, Qt uses the action text when no tooltip is specified.
+    require(action->toolTip() == (thermal ? QStringLiteral("在此层添加热源")
+                                          : QStringLiteral("需先切换到 Thermal 模式")),
             "exact heat source action tooltip");
 }
 
