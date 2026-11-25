@@ -113,6 +113,34 @@ Synthetic inputs never receive that retry.
 Host memory comes from MemTotal on Linux and `sysctl -n hw.memsize` on macOS,
 converted to KiB. An unavailable or invalid probe remains explicit missing data.
 
+`run_record.json` uses `chipcae.vv_real_case_run/0.2`. Every `commands[]` entry
+must contain both case-sensitive keys `bytes_in` and `bytes_out`, each a
+nonnegative JSON integer or `null`. Booleans, fractions, negative values,
+strings and nonfinite numbers are invalid. The writer validates the exact 0.2
+schema and these fields before number sanitization or persistence. A malformed
+writer record raises `RuntimeError` as an internal driver error (CLI exit 1),
+without writing `run_record.json`. This is an exception to normal invocation
+persistence. Version 0.1 records lack the byte keys; readers must not classify
+their absence in 0.1 as missing data. Version 0.2 also applies stage-specific
+byte-field exemptions in `missing[]`; other record fields and semantics stay
+the same.
+
+| Stage | Applicable byte field | Collection |
+|---|---|---|
+| `import` | `bytes_in` | Copied input files and dependencies, before launch; generated JSON excluded |
+| `solve_<stage>` | `bytes_out` | I6 manifest plus all step targets after a successful solve |
+| `readback_<stage>` | `bytes_in` | The paired solve's same I6 byte snapshot |
+| Other stages | Neither | Both fields remain `null` |
+
+Inapplicable byte fields remain `null` and are exempt from `missing[]`.
+Applicable unavailable values remain `null` with their exact indexed paths in
+`missing[]`. A failed solve keeps `bytes_out=null` and starts no readback.
+Each successful solve/readback pair samples I6 exactly once, before readback
+starts, and shares that integer or `null` between the two command records.
+The I6 total uses regular-file stat sizes for the manifest and unique resolved
+step targets. Zero-byte regular files count as integer 0. Byte counts, wall
+time and RSS are recorded without performance thresholds.
+
 Readiness requires the upstream fvm_pipeline.cpp for T, elastic.hpp and removal
 of the thermal-only marker for W, and T plus geometry=ON for A. Assembly checks
 only the nearest capability file ascending from the resolved import executable;
