@@ -78,17 +78,17 @@ def main(root):
         return document
 
     positive = check('fcbga_lid_stiffener.assembly.json')
-    bulk = check('package_bulk_parts.assembly.json')
+    bulk = check('step_frame_parts.assembly.json')
     if bulk is not None:
         # Exercise duplicates within shorthand bodies and against explicit parts.
         for duplicate_explicit in (False, True):
             duplicate = copy.deepcopy(bulk)
             bodies = duplicate['parts_from_step']['bodies']
-            body = 'PACKAGE~BULK/duplicate'
+            body = 'example_parts~test/duplicate'
             bodies[body] = copy.deepcopy(next(iter(bodies.values())))
             if duplicate_explicit:
                 bodies[body]['id'] = duplicate['parts'][0]['id']
-            expected = '/parts_from_step/bodies/PACKAGE~0BULK~1duplicate/id'
+            expected = '/parts_from_step/bodies/example_parts~0test~1duplicate/id'
             found = errors(duplicate, validator)
             if expected not in {location for location, _ in found}:
                 failures.append(f'duplicate expanded ID (explicit={duplicate_explicit}): {found}')

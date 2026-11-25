@@ -125,7 +125,7 @@ class PreviewMeshParams(unittest.TestCase):
             'grid', 'max_ratio', 'n0', 'nx0', 'ny0', 'L',
             'padded_cells', 'void_cells', 'nz', 'node_count',
             'cell_count', 'cut_cell_count', 'mesh_sha256',
-            'cell_budget', 'min_elems_per_layer',
+            'cell_budget', 'min_elems_per_layer', 'copper_area_m2',
         ]
         cases = (
             ('default', [], None),
@@ -157,10 +157,12 @@ class PreviewMeshParams(unittest.TestCase):
                                          keys.index('mesh_sha256') + 1, context)
                         self.assertEqual(keys.index('min_elems_per_layer'),
                                          keys.index('mesh_sha256') + 2, context)
-                    self.assertEqual(message_keys[-2:], expected[-2:], context)
-                    self.assertEqual(top_keys[-3:-1], expected[-2:], context)
+                    self.assertEqual(message_keys[-3:], expected[-3:], context)
+                    self.assertEqual(top_keys[-4:-1], expected[-3:], context)
+                    self.assertEqual(message[-1], ('copper_area_m2', []), context)
+                    self.assertEqual(summary['copper_area_m2'], {}, context)
                     for budget, actual_minimum in (
-                            (message[-2][1], message[-1][1]),
+                            (message[-3][1], message[-2][1]),
                             (summary['cell_budget'], summary['min_elems_per_layer'])):
                         self.assertEqual(budget, 50000, context)
                         if minimum is None:

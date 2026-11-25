@@ -3,6 +3,7 @@
 #include "chipcae/mesh/background/activation.hpp"
 #include "chipcae/mesh/cut/detail/convex_pieces.hpp"
 #include "chipcae/mesh/cut/detail/plane_cut_union.hpp"
+#include "chipcae/mesh/cut/outline_cut.hpp"
 
 #include <algorithm>
 #include <array>
@@ -10,6 +11,7 @@
 #include <cstdlib>
 #include <iomanip>
 #include <limits>
+#include <numeric>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -868,13 +870,6 @@ Expected<CutLayerArrays> generate(const HexMeshArrays& m,
         Real jac = size[0] * size[1] * size[2];
         if (!(size[0] > 0 && size[1] > 0 && size[2] > 0))
             return Error{"cut/mesh", "positive affine box required"};
-        std::vector<Face> faces;
-        for (int f = 0; f < 6; ++f) {
-            Polygon p;
-            for (int j : ids[f])
-                p.push_back(vertices[j]);
-            faces.push_back({p, normals[f], false});
-        }
         auto body = m.attr_table.entries[static_cast<std::size_t>(m.attribute[e] - 1)].body;
         if (body_pieces)
             pieces = &body_pieces->at(body);
@@ -887,6 +882,48 @@ Expected<CutLayerArrays> generate(const HexMeshArrays& m,
                          [](bool internal) { return internal; })) {
             convex = &pieces->front();
             pieces = nullptr;
+        }
+        if (!pieces) {
+            // Stop at the first changing plane: later planes must see the clipped
+            // vertices, so mixed cells restart the original clipping sequence.
+            enum class Classification { Inside, Outside, Mixed };
+            const auto classify = [&](const Plane& p) {
+                bool negative = false, positive = false;
+                for (const auto& v : vertices) {
+                    const Real f = dot(p.n, v) - p.d;
+                    const Real phi = std::abs(f) <= o.snap_phi ? Real(0) : f;
+                    negative |= phi < 0;
+                    positive |= phi > 0;
+                }
+                return !positive  ? Classification::Inside
+                       : negative ? Classification::Mixed
+                                  : Classification::Outside;
+            };
+            auto state = Classification::Inside;
+            if (convex)
+                for (const auto& p : convex->planes) {
+                    state = classify(p);
+                    if (state != Classification::Inside)
+                        break;
+                }
+            if (state == Classification::Inside)
+                for (const auto& p : planes)
+                    if (p.body == 0 || p.body == body) {
+                        state = classify(p);
+                        if (state != Classification::Inside)
+                            break;
+                    }
+            if (state == Classification::Outside)
+                c.void_elem.push_back(static_cast<Local>(e));
+            if (state != Classification::Mixed)
+                continue;
+        }
+        std::vector<Face> faces;
+        for (int f = 0; f < 6; ++f) {
+            Polygon p;
+            for (int j : ids[f])
+                p.push_back(vertices[j]);
+            faces.push_back({p, normals[f], false});
         }
         const auto& cell_bounds = body_pieces ? body_bounds.at(body) : bounds;
         const Real length = std::max({size[0], size[1], size[2]});
@@ -1163,23 +1200,277 @@ Expected<CutLayerArrays> generate(const HexMeshArrays& m,
             c.face_sets[canonical_interface("body:" + name, "void")] = {eb[body]};
     return c;
 }
-Expected<CutLayerArrays> finalize(HexMeshArrays& mesh,
-                                  const CutOptions& o,
-                                  Expected<CutLayerArrays> result,
-                                  bool union_call = false) {
+// Face records are released on return, before allocating compact node arrays.
+void rebuild_faces(const HexMeshArrays& mesh, HexMeshArrays& m, CutLayerArrays& c) {
+    // Rebuild exposed quadrilaterals; trimmed exterior pieces remain in cut quadrature.
+    const auto original_key = [&](std::size_t source) {
+        std::array<Local, 4> key;
+        std::copy_n(mesh.bdr_quad.begin() + 4 * source, 4, key.begin());
+        std::sort(key.begin(), key.end());
+        return key;
+    };
+    // Retain a permutation of the immutable input boundary. Its sorted keys are
+    // computed once (input boundary size only) so the sort comparator does not
+    // re-sort two keys per comparison; they are released before the face scan.
+    std::vector<std::size_t> original_boundary(mesh.bdr_attribute.size());
+    std::iota(original_boundary.begin(), original_boundary.end(), std::size_t{0});
+    {
+        std::vector<std::array<Local, 4>> keys(original_boundary.size());
+        for (std::size_t i = 0; i < keys.size(); ++i)
+            keys[i] = original_key(i);
+        // Descending source breaks ties with the old map's last assignment first.
+        std::sort(
+            original_boundary.begin(), original_boundary.end(), [&](std::size_t a, std::size_t b) {
+                return keys[a] != keys[b] ? keys[a] < keys[b] : a > b;
+            });
+    }
+    m.bdr_quad.clear();
+    m.bdr_attribute.clear();
+    constexpr int fi[6][4] = {
+        {0, 3, 2, 1}, {4, 5, 6, 7}, {0, 1, 5, 4}, {3, 7, 6, 2}, {0, 4, 7, 3}, {1, 2, 6, 5}};
+    struct FaceRecord {
+        std::array<Local, 4> key;
+        Local elem, face;
+    };
+    // A face belongs to the bucket of its smallest vertex. Several faces of a
+    // cell share that vertex, so store the cell only once per distinct minimum.
+    // This needs at most four Local references per hex instead of six size_t
+    // face occurrences. Full keys exist only while visiting one vertex bucket.
+    const auto minimum_vertex = [&](std::size_t e, Local f) {
+        Local v = m.hex[8 * e + fi[f][0]];
+        for (int j = 1; j < 4; ++j)
+            v = std::min(v, m.hex[8 * e + fi[f][j]]);
+        return static_cast<std::size_t>(v);
+    };
+    const auto visit_minima = [&](std::size_t e, auto visit) {
+        std::array<std::size_t, 6> minima;
+        for (Local f = 0; f < 6; ++f)
+            minima[f] = minimum_vertex(e, f);
+        std::sort(minima.begin(), minima.end());
+        const auto end = std::unique(minima.begin(), minima.end());
+        for (auto it = minima.begin(); it != end; ++it)
+            visit(*it);
+    };
+    std::vector<std::size_t> offsets(mesh.vertices.size() / 3 + 1);
+    for (std::size_t e = 0; e < m.attribute.size(); ++e)
+        visit_minima(e, [&](auto v) { ++offsets[v]; });
+    // Inclusive sums and decrementing insertion leave bucket starts in offsets.
+    std::partial_sum(offsets.begin(), offsets.end(), offsets.begin());
+    std::vector<Local> cells(offsets.back());
+    for (std::size_t e = 0; e < m.attribute.size(); ++e)
+        visit_minima(e, [&](auto v) { cells[--offsets[v]] = static_cast<Local>(e); });
+    // A group retains the first source and its full count, including nonmanifold
+    // duplicates. Reconstruct orientation from connectivity, never the sorted key.
+    const auto quad = [&](const FaceRecord& record) {
+        std::array<Local, 4> v;
+        for (int j = 0; j < 4; ++j)
+            v[j] = m.hex[8 * record.elem + fi[record.face][j]];
+        return v;
+    };
+    const auto visit_groups = [&](auto visit) {
+        std::vector<FaceRecord> boundary;
+        for (std::size_t v = 0; v + 1 < offsets.size(); ++v) {
+            boundary.clear();
+            for (auto i = offsets[v]; i < offsets[v + 1]; ++i) {
+                const auto e = cells[i];
+                for (Local f = 0; f < 6; ++f) {
+                    if (minimum_vertex(e, f) != v)
+                        continue;
+                    FaceRecord record{{}, e, f};
+                    record.key = quad(record);
+                    std::sort(record.key.begin(), record.key.end());
+                    boundary.push_back(record);
+                }
+            }
+            std::sort(boundary.begin(), boundary.end(), [](const auto& a, const auto& b) {
+                for (std::size_t i = 0; i < a.key.size(); ++i)
+                    if (a.key[i] != b.key[i])
+                        return a.key[i] < b.key[i];
+                return std::tie(a.elem, a.face) < std::tie(b.elem, b.face);
+            });
+            // Ascending buckets and local key order together give the original
+            // global map order, even with permuted nodes or nonmanifold faces.
+            for (std::size_t begin = 0; begin < boundary.size();) {
+                auto end = begin + 1;
+                while (end < boundary.size() && boundary[end].key == boundary[begin].key)
+                    ++end;
+                visit(boundary, begin, end);
+                begin = end;
+            }
+        }
+    };
+    auto quad_area = [&](const std::array<Local, 4>& q) {
+        Real area = 1;
+        std::array<Real, 3> span{};
+        for (int d = 0; d < 3; ++d) {
+            Real lo = mesh.vertices[3 * q[0] + d], hi = lo;
+            for (auto v : q) {
+                lo = std::min(lo, mesh.vertices[3 * v + d]);
+                hi = std::max(hi, mesh.vertices[3 * v + d]);
+            }
+            span[d] = hi - lo;
+        }
+        for (auto v : span)
+            if (v > 0)
+                area *= v;
+        return area;
+    };
+    auto body_name = [&](BodyId id) {
+        for (const auto& [name, body] : m.attr_table.bodies)
+            if (body == id)
+                return name;
+        return std::string{};
+    };
+    Local next_attr = 1;
+    for (auto a : m.bdr_attribute)
+        next_attr = std::max(next_attr, a + 1);
+    for (const auto& [name, list] : m.face_sets)
+        for (auto a : list)
+            next_attr = std::max(next_attr, a + 1);
+    std::map<BodyId, Local> exposed_attr;
+    std::vector<std::pair<FaceRecord, Local>> aligned;
+    auto original = original_boundary.begin();
+    auto input_key =
+        original != original_boundary.end() ? original_key(*original) : std::array<Local, 4>{};
+    const auto visit_boundary = [&](const auto& boundary, std::size_t begin, std::size_t end) {
+        const auto& rec = boundary[begin];
+        const auto& key = rec.key;
+        // Both sequences have the same key order. A merge avoids a tree lookup
+        // for every interior face, while retaining the original attribute map's
+        // last-write rule for duplicate input boundary keys.
+        while (original != original_boundary.end() && input_key < key) {
+            ++original;
+            if (original != original_boundary.end())
+                input_key = original_key(*original);
+        }
+        const bool was_boundary = original != original_boundary.end() && input_key == key;
+        if (end - begin == 1) {
+            const auto v = quad(rec);
+            m.bdr_quad.insert(m.bdr_quad.end(), v.begin(), v.end());
+            if (was_boundary) {
+                m.bdr_attribute.push_back(mesh.bdr_attribute[*original]);
+                return;
+            }
+            auto elem = rec.elem;
+            auto body = m.attr_table.entries[m.attribute[elem] - 1].body;
+            auto name = canonical_interface("body:" + body_name(body), "void");
+            auto [it, inserted] = exposed_attr.emplace(body, next_attr);
+            if (inserted) {
+                ++next_attr;
+                m.face_sets[name].push_back(it->second);
+                m.attr_table.boundary_names[it->second] = name;
+                HexMeshArrays::InterfaceReport report;
+                report.name = name;
+                fill_interface_sides(report, m);
+                m.preparation_report.push_back(report);
+            }
+            m.bdr_attribute.push_back(it->second);
+            for (auto& r : m.preparation_report)
+                if (r.name == name) {
+                    ++r.aligned_faces;
+                    r.aligned_area += quad_area(v);
+                }
+        } else if (end - begin == 2 && was_boundary)
+            aligned.emplace_back(rec, mesh.bdr_attribute[*original]);
+    };
+
+    // Reuse these groups for finalize's single activation mask. The public cache
+    // also stores a complete mesh and a second face map, neither needed here.
+    ActivationMask active;
+    for (std::size_t a = 1; a <= m.attr_table.entries.size(); ++a)
+        if (static_cast<Local>(a) != c.void_attribute)
+            active.push_back(static_cast<Local>(a));
+    const auto ids = activated_gids(m, active);
+    const std::set<Index> cut(c.cut_elem_gid.begin(), c.cut_elem_gid.end());
+    std::vector<bool> activated(m.attribute.size()), cut_cell(m.attribute.size());
+    for (std::size_t e = 0; e < m.attribute.size(); ++e) {
+        activated[e] = std::binary_search(ids.begin(), ids.end(), m.elem_gid[e]);
+        cut_cell[e] = cut.contains(m.elem_gid[e]);
+    }
+    // fi lists bottom, top, ymin, ymax, xmin, xmax; the cache traverses
+    // MFEM faces as bottom, ymin, xmax, ymax, xmin, top.
+    constexpr Local mfem_face[6] = {0, 5, 1, 3, 4, 2};
+    struct Neighbor {
+        Local a, b, fa, fb, encounter_elem, encounter_face;
+    };
+    std::vector<Neighbor> pairs;
+    visit_groups([&](const auto& boundary, std::size_t begin, std::size_t end) {
+        visit_boundary(boundary, begin, end);
+        // The cache's map retains the minimum (element, MFEM face) occurrence
+        // of each key and pairs every later occurrence with it. The boundary
+        // comparator uses fi order, so find that cache occurrence explicitly.
+        auto first = begin;
+        for (auto i = begin + 1; i < end; ++i)
+            if (std::pair{boundary[i].elem, mfem_face[boundary[i].face]} <
+                std::pair{boundary[first].elem, mfem_face[boundary[first].face]})
+                first = i;
+        for (auto i = begin; i < end; ++i) {
+            if (i == first)
+                continue;
+            auto a = boundary[first].elem, b = boundary[i].elem;
+            if (!(cut_cell[a] || cut_cell[b]) || !activated[a] || !activated[b])
+                continue;
+            auto fa = mfem_face[boundary[first].face], fb = mfem_face[boundary[i].face];
+            const auto encounter_elem = b, encounter_face = fb;
+            if (m.elem_gid[a] > m.elem_gid[b]) {
+                std::swap(a, b);
+                std::swap(fa, fb);
+            }
+            pairs.push_back({a, b, fa, fb, encounter_elem, encounter_face});
+        }
+    });
+    // Aligned internal patches follow all exposed faces, in the same key order.
+    for (const auto& [rec, attribute] : aligned) {
+        const auto v = quad(rec);
+        m.bdr_quad.insert(m.bdr_quad.end(), v.begin(), v.end());
+        m.bdr_attribute.push_back(attribute);
+    }
+    // The cache emits a neighbor when its second face is encountered in MFEM
+    // traversal order. Each occurrence has a unique (element, MFEM face), so
+    // sorting the later occurrences reproduces that traversal exactly, even
+    // for nonmanifold groups. GID orientation never changes the saved encounter.
+    std::sort(pairs.begin(), pairs.end(), [](const auto& a, const auto& b) {
+        return std::tie(a.encounter_elem, a.encounter_face) <
+               std::tie(b.encounter_elem, b.encounter_face);
+    });
+    for (const auto& p : pairs) {
+        c.gp_elem_gid[0].push_back(m.elem_gid[p.a]);
+        c.gp_elem_gid[1].push_back(m.elem_gid[p.b]);
+        c.gp_face.push_back(-1);
+        c.gp_face_gid.push_back(m.elem_gid[p.a] * 6 + p.fa);
+        c.gp_face_minus.push_back(p.fa);
+        c.gp_face_plus.push_back(p.fb);
+        c.gp_owner_rank.push_back(m.partitioning[p.a]);
+    }
+}
+// Only changed fields are populated; large immutable mesh fields stay in mesh.
+struct PreparedCut {
+    HexMeshArrays mesh;
+    CutLayerArrays cut;
+};
+Expected<PreparedCut> prepare_finalize(const HexMeshArrays& mesh,
+                                       const CutOptions& o,
+                                       Expected<CutLayerArrays> result,
+                                       bool union_call = false) {
     if (!result)
         return result.error();
-    auto& c = result.value();
+    PreparedCut prepared;
+    prepared.cut = std::move(result.value());
+    auto& c = prepared.cut;
     const bool pending_void = !c.void_elem.empty() && !c.vq_w.empty();
-    HexMeshArrays m = mesh;
+    auto& m = prepared.mesh;
+    m.attr_table = mesh.attr_table;
+    m.face_sets = mesh.face_sets;
+    m.preparation_report = mesh.preparation_report;
     register_embedded(m, c);
     std::set<Local> empty(c.void_elem.begin(), c.void_elem.end());
-    std::vector<Local> map(m.attribute.size(), -1);
-    m.hex.clear();
-    m.attribute.clear();
-    m.elem_gid.clear();
-    m.partitioning.clear();
-    m.pending_cut.clear();
+    std::vector<Local> map(mesh.attribute.size(), -1);
+    const auto kept = mesh.attribute.size() - (o.keep_void ? 0 : empty.size());
+    m.hex.reserve(8 * kept);
+    m.attribute.reserve(kept);
+    m.elem_gid.reserve(kept);
+    m.partitioning.reserve(kept);
+    m.pending_cut.reserve(mesh.pending_cut.size());
     if (o.keep_void && !empty.empty()) {
         c.void_attribute = static_cast<Local>(m.attr_table.entries.size() + 1);
         m.attr_table.entries.push_back({"void", "", 0, 0});
@@ -1230,107 +1521,26 @@ Expected<CutLayerArrays> finalize(HexMeshArrays& mesh,
         list = std::move(kept);
     }
     m.attr_table.entries = std::move(records);
-    // Rebuild exposed quadrilaterals; trimmed exterior pieces remain in cut quadrature.
-    std::map<std::array<Local, 4>, Local> original_boundary;
-    for (std::size_t i = 0; i < mesh.bdr_attribute.size(); ++i) {
-        std::array<Local, 4> key;
-        std::copy_n(mesh.bdr_quad.begin() + 4 * i, 4, key.begin());
-        std::sort(key.begin(), key.end());
-        original_boundary[key] = mesh.bdr_attribute[i];
-    }
-    m.bdr_quad.clear();
-    m.bdr_attribute.clear();
-    constexpr int fi[6][4] = {
-        {0, 3, 2, 1}, {4, 5, 6, 7}, {0, 1, 5, 4}, {3, 7, 6, 2}, {0, 4, 7, 3}, {1, 2, 6, 5}};
-    std::map<std::array<Local, 4>, std::tuple<std::array<Local, 4>, int, Local>> boundary;
-    for (std::size_t e = 0; e < m.attribute.size(); ++e)
-        for (int f = 0; f < 6; ++f) {
-            std::array<Local, 4> v;
-            for (int j = 0; j < 4; ++j)
-                v[j] = m.hex[e * 8 + fi[f][j]];
-            auto key = v;
-            std::sort(key.begin(), key.end());
-            auto it = boundary.find(key);
-            if (it == boundary.end())
-                boundary[key] = {v, 1, static_cast<Local>(e)};
-            else
-                ++std::get<1>(it->second);
-        }
-    auto quad_area = [&](const std::array<Local, 4>& q) {
-        Real area = 1;
-        std::array<Real, 3> span{};
-        for (int d = 0; d < 3; ++d) {
-            Real lo = m.vertices[3 * q[0] + d], hi = lo;
-            for (auto v : q) {
-                lo = std::min(lo, m.vertices[3 * v + d]);
-                hi = std::max(hi, m.vertices[3 * v + d]);
-            }
-            span[d] = hi - lo;
-        }
-        for (auto v : span)
-            if (v > 0)
-                area *= v;
-        return area;
-    };
-    auto body_name = [&](BodyId id) {
-        for (const auto& [name, body] : m.attr_table.bodies)
-            if (body == id)
-                return name;
-        return std::string{};
-    };
-    Local next_attr = 1;
-    for (auto a : m.bdr_attribute)
-        next_attr = std::max(next_attr, a + 1);
-    for (const auto& [name, list] : m.face_sets)
-        for (auto a : list)
-            next_attr = std::max(next_attr, a + 1);
-    std::map<BodyId, Local> exposed_attr;
-    for (auto [key, rec] : boundary)
-        if (std::get<1>(rec) == 1) {
-            m.bdr_quad.insert(m.bdr_quad.end(), std::get<0>(rec).begin(), std::get<0>(rec).end());
-            if (original_boundary.contains(key)) {
-                m.bdr_attribute.push_back(original_boundary[key]);
-                continue;
-            }
-            auto elem = std::get<2>(rec);
-            auto body = m.attr_table.entries[m.attribute[elem] - 1].body;
-            auto name = canonical_interface("body:" + body_name(body), "void");
-            auto [it, inserted] = exposed_attr.emplace(body, next_attr);
-            if (inserted) {
-                ++next_attr;
-                m.face_sets[name].push_back(it->second);
-                m.attr_table.boundary_names[it->second] = name;
-                HexMeshArrays::InterfaceReport report;
-                report.name = name;
-                fill_interface_sides(report, m);
-                m.preparation_report.push_back(report);
-            }
-            m.bdr_attribute.push_back(it->second);
-            for (auto& r : m.preparation_report)
-                if (r.name == name) {
-                    ++r.aligned_faces;
-                    r.aligned_area += quad_area(std::get<0>(rec));
-                }
-        }
-    // Retain aligned internal patches only when both adjacent cells survive.
-    for (auto [key, rec] : boundary)
-        if (std::get<1>(rec) == 2 && original_boundary.contains(key)) {
-            m.bdr_quad.insert(m.bdr_quad.end(), std::get<0>(rec).begin(), std::get<0>(rec).end());
-            m.bdr_attribute.push_back(original_boundary[key]);
-        }
+    rebuild_faces(mesh, m, c);
     // Compact vertices transactionally, preserving their original global identities.
-    std::vector<Local> remap(m.node_gid.size(), -1);
+    std::vector<Local> remap(mesh.node_gid.size(), -1);
     for (auto v : m.hex)
         remap[v] = 0;
     HexMeshArrays nodes;
+    const auto kept_nodes = static_cast<std::size_t>(std::count(remap.begin(), remap.end(), 0));
+    nodes.vertices.reserve(3 * kept_nodes);
+    nodes.node_gid.reserve(kept_nodes);
+    nodes.node_layer.reserve(kept_nodes);
+    nodes.node_column.reserve(kept_nodes);
     for (std::size_t v = 0; v < remap.size(); ++v)
         if (remap[v] == 0) {
             remap[v] = static_cast<Local>(nodes.node_gid.size());
-            nodes.vertices.insert(
-                nodes.vertices.end(), m.vertices.begin() + 3 * v, m.vertices.begin() + 3 * v + 3);
-            nodes.node_gid.push_back(m.node_gid[v]);
-            nodes.node_layer.push_back(m.node_layer[v]);
-            nodes.node_column.push_back(m.node_column[v]);
+            nodes.vertices.insert(nodes.vertices.end(),
+                                  mesh.vertices.begin() + 3 * v,
+                                  mesh.vertices.begin() + 3 * v + 3);
+            nodes.node_gid.push_back(mesh.node_gid[v]);
+            nodes.node_layer.push_back(mesh.node_layer[v]);
+            nodes.node_column.push_back(mesh.node_column[v]);
         }
     for (auto& v : m.hex)
         v = remap[v];
@@ -1338,6 +1548,7 @@ Expected<CutLayerArrays> finalize(HexMeshArrays& mesh,
         v = remap[v];
     for (auto& ls : c.level_sets) {
         std::vector<Real> phi;
+        phi.reserve(kept_nodes);
         for (std::size_t v = 0; v < remap.size(); ++v)
             if (remap[v] >= 0)
                 phi.push_back(ls.phi[v]);
@@ -1351,19 +1562,6 @@ Expected<CutLayerArrays> finalize(HexMeshArrays& mesh,
     for (std::size_t a = 0; a < m.attr_table.entries.size(); ++a)
         for (int d = 0; d < 3; ++d)
             m.attr_frame[9 * a + 4 * d] = 1;
-    ActivationMask active;
-    for (std::size_t a = 1; a <= m.attr_table.entries.size(); ++a)
-        if (static_cast<Local>(a) != c.void_attribute)
-            active.push_back(static_cast<Local>(a));
-    auto gp = GhostPenaltyCache::prepare(m, c, {active});
-    if (!gp)
-        return gp.error();
-    c.gp_elem_gid = gp.value().faces.elem_gid;
-    c.gp_face = gp.value().faces.face;
-    c.gp_face_gid = gp.value().faces.face_gid;
-    c.gp_face_minus = gp.value().faces.face_minus;
-    c.gp_face_plus = gp.value().faces.face_plus;
-    c.gp_owner_rank = gp.value().faces.owner_rank;
     for (const auto& [name, list] : c.face_sets) {
         HexMeshArrays::InterfaceReport* report = nullptr;
         for (auto& r : m.preparation_report)
@@ -1410,10 +1608,110 @@ Expected<CutLayerArrays> finalize(HexMeshArrays& mesh,
         if (auto fault = union_fault("final_validation", true, pending_void))
             return *fault;
     }
-    mesh = std::move(m);
-    return result;
+    return prepared;
+}
+CutLayerArrays commit_finalize(HexMeshArrays& mesh, PreparedCut&& prepared) {
+    auto& m = prepared.mesh;
+    mesh.vertices.swap(m.vertices);
+    mesh.hex.swap(m.hex);
+    mesh.attribute.swap(m.attribute);
+    mesh.elem_gid.swap(m.elem_gid);
+    mesh.partitioning.swap(m.partitioning);
+    mesh.pending_cut.swap(m.pending_cut);
+    mesh.bdr_quad.swap(m.bdr_quad);
+    mesh.bdr_attribute.swap(m.bdr_attribute);
+    mesh.node_gid.swap(m.node_gid);
+    mesh.node_layer.swap(m.node_layer);
+    mesh.node_column.swap(m.node_column);
+    mesh.attr_frame.swap(m.attr_frame);
+    std::swap(mesh.attr_table, m.attr_table);
+    mesh.face_sets.swap(m.face_sets);
+    mesh.preparation_report.swap(m.preparation_report);
+    return std::move(prepared.cut);
+}
+Expected<CutLayerArrays> finalize(HexMeshArrays& mesh,
+                                  const CutOptions& o,
+                                  Expected<CutLayerArrays> result,
+                                  bool union_call = false) {
+    auto prepared = prepare_finalize(mesh, o, std::move(result), union_call);
+    if (!prepared)
+        return prepared.error();
+    return commit_finalize(mesh, std::move(prepared.value()));
 }
 } // namespace
+// The four-argument outline overload shares this file's private cut transaction.
+Expected<std::optional<CutLayerArrays>> apply_outline_cut(HexMeshArrays& mesh,
+                                                          const Footprint& outline,
+                                                          const CutOptions& options,
+                                                          const CutGeometry& extra) {
+    auto ring = outline.polygon;
+    if (ring.empty() && extra.planes.empty() && extra.unions.empty())
+        return std::optional<CutLayerArrays>{};
+    CutGeometry geometry;
+    if (!ring.empty()) {
+        for (auto v : ring) {
+            const auto& box = outline.box;
+            if (!std::isfinite(v[0]) || !std::isfinite(v[1]) || v[0] < box[0] || v[0] > box[2] ||
+                v[1] < box[1] || v[1] > box[3])
+                return Error{"outline", "outline polygon vertex outside outline.box"};
+        }
+        if (ring.size() > 1 && ring.front() == ring.back())
+            ring.pop_back();
+        double area = 0;
+        for (std::size_t i = 0; i < ring.size(); ++i) {
+            auto a = ring[i], b = ring[(i + 1) % ring.size()];
+            area += a[0] * b[1] - a[1] * b[0];
+        }
+        if (ring.size() < 3 || !std::isfinite(area) || area == 0)
+            return Error{"outline.unsupported", "outline must be a convex polygon"};
+        // Canonical winding and start keep plane arithmetic and array order identical.
+        if (area < 0)
+            std::reverse(ring.begin(), ring.end());
+        auto first = std::min_element(ring.begin(), ring.end(), [](auto a, auto b) {
+            return a[1] < b[1] || (a[1] == b[1] && a[0] < b[0]);
+        });
+        std::rotate(ring.begin(), first, ring.end());
+        for (std::size_t i = 0; i < ring.size(); ++i) {
+            auto a = ring[i], b = ring[(i + 1) % ring.size()];
+            double nx = b[1] - a[1], ny = a[0] - b[0];
+            const double length = std::hypot(nx, ny);
+            if (length == 0)
+                return Error{"outline.unsupported", "duplicate outline vertex"};
+            nx /= length;
+            ny /= length;
+            const double d = nx * a[0] + ny * a[1];
+            for (auto v : ring)
+                if (nx * v[0] + ny * v[1] - d > 1e-12)
+                    return Error{"outline.unsupported", "non-convex outlines are not supported"};
+            for (const auto& [name, body] : mesh.attr_table.bodies)
+                geometry.planes.push_back({body, {nx, ny, 0}, d});
+        }
+    }
+    geometry.planes.insert(geometry.planes.end(), extra.planes.begin(), extra.planes.end());
+    geometry.unions = extra.unions;
+    auto opt = options;
+    opt.export_polyhedra = true;
+    opt.keep_void = false;
+    auto generated = [&]() -> Expected<CutLayerArrays> {
+        if (geometry.unions.empty())
+            return generate(mesh, geometry, opt);
+        if (auto error = validate_options(opt))
+            return *error;
+        auto pieces = prepare_body_pieces(mesh, geometry, {});
+        if (!pieces)
+            return pieces.error();
+        return generate(mesh, geometry, opt, nullptr, nullptr, true, &pieces.value());
+    }();
+    auto clipped = prepare_finalize(mesh, opt, std::move(generated), !geometry.unions.empty());
+    if (!clipped) {
+        if (!extra.unions.empty())
+            return clipped.error();
+        return Error{"outline", clipped.error().path + ": " + clipped.error().reason};
+    }
+    if (clipped.value().mesh.elem_gid.empty())
+        return Error{"outline", "empty cut domain"};
+    return std::optional<CutLayerArrays>{commit_finalize(mesh, std::move(clipped.value()))};
+}
 Expected<CutLayerArrays>
 build_cut_layer(const HexMeshArrays& m, const CutGeometry& g, const CutOptions& o) {
     if (g.unions.empty())

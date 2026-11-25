@@ -94,10 +94,6 @@ struct Parser {
             draw_trace(t);
         deferred_traces.clear();
         auto& reports = model.report.unsupported;
-        reports.erase(std::remove_if(reports.begin(),
-                                     reports.end(),
-                                     [](const auto& r) { return r.element.empty(); }),
-                      reports.end());
         std::vector<EcadLayer> retained;
         std::vector<UnsupportedElement> additions;
         std::set<std::string> seen, omitted_masks;
@@ -160,6 +156,14 @@ struct Parser {
             model.layers[li->second].polygons.push_back(std::move(polygon));
             circle_uses[artwork.use].modeled = true;
         }
+        for (const auto& use : circle_uses)
+            if (use.modeled)
+                reports[use.slot] = {};
+        // Trace and reference slots must stay valid until all deferred work is resolved.
+        reports.erase(std::remove_if(reports.begin(),
+                                     reports.end(),
+                                     [](const auto& r) { return r.element.empty(); }),
+                      reports.end());
         // Merge overlapping copper artwork and traces before computing their area.
         for (auto& layer : model.layers) {
             auto& polygons = layer.polygons;
@@ -318,6 +322,7 @@ struct Parser {
     struct CircleUse {
         std::string id, layer;
         std::uint64_t line;
+        std::size_t slot;
         bool modeled = false;
     };
     std::vector<CircleUse> circle_uses;
@@ -326,6 +331,16 @@ struct Parser {
         double radius;
     };
     std::vector<Artwork> deferred_artwork;
+    struct StandardEntry {
+        std::size_t depth, slot;
+        bool consumed = false;
+    };
+    struct StandardDictionary {
+        std::size_t depth, slot, entries = 0;
+        bool consumed = true;
+    };
+    std::vector<StandardEntry> standard_entries;
+    std::vector<StandardDictionary> standard_dictionaries;
     std::size_t dictionary_user_depth = 0, entry_user_depth = 0;
     struct UserSpecial {
         std::size_t depth;
@@ -449,8 +464,10 @@ struct Parser {
         }
         if (name == "UserPrimitiveRef" && parent == "PadstackPadDef")
             return;
-        if (name == "Property" && !spec.empty() && material_general_depth &&
-            materials[spec].empty() && !value(a, "text").empty())
+        const bool material_property = name == "Property" && !spec.empty() &&
+                                       material_general_depth && materials[spec].empty() &&
+                                       !value(a, "text").empty();
+        if (material_property)
             materials[spec] = value(a, "text");
         if (name == "Package") {
             package = value(a, "name");
@@ -577,19 +594,28 @@ struct Parser {
             } else if (current_layer.empty() &&
                        (!model.outline.points.empty() || parent == "Profile"))
                 active = &model.outline;
+        } else if (name == "DictionaryStandard") {
+            standard_dictionaries.push_back({path.size(), model.report.unsupported.size()});
+            model.report.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT", name, line_number()});
         } else if (name == "EntryStandard") {
+            standard_entries.push_back({path.size(), model.report.unsupported.size()});
+            if (!standard_dictionaries.empty() &&
+                path.size() == standard_dictionaries.back().depth + 1)
+                ++standard_dictionaries.back().entries;
             model.report.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT", name, line_number()});
             standard = value(a, "id");
         } else if (name == "Circle" && !standard.empty()) {
             circles[standard] = number(attr(a, "diameter")) * scale();
+            standard_entries.back().consumed = true;
         } else if (name == "StandardPrimitiveRef") {
+            const auto slot = model.report.unsupported.size();
             model.report.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT", name, line_number()});
             const bool definition =
                 (!package.empty() && std::find(path.begin(), path.end(), "Pin") != path.end()) ||
                 std::find(path.begin(), path.end(), "PadstackPadDef") != path.end();
             if (!current_layer.empty() && !definition) {
                 const auto id = value(a, "id");
-                circle_uses.push_back({id, current_layer, line_number()});
+                circle_uses.push_back({id, current_layer, line_number(), slot});
                 // Preserve the existing requirement that the circle is already defined.
                 if (in_pad && circles.count(id))
                     deferred_artwork.push_back(
@@ -671,6 +697,10 @@ struct Parser {
                     active->points.push_back({static_cast<std::int64_t>(std::llround(px * scale)),
                                               static_cast<std::int64_t>(std::llround(py * scale))});
             }
+        } else if (name == "Features") {
+            if (!layer_index.count(current_layer) || skipped(current_layer))
+                model.report.unsupported.push_back(
+                    {"IMPORT_UNSUPPORTED_ELEMENT", name, line_number()});
         } else if (name == "Step") {
             if (const char* id = attr(a, "name"))
                 model.id = id;
@@ -681,7 +711,8 @@ struct Parser {
                    name != "Layer" && name != "StackupGroup" && name != "Spec" &&
                    name != "HistoryRecord" && name != "LogisticHeader" && name != "Bom" &&
                    name != "Line" && name != "Arc" && name != "LineDesc" && name != "LineDescRef" &&
-                   name != "CadHeader" && name != "Outline" && name != "General") {
+                   name != "CadHeader" && name != "Outline" && name != "General" &&
+                   !material_property) {
             model.report.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT", name, line_number()});
         }
     }
@@ -709,8 +740,22 @@ struct Parser {
             definition_layer.clear();
         if (n == "Spec")
             spec.clear();
-        if (n == "EntryStandard")
+        if (n == "EntryStandard") {
+            const auto& entry = standard_entries.back();
+            if (entry.consumed)
+                model.report.unsupported[entry.slot] = {};
+            if (!standard_dictionaries.empty() &&
+                entry.depth == standard_dictionaries.back().depth + 1)
+                standard_dictionaries.back().consumed &= entry.consumed;
+            standard_entries.pop_back();
             standard.clear();
+        }
+        if (n == "DictionaryStandard") {
+            const auto& dictionary = standard_dictionaries.back();
+            if (dictionary.entries && dictionary.consumed)
+                model.report.unsupported[dictionary.slot] = {};
+            standard_dictionaries.pop_back();
+        }
         if (n == "Line" || n == "Arc") {
             // Retain primitive order for first-problem reports, including forward references.
             deferred_traces.push_back(std::move(trace));

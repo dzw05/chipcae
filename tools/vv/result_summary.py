@@ -294,6 +294,10 @@ def _read(root):
             if c or path in block:
                 fields[field] = _array(block, path, (c,),
                                        'int64' if field == 'elem_gid' else 'int32')
+        if 'CellData/copper_fraction' in block:
+            _array(block, 'CellData/copper_fraction', (c,), 'float64')
+        if 'CellData/conductivity_diag' in block:
+            _array(block, 'CellData/conductivity_diag', (c, 3), 'float64')
         types = _array(block, 'Types', (c,), 'uint8')
         expected_type = 12 if name == 'hex' else 42
         _require(np.all(types == expected_type),
@@ -320,6 +324,10 @@ def _read(root):
         _require(eb['NumberOfPoints'].shape == eb['Polygons/NumberOfCells'].shape,
                  'eb_surface: partition count mismatch')
         _array(eb, 'Points', (n, 3), 'float64')
+        if 'CellData/copper_fraction' in eb:
+            _array(eb, 'CellData/copper_fraction', (c,), 'float64')
+        if 'CellData/conductivity_diag' in eb:
+            _array(eb, 'CellData/conductivity_diag', (c, 3), 'float64')
         _partitions(eb, 'Polygons/NumberOfCells')
         blocks['eb_surface'] = dict(points=n, polygons=c)
     particles = root.get('particles')

@@ -47,11 +47,21 @@ errors may come from any rank. The success `message` is itself valid JSON with
 coarse grid dimensions, `AxB`). The success object also reports the effective
 `cell_budget` and `min_elems_per_layer` (the supplied integer, or JSON `null` when
 omitted), both in `message` and as top-level keys. The keys `cell_budget`, then
-`min_elems_per_layer`, immediately follow `mesh_sha256` and are the final two keys
-in the message object. The top-level order is `stage`, `progress`, the same message
+`min_elems_per_layer`, immediately follow `mesh_sha256`. The final message key is
+`copper_area_m2`. The top-level order is `stage`, `progress`, the same message
 keys in order, then `message`. Mesh failures use the shared
 solve error mapping: unsupported cuts
 exit 13, invalid outline input exits 14. Other failures use `INTERNAL` (exit 1).
+
+`copper_area_m2` is `{}` when no layer has copper. Otherwise it contains each
+copper layer's exact stack name in input layer order, with inner keys `polygons`,
+then `raster`, both in m². Polygon area is the NonZero union of the entire
+referenced polyset layer in its native database units. Raster area sums the stored
+column fractions times column areas over the background grid, including padding,
+before outline or region cuts. Copper outside that grid can therefore make the
+two areas differ. Fraction layers use the same fraction times summed background
+area for both values, making them bitwise identical. Copper with neither a
+fraction nor polygons reports zero for both values.
 
 `--polyset file` overrides the polygon data used for meshing. Stack loading still
 validates all declared sidecars, including containment and digests. An explicit

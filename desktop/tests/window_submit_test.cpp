@@ -331,8 +331,7 @@ struct Fixture {
     }
 };
 QString assemblyInput() {
-    return QString(CHIPCAE_REPOSITORY) +
-           "/schema/examples/assembly/package_bulk_parts.assembly.json";
+    return QString(CHIPCAE_REPOSITORY) + "/schema/examples/assembly/step_frame_parts.assembly.json";
 }
 QString assemblyMock() {
     return QString(CHIPCAE_REPOSITORY) + "/desktop/tools/mock_assembly_import.py";
