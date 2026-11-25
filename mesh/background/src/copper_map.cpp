@@ -3,6 +3,7 @@
 #include "chipcae/mesh/background/column_hierarchy.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -249,35 +250,71 @@ std::vector<Real> copper_column_ref_phi(const std::vector<Real>& xs,
     std::vector<Real> result(nx * ny, Real(0));
     if (Area(united) == 0)
         return result;
-    const auto ticks = [&](const std::vector<Real>& lines) {
-        std::vector<std::int64_t> values;
+    const auto native_lines = [&](const std::vector<Real>& lines) {
+        std::vector<long double> values;
         values.reserve(lines.size());
         for (const auto line : lines) {
             const long double native = static_cast<long double>(line) / dbu_m;
             if (!std::isfinite(native) || native < -static_cast<long double>(limit) ||
                 native > static_cast<long double>(limit))
                 throw std::invalid_argument("copper reference coordinates are out of range");
-            const auto rounded = std::round(native);
-            // Accept only floating-point representation error around native integer
-            // boundaries; fractional DBU boundaries require a contract ruling.
-            if (std::abs(native - rounded) >
-                8 * std::numeric_limits<Real>::epsilon() * std::max(1.L, std::abs(native)))
-                throw std::invalid_argument(
-                    "copper reference cell boundaries must be native integers");
-            values.push_back(static_cast<std::int64_t>(rounded));
-            if (values.size() > 1 && values.back() <= values[values.size() - 2])
-                throw std::invalid_argument(
-                    "copper reference cell boundaries must be native integers");
+            values.push_back(native);
         }
         return values;
     };
-    const auto xt = ticks(xs), yt = ticks(ys);
+    const auto xt = native_lines(xs), yt = native_lines(ys);
     for (std::size_t j = 0; j < ny; ++j)
         for (std::size_t i = 0; i < nx; ++i) {
-            const Paths64 cell{
-                {{xt[i], yt[j]}, {xt[i + 1], yt[j]}, {xt[i + 1], yt[j + 1]}, {xt[i], yt[j + 1]}}};
-            const auto clipped = Intersect(united, cell, FillRule::NonZero);
-            const Real area = std::abs(Area(clipped)) * dbu_m * dbu_m;
+            // Clip each native union ring to the four cell half-planes without
+            // snapping fractional DBU boundaries to an integer lattice. Signed
+            // areas retain holes; bridges between disconnected pieces cancel.
+            using Point = std::array<long double, 2>;
+            const Point low{xt[i], yt[j]}, high{xt[i + 1], yt[j + 1]};
+            long double signed_area = 0;
+            for (const auto& ring : united) {
+                std::vector<Point> clipped;
+                clipped.reserve(ring.size());
+                for (const auto& p : ring)
+                    clipped.push_back({static_cast<long double>(p.x) - low[0],
+                                       static_cast<long double>(p.y) - low[1]});
+                for (std::size_t axis = 0; axis < 2; ++axis) {
+                    for (const bool upper : {false, true}) {
+                        if (clipped.empty())
+                            break;
+                        const long double edge = upper ? high[axis] - low[axis] : 0;
+                        const auto inside = [&](const Point& p) {
+                            return upper ? p[axis] <= edge : p[axis] >= edge;
+                        };
+                        std::vector<Point> output;
+                        auto previous = clipped.back();
+                        bool previous_inside = inside(previous);
+                        for (const auto& current : clipped) {
+                            const bool current_inside = inside(current);
+                            if (current_inside != previous_inside) {
+                                const auto t =
+                                    (edge - previous[axis]) / (current[axis] - previous[axis]);
+                                Point crossing = previous;
+                                crossing[axis] = edge;
+                                crossing[1 - axis] += t * (current[1 - axis] - previous[1 - axis]);
+                                output.push_back(crossing);
+                            }
+                            if (current_inside)
+                                output.push_back(current);
+                            previous = current;
+                            previous_inside = current_inside;
+                        }
+                        clipped = std::move(output);
+                    }
+                }
+                for (std::size_t k = 1; k + 1 < clipped.size(); ++k) {
+                    const auto& a = clipped.front();
+                    const auto& b = clipped[k];
+                    const auto& c = clipped[k + 1];
+                    signed_area +=
+                        ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) / 2;
+                }
+            }
+            const Real area = static_cast<Real>(std::abs(signed_area) * dbu_m * dbu_m);
             const Real cell_area = (xs[i + 1] - xs[i]) * (ys[j + 1] - ys[j]);
             result[level0_dense(static_cast<std::uint32_t>(nx),
                                 static_cast<std::uint32_t>(ny),

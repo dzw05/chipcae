@@ -283,6 +283,15 @@ int main() {
                 });
             }
         }
+        run("test_fractional_dbu_boundaries", [&] {
+            // Quarter-DBU edges on unequal axes catch rejection or integer snapping.
+            cell_gate(layer(rectangles[0]),
+                      dbu,
+                      rectangles[0],
+                      {0, 500.25 * dbu, 1000.75 * dbu, .005},
+                      {0, 750.25 * dbu, 2000.75 * dbu, .005},
+                      areas[0]);
+        });
         run("test_schema_copper_polygons_cell_gate", [&] {
             const auto fixture = schema_fixture();
             require(fixture.layers.front().name == "F.Cu", "unexpected schema layer");
