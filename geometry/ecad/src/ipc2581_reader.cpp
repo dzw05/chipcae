@@ -1,11 +1,13 @@
 #include "ipc2581_stream.hpp"
 
 #include <algorithm>
+#include <cerrno>
 #include <charconv>
 #include <clipper2/clipper.h>
 #include <cmath>
 #include <expat.h>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <set>
@@ -13,6 +15,12 @@
 
 namespace chipcae::geometry::ecad {
 namespace {
+// Context is internal evidence, never part of a report ID or serialized output.
+constexpr const char *kNetlist = "netlist", *kContent = "content", *kBom = "bom",
+                     *kHeader = "header", *kStepAttr = "step-attr", *kDatum = "datum",
+                     *kElectrical = "spec-electrical", *kSpecText = "spec-text",
+                     *kDocLayer = "doc-layer", *kOutlineDoc = "outline-doc",
+                     *kEmptyDict = "empty-dict", *kInstanced = "def-instanced";
 struct Parser {
     EcadModel model;
     struct HoleDef {
@@ -36,6 +44,8 @@ struct Parser {
         std::string layer, spec;
         double diameter = 0;
         bool plated = true, artwork = false;
+        std::string component_ref, pin_ref;
+        std::size_t pin_refs = 0;
     };
     std::vector<Pending> pending;
     bool in_hole = false, in_pad = false, in_component = false;
@@ -156,6 +166,7 @@ struct Parser {
             model.layers[li->second].polygons.push_back(std::move(polygon));
             circle_uses[artwork.use].modeled = true;
         }
+        resolve_metadata();
         for (const auto& use : circle_uses)
             if (use.modeled)
                 reports[use.slot] = {};
@@ -324,6 +335,7 @@ struct Parser {
         std::uint64_t line;
         std::size_t slot;
         bool modeled = false;
+        std::size_t pad = std::numeric_limits<std::size_t>::max();
     };
     std::vector<CircleUse> circle_uses;
     struct Artwork {
@@ -348,6 +360,410 @@ struct Parser {
         bool dictionary, layer, reported = false;
     };
     std::vector<UserSpecial> user_specials;
+
+    // Only slots and reference ownership are retained, not a second XML tree/report.
+    struct Bounds {
+        std::array<std::int64_t, 2> lower{}, upper{};
+        std::size_t points = 0;
+        bool valid = true;
+        void add(std::array<std::int64_t, 2> p) {
+            for (std::size_t axis = 0; axis < 2; ++axis) {
+                lower[axis] = points ? std::min(lower[axis], p[axis]) : p[axis];
+                upper[axis] = points ? std::max(upper[axis], p[axis]) : p[axis];
+            }
+            ++points;
+        }
+        bool area() const {
+            return valid && points >= 3 && lower[0] < upper[0] && lower[1] < upper[1];
+        }
+        bool same(const Bounds& b) const { return lower == b.lower && upper == b.upper; }
+    };
+    enum class BoundsKind { profile, features, package_outline };
+    struct BoundsScope {
+        std::size_t depth, slot;
+        BoundsKind kind;
+        Bounds bounds;
+        std::string owner;
+        std::size_t read_points = 0;
+    };
+    std::vector<BoundsScope> bounds_scopes;
+    std::vector<std::size_t> active_bounds;
+    struct Electrical {
+        std::size_t depth;
+        std::string type;
+        bool conductor, valid;
+        std::vector<std::size_t> slots;
+    };
+    std::vector<Electrical> electrical;
+    struct EmptyDictionary {
+        std::size_t depth, slot;
+        bool empty = true;
+    };
+    std::vector<EmptyDictionary> empty_dictionaries;
+    enum class DefinitionKind { pin, padstack, placement };
+    struct Definition {
+        std::size_t slot;
+        DefinitionKind kind;
+        std::string owner, pin;
+    };
+    std::vector<Definition> definitions;
+    std::map<std::string, std::size_t> package_counts, padstack_counts;
+    std::map<std::pair<std::string, std::string>, std::size_t> pin_counts;
+    std::string pin;
+    std::set<std::size_t> placed_components;
+    std::vector<std::pair<std::size_t, std::size_t>> pad_definitions;
+    struct DefinitionEntry {
+        std::size_t slot;
+        std::string id;
+        bool user, owned;
+    };
+    struct DefinitionDictionary {
+        std::size_t depth, slot;
+        bool user, valid = true;
+        std::vector<std::size_t> entries;
+    };
+    std::vector<DefinitionEntry> definition_entries;
+    std::vector<DefinitionDictionary> definition_dictionaries;
+    std::vector<std::size_t> active_dictionaries;
+    struct DefinitionRef {
+        std::string id;
+        bool user;
+        std::size_t owner;
+    };
+    std::vector<DefinitionRef> definition_refs;
+    static constexpr auto no_slot = std::numeric_limits<std::size_t>::max();
+
+    bool ancestor(std::string_view name) const {
+        return std::find(path.begin(), path.end() - 1, name) != path.end() - 1;
+    }
+    bool pad_path() const {
+        const auto n = path.size();
+        return n >= 4 && path[n - 2] == "Pad" && path[n - 3] == "Set" &&
+               path[n - 4] == "LayerFeature";
+    }
+    static bool finite_number(const char* s, double& v) {
+        if (!s || !*s)
+            return false;
+        char* end = nullptr;
+        errno = 0;
+        v = std::strtod(s, &end);
+        return end != s && *end == '\0' && errno != ERANGE && std::isfinite(v);
+    }
+    void bounds_point(Bounds& b, const XML_Char** a, const char* x, const char* y) const {
+        std::array<std::int64_t, 2> p{};
+        const std::array<const char*, 2> keys{x, y};
+        for (std::size_t axis = 0; axis < 2; ++axis) {
+            double v = 0;
+            if (!finite_number(attr(a, keys[axis]), v)) {
+                b.valid = false;
+                return;
+            }
+            v *= scale();
+            // Keep llround within its domain, including double's rounded INT64_MAX.
+            if (!std::isfinite(v) || v <= static_cast<double>(INT64_MIN) ||
+                v >= static_cast<double>(INT64_MAX)) {
+                b.valid = false;
+                return;
+            }
+            p[axis] = std::llround(v);
+        }
+        b.add(p);
+    }
+    void metadata_start(const std::string& name, const XML_Char** a, const std::string& parent) {
+        for (auto& d : empty_dictionaries)
+            d.empty = false;
+        if (!active_dictionaries.empty()) {
+            auto& d = definition_dictionaries[active_dictionaries.back()];
+            if (path.size() == d.depth + 1 && name != (d.user ? "EntryUser" : "EntryLineDesc"))
+                d.valid = false;
+        }
+        for (const auto index : active_bounds) {
+            auto& b = bounds_scopes[index].bounds;
+            if (name == "PolyBegin" || name == "PolyStepSegment" || name == "Location" ||
+                name == "Point")
+                bounds_point(b, a, "x", "y");
+            else if (name == "Line") {
+                bounds_point(b, a, "startX", "startY");
+                bounds_point(b, a, "endX", "endY");
+            } else if (name != "Polygon" && name != "UserSpecial" && name != "Contour" &&
+                       name != "LineDescRef" && name != "LineDesc")
+                // Curves and unknown coordinate expressions cannot prove the full box.
+                b.valid = false;
+        }
+        if (!electrical.empty()) {
+            auto& e = electrical.back();
+            if (path.size() == e.depth + 1) {
+                const auto type = value(a, "type");
+                e.valid &=
+                    name == "Property" && (type.empty() || type == e.type) &&
+                    (!e.conductor || value(a, "unit").empty() || value(a, "unit") == "SIEMENS/M");
+            } else if (path.size() > e.depth + 1)
+                e.valid = false;
+        }
+        if (name == "Package")
+            ++package_counts[value(a, "name")];
+        if (name == "Pin" && parent == "Package") {
+            pin = value(a, "number");
+            ++pin_counts[{package, pin}];
+        }
+        if (name == "PadStackDef")
+            ++padstack_counts[value(a, "name")];
+        if (name == "Location" && parent == "Component" && in_component)
+            placed_components.insert(model.components.size() - 1);
+        if (name == "PinRef" && pad_path() && in_pad) {
+            auto& p = pending.back();
+            ++p.pin_refs;
+            p.component_ref = value(a, "componentRef");
+            p.pin_ref = value(a, "pin");
+        }
+        if (name == "UserPrimitiveRef" || name == "LineDescRef") {
+            const bool user = name == "UserPrimitiveRef";
+            auto owner = no_slot;
+            if (user && parent == "PadstackPadDef" && !pad_definitions.empty() &&
+                path.size() == pad_definitions.back().first + 1)
+                owner = pad_definitions.back().second;
+            if (!user && !active_bounds.empty() &&
+                bounds_scopes[active_bounds.back()].kind == BoundsKind::package_outline)
+                owner = active_bounds.back();
+            definition_refs.push_back({value(a, "id"), user, owner});
+        }
+        if ((name == "Profile" && package.empty()) ||
+            (name == "Outline" && parent == "Package" && !package.empty())) {
+            const bool profile = name == "Profile";
+            active_bounds.push_back(bounds_scopes.size());
+            bounds_scopes.push_back({path.size(),
+                                     no_slot,
+                                     profile ? BoundsKind::profile : BoundsKind::package_outline,
+                                     {},
+                                     package,
+                                     profile ? 0 : package_points[package].size()});
+        }
+    }
+    void annotate_report(std::size_t slot,
+                         const std::string& name,
+                         const XML_Char** a,
+                         const std::string& parent) {
+        auto& context = model.report.unsupported[slot].context;
+        const auto is = [&](std::initializer_list<std::string_view> names) {
+            return std::find(names.begin(), names.end(), name) != names.end();
+        };
+        if (name == "PinRef" && pad_path())
+            context = kNetlist;
+        else if ((parent == "Content" &&
+                  is({"LayerRef", "StepRef", "FunctionMode", "BomRef", "AvlRef"})) ||
+                 (name == "StepRef" && parent == "Bom"))
+            context = kContent;
+        else if (is({"BomHeader",
+                     "BomItem",
+                     "RefDes",
+                     "Characteristics",
+                     "Textual",
+                     "Avl",
+                     "AvlHeader",
+                     "AvlItem"}) &&
+                 (ancestor("Bom") || ancestor("Avl") || name == "Avl"))
+            context = kBom;
+        else if (is({"Role",
+                     "Enterprise",
+                     "Person",
+                     "FileRevision",
+                     "SoftwarePackage",
+                     "Certification"}) &&
+                 (ancestor("LogisticHeader") || ancestor("HistoryRecord")))
+            context = kHeader;
+        else if (name == "NonstandardAttribute" && parent == "Step" &&
+                 value(a, "name") == "FOOTPRINT_COUNT")
+            context = kStepAttr;
+        else if (name == "Datum" && parent == "Step") {
+            double x = 0, y = 0;
+            // Exact origin is the contract here; do not round a sub-dbu displacement to zero.
+            if (finite_number(attr(a, "x"), x) && finite_number(attr(a, "y"), y) && x == 0 &&
+                y == 0 && x * units_to_m == 0 && y * units_to_m == 0)
+                context = kDatum;
+        } else if (name == "Property" && parent == "General" && path.size() >= 3 &&
+                   path[path.size() - 3] == "Spec" && material_general_depth == path.size() - 1 &&
+                   !value(a, "name").empty() && value(a, "name") != "PLATING_THICKNESS" &&
+                   !(attr(a, "value") && attr(a, "unit")))
+            context = kSpecText;
+
+        if ((name == "Dielectric" || name == "Conductor") && parent == "Spec") {
+            const auto type = value(a, "type");
+            const bool conductor = name == "Conductor";
+            electrical.push_back({path.size(),
+                                  type,
+                                  conductor,
+                                  conductor
+                                      ? type == "CONDUCTIVITY"
+                                      : type == "DIELECTRIC_CONSTANT" || type == "LOSS_TANGENT",
+                                  {slot}});
+        } else if (name == "Property" && !electrical.empty() &&
+                   path.size() == electrical.back().depth + 1)
+            electrical.back().slots.push_back(slot);
+        if (name == "DictionaryColor" || name == "DictionaryFillDesc")
+            empty_dictionaries.push_back({path.size(), slot});
+        if (name == "Features") {
+            const auto layer = layer_defs.find(current_layer);
+            if (layer != layer_defs.end()) {
+                const auto function = uppercase(layer->second.first);
+                if (function == "COURTYARD")
+                    context = kDocLayer;
+                if (function == "BOARD_OUTLINE") {
+                    active_bounds.push_back(bounds_scopes.size());
+                    bounds_scopes.push_back({path.size(), slot, BoundsKind::features, {}, {}, 0});
+                }
+            }
+        }
+        if (name == "PadstackPadDef" && parent == "PadStackDef" && !padstack.empty()) {
+            definitions.push_back({slot, DefinitionKind::padstack, padstack, {}});
+            pad_definitions.emplace_back(path.size(), slot);
+        }
+        if (name == "StandardPrimitiveRef") {
+            if (parent == "Pin" && path.size() >= 3 && path[path.size() - 3] == "Package")
+                definitions.push_back({slot, DefinitionKind::pin, package, pin});
+            else if (parent == "PadstackPadDef" && !pad_definitions.empty() &&
+                     path.size() == pad_definitions.back().first + 1)
+                definitions.push_back({slot, DefinitionKind::padstack, padstack, {}});
+        }
+        if ((name == "PickupPoint" || name == "OtherSideView") && parent == "Package")
+            definitions.push_back({slot, DefinitionKind::placement, package, {}});
+        if (name == "DictionaryUser" || name == "DictionaryLineDesc") {
+            active_dictionaries.push_back(definition_dictionaries.size());
+            definition_dictionaries.push_back(
+                {path.size(), slot, name == "DictionaryUser", true, {}});
+        }
+        if (name == "EntryUser" || name == "EntryLineDesc") {
+            const bool user = name == "EntryUser";
+            const auto index = definition_entries.size();
+            definition_entries.push_back({slot, value(a, "id"), user, false});
+            if (!active_dictionaries.empty()) {
+                auto& d = definition_dictionaries[active_dictionaries.back()];
+                if (user == d.user && path.size() == d.depth + 1) {
+                    d.entries.push_back(index);
+                    definition_entries.back().owned = true;
+                }
+            }
+        }
+    }
+    void metadata_end() {
+        if (!electrical.empty() && path.size() == electrical.back().depth) {
+            const auto& e = electrical.back();
+            if (e.valid && e.slots.size() > 1)
+                for (const auto slot : e.slots)
+                    model.report.unsupported[slot].context = kElectrical;
+            electrical.pop_back();
+        }
+        if (!empty_dictionaries.empty() && path.size() == empty_dictionaries.back().depth) {
+            const auto& d = empty_dictionaries.back();
+            if (d.empty)
+                model.report.unsupported[d.slot].context = kEmptyDict;
+            empty_dictionaries.pop_back();
+        }
+        if (!active_bounds.empty() && path.size() == bounds_scopes[active_bounds.back()].depth) {
+            auto& b = bounds_scopes[active_bounds.back()];
+            if (b.kind == BoundsKind::package_outline)
+                b.bounds.valid &= package_points[b.owner].size() >= b.read_points + 3;
+            active_bounds.pop_back();
+        }
+        if (!active_dictionaries.empty() &&
+            path.size() == definition_dictionaries[active_dictionaries.back()].depth)
+            active_dictionaries.pop_back();
+        if (!pad_definitions.empty() && path.size() == pad_definitions.back().first)
+            pad_definitions.pop_back();
+        if (path.back() == "Pin")
+            pin.clear();
+    }
+    void resolve_metadata() {
+        auto& reports = model.report.unsupported;
+        const auto mark = [&](std::size_t slot, const char* context) {
+            reports[slot].context = context;
+        };
+        Bounds profile;
+        for (const auto& p : model.outline.points)
+            profile.add(p);
+        bool profile_read = false;
+        for (const auto& b : bounds_scopes)
+            if (b.kind == BoundsKind::profile && b.bounds.area() && b.bounds.same(profile))
+                profile_read = true;
+        for (const auto& b : bounds_scopes)
+            if (b.kind == BoundsKind::features && profile_read && profile.area() &&
+                b.bounds.area() && b.bounds.same(profile))
+                mark(b.slot, kOutlineDoc);
+
+        std::map<std::string, std::size_t> component_counts, component_packages;
+        std::set<std::string> placed, modeled_padstacks;
+        std::set<std::pair<std::string, std::string>> modeled_pins;
+        for (std::size_t i = 0; i < model.components.size(); ++i) {
+            const auto& c = model.components[i];
+            ++component_counts[c.id];
+            component_packages[c.id] = i;
+        }
+        for (const auto i : placed_components) {
+            const auto& c = model.components[i];
+            if (!c.package.empty() && package_counts[c.package] == 1 && component_counts[c.id] == 1)
+                placed.insert(c.package);
+        }
+        for (const auto& use : circle_uses) {
+            const auto layer = layer_index.find(use.layer);
+            if (!use.modeled || use.pad == no_slot || layer == layer_index.end() ||
+                !model.layers[layer->second].copper)
+                continue;
+            const auto& p = pending[use.pad];
+            if (!p.via.padstack.empty() && padstack_counts[p.via.padstack] == 1)
+                modeled_padstacks.insert(p.via.padstack);
+            if (p.pin_refs != 1 || p.component_ref.empty() || p.pin_ref.empty() ||
+                component_counts[p.component_ref] != 1)
+                continue;
+            const auto& c = model.components[component_packages.at(p.component_ref)];
+            if (package_counts[c.package] == 1 && pin_counts[{c.package, p.pin_ref}] == 1)
+                modeled_pins.emplace(c.package, p.pin_ref);
+        }
+        std::set<std::size_t> instanced;
+        for (const auto& d : definitions) {
+            const bool hit = d.kind == DefinitionKind::pin ? modeled_pins.contains({d.owner, d.pin})
+                             : d.kind == DefinitionKind::padstack
+                                 ? modeled_padstacks.contains(d.owner)
+                                 : placed.contains(d.owner);
+            if (hit) {
+                mark(d.slot, kInstanced);
+                instanced.insert(d.slot);
+            }
+        }
+        using EntryKey = std::pair<bool, std::string>;
+        std::map<EntryKey, std::size_t> entry_counts;
+        for (const auto& e : definition_entries)
+            ++entry_counts[{e.user, e.id}];
+        // Each reference contributes once; one outside/ambiguous owner poisons its entry.
+        std::map<EntryKey, bool> refs;
+        for (const auto& r : definition_refs) {
+            bool valid = false;
+            if (r.owner != no_slot) {
+                if (r.user)
+                    valid = instanced.contains(r.owner);
+                else {
+                    const auto& b = bounds_scopes[r.owner];
+                    valid = b.bounds.area() && package_counts[b.owner] == 1;
+                }
+            }
+            const auto [it, inserted] = refs.emplace(EntryKey{r.user, r.id}, valid);
+            if (!inserted)
+                it->second &= valid;
+        }
+        std::vector<bool> qualified(definition_entries.size());
+        for (std::size_t i = 0; i < definition_entries.size(); ++i) {
+            const auto& e = definition_entries[i];
+            const EntryKey key{e.user, e.id};
+            const auto r = refs.find(key);
+            qualified[i] =
+                e.owned && !e.id.empty() && entry_counts[key] == 1 && r != refs.end() && r->second;
+            if (qualified[i])
+                mark(e.slot, kInstanced);
+        }
+        for (const auto& d : definition_dictionaries)
+            if (d.valid && !d.entries.empty() &&
+                std::all_of(
+                    d.entries.begin(), d.entries.end(), [&](auto i) { return qualified[i]; }))
+                mark(d.slot, kInstanced);
+    }
     void draw_trace(Trace& t, Clipper2Lib::EndType end = Clipper2Lib::EndType::Round) {
         auto li = layer_index.find(t.layer);
         if (li == layer_index.end() || skipped(t.layer))
@@ -431,6 +847,7 @@ struct Parser {
         if (name == "StandardPrimitiveRef" && in_pad)
             pending.back().artwork = true;
         const auto parent = path.size() > 1 ? path[path.size() - 2] : std::string{};
+        metadata_start(name, a, parent);
         if (name == "DictionaryUser")
             dictionary_user_depth = path.size();
         if (name == "EntryUser" && dictionary_user_depth)
@@ -610,12 +1027,15 @@ struct Parser {
         } else if (name == "StandardPrimitiveRef") {
             const auto slot = model.report.unsupported.size();
             model.report.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT", name, line_number()});
+            annotate_report(slot, name, a, parent);
             const bool definition =
                 (!package.empty() && std::find(path.begin(), path.end(), "Pin") != path.end()) ||
                 std::find(path.begin(), path.end(), "PadstackPadDef") != path.end();
             if (!current_layer.empty() && !definition) {
                 const auto id = value(a, "id");
                 circle_uses.push_back({id, current_layer, line_number(), slot});
+                if (in_pad)
+                    circle_uses.back().pad = pending.size() - 1;
                 // Preserve the existing requirement that the circle is already defined.
                 if (in_pad && circles.count(id))
                     deferred_artwork.push_back(
@@ -698,9 +1118,12 @@ struct Parser {
                                               static_cast<std::int64_t>(std::llround(py * scale))});
             }
         } else if (name == "Features") {
-            if (!layer_index.count(current_layer) || skipped(current_layer))
+            if (!layer_index.count(current_layer) || skipped(current_layer)) {
+                const auto slot = model.report.unsupported.size();
                 model.report.unsupported.push_back(
                     {"IMPORT_UNSUPPORTED_ELEMENT", name, line_number()});
+                annotate_report(slot, name, a, parent);
+            }
         } else if (name == "Step") {
             if (const char* id = attr(a, "name"))
                 model.id = id;
@@ -713,11 +1136,14 @@ struct Parser {
                    name != "Line" && name != "Arc" && name != "LineDesc" && name != "LineDescRef" &&
                    name != "CadHeader" && name != "Outline" && name != "General" &&
                    !material_property) {
+            const auto slot = model.report.unsupported.size();
             model.report.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT", name, line_number()});
+            annotate_report(slot, name, a, parent);
         }
     }
     void end(const char* raw) {
         auto n = local(raw);
+        metadata_end();
         if (!user_specials.empty() && path.size() == user_specials.back().depth)
             user_specials.pop_back();
         if (path.size() == entry_user_depth)

@@ -152,9 +152,9 @@ int main(int argc, char** argv) {
         const auto out_prefix = dir / "grid";
         const auto grid = fs::path(out_prefix.string() + ".vtkhdf");
         std::ostringstream cmd;
-        cmd << shell(argv[1]) << " " << shell(fixture.string()) << " --nx 4 --ny 4 --levels 1 -o "
-            << shell(out_prefix.string()) << " >" << shell((dir / "stdout").string()) << " 2>"
-            << shell((dir / "stderr").string());
+        cmd << shell(argv[1]) << " " << shell(fixture.string())
+            << " --nx 4 --ny 4 --levels 1 --max-ratio 10 -o " << shell(out_prefix.string()) << " >"
+            << shell((dir / "stdout").string()) << " 2>" << shell((dir / "stderr").string());
         int code = std::system(cmd.str().c_str());
         expect(WIFEXITED(code) && WEXITSTATUS(code) == 0, "chipcae-preview exit 0");
         expect(fs::exists(grid), "grid.vtkhdf exists");

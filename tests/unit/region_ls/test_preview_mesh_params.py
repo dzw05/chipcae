@@ -213,8 +213,11 @@ class PreviewMeshParams(unittest.TestCase):
             with self.subTest(minimum=minimum, original_minimum=original_minimum):
                 stack = synthetic_stack(15)
                 stack['layers'][0]['n_elem_min'] = original_minimum
-                invocation = self.invoke(f'min-{minimum}-{original_minimum}', stack,
-                                         ['--min-elems-per-layer', str(minimum)])
+                flags = ['--min-elems-per-layer', str(minimum)]
+                # Equal layer thicknesses make this subdivision ratio exceed the default 2.
+                if original_minimum > 2 * minimum:
+                    flags += ['--max-ratio', '10']
+                invocation = self.invoke(f'min-{minimum}-{original_minimum}', stack, flags)
                 summary = self.success(invocation)
                 self.assertEqual(summary['nz'], expected_nz, diagnostics(invocation[0]))
                 self.assertEqual(summary.get('min_elems_per_layer'), minimum,

@@ -104,10 +104,10 @@ class PreviewCopperArea(unittest.TestCase):
         path.write_text(json.dumps(stack), encoding='utf-8')
         return path
 
-    def invoke(self, name, source, nx=4, ny=4, launcher=(), unpadded=False):
+    def invoke(self, name, source, nx=4, ny=4, launcher=(), unpadded=False, flags=()):
         stem = self.root / name
         command = [*launcher, str(self.preview), str(source), '-o', str(stem),
-                   '--nx', str(nx), '--ny', str(ny), '--levels', '1']
+                   '--nx', str(nx), '--ny', str(ny), '--levels', '1', *flags]
         try:
             result = subprocess.run(command, capture_output=True, text=True,
                                     env=self.env, timeout=8)
@@ -174,7 +174,9 @@ class PreviewCopperArea(unittest.TestCase):
         return source, signed_area(layers[polygons['layer']], dbu)
 
     def test_no_copper_empty_object(self):
-        summary, pairs, _ = self.invoke('no-copper', self.source('no-copper', fraction_stack(False)))
+        summary, pairs, _ = self.invoke(
+            'no-copper', self.source('no-copper', fraction_stack(False)),
+            flags=['--max-ratio', '10'])
         self.assertEqual(summary['copper_area_m2'], {})
         self.assertEqual(pairs, [])
 
@@ -318,7 +320,8 @@ endif()
 
     def test_fraction_layers_bitwise(self):
         summary, _, _ = self.invoke(
-            'fraction', self.source('fraction', fraction_stack()), unpadded=True)
+            'fraction', self.source('fraction', fraction_stack()), unpadded=True,
+            flags=['--max-ratio', '10'])
         self.assertEqual(summary['padded_cells'], 0)
         report = summary['copper_area_m2']
         self.assertEqual(list(report), ['L1', 'L2'])
@@ -365,7 +368,9 @@ endif()
                 footprint=dict(box=[.001, 0, .0022, .003]))]
         reference = signed_area(rings, 1e-9)
         self.assert_area(reference, 4.75e-6)
-        summary, _, stem = self.invoke('polygon', self.source('polygon', stack), nx=8, ny=6)
+        summary, _, stem = self.invoke(
+            'polygon', self.source('polygon', stack), nx=8, ny=6,
+            flags=['--max-ratio', '10'])
         self.assertEqual(summary['padded_cells'], 0)
         report = summary['copper_area_m2']
         self.assertEqual(list(report), ['L1'])
@@ -451,17 +456,19 @@ endif()
         mpi = shutil.which('mpiexec') or shutil.which('mpirun')
         if 'CHIPCAE_ENABLE_MPI:BOOL=ON' not in self.cache or not mpi:
             self.skipTest('MPI-enabled preview and mpiexec/mpirun required')
+        flags = []
         if 'CHIPCAE_ENABLE_ECAD:BOOL=ON' in self.cache:
             source, _ = self.fixture()
             nx, ny = 10, 8
         else:
             source = self.source('mpi-fraction', fraction_stack())
             nx, ny = 4, 4
+            flags = ['--max-ratio', '10']
         runs = {}
         for ranks in (1, 2):
             with self.subTest(ranks=ranks):
                 runs[ranks] = self.invoke(f'np{ranks}', source, nx, ny,
-                                          launcher=[mpi, '-n', str(ranks)])
+                                          launcher=[mpi, '-n', str(ranks)], flags=flags)
         if len(runs) == 2:
             self.assertEqual(runs[1][1], runs[2][1])
             self.assertEqual(runs[1][0]['mesh_sha256'], runs[2][0]['mesh_sha256'])

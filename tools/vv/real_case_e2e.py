@@ -18,6 +18,7 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import struct
 import subprocess
 import sys
@@ -217,6 +218,44 @@ def _manifest(run_dir):
 def _vtk_path(run_dir, manifest=None):
     manifest = _manifest(run_dir) if manifest is None else manifest
     return Path(run_dir) / manifest["steps"][0]["file"]
+
+
+def _regular_file_bytes(paths) -> int | None:
+    """Sum stat sizes once per resolved path; unavailable files invalidate the total."""
+    total, seen = 0, set()
+    try:
+        for path in paths:
+            path = Path(path).resolve()
+            if path in seen:
+                continue
+            info = os.stat(path)
+            if not stat.S_ISREG(info.st_mode):
+                return None
+            total += info.st_size
+            seen.add(path)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return total
+
+
+def _i6_bytes(output) -> int | None:
+    """Count only the manifest and all its step targets, without reading VTKHDF."""
+    manifest = Path(output) / "manifest.json"
+    try:
+        document = _json(manifest)
+        if not isinstance(document, dict):
+            return None
+        steps = document.get("steps", [])
+        if not isinstance(steps, list):
+            return None
+        paths = [manifest]
+        for step in steps:
+            if not isinstance(step, dict) or not isinstance(step.get("file"), str) or not step["file"]:
+                return None
+            paths.append(manifest.parent / step["file"])
+        return _regular_file_bytes(paths)
+    except (OSError, ValueError, RuntimeError):
+        return None
 
 
 def _summary(run_dir):
@@ -677,6 +716,15 @@ def _copy_input(source, target):
 
 
 def _copy_inputs(inputs, kind, resolved):
+    copied = set()
+
+    def copy_input(source, target):
+        _copy_input(source, target)
+        if target.is_dir():
+            copied.update(path for path in target.rglob("*") if path.is_file())
+        else:
+            copied.add(target)
+
     if kind == "assembly":
         document = copy.deepcopy(resolved["document"])
         refs = list(_assembly_refs(document))
@@ -687,16 +735,17 @@ def _copy_inputs(inputs, kind, resolved):
         for (obj, key), source in zip(refs, sources):
             dest = inputs / "dependencies" / source.relative_to(common)
             if not dest.exists():
-                _copy_input(source, dest)
+                copy_input(source, dest)
             obj[key] = dest.relative_to(inputs).as_posix()
         _write_json(inputs / "assembly.json", document)
         # Import and solve reference the same parsed assembly material library.
         _write_json(inputs / "materials.json", resolved["library"])
     else:
         source = resolved["input"]
-        _copy_input(source, inputs / ("board" + ("".join(source.suffixes) if source.is_file() else "")))
-        _copy_input(resolved["map"], inputs / "material_map.json")
+        copy_input(source, inputs / ("board" + ("".join(source.suffixes) if source.is_file() else "")))
+        copy_input(resolved["map"], inputs / "material_map.json")
         _write_json(inputs / "materials.json", resolved.get("library", _illustrative_materials()))
+    return copied
 
 
 def _case(params):
@@ -715,14 +764,14 @@ def _rss_kib(ru_maxrss: int, platform: str | None = None) -> int:
     return -(-ru_maxrss // 1024) if platform == "darwin" else int(ru_maxrss)
 
 
-def _measured(argv, stage, folder, record, timeout_s):
+def _measured(argv, stage, folder, record, timeout_s, *, bytes_in=None):
     """One child, redirected logs, per-child wait4 metrics and a group watchdog."""
     argv = [str(arg) for arg in argv]
     logs = folder / "logs"
     logs.mkdir(exist_ok=True)
     stdout_path, stderr_path = (logs / f"{stage}.{suffix}.log" for suffix in ("stdout", "stderr"))
     entry = dict(stage=stage, argv=argv, command=shlex.join(argv), exit_code=None,
-                 wall_s=0., peak_rss_kib=None, status_detail=None)
+                 wall_s=0., peak_rss_kib=None, status_detail=None, bytes_in=bytes_in, bytes_out=None)
     record["commands"].append(entry)
     record["logs"].extend(str(p.relative_to(folder)) for p in (stdout_path, stderr_path))
     with (folder / "cmd.txt").open("a", encoding="utf-8") as commands:
@@ -830,6 +879,12 @@ def _missing(record, *, pending_checks=()):
                 if item is None:
                     if path.startswith("commands[") and key == "status_detail":
                         continue
+                    if re.fullmatch(r"commands\[\d+\]", path) and key in ("bytes_in", "bytes_out"):
+                        stage = value.get("stage", "")
+                        applicable = ((stage == "import" or stage.startswith("readback_"))
+                                      if key == "bytes_in" else stage.startswith("solve_"))
+                        if not applicable:
+                            continue
                     if name.startswith("checks."):
                         check = key
                         if check in pending_checks:
@@ -1144,8 +1199,10 @@ def _solve_run(record, folder, inputs, output, stage, ranks, exes, mpi, timeout_
         else:
             _stage_error(record, entry, folder)
         return entry, None
+    entry["bytes_out"] = _i6_bytes(output)
     readback = _measured([sys.executable, source_root / "tools/vv/result_summary.py", output,
-                          "-o", output / "readback.json"], "readback_" + stage, folder, record, timeout_s)
+                          "-o", output / "readback.json"], "readback_" + stage, folder, record, timeout_s,
+                         bytes_in=_i6_bytes(output))
     if readback["exit_code"]:
         _stage_error(record, readback, folder)
         record["notes"].append(f"readback_{stage}: downstream checks and digest interrupted")
@@ -1344,7 +1401,7 @@ def _pipeline(record, folder, kind, params, resolved, nps, repeat, source_root, 
     else:
         record["notes"].append("C8: MPI launcher unavailable" if 2 in nps else "C8: MPI not requested")
     inputs, timeout_s = folder / "inputs", params.get("timeout_s", 3600)
-    _copy_inputs(inputs, kind, resolved)
+    copied = _copy_inputs(inputs, kind, resolved)
     if kind == "assembly":
         command = [exes["import"], "--assembly", inputs / "assembly.json", "-o", inputs / "stack.json",
                    "--report", inputs / "defects.json"]
@@ -1354,7 +1411,8 @@ def _pipeline(record, folder, kind, params, resolved, nps, repeat, source_root, 
                    "--report", inputs / "defects.json", "--material-map", inputs / "material_map.json"]
     if params.get("accept_b_tier", False):
         command.append("--accept-b-tier")
-    imported = _measured(command, "import", folder, record, timeout_s)
+    imported = _measured(command, "import", folder, record, timeout_s,
+                         bytes_in=_regular_file_bytes(copied))
     parts = _assembly_parts(resolved["document"]) if kind == "assembly" else []
     if kind == "assembly":
         _merge_check(record, "A1", _check_a1(inputs / "import_report.json", inputs / "stack.json",

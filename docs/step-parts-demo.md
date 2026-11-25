@@ -18,9 +18,31 @@ stderr 去掉首尾空白后恰为 `IMPORT_REJECTED: ECAD support disabled` 时�
 
 在仓库根目录执行。box 上先将共享槽位包装器目录放在 PATH 最前，排队时等待即可。
 按本地安装设置 `jsoncons_DIR`、`HDF5_DIR`、`Kokkos_DIR`；`SP7_PYTHON` 指向所需的 Python 环境，
-缺省为 `python3`。真实案例还需预先设置 `CHIPCAE_DEMO_STEP_DIR`，指向私有 STEP 所在目录。
-运行真实 bulk 前还须将 `CHIPCAE_REAL_RUNS_DIR` 设为 box 本地的
-`/workspace/vv/internal/runs/`；测试拒绝将真实运行目录放入 checkout。
+缺省为 `python3`。真实案例需预先设置 `CHIPCAE_DEMO_STEP_DIR`，指向私有输入基准目录。
+迁移本地配置时，另外设置四个文件变量（值只保留在本地，不入库）：
+
+- `CHIPCAE_DEMO_BULK_STEP`：bulk STEP，例如 `/path/to/example_parts.step`。
+- `CHIPCAE_DEMO_IHP_STEP`：第二个切片 STEP，例如 `/path/to/second_parts.step`。
+- `CHIPCAE_DEMO_BOARD_IPC`：基板 IPC-2581，例如 `/path/to/board.ipc2581.xml`。
+- `CHIPCAE_DEMO_BULK_BODIES`：body 映射 JSON，例如 `/path/to/bodies.json`。
+
+C++ 与 Python 均直接使用绝对文件路径，相对文件路径则相对 `CHIPCAE_DEMO_STEP_DIR` 解析。
+目录变量即使在文件使用绝对路径时也必须非空。映射 JSON 的键集合须与 bulk 模板完全相等，
+值为非空且互不重复的 STEP body 键，例如：
+
+```json
+{
+  "example_parts/die": "<local die body key>",
+  "example_parts/adhesive": "<local adhesive body key>",
+  "example_parts/tim": "<local tim body key>",
+  "example_parts/lid": "<local lid body key>"
+}
+```
+
+该 JSON 放在仓库外；仅运行目录里的 assembly 副本替换 body 键，仓库模板保持中性键。
+真实 STEP 链接名固定为 `example_parts.step`，基板链接名为 `board.xml`。
+运行真实 bulk 前还须将 `CHIPCAE_REAL_RUNS_DIR` 设为本地的 `/path/to/private-runs/`；
+测试拒绝将真实运行目录放入 checkout。
 Python 环境需有 cadquery-ocp、h5py、numpy、jsonschema、PyYAML、VTK。
 本次 Release 构建启用了 JSON/HDF5，ECAD、C++ OCCT、MPI、MFEM 关闭；
 即使 SP4 合入，完整数值验收仍需启用对应导入和求解后端。
@@ -38,9 +60,12 @@ ctest --test-dir "$CHIPCAE_TEST_BUILD_DIR" --output-on-failure
 SP7_STRICT_ACCEPTANCE=1 ctest --test-dir "$CHIPCAE_TEST_BUILD_DIR" -R '^e2e_' --output-on-failure
 ```
 
-真实 bulk 用例仅在 `CHIPCAE_DEMO_STEP_DIR` 未设置时按数据条件跳过。
-设置后缺少真实文件或 Python OCCT 为错误。其他 CAD 用例无 Python OCCT 时跳过。
-派生盖板也需要该环境变量。供应商输入不入库，不打包到 CI 产物。
+真实 bulk 按目录、BULK、BOARD、BODIES 的顺序检查上述变量，任一未设或为空时
+打印 `SKIP: <变量名> is unset` 并退出 77；旧配置只设置目录时也会跳过，须迁移文件变量。
+派生盖板只检查目录与 BULK。两个 C++ 真实切片测试分别使用 BULK 和 IHP，
+目录或文件变量未设、为空，或路径不是普通文件时退出 77。
+Python bulk 在变量齐全而文件不是普通文件时断言失败，诊断只写变量名；缺少 Python OCCT
+也是错误。其他 CAD 用例无 Python OCCT 时跳过。供应商输入不入库，不打包到 CI 产物。
 真实 bulk 在 `CHIPCAE_REAL_RUNS_DIR` 下创建独立的 `sp7-real-bulk-*` 目录并保留它。
 求解完成后，目录根部的 `result.json` 记录 `data_class: "real"`、标为「实测」的
 `warpage_pv`（m）、材料映射、「近似材料／近似几何」标记和铜层「整层平均」处理方式。
@@ -56,13 +81,21 @@ CLI stdout/stderr、Python 输出和失败详情写入同目录的 `run.log`；
 每次可将 `--case box` 改为 `ring-chamfer`、`cylinder`、`chamfer` 或 `negative`。
 `rounded` 仅生成 C 级负例，分别导入 hat 与 ring，不能按正例继续预览或求解。
 `bulk` 使用真实 substrate IPC 和 BULK STEP 的临时符号链接；其余正例使用现场生成的合成 IPC 板。
+生成器的 `--demo-step-dir` 为相对路径基准，`--bulk-step`、`--board-ipc`、`--bulk-bodies`
+分别覆盖对应环境变量；`chamfer` 只需前两项，`bulk` 四项均需设置。
+缺少所需选项时生成器退出 2，并提示对应变量及选项。
 未提供可用的 ODB++ 演示输入，此处只覆盖 IPC-2581。
 真实 bulk 使用下面的专用 CTest 命令，以保留本地记录并避免将测量值输出到终端或 CTest：
 
 ```sh
 : "${CHIPCAE_DEMO_STEP_DIR:?设置私有 STEP 所在目录}"
-: "${CHIPCAE_REAL_RUNS_DIR:?设置 box 本地运行根目录}"
+: "${CHIPCAE_DEMO_BULK_STEP:?设置 bulk STEP 路径}"
+: "${CHIPCAE_DEMO_IHP_STEP:?设置第二个切片 STEP 路径}"
+: "${CHIPCAE_DEMO_BOARD_IPC:?设置基板 IPC 路径}"
+: "${CHIPCAE_DEMO_BULK_BODIES:?设置本地 body 映射 JSON 路径}"
+: "${CHIPCAE_REAL_RUNS_DIR:?设置本地运行根目录}"
 export CHIPCAE_DEMO_STEP_DIR CHIPCAE_REAL_RUNS_DIR
+export CHIPCAE_DEMO_BULK_STEP CHIPCAE_DEMO_IHP_STEP CHIPCAE_DEMO_BOARD_IPC CHIPCAE_DEMO_BULK_BODIES
 ctest --test-dir "$CHIPCAE_TEST_BUILD_DIR" -R '^e2e_real_bulk_parts$' --output-on-failure
 ```
 
@@ -140,7 +173,7 @@ cut 使用 `CellData/volume` 中以 m³ 表示的保留体积，按材料筛选�
 
 ## 材料与近似
 
-`bulk_parts.assembly.json` 的 HOST 用 silicon，IHP_adhesive 和 TIM 用 underfill，
+`bulk_parts.assembly.json` 的 die 用 silicon，adhesive 与 tim 用 underfill，
 lid 当前用 silicon，四者均标 `material_approx=true`，均为「近似材料」。
 lid：刚度近似，CTE 偏低，待 copper 入库后重跑。生成器在已发布材料库出现 copper 后
 自动选择 copper；静态 bulk 模板映射届时也需更新并重跑。
@@ -148,7 +181,7 @@ lid：刚度近似，CTE 偏低，待 copper 入库后重跑。生成器在已�
 
 真实 STEP 用 frame=step，origin=[0, -0.044, 0.000020002] m。
 `interposer_approx` 为「近似材料、近似几何」，underfill，STEP 坐标 x[2,54]、y[2,34] mm，
-z 从基板顶到 HOST 底。assembly/0.1 没有内联 region 字段，因此用临时 box STEP 表达同一区域，
+z 从基板顶到 die 底。assembly/0.1 没有内联 region 字段，因此用临时 box STEP 表达同一区域，
 随同 origin 平移；标签保存在 `fixture-notes.json` 和本文，不扩展 schema。
 导入报告中的近似材料标记由 bulk 验收断言检查，当前被 SP4 阻塞。
 

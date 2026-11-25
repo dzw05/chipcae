@@ -1,7 +1,9 @@
 """Exercise consumed-report filtering through the real IPC importer.
 
-Snapshots live in the C++ acceptance test so both entry points share the exact,
-pre-change public-fixture defects, including all eleven serialized fields.
+Snapshots live in the C++ acceptance test so both entry points share the exact
+public-fixture expectations, including all eleven serialized fields. The original
+snapshots retain the explicit consumed deletions; A expectations follow the public
+XML whitelist audit (74 kicad4l / 48 kicad10 promotions, Circle instances only).
 """
 import hashlib
 import json
