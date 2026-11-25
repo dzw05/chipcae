@@ -2133,6 +2133,44 @@ class ResidualMetadataCLI(unittest.TestCase):
                 self.assertEqual(process.returncode, 1)
                 self.assertIn(b'CHIPCAE_IMPORT_EXE must name an executable importer', process.stderr)
 
+    def test_material_general_does_not_promote_other_sibling_properties(self):
+        source = self.directory / 'sibling-generals.xml'
+        source.write_text('''<IPC-2581>
+<CadHeader units="MILLIMETER"><Spec name="S">
+<General type="MATERIAL">
+<Property text="FR4"/>
+<Property text="green"/>
+<Property name="COLOR" text="green"/>
+</General>
+<General type="OTHER">
+<Property text="green"/>
+<Property/>
+<Property name="COLOR" text="green"/>
+</General>
+<General type="MATERIAL"><Property text="blue"/></General>
+</Spec></CadHeader>
+</IPC-2581>
+''', encoding='utf-8')
+        process, report, _ = invoke(EXECUTABLE, source, self.directory / 'sibling-generals', False)
+        self.assertEqual(process.returncode, 6)
+        self.assertEqual(report['tier_counts'], {'Weld': 0, 'A': 3, 'B': 3, 'C': 0})
+        expected = [('board/Property/5', 'A'), ('board/Property/6', 'A'),
+                    ('board/Property/9', 'B'), ('board/Property/10', 'B'),
+                    ('board/Property/11', 'B'), ('board/Property/13', 'A')]
+        self.assertEqual([(d['defect_id'], d['tier']) for d in report['defects']], expected)
+        for defect in report['defects']:
+            with self.subTest(defect=defect['defect_id']):
+                if defect['tier'] == 'A':
+                    self.assertEqual(defect['suggestion'], 'non-physical metadata ignored')
+                    self.assertEqual(defect['action'], 'non-physical metadata ignored')
+                    self.assertEqual(defect['rejection_reason'], '')
+                else:
+                    self.assertEqual(defect['suggestion'],
+                                     'confirm omitted metadata, components or text')
+                    self.assertEqual(defect['action'], '')
+                    self.assertEqual(defect['rejection_reason'],
+                                     'tier B defect requires explicit confirmation')
+
 
 if __name__ == '__main__':
     value = os.environ.get('CHIPCAE_IMPORT_EXE')

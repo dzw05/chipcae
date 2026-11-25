@@ -2085,6 +2085,58 @@ void verify(const Case& item) {
                   "plating radius remains 475 dbu, absolute tolerance 1e-10");
     }
 }
+void verify_sibling_generals() {
+    Temporary tmp;
+    const auto input = tmp.write("sibling-generals.xml", R"XML(<IPC-2581>
+<CadHeader units="MILLIMETER"><Spec name="S">
+<General type="MATERIAL">
+<Property text="FR4"/>
+<Property text="green"/>
+<Property name="COLOR" text="green"/>
+</General>
+<General type="OTHER">
+<Property text="green"/>
+<Property/>
+<Property name="COLOR" text="green"/>
+</General>
+<General type="MATERIAL"><Property text="blue"/></General>
+</Spec></CadHeader>
+</IPC-2581>
+)XML");
+    const auto result = ecad::read_ipc2581(input);
+    if (!result)
+        throw std::runtime_error("sibling_generals: " + result.error);
+    const std::array<std::tuple<std::string, std::string, std::string>, 6> expected{{
+        {"board/Property/5", "A", "spec-text"},
+        {"board/Property/6", "A", "spec-text"},
+        {"board/Property/9", "B", ""},
+        {"board/Property/10", "B", ""},
+        {"board/Property/11", "B", ""},
+        {"board/Property/13", "A", "spec-text"},
+    }};
+    const auto& unsupported = result.model.report.unsupported;
+    check(unsupported.size() == expected.size(), "sibling_generals: material name stays consumed");
+    for (const bool accept : {false, true}) {
+        const auto defects = objects(report_bytes(result.model.report, tmp, false, accept, true));
+        check(defects.size() == expected.size(), "sibling_generals: exact defect count");
+        for (std::size_t i = 0; i < std::min(defects.size(), expected.size()); ++i) {
+            const auto& [id, tier, context] = expected[i];
+            const auto label = "sibling_generals: " + id;
+            check(field(defects[i], "defect_id") == id, label + " ordered ID");
+            check(field(defects[i], "tier") == tier, label + " tier");
+            if (i < unsupported.size())
+                check(unsupported[i].context == context, label + " General type context");
+            const auto* suggestion = tier == "A" ? metadata_action : confirm;
+            check(field(defects[i], "suggestion") == suggestion, label + " suggestion");
+            check(field(defects[i], "action") == (tier == "A" || accept ? suggestion : ""),
+                  label + " repair action");
+            check(
+                field(defects[i], "rejection_reason") ==
+                    (tier == "B" && !accept ? "tier B defect requires explicit confirmation" : ""),
+                label + " confirmation guard");
+        }
+    }
+}
 } // namespace
 int main() {
     std::cout << "Frozen baseline: " << baseline_sha << '\n';
@@ -2096,6 +2148,11 @@ int main() {
             check(false, input.name + ": " + error.what());
         }
         std::cout << (before == failures ? "PASS " : "FAIL ") << input.name << '\n';
+    }
+    try {
+        verify_sibling_generals();
+    } catch (const std::exception& error) {
+        check(false, error.what());
     }
     std::cout << "Assertion failures: " << failures << '\n';
     return failures ? 1 : 0;
