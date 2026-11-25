@@ -1006,6 +1006,11 @@ int run_fvm(const RunInputs& inputs, const std::filesystem::path& output) {
                      << ",\"imbalance\":" << thermal.imbalance
                      << ",\"iterations\":" << thermal.iterations << '}';
                 emit(io::LogLine{1, 0, line.str(), "", 0});
+                line.str("");
+                line << "FVM_LINEAR {\"field\":\"thermal\",\"pc\":\"" << problem.preconditioner
+                     << "\",\"its\":" << thermal.iterations << ",\"residual\":" << thermal.residual
+                     << '}';
+                emit(io::LogLine{1, 0, line.str(), "", 0});
             }
         } else {
             const auto uniform =
@@ -1051,6 +1056,11 @@ int run_fvm(const RunInputs& inputs, const std::filesystem::path& output) {
             line << std::setprecision(17) << "FVM_ELASTIC {\"iterations\":" << elastic.iterations
                  << ",\"residual\":" << elastic.residual << ",\"warpage_pv\":" << elastic.warpage_pv
                  << ",\"U_mag_max\":" << elastic.U_mag_max << '}';
+            emit(io::LogLine{1, 0, line.str(), "", 0});
+            line.str("");
+            line << "FVM_LINEAR {\"field\":\"elastic\",\"pc\":\"" << elastic_problem.preconditioner
+                 << "\",\"its\":" << elastic.iterations << ",\"residual\":" << elastic.residual
+                 << '}';
             emit(io::LogLine{1, 0, line.str(), "", 0});
         }
         const auto step = results(inputs,

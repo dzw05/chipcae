@@ -2,6 +2,7 @@
 
 import argparse
 from pathlib import Path
+import re
 import sys
 import tempfile
 
@@ -31,8 +32,12 @@ def main():
               process.returncode)
         no_success(out, checks, 'elastic-failure')
         check(checks, 'elastic-failure convergence wording',
-              'nonconvergence' in text or 'not converged' in text,
-              'M3 ruling required if neither nonconvergence nor not converged appears')
+              'nonconvergence' in process.stderr or 'not converged' in process.stderr,
+              process.stderr)
+        check(checks, 'elastic-failure PETSc reason retained',
+              'KSP failure reason=-' in process.stderr and
+              re.search(r'KSP failure reason=-[0-9]+', process.stderr) is not None,
+              process.stderr)
     failures = [name for name, passed in checks if not passed]
     assert not failures, 'Failed acceptance assertions: ' + ', '.join(failures)
     return 0

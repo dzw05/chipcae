@@ -2,15 +2,16 @@
 
 import argparse
 from copy import deepcopy
+import json
+import math
 import os
 from pathlib import Path
-import re
 import shutil
 import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'integration' / 'fvm_case_e2e'))
-from fvm_case_util import (decode_events, fixture, read_json, solve, thermal_case,
+from fvm_case_util import (decode_events, elastic, energy, fixture, read_json, solve, thermal_case,
                           write_json)
 
 
@@ -54,10 +55,25 @@ def selected_pc(out, process, checks, name, expected):
     text = output_text(out, process)
     check(checks, name + ' successful exit', process.returncode == 0,
           f'exit={process.returncode}\n{text}')
-    # Read the public diagnostic, including its iteration/residual evidence.
-    records = re.findall(r'\bpc=(\w+)\s+its=(\d+)\s+residual=([^\s]+)', text)
+    # Separate JSON diagnostics preserve the strict energy/elastic log contracts.
+    events = decode_events((out / 'events.bin').read_bytes())
+    energy(events)
+    elastic(events)
+    lines = [event for event in events if event['kind'] == 20 and
+             event['text'].startswith('FVM_LINEAR ')]
+    records = [json.loads(event['text'][len('FVM_LINEAR '):]) for event in lines]
+    check(checks, name + ' linear diagnostics',
+          len(records) == 2 and
+          all(event['level'] == 1 and event['rank'] == 0 for event in lines) and
+          all(isinstance(record, dict) and set(record) == {'field', 'pc', 'its', 'residual'}
+              for record in records) and
+          [record['field'] for record in records] == ['thermal', 'elastic'] and
+          all(type(record['its']) is int and record['its'] >= 0 and
+              type(record['residual']) in (int, float) and
+              math.isfinite(record['residual']) and record['residual'] >= 0
+              for record in records), records)
     check(checks, name + ' preconditioner', bool(records) and
-          all(pc == expected for pc, _, _ in records),
+          all(record.get('pc') == expected for record in records),
           f'expected pc={expected}; diagnostics={records!r}\n{text}')
 
 
