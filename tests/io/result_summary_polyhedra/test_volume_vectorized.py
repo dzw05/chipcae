@@ -12,6 +12,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 import warnings
 
 from polyhedra_fixtures import CUBE, RINGS, cube_fixture, h5py, invalid, np, rs, success
@@ -242,6 +243,48 @@ class VolumeVectorized(unittest.TestCase):
                                 rejected += 1
             self.assertGreater(passed, 0)
             self.assertGreater(rejected, 0)
+
+    def test_comparison_roundoff_preserves_historical_decision(self):
+        # A tiny central cube supplies the volume. Axis points in degenerate
+        # rings enlarge the bbox without adding volume or cancellation. Thus
+        # subtraction from the stored reference rounds much more coarsely than
+        # the volume arithmetic, even within its conservative error bound.
+        cross = np.cross
+
+        def rounded_batch_cross(a, b):
+            result = cross(a, b)
+            if result.ndim == 2:
+                # Model a few ULPs of platform-dependent batched arithmetic;
+                # retain the historical scalar cross product as the oracle.
+                for _ in range(8):
+                    result = np.nextafter(result, 0.)
+            return result
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = cube_fixture(self, run)
+            size = np.array([np.nextafter(2. ** -26, np.inf), 2. ** -27, 2. ** -27])
+            points = np.concatenate(((CUBE - .5) * size, np.eye(3), -np.eye(3)))
+            rings = [list(ring) for ring in RINGS] + [[i] * 3 for i in range(8, 14)]
+            offsets = np.cumsum([0] + [len(ring) for ring in rings])
+            with h5py.File(step, 'r+') as stream:
+                block = stream['VTKHDF/cut']
+                for name, values in {
+                        'Points': points, 'NumberOfPoints': np.array([14, 0], dtype='int64'),
+                        'PointData/T': np.full(14, 300.), 'PointData/U': np.zeros((14, 3)),
+                        'FaceConnectivity': np.concatenate(rings).astype('int64'),
+                        'FaceOffsets': np.append(offsets, 0).astype('int64'),
+                        'PolyhedronToFaces': np.arange(12, dtype='int64'),
+                        'PolyhedronOffsets': np.array([0, 12, 0], dtype='int64'),
+                        'NumberOfFaces': np.array([12, 0], dtype='int64'),
+                        'NumberOfFaceConnectivityIds': np.array([42, 0], dtype='int64'),
+                        'NumberOfPolyhedronToFaceIds': np.array([12, 0], dtype='int64'),
+                        'CellData/volume': np.array([np.nextafter(8e-9, np.inf)])}.items():
+                    _replace(block, name, values)
+            self.assertIsNone(_reference_volumes(_read(step))[2])
+            success(self, run)
+            with patch.object(np, 'cross', side_effect=rounded_batch_cross):
+                success(self, run)
 
     def test_first_failure_matches_reference(self):
         positions = sorted({0, 1, 1099} | {n for k in range(1, 11)

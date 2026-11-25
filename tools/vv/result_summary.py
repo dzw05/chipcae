@@ -175,7 +175,16 @@ def _polyhedron_chunk(local_points, ids, fo, refs, po, first, last, references):
                      | (error >= 1e-12 * np.maximum(np.abs(result), bounds)))
         if references is not None:
             tolerance = 1e-9 * np.maximum(np.abs(references), bounds)
-            ambiguous |= (np.abs(np.abs(result - references) - tolerance) <= error)
+            # The comparison also rounds: subtracting a much larger reference
+            # can turn a tiny volume error into an entire ULP of the reference.
+            # Cover both subtractions and tolerance rounding at operand scale,
+            # rather than testing the threshold distance against volume error alone.
+            comparison_scale = np.maximum(np.maximum(np.abs(result), np.abs(references)),
+                                          tolerance)
+            comparison_error = error + 8 * np.finfo('float64').eps * comparison_scale
+            ambiguous |= (~np.isfinite(comparison_error)
+                          | (np.abs(np.abs(result - references) - tolerance)
+                             <= comparison_error))
 
         # The vector result need not make an arbitrarily close threshold
         # decision. Recompute ambiguous cells with the historical arithmetic;
