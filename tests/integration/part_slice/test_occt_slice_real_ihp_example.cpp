@@ -13,7 +13,8 @@ int main(int argc, char** argv) {
     if (path.empty())
         return 77;
     return run([&] {
-        const auto input = import_step(path);
+        const auto input =
+            import_step(path, {compute_tolerances({0.04, 0.0005, 0.001, 0}, {}).value()});
         require(input.body_names.size() == 10, "IHP imports ten bodies");
         const std::set<DefectReason> allowed{DefectReason::THIN_LAYER_MERGED,
                                              DefectReason::PART_UNMAPPED,

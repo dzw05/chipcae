@@ -13,7 +13,8 @@ int main(int argc, char** argv) {
     if (path.empty())
         return 77;
     return run([&] {
-        const auto input = import_step(path);
+        const auto input =
+            import_step(path, {compute_tolerances({0.04, 0.0005, 0.001, 0}, {}).value()});
         require(input.body_names.size() == 4, "BULK imports four bodies");
         // Independent STEP reader provides the original planar bounds in metres.
         STEPCAFControl_Reader reader;
