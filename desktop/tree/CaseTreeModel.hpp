@@ -21,6 +21,7 @@ public:
     QString caseSchemaPath() const;
     QModelIndex locate(const QString& pointer, const QString& source = "case") const;
     QString addLoad(Json load);
+    QString addHeatSource(const QString& layerName, double power);
     QString addFixedFace(const QString& target);
     bool remove(const QString& identity);
     bool edit(const QString& identity, Json value);
