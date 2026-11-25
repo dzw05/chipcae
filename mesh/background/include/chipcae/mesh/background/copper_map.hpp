@@ -28,7 +28,7 @@ Real copper_union_area_m2(const PolysetLayer& layer, Real dbu_m);
 // Shares copper_union_area_m2's full-array ring-offset validation.
 // Clips the native integer union against fractional-DBU cell boundaries using
 // long-double arithmetic, preserving signed ring areas for holes.
-// Coordinates outside Clipper2's signed 62-bit range throw invalid_argument.
+// Coordinates outside the conservative range +/-(2^61 - 1) throw invalid_argument.
 // With ECAD disabled, throws the same runtime_error text as rasterize_copper.
 std::vector<Real> copper_column_ref_phi(const std::vector<Real>& x_lines,
                                         const std::vector<Real>& y_lines,

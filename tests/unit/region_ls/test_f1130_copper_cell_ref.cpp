@@ -126,6 +126,74 @@ void cell_gate(const PolysetLayer& input,
             "hand-computed area relative error > 1e-12");
 }
 
+// A rectangular annulus exercises signed cancellation when a cell lies inside
+// the hole and when it intersects both the outer boundary and the hole.
+void holed_orientation_order_gate() {
+    const Rect outer{500, 500, 4500, 4500}, hole{1250, 1250, 3750, 3750};
+    for (const auto n : {4U, 10U, 16U}) {
+        const auto xs = axis(n, .005);
+        std::vector<Real> baseline;
+        for (const bool reverse_winding : {false, true}) {
+            for (const bool hole_first : {false, true}) {
+                const std::vector<Rect> rings =
+                    hole_first ? std::vector<Rect>{hole, outer} : std::vector<Rect>{outer, hole};
+                auto input = layer(rings);
+                for (std::size_t r = 0; r < rings.size(); ++r) {
+                    // NonZero holes must retain opposite winding to their outer.
+                    if ((r == (hole_first ? 0U : 1U)) != reverse_winding) {
+                        for (std::size_t k = 0; k < 2; ++k) {
+                            const auto a = 8 * r + 2 * k, b = 8 * r + 2 * (3 - k);
+                            std::swap(input.coordinates[a], input.coordinates[b]);
+                            std::swap(input.coordinates[a + 1], input.coordinates[b + 1]);
+                        }
+                    }
+                }
+                const auto ref = copper_column_ref_phi(xs, xs, input, dbu);
+                const auto actual = rasterize_copper(xs, xs, paths(input, dbu));
+                require(ref.size() == static_cast<std::size_t>(n) * n &&
+                            actual.size() == ref.size(),
+                        "holed output length");
+                if (baseline.empty())
+                    baseline = ref;
+                std::size_t empty_hole = 0, partial = 0, full = 0;
+                long double sum = 0;
+                for (std::uint32_t j = 0; j < n; ++j) {
+                    for (std::uint32_t i = 0; i < n; ++i) {
+                        const auto dense = level0_dense(n, n, i, j);
+                        const auto r = ref[dense], a = actual[dense];
+                        const long double cell_area =
+                            static_cast<long double>(xs[i + 1] - xs[i]) * (xs[j + 1] - xs[j]);
+                        const auto outer_area =
+                            overlap({outer}, dbu, xs[i], xs[j], xs[i + 1], xs[j + 1]);
+                        const auto hole_area =
+                            overlap({hole}, dbu, xs[i], xs[j], xs[i + 1], xs[j + 1]);
+                        const auto expected = (outer_area - hole_area) / cell_area;
+                        require(std::isfinite(r) && r >= 0 && r <= 1 && std::isfinite(a) &&
+                                    a >= 0 && a <= 1,
+                                "holed fraction range");
+                        require(std::abs(r - expected) <= 1e-12L, "holed analytic cell fraction");
+                        require(r == 0 ? a == 0
+                                       : std::abs(a - r) <= 1e-12 * std::max(1., std::abs(r)),
+                                "holed raster precision gate");
+                        require(std::abs(r - baseline[dense]) <= 1e-12,
+                                "hole winding/order changes cell fraction");
+                        empty_hole += r == 0 && hole_area > 0;
+                        partial += r > 0 && r < 1;
+                        full += std::abs(r - 1) <= 1e-12;
+                        sum += r * cell_area;
+                    }
+                }
+                require(empty_hole > 0 && partial > 0, "hole must have empty and partial cells");
+                if (n >= 10)
+                    require(full > 0, "annulus must have full cells");
+                constexpr long double expected_area = 9.75e-6L; // 4*4 - 2.5*2.5 mm^2.
+                require(std::abs(sum - expected_area) <= 1e-12L * expected_area,
+                        "holed analytic area closure");
+            }
+        }
+    }
+}
+
 // Bounded test-local CCPOLY01 decoder: the existing .json-named fixture is binary.
 // Avoid linking chipcae_stack or changing the automatic test registration.
 std::uint64_t read_le(std::istream& in, unsigned bytes) {
@@ -217,6 +285,16 @@ void invalid_inputs() {
             [&] { (void)copper_column_ref_phi(xs, xs, good, unit); },
             "copper database unit must be finite and positive");
     }
+    // Range validation also applies when the union has no area.
+    for (const auto& input : {good, layer({{0, 0, 0, 1}})}) {
+        const std::vector<Real> outside{0, std::numeric_limits<Real>::max()};
+        expect_error<std::invalid_argument>(
+            [&] { (void)copper_column_ref_phi(outside, xs, input, dbu); },
+            "copper reference coordinates are out of range");
+        expect_error<std::invalid_argument>(
+            [&] { (void)copper_column_ref_phi(xs, outside, input, dbu); },
+            "copper reference coordinates are out of range");
+    }
     const char* short_axis = "copper map axes must be strictly increasing";
     const char* finite_axis = "copper map axes must be finite and strictly increasing";
     const std::vector<std::pair<std::vector<Real>, const char*>> invalid_axes{
@@ -305,6 +383,7 @@ int main() {
                       axis(8, .003),
                       2e-6L);
         });
+        run("test_holed_orientation_order_gate", holed_orientation_order_gate);
         run("test_duplicate_rectangle_idempotent", [&] {
             const auto xs = axis(16, .005);
             const auto single = copper_column_ref_phi(xs, xs, layer(rectangles[0]), dbu);

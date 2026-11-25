@@ -239,7 +239,7 @@ std::vector<Real> copper_column_ref_phi(const std::vector<Real>& xs,
         ny > std::numeric_limits<std::uint32_t>::max() ||
         nx > std::numeric_limits<std::size_t>::max() / ny)
         throw std::invalid_argument("copper reference grid dimensions are out of range");
-    // Clipper2 requires coordinates within its signed 62-bit range. Check before
+    // Use a conservative subset of Clipper2's coordinate range. Check before
     // Union as well as before converting any floating-point cell boundaries.
     constexpr std::int64_t limit = (std::int64_t{1} << 61) - 1;
     for (const auto& path : paths)
@@ -248,8 +248,6 @@ std::vector<Real> copper_column_ref_phi(const std::vector<Real>& xs,
                 throw std::invalid_argument("copper reference coordinates are out of range");
     const auto united = Union(paths, FillRule::NonZero);
     std::vector<Real> result(nx * ny, Real(0));
-    if (Area(united) == 0)
-        return result;
     const auto native_lines = [&](const std::vector<Real>& lines) {
         std::vector<long double> values;
         values.reserve(lines.size());
@@ -263,6 +261,8 @@ std::vector<Real> copper_column_ref_phi(const std::vector<Real>& xs,
         return values;
     };
     const auto xt = native_lines(xs), yt = native_lines(ys);
+    if (Area(united) == 0)
+        return result;
     for (std::size_t j = 0; j < ny; ++j)
         for (std::size_t i = 0; i < nx; ++i) {
             // Clip each native union ring to the four cell half-planes without
