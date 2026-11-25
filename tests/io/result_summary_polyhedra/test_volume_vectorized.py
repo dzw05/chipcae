@@ -215,6 +215,34 @@ class VolumeVectorized(unittest.TestCase):
                         _replace(stream['VTKHDF/cut'], 'CellData/volume', values)
                     self.assert_reference_failure(run, step, [(partition, cell)])
 
+    def test_adjacent_float_tolerance_decisions_match_reference(self):
+        # A 1e-12 accuracy bound alone cannot protect a decision within one
+        # representable float of the 1e-9 threshold. Probe both sides using
+        # the historical oracle, without assuming where rounding puts it.
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            step, _ = cube_fixture(self, run, cells=(3, 2))
+            v, b = _perturb(step, 9211)
+            passed = rejected = 0
+            for sign in (1., -1.):
+                boundary = v + sign * 1e-9 * b
+                for direction in (-np.inf, np.inf):
+                    for index in range(len(v)):
+                        with self.subTest(sign=sign, direction=direction, index=index):
+                            values = v.copy()
+                            values[index] = np.nextafter(boundary[index], direction)
+                            with h5py.File(step, 'r+') as stream:
+                                _replace(stream['VTKHDF/cut'], 'CellData/volume', values)
+                            _, _, first = _reference_volumes(_read(step))
+                            if first is None:
+                                success(self, run)
+                                passed += 1
+                            else:
+                                self.assert_reference_failure(run, step)
+                                rejected += 1
+            self.assertGreater(passed, 0)
+            self.assertGreater(rejected, 0)
+
     def test_first_failure_matches_reference(self):
         positions = sorted({0, 1, 1099} | {n for k in range(1, 11)
                                                   for n in (2 ** k - 1, 2 ** k)})

@@ -105,6 +105,97 @@ def _partitions(block, cells_path='NumberOfCells'):
         ci += connections
 
 
+def _polyhedron_chunk(local_points, ids, fo, refs, po, first, last, references):
+    """Geometry for one bounded cell chunk, in stored face/triangle order.
+
+    Offsets and IDs have already been validated. Structured keys avoid encoding
+    (cell, point) in an integer whose product could overflow.
+    """
+    count = last - first
+    faces = refs[int(po[first]):int(po[last])]
+    face_cells = np.repeat(np.arange(count), np.diff(po[first:last + 1]))
+    starts = fo[faces]
+    lengths = fo[faces + 1] - starts
+    occurrences = (np.repeat(starts - (np.cumsum(lengths) - lengths), lengths)
+                   + np.arange(int(lengths.sum())))
+    pairs = np.empty(len(occurrences), dtype=[('cell', 'int64'), ('point', 'int64')])
+    pairs['cell'] = np.repeat(face_cells, lengths)
+    pairs['point'] = ids[occurrences]
+    pairs = pairs[np.lexsort((pairs['point'], pairs['cell']))]
+    unique = np.empty(len(pairs), dtype=bool)
+    unique[0] = True
+    unique[1:] = pairs[1:] != pairs[:-1]
+    pairs = pairs[unique]
+    vertex_cells = pairs['cell']
+    vertices = local_points[pairs['point']]
+    vertex_counts = np.bincount(vertex_cells, minlength=count)
+    vertex_starts = np.cumsum(vertex_counts) - vertex_counts
+
+    with np.errstate(all='ignore'):
+        # mean(axis=0) of an (N, 3) vertex array sums each coordinate in
+        # ascending point-ID order. add.at preserves that order per cell,
+        # including repeated IDs having been removed above.
+        centers = np.zeros((count, 3))
+        np.add.at(centers, vertex_cells, vertices)
+        centers /= vertex_counts[:, None]
+        spans = (np.maximum.reduceat(vertices, vertex_starts, axis=0)
+                 - np.minimum.reduceat(vertices, vertex_starts, axis=0))
+        bounds = np.prod(spans, axis=1)
+
+        triangle_counts = lengths - 2
+        triangle_cells = np.repeat(face_cells, triangle_counts)
+        origins = np.repeat(starts, triangle_counts)
+        offsets = (np.arange(int(triangle_counts.sum()))
+                   - np.repeat(np.cumsum(triangle_counts) - triangle_counts,
+                               triangle_counts) + 1)
+        center = centers[triangle_cells]
+        a = local_points[ids[origins]] - center
+        b = local_points[ids[origins + offsets]] - center
+        c = local_points[ids[origins + offsets + 1]] - center
+        crosses = np.cross(b, c)
+        # Batched length-three dot, rather than an einsum/reduction with a
+        # different contraction order. Divide before the ordered cell sum.
+        contributions = (a[:, None, :] @ crosses[:, :, None]).ravel() / 6.
+        result = np.zeros(count)
+        np.add.at(result, triangle_cells, contributions)
+
+        # Conservative roundoff guard for cross/dot and accumulated sums.
+        # Include the uncancelled products, not just signed contributions:
+        # near-zero volumes of nonclosed/degenerate cells can cancel heavily.
+        products = (np.abs(b[:, [1, 2, 0]] * c[:, [2, 0, 1]])
+                    + np.abs(b[:, [2, 0, 1]] * c[:, [1, 2, 0]]))
+        magnitude = np.sum(np.abs(a) * products, axis=1) / 6.
+        absolute_sum = np.zeros(count)
+        np.add.at(absolute_sum, triangle_cells, magnitude)
+        terms = np.bincount(triangle_cells, minlength=count)
+        error = 64 * (terms + 1) * (np.finfo('float64').eps * absolute_sum
+                                   + np.finfo('float64').tiny)
+        ambiguous = (~np.isfinite(result) | ~np.isfinite(error)
+                     | (np.abs(result) <= error)
+                     | (error >= 1e-12 * np.maximum(np.abs(result), bounds)))
+        if references is not None:
+            tolerance = 1e-9 * np.maximum(np.abs(references), bounds)
+            ambiguous |= (np.abs(np.abs(result - references) - tolerance) <= error)
+
+        # The vector result need not make an arbitrarily close threshold
+        # decision. Recompute ambiguous cells with the historical arithmetic;
+        # this also preserves its overflow/underflow classification.
+        for cell in np.flatnonzero(ambiguous):
+            source = first + int(cell)
+            rings = [ids[int(fo[face]):int(fo[face + 1])]
+                     for face in refs[int(po[source]):int(po[source + 1])]]
+            vertices = local_points[np.unique(np.concatenate(rings))]
+            center = vertices.mean(axis=0)
+            volume = np.float64(0.)
+            for ring in rings:
+                coords = local_points[ring] - center
+                for i in range(1, len(coords) - 1):
+                    volume += np.dot(coords[0], np.cross(coords[i], coords[i + 1])) / 6.
+            result[cell] = volume
+            bounds[cell] = np.prod(vertices.max(axis=0) - vertices.min(axis=0))
+    return result, bounds
+
+
 def _polyhedra(block):
     """Validate partition-local, exclusively owned faces and signed cell volumes."""
     paths = ('FaceConnectivity', 'FaceOffsets', 'PolyhedronToFaces',
@@ -159,31 +250,34 @@ def _polyhedra(block):
                  f'{block.name}/PolyhedronToFaces: partition {rank} '
                  'each face must be referenced exactly once')
 
-        for cell in range(cells):
-            rings = [ids[int(fo[face]):int(fo[face + 1])]
-                     for face in refs[int(po[cell]):int(po[cell + 1])]]
-            vertices = local_points[np.unique(np.concatenate(rings))]
-            # Overflow and invalid derived arithmetic become protocol errors below.
-            # Keep face/triangle accumulation in deterministic stored order.
+        for first in range(0, cells, 1024):
+            last = min(first + 1024, cells)
+            stored = (volumes[cell_cursor + first:cell_cursor + last]
+                      if volumes is not None else None)
+            computed, bounds = _polyhedron_chunk(
+                local_points, ids, fo, refs, po, first, last, stored)
+            nonpositive = ~np.isfinite(computed) | (computed <= 0)
+            mismatch = np.zeros(last - first, dtype=bool)
             with np.errstate(all='ignore'):
-                center = vertices.mean(axis=0)
-                volume = np.float64(0.)
-                for ring in rings:
-                    coords = local_points[ring] - center
-                    for i in range(1, len(coords) - 1):
-                        volume += np.dot(coords[0], np.cross(coords[i], coords[i + 1])) / 6.
-            _require(np.isfinite(volume) and volume > 0,
+                if stored is not None:
+                    tolerance = 1e-9 * np.maximum(np.abs(stored), bounds)
+                    difference = np.abs(computed - stored)
+                    mismatch = ~((stored > 0) & np.isfinite(bounds)
+                                 & np.isfinite(tolerance) & np.isfinite(difference)
+                                 & (difference <= tolerance))
+            failures = np.flatnonzero(nonpositive | mismatch)
+            if not len(failures):
+                continue
+            index = int(failures[0])
+            cell = first + index
+            volume = computed[index]
+            _require(not nonpositive[index],
                      f'{block.name}/PolyhedronToFaces: partition {rank} cell {cell} '
                      f'nonpositive polyhedron volume (computed={volume})')
             if volumes is not None:
-                reference = volumes[cell_cursor + cell]
-                with np.errstate(all='ignore'):
-                    bbox_volume = np.prod(vertices.max(axis=0) - vertices.min(axis=0))
-                    tolerance = 1e-9 * max(abs(reference), bbox_volume)
-                    difference = abs(volume - reference)
-                _require(reference > 0 and np.isfinite(bbox_volume)
-                         and np.isfinite(tolerance) and np.isfinite(difference)
-                         and difference <= tolerance,
+                reference = stored[index]
+                bbox_volume = bounds[index]
+                _require(not mismatch[index],
                          f'{block.name}/CellData/volume: volume mismatch, '
                          f'partition {rank} cell {cell} computed={volume} '
                          f'reference={reference} bbox_volume={bbox_volume}')
