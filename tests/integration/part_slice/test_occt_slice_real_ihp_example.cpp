@@ -9,7 +9,7 @@ int main(int argc, char** argv) {
                     "CHIPCAE_DEMO_IHP_STEP resolves only configured regular files");
         });
     }
-    const auto path = demo("IHP_NATIVE_CONTACT_CONVERSION_EXAMPLE.step");
+    const auto path = demo_env("CHIPCAE_DEMO_IHP_STEP");
     if (path.empty())
         return 77;
     return run([&] {

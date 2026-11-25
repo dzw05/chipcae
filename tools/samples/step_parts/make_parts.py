@@ -18,6 +18,35 @@ def dump(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2))
 
 
+def configured_file(directory, value, variable):
+    """Resolve a configured file without including private paths in diagnostics."""
+    assert directory and value, variable
+    path = Path(value)
+    if not path.is_absolute():
+        path = Path(directory).resolve() / path
+    assert path.is_file(), variable
+    return path
+
+
+def remap_bodies(bodies, bodies_path):
+    """Return mapped keys in template order, preserving the body values."""
+    mapping = json.loads(bodies_path.read_text())
+    assert isinstance(mapping, dict), 'CHIPCAE_DEMO_BULK_BODIES must be an object'
+    missing = bodies.keys() - mapping.keys()
+    extra = mapping.keys() - bodies.keys()
+    # Only neutral vocabulary can appear in mapping diagnostics.
+    neutral = {'example_parts/' + suffix for suffix in
+               ('die', 'adhesive', 'tim', 'lid', 'substrate', 'carrier')}
+    extra_names = sorted(key if key in neutral else '<non-neutral key>' for key in extra)
+    assert not missing and not extra, f'missing: {sorted(missing)}; extra: {extra_names}'
+    invalid = [key for key in bodies if not isinstance(mapping[key], str) or not mapping[key]]
+    assert not invalid, f'invalid body targets: {invalid}'
+    targets = list(mapping.values())
+    duplicates = [key for key in bodies if targets.count(mapping[key]) > 1]
+    assert not duplicates, f'duplicate body targets: {duplicates}'
+    return {mapping[key]: value for key, value in bodies.items()}
+
+
 def box(x, y, z, dx, dy, dz):
     from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
     from OCP.gp import gp_Pnt
@@ -121,7 +150,7 @@ def ring_chamfer_parts(directory):
     write_step(directory / 'lid.step', prism(points, 1, .5))
 
 
-def chamfer_lid(directory, source):
+def chamfer_lid(directory, step_path):
     from OCP.STEPControl import STEPControl_Reader
     from OCP.IFSelect import IFSelect_RetDone
     from OCP.TopExp import TopExp_Explorer
@@ -132,7 +161,7 @@ def chamfer_lid(directory, source):
     from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
     from OCP.gp import gp_Trsf, gp_Vec
     reader = STEPControl_Reader()
-    assert reader.ReadFile(str(Path(source) / 'PACKAGE_BULK_PARTS.step')) == IFSelect_RetDone
+    assert reader.ReadFile(str(step_path)) == IFSelect_RetDone
     assert reader.TransferRoots() > 0
     solids = TopExp_Explorer(reader.OneShape(), TopAbs_SOLID)
     lids = []
@@ -158,19 +187,16 @@ def chamfer_lid(directory, source):
     write_step(directory / 'lid_chamfer_derived.step', derived)
 
 
-def bulk(directory, source):
+def bulk(directory, step_path, board_path, bodies_path):
     import xml.etree.ElementTree as ET
-    source = source.resolve()
-    board = next((p for p in (
-        source / 'package_substrate.ipc2581.xml',
-        source.parent / 'eda/substrate/package_substrate.ipc2581.xml') if p.is_file()), None)
-    if board is None or not (source / 'PACKAGE_BULK_PARTS.step').is_file():
-        raise FileNotFoundError('Real substrate IPC and PACKAGE_BULK_PARTS.step required')
+    model = json.loads((HERE / 'bulk_parts.assembly.json').read_text())
+    step = model['parts_from_step']
+    step['bodies'] = remap_bodies(step['bodies'], bodies_path)
     (directory / 'board.xml').unlink()
-    (directory / 'board.xml').symlink_to(board)
-    (directory / 'PACKAGE_BULK_PARTS.step').symlink_to(source / 'PACKAGE_BULK_PARTS.step')
+    (directory / 'board.xml').symlink_to(board_path)
+    (directory / 'example_parts.step').symlink_to(step_path)
     mapping = {'copper': 'organic_eq'}
-    for _, element in ET.iterparse(board, events=('end',)):
+    for _, element in ET.iterparse(board_path, events=('end',)):
         if element.tag.split('}')[-1] == 'StackupLayer':
             mapping['layer:' + element.attrib['layerOrGroupRef']] = 'organic_eq'
         element.clear()
@@ -178,6 +204,7 @@ def bulk(directory, source):
     # assembly/0.1 has no inline region: emit the equivalent temporary box.
     # STEP z .8..1.358 mm spans substrate top to HOST bottom after common origin.
     write_step(directory / 'interposer_approx.step', box(2, 2, .8, 52, 32, .558))
+    return model
 
 
 def main():
@@ -186,15 +213,29 @@ def main():
     parser.add_argument('--case', choices=('box', 'rounded', 'ring-chamfer', 'cylinder', 'chamfer', 'bulk', 'negative'),
                         default='box')
     parser.add_argument('--demo-step-dir', type=Path,
-                        default=os.environ.get('CHIPCAE_DEMO_STEP_DIR'))
+                        default=os.environ.get('CHIPCAE_DEMO_STEP_DIR') or None)
+    for option, variable in (('--bulk-step', 'CHIPCAE_DEMO_BULK_STEP'),
+                             ('--board-ipc', 'CHIPCAE_DEMO_BOARD_IPC'),
+                             ('--bulk-bodies', 'CHIPCAE_DEMO_BULK_BODIES')):
+        parser.add_argument(option, default=os.environ.get(variable))
     args = parser.parse_args()
+    inputs = {}
+    if args.case in ('bulk', 'chamfer'):
+        required = [('demo_step_dir', 'CHIPCAE_DEMO_STEP_DIR', '--demo-step-dir'),
+                    ('bulk_step', 'CHIPCAE_DEMO_BULK_STEP', '--bulk-step')]
+        if args.case == 'bulk':
+            required += [('board_ipc', 'CHIPCAE_DEMO_BOARD_IPC', '--board-ipc'),
+                         ('bulk_bodies', 'CHIPCAE_DEMO_BULK_BODIES', '--bulk-bodies')]
+        for attribute, variable, option in required:
+            if not getattr(args, attribute):
+                parser.error(f'set {variable} or {option}')
+        for attribute, variable, _ in required[1:]:
+            inputs[attribute] = configured_file(args.demo_step_dir, getattr(args, attribute), variable)
     destination = args.out.resolve()
     if destination == ROOT or ROOT in destination.parents:
         parser.error('--out must be outside the checkout')
     if destination.exists() and any(destination.iterdir()):
         parser.error('--out must be an empty directory')
-    if args.case in ('bulk', 'chamfer') and not args.demo_step_dir:
-        parser.error('set CHIPCAE_DEMO_STEP_DIR or --demo-step-dir')
     destination.mkdir(parents=True, exist_ok=True)
     if args.case != 'negative':
         try:
@@ -202,6 +243,7 @@ def main():
         except ImportError:
             parser.error('STEP generation requires cadquery-ocp')
     ids = prepare(destination, board_size=(40, 40) if args.case == 'cylinder' else (56, 44))
+    model = None
     if args.case == 'box':
         box_parts(destination)
     elif args.case == 'rounded':
@@ -211,14 +253,15 @@ def main():
     elif args.case == 'cylinder':
         cylinder(destination)
     elif args.case == 'chamfer':
-        chamfer_lid(destination, args.demo_step_dir)
+        chamfer_lid(destination, inputs['bulk_step'])
     elif args.case == 'bulk':
-        bulk(destination, args.demo_step_dir)
+        model = bulk(destination, inputs['bulk_step'], inputs['board_ipc'], inputs['bulk_bodies'])
     filename = {'bulk': 'bulk_parts', 'box': 'box_parts', 'rounded': 'rounded_parts',
                 'ring-chamfer': 'box_parts',
                 'cylinder': 'cylinder', 'chamfer': 'derived_chamfer_lid',
                 'negative': 'negative_material_layer'}[args.case]
-    model = json.loads((HERE / (filename + '.assembly.json')).read_text())
+    if model is None:
+        model = json.loads((HERE / (filename + '.assembly.json')).read_text())
     # Use the published copper card automatically once it exists; never fabricate one.
     lid_material = 'copper' if 'copper' in ids else 'silicon'
     for part in model['parts']:

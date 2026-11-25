@@ -9,7 +9,7 @@ int main(int argc, char** argv) {
                     "CHIPCAE_DEMO_BULK_STEP resolves only configured regular files");
         });
     }
-    const auto path = demo("PACKAGE_BULK_PARTS.step");
+    const auto path = demo_env("CHIPCAE_DEMO_BULK_STEP");
     if (path.empty())
         return 77;
     return run([&] {
