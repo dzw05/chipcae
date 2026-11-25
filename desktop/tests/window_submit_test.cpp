@@ -1738,6 +1738,8 @@ int main(int argc, char** argv) {
         MainWindow w;
         f.openCase(w);
         successfulPreview(w, f, PreviewOptions{});
+        const auto effective = previewController(w)->effectiveOptions();
+        check(effective.nx && effective.ny, "automatic preview provides effective dimensions");
         check(w.writePreviewToCase(), "automatic preview writes to case");
         const auto expected = documentMesh(w);
         w.setMeshDigestDialogChoice(Choice::Accept);
@@ -1748,9 +1750,10 @@ int main(int argc, char** argv) {
               "automatic preview job completes");
         check(documentMesh(w) == expected, "submit preserves the full written automatic mesh");
         check(submitted == documentMesh(w), "submitted automatic mesh equals current document");
-        // Keep the acceptance requirement explicit: the existing mock supplies effective 4x5.
-        check(!submitted.contains("nx") && !submitted.contains("ny"),
-              "automatic preview submission must omit nx and ny (baseline writes effective 4x5)");
+        check(submitted.contains("nx") && submitted.contains("ny") &&
+                  submitted["nx"].toInt() == *effective.nx &&
+                  submitted["ny"].toInt() == *effective.ny,
+              "automatic preview submission preserves effective nx and ny");
     });
     test("submit twice after write-case keeps mesh", [&] {
         Fixture f(argv[1]);
@@ -1758,6 +1761,8 @@ int main(int argc, char** argv) {
         MainWindow w;
         f.openCase(w);
         successfulPreview(w, f, PreviewOptions{});
+        const auto effective = previewController(w)->effectiveOptions();
+        check(effective.nx && effective.ny, "automatic preview provides effective dimensions");
         check(w.writePreviewToCase(), "automatic preview writes before repeated submit");
         const auto expected = documentMesh(w);
         w.setMeshDigestDialogChoice(Choice::Accept);
@@ -1794,9 +1799,12 @@ int main(int argc, char** argv) {
         check(firstMesh == expected && secondMesh == expected && firstMesh == documentMesh(w) &&
                   secondMesh == documentMesh(w),
               "both submitted meshes equal the saved and current document mesh");
-        check(!firstMesh.contains("nx") && !firstMesh.contains("ny") &&
-                  !secondMesh.contains("nx") && !secondMesh.contains("ny"),
-              "both automatic submissions must omit nx and ny (baseline writes effective 4x5)");
+        check(firstMesh.contains("nx") && firstMesh.contains("ny") && secondMesh.contains("nx") &&
+                  secondMesh.contains("ny") && firstMesh["nx"].toInt() == *effective.nx &&
+                  firstMesh["ny"].toInt() == *effective.ny &&
+                  secondMesh["nx"].toInt() == *effective.nx &&
+                  secondMesh["ny"].toInt() == *effective.ny,
+              "both automatic submissions preserve effective nx and ny");
     });
     test("mesh edit after write-case releases lock", [&] {
         Fixture f(argv[1]);
