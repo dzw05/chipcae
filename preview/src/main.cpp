@@ -168,8 +168,6 @@ int run(int argc, char** argv) {
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     options.ranks = world_size;
 #endif
-    // The K1 FCBGA fixture has a 10:1 interface cell-height ratio.
-    options.max_ratio = 10;
     std::set<std::string> seen;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
