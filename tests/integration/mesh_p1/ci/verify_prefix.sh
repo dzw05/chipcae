@@ -37,6 +37,7 @@ script_hash=$(sha256sum "$here/build_deps_cpu.sh" | cut -d' ' -f1)
 # Keep the combined stamp expression identical to build_deps_cpu.sh; the
 # manifest fields above remain independent hashes of each input's contents.
 key=$(cd "$here" && sha256sum build_deps_cpu.sh deps.lock | sha256sum | cut -d' ' -f1)
+# Command substitution strips trailing newlines; all other stamp bytes must match.
 [[ "$(cat "$prefix/.k1-ready")" == "$key" ]] || fail ".k1-ready stamp does not match build_deps_cpu.sh/deps.lock inputs"
 
 if command -v dpkg-query >/dev/null 2>&1; then
