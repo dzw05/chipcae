@@ -227,8 +227,10 @@ int main(int argc, char** argv) {
                1,
                10);
         expect(!fs::exists(alias_grid), "symlink alias rejected before writing");
-        invoke(
-            shell(fixture.string()) + " --levels 32 -o " + shell((dir / "levels").string()), 4, 10);
+        invoke(shell(fixture.string()) + " --levels 32 --max-ratio 10 -o " +
+                   shell((dir / "levels").string()),
+               4,
+               10);
 #ifdef CHIPCAE_TEST_ECAD
         std::ifstream copper_in(fs::path(K1_ROOT) / "schema/examples/fcbga_cu.stack.json");
         auto copper = jsoncons::json::parse(copper_in);
