@@ -134,8 +134,9 @@ def gmg_stats(result):
 def lu_stats(result):
     matches = [re.search(rb'U assembly_seconds=[-+0-9.eE]+.*? factor_seconds=([-+0-9.eE]+) '
                          rb'LU_solve_seconds=([-+0-9.eE]+)', log)
-               for log in result['logs']]
+               for log in result['logs'] if struct.unpack_from('<i', log, 4)[0] == 0]
     matches = [match for match in matches if match]
+    # Rank 0 owns the solve timing summary; other ranks' relayed LogLines are ignored here.
     assert len(matches) == 1, (f"{result['name']}: missing U LU timing line", result['logs'])
     factor, solve = map(float, matches[0].groups())
     assert all(math.isfinite(value) and value >= 0 for value in (factor, solve))
