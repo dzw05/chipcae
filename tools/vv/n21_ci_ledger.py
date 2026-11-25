@@ -14,7 +14,7 @@ from pathlib import Path
 import re
 import sys
 
-from tools.vv.ctest_skip_audit import _cell, read_junit
+from tools.vv.ctest_skip_audit import read_junit
 
 
 _JOB_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]*")
@@ -94,6 +94,13 @@ def evaluate(jobs, required):
         "skip_counts_as_pass": False,
         "data_class": "synthetic",
     }
+
+
+def _cell(value):
+    """Escape a ledger Markdown table cell for display."""
+    return str(value).replace("&", "&amp;").replace("<", "&lt;").replace(
+        ">", "&gt;").replace("\\", "\\\\").replace("|", "\\|").replace(
+        "\r\n", "<br>").replace("\r", "<br>").replace("\n", "<br>")
 
 
 def render_markdown(report):
