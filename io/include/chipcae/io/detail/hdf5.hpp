@@ -62,11 +62,13 @@ void dataset(hid_t parent,
              const char* name,
              const std::vector<T>& data,
              const WriterContext& ctx,
-             hsize_t components = 1) {
+             hsize_t components = 1,
+             hid_t dataset_creation_plist = H5P_DEFAULT) {
     (void)ctx;
     hsize_t dims[2] = {data.size() / components, components};
     H5 space(H5Screate_simple(components == 1 ? 1 : 2, dims, nullptr), H5Sclose);
-    H5 set(H5Dcreate2(parent, name, native<T>(), space, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT),
+    H5 set(H5Dcreate2(
+               parent, name, native<T>(), space, H5P_DEFAULT, dataset_creation_plist, H5P_DEFAULT),
            H5Dclose);
     H5 transfer(H5Pcreate(H5P_DATASET_XFER), H5Pclose);
 #if defined(H5_HAVE_PARALLEL) && defined(CHIPCAE_ENABLE_MPI)
