@@ -13,6 +13,10 @@ CaseTreeView::CaseTreeView(CaseTreeModel* model,
             [this](const QModelIndex& index) { bind(index); });
     connect(model, &QAbstractItemModel::modelAboutToBeReset, this, [this] { source_.clear(); });
 }
+QMenu* CaseTreeView::contextMenuFor(const QModelIndex&) {
+    // TEST-FIRST stub: layer context menus are intentionally unimplemented.
+    return nullptr;
+}
 void CaseTreeView::bind(const QModelIndex& index) {
     source_ = index.data(CaseTreeModel::SourceRole).toString();
     if (source_ != "case" && source_ != "stack") {

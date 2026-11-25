@@ -1,12 +1,18 @@
 #include "CaseTreeView.hpp"
 
+#include <QAction>
 #include <QApplication>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonObject>
+#include <QMenu>
+#include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QUrl>
+#include <cstddef>
 #include <iostream>
+#include <limits>
+#include <memory>
 #include <stdexcept>
 using namespace chipcae::desktop;
 void require(bool value, const char* message) {
@@ -244,6 +250,288 @@ static void caseSchemaPathAcceptance() {
             "independent model leaves rejected document unchanged");
 }
 
+static void loadHeatSourceFixture(CaseDocument& doc) {
+    require(doc.load(QString(CHIPCAE_REPOSITORY) + "/schema/examples/fcbga_demo.case.json"),
+            "heat source fixture loads");
+}
+
+static void requireHeatSourceRejected(CaseTreeModel& tree, const QString& layer, double power) {
+    const auto before = tree.document()->toJson();
+    require(tree.addHeatSource(layer, power).isEmpty(),
+            "rejected heat source returns empty identity");
+    require(tree.document()->toJson() == before, "rejected heat source leaves document unchanged");
+}
+
+static void requireHeatSourceAdded(const CaseDocument& doc,
+                                   const QString& identity,
+                                   std::size_t previousCount,
+                                   const Json& expected) {
+    require(!identity.isEmpty(), "heat source addition returns an identity");
+    const auto loads = doc.toJson().at("loads");
+    require(loads.size() == previousCount + 1, "heat source appends exactly one load");
+    auto load = loads.at(previousCount);
+    require(load.contains("id") && load.at("id").is_string(), "heat source has string id");
+    const auto id = QString::fromStdString(load.at("id").as<std::string>());
+    require(QRegularExpression("^[A-Za-z0-9_.-]{1,64}$").match(id).hasMatch(),
+            "heat source id matches schema pattern");
+    require(identity == "case:" + id, "heat source returns exact case identity");
+    load.erase("id");
+    require(load == expected, "heat source object equals specified type, target and power");
+    require(load.at("power").as<double>() == expected.at("power").as<double>(),
+            "heat source power matches exactly");
+    require(doc.validate().empty(), "heat source document is valid");
+}
+
+static void heatSourceOutsideThermalAcceptance() {
+    CaseDocument doc;
+    loadHeatSourceFixture(doc);
+    CaseTreeModel tree(&doc);
+    requireHeatSourceRejected(tree, "die_layer", 1.0);
+}
+
+static void heatSourceAddedAcceptance() {
+    CaseDocument doc;
+    loadHeatSourceFixture(doc);
+    CaseTreeModel tree(&doc);
+    tree.setThermalMode(true);
+    require(doc.validate().empty(), "thermal heat source fixture is valid");
+    const auto count = doc.toJson().at("loads").size();
+    const auto identity = tree.addHeatSource("die_layer", 1.0);
+    requireHeatSourceAdded(
+        doc,
+        identity,
+        count,
+        Json::parse(R"({"type":"heat_source","target":"layer:die_layer","power":1.0})"));
+    requireHeatSourceRejected(tree, "die_layer", 1.0);
+}
+
+static void heatSourceEdgeCasesAcceptance() {
+    CaseDocument doc;
+    loadHeatSourceFixture(doc);
+    CaseTreeModel tree(&doc);
+    tree.setThermalMode(true);
+    // Seed through the existing API so rejection checks also run before addHeatSource exists.
+    require(!tree.addLoad(Json::parse(
+                              R"({"type":"heat_source","target":"layer:die_layer","power":1.0})"))
+                 .isEmpty(),
+            "seed existing heat source");
+    require(doc.validate().empty(), "edge case fixture is valid");
+    requireHeatSourceRejected(tree, "die_layer", 1.0);
+    requireHeatSourceRejected(tree, "unknown_layer", 1.0);
+    requireHeatSourceRejected(tree, "Die_layer", 1.0);
+    requireHeatSourceRejected(tree, "", 1.0);
+    // Use a layer without a source so duplicate detection cannot mask nonfinite power checks.
+    requireHeatSourceRejected(tree, "substrate", std::numeric_limits<double>::quiet_NaN());
+    requireHeatSourceRejected(tree, "substrate", std::numeric_limits<double>::infinity());
+    requireHeatSourceRejected(tree, "substrate", -std::numeric_limits<double>::infinity());
+    auto count = doc.toJson().at("loads").size();
+    auto identity = tree.addHeatSource("substrate", 1.0);
+    requireHeatSourceAdded(
+        doc,
+        identity,
+        count,
+        Json::parse(R"({"type":"heat_source","target":"layer:substrate","power":1.0})"));
+    int heatSources = 0;
+    const auto loads = doc.toJson().at("loads");
+    for (const auto& load : loads.array_range())
+        if (load.at("type") == "heat_source")
+            ++heatSources;
+    require(heatSources == 2, "different layers have exactly two heat sources");
+    count = doc.toJson().at("loads").size();
+    identity = tree.addHeatSource("bump_eq", -2.0);
+    requireHeatSourceAdded(
+        doc,
+        identity,
+        count,
+        Json::parse(R"({"type":"heat_source","target":"layer:bump_eq","power":-2.0})"));
+}
+
+static void heatSourceVolumetricDuplicateAcceptance() {
+    CaseDocument doc;
+    loadHeatSourceFixture(doc);
+    CaseTreeModel tree(&doc);
+    tree.setThermalMode(true);
+    require(!tree.addLoad(Json::parse(
+                              R"({"type":"heat_source","target":"layer:die_layer","q_vol":2.0})"))
+                 .isEmpty(),
+            "seed volumetric source on layer");
+    require(doc.validate().empty(), "volumetric duplicate fixture is valid");
+    requireHeatSourceRejected(tree, "die_layer", 1.0);
+}
+
+static void heatSourceMissingLayersAcceptance() {
+    CaseDocument fixture;
+    loadHeatSourceFixture(fixture);
+    CaseTreeModel fixtureTree(&fixture);
+    fixtureTree.setThermalMode(true);
+    auto thermal = fixture.toJson();
+    thermal.erase("stack");
+    thermal.erase("materials");
+    // Keep the default empty stack; do not retain dangling fixture activation_groups.
+    CaseDocument doc;
+    doc.applyJson(thermal);
+    require(doc.toJson() == thermal && !doc.stackJson().contains("layers"),
+            "missing layers fixture keeps thermal case and empty stack");
+    CaseTreeModel tree(&doc);
+    const auto stackBefore = doc.stackJson();
+    requireHeatSourceRejected(tree, "die_layer", 1.0);
+    require(doc.stackJson() == stackBefore, "missing layers rejection preserves stack");
+}
+
+static void heatSourceMissingSchemaAcceptance() {
+    CaseDocument doc;
+    loadHeatSourceFixture(doc);
+    CaseTreeModel tree(&doc);
+    tree.setThermalMode(true);
+    require(doc.validate().empty(), "missing schema fixture starts valid");
+    QTemporaryDir schemas;
+    require(schemas.isValid(), "heat source temporary schema directory");
+    tree.setCaseSchemaPath(schemas.filePath("missing.schema.json"));
+    requireHeatSourceRejected(tree, "die_layer", 1.0);
+}
+
+static void layerContextMenuAcceptance(bool thermal) {
+    CaseDocument doc;
+    loadHeatSourceFixture(doc);
+    CaseTreeModel tree(&doc);
+    SchemaForm form;
+    CaseTreeView view(&tree, &form, QString(CHIPCAE_REPOSITORY) + "/schema");
+    if (thermal)
+        tree.setThermalMode(true);
+    // Resolve after switching mode: the switch rebuilds all indexes.
+    const auto index = tree.locate("/layers/2", "stack");
+    require(index.isValid() && index.data(CaseTreeModel::PointerRole) == "/layers/2",
+            "context menu targets exact die layer node");
+    std::unique_ptr<QMenu> menu(view.contextMenuFor(index));
+    require(menu != nullptr, "layer context menu exists");
+    require(menu->parent() == &view, "layer context menu is owned by view");
+    require(menu->actions().size() == 1, "layer context menu has exactly one action");
+    const auto* action = menu->actions().front();
+    require(action->text() == QStringLiteral("在此层添加热源"), "exact heat source action text");
+    require(action->isEnabled() == thermal, "heat source action enabled only in thermal mode");
+    require(action->toolTip() == (thermal ? QString() : QStringLiteral("需先切换到 Thermal 模式")),
+            "exact heat source action tooltip");
+}
+
+static void layerContextMenuRejectsOtherNodesAcceptance() {
+    CaseDocument doc;
+    loadHeatSourceFixture(doc);
+    CaseTreeModel tree(&doc);
+    SchemaForm form;
+    CaseTreeView view(&tree, &form, QString(CHIPCAE_REPOSITORY) + "/schema");
+    tree.setThermalMode(true);
+    const QModelIndex nodes[] = {tree.locate("/loads"),
+                                 tree.locate("/loads/0"),
+                                 tree.locate("/layers/2/regions", "stack"),
+                                 tree.locate("/layers/2/regions/0", "stack"),
+                                 tree.locate("/layers/2/name", "stack"),
+                                 childNamed(tree, {}, "Stack layers"),
+                                 childNamed(tree, {}, "Bodies"),
+                                 childNamed(tree, {}, "Materials")};
+    for (const auto& index : nodes) {
+        require(index.isValid(), "non-layer menu test node exists");
+        std::unique_ptr<QMenu> menu(view.contextMenuFor(index));
+        require(menu == nullptr, "non-layer node has no heat source context menu");
+    }
+    std::unique_ptr<QMenu> invalid(view.contextMenuFor(QModelIndex()));
+    require(invalid == nullptr, "invalid index has no context menu");
+    CaseTreeModel other(&doc);
+    std::unique_ptr<QMenu> foreign(view.contextMenuFor(other.locate("/layers/2", "stack")));
+    require(foreign == nullptr, "foreign model layer has no context menu");
+}
+
+static void layerContextMenuPolicyAcceptance() {
+    CaseDocument doc;
+    loadHeatSourceFixture(doc);
+    CaseTreeModel tree(&doc);
+    SchemaForm form;
+    CaseTreeView view(&tree, &form, QString(CHIPCAE_REPOSITORY) + "/schema");
+    require(view.contextMenuPolicy() == Qt::CustomContextMenu,
+            "tree view requests custom context menus");
+}
+
+static void layerContextMenuAddsAndSelectsAcceptance() {
+    CaseDocument doc;
+    loadHeatSourceFixture(doc);
+    CaseTreeModel tree(&doc);
+    SchemaForm form;
+    CaseTreeView view(&tree, &form, QString(CHIPCAE_REPOSITORY) + "/schema");
+    tree.setThermalMode(true);
+    const auto layer = tree.locate("/layers/2", "stack");
+    require(layer.isValid() && layer.data(CaseTreeModel::PointerRole) == "/layers/2",
+            "menu addition targets exact die layer");
+    tree.itemFromIndex(layer)->setText("display label differs from layer name");
+    std::unique_ptr<QMenu> menu(view.contextMenuFor(layer));
+    require(menu != nullptr && menu->actions().size() == 1,
+            "thermal layer has one heat source action");
+    auto* action = menu->actions().front();
+    require(action->isEnabled(), "thermal action is enabled before triggering");
+    const auto count = doc.toJson().at("loads").size();
+    action->trigger();
+    const auto loads = doc.toJson().at("loads");
+    require(loads.size() == count + 1, "menu action appends one heat source");
+    const auto path = QString("/loads/%1").arg(count);
+    const auto selected = tree.locate(path);
+    require(selected.isValid() && selected.data(CaseTreeModel::PointerRole) == path,
+            "new heat source has exact tree path");
+    requireHeatSourceAdded(
+        doc,
+        selected.data(CaseTreeModel::IdentityRole).toString(),
+        count,
+        Json::parse(R"({"type":"heat_source","target":"layer:die_layer","power":1.0})"));
+    require(view.currentIndex() == selected, "menu action selects new heat source");
+    require(form.objectPath() == path, "menu selection binds new heat source form");
+    require(form.setValue(path + "/power", 10), "stage heat source power edit");
+    require(view.commitEdit(), "commit heat source power edit");
+    auto edited = doc.toJson().at("loads").at(count);
+    require(edited.at("power").as<double>() == 10.0, "edited heat source is exactly 10 W");
+    edited.erase("id");
+    QFile demo(QString(CHIPCAE_REPOSITORY) + "/examples/demo_gate/case.json");
+    require(demo.open(QIODevice::ReadOnly), "DEMO-GATE case loads");
+    const auto demoCase = Json::parse(demo.readAll().toStdString());
+    require(edited == demoCase.at("loads").at(1), "edited heat source equals DEMO-GATE source");
+    require(doc.validate().empty(), "edited heat source document is valid");
+    const auto beforeDuplicate = doc.toJson();
+    action->trigger();
+    require(doc.toJson() == beforeDuplicate, "repeated menu trigger leaves document unchanged");
+    // Duplicate prevention belongs to the model; the thermal menu remains enabled.
+    std::unique_ptr<QMenu> duplicateMenu(view.contextMenuFor(tree.locate("/layers/2", "stack")));
+    require(duplicateMenu != nullptr && duplicateMenu->actions().size() == 1 &&
+                duplicateMenu->actions().front()->isEnabled(),
+            "thermal menu remains enabled for layer with heat source");
+}
+
+static void heatSourceAcceptance() {
+    struct Test {
+        const char* name;
+        void (*run)();
+    };
+    const Test tests[] = {
+        {"heat source rejected outside thermal mode", heatSourceOutsideThermalAcceptance},
+        {"heat source added on layer", heatSourceAddedAcceptance},
+        {"heat source edge cases", heatSourceEdgeCasesAcceptance},
+        {"heat source volumetric duplicate", heatSourceVolumetricDuplicateAcceptance},
+        {"heat source missing layers", heatSourceMissingLayersAcceptance},
+        {"heat source missing schema", heatSourceMissingSchemaAcceptance},
+        {"layer context menu outside thermal mode", [] { layerContextMenuAcceptance(false); }},
+        {"layer context menu in thermal mode", [] { layerContextMenuAcceptance(true); }},
+        {"layer context menu rejects other nodes", layerContextMenuRejectsOtherNodesAcceptance},
+        {"layer context menu policy", layerContextMenuPolicyAcceptance},
+        {"layer context menu adds and selects heat source",
+         layerContextMenuAddsAndSelectsAcceptance}};
+    int failures = 0;
+    for (const auto& test : tests) {
+        try {
+            test.run();
+            std::cout << "PASS D14i-1 " << test.name << '\n';
+        } catch (const std::exception& error) {
+            ++failures;
+            std::cerr << "FAIL D14i-1 " << test.name << ": " << error.what() << '\n';
+        }
+    }
+    require(failures == 0, "D14i-1 heat source acceptance failures");
+}
+
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     try {
@@ -352,6 +640,7 @@ int main(int argc, char** argv) {
         std::cout << "existing assembly tree tests passed\n";
         caseSchemaPathAcceptance();
         std::cout << "tree tests passed\n";
+        heatSourceAcceptance();
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;

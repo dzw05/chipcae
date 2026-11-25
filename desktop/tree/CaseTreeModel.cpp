@@ -201,6 +201,10 @@ QString CaseTreeModel::addLoad(Json load) {
     copy["loads"].push_back(load);
     return apply(copy) ? "case:" + id : QString();
 }
+QString CaseTreeModel::addHeatSource(const QString&, double) {
+    // TEST-FIRST stub: layer heat source creation is intentionally unimplemented.
+    return {};
+}
 QString CaseTreeModel::addFixedFace(const QString& target) {
     auto copy = document_->toJson();
     if (!copy.contains("constraints"))
