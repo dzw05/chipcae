@@ -89,7 +89,7 @@ jobs:
             *) jobs=4 ;;
           esac
           echo "Build jobs: $jobs"
-          cmake --build build --target chipcae_test_ipc2581_e11 chipcae_test_copper_map k1_background k1_cut k1_cut_stats k1_demo_gate_mesh k1_mesh_digest chipcae_test_import_thresholds chipcae_test_repair_policy --parallel "$jobs"
+          cmake --build build --target chipcae_test_ipc2581_e11 chipcae_test_copper_map k1_background k1_cut k1_cut_stats k1_demo_gate_mesh k1_mesh_digest k1_copper_phi_report chipcae_test_import_thresholds chipcae_test_repair_policy --parallel "$jobs"
           ccache --show-stats
 
       - name: Run mesh tests
