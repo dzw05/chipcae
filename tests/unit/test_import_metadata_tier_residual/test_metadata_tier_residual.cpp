@@ -2021,6 +2021,20 @@ void verify(const Case& item) {
     const auto result = ecad::read_ipc2581(input);
     if (!result)
         throw std::runtime_error(item.name + ": " + result.error);
+    if (item.name == "side_placed" || item.name == "mixed_allowed" ||
+        item.name == "multiple_side") {
+        check(result.model.components.size() == 1, item.name + ": one placed component");
+        if (result.model.components.size() == 1) {
+            const auto& points = result.model.components.front().outline.points;
+            const std::vector<std::array<std::int64_t, 2>> polygon{
+                {2000, 2000}, {6000, 2000}, {6000, 5000}, {2000, 5000}};
+            auto expected_points = polygon;
+            if (item.name != "side_placed")
+                expected_points.insert(expected_points.end(), polygon.begin(), polygon.end());
+            check(points == expected_points,
+                  item.name + ": reference eligibility preserves parsed component geometry");
+        }
+    }
     std::string raw;
     for (const auto& row : result.model.report.unsupported)
         raw += row.code + "\t" + row.element + "\t" + std::to_string(row.line) + "\n";

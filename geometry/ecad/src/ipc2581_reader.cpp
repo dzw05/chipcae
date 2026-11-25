@@ -378,17 +378,24 @@ struct Parser {
         }
         bool same(const Bounds& b) const { return lower == b.lower && upper == b.upper; }
     };
-    enum class BoundsKind { profile, features, package_outline };
+    enum class BoundsKind { profile, features };
     struct BoundsScope {
         std::size_t depth, slot;
         BoundsKind kind;
         Bounds bounds;
-        std::string owner;
-        std::size_t read_points = 0;
-        bool side_outline = false;
     };
     std::vector<BoundsScope> bounds_scopes;
     std::vector<std::size_t> active_bounds;
+    // Outline evidence belongs only to LineDescRef classification, not geometry bounds.
+    struct OutlineRefScope {
+        std::size_t depth;
+        std::string owner;
+        Bounds bounds;
+        std::size_t read_points = 0;
+        bool side_outline = false;
+    };
+    std::vector<OutlineRefScope> outline_ref_scopes;
+    std::vector<std::size_t> active_outline_refs;
     struct Electrical {
         std::size_t depth;
         std::string type;
@@ -484,8 +491,7 @@ struct Parser {
             if (path.size() == d.depth + 1 && name != (d.user ? "EntryUser" : "EntryLineDesc"))
                 d.valid = false;
         }
-        for (const auto index : active_bounds) {
-            auto& b = bounds_scopes[index].bounds;
+        const auto collect_bounds = [&](Bounds& b) {
             if (name == "PolyBegin" || name == "PolyStepSegment" || name == "Location" ||
                 name == "Point")
                 bounds_point(b, a, "x", "y");
@@ -496,7 +502,11 @@ struct Parser {
                        name != "LineDescRef" && name != "LineDesc")
                 // Curves and unknown coordinate expressions cannot prove the full box.
                 b.valid = false;
-        }
+        };
+        for (const auto index : active_bounds)
+            collect_bounds(bounds_scopes[index].bounds);
+        for (const auto index : active_outline_refs)
+            collect_bounds(outline_ref_scopes[index].bounds);
         if (!electrical.empty()) {
             auto& e = electrical.back();
             if (path.size() == e.depth + 1) {
@@ -529,24 +539,20 @@ struct Parser {
             if (user && parent == "PadstackPadDef" && !pad_definitions.empty() &&
                 path.size() == pad_definitions.back().first + 1)
                 owner = pad_definitions.back().second;
-            if (!user && !active_bounds.empty() &&
-                bounds_scopes[active_bounds.back()].kind == BoundsKind::package_outline)
-                owner = active_bounds.back();
+            if (!user && !active_outline_refs.empty())
+                owner = active_outline_refs.back();
             definition_refs.push_back({value(a, "id"), user, owner});
         }
         const bool side_outline = name == "Outline" && parent == "OtherSideView" &&
                                   path.size() >= 3 && path[path.size() - 3] == "Package";
-        if ((name == "Profile" && package.empty()) ||
-            (name == "Outline" && (parent == "Package" || side_outline) && !package.empty())) {
-            const bool profile = name == "Profile";
+        if (name == "Profile" && package.empty()) {
             active_bounds.push_back(bounds_scopes.size());
-            bounds_scopes.push_back({path.size(),
-                                     no_slot,
-                                     profile ? BoundsKind::profile : BoundsKind::package_outline,
-                                     {},
-                                     package,
-                                     profile ? 0 : package_points[package].size(),
-                                     side_outline});
+            bounds_scopes.push_back({path.size(), no_slot, BoundsKind::profile, {}});
+        }
+        if (name == "Outline" && (parent == "Package" || side_outline) && !package.empty()) {
+            active_outline_refs.push_back(outline_ref_scopes.size());
+            outline_ref_scopes.push_back(
+                {path.size(), package, {}, package_points[package].size(), side_outline});
         }
     }
     void annotate_report(std::size_t slot,
@@ -650,7 +656,7 @@ struct Parser {
                     context = kDocLayer;
                 if (function == "BOARD_OUTLINE") {
                     active_bounds.push_back(bounds_scopes.size());
-                    bounds_scopes.push_back({path.size(), slot, BoundsKind::features, {}, {}, 0});
+                    bounds_scopes.push_back({path.size(), slot, BoundsKind::features, {}});
                 }
             }
         }
@@ -701,11 +707,13 @@ struct Parser {
                 model.report.unsupported[d.slot].context = kEmptyDict;
             empty_dictionaries.pop_back();
         }
-        if (!active_bounds.empty() && path.size() == bounds_scopes[active_bounds.back()].depth) {
-            auto& b = bounds_scopes[active_bounds.back()];
-            if (b.kind == BoundsKind::package_outline)
-                b.bounds.valid &= package_points[b.owner].size() >= b.read_points + 3;
+        if (!active_bounds.empty() && path.size() == bounds_scopes[active_bounds.back()].depth)
             active_bounds.pop_back();
+        if (!active_outline_refs.empty() &&
+            path.size() == outline_ref_scopes[active_outline_refs.back()].depth) {
+            auto& outline = outline_ref_scopes[active_outline_refs.back()];
+            outline.bounds.valid &= package_points[outline.owner].size() >= outline.read_points + 3;
+            active_outline_refs.pop_back();
         }
         if (!active_dictionaries.empty() &&
             path.size() == definition_dictionaries[active_dictionaries.back()].depth)
@@ -783,7 +791,7 @@ struct Parser {
                 if (r.user)
                     valid = instanced.contains(r.owner);
                 else {
-                    const auto& b = bounds_scopes[r.owner];
+                    const auto& b = outline_ref_scopes[r.owner];
                     valid = b.bounds.area() && package_counts[b.owner] == 1 &&
                             (!b.side_outline || placed.contains(b.owner));
                 }
