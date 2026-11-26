@@ -1,6 +1,6 @@
 """Residual metadata acceptance, frozen before implementation at merged main.
 
-kicad4l retains its baseline C-tier rejection (three Ovals), so it has no
+kicad4l retains its baseline C-tier rejection (one SlotCavity Oval), so it has no
 CLI geometry artifacts. A successful synthetic side-outline case additionally
 checks geometry bytes as required by the revised brief.
 """
@@ -2024,8 +2024,24 @@ def id_sha(ids):
     return sha(json.dumps(ids, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
 
 
+# Independently specified Oval delta; retain FROZEN as the pre-feature audit source.
+OVAL_REMOVED = {'board/StandardPrimitiveRef/835', 'board/StandardPrimitiveRef/1079', 'board/StandardPrimitiveRef/1344', 'board/StandardPrimitiveRef/840', 'board/DictionaryStandard/31', 'board/Oval/33', 'board/EntryStandard/35', 'board/StandardPrimitiveRef/1339', 'board/Oval/36', 'board/StandardPrimitiveRef/596', 'board/StandardPrimitiveRef/1084', 'board/EntryStandard/32', 'board/StandardPrimitiveRef/591'}
+OVAL_PROMOTED = {'board/PadstackPadDef/290', 'board/PadstackPadDef/297', 'board/PadstackPadDef/301', 'board/EntryUser/48', 'board/StandardPrimitiveRef/358', 'board/PadstackPadDef/305', 'board/PadstackPadDef/282', 'board/PadstackPadDef/278', 'board/PadstackPadDef/286', 'board/StandardPrimitiveRef/362', 'board/EntryUser/40', 'board/DictionaryUser/39', 'board/PadstackPadDef/309'}
+OVAL_ID_SHA = 'cc82f9df7da379dbf4191e048111b50446eb981225343ced49af0304ee8da783'
+
 def expected(name):
     report = copy.deepcopy(FROZEN[name]['report'])
+    if name == 'kicad4l':
+        for defect in report['defects']:
+            if defect['defect_id'] in OVAL_REMOVED:
+                report['tier_counts'][defect['tier']] -= 1
+            elif defect['defect_id'] in OVAL_PROMOTED:
+                assert defect['tier'] == 'B'
+                defect.update(tier='A', suggestion='definition expressed by modeled instances',
+                              action='definition expressed by modeled instances', rejection_reason='')
+                report['tier_counts']['A'] += 1
+                report['tier_counts']['B'] -= 1
+        report['defects'] = [d for d in report['defects'] if d['defect_id'] not in OVAL_REMOVED]
     for defect in report['defects']:
         context = PROMOTIONS[name].get(defect['defect_id'])
         if context:
@@ -2080,8 +2096,8 @@ class ResidualMetadataCLI(unittest.TestCase):
             wanted = expected(name)
             ids = [d['defect_id'] for d in report['defects']]
             with self.subTest(case=name):
-                self.assertEqual(ids, original['ids'])
-                self.assertEqual(id_sha(ids), original['id_sha'])
+                self.assertEqual(ids, [d['defect_id'] for d in wanted['defects']])
+                self.assertEqual(id_sha(ids), OVAL_ID_SHA if name == 'kicad4l' else original['id_sha'])
             for actual, target in zip(report['defects'], wanted['defects']):
                 with self.subTest(case=name, defect=target['defect_id']):
                     if target['defect_id'] in PROMOTIONS[name]:

@@ -315,10 +315,19 @@ void fixture_geometry() {
                       << " independently expected=" << expected << " DBU^2\n";
             total_error += std::abs(increment - expected);
             auto expected_paths = paths(before);
+            // A single source polygon can retain clockwise winding because no Union
+            // was needed. Orient the independent copper set positively while retaining
+            // the relative winding of any holes produced by an earlier Union.
+            if (clip::Area(expected_paths) < 0)
+                for (auto& ring : expected_paths)
+                    std::reverse(ring.begin(), ring.end());
             expected_paths.insert(expected_paths.end(), pads.begin(), pads.end());
             const auto expected_union = clip::Union(expected_paths, clip::FillRule::NonZero);
-            if (std::abs(clip::Area(
-                    clip::Xor(paths(actual), expected_union, clip::FillRule::NonZero))) > 2)
+            const double xor_area = std::abs(
+                clip::Area(clip::Xor(paths(actual), expected_union, clip::FillRule::NonZero)));
+            std::cout << "kicad4l " << actual.name << " XOR=" << xor_area
+                      << " increment error=" << std::abs(increment - expected) << " DBU^2\n";
+            if (xor_area > 2)
                 differing_layers += actual.name + " ";
         } else {
             check(actual.polygons.size() == before.polygons.size(),
@@ -425,7 +434,12 @@ int main() {
         run("noncardinal_rotation_31" + std::string(suffix), [=] { valid(4, 3, 31, after); });
         run("vertical_noncardinal_rotation_minus_31" + std::string(suffix),
             [=] { valid(3, 4, -31, after); });
-        for (const auto* transform : {"mirror=\"true\"", "scaleFactor=\"2\""})
+        for (const auto* transform : {"mirror=\"true\"",
+                                      "scaleFactor=\"2\"",
+                                      "rotation=\"nan\"",
+                                      "rotation=\"bad\"",
+                                      "scaleFactor=\"inf\"",
+                                      "scaleFactor=\"bad\""})
             run(std::string(transform) + suffix, [=] {
                 unmodeled("<Oval width=\"3\" height=\"4\"/>",
                           "<Xform " + std::string(transform) + "/>\n",
