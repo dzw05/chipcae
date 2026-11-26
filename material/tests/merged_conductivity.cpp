@@ -496,6 +496,56 @@ int invalid_inputs() {
     return check.report();
 }
 
+int extreme_arithmetic(std::vector<LegalCase>& cases) {
+    Check check{"extreme_arithmetic"};
+    auto run = [&](const char* name, const Input& in, double tangential, double normal) {
+        Result out = sentinel();
+        const auto status = evaluate(in, out);
+        check.expect(status == Status::Ok, std::string(name) + " status");
+        check.expect(out.kind == Kind::Laminate && out.axis == 2,
+                     std::string(name) + " classification");
+        for (int c = 0; c < 3; ++c) {
+            const double expected = c == 2 ? normal : tangential;
+            check.expect(close(out.k[c], expected), std::string(name) + " scaled closed form");
+            check.expect(std::isfinite(out.k[c]) && out.k[c] > 0,
+                         std::string(name) + " finite positive diagonal");
+        }
+        for (int c = 3; c < 6; ++c)
+            check.expect(bits(out.k[c], 0.0), std::string(name) + " positive zero");
+        cases.push_back({name, in, out, status, Kind::Laminate, 2});
+    };
+    auto in = pair(2);
+    in.volume[0] = in.volume[1] = std::numeric_limits<double>::max();
+    run("overflowing_volume_sum",
+        in,
+        0.5 * matrix + 0.5 * copper,
+        1 / (0.5 / matrix + 0.5 / copper));
+
+    const double denorm = std::numeric_limits<double>::denorm_min();
+    in.volume[0] = denorm;
+    in.volume[1] = 2 * denorm;
+    run("subnormal_volumes",
+        in,
+        matrix / 3 + (2.0 / 3) * copper,
+        1 / ((1.0 / 3) / matrix + (2.0 / 3) / copper));
+
+    // Independent power-of-two closed forms avoid overflowing products/reciprocals.
+    for (int i = 0; i < 2; ++i)
+        member(in, i, {0, 0, i}, 1, i, 0x1p1022, 0x1p1023);
+    run("large_conductivities", in, 0x1.8p1022, (4.0 / 3) * 0x1p1022);
+    for (int i = 0; i < 2; ++i)
+        member(in, i, {0, 0, i}, 1, i, 16 * denorm, 32 * denorm);
+    // The harmonic mean is (64/3)*denorm, rounded to 21*denorm in binary64.
+    run("subnormal_conductivities", in, 24 * denorm, 21 * denorm);
+
+    for (int i = 0; i < 2; ++i)
+        member(in, i, {0, 0, i}, i == 0 ? 0x1p-1000 : 0x1p1000, i, 0x1p-1000, 0x1p1000);
+    // Both V/k terms are exactly 1: H=(2^-1000+2^1000)/2 rounds to 2^999.
+    // A=(2^-2000+2^2000)/(2^-1000+2^1000) rounds to 2^1000.
+    run("coupled_extreme_ratios", in, 0x1p1000, 0x1p999);
+    return check.report();
+}
+
 int device_matches_host(const std::vector<LegalCase>& cases) {
     Check check{"device_matches_host"};
     const int count = static_cast<int>(cases.size());
@@ -572,6 +622,7 @@ int main(int argc, char** argv) {
     failures += scaling(cases, bounds);
     failures += bounds.report();
     failures += invalid_inputs();
+    failures += extreme_arithmetic(cases);
     failures += device_matches_host(cases);
     failures += cost_report();
     std::printf("material_merged_conductivity: %d failing subitems\n", failures);
