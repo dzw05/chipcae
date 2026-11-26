@@ -622,7 +622,7 @@ ValidationResult
 validate_material_file(const std::string& path, bool customer_delivery, ImportOptions options) {
     std::ifstream f(path);
     if (!f)
-        return {false, {{path, "cannot open file"}}};
+        return {false, {{path, "cannot open file"}}, {}};
     std::ostringstream s;
     s << f.rdbuf();
     return validate_material_json(s.str(), customer_delivery, options);
@@ -715,7 +715,7 @@ ValidationResult validate_material_library_file(const std::string& path,
                                                 ImportOptions options) {
     std::ifstream f(path);
     if (!f)
-        return {false, {{path, "cannot open file"}}};
+        return {false, {{path, "cannot open file"}}, {}};
     std::ostringstream s;
     s << f.rdbuf();
     return validate_material_library_json(s.str(), customer_delivery, options);
@@ -727,7 +727,7 @@ ValidationResult validate_material_or_library_file(const std::string& path,
                                                    bool customer_delivery) {
     std::ifstream f(path);
     if (!f)
-        return {false, {{path, "cannot open file"}}};
+        return {false, {{path, "cannot open file"}}, {}};
     std::ostringstream s;
     s << f.rdbuf();
     const auto json = s.str();
@@ -739,7 +739,7 @@ ValidationResult validate_material_or_library_file(const std::string& path,
             return validate_material_library_json(json, customer_delivery);
         return validate_material_json(json, customer_delivery);
     } catch (const std::exception& e) {
-        return {false, {exception_issue(e)}};
+        return {false, {exception_issue(e)}, {}};
     }
 }
 } // namespace detail
