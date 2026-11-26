@@ -1,6 +1,6 @@
 """I1 CLI acceptance matrix, using public stacks and synthetic material cards.
 
-Set CHIPCAE_I1_BRANCHPOINT_SOLVE_EXE to an independently built branch-point solver
+Requires CHIPCAE_I1_BRANCHPOINT_SOLVE_EXE to name an independently built branch-point solver
 to compare every default case: exact stdout, HDF structure and non-solver data,
 and global relative L2 error <= 1e-8 for PointData/U. The frozen baseline remains
 the reference for legacy stack writing and performance, outside this CLI test.
@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import traceback
 
@@ -180,6 +181,7 @@ def main():
             baselines.append((label, baseline))
         else:
             print(f'Baseline comparison not configured: set {variable}', flush=True)
+            raise AssertionError(f'{variable} is required for every default-case comparison')
     failures = []
     count = 0
     with tempfile.TemporaryDirectory(prefix='chipcae-i1-solve-') as temp:
@@ -189,17 +191,71 @@ def main():
                 for variant in variants:
                     name = f'{path}-{"polygons" if polygons else fraction}-{variant}'
                     root = Path(temp) / name
-                    root.mkdir()
                     count += 1
                     try:
+                        root.mkdir()
                         run_case(root, executable, baselines, path, polygons, fraction, variant)
                         print(f'PASS {name}', flush=True)
-                    except (AssertionError, OSError, subprocess.TimeoutExpired):
+                    except Exception:
                         failures.append(name)
                         print(f'FAIL {name}\n{traceback.format_exc()}', flush=True)
     print(f'{count} matrix cases: {count - len(failures)} passed, {len(failures)} failed', flush=True)
     assert not failures, failures
 
 
+def self_test():
+    """Exercise acceptance-runner failures without requiring solver backends."""
+    from contextlib import redirect_stdout
+    import io
+    import unittest
+    from unittest.mock import Mock, patch
+
+    class RunnerTests(unittest.TestCase):
+        def setUp(self):
+            self.environment = {
+                'CHIPCAE_SOLVE_EXE': str(Path(__file__).resolve()),
+                'CHIPCAE_I1_BRANCHPOINT_SOLVE_EXE': str(UTIL_PATH),
+            }
+            self.output = io.StringIO()
+
+        def test_missing_branchpoint_fails_before_running_cases(self):
+            del self.environment['CHIPCAE_I1_BRANCHPOINT_SOLVE_EXE']
+            run = Mock()
+            with patch.dict(os.environ, self.environment, clear=True), \
+                    patch.dict(globals(), run_case=run), redirect_stdout(self.output):
+                with self.assertRaisesRegex(AssertionError, 'CHIPCAE_I1_BRANCHPOINT_SOLVE_EXE'):
+                    main()
+            run.assert_not_called()
+
+        def test_unexpected_case_exception_is_reported_and_matrix_continues(self):
+            run = Mock(side_effect=[KeyError('synthetic missing material')] + [None] * 31)
+            with patch.dict(os.environ, self.environment, clear=True), \
+                    patch.dict(globals(), run_case=run), redirect_stdout(self.output):
+                with self.assertRaises(AssertionError):
+                    main()
+            self.assertEqual(run.call_count, 32)
+            self.assertIn('KeyError: \'synthetic missing material\'', self.output.getvalue())
+            self.assertIn('FAIL fvm-thermal-0-default', self.output.getvalue())
+            self.assertIn('PASS fvm-mechanical-only-polygons-opening', self.output.getvalue())
+            self.assertIn('32 matrix cases: 31 passed, 1 failed', self.output.getvalue())
+
+        def test_all_cases_receive_independent_branchpoint(self):
+            run = Mock()
+            with patch.dict(os.environ, self.environment, clear=True), \
+                    patch.dict(globals(), run_case=run), redirect_stdout(self.output):
+                main()
+            self.assertEqual(run.call_count, 32)
+            for call in run.call_args_list:
+                self.assertEqual(call.args[2], [('branchpoint-baseline', UTIL_PATH.resolve())])
+            self.assertEqual(sum(call.args[-1] == 'default' for call in run.call_args_list), 16)
+            self.assertIn('32 matrix cases: 32 passed, 0 failed', self.output.getvalue())
+
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(RunnerTests)
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    return 0 if result.wasSuccessful() else 1
+
+
 if __name__ == '__main__':
+    if sys.argv[1:] == ['--self-test']:
+        sys.exit(self_test())
     main()

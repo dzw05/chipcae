@@ -12,8 +12,12 @@ if(CHIPCAE_ENABLE_JSONCONS AND TARGET chipcae_stack)
         ${PROJECT_SOURCE_DIR}/mesh/cut/include)
 endif()
 
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_test(NAME import_i1_copper_orientation_runner
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/solve_copper_orientation.py --self-test)
+set_tests_properties(import_i1_copper_orientation_runner PROPERTIES LABELS tierA TIMEOUT 30)
+
 if(CHIPCAE_ENABLE_ECAD AND TARGET chipcae-solve AND CHIPCAE_ENABLE_MFEM AND CHIPCAE_ENABLE_MPI AND CHIPCAE_ENABLE_HDF5)
-    find_package(Python3 COMPONENTS Interpreter REQUIRED)
     add_test(NAME import_i1_copper_orientation_solve
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/solve_copper_orientation.py)
     set_tests_properties(import_i1_copper_orientation_solve PROPERTIES LABELS tierA TIMEOUT 1200)
