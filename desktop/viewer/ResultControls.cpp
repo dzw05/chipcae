@@ -38,6 +38,16 @@ ResultControls::ResultControls(ResultView& view, ResultSession& session, QWidget
     scale->setValue(1);
     layout->addRow(QStringLiteral("翘曲放大系数"), scale);
     connect(scale, &QDoubleSpinBox::valueChanged, &view, &ResultView::setWarpageScale);
+    auto autoScale = new QPushButton(QStringLiteral("自动放大"), this);
+    autoScale->setObjectName("autoWarpageScale");
+    autoScale->setEnabled(view.autoWarpageScale() > 0);
+    layout->addRow(autoScale);
+    connect(&view, &ResultView::displayChanged, autoScale, [&view, autoScale] {
+        autoScale->setEnabled(view.autoWarpageScale() > 0);
+    });
+    connect(autoScale, &QPushButton::clicked, scale, [&view, scale] {
+        scale->setValue(view.autoWarpageScale());
+    });
     auto layer = new QComboBox(this);
     layer->addItem(QStringLiteral("全部层"), 0);
     const auto names = session.layerNames();

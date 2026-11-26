@@ -70,6 +70,12 @@ QString mechMethod(const QJsonArray& summary, const QString& name, qint64 step) 
     }
     return {};
 }
+bool mechanicsNotSolved(const QString& warpageMethod, const QString& umagMethod) {
+    auto isNotSolved = [](const QString& method) {
+        return method == "not_solved" || method == "not solved: fvm thermal-only stage";
+    };
+    return isNotSolved(warpageMethod) || isNotSolved(umagMethod);
+}
 QString canonical(QString n) {
     if (n == "cut_poly")
         return "cut";
@@ -534,12 +540,59 @@ void ResultView::setWarpageScale(double v) {
     d->scale = v;
     rebuild();
 }
-// D14j-1 test-first stubs: keep acceptance tests buildable without implementing the feature.
 double ResultView::warpageScale() const {
-    return 0.0;
+    return d->scale;
 }
 double ResultView::autoWarpageScale() const {
-    return 0.0;
+    if (!d->loaded)
+        return 0.0;
+    const auto summary = d->session->summary();
+    if (mechanicsNotSolved(mechMethod(summary, "warpage_pv", d->step),
+                           mechMethod(summary, "U_mag_max", d->step)))
+        return 0.0;
+
+    const double infinity = std::numeric_limits<double>::infinity();
+    std::array<double, 3> minimum{infinity, infinity, infinity};
+    std::array<double, 3> maximum{-infinity, -infinity, -infinity};
+    bool hasPoints = false;
+    double umax = 0.0;
+    for (const auto& block : d->blocks) {
+        auto raw = block.raw;
+        const auto count = raw->GetNumberOfPoints();
+        auto u = raw->GetPointData()->GetArray("U");
+        if (u && (u->GetNumberOfComponents() != 3 || u->GetNumberOfTuples() != count))
+            return 0.0;
+        for (vtkIdType point = 0; point < count; ++point) {
+            double xyz[3];
+            raw->GetPoint(point, xyz);
+            for (int axis = 0; axis < 3; ++axis) {
+                if (!std::isfinite(xyz[axis]))
+                    return 0.0;
+                minimum[axis] = std::min(minimum[axis], xyz[axis]);
+                maximum[axis] = std::max(maximum[axis], xyz[axis]);
+            }
+            hasPoints = true;
+            if (u) {
+                double displacement[3];
+                u->GetTuple(point, displacement);
+                for (double component : displacement)
+                    if (!std::isfinite(component))
+                        return 0.0;
+                const double norm = std::hypot(displacement[0], displacement[1], displacement[2]);
+                if (!std::isfinite(norm))
+                    return 0.0;
+                umax = std::max(umax, norm);
+            }
+        }
+    }
+    if (!hasPoints || umax == 0.0)
+        return 0.0;
+    const double diagonal =
+        std::hypot(maximum[0] - minimum[0], maximum[1] - minimum[1], maximum[2] - minimum[2]);
+    if (!std::isfinite(diagonal) || diagonal == 0.0)
+        return 0.0;
+    const double scale = (diagonal / 16.0) / umax;
+    return std::isfinite(scale) ? scale : 0.0;
 }
 void ResultView::setLayer(int v) {
     d->layer = v;
@@ -593,10 +646,7 @@ void ResultView::rebuild() {
         const auto summary = d->session->summary();
         const auto warpageMethod = mechMethod(summary, "warpage_pv", d->step);
         const auto umagMethod = mechMethod(summary, "U_mag_max", d->step);
-        auto isNotSolved = [](const QString& method) {
-            return method == "not_solved" || method == "not solved: fvm thermal-only stage";
-        };
-        notSolved = isNotSolved(warpageMethod) || isNotSolved(umagMethod);
+        notSolved = mechanicsNotSolved(warpageMethod, umagMethod);
         fvmElastic =
             !notSolved && (warpageMethod == "fvm_cell_centers_lsq" ||
                            warpageMethod == "FVM top-face centroids; least-squares plane removal" ||
