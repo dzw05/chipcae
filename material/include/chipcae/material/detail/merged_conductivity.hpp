@@ -88,16 +88,24 @@ CHIPCAE_MERGED_K_INLINE double merged_k_split(double value, int& exponent) {
 }
 
 CHIPCAE_MERGED_K_INLINE double merged_k_scale(double value, int exponent) {
-    // Chunking keeps powers representable and rounds only when the final result
-    // becomes subnormal. Terms too small to affect a normalized sum may reach zero.
-    while (exponent > 512) {
-        value = merged_k_product(value, 0x1p512);
-        exponent -= 512;
+    if (merged_k_bits(value) == 0)
+        return value;
+    int value_exponent = 0;
+    value = merged_k_split(value, value_exponent);
+    // Check the result's exponent before adding, including powers that are not
+    // themselves representable. The mantissa is in [1, 2).
+    if (exponent > 1023 - value_exponent)
+        return std::numeric_limits<double>::infinity();
+    if (exponent < -1075 - value_exponent)
+        return 0.0;
+    exponent += value_exponent;
+    if (exponent < -1022) {
+        // Keep this product normal and exact; only the final multiplication may
+        // round to subnormal or zero (including the half-denorm tie at -1075).
+        value = merged_k_product(value, 0x1p-1022);
+        exponent += 1022;
     }
-    while (exponent < -512) {
-        value = merged_k_product(value, 0x1p-512);
-        exponent += 512;
-    }
+    // The remaining exponent is in [-1022, 1023], so the field is always normal.
     const auto bits = static_cast<std::uint64_t>(exponent + 1023) << 52;
     double power = 0.0;
     const auto* source = reinterpret_cast<const unsigned char*>(&bits);

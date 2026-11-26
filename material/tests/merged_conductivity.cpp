@@ -496,6 +496,74 @@ int invalid_inputs() {
     return check.report();
 }
 
+int scale_exponent_ranges() {
+    Check check{"scale_exponent_ranges"};
+    struct ScaleInput {
+        double value;
+        int exponent;
+    };
+    std::vector<ScaleInput> probes;
+    // A power outside the normal range can still scale a finite input to a finite
+    // result. Include a value just above the half-denorm tie to catch premature
+    // subnormal rounding during chunked scaling.
+    for (double value : {0x1p-1074,
+                         0x1p-1022,
+                         0x1p-512,
+                         0.5,
+                         1.0,
+                         0x1.0000000000001p0,
+                         0x1.fffffffffffffp0,
+                         0x1p512,
+                         0x1p1023,
+                         std::numeric_limits<double>::max()}) {
+        for (int exponent : {-4194,
+                             -2097,
+                             -1076,
+                             -1075,
+                             -1074,
+                             -1023,
+                             -1022,
+                             -513,
+                             -512,
+                             -1,
+                             0,
+                             1,
+                             512,
+                             513,
+                             1023,
+                             1024,
+                             1074,
+                             2097,
+                             4194}) {
+            const double expected = std::scalbn(value, exponent);
+            check.expect(bits(merged_k_scale(value, exponent), expected),
+                         "binary64 rounding for " + std::to_string(value) + " * 2^" +
+                             std::to_string(exponent));
+            probes.push_back({value, exponent});
+        }
+    }
+    using ExecutionSpace = Kokkos::DefaultExecutionSpace;
+    const int count = static_cast<int>(probes.size());
+    Kokkos::View<ScaleInput*, ExecutionSpace> inputs("scale_inputs", count);
+    Kokkos::View<double*, ExecutionSpace> outputs("scale_outputs", count);
+    auto host_inputs = Kokkos::create_mirror_view(inputs);
+    for (int i = 0; i < count; ++i)
+        host_inputs(i) = probes[i];
+    Kokkos::deep_copy(inputs, host_inputs);
+    Kokkos::parallel_for(
+        "scale_exponent_ranges",
+        Kokkos::RangePolicy<ExecutionSpace>(0, count),
+        KOKKOS_LAMBDA(const int i) {
+            outputs(i) = merged_k_scale(inputs(i).value, inputs(i).exponent);
+        });
+    auto host_outputs = Kokkos::create_mirror_view(outputs);
+    Kokkos::deep_copy(host_outputs, outputs);
+    for (int i = 0; i < count; ++i)
+        check.expect(bits(host_outputs(i), std::scalbn(probes[i].value, probes[i].exponent)),
+                     "execution space binary64 rounding for probe " + std::to_string(i));
+    return check.report();
+}
+
 int extreme_arithmetic(std::vector<LegalCase>& cases) {
     Check check{"extreme_arithmetic"};
     auto run = [&](const char* name, const Input& in, double tangential, double normal) {
@@ -543,6 +611,17 @@ int extreme_arithmetic(std::vector<LegalCase>& cases) {
     // Both V/k terms are exactly 1: H=(2^-1000+2^1000)/2 rounds to 2^999.
     // A=(2^-2000+2^2000)/(2^-1000+2^1000) rounds to 2^1000.
     run("coupled_extreme_ratios", in, 0x1p1000, 0x1p999);
+    for (int i = 0; i < 2; ++i) {
+        in.volume[i] = i == 0 ? denorm : std::numeric_limits<double>::max();
+        for (int c = 0; c < 3; ++c)
+            in.k[3 * i + c] = in.volume[i];
+    }
+    // Each V/k is exactly 1 even though the exponent gap is 2097. The tiny
+    // phase is negligible for A but contributes half the resistance for H.
+    run("full_exponent_gap",
+        in,
+        std::numeric_limits<double>::max(),
+        0.5 * std::numeric_limits<double>::max());
     return check.report();
 }
 
@@ -622,6 +701,7 @@ int main(int argc, char** argv) {
     failures += scaling(cases, bounds);
     failures += bounds.report();
     failures += invalid_inputs();
+    failures += scale_exponent_ranges();
     failures += extreme_arithmetic(cases);
     failures += device_matches_host(cases);
     failures += cost_report();
