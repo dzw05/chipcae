@@ -21,6 +21,13 @@ bool is_convex(const Ring2& ccw);
 // Crossings, contacts, overlaps and nonfinite coordinates return a simplicity
 // error. Topology uses extended-precision orientation without a contact tolerance.
 std::optional<Error> check_simple(const Ring2& ccw);
+// cutgeom-nc 1.0.4 (I11 region and I10 PieceUnion entry classification): true iff
+// every coordinate is finite, the ring keeps >= 3 points after closing-point removal
+// and clean_edges, its translated-fan signed area is exactly 0, and the raw ring with
+// adjacent duplicates and closing points removed fails check_simple. Callers report
+// "self-intersecting polygon" when true, "degenerate polygon" otherwise.
+// normalize_ring is unchanged and still returns the outline degeneracy error.
+bool zero_area_nonsimple(const Ring2& raw);
 
 struct ConvexPieces {
     std::vector<Ring2> pieces;

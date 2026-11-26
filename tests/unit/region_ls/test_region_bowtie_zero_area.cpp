@@ -13,6 +13,7 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <sys/resource.h>
@@ -214,10 +215,11 @@ StackModel region_stack(const Ring2& ring) {
     return stack;
 }
 
-void region_error(const InvalidRing& test) {
+Error region_error(const InvalidRing& test) {
     const auto result = region_cut_planes(region_stack(test.ring), sp5b::registered_mesh());
     require(!result, "invalid region must fail region_cut_planes");
     exact_error(result.error(), "CUT_UNSUPPORTED", test.reason);
+    return result.error();
 }
 
 PieceUnion square_union(BodyId body) {
@@ -248,7 +250,7 @@ constexpr std::array<std::string_view, 4> entries{
 // Each entry gets a fresh valid grid and a valid convex piece. Only the source
 // ring is replaced. Check rollback before classification so an expected red
 // reason assertion cannot hide a mutation of the caller's mesh.
-void consumer_case(const InvalidRing* test, std::size_t entry) {
+std::optional<Error> consumer_case(const InvalidRing* test, std::size_t entry) {
     const auto stack = region_stack(simple_rings()[0].canonical);
     auto mesh = sp5::grid(stack, 8);
     auto piece = square_union(mesh.attr_table.bodies.at("lid"));
@@ -258,26 +260,27 @@ void consumer_case(const InvalidRing* test, std::size_t entry) {
     }
     const CutGeometry input{{}, {piece}};
     const auto before = snapshot(mesh);
-    auto check_result = [&](const auto& result) {
+    auto check_result = [&](const auto& result) -> std::optional<Error> {
         if (!test) {
             require(static_cast<bool>(result), "valid convex PieceUnion control must succeed");
-            return;
+            return std::nullopt;
         }
         require(snapshot(mesh).words == before.words,
                 "failed consumer must preserve every mesh field and NaN/signed-zero bit");
         require(!result, "invalid source ring must fail the consumer");
         exact_error(result.error(), "CUT_UNSUPPORTED", test->reason);
+        return result.error();
     };
     if (entry < 2) {
         const auto result =
             entry == 0 ? build_cut_layer(mesh, input, {})
                        : build_cut_layer(static_cast<const HexMeshArrays&>(mesh), input, {});
-        check_result(result);
+        return check_result(result);
     } else {
         const auto result =
             entry == 2 ? apply_outline_cut(mesh, stack.outline, {}, input)
                        : geometry::apply_outline_cut_general(mesh, stack.outline, {}, input);
-        check_result(result);
+        return check_result(result);
     }
 }
 
@@ -331,10 +334,39 @@ int main() {
         };
 
         for (const auto& test : invalid_rings()) {
-            run("region/" + test.name, [&] { region_error(test); });
+            run("helper/" + test.name, [&] {
+                const bool expected = test.name == "B0" || test.name == "H0" ||
+                                      test.name == "B0r" || test.name == "B1";
+                const auto before = snapshot(test.ring);
+                require(geometry::zero_area_nonsimple(test.ring) == expected,
+                        "helper must classify only finite, cleaned, exact-zero-area bowties");
+                require(snapshot(test.ring).words == before.words,
+                        "helper must preserve input bits");
+            });
+            std::optional<Error> region;
+            std::array<std::optional<Error>, entries.size()> consumers;
+            run("region/" + test.name, [&] { region = region_error(test); });
             for (std::size_t entry = 0; entry < entries.size(); ++entry)
                 run("consumer/" + std::string(entries[entry]) + "/" + test.name,
-                    [&] { consumer_case(&test, entry); });
+                    [&] { consumers[entry] = consumer_case(&test, entry); });
+            for (std::size_t entry = 0; entry < entries.size(); ++entry)
+                run("parity/" + std::string(entries[entry]) + "/" + test.name, [&] {
+                    require(region.has_value() && consumers[entry].has_value(),
+                            "both entries must return their expected complete errors");
+                    exact_error(*consumers[entry], region->path, region->reason);
+                    if (test.name == "N1") {
+                        // Nonzero area bypasses the helper's classification: both
+                        // entries must retain their existing simplicity checks.
+                        require(!geometry::zero_area_nonsimple(test.ring),
+                                "nonzero-area bowtie must not enter the new classification");
+                        exact_error(*region, "CUT_UNSUPPORTED", "lid: self-intersecting polygon");
+                    } else {
+                        const auto suffix = geometry::zero_area_nonsimple(test.ring)
+                                                ? "self-intersecting polygon"
+                                                : "degenerate polygon";
+                        exact_error(*region, "CUT_UNSUPPORTED", std::string("lid: ") + suffix);
+                    }
+                });
             if (test.name == "B0" || test.name == "H0" || test.name == "C1" || test.name == "C2" ||
                 test.name == "tiny-square" || test.name == "nan-square" ||
                 test.name == "inf-square")
@@ -344,6 +376,10 @@ int main() {
         }
 
         for (const auto& test : simple_rings()) {
+            run("helper/S-" + test.name, [&] {
+                require(!geometry::zero_area_nonsimple(test.canonical),
+                        "helper must reject simple nonzero-area rings");
+            });
             run("region/S-" + test.name, [&] {
                 const auto result =
                     region_cut_planes(region_stack(test.canonical), sp5b::registered_mesh());
