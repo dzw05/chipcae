@@ -42,7 +42,8 @@ struct Parser {
     struct Pending {
         Via via;
         std::string layer, spec;
-        double diameter = 0;
+        double diameter = 0, rotation = 0;
+        bool oval_transform_supported = true;
         bool plated = true, artwork = false;
         std::string component_ref, pin_ref;
         std::size_t pin_refs = 0;
@@ -157,11 +158,67 @@ struct Parser {
                 continue;
             const auto center = pad.via.position;
             Polygon polygon;
-            for (int i = 0; i < 256; ++i) {
-                const double angle = 2 * std::acos(-1.0) * i / 256;
-                polygon.points.push_back(
-                    {std::llround(center[0] + artwork.radius * std::cos(angle)),
-                     std::llround(center[1] + artwork.radius * std::sin(angle))});
+            const bool oval = artwork.shape == Artwork::Shape::oval;
+            if (oval && !pad.oval_transform_supported)
+                continue;
+            // Equal dimensions use the established Circle vertices, independent of rotation.
+            if (!oval || artwork.width == artwork.height) {
+                const double radius = oval ? artwork.width / 2 : artwork.radius;
+                Clipper2Lib::Path64 ring;
+                bool invalid = false;
+                for (int i = 0; i < 256; ++i) {
+                    const double angle = 2 * std::acos(-1.0) * i / 256;
+                    const double x = center[0] + radius * std::cos(angle);
+                    const double y = center[1] + radius * std::sin(angle);
+                    if (oval) {
+                        constexpr double limit = static_cast<double>(Clipper2Lib::MAX_COORD);
+                        if (!std::isfinite(x) || !std::isfinite(y) || std::abs(x) >= limit ||
+                            std::abs(y) >= limit) {
+                            invalid = true;
+                            break;
+                        }
+                        ring.push_back({std::llround(x), std::llround(y)});
+                    }
+                    polygon.points.push_back({std::llround(x), std::llround(y)});
+                }
+                if (oval &&
+                    (invalid || ring.size() != 256 || std::abs(Clipper2Lib::Area(ring)) < 1.0))
+                    continue;
+            } else {
+                const double a = std::max(artwork.width, artwork.height) / 2;
+                const double r = std::min(artwork.width, artwork.height) / 2;
+                const double s = a - r;
+                const double pi = std::acos(-1.0);
+                const double rotation = std::remainder(pad.rotation, 360.0) * pi / 180;
+                const double c = std::cos(rotation), sn = std::sin(rotation);
+                Clipper2Lib::Path64 ring;
+                bool invalid = false;
+                for (int end = 0; end < 2 && !invalid; ++end) {
+                    for (int i = 0; i <= 128; ++i) {
+                        const double angle = -pi / 2 + end * pi + pi * i / 128;
+                        double x = (end == 0 ? s : -s) + r * std::cos(angle);
+                        double y = r * std::sin(angle);
+                        if (artwork.width < artwork.height) {
+                            const double previous_x = x;
+                            x = -y;
+                            y = previous_x;
+                        }
+                        const double px = center[0] + x * c - y * sn;
+                        const double py = center[1] + x * sn + y * c;
+                        // Stay in Clipper's coordinate range, including enormous finite inputs.
+                        constexpr double limit = static_cast<double>(Clipper2Lib::MAX_COORD);
+                        if (!std::isfinite(px) || !std::isfinite(py) || std::abs(px) >= limit ||
+                            std::abs(py) >= limit) {
+                            invalid = true;
+                            break;
+                        }
+                        ring.push_back({std::llround(px), std::llround(py)});
+                    }
+                }
+                if (invalid || ring.size() != 258 || std::abs(Clipper2Lib::Area(ring)) < 1.0)
+                    continue;
+                for (const auto& v : ring)
+                    polygon.points.push_back({v.x, v.y});
             }
             model.layers[li->second].polygons.push_back(std::move(polygon));
             circle_uses[artwork.use].modeled = true;
@@ -208,7 +265,7 @@ struct Parser {
         std::stable_sort(circle_uses.begin(), circle_uses.end(), [](const auto& a, const auto& b) {
             return a.line < b.line;
         });
-        std::set<std::pair<std::string, std::uint64_t>> reported_circles;
+        std::set<std::pair<std::string, std::uint64_t>> reported_circles, reported_ovals;
         for (const auto& use : circle_uses) {
             // Solder mask is deliberately omitted and already has its own diagnostic.
             if (omitted_masks.count(use.layer))
@@ -216,6 +273,9 @@ struct Parser {
             if (!use.modeled && circles.count(use.id) &&
                 reported_circles.emplace(use.id, use.line).second)
                 reports.push_back({"IMPORT_UNSUPPORTED_ELEMENT", "Circle", use.line});
+            if (!use.modeled && use.pad < pending.size() && oval_ids.count(use.id) &&
+                reported_ovals.emplace(use.id, use.line).second)
+                reports.push_back({"IMPORT_UNSUPPORTED_ELEMENT", "Oval", use.line});
         }
         for (std::size_t ci = 0; ci < model.components.size(); ++ci) {
             auto& c = model.components[ci];
@@ -329,6 +389,11 @@ struct Parser {
     std::vector<Trace> deferred_traces;
     std::set<std::string> duplicate_ids, missing_ids, missing_layers, end_layers;
     std::map<std::string, double> circles;
+    struct Oval {
+        double width, height;
+    };
+    std::map<std::string, Oval> ovals;
+    std::set<std::string> oval_ids;
     std::string standard;
     struct CircleUse {
         std::string id, layer;
@@ -341,6 +406,8 @@ struct Parser {
     struct Artwork {
         std::size_t pad, use;
         double radius;
+        enum class Shape { circle, oval } shape = Shape::circle;
+        double width = 0, height = 0;
     };
     std::vector<Artwork> deferred_artwork;
     struct StandardEntry {
@@ -981,6 +1048,20 @@ struct Parser {
             pending.push_back(p);
             in_hole = name == "Hole";
             in_pad = name == "Pad";
+        } else if (name == "Xform" && parent == "Pad" && in_pad) {
+            auto& p = pending.back();
+            double rotation = 0, factor = 1;
+            const bool valid_rotation =
+                !attr(a, "rotation") || finite_number(attr(a, "rotation"), rotation);
+            const bool valid_scale =
+                !attr(a, "scaleFactor") || finite_number(attr(a, "scaleFactor"), factor);
+            const auto mirror = uppercase(value(a, "mirror"));
+            const bool unmirrored = !attr(a, "mirror") || mirror == "FALSE" || mirror == "NONE";
+            if (valid_rotation)
+                p.rotation = rotation;
+            // Only exact identity scaling is supported, including for near-unit factors.
+            p.oval_transform_supported = p.oval_transform_supported && valid_rotation &&
+                                         valid_scale && factor == 1 && unmirrored;
         } else if (name == "Location" && in_pad) {
             pending.back().via.position = point(a);
         } else if (name == "Span") {
@@ -1076,6 +1157,21 @@ struct Parser {
         } else if (name == "Circle" && !standard.empty()) {
             circles[standard] = number(attr(a, "diameter")) * scale();
             standard_entries.back().consumed = true;
+        } else if (name == "Oval" && parent == "EntryStandard" && !standard.empty() &&
+                   path.size() >= 3 && path[path.size() - 3] == "DictionaryStandard") {
+            oval_ids.insert(standard);
+            double width = 0, height = 0;
+            if (finite_number(attr(a, "width"), width) &&
+                finite_number(attr(a, "height"), height)) {
+                width *= scale();
+                height *= scale();
+                if (std::isfinite(width) && std::isfinite(height) && width > 0 && height > 0) {
+                    ovals[standard] = {width, height};
+                    standard_entries.back().consumed = true;
+                    return;
+                }
+            }
+            model.report.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT", name, line_number()});
         } else if (name == "StandardPrimitiveRef") {
             const auto slot = model.report.unsupported.size();
             model.report.unsupported.push_back({"IMPORT_UNSUPPORTED_ELEMENT", name, line_number()});
@@ -1092,6 +1188,15 @@ struct Parser {
                 if (in_pad && circles.count(id))
                     deferred_artwork.push_back(
                         {pending.size() - 1, circle_uses.size() - 1, circles[id] / 2});
+                else if (in_pad && ovals.count(id)) {
+                    const auto& oval = ovals.at(id);
+                    deferred_artwork.push_back({pending.size() - 1,
+                                                circle_uses.size() - 1,
+                                                0,
+                                                Artwork::Shape::oval,
+                                                oval.width,
+                                                oval.height});
+                }
             }
         } else if (name == "LineDesc") {
             const char* id = attr(a, "id");
