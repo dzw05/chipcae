@@ -222,7 +222,6 @@ void format_tests(Suite& suite) {
                 "default JSON must use exact key order, separators and floating zero tokens");
     });
     const std::vector<double> boundaries = {0.0,
-                                            -0.0,
                                             1e-9,
                                             0.1,
                                             1.0 / 3.0,
@@ -252,14 +251,15 @@ void format_tests(Suite& suite) {
                 require(text.find_first_of(".eE") != std::string::npos,
                         "duration must have decimal point or exponent");
                 require(same(duration(json, time_names[position]), input),
-                        "duration must round-trip bit-for-bit, including signed zero/subnormal");
+                        "duration must round-trip bit-for-bit, including positive zero/subnormal");
             }
         });
         suite.run(std::string("format/invalid-") + time_names[position], [position] {
             for (const auto input : {std::numeric_limits<double>::quiet_NaN(),
                                      std::numeric_limits<double>::infinity(),
                                      -std::numeric_limits<double>::infinity(),
-                                     -0.001}) {
+                                     -0.001,
+                                     -0.0}) {
                 auto value = example();
                 value.*export_times[position] = input;
                 invalid_argument([&] { (void)format_io_stats_json(value); },
@@ -271,12 +271,12 @@ void format_tests(Suite& suite) {
         auto value = example();
         value.write_step_seconds = 1.0 / 3.0;
         value.finalize_seconds = 1.0;
-        value.last_write_step_seconds = -0.0;
+        value.last_write_step_seconds = 0.0;
         const auto json = format_io_stats_json(value);
         require(token(json, "write_step_seconds") == "0.33333333333333331",
                 "1/3 needs the prescribed 17-digit fallback");
         require(token(json, "finalize_seconds") == "1.0", "integer duration needs .0 suffix");
-        require(token(json, "last_write_step_seconds") == "-0.0", "signed zero must survive");
+        require(token(json, "last_write_step_seconds") == "0.0", "positive zero must survive");
         value.write_step_seconds = 1e-9;
         require(token(format_io_stats_json(value), "write_step_seconds") == "1e-09",
                 "defaultfloat exponent spelling must follow classic streams");
@@ -309,10 +309,10 @@ void reduction_tests(Suite& suite) {
         require(!result.write_step_count_mismatch && !result.bytes_written_mismatch,
                 "equal rank inputs must not warn");
     });
-    suite.run("reduce/np1-preserves-extremes-and-signed-zero", [] {
+    suite.run("reduce/np1-preserves-extremes-and-positive-zero", [] {
         auto s = local_example();
         s.write_step_seconds = std::numeric_limits<double>::max();
-        s.finalize_seconds = -0.0;
+        s.finalize_seconds = 0.0;
         s.last_write_step_seconds = std::numeric_limits<double>::denorm_min();
         s.write_step_count = INT_MAX;
         s.bytes_written = UINT64_MAX;
@@ -373,7 +373,8 @@ void reduction_tests(Suite& suite) {
             for (const auto bad : {std::numeric_limits<double>::quiet_NaN(),
                                    std::numeric_limits<double>::infinity(),
                                    -std::numeric_limits<double>::infinity(),
-                                   -1.0}) {
+                                   -1.0,
+                                   -0.0}) {
                 for (const std::size_t rank : {0U, 1U}) {
                     std::vector<Stats> inputs(2, local_example());
                     inputs[rank].*local_times[position] = bad;
@@ -502,7 +503,8 @@ void write_tests(Suite& suite, const fs::path& stackup) {
             for (const auto bad : {std::numeric_limits<double>::quiet_NaN(),
                                    std::numeric_limits<double>::infinity(),
                                    -std::numeric_limits<double>::infinity(),
-                                   -1.0}) {
+                                   -1.0,
+                                   -0.0}) {
                 TemporaryRun run;
                 auto local = local_example();
                 local.*local_times[position] = bad;
@@ -667,7 +669,10 @@ int mpi_tests(const fs::path& stackup) {
                                    "root-unwritable",
                                    "invalid-rank1-write",
                                    "invalid-rank1-finalize",
-                                   "invalid-rank1-last"}) {
+                                   "invalid-rank1-last",
+                                   "invalid-rank1-negative-zero-write",
+                                   "invalid-rank1-negative-zero-finalize",
+                                   "invalid-rank1-negative-zero-last"}) {
         auto input = local;
         if (mode == "precision") {
             input.write_step_seconds = rank == 0 ? 1.0 / 3.0 : std::nextafter(1.0 / 3.0, 1.0);
@@ -685,6 +690,12 @@ int mpi_tests(const fs::path& stackup) {
             input.finalize_seconds = -1;
         if (rank == 1 && mode == "invalid-rank1-last")
             input.last_write_step_seconds = std::numeric_limits<double>::infinity();
+        if (rank == 1 && mode == "invalid-rank1-negative-zero-write")
+            input.write_step_seconds = -0.0;
+        if (rank == 1 && mode == "invalid-rank1-negative-zero-finalize")
+            input.finalize_seconds = -0.0;
+        if (rank == 1 && mode == "invalid-rank1-negative-zero-last")
+            input.last_write_step_seconds = -0.0;
         const auto root_path = base / mode;
         const bool failure =
             mode == "root-failure" || mode == "root-unwritable" || mode.starts_with("invalid-");

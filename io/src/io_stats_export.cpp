@@ -19,7 +19,7 @@
 namespace chipcae::io {
 namespace {
 void validate_duration(double value) {
-    if (!std::isfinite(value) || value < 0)
+    if (!std::isfinite(value) || std::signbit(value))
         throw std::invalid_argument("io_stats.json duration must be finite and nonnegative");
 }
 
