@@ -28,6 +28,11 @@ namespace geometry = chipcae::mesh::cut::detail;
 using geometry::Ring2;
 using sp5::require;
 
+// Both handcrafted NaN payloads and the bitwise snapshots require binary64 Real.
+static_assert(sizeof(Real) == sizeof(std::uint64_t) && std::numeric_limits<Real>::is_iec559 &&
+                  std::numeric_limits<Real>::digits == 53,
+              "NaN payloads and bitwise snapshots require a 64-bit IEEE 754 Real");
+
 // Recursive serializer and rollback sentinels follow consumer_error in
 // test_region_cut_unions.cpp. Include every HexMeshArrays field, including the
 // additive copper-area report, without comparing padding or floating values.
