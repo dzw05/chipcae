@@ -53,12 +53,12 @@ public:
                       std::span<const Real> times = {},
                       std::span<const Real> fractions = {},
                       bool ordered_steps = true)
-        : effective_(effective), step_(step), start_(start), end_(end), n_(times.size()),
+        : effective_(effective), start_(start), end_(end), step_(step), n_(times.size()),
           ordered_(ordered_steps) {
         if (!(effective >= 0 && effective < 1) || !std::isfinite(start) || !std::isfinite(end) ||
             !(end > start))
             throw std::invalid_argument("chemical_shrinkage: invalid s_eff or schedule interval");
-        if (n_ > 256 || n_ != fractions.size() ||
+        if (n_ > 256 || static_cast<std::size_t>(n_) != fractions.size() ||
             (n_ && (n_ < 2 || times.front() != 0 || times.back() != 1 || fractions.front() != 0 ||
                     fractions.back() != 1)))
             throw std::invalid_argument(

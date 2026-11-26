@@ -121,7 +121,7 @@ public:
             throw std::invalid_argument("invalid shift reference");
     }
     KOKKOS_INLINE_FUNCTION StatusCode evaluate(Real T, Real& log10_aT) const noexcept {
-        Real a, b;
+        Real a = 0, b = 0;
         auto code = raw(T, a);
         if (code != StatusCode::Ok)
             return code;
@@ -141,7 +141,7 @@ public:
         if (dt == 0)
             return StatusCode::Ok;
         if (a == b) {
-            Real v;
+            Real v = 0;
             auto code = rate(a, v);
             dxi = dt * v;
             return code == StatusCode::Ok && !Kokkos::isfinite(dxi) ? StatusCode::Failed : code;
