@@ -166,6 +166,8 @@ ElasticBoundary validate(const ElasticMesh& m,
     require(m.centroid.size() == n && m.gid.size() == n && m.layer.size() == n &&
                 m.rank.size() == n && p.C.size() == n && p.alpha.size() == n && p.dT.size() == n,
             "cell array lengths");
+    require(p.region.empty() || p.region.size() == n,
+            "region length=" + std::to_string(p.region.size()) + " n_cells=" + std::to_string(n));
     require(nf > 0 && nf <= static_cast<std::size_t>(std::numeric_limits<int>::max() / 3) &&
                 m.is_embedded.size() == nf,
             "face array lengths/count");
@@ -372,6 +374,9 @@ ElasticGradient cell_gradient(const ElasticMesh& m,
             scale[j] = std::max(scale[j], std::abs(d[j]));
     }
     for (auto& s : scale) {
+        if (interfaces && !(s > 0))
+            geometry_error(
+                m, m.faces[current].lo, "rank-deficient interface gradient closure", current);
         require(s > 0, "cell has no geometric extent");
     }
     std::vector<double> a;
@@ -1017,6 +1022,8 @@ Reconstruction reconstruction(const ElasticMesh& m,
                               const ElasticProblem& p,
                               const ElasticBoundary& bc,
                               MPI_Comm comm) {
+    if (p.region.empty())
+        return {cut_gradients(m, bc, gradients(m, p, bc)), {}};
     std::vector<char> marked(m.faces.size());
     std::vector<int> count(m.volume.size());
     std::size_t total = 0;
@@ -1024,10 +1031,7 @@ Reconstruction reconstruction(const ElasticMesh& m,
         const auto& f = m.faces[k];
         if (f.hi < 0 || cut_face(m, k))
             continue;
-        bool different = p.C[f.lo] != p.C[f.hi];
-        for (int j = 0; j < 3; ++j)
-            different = different || p.alpha[f.lo][j] * p.dT[f.lo] != p.alpha[f.hi][j] * p.dT[f.hi];
-        if (different) {
+        if (p.region[f.lo] != p.region[f.hi]) {
             marked[k] = 1;
             ++count[f.lo];
             ++count[f.hi];

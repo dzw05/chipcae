@@ -187,6 +187,8 @@ void uncut_regression(bool compare_flags) {
             p.alpha[c] = top.alpha;
         }
     const auto clamped = p;
+    for (const auto& x : m.centroid)
+        p.region.push_back(x[2] > 0.5 ? 1 : 0);
     constexpr double e0 = 1e-4;
     std::array<double, 2> ez{};
     for (std::size_t c = 0; c < m.volume.size(); ++c) {

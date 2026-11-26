@@ -85,6 +85,7 @@ Patch patch(ElasticMesh mesh, double interface_z, bool e_jump = true, bool alpha
                 out.problem.alpha[c] = mat.alpha;
             }
     }
+    out.problem.region = out.mesh.layer;
     out.problem.support = ElasticProblem::Support::Fixed;
     for (std::size_t k = 0; k < out.mesh.faces.size(); ++k) {
         const auto& f = out.mesh.faces[k];
@@ -304,6 +305,7 @@ void identical_assembly(const detail::ElasticAssembly& a, const detail::ElasticA
 }
 void reduction(bool graded, bool equal_eigenstrain) {
     auto p = patch_grid(graded, false, false);
+    p.problem.region.clear(); // T3 checks the legacy path, independently of layer labels.
     auto single = p.mesh;
     std::fill(single.layer.begin(), single.layer.end(), 0);
     auto equivalent = p.problem;
@@ -314,6 +316,60 @@ void reduction(bool graded, bool equal_eigenstrain) {
                 equivalent.dT[c] /= 2;
             }
     identical_assembly(assembly(p.mesh, equivalent), assembly(single, p.problem));
+}
+
+void region_length(std::size_t length) {
+    auto p = patch_grid(false);
+    p.problem.region.resize(length);
+    auto rejected = [&](const auto& result) {
+        require(!result, "invalid region length must reject before assembly");
+        const auto& reason = result.error().reason;
+        require(reason.find("INPUT_INVALID") != std::string::npos,
+                "region length reports INPUT_INVALID: " + reason);
+        require(reason.find("region length=" + std::to_string(length)) != std::string::npos &&
+                    reason.find("n_cells=" + std::to_string(p.mesh.volume.size())) !=
+                        std::string::npos,
+                "region length reports actual length and n_cells: " + reason);
+    };
+    rejected(detail::assemble_elastic(p.mesh, p.problem, MPI_COMM_SELF));
+    rejected(solve_elastic(p.mesh, p.problem, MPI_COMM_SELF));
+}
+
+void region_bypass(bool graded) {
+    auto p = patch_grid(graded);
+    p.problem.region.clear();
+    auto same = p.problem;
+    same.region.assign(p.mesh.volume.size(), 7);
+    identical_assembly(assembly(p.mesh, p.problem), assembly(p.mesh, same));
+    const auto empty_result = solve(p.mesh, p.problem, MPI_COMM_SELF);
+    const auto same_result = solve(p.mesh, same, MPI_COMM_SELF);
+    auto identical_field = [](const std::vector<V>& a, const std::vector<V>& b) {
+        require(a.size() == b.size(), "region bypass field lengths");
+        for (std::size_t c = 0; c < a.size(); ++c)
+            require(std::memcmp(a[c].data(), b[c].data(), 3 * sizeof(double)) == 0,
+                    "empty and equal region fields match byte for byte");
+    };
+    identical_field(empty_result.U_cell, same_result.U_cell);
+    identical_field(empty_result.U_face, same_result.U_face);
+    for (const auto* problem : {&p.problem, &same}) {
+        const auto samples = detail::evaluate_elastic_interfaces(
+            p.mesh, *problem, empty_result.U_cell, MPI_COMM_SELF);
+        require(samples && samples.value().empty(),
+                "C/eigenstrain jumps alone must not select interface maps");
+    }
+}
+
+void region_only_predicate() {
+    // Identical C and alpha still require interface maps when region ids differ.
+    auto p = patch_grid(false, false, false);
+    const auto samples =
+        detail::evaluate_elastic_interfaces(p.mesh, p.problem, p.exact_cells(), MPI_COMM_SELF);
+    require(samples && samples.value().size() == p.interfaces().size(),
+            "different regions select interfaces even with identical material data");
+    auto relabeled = p.problem;
+    for (auto& id : relabeled.region)
+        id = id == 0 ? std::numeric_limits<int>::min() : std::numeric_limits<int>::max();
+    identical_assembly(assembly(p.mesh, p.problem), assembly(p.mesh, relabeled));
 }
 
 void rank_failure(MPI_Comm comm, int ranks) {
@@ -339,6 +395,31 @@ void rank_failure(MPI_Comm comm, int ranks) {
             "rank failure identifies lo gid: " + reason);
     require(std::regex_search(reason, std::regex("face[ =:]+" + std::to_string(f) + "\\b")),
             "rank failure identifies face: " + reason);
+}
+
+void junction_rank_failure() {
+    const auto m = grid(4, 4, 4);
+    auto p = problem(m);
+    p.region.resize(m.volume.size());
+    std::iota(p.region.begin(), p.region.end(), 0);
+    p.support = ElasticProblem::Support::Fixed;
+    for (std::size_t k = 0; k < m.faces.size(); ++k)
+        if (m.faces[k].hi < 0)
+            p.prescribed.push_back({static_cast<std::int64_t>(k), {}});
+    // Every interior face is an interface. A face-local fit at an interior
+    // junction has no same-region tangent samples, despite valid 3D geometry.
+    auto rejected = [](const auto& result) {
+        require(!result, "unsupported interface junction must reject");
+        const auto& reason = result.error().reason;
+        require(
+            std::regex_search(
+                reason,
+                std::regex(
+                    "INTERNAL: gid=[0-9]+ face=[0-9]+ rank-deficient interface gradient closure")),
+            "missing tangent samples report INTERNAL with gid and face: " + reason);
+    };
+    rejected(detail::assemble_elastic(m, p, MPI_COMM_SELF));
+    rejected(solve_elastic(m, p, MPI_COMM_SELF));
 }
 
 void cut_exclusion(bool cut_lo) {
@@ -401,6 +482,7 @@ void multiple_interfaces() {
     for (std::size_t c = 0; c < m.volume.size(); ++c) {
         const bool upper = m.centroid[c][2] > 0.5;
         const bool right = m.centroid[c][0] > 0.5;
+        p.region.push_back(upper != right ? 1 : 0);
         if (upper != right)
             p.C[c] = isotropic(100e9).C;
     }
@@ -586,7 +668,14 @@ int main(int argc, char** argv) {
                 const auto p = patch_grid(graded);
                 identical_assembly(assembly(p.mesh, p.problem), assembly(p.mesh, p.problem));
             });
+            suite.run("T3/T6 " + name + " empty and equal regions bypass heterogeneous data",
+                      [&] { region_bypass(graded); });
         }
+        for (auto length : {std::size_t{1}, std::size_t{79}, std::size_t{81}})
+            suite.run("T6 invalid region length " + std::to_string(length),
+                      [&] { region_length(length); });
+        suite.run("T6 interface selection uses only integer region equality",
+                  region_only_predicate);
         suite.run("T2 bimetal 8x4x(2+2) unconstrained operator", [&] {
             matrix_invariants(patch(grid(axis(8, 1), axis(4, 0.2), axis(4, 0.1)), 0.05));
         });
@@ -602,6 +691,8 @@ int main(int argc, char** argv) {
                       [&] { skew_interface_diagnostic(exact); });
         suite.run("insufficient-rank interface closure reports INTERNAL gid and face",
                   [&] { rank_failure(MPI_COMM_SELF, 1); });
+        suite.run("interface junction missing tangent samples reports INTERNAL gid and face",
+                  junction_rank_failure);
         suite.run("nonpositive acoustic Cholesky pivot reports INTERNAL gid and face",
                   nonpositive_acoustic_pivot);
         for (bool cut_lo : {false, true})

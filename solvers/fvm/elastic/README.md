@@ -38,14 +38,15 @@ compact-gradient residual `deltaU-Gbar*d` using the harmonic acoustic tensor and
 vanishes for affine fields and interior quadratic bending fields on the parent grids.
 The geometry is supplied by the caller, including cut polyhedron moments.
 
-An internal face enters the interface path exactly when neither side is cut and
-some component of `C_lo != C_hi` or `alpha_lo*dT_lo != alpha_hi*dT_hi`.
-Layer labels do not participate. With no qualifying faces, the original assembly
-and output arithmetic is retained, including ordered block/RHS byte equality for
-equal constitutive data and equal eigenstrain represented by different alpha/dT.
-The explicit eigenstrain predicate also marks cellwise smooth temperature changes;
-the brief's claim that those cases remain unchanged does not follow from this
-predicate. Their accuracy and memory therefore require separate measurement.
+An internal face enters the interface path exactly when neither side is cut,
+`ElasticProblem::region` is nonempty, and `region[lo] != region[hi]`.
+Region ids are compared only for integer equality; they may be negative or sparse.
+An empty region vector means a single region; any other length than the cell count
+reports `INPUT_INVALID` with both lengths before assembly. Neither layer labels nor
+numeric differences in stiffness, alpha or temperature select interfaces. With no
+qualifying faces, original assembly and output arithmetic is retained byte for byte,
+including heterogeneous data and smooth cellwise temperatures. CLI callers leave
+region empty in this change; pipeline wiring belongs to the separate D2-wire card.
 
 For an interface, orient `n` from lo to hi and define positive normal distances
 `d_lo=(x_f-x_lo).n`, `d_hi=(x_hi-x_f).n` and separate tangential offsets
@@ -89,10 +90,19 @@ energies `0.5*(A_f/d_s)*r_s^T K_s r_s`, with
 fit and U_f reproduce the field, both residuals vanish, and the cell energy has
 balanced interface traction. Differentiation of the complete affine energies
 retains symmetry and all six rigid modes without modifying K or solver settings.
-For identical C and eigenstrain the predicate bypasses this path entirely; on an
-aligned face the displacement equation also reduces to the geometric lo/hi
-interpolation. Separate skew offsets need not equal the legacy common-offset
-formula for unequal gradients, so bypassing is essential for byte invariance.
+Equal region ids bypass this path regardless of constitutive or thermal data.
+Different regions use it even when their C and alpha agree. With equal acoustic
+tensors K, the equation reduces to
+`U_f=w_lo*(U_lo+G_lo*Delta_lo)+(1-w_lo)*(U_hi+G_hi*Delta_hi)
++d_lo*d_hi/(d_lo+d_hi)*K^-1*(b_hi-b_lo)`, where
+`w_lo=d_hi/(d_lo+d_hi)`. The shared tangential gradient makes its constitutive
+contribution cancel for equal C; the remaining b difference is the negative
+thermal-traction jump. A smooth temperature has an O(h) cell-to-cell jump, so the
+O(h) distance factor makes this correction O(h^2). On an aligned face with equal
+eigenstrain it vanishes, leaving the geometric interpolation. On skew faces,
+separate offsets need not equal the legacy common-offset formula for unequal
+gradients; their smooth-field difference is also O(h^2). Byte invariance therefore
+follows from the region bypass, rather than a numerical material comparison.
 
 Only the lo owner constructs each interface map. Construction errors are reduced
 before any coefficient broadcast; ordered integer keys and floating-point
@@ -109,7 +119,7 @@ For cut cells, face values use inverse Euclidean cell-to-face distances to weigh
 the two owner extrapolations. Prescribed boundaries use their supplied values; free
 and embedded boundaries use the owner extrapolation. The cut gradients satisfy the
 coupled equations `G_c = sum_f U_f tensor S_cf / V_c` fully implicitly. Noncut
-least-squares operators away from material/eigenstrain interfaces remain unchanged.
+least-squares operators away from region interfaces remain unchanged.
 Reconstruction and assembly share the same face-value operator, including embedded
 top samples.
 
