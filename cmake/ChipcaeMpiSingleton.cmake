@@ -105,12 +105,20 @@ set_tests_properties(infra_ompi_singleton_startup PROPERTIES
 
 # Controlled executables exercise the same real driver, with its fixed 10 s gate
 # and N >= 200 validation. No WILL_FAIL: check the specific failure diagnostic.
-foreach(_case sleep exit7 missing iterations)
+foreach(_case sleep exit7 missing iterations success environment descendant_exit)
     add_test(NAME infra_ompi_singleton_driver_${_case} COMMAND cmake
         "-DPYTHON=${Python3_EXECUTABLE}" "-DCHECK=${_case}"
         -P "${_chipcae_singleton_driver}")
     set_tests_properties(infra_ompi_singleton_driver_${_case} PROPERTIES
         TIMEOUT 40 LABELS "infra;unit;owner:INFRA")
+endforeach()
+foreach(_case selection propagation matching conflict_inherited conflict_environment
+        conflict_modification conflict_unset)
+    add_test(NAME infra_ompi_singleton_${_case} COMMAND cmake
+        "-DPYTHON=${Python3_EXECUTABLE}" "-DCHECK=${_case}"
+        "-DBUILD_DIR=${PROJECT_BINARY_DIR}" -P "${_chipcae_singleton_driver}")
+    set_tests_properties(infra_ompi_singleton_${_case} PROPERTIES
+        TIMEOUT 120 LABELS "infra;unit;owner:INFRA")
 endforeach()
 foreach(_case disabled non_open_mpi tests_off)
     add_test(NAME infra_ompi_singleton_${_case} COMMAND cmake
