@@ -333,6 +333,8 @@ def _centroid_problem(fun, pts, idxs, boxes, comp, actual, tol):
         assert len(pts) == 1 and not idxs
         return ()
     assert len(pts) >= 3
+    if fun == 'side_sz':
+        assert len(pts) == 4, 'side centroid requires four vertices'
     fixed = 2 if fun == 'polygon_xy' else next(
         (d for d in (0, 1) if len({p[d] for p in pts}) == 1), None)
     assert fixed is not None and len({p[fixed] for p in pts}) == 1

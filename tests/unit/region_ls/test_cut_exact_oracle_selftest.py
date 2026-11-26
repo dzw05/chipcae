@@ -86,6 +86,13 @@ class ExactOracleTests(unittest.TestCase):
                             ([(1, 0)], [(F(2), F(3))])]:
             with self.assertRaises(AssertionError):
                 oracle.centroid_check('polygon_xy', pts, idxs, boxes, 0, F(1, 3), F(0))
+        # Side references require separate lower/upper endpoint pairs. Reject
+        # other vertex counts even when checking the fixed normal coordinate.
+        for side in [[(F(0), F(0), F(0)), (F(0), F(1), F(0)), (F(0), F(0), F(1))],
+                     [(F(0), F(0), F(0)), (F(0), F(1), F(0)), (F(0), F(1), F(1, 2)),
+                      (F(0), F(1), F(1)), (F(0), F(0), F(1))]]:
+            with self.assertRaises(AssertionError):
+                oracle.centroid_check('side_sz', side, [], [], 0, F(0), F(0))
         for value in [F(0), F(1, 100), F(2), F(10**-20)]:
             lo, hi = oracle._sqrt_bounds(value)
             self.assertLessEqual(lo*lo, value)
