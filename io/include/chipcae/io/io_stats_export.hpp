@@ -23,7 +23,11 @@ struct IoStatsReduction {
 };
 // Inputs are in rank order. Empty input and invalid durations throw std::invalid_argument.
 IoStatsReduction reduce_io_stats(const std::vector<ResultsWriter::IoStats>& per_rank);
-// Returns the complete I20 JSON bytes, including the final newline. Invalid durations throw.
+// Returns the complete I20 JSON bytes, including the final newline.
+// Requires ranks >= 1, write_step_count >= 0, and finite nonnegative durations (no negative zero).
+// When write_step_count > 0, last_write_step_seconds must be <= write_step_seconds + 1e-12;
+// at count 0, no relationship between the durations is required. Byte counts accept all uint64
+// values. Violations throw std::invalid_argument.
 std::string format_io_stats_json(const IoStatsExport& value);
 struct IoStatsWriteResult {
     bool written = false;

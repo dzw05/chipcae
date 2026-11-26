@@ -221,6 +221,60 @@ void format_tests(Suite& suite) {
                     "\"bytes_written\": 0, \"peak_rss_bytes\": 0}\n",
                 "default JSON must use exact key order, separators and floating zero tokens");
     });
+    suite.run("format/invalid-ranks", [] {
+        for (const auto ranks : {0, -1, INT_MIN}) {
+            auto value = example();
+            value.ranks = ranks;
+            invalid_argument([&] { (void)format_io_stats_json(value); },
+                             "rank count below one must throw std::invalid_argument");
+        }
+    });
+    suite.run("format/invalid-write-step-count", [] {
+        for (const auto count : {-1, INT_MIN}) {
+            auto value = example();
+            value.write_step_count = count;
+            invalid_argument([&] { (void)format_io_stats_json(value); },
+                             "negative write count must throw std::invalid_argument");
+        }
+    });
+    suite.run("format/last-write-exceeds-total", [] {
+        for (const auto last : {std::nextafter(1e-12, std::numeric_limits<double>::infinity()),
+                                2e-12,
+                                std::numeric_limits<double>::max()}) {
+            IoStatsExport value;
+            value.write_step_count = 1;
+            value.last_write_step_seconds = last;
+            invalid_argument([&] { (void)format_io_stats_json(value); },
+                             "last write beyond total plus 1e-12 must throw");
+        }
+        auto value = example();
+        value.last_write_step_seconds = 1.0;
+        invalid_argument([&] { (void)format_io_stats_json(value); },
+                         "last write beyond a positive total must throw");
+    });
+    suite.run("format/schema-boundaries", [] {
+        // The fixture permits a 1e-12 tolerance, and imposes no timing relationship at count 0.
+        const std::array<IoStatsExport, 5> values = {
+            IoStatsExport{},
+            IoStatsExport{1, 0, 0, std::nextafter(1e-12, 0.0), 1, 0, 0},
+            IoStatsExport{1, 0, 0, 1e-12, 1, 0, 0},
+            IoStatsExport{1, 0, 0, std::numeric_limits<double>::max(), 0, 0, 0},
+            IoStatsExport{INT_MAX,
+                          std::numeric_limits<double>::max(),
+                          std::numeric_limits<double>::max(),
+                          std::numeric_limits<double>::max(),
+                          INT_MAX,
+                          UINT64_MAX,
+                          UINT64_MAX}};
+        TemporaryRun run;
+        for (const auto& value : values) {
+            const auto json = format_io_stats_json(value);
+            expect_json(json, value);
+            const auto file = run.path / "io_stats.json";
+            put(file, json);
+            checker(file);
+        }
+    });
     const std::vector<double> boundaries = {0.0,
                                             1e-9,
                                             0.1,
@@ -245,6 +299,9 @@ void format_tests(Suite& suite) {
             }
             for (const auto input : values) {
                 auto value = example();
+                value.last_write_step_seconds = 0.0;
+                if (export_times[position] == &IoStatsExport::last_write_step_seconds)
+                    value.write_step_seconds = input;
                 value.*export_times[position] = input;
                 const auto json = format_io_stats_json(value);
                 const auto text = token(json, time_names[position]);

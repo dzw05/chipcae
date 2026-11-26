@@ -156,6 +156,14 @@ IoStatsReduction reduce_io_stats(const std::vector<ResultsWriter::IoStats>& per_
 }
 
 std::string format_io_stats_json(const IoStatsExport& value) {
+    if (value.ranks < 1)
+        throw std::invalid_argument("io_stats.json ranks must be at least one");
+    if (value.write_step_count < 0)
+        throw std::invalid_argument("io_stats.json write_step_count must be nonnegative");
+    if (value.write_step_count > 0 &&
+        value.last_write_step_seconds > value.write_step_seconds + 1e-12)
+        throw std::invalid_argument(
+            "io_stats.json last_write_step_seconds exceeds write_step_seconds plus 1e-12");
     std::ostringstream output;
     output.imbue(std::locale::classic());
     std::istringstream input;
