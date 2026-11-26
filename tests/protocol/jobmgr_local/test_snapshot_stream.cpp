@@ -25,6 +25,21 @@ const char* binary_digest(std::uintmax_t size) {
                        : "847c0e04339e4e3aab14b64dfae13e71cffd9ee04fd26366f61b87f63472201c";
 }
 
+std::string verified_binary_digest(const fs::path& path) {
+    // Check the hashlib-derived constants against the exact generated file with bounded memory.
+    std::ifstream input(path, std::ios::binary);
+    require(input.good(), "cannot read generated binary attachment");
+    chipcae::jobmgr::detail::Sha256 hash;
+    std::array<char, 65536> buffer{};
+    while (input.read(buffer.data(), static_cast<std::streamsize>(buffer.size())) ||
+           input.gcount() != 0)
+        hash.update(buffer.data(), static_cast<std::size_t>(input.gcount()));
+    require(input.eof() && !input.bad(), "generated binary attachment read error");
+    const auto expected = binary_digest(fs::file_size(path));
+    require(hash.hex_final() == expected, "independent fixture digest differs from generated file");
+    return expected;
+}
+
 // Fixed-size generation and comparison keep the parent independent of attachment size.
 void generate_binary(const fs::path& path, std::size_t size) {
     std::uint32_t random = 0x51a256U;
@@ -116,10 +131,11 @@ void memory_regression() {
         Fixture f;
         const auto size = (index == 0 ? 1 : 48) * mib;
         generate_binary(f.source / "board.bin", size);
+        const auto expected = verified_binary_digest(f.source / "board.bin");
         auto stack = Json::parse(read(f.source / "fcbga_demo.stack.json"));
         Json attachment = Json::object();
         attachment["path"] = "board.bin";
-        attachment["sha256"] = std::string(binary_digest(size));
+        attachment["sha256"] = expected;
         stack["external_refs"] = Json::array();
         stack["external_refs"].push_back(attachment);
         write(f.source / "fcbga_demo.stack.json", stack.to_string());
@@ -232,7 +248,13 @@ void correctness_tests(Suite& suite) {
         {"\xef", false},
         {"\xef\xbb", false},
         {"\xef{", false},
+        {"\xef {", false},
+        {"\xef[", false},
+        {"\xef/", false},
         {"\xef\xbb{", false},
+        {"\xef\xbb {", false},
+        {"\xef\xbb[", false},
+        {"\xef\xbb/", false},
         {std::string("\xef\xbb\x00{", 4), false},
         {"\v{", false},
         {"\f{", false}};

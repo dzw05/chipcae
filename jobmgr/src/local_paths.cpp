@@ -158,10 +158,18 @@ public:
                 if (byte == 0xef)
                     continue;
             } else if (state_ == State::bom_second) {
-                state_ = byte == 0xbb ? State::bom_third : State::done;
+                if (byte != 0xbb) {
+                    state_ = State::done;
+                    return;
+                }
+                state_ = State::bom_third;
                 continue;
             } else if (state_ == State::bom_third) {
-                state_ = byte == 0xbf ? State::whitespace : State::done;
+                if (byte != 0xbf) {
+                    state_ = State::done;
+                    return;
+                }
+                state_ = State::whitespace;
                 continue;
             }
             if (byte == ' ' || byte == '\t' || byte == '\n' || byte == '\r')
