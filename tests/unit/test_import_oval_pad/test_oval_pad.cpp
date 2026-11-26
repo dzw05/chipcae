@@ -439,6 +439,13 @@ int main() {
         run("vertical_noncardinal_rotation_minus_31" + std::string(suffix),
             [=] { valid(3, 4, -31, after); });
         for (const auto* transform : {"mirror=\"true\"",
+                                      "mirror=\"TRUE\"",
+                                      "mirror=\"1\"",
+                                      "mirror=\"x\"",
+                                      "mirror=\"y\"",
+                                      "mirror=\"xy\"",
+                                      "mirror=\"\"",
+                                      "mirror=\"unknown\"",
                                       "scaleFactor=\"2\"",
                                       "rotation=\"nan\"",
                                       "rotation=\"bad\"",
@@ -449,6 +456,14 @@ int main() {
                           "<Xform " + std::string(transform) + "/>\n",
                           false,
                           after);
+            });
+        for (const auto* mirror : {"false", "none", "FALSE", "NONE"})
+            run(std::string("unmirrored_") + mirror + suffix, [=] {
+                const auto model =
+                    parse(board("<Oval width=\"3\" height=\"4\"/>",
+                                pad("<Xform mirror=\"" + std::string(mirror) + "\"/>\n", after)));
+                check(single(model).points.size() == 258, "unmirrored Oval vertex count");
+                clean_oval(model);
             });
     }
     for (const auto* dimensions : {"width=\"3\"",
@@ -467,15 +482,40 @@ int main() {
         check(std::abs(area(single(oval)) - area(single(circle))) / area(single(circle)) <=
                   2 * epsilon(3000, 3000),
               "equal dimensions must approach Circle area");
+        check(single(oval).points == single(circle).points,
+              "equal dimensions must match Circle vertices and order");
         clean_oval(oval);
     });
+    for (const bool after : {false, true}) {
+        run(after ? "rotated_circle_limit_xform_after_ref"
+                  : "rotated_circle_limit_xform_before_ref",
+            [=] {
+                const auto oval = parse(board("<Oval width=\"3\" height=\"3\"/>",
+                                              pad("<Xform rotation=\"31\"/>\n", after)));
+                const auto circle = parse(board("<Circle diameter=\"3\"/>"));
+                check(single(oval).points == single(circle).points,
+                      "rotated equal dimensions must match Circle vertices and order");
+                clean_oval(oval);
+            });
+        run(after ? "mirrored_circle_limit_xform_after_ref"
+                  : "mirrored_circle_limit_xform_before_ref",
+            [=] {
+                unmodeled(
+                    "<Oval width=\"3\" height=\"3\"/>", "<Xform mirror=\"x\"/>\n", false, after);
+            });
+    }
     run("subgrid_collapsed_oval_stays_unmodeled",
         [] { unmodeled("<Oval width=\"1e-12\" height=\"2e-12\"/>", "", false, false); });
+    run("subgrid_collapsed_circle_limit_stays_unmodeled",
+        [] { unmodeled("<Oval width=\"1e-12\" height=\"1e-12\"/>", "", false, false); });
     // The center is within 1024 DBU of Clipper's limit; the 2000 DBU end cap crosses it.
     // Positive x rejects the first cap, negative x the second. Neither may emit a partial ring.
-    for (const auto* x : {"2305843009213693", "-2305843009213693"})
+    for (const auto* x : {"2305843009213693", "-2305843009213693"}) {
         run(std::string("out_of_range_oval_stays_unmodeled_x_") + x,
             [=] { unmodeled("<Oval width=\"4\" height=\"3\"/>", "", false, false, x); });
+        run(std::string("out_of_range_circle_limit_stays_unmodeled_x_") + x,
+            [=] { unmodeled("<Oval width=\"4\" height=\"4\"/>", "", false, false, x); });
+    }
     run("overlapping_ovals_union", [] {
         const auto model =
             parse(board("<Oval width=\"3\" height=\"4\"/>", pad() + pad("", false, "-19.5")));

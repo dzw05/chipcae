@@ -158,16 +158,33 @@ struct Parser {
                 continue;
             const auto center = pad.via.position;
             Polygon polygon;
-            if (artwork.shape == Artwork::Shape::circle) {
+            const bool oval = artwork.shape == Artwork::Shape::oval;
+            if (oval && !pad.oval_transform_supported)
+                continue;
+            // Equal dimensions use the established Circle vertices, independent of rotation.
+            if (!oval || artwork.width == artwork.height) {
+                const double radius = oval ? artwork.width / 2 : artwork.radius;
+                Clipper2Lib::Path64 ring;
+                bool invalid = false;
                 for (int i = 0; i < 256; ++i) {
                     const double angle = 2 * std::acos(-1.0) * i / 256;
-                    polygon.points.push_back(
-                        {std::llround(center[0] + artwork.radius * std::cos(angle)),
-                         std::llround(center[1] + artwork.radius * std::sin(angle))});
+                    const double x = center[0] + radius * std::cos(angle);
+                    const double y = center[1] + radius * std::sin(angle);
+                    if (oval) {
+                        constexpr double limit = static_cast<double>(Clipper2Lib::MAX_COORD);
+                        if (!std::isfinite(x) || !std::isfinite(y) || std::abs(x) >= limit ||
+                            std::abs(y) >= limit) {
+                            invalid = true;
+                            break;
+                        }
+                        ring.push_back({std::llround(x), std::llround(y)});
+                    }
+                    polygon.points.push_back({std::llround(x), std::llround(y)});
                 }
-            } else {
-                if (!pad.oval_transform_supported)
+                if (oval &&
+                    (invalid || ring.size() != 256 || std::abs(Clipper2Lib::Area(ring)) < 1.0))
                     continue;
+            } else {
                 const double a = std::max(artwork.width, artwork.height) / 2;
                 const double r = std::min(artwork.width, artwork.height) / 2;
                 const double s = a - r;
@@ -1038,10 +1055,13 @@ struct Parser {
                 !attr(a, "rotation") || finite_number(attr(a, "rotation"), rotation);
             const bool valid_scale =
                 !attr(a, "scaleFactor") || finite_number(attr(a, "scaleFactor"), factor);
-            p.rotation = rotation;
+            const auto mirror = uppercase(value(a, "mirror"));
+            const bool unmirrored = !attr(a, "mirror") || mirror == "FALSE" || mirror == "NONE";
+            if (valid_rotation)
+                p.rotation = rotation;
             // Only exact identity scaling is supported, including for near-unit factors.
             p.oval_transform_supported = p.oval_transform_supported && valid_rotation &&
-                                         valid_scale && factor == 1 && value(a, "mirror") != "true";
+                                         valid_scale && factor == 1 && unmirrored;
         } else if (name == "Location" && in_pad) {
             pending.back().via.position = point(a);
         } else if (name == "Span") {
