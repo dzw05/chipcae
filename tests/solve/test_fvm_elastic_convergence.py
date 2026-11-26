@@ -31,8 +31,9 @@ def main():
         check(checks, 'elastic-failure nonzero exit', process.returncode != 0,
               process.returncode)
         no_success(out, checks, 'elastic-failure')
-        check(checks, 'elastic-failure convergence wording',
-              'nonconvergence' in process.stderr or 'not converged' in process.stderr,
+        check(checks, 'elastic-failure nonconvergence prefix',
+              any(line.startswith('chipcae-solve: fvm.elastic: FVM elastic nonconvergence: ')
+                  for line in process.stderr.splitlines()),
               process.stderr)
         check(checks, 'elastic-failure PETSc reason retained',
               'KSP failure reason=-' in process.stderr and

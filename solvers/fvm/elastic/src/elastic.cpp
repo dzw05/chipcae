@@ -1765,9 +1765,9 @@ ElasticResult solve_system(const ElasticMesh& m,
         PetscReal krylov = 0;
         petsc(KSPGetResidualNorm(ksp, &krylov));
         std::ostringstream why;
-        why << "Krylov residual=" << krylov << " KSP failure reason=" << static_cast<int>(reason)
-            << " iterations=" << its << " physical residual=" << norm
-            << " FVM elastic nonconvergence";
+        why << "FVM elastic nonconvergence: Krylov residual=" << krylov
+            << " KSP failure reason=" << static_cast<int>(reason) << " iterations=" << its
+            << " physical residual=" << norm;
         throw std::runtime_error(why.str());
     }
     VecHandle gathered;
