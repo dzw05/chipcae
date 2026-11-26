@@ -5,13 +5,16 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QDir>
+#include <QDoubleSpinBox>
 #include <QFile>
 #include <QFileInfo>
+#include <QFormLayout>
 #include <QImage>
 #include <QJsonDocument>
 #include <QLabel>
 #include <QLayout>
 #include <QProcess>
+#include <QPushButton>
 #include <QSurfaceFormat>
 #include <QTemporaryDir>
 #include <QVTKOpenGLNativeWidget.h>
@@ -21,6 +24,7 @@
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <vector>
 #include <vtkActor.h>
@@ -2046,6 +2050,249 @@ int obliqueAndTemperatureAcceptance(const QDir& root) {
     }
     return failures;
 }
+// D14j-1: stretch the synthetic model to 5 x 10 x 10 (diagonal 15).
+// Select the displaced point by its original coordinates, independently of VTK point order.
+int prepareAutoWarpageFixture(vtkUnstructuredGrid* grid,
+                              const std::array<double, 3>& displacement) {
+    auto u = grid->GetPointData()->GetArray("U");
+    require(u && u->GetNumberOfComponents() == 3 &&
+                u->GetNumberOfTuples() == grid->GetNumberOfPoints(),
+            "auto scale fixture requires three-component point U");
+    int selected = 0;
+    for (vtkIdType point = 0; point < grid->GetNumberOfPoints(); ++point) {
+        double xyz[3];
+        grid->GetPoint(point, xyz);
+        u->SetTuple3(point, 0, 0, 0);
+        if (xyz[0] == 5 && xyz[1] == 1 && xyz[2] == 1) {
+            u->SetTuple3(point, displacement[0], displacement[1], displacement[2]);
+            ++selected;
+        }
+        grid->GetPoints()->SetPoint(point, xyz[0], 10 * xyz[1], 10 * xyz[2]);
+    }
+    return selected;
+}
+QPushButton* autoWarpageButton(ResultControls& controls) {
+    auto button = controls.findChild<QPushButton*>("autoWarpageScale");
+    require(button, "autoWarpageScale button missing");
+    return button;
+}
+QDoubleSpinBox* warpageScaleSpin(ResultControls& controls) {
+    auto form = qobject_cast<QFormLayout*>(controls.layout());
+    require(form, "result controls form missing");
+    for (int row = 0; row < form->rowCount(); ++row) {
+        auto labelItem = form->itemAt(row, QFormLayout::LabelRole);
+        auto label = labelItem ? qobject_cast<QLabel*>(labelItem->widget()) : nullptr;
+        if (label && label->text() == QStringLiteral("翘曲放大系数")) {
+            auto field = form->itemAt(row, QFormLayout::FieldRole);
+            auto spin = field ? qobject_cast<QDoubleSpinBox*>(field->widget()) : nullptr;
+            require(spin, "warpage scale form field is not a spin box");
+            return spin;
+        }
+    }
+    require(false, "warpage scale form row missing");
+    return nullptr;
+}
+int autoWarpageScaleAcceptance(const QDir& root) {
+    int failures = 0;
+    auto run = [&](const QString& name, auto test) {
+        try {
+            test();
+            std::cout << "PASS D14j-1 " << name.toStdString() << '\n';
+        } catch (const std::exception& e) {
+            ++failures;
+            std::cerr << "FAIL D14j-1 " << name.toStdString() << ": " << e.what() << '\n';
+        }
+    };
+    auto withPackage =
+        [&](
+            auto test,
+            std::array<double, 3> displacement = {0, 0, 0.125},
+            const std::function<void(vtkUnstructuredGrid*)>& mutate = [](vtkUnstructuredGrid*) {},
+            const QJsonArray& summary = {}) {
+            QTemporaryDir temp;
+            int selected = 0;
+            writeSummaryFixture(root, temp, summary, [&](vtkUnstructuredGrid* grid) {
+                selected += prepareAutoWarpageFixture(grid, displacement);
+                mutate(grid);
+            });
+            require(selected == 1,
+                    "auto scale fixture must select original point (5,1,1) exactly once");
+            ResultSession session;
+            require(session.open(temp.path()), qPrintable(session.error()));
+            ResultView view;
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            test(view, session);
+        };
+    auto checkUnavailable = [](ResultView& view, ResultSession& session) {
+        require(view.autoWarpageScale() == 0.0, "unavailable auto scale must be exactly 0");
+        ResultControls controls(view, session);
+        require(autoWarpageButton(controls)->isEnabled() == false,
+                "unavailable auto scale button must be disabled");
+    };
+    run("auto warpage scale from axial displacement", [&] {
+        withPackage([](auto& view, auto&) {
+            require(view.autoWarpageScale() == 7.5, "axial auto scale must be exactly 7.5");
+            require(view.warpageScale() == 1.0, "default scale must remain exactly 1");
+        });
+    });
+    run("auto warpage scale from in-plane displacement", [&] {
+        withPackage(
+            [](auto& view, auto&) {
+                require(view.autoWarpageScale() == 1.5, "in-plane auto scale must be exactly 1.5");
+            },
+            {0.375, 0.5, 0});
+    });
+    run("auto warpage scale ignores current scale", [&] {
+        withPackage([](auto& view, auto&) {
+            view.setWarpageScale(3.0);
+            require(view.warpageScale() == 3.0, "manual scale getter must return exactly 3");
+            require(view.autoWarpageScale() == 7.5, "manual scale changed axial recommendation");
+        });
+    });
+    run("auto warpage scale unavailable: missing U", [&] {
+        withPackage(checkUnavailable, {0, 0, 0.125}, [](auto grid) {
+            grid->GetPointData()->RemoveArray("U");
+        });
+    });
+    run("auto warpage scale unavailable: all-zero U",
+        [&] { withPackage(checkUnavailable, {0, 0, 0}); });
+    run("auto warpage scale unavailable: NaN z displacement",
+        [&] { withPackage(checkUnavailable, {0, 0, std::numeric_limits<double>::quiet_NaN()}); });
+    for (const auto& name : {QString("warpage_pv"), QString("U_mag_max")})
+        for (const auto& method :
+             {QString("not_solved"), QString("not solved: fvm thermal-only stage")})
+            run("auto warpage scale unavailable: " + name + " " + method, [&] {
+                withPackage(checkUnavailable,
+                            {0, 0, 0.125},
+                            [](auto) {},
+                            {QJsonObject{{"step", 0},
+                                         {"name", name},
+                                         {"value", 0.0},
+                                         {"unit", "m"},
+                                         {"method", method}}});
+            });
+    run("auto warpage scale unavailable: unloaded", [&] {
+        ResultSession session;
+        ResultView view;
+        checkUnavailable(view, session);
+    });
+    run("auto warpage scale unavailable: coincident points", [&] {
+        withPackage(checkUnavailable, {0, 0, 0.125}, [](auto grid) {
+            for (vtkIdType point = 0; point < grid->GetNumberOfPoints(); ++point)
+                grid->GetPoints()->SetPoint(point, 2, 3, 4);
+        });
+    });
+    for (int axis = 0; axis < 3; ++axis) {
+        for (bool infinite : {false, true})
+            run(QString("auto warpage scale unavailable: %1 coordinate axis %2")
+                    .arg(infinite ? "Inf" : "NaN")
+                    .arg(axis),
+                [&] {
+                    withPackage(checkUnavailable, {0, 0, 0.125}, [&](auto grid) {
+                        double xyz[3];
+                        grid->GetPoint(0, xyz);
+                        xyz[axis] = infinite ? std::numeric_limits<double>::infinity()
+                                             : std::numeric_limits<double>::quiet_NaN();
+                        grid->GetPoints()->SetPoint(0, xyz);
+                    });
+                });
+        run(QString("auto warpage scale unavailable: Inf displacement axis %1").arg(axis), [&] {
+            std::array<double, 3> displacement{0, 0, 0.125};
+            displacement[axis] = std::numeric_limits<double>::infinity();
+            withPackage(checkUnavailable, displacement);
+        });
+    }
+    run("auto warpage scale ignores display filters", [&] {
+        withPackage([](auto& view, auto& session) {
+            ResultControls controls(view, session);
+            auto check = [&] {
+                require(view.autoWarpageScale() == 7.5,
+                        "display filter changed raw recommendation");
+                require(autoWarpageButton(controls)->isEnabled() == true,
+                        "display filter disabled available auto scale");
+            };
+            view.setLayer(1); // Excludes the displaced point in the third (void) cell.
+            check();
+            view.setBlockVisible("hex", false);
+            check();
+            view.setClip(true, {2.5, 0, 0}, {1, 0, 0});
+            check();
+            view.setShowVoid(true);
+            check();
+            view.setShowVoid(false);
+            check();
+            view.setColorField(ResultColorField::WarpageUz);
+            check();
+        });
+    });
+    run("auto warpage scale button", [&] {
+        withPackage([](auto& view, auto& session) {
+            ResultControls controls(view, session);
+            auto button = autoWarpageButton(controls);
+            require(button->text() == QStringLiteral("自动放大"),
+                    "auto scale button text mismatch");
+            require(button->isEnabled() == true, "axial auto scale button must be enabled");
+            auto spin = warpageScaleSpin(controls);
+            require(spin->value() == 1.0, "controls must retain initial scale 1");
+            for (int click = 0; click < 2; ++click) {
+                button->click();
+                require(spin->value() == 7.5, "auto scale click must set spin to exactly 7.5");
+                require(view.warpageScale() == 7.5,
+                        "auto scale click must set view to exactly 7.5");
+            }
+        });
+    });
+    run("auto warpage scale button after view destruction", [&] {
+        ResultSession session;
+        auto view = std::make_unique<ResultView>();
+        ResultControls controls(*view, session);
+        auto button = autoWarpageButton(controls);
+        auto spin = warpageScaleSpin(controls);
+        spin->setValue(3.0);
+        button->setEnabled(true);
+        view.reset();
+        button->click();
+        near(spin->value(), 3.0);
+    });
+    for (bool failedLoad : {false, true})
+        run(failedLoad ? "auto warpage scale button refresh after failed load"
+                       : "auto warpage scale button refresh after unsolved load",
+            [&] {
+                QTemporaryDir axial, unsolved;
+                int selected = 0;
+                writeSummaryFixture(root, axial, {}, [&](auto grid) {
+                    selected += prepareAutoWarpageFixture(grid, {0, 0, 0.125});
+                });
+                require(selected == 1, "refresh fixture must select original point (5,1,1)");
+                writeSummaryFixture(
+                    root,
+                    unsolved,
+                    {QJsonObject{{"step", 0},
+                                 {"name", "warpage_pv"},
+                                 {"value", 0.0},
+                                 {"method", "not_solved"}}},
+                    [](auto grid) { prepareAutoWarpageFixture(grid, {0, 0, 0.125}); });
+                ResultSession session, unsolvedSession;
+                require(session.open(axial.path()), qPrintable(session.error()));
+                require(unsolvedSession.open(unsolved.path()), qPrintable(unsolvedSession.error()));
+                ResultView view;
+                ResultControls controls(view, session);
+                auto button = autoWarpageButton(controls);
+                require(button->isEnabled() == false,
+                        "pre-load auto scale button must be disabled");
+                require(view.loadStep(session, 0), qPrintable(view.error()));
+                require(button->isEnabled() == true, "displayChanged did not enable auto scale");
+                require(view.autoWarpageScale() == 7.5, "loaded axial recommendation must be 7.5");
+                if (failedLoad)
+                    require(!view.loadStep(session, 999), "missing step unexpectedly loaded");
+                else
+                    require(view.loadStep(unsolvedSession, 0), qPrintable(view.error()));
+                require(button->isEnabled() == false, "displayChanged did not disable auto scale");
+                require(view.autoWarpageScale() == 0.0,
+                        "unavailable reload retained recommendation");
+            });
+    return failures;
+}
 int acceptance(const QDir& root) {
     int failures = 0;
     auto run = [&](const char* name, auto test) {
@@ -3121,5 +3368,6 @@ int main(int argc, char** argv) {
     failures += methodSummaryAcceptance(root);
     failures += acceptance(root);
     failures += obliqueAndTemperatureAcceptance(root);
+    failures += autoWarpageScaleAcceptance(root);
     return failures ? 1 : 0;
 }
