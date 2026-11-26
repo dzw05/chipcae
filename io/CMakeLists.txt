@@ -4,6 +4,7 @@ add_library(chipcae_io
     src/checkpoint.cpp
     src/result_writer.cpp
     src/event_log.cpp
+    src/io_stats_export.cpp
 )
 add_library(chipcae::io ALIAS chipcae_io)
 
