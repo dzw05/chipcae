@@ -1,5 +1,7 @@
 #include "chipcae/jobmgr/local_paths.hpp"
 
+#include "sha256_stream.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -106,3 +108,11 @@ void write_file_atomic(const std::filesystem::path& path, std::string_view bytes
     }
 }
 } // namespace chipcae::jobmgr
+
+// TEST-FIRST compile-only stub. The existing snapshot and atomic writer do not call it.
+namespace chipcae::jobmgr::detail {
+StreamedFile
+stream_copy_hash(const std::filesystem::path&, const std::filesystem::path&, const std::string&) {
+    return {};
+}
+} // namespace chipcae::jobmgr::detail

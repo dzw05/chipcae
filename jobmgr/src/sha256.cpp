@@ -1,4 +1,5 @@
 #include "chipcae/jobmgr/local_paths.hpp"
+#include "sha256_stream.hpp"
 
 #include <array>
 #include <bit>
@@ -65,3 +66,12 @@ std::string sha256_hex(std::string_view input) {
     return out.str();
 }
 } // namespace chipcae::jobmgr
+
+// TEST-FIRST compile-only stubs. Existing sha256_hex behavior remains unchanged.
+namespace chipcae::jobmgr::detail {
+Sha256::Sha256() noexcept : state_{} {}
+void Sha256::update(const void*, std::size_t) noexcept {}
+std::string Sha256::hex_final() {
+    return {};
+}
+} // namespace chipcae::jobmgr::detail

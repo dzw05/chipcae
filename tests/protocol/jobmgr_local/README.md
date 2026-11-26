@@ -45,3 +45,51 @@ restart therefore reject; cached accepted replies retain their original uint64
 sequence (including values beyond double precision). The malformed label
 selector check also applies to an empty root, stricter than desktop validation
 inside iteration.
+
+`test_snapshot_stream` covers incremental SHA-256 standard vectors and every
+split of seeded inputs of length 0–200, stream-copy/hash-only chunk boundaries,
+JSON prefixes across chunks, atomic mismatch/I/O cleanup, and recursive Submit
+byte/hash equivalence. BOM/comment references, duplicate/cyclic normalized
+paths, conflicting hashes, and unchanged duplicate-target sentinels protect the
+existing snapshot contract. Only the chmod-0555 subcase skips when running as
+root; missing LocalJobManager returns 77 for the whole executable.
+
+The CLI memory regression generates synthetic binary attachments incrementally
+with a fixed seed and leading NUL. `posix_spawn` plus EINTR-aware `wait4` measures
+child RSS without `/proc`; Darwin bytes are converted to KiB. Each of 1 MiB and
+48 MiB runs three times, verifies successful Submit, compares output in fixed
+blocks, and checks manifest hashes against independently computed fixture
+hashes. The minimum-RSS difference must be at most 4096 KiB.
+
+TEST-FIRST measured result (Release, before adding private-interface stubs):
+1 MiB RSS was 16576/16508/16588 KiB; 48 MiB RSS was
+160976/160840/160900 KiB. The 144332 KiB minimum-RSS difference fails the
+4096 KiB assertion after all six successful byte/hash integrity checks.
+The extended layout test passes with source-derived fixture hashes and a full
+standard `abc` digest check. Private SHA/stream APIs currently have compile-only
+default-return stubs; the incremental/stream assertions intentionally remain red.
+The existing SHA, atomic writer, and snapshot paths retain their behavior.
+
+Reproduce the focused Release check with:
+
+```sh
+cmake -S . -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCHIPCAE_BUILD_TESTS=ON -DCHIPCAE_ENABLE_HDF5=ON -DCHIPCAE_ENABLE_JSONCONS=ON
+ninja -C "$build" -j1 chipcae-jobmgr \
+  chipcae_autotest_tests_protocol_jobmgr_local_jobmgr_local_snapshot_stream \
+  chipcae_autotest_tests_protocol_jobmgr_local_jobmgr_local_layout
+ctest --test-dir "$build" -j1 -V -R '^jobmgr_local_(snapshot_stream|layout)$'
+```
+
+Supply the dependency prefix for protobuf/jsoncons/Qt Core on the local machine.
+Use the shared-slot shim first in PATH where required. Detailed commands and red
+output are retained externally in `jobs-snapshot-stream-tdd.md` and its adjacent
+logs. The external M1/M2/M3/T1/T2 benchmarks and main/branch byte comparison have
+not been measured in this TEST-FIRST pass; no performance gate is claimed passed.
+
+Final measured Release regression selection `ctest --test-dir "$build" -j1 -V
+-R '^jobmgr_'`: 15 Passed, 1 expected Failed (`jobmgr_local_snapshot_stream`),
+zero Skipped and zero timeouts. Layout and Qt desktop parity both passed.
+The final RSS difference was 144476 KiB. A separate protobuf-disabled Release
+build compiled the final test source and verified the intended return-77 skip.
+Pinned clang-format 23.1.5 dry-run/Werror checks passed on all touched C++ files.
