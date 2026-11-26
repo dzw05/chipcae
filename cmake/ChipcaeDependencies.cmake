@@ -103,11 +103,16 @@ if(CHIPCAE_ENABLE_MUMPS)
 endif()
 
 if(CHIPCAE_ENABLE_ECAD)
-    # Keep rejected package imports out of the scope where FetchContent creates
-    # miniz. Imported targets cannot be removed or renamed after discovery.
+    # Screen packages in a separate configure: even IMPORTED GLOBAL targets
+    # must not occupy FetchContent names when the package is rejected.
     set(_chipcae_miniz_discovery "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/chipcae-miniz-discovery")
     file(MAKE_DIRECTORY "${_chipcae_miniz_discovery}")
     file(WRITE "${_chipcae_miniz_discovery}/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.20)
+if(CHIPCAE_MINIZ_SCREEN)
+    project(chipcae_miniz_screen LANGUAGES NONE)
+    include("${CMAKE_CURRENT_SOURCE_DIR}/find-context.cmake")
+endif()
 set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL OFF)
 find_package(miniz CONFIG QUIET)
 set(_accepted FALSE)
@@ -121,6 +126,11 @@ foreach(_name miniz::miniz miniz)
         break()
     endif()
 endforeach()
+if(CHIPCAE_MINIZ_SCREEN)
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/accepted.cmake"
+        "set(_chipcae_miniz_package_accepted ${_accepted})\n")
+    return()
+endif()
 if(_accepted)
     # Promote the complete import set, including a wrapper's dependencies.
     # Aliases of local imports stay local even after their targets are promoted.
@@ -144,7 +154,38 @@ endif()
 set(_chipcae_miniz_package_accepted ${_accepted} PARENT_SCOPE)
 set(_chipcae_miniz_aliases "${_aliases}" PARENT_SCOPE)
 ]=])
-    add_subdirectory("${_chipcae_miniz_discovery}" "${_chipcae_miniz_discovery}/build")
+    # Preserve normal-variable overrides as well as cache values controlling
+    # package search (including toolchain/sysroot and explicit miniz hints).
+    # A function keeps the serialization helpers out of the caller's scope.
+    function(_chipcae_screen_miniz)
+        file(WRITE "${_chipcae_miniz_discovery}/find-context.cmake" "")
+        get_cmake_property(_variables VARIABLES)
+        foreach(_variable IN LISTS _variables)
+            if(_variable MATCHES "^(BUILD_SHARED_LIBS|miniz_.*|MINIZ_.*|CMAKE_(DISABLE_FIND_PACKAGE_miniz|REQUIRE_FIND_PACKAGE_miniz|FIND_.*|.*_PATH|SYSROOT.*|STAGING_PREFIX|TOOLCHAIN_FILE|SYSTEM_NAME|SYSTEM_VERSION|SYSTEM_PROCESSOR|OSX_.*|LIBRARY_ARCHITECTURE|SIZEOF_VOID_P))$")
+                set(_delimiter "=")
+                while("${${_variable}}" MATCHES "\\]${_delimiter}\\]")
+                    string(APPEND _delimiter "=")
+                endwhile()
+                file(APPEND "${_chipcae_miniz_discovery}/find-context.cmake"
+                    "set(${_variable} [${_delimiter}[${${_variable}}]${_delimiter}])\n")
+            endif()
+        endforeach()
+        # Do not reuse a package location cached by a previous screening run.
+        file(REMOVE "${_chipcae_miniz_discovery}/screen/CMakeCache.txt")
+        execute_process(COMMAND cmake
+            -S "${_chipcae_miniz_discovery}" -B "${_chipcae_miniz_discovery}/screen"
+            -G "${CMAKE_GENERATOR}" -DCHIPCAE_MINIZ_SCREEN=ON
+            RESULT_VARIABLE _result OUTPUT_VARIABLE _output ERROR_VARIABLE _error)
+        if(NOT _result EQUAL 0)
+            message(FATAL_ERROR "miniz package screening failed:\n${_output}\n${_error}")
+        endif()
+        include("${_chipcae_miniz_discovery}/screen/accepted.cmake")
+        set(_chipcae_miniz_package_accepted ${_chipcae_miniz_package_accepted} PARENT_SCOPE)
+    endfunction()
+    _chipcae_screen_miniz()
+    if(_chipcae_miniz_package_accepted)
+        add_subdirectory("${_chipcae_miniz_discovery}" "${_chipcae_miniz_discovery}/build")
+    endif()
     while(_chipcae_miniz_aliases)
         list(POP_FRONT _chipcae_miniz_aliases _chipcae_miniz_alias _chipcae_miniz_underlying)
         if(NOT TARGET ${_chipcae_miniz_alias})
@@ -152,9 +193,6 @@ set(_chipcae_miniz_aliases "${_aliases}" PARENT_SCOPE)
         endif()
     endwhile()
     if(NOT _chipcae_miniz_package_accepted)
-        if(TARGET miniz::miniz OR TARGET miniz)
-            message(FATAL_ERROR "Rejected miniz package exported globally visible targets; static fallback names are occupied")
-        endif()
         include(FetchContent)
         if(DEFINED BUILD_SHARED_LIBS)
             set(_chipcae_miniz_had_shared TRUE)

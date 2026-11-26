@@ -46,7 +46,7 @@ class MinizResolutionAcceptance(unittest.TestCase):
     """Exercise the real dependency resolver and unchanged ECAD CMake consumer."""
 
     def configure_case(self, targets=(), *, shared=None, policy=None, minimum=None,
-                       disabled=False, promote=False, alias=False):
+                       disabled=False, promote=False, alias=False, global_import=False):
         temporary = tempfile.TemporaryDirectory(prefix='miniz-acceptance-')
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -74,6 +74,8 @@ class MinizResolutionAcceptance(unittest.TestCase):
                             f'{cmake_quote(archive)})']
             if alias:
                 package.append(f'add_library({name} ALIAS {underlying})')
+        if global_import:
+            package = [line.replace(' IMPORTED)', ' IMPORTED GLOBAL)') for line in package]
         if targets:
             (prefix / 'minizConfig.cmake').write_text('\n'.join(package) + '\n')
 
@@ -206,6 +208,21 @@ add_library(miniz miniz.c)
         for kind in ('SHARED', 'INTERFACE'):
             with self.subTest(kind=kind):
                 self.configure_case((('miniz::miniz', kind),), promote=True)
+
+    def test_explicit_global_rejected_imports_do_not_occupy_fallback_names(self):
+        for kind in ('SHARED', 'MODULE'):
+            for names in (('miniz',), ('miniz::miniz',), ('miniz', 'miniz::miniz')):
+                for alias in (False, True):
+                    with self.subTest(kind=kind, names=names, alias=alias):
+                        self.configure_case(tuple((name, kind) for name in names),
+                                            global_import=True, alias=alias)
+
+    def test_explicit_global_accepted_imports_remain_usable(self):
+        for kind in ('STATIC', 'INTERFACE', 'UNKNOWN'):
+            for alias in (False, True):
+                with self.subTest(kind=kind, alias=alias):
+                    self.configure_case((('miniz::miniz', kind),),
+                                        global_import=True, alias=alias)
 
     def test_fallback_restores_shared_and_policy_settings(self):
         for package in ('missing', 'disabled', 'shared'):
@@ -400,9 +417,24 @@ class AdapterFlagsAcceptance(unittest.TestCase):
                                 pass
 
 
+class EntryPointEnvironmentAcceptance(unittest.TestCase):
+    def test_missing_environment_skips_before_build_acceptance(self):
+        import test_fvm_case_e2e as entry
+        required = ('CHIPCAE_IMPORT_EXE', 'CHIPCAE_PREVIEW_EXE', 'CHIPCAE_SOLVE_EXE',
+                    'CHIPCAE_FVM_LOADER_PROBE', 'CHIPCAE_MPIEXEC',
+                    'CHIPCAE_MPIEXEC_NUMPROC_FLAG')
+        with patch.dict(os.environ):
+            for key in required:
+                os.environ.pop(key, None)
+            with patch.object(entry.mac_static_miniz_acceptance, 'suite',
+                              side_effect=AssertionError('build acceptance ran before skip')):
+                self.assertEqual(entry.main(), 77)
+
+
 def suite():
     return unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(cls)
-                              for cls in (MinizResolutionAcceptance, AdapterFlagsAcceptance))
+                              for cls in (MinizResolutionAcceptance, AdapterFlagsAcceptance,
+                                          EntryPointEnvironmentAcceptance))
 
 
 if __name__ == '__main__':
