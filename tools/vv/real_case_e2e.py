@@ -18,6 +18,7 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import struct
 import subprocess
 import sys
@@ -217,6 +218,44 @@ def _manifest(run_dir):
 def _vtk_path(run_dir, manifest=None):
     manifest = _manifest(run_dir) if manifest is None else manifest
     return Path(run_dir) / manifest["steps"][0]["file"]
+
+
+def _regular_file_bytes(paths) -> int | None:
+    """Sum stat sizes once per resolved path; unavailable files invalidate the total."""
+    total, seen = 0, set()
+    try:
+        for path in paths:
+            path = Path(path).resolve()
+            if path in seen:
+                continue
+            info = os.stat(path)
+            if not stat.S_ISREG(info.st_mode):
+                return None
+            total += info.st_size
+            seen.add(path)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return total
+
+
+def _i6_bytes(output) -> int | None:
+    """Count only the manifest and all its step targets, without reading VTKHDF."""
+    manifest = Path(output) / "manifest.json"
+    try:
+        document = _json(manifest)
+        if not isinstance(document, dict):
+            return None
+        steps = document.get("steps", [])
+        if not isinstance(steps, list):
+            return None
+        paths = [manifest]
+        for step in steps:
+            if not isinstance(step, dict) or not isinstance(step.get("file"), str) or not step["file"]:
+                return None
+            paths.append(manifest.parent / step["file"])
+        return _regular_file_bytes(paths)
+    except (OSError, ValueError, RuntimeError):
+        return None
 
 
 def _summary(run_dir):
@@ -677,6 +716,15 @@ def _copy_input(source, target):
 
 
 def _copy_inputs(inputs, kind, resolved):
+    copied = set()
+
+    def copy_input(source, target):
+        _copy_input(source, target)
+        if target.is_dir():
+            copied.update(path for path in target.rglob("*") if path.is_file())
+        else:
+            copied.add(target)
+
     if kind == "assembly":
         document = copy.deepcopy(resolved["document"])
         refs = list(_assembly_refs(document))
@@ -687,16 +735,17 @@ def _copy_inputs(inputs, kind, resolved):
         for (obj, key), source in zip(refs, sources):
             dest = inputs / "dependencies" / source.relative_to(common)
             if not dest.exists():
-                _copy_input(source, dest)
+                copy_input(source, dest)
             obj[key] = dest.relative_to(inputs).as_posix()
         _write_json(inputs / "assembly.json", document)
         # Import and solve reference the same parsed assembly material library.
         _write_json(inputs / "materials.json", resolved["library"])
     else:
         source = resolved["input"]
-        _copy_input(source, inputs / ("board" + ("".join(source.suffixes) if source.is_file() else "")))
-        _copy_input(resolved["map"], inputs / "material_map.json")
+        copy_input(source, inputs / ("board" + ("".join(source.suffixes) if source.is_file() else "")))
+        copy_input(resolved["map"], inputs / "material_map.json")
         _write_json(inputs / "materials.json", resolved.get("library", _illustrative_materials()))
+    return copied
 
 
 def _case(params):
@@ -710,14 +759,19 @@ def _case(params):
                 output=dict(format="vtkhdf"))
 
 
-def _measured(argv, stage, folder, record, timeout_s):
+def _rss_kib(ru_maxrss: int, platform: str | None = None) -> int:
+    platform = sys.platform if platform is None else platform
+    return -(-ru_maxrss // 1024) if platform == "darwin" else int(ru_maxrss)
+
+
+def _measured(argv, stage, folder, record, timeout_s, *, bytes_in=None):
     """One child, redirected logs, per-child wait4 metrics and a group watchdog."""
     argv = [str(arg) for arg in argv]
     logs = folder / "logs"
     logs.mkdir(exist_ok=True)
     stdout_path, stderr_path = (logs / f"{stage}.{suffix}.log" for suffix in ("stdout", "stderr"))
     entry = dict(stage=stage, argv=argv, command=shlex.join(argv), exit_code=None,
-                 wall_s=0., peak_rss_kib=None, status_detail=None)
+                 wall_s=0., peak_rss_kib=None, status_detail=None, bytes_in=bytes_in, bytes_out=None)
     record["commands"].append(entry)
     record["logs"].extend(str(p.relative_to(folder)) for p in (stdout_path, stderr_path))
     with (folder / "cmd.txt").open("a", encoding="utf-8") as commands:
@@ -743,7 +797,7 @@ def _measured(argv, stage, folder, record, timeout_s):
             done.set()
             watcher.join()
         entry.update(exit_code="timeout" if timed_out.is_set() else process.returncode,
-                     wall_s=time.monotonic() - start, peak_rss_kib=usage.ru_maxrss)
+                     wall_s=time.monotonic() - start, peak_rss_kib=_rss_kib(usage.ru_maxrss))
         if timed_out.is_set():
             entry["status_detail"] = "timeout"
         elif process.returncode < 0:
@@ -801,6 +855,13 @@ def _check_names(kind, w_ready):
 
 def _missing(record, *, pending_checks=()):
     """List unavailable applicable data, independently of caller-supplied missing[]."""
+    schema = record.get("schema")
+    if schema == "chipcae.vv_real_case_run/0.1":
+        byte_fields = False
+    elif schema == "chipcae.vv_real_case_run/0.2":
+        byte_fields = True
+    else:
+        raise RuntimeError(f"unsupported run record schema: {schema!r}")
     missing = []
     notes = " ".join(record.get("notes", []))
     null_reasons = {
@@ -820,8 +881,19 @@ def _missing(record, *, pending_checks=()):
             missing.append(key)
     def walk(value, path):
         if isinstance(value, dict):
+            command = re.fullmatch(r"commands\[\d+\]", path)
+            if command and byte_fields:
+                stage = value.get("stage", "")
+                for field, applicable in (
+                        ("bytes_in", stage == "import" or stage.startswith("readback_")),
+                        ("bytes_out", stage.startswith("solve_"))):
+                    if applicable and value.get(field) is None:
+                        missing.append(f"{path}.{field}")
             for key, item in value.items():
                 name = f"{path}.{key}"
+                # Byte fields are undefined in 0.1 and handled above in 0.2.
+                if command and key in ("bytes_in", "bytes_out"):
+                    continue
                 if item is None:
                     if path.startswith("commands[") and key == "status_detail":
                         continue
@@ -921,7 +993,7 @@ def _new_folder(out_root, commit, kind):
 def _blank_record(kind, params, source_root, w_ready):
     params = params if isinstance(params, dict) else {}
     record = dict.fromkeys(_REQUIRED)
-    record.update(schema="chipcae.vv_real_case_run/0.1", kind=kind, case_id=params.get("case_id"),
+    record.update(schema="chipcae.vv_real_case_run/0.2", kind=kind, case_id=params.get("case_id"),
                   data_class=params.get("data_class"), materials_provenance=None,
                   commit=_commit(source_root), date=datetime.now().strftime("%Y%m%d"), host=_host(),
                   readiness=dict(ready=False, reason="not evaluated: input validation pending"),
@@ -1139,8 +1211,10 @@ def _solve_run(record, folder, inputs, output, stage, ranks, exes, mpi, timeout_
         else:
             _stage_error(record, entry, folder)
         return entry, None
+    entry["bytes_out"] = _i6_bytes(output)
     readback = _measured([sys.executable, source_root / "tools/vv/result_summary.py", output,
-                          "-o", output / "readback.json"], "readback_" + stage, folder, record, timeout_s)
+                          "-o", output / "readback.json"], "readback_" + stage, folder, record, timeout_s,
+                         bytes_in=entry["bytes_out"])
     if readback["exit_code"]:
         _stage_error(record, readback, folder)
         record["notes"].append(f"readback_{stage}: downstream checks and digest interrupted")
@@ -1339,7 +1413,7 @@ def _pipeline(record, folder, kind, params, resolved, nps, repeat, source_root, 
     else:
         record["notes"].append("C8: MPI launcher unavailable" if 2 in nps else "C8: MPI not requested")
     inputs, timeout_s = folder / "inputs", params.get("timeout_s", 3600)
-    _copy_inputs(inputs, kind, resolved)
+    copied = _copy_inputs(inputs, kind, resolved)
     if kind == "assembly":
         command = [exes["import"], "--assembly", inputs / "assembly.json", "-o", inputs / "stack.json",
                    "--report", inputs / "defects.json"]
@@ -1349,7 +1423,8 @@ def _pipeline(record, folder, kind, params, resolved, nps, repeat, source_root, 
                    "--report", inputs / "defects.json", "--material-map", inputs / "material_map.json"]
     if params.get("accept_b_tier", False):
         command.append("--accept-b-tier")
-    imported = _measured(command, "import", folder, record, timeout_s)
+    imported = _measured(command, "import", folder, record, timeout_s,
+                         bytes_in=_regular_file_bytes(copied))
     parts = _assembly_parts(resolved["document"]) if kind == "assembly" else []
     if kind == "assembly":
         _merge_check(record, "A1", _check_a1(inputs / "import_report.json", inputs / "stack.json",
@@ -1519,7 +1594,21 @@ def _metric_tables(record):
     return tables
 
 
+def _validate_run_record(record) -> None:
+    """Reject malformed writer records before sanitization or persistence."""
+    if record.get("schema") != "chipcae.vv_real_case_run/0.2":
+        raise RuntimeError("run record schema must be chipcae.vv_real_case_run/0.2")
+    for index, command in enumerate(record["commands"]):
+        for field in ("bytes_in", "bytes_out"):
+            if field not in command:
+                raise RuntimeError(f"commands[{index}].{field} is required")
+            value = command[field]
+            if value is not None and not (type(value) is int and value >= 0):
+                raise RuntimeError(f"commands[{index}].{field} must be null or a nonnegative integer")
+
+
 def _finalize(record, folder, usage):
+    _validate_run_record(record)
     inputs = folder / "inputs"
     record["inputs"] = {p.relative_to(inputs).as_posix(): _sha(p) for p in sorted(inputs.rglob("*")) if p.is_file()}
     invalid_numbers, notes = [], []

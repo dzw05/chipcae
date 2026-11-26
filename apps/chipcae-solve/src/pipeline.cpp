@@ -8,6 +8,7 @@
 #include "column_gmg_assembly.hpp"
 #include "cut_convection.hpp"
 #include "cut_output.hpp"
+#include "direct_refine.hpp"
 #include "outline_contains.hpp"
 #include "sha256.hpp"
 
@@ -15,6 +16,7 @@
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <jsoncons/json.hpp>
 #include <limits>
@@ -45,7 +47,13 @@ struct Direct {
     Vec rhs = nullptr, solution = nullptr;
     KSP ksp = nullptr;
     std::uint32_t iterations = 0;
-    double assembly_seconds = 0, factor_seconds = 0;
+    double assembly_seconds = 0, factor_seconds = 0, refine_seconds = 0;
+    RefineResult refinement;
+    static std::string scientific(double value) {
+        char buffer[64];
+        std::snprintf(buffer, sizeof(buffer), "%.3e", value);
+        return buffer;
+    }
     Vector scaled_rhs, scaled_solution;
     ~Direct() {
         KSPDestroy(&ksp);
@@ -53,7 +61,11 @@ struct Direct {
         VecDestroy(&solution);
         MatDestroy(&mat);
     }
-    double solve(const SparseMatrix& a, const Vector& b, Vector& x, const LinearOptions& options) {
+    double solve(const SparseMatrix& a,
+                 const Vector& b,
+                 Vector& x,
+                 const LinearOptions& options,
+                 const std::string& name) {
         const int n = a.Height();
         const auto begin = std::chrono::steady_clock::now();
         // Copy indices explicitly: MFEM int and PetscInt need not have the same width.
@@ -106,31 +118,39 @@ struct Direct {
             throw std::runtime_error("PETSc LU failed");
         for (int i = 0; i < n; ++i)
             x[i] = scaled_solution[i] / diagonal[i];
-        Vector residual(n), correction(n);
-        double relative = 0;
-        // Reuse LU for iterative refinement, checking the actual unpreconditioned residual.
-        for (int i = 0; i < std::min(options.max_iter, 8); ++i) {
-            iterations = static_cast<std::uint32_t>(i + 1);
+        const auto refine_begin = std::chrono::steady_clock::now();
+        refinement = refine(
+            a,
+            b,
+            x,
+            [&](const Vector& residual, Vector& correction) {
+                for (int j = 0; j < n; ++j)
+                    scaled_rhs[j] = residual[j] / diagonal[j];
+                check(KSPSolve(ksp, rhs, solution));
+                check(KSPGetConvergedReason(ksp, &reason));
+                if (reason < 0)
+                    throw std::runtime_error("PETSc LU failed");
+                for (int j = 0; j < n; ++j)
+                    correction[j] = scaled_solution[j] / diagonal[j];
+            },
+            options.rtol,
+            std::min(options.max_iter, 8));
+        refine_seconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - refine_begin).count();
+        iterations = static_cast<std::uint32_t>(refinement.iterations);
+        if (refinement.accepted) {
+            // Keep the structured Residual event's existing normwise definition.
+            // Acceptance uses omega; report the residual of the restored best x.
+            Vector residual(n);
             a.Mult(x, residual);
-            residual *= -1;
-            residual += b;
-            relative = residual.Norml2() / std::max(b.Norml2(), 1.0);
-            if (relative <= options.rtol)
-                return relative;
-            for (int j = 0; j < n; ++j)
-                residual[j] /= diagonal[j];
-            Vec r, d;
-            check(VecCreateSeqWithArray(PETSC_COMM_SELF, 1, n, residual.GetData(), &r));
-            check(VecCreateSeqWithArray(PETSC_COMM_SELF, 1, n, correction.GetData(), &d));
-            auto code = KSPSolve(ksp, r, d);
-            VecDestroy(&r);
-            VecDestroy(&d);
-            check(code);
-            for (int j = 0; j < n; ++j)
-                x[j] += correction[j] / diagonal[j];
+            residual -= b;
+            return residual.Norml2() / std::max(b.Norml2(), 1.0);
         }
-        throw std::runtime_error("LU refinement failed residual tolerance: " +
-                                 std::to_string(relative));
+        throw std::runtime_error(
+            "LU refinement failed residual tolerance: omega=" + scientific(refinement.omega) +
+            " (rtol=" + scientific(options.rtol) + ", eta=" + scientific(refinement.eta) +
+            ", rel=" + scientific(refinement.rel) + ", iterations=" + std::to_string(iterations) +
+            ", refine_seconds=" + scientific(refine_seconds) + ", field=" + name + ")");
     }
 };
 class ThermalForce : public LinearFormIntegrator {
@@ -823,22 +843,51 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             }
             if (!solved) {
                 Direct direct;
-                residual = direct.solve(*matrix, b, x, inputs.linear);
-                iterations = direct.iterations;
-                auto solve_end = std::chrono::steady_clock::now();
-                emit(io::LogLine{
-                    1,
-                    rank,
-                    name + " assembly_seconds=" +
+                std::string timing, failure;
+                try {
+                    residual = direct.solve(*matrix, b, x, inputs.linear, name);
+                    iterations = direct.iterations;
+                    auto solve_end = std::chrono::steady_clock::now();
+                    timing =
+                        name + " assembly_seconds=" +
                         std::to_string(
                             std::chrono::duration<double>(solve_start - assembly_start).count()) +
                         " PETSc_CSR_seconds=" + std::to_string(direct.assembly_seconds) +
                         " factor_seconds=" + std::to_string(direct.factor_seconds) +
                         " LU_solve_seconds=" +
                         std::to_string(
-                            std::chrono::duration<double>(solve_end - solve_start).count()),
-                    "",
-                    0});
+                            std::chrono::duration<double>(solve_end - solve_start).count()) +
+                        " omega=" + Direct::scientific(direct.refinement.omega) +
+                        " eta=" + Direct::scientific(direct.refinement.eta) +
+                        " rel=" + Direct::scientific(direct.refinement.rel) +
+                        " refine_iterations=" + std::to_string(direct.iterations) +
+                        " refine_seconds=" + Direct::scientific(direct.refine_seconds);
+                } catch (const std::exception& error) {
+                    failure = error.what();
+                }
+                int log_ranks = 1;
+                MPI_Comm_size(MPI_COMM_WORLD, &log_ranks);
+                auto relay = [&](const std::string& local, int source) {
+                    std::string line = rank == source ? local : std::string{};
+                    int length = static_cast<int>(line.size());
+                    MPI_Bcast(&length, 1, MPI_INT, source, MPI_COMM_WORLD);
+                    line.resize(static_cast<std::size_t>(length));
+                    MPI_Bcast(line.data(), length, MPI_CHAR, source, MPI_COMM_WORLD);
+                    return line;
+                };
+                // Every direct solve participates, including a rank that threw before timing.
+                // Propagate the first failing rank's diagnostic before relaying success logs.
+                int failed_rank = failure.empty() ? log_ranks : rank;
+                MPI_Allreduce(MPI_IN_PLACE, &failed_rank, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+                if (failed_rank < log_ranks)
+                    throw std::runtime_error(relay(failure, failed_rank));
+                // Only rank zero owns the writer. Finish all collectives before emitting so
+                // a writer failure cannot leave another rank waiting for the next broadcast.
+                std::vector<std::string> timings;
+                for (int source = 0; source < log_ranks; ++source)
+                    timings.push_back(relay(timing, source));
+                for (int source = 0; source < log_ranks; ++source)
+                    emit(io::LogLine{1, source, timings[static_cast<std::size_t>(source)], "", 0});
             }
             form.RecoverFEMSolution(x, rhs, field);
             ++window;

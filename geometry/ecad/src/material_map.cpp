@@ -1,10 +1,14 @@
 #include "chipcae/geometry/ecad/ipc2581.hpp"
 
+#include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <fstream>
 #include <map>
 #include <sstream>
 #include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace chipcae::geometry::ecad {
 namespace {
@@ -49,9 +53,10 @@ void whitespace(const std::string& s, std::size_t& p) {
     while (p < s.size() && std::isspace(static_cast<unsigned char>(s[p])))
         ++p;
 }
-} // namespace
-
-bool apply_material_map(EcadModel& model, const std::filesystem::path& file, std::string* error) {
+struct MaterialMap {
+    std::map<std::string, std::string> mapping, bases;
+};
+bool read_material_map(const std::filesystem::path& file, MaterialMap& map, std::string* error) {
     auto fail = [&](std::string message) {
         if (error)
             *error = std::move(message);
@@ -65,7 +70,8 @@ bool apply_material_map(EcadModel& model, const std::filesystem::path& file, std
     whitespace(text, p);
     if (p == text.size() || text[p++] != '{')
         return fail("invalid material map: expected JSON object");
-    std::map<std::string, std::string> mapping, bases;
+    auto& mapping = map.mapping;
+    auto& bases = map.bases;
     whitespace(text, p);
     while (p < text.size() && text[p] != '}') {
         std::string name, id;
@@ -97,56 +103,182 @@ bool apply_material_map(EcadModel& model, const std::filesystem::path& file, std
     if (p != text.size())
         return fail("invalid material map: trailing data");
 
-    auto folded = [](std::string s) {
-        for (char& c : s)
-            if (c >= 'a' && c <= 'z')
-                c -= 'a' - 'A';
-        return s;
-    };
-    auto quoted = [](const std::vector<std::string>& keys) {
-        std::string result;
-        for (const auto& key : keys) {
-            if (!result.empty())
-                result += ", ";
-            result += "\"" + key + "\"";
+    return true;
+}
+std::string folded(std::string s) {
+    for (char& c : s)
+        if (c >= 'a' && c <= 'z')
+            c -= 'a' - 'A';
+    return s;
+}
+std::string quoted(const std::vector<std::string>& keys) {
+    std::string result;
+    for (const auto& key : keys) {
+        if (!result.empty())
+            result += ", ";
+        result += "\"" + key + "\"";
+    }
+    return result;
+}
+struct MaterialLookup {
+    const std::string* id = nullptr;
+    std::vector<std::string> tried, conflicts;
+};
+MaterialLookup
+lookup_material(const EcadLayer& layer, const MaterialMap& map, bool copper_fallback) {
+    MaterialLookup result;
+    const auto& mapping = map.mapping;
+    auto found = mapping.end();
+    if (!layer.material.empty()) {
+        result.tried.push_back(layer.material);
+        found = mapping.find(layer.material);
+        if (found == mapping.end()) {
+            const auto source = folded(layer.material);
+            for (auto it = mapping.begin(); it != mapping.end(); ++it)
+                if (folded(it->first) == source) {
+                    result.conflicts.push_back(it->first);
+                    found = it;
+                }
+            if (result.conflicts.size() != 1)
+                found = mapping.end();
         }
-        return result;
+    }
+    if (found == mapping.end()) {
+        result.tried.push_back("layer:" + layer.name);
+        found = mapping.find(result.tried.back());
+    }
+    if (found == mapping.end() && copper_fallback) {
+        result.tried.push_back("copper");
+        found = mapping.find(result.tried.back());
+    }
+    if (found != mapping.end())
+        result.id = &found->second;
+    return result;
+}
+} // namespace
+
+bool restore_solder_masks(EcadModel& model,
+                          const std::filesystem::path& material_map,
+                          std::string* error) {
+    MaterialMap map;
+    if (!read_material_map(material_map, map, error))
+        return false;
+
+    // Duplicate capture names share diagnostics, so neither capture can be restored safely.
+    std::unordered_map<std::string, std::size_t> capture_counts;
+    for (const auto& mask : model.omitted_masks)
+        ++capture_counts[mask.layer.name];
+    std::unordered_map<std::string, std::size_t> existing;
+    for (std::size_t i = 0; i < model.layers.size(); ++i)
+        existing.emplace(model.layers[i].name, i);
+    std::unordered_set<std::string> restored;
+    for (const auto& mask : model.omitted_masks)
+        if (capture_counts.at(mask.layer.name) == 1 && !existing.contains(mask.layer.name) &&
+            std::isfinite(mask.layer.thickness_m) && mask.layer.thickness_m > 0 &&
+            lookup_material(mask.layer, map, false).id)
+            restored.insert("SolderMask:" + mask.layer.name);
+    if (restored.empty())
+        return true;
+
+    // The reader emits an omission record for every captured mask. Callers must not remove it
+    // before restoration, including when a preexisting layer has the same name. Only unique
+    // capture names can use its absence to identify a mask restored by an earlier call.
+    std::unordered_set<std::string> pending;
+    for (const auto& entry : model.report.unsupported)
+        pending.insert(entry.element);
+    // Include masks restored by earlier calls so original capture positions remain
+    // meaningful when a later map selects additional masks, including equal slots.
+    struct Placement {
+        const OmittedMask* mask;
+        std::size_t existing;
     };
+    std::vector<Placement> placements;
+    std::vector<bool> placed(model.layers.size(), false);
+    std::unordered_set<std::string> seen;
+    for (const auto& mask : model.omitted_masks) {
+        if (capture_counts.at(mask.layer.name) != 1)
+            continue;
+        const auto found = existing.find(mask.layer.name);
+        const auto element = "SolderMask:" + mask.layer.name;
+        const bool previously_restored =
+            found != existing.end() && !pending.contains(element) &&
+            !model.layers[found->second].copper &&
+            folded(model.layers[found->second].function) == "SOLDERMASK";
+        if ((previously_restored || restored.contains(element)) &&
+            seen.insert(mask.layer.name).second) {
+            const auto index = found == existing.end() ? model.layers.size() : found->second;
+            placements.push_back({&mask, index});
+            if (index < placed.size())
+                placed[index] = true;
+        }
+    }
+    // Merge in insertion-slot order, retaining capture order for equal slots.
+    std::stable_sort(placements.begin(), placements.end(), [](const auto& a, const auto& b) {
+        return a.mask->position < b.mask->position;
+    });
+    std::vector<EcadLayer> layers;
+    layers.reserve(model.layers.size() + restored.size());
+    std::vector<std::size_t> remap(model.layers.size());
+    auto append_mask = [&](const Placement& entry) {
+        if (entry.existing < model.layers.size()) {
+            remap[entry.existing] = layers.size();
+            layers.push_back(std::move(model.layers[entry.existing]));
+        } else {
+            layers.push_back(entry.mask->layer);
+            layers.back().copper = false;
+            layers.back().polygons.clear();
+        }
+    };
+    std::size_t position = 0, next = 0;
+    for (std::size_t i = 0; i < model.layers.size(); ++i) {
+        if (placed[i])
+            continue;
+        while (next < placements.size() && placements[next].mask->position <= position)
+            append_mask(placements[next++]);
+        remap[i] = layers.size();
+        layers.push_back(std::move(model.layers[i]));
+        ++position;
+    }
+    while (next < placements.size())
+        append_mask(placements[next++]);
+    model.layers = std::move(layers);
+    // Insertion changes only indices of existing via data, never its geometry,
+    // fractions, crossed layers or diagnostics.
+    for (auto& via : model.vias)
+        for (auto& index : via.dielectric_layers)
+            if (index < remap.size())
+                index = remap[index];
+    for (auto& cell : model.via_fractions)
+        if (cell.layer < remap.size())
+            cell.layer = remap[cell.layer];
+    std::erase_if(model.report.unsupported,
+                  [&](const auto& entry) { return restored.contains(entry.element); });
+    return true;
+}
+
+bool apply_material_map(EcadModel& model, const std::filesystem::path& file, std::string* error) {
+    auto fail = [&](std::string message) {
+        if (error)
+            *error = std::move(message);
+        return false;
+    };
+    MaterialMap map;
+    if (!read_material_map(file, map, error))
+        return false;
+    const auto& bases = map.bases;
     std::vector<std::string> layer_errors(model.layers.size());
     std::vector<bool> mapped(model.layers.size(), false);
     for (std::size_t i = 0; i < model.layers.size(); ++i) {
         auto& layer = model.layers[i];
-        std::vector<std::string> tried, conflicts;
-        auto found = mapping.end();
-        if (!layer.material.empty()) {
-            tried.push_back(layer.material);
-            found = mapping.find(layer.material);
-            if (found == mapping.end()) {
-                for (auto it = mapping.begin(); it != mapping.end(); ++it)
-                    if (folded(it->first) == folded(layer.material)) {
-                        conflicts.push_back(it->first);
-                        found = it;
-                    }
-                if (conflicts.size() != 1)
-                    found = mapping.end();
-            }
-        }
-        if (found == mapping.end()) {
-            tried.push_back("layer:" + layer.name);
-            found = mapping.find(tried.back());
-        }
-        if (found == mapping.end() && layer.copper) {
-            tried.push_back("copper");
-            found = mapping.find(tried.back());
-        }
-        if (found != mapping.end()) {
-            (layer.copper ? layer.metal : layer.material) = found->second;
+        const auto lookup = lookup_material(layer, map, layer.copper);
+        if (lookup.id) {
+            (layer.copper ? layer.metal : layer.material) = *lookup.id;
             mapped[i] = true;
             continue;
         }
-        std::string entry = layer.name + " (tried: " + quoted(tried);
-        if (conflicts.size() > 1)
-            entry += "; case-conflict: " + quoted(conflicts);
+        std::string entry = layer.name + " (tried: " + quoted(lookup.tried);
+        if (lookup.conflicts.size() > 1)
+            entry += "; case-conflict: " + quoted(lookup.conflicts);
         layer_errors[i] = entry + ")";
     }
     // Resolve bases only after every dielectric has its mapped ID. Scan original

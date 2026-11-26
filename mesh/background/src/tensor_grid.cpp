@@ -613,6 +613,7 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
     for (std::size_t li = 0; li < s.layers.size(); ++li)
         if (s.layers[li].copper) {
             const auto offset = static_cast<std::size_t>(m.copper_layer_of_layer[li]) * nx * ny;
+            HexMeshArrays::GridReport::CopperArea area;
             if (s.layers[li].copper->fraction) {
                 std::fill_n(m.copper_phi.begin() + static_cast<std::ptrdiff_t>(offset),
                             nx * ny,
@@ -628,6 +629,8 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
                     source->coordinates.size() % 2 != 0)
                     return Error{"copper", "invalid polyset geometry"};
                 std::vector<CopperPath> paths;
+                Real xmin = std::numeric_limits<Real>::infinity(), xmax = -xmin;
+                Real ymin = xmin, ymax = -xmin;
                 for (std::size_t r = 0; r + 1 < source->ring_offsets.size(); ++r) {
                     const auto begin = source->ring_offsets[r], end = source->ring_offsets[r + 1];
                     if (begin < 0 || end < begin ||
@@ -635,19 +638,39 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
                         return Error{"copper", "invalid polyset ring offsets"};
                     auto& path = paths.emplace_back();
                     path.reserve(static_cast<std::size_t>(end - begin));
-                    for (auto point = begin; point < end; ++point)
+                    for (auto point = begin; point < end; ++point) {
                         path.push_back({source->coordinates[2 * point] * polyset->dbu_m,
                                         source->coordinates[2 * point + 1] * polyset->dbu_m});
+                        xmin = std::min(xmin, path.back()[0]);
+                        xmax = std::max(xmax, path.back()[0]);
+                        ymin = std::min(ymin, path.back()[1]);
+                        ymax = std::max(ymax, path.back()[1]);
+                    }
                 }
                 try {
                     auto phi = rasterize_copper(axes[0], axes[1], paths);
                     std::copy(phi.begin(),
                               phi.end(),
                               m.copper_phi.begin() + static_cast<std::ptrdiff_t>(offset));
+                    // One bounding-box column measures the full NonZero union, including
+                    // holes, overlapping rings and copper outside the background grid.
+                    if (xmax > xmin && ymax > ymin) {
+                        const auto whole = rasterize_copper({xmin, xmax}, {ymin, ymax}, paths);
+                        area.polygons = whole[0] * (xmax - xmin) * (ymax - ymin);
+                    }
                 } catch (const std::exception& e) {
                     return Error{"copper", e.what()};
                 }
             }
+            // Fixed (j,i) traversal of all padded columns; phi is dense Morton ordered.
+            for (std::size_t j = 0; j < ny; ++j)
+                for (std::size_t i = 0; i < nx; ++i)
+                    area.raster += m.copper_phi[offset + level0_dense(nx, ny, i, j)] *
+                                   (axes[0][i + 1] - axes[0][i]) * (axes[1][j + 1] - axes[1][j]);
+            if (s.layers[li].copper->fraction)
+                // Fraction layers report their uniform fill over the padded grid in both fields.
+                area.polygons = area.raster;
+            m.grid_report.copper_area_m2[s.layers[li].name] = area;
         }
     if (nx > static_cast<std::size_t>(o.cell_budget) / ny / nz)
         return Error{"cell_budget",

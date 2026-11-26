@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QMap>
 #include <QUuid>
+#include <cmath>
 #include <exception>
 #include <jsoncons_ext/jsonpointer/jsonpointer.hpp>
 
@@ -200,6 +201,42 @@ QString CaseTreeModel::addLoad(Json load) {
     load["id"] = id.toStdString();
     copy["loads"].push_back(load);
     return apply(copy) ? "case:" + id : QString();
+}
+QString CaseTreeModel::addHeatSource(const QString& layerName, double power) {
+    const auto data = document_->toJson();
+    bool thermal = false;
+    if (data.contains("physics") && data.at("physics").is_array())
+        for (const auto& physics : data.at("physics").array_range())
+            if (physics.is_object() && physics.contains("id") && physics.at("id") == "thermal")
+                thermal = true;
+    if (!thermal)
+        return {};
+    if (layerName.isEmpty() || !std::isfinite(power))
+        return {};
+    const auto stack = document_->stackJson();
+    if (!stack.contains("layers") || !stack.at("layers").is_array())
+        return {};
+    const auto name = layerName.toStdString();
+    bool found = false;
+    for (const auto& layer : stack.at("layers").array_range())
+        if (layer.is_object() && layer.contains("name") && layer.at("name").is_string() &&
+            layer.at("name") == name) {
+            found = true;
+            break;
+        }
+    if (!found)
+        return {};
+    const auto target = "layer:" + name;
+    if (data.contains("loads") && data.at("loads").is_array())
+        for (const auto& load : data.at("loads").array_range())
+            if (load.is_object() && load.contains("type") && load.at("type") == "heat_source" &&
+                load.contains("target") && load.at("target") == target)
+                return {};
+    Json load = Json::object();
+    load["type"] = "heat_source";
+    load["target"] = target;
+    load["power"] = power;
+    return addLoad(load);
 }
 QString CaseTreeModel::addFixedFace(const QString& target) {
     auto copy = document_->toJson();

@@ -1,0 +1,3 @@
+<testsuite name="synthetic">
+  <testcase name="required_case" status="notrun" time="0"><skipped message="backend | unavailable&#10;return 77"/></testcase>
+</testsuite>

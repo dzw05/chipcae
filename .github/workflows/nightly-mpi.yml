@@ -12,6 +12,12 @@ on:
   schedule:
     - cron: "0 18 * * 0-4"
   workflow_dispatch:
+    inputs:
+      inject_cuda_fault:
+        description: "Fail compilation inside the solver CUDA branch (CI self-test)"
+        type: boolean
+        default: false
+        required: false
 
 concurrency:
   group: nightly-mpi-${{ github.workflow }}-${{ github.ref }}
@@ -202,3 +208,282 @@ jobs:
           cmake --build build --parallel --target chipcae_core chipcae_test_core_types chipcae_test_par
           echo "Compiled core and par tests with Kokkos CUDA. Binaries were not executed."
           echo "This compile path was not verified on the development machine (no nvcc)."
+
+  cuda-solve-compile:
+    name: Nightly CUDA MFEM solver compile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: Start job timer
+        run: echo "CUDA_SOLVE_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Skip if main has no commits in 24h
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: bash tools/ci/nightly_freshness.sh
+
+      - name: Install toolchain
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++ cmake ninja-build make ccache python3 curl binutils \
+            libopenmpi-dev openmpi-bin libopenblas-dev libyaml-cpp-dev
+          curl -fsSLO https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cuda-nvcc-12-6 cuda-cudart-dev-12-6 libcublas-dev-12-6 libcusparse-dev-12-6
+          # Pass the CUDA root explicitly below; preserve build-tool PATH precedence.
+
+      - name: Cache identity
+        if: steps.gate.outputs.run == 'true'
+        id: cache-key
+        env:
+          DEPS_HASH: ${{ hashFiles('apps/chipcae-solve/ci/deps_cuda.lock', 'apps/chipcae-solve/ci/build_deps_cuda.sh', 'tests/integration/mesh_p1/ci/deps.lock') }}
+        run: |
+          set -euo pipefail
+          mkdir -p cuda-solve-logs
+          /usr/local/cuda-12.6/bin/nvcc --version > cuda-solve-logs/nvcc-version.txt
+          {
+            g++ --version
+            g++ -dumpmachine
+            g++ -dumpfullversion
+            mpicxx --showme:command
+            mpicxx --showme:version
+            mpicxx --showme:compile
+            mpicxx --showme:link
+          } > cuda-solve-logs/host-compiler.txt
+          cat cuda-solve-logs/nvcc-version.txt cuda-solve-logs/host-compiler.txt
+          toolchain=$(cat cuda-solve-logs/nvcc-version.txt cuda-solve-logs/host-compiler.txt | sha256sum | cut -d' ' -f1)
+          image_os="${ImageOS:?ImageOS is required for dependency cache identity}"
+          key="solve-cuda-${RUNNER_OS}-${image_os}-${toolchain}-${DEPS_HASH}"
+          echo "deps_key=$key" >> "$GITHUB_OUTPUT"
+          echo "Dependency cache key: $key"
+
+      - name: Cache CUDA solver dependencies (exact match only)
+        if: steps.gate.outputs.run == 'true'
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: ~/deps/solve-cuda
+          key: ${{ steps.cache-key.outputs.deps_key }}
+
+      - name: Cache ccache
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache-solve-cuda
+          key: ccache-${{ steps.cache-key.outputs.deps_key }}-${{ hashFiles('**/*.cpp', '**/*.hpp', '**/*.h', '**/CMakeLists.txt', 'cmake/**') }}
+          restore-keys: |
+            ccache-${{ steps.cache-key.outputs.deps_key }}-
+
+      - name: Install and validate dependencies
+        if: steps.gate.outputs.run == 'true'
+        env:
+          CACHE_HIT: ${{ steps.cache-deps.outputs.cache-hit }}
+          CCACHE_DIR: ${{ github.workspace }}/.ccache-solve-cuda
+          CCACHE_MAXSIZE: 500M
+        run: |
+          set -euo pipefail
+          started=$(date +%s)
+          trap 'result=$?; elapsed=$(( $(date +%s) - started )); echo "Dependencies: cache-hit=${CACHE_HIT:-false}, ${elapsed}s, exit=${result}" | tee cuda-solve-logs/dependencies-time.txt; exit "$result"' EXIT
+          prefix="$HOME/deps/solve-cuda"
+          if [[ "$CACHE_HIT" != true ]]; then
+            bash apps/chipcae-solve/ci/build_deps_cuda.sh "$prefix" "$RUNNER_TEMP/solve-cuda-deps" \
+              2>&1 | tee cuda-solve-logs/dependencies-build.txt
+          fi
+          expected=$(cd apps/chipcae-solve/ci && sha256sum deps_cuda.lock build_deps_cuda.sh | sha256sum | cut -d' ' -f1)
+          test "$(cat "$prefix/.cuda-solve-ready")" = "$expected"
+          for installed in include/metis.h lib/libmetis.so \
+            include/HYPRE.h lib/libHYPRE.so include/hdf5.h lib/libhdf5.so \
+            include/jsoncons/json.hpp include/petscversion.h lib/libpetsc.so \
+            lib/libmfem.so lib/cmake/mfem/MFEMConfig.cmake \
+            share/chipcae/petsc-cmake/FindPETSc.cmake \
+            share/chipcae/petsc-cmake/FindPackageMultipass.cmake \
+            share/chipcae/petsc-cmake/ResolveCompilerPaths.cmake; do
+            test -s "$prefix/$installed"
+          done
+          config="$prefix/include/mfem/config/_config.hpp"
+          echo "Installed MFEM configuration: $config"
+          grep -nE '^#define MFEM_USE_CUDA\b' "$config"
+          grep -nE '^#define MFEM_USE_PETSC\b' "$config"
+          # Dependency configure performs native CPU probes (PETSc/MPI/compiler);
+          # generated solver and test binaries are never executed by this job.
+
+      - name: Configure and enumerate solver targets
+        if: steps.gate.outputs.run == 'true'
+        env:
+          INJECT_CUDA_FAULT: ${{ inputs.inject_cuda_fault }}
+          CCACHE_DIR: ${{ github.workspace }}/.ccache-solve-cuda
+          CCACHE_MAXSIZE: 500M
+        run: |
+          set -euo pipefail
+          echo "CUDA_SOLVE_BUILD_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+          prefix="$HOME/deps/solve-cuda"
+          mkdir -p build/.cmake/api/v1/query
+          touch build/.cmake/api/v1/query/codemodel-v2
+          # Start with caller flags; injection only appends its one definition.
+          cxx_flags="${CXXFLAGS:-}"
+          if [[ "$INJECT_CUDA_FAULT" == true ]]; then
+            cxx_flags+=" -DCHIPCAE_CI_INJECT_CUDA_FAULT"
+          fi
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=mpicxx -DCMAKE_C_COMPILER=mpicc \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_FLAGS="$cxx_flags" \
+            -DCMAKE_PREFIX_PATH="$prefix" \
+            -DCMAKE_MODULE_PATH="$prefix/share/chipcae/petsc-cmake" \
+            -DPETSC_DIR="$prefix" -DCUDAToolkit_ROOT=/usr/local/cuda-12.6 \
+            -DCHIPCAE_ENABLE_JSONCONS=ON -DCHIPCAE_ENABLE_MPI=ON \
+            -DCHIPCAE_ENABLE_HDF5=ON -DCHIPCAE_ENABLE_MFEM=ON \
+            -DCHIPCAE_ENABLE_PETSC=ON -DCHIPCAE_BUILD_TESTS=ON \
+            -DCHIPCAE_WARNINGS_AS_ERRORS=ON \
+            --trace-expand --trace-format=json-v1 \
+            --trace-source="$PWD/tests/solve/CMakeLists.txt" \
+            --trace-redirect="$PWD/cuda-solve-logs/solve-trace.jsonl" \
+            2>&1 | tee cuda-solve-logs/configure.txt
+          ninja -C build -t targets all > cuda-solve-logs/ninja-targets.txt
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          source = Path.cwd()
+          solve = source / "tests/solve"
+          logs = source / "cuda-solve-logs"
+          declared = set()
+          for line in (logs / "solve-trace.jsonl").read_text().splitlines():
+              call = json.loads(line)
+              if (call.get("cmd") == "add_executable"
+                      and Path(call["file"]).resolve() == solve / "CMakeLists.txt"):
+                  declared.add(call["args"][0])
+          assert declared, "No executed add_executable calls in tests/solve"
+          reply = source / "build/.cmake/api/v1/reply"
+          index = json.loads(max(reply.glob("index-*.json")).read_text())
+          model = json.loads((reply / index["reply"]["codemodel-v2"]["jsonFile"]).read_text())
+          configs = model["configurations"]
+          assert len(configs) == 1, "Expected one Ninja Release configuration"
+          generated = set()
+          for ref in configs[0]["targets"]:
+              target = json.loads((reply / ref["jsonFile"]).read_text())
+              directory = Path(model["paths"]["source"]) / target["paths"]["source"]
+              if target["type"] == "EXECUTABLE" and directory.resolve() == solve:
+                  generated.add(target["name"])
+          assert declared == generated, f"Trace/File API mismatch: {declared ^ generated}"
+          ninja = {line.rsplit(": ", 1)[0] for line in
+                   (logs / "ninja-targets.txt").read_text().splitlines()}
+          targets = sorted(declared | {"chipcae-solve", "chipcae_fem", "chipcae_test_gmg_batched_lu"})
+          assert set(targets) <= ninja, f"Missing Ninja targets: {set(targets) - ninja}"
+          (logs / "solve-targets.txt").write_text("\n".join(sorted(declared)) + "\n")
+          (logs / "build-targets.txt").write_text("\n".join(targets) + "\n")
+          print("Complete tests/solve executable set (trace == File API, each exists in Ninja):")
+          print("\n".join(sorted(declared)))
+          print("Build target union:")
+          print("\n".join(targets))
+          PY
+
+      - name: Compile solver and every enumerated target
+        if: steps.gate.outputs.run == 'true'
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache-solve-cuda
+          CCACHE_MAXSIZE: 500M
+        run: |
+          set -euo pipefail
+          mapfile -t targets < cuda-solve-logs/build-targets.txt
+          test "${#targets[@]}" -gt 0
+          cmake --build build --parallel 2 --target "${targets[@]}" \
+            2>&1 | tee cuda-solve-logs/build.txt
+
+      - name: Audit CUDA compilation artifacts
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          for object in \
+            build/apps/chipcae-solve/CMakeFiles/chipcae-solve.dir/src/pipeline.cpp.o \
+            build/apps/chipcae-solve/CMakeFiles/chipcae-solve.dir/src/main.cpp.o \
+            build/solvers/fem/CMakeFiles/chipcae_fem.dir/src/column_gmg.cpp.o; do
+            test -s "$object"
+            ls -l "$object"
+          done
+          exe=build/apps/chipcae-solve/chipcae-solve
+          strings "$exe" > cuda-solve-logs/solver-strings.txt
+          if grep -F 'built without CUDA-enabled MFEM' cuda-solve-logs/solver-strings.txt; then
+            echo 'Non-CUDA solver branch was compiled' >&2
+            exit 1
+          fi
+          echo 'Absent literal: built without CUDA-enabled MFEM'
+          readelf -d "$exe" > cuda-solve-logs/solver-dynamic.txt
+          cat cuda-solve-logs/solver-dynamic.txt
+          # Resolve the solver's actual NEEDED MFEM using its loader search paths,
+          # without invoking the executable or ldd. Audit that library, not a glob.
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          logs = Path("cuda-solve-logs")
+          dynamic = (logs / "solver-dynamic.txt").read_text()
+          needed = re.findall(r"\(NEEDED\).*\[(.*?)\]", dynamic)
+          if not any(name.startswith("libcudart.so") for name in needed):
+              mfem = [name for name in needed if name.startswith("libmfem.so")]
+              assert len(mfem) == 1, f"Expected a direct MFEM dependency: {needed}"
+              origin = Path("build/apps/chipcae-solve").resolve()
+              runpath = re.findall(r"\(RUNPATH\).*\[(.*?)\]", dynamic)
+              rpath = re.findall(r"\(RPATH\).*\[(.*?)\]", dynamic) if not runpath else []
+              search = rpath + [os.environ.get("LD_LIBRARY_PATH", "")] + runpath
+              library = None
+              for entry in ":".join(search).split(":"):
+                  if not entry:
+                      continue
+                  directory = entry.replace("${ORIGIN}", str(origin)).replace("$ORIGIN", str(origin))
+                  candidate = Path(directory) / mfem[0]
+                  if candidate.is_file():
+                      library = candidate.resolve()
+                      break
+              assert library is not None, f"Cannot resolve {mfem[0]} from {search}"
+              assert library.is_relative_to(Path.home() / "deps/solve-cuda"), library
+              print(f"Resolved solver NEEDED {mfem[0]}: {library}")
+              inspected = subprocess.run(["readelf", "-d", str(library)], check=True,
+                                         capture_output=True, text=True).stdout
+              (logs / "mfem-dynamic.txt").write_text(inspected)
+              print(inspected)
+              dependencies = re.findall(r"\(NEEDED\).*\[(.*?)\]", inspected)
+              assert any(name.startswith("libcudart.so") for name in dependencies), dependencies
+          print("Confirmed libcudart NEEDED by solver or its linked MFEM")
+          PY
+          echo "Compiled only; binaries were not executed; no GPU on hosted runner."
+
+      - name: Record timings
+        if: always() && steps.gate.outputs.run == 'true'
+        env:
+          CACHE_HIT: ${{ steps.cache-deps.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          mkdir -p cuda-solve-logs
+          now=$(date +%s)
+          {
+            echo "Dependency cache-hit=${CACHE_HIT:-false}"
+            if [[ -n "${CUDA_SOLVE_BUILD_STARTED:-}" ]]; then
+              echo "Solver configure/build/audit elapsed: $(( now - CUDA_SOLVE_BUILD_STARTED ))s"
+            fi
+            echo "Job elapsed: $(( now - CUDA_SOLVE_STARTED ))s"
+          } | tee cuda-solve-logs/job-time.txt >> "$GITHUB_STEP_SUMMARY"
+          cat cuda-solve-logs/job-time.txt
+          if [[ -f cuda-solve-logs/dependencies-time.txt ]]; then
+            cat cuda-solve-logs/dependencies-time.txt >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload CUDA compile evidence
+        if: always() && steps.gate.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-cuda-solve-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: error
+          path: cuda-solve-logs/

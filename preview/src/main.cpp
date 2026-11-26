@@ -23,6 +23,8 @@
 #include <vector>
 
 #ifdef CHIPCAE_PREVIEW_ENABLED
+#include "chipcae/mesh/background/column_hierarchy.hpp"
+#include "chipcae/mesh/background/copper_map.hpp"
 #include "chipcae/mesh/background/tensor_grid.hpp"
 #include "chipcae/mesh/background/vtkhdf_writer.hpp"
 #include "chipcae/mesh/cut/detail/outline_nonconvex.hpp"
@@ -132,6 +134,29 @@ T checked_io(chipcae::mesh::Expected<T> result) {
         throw std::runtime_error(result.error().path + ": " + result.error().reason);
     return std::move(result.value());
 }
+struct CopperColumnAreas {
+    chipcae::Real background = 0;
+    chipcae::Real raster = 0;
+};
+CopperColumnAreas copper_column_areas(const chipcae::mesh::HexMeshArrays& mesh, std::size_t li) {
+    using chipcae::mesh::level0_dense;
+    const auto& x = mesh.axes[0];
+    const auto& y = mesh.axes[1];
+    const std::size_t nx = x.size() - 1, ny = y.size() - 1;
+    const std::size_t offset = static_cast<std::size_t>(mesh.copper_layer_of_layer[li]) * nx * ny;
+    CopperColumnAreas result;
+    for (std::size_t j = 0; j < ny; ++j)
+        for (std::size_t i = 0; i < nx; ++i) {
+            const auto c = level0_dense(static_cast<std::uint32_t>(nx),
+                                        static_cast<std::uint32_t>(ny),
+                                        static_cast<std::uint32_t>(i),
+                                        static_cast<std::uint32_t>(j));
+            const chipcae::Real area = (x[i + 1] - x[i]) * (y[j + 1] - y[j]);
+            result.background += area;
+            result.raster += mesh.copper_phi[offset + c] * area;
+        }
+    return result;
+}
 int run(int argc, char** argv) {
     using namespace chipcae::mesh;
     std::filesystem::path input, output, surface, polyset;
@@ -143,8 +168,6 @@ int run(int argc, char** argv) {
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     options.ranks = world_size;
 #endif
-    // The K1 FCBGA fixture has a 10:1 interface cell-height ratio.
-    options.max_ratio = 10;
     std::set<std::string> seen;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -276,7 +299,32 @@ int run(int argc, char** argv) {
               << ",\"cut_cell_count\":" << (cut ? cut->cut_elem.size() : 0)
               << ",\"mesh_sha256\":" << quote(summary.sha256)
               << ",\"cell_budget\":" << options.cell_budget << ",\"min_elems_per_layer\":"
-              << (min_elems_per_layer ? std::to_string(*min_elems_per_layer) : "null") << "}";
+              << (min_elems_per_layer ? std::to_string(*min_elems_per_layer) : "null")
+              << ",\"copper_area_m2\":{";
+    bool first_copper = true;
+    for (std::size_t li = 0; li < stack.layers.size(); ++li) {
+        const auto& layer = stack.layers[li];
+        if (!layer.copper)
+            continue;
+        auto [background_area, raster_area] = copper_column_areas(mesh, li);
+        chipcae::Real polygon_area = 0;
+        if (layer.copper->fraction) {
+            // A shared constant-field reduction keeps both values bitwise identical.
+            polygon_area = raster_area = *layer.copper->fraction * background_area;
+        } else if (layer.copper->polygons) {
+            const auto source =
+                std::find_if(polygons.layers.begin(), polygons.layers.end(), [&](const auto& p) {
+                    return p.name == layer.copper->polygons->layer;
+                });
+            polygon_area = copper_union_area_m2(*source, polygons.dbu_m);
+        }
+        if (!first_copper)
+            effective << ',';
+        first_copper = false;
+        effective << quote(layer.name) << ":{\"polygons\":" << polygon_area
+                  << ",\"raster\":" << raster_area << '}';
+    }
+    effective << "}}";
     event("success", 1, effective.str());
     return 0;
 }

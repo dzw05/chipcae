@@ -1,0 +1,20 @@
+# test_name	job	note
+fvm_fvm_case_e2e	mac-highmem	mac-highmem.yml: Test FVM acceptance (mandatory)
+solve_fvm_thermal	mac-highmem	mac-highmem.yml: Test FVM acceptance (mandatory)
+solve_fvm_thermal_cut	mac-highmem	mac-highmem.yml: Test FVM acceptance (mandatory)
+solve_fvm_thermal_np2	mac-highmem	mac-highmem.yml: Test FVM acceptance (mandatory)
+solve_fvm_elastic	mac-highmem	mac-highmem.yml: Test FVM acceptance (mandatory)
+solve_fvm_bimetal	mac-highmem	mac-highmem.yml: Test FVM acceptance (mandatory)
+solve_fvm_elastic_np2	mac-highmem	mac-highmem.yml: Test FVM acceptance (mandatory)
+cutbim_cut_bimetal	mac-highmem	mac-highmem.yml: Test highmem (a, mandatory)
+solve_column_gmg_fcbga	mac-highmem	mac-highmem.yml: Test highmem (a, mandatory)
+solve_column_gmg_fcbga_scaling	mac-highmem	mac-highmem.yml: Test highmem (a, mandatory)
+f1130_uncut_cli_e2e	*	tests/integration/f1130_uncut_cli/CMakeLists.txt: chipcae_auto_tests PREFIX f1130_
+chain_ipc_uncut_chain	*	tests/integration/import_solve_chain/CMakeLists.txt: chipcae_auto_tests PREFIX chain_
+odbcli_odbpp_cli_e2e	*	tests/integration/odbpp_cli_e2e/CMakeLists.txt: chipcae_auto_tests PREFIX odbcli_
+field_compare_ranks	*	tests/integration/field_compare/CMakeLists.txt: chipcae_auto_tests PREFIX field_compare_
+vv_result_schema	*	tests/vv/CMakeLists.txt: add_test vv_result_schema
+realcase_real_case_unit	*	tests/integration/real_case_e2e/CMakeLists.txt: chipcae_auto_tests PREFIX realcase_
+realcase_real_case_thermal	*	N21：realcase 现为 SKIP
+realcase_real_case_warpage	*	N21：realcase 现为 SKIP
+realcase_real_case_assembly	*	N21：realcase 现为 SKIP

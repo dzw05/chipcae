@@ -125,7 +125,7 @@ class PreviewMeshParams(unittest.TestCase):
             'grid', 'max_ratio', 'n0', 'nx0', 'ny0', 'L',
             'padded_cells', 'void_cells', 'nz', 'node_count',
             'cell_count', 'cut_cell_count', 'mesh_sha256',
-            'cell_budget', 'min_elems_per_layer',
+            'cell_budget', 'min_elems_per_layer', 'copper_area_m2',
         ]
         cases = (
             ('default', [], None),
@@ -157,10 +157,12 @@ class PreviewMeshParams(unittest.TestCase):
                                          keys.index('mesh_sha256') + 1, context)
                         self.assertEqual(keys.index('min_elems_per_layer'),
                                          keys.index('mesh_sha256') + 2, context)
-                    self.assertEqual(message_keys[-2:], expected[-2:], context)
-                    self.assertEqual(top_keys[-3:-1], expected[-2:], context)
+                    self.assertEqual(message_keys[-3:], expected[-3:], context)
+                    self.assertEqual(top_keys[-4:-1], expected[-3:], context)
+                    self.assertEqual(message[-1], ('copper_area_m2', []), context)
+                    self.assertEqual(summary['copper_area_m2'], {}, context)
                     for budget, actual_minimum in (
-                            (message[-2][1], message[-1][1]),
+                            (message[-3][1], message[-2][1]),
                             (summary['cell_budget'], summary['min_elems_per_layer'])):
                         self.assertEqual(budget, 50000, context)
                         if minimum is None:
@@ -211,8 +213,11 @@ class PreviewMeshParams(unittest.TestCase):
             with self.subTest(minimum=minimum, original_minimum=original_minimum):
                 stack = synthetic_stack(15)
                 stack['layers'][0]['n_elem_min'] = original_minimum
-                invocation = self.invoke(f'min-{minimum}-{original_minimum}', stack,
-                                         ['--min-elems-per-layer', str(minimum)])
+                flags = ['--min-elems-per-layer', str(minimum)]
+                # Equal layer thicknesses make this subdivision ratio exceed the default 2.
+                if original_minimum > 2 * minimum:
+                    flags += ['--max-ratio', '10']
+                invocation = self.invoke(f'min-{minimum}-{original_minimum}', stack, flags)
                 summary = self.success(invocation)
                 self.assertEqual(summary['nz'], expected_nz, diagnostics(invocation[0]))
                 self.assertEqual(summary.get('min_elems_per_layer'), minimum,

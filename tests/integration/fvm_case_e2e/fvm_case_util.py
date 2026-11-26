@@ -74,6 +74,10 @@ def build_adapter_probe(root, source, contract=None):
             skip = False
         elif flag == '-o':
             skip = True
+        elif flag.startswith('-Wl,--dependency-file='):
+            # CMake generates a fresh linker depfile for each probe target.
+            # The CLI's relative output path belongs to its original build tree.
+            continue
         elif not flag.endswith(('.o', '.obj')):
             libraries.append(str(binary / flag) if (binary / flag).is_file() else flag)
     quote = lambda value: '[=[' + str(value) + ']=]'

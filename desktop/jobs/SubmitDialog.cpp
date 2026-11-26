@@ -27,6 +27,7 @@ SubmitDialog::SubmitDialog(QWidget* parent) : QDialog(parent) {
     ranks_ = spin(1);
     threads_ = spin(1);
     nx_ = spin(4);
+    nx_->setObjectName("meshNx");
     layout->addRow(tr("Ranks"), ranks_);
     layout->addRow(tr("Threads per rank"), threads_);
     layout->addRow(tr("Mesh nx"), nx_);
@@ -67,7 +68,18 @@ int SubmitDialog::meshNx() const {
     return nx_->value();
 }
 void SubmitDialog::setMeshNx(int nx) {
+    // Written preview values may exceed the editable session limit.
+    if (meshNxLocked_ && nx > nx_->maximum())
+        nx_->setMaximum(nx);
     nx_->setValue(nx);
+}
+void SubmitDialog::setMeshNxLocked(bool locked) {
+    meshNxLocked_ = locked;
+    nx_->setEnabled(!locked);
+    nx_->setToolTip(locked ? QStringLiteral("沿用预览写入 case 的网格参数") : QString());
+}
+bool SubmitDialog::meshNxLocked() const {
+    return meshNxLocked_;
 }
 bool SubmitDialog::loadProfile(const QString& path) {
     QFile file(path);

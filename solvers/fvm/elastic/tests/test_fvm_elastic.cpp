@@ -535,6 +535,9 @@ void failed_ksp() {
     const auto r = solve_elastic(m, p, MPI_COMM_SELF);
     require(!r, "one GMRES iteration must not return unconverged fields as success");
     const auto why = r.error().reason;
+    require(why.starts_with("Krylov residual="), "frozen solver-failure prefix: " + why);
+    require(why.find("nonconvergence") != std::string::npos,
+            "solver failure identifies nonconvergence: " + why);
     require(why.find("iter") != std::string::npos && why.find("1") != std::string::npos &&
                 why.find("residual") != std::string::npos,
             "solver failure includes iteration count and physical residual: " + why);

@@ -132,6 +132,8 @@ private:
     bool previewDisplayed_ = false;
     bool previewDisplayStale_ = false;
     std::optional<chipcae::desktop::MeshOptions> previewMeshOptions_;
+    std::optional<chipcae::desktop::Json> previewWrittenMesh_;
     QAction* writePreviewToCaseAction_ = nullptr;
+    bool previewMeshLocked() const;
     void clearPreviewMeshOptions();
 };

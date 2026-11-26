@@ -2,12 +2,19 @@
 
 #include <set>
 using namespace slice_test;
-int main() {
-    const auto path = demo("IHP_NATIVE_CONTACT_CONVERSION_EXAMPLE.step");
+int main(int argc, char** argv) {
+    if (argc == 3 && std::string(argv[1]) == "--check-demo-env") {
+        return run([&] {
+            require(demo_env("CHIPCAE_DEMO_IHP_STEP") == std::filesystem::path(argv[2]),
+                    "CHIPCAE_DEMO_IHP_STEP resolves only configured regular files");
+        });
+    }
+    const auto path = demo_env("CHIPCAE_DEMO_IHP_STEP");
     if (path.empty())
         return 77;
     return run([&] {
-        const auto input = import_step(path);
+        const auto input =
+            import_step(path, {compute_tolerances({0.04, 0.0005, 0.001, 0}, {}).value()});
         require(input.body_names.size() == 10, "IHP imports ten bodies");
         const std::set<DefectReason> allowed{DefectReason::THIN_LAYER_MERGED,
                                              DefectReason::PART_UNMAPPED,

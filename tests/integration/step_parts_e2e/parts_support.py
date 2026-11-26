@@ -119,7 +119,7 @@ def solve(directory, label, n=28, stack='stack.json', materials=(), ny=None, lev
 
 
 def volume(path, material):
-    """Read solver SI volumes as described in docs/demo-1214.md."""
+    """Read solver SI volumes as described in docs/step-parts-demo.md."""
     import h5py
     import numpy as np
     total = 0.
