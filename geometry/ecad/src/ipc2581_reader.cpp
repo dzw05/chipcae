@@ -175,7 +175,8 @@ struct Parser {
                 const double rotation = std::remainder(pad.rotation, 360.0) * pi / 180;
                 const double c = std::cos(rotation), sn = std::sin(rotation);
                 Clipper2Lib::Path64 ring;
-                for (int end = 0; end < 2; ++end) {
+                bool invalid = false;
+                for (int end = 0; end < 2 && !invalid; ++end) {
                     for (int i = 0; i <= 128; ++i) {
                         const double angle = -pi / 2 + end * pi + pi * i / 128;
                         double x = (end == 0 ? s : -s) + r * std::cos(angle);
@@ -190,12 +191,14 @@ struct Parser {
                         // Stay in Clipper's coordinate range, including enormous finite inputs.
                         constexpr double limit = static_cast<double>(Clipper2Lib::MAX_COORD);
                         if (!std::isfinite(px) || !std::isfinite(py) || std::abs(px) >= limit ||
-                            std::abs(py) >= limit)
+                            std::abs(py) >= limit) {
+                            invalid = true;
                             break;
+                        }
                         ring.push_back({std::llround(px), std::llround(py)});
                     }
                 }
-                if (ring.size() != 258 || std::abs(Clipper2Lib::Area(ring)) < 1.0)
+                if (invalid || ring.size() != 258 || std::abs(Clipper2Lib::Area(ring)) < 1.0)
                     continue;
                 for (const auto& v : ring)
                     polygon.points.push_back({v.x, v.y});
@@ -1036,6 +1039,7 @@ struct Parser {
             const bool valid_scale =
                 !attr(a, "scaleFactor") || finite_number(attr(a, "scaleFactor"), factor);
             p.rotation = rotation;
+            // Only exact identity scaling is supported, including for near-unit factors.
             p.oval_transform_supported = p.oval_transform_supported && valid_rotation &&
                                          valid_scale && factor == 1 && value(a, "mirror") != "true";
         } else if (name == "Location" && in_pad) {

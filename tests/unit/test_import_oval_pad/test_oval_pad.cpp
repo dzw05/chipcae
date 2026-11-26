@@ -195,8 +195,12 @@ void valid(double w, double h, double degrees, bool after = false) {
     }
     clean_oval(model);
 }
-void unmodeled(const std::string& shape, const std::string& xform, bool invalid, bool after) {
-    const auto xml = board(shape, pad(xform, after));
+void unmodeled(const std::string& shape,
+               const std::string& xform,
+               bool invalid,
+               bool after,
+               const std::string& x = "10") {
+    const auto xml = board(shape, pad(xform, after, "-20", x));
     const auto model = parse(xml);
     check(layer(model).polygons.empty() && model.vias.empty(), "unsupported Pad created geometry");
     const auto line = line_of(xml, "<StandardPrimitiveRef");
@@ -467,6 +471,11 @@ int main() {
     });
     run("subgrid_collapsed_oval_stays_unmodeled",
         [] { unmodeled("<Oval width=\"1e-12\" height=\"2e-12\"/>", "", false, false); });
+    // The center is within 1024 DBU of Clipper's limit; the 2000 DBU end cap crosses it.
+    // Positive x rejects the first cap, negative x the second. Neither may emit a partial ring.
+    for (const auto* x : {"2305843009213693", "-2305843009213693"})
+        run(std::string("out_of_range_oval_stays_unmodeled_x_") + x,
+            [=] { unmodeled("<Oval width=\"4\" height=\"3\"/>", "", false, false, x); });
     run("overlapping_ovals_union", [] {
         const auto model =
             parse(board("<Oval width=\"3\" height=\"4\"/>", pad() + pad("", false, "-19.5")));
