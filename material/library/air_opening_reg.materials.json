@@ -1,0 +1,44 @@
+{
+  "schema": "chipcae.material_library/1",
+  "materials": [
+    {
+      "id": "air_opening_reg",
+      "schema_version": "1",
+      "unit_system": "SI",
+      "model": "thermo_elastic",
+      "conductivity": 0.02551,
+      "density": 1.184,
+      "elastic": {
+        "symmetry": "isotropic",
+        "table": {
+          "temperatures": [298.15],
+          "columns": {
+            "E": [2.7e6],
+            "nu": [0]
+          },
+          "interpolation": "constant",
+          "extrapolation": "clamp"
+        }
+      },
+      "thermal_expansion": {
+        "cte_type": "tangent",
+        "symmetry": "isotropic",
+        "stress_free_temperature": 298.15,
+        "table": {
+          "temperatures": [298.15],
+          "columns": {
+            "alpha": [0]
+          },
+          "interpolation": "constant",
+          "extrapolation": "clamp"
+        }
+      },
+      "provenance": {
+        "source_type": "literature",
+        "confidence": "medium",
+        "reference": "conductivity / density / notes 中的比热: Y.A. Çengel & J.M. Cimbala, Fluid Mechanics: Fundamentals and Applications, Table A-9, Properties of air at 1 atm pressure, 25 °C 行; https://www.me.psu.edu/cimbala/me420/Links/Table_A_9_CC_Properties_of_Air.pdf ; 表注原始来源: Touloukian et al., Thermophysical Properties of Matter, Vol. 3, IFI/Plenum 1970。elastic.E / elastic.nu / thermal_expansion.alpha: 数值正则化：E = soldermask_lpi_eq 的 E × 1e-3 = 2.7e6 Pa，ν = 0，α = 0；不是物理值。",
+        "notes": "近似（手册典型值）：25 °C、1 atm 静止干空气，conductivity = 0.02551 W/(m·K)，density = 1.184 kg/m³；同表比热为 1007 J/(kg·K)，schema 无比热字段，仅在此记录。力学参数 E、ν、α 是数值正则化，不是物理值，开窗区应力输出无物理意义。298.15 K 为与阻焊条目一致的参考温度；采用单点 298.15 K 表和 clamp，所有属性保持常数，尽管空气导热系数随温度上升而增大，本条目不描述该变化。仅适用于开窗未被焊料、表面处理覆盖的裸板状态；不建模对流和辐射。"
+      }
+    }
+  ]
+}
