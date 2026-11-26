@@ -46,7 +46,8 @@ class MinizResolutionAcceptance(unittest.TestCase):
     """Exercise the real dependency resolver and unchanged ECAD CMake consumer."""
 
     def configure_case(self, targets=(), *, shared=None, policy=None, minimum=None,
-                       disabled=False, promote=False, alias=False, global_import=False):
+                       disabled=False, promote=False, alias=False, global_import=False,
+                       caller_context=False):
         temporary = tempfile.TemporaryDirectory(prefix='miniz-acceptance-')
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -76,6 +77,21 @@ class MinizResolutionAcceptance(unittest.TestCase):
                 package.append(f'add_library({name} ALIAS {underlying})')
         if global_import:
             package = [line.replace(' IMPORTED)', ' IMPORTED GLOBAL)') for line in package]
+        if caller_context:
+            package = [
+                'if(NOT CHIPCAE_TEST_MINIZ_ENABLED)', 'return()', 'endif()',
+                'chipcae_test_miniz_context()',
+                'cmake_policy(GET CMP0126 context_policy)',
+                'if(NOT context_policy STREQUAL "NEW")',
+                'message(FATAL_ERROR "caller package-search policies changed")', 'endif()',
+                'if(NOT TARGET chipcae_test_miniz_context)',
+                'message(FATAL_ERROR "caller target is missing")', 'endif()',
+                'get_property(context GLOBAL PROPERTY CHIPCAE_TEST_MINIZ_CONTEXT)',
+                'if(NOT context STREQUAL "caller-context")',
+                'message(FATAL_ERROR "caller property is missing")', 'endif()',
+                'file(WRITE "${CMAKE_BINARY_DIR}/miniz-context.txt" "caller-context")',
+                *package,
+            ]
         if targets:
             (prefix / 'minizConfig.cmake').write_text('\n'.join(package) + '\n')
 
@@ -127,8 +143,23 @@ add_library(miniz miniz.c)
             f'set(FETCHCONTENT_SOURCE_DIR_MINIZ {cmake_quote(fallback)})',
             f'set(CMAKE_DISABLE_FIND_PACKAGE_miniz {"ON" if disabled else "OFF"})',
             *before,
+            *([
+                'set(CHIPCAE_TEST_MINIZ_ENABLED ON)',
+                'add_library(chipcae_test_miniz_context INTERFACE)',
+                'set_property(GLOBAL PROPERTY CHIPCAE_TEST_MINIZ_CONTEXT caller-context)',
+                'function(chipcae_test_miniz_context)',
+                'get_property(context GLOBAL PROPERTY CHIPCAE_TEST_MINIZ_CONTEXT)',
+                'if(NOT context STREQUAL "caller-context")',
+                'message(FATAL_ERROR "caller helper lost its context")', 'endif()',
+                'endfunction()',
+            ] if caller_context else []),
             f'include({cmake_quote(SOURCE / "cmake/ChipcaeDependencies.cmake")})',
             *after,
+            # The import-scope guard must not change later package imports.
+            'add_library(unrelated_global INTERFACE IMPORTED GLOBAL)',
+            'get_target_property(still_global unrelated_global IMPORTED_GLOBAL)',
+            'if(NOT still_global)',
+            'message(FATAL_ERROR "resolver changed subsequent GLOBAL imports")', 'endif()',
             f'add_subdirectory({cmake_quote(SOURCE / "geometry/ecad")} ecad)',
             'if(TARGET miniz::miniz)', 'set(selected miniz::miniz)',
             'else()', 'set(selected miniz)', 'endif()',
@@ -150,6 +181,10 @@ add_library(miniz miniz.c)
                                            if not line.startswith('{')))
         if any(result.returncode for result in results):
             return
+        if caller_context:
+            context_file = root / 'build/miniz-context.txt'
+            self.assertTrue(context_file.is_file(), 'miniz package was not loaded in caller context')
+            self.assertEqual(context_file.read_text(), 'caller-context')
         selected, kind = (root / 'build/selection.txt').read_text().splitlines()
         expected_name, expected_kind = next((item for item in targets if item[0] == 'miniz::miniz'),
                                             targets[0] if targets else ('miniz', 'STATIC'))
@@ -181,6 +216,13 @@ add_library(miniz miniz.c)
                              'c4b4c25a4eb81883448ff8924e6dba95c800094a198dc9ce66a292ac2ef8e018')
         else:
             self.assertIn(str(prefix / (expected_name.replace('::', '_') + '.a')), commands)
+
+    def test_package_discovery_uses_caller_variables_helpers_and_targets(self):
+        for kind in ('STATIC', 'INTERFACE', 'SHARED'):
+            for global_import in (False, True):
+                with self.subTest(kind=kind, global_import=global_import):
+                    self.configure_case((('miniz::miniz', kind),),
+                                        global_import=global_import, caller_context=True)
 
     def test_shared_and_module_packages_fall_back_without_name_collisions(self):
         for kind in ('SHARED', 'MODULE'):
