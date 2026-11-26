@@ -200,6 +200,7 @@ void correctness_tests(Suite& suite) {
             TempDirectory temp;
             const auto source = temp.path / "source";
             const auto target = temp.path / "new/target";
+            fs::create_directories(target.parent_path());
             const auto bytes = seeded(size);
             write(source, bytes);
             const auto expected = sha256_hex(bytes);
