@@ -377,3 +377,23 @@ if(_solve_backend)
     set_tests_properties(solve_fvm_trace_map PROPERTIES
         TIMEOUT 900 LABELS "fvm;numerical" SKIP_RETURN_CODE 77)
 endif()
+
+if(_solve_backend AND MFEM_USE_PETSC)
+    add_executable(chipcae_test_fvm_thermal_ksp_guard test_fvm_thermal_ksp_guard.cpp)
+    target_link_libraries(chipcae_test_fvm_thermal_ksp_guard PRIVATE chipcae::fvm chipcae::mesh)
+    target_include_directories(chipcae_test_fvm_thermal_ksp_guard PRIVATE
+        ${PROJECT_SOURCE_DIR}/solvers/fvm/tests ${PROJECT_SOURCE_DIR}/solvers/fvm/src)
+    chipcae_set_warnings(chipcae_test_fvm_thermal_ksp_guard)
+    add_test(NAME solve_fvm_thermal_ksp_guard COMMAND chipcae_test_fvm_thermal_ksp_guard)
+    set_tests_properties(solve_fvm_thermal_ksp_guard PROPERTIES
+        LABELS "solve;numerical;fvm" TIMEOUT 900 SKIP_RETURN_CODE 77
+        ENVIRONMENT "OMP_NUM_THREADS=2;OPENBLAS_NUM_THREADS=1")
+    if(CHIPCAE_ENABLE_MPI)
+        add_test(NAME solve_fvm_thermal_ksp_guard_np2
+            COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2 ${MPIEXEC_PREFLAGS}
+                $<TARGET_FILE:chipcae_test_fvm_thermal_ksp_guard> --mpi-only ${MPIEXEC_POSTFLAGS})
+        set_tests_properties(solve_fvm_thermal_ksp_guard_np2 PROPERTIES
+            LABELS "solve;numerical;fvm" TIMEOUT 900 SKIP_RETURN_CODE 77 PROCESSORS 2
+            ENVIRONMENT "OMP_NUM_THREADS=2;OPENBLAS_NUM_THREADS=1;OMPI_ALLOW_RUN_AS_ROOT=1;OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1")
+    endif()
+endif()
