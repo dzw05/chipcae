@@ -213,7 +213,8 @@ jobs::Job LocalJobManager::Submit(const jobs::SubmitRequest& request,
                              input.sha256());
         }
         detail::validate_case(directory / "inputs/case.json");
-        j.set_case_sha256(sha256_hex(detail::read_file(directory / "inputs/case.json")));
+        j.set_case_sha256(hashes.at((directory / "inputs/case.json").lexically_normal().string())
+                              .as<std::string>());
         const auto profile = detail::read_object(directory / "run.json");
         const auto mapped = detail::map_profile(profile, impl_->config.cuda_available);
         if (request.has_profile() &&

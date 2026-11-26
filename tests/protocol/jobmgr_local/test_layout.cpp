@@ -18,8 +18,16 @@ int main() {
         auto manager = f.manager();
         auto request = f.request();
         *request.mutable_profile() = mapped_profile();
-        request.mutable_case_file()->set_sha256(
-            "6933690CA67EBED3B7A7989056D8C26F167D1FF2D3D6058306E41094B8FB47AC");
+        require(chipcae::jobmgr::sha256_hex("abc") ==
+                    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                "FIPS 180-4 abc SHA-256");
+        const auto case_sha = chipcae::jobmgr::sha256_hex(read(f.case_path));
+        auto uppercase_sha = case_sha;
+        std::transform(uppercase_sha.begin(),
+                       uppercase_sha.end(),
+                       uppercase_sha.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+        request.mutable_case_file()->set_sha256(uppercase_sha);
         auto job = manager->Submit(request, f.case_path, f.profile_path);
         require(job.state() == jobs::JOB_STATE_RUNNING, "Submit must transition to RUNNING");
         require(chipcae::jobmgr::is_uuid(job.run_id()) && job.run_id().size() == 36,
@@ -58,26 +66,20 @@ int main() {
                 "submit protobuf parse");
         const auto hashes = Json::parse(read(run / "snapshot-hashes.json"));
         const std::vector<std::tuple<fs::path, fs::path, std::string>> snapshots{
-            {f.case_path,
-             run / "inputs/case.json",
-             "6933690ca67ebed3b7a7989056d8c26f167d1ff2d3d6058306e41094b8fb47ac"},
-            {f.profile_path,
-             run / "run.json",
-             "a4b6666faa98beea4a288e1cbcbd7b44c52dfd5267dd9b528ecf905035841cad"},
+            {f.case_path, run / "inputs/case.json", chipcae::jobmgr::sha256_hex(read(f.case_path))},
+            {f.profile_path, run / "run.json", chipcae::jobmgr::sha256_hex(read(f.profile_path))},
             {f.source / "fcbga_demo.stack.json",
              run / "inputs/fcbga_demo.stack.json",
-             "db79e596ad6a1260378e9ce58b16ddf418645dd785f99dbc96d23f6d85d711d2"},
+             chipcae::jobmgr::sha256_hex(read(f.source / "fcbga_demo.stack.json"))},
             {f.source / "fcbga_demo.materials.json",
              run / "inputs/fcbga_demo.materials.json",
-             "a41bcdf01dcacc8f22c03f3d7642b1cf95657dcac88ca773b22f344b5254dd04"}};
+             chipcae::jobmgr::sha256_hex(read(f.source / "fcbga_demo.materials.json"))}};
         require(hashes.size() == snapshots.size(), "every snapshot has exactly one hash");
         for (const auto& [source, target, hash] : snapshots) {
             require(read(source) == read(target), "snapshot raw bytes preserved");
             require(hashes.at(target.string()).as<std::string>() == hash, "snapshot hash mismatch");
         }
-        require(job.case_sha256() ==
-                    "6933690ca67ebed3b7a7989056d8c26f167d1ff2d3d6058306e41094b8fb47ac",
-                "case hash uses raw snapshot bytes");
+        require(job.case_sha256() == case_sha, "case hash uses raw snapshot bytes");
         require(f.fake->starts.size() == 1 &&
                     f.fake->starts.front().second.env_overrides.at("OMP_NUM_THREADS") == "2",
                 "OMP override passed to launcher");
