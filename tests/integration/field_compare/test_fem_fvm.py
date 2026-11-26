@@ -20,11 +20,9 @@ def main():
     elastic = header.exists() and "not solved: fvm thermal-only stage" not in pipeline.read_text()
     with tempfile.TemporaryDirectory(prefix="field-fem-fvm-") as tmp:
         root = Path(tmp)
-        # Resolve the heated layer with four CVs: its cell-centered maximum
-        # has O(dz^2) error against Q2, so the default two CVs exceed the 1% gate.
-        ref_dir, _ = solve(root, "fem", exe, source, min_elems_per_layer=4)
+        ref_dir, _ = solve(root, "fem", exe, source)
         other_dir, _ = solve(root, "fvm", exe, source, fvm=True,
-                             preconditioner="jacobi", elastic=elastic, min_elems_per_layer=4)
+                             preconditioner="jacobi", elastic=elastic)
         fc = comparison_module()
         ref, other = fc.load_run(ref_dir), fc.load_run(other_dir)
         assert ref.mesh_sha256 == other.mesh_sha256, "fixture meshes differ"

@@ -192,8 +192,7 @@ def mpi_launcher():
 
 
 def solve(root, name, exe, source, *, ranks=1, launcher=None, levels=1,
-          preconditioner="direct", bbox=False, fvm=False, elastic=True,
-          min_elems_per_layer=None):
+          preconditioner="direct", bbox=False, fvm=False, elastic=True):
     work = root / name
     shutil.copytree(Path(__file__).parent / "data", work)
     case = {
@@ -213,8 +212,6 @@ def solve(root, name, exe, source, *, ranks=1, launcher=None, levels=1,
                    "warpage": {"standard": "JESD22-B112", "remove_rigid": "best_fit_plane"},
                    "fields": ["T", "U", "layer_id", "material_id", "cell_kind", "elem_gid"]},
     }
-    if min_elems_per_layer is not None:
-        case["mesh"]["min_elems_per_layer"] = min_elems_per_layer
     if fvm:
         case["output"]["fields"].append("volume")
     if elastic:
@@ -244,10 +241,7 @@ def solve(root, name, exe, source, *, ranks=1, launcher=None, levels=1,
     summarize(out)  # Exactly once per successful solve, before field loading.
     logs = [payload for kind, payload in events(out / "events.bin") if kind == 20]
     if elastic:
-        # FVM removes rigid modes through its nullspace; the six pinned DOFs
-        # and their diagnostic belong to the FEM formulation only.
-        diagnostic = b"FVM_ELASTIC " if fvm else b"3-2-1 constrained_dofs=6 (3+2+1)"
-        assert any(diagnostic in log for log in logs), logs
+        assert any(b"3-2-1 constrained_dofs=6 (3+2+1)" in log for log in logs), logs
     return out, logs
 
 
