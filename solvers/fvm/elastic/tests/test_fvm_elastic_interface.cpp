@@ -437,6 +437,56 @@ void free_boundary_closure() {
     relative_field(r.U_cell, exact, "free boundary constitutive closure thermal expansion");
 }
 
+void skew_interface_diagnostic(bool exact) {
+    auto mesh = patch_grid(true).mesh;
+    constexpr double shear = 0.2;
+    for (auto& x : mesh.centroid)
+        x[0] += shear * x[2];
+    for (auto& f : mesh.faces) {
+        f.centroid[0] += shear * f.centroid[2];
+        f.normal[2] -= shear * f.normal[0]; // inverse-transpose area vector
+        const double scale = norm(f.normal);
+        f.area *= scale;
+        f.normal = elastic_test::scale(f.normal, 1 / scale);
+    }
+    const auto p = patch(std::move(mesh), axis(4, 1, 1.3)[2]);
+    auto u = p.exact_cells();
+    if (!exact)
+        for (std::size_t c = 0; c < u.size(); ++c)
+            for (int j = 0; j < 3; ++j)
+                u[c][j] += 0.0001 * std::sin(static_cast<double>((c + 1) * (j + 2)));
+    const auto got = detail::evaluate_elastic_interfaces(p.mesh, p.problem, u, MPI_COMM_SELF);
+    require(static_cast<bool>(got), got ? "" : got.error().reason);
+    require(got.value().size() == p.interfaces().size(), "diagnostic covers every marked face");
+    double jump = 0, stress_scale = 0;
+    std::vector<V> faces;
+    for (const auto& sample : got.value()) {
+        const auto& f = p.mesh.faces[sample.face];
+        faces.push_back(sample.displacement);
+        for (int side = 0; side < 2; ++side) {
+            const auto c = static_cast<std::size_t>(side == 0 ? f.lo : f.hi);
+            const auto sigma = stress(p.problem, c, sample.gradient[side]);
+            stress_scale = std::max(stress_scale, matrix_norm(sigma));
+            const auto independent = mul(sigma, f.normal);
+            require(norm(sub(sample.traction[side], independent)) <= 1e-12 * matrix_norm(sigma),
+                    "diagnostic agrees with independent engineering stress");
+            if (exact) {
+                const auto want = p.gradient(c);
+                M3 error{};
+                for (int j = 0; j < 9; ++j)
+                    error[j] = sample.gradient[side][j] - want[j];
+                require(matrix_norm(error) <= field_tolerance * matrix_norm(want),
+                        "skew half-face gradients reproduce the piecewise-affine patch");
+            }
+        }
+        jump = std::max(jump, norm(sub(sample.traction[0], sample.traction[1])));
+    }
+    require(stress_scale > 0 && jump <= field_tolerance * stress_scale,
+            "skew unequal-distance one-sided tractions balance for arbitrary cell values");
+    if (exact)
+        relative_field(faces, exact_interfaces(p), "skew diagnostic U_face");
+}
+
 void mpi_comparison(Suite& suite, bool graded) {
     auto p = patch_grid(graded);
     const std::string name = std::string("T5 ") + (graded ? "graded" : "uniform");
@@ -546,6 +596,10 @@ int main(int argc, char** argv) {
         suite.run("interface cell with free lateral faces uses constitutive closure",
                   free_boundary_closure);
         suite.run("multiple interface faces preserve a shared rigid field", multiple_interfaces);
+        for (bool exact : {false, true})
+            suite.run(exact ? "skew interface piecewise-affine diagnostic"
+                            : "skew interface arbitrary-field traction continuity",
+                      [&] { skew_interface_diagnostic(exact); });
         suite.run("insufficient-rank interface closure reports INTERNAL gid and face",
                   [&] { rank_failure(MPI_COMM_SELF, 1); });
         suite.run("nonpositive acoustic Cholesky pivot reports INTERNAL gid and face",

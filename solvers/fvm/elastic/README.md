@@ -33,17 +33,85 @@ The final discretization uses an energy-conjugate finite-volume gradient:
 `V G = sum_f (U_f-U_cell) tensor n A`. Internal face values interpolate cells with
 an implicit tangential centroid correction; exterior values are prescribed or
 boundary-consistent least-squares extrapolations. Cell strain energy uses the caller's
-full stiffness and thermal eigenstrain. On uncut faces, a face energy penalizes the
+full stiffness and thermal eigenstrain. On uncut, noninterface faces, a face energy penalizes the
 compact-gradient residual `deltaU-Gbar*d` using the harmonic acoustic tensor and `area/(n.d)`. This
 vanishes for affine fields and interior quadratic bending fields on the parent grids.
 The geometry is supplied by the caller, including cut polyhedron moments.
+
+An internal face enters the interface path exactly when neither side is cut and
+some component of `C_lo != C_hi` or `alpha_lo*dT_lo != alpha_hi*dT_hi`.
+Layer labels do not participate. With no qualifying faces, the original assembly
+and output arithmetic is retained, including ordered block/RHS byte equality for
+equal constitutive data and equal eigenstrain represented by different alpha/dT.
+The explicit eigenstrain predicate also marks cellwise smooth temperature changes;
+the brief's claim that those cases remain unchanged does not follow from this
+predicate. Their accuracy and memory therefore require separate measurement.
+
+For an interface, orient `n` from lo to hi and define positive normal distances
+`d_lo=(x_f-x_lo).n`, `d_hi=(x_hi-x_f).n` and separate tangential offsets
+`Delta_lo=x_f-x_lo-d_lo*n`, `Delta_hi=x_f-x_hi+d_hi*n`. Let `T_s G` be the
+engineering constitutive traction, `K_s=T_s(outer(I,n))` the acoustic tensor,
+and `P=I-outer(n,n)`. The shared tangential gradient uses **K**, not K/d, weights:
+`G_t=(K_lo+K_hi)^-1 (K_lo*G_lo*P+K_hi*G_hi*P)`.
+With `b_s=T_s G_t-thermal_traction_s`, traction continuity gives
+
+```text
+H U_f = (K_lo/d_lo)(U_lo+G_lo Delta_lo)
+      + (K_hi/d_hi)(U_hi+G_hi Delta_hi) + b_hi-b_lo,
+H = K_lo/d_lo+K_hi/d_hi.
+```
+
+Each one-sided LS fit replaces the current cross-interface center sample by the
+unknown displacement at `x_f`, retaining same-material centers, prescribed face
+samples and free-face constitutive closure. Write these fits as
+`G_s = a_s + B_s U_f` and substitute into the traction equation. Cholesky solves
+apply H to every affine coefficient and constant; a three-variable local SVD
+eliminates the remaining U_f feedback. The existing one-sided Jacobi SVD retains
+squared singular values strictly greater than `largest*1e-26`, with unchanged
+arithmetic on the legacy path. Incomplete gradient or elimination rank, nonpositive
+half distances, and nonpositive acoustic Cholesky pivots report `INTERNAL` with the
+lo gid and face index. There is no interpolation fallback or connected dense solve.
+
+**Interface junction deviation:** a cell touching several qualifying faces has a
+separate one-sided gradient for each face. Each local fit omits the other qualifying
+faces, so their unknown displacements cannot create nonlocal feedback. Ordinary
+cell reconstruction uses the arithmetic mean of its incident local fits; interface
+tractions and half-face energies use their corresponding local fits. This defines
+the previously underspecified multiple-face case, but differs from solving for one
+cell gradient coupled to all incident interface values. Every required local fit
+must have full rank. This choice needs numerical design review beyond the rigid
+junction acceptance test.
+
+The same eliminated U_f operator enters both the cell Green–Gauss energy and the
+returned face displacement. Interface stabilization consists of two half-face
+energies `0.5*(A_f/d_s)*r_s^T K_s r_s`, with
+`r_s=U_f-U_s-G_s*(x_f-x_s)`. For a compatible piecewise-affine field, each local
+fit and U_f reproduce the field, both residuals vanish, and the cell energy has
+balanced interface traction. Differentiation of the complete affine energies
+retains symmetry and all six rigid modes without modifying K or solver settings.
+For identical C and eigenstrain the predicate bypasses this path entirely; on an
+aligned face the displacement equation also reduces to the geometric lo/hi
+interpolation. Separate skew offsets need not equal the legacy common-offset
+formula for unequal gradients, so bypassing is essential for byte invariance.
+
+Only the lo owner constructs each interface map. Construction errors are reduced
+before any coefficient broadcast; ordered integer keys and floating-point
+coefficients are then replicated separately. Records are sparse, single-interface
+cell gradients are stored once, and local elimination and extra junction gradient
+storage are released before PETSc allocation. This does not guarantee unchanged
+matrix support or peak RSS: stiffness contrast can enlarge the implicit stencil.
+The private interface diagnostic evaluates the common tangential gradient, signed
+half-face normal derivatives and one-sided constitutive tractions from these same
+maps. Cut faces, including either adjacent cut flag, always retain the cut path;
+material jumps on cut faces remain outside this change.
 
 For cut cells, face values use inverse Euclidean cell-to-face distances to weight
 the two owner extrapolations. Prescribed boundaries use their supplied values; free
 and embedded boundaries use the owner extrapolation. The cut gradients satisfy the
 coupled equations `G_c = sum_f U_f tensor S_cf / V_c` fully implicitly. Noncut
-least-squares operators remain unchanged. Reconstruction and assembly share the
-same face-value operator, including embedded top samples.
+least-squares operators away from material/eigenstrain interfaces remain unchanged.
+Reconstruction and assembly share the same face-value operator, including embedded
+top samples.
 
 The Green–Gauss equations alone do not define a unique gradient for every allowed
 boundary layout. The explicit completion used here minimizes the Euclidean change
