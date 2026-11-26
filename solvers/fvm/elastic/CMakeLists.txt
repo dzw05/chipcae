@@ -12,7 +12,7 @@ target_link_libraries(chipcae_fvm_elastic PUBLIC mfem chipcae::core)
 chipcae_set_warnings(chipcae_fvm_elastic)
 
 if(CHIPCAE_BUILD_TESTS)
-    foreach(kind elastic bimetal elastic_concave)
+    foreach(kind elastic bimetal elastic_concave elastic_interface)
         add_executable(chipcae_test_fvm_${kind} tests/test_fvm_${kind}.cpp)
         target_include_directories(chipcae_test_fvm_${kind} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -36,5 +36,9 @@ if(CHIPCAE_BUILD_TESTS)
             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2 ${MPIEXEC_PREFLAGS}
                     $<TARGET_FILE:chipcae_test_fvm_elastic> ${MPIEXEC_POSTFLAGS} -elastic_test_mode mpi)
         set_tests_properties(solve_fvm_elastic_np2 PROPERTIES LABELS "fvm;numerical" TIMEOUT 900)
+        add_test(NAME solve_fvm_elastic_interface_np2
+            COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2 ${MPIEXEC_PREFLAGS}
+                    $<TARGET_FILE:chipcae_test_fvm_elastic_interface> ${MPIEXEC_POSTFLAGS} -elastic_test_mode mpi)
+        set_tests_properties(solve_fvm_elastic_interface_np2 PROPERTIES LABELS "fvm;numerical" TIMEOUT 900)
     endif()
 endif()
