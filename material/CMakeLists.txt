@@ -305,3 +305,11 @@ if(CHIPCAE_MATERIAL_ENABLE_TESTS)
     set_tests_properties(material_library_copper PROPERTIES LABELS tierA TIMEOUT 60
         ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
 endif()
+
+if(CHIPCAE_MATERIAL_ENABLE_TESTS)
+    add_executable(material_merged_conductivity tests/merged_conductivity.cpp)
+    target_link_libraries(material_merged_conductivity PRIVATE chipcae_material)
+    add_test(NAME material_merged_conductivity COMMAND material_merged_conductivity)
+    set_tests_properties(material_merged_conductivity PROPERTIES LABELS tierA TIMEOUT 60
+        ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
+endif()
