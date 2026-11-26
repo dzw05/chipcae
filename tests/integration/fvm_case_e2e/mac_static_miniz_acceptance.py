@@ -47,19 +47,25 @@ class MinizResolutionAcceptance(unittest.TestCase):
 
     def configure_case(self, targets=(), *, shared=None, policy=None, minimum=None,
                        disabled=False, promote=False, alias=False, global_import=False,
-                       caller_context=False):
+                       caller_context=False, built=False, promote_after=False):
         temporary = tempfile.TemporaryDirectory(prefix='miniz-acceptance-')
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         prefix = root / 'prefix'
         prefix.mkdir()
         package = []
+        built_targets = []
         for name, kind in targets:
             archive = prefix / (name.replace('::', '_') + ('.so' if kind in
                                 ('SHARED', 'MODULE') else '.a'))
             archive.write_bytes(b'!<arch>\n')
-            underlying = name.replace('::', '_') + '_impl' if alias else name
-            if kind == 'INTERFACE':
+            underlying = name.replace('::', '_') + '_impl' if alias or (built and '::' in name) else name
+            if built:
+                source = prefix / (underlying + '.c')
+                source.write_text('int synthetic_package_miniz(void) { return 1; }\n')
+                package.append(f'add_library({underlying} {kind} {cmake_quote(source)})')
+                built_targets.append(underlying)
+            elif kind == 'INTERFACE':
                 # A package-local wrapper and transitive imported archive must
                 # remain usable from the parent after isolated discovery.
                 backing = underlying.replace('::', '_') + '_archive'
@@ -73,7 +79,11 @@ class MinizResolutionAcceptance(unittest.TestCase):
                 package += [f'add_library({underlying} {kind} IMPORTED)',
                             f'set_property(TARGET {underlying} PROPERTY IMPORTED_LOCATION '
                             f'{cmake_quote(archive)})']
-            if alias:
+            if promote_after:
+                package.append(f'set_property(TARGET {underlying} PROPERTY IMPORTED_GLOBAL TRUE)'
+                               if promote_after == 'set_property' else
+                               f'set_target_properties({underlying} PROPERTIES IMPORTED_GLOBAL TRUE)')
+            if alias or (built and '::' in name):
                 package.append(f'add_library({name} ALIAS {underlying})')
         if global_import:
             package = [line.replace(' IMPORTED)', ' IMPORTED GLOBAL)') for line in package]
@@ -101,6 +111,8 @@ class MinizResolutionAcceptance(unittest.TestCase):
         fallback = root / 'fallback'
         fallback.mkdir()
         (fallback / 'miniz.c').write_text('int synthetic_miniz(void) { return 0; }\n')
+        for name in ('miniz_zip.c', 'miniz_tinfl.c', 'miniz_tdef.c'):
+            (fallback / name).write_text('/* Synthetic pinned source boundary. */\n')
         (fallback / 'CMakeLists.txt').write_text('''
 cmake_minimum_required(VERSION 3.20)
 project(synthetic_miniz C)
@@ -160,11 +172,21 @@ add_library(miniz miniz.c)
             'get_target_property(still_global unrelated_global IMPORTED_GLOBAL)',
             'if(NOT still_global)',
             'message(FATAL_ERROR "resolver changed subsequent GLOBAL imports")', 'endif()',
+            'set(CHIPCAE_TEST_CACHE sentinel CACHE STRING "synthetic" FORCE)',
+            'set_property(CACHE CHIPCAE_TEST_CACHE PROPERTY HELPSTRING "cache;description")',
+            'get_property(cache_help CACHE CHIPCAE_TEST_CACHE PROPERTY HELPSTRING)',
+            'if(NOT cache_help STREQUAL "cache;description")',
+            'message(FATAL_ERROR "resolver changed subsequent CACHE properties")', 'endif()',
             f'add_subdirectory({cmake_quote(SOURCE / "geometry/ecad")} ecad)',
             'if(TARGET miniz::miniz)', 'set(selected miniz::miniz)',
             'else()', 'set(selected miniz)', 'endif()',
             'get_target_property(kind ${selected} TYPE)',
             'file(WRITE "${CMAKE_BINARY_DIR}/selection.txt" "${selected}\\n${kind}\\n")',
+            'get_target_property(backing ${selected} ALIASED_TARGET)',
+            'if(NOT backing)', 'set(backing ${selected})', 'endif()',
+            'file(WRITE "${CMAKE_BINARY_DIR}/backing.txt" "${backing}")',
+            'file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/package-artifacts.txt" CONTENT ' +
+            cmake_quote(''.join(f'$<TARGET_FILE:{target}>\n' for target in built_targets)) + ')',
             'add_executable(ecad_link main.cpp)',
             'target_link_libraries(ecad_link PRIVATE chipcae_geometry_ecad)',
         ]) + '\n')
@@ -188,8 +210,11 @@ add_library(miniz miniz.c)
         selected, kind = (root / 'build/selection.txt').read_text().splitlines()
         expected_name, expected_kind = next((item for item in targets if item[0] == 'miniz::miniz'),
                                             targets[0] if targets else ('miniz', 'STATIC'))
-        rejected = expected_kind in ('SHARED', 'MODULE') or disabled or not targets
-        self.assertEqual(kind, 'STATIC_LIBRARY' if rejected else expected_kind + '_LIBRARY')
+        rejected = any(kind in ('SHARED', 'MODULE') for _, kind in targets) or disabled or not targets
+        if built and not rejected and '::' in selected:
+            self.assertEqual(kind, 'INTERFACE_LIBRARY')
+        else:
+            self.assertEqual(kind, 'STATIC_LIBRARY' if rejected else expected_kind + '_LIBRARY')
         if not rejected:
             self.assertEqual(selected, expected_name)
         commands = run(['ninja', '-C', str(root / 'build'), '-t', 'commands', 'ecad_link'],
@@ -200,6 +225,14 @@ add_library(miniz miniz.c)
             if package_kind in ('SHARED', 'MODULE'):
                 self.assertNotIn(str(prefix / (name.replace('::', '_') + '.so')), commands,
                                  'ECAD link closure contains synthetic shared miniz')
+        if built and rejected:
+            for artifact in (root / 'build/package-artifacts.txt').read_text().splitlines():
+                self.assertNotIn(artifact, commands, 'ECAD linked a rejected package target')
+                self.assertNotIn(os.path.relpath(artifact, root / 'build'), commands,
+                                 'ECAD linked a rejected package target by relative path')
+            backing = (root / 'build/backing.txt').read_text()
+            result = run(['cmake', '--build', str(root / 'build'), '--target', backing, '-j2'])
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         if rejected:
             self.assertIn('libminiz.a', commands)
             declarations = []
@@ -214,8 +247,12 @@ add_library(miniz miniz.c)
             self.assertEqual(miniz[miniz.index('URL_HASH') + 1],
                              'SHA256='
                              'c4b4c25a4eb81883448ff8924e6dba95c800094a198dc9ce66a292ac2ef8e018')
-        else:
+        elif not built:
             self.assertIn(str(prefix / (expected_name.replace('::', '_') + '.a')), commands)
+        else:
+            artifact = (root / 'build/package-artifacts.txt').read_text().splitlines()[
+                [name for name, _ in targets].index(expected_name)]
+            self.assertIn(os.path.relpath(artifact, root / 'build'), commands)
 
     def test_package_discovery_uses_caller_variables_helpers_and_targets(self):
         for kind in ('STATIC', 'INTERFACE', 'SHARED'):
@@ -250,6 +287,23 @@ add_library(miniz miniz.c)
                                           global_import=global_import, alias=alias):
                             self.configure_case((('miniz', plain), ('miniz::miniz', namespaced)),
                                                 global_import=global_import, alias=alias)
+
+    def test_globally_built_shared_packages_use_an_independent_static_target(self):
+        for kind in ('SHARED', 'MODULE'):
+            for names in (('miniz',), ('miniz::miniz',), ('miniz', 'miniz::miniz')):
+                with self.subTest(kind=kind, names=names):
+                    self.configure_case(tuple((name, kind) for name in names), built=True)
+
+    def test_packages_cannot_promote_rejected_imports_after_creation(self):
+        for setter in ('set_property', 'set_target_properties'):
+            for name in ('miniz', 'miniz::miniz'):
+                with self.subTest(setter=setter, name=name):
+                    self.configure_case(((name, 'SHARED'),), promote_after=setter)
+
+    def test_built_static_packages_keep_their_targets(self):
+        for names in (('miniz',), ('miniz::miniz',), ('miniz', 'miniz::miniz')):
+            with self.subTest(names=names):
+                self.configure_case(tuple((name, 'STATIC') for name in names), built=True)
 
     def test_automatic_global_promotion_does_not_leak_rejected_targets(self):
         for kind in ('SHARED', 'INTERFACE'):
