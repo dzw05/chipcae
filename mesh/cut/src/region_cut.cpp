@@ -69,7 +69,10 @@ Expected<Polygon> normalized_polygon(const Inclusion& region) {
         area += (ring[i][0] - ring[0][0]) * (ring[i + 1][1] - ring[0][1]) -
                 (ring[i][1] - ring[0][1]) * (ring[i + 1][0] - ring[0][0]);
     if (ring.size() < 3 || !std::isfinite(area) || area == 0)
-        return Error{"CUT_UNSUPPORTED", region.name + ": degenerate polygon"};
+        return Error{"CUT_UNSUPPORTED",
+                     region.name + (detail::zero_area_nonsimple(region.footprint.polygon)
+                                        ? ": self-intersecting polygon"
+                                        : ": degenerate polygon")};
     if (area < 0)
         std::reverse(ring.begin(), ring.end());
     std::rotate(ring.begin(), std::min_element(ring.begin(), ring.end()), ring.end());
