@@ -242,9 +242,14 @@ add_library(miniz miniz.c)
                 self.configure_case((('miniz::miniz', kind),), alias=True)
 
     def test_ecad_namespaced_target_precedence_controls_fallback(self):
-        for plain, namespaced in (('STATIC', 'SHARED'), ('SHARED', 'STATIC')):
-            with self.subTest(plain=plain, namespaced=namespaced):
-                self.configure_case((('miniz', plain), ('miniz::miniz', namespaced)))
+        for rejected in ('SHARED', 'MODULE'):
+            for plain, namespaced in (('STATIC', rejected), (rejected, 'STATIC')):
+                for global_import in (False, True):
+                    for alias in (False, True):
+                        with self.subTest(plain=plain, namespaced=namespaced,
+                                          global_import=global_import, alias=alias):
+                            self.configure_case((('miniz', plain), ('miniz::miniz', namespaced)),
+                                                global_import=global_import, alias=alias)
 
     def test_automatic_global_promotion_does_not_leak_rejected_targets(self):
         for kind in ('SHARED', 'INTERFACE'):
