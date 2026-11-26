@@ -1,14 +1,30 @@
 # Scheme A acceptance tests
 
-These tests prescribe geometry and analytic fields independently of the future
+These tests prescribe geometry and analytic fields independently of the
 `tools.vv.fvm_warpage_gate` implementation. Missing gate code is an assertion
 failure. Only missing numpy/h5py exits 77; a skip supplies no acceptance evidence.
-No production implementation or passing numerical stub is included in this RED pass.
 
 The interpolation tests use the internal `(values, interp_indicator)` return
 convention. PV means the maximum minus minimum of the residual at the supplied
 samples after a least-squares plane fit. The analytic quadratic PV test includes
 the midpoint; it does not insert new samples into a centroid set.
+The fit centers and scales xy before solving. Interpolation validates a complete
+rectangular top lattice, uses deterministic quadratic stencils, and takes the
+largest primary/shifted difference across the available x and y directions,
+divided by the sampled primary PV. Outside-domain targets, unavailable alternate
+stencils and nonpositive reference PV fail as `参考插值不足`.
+
+Gate records have unique `(nx, ny, kz)` keys; duplicates and malformed data raise
+`InputInvalid`. Checks are ordered by `(nx, ny, kz, name)`. Missing required
+kz4/kz8 runs fail; finite kz16 records remain diagnostic. Limits are inclusive,
+without an acceptance epsilon. Preconditions take their legacy limit from the
+caller and omit the nodal check only when `nodal_rel` is `None`.
+
+Crosscheck mesh sequences sort fields together with metadata. Mechanical GCI
+uses only `warpage_pv` and rigid-removed `deformation_max`; the existing Celik
+implementation also continues to report temperature-rise GCI. Raw `U_mag_max`
+retains its values with `convergence_use: false` and the explanation
+`U_mag_max 含刚体位移，只打印，不作收敛判据`. Thermal-only quantities remain unavailable.
 
 The brief's even-grid centroid/node ratio `(1-1/nx)^2` conflicts with sampled PV:
 even grids miss the centroid midpoint and give `1-2/nx`. That one assertion is

@@ -127,7 +127,11 @@ def _record(kind, runs, notes):
 
 
 def _mesh_sequence(loaded, *, t_ambient):
-    runs = sorted((_metadata(path, run) for path, run in loaded), key=lambda r: r["h"])
+    from tools.vv.fvm_warpage_gate import deformation_max, require_convergence_quantity
+
+    ordered = sorted(((_metadata(path, run), path, run) for path, run in loaded),
+                     key=lambda entry: entry[0]["h"])
+    runs = [metadata for metadata, _, _ in ordered]
     if len({run["mesh_sha256"] for run in runs}) != 3:
         raise _MeshMismatch("mesh sequence requires three distinct mesh hashes")
     hs = [run["h"] for run in runs]
@@ -139,12 +143,20 @@ def _mesh_sequence(loaded, *, t_ambient):
         if not all(math.isfinite(v) for v in temperatures):
             raise InputInvalid("nonfinite computed temperature rise")
         estimates["T_max_rise"] = celik_gci(hs, temperatures)
-    for name in ("warpage_pv", "U_mag_max"):
-        if any(run["qoi_method"][name].startswith("not solved") for run in runs):
+    for name in ("warpage_pv", "deformation_max", "U_mag_max"):
+        source = "U_mag_max" if name == "deformation_max" else name
+        if any(run["qoi_method"][source].startswith("not solved") for run in runs):
             estimates[name] = None
             notes.append(f"{name}: not solved in at least one run; GCI unavailable")
+        elif name == "U_mag_max":
+            estimates[name] = dict(values=[run["qoi"][name] for run in runs],
+                                   convergence_use=False,
+                                   explanation="U_mag_max 含刚体位移，只打印，不作收敛判据")
         else:
-            estimates[name] = celik_gci(hs, [run["qoi"][name] for run in runs])
+            require_convergence_quantity(name)
+            values = ([deformation_max(path) for _, path, _ in ordered]
+                      if name == "deformation_max" else [run["qoi"][name] for run in runs])
+            estimates[name] = celik_gci(hs, values)
     result = _record("mesh_seq", runs, notes)
     result["mesh_seq"] = estimates
     return result
