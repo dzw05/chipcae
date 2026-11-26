@@ -65,7 +65,9 @@ def launches(probe, iterations):
                 break
             timed_out = False
             try:
-                status = child.wait(timeout=10.0)
+                # Popen time is part of the fixed startup-through-exit budget.
+                remaining = max(0.0, 10.0 - (time.perf_counter() - begin))
+                status = child.wait(timeout=remaining)
             except subprocess.TimeoutExpired:
                 timed_out = True
                 terminate_group(child)
@@ -74,6 +76,10 @@ def launches(probe, iterations):
                 terminate_group(child)
                 raise
             elapsed = time.perf_counter() - begin
+            if not timed_out and (elapsed > 10.0 or status != 0):
+                # A failed parent can exit normally while descendants keep
+                # running and retaining the regular-file capture descriptors.
+                terminate_group(child)
             maximum = max(maximum, elapsed)
             completed += 1
             threshold += elapsed > 10.0
@@ -208,6 +214,22 @@ def mca_environment(props):
     return values
 
 
+def singleton_environment(props):
+    values = mca_environment(props)
+    # OpenPMIx 5 uses ordinary environment variables for its directory roots.
+    # Audit these too, retaining all MCA assignment/duplication assertions above.
+    for prop in ("ENVIRONMENT", "ENVIRONMENT_MODIFICATION"):
+        for entry in props.get(prop, []):
+            name, value = entry.split("=", 1)
+            if name in ("PMIX_SERVER_TMPDIR", "PMIX_SYSTEM_TMPDIR"):
+                assert name not in values, f"{name}: duplicate singleton directory assignment"
+                if prop == "ENVIRONMENT_MODIFICATION":
+                    assert value.startswith("set:"), f"{name}: directory must not concatenate values"
+                    value = value[4:]
+                values[name] = value
+    return values
+
+
 def configuration_check(build):
     result = subprocess.run(["ctest", "--test-dir", build, "--show-only=json-v1"],
                             check=True, stdout=subprocess.PIPE, text=True)
@@ -242,6 +264,24 @@ def configuration_check(build):
                 "preview_outline_chamfer_differs", "preview_outline_volume",
                 "preview_solve_outline_digest", "preview_outline_nonconvex_rejected",
                 "preview_outline_external_polyset_rejected")
+    # Additional audited direct callers: PETSc initializes MPI too; install and
+    # CAD wrappers reach the CLI without exporting its path in ENVIRONMENT.
+    selected += ("mesh_hash_preview_np", "preview_copper_area", "preview_copper_phi",
+                 "preview_lid_nonconvex", "preview_mesh_params", "preview_outline_nonconvex",
+                 "preview_region_planes", "solve_column_gmg_prolongation",
+                 "solve_column_gmg_unsupported", "solve_column_gmg_fcbga",
+                 "solve_column_gmg_fcbga_scaling", "solve_fem_thermal_bow",
+                 "solve_fvm_thermal", "solve_fvm_thermal_cut", "solve_fvm_elastic",
+                 "solve_fvm_elastic_concave", "solve_fvm_elastic_benchmark", "solve_fvm_bimetal",
+                 "contract_output_solver", "install_smoke", "install_relocate", "cpack_tgz",
+                 "import_assembly_cf_chain", "stack_writer_outline_polyset",
+                 "e2e_step_box_parts", "e2e_real_bulk_parts", "e2e_step_ring_chamfer_lid",
+                 "e2e_cylinder_volume", "e2e_derived_chamfer_lid",
+                 "e2e_cut_unsupported_material_layer", "vtkhdf_results_serial", "cut_results_serial",
+                 "tracemap_fvm_slab_harmonic", "tracemap_fvm_slab_series_xfail",
+                 "tracemap_cut_inside_normalized", "tracemap_cut_outside_xfail",
+                 "tracemap_cut_conservation_xfail", "tracemap_merge_conservation",
+                 "tracemap_merge_directional_xfail")
     # The parts harness initializes MPI, including the direct np=1 path. The
     # auto-registered integration wrappers obtain the CLI through ENVIRONMENT.
     selected += tuple(name for name, test in tests.items()
@@ -261,9 +301,10 @@ def configuration_check(build):
     # to reach the existing direct paths as well as the new acceptance probe.
     protection = mca_environment(acceptance)
     assert protection, "missing singleton startup protection: acceptance has no test-local MCA environment"
+    protection.update(singleton_environment(acceptance))
     for name in selected:
         if name in tests:
-            settings = mca_environment(properties(tests[name]))
+            settings = singleton_environment(properties(tests[name]))
             assert protection.keys() <= settings.keys(), f"{name}: direct singleton path lacks probe protection"
             for key, value in protection.items():
                 if Path(value).is_absolute():
@@ -274,7 +315,7 @@ def configuration_check(build):
                     assert settings[key] == value, f"{name}: {key} disagrees with probe protection"
     for name in ("core_types", "k1_background", "k1_mesh_digest", "k1_cut"):
         if name in tests:
-            assert not mca_environment(properties(tests[name])), f"{name}: unrelated test received MCA injection"
+            assert not singleton_environment(properties(tests[name])), f"{name}: unrelated test received MCA injection"
     print("singleton registration, direct-path protection and existing test properties verified")
 
 
@@ -294,10 +335,28 @@ def module_check(case, script, python, real_build):
         "tests/solve": ("solve_inputs", "solve_profile_cuda_unavailable",
                         "solve_profile_cuda_gpus_zero", "solve_profile_cpu_gpus_nonzero",
                         "solve_pipeline", "solve_cut_manufactured", "solve_cut_pipeline"),
-        "tests/preview": ("preview_zalign",),
+        "tests/preview": ("preview_zalign", "mesh_hash_preview_np", "preview_copper_area",
+                          "preview_copper_phi", "preview_lid_nonconvex", "preview_mesh_params",
+                          "preview_outline_nonconvex", "preview_region_planes"),
+        "tests/install": ("install_smoke", "install_relocate", "cpack_tgz"),
+        "tests/results": ("vtkhdf_results_serial", "cut_results_serial"),
+        "tests/contract": ("contract_output_solver",),
+        "tests/integration/callers": ("controlled_integration_cli", "import_assembly_cf_chain",
+                                       "stack_writer_outline_polyset", "e2e_step_box_parts",
+                                       "e2e_real_bulk_parts", "e2e_step_ring_chamfer_lid",
+                                       "e2e_cylinder_volume", "e2e_derived_chamfer_lid",
+                                       "e2e_cut_unsupported_material_layer"),
+        "solvers": ("solve_column_gmg_prolongation", "solve_column_gmg_unsupported",
+                    "solve_fvm_thermal", "solve_fvm_thermal_cut", "solve_fvm_elastic",
+                    "solve_fvm_elastic_concave", "solve_fvm_elastic_benchmark", "solve_fvm_bimetal",
+                    "tracemap_fvm_slab_harmonic", "tracemap_fvm_slab_series_xfail",
+                    "tracemap_cut_inside_normalized", "tracemap_cut_outside_xfail",
+                    "tracemap_cut_conservation_xfail", "tracemap_merge_conservation",
+                    "tracemap_merge_directional_xfail"),
     }
     selected = tuple(name for names in groups.values() for name in names)
-    unrelated = ("core_types", "k1_background", "k1_mesh_digest", "k1_cut", "solve_mesh")
+    unrelated = ("core_types", "k1_background", "k1_mesh_digest", "k1_cut", "solve_mesh",
+                 "unrelated_mpi_label")
     literal = lambda value: "[=[" + str(value) + "]=]"
     with tempfile.TemporaryDirectory(prefix="chipcae-singleton-module-") as directory:
         root = Path(directory)
@@ -321,13 +380,17 @@ else:
                 expected_commands[name] = command
                 definitions.append(f"add_test(NAME {name} COMMAND " +
                                    " ".join(map(literal, command)) + ")")
-                labels = "mesh;tierA;preview;module;owner:M2" if name == "mesh_digest_golden" else "fixture"
+                labels = ("mesh;tierA;preview;module;owner:M2" if name == "mesh_digest_golden"
+                          else "mpi" if name == "unrelated_mpi_label" else "fixture")
                 definitions.append(f'''set_tests_properties({name} PROPERTIES
     TIMEOUT 120 PROCESSORS 2 LABELS "{labels}"
     PASS_REGULAR_EXPRESSION "controlled wrapper completed"
     FAIL_REGULAR_EXPRESSION "controlled wrapper failure"
     ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false"
     ENVIRONMENT_MODIFICATION "CHIPCAE_PRESERVED=set:kept")''')
+                if name == "controlled_integration_cli":
+                    definitions.append('set_property(TEST controlled_integration_cli APPEND '
+                                       'PROPERTY ENVIRONMENT "CHIPCAE_SOLVE_EXE=controlled")')
                 if name == "mesh_digest_golden":
                     definitions.append('''if(DEFINED FIXTURE_ENV)
     set_property(TEST mesh_digest_golden APPEND PROPERTY ENVIRONMENT "${FIXTURE_ENV}" "${FIXTURE_ENV}")
@@ -337,8 +400,10 @@ if(DEFINED FIXTURE_MOD)
 endif()''')
             (source / "CMakeLists.txt").write_text("\n".join(definitions) + "\n")
         (root / "tests/CMakeLists.txt").write_text(
-            "add_subdirectory(integration)\nadd_subdirectory(solve)\nadd_subdirectory(preview)\n")
-        (root / "tests/integration/CMakeLists.txt").write_text("add_subdirectory(mesh_p1)\n")
+            "add_subdirectory(integration)\nadd_subdirectory(solve)\nadd_subdirectory(preview)\n"
+            "add_subdirectory(install)\nadd_subdirectory(contract)\nadd_subdirectory(results)\n")
+        (root / "tests/integration/CMakeLists.txt").write_text(
+            "add_subdirectory(mesh_p1)\nadd_subdirectory(callers)\n")
         root_definitions = (root / "CMakeLists.txt").read_text()
         (root / "CMakeLists.txt").write_text(f'''cmake_minimum_required(VERSION 3.20)
 project(singleton_module_acceptance LANGUAGES C CXX)
@@ -350,6 +415,10 @@ function(chipcae_set_warnings)
 endfunction()
 {root_definitions}
 add_subdirectory(tests)
+add_subdirectory(solvers)
+if(DEFINED FIXTURE_CMAKE_VERSION)
+    set(CMAKE_VERSION "${{FIXTURE_CMAKE_VERSION}}")
+endif()
 include("{module}")
 include("{module}")
 ''')
@@ -365,6 +434,15 @@ include("{module}")
 
         configured = configure(build)
         assert configured.returncode == 0, "real Open MPI fixture failed to configure"
+        if case == "compatibility":
+            # Exercise our version guard with the installed interpreter. This
+            # is not a claim of running a second/older CMake executable.
+            result = configure(build, ["-DFIXTURE_CMAKE_VERSION=3.27.9"])
+            assert result.returncode != 0, "older CMake silently left Open MPI tests unprotected"
+            assert "3.28" in result.stdout and "Open MPI" in result.stdout
+            assert re.search(r"requires|needs|upgrade", result.stdout, re.I)
+            print("compatibility: older-version guard explicitly rejects unprotected configuration")
+            return
         entries = registered_tests(build)
         acceptance = [test for test in entries if test["name"] == "infra_ompi_singleton_startup"]
         assert len(acceptance) == 1, "including module twice duplicated acceptance registration"
@@ -376,61 +454,66 @@ include("{module}")
             assert props["TIMEOUT"] == 120 and props["PROCESSORS"] == 2
             assert props["PASS_REGULAR_EXPRESSION"] == ["controlled wrapper completed"]
             assert props["FAIL_REGULAR_EXPRESSION"] == ["controlled wrapper failure"]
-            expected_labels = {"mesh", "tierA", "preview", "module", "owner:M2"} if name == "mesh_digest_golden" else {"fixture"}
+            expected_labels = ({"mesh", "tierA", "preview", "module", "owner:M2"}
+                               if name == "mesh_digest_golden" else
+                               {"mpi"} if name == "unrelated_mpi_label" else {"fixture"})
             assert set(props["LABELS"]) == expected_labels, f"{name}: labels changed"
             assert "OMP_NUM_THREADS=2" in props["ENVIRONMENT"] and "OMP_PROC_BIND=false" in props["ENVIRONMENT"]
             assert "CHIPCAE_PRESERVED=set:kept" in props["ENVIRONMENT_MODIFICATION"]
             if name in unrelated:
-                assert not mca_environment(props), f"{name}: unrelated test received protection"
+                assert not singleton_environment(props), f"{name}: unrelated test received protection"
         protection = mca_environment(test_properties(acceptance[0]))
         assert protection, "missing singleton startup protection: cannot validate module environment contract"
+        protection.update(singleton_environment(test_properties(acceptance[0])))
 
         if case.startswith("conflict_") or case == "matching":
             # Discover the independently selected candidate rather than locking
             # the tests to hash or another unvalidated switch. Component values
             # and per-test session paths are both supported.
-            settings = mca_environment(test_properties(tests["mesh_digest_golden"]))
+            settings = singleton_environment(test_properties(tests["mesh_digest_golden"]))
             assert protection.keys() <= settings.keys(), "golden lacks acceptance protection"
-            key = next(iter(protection))
-            value = settings[key]
-            conflict = "chipcae-controlled-conflicting-value"
-            extra = []
-            environment = dict(os.environ)
-            if case == "matching":
-                extra = [f"-DFIXTURE_ENV={key}={value}", f"-DFIXTURE_MOD={key}=set:{value}"]
-                # A global session path cannot match deliberately distinct
-                # per-test paths. Matching inheritance applies to shared values.
-                if not Path(value).is_absolute():
-                    environment[key] = value
-            elif case == "conflict_inherited":
-                environment[key] = conflict
-            elif case == "conflict_environment":
-                extra = [f"-DFIXTURE_ENV={key}={conflict}"]
-            elif case == "conflict_modification":
-                extra = [f"-DFIXTURE_MOD={key}=set:{conflict}"]
-            else:
-                extra = [f"-DFIXTURE_MOD={key}=unset:"]
-            result = configure(build, extra, environment)
+            for key in protection:
+                value = settings[key]
+                conflict = "chipcae-controlled-conflicting-value"
+                extra = []
+                environment = dict(os.environ)
+                if case == "matching":
+                    extra = [f"-DFIXTURE_ENV={key}={value}", f"-DFIXTURE_MOD={key}=set:{value}"]
+                    # A global session path cannot match deliberately distinct
+                    # per-test paths. Matching inheritance applies to shared values.
+                    if not Path(value).is_absolute():
+                        environment[key] = value
+                elif case == "conflict_inherited":
+                    environment[key] = conflict
+                elif case == "conflict_environment":
+                    extra = [f"-DFIXTURE_ENV={key}={conflict}"]
+                elif case == "conflict_modification":
+                    extra = [f"-DFIXTURE_MOD={key}=set:{conflict}"]
+                else:
+                    extra = [f"-DFIXTURE_MOD={key}=unset:"]
+                result = configure(build, extra, environment)
+                if case != "matching":
+                    assert result.returncode != 0, f"silently accepted {case}: {key}"
+                    assert key in result.stdout, "conflict diagnostic must identify the MCA name"
+                    assert re.search(r"conflict|incompatible|冲突", result.stdout, re.I), "no explicit conflict diagnostic"
+                    if case in ("conflict_environment", "conflict_modification", "conflict_unset"):
+                        assert "mesh_digest_golden" in result.stdout, "diagnostic must identify the affected test"
+                    if case != "conflict_unset":
+                        assert conflict in result.stdout, "diagnostic must preserve the conflicting value"
+                    print(f"{case}: explicit MCA conflict diagnostic verified")
+                    continue
+                assert result.returncode == 0, "matching MCA assignments must not conflict"
+                tests = {test["name"]: test for test in registered_tests(build)}
+                # The combined reader rejects duplicate ENVIRONMENT entries and
+                # repeated assignments across ENVIRONMENT / MODIFICATION.
+                assert singleton_environment(test_properties(tests["mesh_digest_golden"]))[key] == value
             if case != "matching":
-                assert result.returncode != 0, f"silently accepted {case}: {key}"
-                assert key in result.stdout, "conflict diagnostic must identify the MCA name"
-                assert re.search(r"conflict|incompatible|冲突", result.stdout, re.I), "no explicit conflict diagnostic"
-                if case in ("conflict_environment", "conflict_modification", "conflict_unset"):
-                    assert "mesh_digest_golden" in result.stdout, "diagnostic must identify the affected test"
-                if case != "conflict_unset":
-                    assert conflict in result.stdout, "diagnostic must preserve the conflicting value"
-                print(f"{case}: explicit MCA conflict diagnostic verified")
                 return
-            assert result.returncode == 0, "matching MCA assignments must not conflict"
-            tests = {test["name"]: test for test in registered_tests(build)}
-            # The combined reader rejects duplicate ENVIRONMENT entries and
-            # repeated assignments across ENVIRONMENT / MODIFICATION.
-            assert mca_environment(test_properties(tests["mesh_digest_golden"]))[key] == value
 
         session_paths = set()
         for name in (*selected, "infra_ompi_singleton_startup"):
             props = test_properties(tests[name])
-            settings = mca_environment(props)
+            settings = singleton_environment(props)
             assert protection.keys() <= settings.keys(), f"{name}: direct singleton path lacks probe protection"
             assert all(any(entry == f"{key}={value}" for entry in props.get("ENVIRONMENT", []))
                        for key, value in settings.items()), f"{name}: protection must be test-local ENVIRONMENT"
@@ -452,13 +535,13 @@ include("{module}")
         if session_paths:
             absolute_keys = [key for key, value in protection.items() if Path(value).is_absolute()]
             for key in absolute_keys:
-                paths = {mca_environment(test_properties(tests[name]))[key]
+                paths = {singleton_environment(test_properties(tests[name]))[key]
                          for name in (*selected, "infra_ompi_singleton_startup")}
                 assert len(paths) == len(selected) + 1, f"{key}: test session directories are shared"
             second = root / "another-build"
             assert configure(second).returncode == 0
             other = {test["name"]: test for test in registered_tests(second)}
-            other_paths = {Path(mca_environment(test_properties(other[name]))[key]).resolve()
+            other_paths = {Path(singleton_environment(test_properties(other[name]))[key]).resolve()
                            for name in (*selected, "infra_ompi_singleton_startup") for key in absolute_keys}
             assert session_paths.isdisjoint(other_paths), "concurrent builds share session directories"
         if case == "propagation":
@@ -469,7 +552,7 @@ include("{module}")
             assert result.returncode == 0, "controlled direct/MPI wrapper failed"
             for name in ("mesh_digest_golden", "mesh_digest_mpi", "solve_inputs"):
                 observed = json.loads((root / (name + ".json")).read_text())
-                for key, value in mca_environment(test_properties(tests[name])).items():
+                for key, value in singleton_environment(test_properties(tests[name])).items():
                     assert observed.get(key) == value, f"{name}: child did not inherit {key}"
                 assert observed["OMP_NUM_THREADS"] == "2" and observed["CHIPCAE_PRESERVED"] == "kept"
         print(f"{case}: recursive selection, duplicate include and environment contract verified")
@@ -526,7 +609,7 @@ endif()
 mode, script, python, probe, iterations, build = sys.argv[1:]
 if mode in ("sleep", "exit7", "missing", "iterations", "success", "environment", "descendant_exit"):
     driver_check(mode, script, python)
-elif mode in ("selection", "propagation", "matching", "conflict_inherited", "conflict_environment",
+elif mode in ("selection", "propagation", "matching", "compatibility", "conflict_inherited", "conflict_environment",
               "conflict_modification", "conflict_unset"):
     module_check(mode, script, python, build)
 elif mode == "configuration":
