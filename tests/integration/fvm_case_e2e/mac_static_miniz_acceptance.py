@@ -1,7 +1,7 @@
 """Build-system regressions for ECAD miniz selection and private FVM probes.
 
 All packages and generated projects are synthetic and live in temporary directories.
-Run directly with unittest, or through the existing fvm_fvm_case_e2e entry point.
+Run separately with ``python -m unittest mac_static_miniz_acceptance``.
 """
 
 from contextlib import contextmanager
@@ -47,7 +47,8 @@ class MinizResolutionAcceptance(unittest.TestCase):
 
     def configure_case(self, targets=(), *, shared=None, policy=None, minimum=None,
                        disabled=False, promote=False, alias=False, global_import=False,
-                       caller_context=False, built=False, promote_after=False):
+                       caller_context=False, built=False, promote_after=False,
+                       check_package_semantics=False):
         temporary = tempfile.TemporaryDirectory(prefix='miniz-acceptance-')
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -85,6 +86,18 @@ class MinizResolutionAcceptance(unittest.TestCase):
                                f'set_target_properties({underlying} PROPERTIES IMPORTED_GLOBAL TRUE)')
             if alias or (built and '::' in name):
                 package.append(f'add_library({name} ALIAS {underlying})')
+            if check_package_semantics:
+                package += [
+                    f'get_target_property(package_type {name} TYPE)',
+                    f'if(NOT package_type STREQUAL "{kind}_LIBRARY")',
+                    'message(FATAL_ERROR "resolver changed package target type")', 'endif()',
+                ]
+                if global_import or promote_after:
+                    package += [
+                        f'get_target_property(package_global {underlying} IMPORTED_GLOBAL)',
+                        'if(NOT package_global)',
+                        'message(FATAL_ERROR "resolver changed package GLOBAL import")', 'endif()',
+                    ]
         if global_import:
             package = [line.replace(' IMPORTED)', ' IMPORTED GLOBAL)') for line in package]
         if caller_context:
@@ -154,6 +167,7 @@ add_library(miniz miniz.c)
             'function(chipcae_set_warnings)', 'endfunction()',
             f'set(FETCHCONTENT_SOURCE_DIR_MINIZ {cmake_quote(fallback)})',
             f'set(CMAKE_DISABLE_FIND_PACKAGE_miniz {"ON" if disabled else "OFF"})',
+            'cmake_policy(GET CMP0107 alias_policy_before)',
             *before,
             *([
                 'set(CHIPCAE_TEST_MINIZ_ENABLED ON)',
@@ -167,7 +181,10 @@ add_library(miniz miniz.c)
             ] if caller_context else []),
             f'include({cmake_quote(SOURCE / "cmake/ChipcaeDependencies.cmake")})',
             *after,
-            # The import-scope guard must not change later package imports.
+            'cmake_policy(GET CMP0107 alias_policy_after)',
+            'if(NOT alias_policy_after STREQUAL alias_policy_before)',
+            'message(FATAL_ERROR "resolver changed subsequent alias policy")', 'endif()',
+            # Later packages retain native GLOBAL imports and CACHE properties.
             'add_library(unrelated_global INTERFACE IMPORTED GLOBAL)',
             'get_target_property(still_global unrelated_global IMPORTED_GLOBAL)',
             'if(NOT still_global)',
@@ -211,10 +228,7 @@ add_library(miniz miniz.c)
         expected_name, expected_kind = next((item for item in targets if item[0] == 'miniz::miniz'),
                                             targets[0] if targets else ('miniz', 'STATIC'))
         rejected = any(kind in ('SHARED', 'MODULE') for _, kind in targets) or disabled or not targets
-        if built and not rejected and '::' in selected:
-            self.assertEqual(kind, 'INTERFACE_LIBRARY')
-        else:
-            self.assertEqual(kind, 'STATIC_LIBRARY' if rejected else expected_kind + '_LIBRARY')
+        self.assertEqual(kind, 'STATIC_LIBRARY' if rejected else expected_kind + '_LIBRARY')
         if not rejected:
             self.assertEqual(selected, expected_name)
         commands = run(['ninja', '-C', str(root / 'build'), '-t', 'commands', 'ecad_link'],
@@ -294,11 +308,18 @@ add_library(miniz miniz.c)
                 with self.subTest(kind=kind, names=names):
                     self.configure_case(tuple((name, kind) for name in names), built=True)
 
-    def test_packages_cannot_promote_rejected_imports_after_creation(self):
+    def test_discovery_preserves_package_alias_semantics(self):
+        for kind in ('STATIC', 'SHARED', 'MODULE'):
+            with self.subTest(kind=kind):
+                self.configure_case((('miniz::miniz', kind),), built=True, alias=True,
+                                    check_package_semantics=True)
+
+    def test_post_creation_global_imports_use_static_fallback(self):
         for setter in ('set_property', 'set_target_properties'):
             for name in ('miniz', 'miniz::miniz'):
                 with self.subTest(setter=setter, name=name):
-                    self.configure_case(((name, 'SHARED'),), promote_after=setter)
+                    self.configure_case(((name, 'SHARED'),), promote_after=setter,
+                                        check_package_semantics=True)
 
     def test_built_static_packages_keep_their_targets(self):
         for names in (('miniz',), ('miniz::miniz',), ('miniz', 'miniz::miniz')):
@@ -316,7 +337,8 @@ add_library(miniz miniz.c)
                 for alias in (False, True):
                     with self.subTest(kind=kind, names=names, alias=alias):
                         self.configure_case(tuple((name, kind) for name in names),
-                                            global_import=True, alias=alias)
+                                            global_import=True, alias=alias,
+                                            check_package_semantics=True)
 
     def test_explicit_global_accepted_imports_remain_usable(self):
         for kind in ('STATIC', 'INTERFACE', 'UNKNOWN'):
@@ -527,9 +549,37 @@ class EntryPointEnvironmentAcceptance(unittest.TestCase):
         with patch.dict(os.environ):
             for key in required:
                 os.environ.pop(key, None)
-            with patch.object(entry.mac_static_miniz_acceptance, 'suite',
-                              side_effect=AssertionError('build acceptance ran before skip')):
+            with patch(__name__ + '.suite',
+                       side_effect=AssertionError('build acceptance ran before skip')):
                 self.assertEqual(entry.main(), 77)
+
+    def test_configured_environment_runs_only_fvm_acceptance(self):
+        import test_fvm_case_e2e as entry
+        required = ('CHIPCAE_IMPORT_EXE', 'CHIPCAE_PREVIEW_EXE', 'CHIPCAE_SOLVE_EXE',
+                    'CHIPCAE_FVM_LOADER_PROBE', 'CHIPCAE_MPIEXEC')
+        environment = dict.fromkeys(required, sys.executable)
+        environment['CHIPCAE_MPIEXEC_NUMPROC_FLAG'] = '-n'
+        scheduled = []
+
+        class RecordingRunner:
+            def __init__(self, **kwargs):
+                pass
+
+            def run(self, suite):
+                def classes(tests):
+                    for test in tests:
+                        if isinstance(test, unittest.TestSuite):
+                            yield from classes(test)
+                        else:
+                            yield type(test).__name__
+                scheduled.append(set(classes(suite)))
+                return SimpleNamespace(wasSuccessful=lambda: True)
+
+        with patch.dict(os.environ, environment), \
+                patch.object(entry.u, 'command', return_value=SimpleNamespace(stdout='[]')), \
+                patch.object(entry.unittest, 'TextTestRunner', RecordingRunner):
+            self.assertEqual(entry.main(), 0)
+        self.assertEqual(scheduled, [{'DecoderAcceptance', 'AdapterAcceptance', 'CaseAcceptance'}])
 
 
 def suite():

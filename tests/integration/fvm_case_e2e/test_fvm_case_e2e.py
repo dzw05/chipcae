@@ -13,7 +13,6 @@ import unittest
 import zlib
 
 import fvm_case_util as u
-import mac_static_miniz_acceptance
 
 SOURCE = Path(__file__).resolve().parents[3]
 
@@ -1413,8 +1412,6 @@ def main():
     except Exception as error:
         print(f'SKIP: numpy/h5py unavailable: {error}')
         return 77
-    if not unittest.TextTestRunner(verbosity=2).run(mac_static_miniz_acceptance.suite()).wasSuccessful():
-        return 1
     fields = u.command([os.environ['CHIPCAE_FVM_LOADER_PROBE'], '--result-fields'], SOURCE)
     u.REQUIRE_COPPER_FIELDS = json.loads(fields.stdout)
     print(f'ResultsPartition copper fields available: {u.REQUIRE_COPPER_FIELDS}', flush=True)
