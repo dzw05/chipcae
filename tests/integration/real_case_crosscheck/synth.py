@@ -122,3 +122,40 @@ def mesh_runs(root):
     for run, n, letter in zip(runs, (216, 125, 64), ("a", "b", "c")):
         synthetic_run(run, n=n, mesh_hash=letter * 64)
     return runs
+
+
+def deformation_mesh_runs(root, *, rigid_scale=1.0):
+    """Fixed geometry, known nonrigid maximum A+B*h^2, changing rigid anchors.
+
+    The x-directed quadratic has zero mean. Cartesian symmetry makes its inner
+    product with every infinitesimal rotation zero as well. No rigid-removal
+    implementation is used to construct this independently prescribed field.
+    Volume data set h; fixed coordinates prevent changing samples from adding
+    a spurious discretization error to the deformation sequence.
+    """
+    corners = np.array([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0),
+                        (0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1)], dtype=float)
+    points = np.concatenate([corners + [3*i, 0, 0] for i in range(8)]) / 22
+    points -= np.mean(points, axis=0)
+    shape = points[:, 0]**2 - np.mean(points[:, 0]**2)
+    shape /= np.max(np.abs(shape))
+    deformation = np.column_stack((shape, np.zeros_like(shape), np.zeros_like(shape)))
+    runs, amplitudes, raw_values = [], [], []
+    for index, (label, h) in enumerate(zip(("fine", "middle", "coarse"), (.125, .25, .5))):
+        run = root / label
+        amplitude = .02 + .5*h*h
+        anchor = np.array([.3*index, -.2*index, .1*(index+1)])
+        rotation = rigid_scale * np.array([.1*(index+1), -.07, .13*index])
+        translation = rigid_scale * np.array([.2*(index+1), -.1*index, .3])
+        u = amplitude * deformation + translation + np.cross(rotation, points - anchor)
+        raw = float(np.max(np.linalg.norm(u, axis=1)))
+        synthetic_run(run, n=8, total_volume=8*h**3, mesh_hash="abc"[index] * 64,
+                      qoi={"T_max": AMBIENT + 2 + .5*h*h,
+                           "warpage_pv": 1e-4*(1 + .5*h*h), "U_mag_max": raw})
+        with h5py.File(run / "step.vtkhdf", "r+") as data:
+            data["VTKHDF/hex/Points"][:] = points
+            data["VTKHDF/hex/PointData/U"][:] = u
+        runs.append(run)
+        amplitudes.append(amplitude)
+        raw_values.append(raw)
+    return runs, amplitudes, raw_values

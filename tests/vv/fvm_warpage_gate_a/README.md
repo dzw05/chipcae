@@ -1,0 +1,35 @@
+# Scheme A acceptance tests
+
+These tests prescribe geometry and analytic fields independently of the future
+`tools.vv.fvm_warpage_gate` implementation. Missing gate code is an assertion
+failure. Only missing numpy/h5py exits 77; a skip supplies no acceptance evidence.
+No production implementation or passing numerical stub is included in this RED pass.
+
+The interpolation tests use the internal `(values, interp_indicator)` return
+convention. PV means the maximum minus minimum of the residual at the supplied
+samples after a least-squares plane fit. The analytic quadratic PV test includes
+the midpoint; it does not insert new samples into a centroid set.
+
+The brief's even-grid centroid/node ratio `(1-1/nx)^2` conflicts with sampled PV:
+even grids miss the centroid midpoint and give `1-2/nx`. That one assertion is
+deferred pending a specification ruling, without adding a skip or an xfail.
+The strip test conservatively retains G1's final-pair in-plane order >=1 alongside
+the new thickness order >=1.5; both must pass.
+
+All solver cases are generated in temporary directories from `bimaterial_strip`.
+Each kz uses a cached FEM reference, starting at 12x4 and doubling to the first
+adjacent pair with relative PV change <=1e-3, choosing the finer member. FEM uses
+direct/rtol=1e-10. FVM keeps the existing fixture solver settings. Face PV comes
+from the FVM manifest, while the FEM reference is interpolated at face centroids.
+Nodal errors remain diagnostic for this strip gate.
+
+Each launch uses a fresh measurement supervisor, monotonic wall time and
+RUSAGE_CHILDREN peak RSS. Linux KiB and macOS bytes are normalized to MiB.
+Available memory must be >=4 GiB; ordinary runs require RSS <=3072 MiB and
+FEM references require wall time <=600 s. Resource failures are failures, never skips. The optional
+Darwin/CHIPCAE_VV_HIGHMEM=1 cases retain the brief's RSS cap pending an explicit
+high-memory policy; this test does not invent a larger allowance. On Linux,
+192x64 and kz16 print their unrun status. Solver/reference failure cannot be
+classified as an FVM numerical defect until the gate unit tests pass.
+
+CTest names: `vv_fvm_warpage_gate_unit`, `vv_fvm_warpage_gate_a_strip`.

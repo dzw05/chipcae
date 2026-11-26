@@ -8,9 +8,11 @@ import math
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from synth import (AMBIENT, crosscheck_module, h5py, mesh_runs, np, synthetic_run)
-from tools.vv.field_compare import InputInvalid, compare_runs, load_run
+from synth import (AMBIENT, crosscheck_module, deformation_mesh_runs, h5py, mesh_runs,
+                   np, synthetic_run)
+from tools.vv.field_compare import InputInvalid, _remove_rigid, compare_runs, load_run
 
 
 DERIVED = ("p", "phi_ext21", "e_a21", "e_ext21", "gci_fine21")
@@ -67,6 +69,17 @@ class SyntheticFixtureTests(unittest.TestCase):
                                           t_ambient=AMBIENT, remove_rigid=True)
                     self.assertEqual(result["verdict"], verdict)
                     self.assertIsNotNone(result["fields"]["U_rigid_removed"])
+
+    def test_deformation_fixture_has_fixed_geometry_and_prescribed_nonrigid_maxima(self):
+        with tempfile.TemporaryDirectory(prefix="deformation-fixture-") as tmp:
+            runs, amplitudes, raw = deformation_mesh_runs(Path(tmp))
+            loaded = [load_run(path) for path in runs]
+            for run, expected, raw_max in zip(loaded, amplitudes, raw):
+                np.testing.assert_allclose(run.points, loaded[0].points, rtol=0, atol=1e-15)
+                actual = float(np.max(np.linalg.norm(_remove_rigid(run.points, run.U), axis=1)))
+                self.assertTrue(math.isclose(actual, expected, rel_tol=1e-12))
+                self.assertGreater(raw_max, 2 * expected)
+            np.testing.assert_allclose(amplitudes, [.0278125, .05125, .145], rtol=1e-15, atol=0)
 
 
 class GciTests(unittest.TestCase):
@@ -240,6 +253,40 @@ class GciTests(unittest.TestCase):
             for volumes in (None, np.array([np.finfo(float).max] * 2)):
                 with self.subTest(volumes=volumes), self.assertRaises(InputInvalid):
                     self.cc.grid_size(replace(run, cell_volume=volumes))
+
+    def test_deformation_sequence_recovers_order_two_despite_changed_rigid_anchors(self):
+        estimates = []
+        with tempfile.TemporaryDirectory(prefix="deformation-gci-") as tmp:
+            for scale in (1.0, 13.0):
+                runs, _, _ = deformation_mesh_runs(Path(tmp) / str(scale), rigid_scale=scale)
+                result = self.cc.mesh_sequence([runs[2], runs[0], runs[1]], t_ambient=AMBIENT)
+                self.assertEqual(result["verdict"], "report")
+                self.assertIn("deformation_max", result["mesh_seq"],
+                              "missing feature: mesh_seq needs rigid-removed deformation GCI")
+                estimate = result["mesh_seq"]["deformation_max"]
+                self.assertEqual(set(estimate), GCI_KEYS)
+                self.assertEqual(estimate["status"], "monotone")
+                self.assertLessEqual(abs(estimate["p"] - 2), 1e-6)
+                self.assertTrue(math.isclose(estimate["phi_ext21"], .02, rel_tol=1e-10))
+                # Independent Celik safety factor with prescribed p=2 and h2/h1=2.
+                expected_gci = 1.25 * (.0234375 / .0278125) / 3
+                self.assertTrue(math.isclose(estimate["gci_fine21"], expected_gci, rel_tol=1e-9))
+                self.assertEqual([r["run_dir"] for r in result["runs"]], [p.name for p in runs])
+                estimates.append(estimate)
+            for key in ("p", "phi_ext21", "gci_fine21"):
+                self.assertTrue(math.isclose(estimates[0][key], estimates[1][key], rel_tol=1e-9), key)
+
+    def test_raw_displacement_values_never_enter_celik_gci(self):
+        with tempfile.TemporaryDirectory(prefix="raw-u-no-gci-") as tmp:
+            runs, amplitudes, raw = deformation_mesh_runs(Path(tmp))
+            with patch.object(self.cc, "celik_gci", wraps=self.cc.celik_gci) as calls:
+                self.cc.mesh_sequence([runs[1], runs[2], runs[0]], t_ambient=AMBIENT)
+            sequences = [tuple(call.args[1]) for call in calls.call_args_list]
+            self.assertNotIn(tuple(raw), sequences,
+                             "U_mag_max contains rigid motion and must never enter GCI")
+            self.assertEqual(len(sequences), 3, "temperature, warpage and deformation need GCI")
+            self.assertTrue(any(np.allclose(sequence, amplitudes, rtol=1e-12, atol=0)
+                                for sequence in sequences), "deformation sequence was not analyzed")
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ import tempfile
 import unittest
 
 from synth import (AMBIENT, QOIS, ROOT, SCRIPT, change_manifest, crosscheck_module,
-                   h5py, mesh_runs, np, patch_qoi, synthetic_run)
+                   deformation_mesh_runs, h5py, mesh_runs, np, patch_qoi, synthetic_run)
 from tools.vv.field_compare import compare_runs, load_run
 
 
@@ -112,17 +112,20 @@ class CrosscheckCliTests(unittest.TestCase):
             self.assertEqual(metadata["qoi_method"], loaded.qoi_method)
             expected_h = float((np.sum(loaded.cell_volume) / len(loaded.cell_gid)) ** (1 / 3))
             self.assertEqual(float(metadata["h"]).hex(), expected_h.hex())
-        self.assertEqual(set(result["mesh_seq"]), {"T_max_rise", "warpage_pv", "U_mag_max"})
-        for name, gci in result["mesh_seq"].items():
+        self.assertEqual(set(result["mesh_seq"]),
+                         {"T_max_rise", "warpage_pv", "U_mag_max", "deformation_max"})
+        for name in ("T_max_rise", "warpage_pv"):
+            gci = result["mesh_seq"][name]
             self.assertLessEqual(abs(gci["p"] - 2.0), 1e-8, name)
             self.assertEqual(gci["status"], "monotone")
             self.assert_float_repr(markdown, gci.values())
+        self.raw_displacement_report(result, markdown)
         self.assertFalse(result.get("gates"))
 
     def test_mesh_sequence_without_ambient_omits_temperature_rise(self):
         self.invoke(self.mesh_args(ambient=False))
         result, _ = self.report(kind="mesh_seq", verdict="report")
-        self.assertEqual(set(result["mesh_seq"]), {"warpage_pv", "U_mag_max"})
+        self.assertEqual(set(result["mesh_seq"]), {"warpage_pv", "U_mag_max", "deformation_max"})
 
     def test_unsolved_displacement_qoi_is_null_with_note_and_still_reports(self):
         for name in ("warpage_pv", "U_mag_max"):
@@ -134,6 +137,40 @@ class CrosscheckCliTests(unittest.TestCase):
             self.assertIn("not solved", notes)
             self.assertIn(name, notes)
             self.assertIsNotNone(result["mesh_seq"]["T_max_rise"])
+            self.assertIn("deformation_max", result["mesh_seq"])
+            if name == "U_mag_max":
+                self.assertIsNone(result["mesh_seq"]["deformation_max"])
+
+    def raw_displacement_report(self, result, markdown):
+        raw = result["mesh_seq"]["U_mag_max"]
+        self.assertIsInstance(raw, dict)
+        self.assertIs(raw.get("convergence_use"), False,
+                      "raw displacement must be explicitly excluded from convergence")
+        self.assertIn("values", raw)
+        np.testing.assert_allclose(raw["values"],
+                                   [r["qoi"]["U_mag_max"] for r in result["runs"]],
+                                   rtol=1e-15, atol=0)
+        explanation = "U_mag_max 含刚体位移，只打印，不作收敛判据"
+        self.assertIn(explanation, json.dumps(raw, ensure_ascii=False))
+        self.assertIn(explanation, markdown)
+        self.assertIn("mesh_seq.U_mag_max.convergence_use | False", markdown)
+        for key in ("p", "phi_ext21", "e_a21", "e_ext21", "gci_fine21", "r21", "r32"):
+            self.assertNotIn(key, raw, f"raw U must not carry derived convergence field {key}")
+            self.assertNotIn(f"mesh_seq.U_mag_max.{key} |", markdown)
+        self.assert_float_repr(markdown, raw["values"])
+
+    def test_deformation_json_and_markdown_report_second_order_without_raw_u_gci(self):
+        self.runs, _, _ = deformation_mesh_runs(self.root / "deformation")
+        self.invoke(self.mesh_args([self.runs[2], self.runs[0], self.runs[1]]))
+        result, markdown = self.report(kind="mesh_seq", verdict="report")
+        self.assertEqual(set(result["mesh_seq"]),
+                         {"T_max_rise", "warpage_pv", "U_mag_max", "deformation_max"})
+        deformation = result["mesh_seq"]["deformation_max"]
+        self.assertLessEqual(abs(deformation["p"] - 2), 1e-6)
+        self.assertIn("mesh_seq.deformation_max.p", markdown)
+        self.assert_float_repr(markdown, deformation.values())
+        self.raw_displacement_report(result, markdown)
+        self.assertFalse(result.get("gates"))
 
     def test_nonconvergent_mesh_sequence_has_no_unapproved_gate(self):
         for path, value in zip(self.runs, (1.0, 2.0, 3.0)):
