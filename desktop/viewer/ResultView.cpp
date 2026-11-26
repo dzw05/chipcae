@@ -578,7 +578,8 @@ double ResultView::autoWarpageScale() const {
                 for (double component : displacement)
                     if (!std::isfinite(component))
                         return 0.0;
-                const double norm = std::hypot(displacement[0], displacement[1], displacement[2]);
+                const double norm =
+                    std::hypot(std::hypot(displacement[0], displacement[1]), displacement[2]);
                 if (!std::isfinite(norm))
                     return 0.0;
                 umax = std::max(umax, norm);
@@ -587,8 +588,8 @@ double ResultView::autoWarpageScale() const {
     }
     if (!hasPoints || umax == 0.0)
         return 0.0;
-    const double diagonal =
-        std::hypot(maximum[0] - minimum[0], maximum[1] - minimum[1], maximum[2] - minimum[2]);
+    const double diagonal = std::hypot(std::hypot(maximum[0] - minimum[0], maximum[1] - minimum[1]),
+                                       maximum[2] - minimum[2]);
     if (!std::isfinite(diagonal) || diagonal == 0.0)
         return 0.0;
     const double scale = (diagonal / 16.0) / umax;

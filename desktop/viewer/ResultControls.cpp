@@ -42,10 +42,10 @@ ResultControls::ResultControls(ResultView& view, ResultSession& session, QWidget
     autoScale->setObjectName("autoWarpageScale");
     autoScale->setEnabled(view.autoWarpageScale() > 0);
     layout->addRow(autoScale);
-    connect(&view, &ResultView::displayChanged, autoScale, [&view, autoScale] {
+    connect(&view, &ResultView::displayChanged, &view, [&view, autoScale] {
         autoScale->setEnabled(view.autoWarpageScale() > 0);
     });
-    connect(autoScale, &QPushButton::clicked, scale, [&view, scale] {
+    connect(autoScale, &QPushButton::clicked, &view, [&view, scale] {
         scale->setValue(view.autoWarpageScale());
     });
     auto layer = new QComboBox(this);

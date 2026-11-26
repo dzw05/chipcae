@@ -24,6 +24,7 @@
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <vector>
 #include <vtkActor.h>
@@ -2240,6 +2241,18 @@ int autoWarpageScaleAcceptance(const QDir& root) {
                         "auto scale click must set view to exactly 7.5");
             }
         });
+    });
+    run("auto warpage scale button after view destruction", [&] {
+        ResultSession session;
+        auto view = std::make_unique<ResultView>();
+        ResultControls controls(*view, session);
+        auto button = autoWarpageButton(controls);
+        auto spin = warpageScaleSpin(controls);
+        spin->setValue(3.0);
+        button->setEnabled(true);
+        view.reset();
+        button->click();
+        near(spin->value(), 3.0);
     });
     for (bool failedLoad : {false, true})
         run(failedLoad ? "auto warpage scale button refresh after failed load"
