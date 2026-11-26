@@ -24,6 +24,14 @@
 namespace {
 using namespace chipcae::mesh;
 using sp5::require;
+#ifdef CHIPCAE_ENABLE_MFEM
+struct RuntimeGuard {
+    RuntimeGuard(int& argc, char** argv) { k1::init_runtime(argc, argv); }
+    ~RuntimeGuard() { k1::finalize_runtime(); }
+    RuntimeGuard(const RuntimeGuard&) = delete;
+    RuntimeGuard& operator=(const RuntimeGuard&) = delete;
+};
+#endif
 // A deliberately small parser for the controlled case schema. No optional JSON dependency.
 struct Json {
     enum Kind { Number, String, Array, Object, Boolean } kind = Number;
@@ -367,12 +375,12 @@ int main(int argc, char** argv) {
 #ifndef CHIPCAE_ENABLE_MFEM
     if (use_mfem)
         return 77;
-#else
-    if (use_mfem)
-        k1::init_runtime(argc, argv);
 #endif
-    const int code = sp5::run([&] {
+    return sp5::run([&] {
 #ifdef CHIPCAE_ENABLE_MFEM
+        std::optional<RuntimeGuard> runtime;
+        if (use_mfem)
+            runtime.emplace(argc, argv);
         std::unique_ptr<mfem::Device> device;
         if (use_mfem)
             device = std::make_unique<mfem::Device>("cpu");
@@ -385,9 +393,4 @@ int main(int argc, char** argv) {
         require(p.pos == p.text.size(), "trailing JSON content");
         dump(input, argv[2], use_mfem);
     });
-#ifdef CHIPCAE_ENABLE_MFEM
-    if (use_mfem)
-        k1::finalize_runtime();
-#endif
-    return code;
 }

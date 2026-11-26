@@ -1,18 +1,35 @@
 """Hand-derived checks for the independent oracle; no compiled products required."""
+from contextlib import redirect_stdout
+from io import StringIO
 import math
 import sys
 import tempfile
 from pathlib import Path
 import time
 import unittest
+from unittest.mock import patch
 from fractions import Fraction as F
 
 import cut_exact_oracle as oracle
 import cut_exact_oracle_compare as compare
+import cut_union_actual as union_actual
 from cut_exact_oracle_cases import cases, validate_case
 
 
 class ExactOracleTests(unittest.TestCase):
+    def test_union_process_failure_survives_resource_limit(self):
+        # The child exit status must survive even when the wall budget is exceeded.
+        for codes in ((23,), (0, 24)):
+            with self.subTest(codes=codes), tempfile.TemporaryDirectory() as directory:
+                args = ['cut_union_actual', '--dump', 'dump', '--checker', 'check.py',
+                        '--out', str(Path(directory)/'actual.json')]
+                results = [union_actual.subprocess.CompletedProcess([], code) for code in codes]
+                with patch.object(sys, 'argv', args), \
+                        patch.object(union_actual.subprocess, 'run', side_effect=results), \
+                        patch.object(union_actual.time, 'monotonic', side_effect=[0, 31]), \
+                        redirect_stdout(StringIO()):
+                    self.assertEqual(union_actual.main(), codes[-1])
+
     def test_intersection_scales_and_near_parallel_amplification(self):
         ring = [(F(-1), F(-1)), (F(3, 2), F(-1)), (F(-1), F(3, 2))]
         planes = list(oracle._planes(tuple(ring)))

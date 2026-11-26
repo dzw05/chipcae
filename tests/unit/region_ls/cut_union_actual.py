@@ -55,6 +55,7 @@ def main():
     parser.add_argument('--out', required=True, type=Path)
     args = parser.parse_args()
     args.out.parent.mkdir(parents=True, exist_ok=True)
+    succeeded = False
     try:
         with args.out.open('w', encoding='utf-8') as stream:
             result = subprocess.run([str(args.dump)], stdout=stream, check=False)
@@ -64,6 +65,7 @@ def main():
         if result.returncode:
             return result.returncode
         check_fractions(read_json(args.out), args.checker.parent)
+        succeeded = True
         return 0
     finally:
         rss = max(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
@@ -71,7 +73,8 @@ def main():
         rss /= 1024**2 if sys.platform == 'darwin' else 1024
         wall = time.monotonic()-start
         print(f'MEASURE wall_s={wall:.6f} rss_mib={rss:.3f}', flush=True)
-        require(wall <= 30 and rss <= 512, 'union resource limit')
+        if succeeded:
+            require(wall <= 30 and rss <= 512, 'union resource limit')
 
 
 if __name__ == '__main__':
