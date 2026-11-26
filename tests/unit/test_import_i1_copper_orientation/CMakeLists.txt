@@ -12,17 +12,19 @@ if(CHIPCAE_ENABLE_JSONCONS AND TARGET chipcae_stack)
         ${PROJECT_SOURCE_DIR}/mesh/cut/include)
 endif()
 
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
-add_test(NAME import_i1_copper_orientation_runner
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/solve_copper_orientation.py --self-test)
-set_tests_properties(import_i1_copper_orientation_runner PROPERTIES LABELS tierA TIMEOUT 30)
-
 if(CHIPCAE_ENABLE_ECAD AND TARGET chipcae-solve AND CHIPCAE_ENABLE_MFEM AND CHIPCAE_ENABLE_MPI AND CHIPCAE_ENABLE_HDF5)
-    add_test(NAME import_i1_copper_orientation_solve
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    set(CHIPCAE_I1_BRANCHPOINT_SOLVE_EXE "$ENV{CHIPCAE_I1_BRANCHPOINT_SOLVE_EXE}"
+        CACHE FILEPATH "Independently built branch-point chipcae-solve for I1 comparisons")
+    if(NOT EXISTS "${CHIPCAE_I1_BRANCHPOINT_SOLVE_EXE}")
+        message(FATAL_ERROR "Set CHIPCAE_I1_BRANCHPOINT_SOLVE_EXE to an independently built branch-point chipcae-solve")
+    endif()
+    add_test(NAME import_i1_copper_orientation
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/solve_copper_orientation.py)
-    set_tests_properties(import_i1_copper_orientation_solve PROPERTIES LABELS tierA TIMEOUT 1200)
-    set_property(TEST import_i1_copper_orientation_solve APPEND PROPERTY ENVIRONMENT
+    set_tests_properties(import_i1_copper_orientation PROPERTIES LABELS tierA TIMEOUT 1200)
+    set_property(TEST import_i1_copper_orientation APPEND PROPERTY ENVIRONMENT
         "CHIPCAE_SOLVE_EXE=$<TARGET_FILE:chipcae-solve>"
+        "CHIPCAE_I1_BRANCHPOINT_SOLVE_EXE=${CHIPCAE_I1_BRANCHPOINT_SOLVE_EXE}"
         "CHIPCAE_MPIEXEC=${MPIEXEC_EXECUTABLE}"
         "CHIPCAE_MPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}")
 endif()

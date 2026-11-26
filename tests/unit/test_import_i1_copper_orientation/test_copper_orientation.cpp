@@ -305,6 +305,17 @@ void roundtrip(Checks& checks, const Fixture& f, const J& input, bool legacy) {
             expected.erase("role");
         checks.expect(output.at("layers").at(i).at("copper") == expected,
                       "copper JSON keys/values changed in layer " + std::to_string(i));
+        const auto& written_copper = output.at("layers").at(i).at("copper");
+        const bool vertical = expected.contains("orientation");
+        const bool opening = expected.contains("role");
+        checks.expect(written_copper.contains("orientation") == vertical,
+                      "vertical key missing or default orientation emitted");
+        checks.expect(written_copper.contains("role") == opening,
+                      "opening key missing or default role emitted");
+        if (vertical)
+            checks.expect(written_copper.at("orientation") == "vertical", "vertical value lost");
+        if (opening)
+            checks.expect(written_copper.at("role") == "opening", "opening became metal");
     }
     auto reloaded = chipcae::mesh::load_stack(out, schema);
     checks.expect(static_cast<bool>(reloaded), "cannot reload writer output");
@@ -324,6 +335,13 @@ void import_i1_copper_orientation_roundtrip() {
             f.copper(j)["role"] = role;
             roundtrip(checks, f, j, false);
         }
+        // Exercise opening with omitted orientation for each independent fixture shape:
+        // polygons from copper_polygons and fraction from fcbga_cu/top_copper.
+        auto opening_only = f.input;
+        f.copper(opening_only)["role"] = "opening";
+        if (!polygons)
+            f.copper(opening_only)["fraction"] = 0.5;
+        roundtrip(checks, f, opening_only, false);
         auto multiple = f.input;
         auto opening = f.layer(multiple);
         opening["name"] = "separate_opening";

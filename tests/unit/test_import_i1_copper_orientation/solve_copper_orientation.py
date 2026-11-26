@@ -6,7 +6,7 @@ and global relative L2 error <= 1e-8 for PointData/U. The frozen baseline remain
 the reference for legacy stack writing and performance, outside this CLI test.
 Baseline builds/configurations are recorded outside the repo.
 
-Mechanical-only FVM still traverses thermal_problem first. Its CLI rejection does
+Thermal-mechanical FVM traverses thermal_problem first. Its CLI rejection does
 not independently prove execution of the elastic adapter's guard; the direct C++
 guard test covers the helper, and placement in each adapter needs implementation
 review. No public test hook is introduced here.
@@ -65,8 +65,6 @@ def prepare(root, polygons, fraction):
 
 
 def case_for(path):
-    if path == 'fvm-mechanical-only':
-        return UTIL.solid_case('fvm')
     case = UTIL.thermal_case('fem' if path == 'fem' else 'fvm')
     if path == 'fvm-thermal':
         case['physics'] = case['physics'][:1]
@@ -107,9 +105,43 @@ def compare_artifacts(actual, expected):
         same = np.array_equal(x, y) if x.dtype.hasobject else x.tobytes() == y.tobytes()
         assert same, f'{context}: values differ'
 
+    def attributes(x, y, context):
+        assert x.attrs.keys() == y.attrs.keys(), f'{context}: attribute names differ'
+        for attribute in x.attrs:
+            exact_value(x.attrs[attribute], y.attrs[attribute], f'{context}@{attribute}')
+
+    def datasets(group, ancestors=()):
+        # visititems reports each object only once, omitting additional hard links.
+        # Enumerate dataset paths independently, including aliases through groups.
+        assert group.id not in ancestors, f'{group.name}: cyclic HDF group'
+        result = {}
+        for key, value in group.items():
+            if isinstance(value, h5py.Dataset):
+                result[key] = value
+            elif isinstance(value, h5py.Group):
+                for child, dataset in datasets(value, ancestors + (group.id,)).items():
+                    result[f'{key}/{child}'] = dataset
+        return result
+
     for name in actual:
         with h5py.File(actual[name], 'r') as first, h5py.File(expected[name], 'r') as second:
-            objects, reference_objects = {'/': first}, {'/': second}
+            # File attributes and the complete dataset inventory are checked separately
+            # from object traversal, which cannot establish the set of dataset paths.
+            attributes(first, second, f'{name}:/')
+            actual_datasets, expected_datasets = datasets(first), datasets(second)
+            assert actual_datasets.keys() == expected_datasets.keys(), f'{name}: dataset names differ'
+            for key, x in actual_datasets.items():
+                y = expected_datasets[key]
+                context = f'{name}:{key}'
+                assert x.shape == y.shape, f'{context}: shape differs'
+                assert x.dtype == y.dtype, f'{context}: dtype differs'
+                attributes(x, y, context)
+                if key.endswith('/PointData/U'):
+                    displacement.append(np.asarray(x[...]).ravel())
+                    reference_displacement.append(np.asarray(y[...]).ravel())
+                else:
+                    exact_value(x[...], y[...], context)
+            objects, reference_objects = {}, {}
             first.visititems(lambda key, value: objects.update({key: value}))
             second.visititems(lambda key, value: reference_objects.update({key: value}))
             assert objects.keys() == reference_objects.keys(), f'{name}: HDF object names differ'
@@ -117,17 +149,7 @@ def compare_artifacts(actual, expected):
                 y = reference_objects[key]
                 context = f'{name}:{key}'
                 assert type(x) is type(y), f'{context}: object type differs'
-                assert x.attrs.keys() == y.attrs.keys(), f'{context}: attribute names differ'
-                for attribute in x.attrs:
-                    exact_value(x.attrs[attribute], y.attrs[attribute], f'{context}@{attribute}')
-                if isinstance(x, h5py.Dataset):
-                    assert x.shape == y.shape, f'{context}: shape differs'
-                    assert x.dtype == y.dtype, f'{context}: dtype differs'
-                    if key.endswith('/PointData/U'):
-                        displacement.append(np.asarray(x[...]).ravel())
-                        reference_displacement.append(np.asarray(y[...]).ravel())
-                    else:
-                        exact_value(x[...], y[...], context)
+                attributes(x, y, context)
     assert displacement, 'no PointData/U datasets compared'
     x, y = np.concatenate(displacement), np.concatenate(reference_displacement)
     assert np.all(np.isfinite(x)) and np.all(np.isfinite(y)), 'nonfinite displacement'
@@ -185,10 +207,9 @@ def main():
     failures = []
     count = 0
     with tempfile.TemporaryDirectory(prefix='chipcae-i1-solve-') as temp:
-        for path in ('fvm-thermal', 'fvm-thermal-mechanical', 'fem', 'fvm-mechanical-only'):
+        for path in ('fvm-thermal', 'fvm-thermal-mechanical', 'fem'):
             for polygons, fraction in ((False, 0), (False, 0.5), (False, 1), (True, None)):
-                variants = ('default', 'vertical', 'opening') if polygons or fraction == 0.5 else ('default',)
-                for variant in variants:
+                for variant in ('default', 'vertical', 'opening'):
                     name = f'{path}-{"polygons" if polygons else fraction}-{variant}'
                     root = Path(temp) / name
                     count += 1
@@ -228,29 +249,110 @@ def self_test():
             run.assert_not_called()
 
         def test_unexpected_case_exception_is_reported_and_matrix_continues(self):
-            run = Mock(side_effect=[KeyError('synthetic missing material')] + [None] * 31)
+            run = Mock(side_effect=[KeyError('synthetic missing material')] + [None] * 35)
             with patch.dict(os.environ, self.environment, clear=True), \
                     patch.dict(globals(), run_case=run), redirect_stdout(self.output):
                 with self.assertRaises(AssertionError):
                     main()
-            self.assertEqual(run.call_count, 32)
+            self.assertEqual(run.call_count, 36)
             self.assertIn('KeyError: \'synthetic missing material\'', self.output.getvalue())
             self.assertIn('FAIL fvm-thermal-0-default', self.output.getvalue())
-            self.assertIn('PASS fvm-mechanical-only-polygons-opening', self.output.getvalue())
-            self.assertIn('32 matrix cases: 31 passed, 1 failed', self.output.getvalue())
+            self.assertIn('PASS fem-polygons-opening', self.output.getvalue())
+            self.assertIn('36 matrix cases: 35 passed, 1 failed', self.output.getvalue())
 
         def test_all_cases_receive_independent_branchpoint(self):
             run = Mock()
             with patch.dict(os.environ, self.environment, clear=True), \
                     patch.dict(globals(), run_case=run), redirect_stdout(self.output):
                 main()
-            self.assertEqual(run.call_count, 32)
+            self.assertEqual(run.call_count, 36)
+            expected = {
+                (path, polygons, fraction, variant)
+                for path in ('fvm-thermal', 'fvm-thermal-mechanical', 'fem')
+                for polygons, fraction in ((False, 0), (False, 0.5), (False, 1), (True, None))
+                for variant in ('default', 'vertical', 'opening')
+            }
+            self.assertEqual({call.args[3:] for call in run.call_args_list}, expected)
             for call in run.call_args_list:
                 self.assertEqual(call.args[2], [('branchpoint-baseline', UTIL_PATH.resolve())])
-            self.assertEqual(sum(call.args[-1] == 'default' for call in run.call_args_list), 16)
-            self.assertIn('32 matrix cases: 32 passed, 0 failed', self.output.getvalue())
+            self.assertEqual(sum(call.args[-1] == 'default' for call in run.call_args_list), 12)
+            self.assertIn('36 matrix cases: 36 passed, 0 failed', self.output.getvalue())
+
+    class ArtifactTests(unittest.TestCase):
+        def setUp(self):
+            import h5py
+            import numpy as np
+
+            temp = tempfile.TemporaryDirectory(prefix='chipcae-i1-artifacts-')
+            self.addCleanup(temp.cleanup)
+            self.actual = Path(temp.name) / 'actual.vtkhdf'
+            self.expected = Path(temp.name) / 'expected.vtkhdf'
+            for path in (self.actual, self.expected):
+                with h5py.File(path, 'w') as file:
+                    file.attrs['version'] = np.array([1, 0], dtype='int32')
+                    group = file.create_group('VTKHDF/hex')
+                    group.attrs['kind'] = 'synthetic'
+                    group.create_dataset('Points', data=np.array([[0., 1., 2.]]))
+                    field = group.create_dataset('PointData/U', data=np.array([[1., 2., 3.]]))
+                    field.attrs['units'] = 'm'
+
+        def compare(self):
+            return compare_artifacts({'result.vtkhdf': self.actual},
+                                     {'result.vtkhdf': self.expected})
+
+        def test_exact_and_small_displacement_differences_pass(self):
+            import h5py
+
+            self.assertLessEqual(self.compare(), 1e-8)
+            with h5py.File(self.actual, 'r+') as file:
+                file['VTKHDF/hex/PointData/U'][0, 0] += 1e-9
+            self.assertLessEqual(self.compare(), 1e-8)
+
+        def test_dataset_alias_names_must_match(self):
+            import h5py
+
+            # visititems visits the Points object once and misses its extra hard link.
+            with h5py.File(self.actual, 'r+') as file:
+                file['VTKHDF/hex/ZPointsAlias'] = file['VTKHDF/hex/Points']
+            with self.assertRaisesRegex(AssertionError, 'dataset names differ'):
+                self.compare()
+
+        def test_file_group_and_dataset_attributes_must_match(self):
+            import h5py
+
+            for name, attribute, value in (('/', 'version', [1, 1]),
+                                           ('VTKHDF/hex', 'kind', 'synthetiX'),
+                                           ('VTKHDF/hex/PointData/U', 'units', 's')):
+                with self.subTest(name=name):
+                    shutil.copyfile(self.expected, self.actual)
+                    with h5py.File(self.actual, 'r+') as file:
+                        file[name].attrs.modify(attribute, value)
+                    with self.assertRaisesRegex(AssertionError, 'values differ'):
+                        self.compare()
+
+        def test_dataset_shape_dtype_and_values_must_match(self):
+            import h5py
+            import numpy as np
+
+            for data, message in ((np.array([1., 2., 3.]), 'shape differs'),
+                                  (np.array([[1., 2., 3.]], dtype='float32'), 'dtype differs'),
+                                  (np.array([[1., 2., 4.]]), 'relative difference')):
+                with self.subTest(message=message):
+                    shutil.copyfile(self.expected, self.actual)
+                    with h5py.File(self.actual, 'r+') as file:
+                        del file['VTKHDF/hex/PointData/U']
+                        field = file.create_dataset('VTKHDF/hex/PointData/U', data=data)
+                        field.attrs['units'] = 'm'
+                    with self.assertRaisesRegex(AssertionError, message):
+                        self.compare()
+            shutil.copyfile(self.expected, self.actual)
+            with h5py.File(self.actual, 'r+') as file:
+                file['VTKHDF/hex/Points'][0, 0] = 1e-12
+            with self.assertRaisesRegex(AssertionError, 'values differ'):
+                self.compare()
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(RunnerTests)
+    suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(ArtifactTests))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     return 0 if result.wasSuccessful() else 1
 
