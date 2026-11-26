@@ -534,6 +534,13 @@ void ResultView::setWarpageScale(double v) {
     d->scale = v;
     rebuild();
 }
+// D14j-1 test-first stubs: keep acceptance tests buildable without implementing the feature.
+double ResultView::warpageScale() const {
+    return 0.0;
+}
+double ResultView::autoWarpageScale() const {
+    return 0.0;
+}
 void ResultView::setLayer(int v) {
     d->layer = v;
     rebuild();
