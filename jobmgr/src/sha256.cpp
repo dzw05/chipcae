@@ -1,15 +1,16 @@
 #include "chipcae/jobmgr/local_paths.hpp"
 #include "sha256_stream.hpp"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstdint>
-#include <iomanip>
-#include <sstream>
+#include <cstring>
 #include <string>
-#include <vector>
+
 namespace chipcae::jobmgr {
-std::string sha256_hex(std::string_view input) {
+namespace {
+void compress(std::array<std::uint32_t, 8>& state, const unsigned char* block) noexcept {
     constexpr std::array<std::uint32_t, 64> k = {
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
         0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
@@ -21,57 +22,108 @@ std::string sha256_hex(std::string_view input) {
         0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
         0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
         0xc67178f2};
-    std::array<std::uint32_t, 8> h = {0x6a09e667,
-                                      0xbb67ae85,
-                                      0x3c6ef372,
-                                      0xa54ff53a,
-                                      0x510e527f,
-                                      0x9b05688c,
-                                      0x1f83d9ab,
-                                      0x5be0cd19};
-    std::vector<unsigned char> b(input.begin(), input.end());
-    auto bits = static_cast<std::uint64_t>(b.size()) * 8;
-    b.push_back(128);
-    while (b.size() % 64 != 56)
-        b.push_back(0);
-    for (int i = 7; i >= 0; --i)
-        b.push_back(static_cast<unsigned char>(bits >> (8 * i)));
-    auto r = [](std::uint32_t x, int n) { return std::rotr(x, n); };
-    for (std::size_t off = 0; off < b.size(); off += 64) {
-        std::array<std::uint32_t, 64> w{};
-        for (std::size_t i = 0; i < 16; ++i)
-            for (std::size_t j = 0; j < 4; ++j)
-                w[i] = (w[i] << 8) | b[off + 4 * i + j];
-        for (std::size_t i = 16; i < 64; ++i)
-            w[i] = w[i - 16] + (r(w[i - 15], 7) ^ r(w[i - 15], 18) ^ (w[i - 15] >> 3)) + w[i - 7] +
-                   (r(w[i - 2], 17) ^ r(w[i - 2], 19) ^ (w[i - 2] >> 10));
-        auto v = h;
-        for (std::size_t i = 0; i < 64; ++i) {
-            auto t = v[7] + (r(v[4], 6) ^ r(v[4], 11) ^ r(v[4], 25)) +
-                     ((v[4] & v[5]) ^ (~v[4] & v[6])) + k[i] + w[i];
-            auto u = (r(v[0], 2) ^ r(v[0], 13) ^ r(v[0], 22)) +
-                     ((v[0] & v[1]) ^ (v[0] & v[2]) ^ (v[1] & v[2]));
-            for (int j = 7; j > 0; --j)
-                v[static_cast<std::size_t>(j)] = v[static_cast<std::size_t>(j - 1)];
-            v[4] += t;
-            v[0] = t + u;
-        }
-        for (std::size_t i = 0; i < 8; ++i)
-            h[i] += v[i];
+    std::array<std::uint32_t, 64> w{};
+    for (std::size_t i = 0; i < 16; ++i)
+        for (std::size_t j = 0; j < 4; ++j)
+            w[i] = (w[i] << 8) | block[4 * i + j];
+    for (std::size_t i = 16; i < 64; ++i)
+        w[i] = w[i - 16] + (std::rotr(w[i - 15], 7) ^ std::rotr(w[i - 15], 18) ^ (w[i - 15] >> 3)) +
+               w[i - 7] + (std::rotr(w[i - 2], 17) ^ std::rotr(w[i - 2], 19) ^ (w[i - 2] >> 10));
+    auto a = state[0];
+    auto b = state[1];
+    auto c = state[2];
+    auto d = state[3];
+    auto e = state[4];
+    auto f = state[5];
+    auto g = state[6];
+    auto h = state[7];
+    for (std::size_t i = 0; i < 64; ++i) {
+        const auto t = h + (std::rotr(e, 6) ^ std::rotr(e, 11) ^ std::rotr(e, 25)) +
+                       ((e & f) ^ (~e & g)) + k[i] + w[i];
+        const auto u =
+            (std::rotr(a, 2) ^ std::rotr(a, 13) ^ std::rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c));
+        h = g;
+        g = f;
+        f = e;
+        e = d + t;
+        d = c;
+        c = b;
+        b = a;
+        a = t + u;
     }
-    std::ostringstream out;
-    out << std::hex << std::setfill('0');
-    for (auto x : h)
-        out << std::setw(8) << x;
-    return out.str();
+    state[0] += a;
+    state[1] += b;
+    state[2] += c;
+    state[3] += d;
+    state[4] += e;
+    state[5] += f;
+    state[6] += g;
+    state[7] += h;
+}
+} // namespace
+
+namespace detail {
+Sha256::Sha256() noexcept
+    : state_{0x6a09e667,
+             0xbb67ae85,
+             0x3c6ef372,
+             0xa54ff53a,
+             0x510e527f,
+             0x9b05688c,
+             0x1f83d9ab,
+             0x5be0cd19} {}
+
+void Sha256::update(const void* data, std::size_t size) noexcept {
+    if (size == 0)
+        return;
+    const auto* bytes = static_cast<const unsigned char*>(data);
+    total_bytes_ += static_cast<std::uint64_t>(size);
+    if (block_used_ != 0) {
+        const auto count = std::min(size, block_.size() - block_used_);
+        std::memcpy(block_.data() + block_used_, bytes, count);
+        block_used_ += count;
+        bytes += count;
+        size -= count;
+        if (block_used_ == block_.size()) {
+            compress(state_, block_.data());
+            block_used_ = 0;
+        }
+    }
+    while (size >= block_.size()) {
+        compress(state_, bytes);
+        bytes += block_.size();
+        size -= block_.size();
+    }
+    if (size != 0) {
+        std::memcpy(block_.data(), bytes, size);
+        block_used_ = size;
+    }
+}
+
+std::string Sha256::hex_final() {
+    const auto bits = total_bytes_ * 8;
+    block_[block_used_++] = 0x80;
+    if (block_used_ > 56) {
+        std::fill(block_.begin() + block_used_, block_.end(), 0);
+        compress(state_, block_.data());
+        block_used_ = 0;
+    }
+    std::fill(block_.begin() + block_used_, block_.begin() + 56, 0);
+    for (std::size_t i = 0; i < 8; ++i)
+        block_[63 - i] = static_cast<unsigned char>(bits >> (8 * i));
+    compress(state_, block_.data());
+    constexpr char hex[] = "0123456789abcdef";
+    std::string result(64, '0');
+    for (std::size_t i = 0; i < state_.size(); ++i)
+        for (std::size_t j = 0; j < 8; ++j)
+            result[8 * i + j] = hex[(state_[i] >> (28 - 4 * j)) & 0xfU];
+    return result;
+}
+} // namespace detail
+
+std::string sha256_hex(std::string_view bytes) {
+    detail::Sha256 h;
+    h.update(bytes);
+    return h.hex_final();
 }
 } // namespace chipcae::jobmgr
-
-// TEST-FIRST compile-only stubs. Existing sha256_hex behavior remains unchanged.
-namespace chipcae::jobmgr::detail {
-Sha256::Sha256() noexcept : state_{} {}
-void Sha256::update(const void*, std::size_t) noexcept {}
-std::string Sha256::hex_final() {
-    return {};
-}
-} // namespace chipcae::jobmgr::detail
