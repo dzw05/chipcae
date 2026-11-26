@@ -19,6 +19,17 @@ Gate records have unique `(nx, ny, kz)` keys; duplicates and malformed data rais
 kz4/kz8 runs fail; finite kz16 records remain diagnostic. Limits are inclusive,
 without an acceptance epsilon. Preconditions take their legacy limit from the
 caller and omit the nodal check only when `nodal_rel` is `None`.
+Each judged record also requires finite, nonzero `fvm_curvature` and
+`fem_curvature` with the same sign, independently of the error signs. The caller
+computes them with the existing `fvm_case_util.curvature` function.
+
+`top_face_centroids(run_dir, requested_nxny)` requires the `(nx, ny)` tuple from
+the written case. For an uncut strip it checks that `nx0*2^L`, `ny0*2^L` equal
+those requested dimensions, the sample count equals their product, and
+`padded_cells` is integer zero. All four manifest fields are required. This
+preserves the frozen coarse-grid meaning of `nx0/ny0`. `same_point_error` reads
+`case.json` in the result directory (synthetic runs) or beside it (CLI runs);
+it fails if the request is missing and never infers it from the manifest.
 
 Crosscheck mesh sequences sort fields together with metadata. Mechanical GCI
 uses only `warpage_pv` and rigid-removed `deformation_max`; the existing Celik
@@ -26,9 +37,9 @@ implementation also continues to report temperature-rise GCI. Raw `U_mag_max`
 retains its values with `convergence_use: false` and the explanation
 `U_mag_max 含刚体位移，只打印，不作收敛判据`. Thermal-only quantities remain unavailable.
 
-The brief's even-grid centroid/node ratio `(1-1/nx)^2` conflicts with sampled PV:
-even grids miss the centroid midpoint and give `1-2/nx`. That one assertion is
-deferred pending a specification ruling, without adding a skip or an xfail.
+The revised brief corrects the quadratic sampled centroid/node PV ratio to
+`1-2/nx` for even nx and `(nx-1)/(nx+1)` for odd nx. Analytic assertions cover
+even nx 24/48/96/192 and odd nx 25 without inserting midpoint samples.
 The strip test conservatively retains G1's final-pair in-plane order >=1 alongside
 the new thickness order >=1.5; both must pass.
 

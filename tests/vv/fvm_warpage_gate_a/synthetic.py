@@ -13,7 +13,8 @@ METHOD = "FVM top-face centroids; least-squares plane removal"
 def manifest(run, nx, ny, *, pv=1.0, method=METHOD):
     data = {
         "schema_version": "chipcae.results/1.0",
-        "mesh": {"nx0": nx, "ny0": ny, "nz": 1, "mesh_sha256": "a" * 64},
+        "mesh": {"nx0": nx, "ny0": ny, "L": 0, "padded_cells": 0,
+                 "nz": 1, "mesh_sha256": "a" * 64},
         "steps": [{"n": 0, "file": "nested/first.vtkhdf"}],
         "summary": [{"name": name, "value": value, "method": label, "step": 0}
                     for name, value, label in (("warpage_pv", pv, method),
@@ -21,6 +22,8 @@ def manifest(run, nx, ny, *, pv=1.0, method=METHOD):
                                                ("U_mag_max", 2.0, "synthetic"))],
     }
     (run / "manifest.json").write_text(json.dumps(data), encoding="utf-8")
+    (run / "case.json").write_text(json.dumps({"mesh": {"nx": nx, "ny": ny}}),
+                                    encoding="utf-8")
 
 
 def block(group, points, cells, *, kind=12, displacement=None):

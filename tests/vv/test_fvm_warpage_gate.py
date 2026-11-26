@@ -3,6 +3,7 @@
 """Analytic acceptance for same-point warpage gates; never launches a solver."""
 
 import importlib
+import json
 import math
 from pathlib import Path
 import tempfile
@@ -36,7 +37,8 @@ def gate_module():
 def records():
     # Both kz order log2(3.5)>1.5 and retained in-plane order log2(2)=1.
     return [dict(nx=nx, ny=ny, kz=kz, same_point_rel=error,
-                 interp_indicator=0.0, deformation_rel=0.0)
+                 interp_indicator=0.0, deformation_rel=0.0,
+                 fvm_curvature=-.2, fem_curvature=-.3)
             for nx, ny, e4, e8 in ((48, 16, .028, .008), (96, 32, .014, .004))
             for kz, error in ((4, e4), (8, e8))]
 
@@ -134,6 +136,27 @@ class GateTests(unittest.TestCase):
     def test_checks_are_deterministic_under_record_permutation(self):
         self.assertEqual(self.judge(records()), self.judge(list(reversed(records()))))
 
+    def test_curvature_direction_is_independent_of_error_sign(self):
+        for fvm, fem, expected in ((.2, .3, True), (-.2, -.3, True),
+                                   (.2, -.3, False), (-.2, .3, False)):
+            items = records()
+            items[0].update(fvm_curvature=fvm, fem_curvature=fem)
+            result = self.judge(items)
+            self.assertEqual(result["pass"], expected)
+            if not expected:
+                self.reason(result, "翘曲方向")
+
+    def test_unresolved_curvature_direction_fails(self):
+        for key in ("fvm_curvature", "fem_curvature"):
+            for value in (None, 0., math.nan, math.inf, -math.inf, "unknown", True):
+                with self.subTest(key=key, value=value):
+                    items = records()
+                    items[0][key] = value
+                    self.reason(self.judge(items), "翘曲方向")
+            items = records()
+            del items[0][key]
+            self.reason(self.judge(items), "翘曲方向")
+
     def test_duplicate_grid_thickness_records_are_rejected(self):
         with self.assertRaises(InputInvalid):
             self.gate.scheme_a_gate([*records(), records()[0]])
@@ -215,6 +238,20 @@ class AnalyticFieldTests(unittest.TestCase):
         xy = base * [2**-20, 2**10] + [2**12, -2**30]
         w = base[:, 0]**2 + .125*base[:, 1]**2
         self.assertTrue(math.isclose(self.gate.plane_pv(xy, w), 1.125, rel_tol=1e-12))
+
+    def test_discrete_centroid_node_quadratic_pv_ratios(self):
+        # Analytic sampled extrema: even grids miss the centroid midpoint;
+        # odd grids miss the nodal midpoint. Never insert a synthetic sample.
+        for nx, expected in ((24, 1-2/24), (48, 1-2/48), (96, 1-2/96),
+                              (192, 1-2/192), (25, 24/26)):
+            with self.subTest(nx=nx):
+                nodes = np.linspace(-1, 1, nx+1)
+                centers = (nodes[:-1] + nodes[1:]) / 2
+                nodal_xy = np.array([(x, y) for x in nodes for y in (-.5, .5)])
+                center_xy = np.array([(x, y) for x in centers for y in (-.5, .5)])
+                nodal = self.gate.plane_pv(nodal_xy, 1.5*nodal_xy[:, 0]**2)
+                centroid = self.gate.plane_pv(center_xy, 1.5*center_xy[:, 0]**2)
+                self.assertTrue(math.isclose(centroid/nodal, expected, rel_tol=1e-12))
 
     def test_plane_pv_rejects_malformed_samples(self):
         xy = np.array([[0., 0.], [1., 0.], [0., 1.], [1., 1.]])
@@ -304,6 +341,26 @@ class AnalyticFieldTests(unittest.TestCase):
         with self.assertRaises(InputInvalid):
             self.gate.same_point_error(fvm, fem)
 
+    def test_same_point_requires_case_request_independent_of_manifest(self):
+        fem = grid_run(self.root / "reference", np.linspace(-1, 1, 9),
+                       np.linspace(-1, 1, 9), method="synthetic FEM")
+        fvm = grid_run(self.root / "requested", [-1, -.5, 0, .5, 1], [-1, 0, 1])
+        for case in ({}, {"mesh": {"nx": 4}}, {"mesh": {"nx": 2, "ny": 4}},
+                     {"mesh": {"nx": 4., "ny": 2}}):
+            (fvm / "case.json").write_text(json.dumps(case), encoding="utf-8")
+            with self.subTest(case=case), self.assertRaises(InputInvalid):
+                self.gate.same_point_error(fvm, fem)
+        (fvm / "case.json").unlink()
+        with self.assertRaises(InputInvalid):
+            self.gate.same_point_error(fvm, fem)
+
+    def test_same_point_accepts_case_beside_result_directory(self):
+        fvm = grid_run(self.root / "input" / "result", [-1, -.5, 0, .5, 1], [-1, 0, 1])
+        (fvm / "case.json").rename(fvm.parent / "case.json")
+        fem = grid_run(self.root / "reference", np.linspace(-1, 1, 9),
+                       np.linspace(-1, 1, 9), method="synthetic FEM")
+        self.assertEqual(self.gate.same_point_error(fvm, fem)["n_samples"], 8)
+
     def test_rigid_motion_does_not_change_known_deformation_maximum(self):
         run = grid_run(self.root / "deform", [-1, 0, 1], [-1, 0, 1])
         with h5py.File(run / "nested/first.vtkhdf", "r+") as data:
@@ -342,7 +399,38 @@ class TopGeometryTests(unittest.TestCase):
     def test_hex_uses_four_top_vertices_in_cell_order_and_first_step_file(self):
         run = grid_run(self.root / "hex", [0, 1, 3, 6], [0, 2, 6])
         expected = [[.5, 1], [2, 1], [4.5, 1], [.5, 4], [2, 4], [4.5, 4]]
-        np.testing.assert_allclose(self.gate.top_face_centroids(run), expected, rtol=0, atol=1e-14)
+        np.testing.assert_allclose(self.gate.top_face_centroids(run, (3, 2)), expected,
+                                   rtol=0, atol=1e-14)
+
+    def test_finest_hierarchy_dimensions_match_requested_case(self):
+        run = grid_run(self.root / "hierarchy", np.linspace(0, 1, 49), np.linspace(0, 1, 17))
+        change_manifest(run, lambda m: m["mesh"].update(nx0=24, ny0=8, L=1))
+        self.assertEqual(self.gate.top_face_centroids(run, (48, 16)).shape, (768, 2))
+        for changes, request in (({"nx0": 48, "ny0": 16}, (48, 16)),
+                                  ({"nx0": 24, "ny0": 8, "L": 0}, (48, 16)),
+                                  ({"L": 1}, (16, 48)), ({"padded_cells": 1}, (48, 16))):
+            change_manifest(run, lambda m: m["mesh"].update(
+                nx0=24, ny0=8, L=1, padded_cells=0))
+            change_manifest(run, lambda m: m["mesh"].update(changes))
+            with self.subTest(changes=changes, request=request), self.assertRaises(InputInvalid):
+                self.gate.top_face_centroids(run, request)
+
+    def test_hierarchy_fields_and_requested_dimensions_are_required_valid_integers(self):
+        run = grid_run(self.root / "invalid-metadata", [0, 1, 2, 3], [0, 1])
+        for key in ("nx0", "ny0", "L", "padded_cells"):
+            for value in (None, -1, .5, True, "1"):
+                change_manifest(run, lambda m: m["mesh"].update(nx0=3, ny0=1, L=0, padded_cells=0))
+                change_manifest(run, lambda m: m["mesh"].update({key: value}))
+                with self.subTest(key=key, value=value), self.assertRaises(InputInvalid):
+                    self.gate.top_face_centroids(run, (3, 1))
+            change_manifest(run, lambda m: m["mesh"].update(nx0=3, ny0=1, L=0, padded_cells=0))
+            change_manifest(run, lambda m: m["mesh"].pop(key))
+            with self.subTest(missing=key), self.assertRaises(InputInvalid):
+                self.gate.top_face_centroids(run, (3, 1))
+        change_manifest(run, lambda m: m["mesh"].update(nx0=3, ny0=1, L=0, padded_cells=0))
+        for request in (None, (3,), (3, 1, 1), (3., 1), (True, 1), (0, 1), [3, 1]):
+            with self.subTest(request=request), self.assertRaises(InputInvalid):
+                self.gate.top_face_centroids(run, request)
 
     def test_top_plane_uses_strict_absolute_tolerance(self):
         run = grid_run(self.root / "strict-top", [0, 1, 2, 3, 4], [0, 1])
@@ -356,23 +444,23 @@ class TopGeometryTests(unittest.TestCase):
             points[mask & (points[:, 0] < 4), 2] = -1e-14
             data["VTKHDF/hex/Points"][:] = points
         with self.assertRaises(InputInvalid):
-            self.gate.top_face_centroids(run)
+            self.gate.top_face_centroids(run, (4, 1))
 
     def test_cut_area_centroid_winding_disconnected_patches_and_global_top(self):
         for reverse in (False, True):
             run = cut_run(self.root / str(reverse), reverse=reverse)
             expected = [[7 / 9 + shift, 4 / 9] for shift in (0, 4, 9)]
-            np.testing.assert_allclose(self.gate.top_face_centroids(run), expected,
+            np.testing.assert_allclose(self.gate.top_face_centroids(run, (1, 1)), expected,
                                        rtol=1e-14, atol=1e-14)
 
     def test_uncut_sample_count_and_minimum_three_are_required(self):
         run = grid_run(self.root / "mismatch", [0, 1, 2, 3], [0, 1])
         change_manifest(run, lambda m: m["mesh"].update(nx0=4))
         with self.assertRaises(InputInvalid):
-            self.gate.top_face_centroids(run)
+            self.gate.top_face_centroids(run, (4, 1))
         run = grid_run(self.root / "few", [0, 1, 2], [0, 1])
         with self.assertRaises(InputInvalid):
-            self.gate.top_face_centroids(run)
+            self.gate.top_face_centroids(run, (2, 1))
 
     def test_multipart_and_malformed_hex_topology_are_rejected(self):
         for name in ("partition", "cutpartition", "offset", "connectivity", "coordinate", "shortcell"):
@@ -394,7 +482,7 @@ class TopGeometryTests(unittest.TestCase):
                 else:
                     group["Points"][0] = [math.nan, 0, 0]
             with self.subTest(name=name), self.assertRaises(InputInvalid):
-                self.gate.top_face_centroids(run)
+                self.gate.top_face_centroids(run, (3, 1))
 
     def test_cut_zero_area_face_and_invalid_face_offsets_are_rejected(self):
         for name in ("zeroarea", "offset", "connectivity"):
@@ -408,7 +496,7 @@ class TopGeometryTests(unittest.TestCase):
                 else:
                     group["FaceConnectivity"][4] = -1
             with self.subTest(name=name), self.assertRaises(InputInvalid):
-                self.gate.top_face_centroids(run)
+                self.gate.top_face_centroids(run, (1, 1))
 
 
 class ResourceTests(unittest.TestCase):
@@ -435,6 +523,9 @@ class ResourceTests(unittest.TestCase):
                         support.memory_preflight()
 
     def test_peak_rss_units_and_ordinary_limit(self):
+        for platform, raw in (("linux", 1024), ("darwin", 1048576)):
+            with patch.object(support.sys, "platform", platform):
+                self.assertTrue(math.isclose(support.rss_mib(raw), 1, rel_tol=1e-15))
         for platform, raw in (("linux", 3072 * 1024), ("darwin", 3072 * 1024**2)):
             with patch.object(support.sys, "platform", platform):
                 self.assertTrue(math.isclose(support.rss_mib(raw), 3072, rel_tol=1e-15))

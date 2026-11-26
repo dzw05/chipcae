@@ -38,6 +38,9 @@ class StripSchemeATests(unittest.TestCase):
         gate = importlib.import_module("tools.vv.fvm_warpage_gate")
         executable = os.environ.get("CHIPCAE_SOLVE_EXE") or shutil.which("chipcae-solve")
         self.assertTrue(executable and Path(executable).is_file(), "missing solver backend")
+        highmem = sys.platform == "darwin" and os.environ.get("CHIPCAE_VV_HIGHMEM") == "1"
+        if not highmem:
+            print("(192,64) 未运行（box 不跑，待 Mac runner）；kz16 未运行", flush=True)
         memory_preflight()
         gate.require_convergence_quantity("warpage_pv")
         gate.require_convergence_quantity("deformation_max")
@@ -105,11 +108,8 @@ class StripSchemeATests(unittest.TestCase):
 
             records = []
             grids = [(48, 16), (96, 32)]
-            highmem = sys.platform == "darwin" and os.environ.get("CHIPCAE_VV_HIGHMEM") == "1"
             if highmem:
                 grids.append((192, 64))
-            else:
-                print("192×64 未运行（box 不跑，待 Mac runner）；kz16 未运行", flush=True)
             for nx, ny in grids:
                 for kz in (4, 8):
                     fem = reference(kz)
@@ -119,14 +119,18 @@ class StripSchemeATests(unittest.TestCase):
                     self.assertTrue(math.isfinite(def_fem) and def_fem > 0)
                     deformation_rel = def_fvm / def_fem - 1
                     self.assertTrue(math.isfinite(deformation_rel))
-                    self.assertGreater(curvature(blocks(fvm)) * curvature(blocks(fem)), 0,
+                    fvm_curvature, fem_curvature = curvature(blocks(fvm)), curvature(blocks(fem))
+                    self.assertGreater(fvm_curvature * fem_curvature, 0,
                                        "FVM/FEM warpage direction differs")
                     record = dict(nx=nx, ny=ny, kz=kz,
                                   same_point_rel=error["same_point_rel"],
                                   interp_indicator=error["interp_indicator"],
-                                  deformation_rel=deformation_rel)
+                                  deformation_rel=deformation_rel,
+                                  fvm_curvature=fvm_curvature, fem_curvature=fem_curvature)
                     records.append(record)
-                    fields = {**error, "deformation_rel": deformation_rel, **measurement}
+                    fields = {**error, "deformation_rel": deformation_rel,
+                              "fvm_curvature": fvm_curvature, "fem_curvature": fem_curvature,
+                              **measurement}
                     print(f"scheme A nx={nx} ny={ny} kz={kz} " + " ".join(
                         f"{key}={value:.17g}" for key, value in fields.items()
                         if isinstance(value, (int, float))), flush=True)
@@ -144,6 +148,11 @@ class StripSchemeATests(unittest.TestCase):
                           if r["nx"] == nx and r["kz"] in (4, 8)]
                 p = math.log2(abs(e4 / e8)) if e4 and e8 else math.nan
                 print(f"nx={nx} ny={ny} p_kz={p:.17g}", flush=True)
+            result = gate.scheme_a_gate(records)
+            for check in result["checks"]:
+                print(" ".join(f"{key}={value:.17g}" if isinstance(value, (int, float))
+                               and not isinstance(value, bool) else f"{key}={value}"
+                               for key, value in check.items()), flush=True)
             # Retain G1's original final-pair in-plane order as well as new kz order.
             for kz in (4, 8):
                 pair = [next(r for r in records if r["nx"] == nx and r["kz"] == kz)
@@ -153,11 +162,6 @@ class StripSchemeATests(unittest.TestCase):
                 order = math.log2(e_coarse / e_fine) if e_coarse else math.nan
                 print(f"retained G1 kz={kz} p_xy={order:.17g}", flush=True)
                 self.assertGreaterEqual(order, 1, "retained G1 in-plane order <1")
-            result = gate.scheme_a_gate(records)
-            for check in result["checks"]:
-                print(" ".join(f"{key}={value:.17g}" if isinstance(value, (int, float))
-                               and not isinstance(value, bool) else f"{key}={value}"
-                               for key, value in check.items()), flush=True)
             self.assertTrue(result["pass"], f"scheme A gate failed: {result}")
 
 

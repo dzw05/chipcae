@@ -129,8 +129,16 @@ def _polygon_centroid(xy):
 
 
 @_input_errors
-def top_face_centroids(run_dir):
-    """Read serial first-step hex/cut geometry, preserving block/cell/face order."""
+def top_face_centroids(run_dir, requested_nxny):
+    """Read ordered serial top faces and verify the uncut finest grid request.
+
+    ``nx0,ny0`` are coarse dimensions and ``L`` is the finest level index.
+    The caller supplies the independently written case's finest dimensions.
+    """
+    _require(isinstance(requested_nxny, tuple) and len(requested_nxny) == 2,
+             "requested_nxny must be an (nx,ny) tuple")
+    requested = tuple(_positive_int(value, name)
+                      for value, name in zip(requested_nxny, ("requested nx", "requested ny")))
     run_dir = Path(run_dir)
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     _require(manifest["schema_version"] == "chipcae.results/1.0", "invalid manifest schema")
@@ -154,8 +162,20 @@ def top_face_centroids(run_dir):
     _require(len(result) >= 3, "at least three top face samples required")
     if not blocks[1][1]:
         mesh = manifest["mesh"]
-        expected = _positive_int(mesh["nx0"], "nx0") * _positive_int(mesh["ny0"], "ny0")
-        _require(len(result) == expected, "uncut top face sample count differs from nx0*ny0")
+        nx0, ny0 = (_positive_int(mesh[name], name) for name in ("nx0", "ny0"))
+        level = mesh["L"]
+        _require(isinstance(level, Integral) and not isinstance(level, (bool, np.bool_))
+                 and level >= 0, "L: nonnegative integer required")
+        # A larger L cannot fit either requested dimension; reject before a
+        # potentially enormous integer left shift on malformed metadata.
+        _require(level < min(requested).bit_length(), "L exceeds requested finest dimensions")
+        finest = nx0 << int(level), ny0 << int(level)
+        _require(finest == requested, "finest mesh dimensions differ from case request")
+        padded = mesh["padded_cells"]
+        _require(isinstance(padded, Integral) and not isinstance(padded, (bool, np.bool_))
+                 and padded == 0, "uncut strip requires integer padded_cells == 0")
+        _require(len(result) == finest[0] * finest[1],
+                 "uncut top face sample count differs from (nx0*2^L)*(ny0*2^L)")
     result = np.asarray(result, dtype=float)
     _require(np.all(np.isfinite(result)), "nonfinite top face samples")
     return result
@@ -261,12 +281,22 @@ def fem_top_interpolate(run_dir, xy):
 
 @_input_errors
 def same_point_error(fvm_run_dir, fem_run_dir):
-    """Use manifest face PV and signed relative errors against the FEM reference."""
+    """Use manifest face PV and signed relative errors against the FEM reference.
+
+    Read the written ``case.json`` in the result directory, or beside it in
+    the CLI input directory. Never infer the request from result metadata.
+    """
     fvm, fem = load_run(fvm_run_dir), load_run(fem_run_dir)
     _require(fvm.qoi_method["warpage_pv"] == FVM_METHOD, "incorrect FVM warpage method")
     fvm_pv, nodal_pv = fvm.qoi["warpage_pv"], fem.qoi["warpage_pv"]
     _require(fvm_pv > 0 and nodal_pv > 0, "positive finite manifest PV required")
-    xy = top_face_centroids(fvm_run_dir)
+    case_path = Path(fvm_run_dir) / "case.json"
+    if not case_path.is_file():
+        case_path = Path(fvm_run_dir).parent / "case.json"
+    case = json.loads(case_path.read_text(encoding="utf-8"))
+    requested = tuple(_positive_int(case["mesh"][name], f"case mesh.{name}")
+                      for name in ("nx", "ny"))
+    xy = top_face_centroids(fvm_run_dir, requested)
     values, indicator = fem_top_interpolate(fem_run_dir, xy)
     same_pv = plane_pv(xy, values)
     _require(same_pv > 0, "positive finite same-point PV required")
@@ -314,7 +344,16 @@ def scheme_a_gate(records):
         error, indicator, deformation = (_finite(record[name], name) for name in
                                         ("same_point_rel", "interp_indicator", "deformation_rel"))
         _require(indicator >= 0, "negative interpolation indicator")
-        indexed[key] = error, indicator, deformation
+        direction = None
+        if kz != 16:
+            try:
+                fvm, fem = (_finite(record.get(name), name)
+                            for name in ("fvm_curvature", "fem_curvature"))
+                if fvm != 0 and fem != 0:
+                    direction = 1 if (fvm > 0) == (fem > 0) else -1
+            except InputInvalid:
+                pass  # Unresolved direction is an explicit failed gate check.
+        indexed[key] = error, indicator, deformation, direction
         if kz != 16:
             grids.add((nx, ny))
     checks = []
@@ -330,7 +369,7 @@ def scheme_a_gate(records):
                   key in indexed, "缺 kz≥8 运行" if kz == 8 else "缺 kz4 运行")
             if key not in indexed:
                 continue
-            error, indicator, deformation = indexed[key]
+            error, indicator, deformation, direction = indexed[key]
             tau = (.03 if nx == 48 else .015) if kz == 4 else (.010 if nx == 48 else .005)
             check(nx, ny, kz, "same_point_abs", abs(error), tau, abs(error) <= tau,
                   "同点 PV 误差超门")
@@ -339,6 +378,8 @@ def scheme_a_gate(records):
             limit = min(tau / 10, 1e-3)
             check(nx, ny, kz, "interp_indicator", indicator, limit, indicator <= limit,
                   "参考插值不足")
+            check(nx, ny, kz, "curvature_direction", direction, 1, direction == 1,
+                  "翘曲方向相反或不可判")
         e4 = indexed.get((nx, ny, 4))
         e8 = indexed.get((nx, ny, 8))
         p = None
