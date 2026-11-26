@@ -133,15 +133,25 @@ class Errors:
     def __init__(self):
         self.worst = {}
         self.failures = {}
+        self.bisections = 0
+        self.vertices = 0
+        self.vertex_kinds = Counter()
 
-    def compare(self, case, gid, ijk, quantity, actual, expected, normalization, *, normal=False):
+    def compare(self, case, gid, ijk, quantity, actual, expected, normalization, *,
+                normal=False, tolerance=None, enforce=True):
         actual, expected, normalization = map(F, (actual, expected, normalization))
         require(normalization > 0, f'{quantity}: positive normalization required')
         error = abs(actual-expected)/normalization
         category = quantity.split('/')[0]
         is_worst = category not in self.worst or error > self.worst[category][0]
-        tolerance = NORMAL_TOL if normal else TOL
-        is_failure = error > tolerance and (category not in self.failures or error > self.failures[category][0])
+        tolerance = (NORMAL_TOL if normal else TOL) if tolerance is None else tolerance
+        failed = enforce and error > tolerance
+        is_failure = failed and (category not in self.failures or error > self.failures[category][0])
+        if failed and category in ('gate_A', 'gate_B_regular', 'gate_B_sliver', 'U', 'U_round'):
+            print(f'FAIL case={case} gid={gid} ijk={ijk} quantity={quantity} '
+                  f'expected={precise(expected)} actual={precise(actual)} '
+                  f'normalization={precise(normalization)} error={float(error):.9g} '
+                  f'limit={float(tolerance):.9g}', flush=True)
         if not is_worst and not is_failure:
             return error
         detail = (f'case={case} gid={gid} ijk={ijk} quantity={quantity} '
@@ -158,6 +168,12 @@ class Errors:
             print(f'MAX {category}={float(error):.9g} {detail}', flush=True)
         for _, detail in self.failures.values():
             print(f'FAIL {detail}', flush=True)
+        print(f'GATES bisections={self.bisections} U_vertices={self.vertices} '
+              f'U_kinds={dict(self.vertex_kinds)} C_U={oracle.C_U}', flush=True)
+
+    def fail_gate(self, category, detail):
+        print(f'FAIL {category} {detail}', flush=True)
+        self.failures[category] = (F(1), detail)
 
 
 def parent_moment(axes, ijk, powers):
@@ -172,7 +188,131 @@ def parent_moment(axes, ijk, powers):
     return result
 
 
-def compare_cell(errors, name, gid, ijk, axes, record, truth, fem):
+def _boxes(vertices, errors):
+    idxs, boxes = [], []
+    for i, (p, e) in enumerate(zip(vertices, errors)):
+        for d in range(3):
+            if e[d]:
+                idxs.append((i, d))
+                boxes.append((p[d]-e[d], p[d]+e[d]))
+    return idxs, boxes
+
+
+def compare_centroids(errors, name, gid, ijk, axes, record, truth, ring, snap):
+    """Independent U, A, B and Q3 gates from the revised brief.
+
+    Only axes and synthetic case inputs build the reference boxes; actual eb
+    vertices are consumed solely by U. Top/bottom copies are independent.
+    """
+    check = lambda quantity, actual, expected, scale, **kw: errors.compare(
+        name, gid, ijk, quantity, actual, expected, scale, **kw)
+    lo = tuple(axes[d][ijk[d]] for d in range(3))
+    hi = tuple(axes[d][ijk[d]+1] for d in range(3))
+    canonical = oracle._canonical_ring(ring)
+    planes = oracle._planes(tuple(canonical))
+    bounded = oracle.clip_bounds(lo[0], hi[0], lo[1], hi[1], list(planes), canonical,
+                                 F(0) if snap is None else snap)
+    _, tagged, _ = oracle._column(lo[0], hi[0], lo[1], hi[1], planes, snap)
+    require({v[0] for v in bounded} == {v for v, _ in tagged},
+            f'{name} gid={gid} ijk={ijk}: U clipping vertex set differs')
+    by_point = {v[0]: v for v in bounded}
+    errors.vertex_kinds.update(v[3][0] for v in bounded)
+    ebxy = {tuple(F(float(row[d])) for d in range(2)) for row in record['eb']}
+
+    def inbox(actual, vertex):
+        return all(actual[d] == vertex[0][d] if vertex[2][d] else
+                   abs(actual[d]-vertex[0][d]) <= oracle.C_U*oracle.U*vertex[1][d]
+                   and abs(actual[d]-F(float(vertex[0][d]))) <= oracle.C_U*oracle.U*vertex[1][d]
+                   for d in range(2))
+
+    for point in sorted(ebxy):
+        errors.vertices += 1
+        matches = [v for v in bounded if inbox(point, v)]
+        if not matches:
+            closest = min(bounded, key=lambda v: sum((point[d]-v[0][d])**2 for d in range(2)))
+            errors.fail_gate('U', f'case={name} gid={gid} ijk={ijk} quantity=eb_vertex '
+                             f'actual={tuple(map(precise, point))} '
+                             f'expected={tuple(map(precise, closest[0]))} '
+                             f'normalization=u*S_v={tuple(precise(oracle.U*s) for s in closest[1])} '
+                             f'fixed={closest[2]} C_U={oracle.C_U}')
+            continue
+        vertex = matches[0]
+        for d in range(2):
+            if not vertex[2][d] and vertex[1][d] > 0:
+                check(f'U/vertex/{d}', point[d], vertex[0][d], oracle.U*vertex[1][d],
+                      tolerance=F(oracle.C_U))
+                check(f'U_round/vertex/{d}', point[d], F(float(vertex[0][d])),
+                      oracle.U*vertex[1][d], tolerance=F(oracle.C_U))
+    for vertex in bounded:
+        if not all(vertex[2]) and not any(inbox(p, vertex) for p in ebxy):
+            errors.fail_gate('U', f'case={name} gid={gid} ijk={ijk} quantity=vertex_coverage '
+                             f'expected={tuple(map(precise, vertex[0]))} actual=missing')
+
+    def lift(vertex, z):
+        p, scale, fixed, _ = vertex
+        return (p[0], p[1], z), tuple(oracle.C_U*oracle.U*scale[d]
+                                     if not fixed[d] else F(0) for d in range(2))+(F(0),)
+
+    s_max = tuple(max(abs(lo[d]), abs(hi[d])) for d in range(3))
+    midz = (lo[2]+hi[2])/2
+    volume_pts, volume_errors = zip(*(lift(v, midz) for v in bounded))
+
+    def gate(label, actual, exact, fraction, fun, pts, e_max, d, q3):
+        pts, e_max = list(pts), list(e_max)
+        idxs, boxes = _boxes(pts, e_max)
+        verdict, distance, splits = oracle._centroid_result(
+            fun, pts, idxs, boxes, d, actual, TOL*truth['h'][d]+q3)
+        errors.bisections += splits
+        # Keep the raw centroid error visible; acceptance uses both revised gates.
+        check(label, actual, exact, truth['h'][d], enforce=False)
+        if distance is not None:
+            check(f'gate_A_distance/{label}', distance, F(0), truth['h'][d], enforce=False)
+            check(f'gate_A/{label}', max(F(0), distance-q3), F(0), truth['h'][d], enforce=False)
+        if verdict != 'pass':
+            errors.fail_gate('gate_A', f'case={name} gid={gid} ijk={ijk} quantity={label} '
+                             f'expected=independent_interval actual={precise(actual)} '
+                             f'normalization={precise(truth["h"][d])} '
+                             f'corner_distance={precise(distance) if distance is not None else "undefined"} '
+                             f'Q3={precise(q3)} bisections={splits}')
+        if fraction >= F(1, 1000):
+            check(f'gate_B_regular/{label}', actual, exact, truth['h'][d])
+        else:
+            check(f'gate_B_sliver/{label}', abs(actual-exact)*fraction, F(0),
+                  truth['h'][d], tolerance=F(1, 10**15))
+
+    measured_volume = record['mom']['000']
+    require(measured_volume > 0, f'{name} gid={gid}: nonpositive quadrature volume')
+    fraction = truth['volume']/truth['parent_volume']
+    for d, key in enumerate(('100', '010', '001')):
+        gate(f'centroid/{d}', record['mom'][key]/measured_volume, truth['centroid'][d],
+             fraction, 'polygon_xy', volume_pts, volume_errors, d, F(0))
+    for side, area in enumerate(truth['aperture']):
+        if not area:
+            continue
+        count, actual_area = record['sq'][side][1:3]
+        require(count > 0 and actual_area > 0, f'{name} gid={gid}: missing aperture records')
+        if side >= 4:
+            face_pts, face_errors = zip(*(lift(v, lo[2] if side == 4 else hi[2]) for v in bounded))
+            fun = 'polygon_xy'
+        else:
+            segments = [(tagged[i-1][0], p) for i, (p, tag) in enumerate(tagged)
+                        if tag == side and tagged[i-1][0] != p]
+            require(len(segments) == 1, f'{name} gid={gid} side={side}: expected one axial segment')
+            p, q = (by_point[point] for point in segments[0])
+            # Different point indices give four independent endpoint variables.
+            face_pts, face_errors = zip(*(lift(v, z) for v, z in
+                                        ((p, lo[2]), (q, lo[2]), (q, hi[2]), (p, hi[2]))))
+            fun = 'side_sz'
+        for d in range(3):
+            q3 = oracle.face_integration_bound({'vertices': list(face_pts)}, list(face_errors),
+                                              (side, d), truth['h'], s_max, count)
+            check(f'Q3/{side}/{d}', q3, F(0), truth['h'][d], enforce=False)
+            gate(f'face_centroid/{side}/{d}', record['sq'][side][3+d]/actual_area,
+                 truth['face_centroid'][side][d], area/truth['parent_face'][side],
+                 fun, face_pts, face_errors, d, q3)
+
+
+def compare_cell(errors, name, gid, ijk, axes, record, truth, fem, ring, snap):
     check = lambda quantity, actual, expected, scale, **kw: errors.compare(
         name, gid, ijk, quantity, actual, expected, scale, **kw)
     volume = truth['parent_volume']
@@ -183,11 +323,6 @@ def compare_cell(errors, name, gid, ijk, axes, record, truth, fem):
         for powers, expected in truth['mom'].items():
             key = ''.join(map(str, powers))
             check(f'{path}/{key}', record[path][key], expected, parent_moment(axes, ijk, powers))
-    measured_volume = record['mom']['000']
-    require(measured_volume > 0, f'{name} gid={gid}: nonpositive quadrature volume')
-    for d, key in enumerate(('100', '010', '001')):
-        check(f'centroid/{d}', record['mom'][key]/measured_volume,
-              truth['centroid'][d], truth['h'][d])
     actual_nonzero = {s for s in range(6) if record['sq'][s][2] > 0}
     expected_nonzero = {s for s, area in enumerate(truth['aperture']) if area > 0}
     require(actual_nonzero == expected_nonzero,
@@ -200,9 +335,6 @@ def compare_cell(errors, name, gid, ijk, axes, record, truth, fem):
                     f'{name} gid={gid} ijk={ijk} side={side}: zero aperture n_rec={count} sum={area}')
         else:
             require(count > 0 and area > 0, f'{name} gid={gid}: missing aperture records')
-            for d in range(3):
-                check(f'face_centroid/{side}/{d}', moments[d]/area,
-                      truth['face_centroid'][side][d], truth['h'][d])
         check(f'aperture/{side}', area, expected, truth['parent_face'][side])
     max_face = max(truth['parent_face'])
     expected_area = sum((e[0] for e in truth['eb']), F(0))
@@ -231,6 +363,7 @@ def compare_cell(errors, name, gid, ijk, axes, record, truth, fem):
                         f'{name} gid={gid}: eb vertex outside parent')
         require(coverage == set(range(len(normals))),
                 f'{name} gid={gid} ijk={ijk}: missing {path} expected normal coverage')
+    compare_centroids(errors, name, gid, ijk, axes, record, truth, ring, snap)
 
 
 def snap_difference(a, b):
@@ -275,7 +408,7 @@ def compare_case(exe, case, workdir, fem, errors):
         if case['snap_side']:
             delta = max(delta, snap_difference(truth, oracle.cell_truth(axes, ring, ijk, snap=None)))
         if truth['cls'] == 'cut':
-            compare_cell(errors, case['name'], gid, ijk, axes, cut[gid], truth, fem)
+            compare_cell(errors, case['name'], gid, ijk, axes, cut[gid], truth, fem, ring, snap)
             if case['interior']:
                 vertex = ring[1]
                 if all(axes[d][ijk[d]] < F(vertex[d]) < axes[d][ijk[d]+1] for d in range(2)):

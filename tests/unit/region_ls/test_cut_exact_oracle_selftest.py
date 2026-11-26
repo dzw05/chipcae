@@ -13,6 +13,93 @@ from cut_exact_oracle_cases import cases, validate_case
 
 
 class ExactOracleTests(unittest.TestCase):
+    def test_intersection_scales_and_near_parallel_amplification(self):
+        ring = [(F(-1), F(-1)), (F(3, 2), F(-1)), (F(-1), F(3, 2))]
+        planes = list(oracle._planes(tuple(ring)))
+        vertices = oracle.clip_bounds(F(0), F(1), F(0), F(1), planes, ring, F(0))
+        v, scale, fixed, tag = next(v for v in vertices if v[0] == (F(1, 2), F(0)))
+        # On y=0: S_phi=35/4, |N_x|=5/2, Delta=1, rho=7*gamma_23.
+        u = F(1, 2**53)
+        gamma23 = 23*u/(1-23*u)
+        self.assertEqual(scale, (F(7, 2)/(1-7*gamma23)+F(3, 2), F(0)))
+        self.assertEqual(fixed, (False, True))
+        self.assertEqual(tag, ('L', 1))
+        scales = []
+        for epsilon in (F(1, 1000), F(1, 1000000)):
+            ring = [(F(-1), F(1, 2)-3*epsilon/2),
+                    (F(2), F(1, 2)+3*epsilon/2), (F(2), F(2)), (F(-1), F(2))]
+            vertices = oracle.clip_bounds(F(0), F(1), F(1, 2), F(3, 2),
+                                          list(oracle._planes(tuple(ring))), ring, F(0))
+            scales.append(next(v[1][0] for v in vertices if v[0] == (F(1, 2), F(1, 2))))
+        self.assertGreater(scales[1], 900*scales[0])
+        self.assertLess(scales[1], 1100*scales[0])
+
+    def test_interval_centroid_rejects_outside_and_accepts_attained_range(self):
+        pts = [(F(0), F(0), F(0)), (F(1), F(0), F(0)), (F(0), F(1), F(0))]
+        tol = F(1, 1000)
+        check = lambda boxes, actual: oracle.centroid_check(
+            'polygon_xy', pts, [(1, 0)], boxes, 0, actual, tol)
+        self.assertEqual(check([(F(1), F(1))], F(1, 3)), 'pass')
+        self.assertEqual(check([(F(1), F(1))], F(1, 3)+2*tol), 'fail')
+        # x-centroid=x_vertex/3: [1/3,2/3] is attained continuously.
+        self.assertEqual(check([(F(1), F(2))], F(1, 2)), 'pass')
+        self.assertEqual(check([(F(1), F(2))], F(2, 3)+2*tol), 'fail')
+        # Independent top and bottom endpoint variables make a trapezoid.
+        side = [(F(0), F(0), F(0)), (F(0), F(1), F(0)),
+                (F(0), F(1), F(1)), (F(0), F(0), F(1))]
+        self.assertEqual(oracle.centroid_check('side_sz', side, [(2, 1)],
+                         [(F(1), F(2))], 2, F(5, 9), F(0)), 'pass')
+        # Trapezoid x-centroid=(x*x+x+1)/(3*(x+1)) has an interior
+        # minimum 1/3 at x=0. The root box's corner range misses it.
+        quad = [(F(0), F(0), F(0)), (F(1), F(0), F(0)),
+                (F(1, 4), F(1), F(0)), (F(0), F(1), F(0))]
+        verdict, _, splits = oracle._centroid_result('polygon_xy', quad, [(2, 0)],
+                    [(F(-1, 2), F(1, 2))], 0, F(1, 3), F(0))
+        self.assertEqual(verdict, 'pass')
+        self.assertGreater(splits, 0)
+
+    def test_surface_rule_defects_and_forward_bound(self):
+        defects = oracle.rule_defects(6)
+        self.assertEqual(len(oracle.triangle_rule_replica(6)), 16)
+        self.assertLessEqual(defects['d1'], F(1, 10**15))
+        self.assertLessEqual(defects['d2'], F(1, 10**15))
+        self.assertGreater(defects['W2'], F(99, 100))
+        self.assertLess(defects['W2'], F(101, 100))
+        pts = [(F(0), F(0), F(0)), (F(1), F(0), F(0)), (F(0), F(1), F(0))]
+        bound = oracle.face_integration_bound({'vertices': pts}, [(F(0),)*3]*3,
+                    (4, 0), (F(1),)*3, (F(1),)*3, 16)
+        self.assertGreater(bound, F(0))
+        self.assertLess(bound, F(1, 10**13))
+        with self.assertRaises(AssertionError):
+            oracle.face_integration_bound({'vertices': pts}, [(F(1),)*3]*3,
+                    (4, 0), (F(1),)*3, (F(1),)*3, 16)
+
+    def test_bound_interfaces_reject_malformed_inputs(self):
+        ring = [(F(0), F(0)), (F(1), F(0)), (F(0), F(1))]
+        planes = list(oracle._planes(tuple(ring)))
+        for bad in [planes[:-1], [tuple(v+1 for v in p) for p in planes]]:
+            with self.assertRaises(AssertionError):
+                oracle.clip_bounds(F(0), F(1), F(0), F(1), bad, ring, F(0))
+        pts = [(*p, F(0)) for p in ring]
+        for idxs, boxes in [([(1, 0), (1, 0)], [(F(1), F(2))]*2),
+                            ([(3, 0)], [(F(0), F(1))]),
+                            ([(1, 0)], [(F(2), F(3))])]:
+            with self.assertRaises(AssertionError):
+                oracle.centroid_check('polygon_xy', pts, idxs, boxes, 0, F(1, 3), F(0))
+        for value in [F(0), F(1, 100), F(2), F(10**-20)]:
+            lo, hi = oracle._sqrt_bounds(value)
+            self.assertLessEqual(lo*lo, value)
+            self.assertGreaterEqual(hi*hi, value)
+
+    def test_snap_margin_includes_plane_roundoff(self):
+        # Exact on-plane x=1e6 lies outside the ambiguous open band, but
+        # gamma_23*(|x|+|anchor|) is larger than snap: it is not certifiable.
+        ring = [(F(10**6), F(0)), (F(10**6+1), F(0)),
+                (F(10**6+1), F(1)), (F(10**6), F(1))]
+        with self.assertRaisesRegex(AssertionError, 'uncertain snap decision'):
+            oracle.check_ambiguity([[F(10**6), F(10**6+1)], [F(0), F(1)],
+                                    [F(0), F(1)]], ring, F(1, 10**14))
+
     def test_clipped_square_moments(self):
         p = oracle.clip_halfplane([(F(0), F(0)), (F(1), F(0)),
                                   (F(1), F(1)), (F(0), F(1))], F(1), F(1), F(1))
@@ -84,6 +171,12 @@ class ExactOracleTests(unittest.TestCase):
         self.assertEqual(len(truth['eb']), 1)
         self.assertEqual(truth['eb'][0][1], (F(1, 2), F(1, 2), F(1, 2)))
         self.assertEqual(truth['centroid'], (F(1, 3), F(1, 3), F(1, 2)))
+        tilted = oracle.cell_truth([[F(0), F(1)]]*3,
+                                   [(0, 0), (1+offset, 0), (0, 1)],
+                                   (0, 0, 0), snap=F(1, 10))
+        # Retained cap endpoints (1,0),(0,1) define the area vector.
+        # The original tilted plane's unit normal has unequal x/y components.
+        self.assertEqual(tilted['ext'], (F(-1), F(-1), F(0)))
 
     def test_binary64_input_and_decimal_output_conversion(self):
         self.assertNotEqual(F(.1), F('0.1'))
@@ -155,17 +248,17 @@ class ExactOracleTests(unittest.TestCase):
         record['sq'].append([-1, 1, truth['eb'][0][0], 0, 0, 0])
         record['eb'] = [[*p, *normal] for p in [(1, 0, 0), (0, 1, 0), (0, 1, 1)]]
         errors = compare.Errors()
-        compare.compare_cell(errors, 'analytic_triangle', 0, (0, 0, 0), axes, record, truth, False)
+        compare.compare_cell(errors, 'analytic_triangle', 0, (0, 0, 0), axes, record, truth, False, [(0, 0), (1, 0), (0, 1)], None)
         self.assertFalse(errors.failures)
         record['sq'][1][1] = 1  # No area, but one raw zero-weight record: forbidden.
         with self.assertRaisesRegex(AssertionError, 'zero aperture n_rec=1'):
             compare.compare_cell(compare.Errors(), 'zero_record', 0, (0, 0, 0),
-                                 axes, record, truth, False)
+                                 axes, record, truth, False, [(0, 0), (1, 0), (0, 1)], None)
         record['sq'][1][1] = 0
         record['bq_n'] = []
         with self.assertRaisesRegex(AssertionError, 'missing bq_n expected normal coverage'):
             compare.compare_cell(compare.Errors(), 'missing_normal', 0, (0, 0, 0),
-                                 axes, record, truth, False)
+                                 axes, record, truth, False, [(0, 0), (1, 0), (0, 1)], None)
 
 
 if __name__ == '__main__':
