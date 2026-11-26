@@ -21,13 +21,19 @@ struct IoStatsReduction {
     bool write_step_count_mismatch = false;
     bool bytes_written_mismatch = false;
 };
+// Inputs are in rank order. Empty input and invalid durations throw std::invalid_argument.
 IoStatsReduction reduce_io_stats(const std::vector<ResultsWriter::IoStats>& per_rank);
+// Returns the complete I20 JSON bytes, including the final newline. Invalid durations throw.
 std::string format_io_stats_json(const IoStatsExport& value);
 struct IoStatsWriteResult {
     bool written = false;
     std::vector<std::string> warnings;
     std::string error;
 };
+// Collective on initialized multi-rank MPI_COMM_WORLD; every rank must call in the same order.
+// Only rank 0 publishes run_dir/io_stats.json via tmp + rename and returns written=true.
+// Warnings are root-only. On root failure, other ranks report
+// "io_stats.json export failed on rank 0"; returned MPI errors are reported locally.
 IoStatsWriteResult write_io_stats_json(const std::filesystem::path& run_dir,
                                        const ResultsWriter::IoStats& local) noexcept;
 } // namespace chipcae::io
