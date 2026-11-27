@@ -428,9 +428,9 @@ int main(int argc, char** argv) {
                 });
         }
 
-        // Enforce the frozen fixture's cavity gate with matrix remaining (f<1).
+        // M3's 2026-11-23 20:25 supplement supersedes the frozen fixture's 1e-8 gate:
+        // finite-stiffness cavity residuals are first order in Ei/Em, bounded by 10*(Ei/Em).
         const auto& cavity = fixture.at("levin_cavity");
-        const Real cavity_tol = cavity.at("alpha_star_rel_tol_to_alpha_m").as<double>();
         const auto ers = cavity.at("E_i_over_E_m").as<std::vector<double>>();
         for (double er : ers) {
             auto b = i;
@@ -444,6 +444,7 @@ int main(int argc, char** argv) {
             cases.run("cavity f=" + std::to_string(f), [&] {
                 std::vector<std::array<Real, 3>> residuals;
                 for (double er : ers) {
+                    const Real cavity_tol = 10 * Real{er};
                     auto b = i;
                     b.E = m.E * er;
                     b.alpha = cavity.at("alpha_i").as<double>();
@@ -454,13 +455,12 @@ int main(int argc, char** argv) {
                         residual[d] = std::abs(actual.alpha[d] - m.alpha) /
                                       std::max(std::abs(m.alpha), 1e-30);
                         std::cout << "cavity f=" << f << " er=" << er << " d=" << d
-                                  << " residual=" << residual[d] << '\n';
+                                  << " residual=" << residual[d] << " limit=" << cavity_tol << '\n';
                         cases.run("cavity gate f=" + std::to_string(f) +
                                       " er=" + std::to_string(er) + " d=" + std::to_string(d),
                                   [&] {
                                       require(residual[d] <= cavity_tol,
-                                              "cavity residual exceeds fixture "
-                                              "alpha_star_rel_tol_to_alpha_m");
+                                              "cavity residual exceeds M3 bound 10*(Ei/Em)");
                                   });
                     }
                     residuals.push_back(residual);
