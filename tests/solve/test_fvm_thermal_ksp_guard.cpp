@@ -240,6 +240,7 @@ void load_vector(const fs::path& path, int count, Vector& vector) {
 struct Exported {
     Matrix A;
     Vector b, x;
+    int solves = 0;
     explicit Exported(const CaseFiles& files) {
         std::array<int, 3> counts{};
         root_io([&] {
@@ -250,6 +251,7 @@ struct Exported {
                     "matrix/RHS/solution export record counts disagree");
         });
         MPI_Bcast(counts.data(), 3, MPI_INT, 0, PETSC_COMM_WORLD);
+        solves = counts[0];
         // Each viewer may contain several solves after restarts; keep the final records.
         load_matrix(files.directory / "A", counts[0], A);
         load_vector(files.directory / "b", counts[1], b);
@@ -266,6 +268,46 @@ struct Exported {
         return denominator > 0 ? numerator / denominator : numerator;
     }
 };
+void solve_history(const CaseFiles& files,
+                   const Exported& exported,
+                   int reported_iterations,
+                   int cap,
+                   const std::string& expected_reason,
+                   int minimum_solves = 1) {
+    root_io([&] {
+        const auto text = read_text(files.directory / "reason.txt");
+        // Select only the outer solver; GAMG's nested KSPs have different prefixes.
+        const std::regex record("Linear fvm_thermal_ solve (converged|did not converge) due to "
+                                "([A-Z0-9_]+) iterations ([0-9]+)");
+        int count = 0, total = 0, previous_iterations = 0;
+        std::string final_reason;
+        for (auto it = std::sregex_iterator(text.begin(), text.end(), record);
+             it != std::sregex_iterator();
+             ++it) {
+            if (count > 0)
+                require(final_reason.starts_with("CONVERGED_") && previous_iterations > 0 &&
+                            total < cap,
+                        "restart must follow positive convergence with progress and budget");
+            final_reason = (*it)[2].str();
+            previous_iterations = std::stoi((*it)[3].str());
+            require(previous_iterations <= cap - total,
+                    "independent KSP iteration history exceeds the total budget");
+            total += previous_iterations;
+            ++count;
+        }
+        require(count >= minimum_solves, "missing initial/restarted outer KSP reason records");
+        require(count == exported.solves, "KSP reason and A/b/x solve record counts disagree");
+        require(total == reported_iterations,
+                "reported total iterations=" + std::to_string(reported_iterations) +
+                    " differs from independent KSP history total=" + std::to_string(total));
+        require(expected_reason.ends_with('_') ? final_reason.starts_with(expected_reason)
+                                               : final_reason == expected_reason,
+                "final KSP reason=" + final_reason + " disagrees with " + expected_reason);
+        if (rank() == 0)
+            std::cout << "outer_solves=" << count << " independent_total_iterations=" << total
+                      << " final_reason=" << final_reason << '\n';
+    });
+}
 void converged_text(const CaseFiles& files) {
     root_io([&] {
         const auto reason = read_text(files.directory / "reason.txt");
@@ -286,7 +328,11 @@ void converged_text(const CaseFiles& files) {
                 "final KSP must use UNPRECONDITIONED norm type for convergence test");
     });
 }
-void accepted(const fv::ThermalResult& result, const Exported& exported) {
+void accepted(const fv::ThermalResult& result,
+              const Exported& exported,
+              const CaseFiles& files,
+              int cap,
+              int minimum_solves = 1) {
     const auto rho = exported.residual();
     together(std::isfinite(rho) && rho <= rtol,
              "independent true relative residual must be finite and <= rtol");
@@ -303,6 +349,7 @@ void accepted(const fv::ThermalResult& result, const Exported& exported) {
     }
     together(error.empty(), error.empty() ? "residual mismatch on another rank" : error);
     together(!result.T_cell.empty(), "successful thermal result must contain cell temperatures");
+    solve_history(files, exported, result.iterations, cap, "CONVERGED_", minimum_solves);
     if (rank() == 0)
         std::cout << std::setprecision(17) << "iterations=" << result.iterations
                   << " rho_test=" << rho
@@ -319,7 +366,8 @@ double diagnostic_real(const std::string& token) {
 int failure(const mesh::Expected<fv::ThermalResult>& result,
             const CaseFiles& files,
             const std::string& norm,
-            int cap) {
+            int cap,
+            int minimum_solves = 1) {
     together(!result, "solve must return error without ThermalResult");
     const auto& error = result.error();
     std::string canonical_path = error.path, canonical_reason = error.reason;
@@ -361,6 +409,10 @@ int failure(const mesh::Expected<fv::ThermalResult>& result,
          0,
          expected > 0 ? 1e-6 : 0,
          "diagnostic true_residual must match independent final A/b/x residual");
+    require(reason >= KSP_DIVERGED_INNER_SOLVE_FAILED &&
+                reason <= KSP_CONVERGED_ATOL_NORMAL_EQUATIONS,
+            "diagnostic must contain a valid PETSc convergence reason");
+    solve_history(files, exported, its, cap, KSPConvergedReasons[reason], minimum_solves);
     return reason;
 }
 void convergence(bool cut, const std::string& pc, bool mpi = false) {
@@ -371,7 +423,7 @@ void convergence(bool cut, const std::string& pc, bool mpi = false) {
     Exported exported(files);
     if (rank() == 0)
         std::cout << "geometry=" << (cut ? "cut24x8" : "strip48x16") << " pc=" << pc << ' ';
-    accepted(result.value(), exported);
+    accepted(result.value(), exported, files, f.problem.max_iter);
     converged_text(files);
     if (mpi) {
         auto bits = std::bit_cast<std::uint64_t>(result.value().residual);
@@ -445,7 +497,7 @@ void false_green() {
     auto result = solve(f);
     if (result) {
         Exported exported(injected);
-        accepted(result.value(), exported);
+        accepted(result.value(), exported, injected, f.problem.max_iter, 2);
         require(result.value().iterations > cut_gamg.iterations,
                 "old-norm injection must count additional restart iterations");
         if (rank() == 0)
@@ -477,11 +529,11 @@ void restart_budget() {
     auto result = solve(f);
     if (result) {
         Exported exported(injected);
-        accepted(result.value(), exported);
+        accepted(result.value(), exported, injected, cap, 2);
         require(result.value().iterations > old.iterations && result.value().iterations <= cap,
                 "successful restart must count all iterations and respect the prefixed total cap");
     } else {
-        failure(result, injected, "preconditioned", cap);
+        failure(result, injected, "preconditioned", cap, 2);
     }
 }
 void restart_target() {
@@ -501,7 +553,7 @@ void restart_target() {
     auto result = solve(f);
     together(bool(result), "restart must reach the requested global target");
     Exported exported(injected);
-    accepted(result.value(), exported);
+    accepted(result.value(), exported, injected, f.problem.max_iter, 2);
     together(result.value().iterations > old.iterations, "old-norm injection must restart");
     root_io([&] {
         const auto view = read_text(injected.directory / "view.txt");
