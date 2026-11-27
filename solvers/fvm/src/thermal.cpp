@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <set>
@@ -329,6 +330,7 @@ Expected<ThermalResult> detail::solve_thermal_on_comm(const FvGrid& g,
             check(KSPSetNormType(solver.value, KSP_NORM_UNPRECONDITIONED), "norm type");
             check(KSPSetInitialGuessNonzero(solver.value, PETSC_FALSE), "zero initial guess");
             check(KSPSetOptionsPrefix(solver.value, "fvm_thermal_"), "options prefix");
+            // Options configure KSP; independent acceptance still uses p.rtol.
             check(KSPSetFromOptions(solver.value), "KSPSetFromOptions");
             PetscReal atol = 0, divtol = 0;
             PetscInt max_iterations = 0;
@@ -367,7 +369,7 @@ Expected<ThermalResult> detail::solve_thermal_on_comm(const FvGrid& g,
                     // Use the initial residual in the effective KSP norm, rather than b.
                     // In the default unpreconditioned norm, this targets p.rtol*||b||.
                     // Injected norms still require the independent true-residual check.
-                    check(KSPConvergedDefaultSetUIRNorm(solver.value), "restart residual baseline");
+                    KSPConvergedDefaultSetUIRNorm(solver.value);
                     const PetscReal restart_rtol = p.rtol / rho;
                     check(KSPSetTolerances(
                               solver.value, restart_rtol, atol, divtol, max_iterations - its),

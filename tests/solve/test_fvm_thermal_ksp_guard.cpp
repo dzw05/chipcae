@@ -1,9 +1,15 @@
 #include "chipcae/mesh/cut/detail/outline_nonconvex.hpp"
 #include "fvm_test_util.hpp"
 
+#include <algorithm>
+#include <array>
+#include <bit>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
+#include <iterator>
 #include <petscksp.h>
 #include <random>
 #include <regex>
