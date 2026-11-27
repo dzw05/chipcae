@@ -389,3 +389,10 @@ if(_solve_backend)
     set_tests_properties(solve_q2_export_unit solve_q2_export_pipeline PROPERTIES
         TIMEOUT 600 LABELS "solve;numerical;io")
 endif()
+
+if(_solve_backend AND TARGET chipcae-preview)
+    add_test(NAME solve_n8_geometry COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_n8_geometry.py $<TARGET_FILE:chipcae-preview>)
+    set_tests_properties(solve_n8_geometry PROPERTIES
+        TIMEOUT 300 LABELS "solve;mesh;cut;geometry")
+endif()
