@@ -134,6 +134,7 @@ def contract(legacy, ir):
                    'manifest_fem/fem.manifest.json')
     check(a['fields'] == b['fields'], 'K1-E6 fields changed')
     check(a['partitions'] == b['partitions'], 'K1-E6 partitions changed')
+    check(a['mesh'] == b['mesh'], 'K1-E6 mesh changed')
     check(len(a['summary']) == len(b['summary']), 'K1-E6 summary count changed')
     for old, new in zip(a['summary'], b['summary']):
         check(old['name'] == new['name'] and old['unit'] == new['unit'],
@@ -147,8 +148,17 @@ def contract(legacy, ir):
     check(a['schema_version'] == b['schema_version'] == fixture['schema_version'],
           'I6 manifest schema')
     fixture_fields = {f['name']: f for f in fixture['fields']}
-    required = {f['name'] for f in fixture['fields'] if not f.get('reserved', False)}
-    check({f['name'] for f in a['fields']} >= required, 'missing I6 FEM fields')
+    # I6 permits volume, while the structured FEM default field table omits it.
+    fem_defaults = {'T', 'U', 'layer_id', 'material_id', 'cell_kind', 'elem_gid',
+                    'copper_fraction', 'conductivity_diag'}
+    required = {f['name'] for f in fixture['fields'] if not f.get('reserved', False)} & fem_defaults
+    for manifest in (a, b):
+        names = {f['name'] for f in manifest['fields']}
+        check(names >= required, 'missing I6 FEM fields')
+        check('volume' not in names, 'K1-E6 structured FEM must omit volume')
+    for run in (legacy, ir):
+        check(not any(path.endswith('/CellData/volume') for path in run['datasets']),
+              'K1-E6 structured FEM must omit volume datasets')
     for field in a['fields']:
         if field['name'] in fixture_fields:
             reference = fixture_fields[field['name']]
@@ -234,9 +244,29 @@ class Runs:
               'missing successful run completion')
         check(len(manifest['steps']) == 1, 'one output step required')
         datasets = {}
+        u_blocks = {}
         with h5py.File(out / manifest['steps'][0]['file'], 'r') as f:
             f.visititems(lambda name, obj: datasets.update({name: (obj.shape, obj.dtype.str)})
                          if isinstance(obj, h5py.Dataset) else None)
+            if kind == 'linear_cut':
+                point_count = 0
+                for path in datasets:
+                    if path.endswith('/Points'):
+                        points = f[path][:]
+                        check(points.ndim == 2 and points.shape[1] == 3,
+                              f'invalid cut point shape: {path}')
+                        check(np.all(np.isfinite(points)), f'nonfinite cut points: {path}')
+                        point_count += len(points)
+                    if path.endswith('/PointData/U'):
+                        displacement = f[path][:]
+                        points = f[path.removesuffix('/PointData/U') + '/Points']
+                        check(displacement.shape == points.shape, f'invalid cut U shape: {path}')
+                        check(np.all(np.isfinite(displacement)), f'nonfinite cut U: {path}')
+                        u_blocks[path] = displacement.tobytes()
+                check(point_count > 0, 'cut blocks must contain points in total')
+                result.update(manifest=manifest, events=decoded, datasets=datasets,
+                              u_blocks=u_blocks)
+                return result
             points = f['VTKHDF/hex/Points'][:]
             displacement = f['VTKHDF/hex/PointData/U'][:]
         check(points.ndim == 2 and points.shape[1] == 3 and len(points) > 0, 'invalid point shape')
@@ -311,9 +341,12 @@ def acceptance(root):
     for key in a:
         check('k1_stop=' not in a[key] and 'k1_stop=' not in b[key],
               f'K1-E7 cut has K1 suffix: {a[key]}\n{b[key]}')
-    check(cut_legacy['u'].dtype == cut_ir['u'].dtype
-          and cut_legacy['u'].shape == cut_ir['u'].shape
-          and cut_legacy['u'].tobytes() == cut_ir['u'].tobytes(), 'K1-E7 cut U changed')
+    check(cut_legacy['datasets'] == cut_ir['datasets'],
+          'K1-E7 HDF5 dataset paths/shapes/dtypes changed')
+    check(cut_legacy['u_blocks'] == cut_ir['u_blocks'], 'K1-E7 cut U changed')
+    for key in ('fields', 'summary', 'partitions', 'mesh'):
+        check(cut_legacy['manifest'][key] == cut_ir['manifest'][key],
+              f'K1-E7 cut manifest {key} changed')
     a, b = residual_bits(cut_legacy), residual_bits(cut_ir)
     check(a and {e[1] for e in a} == {'T', 'U'} and a == b, 'K1-E7 cut Residual changed')
     print('PASS K1-E7', flush=True)
