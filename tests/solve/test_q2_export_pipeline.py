@@ -266,7 +266,7 @@ def main():
                 print(f'FAIL {name}: {error}', flush=True)
         if 'B-box' in results and 'B-box-off' in results:
             on, off = results['B-box'], results['B-box-off']
-            assert on[0]['mesh_sha256'] == off[0]['mesh_sha256'], 'B5: mesh digest'
+            assert on[0]['mesh']['mesh_sha256'] == off[0]['mesh']['mesh_sha256'], 'B5: mesh digest'
             for key in on[1]:
                 a, b = on[1][key], off[1][key]
                 assert a.dtype == b.dtype and a.shape == b.shape and a.tobytes() == b.tobytes(), (

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -574,6 +575,49 @@ void permission_failure(Fixture& f, const std::filesystem::path& folder) {
             "unwritable destination assertion failed");
     require(!std::filesystem::exists(file), "unwritable export published final file");
 }
+void stream_write_failure(Fixture& f, const std::filesystem::path& folder) {
+    const auto file = folder / "limited-write.json";
+    const std::string sentinel = "previous complete destination";
+    {
+        std::ofstream stream(file);
+        stream << sentinel;
+        stream.close();
+        require(static_cast<bool>(stream), "cannot prepare write-failure destination");
+    }
+    const pid_t child = fork();
+    require(child >= 0, "fork failed");
+    if (child == 0) {
+        try {
+            rlimit core{}, size{};
+            require(getrlimit(RLIMIT_CORE, &core) == 0, "getrlimit core failed");
+            core.rlim_cur = 0;
+            require(setrlimit(RLIMIT_CORE, &core) == 0, "setrlimit core failed");
+            require(getrlimit(RLIMIT_FSIZE, &size) == 0, "getrlimit file size failed");
+            size.rlim_cur = std::min(size.rlim_max, static_cast<rlim_t>(1024));
+            require(std::signal(SIGXFSZ, SIG_IGN) != SIG_ERR, "ignore SIGXFSZ failed");
+            require(setrlimit(RLIMIT_FSIZE, &size) == 0, "setrlimit file size failed");
+            bool threw = false;
+            try {
+                (void)f.write(file, 0);
+            } catch (const std::exception&) {
+                threw = true;
+            }
+            require(threw, "stream write failure must throw");
+            _exit(0);
+        } catch (const std::exception& error) {
+            std::cerr << "write-limit child: " << error.what() << std::endl;
+            _exit(1);
+        }
+    }
+    int status = 0;
+    require(waitpid(child, &status, 0) == child, "waitpid failed");
+    require(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+            "stream write failure terminated instead of throwing");
+    std::ifstream stream(file);
+    const std::string contents((std::istreambuf_iterator<char>(stream)),
+                               std::istreambuf_iterator<char>());
+    require(contents == sentinel, "failed write replaced complete destination");
+}
 void environment() {
     const char* original = std::getenv("CHIPCAE_ACCURACY_Q2_EXPORT");
     const bool present = original != nullptr;
@@ -646,6 +690,8 @@ int main() {
         });
         run("unwritable destination (drop root privileges)",
             [&] { permission_failure(f, folder.path); });
+        run("stream write failure preserves complete destination",
+            [&] { stream_write_failure(f, folder.path); });
         run("malformed arrays", [&] {
             auto gids = f.gids;
             gids.pop_back();
