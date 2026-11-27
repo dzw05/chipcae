@@ -3,7 +3,7 @@
 """INT-a scheme A decisions on supplied data; no solver or FEM evaluator.
 
 Public inputs, result dictionaries and errors:
-tests/integration/fvm_warpage_scheme_a/fvm_warpage_scheme_a_contract.md.
+tests/integration/fvm_warpage_scheme_a/README.md#scheme-a-python-api-contract.
 """
 
 import json
