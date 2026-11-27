@@ -585,6 +585,22 @@ void divergence() {
     require(failure(solve(f), files, "unpreconditioned", 1) < 0,
             "no-PC one-iteration injection must report a negative KSP reason");
 }
+void zero_progress() {
+    CaseFiles files;
+    // A loose absolute tolerance reports convergence before making any progress.
+    // The true-residual guard must reject immediately instead of restarting forever.
+    files.set("ksp_atol", "1e12");
+    auto f = fixture(true, "gamg");
+    auto result = solve(f);
+    require(failure(result, files, "unpreconditioned", f.problem.max_iter) == KSP_CONVERGED_ATOL,
+            "zero-progress rejection must preserve the positive KSP reason");
+    require(result.error().reason.find(" iterations=0 ") != std::string::npos,
+            "zero-progress rejection must report zero total iterations");
+    root_io([&] {
+        require(records(files.directory / "x", false) == 1,
+                "zero-progress rejection must stop after the initial solve");
+    });
+}
 void zero_rhs() {
     CaseFiles files;
     auto f = fixture(true, "jacobi");
@@ -663,6 +679,7 @@ int main(int argc, char** argv) {
         run("old-norm restart respects prefixed total iteration budget", restart_budget);
         run("restart restores global target after a tighter initial tolerance", restart_target);
         run("injected no-PC one-iteration divergence is structured", divergence);
+        run("positive reason with zero progress rejects without restarting", zero_progress);
         run("zero RHS with unknowns keeps zero diagnostics", zero_rhs);
         run("all Dirichlet bypasses KSP and exports", all_dirichlet);
     }

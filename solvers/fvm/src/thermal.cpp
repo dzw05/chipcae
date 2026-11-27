@@ -364,8 +364,9 @@ Expected<ThermalResult> detail::solve_thermal_on_comm(const FvGrid& g,
                     if (reason <= 0 || !std::isfinite(rho) || count == 0 || its >= max_iterations)
                         break;
                     check(KSPSetInitialGuessNonzero(solver.value, PETSC_TRUE), "restart guess");
-                    // PETSc otherwise uses ||b|| even with a nonzero initial guess.
-                    // With ||r_start|| as baseline, this scaling targets p.rtol*||b||.
+                    // Use the initial residual in the effective KSP norm, rather than b.
+                    // In the default unpreconditioned norm, this targets p.rtol*||b||.
+                    // Injected norms still require the independent true-residual check.
                     check(KSPConvergedDefaultSetUIRNorm(solver.value), "restart residual baseline");
                     const PetscReal restart_rtol = p.rtol / rho;
                     check(KSPSetTolerances(
