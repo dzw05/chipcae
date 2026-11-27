@@ -34,6 +34,7 @@ set(_CHIPCAE_TEST_OWNER_PREFIXES
     "M2|tests/integration/tracemap/" # mesh copper trace map and FVM face coupling.
     "M1|tests/integration/part_slice/" # geometry::slice_prismatic and OCCT sections.
     "INFRA|tests/tier_labels/"
+    "INFRA|tests/cmake_deps/"
 )
 
 # Manual registrations in tests/CMakeLists.txt run sources in several modules.
