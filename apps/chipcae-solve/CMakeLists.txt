@@ -35,7 +35,6 @@ if(CHIPCAE_ENABLE_JSONCONS AND CHIPCAE_ENABLE_MFEM AND CHIPCAE_ENABLE_MPI AND CH
     if(NOT MFEM_USE_PETSC)
         message(FATAL_ERROR "chipcae-solve requires MFEM built with PETSc support")
     endif()
-    # Test-first link support; k1_stop.cpp contains only inert stubs in this pass.
     add_library(chipcae_solve_k1_stop STATIC src/k1_stop.cpp)
     target_include_directories(chipcae_solve_k1_stop PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_compile_options(chipcae_solve_k1_stop PRIVATE

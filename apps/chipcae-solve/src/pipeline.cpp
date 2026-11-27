@@ -10,6 +10,7 @@
 #include "cut_convection.hpp"
 #include "cut_output.hpp"
 #include "direct_refine.hpp"
+#include "k1_stop.hpp"
 #include "outline_contains.hpp"
 #include "q2_export.hpp"
 #include "sha256.hpp"
@@ -19,6 +20,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <jsoncons/json.hpp>
 #include <limits>
@@ -51,6 +53,27 @@ struct Direct {
     std::uint32_t iterations = 0;
     double assembly_seconds = 0, factor_seconds = 0, refine_seconds = 0;
     RefineResult refinement;
+    bool k1_ir = false;
+    k1::StopStats k1_stats{};
+    static bool k1_stop_mode() {
+        const char* mode = std::getenv("CHIPCAE_K1_STOP");
+        if (!mode || std::string(mode) == "legacy")
+            return false;
+        if (std::string(mode) == "ir")
+            return true;
+        throw std::runtime_error("CHIPCAE_K1_STOP must be unset, legacy or ir");
+    }
+    std::string timing_suffix() const {
+        if (!k1_ir)
+            return {};
+        return " k1_stop=ir rel_d=" + scientific(k1_stats.rel_d) +
+               " rel_e=" + scientific(k1_stats.rel_e) + " est_inf=" + scientific(k1_stats.est_inf) +
+               " est_abs=" + scientific(k1_stats.est_abs) +
+               " ir_corrections=" + std::to_string(k1_stats.corrections) +
+               " gate=1.000e-12 atol=0 gate_precision=binary64 gate_order=csr_row"
+               " residual_precision=double-double k1_ir_seconds=" +
+               scientific(refine_seconds);
+    }
     static std::string scientific(double value) {
         char buffer[64];
         std::snprintf(buffer, sizeof(buffer), "%.3e", value);
@@ -68,6 +91,8 @@ struct Direct {
                  Vector& x,
                  const LinearOptions& options,
                  const std::string& name) {
+        const bool ir_mode = k1_stop_mode();
+        k1_ir = ir_mode && name == "U" && options.preconditioner == "direct";
         const int n = a.Height();
         const auto begin = std::chrono::steady_clock::now();
         // Copy indices explicitly: MFEM int and PetscInt need not have the same width.
@@ -121,22 +146,43 @@ struct Direct {
         for (int i = 0; i < n; ++i)
             x[i] = scaled_solution[i] / diagonal[i];
         const auto refine_begin = std::chrono::steady_clock::now();
-        refinement = refine(
-            a,
-            b,
-            x,
-            [&](const Vector& residual, Vector& correction) {
-                for (int j = 0; j < n; ++j)
-                    scaled_rhs[j] = residual[j] / diagonal[j];
-                check(KSPSolve(ksp, rhs, solution));
-                check(KSPGetConvergedReason(ksp, &reason));
-                if (reason < 0)
-                    throw std::runtime_error("PETSc LU failed");
-                for (int j = 0; j < n; ++j)
-                    correction[j] = scaled_solution[j] / diagonal[j];
-            },
-            options.rtol,
-            std::min(options.max_iter, 8));
+        if (k1_ir) {
+            k1_stats = k1::refine_mixed({n, a.GetI(), a.GetJ(), a.GetData()},
+                                        b.GetData(),
+                                        x.GetData(),
+                                        [&](const double* residual, double* correction) {
+                                            for (int j = 0; j < n; ++j)
+                                                scaled_rhs[j] = residual[j] / diagonal[j];
+                                            check(KSPSolve(ksp, rhs, solution));
+                                            check(KSPGetConvergedReason(ksp, &reason));
+                                            if (reason < 0)
+                                                throw std::runtime_error("PETSc LU failed");
+                                            for (int j = 0; j < n; ++j)
+                                                correction[j] = scaled_solution[j] / diagonal[j];
+                                        });
+            refinement = {k1_stats.omega_inf,
+                          k1_stats.eta_inf,
+                          k1_stats.rel_d,
+                          k1_stats.corrections + 1,
+                          k1_stats.accepted};
+        } else {
+            refinement = refine(
+                a,
+                b,
+                x,
+                [&](const Vector& residual, Vector& correction) {
+                    for (int j = 0; j < n; ++j)
+                        scaled_rhs[j] = residual[j] / diagonal[j];
+                    check(KSPSolve(ksp, rhs, solution));
+                    check(KSPGetConvergedReason(ksp, &reason));
+                    if (reason < 0)
+                        throw std::runtime_error("PETSc LU failed");
+                    for (int j = 0; j < n; ++j)
+                        correction[j] = scaled_solution[j] / diagonal[j];
+                },
+                options.rtol,
+                std::min(options.max_iter, 8));
+        }
         refine_seconds =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - refine_begin).count();
         iterations = static_cast<std::uint32_t>(refinement.iterations);
@@ -148,6 +194,13 @@ struct Direct {
             residual -= b;
             return residual.Norml2() / std::max(b.Norml2(), 1.0);
         }
+        if (k1_ir)
+            throw std::runtime_error(
+                "K1 stop measure failed: rel_d=" + scientific(k1_stats.rel_d) +
+                " (gate=1.000e-12, atol=0) rel_e=" + scientific(k1_stats.rel_e) + " omega=" +
+                scientific(k1_stats.omega_inf) + " est_abs=" + scientific(k1_stats.est_abs) +
+                " ir_corrections=" + std::to_string(k1_stats.corrections) +
+                " residual_precision=double-double field=U");
         throw std::runtime_error(
             "LU refinement failed residual tolerance: omega=" + scientific(refinement.omega) +
             " (rtol=" + scientific(options.rtol) + ", eta=" + scientific(refinement.eta) +
@@ -864,7 +917,8 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                         " eta=" + Direct::scientific(direct.refinement.eta) +
                         " rel=" + Direct::scientific(direct.refinement.rel) +
                         " refine_iterations=" + std::to_string(direct.iterations) +
-                        " refine_seconds=" + Direct::scientific(direct.refine_seconds);
+                        " refine_seconds=" + Direct::scientific(direct.refine_seconds) +
+                        direct.timing_suffix();
                 } catch (const std::exception& error) {
                     failure = error.what();
                 }
