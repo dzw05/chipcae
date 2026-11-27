@@ -128,3 +128,10 @@ An external polyset layer named `outline` without an inline polygon is unsupport
 preview exits with `CUT_UNSUPPORTED` (13) and explains that an inline polygon is
 required. It does not silently preview the bounding box in this case.
 This rejection also applies with `--nonconvex-outline`.
+
+`--events-file <path>` creates or truncates a dedicated event file. Only MPI rank 0
+writes it; each complete line is byte-identical to the corresponding stdout line
+and is flushed immediately. The file is closed before MPI finalization. Because
+mpiexec can forward stderr fragments into stdout, tests and automation should read
+this event file as their JSON event stream. The path must differ from the grid
+and any explicit surface output path.

@@ -391,3 +391,10 @@ add_test(NAME solve_ecad_test_registration
         -P "${CMAKE_CURRENT_SOURCE_DIR}/check_ecad_test_registration.cmake")
 set_tests_properties(solve_ecad_test_registration PROPERTIES
     TIMEOUT 60 LABELS "solve;configuration;unit;owner:M3")
+
+if(_solve_backend AND TARGET chipcae-preview)
+    add_test(NAME solve_n8_geometry COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_n8_geometry.py $<TARGET_FILE:chipcae-preview>)
+    set_tests_properties(solve_n8_geometry PROPERTIES
+        TIMEOUT 300 LABELS "solve;mesh;cut;geometry")
+endif()

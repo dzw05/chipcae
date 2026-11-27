@@ -9,10 +9,12 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cerrno>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <optional>
@@ -20,6 +22,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #ifdef CHIPCAE_PREVIEW_ENABLED
@@ -77,25 +80,31 @@ std::string quote(const std::string& text) {
     }
     return result + '"';
 }
-void event(const std::string& stage, double progress, const std::string& message) {
+void event(const std::string& stage,
+           double progress,
+           const std::string& message,
+           std::ostream* events = nullptr) {
+    int rank = 0;
 #if defined(CHIPCAE_PREVIEW_ENABLED) && defined(CHIPCAE_ENABLE_MPI)
-    int initialized = 0, rank = 0;
+    int initialized = 0;
     MPI_Initialized(&initialized);
     if (initialized)
         MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     if (rank != 0 && stage != "error")
         return;
 #endif
+    std::ostringstream line;
     if (stage == "success" && message.size() >= 2 && message.front() == '{' &&
         message.back() == '}')
-        std::cout << "{\"stage\":" << quote(stage) << ",\"progress\":" << progress << ','
-                  << message.substr(1, message.size() - 2) << ",\"message\":" << quote(message)
-                  << "}\n"
-                  << std::flush;
+        line << "{\"stage\":" << quote(stage) << ",\"progress\":" << progress << ','
+             << message.substr(1, message.size() - 2) << ",\"message\":" << quote(message) << "}\n";
     else
-        std::cout << "{\"stage\":" << quote(stage) << ",\"progress\":" << progress
-                  << ",\"message\":" << quote(message) << "}\n"
-                  << std::flush;
+        line << "{\"stage\":" << quote(stage) << ",\"progress\":" << progress
+             << ",\"message\":" << quote(message) << "}\n";
+    const auto text = line.str();
+    std::cout << text << std::flush;
+    if (rank == 0 && events)
+        *events << text << std::flush;
 }
 #ifdef CHIPCAE_PREVIEW_ENABLED
 using chipcae::preview::detail::digest;
@@ -157,9 +166,9 @@ CopperColumnAreas copper_column_areas(const chipcae::mesh::HexMeshArrays& mesh, 
         }
     return result;
 }
-int run(int argc, char** argv) {
+int run(int argc, char** argv, std::ostream* events) {
     using namespace chipcae::mesh;
-    std::filesystem::path input, output, surface, polyset;
+    std::filesystem::path input, output, surface, polyset, events_path;
     GridOptions options;
     std::optional<int> min_elems_per_layer;
     bool nonconvex_outline = false;
@@ -173,7 +182,7 @@ int run(int argc, char** argv) {
         std::string arg = argv[i];
         if (arg == "-o" || arg == "--surface" || arg == "--polyset" || arg == "--nx" ||
             arg == "--ny" || arg == "--levels" || arg == "--max-ratio" || arg == "--cell-budget" ||
-            arg == "--min-elems-per-layer") {
+            arg == "--min-elems-per-layer" || arg == "--events-file") {
             if (!seen.insert(arg).second)
                 throw std::runtime_error("duplicate option: " + arg);
             if (++i == argc || std::string(argv[i]).empty())
@@ -183,6 +192,8 @@ int run(int argc, char** argv) {
                 output = value;
             else if (arg == "--surface")
                 surface = value;
+            else if (arg == "--events-file")
+                events_path = value;
             else if (arg == "--polyset")
                 polyset = value;
             else if (arg == "--nx")
@@ -221,7 +232,10 @@ int run(int argc, char** argv) {
     auto grid_path = std::filesystem::path(stem.string() + ".vtkhdf");
     if (!surface.empty() && same_path(surface, grid_path))
         throw std::runtime_error("surface and grid paths must differ");
-    event("load", 0, "Loading stack 0.2");
+    if (!events_path.empty() && (same_path(events_path, grid_path) ||
+                                 (!surface.empty() && same_path(events_path, surface))))
+        throw std::runtime_error("events file must differ from grid and surface paths");
+    event("load", 0, "Loading stack 0.2", events);
     auto stack = checked_io(load_stack(input, chipcae::data_path(CHIPCAE_PREVIEW_SCHEMA)));
     if (min_elems_per_layer)
         for (auto& layer : stack.layers)
@@ -254,7 +268,7 @@ int run(int argc, char** argv) {
              "external polyset outline is not supported; use an inline outline polygon"});
     auto bounding_stack = stack;
     bounding_stack.outline.polygon.clear();
-    event("mesh", 0.3, "Building tensor grid");
+    event("mesh", 0.3, "Building tensor grid", events);
     auto mesh = sidecars.empty() ? checked(build_tensor_grid(bounding_stack, options))
                                  : checked(build_tensor_grid(bounding_stack, options, polygons));
     auto region_planes = checked(cut::region_cut_planes(stack, mesh));
@@ -262,7 +276,7 @@ int run(int argc, char** argv) {
         checked(nonconvex_outline
                     ? cut::detail::apply_outline_cut_general(mesh, stack.outline, {}, region_planes)
                     : cut::apply_outline_cut(mesh, stack.outline, {}, region_planes));
-    event("write", 0.8, "Writing VTKHDF");
+    event("write", 0.8, "Writing VTKHDF", events);
     auto files =
         checked_io(write_vtkhdf(stem, mesh, cut ? &*cut : nullptr, chipcae::Communicator::world()));
     int rank = 0;
@@ -325,7 +339,7 @@ int run(int argc, char** argv) {
                   << ",\"raster\":" << raster_area << '}';
     }
     effective << "}}";
-    event("success", 1, effective.str());
+    event("success", 1, effective.str(), events);
     return 0;
 }
 #endif
@@ -339,7 +353,7 @@ int main(int argc, char** argv) {
                   "chipcae-preview <stack.json> [--polyset f] [--nx N --ny N] "
                   "[--levels N] [--max-ratio R] [--cell-budget B] [--min-elems-per-layer M] "
                   "[--nonconvex-outline] "
-                  "-o <stem|out.vtkhdf> [--surface <exact-eb-file>] "
+                  "-o <stem|out.vtkhdf> [--surface <exact-eb-file>] [--events-file <path>] "
                   "(--polyset overrides meshing sidecars; levels=0 is automatic)");
             return 0;
         }
@@ -353,18 +367,80 @@ int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
 #endif
     int code = 0;
+    int rank = 0;
+#ifdef CHIPCAE_ENABLE_MPI
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+#endif
+    std::ofstream events_file;
+    std::ostream* events = nullptr;
     try {
+        std::string initialization_error;
+        try {
+            std::optional<std::string> events_path;
+            // Follow run()'s value boundaries, including tokens that look like options.
+            // Validate the whole event option before opening (and truncating) anything.
+            for (int i = 1; i < argc; ++i) {
+                const std::string arg = argv[i];
+                if (arg == "--events-file") {
+                    if (events_path)
+                        throw std::runtime_error("duplicate option: --events-file");
+                    if (++i == argc || std::string(argv[i]).empty())
+                        throw std::runtime_error("missing value for --events-file");
+                    events_path = argv[i];
+                } else if (arg == "-o" || arg == "--surface" || arg == "--polyset" ||
+                           arg == "--nx" || arg == "--ny" || arg == "--levels" ||
+                           arg == "--max-ratio" || arg == "--cell-budget" ||
+                           arg == "--min-elems-per-layer") {
+                    ++i;
+                }
+            }
+            if (rank == 0 && events_path) {
+                events_file.open(*events_path, std::ios::binary | std::ios::trunc);
+                if (!events_file)
+                    throw std::runtime_error(
+                        "events file: " +
+                        std::error_code(errno, std::generic_category()).message());
+                events = &events_file;
+            }
+        } catch (const std::exception& error) {
+            initialization_error = error.what();
+        }
+#ifdef CHIPCAE_ENABLE_MPI
+        // A rank-zero open failure must reach every rank before run()'s collectives.
+        int error_size = static_cast<int>(initialization_error.size());
+        MPI_Bcast(&error_size, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        initialization_error.resize(static_cast<std::size_t>(error_size));
+        MPI_Bcast(initialization_error.data(), error_size, MPI_CHAR, 0, MPI_COMM_WORLD);
+#endif
+        if (!initialization_error.empty())
+            throw std::runtime_error(initialization_error);
 #ifdef CHIPCAE_ENABLE_KOKKOS
         Kokkos::ScopeGuard guard;
 #endif
-        code = run(argc, argv);
+        code = run(argc, argv, events);
     } catch (const MeshFailure& error) {
         std::cerr << error.what() << '\n';
-        event("error", 1, error.what());
+        event("error", 1, error.what(), events);
         code = exit_code(error.error);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
-        event("error", 1, error.what());
+        event("error", 1, error.what(), events);
+        code = chipcae::ErrorCode::INTERNAL;
+    }
+    // Do not throw from event(): rank zero may be about to enter a mesh collective.
+    // Check write/flush/close failures together once all ranks have left run().
+    int events_failed = 0;
+    if (events_file.is_open()) {
+        events_file.close();
+        events_failed = events_file.fail() ? 1 : 0;
+    }
+#ifdef CHIPCAE_ENABLE_MPI
+    MPI_Bcast(&events_failed, 1, MPI_INT, 0, MPI_COMM_WORLD);
+#endif
+    if (events_failed) {
+        const std::string message = "events file: write or close failed";
+        std::cerr << message << '\n';
+        event("error", 1, message);
         code = chipcae::ErrorCode::INTERNAL;
     }
 #ifdef CHIPCAE_ENABLE_MPI

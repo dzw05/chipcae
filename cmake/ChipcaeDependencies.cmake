@@ -103,8 +103,61 @@ if(CHIPCAE_ENABLE_MUMPS)
 endif()
 
 if(CHIPCAE_ENABLE_ECAD)
-    find_package(miniz CONFIG QUIET)
-    if(NOT TARGET miniz AND NOT TARGET miniz::miniz)
+    # Discover in this configure so packages retain the caller's variables,
+    # helpers, targets and policies. Local imports stay in the child directory;
+    # ordinary targets and explicit GLOBAL imports may remain visible.
+    set(_chipcae_miniz_discovery "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/chipcae-miniz-discovery")
+    file(MAKE_DIRECTORY "${_chipcae_miniz_discovery}")
+    file(WRITE "${_chipcae_miniz_discovery}/CMakeLists.txt" [=[
+set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL OFF)
+find_package(miniz CONFIG QUIET)
+set(_accepted FALSE)
+set(_rejected FALSE)
+set(_aliases "")
+foreach(_name miniz::miniz miniz)
+    if(TARGET ${_name})
+        get_target_property(_type ${_name} TYPE)
+        if(_type STREQUAL "SHARED_LIBRARY" OR _type STREQUAL "MODULE_LIBRARY")
+            set(_rejected TRUE)
+        else()
+            set(_accepted TRUE)
+        endif()
+    endif()
+endforeach()
+if(_rejected)
+    set(_accepted FALSE)
+endif()
+if(_accepted)
+    # Promote the complete import set, including a wrapper's dependencies.
+    # Aliases of local imports stay local even after their targets are promoted.
+    foreach(_name miniz::miniz miniz)
+        if(TARGET ${_name})
+            get_target_property(_underlying ${_name} ALIASED_TARGET)
+            if(_underlying)
+                list(APPEND _aliases ${_name} ${_underlying})
+            endif()
+        endif()
+    endforeach()
+    get_property(_imports DIRECTORY PROPERTY IMPORTED_TARGETS)
+    foreach(_target IN LISTS _imports)
+        get_target_property(_underlying ${_target} ALIASED_TARGET)
+        if(_underlying)
+            set(_target ${_underlying})
+        endif()
+        set_property(TARGET ${_target} PROPERTY IMPORTED_GLOBAL TRUE)
+    endforeach()
+endif()
+set(_chipcae_miniz_package_accepted ${_accepted} PARENT_SCOPE)
+set(_chipcae_miniz_aliases "${_aliases}" PARENT_SCOPE)
+]=])
+    add_subdirectory("${_chipcae_miniz_discovery}" "${_chipcae_miniz_discovery}/build")
+    while(_chipcae_miniz_aliases)
+        list(POP_FRONT _chipcae_miniz_aliases _chipcae_miniz_alias _chipcae_miniz_underlying)
+        if(NOT TARGET ${_chipcae_miniz_alias})
+            add_library(${_chipcae_miniz_alias} ALIAS ${_chipcae_miniz_underlying})
+        endif()
+    endwhile()
+    if(NOT _chipcae_miniz_package_accepted)
         include(FetchContent)
         if(DEFINED BUILD_SHARED_LIBS)
             set(_chipcae_miniz_had_shared TRUE)
@@ -115,9 +168,17 @@ if(CHIPCAE_ENABLE_ECAD)
         set(BUILD_SHARED_LIBS OFF)
         set(BUILD_EXAMPLES OFF CACHE BOOL "Build miniz examples" FORCE)
         set(INSTALL_PROJECT OFF CACHE BOOL "Install miniz" FORCE)
+        set(_chipcae_miniz_source_subdir ".")
+        if(TARGET miniz OR TARGET miniz::miniz)
+            # Rejected GLOBAL imports, build targets and aliases cannot be
+            # removed. Populate the pinned source without its public target,
+            # then compile a private archive for the unchanged ECAD consumer.
+            set(_chipcae_miniz_source_subdir "chipcae-populate-only")
+        endif()
         FetchContent_Declare(miniz
             URL https://codeload.github.com/richgel999/miniz/tar.gz/refs/tags/3.0.2
             URL_HASH SHA256=c4b4c25a4eb81883448ff8924e6dba95c800094a198dc9ce66a292ac2ef8e018
+            SOURCE_SUBDIR "${_chipcae_miniz_source_subdir}"
         )
         if(DEFINED CMAKE_POLICY_DEFAULT_CMP0077)
             set(_chipcae_miniz_saved_policy "${CMAKE_POLICY_DEFAULT_CMP0077}")
@@ -134,6 +195,39 @@ if(CHIPCAE_ENABLE_ECAD)
             set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
         endif()
         FetchContent_MakeAvailable(miniz)
+        if(_chipcae_miniz_source_subdir STREQUAL "chipcae-populate-only")
+            set(_chipcae_miniz_static_dir "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/chipcae-static-miniz")
+            file(MAKE_DIRECTORY "${_chipcae_miniz_static_dir}")
+            file(WRITE "${_chipcae_miniz_static_dir}/CMakeLists.txt" [=[
+# Sources and export settings of the pinned miniz 3.0.2 static build.
+add_library(chipcae_miniz_static STATIC
+    "${miniz_SOURCE_DIR}/miniz.c" "${miniz_SOURCE_DIR}/miniz_zip.c"
+    "${miniz_SOURCE_DIR}/miniz_tinfl.c" "${miniz_SOURCE_DIR}/miniz_tdef.c")
+set_target_properties(chipcae_miniz_static PROPERTIES OUTPUT_NAME miniz C_STANDARD 90)
+include(GenerateExportHeader)
+generate_export_header(chipcae_miniz_static BASE_NAME miniz)
+target_compile_definitions(chipcae_miniz_static PUBLIC MINIZ_STATIC_DEFINE
+    PRIVATE $<$<C_COMPILER_ID:GNU>:_GNU_SOURCE>)
+target_include_directories(chipcae_miniz_static PUBLIC
+    "$<BUILD_INTERFACE:${miniz_SOURCE_DIR}>"
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>")
+]=])
+            add_subdirectory("${_chipcae_miniz_static_dir}" "${_chipcae_miniz_static_dir}/build")
+            if(TARGET miniz::miniz)
+                # CMP0107's compatibility behavior permits replacing this one
+                # occupied public name with an alias. The package's real target
+                # and artifacts remain intact; restore the caller's policy
+                # immediately, without intercepting any CMake commands.
+                cmake_policy(PUSH)
+                cmake_policy(SET CMP0107 OLD)
+                add_library(miniz::miniz ALIAS chipcae_miniz_static)
+                cmake_policy(POP)
+            else()
+                add_library(miniz::miniz ALIAS chipcae_miniz_static)
+            endif()
+            unset(_chipcae_miniz_static_dir)
+        endif()
+        unset(_chipcae_miniz_source_subdir)
         if(DEFINED _chipcae_miniz_saved_minimum)
             set(CMAKE_POLICY_VERSION_MINIMUM "${_chipcae_miniz_saved_minimum}")
             unset(_chipcae_miniz_saved_minimum)
@@ -154,6 +248,11 @@ if(CHIPCAE_ENABLE_ECAD)
         unset(_chipcae_miniz_had_shared)
         unset(_chipcae_miniz_shared)
     endif()
+    unset(_chipcae_miniz_discovery)
+    unset(_chipcae_miniz_package_accepted)
+    unset(_chipcae_miniz_aliases)
+    unset(_chipcae_miniz_alias)
+    unset(_chipcae_miniz_underlying)
 
     find_package(Clipper2 CONFIG QUIET)
     if(NOT TARGET Clipper2)
