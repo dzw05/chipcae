@@ -292,6 +292,13 @@ void CaseTreeModel::setThermalMode(bool thermal) {
     auto copy = document_->toJson();
     if (!copy.contains("physics"))
         return;
+    if (thermal) {
+        for (const auto& p : copy.at("physics").array_range()) {
+            if (p.is_object() && p.contains("solver") && p.at("solver").is_string() &&
+                p.at("solver") == "fem_vem.solid")
+                return;
+        }
+    }
     bool alreadyThermal = false;
     for (const auto& p : copy.at("physics").array_range())
         alreadyThermal = alreadyThermal || p.at("id") == "thermal";
