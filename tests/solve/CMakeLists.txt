@@ -382,6 +382,7 @@ endif()
 add_test(NAME solve_ecad_test_registration
     COMMAND cmake
         "-DBUILD_DIR=${CMAKE_BINARY_DIR}"
+        "-DGENERATOR=${CMAKE_GENERATOR}"
         "-DCONFIG=$<CONFIG>"
         "-DECAD=$<BOOL:${CHIPCAE_ENABLE_ECAD}>"
         "-DSOLVE_BACKEND=$<BOOL:${_solve_backend}>"
