@@ -1,4 +1,6 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.28)
+# Keep the existing policy baseline while enabling cross-directory test property APIs.
+cmake_policy(VERSION 3.20)
 
 if(CMAKE_HOST_APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "Minimum macOS (float std::from_chars)")
