@@ -208,7 +208,8 @@ class PreviewCopperArea(unittest.TestCase):
                 options.append(argument)
         compiler = next(line.split('=', 1)[1] for line in self.cache.splitlines()
                         if line.startswith(('CMAKE_CXX_COMPILER:FILEPATH=',
-                                            'CMAKE_CXX_COMPILER:STRING=')))
+                                            'CMAKE_CXX_COMPILER:STRING=',
+                                            'CMAKE_CXX_COMPILER:UNINITIALIZED=')))
         generator = next(line.split('=', 1)[1] for line in self.cache.splitlines()
                          if line.startswith('CMAKE_GENERATOR:INTERNAL='))
         harness = self.root / 'columns.cpp'
