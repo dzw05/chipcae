@@ -7,7 +7,7 @@ an explicit assertion failure for every case, rather than a collection error.
 Missing numpy or h5py exits 77, which fails this CTest registration. There are no
 skips, expected failures, or fallback evaluators.
 
-The production-facing [API contract](../../../tools/vv/fvm_warpage_scheme_a_contract.md)
+The production-facing [API contract](fvm_warpage_scheme_a_contract.md)
 defines supported inputs, result/check shapes, ordering and validation behavior.
 
 All inputs are generated in temporary directories by `synthetic_inputs.py`.

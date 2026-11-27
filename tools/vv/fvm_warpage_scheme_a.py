@@ -2,7 +2,8 @@
 # Copyright (c) 2026 Zhiwei Duan
 """INT-a scheme A decisions on supplied data; no solver or FEM evaluator.
 
-Public inputs, result dictionaries and errors: fvm_warpage_scheme_a_contract.md.
+Public inputs, result dictionaries and errors:
+tests/integration/fvm_warpage_scheme_a/fvm_warpage_scheme_a_contract.md.
 """
 
 import json
