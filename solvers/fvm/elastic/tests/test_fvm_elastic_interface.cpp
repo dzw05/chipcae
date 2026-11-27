@@ -133,10 +133,11 @@ detail::ElasticAssembly assembly(const ElasticMesh& m, const ElasticProblem& p) 
     require(static_cast<bool>(a), a ? "" : "assembly: " + a.error().reason);
     return std::move(a.value());
 }
-std::vector<M3> production_gradients(const Patch& p, const ElasticResult& r) {
+std::vector<M3>
+production_gradients(const Patch& p, const ElasticResult& r, MPI_Comm comm = MPI_COMM_SELF) {
     // This existing private entry point evaluates reconstruction() for uncut cells too.
     // These are the actual LS maps used by assembly and returned face reconstruction.
-    auto g = detail::evaluate_cut_gradients(p.mesh, p.problem, r.U_cell, MPI_COMM_SELF);
+    auto g = detail::evaluate_cut_gradients(p.mesh, p.problem, r.U_cell, comm);
     require(static_cast<bool>(g), g ? "" : "production gradients: " + g.error().reason);
     require(g.value().size() == p.mesh.volume.size(), "one production gradient per cell");
     return std::move(g.value());
@@ -177,8 +178,8 @@ M3 interface_gradient(
     return one_sided;
 }
 
-void check_gradients(const Patch& p, const ElasticResult& r) {
-    const auto g = production_gradients(p, r);
+void check_gradients(const Patch& p, const ElasticResult& r, MPI_Comm comm = MPI_COMM_SELF) {
+    const auto g = production_gradients(p, r, comm);
     double error = 0, reference = 0;
     for (std::size_t c = 0; c < g.size(); ++c) {
         const auto exact = p.gradient(c);
@@ -211,8 +212,8 @@ void check_gradients(const Patch& p, const ElasticResult& r) {
             "T4 one-sided production gradients reproduce piecewise-affine derivatives");
 }
 
-void check_traction(const Patch& p, const ElasticResult& r) {
-    const auto g = production_gradients(p, r);
+void check_traction(const Patch& p, const ElasticResult& r, MPI_Comm comm = MPI_COMM_SELF) {
+    const auto g = production_gradients(p, r, comm);
     double jump = 0, sigma_scale = 0;
     for (auto k : p.interfaces()) {
         const auto& f = p.mesh.faces[k];
@@ -424,6 +425,69 @@ void region_only_predicate() {
     identical_assembly(assembly(p.mesh, p.problem), assembly(p.mesh, relabeled));
 }
 
+void equal_material_formula(bool thermal_jump) {
+    auto p = patch_grid(true, false, false);
+    // Shear parallel to the interface so that both half-face tangent offsets
+    // are nonzero, and retain unequal normal distances from the graded grid.
+    constexpr double shear = 0.2;
+    for (auto& x : p.mesh.centroid)
+        x[0] += shear * x[2];
+    for (auto& f : p.mesh.faces) {
+        f.centroid[0] += shear * f.centroid[2];
+        f.normal[2] -= shear * f.normal[0];
+        const double length = norm(f.normal);
+        f.area *= length;
+        f.normal = scale(f.normal, 1 / length);
+    }
+    std::vector<V> u;
+    for (std::size_t c = 0; c < p.mesh.volume.size(); ++c) {
+        const auto& x = p.mesh.centroid[c];
+        u.push_back({1e-4 * (1 + x[0] * x[2]),
+                     2e-4 * (x[0] * x[0] - x[1] * x[2]),
+                     3e-4 * (x[2] * x[2] + x[0] * x[1])});
+        if (thermal_jump)
+            p.problem.dT[c] += 20 * x[2]; // Smooth T, unequal cell eigenstrains.
+    }
+    const auto samples = detail::evaluate_elastic_interfaces(p.mesh, p.problem, u, MPI_COMM_SELF);
+    const auto gradients = detail::evaluate_cut_gradients(p.mesh, p.problem, u, MPI_COMM_SELF);
+    require(samples && gradients, "equal-material formula reconstruction succeeds");
+    require(samples.value().size() == p.interfaces().size(), "formula covers every interface");
+    constexpr double E = 25e9, alpha = 1e-5;
+    constexpr double mu = E / (2 * (1 + nu));
+    constexpr double lambda = E * nu / ((1 + nu) * (1 - 2 * nu));
+    double correction_scale = 0;
+    std::vector<V> got, expected;
+    for (const auto& sample : samples.value()) {
+        const auto& f = p.mesh.faces[sample.face];
+        const auto dl_vector = sub(f.centroid, p.mesh.centroid[f.lo]);
+        const auto dh_vector = sub(f.centroid, p.mesh.centroid[f.hi]);
+        const double dl = dot(dl_vector, f.normal), dh = -dot(dh_vector, f.normal);
+        const auto delta_lo = sub(dl_vector, scale(f.normal, dl));
+        const auto delta_hi = add(dh_vector, scale(f.normal, dh));
+        require(norm(delta_lo) > 0 && norm(delta_hi) > 0 && std::abs(dl - dh) > 1e-4,
+                "formula fixture discriminates tangent offsets and unequal distance weights");
+        const auto lo = add(u[f.lo], mul(gradients.value()[f.lo], delta_lo));
+        const auto hi = add(u[f.hi], mul(gradients.value()[f.hi], delta_hi));
+        const auto interpolated = scale(add(scale(lo, dh), scale(hi, dl)), 1 / (dl + dh));
+        // Equal C gives a common tangential traction on both sides. Thus
+        // b_hi-b_lo = (3 lambda+2 mu) alpha (T_lo-T_hi) n, and
+        // K^-1 n = n/(lambda+2 mu), independently of reconstruction internals.
+        const auto correction =
+            scale(f.normal,
+                  dl * dh / (dl + dh) * (3 * lambda + 2 * mu) * alpha *
+                      (p.problem.dT[f.lo] - p.problem.dT[f.hi]) / (lambda + 2 * mu));
+        correction_scale = std::max(correction_scale, norm(correction));
+        got.push_back(sample.displacement);
+        expected.push_back(add(interpolated, correction));
+    }
+    if (thermal_jump)
+        require(correction_scale > 1e-6 * max_norm(expected),
+                "nonzero b_hi-b_lo correction is required by the smooth temperature field");
+    else
+        near(correction_scale, 0, 1e-20, 0, "equal eigenstrains remove the correction");
+    relative_field(got, expected, "equal-material reduced interface formula");
+}
+
 void rank_failure(MPI_Comm comm, int ranks) {
     auto p = patch(grid(1, 1, 2), 0.5);
     p.problem.support = ElasticProblem::Support::Rigid321;
@@ -484,9 +548,13 @@ void zero_field_gradients() {
             near(value, 0, 1e-14, 0, "rank-zero displacement gives zero production gradient");
 }
 
-void junction_samples(MPI_Comm comm, int ranks, bool rank_one = false) {
+void junction_samples(MPI_Comm comm, int ranks, bool rank_one = false, bool reverse_faces = false) {
     const auto x_axis = axis(3, 1, 1.2), z_axis = axis(4, 1, 1.3);
     auto m = grid(x_axis, axis(3, 1, 1.1), z_axis);
+    if (reverse_faces) {
+        std::reverse(m.faces.begin(), m.faces.end());
+        std::reverse(m.is_embedded.begin(), m.is_embedded.end());
+    }
     auto p = problem(m, isotropic(), 0);
     auto field = [rank_one](const V& x) -> V {
         if (rank_one)
@@ -801,6 +869,14 @@ void mpi_comparison(Suite& suite, bool graded) {
                        exact_interfaces(p),
                        name + " np2 analytical interface U_face");
     });
+    suite.run(name + " np2 T4 production gradients", [&] {
+        solved();
+        check_gradients(p, *parallel, suite.comm);
+    });
+    suite.run(name + " np2 T4 constitutive tractions", [&] {
+        solved();
+        check_traction(p, *parallel, suite.comm);
+    });
 }
 } // namespace
 
@@ -832,6 +908,8 @@ int main(int argc, char** argv) {
                   [&] { junction_samples(suite.comm, ranks); });
         suite.run("rank-one field gradients across interface owners",
                   [&] { junction_samples(suite.comm, ranks, true); });
+        suite.run("reversed junction face ordering across interface owners",
+                  [&] { junction_samples(suite.comm, ranks, false, true); });
     } else {
         for (bool graded : {false, true}) {
             const std::string name = graded ? "graded 6x5x(2+2)" : "uniform 4x4x(2+3)";
@@ -858,6 +936,10 @@ int main(int argc, char** argv) {
                       [&] { region_length(length); });
         suite.run("T6 interface selection uses only integer region equality",
                   region_only_predicate);
+        for (bool thermal_jump : {false, true})
+            suite.run(thermal_jump ? "equal-material reduced formula with b_hi-b_lo correction"
+                                   : "equal-material reduced formula with equal eigenstrain",
+                      [&] { equal_material_formula(thermal_jump); });
         suite.run("T2 bimetal 8x4x(2+2) unconstrained operator", [&] {
             matrix_invariants(patch(grid(axis(8, 1), axis(4, 0.2), axis(4, 0.1)), 0.05));
         });
@@ -877,6 +959,8 @@ int main(int argc, char** argv) {
                   junction_all_faces);
         suite.run("junction LS fits retain each interface displacement",
                   [&] { junction_samples(MPI_COMM_SELF, 1); });
+        suite.run("junction LS fits retain samples with reversed face ordering",
+                  [&] { junction_samples(MPI_COMM_SELF, 1, false, true); });
         suite.run("rank-zero field evaluates production gradients", zero_field_gradients);
         suite.run("rank-one field retains each interface LS sample",
                   [&] { junction_samples(MPI_COMM_SELF, 1, true); });

@@ -4,7 +4,10 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
+
+from preview_event_stream import EventStreamError, check_serial_stdout, read_events, stdout_mixed
 
 
 def main():
@@ -31,12 +34,24 @@ def main():
                 launcher = [mpi, '-n', str(ranks)]
             env = dict(os.environ, OMPI_ALLOW_RUN_AS_ROOT='1',
                        OMPI_ALLOW_RUN_AS_ROOT_CONFIRM='1')
+            event_path = root / f'events-{ranks}.jsonl'
             result = subprocess.run(
                 [*launcher, str(preview), str(stack), '--nx', '12', '--ny', '12',
-                 '--levels', '1', '-o', str(root / f'out-{ranks}')],
+                 '--levels', '1', '-o', str(root / f'out-{ranks}'),
+                 '--events-file', str(event_path)],
                 capture_output=True, text=True, env=env, timeout=40)
             assert result.returncode == 0, (result.stdout, result.stderr)
-            events = [json.loads(line) for line in result.stdout.splitlines()]
+            try:
+                events = read_events(event_path)
+                if launcher:
+                    if stdout_mixed(result.stdout, event_path):
+                        print(f'PREVIEW_STDOUT_MIXED: mesh_hash_preview_np np={ranks}',
+                              file=sys.stderr)
+                else:
+                    check_serial_stdout(result.stdout, event_path)
+            except EventStreamError as error:
+                raise AssertionError(f'invalid events-file JSON: {error}'
+                                     f'\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}') from error
             summary, = [e for e in events if e.get('stage') == 'success']
             candidate = summary['nx0'] * summary['ny0'] * summary['nz']
             assert summary['cell_count'] < candidate, summary

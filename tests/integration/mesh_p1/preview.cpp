@@ -41,51 +41,79 @@ int main(int argc, char** argv) {
                           std::string expected_error_path = "") {
             jsoncons::json summary;
             auto prefix = argc == 4 && use_mpi ? shell(argv[2]) + " " + argv[3] + " " : "";
-            auto command = prefix + shell(argv[1]) + " " + args + " >" +
+            auto command = prefix + shell(argv[1]) + " --events-file " +
+                           shell((dir / "events").string()) + " " + args + " >" +
                            shell((dir / "stdout").string()) + " 2>" +
                            shell((dir / "stderr").string());
             int code = std::system(command.c_str());
+            auto read_stream = [&](const char* name) {
+                std::ifstream input(dir / name, std::ios::binary);
+                std::ostringstream contents;
+                contents << input.rdbuf();
+                return contents.str();
+            };
+            const auto events_text = read_stream("events");
+            const auto stdout_text = read_stream("stdout");
+            const auto stderr_text = read_stream("stderr");
+            const auto context = "\nevents file:\n" + events_text + "\nstdout:\n" + stdout_text +
+                                 "\nstderr:\n" + stderr_text;
             if (!WIFEXITED(code) || WEXITSTATUS(code) != expected_code) {
                 std::ifstream diagnostic(dir / "stderr");
                 std::cerr << "Expected exit " << expected_code << ", actual status " << code << ": "
-                          << diagnostic.rdbuf();
+                          << diagnostic.rdbuf() << context;
             }
             expect(WIFEXITED(code) && WEXITSTATUS(code) == expected_code, "CLI exact exit status");
-            std::ifstream stream(dir / "stdout");
+            std::istringstream stream(events_text);
             std::string line, last;
             int count = 0, terminal = 0;
-            while (std::getline(stream, line)) {
-                auto event = jsoncons::json::parse(line);
-                expect(event.at("stage").is_string(), "stage string");
-                expect(event.at("progress").is_number(), "numeric progress");
-                expect(event.at("message").is_string(), "message string");
-                last = event.at("stage").as<std::string>();
-                if (last == "success" || last == "error")
-                    ++terminal;
-                if (last == "error" && !expected_error_path.empty())
-                    expect(event.at("message").as<std::string>().starts_with(expected_error_path +
-                                                                             ": "),
-                           "terminal mesh error path");
-                if (last == "success") {
-                    auto params = jsoncons::json::parse(event.at("message").as<std::string>());
-                    expect(params.at("grid").is_string(), "effective grid");
-                    if (params.at("max_ratio").as<double>() != expected_max_ratio)
-                        std::cerr << "Expected max_ratio " << expected_max_ratio << ", actual "
-                                  << params.at("max_ratio").as<double>() << '\n';
-                    expect(params.at("max_ratio").as<double>() == expected_max_ratio,
-                           "effective max ratio");
-                    expect(
-                        params.at("L").as<int>() ==
-                                (expected_levels < 0 ? (argc == 4 ? 0 : 1) : expected_levels) &&
-                            params.at("n0").as<std::string>() ==
-                                (expected_n0.empty() ? (argc == 4 ? "9x9" : "5x5") : expected_n0),
-                        "effective hierarchy");
-                    for (const auto& field : params.object_range())
-                        expect(event.at(field.key()) == field.value(),
-                               "top-level and success.message summaries agree");
-                    summary = params;
+            try {
+                expect(!events_text.empty() && events_text.back() == '\n',
+                       "nonempty LF-terminated events file");
+                if (prefix.empty())
+                    expect(stdout_text == events_text, "serial stdout matches events file bytes");
+                else if (stdout_text != events_text)
+                    std::cerr << "PREVIEW_STDOUT_MIXED: k1_preview\n";
+                while (std::getline(stream, line)) {
+                    expect(line.find_first_not_of(" \t\r\v\f") != std::string::npos,
+                           "nonblank event line");
+                    // jsoncons::json::parse checks complete input consumption (check_done).
+                    auto event = jsoncons::json::parse(line);
+                    expect(event.is_object(), "event is a JSON object");
+                    expect(event.at("stage").is_string(), "stage string");
+                    expect(event.at("progress").is_number(), "numeric progress");
+                    expect(event.at("message").is_string(), "message string");
+                    last = event.at("stage").as<std::string>();
+                    if (last == "success" || last == "error")
+                        ++terminal;
+                    if (last == "error" && !expected_error_path.empty())
+                        expect(event.at("message").as<std::string>().starts_with(
+                                   expected_error_path + ": "),
+                               "terminal mesh error path");
+                    if (last == "success") {
+                        auto params = jsoncons::json::parse(event.at("message").as<std::string>());
+                        expect(params.at("grid").is_string(), "effective grid");
+                        if (params.at("max_ratio").as<double>() != expected_max_ratio)
+                            std::cerr << "Expected max_ratio " << expected_max_ratio << ", actual "
+                                      << params.at("max_ratio").as<double>() << '\n';
+                        expect(params.at("max_ratio").as<double>() == expected_max_ratio,
+                               "effective max ratio");
+                        expect(
+                            params.at("L").as<int>() ==
+                                    (expected_levels < 0 ? (argc == 4 ? 0 : 1) : expected_levels) &&
+                                params.at("n0").as<std::string>() ==
+                                    (expected_n0.empty() ? (argc == 4 ? "9x9" : "5x5")
+                                                         : expected_n0),
+                            "effective hierarchy");
+                        for (const auto& field : params.object_range())
+                            expect(event.at(field.key()) == field.value(),
+                                   "top-level and success.message summaries agree");
+                        summary = params;
+                    }
+                    ++count;
                 }
-                ++count;
+            } catch (const std::exception& error) {
+                throw std::runtime_error("invalid events-file JSON: " + std::string(error.what()) +
+                                         context);
             }
             if (expected_code == 0)
                 expect(terminal == 1 && count == 4,

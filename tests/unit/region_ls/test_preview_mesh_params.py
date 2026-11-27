@@ -12,6 +12,8 @@ import tempfile
 import time
 import unittest
 
+from preview_event_stream import EventStreamError, check_serial_stdout, read_events
+
 
 def synthetic_stack(count=1):
     return dict(id='mesh-params', unit='m', symmetry='none', package_type='FCBGA',
@@ -66,7 +68,8 @@ class PreviewMeshParams(unittest.TestCase):
         source.write_text(json.dumps(stack), encoding='utf-8')
         stem = self.root / name
         command = [str(self.preview), str(source), '--nx', str(nx), '--ny', str(ny),
-                   '--levels', str(levels), '-o', str(stem), *flags]
+                   '--levels', str(levels), '-o', str(stem),
+                   '--events-file', str(self.root / f'events-{name}.jsonl'), *flags]
         result, events = self.preview_command(command)
         return result, events, stem
 
@@ -83,9 +86,15 @@ class PreviewMeshParams(unittest.TestCase):
                 children_maxrss_cumulative_mib=rss / (1024**2 if sys.platform == 'darwin'
                                                      else 1024)))
         try:
-            events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
-        except json.JSONDecodeError as error:
-            self.fail(f'invalid stdout JSON: {error}{diagnostics(result)}')
+            if command == [str(self.preview), '--help']:
+                # Standalone help exits before run(); keep its existing stdout contract.
+                events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+            else:
+                event_path = Path(command[command.index('--events-file') + 1])
+                events = read_events(event_path)
+                check_serial_stdout(result.stdout, event_path)
+        except (EventStreamError, json.JSONDecodeError) as error:
+            self.fail(f'invalid events-file JSON: {error}{diagnostics(result)}')
         return result, events
 
     def measure(self, label):
@@ -139,8 +148,11 @@ class PreviewMeshParams(unittest.TestCase):
                     summary = self.success(invocation)
                     result = invocation[0]
                     context = diagnostics(result)
-                    events = [json.loads(line, object_pairs_hook=list)
-                              for line in result.stdout.splitlines() if line.strip()]
+                    try:
+                        event_path = Path(result.args[result.args.index('--events-file') + 1])
+                        events = read_events(event_path, object_pairs_hook=list)
+                    except EventStreamError as error:
+                        self.fail(f'invalid events-file JSON: {error}{context}')
                     found = [event for event in events if ('stage', 'success') in event]
                     self.assertEqual(len(found), 1, context)
                     event = found[0]

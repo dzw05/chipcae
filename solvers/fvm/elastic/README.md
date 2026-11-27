@@ -69,8 +69,9 @@ own unknown displacement at its face centroid, retaining same-material centers,
 prescribed face samples and free-face constitutive closure. Write these fits as
 `G_s = a_s + sum_g B_sg U_g` and substitute into the traction equations. Cholesky
 solves apply H's inverse to every affine coefficient and constant. Sparse block
-elimination uses a three-variable local SVD at each face, substitutes its map into
-dependent face equations, then back substitutes to resolve all interface displacements.
+Gauss-Jordan elimination uses a three-variable local SVD at each face and substitutes
+its map into every dependent face equation, including earlier pivots. Fill dependencies
+are tracked until all interface displacements are resolved before evaluating LS samples.
 No connected-interface dense matrix or inverse is allocated. The existing
 one-sided Jacobi SVD retains squared singular values strictly greater than
 `largest*1e-26`, with unchanged arithmetic on the legacy path. Incomplete gradient

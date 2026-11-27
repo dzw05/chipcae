@@ -1103,11 +1103,12 @@ void eliminate_interfaces(const ElasticMesh& m, std::map<std::size_t, InterfaceF
     std::map<Index, std::set<std::size_t>> dependents;
     for (const auto& [k, face] : faces)
         for (const auto& [key, block] : face.value.cells)
-            if (key < 0 && nonzero(block))
+            if (key < 0)
                 dependents[key].insert(k);
-    // Block Gaussian elimination keeps each pivot local to a face's three
-    // displacement components. Only existing sparse dependencies are updated;
-    // no connected-interface dense matrix or inverse is allocated.
+    // Block Gauss-Jordan elimination keeps each pivot local to a face's three
+    // displacement components. Update every dependent row, including earlier
+    // pivots, so fill never leaves a dependency on an already processed face.
+    // No connected-interface dense matrix or inverse is allocated.
     for (auto& [k, face] : faces) {
         const Index key = -1 - static_cast<Index>(k);
         auto self = face.value.cells.extract(key);
@@ -1126,26 +1127,20 @@ void eliminate_interfaces(const ElasticMesh& m, std::map<std::size_t, InterfaceF
         if (affected.empty())
             continue;
         for (auto other : affected.mapped()) {
-            if (other <= k)
+            if (other == k)
                 continue;
             auto& value = faces.at(other).value;
             substitute_interface(value, key, face.value);
             for (const auto& [next, block] : face.value.cells)
-                if (next < 0 && nonzero(block))
+                if (next < 0)
                     dependents[next].insert(other);
         }
     }
-    // Back substitution resolves every face value before substituting any LS
-    // samples, so junction gradients share the same displacement on each face.
-    for (auto it = faces.rbegin(); it != faces.rend(); ++it) {
-        auto& value = it->second.value;
-        while (!value.cells.empty() && value.cells.begin()->first < 0) {
-            const Index key = value.cells.begin()->first;
-            substitute_interface(value, key, faces.at(static_cast<std::size_t>(-1 - key)).value);
-        }
-    }
+    // Every face is fully resolved before substituting any LS samples. Check
+    // this invariant instead of iterating through potentially cyclic maps.
     for (auto& [k, face] : faces) {
-        (void)k;
+        if (!face.value.cells.empty() && face.value.cells.begin()->first < 0)
+            geometry_error(m, m.faces[k].lo, "unresolved interface displacement dependency", k);
         for (auto& gradient : face.gradient)
             while (!gradient.cells.empty() && gradient.cells.begin()->first < 0) {
                 const Index key = gradient.cells.begin()->first;

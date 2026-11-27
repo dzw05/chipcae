@@ -12,6 +12,8 @@ import tempfile
 import time
 import unittest
 
+from preview_event_stream import EventStreamError, check_serial_stdout, read_events, stdout_mixed
+
 import h5py
 import numpy as np
 
@@ -65,8 +67,10 @@ class PreviewLidNonconvex(unittest.TestCase):
         source = self.root / f'{label}.json'
         source.write_text(json.dumps(stack), encoding='utf-8')
         stem = self.root / label
+        event_path = self.root / f'events-{label}.jsonl'
         command = [*launcher, str(self.preview), str(source), '--nx', str(n),
-                   '--ny', str(n), '--levels', '1', *flags, '-o', str(stem)]
+                   '--ny', str(n), '--levels', '1', '--events-file', str(event_path),
+                   *flags, '-o', str(stem)]
         env = dict(os.environ, OMPI_ALLOW_RUN_AS_ROOT='1', OMPI_ALLOW_RUN_AS_ROOT_CONFIRM='1')
         start = time.perf_counter()
         try:
@@ -81,9 +85,14 @@ class PreviewLidNonconvex(unittest.TestCase):
                 children_maxrss_cumulative_mib=rss / (1024**2 if sys.platform == 'darwin'
                                                      else 1024)))
         try:
-            events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
-        except json.JSONDecodeError as error:
-            self.fail(f'invalid stdout JSON: {error}{diagnostics(result)}')
+            events = read_events(event_path)
+            if launcher:
+                if stdout_mixed(result.stdout, event_path):
+                    print(f'PREVIEW_STDOUT_MIXED: {self.id()}', file=sys.stderr)
+            else:
+                check_serial_stdout(result.stdout, event_path)
+        except EventStreamError as error:
+            self.fail(f'invalid events-file JSON: {error}{diagnostics(result)}')
         return result, events, stem
 
     def success(self, result, events):

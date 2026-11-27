@@ -377,3 +377,10 @@ if(_solve_backend)
     set_tests_properties(solve_fvm_trace_map PROPERTIES
         TIMEOUT 900 LABELS "fvm;numerical" SKIP_RETURN_CODE 77)
 endif()
+
+if(_solve_backend AND TARGET chipcae-preview)
+    add_test(NAME solve_n8_geometry COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_n8_geometry.py $<TARGET_FILE:chipcae-preview>)
+    set_tests_properties(solve_n8_geometry PROPERTIES
+        TIMEOUT 300 LABELS "solve;mesh;cut;geometry")
+endif()
