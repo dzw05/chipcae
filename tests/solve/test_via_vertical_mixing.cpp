@@ -426,8 +426,9 @@ int main(int argc, char** argv) {
                 });
         }
 
-        // 20:25 ruling supersedes the frozen fixture's 1e-8 gate. Matrix must remain (f<1).
+        // Enforce the frozen fixture's cavity gate with matrix remaining (f<1).
         const auto& cavity = fixture.at("levin_cavity");
+        const Real cavity_tol = cavity.at("alpha_star_rel_tol_to_alpha_m").as<double>();
         const auto ers = cavity.at("E_i_over_E_m").as<std::vector<double>>();
         for (double er : ers) {
             auto b = i;
@@ -452,7 +453,13 @@ int main(int argc, char** argv) {
                                       std::max(std::abs(m.alpha), 1e-30);
                         std::cout << "cavity f=" << f << " er=" << er << " d=" << d
                                   << " residual=" << residual[d] << '\n';
-                        require(residual[d] <= 10 * er, "cavity residual exceeds 10*Ei/Em");
+                        cases.run("cavity gate f=" + std::to_string(f) +
+                                      " er=" + std::to_string(er) + " d=" + std::to_string(d),
+                                  [&] {
+                                      require(residual[d] <= cavity_tol,
+                                              "cavity residual exceeds fixture "
+                                              "alpha_star_rel_tol_to_alpha_m");
+                                  });
                     }
                     residuals.push_back(residual);
                 }
@@ -504,7 +511,13 @@ int main(int argc, char** argv) {
             reject_fraction(f, "additional invalid f=" + std::to_string(f));
 
         auto reject_elastic = [&](Material bad, const std::string& label) {
-            for (double f : fractions)
+            for (double f : fractions) {
+                if (f == 0 || f == 1) {
+                    // Endpoint delegation must ignore the absent phase, as mixture() does.
+                    cases.run(label + " unused phase f=" + std::to_string(f),
+                              [&] { endpoint(f == 0 ? m : bad, f == 0 ? bad : i, f); });
+                    continue;
+                }
                 for (bool swap : {false, true})
                     cases.run(label + (swap ? " inclusion" : " matrix") + " f=" + std::to_string(f),
                               [&] {
@@ -513,6 +526,7 @@ int main(int argc, char** argv) {
                                           swap ? m : bad, swap ? bad : i, f);
                                   });
                               });
+            }
         };
         auto reject_k = [&](double bad, const std::string& label) {
             for (double f : fractions)

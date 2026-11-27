@@ -33,12 +33,12 @@ inline Moduli validate_phase(const Material& phase, const char* name) {
 
 // Column axis is z. K denotes plane-strain bulk, never the 3D bulk used by Levin.
 inline Constitutive mixture_vertical(const Material& matrix, const Material& inclusion, double f) {
+    // Preserve legacy endpoint behavior, including ignoring the absent phase.
+    if (f == 0 || f == 1)
+        return mixture(matrix, inclusion, f);
     vertical_detail::validate_fraction(f);
     const auto m = vertical_detail::validate_phase(matrix, "matrix");
     const auto i = vertical_detail::validate_phase(inclusion, "inclusion");
-    // Validate both phases even when one has zero volume, then preserve legacy bytes.
-    if (f == 0 || f == 1)
-        return mixture(matrix, inclusion, f);
 
     const double v = 1 - f, dn = inclusion.nu - matrix.nu;
     const double den = f / m.K + v / i.K + 1 / m.G;
