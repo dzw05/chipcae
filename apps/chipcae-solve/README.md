@@ -143,7 +143,7 @@ The adapter solves heat first, then passes CV temperatures minus `T_ref` to
 Mechanical stiffness and expansion use the shared `solve::mixture` laminate
 helper with the same CV copper fractions as thermal conductivity. Both
 libraries receive the case's `rtol`, `max_iter` and `preconditioner` unchanged;
-FVM accepts `jacobi` (default) and `gamg`. FEM stabilization and penalty
+FVM accepts `jacobi` and `gamg` (default). FEM stabilization and penalty
 settings are ignored; shared cut quadrature settings remain validated.
 
 `rigid: "3-2-1"` selects the elastic library's rigid-mode removal. Fixed face

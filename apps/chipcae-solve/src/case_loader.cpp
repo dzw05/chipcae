@@ -250,7 +250,7 @@ RunInputs load_inputs(const std::filesystem::path& case_path,
                 invalid("mixed fem/fvm physics not supported in case/1.0");
             if (saw_fvm) {
                 out.family = "fvm";
-                out.linear.preconditioner = "jacobi";
+                out.linear.preconditioner = "gamg";
             }
             out.thermal = thermal;
             out.T_ref = T_ref;

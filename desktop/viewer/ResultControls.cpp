@@ -38,6 +38,16 @@ ResultControls::ResultControls(ResultView& view, ResultSession& session, QWidget
     scale->setValue(1);
     layout->addRow(QStringLiteral("翘曲放大系数"), scale);
     connect(scale, &QDoubleSpinBox::valueChanged, &view, &ResultView::setWarpageScale);
+    auto autoScale = new QPushButton(QStringLiteral("自动放大"), this);
+    autoScale->setObjectName("autoWarpageScale");
+    autoScale->setEnabled(view.autoWarpageScale() > 0);
+    layout->addRow(autoScale);
+    connect(&view, &ResultView::displayChanged, &view, [&view, autoScale] {
+        autoScale->setEnabled(view.autoWarpageScale() > 0);
+    });
+    connect(autoScale, &QPushButton::clicked, &view, [&view, scale] {
+        scale->setValue(view.autoWarpageScale());
+    });
     auto layer = new QComboBox(this);
     layer->addItem(QStringLiteral("全部层"), 0);
     const auto names = session.layerNames();
@@ -97,8 +107,12 @@ ResultControls::ResultControls(ResultView& view, ResultSession& session, QWidget
                                : view.colorField() == ResultColorField::Temperature
                                    ? QStringLiteral("无温度场")
                                    : QString("Field: unavailable");
-        summary->setText(view.tmaxText() + "\n" + fieldText + "\n" + view.summary("warpage_pv") +
-                         "\n" + view.summary("U_mag_max"));
+        auto text = view.tmaxText() + "\n" + fieldText + "\n" + view.summary("warpage_pv") + "\n" +
+                    view.summary("U_mag_max");
+        const auto micrometerText = view.warpageMicrometerText();
+        if (!micrometerText.isEmpty())
+            text += "\n" + micrometerText;
+        summary->setText(text);
     };
     connect(steps, &QComboBox::currentIndexChanged, &view, [&view, &session, steps, refresh] {
         view.loadStep(session, steps->currentData().toLongLong());

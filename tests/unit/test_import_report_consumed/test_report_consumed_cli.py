@@ -3,7 +3,7 @@
 Snapshots live in the C++ acceptance test so both entry points share the exact
 public-fixture expectations, including all eleven serialized fields. The original
 snapshots retain the explicit consumed deletions; A expectations follow the public
-XML whitelist audit (74 kicad4l / 48 kicad10 promotions, Circle instances only).
+XML whitelist audit (101 kicad4l / 51 kicad10 promotions, Circle and Oval instances).
 """
 import hashlib
 import json
@@ -101,12 +101,10 @@ class ConsumedReportCLI(unittest.TestCase):
                 self.assertEqual(process.stderr, "IMPORT_REJECTED: unsupported board geometry\n")
                 self.assertEqual(public["defects"], [])
                 expected, _ = baseline("kicad4l", accept)
-                retained_ids = {"board/DictionaryStandard/31", "board/EntryStandard/32",
-                                "board/EntryStandard/35", "board/Oval/33", "board/Oval/36",
-                                "board/Oval/1379"}
+                retained_ids = {"board/Oval/1379"}
                 self.assertEqual([d for d in report["defects"] if d["defect_id"] in retained_ids],
                                  [d for d in expected["defects"] if d["defect_id"] in retained_ids])
-                self.assertEqual(report["tier_counts"]["C"], 3)
+                self.assertEqual(report["tier_counts"]["C"], 1)
                 directory = self.directory / f"kicad4l-{accept}"
                 self.assertFalse((directory / "stack.json").exists())
                 self.assertFalse((directory / "board.polyset").exists())
@@ -134,7 +132,7 @@ class ConsumedReportCLI(unittest.TestCase):
                     self.assertEqual(actual & deleted, set(), "consumed element IDs remain")
 
     def test_existing_successful_fixture_retains_geometry_bytes(self):
-        # kicad4l's three unsupported Ovals prevent successful output even with B accepted.
+        # kicad4l's unsupported SlotCavity Oval prevent successful output even with B accepted.
         # Exercise the other authorized public fixture without altering either source.
         process, _, public = self.runs["kicad10", True]
         self.assertEqual(process.returncode, 0, process.stderr)

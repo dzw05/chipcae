@@ -40,6 +40,8 @@ struct CopperSpec {
     std::string metal;
     std::optional<Real> fraction;
     std::optional<CopperPolygons> polygons;
+    std::string orientation = "planar";
+    std::string role = "metal";
 };
 struct Layer {
     std::string name, kind, material, body;

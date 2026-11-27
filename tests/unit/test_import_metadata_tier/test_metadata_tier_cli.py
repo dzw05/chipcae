@@ -23,12 +23,12 @@ ACTIONS = ("non-physical metadata ignored", "definition expressed by modeled ins
 DEFECT_KEYS = {"defect_id", "tier", "kind", "reason", "dimension", "size", "size_unit",
                "suggestion", "action", "rejection_reason", "material_ambiguous"}
 BASELINE_ID_SHA256 = {
-    "kicad4l": "6b1f9df488a3d289d416138a4440cb10934f8a1c6dfef2d510569f719b470090",
+    "kicad4l": "cc82f9df7da379dbf4191e048111b50446eb981225343ced49af0304ee8da783",
     "definitions": "01d30642e3493fadda567686fff4ea8299ac242ce8cde691c43d2456adf86b23",
 }
 BASELINE_REPORT_SHA256 = {
-    ("kicad4l", False): "df92c5e4380191a39704665318e75943031a8377cbf7afe9449d9be4875e4c4b",
-    ("kicad4l", True): "bef62f152bc82ccefa72f1089f1b80526da999127a25e49d0afd0ca87676f3a9",
+    ("kicad4l", False): "352354eee52ae95f9c0b169bfabf92efdd4f22c11bf4dfdce4cb553a373e65dc",
+    ("kicad4l", True): "992945e6836e0866dbc304932ee6d403e825632c5199efdfa01739d9dcbe36ae",
     ("definitions", False): "e44e2551bb7fec57e4f54a1b9ce6ee471d32e5775d7bd5d319cdcac9f05f5cc0",
     ("definitions", True): "4b31a0728aef9ae0c31446fd88edfe7a85cad7cb11d84ba6793a5261115b79c0",
 }
@@ -37,7 +37,7 @@ ARTIFACT_SHA256 = {
     "board.polyset": "e22082e4d3775aac3e97c01a16552f5948bcd20b154f6a67189e01b0814696aa",
     "import_layers.json": "ac0de18e34ce03a1582683541b251cf31f510618b7ce6adee34a3f27d97e460f",
 }
-FIXTURE_PROMOTIONS = {'Avl': 1, 'AvlHeader': 1, 'AvlItem': 1, 'AvlRef': 1, 'BomHeader': 1, 'BomItem': 1, 'BomRef': 1, 'Certification': 1, 'Characteristics': 1, 'Conductor': 4, 'Datum': 1, 'DictionaryColor': 1, 'DictionaryFillDesc': 1, 'Dielectric': 8, 'Enterprise': 1, 'EntryLineDesc': 1, 'Features': 1, 'FileRevision': 1, 'FunctionMode': 1, 'LayerRef': 13, 'NonstandardAttribute': 1, 'Person': 1, 'PickupPoint': 1, 'PinRef': 12, 'Property': 12, 'RefDes': 1, 'Role': 1, 'SoftwarePackage': 1, 'StepRef': 1, 'Textual': 1}
+FIXTURE_PROMOTIONS = {'DictionaryUser': 1, 'EntryUser': 2, 'PadstackPadDef': 8, 'StandardPrimitiveRef': 2, 'Avl': 1, 'AvlHeader': 1, 'AvlItem': 1, 'AvlRef': 1, 'BomHeader': 1, 'BomItem': 1, 'BomRef': 1, 'Certification': 1, 'Characteristics': 1, 'Conductor': 4, 'Datum': 1, 'DictionaryColor': 1, 'DictionaryFillDesc': 1, 'Dielectric': 8, 'Enterprise': 1, 'EntryLineDesc': 1, 'Features': 1, 'FileRevision': 1, 'FunctionMode': 1, 'LayerRef': 13, 'NonstandardAttribute': 1, 'Person': 1, 'PickupPoint': 1, 'PinRef': 12, 'Property': 25, 'RefDes': 1, 'Role': 1, 'SoftwarePackage': 1, 'StepRef': 2, 'Textual': 1}
 DEFINITIONS_XML = '''<IPC-2581>
 <DictionaryStandard><EntryStandard id="disk"><Circle diameter="1"/></EntryStandard></DictionaryStandard><DictionaryUser><EntryUser id="user"><UserSpecial><Circle diameter="1"/></UserSpecial></EntryUser></DictionaryUser><DictionaryLineDesc><EntryLineDesc id="line"><LineDesc lineWidth="0"/></EntryLineDesc></DictionaryLineDesc>
 <CadHeader units="MILLIMETER"></CadHeader>
@@ -195,7 +195,7 @@ class MetadataTierCLI(unittest.TestCase):
             with self.subTest(accepted=accept):
                 self.assertEqual(process.returncode, 7, process.stderr)
                 self.assertEqual(process.stderr, "IMPORT_REJECTED: unsupported board geometry\n")
-                self.assertEqual(report["tier_counts"]["C"], 3)
+                self.assertEqual(report["tier_counts"]["C"], 1)
                 directory = self.directory / f"kicad4l-{accept}"
                 for name in ARTIFACT_SHA256:
                     self.assertFalse((directory / name).exists())

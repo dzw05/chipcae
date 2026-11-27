@@ -542,7 +542,10 @@ Expected<BodyPieces> prepare_body_pieces(const HexMeshArrays& mesh,
         const auto prefix = body_name(mesh, body) + ": ";
         auto ring = detail::normalize_ring(region->ring);
         if (!ring)
-            return Error{"CUT_UNSUPPORTED", prefix + "degenerate polygon"};
+            return Error{"CUT_UNSUPPORTED",
+                         prefix + (detail::zero_area_nonsimple(region->ring)
+                                       ? "self-intersecting polygon"
+                                       : "degenerate polygon")};
         auto topology = region->ring;
         topology.erase(std::unique(topology.begin(), topology.end()), topology.end());
         while (topology.size() > 1 && topology.front() == topology.back())

@@ -5,13 +5,16 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QDir>
+#include <QDoubleSpinBox>
 #include <QFile>
 #include <QFileInfo>
+#include <QFormLayout>
 #include <QImage>
 #include <QJsonDocument>
 #include <QLabel>
 #include <QLayout>
 #include <QProcess>
+#include <QPushButton>
 #include <QSurfaceFormat>
 #include <QTemporaryDir>
 #include <QVTKOpenGLNativeWidget.h>
@@ -21,6 +24,7 @@
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <vector>
 #include <vtkActor.h>
@@ -2046,6 +2050,591 @@ int obliqueAndTemperatureAcceptance(const QDir& root) {
     }
     return failures;
 }
+// D14j-1: stretch the synthetic model to 5 x 10 x 10 (diagonal 15).
+// Select the displaced point by its original coordinates, independently of VTK point order.
+int prepareAutoWarpageFixture(vtkUnstructuredGrid* grid,
+                              const std::array<double, 3>& displacement) {
+    auto u = grid->GetPointData()->GetArray("U");
+    require(u && u->GetNumberOfComponents() == 3 &&
+                u->GetNumberOfTuples() == grid->GetNumberOfPoints(),
+            "auto scale fixture requires three-component point U");
+    int selected = 0;
+    for (vtkIdType point = 0; point < grid->GetNumberOfPoints(); ++point) {
+        double xyz[3];
+        grid->GetPoint(point, xyz);
+        u->SetTuple3(point, 0, 0, 0);
+        if (xyz[0] == 5 && xyz[1] == 1 && xyz[2] == 1) {
+            u->SetTuple3(point, displacement[0], displacement[1], displacement[2]);
+            ++selected;
+        }
+        grid->GetPoints()->SetPoint(point, xyz[0], 10 * xyz[1], 10 * xyz[2]);
+    }
+    return selected;
+}
+QPushButton* autoWarpageButton(ResultControls& controls) {
+    auto button = controls.findChild<QPushButton*>("autoWarpageScale");
+    require(button, "autoWarpageScale button missing");
+    return button;
+}
+QDoubleSpinBox* warpageScaleSpin(ResultControls& controls) {
+    auto form = qobject_cast<QFormLayout*>(controls.layout());
+    require(form, "result controls form missing");
+    for (int row = 0; row < form->rowCount(); ++row) {
+        auto labelItem = form->itemAt(row, QFormLayout::LabelRole);
+        auto label = labelItem ? qobject_cast<QLabel*>(labelItem->widget()) : nullptr;
+        if (label && label->text() == QStringLiteral("翘曲放大系数")) {
+            auto field = form->itemAt(row, QFormLayout::FieldRole);
+            auto spin = field ? qobject_cast<QDoubleSpinBox*>(field->widget()) : nullptr;
+            require(spin, "warpage scale form field is not a spin box");
+            return spin;
+        }
+    }
+    require(false, "warpage scale form row missing");
+    return nullptr;
+}
+int autoWarpageScaleAcceptance(const QDir& root) {
+    int failures = 0;
+    auto run = [&](const QString& name, auto test) {
+        try {
+            test();
+            std::cout << "PASS D14j-1 " << name.toStdString() << '\n';
+        } catch (const std::exception& e) {
+            ++failures;
+            std::cerr << "FAIL D14j-1 " << name.toStdString() << ": " << e.what() << '\n';
+        }
+    };
+    auto withPackage =
+        [&](
+            auto test,
+            std::array<double, 3> displacement = {0, 0, 0.125},
+            const std::function<void(vtkUnstructuredGrid*)>& mutate = [](vtkUnstructuredGrid*) {},
+            const QJsonArray& summary = {}) {
+            QTemporaryDir temp;
+            int selected = 0;
+            writeSummaryFixture(root, temp, summary, [&](vtkUnstructuredGrid* grid) {
+                selected += prepareAutoWarpageFixture(grid, displacement);
+                mutate(grid);
+            });
+            require(selected == 1,
+                    "auto scale fixture must select original point (5,1,1) exactly once");
+            ResultSession session;
+            require(session.open(temp.path()), qPrintable(session.error()));
+            ResultView view;
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            test(view, session);
+        };
+    auto checkUnavailable = [](ResultView& view, ResultSession& session) {
+        require(view.autoWarpageScale() == 0.0, "unavailable auto scale must be exactly 0");
+        ResultControls controls(view, session);
+        require(autoWarpageButton(controls)->isEnabled() == false,
+                "unavailable auto scale button must be disabled");
+    };
+    run("auto warpage scale from axial displacement", [&] {
+        withPackage([](auto& view, auto&) {
+            require(view.autoWarpageScale() == 7.5, "axial auto scale must be exactly 7.5");
+            require(view.warpageScale() == 1.0, "default scale must remain exactly 1");
+        });
+    });
+    run("auto warpage scale from in-plane displacement", [&] {
+        withPackage(
+            [](auto& view, auto&) {
+                require(view.autoWarpageScale() == 1.5, "in-plane auto scale must be exactly 1.5");
+            },
+            {0.375, 0.5, 0});
+    });
+    run("auto warpage scale ignores current scale", [&] {
+        withPackage([](auto& view, auto&) {
+            view.setWarpageScale(3.0);
+            require(view.warpageScale() == 3.0, "manual scale getter must return exactly 3");
+            require(view.autoWarpageScale() == 7.5, "manual scale changed axial recommendation");
+        });
+    });
+    run("auto warpage scale unavailable: missing U", [&] {
+        withPackage(checkUnavailable, {0, 0, 0.125}, [](auto grid) {
+            grid->GetPointData()->RemoveArray("U");
+        });
+    });
+    run("auto warpage scale unavailable: all-zero U",
+        [&] { withPackage(checkUnavailable, {0, 0, 0}); });
+    run("auto warpage scale unavailable: NaN z displacement",
+        [&] { withPackage(checkUnavailable, {0, 0, std::numeric_limits<double>::quiet_NaN()}); });
+    for (const auto& name : {QString("warpage_pv"), QString("U_mag_max")})
+        for (const auto& method :
+             {QString("not_solved"), QString("not solved: fvm thermal-only stage")})
+            run("auto warpage scale unavailable: " + name + " " + method, [&] {
+                withPackage(checkUnavailable,
+                            {0, 0, 0.125},
+                            [](auto) {},
+                            {QJsonObject{{"step", 0},
+                                         {"name", name},
+                                         {"value", 0.0},
+                                         {"unit", "m"},
+                                         {"method", method}}});
+            });
+    run("auto warpage scale unavailable: unloaded", [&] {
+        ResultSession session;
+        ResultView view;
+        checkUnavailable(view, session);
+    });
+    run("auto warpage scale unavailable: coincident points", [&] {
+        withPackage(checkUnavailable, {0, 0, 0.125}, [](auto grid) {
+            for (vtkIdType point = 0; point < grid->GetNumberOfPoints(); ++point)
+                grid->GetPoints()->SetPoint(point, 2, 3, 4);
+        });
+    });
+    for (int axis = 0; axis < 3; ++axis) {
+        for (bool infinite : {false, true})
+            run(QString("auto warpage scale unavailable: %1 coordinate axis %2")
+                    .arg(infinite ? "Inf" : "NaN")
+                    .arg(axis),
+                [&] {
+                    withPackage(checkUnavailable, {0, 0, 0.125}, [&](auto grid) {
+                        double xyz[3];
+                        grid->GetPoint(0, xyz);
+                        xyz[axis] = infinite ? std::numeric_limits<double>::infinity()
+                                             : std::numeric_limits<double>::quiet_NaN();
+                        grid->GetPoints()->SetPoint(0, xyz);
+                    });
+                });
+        run(QString("auto warpage scale unavailable: Inf displacement axis %1").arg(axis), [&] {
+            std::array<double, 3> displacement{0, 0, 0.125};
+            displacement[axis] = std::numeric_limits<double>::infinity();
+            withPackage(checkUnavailable, displacement);
+        });
+    }
+    run("auto warpage scale ignores display filters", [&] {
+        withPackage([](auto& view, auto& session) {
+            ResultControls controls(view, session);
+            auto check = [&] {
+                require(view.autoWarpageScale() == 7.5,
+                        "display filter changed raw recommendation");
+                require(autoWarpageButton(controls)->isEnabled() == true,
+                        "display filter disabled available auto scale");
+            };
+            view.setLayer(1); // Excludes the displaced point in the third (void) cell.
+            check();
+            view.setBlockVisible("hex", false);
+            check();
+            view.setClip(true, {2.5, 0, 0}, {1, 0, 0});
+            check();
+            view.setShowVoid(true);
+            check();
+            view.setShowVoid(false);
+            check();
+            view.setColorField(ResultColorField::WarpageUz);
+            check();
+        });
+    });
+    run("auto warpage scale button", [&] {
+        withPackage([](auto& view, auto& session) {
+            ResultControls controls(view, session);
+            auto button = autoWarpageButton(controls);
+            require(button->text() == QStringLiteral("自动放大"),
+                    "auto scale button text mismatch");
+            require(button->isEnabled() == true, "axial auto scale button must be enabled");
+            auto spin = warpageScaleSpin(controls);
+            require(spin->value() == 1.0, "controls must retain initial scale 1");
+            for (int click = 0; click < 2; ++click) {
+                button->click();
+                require(spin->value() == 7.5, "auto scale click must set spin to exactly 7.5");
+                require(view.warpageScale() == 7.5,
+                        "auto scale click must set view to exactly 7.5");
+            }
+        });
+    });
+    run("auto warpage scale button after view destruction", [&] {
+        ResultSession session;
+        auto view = std::make_unique<ResultView>();
+        ResultControls controls(*view, session);
+        auto button = autoWarpageButton(controls);
+        auto spin = warpageScaleSpin(controls);
+        spin->setValue(3.0);
+        button->setEnabled(true);
+        view.reset();
+        button->click();
+        near(spin->value(), 3.0);
+    });
+    for (bool failedLoad : {false, true})
+        run(failedLoad ? "auto warpage scale button refresh after failed load"
+                       : "auto warpage scale button refresh after unsolved load",
+            [&] {
+                QTemporaryDir axial, unsolved;
+                int selected = 0;
+                writeSummaryFixture(root, axial, {}, [&](auto grid) {
+                    selected += prepareAutoWarpageFixture(grid, {0, 0, 0.125});
+                });
+                require(selected == 1, "refresh fixture must select original point (5,1,1)");
+                writeSummaryFixture(
+                    root,
+                    unsolved,
+                    {QJsonObject{{"step", 0},
+                                 {"name", "warpage_pv"},
+                                 {"value", 0.0},
+                                 {"method", "not_solved"}}},
+                    [](auto grid) { prepareAutoWarpageFixture(grid, {0, 0, 0.125}); });
+                ResultSession session, unsolvedSession;
+                require(session.open(axial.path()), qPrintable(session.error()));
+                require(unsolvedSession.open(unsolved.path()), qPrintable(unsolvedSession.error()));
+                ResultView view;
+                ResultControls controls(view, session);
+                auto button = autoWarpageButton(controls);
+                require(button->isEnabled() == false,
+                        "pre-load auto scale button must be disabled");
+                require(view.loadStep(session, 0), qPrintable(view.error()));
+                require(button->isEnabled() == true, "displayChanged did not enable auto scale");
+                require(view.autoWarpageScale() == 7.5, "loaded axial recommendation must be 7.5");
+                if (failedLoad)
+                    require(!view.loadStep(session, 999), "missing step unexpectedly loaded");
+                else
+                    require(view.loadStep(unsolvedSession, 0), qPrintable(view.error()));
+                require(button->isEnabled() == false, "displayChanged did not disable auto scale");
+                require(view.autoWarpageScale() == 0.0,
+                        "unavailable reload retained recommendation");
+            });
+    return failures;
+}
+// D14k-1 exercises viewport props and Qt summary text against literal acceptance values.
+int warpageOverlayAcceptance(const QDir& root) {
+    int failures = 0;
+    QString context;
+    auto run = [&](const char* name, auto test) {
+        const auto before = failures;
+        context.clear();
+        auto check = [&](bool ok, const char* message) {
+            if (!ok) {
+                ++failures;
+                std::cerr << "FAIL D14k-1 " << name << " [" << context.toStdString()
+                          << "]: " << message << '\n';
+            }
+        };
+        try {
+            test(check);
+        } catch (const std::exception& e) {
+            check(false, e.what());
+        }
+        if (before == failures)
+            std::cout << "PASS D14k-1 " << name << '\n';
+    };
+    auto scaleActorCount = [](ResultView& view) {
+        int count = 0;
+        auto props = view.renderWindow()->GetRenderers()->GetFirstRenderer()->GetViewProps();
+        props->InitTraversal();
+        while (auto prop = props->GetNextProp())
+            if (auto text = vtkTextActor::SafeDownCast(prop))
+                if (QString::fromUtf8(text->GetInput()).startsWith("Warpage scale x"))
+                    ++count;
+        return count;
+    };
+    auto checkOverlay = [&](auto check, ResultView& view, const QString& expected) {
+        check(view.warpageScaleText() == expected, "warpageScaleText differs from literal");
+        const auto actors = matchingTextActors(view, expected, false);
+        check(actors.size() == 1, "expected exactly one scale actor, including hidden props");
+        check(scaleActorCount(view) == 1, "stale or duplicate scale actor in renderer");
+        if (actors.size() == 1) {
+            auto actor = actors.front();
+            check(QString::fromUtf8(actor->GetInput()) == expected, "scale actor input differs");
+            check(actor->GetVisibility() == 1, "scale actor must be visible");
+            check(actor->GetPositionCoordinate()->GetCoordinateSystem() == VTK_NORMALIZED_VIEWPORT,
+                  "scale position must use normalized viewport coordinates");
+            const auto position = actor->GetPositionCoordinate()->GetValue();
+            near(position[0], 0.02);
+            near(position[1], 0.92);
+            check(actor->GetTextProperty()->GetFontSize() == 18, "scale font size must be 18");
+            check(actor->GetPickable() == 0, "scale actor must not intercept picking");
+        }
+    };
+    auto checkNoOverlay = [&](auto check, ResultView& view) {
+        check(view.warpageScaleText().isEmpty(), "unavailable scale text must be empty");
+        check(matchingTextActors(view, "Warpage scale x10", false).size() == 0,
+              "unavailable scale actor must be removed, including hidden props");
+        check(scaleActorCount(view) == 0, "unexpected scale prefix actor");
+    };
+    run("warpage scale overlay hidden at unit scale", [&](auto check) {
+        ResultSession session;
+        require(session.open(root.filePath("viewer_mixed")), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        check(view.warpageScaleText().isEmpty(), "default scale text must be empty");
+        check(scaleActorCount(view) == 0, "default scale must not add any scale text prop");
+    });
+    run("warpage scale overlay text", [&](auto check) {
+        ResultSession session;
+        require(session.open(root.filePath("viewer_mixed")), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        struct ScaleCase {
+            double scale;
+            QString expected;
+        };
+        const std::array cases = {ScaleCase{7.5, "Warpage scale x7.5"},
+                                  ScaleCase{1000, "Warpage scale x1000"},
+                                  ScaleCase{0, "Warpage scale x0"},
+                                  ScaleCase{-2, "Warpage scale x-2"}};
+        for (const auto& item : cases) {
+            context = item.expected;
+            view.setWarpageScale(item.scale);
+            checkOverlay(check, view, item.expected);
+            view.setWarpageScale(item.scale);
+            checkOverlay(check, view, item.expected);
+        }
+        context = "back to unit scale";
+        view.setWarpageScale(1.0);
+        checkNoOverlay(check, view);
+    });
+    run("warpage scale overlay follows auto scale", [&](auto check) {
+        QTemporaryDir temp;
+        int selected = 0;
+        writeSummaryFixture(
+            root,
+            temp,
+            {QJsonObject{{"step", 0}, {"name", "U_mag_max"}, {"value", 0.125}, {"unit", "m"}}},
+            [&](auto grid) { selected += prepareAutoWarpageFixture(grid, {0, 0, 0.125}); });
+        require(selected == 1, "axial fixture must select original point (5,1,1) exactly once");
+        ResultSession session;
+        require(session.open(temp.path()), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        ResultControls controls(view, session);
+        require(autoWarpageButton(controls)->isEnabled(), "axial auto scale button disabled");
+        autoWarpageButton(controls)->click();
+        checkOverlay(check, view, "Warpage scale x7.5");
+    });
+    run("warpage scale overlay without numeric mechanics summary", [&](auto check) {
+        struct SummaryCase {
+            QString name;
+            QJsonArray summary;
+        };
+        const std::array cases = {
+            SummaryCase{"empty mechanics summary with PointData U", {}},
+            SummaryCase{
+                "other-step mechanics summary with PointData U",
+                {QJsonObject{
+                    {"step", 1}, {"name", "warpage_pv"}, {"value", 1.25e-06}, {"unit", "m"}}}},
+            SummaryCase{"nonnumeric mechanics summary with PointData U",
+                        {QJsonObject{{"step", 0},
+                                     {"name", "warpage_pv"},
+                                     {"value", "unavailable"},
+                                     {"unit", "m"}}}}};
+        for (const auto& item : cases) {
+            context = item.name;
+            QTemporaryDir temp;
+            writeSummaryFixture(root, temp, item.summary, [](auto grid) {
+                require(grid->GetPointData()->GetArray("U"),
+                        "summary fixture must retain PointData U");
+            });
+            ResultSession session;
+            require(session.open(temp.path()), qPrintable(session.error()));
+            ResultView view;
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            view.setWarpageScale(10);
+            checkOverlay(check, view, "Warpage scale x10");
+        }
+    });
+    run("warpage scale overlay hidden when unavailable", [&](auto check) {
+        ResultView empty;
+        context = "not loaded";
+        empty.setWarpageScale(10);
+        checkNoOverlay(check, empty);
+        const QJsonObject solved{
+            {"step", 0}, {"name", "warpage_pv"}, {"value", 1.25e-06}, {"unit", "m"}};
+        struct UnavailableCase {
+            QString name;
+            QJsonArray summary;
+            bool noU = false;
+        };
+        const std::array cases = {
+            UnavailableCase{"no PointData U", {solved}, true},
+            UnavailableCase{
+                "warpage_pv not_solved",
+                {QJsonObject{
+                    {"step", 0}, {"name", "warpage_pv"}, {"value", 0}, {"method", "not_solved"}}}},
+            UnavailableCase{
+                "U_mag_max not_solved with solved warpage_pv",
+                {solved,
+                 QJsonObject{
+                     {"step", 0}, {"name", "U_mag_max"}, {"value", 0}, {"method", "not_solved"}}}}};
+        for (const auto& item : cases) {
+            context = item.name;
+            QTemporaryDir temp;
+            writeSummaryFixture(root, temp, item.summary, [&](auto grid) {
+                if (item.noU)
+                    grid->GetPointData()->RemoveArray("U");
+                else
+                    require(grid->GetPointData()->GetArray("U"),
+                            "unavailable summary fixture must retain PointData U");
+            });
+            ResultSession session;
+            require(session.open(temp.path()), qPrintable(session.error()));
+            ResultView view;
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            view.setWarpageScale(10);
+            checkNoOverlay(check, view);
+        }
+        context = "failed load clears previously visible overlay";
+        ResultSession session;
+        require(session.open(root.filePath("viewer_mixed")), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        view.setWarpageScale(10);
+        checkOverlay(check, view, "Warpage scale x10");
+        require(!view.loadStep(session, 999), "nonexistent step must fail to load");
+        checkNoOverlay(check, view);
+        view.setWarpageScale(10);
+        checkNoOverlay(check, view);
+    });
+    run("warpage scale overlay in capture scene", [&](auto check) {
+        ResultSession session;
+        require(session.open(root.filePath("viewer_mixed")), qPrintable(session.error()));
+        ResultView view;
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        view.setWarpageScale(7.5);
+        context = "before capture";
+        checkOverlay(check, view, "Warpage scale x7.5");
+        QTemporaryDir temp;
+        require(temp.isValid(), "capture temporary directory");
+        check(view.capture(temp.filePath("scale.png")) == true, "scale capture must succeed");
+        context = "after capture";
+        checkOverlay(check, view, "Warpage scale x7.5");
+    });
+    run("warpage micrometer text", [&](auto check) {
+        const QJsonObject first{
+            {"step", 0}, {"name", "warpage_pv"}, {"value", 1.25e-06}, {"unit", "m"}};
+        auto second = first;
+        second["value"] = 3.21e-05;
+        auto zero = first;
+        zero["value"] = 0;
+        auto mm = first;
+        mm["unit"] = "mm";
+        auto upper = first;
+        upper["unit"] = "M";
+        auto missingUnit = first;
+        missingUnit.remove("unit");
+        auto unsolved = first;
+        unsolved["method"] = "not_solved";
+        auto wrongStep = second;
+        wrongStep["step"] = 1;
+        auto nonnumeric = first;
+        nonnumeric["value"] = "1.25e-06";
+        auto wrongName = second;
+        wrongName["name"] = "U_mag_max";
+        struct MicrometerCase {
+            QString name;
+            QJsonArray summary;
+            QString expected;
+        };
+        const std::vector<MicrometerCase> cases = {
+            {"1.25e-06 m", {first}, QStringLiteral("翘曲 PV = 1.250 µm")},
+            {"3.21e-05 m", {second}, QStringLiteral("翘曲 PV = 32.100 µm")},
+            {"zero m", {zero}, QStringLiteral("翘曲 PV = 0.000 µm")},
+            {"mm", {mm}, {}},
+            {"uppercase M", {upper}, {}},
+            {"missing unit", {missingUnit}, {}},
+            {"absent entry", {}, {}},
+            {"not_solved", {unsolved}, {}},
+            {"wrong step only", {wrongStep}, {}},
+            {"nonnumeric only", {nonnumeric}, {}},
+            {"wrong name only", {wrongName}, {}},
+            {"skip nonmatching entries",
+             {wrongStep, nonnumeric, wrongName, first},
+             QStringLiteral("翘曲 PV = 1.250 µm")},
+            {"first numeric duplicate wins", {first, second}, QStringLiteral("翘曲 PV = 1.250 µm")},
+            {"do not skip first duplicate in mm", {mm, first}, {}},
+            {"do not skip first duplicate without unit", {missingUnit, first}, {}}};
+        for (const auto& item : cases) {
+            context = item.name;
+            QTemporaryDir temp;
+            writeSummaryFixture(root, temp, item.summary);
+            ResultSession session;
+            require(session.open(temp.path()), qPrintable(session.error()));
+            ResultView view;
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            check(view.warpageMicrometerText() == item.expected,
+                  "micrometer text differs from hand-converted literal");
+            if (item.name == "1.25e-06 m") {
+                require(!view.loadStep(session, 999), "missing micrometer step must fail");
+                check(view.warpageMicrometerText().isEmpty(),
+                      "failed load retained micrometer text");
+            }
+        }
+        ResultView empty;
+        context = "not loaded";
+        check(empty.warpageMicrometerText().isEmpty(), "unloaded micrometer text must be empty");
+    });
+    run("summary label appends micrometer line", [&](auto check) {
+        auto checkLabel = [&](ResultControls& controls, ResultView& view, const QString& expected) {
+            QLabel* summaryLabel = nullptr;
+            for (auto label : controls.findChildren<QLabel*>())
+                if (label->text().startsWith(view.tmaxText() + "\n")) {
+                    require(!summaryLabel, "multiple summary labels");
+                    summaryLabel = label;
+                }
+            require(summaryLabel, "summary label missing");
+            const auto lines = summaryLabel->text().split('\n');
+            check(lines.size() == (expected.isEmpty() ? 4 : 5),
+                  "summary must have exactly 4 or 5 lines");
+            require(lines.size() >= 4, "original four summary lines missing");
+            const auto range = view.colorRange();
+            const auto field = range.valid ? QString("%1: min=%2 max=%3")
+                                                 .arg(view.colorBarTitle())
+                                                 .arg(range.min, 0, 'g', 16)
+                                                 .arg(range.max, 0, 'g', 16)
+                                           : QStringLiteral("无温度场");
+            check(lines[0] == view.tmaxText(), "first summary line changed");
+            check(lines[1] == field, "second summary line changed");
+            check(lines[2] == view.summary("warpage_pv"), "third summary line changed");
+            check(lines[3] == view.summary("U_mag_max"), "fourth summary line changed");
+            check(view.warpageMicrometerText() == expected, "summary micrometer accessor differs");
+            if (lines.size() == 5) {
+                check(lines[4] == expected,
+                      "fifth summary line differs from hand-converted literal");
+                check(lines[4] == view.warpageMicrometerText(),
+                      "fifth summary line differs from accessor");
+            }
+            if (range.valid)
+                checkSummaryLabel(controls, view);
+        };
+        QTemporaryDir temp, absent;
+        writeSummaryFixture(
+            root,
+            temp,
+            {QJsonObject{{"step", 0}, {"name", "warpage_pv"}, {"value", 1.25e-06}, {"unit", "m"}},
+             QJsonObject{{"step", 1}, {"name", "warpage_pv"}, {"value", 3.21e-05}, {"unit", "m"}}});
+        // Both steps share synthetic geometry; summary values are independently specified above.
+        QFile manifest(temp.filePath("manifest.json"));
+        require(manifest.open(QIODevice::ReadOnly), "two-step manifest read");
+        auto object = QJsonDocument::fromJson(manifest.readAll()).object();
+        manifest.close();
+        auto steps = object["steps"].toArray();
+        steps.append(QJsonObject{{"n", 1}, {"time", 1}, {"file", "step.vtkhdf"}});
+        object["steps"] = steps;
+        require(manifest.open(QIODevice::WriteOnly | QIODevice::Truncate),
+                "two-step manifest write");
+        const auto bytes = QJsonDocument(object).toJson();
+        require(manifest.write(bytes) == bytes.size(), "two-step manifest write incomplete");
+        manifest.close();
+        writeSummaryFixture(root, absent, {});
+        ResultSession session, absentSession;
+        require(session.open(temp.path()), qPrintable(session.error()));
+        require(absentSession.open(absent.path()), qPrintable(absentSession.error()));
+        ResultView view;
+        ResultControls controls(view, session);
+        context = "before loading";
+        checkLabel(controls, view, {});
+        require(view.loadStep(session, 0), qPrintable(view.error()));
+        context = "loaded step 0";
+        checkLabel(controls, view, QStringLiteral("翘曲 PV = 1.250 µm"));
+        context = "changed to step 1";
+        require(view.loadStep(session, 1), qPrintable(view.error()));
+        checkLabel(controls, view, QStringLiteral("翘曲 PV = 32.100 µm"));
+        context = "failed load";
+        require(!view.loadStep(session, 999), "nonexistent summary step must fail");
+        checkLabel(controls, view, {});
+        context = "no warpage_pv entry";
+        require(view.loadStep(absentSession, 0), qPrintable(view.error()));
+        checkLabel(controls, view, {});
+    });
+    return failures;
+}
 int acceptance(const QDir& root) {
     int failures = 0;
     auto run = [&](const char* name, auto test) {
@@ -3121,5 +3710,7 @@ int main(int argc, char** argv) {
     failures += methodSummaryAcceptance(root);
     failures += acceptance(root);
     failures += obliqueAndTemperatureAcceptance(root);
+    failures += autoWarpageScaleAcceptance(root);
+    failures += warpageOverlayAcceptance(root);
     return failures ? 1 : 0;
 }

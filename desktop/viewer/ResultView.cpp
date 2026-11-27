@@ -70,6 +70,12 @@ QString mechMethod(const QJsonArray& summary, const QString& name, qint64 step) 
     }
     return {};
 }
+bool mechanicsNotSolved(const QString& warpageMethod, const QString& umagMethod) {
+    auto isNotSolved = [](const QString& method) {
+        return method == "not_solved" || method == "not solved: fvm thermal-only stage";
+    };
+    return isNotSolved(warpageMethod) || isNotSolved(umagMethod);
+}
 QString canonical(QString n) {
     if (n == "cut_poly")
         return "cut";
@@ -256,6 +262,7 @@ struct ResultView::State {
     vtkSmartPointer<vtkActor> boundaries;
     vtkSmartPointer<vtkTextActor> overlay = vtkSmartPointer<vtkTextActor>::New();
     vtkSmartPointer<vtkTextActor> fvmNotice = vtkSmartPointer<vtkTextActor>::New();
+    vtkSmartPointer<vtkTextActor> warpageScaleOverlay = vtkSmartPointer<vtkTextActor>::New();
     double scale = 1;
     int layer = 0;
     bool showVoid = false, clip = false;
@@ -294,6 +301,10 @@ ResultView::ResultView(QWidget* parent) : QWidget(parent), d(std::make_unique<St
     d->fvmNotice->SetPosition(0.02, 0.02);
     d->fvmNotice->GetTextProperty()->SetFontSize(18);
     d->fvmNotice->PickableOff();
+    d->warpageScaleOverlay->GetPositionCoordinate()->SetCoordinateSystemToNormalizedViewport();
+    d->warpageScaleOverlay->SetPosition(0.02, 0.92);
+    d->warpageScaleOverlay->GetTextProperty()->SetFontSize(18);
+    d->warpageScaleOverlay->PickableOff();
     widget->setRenderWindow(d->window);
     d->window->AddRenderer(d->renderer);
     d->renderer->SetBackground(0.12, 0.14, 0.18);
@@ -316,6 +327,7 @@ bool ResultView::loadStep(ResultSession& session, qint64 step) {
         d->blocks.clear();
         d->renderer->RemoveAllViewProps();
         d->fvmNotice->VisibilityOff();
+        d->warpageScaleOverlay->VisibilityOff();
         d->boundaries = nullptr;
         d->boundarySetupMs = 0;
         d->range = {};
@@ -534,6 +546,92 @@ void ResultView::setWarpageScale(double v) {
     d->scale = v;
     rebuild();
 }
+double ResultView::warpageScale() const {
+    return d->scale;
+}
+QString ResultView::warpageScaleText() const {
+    if (!d->loaded || d->scale == 1.0)
+        return {};
+    const auto summary = d->session->summary();
+    if (mechanicsNotSolved(mechMethod(summary, "warpage_pv", d->step),
+                           mechMethod(summary, "U_mag_max", d->step)))
+        return {};
+    for (const auto& block : d->blocks)
+        if (block.raw->GetPointData()->GetArray("U"))
+            return "Warpage scale x" + QString::number(d->scale, 'g', 6);
+    return {};
+}
+QString ResultView::warpageMicrometerText() const {
+    if (!d->loaded)
+        return {};
+    const auto summary = d->session->summary();
+    if (mechanicsNotSolved(mechMethod(summary, "warpage_pv", d->step),
+                           mechMethod(summary, "U_mag_max", d->step)))
+        return {};
+    for (const auto value : summary) {
+        const auto entry = value.toObject();
+        if (entry["name"] == "warpage_pv" && entry["step"].toInteger(-1) == d->step &&
+            entry["value"].isDouble()) {
+            if (entry["unit"] != "m")
+                return {};
+            return QStringLiteral("翘曲 PV = %1 µm")
+                .arg(entry["value"].toDouble() * 1e6, 0, 'f', 3);
+        }
+    }
+    return {};
+}
+double ResultView::autoWarpageScale() const {
+    if (!d->loaded)
+        return 0.0;
+    const auto summary = d->session->summary();
+    if (mechanicsNotSolved(mechMethod(summary, "warpage_pv", d->step),
+                           mechMethod(summary, "U_mag_max", d->step)))
+        return 0.0;
+
+    const double infinity = std::numeric_limits<double>::infinity();
+    std::array<double, 3> minimum{infinity, infinity, infinity};
+    std::array<double, 3> maximum{-infinity, -infinity, -infinity};
+    bool hasPoints = false;
+    double umax = 0.0;
+    for (const auto& block : d->blocks) {
+        auto raw = block.raw;
+        const auto count = raw->GetNumberOfPoints();
+        auto u = raw->GetPointData()->GetArray("U");
+        if (u && (u->GetNumberOfComponents() != 3 || u->GetNumberOfTuples() != count))
+            return 0.0;
+        for (vtkIdType point = 0; point < count; ++point) {
+            double xyz[3];
+            raw->GetPoint(point, xyz);
+            for (int axis = 0; axis < 3; ++axis) {
+                if (!std::isfinite(xyz[axis]))
+                    return 0.0;
+                minimum[axis] = std::min(minimum[axis], xyz[axis]);
+                maximum[axis] = std::max(maximum[axis], xyz[axis]);
+            }
+            hasPoints = true;
+            if (u) {
+                double displacement[3];
+                u->GetTuple(point, displacement);
+                for (double component : displacement)
+                    if (!std::isfinite(component))
+                        return 0.0;
+                const double norm =
+                    std::hypot(std::hypot(displacement[0], displacement[1]), displacement[2]);
+                if (!std::isfinite(norm))
+                    return 0.0;
+                umax = std::max(umax, norm);
+            }
+        }
+    }
+    if (!hasPoints || umax == 0.0)
+        return 0.0;
+    const double diagonal = std::hypot(std::hypot(maximum[0] - minimum[0], maximum[1] - minimum[1]),
+                                       maximum[2] - minimum[2]);
+    if (!std::isfinite(diagonal) || diagonal == 0.0)
+        return 0.0;
+    const double scale = (diagonal / 16.0) / umax;
+    return std::isfinite(scale) ? scale : 0.0;
+}
 void ResultView::setLayer(int v) {
     d->layer = v;
     rebuild();
@@ -569,6 +667,7 @@ void ResultView::rebuild() {
     d->error.clear();
     d->renderer->RemoveAllViewProps();
     d->fvmNotice->VisibilityOff();
+    d->warpageScaleOverlay->VisibilityOff();
     d->boundaries = nullptr;
     d->boundarySetupMs = 0;
     d->fieldStatusLabel->clear();
@@ -576,6 +675,12 @@ void ResultView::rebuild() {
     d->range = {};
     if (!d->watermark.isEmpty())
         d->renderer->AddViewProp(d->overlay);
+    const auto scaleText = warpageScaleText();
+    if (!scaleText.isEmpty()) {
+        d->warpageScaleOverlay->SetInput(scaleText.toUtf8().constData());
+        d->warpageScaleOverlay->VisibilityOn();
+        d->renderer->AddViewProp(d->warpageScaleOverlay);
+    }
     if (d->clip && vtkMath::Norm(d->normal.data()) == 0) {
         d->error = "Clip normal must be nonzero";
         emit displayChanged();
@@ -586,10 +691,7 @@ void ResultView::rebuild() {
         const auto summary = d->session->summary();
         const auto warpageMethod = mechMethod(summary, "warpage_pv", d->step);
         const auto umagMethod = mechMethod(summary, "U_mag_max", d->step);
-        auto isNotSolved = [](const QString& method) {
-            return method == "not_solved" || method == "not solved: fvm thermal-only stage";
-        };
-        notSolved = isNotSolved(warpageMethod) || isNotSolved(umagMethod);
+        notSolved = mechanicsNotSolved(warpageMethod, umagMethod);
         fvmElastic =
             !notSolved && (warpageMethod == "fvm_cell_centers_lsq" ||
                            warpageMethod == "FVM top-face centroids; least-squares plane removal" ||

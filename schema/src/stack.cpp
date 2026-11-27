@@ -124,6 +124,10 @@ Expected<StackModel> load_stack(const std::filesystem::path& file,
                 const auto& c = l.at("copper");
                 CopperSpec copper;
                 copper.metal = c.at("metal").as<std::string>();
+                if (c.contains("orientation"))
+                    copper.orientation = c.at("orientation").as<std::string>();
+                if (c.contains("role"))
+                    copper.role = c.at("role").as<std::string>();
                 if (c.contains("fraction"))
                     copper.fraction = c.at("fraction").as<Real>();
                 if (c.contains("polygons")) {

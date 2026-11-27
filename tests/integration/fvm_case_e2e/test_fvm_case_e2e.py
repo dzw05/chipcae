@@ -531,7 +531,7 @@ class CaseAcceptance(unittest.TestCase):
                     self.assertEqual(got['family'], 'fvm')
                     self.assertTrue(got['thermal'])
                     self.assertEqual(got['linear']['preconditioner'],
-                                     'gamg' if mode == 'gamg' else 'jacobi')
+                                     'jacobi' if mode == 'jacobi' else 'gamg')
         # Both accepted preconditioners must reach and complete the numerical backend.
         for pc in ('jacobi', 'gamg'):
             with self.subTest(solve_preconditioner=pc):

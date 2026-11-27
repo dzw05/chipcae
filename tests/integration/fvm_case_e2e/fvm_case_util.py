@@ -95,6 +95,10 @@ def build_adapter_probe(root, source, contract=None):
         flag = option[0]
         if flag == '-o' or (len(option) == 1 and flag.endswith(('.o', '.obj'))):
             continue
+        if flag.startswith('-Wl,--dependency-file='):
+            # CMake generates a fresh linker depfile for each probe target.
+            # The CLI's relative output path belongs to its original build tree.
+            continue
         # These controls must stay between their libraries. LINK_OPTIONS would
         # move them ahead of every archive and change the meaning of the link.
         if (flag in linker_controls or

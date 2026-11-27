@@ -1,6 +1,7 @@
 #include "run_dir.hpp"
 
 #include "chipcae/jobmgr/local_paths.hpp"
+#include "sha256_stream.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -37,23 +38,24 @@ void snapshot(const std::filesystem::path& source,
               Json& hashes,
               std::set<std::filesystem::path>& visited,
               const std::string& expected) {
-    const auto raw = read_file(source);
-    const auto hash = sha256_hex(raw);
     auto lowercase = expected;
     std::transform(lowercase.begin(), lowercase.end(), lowercase.begin(), [](unsigned char c) {
         return static_cast<char>(std::tolower(c));
     });
-    if (!expected.empty() && hash != lowercase)
-        throw std::runtime_error("INPUT_HASH_MISMATCH");
     const auto destination = target.lexically_normal();
-    if (!visited.insert(destination).second)
+    if (visited.contains(destination)) {
+        stream_copy_hash(source, {}, lowercase);
         return;
-    write_file_atomic(destination, raw);
-    hashes[destination.string()] = hash;
+    }
+    const auto streamed = stream_copy_hash(source, destination, lowercase);
+    visited.insert(destination);
+    hashes[destination.string()] = streamed.sha256;
+    if (!streamed.json_candidate)
+        return;
     // Non-JSON assets are copied verbatim. Parse failures are not case-validation failures here.
     Json value;
     try {
-        value = Json::parse(raw);
+        value = Json::parse(read_file(destination));
     } catch (const jsoncons::ser_error&) {
         return;
     }
