@@ -166,6 +166,14 @@ class CLITests(unittest.TestCase):
             for value in ("nan", "inf"):
                 self.invoke(self.replace_value(self.point_args, option, value), 2, "Q2REF_NONFINITE")
 
+    def test_point_numeric_finiteness_precedes_all_range_checks(self):
+        for option, value in (("--bbox", "1"), ("--nx", "0"), ("--ny", "-1")):
+            for nonfinite in ("nan", "inf"):
+                with self.subTest(option=option, nonfinite=nonfinite):
+                    args = self.replace_value(self.point_args, option, value)
+                    args = self.replace_value(args, "--z-top", nonfinite)
+                    self.invoke(args, 2, "Q2REF_NONFINITE")
+
 
 if __name__ == "__main__":
     unittest.main(argv=[sys.argv[0]])
