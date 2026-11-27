@@ -13,6 +13,8 @@ import sys
 import tempfile
 import unittest
 
+from preview_event_stream import EventStreamError, check_serial_stdout, read_events, stdout_mixed
+
 import h5py
 import numpy as np
 
@@ -106,8 +108,10 @@ class PreviewCopperArea(unittest.TestCase):
 
     def invoke(self, name, source, nx=4, ny=4, launcher=(), unpadded=False, flags=()):
         stem = self.root / name
+        event_path = self.root / f'events-{name}.jsonl'
         command = [*launcher, str(self.preview), str(source), '-o', str(stem),
-                   '--nx', str(nx), '--ny', str(ny), '--levels', '1', *flags]
+                   '--nx', str(nx), '--ny', str(ny), '--levels', '1',
+                   '--events-file', str(event_path), *flags]
         try:
             result = subprocess.run(command, capture_output=True, text=True,
                                     env=self.env, timeout=8)
@@ -117,11 +121,15 @@ class PreviewCopperArea(unittest.TestCase):
         context = diagnostics(result)
         self.assertEqual(result.returncode, 0, context)
         try:
-            lines = [line for line in result.stdout.splitlines() if line.strip()]
-            events = [json.loads(line) for line in lines]
-            pairs = [json.loads(line, object_pairs_hook=list) for line in lines]
-        except json.JSONDecodeError as error:
-            self.fail(f'invalid stdout JSON: {error}{context}')
+            events = read_events(event_path)
+            pairs = read_events(event_path, object_pairs_hook=list)
+            if launcher:
+                if stdout_mixed(result.stdout, event_path):
+                    print(f'PREVIEW_STDOUT_MIXED: {self.id()}', file=sys.stderr)
+            else:
+                check_serial_stdout(result.stdout, event_path)
+        except EventStreamError as error:
+            self.fail(f'invalid events-file JSON: {error}{context}')
         found = [event for event in events if event.get('stage') == 'success']
         ordered = [event for event in pairs if ('stage', 'success') in event]
         self.assertEqual(len(found), 1, context)
@@ -441,13 +449,19 @@ endif()
             data.extend(struct.pack('<2q', *point))
         sidecar.write_bytes(data)
         stem = self.root / 'missing-layer'
+        event_path = self.root / 'events-missing-layer.jsonl'
         command = [str(self.preview), str(source), '--polyset', str(sidecar),
-                   '--nx', '4', '--ny', '4', '--levels', '1', '-o', str(stem)]
+                   '--nx', '4', '--ny', '4', '--levels', '1', '-o', str(stem),
+                   '--events-file', str(event_path)]
         result = subprocess.run(command, capture_output=True, text=True,
                                 env=self.env, timeout=8)
         context = diagnostics(result)
         self.assertGreater(result.returncode, 0, context)
-        events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+        try:
+            events = read_events(event_path)
+            check_serial_stdout(result.stdout, event_path)
+        except EventStreamError as error:
+            self.fail(f'invalid events-file JSON: {error}{context}')
         self.assertEqual([event['stage'] for event in events], ['load', 'mesh', 'error'], context)
         self.assertIn('polyset does not contain layer F.Cu', events[-1]['message'], context)
         self.assertFalse(list(self.root.glob('missing-layer*')), context)

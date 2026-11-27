@@ -14,6 +14,8 @@ import tempfile
 import time
 import unittest
 
+from preview_event_stream import EventStreamError, check_serial_stdout, read_events, stdout_mixed
+
 import h5py
 import numpy as np
 
@@ -99,9 +101,10 @@ class PreviewOutlineNonconvex(unittest.TestCase):
         source = self.root / f'{name}.json'
         source.write_text(json.dumps(stack), encoding='utf-8')
         stem = self.root / name
+        event_path = self.root / f'events-{name}.jsonl'
         command = [*launcher, str(self.preview), *prefix_flags, str(source), '--nx', str(n),
                    '--ny', str(n), '--levels', '1', '--max-ratio', '10',
-                   '-o', str(stem), *flags]
+                   '-o', str(stem), '--events-file', str(event_path), *flags]
         env = dict(os.environ, OMPI_ALLOW_RUN_AS_ROOT='1',
                    OMPI_ALLOW_RUN_AS_ROOT_CONFIRM='1')
         start = time.perf_counter()
@@ -120,9 +123,14 @@ class PreviewOutlineNonconvex(unittest.TestCase):
         if result.returncode == 0:
             self.timings[name] = elapsed
         try:
-            events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
-        except json.JSONDecodeError as error:
-            self.fail(f'invalid stdout JSON: {error}{diagnostics(result)}')
+            events = read_events(event_path)
+            if launcher:
+                if stdout_mixed(result.stdout, event_path):
+                    print(f'PREVIEW_STDOUT_MIXED: {self.id()}', file=sys.stderr)
+            else:
+                check_serial_stdout(result.stdout, event_path)
+        except EventStreamError as error:
+            self.fail(f'invalid events-file JSON: {error}{diagnostics(result)}')
         return result, events, stem
 
     def success(self, result, events):

@@ -5,7 +5,12 @@ import json
 from pathlib import Path
 import struct
 import subprocess
+import sys
 import tempfile
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'unit' / 'region_ls'))
+from preview_event_stream import EventStreamError, check_serial_stdout, read_events, stdout_mixed
 
 
 def golden(nx):
@@ -25,12 +30,22 @@ def golden(nx):
 
 
 def run(preview, stack, output, nx, launcher):
+    event_path = output.parent / f'events-{output.name}.jsonl'
     result = subprocess.run(
         [*launcher, preview, str(stack), '--nx', str(nx), '--ny', '1',
-         '--levels', '1', '-o', str(output)],
+         '--levels', '1', '-o', str(output), '--events-file', str(event_path)],
         check=False, capture_output=True, text=True, timeout=90)
     assert result.returncode == 0, (result.args, result.stdout, result.stderr)
-    events = [json.loads(line) for line in result.stdout.splitlines()]
+    try:
+        events = read_events(event_path)
+        if launcher:
+            if stdout_mixed(result.stdout, event_path):
+                print(f'PREVIEW_STDOUT_MIXED: mesh_digest np={launcher[2]}', file=sys.stderr)
+        else:
+            check_serial_stdout(result.stdout, event_path)
+    except EventStreamError as error:
+        raise AssertionError(f'invalid events-file JSON: {error}'
+                             f'\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}') from error
     success = [event for event in events if event['stage'] == 'success']
     assert len(success) == 1, events
     summary = success[0]
