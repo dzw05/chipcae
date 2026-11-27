@@ -154,8 +154,11 @@ def compare_mesh_to_oracle(vtkhdf_path, polygon, nx, ny, kz):
         # Catch missing/duplicated cells even if aggregate counts happen to agree.
         keys = set(zip(ij[mask, 0], ij[mask, 1], z_indices))
         wanted = {(i, j, k) for (i, j), value in oracle.items() if value > 0 for k in range(kz)}
-        check('count', f'layer {lid} occupied grid cells', (len(keys), len(keys - wanted)),
-              (len(wanted), 0), keys == wanted and len(keys) == n)
+        check('count', f'layer {lid} unique grid cells', len(keys), n, len(keys) == n)
+        # A moved boundary can change support while preserving every cell count.
+        # Support mismatches concern the spatial fraction field, not its count.
+        check('volfrac', f'layer {lid} occupied grid cells', (len(keys), len(keys - wanted)),
+              (len(wanted), 0), keys == wanted)
     if failures:
         raise AssertionError('\n'.join(failures))
     return count, actual_cut, max_error, relative_volume
