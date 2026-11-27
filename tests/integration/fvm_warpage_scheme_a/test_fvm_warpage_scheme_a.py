@@ -370,6 +370,13 @@ class Acceptance(unittest.TestCase):
         self.assertEqual(self.api.fem_reference_self_convergence(list(reversed(data))),
                          self.api.fem_reference_self_convergence(data))
 
+    def test_reference_missing_kz2_thickness_tier_returns_failed_result(self):
+        data = [tier for tier in tiers()
+                if (tier["nx"], tier["ny"], tier["kz"]) != (12, 4, 2)]
+        result = self.api.fem_reference_self_convergence(data)
+        self.reason(result, "missing FEM tier (12, 4, 2)")
+        self.assertEqual(result["reference"], {})
+
     def reference_invalid(self, change):
         data = tiers()
         change(data)

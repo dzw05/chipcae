@@ -289,7 +289,7 @@ def fem_reference_self_convergence(tiers) -> dict:
                 values[fvm] = _number(pv, "same_point_pv", positive=True)
             keys.update(values)
             indexed[key] = (nodal, values)
-        required = [(12, 4, 4), *((nx, ny, 2) for nx, ny in _REFERENCE_XY)]
+        required = [(12, 4, 2), (12, 4, 4), *((nx, ny, 2) for nx, ny in _REFERENCE_XY[1:])]
         for key in required:
             _require(key in indexed, f"missing FEM tier {key}")
             _require(set(indexed[key][1]) == keys, f"missing FVM keys at FEM tier {key}")
