@@ -76,9 +76,12 @@ open. These tests adopt the following internal conventions:
   errors. No implicit dimensions, default evaluator, or nodal fallback is allowed.
 - A gate record's unique key is `(nx,ny,kz)`. Duplicate keys fail. Gate results have
   `pass` and `checks`; each check has `name,value,limit,pass,reason`. Check order is
-  deterministic and independent of input record order. The tests leave check
-  names and grouping free so long as the result is stable and reasons identify
-  failure. kz16 diagnostics and interpolation fields must not alter this result.
+  deterministic and independent of input record order. Validation failures use
+  `name == "input"`; order checks use `p_kz (nx, ny)` and `p_xy kzN` (for example,
+  `p_kz (96, 32)` and `p_xy kz8`). The regression tests rely on those names and
+  their `p_` prefix. Other check names are diagnostic; the check sequence follows
+  the grouping below. kz16 diagnostics and interpolation fields must not alter
+  this result.
   The implementation orders strip groups by `(nx,ny)`, then kz4 before kz8;
   each record checks absolute error, deformation, then curvature, followed by
   that group's thickness order. The final checks are the `(48,16)` to `(96,32)`
@@ -145,18 +148,6 @@ RUSAGE_CHILDREN or an adjusted/subtracted estimate. A child's pre-exec memory
 can contribute to that peak. The real allocation probe therefore runs in a fresh
 interpreter, isolating it from earlier geometry-test allocations while still
 checking an actual 64 MiB child followed by an actual minimal child.
-
-## Recorded implementation deviations
-
-- The order-boundary fixture originally assigned only its constructed coarse
-  error and left the gate's fine error at `.003`. It now assigns the constructed
-  `2**-9` fine error as well, and additionally asserts that the actual supplied
-  pair produces the target order bitwise. Every original assertion is retained.
-- The RSS probe now uses a fresh interpreter. On this Linux box, an unisolated
-  minimal child's peak equalled the parent's 64,004 KiB peak after geometry
-  tests. Both original RSS bounds (high>=60 MiB and low<60 MiB) are retained.
-- Undefined zero-fine orders fail with `阶不可判`; cut sample counts use internal
-  face consistency rather than the uncut nx*ny rule, as specified in the plan.
 
 ## Review regressions
 
@@ -248,8 +239,11 @@ Every decision result contains `pass: bool` and `checks: list[dict]`.
 | `pass` | Boolean check verdict |
 | `reason` | Empty string on success; nonempty diagnostic on failure |
 
-`name` and `reason` are diagnostics, except that `name == "input"` identifies
-validation failures. Failed numerical checks use the same shape. Missing required
+`name == "input"` identifies validation failures. Order-check names are
+`p_kz (nx, ny)` and `p_xy kzN`, including tuple spacing and the `p_` prefix;
+regressions use these names to distinguish undefined orders from other failures.
+Other names and all reasons are diagnostics, with the required reason fragments
+specified below. Failed numerical checks use the same shape. Missing required
 gate records have `value` and `limit` set to `None`. An undefined convergence
 order has `value: None` and a reason containing `阶不可判`.
 
@@ -374,3 +368,51 @@ Interrupted `wait4` calls are retried. If measurement fails after launch, the
 child is killed if still running and waited for before the error propagates,
 including on `KeyboardInterrupt` or `SystemExit`. Successful measurements retain
 the launched child's `wait4` usage; no cleanup result is returned as a measurement.
+
+## PR #341 architect ruling handoff
+
+The lead-owned `handoff/rulings/pr341.md`, dated 2026-11-27 17:27 Asia/Shanghai
+with a 17:34 addendum, was delivered to this fix round. Its complete binding
+text is reproduced here for subsequent reviews. The brief permits this README
+but does not permit adding a repository file at that handoff path:
+
+> # PR #341 — 首席裁定（2026-11-27 17:27 Asia/Shanghai）
+>
+> must-cycle-limit（2/2）已升级超过 4 小时，首席当场裁定：解除上限，再给 3 轮修复。合并条件不变：ci-ok 全绿、三道审查无 MUST（审查须绑定当前 head，审查者模型族与作者不同），由新版 automerge 合入。
+> - 门不放宽：不准 PROVISIONAL/skip/xfail，不准拿实现输出当期望，只改简报「可改」范围；防漂移只用 git merge origin/main，不 rebase、不 force-push。
+> - 负责人逐条判定剩余 MUST：属实就修；认为不成立的，带实测或文献证据报首席裁定，不准自行忽略。
+> - 新期限：11-28 18:00 合入。11-28 12:00 前仍有 MUST 未收敛的，负责人报首席，由首席重拆卡。
+>
+> ## 首席裁定 2026-11-27 17:34（Asia/Shanghai），head 38c34fd6，预审 r7
+> 依据 reviews/pr341-must-triage-2026-11-27.md（72faa7e7）。
+> - **r7 MUST ①（双校验协议不一致）：不成立，RELEASED BY RULING。** 数据 API 返回 float/ndarray、非法输入抛 InputInvalid；判定 API 返回 {pass,checks}——这是冻结简报公开签名与现有断言规定的契约。不得为此改签名、改代码或替换断言。若认为契约应统一，另起提案走简报修订，不在本 PR。
+> - **r7 MUST ②（CONTRADICTS-RULING）：不成立，RELEASED BY RULING。** 是闸门注入的流程哨兵，不是代码缺陷；本裁定未要求改校验协议。
+> - 修复轮遇到这两条不改代码。重跑审查时附本裁定原文；三道审查（绑定当前 head）无其他 MUST、ci-ok 全绿后，按放行记录加回 automerge。门不放宽，期限 11-28 18:00 不变。
+
+Application to this fix line:
+
+- The extra three repair rounds do not change merge acceptance. Fresh ci-ok and
+  three reviews bound to the resulting head, from model families different from
+  the author, remain pipeline/lead requirements before automerge. Local unit
+  results do not substitute for those checks.
+- No acceptance case, assertion, threshold, timeout or registration is weakened
+  or removed. The order fixture supplies analytically constructed errors and
+  checks the supplied pair bitwise. The fresh-interpreter RSS probe stays in the
+  same acceptance case with both original 60 MiB bounds; it is not a deferred or
+  excluded test. No earlier skip, xfail or provisional verdict needs reverting.
+  Changes remain in the brief's allowed files. Any mainline synchronization
+  must use `git merge origin/main`.
+- The confirmed handoff item is addressed by delivering the complete ruling
+  above from the lead-owned source. CodeBuddy verified no MUST. The 17:34
+  addendum explicitly releases both the error-protocol complaint and the
+  `CONTRADICTS-RULING` process sentinel. Data APIs still raise `InputInvalid`,
+  while decision APIs return failed checks, as specified in the API contract.
+  No signatures, executable code or assertions change for either released item.
+- The lead owns the 2026-11-28 12:00 escalation checkpoint and 18:00 merge
+  deadline. Any remaining MUST at the checkpoint must be escalated for rescoping.
+
+PR body scope note: INT-a，门判定库与单元测试；Q2 点值来自
+v-int-fem-q2-point-ref，求值器接入与门 A 实判在 INT-b
+（v-int-fvm-warpage-gate-a2）. Synthetic acceptance does not establish the actual
+solver's scheme A verdict. Current-head verification evidence and the precise
+handoff-path brief-change request accompany the fix-round summary.

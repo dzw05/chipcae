@@ -181,7 +181,7 @@ def top_face_centroids(run_dir, requested_nxny) -> np.ndarray:
     level = _integer(mesh.get("L"), "L", 0)
     _require(_integer(mesh.get("padded_cells"), "padded_cells", 0) == 0,
              "padded_cells must be zero")
-    # Compare via bit lengths before shifting, so malformed huge L cannot allocate.
+    # Positive base dimensions imply 2**L <= max(requested); reject huge L before shifting.
     _require(level <= max(requested).bit_length(), "refined dimensions mismatch")
     nx, ny = nx0 << level, ny0 << level
     _require((nx, ny) == requested, "refined dimensions mismatch")
