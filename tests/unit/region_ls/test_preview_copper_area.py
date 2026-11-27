@@ -208,7 +208,8 @@ class PreviewCopperArea(unittest.TestCase):
                 options.append(argument)
         compiler = next(line.split('=', 1)[1] for line in self.cache.splitlines()
                         if line.startswith(('CMAKE_CXX_COMPILER:FILEPATH=',
-                                            'CMAKE_CXX_COMPILER:STRING=')))
+                                            'CMAKE_CXX_COMPILER:STRING=',
+                                            'CMAKE_CXX_COMPILER:UNINITIALIZED=')))
         generator = next(line.split('=', 1)[1] for line in self.cache.splitlines()
                          if line.startswith('CMAKE_GENERATOR:INTERNAL='))
         harness = self.root / 'columns.cpp'
@@ -245,6 +246,27 @@ add_test(NAME column_contributions COMMAND columns)
             result = subprocess.run(command, capture_output=True, text=True,
                                     env=self.env, timeout=40)
             self.assertEqual(result.returncode, 0, diagnostics(result))
+
+    def test_cpp_harness_compiler_cache_types(self):
+        original_cache, original_root = self.cache, self.root
+        compiler = next(line.split('=', 1)[1] for line in self.cache.splitlines()
+                        if line.startswith('CMAKE_CXX_COMPILER:'))
+        other_entries = [line for line in self.cache.splitlines()
+                         if not line.startswith('CMAKE_CXX_COMPILER:')]
+        try:
+            for cache_type in ('FILEPATH', 'STRING', 'UNINITIALIZED'):
+                with self.subTest(cache_type=cache_type):
+                    self.cache = '\n'.join([
+                        *other_entries, f'CMAKE_CXX_COMPILER:{cache_type}={compiler}'])
+                    self.root = original_root / cache_type
+                    self.root.mkdir()
+                    try:
+                        self.test_raster_column_contributions()
+                    except StopIteration:
+                        self.fail(f'C++ raster harness must recognize {cache_type} '
+                                  'compiler cache entries and compile/run the assertions')
+        finally:
+            self.cache, self.root = original_cache, original_root
 
     def test_raster_column_contributions(self):
         # Compile the real private preview reduction, with unused CLI code removed
