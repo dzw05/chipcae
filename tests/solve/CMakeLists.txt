@@ -392,6 +392,18 @@ add_test(NAME solve_ecad_test_registration
 set_tests_properties(solve_ecad_test_registration PROPERTIES
     TIMEOUT 60 LABELS "solve;configuration;unit;owner:M3")
 
+if(_solve_backend)
+    add_executable(chipcae_test_q2_export test_q2_export.cpp)
+    target_include_directories(chipcae_test_q2_export PRIVATE ${PROJECT_SOURCE_DIR}/apps/chipcae-solve/src)
+    target_link_libraries(chipcae_test_q2_export PRIVATE chipcae_solve_inputs chipcae::fem chipcae::io mfem)
+    chipcae_set_warnings(chipcae_test_q2_export)
+    add_test(NAME solve_q2_export_unit COMMAND chipcae_test_q2_export)
+    add_test(NAME solve_q2_export_pipeline COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_q2_export_pipeline.py $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE})
+    set_tests_properties(solve_q2_export_unit solve_q2_export_pipeline PROPERTIES
+        TIMEOUT 600 LABELS "solve;numerical;io")
+endif()
+
 if(_solve_backend AND TARGET chipcae-preview)
     add_test(NAME solve_n8_geometry COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/test_n8_geometry.py $<TARGET_FILE:chipcae-preview>)

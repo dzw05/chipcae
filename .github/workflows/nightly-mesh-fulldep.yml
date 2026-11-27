@@ -64,7 +64,7 @@ jobs:
             if [[ -f .k1-last-success ]]; then
               previous=$(cat .k1-last-success)
               if git cat-file -e "$previous^{commit}" 2>/dev/null; then
-                if [[ -n $(git diff --name-only "$previous" HEAD -- tests/integration/mesh_p1/ci/deps.lock tests/integration/mesh_p1/ci/build_deps_cpu.sh) ]]; then
+                if [[ -n $(git diff --name-only "$previous" HEAD -- tests/integration/mesh_p1/ci/deps.lock tests/integration/mesh_p1/ci/build_deps_cpu.sh tests/integration/mesh_p1/ci/write_manifest.sh) ]]; then
                   deps_changed=true
                 fi
               fi
@@ -89,20 +89,37 @@ jobs:
           echo "ImageOS=$image_os" >> "$GITHUB_ENV"
           echo "Cache identity: image_os=$image_os compiler=$compiler_id"
 
+      - name: Record run identity
+        if: steps.changes.outputs.run == 'true'
+        env:
+          TESTED_SHA: ${{ github.sha }}
+          EVENT: ${{ github.event_name }}
+          FORCE: ${{ inputs.force }}
+          REBUILD_DEPS: ${{ inputs.rebuild_deps }}
+          DEPS_CACHE_KEY: k1-deps-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/deps.lock', 'tests/integration/mesh_p1/ci/build_deps_cpu.sh', 'tests/integration/mesh_p1/ci/write_manifest.sh') }}
+        run: |
+          set -euo pipefail
+          mkdir -p build-k1-full
+          {
+            echo "sha=$TESTED_SHA event=$EVENT force=$FORCE rebuild_deps=$REBUILD_DEPS"
+            echo "run=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT job=$GITHUB_JOB"
+            echo "dependency cache key=$DEPS_CACHE_KEY"
+          } | tee build-k1-full/run-context.log
+
       - name: Restore dependency prefix
         id: cache-deps
         if: ${{ inputs.rebuild_deps != true }}
         uses: actions/cache/restore@v4
         with:
           path: build-k1-deps/prefix
-          key: k1-deps-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/deps.lock', 'tests/integration/mesh_p1/ci/build_deps_cpu.sh') }}
+          key: k1-deps-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/deps.lock', 'tests/integration/mesh_p1/ci/build_deps_cpu.sh', 'tests/integration/mesh_p1/ci/write_manifest.sh') }}
 
       - name: Install build tools, MPI and shared OCCT
         if: steps.changes.outputs.run == 'true'
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake g++ ccache libopenmpi-dev openmpi-bin curl python3-h5py python3-numpy
+          sudo apt-get install -y ninja-build cmake g++ ccache libopenmpi-dev openmpi-bin libopenblas-dev curl python3-h5py python3-numpy
           # shellcheck source=tests/integration/mesh_p1/ci/deps.lock
           source tests/integration/mesh_p1/ci/deps.lock
           occt_pins=()
@@ -148,7 +165,7 @@ jobs:
             delete_bad=true
             verify=rebuild_deps
           elif [[ "${{ steps.cache-deps.outputs.cache-hit }}" == "true" ]]; then
-            if tests/integration/mesh_p1/ci/verify_prefix.sh build-k1-deps/prefix; then
+            if tests/integration/mesh_p1/ci/build_deps_cpu.sh --verify-only build-k1-deps/prefix; then
               need=false
               verify=passed
             else
@@ -172,7 +189,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          key="k1-deps-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/deps.lock', 'tests/integration/mesh_p1/ci/build_deps_cpu.sh') }}"
+          key="k1-deps-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/deps.lock', 'tests/integration/mesh_p1/ci/build_deps_cpu.sh', 'tests/integration/mesh_p1/ci/write_manifest.sh') }}"
           delete_ok=true
           # gh cache delete takes a positional id or key, not --key (that flag is only on cache list).
           ids=$(gh cache list --key "$key" --json id --jq '.[].id' || true)
@@ -197,9 +214,535 @@ jobs:
           set -euo pipefail
           start=$SECONDS
           tests/integration/mesh_p1/ci/build_deps_cpu.sh
-          tests/integration/mesh_p1/ci/verify_prefix.sh build-k1-deps/prefix
+          tests/integration/mesh_p1/ci/build_deps_cpu.sh --verify-only build-k1-deps/prefix
           echo "secs=$((SECONDS - start))" >> "$GITHUB_OUTPUT"
           echo "Dependency build and verify wall time: $((SECONDS - start))s"
+
+      - name: Test PETSc MFEM acceptance guards
+        if: steps.changes.outputs.run == 'true'
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          import subprocess
+          import tempfile
+          import textwrap
+          import unittest
+
+          repo = Path.cwd()
+          ci = Path("tests/integration/mesh_p1/ci")
+          workflow = (repo / ".github/workflows/nightly-mesh-fulldep.yml").read_text()
+
+          def run(*args, cwd=None, env=None):
+              # Use the real tools on PATH, including the shared build-slot wrappers.
+              return subprocess.run(args, cwd=cwd, env=env, text=True, capture_output=True)
+
+          def output(result):
+              return result.stdout + result.stderr
+
+          def digest(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
+          class ProvenanceAcceptance(unittest.TestCase):
+              def setUp(self):
+                  temp = tempfile.TemporaryDirectory()
+                  self.addCleanup(temp.cleanup)
+                  self.root = Path(temp.name)
+                  self.prefix = self.root / "build-k1-deps/prefix"
+                  self.relative = "lib/cmake/mfem/MFEMConfig.cmake"
+                  self.config = self.prefix / self.relative
+                  self.config.parent.mkdir(parents=True)
+                  self.config.write_text("# installed package fixture\n")
+                  self.manifest = self.prefix / ".k1-manifest"
+                  self.log = self.root / "build-k1-full/configure.log"
+                  self.log.parent.mkdir()
+                  self.fields = [
+                      ("install_prefix", str(self.prefix)),
+                      ("mfem_config_relpath", self.relative),
+                  ]
+                  self.write_manifest()
+                  self.write_log()
+
+              def write_manifest(self):
+                  self.manifest.write_text("".join(f"{key}={value}\n" for key, value in self.fields))
+
+              def write_log(self, path=None, capability="ON"):
+                  self.log.write_text(
+                      "-- unrelated configure output\n"
+                      f"-- MFEM_CONFIG={path or self.config}\n"
+                      f"-- MFEM_USE_PETSC={capability}\n"
+                      "-- Configuring done\n-- Generating done\n"
+                  )
+
+              def checker(self):
+                  # Execute the production step; never duplicate its path/boolean logic here.
+                  marker = "      - name: Validate MFEM provenance\n"
+                  self.assertTrue(marker in workflow, "Missing post-configure MFEM provenance guard")
+                  step = workflow.split(marker, 1)[1].split("\n      - ", 1)[0]
+                  self.assertIn("        run: |\n", step)
+                  shell = textwrap.dedent(step.split("        run: |\n", 1)[1])
+                  return run("bash", "-c", shell, cwd=self.root)
+
+              def test_matching_paths_and_cmake_true_values_pass(self):
+                  for value in ("ON", "on", "TRUE", "Yes", "Y", "1", "2", "-1", "0.5", "enabled"):
+                      with self.subTest(capability=value):
+                          self.write_log(capability=value)
+                          result = self.checker()
+                          self.assertEqual(result.returncode, 0, output(result))
+                          for expected in (str(self.prefix.resolve()), str(self.config.resolve()), value):
+                              self.assertIn(expected, output(result))
+
+              def test_equivalent_prefix_symlink_spelling_passes(self):
+                  alias = self.root / "prefix-alias"
+                  alias.symlink_to(self.prefix, target_is_directory=True)
+                  self.fields[0] = ("install_prefix", str(alias))
+                  self.write_manifest()
+                  self.write_log(path=alias / self.relative)
+                  result = self.checker()
+                  self.assertEqual(result.returncode, 0, output(result))
+                  self.assertIn(str(self.prefix.resolve()), output(result))
+                  self.assertIn(str(self.config.resolve()), output(result))
+
+              def test_missing_empty_and_duplicate_manifest_fields_fail(self):
+                  valid = list(self.fields)
+                  for key, _ in valid:
+                      for mutation in ("missing", "empty", "duplicate", "conflicting-duplicate"):
+                          with self.subTest(key=key, mutation=mutation):
+                              self.fields = [(k, v) for k, v in valid if k != key]
+                              if mutation == "empty":
+                                  self.fields.append((key, ""))
+                              elif "duplicate" in mutation:
+                                  self.fields = valid + [(key, dict(valid)[key] if mutation == "duplicate" else "wrong")]
+                              self.write_manifest()
+                              result = self.checker()
+                              self.assertNotEqual(result.returncode, 0, output(result))
+
+              def test_missing_manifest_configure_log_and_config_fail(self):
+                  for path in (self.manifest, self.log, self.config):
+                      with self.subTest(path=path.name):
+                          saved = path.read_bytes()
+                          path.unlink()
+                          result = self.checker()
+                          self.assertNotEqual(result.returncode, 0, output(result))
+                          path.write_bytes(saved)
+
+              def test_false_and_undefined_capabilities_fail(self):
+                  for value in ("", "OFF", "False", "NO", "N", "0", "IGNORE", "NOTFOUND", "MFEM-NOTFOUND"):
+                      with self.subTest(capability=value):
+                          self.write_log(capability=value)
+                          result = self.checker()
+                          self.assertNotEqual(result.returncode, 0, output(result))
+                  self.write_log()
+                  self.log.write_text(self.log.read_text().replace("-- MFEM_USE_PETSC=ON\n", ""))
+                  result = self.checker()
+                  self.assertNotEqual(result.returncode, 0, output(result))
+
+              def test_missing_empty_and_duplicate_discovery_records_fail(self):
+                  for key in ("MFEM_CONFIG", "MFEM_USE_PETSC"):
+                      for mutation in ("missing", "empty", "duplicate", "conflicting-duplicate"):
+                          with self.subTest(key=key, mutation=mutation):
+                              self.write_log()
+                              rows = self.log.read_text().splitlines()
+                              record = next(row for row in rows if row.startswith("-- " + key + "="))
+                              if mutation == "missing":
+                                  rows.remove(record)
+                              elif mutation == "empty":
+                                  rows[rows.index(record)] = "-- " + key + "="
+                              else:
+                                  rows.append(record if mutation == "duplicate" else "-- " + key + "=wrong")
+                              self.log.write_text("\n".join(rows) + "\n")
+                              result = self.checker()
+                              self.assertNotEqual(result.returncode, 0, output(result))
+
+              def test_another_existing_mfem_installation_fails(self):
+                  other = self.root / "other" / self.relative
+                  other.parent.mkdir(parents=True)
+                  other.write_text(self.config.read_text())
+                  self.write_log(path=other)
+                  result = self.checker()
+                  self.assertNotEqual(result.returncode, 0, output(result))
+                  for path in (self.prefix, self.config, other):
+                      self.assertIn(str(path.resolve()), output(result))
+                  self.assertRegex(output(result).lower(), r"false|fail|mismatch")
+
+              def test_missing_install_prefix_directory_fails(self):
+                  self.fields[0] = ("install_prefix", str(self.root / "absent-prefix"))
+                  self.write_manifest()
+                  result = self.checker()
+                  self.assertNotEqual(result.returncode, 0, output(result))
+
+              def test_absolute_and_parent_components_fail_even_when_the_file_matches(self):
+                  for relative in (str(self.config), "lib/../" + self.relative, "../prefix/" + self.relative):
+                      with self.subTest(relative=relative):
+                          self.fields[1] = ("mfem_config_relpath", relative)
+                          self.write_manifest()
+                          result = self.checker()
+                          self.assertNotEqual(result.returncode, 0, output(result))
+
+              def test_symlink_escape_fails_even_when_discovered_and_expected_files_match(self):
+                  outside = self.root / "outside-MFEMConfig.cmake"
+                  outside.write_text(self.config.read_text())
+                  self.config.unlink()
+                  self.config.symlink_to(outside)
+                  self.write_log(path=outside)
+                  result = self.checker()
+                  self.assertNotEqual(result.returncode, 0, output(result))
+
+              def test_normalized_config_with_wrong_relative_suffix_fails(self):
+                  # E == D and E is inside P, but removing the declared suffix from D
+                  # would infer P/lib rather than P. This catches an omitted third comparison.
+                  (self.prefix / "cmake").symlink_to("lib/cmake", target_is_directory=True)
+                  self.fields[1] = ("mfem_config_relpath", "cmake/mfem/MFEMConfig.cmake")
+                  self.write_manifest()
+                  result = self.checker()
+                  self.assertNotEqual(result.returncode, 0, output(result))
+
+          class DiscoveryAcceptance(unittest.TestCase):
+              def test_config_mode_wins_over_a_conflicting_find_module_and_reports_exports(self):
+                  with tempfile.TemporaryDirectory() as temp:
+                      root = Path(temp)
+                      package = root / "prefix/lib/cmake/mfem"
+                      package.mkdir(parents=True)
+                      config = package / "MFEMConfig.cmake"
+                      module = root / "modules"
+                      module.mkdir()
+                      (module / "FindMFEM.cmake").write_text('set(loaded "module")\nset(MFEM_FOUND TRUE)\n')
+                      for value in ("ON", "OFF"):
+                          with self.subTest(exported_capability=value):
+                              config.write_text(f'set(loaded "config")\nset(MFEM_USE_PETSC {value})\n')
+                              (root / "CMakeLists.txt").write_text(
+                                  'cmake_minimum_required(VERSION 3.20)\nproject(discovery NONE)\n'
+                                  f'set(CMAKE_MODULE_PATH "{module.as_posix()}")\n'
+                                  'set(CHIPCAE_ENABLE_MFEM ON)\n'
+                                  f'include("{(repo / "cmake/ChipcaeDependencies.cmake").as_posix()}")\n'
+                                  'file(WRITE "${CMAKE_BINARY_DIR}/selected" "${loaded}")\n'
+                              )
+                              build = root / ("build-" + value)
+                              result = run("cmake", "-S", str(root), "-B", str(build),
+                                           "-DCMAKE_BUILD_TYPE=Release", f"-DCMAKE_PREFIX_PATH={root / 'prefix'}")
+                              self.assertEqual(result.returncode, 0, output(result))
+                              self.assertEqual((build / "selected").read_text(), "config",
+                                               "MFEM module discovery selected a different installation")
+                              self.assertIn(f"MFEM_CONFIG={config}", output(result))
+                              self.assertIn(f"MFEM_USE_PETSC={value}", output(result))
+
+              def test_all_optional_dependencies_remain_gated(self):
+                  with tempfile.TemporaryDirectory() as temp:
+                      root = Path(temp)
+                      (root / "CMakeLists.txt").write_text(
+                          'cmake_minimum_required(VERSION 3.20)\nproject(bare NONE)\n'
+                          f'include("{(repo / "cmake/ChipcaeDependencies.cmake").as_posix()}")\n'
+                      )
+                      result = run("cmake", "-S", str(root), "-B", str(root / "build"),
+                                   "-DCMAKE_BUILD_TYPE=Release")
+                      self.assertEqual(result.returncode, 0, output(result))
+
+              def test_discovered_config_and_exported_capability_are_reported_without_input_substitution(self):
+                  with tempfile.TemporaryDirectory() as temp:
+                      root = Path(temp)
+                      package = root / "prefix/lib/cmake/mfem"
+                      package.mkdir(parents=True)
+                      config = package / "MFEMConfig.cmake"
+                      for value in ("ON", "OFF"):
+                          with self.subTest(exported_capability=value):
+                              config.write_text(f"set(MFEM_USE_PETSC {value})\n")
+                              (root / "CMakeLists.txt").write_text(
+                                  'cmake_minimum_required(VERSION 3.20)\nproject(diagnostics NONE)\n'
+                                  'set(CHIPCAE_ENABLE_MFEM ON)\n'
+                                  f'include("{(repo / "cmake/ChipcaeDependencies.cmake").as_posix()}")\n'
+                              )
+                              result = run("cmake", "-S", str(root), "-B", str(root / ("build-" + value)),
+                                           "-DCMAKE_BUILD_TYPE=Release", f"-DCMAKE_PREFIX_PATH={root / 'prefix'}")
+                              self.assertEqual(result.returncode, 0, output(result))
+                              with self.subTest(record="config"):
+                                  self.assertIn(f"MFEM_CONFIG={config}", output(result))
+                              with self.subTest(record="capability"):
+                                  self.assertIn(f"MFEM_USE_PETSC={value}", output(result))
+
+          class PrefixFixture(unittest.TestCase):
+              @classmethod
+              def setUpClass(cls):
+                  temp = tempfile.TemporaryDirectory()
+                  cls.addClassCleanup(temp.cleanup)
+                  cls.fixture = Path(temp.name)
+                  source = cls.fixture / "source"
+                  source.mkdir()
+                  # Small real compiled libraries keep the new MFEM consumer's link
+                  # validation real. They are synthetic, not substitutes for runner acceptance.
+                  (source / "petsc.cpp").write_text(
+                      'extern "C" int PetscInitialize(int*, char***, const char*, const char*) { return 0; }\n'
+                      'extern "C" int PetscFinalize() { return 0; }\n'
+                  )
+                  (source / "petsc.h").write_text(
+                      '#pragma once\nextern "C" {\n'
+                      'int PetscInitialize(int*, char***, const char*, const char*);\n'
+                      'int PetscFinalize();\n}\n'
+                  )
+                  (source / "mfem.cpp").write_text('int fixture_mfem() { return 0; }\n')
+                  (source / "mfem.hpp").write_text(
+                      '#pragma once\n#include <petsc.h>\nnamespace mfem { class PetscParMatrix {}; }\n'
+                  )
+                  (source / "MFEMConfig.cmake").write_text(
+                      'set(MFEM_USE_PETSC ON)\ninclude("${CMAKE_CURRENT_LIST_DIR}/MFEMTargets.cmake")\n'
+                  )
+                  (source / "CMakeLists.txt").write_text(
+                      'cmake_minimum_required(VERSION 3.20)\nproject(prefix_fixture LANGUAGES CXX)\n'
+                      'add_library(petsc SHARED petsc.cpp)\nadd_library(mfem STATIC mfem.cpp)\n'
+                      'target_link_libraries(mfem PUBLIC petsc)\n'
+                      'target_include_directories(mfem INTERFACE "$<INSTALL_INTERFACE:include>")\n'
+                      'install(TARGETS petsc mfem EXPORT MFEMTargets LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)\n'
+                      'install(EXPORT MFEMTargets DESTINATION lib/cmake/mfem)\n'
+                      'install(FILES MFEMConfig.cmake DESTINATION lib/cmake/mfem)\n'
+                      'install(FILES petsc.h mfem.hpp DESTINATION include)\n'
+                  )
+                  for args in (
+                      ("cmake", "-S", str(source), "-B", str(cls.fixture / "build"), "-G", "Ninja",
+                       "-DCMAKE_BUILD_TYPE=Release", f"-DCMAKE_INSTALL_PREFIX={cls.fixture / 'installed'}",
+                       "-DCMAKE_CXX_COMPILER_LAUNCHER="),
+                      ("cmake", "--build", str(cls.fixture / "build"), "--parallel", "2"),
+                      ("cmake", "--install", str(cls.fixture / "build")),
+                  ):
+                      result = run(*args)
+                      if result.returncode:
+                          raise AssertionError("Synthetic library fixture failed: " + output(result))
+
+              def setUp(self):
+                  temp = tempfile.TemporaryDirectory()
+                  self.addCleanup(temp.cleanup)
+                  self.root = Path(temp.name)
+                  self.here = self.root / ci
+                  shutil.copytree(repo / ci, self.here)
+                  self.prefix = self.root / "build-k1-deps/prefix"
+                  shutil.copytree(self.fixture / "installed", self.prefix)
+                  self.config = self.prefix / "lib/cmake/mfem/MFEMConfig.cmake"
+                  lock = self.here / "deps.lock"
+                  # A rebuild may only use local fixtures; a missing archive fails promptly.
+                  lock.write_text(re.sub(r"(?m)^([A-Z0-9_]+_URL)=.*$",
+                                         rf"\1=file://{self.root}/missing-archive.tar.gz", lock.read_text()))
+                  if not re.search(r"(?m)^PETSC_VERSION=", lock.read_text()):
+                      with lock.open("a") as stream:
+                          stream.write("\nPETSC_VERSION=fixture\nPETSC_URL=file:///missing-petsc.tar.gz\n"
+                                       "PETSC_SHA256=" + "a" * 64 + "\n")
+                  self.pins = dict(re.findall(r"(?m)^([A-Z0-9_]+)=(.*)$", lock.read_text()))
+                  for relative in (
+                      "lib/libmetis.so", "lib/libHYPRE.a", "lib/libhdf5.so.310.5.1",
+                      "lib/cmake/HYPRE/HYPREConfig.cmake", "cmake/hdf5-config.cmake",
+                      "share/cmake/jsoncons/jsonconsConfig.cmake", "include/petscsys.h", "include/petscconf.h",
+                  ):
+                      path = self.prefix / relative
+                      path.parent.mkdir(parents=True, exist_ok=True)
+                      path.write_text("/* synthetic installed artifact */\n")
+                  self.stamp = self.prefix / ".k1-ready"
+                  self.manifest = self.prefix / ".k1-manifest"
+                  self.trace = self.root / "legacy-verification.trace"
+                  # Isolate the unchanged MPI/HDF5 verifier, which needs the full runner
+                  # stack. The new capability/compile/link checks must still execute.
+                  (self.here / "verify_prefix.sh").write_text(
+                      '#!/usr/bin/env bash\nset -euo pipefail\nprintf "verified\\n" >> "$K1_LEGACY_VERIFY_TRACE"\n'
+                  )
+                  self.env = dict(os.environ, CMAKE_BUILD_PARALLEL_LEVEL="2",
+                                  K1_LEGACY_VERIFY_TRACE=str(self.trace))
+                  key = run("bash", "-c", "sha256sum build_deps_cpu.sh deps.lock | sha256sum | cut -d' ' -f1",
+                            cwd=self.here)
+                  self.assertEqual(key.returncode, 0, output(key))
+                  self.stamp.write_text(key.stdout)
+                  self.write_fixture_manifest()
+
+              def write_fixture_manifest(self):
+                  compiler = run("g++", "-dumpmachine").stdout.strip() + "-gcc-" + run("g++", "-dumpfullversion").stdout.strip()
+                  fields = {
+                      "format": "1", "compiler_id": compiler, "image_os": os.environ.get("ImageOS", "unknown"),
+                      "install_prefix": str(self.prefix), "mfem_config_relpath": "lib/cmake/mfem/MFEMConfig.cmake",
+                      "deps_lock_sha256": digest(self.here / "deps.lock"),
+                      "build_script_sha256": digest(self.here / "build_deps_cpu.sh"),
+                      "manifest_script_sha256": digest(self.here / "write_manifest.sh"),
+                      **{key: value for key, value in self.pins.items()
+                         if key.endswith("_VERSION") or key in ("SYSTEM_MPI_PACKAGE", "PETSC_URL", "PETSC_SHA256")},
+                  }
+                  rows = [f"{key}={value}\n" for key, value in fields.items()]
+                  rows += [f"SHA256  {digest(path)}  {path.relative_to(self.prefix)}\n"
+                           for path in sorted(self.prefix.rglob("*")) if path.is_file() and not path.name.startswith(".k1-")]
+                  self.manifest.write_text("".join(rows))
+
+              def install(self, *args):
+                  return run("bash", str(self.here / "build_deps_cpu.sh"), *map(str, args),
+                             cwd=self.root, env=self.env)
+
+          class PrefixAcceptance(PrefixFixture):
+              def test_matching_stamp_with_missing_petsc_library_cannot_succeed(self):
+                  (self.prefix / "lib/libpetsc.so").unlink()
+                  result = self.install(self.prefix)
+                  self.assertNotEqual(result.returncode, 0, "Missing PETSc library accepted as ready: " + output(result))
+
+              def test_matching_stamp_with_petsc_disabled_mfem_cannot_succeed(self):
+                  self.config.write_text(self.config.read_text().replace("MFEM_USE_PETSC ON", "MFEM_USE_PETSC OFF"))
+                  self.write_fixture_manifest()
+                  result = self.install(self.prefix)
+                  self.assertNotEqual(result.returncode, 0, "PETSc-disabled MFEM accepted as ready: " + output(result))
+
+              def test_existing_library_and_true_flag_do_not_replace_a_real_petsc_link_probe(self):
+                  source = self.root / "broken-petsc"
+                  source.mkdir()
+                  (source / "broken.cpp").write_text('extern "C" int unrelated_symbol() { return 0; }\n')
+                  (source / "CMakeLists.txt").write_text(
+                      'cmake_minimum_required(VERSION 3.20)\nproject(broken_petsc LANGUAGES CXX)\n'
+                      'add_library(petsc SHARED broken.cpp)\n'
+                  )
+                  build = source / "build"
+                  for args in (
+                      ("cmake", "-S", str(source), "-B", str(build), "-G", "Ninja",
+                       "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_CXX_COMPILER_LAUNCHER="),
+                      ("cmake", "--build", str(build), "--parallel", "2"),
+                  ):
+                      result = run(*args)
+                      self.assertEqual(result.returncode, 0, output(result))
+                  shutil.copyfile(build / "libpetsc.so", self.prefix / "lib/libpetsc.so")
+                  self.write_fixture_manifest()
+                  result = self.install(self.prefix)
+                  self.assertNotEqual(result.returncode, 0,
+                                      "MFEM package with an unusable PETSc link accepted as ready: " + output(result))
+
+              def test_stale_manifest_writer_hash_cannot_succeed_or_be_rewritten(self):
+                  self.manifest.write_text(self.manifest.read_text().replace(
+                      digest(self.here / "write_manifest.sh"), "0" * 64))
+                  before = self.manifest.read_bytes()
+                  result = self.install(self.prefix)
+                  self.assertNotEqual(result.returncode, 0, "Stale writer provenance accepted: " + output(result))
+                  if self.manifest.exists():
+                      self.assertEqual(self.manifest.read_bytes(), before, "Invalid cache must not be re-certified")
+
+              def test_verification_only_entry_point_accepts_valid_prefix(self):
+                  result = self.install("--verify-only", self.prefix)
+                  self.assertEqual(result.returncode, 0, output(result))
+                  self.assertTrue(self.trace.exists(), "Verification must include the existing verifier")
+
+              def test_valid_prefix_is_verified_on_both_invocations_without_rebuilding(self):
+                  before = {str(path.relative_to(self.prefix)): (path.stat().st_mtime_ns, path.read_bytes())
+                            for path in self.prefix.rglob("*") if path.is_file()}
+                  for invocation in (1, 2):
+                      with self.subTest(invocation=invocation):
+                          previous_calls = len(self.trace.read_text().splitlines()) if self.trace.exists() else 0
+                          result = self.install(self.prefix)
+                          self.assertEqual(result.returncode, 0, output(result))
+                          self.assertTrue(self.trace.exists(), "Ready-prefix shortcut skipped full verification")
+                          self.assertGreater(len(self.trace.read_text().splitlines()), previous_calls,
+                                             "Every ready-prefix invocation must verify the prefix")
+                  after = {str(path.relative_to(self.prefix)): (path.stat().st_mtime_ns, path.read_bytes())
+                           for path in self.prefix.rglob("*") if path.is_file()}
+                  self.assertEqual(after, before, "Valid prefix must be reused without rebuilding or rewriting metadata")
+
+              def test_explicitly_empty_prefix_is_rejected(self):
+                  result = self.install("")
+                  self.assertNotEqual(result.returncode, 0, "Empty prefix silently used default: " + output(result))
+
+              def test_rebuild_does_not_delete_tracked_files_in_a_custom_prefix(self):
+                  protected = self.prefix / "protected-source"
+                  protected.write_text("tracked source must survive cleanup\n")
+                  for args in (("git", "init", "--quiet"),
+                               ("git", "add", "build-k1-deps/prefix/protected-source")):
+                      result = run(*args, cwd=self.root)
+                      self.assertEqual(result.returncode, 0, output(result))
+                  self.stamp.write_text("stale-input-key\n")
+                  result = self.install(self.prefix)
+                  self.assertNotEqual(result.returncode, 0, output(result))
+                  self.assertTrue(protected.is_file(), "Rebuild cleanup deleted tracked source")
+
+              def test_prefix_outside_worktree_is_rejected(self):
+                  result = self.install(self.root.parent / "outside-prefix")
+                  self.assertNotEqual(result.returncode, 0, output(result))
+
+              def test_failed_configure_build_or_link_removes_previous_success_stamp(self):
+                  for phase in ("configure", "build", "link"):
+                      with self.subTest(phase=phase):
+                          self.stamp.write_text("stale-input-key\n")
+                          shutil.rmtree(self.root / "build-k1-deps/metis-build", ignore_errors=True)
+                          for name in ("metis", "metis-" + self.pins["METIS_VERSION"]):
+                              source = self.root / "build-k1-deps/src" / name
+                              source.mkdir(parents=True, exist_ok=True)
+                              body = 'cmake_minimum_required(VERSION 3.20)\n'
+                              if phase == "configure":
+                                  body += 'project(failure NONE)\nmessage(FATAL_ERROR "intentional-configure-failure")\n'
+                              elif phase == "build":
+                                  body += ('project(failure NONE)\nadd_custom_target(failure ALL\n'
+                                           'COMMAND cmake -E echo intentional-build-failure\nCOMMAND cmake -E false)\n')
+                              else:
+                                  compiler = shutil.which("c++")
+                                  self.assertIsNotNone(compiler)
+                                  body += (f'set(CMAKE_CXX_COMPILER "{compiler}")\nproject(failure LANGUAGES CXX)\n'
+                                           'set(CMAKE_CXX_COMPILER_LAUNCHER "")\nadd_executable(failure link.cpp)\n')
+                                  (source / "link.cpp").write_text(
+                                      'void acceptance_missing_symbol();\nint main() { acceptance_missing_symbol(); }\n'
+                                  )
+                              (source / "CMakeLists.txt").write_text(body)
+                          result = self.install(self.prefix)
+                          self.assertNotEqual(result.returncode, 0, output(result))
+                          self.assertIn("acceptance_missing_symbol" if phase == "link" else f"intentional-{phase}-failure",
+                                        output(result), "Fixture did not reach the intended failure boundary")
+                          self.assertFalse(self.stamp.exists(), "Failed " + phase + " left a success stamp:\n" + output(result))
+
+          class ManifestAcceptance(PrefixFixture):
+              def writer(self):
+                  return run("bash", str(self.here / "write_manifest.sh"), str(self.prefix), env=self.env)
+
+              def test_manifest_records_actual_prefix_config_petsc_source_writer_and_checksums(self):
+                  result = self.writer()
+                  self.assertEqual(result.returncode, 0, output(result))
+                  rows = self.manifest.read_text().splitlines()
+                  for key, value in (
+                      ("install_prefix", str(self.prefix.resolve())),
+                      ("mfem_config_relpath", "lib/cmake/mfem/MFEMConfig.cmake"),
+                      ("PETSC_VERSION", self.pins["PETSC_VERSION"]),
+                      ("PETSC_URL", self.pins["PETSC_URL"]), ("PETSC_SHA256", self.pins["PETSC_SHA256"]),
+                      ("manifest_script_sha256", digest(self.here / "write_manifest.sh")),
+                  ):
+                      with self.subTest(field=key):
+                          self.assertEqual([row for row in rows if row.startswith(key + "=")], [f"{key}={value}"])
+                  for relative in ("include/petsc.h", "lib/libpetsc.so", "lib/cmake/mfem/MFEMConfig.cmake"):
+                      self.assertIn(f"SHA256  {digest(self.prefix / relative)}  {relative}", rows)
+
+              def test_actual_mfem_layout_and_versioned_petsc_library_are_discovered(self):
+                  destination = self.prefix / "share/mfem"
+                  destination.parent.mkdir(exist_ok=True)
+                  shutil.move(str(self.config.parent), str(destination))
+                  library = self.prefix / "lib/libpetsc.so"
+                  library.rename(library.with_name("libpetsc.so.999"))
+                  result = self.writer()
+                  self.assertEqual(result.returncode, 0, output(result))
+                  self.assertIn("mfem_config_relpath=share/mfem/MFEMConfig.cmake\n", self.manifest.read_text())
+                  self.assertIn("  lib/libpetsc.so.999\n", self.manifest.read_text())
+
+              def test_missing_and_ambiguous_artifacts_fail_atomically(self):
+                  original = self.manifest.read_bytes()
+                  for mutation in ("missing-config", "ambiguous-config", "missing-petsc-library", "missing-petsc-header", "missing-legacy-artifact"):
+                      with self.subTest(mutation=mutation):
+                          self.manifest.write_bytes(original)
+                          path = {
+                              "missing-config": self.config,
+                              "ambiguous-config": self.prefix / "share/mfem/MFEMConfig.cmake",
+                              "missing-petsc-library": self.prefix / "lib/libpetsc.so",
+                              "missing-petsc-header": self.prefix / "include/petsc.h",
+                              "missing-legacy-artifact": self.prefix / "lib/libHYPRE.a",
+                          }[mutation]
+                          saved = path.read_bytes() if path.exists() else None
+                          if saved is None:
+                              path.parent.mkdir(parents=True, exist_ok=True)
+                              path.write_text("# second package config\n")
+                          else:
+                              path.unlink()
+                          result = self.writer()
+                          actual = self.manifest.read_bytes()
+                          if saved is None:
+                              path.unlink()
+                          else:
+                              path.write_bytes(saved)
+                          self.assertNotEqual(result.returncode, 0, "Invalid install was certified: " + output(result))
+                          self.assertEqual(actual, original, "Failed writer destroyed the previous manifest")
+
+          unittest.main(verbosity=2)
+          PY
 
       - name: Test N11 acceptance guards
         if: steps.changes.outputs.run == 'true'
@@ -220,6 +763,8 @@ jobs:
           workflow = Path(".github/workflows/nightly-mesh-fulldep.yml").read_text()
           step = workflow.split("      - name: Build project and run mesh tests\n", 1)[1]
           shell = textwrap.dedent(step.split("        run: |\n", 1)[1].split("      - uses:", 1)[0])
+          configure = workflow.split("      - name: Configure project\n", 1)[1].split("\n      - ", 1)[0]
+          shell = textwrap.dedent(configure.split("        run: |\n", 1)[1]) + shell
           scripts = re.findall(r"python3[^\n]* <<'PY'\n(.*?)\nPY", shell, re.S)
           names = (
               "import_assembly_accept", "import_assembly_accept_default",
@@ -442,12 +987,14 @@ jobs:
           unittest.main(verbosity=2)
           PY
 
-      - name: Build project and run mesh tests
-        id: tests
+      - name: Configure project
+        id: configure
         if: steps.changes.outputs.run == 'true'
         run: |
           set -euo pipefail
           start=$SECONDS
+          mkdir -p build-k1-full
+          {
           cmake -S . -B build-k1-full -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_WARNINGS_AS_ERRORS=ON -DCHIPCAE_RESULTS_FAULT_INJECTION=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
@@ -457,6 +1004,74 @@ jobs:
             -DCHIPCAE_ENABLE_ECAD=ON -DCHIPCAE_ENABLE_OCCT=ON -DCHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE=ON -DPython3_EXECUTABLE=/usr/bin/python3 \
             -DCMAKE_DISABLE_FIND_PACKAGE_Clipper2=TRUE \
             -DCMAKE_DISABLE_FIND_PACKAGE_EXPAT=TRUE
+          } 2>&1 | tee build-k1-full/configure.log
+          echo "secs=$((SECONDS - start))" >> "$GITHUB_OUTPUT"
+
+      - name: Validate MFEM provenance
+        if: steps.changes.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' 2>&1 | tee build-k1-full/provenance.log
+          from pathlib import Path
+          import re
+          import subprocess
+          import tempfile
+
+          rows = Path("build-k1-deps/prefix/.k1-manifest").read_text().splitlines()
+          log = Path("build-k1-full/configure.log").read_text().splitlines()
+
+          def field(lines, key, diagnostic=False):
+              pattern = (r"^-- " if diagnostic else "^") + re.escape(key) + r"=(.*)$"
+              values = [match.group(1) for row in lines if (match := re.fullmatch(pattern, row))]
+              if len(values) != 1 or not values[0].strip():
+                  raise SystemExit(f"Missing, empty or duplicate field: {key}")
+              return values[0]
+
+          prefix = Path(field(rows, "install_prefix")).resolve(strict=True)
+          relative = Path(field(rows, "mfem_config_relpath"))
+          if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+              raise SystemExit(f"Invalid mfem_config_relpath: {relative}")
+          discovered = Path(field(log, "MFEM_CONFIG", True)).resolve(strict=True)
+          expected = (prefix / relative).resolve(strict=True)
+          capability = field(log, "MFEM_USE_PETSC", True)
+          # Let CMake evaluate its exported variable, including numeric values
+          # and false constants, instead of approximating its boolean semantics.
+          with tempfile.TemporaryDirectory() as temporary:
+              probe = Path(temporary)
+              (probe / "capability.txt").write_text(capability)
+              (probe / "check.cmake").write_text(
+                  'cmake_minimum_required(VERSION 3.20)\n'
+                  'file(READ "${CMAKE_CURRENT_LIST_DIR}/capability.txt" capability)\n'
+                  'if(NOT capability)\n'
+                  '  message(FATAL_ERROR "MFEM exported false PETSc support")\n'
+                  'endif()\n'
+              )
+              supported = subprocess.run(
+                  ["cmake", "-P", str(probe / "check.cmake")], capture_output=True,
+              ).returncode == 0
+          contained = prefix.is_dir() and expected.is_file() and expected.is_relative_to(prefix)
+          same_config = discovered.is_file() and discovered == expected
+          suffix_matches = discovered.parts[-len(relative.parts):] == relative.parts
+          inferred = discovered.parents[len(relative.parts) - 1] if len(relative.parts) < len(discovered.parts) else None
+          same_prefix = suffix_matches and inferred == prefix
+          print(f"manifest prefix P={prefix}", flush=True)
+          print(f"discovered config D={discovered}", flush=True)
+          print(f"expected config E={expected}", flush=True)
+          print(f"inferred prefix={inferred}", flush=True)
+          print(f"MFEM_USE_PETSC={capability}", flush=True)
+          print(f"E inside P={contained}; D == E={same_config}; inferred == P={same_prefix}; capability true={supported}", flush=True)
+          if not all((contained, same_config, same_prefix, supported)):
+              raise SystemExit("MFEM provenance comparison failed")
+          PY
+
+      - name: Build project and run mesh tests
+        id: tests
+        if: steps.changes.outputs.run == 'true'
+        env:
+          CONFIGURE_SECONDS: ${{ steps.configure.outputs.secs }}
+        run: |
+          set -euo pipefail
+          start=$SECONDS
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -467,7 +1082,7 @@ jobs:
               raise SystemExit('N11 requires geometry == "ON"')
           PY
           cmake --build build-k1-full --parallel 2
-          build_secs=$((SECONDS - start))
+          build_secs=$((SECONDS - start + CONFIGURE_SECONDS))
           test_start=$SECONDS
           ctest --test-dir build-k1-full -L "mesh|occt" -LE gpu --output-on-failure --output-junit mesh-results.xml
           ctest --test-dir build-k1-full -R '^mesh_digest_mpi$' --no-tests=error --output-on-failure
@@ -522,10 +1137,17 @@ jobs:
         if: always() && steps.changes.outputs.run == 'true'
         with:
           name: mesh-full-results
+          include-hidden-files: true
           path: |
             build-k1-full/mesh-results.xml
             build-k1-full/n11-geometry-on.xml
-            build-k1-full/Testing/Temporary/LastTest.log
+            build-k1-full/Testing/Temporary/*.log
+            build-k1-full/configure.log
+            build-k1-full/provenance.log
+            build-k1-full/run-context.log
+            build-k1-full/import-assets/assembly-capabilities.json
+            build-k1-deps/prefix/.k1-manifest
+            build-k1-deps/prefix/.k1-ready
 
       - name: Fail if a cache key could not be replaced
         if: success() && steps.changes.outputs.run == 'true' && steps.deps.outputs.delete_bad_cache == 'true' && steps.cache-delete.outputs.delete_ok != 'true'
@@ -562,7 +1184,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: build-k1-deps/prefix
-          key: k1-deps-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/deps.lock', 'tests/integration/mesh_p1/ci/build_deps_cpu.sh') }}
+          key: k1-deps-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/deps.lock', 'tests/integration/mesh_p1/ci/build_deps_cpu.sh', 'tests/integration/mesh_p1/ci/write_manifest.sh') }}
 
       - name: Save ccache
         if: success() && steps.changes.outputs.run == 'true'
