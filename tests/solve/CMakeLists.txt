@@ -377,3 +377,16 @@ if(_solve_backend)
     set_tests_properties(solve_fvm_trace_map PROPERTIES
         TIMEOUT 900 LABELS "fvm;numerical" SKIP_RETURN_CODE 77)
 endif()
+
+# Registration acceptance runs even when the optional solve inputs are absent.
+add_test(NAME solve_ecad_test_registration
+    COMMAND cmake
+        "-DBUILD_DIR=${CMAKE_BINARY_DIR}"
+        "-DCONFIG=$<CONFIG>"
+        "-DECAD=$<BOOL:${CHIPCAE_ENABLE_ECAD}>"
+        "-DSOLVE_BACKEND=$<BOOL:${_solve_backend}>"
+        "-DHAS_IMPORT=$<TARGET_EXISTS:chipcae-import>"
+        "-DHAS_PREVIEW=$<TARGET_EXISTS:chipcae-preview>"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/check_ecad_test_registration.cmake")
+set_tests_properties(solve_ecad_test_registration PROPERTIES
+    TIMEOUT 60 LABELS "solve;configuration;unit;owner:M3")
