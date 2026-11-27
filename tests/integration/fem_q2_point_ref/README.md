@@ -31,7 +31,7 @@ Tests never skip and never return 77.
   uncovered cells, temperature selfcheck and inclusive selfcheck threshold.
 - `richardson_dual`: analytic orders 2 and 3, both signs of error, explicit ratio
   and safety factor, every status, both sides of disagreement, exact binary
-  tolerance equality and numerical validation.
+  tolerance equality, extreme-scale arithmetic and numerical validation.
 - `cli`: two real synthetic rank files, JSON keys/precision, output rejection
   and write errors, dual exit codes 0/1/3, every applicable parser error at all
   levels, numerical errors (including finiteness before range checks across
@@ -55,6 +55,11 @@ implementation stage. A further CLI regression was observed failing before
 fixing the order of checks for nonfinite z and finite, invalid bbox/counts.
 
 ## Using the reference
+
+The module's `__all__` lists its supported Python API: `Q2RefError`, `Q2Mesh`,
+`q2_mesh_from_elements`, `load_fem_q2`, `fem_q2_point_values`, `node_selfcheck`,
+`uniform_top_centroids`, `plane_removed_pv`, `same_point_pv`, `richardson` and
+`dual_reference`. Other names, including imports and CLI plumbing, are helpers.
 
 `load_fem_q2(run_dir)` reads every `accuracy-q2-rank*.json` in numeric rank order.
 Every rank must contain a nonempty `elements` list. It sorts cells by exact
@@ -101,8 +106,12 @@ must stop on any other state rather than substitute another reference.
   an omitted option as `Q2REF_BAD_ARG`.
 - A MONOTONE Richardson sequence with `f_fine=0` has undefined relative GCI.
   It retains the defined `p` and `f_ext` and reports `gci_fine=None` (JSON
-  `null`). Unrepresentable arithmetic still fails explicitly; JSON never emits
-  NaN or Infinity.
+  `null`). Richardson differences, extrapolate corrections and relative GCI
+  use exact rational arithmetic before converting returned quantities to
+  float64. Only a returned nonzero quantity rounding to zero or overflowing
+  raises `Q2REF_BAD_ARG`; an unrepresentable intermediate is allowed. Status
+  uses exact R, so the reported float can round to 1 for MONOTONE data. JSON
+  never emits NaN or Infinity.
 - The numerical import path uses only standard library and NumPy. The mandated
   `field_compare.ensure_output_allowed` reuse is imported lazily for `--json`;
   that existing module imports h5py. Thus JSON file output retains that existing

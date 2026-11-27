@@ -6,11 +6,15 @@ Only the sidecar accuracy-q2-rank*.json format is consumed. No solver or
 vertex-field fallback is used. Geometry and fields are stored in gid order;
 the spatial index is rebuilt for each evaluation because Q2Mesh arrays remain
 mutable even though its dataclass is frozen.
+
+The supported Python surface is exactly the names in __all__. Other names,
+including imported utilities and main (CLI plumbing), are implementation details.
 """
 
 import argparse
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from fractions import Fraction
 import json
 import math
 from numbers import Integral, Real
@@ -23,6 +27,13 @@ from time import perf_counter
 import numpy as np
 
 from tools.vv.warpage_qoi import best_fit_plane
+
+
+__all__ = [
+    "Q2RefError", "Q2Mesh", "q2_mesh_from_elements", "load_fem_q2",
+    "fem_q2_point_values", "node_selfcheck", "uniform_top_centroids",
+    "plane_removed_pv", "same_point_pv", "richardson", "dual_reference",
+]
 
 
 _REL_TOL = 1e-12
@@ -374,8 +385,26 @@ def same_point_pv(q2: Q2Mesh, xy: np.ndarray, z_top: float) -> dict:
             "selfcheck_rel": float(check), "eval_seconds": perf_counter() - start}
 
 
+def _richardson_float(value, name):
+    """Convert a final quantity, rejecting overflow or loss of a nonzero value."""
+    try:
+        result = float(value)
+    except OverflowError as exc:
+        raise Q2RefError(f"Q2REF_BAD_ARG: Richardson {name} overflows float64") from exc
+    if value != 0 and result == 0:
+        raise Q2RefError(f"Q2REF_BAD_ARG: Richardson {name} underflows float64")
+    return result
+
+
 def richardson(f_coarse: float, f_medium: float, f_fine: float, ratio: float = 2.0, fs: float = 1.25) -> dict:
-    """Report observed convergence and GCI; only monotone data has an extrapolate."""
+    """Report observed convergence and GCI; only monotone data has an extrapolate.
+
+    Differences and corrections use exact rational arithmetic until each returned
+    quantity is converted to float64. A returned nonzero quantity that rounds to
+    zero or overflows raises Q2REF_BAD_ARG. Intermediates need not fit float64.
+    Classification uses the exact R, so its reported float may round to 1 even
+    for MONOTONE data. Relative GCI is None when f_fine is zero.
+    """
     values = _scalars(f_coarse=f_coarse, f_medium=f_medium, f_fine=f_fine, ratio=ratio, fs=fs)
     _finite(**values)
     f_coarse, f_medium, f_fine, ratio, fs = values.values()
@@ -387,29 +416,33 @@ def richardson(f_coarse: float, f_medium: float, f_fine: float, ratio: float = 2
     if f_medium == f_fine:
         result["R"] = 0.0
         return result
-    coarse_delta, fine_delta = f_coarse - f_medium, f_medium - f_fine
-    _finite(coarse_delta=coarse_delta, fine_delta=fine_delta)
+    coarse, medium, fine = map(Fraction, (f_coarse, f_medium, f_fine))
+    coarse_delta, fine_delta = coarse - medium, medium - fine
     R = fine_delta / coarse_delta
-    _finite(R=R)
-    result["R"] = R
+    result["R"] = _richardson_float(R, "R")
     if R < 0:
         result["status"] = "OSCILLATORY"
     elif R >= 1:
         result["status"] = "DIVERGENT"
-    elif R == 0:
-        raise Q2RefError("Q2REF_BAD_ARG: convergence ratio underflows float64")
     else:
         # (1-R)/R equals ratio**p-1, with no power overflow for large p.
-        correction = (f_fine - f_medium) * R / (1 - R)
-        p = -math.log(R) / math.log(ratio)
-        f_ext = f_fine + correction
-        _finite(p=p, f_ext=f_ext)
+        correction = -fine_delta * R / (1 - R)
+        if R > Fraction(1, 2):
+            # Preserve 1-R even when R rounds to 1. For a subnormal gap,
+            # -log1p(-gap)/gap tends to 1; divide by log(ratio) before rounding.
+            gap = 1 - R
+            gap_float = float(gap)
+            log_scale = -math.log1p(-gap_float) / gap_float if gap_float else 1.0
+            p = _richardson_float(gap * Fraction(log_scale) / Fraction(math.log(ratio)), "p")
+        else:
+            # Logging the integers preserves factors lost by rounding a
+            # subnormal R. R <= 1/2 keeps this subtraction away from zero.
+            p = (math.log(R.denominator) - math.log(R.numerator)) / math.log(ratio)
+        f_ext = _richardson_float(fine + correction, "f_ext")
         result.update(p=p, f_ext=f_ext, status="MONOTONE")
         # Relative GCI is undefined at zero; the order and extrapolate remain valid.
         if f_fine != 0:
-            gci = fs * abs(correction / f_fine)
-            _finite(gci_fine=gci)
-            result["gci_fine"] = gci
+            result["gci_fine"] = _richardson_float(Fraction(fs) * abs(correction / fine), "gci_fine")
     return result
 
 

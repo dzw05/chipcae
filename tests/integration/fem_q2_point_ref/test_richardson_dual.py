@@ -82,6 +82,64 @@ class RichardsonDualTests(unittest.TestCase):
                 for key in ("p", "f_ext", "gci_fine"):
                     self.assertIsNone(result[key])
 
+    def test_monotone_extreme_scales_preserve_representable_results(self):
+        scale = 2.0**1023
+        # These limits follow by substituting the binary-scaled triples into
+        # R = (medium-fine)/(coarse-medium) and correction = -fine_delta*R/(1-R).
+        # Tiny corrections must survive until the relative GCI is formed.
+        cases = [((1.0, 2.0**-538, 2.0**-539), 1.25,
+                  2.0**-539, 539.0, 2.0**-539, 1.25*2.0**-539),
+                 # Exact R is about (2/3)*2**-1074 and rounds up to the
+                 # smallest subnormal. Its logarithm must retain that factor.
+                 ((3.0, 3*2.0**-1074, 2.0**-1074), 3.0,
+                  2.0**-1074, 1073+math.log2(3), 2.0**-1074, 2.0**-1072),
+                 ((scale, -scale, -1.5*scale), 1.25,
+                  0.25, 2.0, -(5/3)*scale, 5/36),
+                 # The correction is -147/64*scale (outside float64), but
+                 # adding fine=scale gives the representable -83/64*scale.
+                 (((109/64)*scale, (85/64)*scale, scale), 1.25,
+                  7/8, -math.log(7/8)/math.log(2), -(83/64)*scale, 735/256),
+                 # correction/fine overflows; multiplying by fs rescales it.
+                 ((3.0, 1.0, 2.0**-1024), 2.0**-1023,
+                  0.5, 1.0, -1.0, 2.0),
+                 # R = 1-2**-55 rounds to 1.0, but p and the extrapolate
+                 # are defined. f_ext is exactly 1-2**54 before rounding.
+                 ((1.0, 0.5, 2.0**-56), 1.25,
+                  1.0, 2.0**-55/math.log(2), float(1-2**54), 1.25*2.0**110)]
+        for values, fs, expected_R, p, f_ext, gci in cases:
+            for sign in (1, -1):
+                with self.subTest(values=values, fs=fs, sign=sign):
+                    result = ref.richardson(*(sign*value for value in values), fs=fs)
+                    self.assertEqual(set(result), RICHARDSON_KEYS)
+                    self.assertEqual(result["status"], "MONOTONE")
+                    for key, expected, tolerance in (("R", expected_R, 1e-12),
+                                                     ("p", p, 1e-10),
+                                                     ("f_ext", sign*f_ext, 1e-12),
+                                                     ("gci_fine", gci, 1e-12)):
+                        self.assertTrue(math.isfinite(result[key]), key)
+                        self.assertLessEqual(abs(result[key]-expected), tolerance*abs(expected), key)
+
+    def test_overflowing_differences_preserve_nonmonotone_status(self):
+        scale = 1.5*2.0**1023
+        result = ref.richardson(scale, -scale, scale)
+        self.assertEqual(result["status"], "OSCILLATORY")
+        self.assertLessEqual(abs(result["R"]+1), 1e-12)
+        for key in ("p", "f_ext", "gci_fine"):
+            self.assertIsNone(result[key])
+
+    def test_unrepresentable_returned_quantities_raise_documented_error(self):
+        # Respectively: R underflows, f_ext underflows, f_ext overflows, and
+        # relative GCI overflows. All input scalars themselves are finite.
+        cases = [(2.0**1023, 2.0**-1023, 0.0),
+                 (1.0, 2.0**-538, 0.0),
+                 (1.0, 0.75, 0.51),
+                 (3.0, 1.0, 2.0**-1074)]
+        # Scale the third triple so only its extrapolate exceeds float64.
+        cases[2] = tuple(value*2.0**1023 for value in cases[2])
+        for values in cases:
+            with self.subTest(values=values):
+                self.error("Q2REF_BAD_ARG", ref.richardson, *values)
+
     def test_dual_states_and_exact_relative_error_arithmetic(self):
         cases = [(1.0, 1.01, 0.99, 0.02, "PASS", True, True),
                  (1.0, 2.0, 4.0, 0.02, "FAIL", False, False),

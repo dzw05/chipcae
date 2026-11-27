@@ -13,6 +13,14 @@ from tools.vv import fem_q2_point_ref as ref
 
 
 class PointExactTests(unittest.TestCase):
+    def test_supported_public_surface(self):
+        expected = {"Q2RefError", "Q2Mesh", "q2_mesh_from_elements", "load_fem_q2",
+                    "fem_q2_point_values", "node_selfcheck", "uniform_top_centroids",
+                    "plane_removed_pv", "same_point_pv", "richardson", "dual_reference"}
+        self.assertEqual(set(ref.__all__), expected)
+        for name in expected:
+            self.assertTrue(callable(getattr(ref, name)), name)
+
     def test_mesh_contract_and_tensor_storage(self):
         data = elements(field=general)
         mesh = ref.q2_mesh_from_elements(data)
