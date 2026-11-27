@@ -20,6 +20,7 @@ endif()
 # name. Probe output goes to files, since PRRTE descendants may inherit pipes.
 set(_runner [==[
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -49,7 +50,7 @@ def terminate_group(child):
 
 def launches(probe, iterations):
     maximum = 0.0
-    completed = nonzero = threshold = timeouts = 0
+    completed = nonzero = threshold = timeouts = invalid_reports = 0
     for index in range(1, iterations + 1):
         with tempfile.TemporaryFile() as output:
             begin = time.perf_counter()
@@ -68,14 +69,18 @@ def launches(probe, iterations):
                 # Popen time is part of the fixed startup-through-exit budget.
                 remaining = max(0.0, 10.0 - (time.perf_counter() - begin))
                 status = child.wait(timeout=remaining)
+                elapsed = time.perf_counter() - begin
             except subprocess.TimeoutExpired:
                 timed_out = True
+                # Record the observed deadline overrun before cleanup. Never
+                # clamp a scheduling delay to 10 s or charge the kill grace
+                # period to startup. Timeout is also an independent failure.
+                elapsed = time.perf_counter() - begin
                 terminate_group(child)
                 status = child.returncode
             except BaseException:
                 terminate_group(child)
                 raise
-            elapsed = time.perf_counter() - begin
             if not timed_out and (elapsed > 10.0 or status != 0):
                 # A failed parent can exit normally while descendants keep
                 # running and retaining the regular-file capture descriptors.
@@ -93,11 +98,22 @@ def launches(probe, iterations):
             diagnostic = output.read(65536).decode(errors="replace")
             if diagnostic:
                 print(diagnostic, end="" if diagnostic.endswith("\n") else "\n", flush=True)
-            if timed_out or elapsed > 10.0 or status != 0:
+            valid_report = True
+            if not timed_out and status == 0:
+                reports = re.findall(r"^probe init/finalize=([^ ]+) s$", diagnostic, re.M)
+                try:
+                    valid_report = len(reports) == 1 and math.isfinite(float(reports[0])) and float(reports[0]) >= 0
+                except ValueError:
+                    valid_report = False
+                if not valid_report:
+                    invalid_reports += 1
+                    print(f"iteration={index}: invalid probe init/finalize report", flush=True)
+            if timed_out or elapsed > 10.0 or status != 0 or not valid_report:
                 break
     print(f"summary requested={iterations} completed={completed} maximum={maximum:.6f} s "
-          f"nonzero={nonzero} threshold_failures={threshold} timeouts={timeouts}", flush=True)
-    return int(completed != iterations or nonzero != 0 or threshold != 0 or timeouts != 0)
+          f"nonzero={nonzero} threshold_failures={threshold} timeouts={timeouts} "
+          f"invalid_reports={invalid_reports}", flush=True)
+    return int(completed != iterations or nonzero != 0 or threshold != 0 or timeouts != 0 or invalid_reports != 0)
 
 
 def driver_check(case, script, python):
@@ -117,16 +133,44 @@ def driver_check(case, script, python):
                       "time.sleep(60)\n")
             body += (f"subprocess.Popen([{python!r}, '-c', {worker!r}])\n"
                      f"while not Path({str(descendant)!r}).exists(): time.sleep(0.01)\n")
-            body += "time.sleep(30)\n" if case == "sleep" else "raise SystemExit(7)\n"
+            # Force the parent's TERM grace period too, so cleanup would add
+            # at least 0.5 s to an incorrectly measured startup duration.
+            body += ("import signal\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                     "time.sleep(30)\n" if case == "sleep" else "raise SystemExit(7)\n")
         elif case == "exit7":
             body += "raise SystemExit(7)\n"
+        elif case == "timeout_timing":
+            body += "time.sleep(30)\n"
         elif case == "environment":
             body += ("assert os.environ['CHIPCAE_SINGLETON_SENTINEL'] == 'child inherits spaces=ok'\n"
                      "print('inherited sentinel verified')\n")
+        if case not in ("missing_report", "invalid_report"):
+            body += "print('probe init/finalize=0.000001 s')\n"
+        elif case == "invalid_report":
+            body += "print('probe init/finalize=nan s')\n"
         probe.write_text(body)
         probe.chmod(0o700)
         if case == "missing":
             probe.unlink()
+        if case in ("timing", "timeout_timing"):
+            # Completed and timed-out processes must retain the observed
+            # overrun. The completed case tests the threshold independently.
+            import contextlib
+            import io
+            from unittest.mock import patch
+            output = io.StringIO()
+            with patch.object(time, "perf_counter", side_effect=[0.0, 0.0, 10.25]), \
+                    contextlib.redirect_stdout(output):
+                status = launches(str(probe), 200)
+            print(output.getvalue(), end="", flush=True)
+            assert status == 1 and marker.read_text().splitlines() == ["launch"]
+            if case == "timing":
+                assert "elapsed=10.250000 s exit=0 timeout=0" in output.getvalue()
+                assert "maximum=10.250000 s nonzero=0 threshold_failures=1 timeouts=0" in output.getvalue()
+            else:
+                assert "elapsed=10.250000 s" in output.getvalue() and "timeout=1" in output.getvalue()
+                assert "maximum=10.250000 s nonzero=1 threshold_failures=1 timeouts=1" in output.getvalue()
+            return
         count = 199 if case == "iterations" else 200
         command = ["cmake", f"-DPROBE={probe}", f"-DPYTHON={python}"]
         # The success case must exercise the default, not a supplied N=200.
@@ -154,14 +198,19 @@ def driver_check(case, script, python):
                     assert result.stdout.count("inherited sentinel verified") == 200
             else:
                 assert result.returncode != 0, f"driver accepted controlled {case} failure"
-                expected = {"sleep": "threshold_failures=1 timeouts=1", "exit7": "exit=7",
+                expected = {"sleep": "timeouts=1", "exit7": "exit=7",
                             "descendant_exit": "exit=7", "missing": "exit=launch-error",
-                            "iterations": "integer >= 200"}[case]
+                            "iterations": "integer >= 200",
+                            "missing_report": "invalid probe init/finalize report",
+                            "invalid_report": "invalid probe init/finalize report"}[case]
                 assert expected in result.stdout, f"wrong failure for {case}: expected {expected!r}"
-                launched = case in ("sleep", "exit7", "descendant_exit")
+                launched = case in ("sleep", "exit7", "descendant_exit", "missing_report", "invalid_report")
                 assert actual == ["launch"] * int(launched), "driver retried/launched invalid input"
                 if launched:
                     assert len(records) == 1 and "completed=1 " in result.stdout
+                    if case == "sleep":
+                        assert float(records[0][1]) >= 10.0 and records[0][3] == '1', \
+                            "timeout must report the observed deadline overrun"
                 elif case == "missing":
                     assert "completed=0 " in result.stdout
             if case in ("sleep", "descendant_exit"):
@@ -228,6 +277,115 @@ def singleton_environment(props):
                     value = value[4:]
                 values[name] = value
     return values
+
+
+DIRECTORY_KEYS = {"PRTE_MCA_prte_tmpdir_base", "PMIX_SERVER_TMPDIR", "PMIX_SYSTEM_TMPDIR"}
+
+
+def check_protection(name, settings, protection):
+    assert protection.keys() <= settings.keys(), f"{name}: direct singleton path lacks probe protection"
+    for key, value in protection.items():
+        if key in DIRECTORY_KEYS:
+            assert Path(settings[key]).is_absolute(), f"{name}: {key} lacks an absolute session directory"
+        else:
+            assert settings[key] == value, f"{name}: {key} disagrees with probe protection"
+
+
+def coverage_check(build, entries):
+    # This inventory is deliberately independent of the module's test names,
+    # labels and selection rules. Inspect ALL built executables, including
+    # static MPI links, and follow local Python imports used by wrappers.
+    import ast
+    cache = Path(build, "CMakeCache.txt").read_text()
+    source = Path(re.search(r"^CMAKE_HOME_DIRECTORY:[^=]+=(.+)$", cache, re.M)[1])
+    nm = re.search(r"^CMAKE_NM:[^=]+=(.+)$", cache, re.M)[1]
+    manifests = list(Path(build).glob(".ompi-executables-*.txt"))
+    assert manifests, "missing executable inventory for independent MPI coverage audit"
+    binaries = set()
+    for manifest in manifests:
+        for line in manifest.read_text().splitlines():
+            path = Path(line)
+            if not path.is_file():
+                continue  # Non-default/manual targets cannot be launched by this CTest build.
+            result = subprocess.run([nm, "-g", str(path)], check=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if re.search(r"\b_?(?:P?MPI_Init(?:_thread)?|PetscInitialize(?:NoArguments)?)\b", result.stdout):
+                binaries.add(path.resolve())
+    assert binaries, "independent audit found no MPI-initializing executables"
+    modules = {}
+    for path in source.rglob("*.py"):
+        if any(part.startswith("build") or part in (".git", "third_party")
+               for part in path.relative_to(source).parts):
+            continue
+        modules.setdefault(path.stem, []).append(path)
+    texts = {}
+
+    def script_text(path, seen):
+        path = path.resolve()
+        if path in seen:
+            return ""
+        seen.add(path)
+        if path not in texts:
+            texts[path] = path.read_text(errors="replace")
+        content = texts[path]
+        imported = []
+        if path.suffix == ".py":
+            for node in ast.walk(ast.parse(content)):
+                if isinstance(node, ast.Import):
+                    imported.extend(alias.name for alias in node.names)
+                elif isinstance(node, ast.ImportFrom):
+                    imported.append(node.module or "")
+                    imported.extend(".".join(filter(None, (node.module, alias.name))) for alias in node.names)
+        children = []
+        for name in imported:
+            if not name:
+                continue
+            relative = Path(*name.split(".")).with_suffix(".py")
+            local = path.parent / relative
+            absolute = source / relative
+            if local.is_file():
+                children.append(local)
+            elif absolute.is_file():
+                children.append(absolute)
+            else:
+                # Some harnesses extend sys.path at runtime. Keep all possible
+                # repository modules when that lookup cannot be resolved here.
+                children.extend(modules.get(name.split(".")[-1], []))
+        return content + "\n" + "\n".join(script_text(child, seen) for child in children)
+
+    acceptance = next(test for test in entries if test["name"] == "infra_ompi_singleton_startup")
+    protection = singleton_environment(test_properties(acceptance))
+    covered = []
+    missing = []
+    directories = {}
+    for test in entries:
+        command = test.get("command", [])
+        reasons = []
+        for arg in command:
+            path = Path(arg)
+            if path.is_file() and path.resolve() in binaries:
+                reasons.append(path.name)
+            elif path.is_file() and path.suffix in (".py", ".cmake"):
+                content = script_text(path, set())
+                if re.search(r"\b(?:P?MPI_Init(?:_thread)?|PetscInitialize(?:NoArguments)?)\s*\(", content):
+                    reasons.append(f"{path.name}: embedded MPI initializer")
+                if any(binary.name in content for binary in binaries):
+                    reasons.append(f"{path.name}: MPI executable reference/import")
+        if reasons:
+            try:
+                settings = singleton_environment(test_properties(test))
+                check_protection(test["name"], settings, protection)
+                for key in DIRECTORY_KEYS & protection.keys():
+                    token = (key, Path(settings[key]).resolve())
+                    assert token not in directories, f"{test['name']}: shares {key} with {directories.get(token)}"
+                    directories[token] = test["name"]
+            except AssertionError as error:
+                missing.append(str(error))
+            covered.append(test["name"])
+            print(f"independent MPI coverage: {test['name']}: {', '.join(reasons)}", flush=True)
+    print(f"independent MPI coverage: {len(entries)} registrations, {len(binaries)} MPI executables, "
+          f"{len(covered)} callers protected", flush=True)
+    assert not missing, "independent MPI coverage gaps:\n" + "\n".join(missing)
 
 
 def configuration_check(build):
@@ -302,21 +460,31 @@ def configuration_check(build):
     protection = mca_environment(acceptance)
     assert protection, "missing singleton startup protection: acceptance has no test-local MCA environment"
     protection.update(singleton_environment(acceptance))
+    coverage_check(build, entries)
     for name in selected:
         if name in tests:
             settings = singleton_environment(properties(tests[name]))
-            assert protection.keys() <= settings.keys(), f"{name}: direct singleton path lacks probe protection"
-            for key, value in protection.items():
-                if Path(value).is_absolute():
-                    # Session-directory isolation may deliberately use a
-                    # different absolute directory for each test.
-                    assert Path(settings[key]).is_absolute(), f"{name}: {key} lacks an absolute session directory"
-                else:
-                    assert settings[key] == value, f"{name}: {key} disagrees with probe protection"
+            check_protection(name, settings, protection)
     for name in ("core_types", "k1_background", "k1_mesh_digest", "k1_cut"):
         if name in tests:
             assert not singleton_environment(properties(tests[name])), f"{name}: unrelated test received MCA injection"
-    print("singleton registration, direct-path protection and existing test properties verified")
+    # Prove this inventory can detect an omission without consulting the
+    # module's list: remove protection from a real direct caller and a wrapper.
+    import copy
+    for omitted in ("k1_results_validation", "mesh_digest_golden"):
+        if omitted not in tests:
+            continue
+        mutated = copy.deepcopy(entries)
+        test = next(test for test in mutated if test["name"] == omitted)
+        test["properties"] = [prop for prop in test["properties"]
+                              if prop["name"] not in ("ENVIRONMENT", "ENVIRONMENT_MODIFICATION")]
+        try:
+            coverage_check(build, mutated)
+        except AssertionError as error:
+            assert omitted in str(error), "independent audit failed for an unrelated reason"
+        else:
+            raise AssertionError(f"independent audit missed unprotected {omitted}")
+    print("singleton registration, independent caller coverage and existing test properties verified")
 
 
 def module_check(case, script, python, real_build):
@@ -327,7 +495,9 @@ def module_check(case, script, python, real_build):
     for key in ("MPI_C_COMPILER", "MPI_CXX_COMPILER", "CMAKE_C_COMPILER", "CMAKE_CXX_COMPILER"):
         match = re.search(rf"^{key}:[^=]+=(.+)$", cache, re.M)
         assert match, f"configured installation lacks {key}"
-        options.append(f"-D{key}={match[1]}")
+        if case != "c_only" or "CXX" not in key:
+            options.append(f"-D{key}={match[1]}")
+    languages = "C" if case == "c_only" else "C CXX"
     module = Path(script).with_name("ChipcaeMpiSingleton.cmake").as_posix()
     groups = {
         "tests/integration/mesh_p1": ("mesh_digest_golden", "mesh_digest_mpi", "k1_preview",
@@ -406,11 +576,14 @@ endif()''')
             "add_subdirectory(mesh_p1)\nadd_subdirectory(callers)\n")
         root_definitions = (root / "CMakeLists.txt").read_text()
         (root / "CMakeLists.txt").write_text(f'''cmake_minimum_required(VERSION 3.20)
-project(singleton_module_acceptance LANGUAGES C CXX)
+project(singleton_module_acceptance LANGUAGES {languages})
 enable_testing()
 set(CHIPCAE_BUILD_TESTS ON)
 set(CHIPCAE_ENABLE_MPI ON)
-find_package(MPI REQUIRED COMPONENTS C CXX)
+find_package(MPI REQUIRED COMPONENTS {languages})
+if(FIXTURE_MPI_LIBRARY)
+    set_property(TARGET MPI::MPI_C PROPERTY INTERFACE_LINK_LIBRARIES "${{FIXTURE_MPI_LIBRARY}}")
+endif()
 function(chipcae_set_warnings)
 endfunction()
 {root_definitions}
@@ -434,6 +607,28 @@ include("{module}")
 
         configured = configure(build)
         assert configured.returncode == 0, "real Open MPI fixture failed to configure"
+        if case == "runtime_mismatch":
+            stub = root / "stub"
+            stub.mkdir()
+            (stub / "version.c").write_text('''#include <string.h>
+int MPI_Get_library_version(char *version, int *length) {
+    const char *value = "MPICH controlled mismatched runtime";
+    strcpy(version, value);
+    *length = (int)strlen(value);
+    return 0;
+}
+''')
+            (stub / "CMakeLists.txt").write_text('''cmake_minimum_required(VERSION 3.20)
+project(mismatched_runtime LANGUAGES C)
+add_library(mpi_mismatch STATIC version.c)
+''')
+            subprocess.run(["cmake", "-G", "Ninja", "-S", str(stub), "-B", str(stub / "build")], check=True)
+            subprocess.run(["cmake", "--build", str(stub / "build"), "-j2"], check=True)
+            library = next((stub / "build").glob("*mpi_mismatch*.a"))
+            result = configure(build, [f"-DFIXTURE_MPI_LIBRARY={library}"])
+            assert result.returncode != 0, "Open MPI headers concealed a mismatched linked runtime"
+            assert "runtime" in result.stdout.lower() and "MPICH" in result.stdout
+            return
         if case == "compatibility":
             # Exercise our version guard with the installed interpreter. This
             # is not a claim of running a second/older CMake executable.
@@ -446,6 +641,8 @@ include("{module}")
         entries = registered_tests(build)
         acceptance = [test for test in entries if test["name"] == "infra_ompi_singleton_startup"]
         assert len(acceptance) == 1, "including module twice duplicated acceptance registration"
+        assert "SKIP_REGULAR_EXPRESSION" not in test_properties(acceptance[0]), \
+            "configured Open MPI component was misclassified and acceptance skipped"
         tests = {test["name"]: test for test in entries}
         for name in (*selected, *unrelated):
             test = tests[name]
@@ -466,7 +663,7 @@ include("{module}")
         assert protection, "missing singleton startup protection: cannot validate module environment contract"
         protection.update(singleton_environment(test_properties(acceptance[0])))
 
-        if case.startswith("conflict_") or case == "matching":
+        if case.startswith("conflict_") or case in ("matching", "inherited_baseline"):
             # Discover the independently selected candidate rather than locking
             # the tests to hash or another unvalidated switch. Component values
             # and per-test session paths are both supported.
@@ -477,11 +674,13 @@ include("{module}")
                 conflict = "chipcae-controlled-conflicting-value"
                 extra = []
                 environment = dict(os.environ)
-                if case == "matching":
+                if case == "inherited_baseline":
+                    environment[key] = str(root)
+                elif case == "matching":
                     extra = [f"-DFIXTURE_ENV={key}={value}", f"-DFIXTURE_MOD={key}=set:{value}"]
                     # A global session path cannot match deliberately distinct
                     # per-test paths. Matching inheritance applies to shared values.
-                    if not Path(value).is_absolute():
+                    if key not in DIRECTORY_KEYS:
                         environment[key] = value
                 elif case == "conflict_inherited":
                     environment[key] = conflict
@@ -492,7 +691,7 @@ include("{module}")
                 else:
                     extra = [f"-DFIXTURE_MOD={key}=unset:"]
                 result = configure(build, extra, environment)
-                if case != "matching":
+                if case not in ("matching", "inherited_baseline"):
                     assert result.returncode != 0, f"silently accepted {case}: {key}"
                     assert key in result.stdout, "conflict diagnostic must identify the MCA name"
                     assert re.search(r"conflict|incompatible|冲突", result.stdout, re.I), "no explicit conflict diagnostic"
@@ -502,7 +701,10 @@ include("{module}")
                         assert conflict in result.stdout, "diagnostic must preserve the conflicting value"
                     print(f"{case}: explicit MCA conflict diagnostic verified")
                     continue
-                assert result.returncode == 0, "matching MCA assignments must not conflict"
+                assert result.returncode == 0, "matching assignments and inherited directory baselines must configure"
+                if case == "inherited_baseline":
+                    assert any("overrid" in line.lower() and f"{key}={root}" in line
+                               for line in result.stdout.splitlines()), "inherited override must identify its key and baseline"
                 tests = {test["name"]: test for test in registered_tests(build)}
                 # The combined reader rejects duplicate ENVIRONMENT entries and
                 # repeated assignments across ENVIRONMENT / MODIFICATION.
@@ -518,7 +720,7 @@ include("{module}")
             assert all(any(entry == f"{key}={value}" for entry in props.get("ENVIRONMENT", []))
                        for key, value in settings.items()), f"{name}: protection must be test-local ENVIRONMENT"
             for key, value in protection.items():
-                if Path(value).is_absolute():
+                if key in DIRECTORY_KEYS:
                     path = Path(settings[key])
                     assert path.is_absolute() and build.resolve() in path.resolve().parents
                     assert path.is_dir() and os.access(path, os.R_OK | os.W_OK | os.X_OK)
@@ -533,7 +735,7 @@ include("{module}")
         for key, value in protection.items():
             assert key in configured.stdout and value in configured.stdout, "configure must report selected protection"
         if session_paths:
-            absolute_keys = [key for key, value in protection.items() if Path(value).is_absolute()]
+            absolute_keys = [key for key in protection if key in DIRECTORY_KEYS]
             for key in absolute_keys:
                 paths = {singleton_environment(test_properties(tests[name]))[key]
                          for name in (*selected, "infra_ompi_singleton_startup")}
@@ -555,6 +757,16 @@ include("{module}")
                 for key, value in singleton_environment(test_properties(tests[name])).items():
                     assert observed.get(key) == value, f"{name}: child did not inherit {key}"
                 assert observed["OMP_NUM_THREADS"] == "2" and observed["CHIPCAE_PRESERVED"] == "kept"
+        if case == "c_only":
+            subprocess.run(["cmake", "--build", str(build), "--target",
+                            "chipcae_ompi_singleton_probe", "-j2"], check=True)
+            environment = dict(os.environ, **singleton_environment(test_properties(acceptance[0])))
+            probe = next(arg[len("-DPROBE="):] for arg in acceptance[0]["command"]
+                         if arg.startswith("-DPROBE="))
+            result = subprocess.run([probe], env=environment, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, timeout=10)
+            print(result.stdout, end="", flush=True)
+            assert result.returncode == 0 and "probe init/finalize=" in result.stdout
         print(f"{case}: recursive selection, duplicate include and environment contract verified")
     assert not root.exists(), "controlled build/session directories were not cleaned up"
 
@@ -607,9 +819,20 @@ endif()
 
 
 mode, script, python, probe, iterations, build = sys.argv[1:]
-if mode in ("sleep", "exit7", "missing", "iterations", "success", "environment", "descendant_exit"):
+if mode == "component_paths":
+    try:
+        check_protection("component_paths", {"PMIX_MCA_psec": "/different/component"},
+                         {"PMIX_MCA_psec": "/original/component"})
+    except AssertionError as error:
+        assert "PMIX_MCA_psec" in str(error)
+    else:
+        raise AssertionError("absolute component values bypassed equality check")
+    check_protection("directories", {key: "/different/session" for key in DIRECTORY_KEYS},
+                     {key: "/original/session" for key in DIRECTORY_KEYS})
+    print("directory names permit isolation; absolute component values require equality")
+elif mode in ("sleep", "timing", "timeout_timing", "exit7", "missing", "iterations", "success", "environment", "descendant_exit", "missing_report", "invalid_report"):
     driver_check(mode, script, python)
-elif mode in ("selection", "propagation", "matching", "compatibility", "conflict_inherited", "conflict_environment",
+elif mode in ("c_only", "selection", "propagation", "matching", "inherited_baseline", "runtime_mismatch", "compatibility", "conflict_inherited", "conflict_environment",
               "conflict_modification", "conflict_unset"):
     module_check(mode, script, python, build)
 elif mode == "configuration":
