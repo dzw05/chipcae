@@ -415,3 +415,8 @@ if(_solve_backend AND Python3_EXECUTABLE)
     set_tests_properties(solve_k1_stop_e2e PROPERTIES TIMEOUT 900 LABELS "solve;numerical;mpi"
         ENVIRONMENT "OMP_NUM_THREADS=2;OPENBLAS_NUM_THREADS=1;OMPI_ALLOW_RUN_AS_ROOT=1;OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1")
 endif()
+
+if(_solve_backend AND TARGET chipcae_test_solve_parts)
+    # The generated parts harness includes pipeline.cpp and needs its K1 implementation.
+    target_link_libraries(chipcae_test_solve_parts PRIVATE chipcae_solve_k1_stop)
+endif()
