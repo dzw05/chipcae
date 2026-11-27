@@ -329,8 +329,9 @@ void failure(const mesh::Expected<fv::ThermalResult>& result,
     require(error.path == "fvm/thermal", "convergence error path: " + error.path);
     if (rank() == 0)
         std::cout << "observed error: " << error.reason << '\n';
-    require(error.reason.starts_with("INTERNAL: SOLVER_NOT_CONVERGED field=T "),
-            "missing structured SOLVER_NOT_CONVERGED field=T: " + error.reason);
+    require(
+        error.reason.starts_with("INTERNAL: SOLVER_NOT_CONVERGED (KSP nonconvergence) field=T "),
+        "missing structured SOLVER_NOT_CONVERGED field=T: " + error.reason);
     const int reason = diagnostic_int(error.reason, "reason");
     require(capped ? reason == -3 : reason < 0, "unexpected reason: " + error.reason);
     const int its = diagnostic_int(error.reason, "iterations");
@@ -429,13 +430,14 @@ void false_green() {
         // A positive KSP reason with an excessive true residual is also a valid rejection.
         const auto reason = diagnostic_int(result.error().reason, "reason");
         if (reason > 0) {
-            together(
-                result.error().path == "fvm/thermal" &&
-                    result.error().reason.starts_with("INTERNAL: SOLVER_NOT_CONVERGED field=T ") &&
-                    result.error().reason.find(" norm_type=preconditioned") != std::string::npos &&
-                    result.error().reason.find(" true_residual=") != std::string::npos &&
-                    result.error().reason.find(" rtol=") != std::string::npos,
-                "old-norm rejection must be structured: " + result.error().reason);
+            together(result.error().path == "fvm/thermal" &&
+                         result.error().reason.starts_with(
+                             "INTERNAL: SOLVER_NOT_CONVERGED (KSP nonconvergence) field=T ") &&
+                         result.error().reason.find(" norm_type=preconditioned") !=
+                             std::string::npos &&
+                         result.error().reason.find(" true_residual=") != std::string::npos &&
+                         result.error().reason.find(" rtol=") != std::string::npos,
+                     "old-norm rejection must be structured: " + result.error().reason);
             const auto its = diagnostic_int(result.error().reason, "iterations");
             require(its >= 0 && its <= f.problem.max_iter, "old-norm rejection iteration budget");
         } else {
