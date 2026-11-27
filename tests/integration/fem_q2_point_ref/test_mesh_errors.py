@@ -61,9 +61,26 @@ class MeshErrorTests(unittest.TestCase):
                 data = deepcopy(self.data)
                 data[0][key] = value
                 self.error("Q2REF_NODE_COUNT", ref.q2_mesh_from_elements, data)
-        data = deepcopy(self.data)
-        data[0]["U"][0] = [1, 2]
-        self.error("Q2REF_BAD_JSON", ref.q2_mesh_from_elements, data)
+
+    def test_ragged_numeric_arrays_report_node_count(self):
+        for key in ("points", "U", "T"):
+            rows = [[], [1, 2], [1, 2, 3, 4], [[1, 2]]]
+            if key != "T":
+                rows.append(2.0)
+            for row in rows:
+                with self.subTest(key=key, row=row):
+                    data = deepcopy(self.data)
+                    data[0][key][0] = row
+                    self.error("Q2REF_NODE_COUNT", ref.q2_mesh_from_elements, data)
+
+    def test_ragged_nonnumeric_arrays_report_bad_json(self):
+        for key in ("points", "U", "T"):
+            for row in ("not-a-number", [1, "not-a-number"], [["not-a-number"]],
+                        {"bad": 1}, [1 + 2j]):
+                with self.subTest(key=key, row=row):
+                    data = deepcopy(self.data)
+                    data[0][key][0] = row
+                    self.error("Q2REF_BAD_JSON", ref.q2_mesh_from_elements, data)
 
     def test_nonfinite_nodes_fields_and_query_points(self):
         for key in ("points", "U", "T"):

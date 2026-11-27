@@ -52,6 +52,22 @@ def _array(value, name, prefix="Q2REF_BAD_ARG"):
         raise Q2RefError(f"{prefix}: {name} must be a real numeric array") from exc
 
 
+def _node_array(value, name):
+    try:
+        return _array(value, name, "Q2REF_BAD_JSON")
+    except Q2RefError as exc:
+        # NumPy rejects ragged shapes before converting their numeric values.
+        # Check the leaves to distinguish bad values from malformed node arrays.
+        pending = [value]
+        while pending:
+            item = pending.pop()
+            if isinstance(item, (list, tuple)) or (isinstance(item, np.ndarray) and item.ndim > 0):
+                pending.extend(item)
+            else:
+                _array(item, name, "Q2REF_BAD_JSON")
+        raise Q2RefError(f"Q2REF_NODE_COUNT: {name} must be a rectangular numeric array") from exc
+
+
 def _scalars(**values):
     result = {}
     for name, value in values.items():
@@ -129,7 +145,7 @@ def q2_mesh_from_elements(elements: Sequence[Mapping]) -> Q2Mesh:
     displacement = np.empty((count, 3, 3, 3, 3), dtype=np.float64)
     temperature = np.empty((count, 3, 3, 3), dtype=np.float64)
     for row, (gid, element) in enumerate(rows):
-        arrays = {name: _array(element[name], name, "Q2REF_BAD_JSON") for name in ("points", "U", "T")}
+        arrays = {name: _node_array(element[name], name) for name in ("points", "U", "T")}
         for name, shape in (("points", (27, 3)), ("U", (27, 3)), ("T", (27,))):
             if arrays[name].shape != shape:
                 raise Q2RefError(f"Q2REF_NODE_COUNT: gid {gid} {name} must have shape {shape}")
