@@ -109,7 +109,7 @@ if(_solve_backend AND TARGET chipcae_material)
     add_test(NAME solve_copper_trace_map COMMAND chipcae_test_copper_trace_map)
     set_tests_properties(solve_copper_trace_map PROPERTIES TIMEOUT 60 LABELS "solve;material;tierA")
 endif()
-if(_solve_backend)
+if(_solve_backend AND CHIPCAE_ENABLE_ECAD)
     add_test(NAME solve_copper_trace_map_paths COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/test_copper_trace_map.py
         $<TARGET_FILE:chipcae-solve> ${PROJECT_SOURCE_DIR})
@@ -299,12 +299,12 @@ if(TARGET chipcae_solve_inputs)
     endif()
 endif()
 
-if(_solve_backend)
+if(_solve_backend AND CHIPCAE_ENABLE_ECAD)
     add_test(NAME solve_fem_thermal_bow COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/test_fem_thermal_bow.py
         $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE})
     set_tests_properties(solve_fem_thermal_bow PROPERTIES
-        TIMEOUT 600 LABELS "solve;numerical" SKIP_RETURN_CODE 77)
+        TIMEOUT 600 LABELS "solve;numerical")
 endif()
 
 # Nonconvex outline acceptance; containment needs no numerical backend.
@@ -362,7 +362,7 @@ if(_solve_backend)
     add_test(NAME solve_direct_refine COMMAND chipcae_test_direct_refine)
     set_tests_properties(solve_direct_refine PROPERTIES TIMEOUT 120 LABELS "solve;numerical")
 endif()
-if(_solve_backend AND TARGET chipcae-import AND TARGET chipcae-preview)
+if(_solve_backend AND CHIPCAE_ENABLE_ECAD AND TARGET chipcae-import AND TARGET chipcae-preview)
     add_test(NAME solve_lu_refine_floor COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/test_lu_refine_floor.py
         $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE}
@@ -370,12 +370,12 @@ if(_solve_backend AND TARGET chipcae-import AND TARGET chipcae-preview)
     set_tests_properties(solve_lu_refine_floor PROPERTIES TIMEOUT 600 LABELS "solve;numerical;mpi;io"
         ENVIRONMENT "OMP_NUM_THREADS=2;OPENBLAS_NUM_THREADS=1;OMPI_ALLOW_RUN_AS_ROOT=1;OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1")
 endif()
-if(_solve_backend)
+if(_solve_backend AND CHIPCAE_ENABLE_ECAD)
     add_test(NAME solve_fvm_trace_map COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/test_fvm_trace_map.py
         $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE})
     set_tests_properties(solve_fvm_trace_map PROPERTIES
-        TIMEOUT 900 LABELS "fvm;numerical" SKIP_RETURN_CODE 77)
+        TIMEOUT 900 LABELS "fvm;numerical")
 endif()
 
 # Registration acceptance runs even when the optional solve inputs are absent.
