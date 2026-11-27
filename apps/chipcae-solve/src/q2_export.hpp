@@ -152,8 +152,9 @@ Q2ExportStats write_q2_export(const std::filesystem::path& file,
                 if (partitioning[static_cast<std::size_t>(e)] == rank)
                     write_element(e);
         } else {
-            // Unordered GIDs use repeated minimum selection to retain constant auxiliary
-            // memory. Production arrays are normally increasing and take the linear path.
+            // Unordered GIDs use O(ne * stats.elements) repeated minimum selection to retain
+            // constant auxiliary memory (quadratic when this rank owns all elements).
+            // Production arrays are normally increasing and take the linear path.
             previous.reset();
             for (std::size_t n = 0; n < stats.elements; ++n) {
                 int selected = -1;

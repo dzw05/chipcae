@@ -237,7 +237,8 @@ Values reconstruct(const Element& e, const Point& p) {
     return v;
 }
 
-// Fixed plane x+.37y=.53, chosen before any exporter execution. Rectangle clipping
+// Fixed plane x+.37y=.55 cuts eight cells on each fixture grid, with retained
+// fractions in [0.3125, 0.759], and misses every grid vertex. Rectangle clipping
 // plus the shoelace centroid gives the physical prism centroid without MFEM.
 std::vector<Point> cut_centroid(const Point& lo, const Point& hi) {
     std::vector<Point> polygon{
@@ -247,7 +248,7 @@ std::vector<Point> cut_centroid(const Point& lo, const Point& hi) {
     for (std::size_t i = 0; i < polygon.size(); ++i) {
         const auto& p = polygon[i];
         const auto& q = polygon[(i + 1) % polygon.size()];
-        const double a = p[0] + .37 * p[1] - .53, b = q[0] + .37 * q[1] - .53;
+        const double a = p[0] + .37 * p[1] - .55, b = q[0] + .37 * q[1] - .55;
         require(std::abs(a) > 16 * eps, "clipping plane intersects grid vertex");
         inside = inside || a < 0;
         outside = outside || a > 0;
@@ -359,6 +360,7 @@ struct Fixture {
                                               {.31, .47, .91},
                                               {.93, .61, .29},
                                               {.07, .83, .73}}};
+        std::size_t cut_elements = 0;
         for (int e = 0; e < mesh.GetNE(); ++e) {
             gids.push_back(23 - e); // Descending, interleaved ownership: sorting is observable.
             ranks.push_back((e % 4 == 0 || e % 4 == 3) ? 1 : 0);
@@ -383,6 +385,8 @@ struct Fixture {
             const auto lo = expected.points.front(), hi = expected.points.back();
             auto& points = samples[expected.gid];
             points = cut_centroid(lo, hi);
+            if (!points.empty())
+                ++cut_elements;
             for (const auto& ref : fixed) {
                 Point p;
                 for (std::size_t d = 0; d < 3; ++d)
@@ -399,6 +403,7 @@ struct Fixture {
             points.insert(points.end(), expected.points.begin(), expected.points.end());
             captured.emplace(expected.gid, expected);
         }
+        require(cut_elements == 8, "fixture must sample eight clipped prism centroids");
         for (const auto& [gid, e] : captured) {
             const auto index = static_cast<std::size_t>(23 - gid);
             oracle[static_cast<std::size_t>(ranks[index])]["elements"].push_back(element_json(e));
