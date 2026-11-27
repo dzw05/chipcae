@@ -135,3 +135,8 @@ and is flushed immediately. The file is closed before MPI finalization. Because
 mpiexec can forward stderr fragments into stdout, tests and automation should read
 this event file as their JSON event stream. The path must differ from the grid
 and any explicit surface output path.
+
+Once opened, the file also mirrors rank 0's argument-error events, including when
+a missing numeric value precedes `--events-file`. If opening the file fails, only
+rank 0 reports the failure, with one stderr diagnostic and one stdout error event.
+All ranks exit with code 1 without meshing; a missing parent directory is not created.
