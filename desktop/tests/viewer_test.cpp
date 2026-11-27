@@ -2399,6 +2399,37 @@ int warpageOverlayAcceptance(const QDir& root) {
         autoWarpageButton(controls)->click();
         checkOverlay(check, view, "Warpage scale x7.5");
     });
+    run("warpage scale overlay without numeric mechanics summary", [&](auto check) {
+        struct SummaryCase {
+            QString name;
+            QJsonArray summary;
+        };
+        const std::array cases = {
+            SummaryCase{"empty mechanics summary with PointData U", {}},
+            SummaryCase{
+                "other-step mechanics summary with PointData U",
+                {QJsonObject{
+                    {"step", 1}, {"name", "warpage_pv"}, {"value", 1.25e-06}, {"unit", "m"}}}},
+            SummaryCase{"nonnumeric mechanics summary with PointData U",
+                        {QJsonObject{{"step", 0},
+                                     {"name", "warpage_pv"},
+                                     {"value", "unavailable"},
+                                     {"unit", "m"}}}}};
+        for (const auto& item : cases) {
+            context = item.name;
+            QTemporaryDir temp;
+            writeSummaryFixture(root, temp, item.summary, [](auto grid) {
+                require(grid->GetPointData()->GetArray("U"),
+                        "summary fixture must retain PointData U");
+            });
+            ResultSession session;
+            require(session.open(temp.path()), qPrintable(session.error()));
+            ResultView view;
+            require(view.loadStep(session, 0), qPrintable(view.error()));
+            view.setWarpageScale(10);
+            checkOverlay(check, view, "Warpage scale x10");
+        }
+    });
     run("warpage scale overlay hidden when unavailable", [&](auto check) {
         ResultView empty;
         context = "not loaded";
@@ -2421,17 +2452,7 @@ int warpageOverlayAcceptance(const QDir& root) {
                 "U_mag_max not_solved with solved warpage_pv",
                 {solved,
                  QJsonObject{
-                     {"step", 0}, {"name", "U_mag_max"}, {"value", 0}, {"method", "not_solved"}}}},
-            UnavailableCase{"empty mechanics summary with PointData U", {}},
-            UnavailableCase{
-                "other-step mechanics summary with PointData U",
-                {QJsonObject{
-                    {"step", 1}, {"name", "warpage_pv"}, {"value", 1.25e-06}, {"unit", "m"}}}},
-            UnavailableCase{"nonnumeric mechanics summary with PointData U",
-                            {QJsonObject{{"step", 0},
-                                         {"name", "warpage_pv"},
-                                         {"value", "unavailable"},
-                                         {"unit", "m"}}}}};
+                     {"step", 0}, {"name", "U_mag_max"}, {"value", 0}, {"method", "not_solved"}}}}};
         for (const auto& item : cases) {
             context = item.name;
             QTemporaryDir temp;
