@@ -173,7 +173,7 @@ PINNED_MATERIALS = {
                 "Properties of Copper Alloy UNS C10100, Mechanical Properties at 25 C (Poisson ratio 0.34): "
                 "https://www.efunda.com/Materials/alloys/copper/show_copper.cfm?ID=UNS_C10100&Page_Title=UNS+C10100&show_prop=all"
             ),
-            "notes": "近似材料：多晶纯铜室温值，用于 PACKAGE_BULK_PARTS 的 lid；未按实际盖板合金和工艺标定",
+            "notes": "近似材料：多晶纯铜室温值，用于 example_parts 的 lid；未按实际盖板合金和工艺标定",
         },
         "elastic": {
             "symmetry": "isotropic",
@@ -560,7 +560,7 @@ assert copper["provenance"]["reference"].strip(), "copper reference must be non-
 assert copper["provenance"]["source_type"] == "literature", "copper source_type must be literature"
 assert copper["provenance"]["confidence"] == "medium", "copper confidence must be medium"
 assert (
-    "近似材料：多晶纯铜室温值，用于 PACKAGE_BULK_PARTS 的 lid；未按实际盖板合金和工艺标定"
+    "近似材料：多晶纯铜室温值，用于 example_parts 的 lid；未按实际盖板合金和工艺标定"
     == copper["provenance"]["notes"]
 ), "copper notes must equal the required approximation statement"
 assert copper["schema_version"] == "1"
@@ -586,9 +586,9 @@ assert copper["thermal_expansion"]["cte_type"] == "tangent"
 assert copper["thermal_expansion"]["stress_free_temperature"] == 298.15
 
 # This read-only mapping is an explicit MAT-CU acceptance requirement after SP0 (#87).
-assembly_path = examples / "assembly/package_bulk_parts.assembly.json"
+assembly_path = examples / "assembly/step_frame_parts.assembly.json"
 assert assembly_path.is_file(), (
-    "SP0 (#87) prerequisite missing: schema/examples/assembly/package_bulk_parts.assembly.json; "
+    "SP0 (#87) prerequisite missing: schema/examples/assembly/step_frame_parts.assembly.json; "
     "stop and report the base mismatch; do not create the fixture"
 )
 assembly = json.loads(assembly_path.read_text(encoding="utf-8"))

@@ -62,7 +62,7 @@ def layout(prefix, source):
 def preview(prefix, work, env):
     result = success([prefix / 'bin/chipcae-preview',
                       prefix / 'share/chipcae/examples/fcbga_demo.stack.json',
-                      '-o', work / 'preview'], work, env)
+                      '--max-ratio', '10', '-o', work / 'preview'], work, env)
     events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
     reports = [event for event in events if event.get('stage') == 'success']
     assert reports, 'preview emitted no success JSON event'

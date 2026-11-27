@@ -40,6 +40,8 @@ public:
     QString provenanceWatermark() const;
     QString provenanceBanner() const;
     void setWarpageScale(double scale);
+    double warpageScale() const;
+    double autoWarpageScale() const;
     void setBlockVisible(const QString& block, bool visible);
     void setLayer(int id); // 0 = all; ResultSession layer ids start at 1.
     void setShowVoid(bool show);

@@ -34,7 +34,11 @@ image_os="${ImageOS:-unknown}"
 [[ "$(manifest_val deps_lock_sha256)" == "$(sha256sum "$here/deps.lock" | cut -d' ' -f1)" ]] || fail "deps.lock sha256 mismatch"
 script_hash=$(sha256sum "$here/build_deps_cpu.sh" | cut -d' ' -f1)
 [[ "$(manifest_val build_script_sha256)" == "$script_hash" ]] || fail "build_deps_cpu.sh sha256 mismatch"
-[[ "$(cat "$prefix/.k1-ready")" == "$script_hash" ]] || fail ".k1-ready stamp does not match the build script"
+# Keep the combined stamp expression identical to build_deps_cpu.sh; the
+# manifest fields above remain independent hashes of each input's contents.
+key=$(cd "$here" && sha256sum build_deps_cpu.sh deps.lock | sha256sum | cut -d' ' -f1)
+# Command substitution strips trailing newlines; all other stamp bytes must match.
+[[ "$(cat "$prefix/.k1-ready")" == "$key" ]] || fail ".k1-ready stamp does not match build_deps_cpu.sh/deps.lock inputs"
 
 if command -v dpkg-query >/dev/null 2>&1; then
   actual=$(dpkg-query -W -f='${Version}' "$SYSTEM_MPI_PACKAGE")

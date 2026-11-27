@@ -1,6 +1,11 @@
 #pragma once
 #include "chipcae/core/memory_space.hpp"
 #include "chipcae/schema/stack.hpp"
+
+#include <tuple>
+#include <type_traits>
+#include <utility>
+
 namespace chipcae::mesh {
 struct AttributeRecord {
     std::string layer, region;
@@ -50,6 +55,14 @@ struct HexMeshArrays {
         std::vector<std::string> warnings;
         Real partition_imbalance = 0;
         std::int64_t void_cells = 0; // 没有 material 的层里不生成的单元数
+        // Areas in m^2, keyed by case-sensitive stack layer name.
+        struct CopperArea {
+            // NonZero polygon union; fraction layers use the padded-grid uniform fill.
+            Real polygons = 0;
+            // Integral of column fractions over the padded grid.
+            Real raster = 0;
+        };
+        std::map<std::string, CopperArea> copper_area_m2;
     } grid_report;
     AttributeTable attr_table;
     // Named face groups. Cut-face attributes also appear here (and therefore in
@@ -61,6 +74,22 @@ struct HexMeshArrays {
     // Global padded grid axes; x/y interval counts define the dense Morton column count.
     std::array<std::vector<Real>, 3> axes;
 };
+// Keep the original 11-member I5 binding while copper_area_m2 remains an additive report field.
+template <std::size_t I, class Report>
+    requires std::is_same_v<std::remove_cvref_t<Report>, HexMeshArrays::GridReport>
+decltype(auto) get(Report&& report) {
+    return std::get<I>(std::forward_as_tuple(std::forward<Report>(report).levels,
+                                             std::forward<Report>(report).rule,
+                                             std::forward<Report>(report).N_L,
+                                             std::forward<Report>(report).auto_selected,
+                                             std::forward<Report>(report).padding,
+                                             std::forward<Report>(report).max_aspect_ratio,
+                                             std::forward<Report>(report).level_axes,
+                                             std::forward<Report>(report).column_ranks,
+                                             std::forward<Report>(report).warnings,
+                                             std::forward<Report>(report).partition_imbalance,
+                                             std::forward<Report>(report).void_cells));
+}
 template <class T, class MemSpace>
 View1<T, MemSpace> upload_vector(const std::vector<T>& src, const std::string& name) {
     View1<T, MemSpace> v(name, src.size());
@@ -100,3 +129,13 @@ HexMeshDevice<MemSpace> upload(const HexMeshArrays& m) {
                 : (m.axes[0].size() - 1) * (m.axes[1].size() - 1)};
 }
 } // namespace chipcae::mesh
+
+namespace std {
+template <>
+struct tuple_size<chipcae::mesh::HexMeshArrays::GridReport> : integral_constant<size_t, 11> {};
+template <size_t I>
+struct tuple_element<I, chipcae::mesh::HexMeshArrays::GridReport> {
+    using type = remove_reference_t<decltype(chipcae::mesh::get<I>(
+        declval<chipcae::mesh::HexMeshArrays::GridReport&>()))>;
+};
+} // namespace std

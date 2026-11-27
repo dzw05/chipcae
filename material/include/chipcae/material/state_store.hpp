@@ -83,8 +83,8 @@ public:
                          std::uint64_t parameter_hash = 0,
                          std::string_view material_id = "",
                          std::uint32_t numbering_scheme = 0)
-        : layout_(layout), n_points_(n_points), parameter_hash_(parameter_hash),
-          material_id_(material_id), numbering_scheme_(numbering_scheme) {
+        : parameter_hash_(parameter_hash), material_id_(material_id),
+          numbering_scheme_(numbering_scheme), layout_(layout), n_points_(n_points) {
         committed_ = Soa<Real, MS>("chipcae_state_committed", layout_.n_reals, n_points_);
         trial_ = Soa<Real, MS>("chipcae_state_trial", layout_.n_reals, n_points_);
         Kokkos::deep_copy(committed_, Real{0});

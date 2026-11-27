@@ -336,6 +336,29 @@ std::optional<Error> check_simple(const Ring2& ccw) {
     return std::nullopt;
 }
 
+bool zero_area_nonsimple(const Ring2& raw) {
+    if (!std::all_of(raw.begin(), raw.end(), finite))
+        return false;
+    auto ring = raw;
+    while (ring.size() > 1 && ring.front() == ring.back())
+        ring.pop_back();
+    clean_edges(ring);
+    if (ring.size() < 3)
+        return false;
+    Real area = 0;
+    // A translated fan avoids cancellation due to a common coordinate offset.
+    for (std::size_t i = 1; i + 1 < ring.size(); ++i)
+        area += (ring[i][0] - ring[0][0]) * (ring[i + 1][1] - ring[0][1]) -
+                (ring[i][1] - ring[0][1]) * (ring[i + 1][0] - ring[0][0]);
+    if (!std::isfinite(area) || area != 0)
+        return false;
+    auto topology = raw;
+    topology.erase(std::unique(topology.begin(), topology.end()), topology.end());
+    while (topology.size() > 1 && topology.front() == topology.back())
+        topology.pop_back();
+    return check_simple(topology).has_value();
+}
+
 Expected<ConvexPieces> convex_pieces(const Ring2& ccw) {
     if (ccw.size() < 3 || !std::all_of(ccw.begin(), ccw.end(), finite))
         return degenerate();

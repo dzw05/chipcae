@@ -4,7 +4,7 @@ This document defines public preview guarantees for the STK-2 acceptance case.
 With HDF5 and jsoncons enabled, run from the repository root:
 
 ```sh
-chipcae-preview schema/examples/fcbga_demo.stack.json --nx 4 --ny 4 --levels 1 -o grid
+chipcae-preview schema/examples/fcbga_demo.stack.json --nx 4 --ny 4 --levels 1 --max-ratio 10 -o grid
 ```
 
 For this fixture and these options, `grid.vtkhdf` must contain exactly

@@ -251,7 +251,7 @@ class SoldermaskCLI(unittest.TestCase):
         self.assert_no_masks(products)
 
     def test_raw_fixture_keeps_existing_oval_rejections_and_removes_mask_defects(self):
-        # The untouched public fixture has three pre-existing C-tier Oval records.
+        # The untouched public fixture retains one C-tier SlotCavity Oval record.
         # Mask restoration must preserve these records and the rejection exit code.
         for accept in (False, True):
             with self.subTest(accept=accept):
@@ -264,7 +264,7 @@ class SoldermaskCLI(unittest.TestCase):
                 self.assertEqual(process.returncode, baseline_process.returncode)
                 raw = document(baseline, "import_report.json")
                 current = document(products, "import_report.json")
-                self.assertEqual(raw["tier_counts"]["C"], 3)
+                self.assertEqual(raw["tier_counts"]["C"], 1)
                 self.assertEqual([d for d in current["defects"] if d["tier"] == "C"],
                                  [d for d in raw["defects"] if d["tier"] == "C"])
                 self.assert_defect_delta(products, baseline)

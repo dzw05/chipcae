@@ -29,6 +29,7 @@ struct UnsupportedElement {
     std::string code = "IMPORT_UNSUPPORTED_ELEMENT";
     std::string element;
     std::uint64_t line = 0;
+    std::string context{};
 };
 struct ImportReport {
     std::vector<UnsupportedElement> unsupported;

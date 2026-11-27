@@ -1,0 +1,4 @@
+# test_name	job	note
+
+required_case	mac-highmem	Synthetic designated-job acceptance
+another_case	*	Synthetic wildcard acceptance

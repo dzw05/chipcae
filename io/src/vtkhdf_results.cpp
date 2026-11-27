@@ -93,12 +93,12 @@ std::string quoted(const std::string& s) {
 using namespace chipcae::hdf_detail;
 // VTK 9.7 reads variable-length ASCII string datasets as vtkStringArray.
 // Write these in a serial metadata pass after all MPI file handles close.
-void strings(hid_t parent, const char* name, const std::vector<std::string>& values) {
+void strings(hid_t parent, const char* name, const std::vector<std::string>& values, hid_t dcpl) {
     H5 type(H5Tcopy(H5T_C_S1), H5Tclose);
     check(H5Tset_size(type, H5T_VARIABLE));
     hsize_t count = values.size();
     H5 space(H5Screate_simple(1, &count, nullptr), H5Sclose);
-    H5 set(H5Dcreate2(parent, name, type, space, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT), H5Dclose);
+    H5 set(H5Dcreate2(parent, name, type, space, H5P_DEFAULT, dcpl, H5P_DEFAULT), H5Dclose);
     std::vector<const char*> pointers;
     for (const auto& value : values)
         pointers.push_back(value.c_str());
@@ -143,6 +143,7 @@ void distributed(hid_t group,
                  int rank,
                  int size,
                  bool parallel,
+                 hid_t dcpl,
                  hsize_t components = 1) {
     std::vector<int> counts, offsets;
     phase([&] {
@@ -196,7 +197,7 @@ void distributed(hid_t group,
         bool ok = true;
         if (rank == 0)
             try {
-                dataset(group, name, gathered, WriterContext{}, components);
+                dataset(group, name, gathered, WriterContext{}, components, dcpl);
             } catch (...) {
                 ok = false;
             }
@@ -214,7 +215,7 @@ void distributed(hid_t group,
                  "H5Dcreate2",
                  [&] {
                      return H5Dcreate2(
-                         group, name, native<T>(), space, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+                         group, name, native<T>(), space, H5P_DEFAULT, dcpl, H5P_DEFAULT);
                  }),
            H5Dclose);
     hsize_t md[2] = {std::max(hsize_t(1), static_cast<hsize_t>(count) / components), components};
@@ -610,6 +611,25 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
         check(hcall(true, rank_, "H5Pset_link_creation_order", [&] {
             return H5Pset_link_creation_order(gcpl, H5P_CRT_ORDER_TRACKED | H5P_CRT_ORDER_INDEXED);
         }));
+        check(hcall(true, rank_, "H5Pset_obj_track_times", [&] {
+            return H5Pset_obj_track_times(gcpl, 0);
+        }));
+        // Keep ordinary groups' default link-order properties.
+        H5 untimed_gcpl(
+            hcall(true, rank_, "H5Pcreate", [&] { return H5Pcreate(H5P_GROUP_CREATE); }), H5Pclose);
+        check(hcall(true, rank_, "H5Pset_obj_track_times", [&] {
+            return H5Pset_obj_track_times(untimed_gcpl, 0);
+        }));
+        H5 fcpl(hcall(true, rank_, "H5Pcreate", [&] { return H5Pcreate(H5P_FILE_CREATE); }),
+                H5Pclose);
+        check(hcall(true, rank_, "H5Pset_obj_track_times", [&] {
+            return H5Pset_obj_track_times(fcpl, 0);
+        }));
+        H5 dcpl(hcall(true, rank_, "H5Pcreate", [&] { return H5Pcreate(H5P_DATASET_CREATE); }),
+                H5Pclose);
+        check(hcall(true, rank_, "H5Pset_obj_track_times", [&] {
+            return H5Pset_obj_track_times(dcpl, 0);
+        }));
         hid_t file = -1, root = -1, assembly = -1;
         auto metadata = [&](auto action) {
             bool success = true;
@@ -623,7 +643,7 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
         };
         metadata([&] {
             file = hcall(parallel, rank_, "H5Fcreate", [&] {
-                return H5Fcreate(tmp.c_str(), H5F_ACC_TRUNC, H5P_DEFAULT, access);
+                return H5Fcreate(tmp.c_str(), H5F_ACC_TRUNC, fcpl, access);
             });
             if (file < 0)
                 throw std::runtime_error("create results file");
@@ -643,7 +663,7 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
             hid_t g = -1;
             metadata([&] {
                 g = hcall(parallel, rank_, "H5Gcreate2", [&] {
-                    return H5Gcreate2(root, names[block], H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+                    return H5Gcreate2(root, names[block], H5P_DEFAULT, untimed_gcpl, H5P_DEFAULT);
                 });
                 results_header(
                     g, block >= 2 ? "PolyData" : "UnstructuredGrid", 2, 8, parallel, rank_);
@@ -701,7 +721,7 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                                      const char* name,
                                      const std::vector<T>& v,
                                      hsize_t c = 1) {
-                distributed(target, name, v, rank_, size_, parallel, c);
+                distributed(target, name, v, rank_, size_, parallel, dcpl, c);
             };
             std::vector<Index> point_counts;
             phase([&] { point_counts = {static_cast<Index>(q.points.size() / 3)}; });
@@ -762,7 +782,7 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                     hid_t t = -1;
                     metadata([&] {
                         t = hcall(parallel, rank_, "H5Gcreate2", [&] {
-                            return H5Gcreate2(g, name, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+                            return H5Gcreate2(g, name, H5P_DEFAULT, untimed_gcpl, H5P_DEFAULT);
                         });
                         if (t < 0)
                             throw std::runtime_error("create topology");
@@ -778,10 +798,10 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
                 hid_t pd = -1, cd = -1;
                 metadata([&] {
                     pd = hcall(parallel, rank_, "H5Gcreate2", [&] {
-                        return H5Gcreate2(g, "PointData", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+                        return H5Gcreate2(g, "PointData", H5P_DEFAULT, untimed_gcpl, H5P_DEFAULT);
                     });
                     cd = hcall(parallel, rank_, "H5Gcreate2", [&] {
-                        return H5Gcreate2(g, "CellData", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+                        return H5Gcreate2(g, "CellData", H5P_DEFAULT, untimed_gcpl, H5P_DEFAULT);
                     });
                     if (pd < 0 || cd < 0)
                         throw std::runtime_error("create fields");
@@ -836,13 +856,16 @@ void ResultsWriter::write_step(int n, double time, const ResultsStep& local) {
         try {
             {
                 H5 metadata_file(H5Fopen(tmp.c_str(), H5F_ACC_RDWR, H5P_DEFAULT), H5Fclose);
+                H5 gcpl(H5Pcreate(H5P_GROUP_CREATE), H5Pclose);
+                check(H5Pset_obj_track_times(gcpl, 0));
+                H5 dcpl(H5Pcreate(H5P_DATASET_CREATE), H5Pclose);
+                check(H5Pset_obj_track_times(dcpl, 0));
                 for (auto name : {"hex", "cut", "eb_surface", "particles"}) {
                     std::string path = std::string("/VTKHDF/") + name + "/FieldData";
-                    H5 fd(H5Gcreate2(
-                              metadata_file, path.c_str(), H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT),
+                    H5 fd(H5Gcreate2(metadata_file, path.c_str(), H5P_DEFAULT, gcpl, H5P_DEFAULT),
                           H5Gclose);
-                    strings(fd, "layer_names", layer_names_);
-                    strings(fd, "material_names", material_names_);
+                    strings(fd, "layer_names", layer_names_, dcpl);
+                    strings(fd, "material_names", material_names_, dcpl);
                 }
                 check(H5Fflush(metadata_file, H5F_SCOPE_GLOBAL));
                 check(H5Fclose(metadata_file));

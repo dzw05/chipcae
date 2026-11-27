@@ -115,6 +115,7 @@ step paths, field descriptors, four blocks, stackup.json, and summary entries.
 The input chipcae.stack 0.2 JSON is copied verbatim as stackup.json; the caller
 must validate it against schema/stack-0.2.schema.json. The legacy ResultManifest
 and ResultWriter APIs remain available unchanged.
+Step VTKHDF files omit HDF5 object timestamps and are byte-identical for identical input.
 
 Every published step requires solver summaries warpage_pv (m), T_max (K), and
 U_mag_max (m). warpage_pv must come from the solver's full Q2 field with the
@@ -130,6 +131,10 @@ with exit code 14 (`INPUT_INVALID`), reporting `partitions: required object`.
 An explicit null retains `partitions: expected object` with the same exit code.
 It validates these fields and cross-checks the selected step's `per_step` value
 against its VTKHDF partition array lengths.
+When present, `CellData/copper_fraction` (cells,) and
+`CellData/conductivity_diag` (cells,3) in hex, cut, and eb_surface must have the
+specified shapes, float64 dtype, and finite values; validation failure exits 14,
+and absent fields are skipped.
 The keys remain schema_version, steps[].n, fields[].location/components and
 U_mag_max; aliases are not emitted. After `set_mesh` is called, `finalize` emits
 `mesh` with exactly five JSON integer keys (`nx0`, `ny0`, `L`, `padded_cells`,

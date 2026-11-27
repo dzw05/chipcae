@@ -503,7 +503,8 @@ public:
         const auto found = incident.find(key(p));
         const std::set<std::size_t> single{fallback};
         const auto& cells = found == incident.end() ? single : found->second;
-        long double sum = 0, weight = 0, boundary_sum = 0, boundary_weight = 0;
+        long double sum = 0, weight = 0, dirichlet_sum = 0, dirichlet_weight = 0;
+        long double boundary_sum = 0, boundary_weight = 0;
         std::set<std::size_t> visited;
         for (auto c : cells) {
             double value = thermal.T_cell[c];
@@ -513,15 +514,21 @@ public:
             weight += grid.cv_volume[c];
             for (auto j = grid.cv_face_off[c]; j < grid.cv_face_off[c + 1]; ++j) {
                 const auto f = static_cast<std::size_t>(grid.cv_faces[j]);
-                if (dirichlet.contains(f) && visited.insert(f).second &&
-                    on_face(p, grid.faces[f])) {
-                    boundary_sum += grid.faces[f].area * thermal.T_face[f];
-                    boundary_weight += grid.faces[f].area;
+                const auto& face = grid.faces[f];
+                if (face.hi < 0 && visited.insert(f).second && on_face(p, face)) {
+                    if (dirichlet.contains(f)) {
+                        dirichlet_sum += face.area * thermal.T_face[f];
+                        dirichlet_weight += face.area;
+                    } else {
+                        boundary_sum += face.area * thermal.T_face[f];
+                        boundary_weight += face.area;
+                    }
                 }
             }
         }
-        return static_cast<double>(boundary_weight > 0 ? boundary_sum / boundary_weight
-                                                       : sum / weight);
+        return static_cast<double>(dirichlet_weight > 0  ? dirichlet_sum / dirichlet_weight
+                                   : boundary_weight > 0 ? boundary_sum / boundary_weight
+                                                         : sum / weight);
     }
 };
 
@@ -1006,6 +1013,11 @@ int run_fvm(const RunInputs& inputs, const std::filesystem::path& output) {
                      << ",\"imbalance\":" << thermal.imbalance
                      << ",\"iterations\":" << thermal.iterations << '}';
                 emit(io::LogLine{1, 0, line.str(), "", 0});
+                line.str("");
+                line << "FVM_LINEAR {\"field\":\"thermal\",\"pc\":\"" << problem.preconditioner
+                     << "\",\"its\":" << thermal.iterations << ",\"residual\":" << thermal.residual
+                     << '}';
+                emit(io::LogLine{1, 0, line.str(), "", 0});
             }
         } else {
             const auto uniform =
@@ -1051,6 +1063,11 @@ int run_fvm(const RunInputs& inputs, const std::filesystem::path& output) {
             line << std::setprecision(17) << "FVM_ELASTIC {\"iterations\":" << elastic.iterations
                  << ",\"residual\":" << elastic.residual << ",\"warpage_pv\":" << elastic.warpage_pv
                  << ",\"U_mag_max\":" << elastic.U_mag_max << '}';
+            emit(io::LogLine{1, 0, line.str(), "", 0});
+            line.str("");
+            line << "FVM_LINEAR {\"field\":\"elastic\",\"pc\":\"" << elastic_problem.preconditioner
+                 << "\",\"its\":" << elastic.iterations << ",\"residual\":" << elastic.residual
+                 << '}';
             emit(io::LogLine{1, 0, line.str(), "", 0});
         }
         const auto step = results(inputs,

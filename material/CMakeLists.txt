@@ -282,3 +282,46 @@ if(CHIPCAE_MATERIAL_ENABLE_TESTS)
     set_tests_properties(material_library_soldermask_lpi PROPERTIES LABELS tierA TIMEOUT 60
         ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
 endif()
+
+if(CHIPCAE_MATERIAL_ENABLE_TESTS)
+    add_executable(material_library_bt_hl832ns tests/library_bt_hl832ns.cpp)
+    target_link_libraries(material_library_bt_hl832ns PRIVATE chipcae_material)
+    target_include_directories(material_library_bt_hl832ns SYSTEM PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../desktop/third_party/jsoncons/include)
+    add_test(NAME material_library_bt_hl832ns COMMAND material_library_bt_hl832ns
+        ${CMAKE_CURRENT_SOURCE_DIR}/library/bt_hl832ns_eq.materials.json)
+    set_tests_properties(material_library_bt_hl832ns PROPERTIES LABELS tierA TIMEOUT 60
+        ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
+endif()
+
+if(CHIPCAE_MATERIAL_ENABLE_TESTS)
+    add_executable(material_library_copper tests/library_copper.cpp)
+    target_link_libraries(material_library_copper PRIVATE chipcae_material)
+    target_include_directories(material_library_copper SYSTEM PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../desktop/third_party/jsoncons/include)
+    add_test(NAME material_library_copper COMMAND material_library_copper
+        ${CMAKE_CURRENT_SOURCE_DIR}/library/copper.materials.json
+        ${CMAKE_CURRENT_SOURCE_DIR}/../schema/examples/fcbga_demo.materials.json)
+    set_tests_properties(material_library_copper PROPERTIES LABELS tierA TIMEOUT 60
+        ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
+endif()
+
+if(CHIPCAE_MATERIAL_ENABLE_TESTS)
+    add_executable(material_merged_conductivity tests/merged_conductivity.cpp)
+    target_link_libraries(material_merged_conductivity PRIVATE chipcae_material)
+    add_test(NAME material_merged_conductivity COMMAND material_merged_conductivity)
+    set_tests_properties(material_merged_conductivity PROPERTIES LABELS tierA TIMEOUT 60
+        ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
+endif()
+
+if(CHIPCAE_MATERIAL_ENABLE_TESTS)
+    add_executable(material_library_air_opening_reg tests/library_air_opening_reg.cpp)
+    target_link_libraries(material_library_air_opening_reg PRIVATE chipcae_material)
+    target_include_directories(material_library_air_opening_reg SYSTEM PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../desktop/third_party/jsoncons/include)
+    add_test(NAME material_library_air_opening_reg COMMAND material_library_air_opening_reg
+        ${CMAKE_CURRENT_SOURCE_DIR}/library/air_opening_reg.materials.json
+        ${CMAKE_CURRENT_SOURCE_DIR}/library/soldermask_lpi_eq.materials.json)
+    set_tests_properties(material_library_air_opening_reg PROPERTIES LABELS tierA TIMEOUT 60
+        ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
+endif()

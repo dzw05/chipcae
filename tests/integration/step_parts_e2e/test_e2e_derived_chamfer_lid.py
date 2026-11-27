@@ -3,13 +3,11 @@ from parts_support import *
 
 
 def acceptance(d):
-    source = os.environ.get('CHIPCAE_DEMO_STEP_DIR')
-    if not source:
-        print('SKIP: deriving the real lid requires CHIPCAE_DEMO_STEP_DIR')
-        sys.exit(77)
+    source = os.environ['CHIPCAE_DEMO_STEP_DIR']
     # Use the full generator: assembly/0.1 carries no provenance label.
     command = [sys.executable, str(ROOT / 'tools/samples/step_parts/make_parts.py'),
-               '--case', 'chamfer', '--out', str(d), '--demo-step-dir', source]
+               '--case', 'chamfer', '--out', str(d), '--demo-step-dir', source,
+               '--bulk-step', os.environ['CHIPCAE_DEMO_BULK_STEP']]
     result = subprocess.run(command, capture_output=True, text=True, timeout=45)
     assert result.returncode == 0, (command, result.returncode, result.stderr)
     notes = json.loads((d / 'fixture-notes.json').read_text())
@@ -28,4 +26,8 @@ def acceptance(d):
 
 
 if __name__ == '__main__':
+    for variable in ('CHIPCAE_DEMO_STEP_DIR', 'CHIPCAE_DEMO_BULK_STEP'):
+        if not os.environ.get(variable):
+            print(f'SKIP: {variable} is unset')
+            sys.exit(77)
     main(acceptance, dependency='SP6-B')

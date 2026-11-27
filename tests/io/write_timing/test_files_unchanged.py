@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 
 
 def require(condition, message):
@@ -23,6 +24,12 @@ def main():
     with tempfile.TemporaryDirectory(prefix="iowt-files-") as temporary:
         runs = [Path(temporary) / name for name in ("first", "second")]
         for run in runs:
+            if run == runs[1]:
+                # Cross HDF5's timestamp boundary after the first run's inspections.
+                second = int(time.time())
+                while int(time.time()) == second:
+                    time.sleep(0.01)
+                time.sleep(0.05)
             subprocess.run([helper, "generate", stackup, str(run)], check=True)
             with (run / "manifest.json").open(encoding="utf-8") as stream:
                 manifest = json.load(stream)

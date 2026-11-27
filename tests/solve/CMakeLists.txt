@@ -339,3 +339,53 @@ if(_solve_backend)
     set_tests_properties(solve_cutgeom_nc_consume_outline PROPERTIES
         TIMEOUT 180 LABELS "cut;contract")
 endif()
+
+if(TARGET chipcae_solve_inputs AND _solve_backend)
+    add_test(NAME solve_fvm_solver_convergence COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_fvm_solver_convergence.py
+        $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE})
+    set_tests_properties(solve_fvm_solver_convergence PROPERTIES
+        TIMEOUT 600 LABELS "solve;fvm;numerical;mpi"
+        ENVIRONMENT "OMP_NUM_THREADS=2;OPENBLAS_NUM_THREADS=1")
+endif()
+
+if(TARGET chipcae_solve_inputs AND _solve_backend)
+    add_test(NAME solve_fvm_elastic_convergence COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_fvm_elastic_convergence.py
+        $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE})
+    set_tests_properties(solve_fvm_elastic_convergence PROPERTIES
+        TIMEOUT 600 SKIP_RETURN_CODE 77 LABELS "solve;fvm;numerical"
+        ENVIRONMENT "OMP_NUM_THREADS=2;OPENBLAS_NUM_THREADS=1")
+endif()
+
+if(_solve_backend AND TARGET chipcae-solve AND MFEM_USE_PETSC)
+    add_test(NAME solve_fvm_cut_vertex_recon COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_fvm_cut_vertex_recon.py $<TARGET_FILE:chipcae-solve>
+        ${PROJECT_SOURCE_DIR} --with-fem)
+    set_tests_properties(solve_fvm_cut_vertex_recon PROPERTIES
+        TIMEOUT 1200 LABELS "solve;numerical;cut" SKIP_RETURN_CODE 77)
+endif()
+
+if(_solve_backend)
+    add_executable(chipcae_test_direct_refine test_direct_refine.cpp)
+    target_include_directories(chipcae_test_direct_refine PRIVATE ${PROJECT_SOURCE_DIR}/apps/chipcae-solve/src)
+    target_link_libraries(chipcae_test_direct_refine PRIVATE mfem MPI::MPI_CXX)
+    chipcae_set_warnings(chipcae_test_direct_refine)
+    add_test(NAME solve_direct_refine COMMAND chipcae_test_direct_refine)
+    set_tests_properties(solve_direct_refine PROPERTIES TIMEOUT 120 LABELS "solve;numerical")
+endif()
+if(_solve_backend AND TARGET chipcae-import AND TARGET chipcae-preview)
+    add_test(NAME solve_lu_refine_floor COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_lu_refine_floor.py
+        $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE}
+        $<TARGET_FILE:chipcae-import> $<TARGET_FILE:chipcae-preview>)
+    set_tests_properties(solve_lu_refine_floor PROPERTIES TIMEOUT 600 LABELS "solve;numerical;mpi;io"
+        ENVIRONMENT "OMP_NUM_THREADS=2;OPENBLAS_NUM_THREADS=1;OMPI_ALLOW_RUN_AS_ROOT=1;OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1")
+endif()
+if(_solve_backend)
+    add_test(NAME solve_fvm_trace_map COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_fvm_trace_map.py
+        $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE})
+    set_tests_properties(solve_fvm_trace_map PROPERTIES
+        TIMEOUT 900 LABELS "fvm;numerical" SKIP_RETURN_CODE 77)
+endif()

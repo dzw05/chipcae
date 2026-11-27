@@ -1,0 +1,8 @@
+<testsuite name="synthetic">
+  <testcase name="required_case" status="run"/>
+  <testcase name="z_skip" status="run" time="0"><skipped message="optional | backend&#10;unavailable"/></testcase>
+  <testcase name="z_notrun" status="notrun"><system-out>not scheduled</system-out></testcase>
+  <testcase name="a_skip" status="run" time="0"><skipped>optional capability</skipped></testcase>
+  <testcase name="a_notrun" status="disabled"><system-out>disabled</system-out></testcase>
+  <testcase name="unrelated_failure" status="fail"><system-out>unrelated</system-out></testcase>
+</testsuite>
