@@ -113,8 +113,10 @@ class PreviewEventStream(unittest.TestCase):
         cls.reference = None
 
     def command(self, *flags):
+        # Automatic hierarchy selection depends on rank count. Fix the hierarchy
+        # so serial and MPI compare the same mesh while exercising the file channel.
         return [str(self.preview), str(self.fixture), '--nx', '2', '--ny', '2',
-                '--levels', '0', '--max-ratio', '10', '-o', str(self.root / 'grid'), *flags]
+                '--levels', '1', '--max-ratio', '10', '-o', str(self.root / 'grid'), *flags]
 
     def invoke(self, command):
         # Keep bytes intact: text-mode newline normalization would mask CRLF drift.
@@ -159,8 +161,8 @@ class PreviewEventStream(unittest.TestCase):
     def test_stdout_unchanged_without_option(self):
         plain = self.invoke(self.command())
         self.assertEqual(plain.returncode, 0, diagnostics(plain))
-        path = self.root / 'unchanged.events'
-        enabled = self.invoke(self.command('--events-file', str(path)))
+        path = self.root / 'serial.events'
+        enabled, _, _ = self.serial_reference()
         context = diagnostics(plain) + diagnostics(enabled)
         self.assertEqual(enabled.returncode, plain.returncode, context)
         self.assertEqual(enabled.stdout.encode('utf-8'), plain.stdout.encode('utf-8'), context)
