@@ -112,15 +112,15 @@ can enlarge the implicit stencil.
 The private interface diagnostic evaluates the common tangential gradient, signed
 half-face normal derivatives and one-sided constitutive tractions from these same
 maps. Cut faces, including either adjacent cut flag, always retain the cut path;
-material jumps on cut faces remain outside this change.
+material jumps on cut faces remain outside this change. Noncut least-squares
+operators away from region interfaces remain unchanged.
 
 For cut cells, face values use inverse Euclidean cell-to-face distances to weight
 the two owner extrapolations. Prescribed boundaries use their supplied values; free
 and embedded boundaries use the owner extrapolation. The cut gradients satisfy the
 coupled equations `G_c = sum_f U_f tensor S_cf / V_c` fully implicitly. Noncut
-least-squares operators away from region interfaces remain unchanged.
-Reconstruction and assembly share the same face-value operator, including embedded
-top samples.
+least-squares operators remain unchanged. Reconstruction and assembly share the
+same face-value operator, including embedded top samples.
 
 The Green–Gauss equations alone do not define a unique gradient for every allowed
 boundary layout. The explicit completion used here minimizes the Euclidean change
