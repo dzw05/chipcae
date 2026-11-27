@@ -543,6 +543,13 @@ void ResultView::setWarpageScale(double v) {
 double ResultView::warpageScale() const {
     return d->scale;
 }
+// TEST-FIRST stubs: keep the acceptance executable linkable until D14k-1 is implemented.
+QString ResultView::warpageScaleText() const {
+    return {};
+}
+QString ResultView::warpageMicrometerText() const {
+    return {};
+}
 double ResultView::autoWarpageScale() const {
     if (!d->loaded)
         return 0.0;
