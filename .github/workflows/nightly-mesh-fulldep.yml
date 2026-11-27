@@ -64,7 +64,7 @@ jobs:
             if [[ -f .k1-last-success ]]; then
               previous=$(cat .k1-last-success)
               if git cat-file -e "$previous^{commit}" 2>/dev/null; then
-                if [[ -n $(git diff --name-only "$previous" HEAD -- tests/integration/mesh_p1/ci/deps.lock tests/integration/mesh_p1/ci/build_deps_cpu.sh) ]]; then
+                if [[ -n $(git diff --name-only "$previous" HEAD -- tests/integration/mesh_p1/ci/deps.lock tests/integration/mesh_p1/ci/build_deps_cpu.sh tests/integration/mesh_p1/ci/write_manifest.sh) ]]; then
                   deps_changed=true
                 fi
               fi
@@ -89,20 +89,37 @@ jobs:
           echo "ImageOS=$image_os" >> "$GITHUB_ENV"
           echo "Cache identity: image_os=$image_os compiler=$compiler_id"
 
+      - name: Record run identity
+        if: steps.changes.outputs.run == 'true'
+        env:
+          TESTED_SHA: ${{ github.sha }}
+          EVENT: ${{ github.event_name }}
+          FORCE: ${{ inputs.force }}
+          REBUILD_DEPS: ${{ inputs.rebuild_deps }}
+          DEPS_CACHE_KEY: k1-deps-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/deps.lock', 'tests/integration/mesh_p1/ci/build_deps_cpu.sh', 'tests/integration/mesh_p1/ci/write_manifest.sh') }}
+        run: |
+          set -euo pipefail
+          mkdir -p build-k1-full
+          {
+            echo "sha=$TESTED_SHA event=$EVENT force=$FORCE rebuild_deps=$REBUILD_DEPS"
+            echo "run=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT job=$GITHUB_JOB"
+            echo "dependency cache key=$DEPS_CACHE_KEY"
+          } | tee build-k1-full/run-context.log
+
       - name: Restore dependency prefix
         id: cache-deps
         if: ${{ inputs.rebuild_deps != true }}
         uses: actions/cache/restore@v4
         with:
           path: build-k1-deps/prefix
-          key: k1-deps-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/deps.lock', 'tests/integration/mesh_p1/ci/build_deps_cpu.sh') }}
+          key: k1-deps-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/deps.lock', 'tests/integration/mesh_p1/ci/build_deps_cpu.sh', 'tests/integration/mesh_p1/ci/write_manifest.sh') }}
 
       - name: Install build tools, MPI and shared OCCT
         if: steps.changes.outputs.run == 'true'
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake g++ ccache libopenmpi-dev openmpi-bin curl python3-h5py python3-numpy
+          sudo apt-get install -y ninja-build cmake g++ ccache libopenmpi-dev openmpi-bin libopenblas-dev curl python3-h5py python3-numpy
           # shellcheck source=tests/integration/mesh_p1/ci/deps.lock
           source tests/integration/mesh_p1/ci/deps.lock
           occt_pins=()
@@ -148,7 +165,7 @@ jobs:
             delete_bad=true
             verify=rebuild_deps
           elif [[ "${{ steps.cache-deps.outputs.cache-hit }}" == "true" ]]; then
-            if tests/integration/mesh_p1/ci/verify_prefix.sh build-k1-deps/prefix; then
+            if tests/integration/mesh_p1/ci/build_deps_cpu.sh --verify-only build-k1-deps/prefix; then
               need=false
               verify=passed
             else
@@ -172,7 +189,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          key="k1-deps-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/deps.lock', 'tests/integration/mesh_p1/ci/build_deps_cpu.sh') }}"
+          key="k1-deps-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/deps.lock', 'tests/integration/mesh_p1/ci/build_deps_cpu.sh', 'tests/integration/mesh_p1/ci/write_manifest.sh') }}"
           delete_ok=true
           # gh cache delete takes a positional id or key, not --key (that flag is only on cache list).
           ids=$(gh cache list --key "$key" --json id --jq '.[].id' || true)
@@ -197,7 +214,7 @@ jobs:
           set -euo pipefail
           start=$SECONDS
           tests/integration/mesh_p1/ci/build_deps_cpu.sh
-          tests/integration/mesh_p1/ci/verify_prefix.sh build-k1-deps/prefix
+          tests/integration/mesh_p1/ci/build_deps_cpu.sh --verify-only build-k1-deps/prefix
           echo "secs=$((SECONDS - start))" >> "$GITHUB_OUTPUT"
           echo "Dependency build and verify wall time: $((SECONDS - start))s"
 
@@ -322,6 +339,23 @@ jobs:
                   self.log.write_text(self.log.read_text().replace("-- MFEM_USE_PETSC=ON\n", ""))
                   result = self.checker()
                   self.assertNotEqual(result.returncode, 0, output(result))
+
+              def test_missing_empty_and_duplicate_discovery_records_fail(self):
+                  for key in ("MFEM_CONFIG", "MFEM_USE_PETSC"):
+                      for mutation in ("missing", "empty", "duplicate", "conflicting-duplicate"):
+                          with self.subTest(key=key, mutation=mutation):
+                              self.write_log()
+                              rows = self.log.read_text().splitlines()
+                              record = next(row for row in rows if row.startswith("-- " + key + "="))
+                              if mutation == "missing":
+                                  rows.remove(record)
+                              elif mutation == "empty":
+                                  rows[rows.index(record)] = "-- " + key + "="
+                              else:
+                                  rows.append(record if mutation == "duplicate" else "-- " + key + "=wrong")
+                              self.log.write_text("\n".join(rows) + "\n")
+                              result = self.checker()
+                              self.assertNotEqual(result.returncode, 0, output(result))
 
               def test_another_existing_mfem_installation_fails(self):
                   other = self.root / "other" / self.relative
@@ -604,6 +638,18 @@ jobs:
                   result = self.install("")
                   self.assertNotEqual(result.returncode, 0, "Empty prefix silently used default: " + output(result))
 
+              def test_rebuild_does_not_delete_tracked_files_in_a_custom_prefix(self):
+                  protected = self.prefix / "protected-source"
+                  protected.write_text("tracked source must survive cleanup\n")
+                  for args in (("git", "init", "--quiet"),
+                               ("git", "add", "build-k1-deps/prefix/protected-source")):
+                      result = run(*args, cwd=self.root)
+                      self.assertEqual(result.returncode, 0, output(result))
+                  self.stamp.write_text("stale-input-key\n")
+                  result = self.install(self.prefix)
+                  self.assertNotEqual(result.returncode, 0, output(result))
+                  self.assertTrue(protected.is_file(), "Rebuild cleanup deleted tracked source")
+
               def test_prefix_outside_worktree_is_rejected(self):
                   result = self.install(self.root.parent / "outside-prefix")
                   self.assertNotEqual(result.returncode, 0, output(result))
@@ -670,7 +716,7 @@ jobs:
 
               def test_missing_and_ambiguous_artifacts_fail_atomically(self):
                   original = self.manifest.read_bytes()
-                  for mutation in ("missing-config", "ambiguous-config", "missing-petsc-library", "missing-petsc-header"):
+                  for mutation in ("missing-config", "ambiguous-config", "missing-petsc-library", "missing-petsc-header", "missing-legacy-artifact"):
                       with self.subTest(mutation=mutation):
                           self.manifest.write_bytes(original)
                           path = {
@@ -678,6 +724,7 @@ jobs:
                               "ambiguous-config": self.prefix / "share/mfem/MFEMConfig.cmake",
                               "missing-petsc-library": self.prefix / "lib/libpetsc.so",
                               "missing-petsc-header": self.prefix / "include/petsc.h",
+                              "missing-legacy-artifact": self.prefix / "lib/libHYPRE.a",
                           }[mutation]
                           saved = path.read_bytes() if path.exists() else None
                           if saved is None:
@@ -716,6 +763,8 @@ jobs:
           workflow = Path(".github/workflows/nightly-mesh-fulldep.yml").read_text()
           step = workflow.split("      - name: Build project and run mesh tests\n", 1)[1]
           shell = textwrap.dedent(step.split("        run: |\n", 1)[1].split("      - uses:", 1)[0])
+          configure = workflow.split("      - name: Configure project\n", 1)[1].split("\n      - ", 1)[0]
+          shell = textwrap.dedent(configure.split("        run: |\n", 1)[1]) + shell
           scripts = re.findall(r"python3[^\n]* <<'PY'\n(.*?)\nPY", shell, re.S)
           names = (
               "import_assembly_accept", "import_assembly_accept_default",
@@ -938,12 +987,14 @@ jobs:
           unittest.main(verbosity=2)
           PY
 
-      - name: Build project and run mesh tests
-        id: tests
+      - name: Configure project
+        id: configure
         if: steps.changes.outputs.run == 'true'
         run: |
           set -euo pipefail
           start=$SECONDS
+          mkdir -p build-k1-full
+          {
           cmake -S . -B build-k1-full -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_WARNINGS_AS_ERRORS=ON -DCHIPCAE_RESULTS_FAULT_INJECTION=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
@@ -953,6 +1004,74 @@ jobs:
             -DCHIPCAE_ENABLE_ECAD=ON -DCHIPCAE_ENABLE_OCCT=ON -DCHIPCAE_ASSEMBLY_GEOMETRY_AVAILABLE=ON -DPython3_EXECUTABLE=/usr/bin/python3 \
             -DCMAKE_DISABLE_FIND_PACKAGE_Clipper2=TRUE \
             -DCMAKE_DISABLE_FIND_PACKAGE_EXPAT=TRUE
+          } 2>&1 | tee build-k1-full/configure.log
+          echo "secs=$((SECONDS - start))" >> "$GITHUB_OUTPUT"
+
+      - name: Validate MFEM provenance
+        if: steps.changes.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' 2>&1 | tee build-k1-full/provenance.log
+          from pathlib import Path
+          import re
+          import subprocess
+          import tempfile
+
+          rows = Path("build-k1-deps/prefix/.k1-manifest").read_text().splitlines()
+          log = Path("build-k1-full/configure.log").read_text().splitlines()
+
+          def field(lines, key, diagnostic=False):
+              pattern = (r"^-- " if diagnostic else "^") + re.escape(key) + r"=(.*)$"
+              values = [match.group(1) for row in lines if (match := re.fullmatch(pattern, row))]
+              if len(values) != 1 or not values[0].strip():
+                  raise SystemExit(f"Missing, empty or duplicate field: {key}")
+              return values[0]
+
+          prefix = Path(field(rows, "install_prefix")).resolve(strict=True)
+          relative = Path(field(rows, "mfem_config_relpath"))
+          if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+              raise SystemExit(f"Invalid mfem_config_relpath: {relative}")
+          discovered = Path(field(log, "MFEM_CONFIG", True)).resolve(strict=True)
+          expected = (prefix / relative).resolve(strict=True)
+          capability = field(log, "MFEM_USE_PETSC", True)
+          # Let CMake evaluate its exported variable, including numeric values
+          # and false constants, instead of approximating its boolean semantics.
+          with tempfile.TemporaryDirectory() as temporary:
+              probe = Path(temporary)
+              (probe / "capability.txt").write_text(capability)
+              (probe / "check.cmake").write_text(
+                  'cmake_minimum_required(VERSION 3.20)\n'
+                  'file(READ "${CMAKE_CURRENT_LIST_DIR}/capability.txt" capability)\n'
+                  'if(NOT capability)\n'
+                  '  message(FATAL_ERROR "MFEM exported false PETSc support")\n'
+                  'endif()\n'
+              )
+              supported = subprocess.run(
+                  ["cmake", "-P", str(probe / "check.cmake")], capture_output=True,
+              ).returncode == 0
+          contained = prefix.is_dir() and expected.is_file() and expected.is_relative_to(prefix)
+          same_config = discovered.is_file() and discovered == expected
+          suffix_matches = discovered.parts[-len(relative.parts):] == relative.parts
+          inferred = discovered.parents[len(relative.parts) - 1] if len(relative.parts) < len(discovered.parts) else None
+          same_prefix = suffix_matches and inferred == prefix
+          print(f"manifest prefix P={prefix}", flush=True)
+          print(f"discovered config D={discovered}", flush=True)
+          print(f"expected config E={expected}", flush=True)
+          print(f"inferred prefix={inferred}", flush=True)
+          print(f"MFEM_USE_PETSC={capability}", flush=True)
+          print(f"E inside P={contained}; D == E={same_config}; inferred == P={same_prefix}; capability true={supported}", flush=True)
+          if not all((contained, same_config, same_prefix, supported)):
+              raise SystemExit("MFEM provenance comparison failed")
+          PY
+
+      - name: Build project and run mesh tests
+        id: tests
+        if: steps.changes.outputs.run == 'true'
+        env:
+          CONFIGURE_SECONDS: ${{ steps.configure.outputs.secs }}
+        run: |
+          set -euo pipefail
+          start=$SECONDS
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -963,7 +1082,7 @@ jobs:
               raise SystemExit('N11 requires geometry == "ON"')
           PY
           cmake --build build-k1-full --parallel 2
-          build_secs=$((SECONDS - start))
+          build_secs=$((SECONDS - start + CONFIGURE_SECONDS))
           test_start=$SECONDS
           ctest --test-dir build-k1-full -L "mesh|occt" -LE gpu --output-on-failure --output-junit mesh-results.xml
           ctest --test-dir build-k1-full -R '^mesh_digest_mpi$' --no-tests=error --output-on-failure
@@ -1018,10 +1137,17 @@ jobs:
         if: always() && steps.changes.outputs.run == 'true'
         with:
           name: mesh-full-results
+          include-hidden-files: true
           path: |
             build-k1-full/mesh-results.xml
             build-k1-full/n11-geometry-on.xml
-            build-k1-full/Testing/Temporary/LastTest.log
+            build-k1-full/Testing/Temporary/*.log
+            build-k1-full/configure.log
+            build-k1-full/provenance.log
+            build-k1-full/run-context.log
+            build-k1-full/import-assets/assembly-capabilities.json
+            build-k1-deps/prefix/.k1-manifest
+            build-k1-deps/prefix/.k1-ready
 
       - name: Fail if a cache key could not be replaced
         if: success() && steps.changes.outputs.run == 'true' && steps.deps.outputs.delete_bad_cache == 'true' && steps.cache-delete.outputs.delete_ok != 'true'
@@ -1058,7 +1184,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: build-k1-deps/prefix
-          key: k1-deps-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/deps.lock', 'tests/integration/mesh_p1/ci/build_deps_cpu.sh') }}
+          key: k1-deps-${{ steps.compiler.outputs.image_os }}-${{ steps.compiler.outputs.id }}-${{ hashFiles('tests/integration/mesh_p1/ci/deps.lock', 'tests/integration/mesh_p1/ci/build_deps_cpu.sh', 'tests/integration/mesh_p1/ci/write_manifest.sh') }}
 
       - name: Save ccache
         if: success() && steps.changes.outputs.run == 'true'
