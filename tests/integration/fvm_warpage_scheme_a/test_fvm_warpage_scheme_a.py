@@ -382,6 +382,14 @@ class Acceptance(unittest.TestCase):
         change(data)
         self.verdict(self.api.fem_reference_self_convergence(data), False)
 
+    def reference_extra_tier(self, nx, ny, kz):
+        data = tiers()
+        self.verdict(self.api.fem_reference_self_convergence(data), True)
+        data.append(dict(clone(data[0]), nx=nx, ny=ny, kz=kz))
+        result = self.api.fem_reference_self_convergence(data)
+        self.reason(result, "unsupported FEM tier")
+        self.assertEqual(result["reference"], {})
+
     def test_convergence_and_gate_validate_quantity_before_calculation(self):
         class QuantityGuard(ValueError):
             pass
@@ -475,9 +483,21 @@ class Acceptance(unittest.TestCase):
 
     def gate_indeterminate(self, coarse, fine):
         data = gate_records()
+        self.verdict(self.api.scheme_a_gate(data), True)
         record(data, 96, 4)["same_point_rel"] = coarse
         record(data, 96, 8)["same_point_rel"] = fine
-        self.reason(self.api.scheme_a_gate(data), "阶不可判")
+        record(data, 48, 8)["same_point_rel"] = max(.006, 2 * abs(fine))
+        result = self.api.scheme_a_gate(data)
+        self.reason(result, "阶不可判")
+        order = next(c for c in result["checks"] if c["name"] == "p_kz (96, 32)")
+        self.assertIs(order["pass"], False)
+        self.assertIsNone(order["value"])
+        self.assertIn("阶不可判", order["reason"])
+        for check in result["checks"]:
+            # Sign reversal and zero fine error also make p_xy undefined.
+            if not check["name"].startswith("p_") or (coarse > 0 and fine > 0
+                                                       and check is not order):
+                self.assertIs(check["pass"], True, repr(check))
 
     def gate_field(self, field, value, passes=False):
         data = gate_records()
@@ -602,6 +622,45 @@ print(json.dumps([high, low]))
                                        "import os,signal; os.kill(os.getpid(), signal.SIGTERM)"],
                                       dict(os.environ), self.work)
         self.assertEqual(result["returncode"], -signal.SIGTERM)
+
+    def measured_wait_fault(self, fault):
+        children = []
+        popen, wait4 = subprocess.Popen, os.wait4
+        def cleanup(child):
+            if child.poll() is None:
+                child.kill()
+            child.wait()
+        def spawn(*args, **kwargs):
+            child = popen(*args, **kwargs)
+            children.append(child)
+            self.addCleanup(cleanup, child)
+            return child
+        attempts = 0
+        def wait(pid, options):
+            nonlocal attempts
+            attempts += 1
+            if fault is InterruptedError and attempts > 2:
+                return wait4(pid, options)
+            raise fault("synthetic wait failure")
+        with mock.patch("subprocess.Popen", side_effect=spawn), \
+                mock.patch("os.wait4", side_effect=wait):
+            argv = [sys.executable, "-c", "raise SystemExit(7)" if fault is InterruptedError
+                    else "import time; time.sleep(30)"]
+            if fault is InterruptedError:
+                result = self.api.run_measured(argv, dict(os.environ), self.work)
+                self.assertEqual(result["returncode"], 7)
+                self.assertGreaterEqual(result["wall_s"], 0)
+                self.assertGreater(result["peak_rss_mib"], 0)
+            else:
+                expected = fault if issubclass(fault, BaseException) and not issubclass(
+                    fault, Exception) else self.api.InputInvalid
+                with self.assertRaises(expected):
+                    self.api.run_measured(argv, dict(os.environ), self.work)
+        self.assertEqual(len(children), 1)
+        # Check before cleanup/poll can reap a zombie and hide a leaked child.
+        self.assertIsNotNone(children[0].returncode)
+        with self.assertRaises(ChildProcessError):
+            os.waitpid(children[0].pid, os.WNOHANG)
 
     def test_run_measured_inherits_streams_and_sets_returncode_after_reap(self):
         children = []
@@ -785,6 +844,12 @@ for tag, change in (
         ("zero_nodal", lambda d: d[0].update(nodal_pv=0)),
         ("empty", lambda d: d.clear())):
     case("reference_invalid_" + tag, "reference_invalid", change)
+
+for nx, ny, kz in ((192, 64, 2), (18, 6, 2), (24, 4, 2), (12, 4, 8),
+                    (24, 8, 4), (48, 16, 8), (96, 32, 4)):
+    case(f"reference_extra_tier_{nx}_{ny}_{kz}", "reference_extra_tier", nx, ny, kz)
+for fault in (InterruptedError, OSError, ValueError, TypeError, KeyboardInterrupt, SystemExit):
+    case("run_measured_wait_" + fault.__name__, "measured_wait_fault", fault)
 
 for nx, kz, error, passes, limit in ((96, 8, .005, True, .005), (96, 8, .0050001, False, .005),
                                     (48, 8, .010, True, .010), (48, 8, .0100001, False, .010),

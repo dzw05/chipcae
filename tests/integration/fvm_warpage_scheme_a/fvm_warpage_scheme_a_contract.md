@@ -63,8 +63,9 @@ integer `nx, ny, kz`, positive `nodal_pv`, and a nonempty `same_point_pv` dictio
 mapping FVM `(nx, ny, kz)` tuples of positive integers to positive PV values.
 FEM tiers are uniquely keyed by `(nx, ny, kz)`; duplicates fail without merging.
 All five FEM keys `(12,4,2)`, `(12,4,4)`, `(24,8,2)`, `(48,16,2)` and `(96,32,2)`
-are required. Each required tier must contain every FVM key present in any tier.
-Extra tiers are validated and contribute to that union but are not candidates.
+are required, and all other FEM tier keys are rejected. Each required tier must
+contain every FVM key present in any tier. Only the `(12,4,4)` thickness probe
+uses kz4; all refinement candidates use kz2 and stop at `(96,32,2)`.
 Unknown fields are ignored.
 
 Return exactly `pass, checks, reference`. `reference` maps each converged FVM key
@@ -172,3 +173,7 @@ elapsed seconds; peak RSS is raw per-child usage, without subtracting parent or
 previous-child usage. Linux available memory uses only `MemAvailable`. Darwin
 sums free, inactive and speculative pages and multiplies by `hw.pagesize`.
 Unsupported platforms and invalid or unreadable resource data raise `InputInvalid`.
+Interrupted `wait4` calls are retried. If measurement fails after launch, the
+child is killed if still running and waited for before the error propagates,
+including on `KeyboardInterrupt` or `SystemExit`. Successful measurements retain
+the launched child's `wait4` usage; no cleanup result is returned as a measurement.

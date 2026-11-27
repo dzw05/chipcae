@@ -92,7 +92,9 @@ open. These tests adopt the following internal conventions:
   tiers/keys fail. `reference` maps each FVM tuple to its independently selected
   FEM tuple. Selection follows ascending adjacent kz2 tiers, regardless of list
   input order, after checking `(12,4,kz2)` against `(12,4,kz4)` for every key.
-  All five prescribed FEM tiers and all FVM keys are required. Checks run in
+  All five prescribed FEM tiers and all FVM keys are required; extra FEM tiers
+  fail, including refinement beyond `(96,32)` or kz other than the fixed kz2
+  sequence and `(12,4,kz4)` thickness probe. Checks run in
   ascending FVM-key order, thickness before reference selection. A rejected
   intermediate pair may be refined further: the reference check reports the
   first accepted pair, or the last pair and `参考未收敛` when none qualifies.
@@ -155,12 +157,22 @@ checking an actual 64 MiB child followed by an actual minimal child.
   tests. Both original RSS bounds (high>=60 MiB and low<60 MiB) are retained.
 - Undefined zero-fine orders fail with `阶不可判`; cut sample counts use internal
   face consistency rather than the uncut nx*ny rule, as specified in the plan.
-- Full CTest is deferred to the pipeline by the task instruction.
+
+## Review regressions
+
+The regression cases reject extra FEM tiers, retry interrupted `wait4` calls,
+and verify that measurement errors and process-control exceptions leave the
+real launched child reaped. Indeterminate-order cases require the specific
+`p_kz (96, 32)` check to fail with `阶不可判`, with all absolute, deformation and
+curvature checks passing. Positive nonzero-error cases also require every other
+order check to pass. Sign reversal and a zero fine error necessarily invalidate
+an adjacent xy order too.
 
 ## Commands and scope
 
 Keep the supplied build-tool PATH and shared-slot wrappers. Configure and build
-Release, then inspect registration and run only the named acceptance/regressions:
+Release, then inspect registration, run the named acceptance/regressions, and
+run the complete suite:
 
 ```sh
 cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCHIPCAE_BUILD_TESTS=ON
@@ -168,11 +180,12 @@ cmake --build build-release --parallel 2
 ctest --test-dir build-release -N -R '^vv_fvm_warpage_scheme_a_unit$'
 ctest --test-dir build-release -R '^(vv_fvm_warpage_scheme_a_unit|warpage_qoi_analytic|vv_result_schema)$' --output-on-failure
 ctest --test-dir build-release -V -R '^vv_fvm_warpage_scheme_a_unit$'
+ctest --test-dir build-release --parallel 1 --output-on-failure
 ```
 
 The new test has label `vv`, timeout 120 seconds, repository-root working
 directory, and **no** `SKIP_RETURN_CODE`. Missing dependencies fail acceptance.
-No full CTest suite is run here; the pipeline owns the full Release run.
+Run the full suite only when at least 4 GiB of memory is available on the box.
 No C/C++ file is changed, so clang-format has no applicable source files.
 
 INT-a implements the gate library and unit tests. Q2 point values belong to

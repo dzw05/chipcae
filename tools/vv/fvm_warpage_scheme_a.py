@@ -278,10 +278,12 @@ def fem_reference_self_convergence(tiers) -> dict:
     try:
         require_convergence_quantity("warpage_pv")
         _require(isinstance(tiers, (list, tuple)) and tiers, "empty/invalid FEM tiers")
+        required = [(12, 4, 2), (12, 4, 4), *((nx, ny, 2) for nx, ny in _REFERENCE_XY[1:])]
         indexed = {}
         keys = set()
         for tier in tiers:
             key = _key(tier)
+            _require(key in required, f"unsupported FEM tier {key}")
             _require(key not in indexed, f"duplicate FEM tier {key}")
             nodal = _number(tier.get("nodal_pv"), "nodal_pv", positive=True)
             same = tier.get("same_point_pv")
@@ -293,7 +295,6 @@ def fem_reference_self_convergence(tiers) -> dict:
                 values[fvm] = _number(pv, "same_point_pv", positive=True)
             keys.update(values)
             indexed[key] = (nodal, values)
-        required = [(12, 4, 2), (12, 4, 4), *((nx, ny, 2) for nx, ny in _REFERENCE_XY[1:])]
         for key in required:
             _require(key in indexed, f"missing FEM tier {key}")
             _require(set(indexed[key][1]) == keys, f"missing FVM keys at FEM tier {key}")
@@ -426,12 +427,31 @@ def run_measured(argv, env, cwd) -> dict:
     """Measure exactly this child's wait4 usage, inheriting all output streams."""
     _require(sys.platform in ("linux", "darwin"), f"unsupported platform: {sys.platform}")
     start = time.monotonic()
+    child = None
     try:
         child = subprocess.Popen(argv, env=env, cwd=cwd)
-        _, status, usage = os.wait4(child.pid, 0)
+        while True:
+            try:
+                _, status, usage = os.wait4(child.pid, 0)
+                break
+            except InterruptedError:
+                continue
         child.returncode = os.waitstatus_to_exitcode(status)
     except (OSError, ValueError, TypeError) as exc:
         raise InputInvalid(f"child measurement failed: {exc}") from exc
+    finally:
+        if child is not None and child.returncode is None:
+            # A failed/interrupted measurement must not leave a live or zombie child.
+            try:
+                child.kill()
+            except ProcessLookupError:
+                pass
+            while True:
+                try:
+                    child.wait()
+                    break
+                except (InterruptedError, KeyboardInterrupt):
+                    continue
     return dict(returncode=child.returncode, wall_s=time.monotonic() - start,
                 peak_rss_mib=rss_mib(usage.ru_maxrss, sys.platform))
 
