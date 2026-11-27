@@ -345,24 +345,33 @@ static void hiddenEnumAcceptance() {
              Json::parse(R"({"s":"fem.solid"})"));
         choices(editor(form, "/s"), {"fem.solid", "FEM_VEM.SOLID", "Fem_vem.solid"}, "fem.solid");
     });
-    for (const auto& values : {Json::parse(R"(["fem_vem.solid"])"), Json::parse("[]")}) {
-        run(values.empty() ? "empty enum keeps inert Invalid item"
-                           : "all hidden keeps inert Invalid item",
-            [&] {
-                SchemaForm form;
-                auto source = Json::parse(R"({"type":"object","properties":{"s":{"enum":[]}}})");
-                source["properties"]["s"]["enum"] = values;
-                const auto document = Json::parse(R"({"s":"fem.solid"})");
-                load(form, source, document);
-                auto* combo = editor(form, "/s");
-                choices(combo, {"Invalid: fem.solid"}, "Invalid: fem.solid");
-                for (int i = 0; i < 2; ++i) {
-                    combo->activated(0);
-                    require(form.document() == document,
-                            "activating synthetic Invalid item cannot write");
-                }
-            });
-    }
+    run("all hidden keeps inert Invalid item", [&] {
+        SchemaForm form;
+        const auto source = Json::parse(R"({"type":"object","properties":{"s":{
+            "enum":["fem_vem.solid"]}}})");
+        const auto document = Json::parse(R"({"s":"fem.solid"})");
+        load(form, source, document);
+        auto* combo = editor(form, "/s");
+        choices(combo, {"Invalid: fem.solid"}, "Invalid: fem.solid");
+        for (int i = 0; i < 2; ++i) {
+            combo->activated(0);
+            require(form.document() == document, "activating synthetic Invalid item cannot write");
+        }
+    });
+    run("empty enum keeps inert Invalid item", [&] {
+        SchemaForm form;
+        const auto source = Json::parse(R"({"type":"object","properties":{"s":{"enum":[]}}})");
+        const auto document = Json::parse(R"({"s":"fem.solid"})");
+        load(form, source, document);
+        auto* combo = editor(form, "/s");
+        // The renderer adds the invalid current value even when the schema enum is empty.
+        choices(combo, {"Invalid: fem.solid"}, "Invalid: fem.solid");
+        for (int i = 0; i < 2; ++i) {
+            combo->activated(0);
+            require(form.document() == document,
+                    "activating empty enum's Invalid item cannot write");
+        }
+    });
     require(failures == 0, "D14n-1 hidden enum acceptance failures");
 }
 
