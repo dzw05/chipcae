@@ -7,6 +7,9 @@ an explicit assertion failure for every case, rather than a collection error.
 Missing numpy or h5py exits 77, which fails this CTest registration. There are no
 skips, expected failures, or fallback evaluators.
 
+The production-facing [API contract](../../../tools/vv/fvm_warpage_scheme_a_contract.md)
+defines supported inputs, result/check shapes, ordering and validation behavior.
+
 All inputs are generated in temporary directories by `synthetic_inputs.py`.
 Nothing comes from a solver, contract fixture, vendor, or customer case. The
 serial HDF files use the existing `VTKHDF/hex` and `VTKHDF/cut` layout, with a
@@ -65,7 +68,9 @@ open. These tests adopt the following internal conventions:
 - `InputInvalid` is a module-local `ValueError` subclass. Invalid geometry, files,
   array shapes, callback results, and resource data raise it. Gate and reference
   functions return failed checks with nonempty reasons for invalid records.
-  `require_convergence_quantity` rejects unsupported quantities with `ValueError`.
+  `require_convergence_quantity` rejects unsupported quantities with `InputInvalid`
+  (a `ValueError` subclass). All three decision APIs convert `InputInvalid`,
+  including quantity validation, to failed input checks.
 - Mesh fields and requested dimensions must be actual integers, excluding booleans;
   nx/ny are positive, L is nonnegative, and padding is zero. Missing fields are
   errors. No implicit dimensions, default evaluator, or nodal fallback is allowed.

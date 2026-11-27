@@ -393,6 +393,27 @@ class Acceptance(unittest.TestCase):
                     function(data)
                 guard.assert_called_once_with("warpage_pv")
 
+    def test_quantity_validation_uses_input_invalid(self):
+        for name in ("U_mag_max", "unknown", "", None):
+            with self.subTest(name=name):
+                self.invalid(self.api.require_convergence_quantity, name)
+
+    def test_decision_apis_normalize_invalid_quantity_to_failed_input_checks(self):
+        for function, args, extra in (
+                (self.api.fem_reference_self_convergence, (tiers(),), {"reference": {}}),
+                (self.api.scheme_a_gate, (gate_records(),), {}),
+                (self.api.scheme_a_preconditions, (96, 8, .01, .01, .05),
+                 {"reason": "unsupported convergence quantity"})):
+            with self.subTest(function=function.__name__):
+                with mock.patch.object(self.api, "require_convergence_quantity",
+                                       side_effect=self.api.InputInvalid(
+                                           "unsupported convergence quantity")) as guard:
+                    result = function(*args)
+                guard.assert_called_once_with("warpage_pv")
+                self.assertEqual(result, dict(extra, checks=[{
+                    "name": "input", "value": None, "limit": None, "pass": False,
+                    "reason": "unsupported convergence quantity"}], **{"pass": False}))
+
     def test_scheme_a_complete_pass_and_check_schema(self):
         result = self.api.scheme_a_gate(gate_records())
         self.verdict(result, True)

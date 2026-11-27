@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Zhiwei Duan
-"""INT-a scheme A decisions on supplied data; no solver or FEM evaluator."""
+"""INT-a scheme A decisions on supplied data; no solver or FEM evaluator.
+
+Public inputs, result dictionaries and errors: fvm_warpage_scheme_a_contract.md.
+"""
 
 import json
 import math
@@ -248,7 +251,7 @@ def same_point_record(fvm_run_dir, fem_run_dir, fem_same_point_pv) -> dict:
 def require_convergence_quantity(name):
     """Reject raw displacement magnitudes and unspecified convergence quantities."""
     if name not in ("warpage_pv", "deformation_max"):
-        raise ValueError(f"unsupported convergence quantity: {name}")
+        raise InputInvalid(f"unsupported convergence quantity: {name}")
 
 
 def _check(name, value, limit, passes, reason=""):
@@ -271,8 +274,8 @@ def _key(record):
 
 def fem_reference_self_convergence(tiers) -> dict:
     """Select each FVM key's first converged adjacent kz2 FEM reference."""
-    require_convergence_quantity("warpage_pv")
     try:
+        require_convergence_quantity("warpage_pv")
         _require(isinstance(tiers, (list, tuple)) and tiers, "empty/invalid FEM tiers")
         indexed = {}
         keys = set()
@@ -343,8 +346,8 @@ def _order(name, coarse, fine, limit, thickness=False):
 
 def scheme_a_gate(records) -> dict:
     """Retain legacy kz4/G5 checks and require the added scheme A conditions."""
-    require_convergence_quantity("warpage_pv")
     try:
+        require_convergence_quantity("warpage_pv")
         _require(isinstance(records, (list, tuple)) and records, "empty/invalid records")
         indexed = {}
         for record in records:
@@ -392,8 +395,8 @@ def scheme_a_gate(records) -> dict:
 
 def scheme_a_preconditions(nx, kz_min, same_point_rel, nodal_rel, legacy_gate) -> dict:
     """Caller-supplied legacy threshold plus the mandatory kz>=8 prerequisite."""
-    require_convergence_quantity("warpage_pv")
     try:
+        require_convergence_quantity("warpage_pv")
         _integer(nx, "nx")
         kz = _integer(kz_min, "kz_min")
         limit = _number(legacy_gate, "legacy_gate", positive=True)
