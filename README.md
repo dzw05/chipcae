@@ -10,7 +10,7 @@
 
 ## 构建
 
-需要 C++20 编译器和 CMake 3.20 或更高版本。
+需要 C++20 编译器和 CMake 3.28 或更高版本。Open MPI 测试保护需要跨目录测试属性 API。
 
 ```bash
 cmake -B build
