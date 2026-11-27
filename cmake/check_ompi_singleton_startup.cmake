@@ -292,100 +292,53 @@ def check_protection(name, settings, protection):
 
 
 def coverage_check(build, entries):
-    # This inventory is deliberately independent of the module's test names,
-    # labels and selection rules. Inspect ALL built executables, including
-    # static MPI links, and follow local Python imports used by wrappers.
-    import ast
-    cache = Path(build, "CMakeCache.txt").read_text()
-    source = Path(re.search(r"^CMAKE_HOME_DIRECTORY:[^=]+=(.+)$", cache, re.M)[1])
-    nm = re.search(r"^CMAKE_NM:[^=]+=(.+)$", cache, re.M)[1]
-    manifests = list(Path(build).glob(".ompi-executables-*.txt"))
-    assert manifests, "missing executable inventory for independent MPI coverage audit"
-    binaries = set()
-    for manifest in manifests:
-        for line in manifest.read_text().splitlines():
-            path = Path(line)
-            if not path.is_file():
-                continue  # Non-default/manual targets cannot be launched by this CTest build.
-            result = subprocess.run([nm, "-g", str(path)], check=True,
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            if re.search(r"\b_?(?:P?MPI_Init(?:_thread)?|PetscInitialize(?:NoArguments)?)\b", result.stdout):
-                binaries.add(path.resolve())
-    assert binaries, "independent audit found no MPI-initializing executables"
-    modules = {}
-    for path in source.rglob("*.py"):
-        if any(part.startswith("build") or part in (".git", "third_party")
-               for part in path.relative_to(source).parts):
-            continue
-        modules.setdefault(path.stem, []).append(path)
-    texts = {}
-
-    def script_text(path, seen):
-        path = path.resolve()
-        if path in seen:
-            return ""
-        seen.add(path)
-        if path not in texts:
-            texts[path] = path.read_text(errors="replace")
-        content = texts[path]
-        imported = []
-        if path.suffix == ".py":
-            for node in ast.walk(ast.parse(content)):
-                if isinstance(node, ast.Import):
-                    imported.extend(alias.name for alias in node.names)
-                elif isinstance(node, ast.ImportFrom):
-                    imported.append(node.module or "")
-                    imported.extend(".".join(filter(None, (node.module, alias.name))) for alias in node.names)
-        children = []
-        for name in imported:
-            if not name:
-                continue
-            relative = Path(*name.split(".")).with_suffix(".py")
-            local = path.parent / relative
-            absolute = source / relative
-            if local.is_file():
-                children.append(local)
-            elif absolute.is_file():
-                children.append(absolute)
-            else:
-                # Some harnesses extend sys.path at runtime. Keep all possible
-                # repository modules when that lookup cannot be resolved here.
-                children.extend(modules.get(name.split(".")[-1], []))
-        return content + "\n" + "\n".join(script_text(child, seen) for child in children)
-
+    # CTest's full registration inventory is independent of the module's
+    # directory traversal. Runtime dispatch cannot be enumerated statically:
+    # every entry must have protection, including opaque/generated wrappers.
     acceptance = next(test for test in entries if test["name"] == "infra_ompi_singleton_startup")
     protection = singleton_environment(test_properties(acceptance))
-    covered = []
+    assert DIRECTORY_KEYS <= protection.keys(), "acceptance lacks singleton directory protection"
     missing = []
     directories = {}
     for test in entries:
-        command = test.get("command", [])
-        reasons = []
-        for arg in command:
-            path = Path(arg)
-            if path.is_file() and path.resolve() in binaries:
-                reasons.append(path.name)
-            elif path.is_file() and path.suffix in (".py", ".cmake"):
-                content = script_text(path, set())
-                if re.search(r"\b(?:P?MPI_Init(?:_thread)?|PetscInitialize(?:NoArguments)?)\s*\(", content):
-                    reasons.append(f"{path.name}: embedded MPI initializer")
-                if any(binary.name in content for binary in binaries):
-                    reasons.append(f"{path.name}: MPI executable reference/import")
-        if reasons:
-            try:
-                settings = singleton_environment(test_properties(test))
-                check_protection(test["name"], settings, protection)
-                for key in DIRECTORY_KEYS & protection.keys():
-                    token = (key, Path(settings[key]).resolve())
-                    assert token not in directories, f"{test['name']}: shares {key} with {directories.get(token)}"
-                    directories[token] = test["name"]
-            except AssertionError as error:
-                missing.append(str(error))
-            covered.append(test["name"])
-            print(f"independent MPI coverage: {test['name']}: {', '.join(reasons)}", flush=True)
-    print(f"independent MPI coverage: {len(entries)} registrations, {len(binaries)} MPI executables, "
-          f"{len(covered)} callers protected", flush=True)
+        try:
+            settings = singleton_environment(test_properties(test))
+            check_protection(test["name"], settings, protection)
+            for key in DIRECTORY_KEYS:
+                path = Path(settings[key]).resolve()
+                assert path.is_dir(), f"{test['name']}: {key} directory does not exist"
+                token = (key, path)
+                assert token not in directories, f"{test['name']}: shares {key} with {directories.get(token)}"
+                directories[token] = test["name"]
+        except AssertionError as error:
+            missing.append(str(error))
+    print(f"independent MPI coverage: {len(entries)} registrations audited, "
+          f"{len(entries) - len(missing)} protected (including dynamic dispatch)", flush=True)
     assert not missing, "independent MPI coverage gaps:\n" + "\n".join(missing)
+
+
+def dynamic_coverage_check(build):
+    # A wrapper may resolve the executable from arbitrary runtime input. None
+    # of these registrations contains an executable name or a Python import.
+    import copy
+    entries = registered_tests(build)
+    coverage_check(build, entries)
+    for command in (["sh", "-c", 'exec "$RUNTIME_PROGRAM"'],
+                    [sys.executable, "-c", "import os; os.system(os.environ['RUNTIME_PROGRAM'])"],
+                    ["cmake", "-P", "generated-at-runtime.cmake"]):
+        opaque = copy.deepcopy(next(test for test in entries
+                                   if test["name"] == "infra_ompi_singleton_startup"))
+        opaque["name"] = "opaque_runtime_dispatch"
+        opaque["command"] = command
+        opaque["properties"] = [prop for prop in opaque["properties"]
+                                if prop["name"] not in ("ENVIRONMENT", "ENVIRONMENT_MODIFICATION")]
+        try:
+            coverage_check(build, [*entries, opaque])
+        except AssertionError as error:
+            assert opaque["name"] in str(error), str(error)
+        else:
+            raise AssertionError(f"independent audit missed dynamic invocation: {command}")
+    print("independent audit rejects unprotected shell, Python and generated CMake dispatch")
 
 
 def configuration_check(build):
@@ -404,48 +357,6 @@ def configuration_check(build):
     command = matches[0]["command"]
     assert any(arg.startswith("-DPROBE=") for arg in command), "acceptance must directly exec the probe"
 
-    # Hand-audited direct callers. mesh_digest_mpi and mpi_surface also exec a
-    # baseline preview without a launcher. Label-only selection misses golden.
-    selected = ("mesh_digest_golden", "mesh_digest_mpi", "k1_preview",
-                "k1_preview_mpi_surface", "preview_zalign", "k1_results_validation",
-                "k1_vtkhdf", "k1_patch_gpu", "k1_cut_mfem_gpu",
-                "solve_cut_manufactured", "solve_cut_output_eb_layer",
-                "solve_ghost_penalty_rank_guard", "solve_cut_bilayer",
-                "solve_cut_bilayer_gamma", "solve_cut_convection",
-                "solve_pipeline", "solve_preview_mesh_digest", "solve_ghost_scan",
-                # main.cpp constructs MpiSession before CLI validation, even
-                # without the numerical backend. These have no MPI label.
-                "solve_inputs", "solve_profile_cuda_unavailable",
-                "solve_profile_cuda_gpus_zero", "solve_profile_cpu_gpus_nonzero",
-                "solve_cut_pipeline", "solve_demo", "solve_copper_trace_map_paths",
-                "solve_fvm_cut_vertex_recon", "solve_lu_refine_floor", "solve_fvm_trace_map",
-                "preview_outline_chamfer_differs", "preview_outline_volume",
-                "preview_solve_outline_digest", "preview_outline_nonconvex_rejected",
-                "preview_outline_external_polyset_rejected")
-    # Additional audited direct callers: PETSc initializes MPI too; install and
-    # CAD wrappers reach the CLI without exporting its path in ENVIRONMENT.
-    selected += ("mesh_hash_preview_np", "preview_copper_area", "preview_copper_phi",
-                 "preview_lid_nonconvex", "preview_mesh_params", "preview_outline_nonconvex",
-                 "preview_region_planes", "solve_column_gmg_prolongation",
-                 "solve_column_gmg_unsupported", "solve_column_gmg_fcbga",
-                 "solve_column_gmg_fcbga_scaling", "solve_fem_thermal_bow",
-                 "solve_fvm_thermal", "solve_fvm_thermal_cut", "solve_fvm_elastic",
-                 "solve_fvm_elastic_concave", "solve_fvm_elastic_benchmark", "solve_fvm_bimetal",
-                 "contract_output_solver", "install_smoke", "install_relocate", "cpack_tgz",
-                 "import_assembly_cf_chain", "stack_writer_outline_polyset",
-                 "e2e_step_box_parts", "e2e_real_bulk_parts", "e2e_step_ring_chamfer_lid",
-                 "e2e_cylinder_volume", "e2e_derived_chamfer_lid",
-                 "e2e_cut_unsupported_material_layer", "vtkhdf_results_serial", "cut_results_serial",
-                 "tracemap_fvm_slab_harmonic", "tracemap_fvm_slab_series_xfail",
-                 "tracemap_cut_inside_normalized", "tracemap_cut_outside_xfail",
-                 "tracemap_cut_conservation_xfail", "tracemap_merge_conservation",
-                 "tracemap_merge_directional_xfail")
-    # The parts harness initializes MPI, including the direct np=1 path. The
-    # auto-registered integration wrappers obtain the CLI through ENVIRONMENT.
-    selected += tuple(name for name, test in tests.items()
-                      if name.startswith("solve_parts_") or
-                      any(entry.startswith(("CHIPCAE_SOLVE_EXE=", "CHIPCAE_PREVIEW_EXE="))
-                          for entry in properties(test).get("ENVIRONMENT", [])))
     if "mesh_digest_golden" in tests:
         golden = tests["mesh_digest_golden"]
         props = properties(golden)
@@ -454,24 +365,19 @@ def configuration_check(build):
         assert len(golden["command"]) == 3
         assert Path(golden["command"][1]).name == "mesh_digest.py"
         assert Path(golden["command"][2]).name == "chipcae-preview"
-    assert properties(tests["core_types"])["ENVIRONMENT"] == ["OMP_NUM_THREADS=2", "OMP_PROC_BIND=false"]
+    core_environment = properties(tests["core_types"])["ENVIRONMENT"]
+    assert [entry for entry in core_environment if entry.split("=", 1)[0] not in DIRECTORY_KEYS] == [
+        "OMP_NUM_THREADS=2", "OMP_PROC_BIND=false"]
     # Do not prescribe which candidate wins. Require the chosen MCA protection
     # to reach the existing direct paths as well as the new acceptance probe.
     protection = mca_environment(acceptance)
     assert protection, "missing singleton startup protection: acceptance has no test-local MCA environment"
     protection.update(singleton_environment(acceptance))
     coverage_check(build, entries)
-    for name in selected:
-        if name in tests:
-            settings = singleton_environment(properties(tests[name]))
-            check_protection(name, settings, protection)
-    for name in ("core_types", "k1_background", "k1_mesh_digest", "k1_cut"):
-        if name in tests:
-            assert not singleton_environment(properties(tests[name])), f"{name}: unrelated test received MCA injection"
-    # Prove this inventory can detect an omission without consulting the
-    # module's list: remove protection from a real direct caller and a wrapper.
+    # Remove protection from real direct callers and an entry with no known
+    # MPI dependency. Opaque runtime dispatch must not evade the audit.
     import copy
-    for omitted in ("k1_results_validation", "mesh_digest_golden"):
+    for omitted in ("k1_results_validation", "mesh_digest_golden", "core_types"):
         if omitted not in tests:
             continue
         mutated = copy.deepcopy(entries)
@@ -484,6 +390,7 @@ def configuration_check(build):
             assert omitted in str(error), "independent audit failed for an unrelated reason"
         else:
             raise AssertionError(f"independent audit missed unprotected {omitted}")
+    dynamic_coverage_check(build)
     print("singleton registration, independent caller coverage and existing test properties verified")
 
 
@@ -511,6 +418,7 @@ def module_check(case, script, python, real_build):
         "tests/install": ("install_smoke", "install_relocate", "cpack_tgz"),
         "tests/results": ("vtkhdf_results_serial", "cut_results_serial"),
         "tests/contract": ("contract_output_solver",),
+        "tests/opaque": ("opaque_runtime_dispatch",),
         "tests/integration/callers": ("controlled_integration_cli", "import_assembly_cf_chain",
                                        "stack_writer_outline_polyset", "e2e_step_box_parts",
                                        "e2e_real_bulk_parts", "e2e_step_ring_chamfer_lid",
@@ -525,7 +433,7 @@ def module_check(case, script, python, real_build):
                     "tracemap_merge_directional_xfail"),
     }
     selected = tuple(name for names in groups.values() for name in names)
-    unrelated = ("core_types", "k1_background", "k1_mesh_digest", "k1_cut", "solve_mesh",
+    other_tests = ("core_types", "k1_background", "k1_mesh_digest", "k1_cut", "solve_mesh",
                  "unrelated_mpi_label")
     literal = lambda value: "[=[" + str(value) + "]=]"
     with tempfile.TemporaryDirectory(prefix="chipcae-singleton-module-") as directory:
@@ -539,14 +447,24 @@ if sys.argv[1] == '--wrapper':
 else:
     Path(sys.argv[1]).write_text(json.dumps(dict(os.environ)))
 ''')
+        (root / "dispatch_helper.py").write_text('''import json, os, subprocess
+from pathlib import Path
+def run():
+    Path(os.environ["OBSERVATION"]).write_text(json.dumps(dict(os.environ)))
+    subprocess.run(json.loads(Path(os.environ["DISPATCH_FILE"]).read_text()), check=True)
+    print("controlled wrapper completed")
+''')
         expected_commands = {}
-        for relative, names in {**groups, ".": unrelated}.items():
+        for relative, names in {**groups, ".": other_tests}.items():
             source = root / relative
             source.mkdir(parents=True, exist_ok=True)
             definitions = []
             for name in names:
                 command = [python, str(recorder), "--wrapper", str(root / (name + ".json")),
                            name, "space = token"]
+                if name == "opaque_runtime_dispatch":
+                    command = [python, "-c", "import importlib,os; "
+                               "importlib.import_module(os.environ['DISPATCH_MODULE']).run()"]
                 expected_commands[name] = command
                 definitions.append(f"add_test(NAME {name} COMMAND " +
                                    " ".join(map(literal, command)) + ")")
@@ -558,6 +476,10 @@ else:
     FAIL_REGULAR_EXPRESSION "controlled wrapper failure"
     ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false"
     ENVIRONMENT_MODIFICATION "CHIPCAE_PRESERVED=set:kept")''')
+                if name == "opaque_runtime_dispatch":
+                    definitions.append(f'''set_property(TEST {name} APPEND PROPERTY ENVIRONMENT
+    "PYTHONPATH={root}" "DISPATCH_MODULE=dispatch_helper"
+    "DISPATCH_FILE=${{PROJECT_BINARY_DIR}}/dispatch.json" "OBSERVATION={root}/{name}.json")''')
                 if name == "controlled_integration_cli":
                     definitions.append('set_property(TEST controlled_integration_cli APPEND '
                                        'PROPERTY ENVIRONMENT "CHIPCAE_SOLVE_EXE=controlled")')
@@ -571,7 +493,8 @@ endif()''')
             (source / "CMakeLists.txt").write_text("\n".join(definitions) + "\n")
         (root / "tests/CMakeLists.txt").write_text(
             "add_subdirectory(integration)\nadd_subdirectory(solve)\nadd_subdirectory(preview)\n"
-            "add_subdirectory(install)\nadd_subdirectory(contract)\nadd_subdirectory(results)\n")
+            "add_subdirectory(install)\nadd_subdirectory(contract)\nadd_subdirectory(results)\n"
+            "add_subdirectory(opaque)\n")
         (root / "tests/integration/CMakeLists.txt").write_text(
             "add_subdirectory(mesh_p1)\nadd_subdirectory(callers)\n")
         root_definitions = (root / "CMakeLists.txt").read_text()
@@ -594,6 +517,8 @@ if(DEFINED FIXTURE_CMAKE_VERSION)
 endif()
 include("{module}")
 include("{module}")
+file(GENERATE OUTPUT "${{PROJECT_BINARY_DIR}}/dispatch.json"
+    CONTENT [===[["$<TARGET_FILE:chipcae_ompi_singleton_probe>"]]===])
 ''')
         build = root / "build"
 
@@ -604,6 +529,29 @@ include("{module}")
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             print(result.stdout, end="", flush=True)
             return result
+
+        if case in ("cross_compile", "non_runnable"):
+            extra = (["-DCMAKE_SYSTEM_NAME=Linux"] if case == "cross_compile" else
+                     ["-DCHIPCAE_SINGLETON_RUNTIME_RUNNABLE=OFF"])
+            configured = configure(build, extra)
+            assert configured.returncode == 0, "non-runnable MPI target must configure"
+            entries = registered_tests(build)
+            acceptance = next(test for test in entries if test["name"] == "infra_ompi_singleton_startup")
+            props = test_properties(acceptance)
+            assert "not runnable" in str(props.get("SKIP_REGULAR_EXPRESSION", "")), \
+                "non-runnable target must have an explicit CTest skip"
+            subprocess.run(["cmake", "--build", str(build), "--target",
+                            "chipcae_ompi_singleton_probe", "-j2"], check=True)
+            result = subprocess.run(["ctest", "--test-dir", str(build), "-R",
+                                     "^infra_ompi_singleton_startup$", "-V"],
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            print(result.stdout, end="", flush=True)
+            assert result.returncode == 0 and "Skipped" in result.stdout
+            assert "iteration=" not in result.stdout, "non-runnable target was executed"
+            for test in entries:
+                assert DIRECTORY_KEYS <= singleton_environment(test_properties(test)).keys(), \
+                    f"{test['name']}: non-runnable configuration lost protection"
+            return
 
         configured = configure(build)
         assert configured.returncode == 0, "real Open MPI fixture failed to configure"
@@ -644,7 +592,7 @@ add_library(mpi_mismatch STATIC version.c)
         assert "SKIP_REGULAR_EXPRESSION" not in test_properties(acceptance[0]), \
             "configured Open MPI component was misclassified and acceptance skipped"
         tests = {test["name"]: test for test in entries}
-        for name in (*selected, *unrelated):
+        for name in (*selected, *other_tests):
             test = tests[name]
             props = test_properties(test)
             assert test["command"] == expected_commands[name], f"{name}: existing command/arguments changed"
@@ -657,8 +605,6 @@ add_library(mpi_mismatch STATIC version.c)
             assert set(props["LABELS"]) == expected_labels, f"{name}: labels changed"
             assert "OMP_NUM_THREADS=2" in props["ENVIRONMENT"] and "OMP_PROC_BIND=false" in props["ENVIRONMENT"]
             assert "CHIPCAE_PRESERVED=set:kept" in props["ENVIRONMENT_MODIFICATION"]
-            if name in unrelated:
-                assert not singleton_environment(props), f"{name}: unrelated test received protection"
         protection = mca_environment(test_properties(acceptance[0]))
         assert protection, "missing singleton startup protection: cannot validate module environment contract"
         protection.update(singleton_environment(test_properties(acceptance[0])))
@@ -713,7 +659,7 @@ add_library(mpi_mismatch STATIC version.c)
                 return
 
         session_paths = set()
-        for name in (*selected, "infra_ompi_singleton_startup"):
+        for name in (*selected, *other_tests, "infra_ompi_singleton_startup"):
             props = test_properties(tests[name])
             settings = singleton_environment(props)
             assert protection.keys() <= settings.keys(), f"{name}: direct singleton path lacks probe protection"
@@ -738,14 +684,26 @@ add_library(mpi_mismatch STATIC version.c)
             absolute_keys = [key for key in protection if key in DIRECTORY_KEYS]
             for key in absolute_keys:
                 paths = {singleton_environment(test_properties(tests[name]))[key]
-                         for name in (*selected, "infra_ompi_singleton_startup")}
-                assert len(paths) == len(selected) + 1, f"{key}: test session directories are shared"
+                         for name in (*selected, *other_tests, "infra_ompi_singleton_startup")}
+                assert len(paths) == len(selected) + len(other_tests) + 1, f"{key}: test session directories are shared"
             second = root / "another-build"
             assert configure(second).returncode == 0
             other = {test["name"]: test for test in registered_tests(second)}
             other_paths = {Path(singleton_environment(test_properties(other[name]))[key]).resolve()
-                           for name in (*selected, "infra_ompi_singleton_startup") for key in absolute_keys}
+                           for name in (*selected, *other_tests, "infra_ompi_singleton_startup") for key in absolute_keys}
             assert session_paths.isdisjoint(other_paths), "concurrent builds share session directories"
+        if case == "dynamic_execution":
+            subprocess.run(["cmake", "--build", str(build), "--target",
+                            "chipcae_ompi_singleton_probe", "-j2"], check=True)
+            result = subprocess.run(["ctest", "--test-dir", str(build), "-R",
+                                     "^opaque_runtime_dispatch$", "-V"],
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            print(result.stdout, end="", flush=True)
+            assert result.returncode == 0 and "probe init/finalize=" in result.stdout
+            observed = json.loads((root / "opaque_runtime_dispatch.json").read_text())
+            for key, value in singleton_environment(test_properties(tests["opaque_runtime_dispatch"])).items():
+                assert observed.get(key) == value, f"dynamic child did not inherit {key}"
+            coverage_check(build, entries)
         if case == "propagation":
             result = subprocess.run(["ctest", "--test-dir", str(build), "-R",
                                      "^(mesh_digest_golden|mesh_digest_mpi|solve_inputs)$", "-V"],
@@ -832,9 +790,11 @@ if mode == "component_paths":
     print("directory names permit isolation; absolute component values require equality")
 elif mode in ("sleep", "timing", "timeout_timing", "exit7", "missing", "iterations", "success", "environment", "descendant_exit", "missing_report", "invalid_report"):
     driver_check(mode, script, python)
-elif mode in ("c_only", "selection", "propagation", "matching", "inherited_baseline", "runtime_mismatch", "compatibility", "conflict_inherited", "conflict_environment",
+elif mode in ("dynamic_execution", "cross_compile", "non_runnable", "c_only", "selection", "propagation", "matching", "inherited_baseline", "runtime_mismatch", "compatibility", "conflict_inherited", "conflict_environment",
               "conflict_modification", "conflict_unset"):
     module_check(mode, script, python, build)
+elif mode == "coverage_dynamic":
+    dynamic_coverage_check(build)
 elif mode == "configuration":
     configuration_check(build)
 elif mode in ("disabled", "non_open_mpi", "tests_off"):
