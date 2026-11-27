@@ -1,0 +1,63 @@
+{
+  "schema": "chipcae.material_library/1",
+  "materials": [
+    {
+      "id": "silicon",
+      "schema_version": "1",
+      "unit_system": "SI",
+      "density": 2329,
+      "model": "thermo_elastic",
+      "provenance": {
+        "source_type": "literature",
+        "confidence": "medium",
+        "reference": "Conductivity: C. Y. Ho, R. W. Powell and P. E. Liley, Thermal Conductivity of the Elements, J. Phys. Chem. Ref. Data 1, 279-421 (1972), https://doi.org/10.1063/1.3253100 (silicon recommended value at 300 K: 148 W/(m K), nominal uncertainty about +/-5%). Elasticity: M. A. Hopcroft, W. D. Nix and T. W. Kenny, What is the Young's Modulus of Silicon?, J. Microelectromech. Syst. 19(2), 229-238 (2010), https://doi.org/10.1109/JMEMS.2009.2039697 ; public PDF: http://mems.stanford.edu/~hopcroft/Publications/Hopcroft_Youngs_Modulus_Silicon.pdf (<100> E = 130 GPa and <100>/<010> nu = 0.28; cubic constants C11 = 165.7e9 Pa, C12 = 63.9e9 Pa, C44 = 79.6e9 Pa; D = (C11-C12)*(C11+2*C12), S11 = (C11+C12)/D, S12 = -C12/D, E100 = 1/S11, nu100 = -S12/S11). Thermal expansion and lattice parameter: Y. Okada and Y. Tokumaru, Precise determination of lattice parameter and thermal expansion coefficient of silicon between 300 and 1500 K, J. Appl. Phys. 56, 314-320 (1984), https://doi.org/10.1063/1.333965 ; alpha(T) = {3.725*[1-exp(-5.88e-3*(T-124))] + 5.548e-4*T}*1e-6 1/K, T in kelvin, empirical range 120-1500 K; sampled at 250, 300, 350 and 400 K and rounded to four significant figures. Density: rho = 8*M/(N_A*a^3), eight atoms per diamond-cubic cell, a = 0.5430741e-9 m at 273.2 K (Okada and Tokumaru), M = 28.0855e-3 kg/mol (CIAAW historical standard atomic weight 28.0855(3), adopted in 1975: https://www.ciaaw.org/historical-atomic-weights.htm ; the current interval is [28.084, 28.086] since 2009: https://ciaaw.org/silicon.htm), N_A = 6.02214076e23 mol^-1 (SI defining constant); rho = 2329.39946 kg/m^3, rounded to 2329 kg/m^3.",
+        "notes": "近似材料：单晶硅室温公开文献典型值，用于芯片体；E/nu 为各向异性单晶的〈100〉各向同性近似，Hopcroft 给出的 E 范围为 130–188 GPa，本卡取 130 GPa 和 nu=0.28，在 250 K、400 K 两点同值，不建模弹性温度相关性；k 固定为 Ho 等推荐的 300 K 单值 148 W/(m K)，不建模其温度相关性；rho 采用晶格复算后的常数近似。alpha 为 Okada-Tokumaru 经验式在 250/300/350/400 K 的四点取样，表间线性插值、表外钳位；250 K 在经验式适用范围内，但低于该文实测下限 300 K。尚未按实际芯片掺杂、晶向和减薄工艺标定。应力自由温度 298.15 K 是与现有材料库一致的方法选择，非实测材料参数。"
+      },
+      "elastic": {
+        "symmetry": "isotropic",
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "E": [
+              130e9,
+              130e9
+            ],
+            "nu": [
+              0.28,
+              0.28
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      },
+      "thermal_expansion": {
+        "cte_type": "tangent",
+        "symmetry": "isotropic",
+        "stress_free_temperature": 298.15,
+        "table": {
+          "temperatures": [
+            250,
+            300,
+            350,
+            400
+          ],
+          "columns": {
+            "alpha": [
+              2.088e-6,
+              2.568e-6,
+              2.933e-6,
+              3.212e-6
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      },
+      "conductivity": 148
+    }
+  ]
+}

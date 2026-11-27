@@ -43,7 +43,8 @@ struct ElasticGeometry {
     std::int64_t min_dn_gid = -1;
     double max_identity_defect = 0;
 };
-// Cut gradients satisfy the implicit face-value Green-Gauss equations.
+// Evaluate assembly's gradient maps for any supplied cell field; no solve is required.
+// Uncut cells use same-region LS; cut gradients satisfy the implicit face-value GG equations.
 Expected<std::vector<ElasticMatrix>> evaluate_cut_gradients(const ElasticMesh&,
                                                             const ElasticProblem&,
                                                             const std::vector<ElasticVector>&,

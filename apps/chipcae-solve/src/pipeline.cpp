@@ -6,6 +6,7 @@
 #include "chipcae/solvers/fem/column_gmg.hpp"
 #include "chipcae/solvers/fem/cut_fem.hpp"
 #include "column_gmg_assembly.hpp"
+#include "copper_guard.hpp"
 #include "cut_convection.hpp"
 #include "cut_output.hpp"
 #include "direct_refine.hpp"
@@ -653,6 +654,7 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             lookup.base = &m;
             lookup.layer = static_cast<std::size_t>(layer - inputs.stack.layers.begin());
             if (layer->copper) {
+                detail::require_planar_metal_copper(*layer);
                 has_copper = true;
                 lookup.metal = &materials.at(layer->copper->metal);
             }

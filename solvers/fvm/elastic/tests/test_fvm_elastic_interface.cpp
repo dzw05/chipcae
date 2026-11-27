@@ -327,6 +327,21 @@ void identical_assembly(const detail::ElasticAssembly& a, const detail::ElasticA
     for (std::size_t c = 0; c < a.rhs.size(); ++c)
         require(std::memcmp(a.rhs[c].data(), b.rhs[c].data(), sizeof(double) * 3) == 0,
                 "identical rhs vector bytes");
+    require(a.faces.size() == b.faces.size(), "bitwise assembly face count");
+    for (std::size_t k = 0; k < a.faces.size(); ++k) {
+        const auto& x = a.faces[k];
+        const auto& y = b.faces[k];
+        require(x.blocks.size() == y.blocks.size(), "bitwise face block count");
+        require(std::memcmp(x.constant.data(), y.constant.data(), sizeof(double) * 3) == 0,
+                "identical face constant bytes");
+        for (std::size_t i = 0; i < x.blocks.size(); ++i) {
+            require(x.blocks[i].column == y.blocks[i].column, "identical face block keys");
+            require(std::memcmp(x.blocks[i].value.data(),
+                                y.blocks[i].value.data(),
+                                sizeof(double) * 9) == 0,
+                    "identical face block bytes");
+        }
+    }
 }
 void reduction(bool graded, bool equal_eigenstrain) {
     auto p = patch_grid(graded, false, false);
@@ -360,8 +375,20 @@ void region_length(std::size_t length) {
     rejected(solve_elastic(p.mesh, p.problem, MPI_COMM_SELF));
 }
 
-void region_bypass(bool graded) {
+void region_bypass(bool graded, bool unconstrained = false) {
     auto p = patch_grid(graded);
+    const auto& f = p.mesh.faces[p.interfaces().front()];
+    require(p.problem.C[f.lo] != p.problem.C[f.hi] &&
+                p.problem.alpha[f.lo] != p.problem.alpha[f.hi],
+            "T3 bypass fixture has both stiffness and CTE jumps");
+    if (unconstrained) {
+        p.problem.support = ElasticProblem::Support::Rigid321;
+        p.problem.prescribed.clear();
+        for (std::size_t c = 0; c < p.mesh.volume.size(); ++c) {
+            const auto& x = p.mesh.centroid[c];
+            p.problem.dT[c] += 5 * (x[0] + 2 * x[1] * x[2]);
+        }
+    }
     p.problem.region.clear();
     auto same = p.problem;
     same.region.assign(p.mesh.volume.size(), 7);
@@ -442,11 +469,28 @@ void junction_all_faces() {
     relative_field(r.U_face, faces, "all-interface affine U_face");
 }
 
-void junction_samples(MPI_Comm comm, int ranks) {
+void zero_field_gradients() {
+    auto p = patch_grid(false);
+    std::fill(p.problem.dT.begin(), p.problem.dT.end(), 0);
+    for (auto& prescribed : p.problem.prescribed)
+        prescribed.U = {};
+    const std::vector<V> u(p.mesh.volume.size());
+    const auto gradients = detail::evaluate_cut_gradients(p.mesh, p.problem, u, MPI_COMM_SELF);
+    require(static_cast<bool>(gradients),
+            gradients ? "" : "zero-field gradients: " + gradients.error().reason);
+    require(gradients.value().size() == u.size(), "one zero-field gradient per cell");
+    for (const auto& g : gradients.value())
+        for (double value : g)
+            near(value, 0, 1e-14, 0, "rank-zero displacement gives zero production gradient");
+}
+
+void junction_samples(MPI_Comm comm, int ranks, bool rank_one = false) {
     const auto x_axis = axis(3, 1, 1.2), z_axis = axis(4, 1, 1.3);
     auto m = grid(x_axis, axis(3, 1, 1.1), z_axis);
     auto p = problem(m, isotropic(), 0);
-    auto field = [](const V& x) -> V {
+    auto field = [rank_one](const V& x) -> V {
+        if (rank_one)
+            return {1e-4 * (1 + x[0] * x[2] + x[1] * x[1]), 0, 0};
         return {1e-4 * (1 + x[0] * x[2] + x[1] * x[1]),
                 2e-4 * (x[0] * x[0] - x[1] * x[2]),
                 3e-4 * (x[2] * x[2] + x[0] * x[1])};
@@ -786,6 +830,8 @@ int main(int argc, char** argv) {
                   [&] { rank_failure(suite.comm, ranks); });
         suite.run("coupled junction samples across interface owners",
                   [&] { junction_samples(suite.comm, ranks); });
+        suite.run("rank-one field gradients across interface owners",
+                  [&] { junction_samples(suite.comm, ranks, true); });
     } else {
         for (bool graded : {false, true}) {
             const std::string name = graded ? "graded 6x5x(2+2)" : "uniform 4x4x(2+3)";
@@ -804,6 +850,8 @@ int main(int argc, char** argv) {
             });
             suite.run("T3/T6 " + name + " empty and equal regions bypass heterogeneous data",
                       [&] { region_bypass(graded); });
+            suite.run("T6 " + name + " free nonaffine empty and equal region bytes",
+                      [&] { region_bypass(graded, true); });
         }
         for (auto length : {std::size_t{1}, std::size_t{79}, std::size_t{81}})
             suite.run("T6 invalid region length " + std::to_string(length),
@@ -829,6 +877,9 @@ int main(int argc, char** argv) {
                   junction_all_faces);
         suite.run("junction LS fits retain each interface displacement",
                   [&] { junction_samples(MPI_COMM_SELF, 1); });
+        suite.run("rank-zero field evaluates production gradients", zero_field_gradients);
+        suite.run("rank-one field retains each interface LS sample",
+                  [&] { junction_samples(MPI_COMM_SELF, 1, true); });
         suite.run("nonpositive acoustic Cholesky pivot reports INTERNAL gid and face",
                   nonpositive_acoustic_pivot);
         for (bool cut_lo : {false, true})

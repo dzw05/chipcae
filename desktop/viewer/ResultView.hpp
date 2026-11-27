@@ -42,6 +42,8 @@ public:
     void setWarpageScale(double scale);
     double warpageScale() const;
     double autoWarpageScale() const;
+    QString warpageScaleText() const;
+    QString warpageMicrometerText() const;
     void setBlockVisible(const QString& block, bool visible);
     void setLayer(int id); // 0 = all; ResultSession layer ids start at 1.
     void setShowVoid(bool show);

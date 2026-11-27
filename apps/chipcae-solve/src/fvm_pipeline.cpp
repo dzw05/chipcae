@@ -7,6 +7,7 @@
 #include "chipcae/solve/mixture.hpp"
 #include "chipcae/solvers/fvm/elastic.hpp"
 #include "chipcae/solvers/fvm/thermal.hpp"
+#include "copper_guard.hpp"
 #include "sha256.hpp"
 
 #include <algorithm>
@@ -118,6 +119,7 @@ fv::ThermalProblem thermal_problem(const RunInputs& inputs,
         // load_inputs already evaluates E/nu/alpha with interpolate_property at
         // T_ref. Thermal conductivity is scalar; mechanical mixture() is deferred.
         problem.k[c] = {base.k, base.k, base.k};
+        detail::require_planar_metal_copper(*layer);
         if (layer->copper)
             material::copper_laminate_conductivity(base.k,
                                                    inputs.materials.at(layer->copper->metal).k,
@@ -282,6 +284,7 @@ fv::ElasticProblem to_elastic_problem(const RunInputs& inputs,
         const auto& record = arrays.attr_table.entries.at(grid.cv_attribute[c] - 1);
         const auto& base = *materials.at(record.material);
         const auto& layer = inputs.stack.layers.at(stack_layer(inputs, record.layer));
+        detail::require_planar_metal_copper(layer);
         const auto& metal = layer.copper ? inputs.materials.at(layer.copper->metal) : base;
         const auto constitutive = mixture(base, metal, fractions[c]);
         for (int i = 0; i < 6; ++i)

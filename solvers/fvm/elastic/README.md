@@ -47,6 +47,8 @@ numeric differences in stiffness, alpha or temperature select interfaces. With n
 qualifying faces, original assembly and output arithmetic is retained byte for byte,
 including heterogeneous data and smooth cellwise temperatures. CLI callers leave
 region empty in this change; pipeline wiring belongs to the separate D2-wire card.
+The bypass keeps the legacy gradient vector and assembly/solve call sequence;
+interface lookups are confined to the interface reconstruction instantiation.
 
 For an interface, orient `n` from lo to hi and define positive normal distances
 `d_lo=(x_f-x_lo).n`, `d_hi=(x_hi-x_f).n` and separate tangential offsets
@@ -72,8 +74,10 @@ dependent face equations, then back substitutes to resolve all interface displac
 No connected-interface dense matrix or inverse is allocated. The existing
 one-sided Jacobi SVD retains squared singular values strictly greater than
 `largest*1e-26`, with unchanged arithmetic on the legacy path. Incomplete gradient
-or elimination rank, nonpositive half distances, and nonpositive acoustic Cholesky
-pivots report `INTERNAL` with the lo gid and face index. There is no interpolation
+or elimination rank and nonpositive acoustic Cholesky pivots report `INTERNAL`
+with the lo gid and face index. Zero projected distances also report `INTERNAL`;
+negative or nonfinite projected distances fail input validation with `INPUT_INVALID`
+before interface construction. There is no interpolation
 fallback. At a junction, the resulting cell gradient includes all incident
 interface samples and is shared by
 ordinary reconstruction, interface tractions and half-face energies. Sparse
@@ -112,8 +116,7 @@ can enlarge the implicit stencil.
 The private interface diagnostic evaluates the common tangential gradient, signed
 half-face normal derivatives and one-sided constitutive tractions from these same
 maps. Cut faces, including either adjacent cut flag, always retain the cut path;
-material jumps on cut faces remain outside this change. Noncut least-squares
-operators away from region interfaces remain unchanged.
+material jumps on cut faces remain outside this change.
 
 For cut cells, face values use inverse Euclidean cell-to-face distances to weight
 the two owner extrapolations. Prescribed boundaries use their supplied values; free
