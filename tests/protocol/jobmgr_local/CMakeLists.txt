@@ -16,7 +16,7 @@ else()
 endif()
 
 # Preserve existing target names, while keeping the custom desktop target out of discovery.
-foreach(name paths layout state_machine profile calls recovery poll launch_e2e cancel stop_roundtrip)
+foreach(name paths layout state_machine profile calls recovery poll launch_e2e cancel stop_roundtrip snapshot_stream)
     set(target chipcae_autotest_tests_protocol_jobmgr_local_jobmgr_local_${name})
     add_executable(${target} test_${name}.cpp)
     if(name STREQUAL "paths")
@@ -34,12 +34,18 @@ foreach(name paths layout state_machine profile calls recovery poll launch_e2e c
     if(NOT name STREQUAL "paths")
         set_tests_properties(jobmgr_local_${name} PROPERTIES SKIP_RETURN_CODE 77)
     endif()
-    if(jobmgr_local_enabled AND (name STREQUAL "launch_e2e" OR name STREQUAL "cancel" OR name STREQUAL "stop_roundtrip"))
+    if(jobmgr_local_enabled AND (name STREQUAL "launch_e2e" OR name STREQUAL "cancel" OR name STREQUAL "stop_roundtrip" OR name STREQUAL "snapshot_stream"))
         target_include_directories(${target} PRIVATE "${PROJECT_SOURCE_DIR}/jobmgr/src")
         target_compile_definitions(${target} PRIVATE
             JOBMGR_MOCK_SOLVER="$<TARGET_FILE:jobmgr_local_mock_solver>"
             JOBMGR_FAKE_MPIRUN="${CMAKE_CURRENT_BINARY_DIR}/fake_mpirun.sh")
         add_dependencies(${target} jobmgr_local_mock_solver)
+    endif()
+    if(jobmgr_local_enabled AND name STREQUAL "snapshot_stream")
+        target_include_directories(${target} PRIVATE "${PROJECT_SOURCE_DIR}/jobmgr/src")
+        target_compile_definitions(${target} PRIVATE
+            CHIPCAE_JOBMGR_CLI="$<TARGET_FILE:chipcae-jobmgr>")
+        add_dependencies(${target} chipcae-jobmgr)
     endif()
 endforeach()
 
