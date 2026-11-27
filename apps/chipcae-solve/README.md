@@ -265,3 +265,30 @@ omega 不超过 `5.5e-16`，力学 rel 为 `2.48e-12`、omega 为 `8.6e-16`。
 - J. L. Rigal & J. Gaches, *J. ACM* 14 (1967), 543–548；Higham Thm 7.1（范数后向误差）。
 - M. Arioli, J. W. Demmel & I. S. Duff, *SIAM J. Matrix Anal. Appl.* 10(2) (1989),
   165–190；LAPACK xGERFS（精化停止规则）。
+
+## Q2 validation export
+
+Set `CHIPCAE_ACCURACY_Q2_EXPORT=1` to export the FEM solution's complete Q2 nodes for
+validation. Only the exact value `1` enables this output; it is off by default. Each rank
+writes `<out>/accuracy-q2-rank<rank>.json`, next to `manifest.json`, including an empty
+`{"elements":[]}` file when that rank owns no elements. A completed file replaces its
+same-directory `.tmp` file only after writing and closing successfully.
+
+The JSON has exactly one key, `elements`. Each element has `gid` (the existing integer
+GID), `points` (27 × 3 coordinates in m), `U` (27 × 3 displacements in m), and `T`
+(27 temperatures in K). Elements are strictly increasing by numeric GID and appear only
+on their owning rank. Matching indices in `points`, `U`, and `T` describe the same node.
+Nodes follow `q = i + 3*j + 9*k`, where `i,j,k = 0,1,2` select reference coordinates
+`ξ,η,ζ = 0,½,1`; x varies fastest on the Cartesian mesh. All 8 vertices, 12 edge
+midpoints, 6 face centers, and the cell center are included, with doubles serialized at
+17 significant digits for exact round trips. Thermal-only runs export zero `U`.
+
+Cut cells export all 27 nodes of the complete background hexahedron, including extension
+nodes outside the physical domain; their values are the background FE polynomial evaluated
+at those nodes. Deleted exterior cells are excluded. Tensor Q2 evaluation can therefore
+recover the FE solution anywhere within the retained physical part of a cut cell.
+
+This optional sidecar leaves the manifest and VTKHDF format unchanged. Expect roughly
+4–5 KB per cell, or approximately 0.5 GB for 100,000 cells. Export streams one cell at a
+time and logs local `q2_export elements=… nodes=… bytes=… seconds=…` metrics through the
+existing event logger (persisted on rank 0).
