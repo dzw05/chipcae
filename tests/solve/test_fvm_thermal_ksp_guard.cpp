@@ -152,7 +152,8 @@ Fixture fixture(bool cut, const std::string& pc) {
     auto p = fvm_test::problem(g, {1, 1, 1}, pc);
     // Repository library cards at T_ref=300 K: copper=394, bt_hl832ns_eq=0.6 W/(m K).
     // Synthetic stack convention: copper below z=.05, BT above; two cells per layer.
-    // The brief does not identify the original CLI cards/layer order; this choice is explicit.
+    // elastic_accuracy_util.prepare_case uses synthetic a=2 below b=4, not library cards.
+    // This library-card stack is explicit; it does not claim the original CLI provenance.
     for (std::size_t c = 0; c < g.cv_volume.size(); ++c) {
         const double k = g.cv_centroid[c][2] < .05 ? 394 : .6;
         p.k[c] = {k, k, k};
@@ -308,17 +309,17 @@ void accepted(const fv::ThermalResult& result, const Exported& exported) {
                   << " T_max=" << *std::max_element(result.T_cell.begin(), result.T_cell.end())
                   << '\n';
 }
-int diagnostic_int(const std::string& diagnostic, const std::string& key) {
-    std::smatch match;
-    require(
-        std::regex_search(diagnostic, match, std::regex("(?:^| )" + key + "=(-?[0-9]+)(?: |$)")),
-        "missing integer " + key + " in " + diagnostic);
-    return std::stoi(match[1].str());
+double diagnostic_real(const std::string& token) {
+    std::size_t consumed = 0;
+    const auto value = std::stod(token, &consumed);
+    require(consumed == token.size() && std::isfinite(value) && value >= 0,
+            "diagnostic must contain a finite nonnegative number: " + token);
+    return value;
 }
-void failure(const mesh::Expected<fv::ThermalResult>& result,
-             const std::string& norm,
-             int cap,
-             bool capped) {
+int failure(const mesh::Expected<fv::ThermalResult>& result,
+            const CaseFiles& files,
+            const std::string& norm,
+            int cap) {
     together(!result, "solve must return error without ThermalResult");
     const auto& error = result.error();
     std::string canonical_path = error.path, canonical_reason = error.reason;
@@ -332,15 +333,35 @@ void failure(const mesh::Expected<fv::ThermalResult>& result,
     require(
         error.reason.starts_with("INTERNAL: SOLVER_NOT_CONVERGED (KSP nonconvergence) field=T "),
         "missing structured SOLVER_NOT_CONVERGED field=T: " + error.reason);
-    const int reason = diagnostic_int(error.reason, "reason");
-    require(capped ? reason == -3 : reason < 0, "unexpected reason: " + error.reason);
-    const int its = diagnostic_int(error.reason, "iterations");
+    // The public diagnostic is ordered and complete; field presence alone can hide
+    // a stale absolute/preconditioned residual or a nonnumeric placeholder.
+    std::smatch fields;
+    require(std::regex_match(
+                error.reason,
+                fields,
+                std::regex("INTERNAL: SOLVER_NOT_CONVERGED \\(KSP nonconvergence\\) field=T "
+                           "reason=(-?[0-9]+) iterations=([0-9]+) true_residual=([^ ]+) "
+                           "rtol=([^ ]+) norm_type=([a-z]+)")),
+            "incorrect structured diagnostic field order or values: " + error.reason);
+    const int reason = std::stoi(fields[1].str());
+    require(reason != 0, "failure must report a completed KSP reason: " + error.reason);
+    const int its = std::stoi(fields[2].str());
     require(its >= 0 && its <= cap, "total iteration budget exceeded: " + error.reason);
-    require(error.reason.find(" norm_type=" + norm) != std::string::npos,
-            "diagnostic must report effective norm: " + error.reason);
-    require(error.reason.find(" true_residual=") != std::string::npos &&
-                error.reason.find(" rtol=") != std::string::npos,
-            "missing true residual or rtol in " + error.reason);
+    const auto rho = diagnostic_real(fields[3].str());
+    const auto target = diagnostic_real(fields[4].str());
+    near(target, rtol, 0, 0, "diagnostic rtol must equal the requested global target");
+    require(fields[5].str() == norm, "diagnostic must report effective norm: " + error.reason);
+    require(reason < 0 || rho > target,
+            "positive-reason rejection must explain an excessive true residual: " + error.reason);
+    Exported exported(files);
+    const auto expected = exported.residual();
+    together(std::isfinite(expected), "independent rejected residual must be finite");
+    near(rho,
+         expected,
+         0,
+         expected > 0 ? 1e-6 : 0,
+         "diagnostic true_residual must match independent final A/b/x residual");
+    return reason;
 }
 void convergence(bool cut, const std::string& pc, bool mpi = false) {
     CaseFiles files;
@@ -348,6 +369,8 @@ void convergence(bool cut, const std::string& pc, bool mpi = false) {
     auto result = solve(f);
     together(bool(result), "thermal fixture must converge");
     Exported exported(files);
+    if (rank() == 0)
+        std::cout << "geometry=" << (cut ? "cut24x8" : "strip48x16") << " pc=" << pc << ' ';
     accepted(result.value(), exported);
     converged_text(files);
     if (mpi) {
@@ -364,7 +387,8 @@ void capped(bool options) {
         files.set("ksp_max_it", "3");
     else
         f.problem.max_iter = 3;
-    failure(solve(f), "unpreconditioned", 3, true);
+    require(failure(solve(f), files, "unpreconditioned", 3) == -3,
+            "iteration cap must report KSP_DIVERGED_ITS (-3)");
 }
 
 struct OldResult {
@@ -427,24 +451,37 @@ void false_green() {
         if (rank() == 0)
             std::cout << "preconditioned injection: restarted and passed independent residual\n";
     } else {
-        // A positive KSP reason with an excessive true residual is also a valid rejection.
-        const auto reason = diagnostic_int(result.error().reason, "reason");
-        if (reason > 0) {
-            together(result.error().path == "fvm/thermal" &&
-                         result.error().reason.starts_with(
-                             "INTERNAL: SOLVER_NOT_CONVERGED (KSP nonconvergence) field=T ") &&
-                         result.error().reason.find(" norm_type=preconditioned") !=
-                             std::string::npos &&
-                         result.error().reason.find(" true_residual=") != std::string::npos &&
-                         result.error().reason.find(" rtol=") != std::string::npos,
-                     "old-norm rejection must be structured: " + result.error().reason);
-            const auto its = diagnostic_int(result.error().reason, "iterations");
-            require(its >= 0 && its <= f.problem.max_iter, "old-norm rejection iteration budget");
-        } else {
-            failure(result, "preconditioned", f.problem.max_iter, false);
-        }
+        // A positive reason with an excessive true residual is also a valid rejection.
+        failure(result, injected, "preconditioned", f.problem.max_iter);
         if (rank() == 0)
             std::cout << "preconditioned injection: rejected: " << result.error().reason << '\n';
+    }
+}
+void restart_budget() {
+    auto f = fixture(true, "gamg");
+    OldResult old{};
+    {
+        CaseFiles reference;
+        together(bool(solve(f)), "restart-budget reference must export a converged system");
+        Exported exported(reference);
+        old = old_criterion(exported, "gamg");
+    }
+    together(old.rho > rtol,
+             "ESCALATE: cut/GAMG must establish a false green before capped restart injection");
+    // Leave exactly one iteration after the old criterion first claims convergence.
+    // Reusing the full prefixed max_it on restart would exceed this total budget.
+    const int cap = old.iterations + 1;
+    CaseFiles injected;
+    injected.set("ksp_norm_type", "preconditioned");
+    injected.set("ksp_max_it", std::to_string(cap));
+    auto result = solve(f);
+    if (result) {
+        Exported exported(injected);
+        accepted(result.value(), exported);
+        require(result.value().iterations > old.iterations && result.value().iterations <= cap,
+                "successful restart must count all iterations and respect the prefixed total cap");
+    } else {
+        failure(result, injected, "preconditioned", cap);
     }
 }
 void divergence() {
@@ -453,7 +490,8 @@ void divergence() {
     files.set("pc_type", "none");
     files.set("ksp_max_it", "1");
     auto f = fixture(true, "gamg");
-    failure(solve(f), "unpreconditioned", 1, false);
+    require(failure(solve(f), files, "unpreconditioned", 1) < 0,
+            "no-PC one-iteration injection must report a negative KSP reason");
 }
 void zero_rhs() {
     CaseFiles files;
@@ -482,8 +520,10 @@ void all_dirichlet() {
     together(bool(result), "all-six-faces Dirichlet must succeed");
     near(result.value().residual, 0, 0, 0, "no unknowns residual");
     require(result.value().iterations == 0, "no unknowns needs zero iterations");
-    for (auto temperature : result.value().T_cell)
-        near(temperature, 300, 1e-12, 0, "all Dirichlet temperature");
+    for (const auto* temperatures :
+         {&result.value().T_cell, &result.value().T_face, &result.value().T_vertex})
+        for (auto temperature : *temperatures)
+            near(temperature, 300, 1e-12, 0, "all Dirichlet temperature");
     root_io([&] {
         require(fs::is_empty(files.directory), "unknowns=0 must not construct KSP/export files");
     });
@@ -528,6 +568,7 @@ int main(int argc, char** argv) {
         run("problem max_iter=3 rejects without fields", [] { capped(false); });
         run("prefixed max_it=3 remains authoritative", [] { capped(true); });
         run("old positive convergence cannot bypass true residual guard", false_green);
+        run("old-norm restart respects prefixed total iteration budget", restart_budget);
         run("injected no-PC one-iteration divergence is structured", divergence);
         run("zero RHS with unknowns keeps zero diagnostics", zero_rhs);
         run("all Dirichlet bypasses KSP and exports", all_dirichlet);
