@@ -8,6 +8,8 @@
 
 namespace chipcae::solve {
 namespace vertical_detail {
+inline constexpr double levin_equal_bulk_rel_tol = 1e-12;
+
 inline void validate_fraction(double f) {
     if (!std::isfinite(f) || f < 0 || f > 1)
         throw InputError(ErrorCode::INPUT_INVALID, "invalid copper fraction");
@@ -83,15 +85,17 @@ inline Constitutive mixture_vertical(const Material& matrix, const Material& inc
     const double meanS = (f * ri + v * rm) / 3;
     for (int d = 0; d < 3; ++d) {
         const double row = compliance(d, 0) + compliance(d, 1) + compliance(d, 2);
-        result.alpha[d] = std::abs(diff) <= 1e-12 * std::max(ri, rm)
-                              ? amean
-                              : amean + 3 * (inclusion.alpha - matrix.alpha) / diff * (row - meanS);
+        result.alpha[d] =
+            std::abs(diff) <= vertical_detail::levin_equal_bulk_rel_tol * std::max(ri, rm)
+                ? amean
+                : amean + 3 * (inclusion.alpha - matrix.alpha) / diff * (row - meanS);
     }
     return result;
 }
 
 inline void copper_vertical_conductivity(double km, double ki, double f, double* k) {
     vertical_detail::validate_fraction(f);
+    // The legacy conductivity law requires both phases even at endpoints (unlike mixture()).
     if (!std::isfinite(km) || km <= 0 || !std::isfinite(ki) || ki <= 0)
         throw InputError(ErrorCode::INPUT_INVALID, "invalid vertical conductivity km/ki");
     if (f == 0 || f == 1) {
