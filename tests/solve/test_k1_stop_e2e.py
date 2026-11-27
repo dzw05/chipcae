@@ -134,9 +134,16 @@ def contract(legacy, ir):
                    'manifest_fem/fem.manifest.json')
     check(a['fields'] == b['fields'], 'K1-E6 fields changed')
     check(a['partitions'] == b['partitions'], 'K1-E6 partitions changed')
-    shape = lambda m: [{key: item[key] for key in ('name', 'unit', 'method')}
-                       for item in m['summary']]
-    check(shape(a) == shape(b), 'K1-E6 summary name/unit/method changed')
+    check(len(a['summary']) == len(b['summary']), 'K1-E6 summary count changed')
+    for old, new in zip(a['summary'], b['summary']):
+        check(old['name'] == new['name'] and old['unit'] == new['unit'],
+              'K1-E6 summary name/unit changed')
+        check(('method' in old) == ('method' in new)
+              and old.get('method') == new.get('method'),
+              'K1-E6 summary method presence/value changed')
+    tmax = [item for item in a['summary'] if item['name'] == 'T_max']
+    check(len(tmax) == 1 and 'method' not in tmax[0],
+          'K1-E6 legacy T_max must omit method')
     check(a['schema_version'] == b['schema_version'] == fixture['schema_version'],
           'I6 manifest schema')
     fixture_fields = {f['name']: f for f in fixture['fields']}
@@ -172,12 +179,17 @@ class Runs:
         check(len(stack['layers']) == 2, 'two equal layers required')
         for layer in stack['layers']:
             layer['n_elem_min'] = kz
+        if kind == 'linear_cut':
+            xmin, ymin, xmax, ymax = stack['outline']['box']
+            stack['outline']['polygon'] = [[xmin, ymin], [xmax, ymin],
+                                           [xmax, ymax], [xmin, ymax]]
         UTIL.write_json(work / 'stack.json', stack)
-        case = UTIL.thermal_case('fem') if kind == 'linear' else UTIL.solid_case('fem')
+        linear = kind in ('linear', 'linear_cut')
+        case = UTIL.thermal_case('fem') if linear else UTIL.solid_case('fem')
         case['mesh'] = strip['mesh']
         case['mesh'].update(nx=12, ny=4, levels=0, min_elems_per_layer=kz)
         case['solver']['linear']['preconditioner'] = 'direct'
-        if kind == 'linear':
+        if linear:
             case['loads'] = [dict(type='fixed_temperature', target='face:zmin', T=300),
                              dict(type='fixed_temperature', target='face:zmax', T=400)]
         # Reuse the material builder, preserving the original mismatch only for E1/E4.
@@ -291,6 +303,20 @@ def acceptance(root):
 
     contract(runs.run('linear', 2, 'legacy'), linear2)
     print('PASS K1-E6', flush=True)
+
+    cut_legacy = runs.run('linear_cut', 2, None)
+    cut_ir = runs.run('linear_cut', 2, 'ir')
+    a, b = timings(cut_legacy), timings(cut_ir)
+    check(set(a) == set(b) == {(0, 'T'), (0, 'U')}, 'K1-E7 missing cut timing')
+    for key in a:
+        check('k1_stop=' not in a[key] and 'k1_stop=' not in b[key],
+              f'K1-E7 cut has K1 suffix: {a[key]}\n{b[key]}')
+    check(cut_legacy['u'].dtype == cut_ir['u'].dtype
+          and cut_legacy['u'].shape == cut_ir['u'].shape
+          and cut_legacy['u'].tobytes() == cut_ir['u'].tobytes(), 'K1-E7 cut U changed')
+    a, b = residual_bits(cut_legacy), residual_bits(cut_ir)
+    check(a and {e[1] for e in a} == {'T', 'U'} and a == b, 'K1-E7 cut Residual changed')
+    print('PASS K1-E7', flush=True)
 
 
 if __name__ == '__main__':

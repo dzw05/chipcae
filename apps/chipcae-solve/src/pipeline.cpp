@@ -53,6 +53,8 @@ struct Direct {
     std::uint32_t iterations = 0;
     double assembly_seconds = 0, factor_seconds = 0, refine_seconds = 0;
     RefineResult refinement;
+    // Only structured (non-clipped) meshes opt in; ir stays disabled by default.
+    bool k1_eligible = false;
     bool k1_ir = false;
     k1::StopStats k1_stats{};
     static bool k1_stop_mode() {
@@ -92,7 +94,7 @@ struct Direct {
                  const LinearOptions& options,
                  const std::string& name) {
         const bool ir_mode = k1_stop_mode();
-        k1_ir = ir_mode && name == "U" && options.preconditioner == "direct";
+        k1_ir = ir_mode && k1_eligible && name == "U" && options.preconditioner == "direct";
         const int n = a.Height();
         const auto begin = std::chrono::steady_clock::now();
         // Copy indices explicitly: MFEM int and PetscInt need not have the same width.
@@ -899,6 +901,7 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
             }
             if (!solved) {
                 Direct direct;
+                direct.k1_eligible = !clipped.has_value();
                 std::string timing, failure;
                 try {
                     residual = direct.solve(*matrix, b, x, inputs.linear, name);

@@ -298,7 +298,9 @@ existing event logger (persisted on rank 0).
 `CHIPCAE_K1_STOP` is an internal switch, off by default. Unset or `legacy` keeps the
 existing direct solve and timing output. The exact value `ir` enables mixed precision
 iterative refinement for the displacement field U when the selected preconditioner is
-`direct`. Other values, including an empty string or `IR`, fail with
+`direct` on a structured (non-clipped) mesh. Clipped meshes retain legacy refinement
+and timing output even when `ir` is selected. Other values, including an empty string
+or `IR`, fail with
 `CHIPCAE_K1_STOP must be unset, legacy or ir`.
 
 The acceptance gate is the explicitly recomputed binary64 residual
