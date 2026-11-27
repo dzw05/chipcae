@@ -107,8 +107,12 @@ ResultControls::ResultControls(ResultView& view, ResultSession& session, QWidget
                                : view.colorField() == ResultColorField::Temperature
                                    ? QStringLiteral("无温度场")
                                    : QString("Field: unavailable");
-        summary->setText(view.tmaxText() + "\n" + fieldText + "\n" + view.summary("warpage_pv") +
-                         "\n" + view.summary("U_mag_max"));
+        auto text = view.tmaxText() + "\n" + fieldText + "\n" + view.summary("warpage_pv") + "\n" +
+                    view.summary("U_mag_max");
+        const auto micrometerText = view.warpageMicrometerText();
+        if (!micrometerText.isEmpty())
+            text += "\n" + micrometerText;
+        summary->setText(text);
     };
     connect(steps, &QComboBox::currentIndexChanged, &view, [&view, &session, steps, refresh] {
         view.loadStep(session, steps->currentData().toLongLong());
