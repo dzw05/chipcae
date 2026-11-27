@@ -330,10 +330,10 @@ Expected<ThermalResult> detail::solve_thermal_on_comm(const FvGrid& g,
             check(KSPSetInitialGuessNonzero(solver.value, PETSC_FALSE), "zero initial guess");
             check(KSPSetOptionsPrefix(solver.value, "fvm_thermal_"), "options prefix");
             check(KSPSetFromOptions(solver.value), "KSPSetFromOptions");
-            PetscReal effective_rtol = 0, atol = 0, divtol = 0;
+            PetscReal atol = 0, divtol = 0;
             PetscInt max_iterations = 0;
             KSPNormType norm_type;
-            check(KSPGetTolerances(solver.value, &effective_rtol, &atol, &divtol, &max_iterations),
+            check(KSPGetTolerances(solver.value, nullptr, &atol, &divtol, &max_iterations),
                   "effective tolerances");
             check(KSPGetNormType(solver.value, &norm_type), "effective norm type");
             check(VecSet(x.value, 0), "zero solution");
@@ -367,7 +367,7 @@ Expected<ThermalResult> detail::solve_thermal_on_comm(const FvGrid& g,
                     // PETSc otherwise uses ||b|| even with a nonzero initial guess.
                     // With ||r_start|| as baseline, this scaling targets p.rtol*||b||.
                     check(KSPConvergedDefaultSetUIRNorm(solver.value), "restart residual baseline");
-                    const PetscReal restart_rtol = std::min(effective_rtol, p.rtol) / rho;
+                    const PetscReal restart_rtol = p.rtol / rho;
                     check(KSPSetTolerances(
                               solver.value, restart_rtol, atol, divtol, max_iterations - its),
                           "restart tolerances");

@@ -395,7 +395,7 @@ struct OldResult {
     int iterations;
     double rho;
 };
-OldResult old_criterion(Exported& exported, const std::string& pc) {
+OldResult old_criterion(Exported& exported, const std::string& pc, double target = rtol) {
     Solver solver;
     check(KSPCreate(PETSC_COMM_WORLD, &solver.value), "old KSPCreate");
     check(KSPSetOperators(solver.value, exported.A.value, exported.A.value), "old operators");
@@ -404,7 +404,7 @@ OldResult old_criterion(Exported& exported, const std::string& pc) {
     check(KSPGetPC(solver.value, &preconditioner), "old KSPGetPC");
     check(PCSetType(preconditioner, pc == "gamg" ? PCGAMG : PCJACOBI), "old identical PC");
     check(KSPSetNormType(solver.value, KSP_NORM_PRECONDITIONED), "old preconditioned norm");
-    check(KSPSetTolerances(solver.value, rtol, 1e-50, PETSC_DEFAULT, 500), "old tolerances");
+    check(KSPSetTolerances(solver.value, target, 1e-50, PETSC_DEFAULT, 500), "old tolerances");
     check(KSPSetInitialGuessNonzero(solver.value, PETSC_FALSE), "old zero initial guess");
     check(VecSet(exported.x.value, 0), "old VecSet zero");
     check(KSPSolve(solver.value, exported.b.value, exported.x.value), "old KSPSolve");
@@ -483,6 +483,46 @@ void restart_budget() {
     } else {
         failure(result, injected, "preconditioned", cap);
     }
+}
+void restart_target() {
+    auto f = fixture(true, "gamg");
+    OldResult old{};
+    {
+        CaseFiles reference;
+        together(bool(solve(f)), "restart-target reference must export a converged system");
+        Exported exported(reference);
+        old = old_criterion(exported, "gamg", 9e-9);
+    }
+    together(old.rho > rtol,
+             "ESCALATE: tighter old criterion must establish a false green before restart");
+    CaseFiles injected;
+    injected.set("ksp_norm_type", "preconditioned");
+    injected.set("ksp_rtol", "9e-9");
+    auto result = solve(f);
+    together(bool(result), "restart must reach the requested global target");
+    Exported exported(injected);
+    accepted(result.value(), exported);
+    together(result.value().iterations > old.iterations, "old-norm injection must restart");
+    root_io([&] {
+        const auto view = read_text(injected.directory / "view.txt");
+        const auto first = view.find("KSP Object: (fvm_thermal_)");
+        const auto last = view.rfind("KSP Object: (fvm_thermal_)");
+        require(first != std::string::npos && last > first, "missing initial/restarted KSP views");
+        auto tolerance = [&](std::size_t start) {
+            const auto outer = view.substr(start, view.find("PC Object:", start) - start);
+            std::smatch fields;
+            require(std::regex_search(outer, fields, std::regex("tolerances: relative=([^,]+),")),
+                    "missing outer KSP relative tolerance");
+            return diagnostic_real(fields[1].str());
+        };
+        // PETSc's ASCII view prints tolerances with %g (six significant digits).
+        near(tolerance(first), 9e-9, 0, 1e-5, "prefixed tolerance must apply to initial solve");
+        near(tolerance(last) * old.rho,
+             rtol,
+             0,
+             1e-5,
+             "restarted KSP must target problem.rtol times the original RHS norm");
+    });
 }
 void divergence() {
     CaseFiles files;
@@ -569,6 +609,7 @@ int main(int argc, char** argv) {
         run("prefixed max_it=3 remains authoritative", [] { capped(true); });
         run("old positive convergence cannot bypass true residual guard", false_green);
         run("old-norm restart respects prefixed total iteration budget", restart_budget);
+        run("restart restores global target after a tighter initial tolerance", restart_target);
         run("injected no-PC one-iteration divergence is structured", divergence);
         run("zero RHS with unknowns keeps zero diagnostics", zero_rhs);
         run("all Dirichlet bypasses KSP and exports", all_dirichlet);
