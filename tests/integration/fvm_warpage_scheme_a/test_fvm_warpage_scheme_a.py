@@ -421,10 +421,17 @@ class Acceptance(unittest.TestCase):
         self.assertEqual(math.log2(coarse / fine).hex(), target.hex())
         if axis == "kz":
             record(data, 96, 4)["same_point_rel"] = coarse
+            record(data, 96, 8)["same_point_rel"] = fine
         else:
             record(data, 48, 4)["same_point_rel"] = 4 * coarse
             record(data, 96, 4)["same_point_rel"] = 4 * fine
             record(data, 48, 8)["same_point_rel"] = coarse
+            record(data, 96, 8)["same_point_rel"] = fine
+        # Assert the pair actually handed to the gate, as well as its construction.
+        actual_coarse = record(data, 96 if axis == "kz" else 48,
+                               4 if axis == "kz" else 8)["same_point_rel"]
+        actual_fine = record(data, 96, 8)["same_point_rel"]
+        self.assertEqual(math.log2(actual_coarse / actual_fine).hex(), target.hex())
         self.verdict(self.api.scheme_a_gate(data), passes)
 
     def test_gate_missing_kz8_has_required_reason(self):
@@ -528,10 +535,21 @@ class Acceptance(unittest.TestCase):
                              1e-14)
 
     def test_run_measured_has_per_child_not_cumulative_rss(self):
-        high = self.api.run_measured([sys.executable, "-c",
-                                     "x=bytearray(64*1024*1024); x[::4096]=b'x'*16384"],
-                                    dict(os.environ), self.work)
-        low = self.api.run_measured([sys.executable, "-c", "pass"], dict(os.environ), self.work)
+        # A fork/exec child may retain the test parent's pre-exec RSS floor.
+        # Isolate from earlier large geometry allocations, keeping real wait4
+        # measurements and both original 60 MiB assertions unchanged.
+        probe = """
+import json, os, sys
+from tools.vv.fvm_warpage_scheme_a import run_measured
+high = run_measured([sys.executable, '-c',
+                    "x=bytearray(64*1024*1024); x[::4096]=b'x'*16384"],
+                   dict(os.environ), sys.argv[1])
+low = run_measured([sys.executable, '-c', 'pass'], dict(os.environ), sys.argv[1])
+print(json.dumps([high, low]))
+"""
+        high, low = json.loads(subprocess.check_output(
+            [sys.executable, "-c", probe, str(self.work)], cwd=ROOT, text=True))
+        print(f"per-child resource probe: high={high}, low={low}", flush=True)
         for result in (high, low):
             self.assertEqual(result["returncode"], 0)
             self.assertGreaterEqual(result["wall_s"], 0)
