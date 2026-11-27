@@ -145,7 +145,8 @@ int main(int argc, char** argv) {
                 "reference must contain the lattice parameter used for density");
         const auto notes = provenance.at("notes").as<std::string>();
         require(notes.starts_with("近似"), "provenance notes must start with 近似");
-        require(notes.find("100") != std::string::npos,
+        require(notes.find("<100>") != std::string::npos ||
+                    notes.find("〈100〉") != std::string::npos,
                 "notes must identify the <100> isotropic approximation");
         require(notes.find("300 K") != std::string::npos,
                 "notes must state the 300 K reference temperature");
