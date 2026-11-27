@@ -48,7 +48,8 @@ class MinizResolutionAcceptance(unittest.TestCase):
     def configure_case(self, targets=(), *, shared=None, policy=None, minimum=None,
                        disabled=False, promote=False, alias=False, global_import=False,
                        caller_context=False, built=False, promote_after=False,
-                       check_package_semantics=False):
+                       check_package_semantics=False, consumer_cmake='',
+                       package_filename='minizConfig.cmake'):
         temporary = tempfile.TemporaryDirectory(prefix='miniz-acceptance-')
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -116,7 +117,7 @@ class MinizResolutionAcceptance(unittest.TestCase):
                 *package,
             ]
         if targets:
-            (prefix / 'minizConfig.cmake').write_text('\n'.join(package) + '\n')
+            (prefix / package_filename).write_text('\n'.join(package) + '\n')
 
         # Model the upstream target at FetchContent's source boundary. This
         # avoids downloads in the matrix; the real declaration's URL/hash are
@@ -206,6 +207,7 @@ add_library(miniz miniz.c)
             cmake_quote(''.join(f'$<TARGET_FILE:{target}>\n' for target in built_targets)) + ')',
             'add_executable(ecad_link main.cpp)',
             'target_link_libraries(ecad_link PRIVATE chipcae_geometry_ecad)',
+            consumer_cmake,
         ]) + '\n')
         command = ['cmake', '-S', str(root), '-B', str(root / 'build'), '-G', 'Ninja',
                    '-DCMAKE_BUILD_TYPE=Release', '--trace-expand', '--trace-format=json-v1']
@@ -267,6 +269,7 @@ add_library(miniz miniz.c)
             artifact = (root / 'build/package-artifacts.txt').read_text().splitlines()[
                 [name for name, _ in targets].index(expected_name)]
             self.assertIn(os.path.relpath(artifact, root / 'build'), commands)
+        return root
 
     def test_package_discovery_uses_caller_variables_helpers_and_targets(self):
         for kind in ('STATIC', 'INTERFACE', 'SHARED'):
@@ -325,6 +328,66 @@ add_library(miniz miniz.c)
         for names in (('miniz',), ('miniz::miniz',), ('miniz', 'miniz::miniz')):
             with self.subTest(names=names):
                 self.configure_case(tuple((name, 'STATIC') for name in names), built=True)
+
+    def test_package_normal_static_targets_are_directory_independent(self):
+        """Refute pre-review :138: only imported targets have directory scope.
+
+        Per cmake-buildsystem(7) "Imported Targets" / add_library IMPORTED,
+        imports are scoped unless GLOBAL; normal targets and aliases of normal
+        targets are global, so parent and sibling consumers can link them.
+        """
+        for names, selected, backing in (
+                (('miniz',), 'miniz', 'miniz'),
+                (('miniz::miniz',), 'miniz::miniz', 'miniz_miniz_impl'),
+                (('miniz', 'miniz::miniz'), 'miniz::miniz', 'miniz_miniz_impl')):
+            with self.subTest(names=names):
+                consumers = f'''
+function(add_package_consumer name)
+    if(TARGET miniz::miniz)
+        set(selected miniz::miniz)
+    elseif(TARGET miniz)
+        set(selected miniz)
+    else()
+        message(FATAL_ERROR "package target missing in ${{CMAKE_CURRENT_SOURCE_DIR}}")
+    endif()
+    if(NOT selected STREQUAL "{selected}")
+        message(FATAL_ERROR "ECAD target selection changed")
+    endif()
+    get_target_property(kind ${{selected}} TYPE)
+    if(NOT kind STREQUAL "STATIC_LIBRARY")
+        message(FATAL_ERROR "package target is not static")
+    endif()
+    get_target_property(backing ${{selected}} ALIASED_TARGET)
+    if(NOT backing)
+        set(backing ${{selected}})
+    endif()
+    if(NOT backing STREQUAL "{backing}")
+        message(FATAL_ERROR "selected target is not the package's own normal target")
+    endif()
+    get_target_property(imported ${{backing}} IMPORTED)
+    if(imported)
+        message(FATAL_ERROR "package target unexpectedly imported")
+    endif()
+    add_executable(${{name}} "${{CMAKE_SOURCE_DIR}}/package_consumer.c")
+    target_link_libraries(${{name}} PRIVATE ${{selected}})
+endfunction()
+file(WRITE "${{CMAKE_SOURCE_DIR}}/package_consumer.c" [=[
+int synthetic_package_miniz(void);
+int main(void) {{ return synthetic_package_miniz() != 1; }}
+]=])
+add_package_consumer(parent_link)
+file(MAKE_DIRECTORY "${{CMAKE_SOURCE_DIR}}/sibling")
+file(WRITE "${{CMAKE_SOURCE_DIR}}/sibling/CMakeLists.txt"
+    "add_package_consumer(sibling_link)\\n")
+add_subdirectory(sibling)
+'''
+                root = self.configure_case(tuple((name, 'STATIC') for name in names),
+                                           built=True, consumer_cmake=consumers,
+                                           package_filename='miniz-config.cmake')
+                self.assertIsNotNone(root, 'normal static package configuration failed')
+                result = run(['cmake', '--build', str(root / 'build'), '--target',
+                              'parent_link', 'sibling_link', '-j2'])
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_automatic_global_promotion_does_not_leak_rejected_targets(self):
         for kind in ('SHARED', 'INTERFACE'):
