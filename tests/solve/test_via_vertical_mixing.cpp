@@ -13,7 +13,6 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace {
@@ -421,8 +420,11 @@ int main(int argc, char** argv) {
                     positive_definite(C, tol);
                     const auto S = inverse(C);
                     std::cout << "opening er=" << er << " f=" << f << " Eperp=" << 1 / S[0][0]
-                              << " Ez=" << 1 / S[2][2] << " alpha_perp=" << actual.alpha[0]
-                              << " alpha_z=" << actual.alpha[2] << '\n';
+                              << " Ez=" << 1 / S[2][2] << " Gt=" << 1 / S[5][5]
+                              << " Gzt=" << 1 / S[3][3] << " nu_t=" << -S[0][1] / S[0][0]
+                              << " nu_zt=" << -S[0][2] / S[2][2] << " nu_tz=" << -S[0][2] / S[0][0]
+                              << " alpha_perp=" << actual.alpha[0] << " alpha_z=" << actual.alpha[2]
+                              << " k_perp=" << k[0] << " k_z=" << k[2] << '\n';
                 });
         }
 
