@@ -95,9 +95,10 @@ must stop on any other state rather than substitute another reference.
 
 ## Contract tensions and implementation choices
 
-- `tol` has no numeric default or built-in gate value. A private missing-value
-  sentinel is the sole signature deviation, allowing omitted `tol` to raise
-  `Q2REF_BAD_ARG` as explicitly required by the brief and acceptance test.
+- `dual_reference(fvm_pv, exact_point_pv, richardson_pv, tol)` requires an explicit
+  `tol` with no default. Omitting it raises Python's argument-binding `TypeError`.
+  Invalid supplied values raise `Q2RefError`; the CLI requires `--tol` and reports
+  an omitted option as `Q2REF_BAD_ARG`.
 - A MONOTONE Richardson sequence with `f_fine=0` has undefined relative GCI.
   It is rejected with `Q2REF_BAD_ARG` rather than emitting a nonfinite result.
   This conservative choice needs an architect ruling if zero-valued fine

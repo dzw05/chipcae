@@ -28,7 +28,6 @@ from tools.vv.warpage_qoi import best_fit_plane
 _REL_TOL = 1e-12
 _POINT_BATCH = 4096
 _CELL_BATCH = 1024
-_MISSING = object()
 
 
 class Q2RefError(ValueError):
@@ -396,12 +395,8 @@ def richardson(f_coarse: float, f_medium: float, f_fine: float, ratio: float = 2
     return result
 
 
-def dual_reference(fvm_pv: float, exact_point_pv: float, richardson_pv: float, tol: float = _MISSING) -> dict:
-    """Compare against both references; tol is required and has no numeric default.
-
-    A private missing-value sentinel lets an omitted tol use Q2RefError instead
-    of Python's argument-binding TypeError, as required by the acceptance spec.
-    """
+def dual_reference(fvm_pv: float, exact_point_pv: float, richardson_pv: float, tol: float) -> dict:
+    """Compare against both references using the required explicit tolerance."""
     values = _scalars(fvm_pv=fvm_pv, exact_point_pv=exact_point_pv, richardson_pv=richardson_pv, tol=tol)
     _finite(**values)
     fvm_pv, exact_point_pv, richardson_pv, tol = values.values()

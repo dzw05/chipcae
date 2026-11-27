@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Zhiwei Duan
 """Analytic convergence orders, reference disagreement and argument precedence."""
+import inspect
 import math
 import sys
 import unittest
@@ -87,9 +88,17 @@ class RichardsonDualTests(unittest.TestCase):
         result = ref.dual_reference(1.125, 1, 1, math.nextafter(0.125, 0))
         self.assertEqual(result["status"], "FAIL")
 
-    def test_dual_requires_tol_and_rejects_finite_invalid_parameters(self):
-        # Explicit acceptance requirement, despite the brief's no-default signature tension.
-        self.error("Q2REF_BAD_ARG", ref.dual_reference, 1, 1, 1)
+    def test_dual_requires_explicit_tol(self):
+        signature = inspect.signature(ref.dual_reference)
+        self.assertIs(signature.parameters["tol"].default, inspect.Parameter.empty)
+        with self.assertRaisesRegex(TypeError, r"\btol\b"):
+            ref.dual_reference(1, 1, 1)
+        with self.assertRaisesRegex(TypeError, r"\btol\b"):
+            ref.dual_reference(fvm_pv=1, exact_point_pv=1, richardson_pv=1)
+        result = ref.dual_reference(1, 1, 1, tol=0.1)
+        self.assertEqual(result["status"], "PASS")
+
+    def test_rejects_finite_invalid_parameters(self):
         for args in ((1, 1, 1, 0), (1, 1, 1, -0.1), (1, 0, 1, 0.1), (1, 1, 0, 0.1)):
             self.error("Q2REF_BAD_ARG", ref.dual_reference, *args)
         for ratio, fs in ((1, 1.25), (0, 1.25), (-2, 1.25), (2, 0), (2, -1)):
