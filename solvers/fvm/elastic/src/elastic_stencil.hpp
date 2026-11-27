@@ -43,11 +43,22 @@ struct ElasticGeometry {
     std::int64_t min_dn_gid = -1;
     double max_identity_defect = 0;
 };
-// Cut gradients satisfy the implicit face-value Green-Gauss equations.
+// Evaluate assembly's gradient maps for any supplied cell field; no solve is required.
+// Uncut cells use same-region LS; cut gradients satisfy the implicit face-value GG equations.
 Expected<std::vector<ElasticMatrix>> evaluate_cut_gradients(const ElasticMesh&,
                                                             const ElasticProblem&,
                                                             const std::vector<ElasticVector>&,
                                                             MPI_Comm);
+// Face-local diagnostic, evaluated from the same eliminated maps as assembly.
+// Gradients use the common K-weighted tangent and signed half-face normal derivative.
+struct ElasticInterfaceSample {
+    std::size_t face = 0;
+    ElasticVector displacement{};
+    std::array<ElasticMatrix, 2> gradient{};
+    std::array<ElasticVector, 2> traction{}; // Both use the lo-to-hi normal.
+};
+Expected<std::vector<ElasticInterfaceSample>> evaluate_elastic_interfaces(
+    const ElasticMesh&, const ElasticProblem&, const std::vector<ElasticVector>&, MPI_Comm);
 // Boundary value is supplied explicitly. Internal faces ignore this argument.
 Expected<ElasticMatrix> evaluate_cut_face_gradient(const ElasticMesh&,
                                                    std::size_t,

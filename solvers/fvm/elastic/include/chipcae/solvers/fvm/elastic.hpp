@@ -39,6 +39,11 @@ struct ElasticProblem {
     // Thermal eigenstrain: (alpha_x,alpha_y,alpha_z,0,0,0)*dT.
     std::vector<std::array<double, 3>> alpha;
     std::vector<double> dT;
+    // Material-region id per cell. Empty = single region (no material interface;
+    // every face uses the main discretization). Otherwise size n_cells; faces with
+    // region[lo] != region[hi] use the traction-continuity interface treatment.
+    // Only integer equality is used; values carry no other meaning.
+    std::vector<int> region;
     enum class Support { Rigid321, Fixed } support = Support::Rigid321;
     // Fixed targets expand to zero displacement on nonembedded exterior faces.
     // Every target must match. Rigid321 prohibits all displacement targets.

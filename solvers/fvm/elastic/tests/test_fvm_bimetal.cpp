@@ -104,6 +104,7 @@ ElasticProblem layered(const ElasticMesh& m, const std::vector<Ply>& plies, doub
         const auto& mat = plies[static_cast<std::size_t>(m.layer[c])].mat;
         p.C[c] = mat.C;
         p.alpha[c] = mat.alpha;
+        p.region.push_back(m.layer[c]);
     }
     return p;
 }

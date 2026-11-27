@@ -170,7 +170,7 @@ void uncut_regression(bool compare_flags) {
     auto p = problem(m);
     p.support = ElasticProblem::Support::Fixed;
     p.fixed_side = {0};
-    // Freeze the parent material inputs together with its saved displacement field.
+    // Keep the original heterogeneous material inputs for both checks.
     // Current laminate formulas remain covered by the other laminate fixtures.
     M6 compliance{};
     compliance[0] = compliance[7] = 1 / 50.5e9;
@@ -186,22 +186,57 @@ void uncut_regression(bool compare_flags) {
             p.C[c] = top.C;
             p.alpha[c] = top.alpha;
         }
-    const auto r = solve(m, p, MPI_COMM_SELF);
-    const std::vector<V> parent{
-        {0.000215287545635354, -0.00018146171248660089, -0.00024354123357001585},
-        {0.0003131199638203407, -0.00024896428923006786, 0.00010968775654632344},
-        {0.00021528754563535432, 0.00018146171248660054, -0.00024354123357001585},
-        {0.00031311996382034081, 0.00024896428923006726, 0.00010968775654632332},
-        {0.00064270669742172437, -0.00020642309354412865, -0.00046122485212008065},
-        {0.00090607076721228408, -0.00028658086640763122, -6.439135344352884e-05},
-        {0.0006427066974217247, 0.00020642309354412789, -0.00046122485212008065},
-        {0.00090607076721228364, 0.00028658086640763128, -6.4391353443528636e-05}};
-    field_near(r.U_cell, parent, 0, 1e-14, "saved parent nonaffine cell field");
-    if (compare_flags) {
-        m.is_cut.assign(m.volume.size(), 0);
-        const auto zero_flags = solve(m, p, MPI_COMM_SELF);
-        // Exact comparisons intentionally enforce the brief's legacy arithmetic contract.
-        require(r.U_cell == zero_flags.U_cell && r.U_face == zero_flags.U_face &&
+    const auto clamped = p;
+    for (const auto& x : m.centroid)
+        p.region.push_back(x[2] > 0.5 ? 1 : 0);
+    constexpr double e0 = 1e-4;
+    std::array<double, 2> ez{};
+    for (std::size_t c = 0; c < m.volume.size(); ++c) {
+        const auto& stiffness = p.C[c];
+        // sigma_zz = C31*(e0-alpha_x*dT) + C32*(e0-alpha_y*dT)
+        //          + C33*(ez-alpha_z*dT) = 0 in each layer.
+        ez[m.centroid[c][2] > 0.5 ? 1 : 0] =
+            p.alpha[c][2] * p.dT[c] - (stiffness[12] * (e0 - p.alpha[c][0] * p.dT[c]) +
+                                       stiffness[13] * (e0 - p.alpha[c][1] * p.dT[c])) /
+                                          stiffness[14];
+    }
+    auto exact = [&](const V& x) -> V {
+        return {
+            e0 * x[0], e0 * x[1], ez[0] * std::min(x[2], 0.5) + ez[1] * std::max(x[2] - 0.5, 0.0)};
+    };
+    p.fixed_side.clear();
+    for (std::size_t f = 0; f < m.faces.size(); ++f)
+        if (m.faces[f].hi < 0 && m.faces[f].side >= 0 && m.faces[f].side < 4)
+            p.prescribed.push_back({static_cast<std::int64_t>(f), exact(m.faces[f].centroid)});
+    for (bool analytic : {true, false}) {
+        if (!analytic)
+            p = clamped;
+        m.is_cut.clear();
+        const auto r = solve(m, p, MPI_COMM_SELF);
+        check_output(m, p, r);
+        if (analytic) {
+            auto check_field = [&](const std::vector<V>& got,
+                                   const std::vector<V>& points,
+                                   const std::string& label) {
+                std::vector<V> expected;
+                double error = 0;
+                for (std::size_t i = 0; i < points.size(); ++i) {
+                    expected.push_back(exact(points[i]));
+                    error = std::max(error, norm(sub(got[i], expected.back())));
+                }
+                std::cout << std::setprecision(17) << label
+                          << " normalized_max_error=" << error / max_norm(expected) << '\n';
+                field_near(got, expected, 0, 1e-10, label);
+            };
+            check_field(r.U_cell, m.centroid, "H1 heterogeneous analytical U_cell");
+            check_field(r.U_face, face_points(m), "H1 heterogeneous analytical U_face");
+        }
+        if (compare_flags) {
+            m.is_cut.assign(m.volume.size(), 0);
+            const auto zero_flags = solve(m, p, MPI_COMM_SELF);
+            // Exact comparisons intentionally enforce the brief's legacy arithmetic contract.
+            require(
+                r.U_cell == zero_flags.U_cell && r.U_face == zero_flags.U_face &&
                     r.face_prescribed == zero_flags.face_prescribed &&
                     r.top_samples == zero_flags.top_samples &&
                     r.warpage_pv == zero_flags.warpage_pv && r.U_mag_max == zero_flags.U_mag_max &&
@@ -213,6 +248,7 @@ void uncut_regression(bool compare_flags) {
                     r.warpage_method == zero_flags.warpage_method &&
                     r.U_mag_method == zero_flags.U_mag_method,
                 "empty/all-zero flags give identical fields and diagnostics");
+        }
     }
 }
 void matrix_invariants(const ElasticMesh& m, const ElasticProblem& p) {
@@ -836,8 +872,9 @@ int main(int argc, char** argv) {
         benchmark(s);
     } else {
         s.run("embedded affine support in assembly and solve", [&] { embedded_support(s.comm); });
-        s.run("uncut saved parent fields at relative 1e-14", [] { uncut_regression(false); });
-        s.run("empty and all-zero is_cut retain exact parent outputs",
+        s.run("heterogeneous bilayer analytic layered solution (H1) and clamped invariants (H2)",
+              [] { uncut_regression(false); });
+        s.run("empty and all-zero is_cut give identical heterogeneous outputs",
               [] { uncut_regression(true); });
         s.run("uncut all-face minimum rho and gid", [] {
             const auto m = grid(3, 2, 1);
