@@ -26,7 +26,9 @@ if(CHIPCAE_ENABLE_PETSC)
 endif()
 
 if(CHIPCAE_ENABLE_MFEM)
-    find_package(MFEM REQUIRED)
+    find_package(MFEM CONFIG REQUIRED)
+    message(STATUS "MFEM_CONFIG=${MFEM_CONFIG}")
+    message(STATUS "MFEM_USE_PETSC=${MFEM_USE_PETSC}")
 endif()
 
 if(CHIPCAE_ENABLE_JSONCONS)
