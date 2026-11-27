@@ -2384,9 +2384,11 @@ int warpageOverlayAcceptance(const QDir& root) {
     run("warpage scale overlay follows auto scale", [&](auto check) {
         QTemporaryDir temp;
         int selected = 0;
-        writeSummaryFixture(root, temp, {}, [&](auto grid) {
-            selected += prepareAutoWarpageFixture(grid, {0, 0, 0.125});
-        });
+        writeSummaryFixture(
+            root,
+            temp,
+            {QJsonObject{{"step", 0}, {"name", "U_mag_max"}, {"value", 0.125}, {"unit", "m"}}},
+            [&](auto grid) { selected += prepareAutoWarpageFixture(grid, {0, 0, 0.125}); });
         require(selected == 1, "axial fixture must select original point (5,1,1) exactly once");
         ResultSession session;
         require(session.open(temp.path()), qPrintable(session.error()));
@@ -2402,17 +2404,43 @@ int warpageOverlayAcceptance(const QDir& root) {
         context = "not loaded";
         empty.setWarpageScale(10);
         checkNoOverlay(check, empty);
-        for (bool noU : {true, false}) {
-            context = noU ? "no PointData U" : "not_solved";
+        const QJsonObject solved{
+            {"step", 0}, {"name", "warpage_pv"}, {"value", 1.25e-06}, {"unit", "m"}};
+        struct UnavailableCase {
+            QString name;
+            QJsonArray summary;
+            bool noU = false;
+        };
+        const std::array cases = {
+            UnavailableCase{"no PointData U", {solved}, true},
+            UnavailableCase{
+                "warpage_pv not_solved",
+                {QJsonObject{
+                    {"step", 0}, {"name", "warpage_pv"}, {"value", 0}, {"method", "not_solved"}}}},
+            UnavailableCase{
+                "U_mag_max not_solved with solved warpage_pv",
+                {solved,
+                 QJsonObject{
+                     {"step", 0}, {"name", "U_mag_max"}, {"value", 0}, {"method", "not_solved"}}}},
+            UnavailableCase{"empty mechanics summary with PointData U", {}},
+            UnavailableCase{
+                "other-step mechanics summary with PointData U",
+                {QJsonObject{
+                    {"step", 1}, {"name", "warpage_pv"}, {"value", 1.25e-06}, {"unit", "m"}}}},
+            UnavailableCase{"nonnumeric mechanics summary with PointData U",
+                            {QJsonObject{{"step", 0},
+                                         {"name", "warpage_pv"},
+                                         {"value", "unavailable"},
+                                         {"unit", "m"}}}}};
+        for (const auto& item : cases) {
+            context = item.name;
             QTemporaryDir temp;
-            const QJsonArray summary = noU ? QJsonArray{}
-                                           : QJsonArray{QJsonObject{{"step", 0},
-                                                                    {"name", "warpage_pv"},
-                                                                    {"value", 0},
-                                                                    {"method", "not_solved"}}};
-            writeSummaryFixture(root, temp, summary, [&](auto grid) {
-                if (noU)
+            writeSummaryFixture(root, temp, item.summary, [&](auto grid) {
+                if (item.noU)
                     grid->GetPointData()->RemoveArray("U");
+                else
+                    require(grid->GetPointData()->GetArray("U"),
+                            "unavailable summary fixture must retain PointData U");
             });
             ResultSession session;
             require(session.open(temp.path()), qPrintable(session.error()));

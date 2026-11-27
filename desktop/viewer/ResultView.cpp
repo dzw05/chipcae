@@ -556,6 +556,14 @@ QString ResultView::warpageScaleText() const {
     if (mechanicsNotSolved(mechMethod(summary, "warpage_pv", d->step),
                            mechMethod(summary, "U_mag_max", d->step)))
         return {};
+    const bool hasMechanicsSummary =
+        std::any_of(summary.begin(), summary.end(), [step = d->step](const QJsonValue& value) {
+            const auto entry = value.toObject();
+            return (entry["name"] == "warpage_pv" || entry["name"] == "U_mag_max") &&
+                   entry["step"].toInteger(-1) == step && entry["value"].isDouble();
+        });
+    if (!hasMechanicsSummary)
+        return {};
     for (const auto& block : d->blocks)
         if (block.raw->GetPointData()->GetArray("U"))
             return "Warpage scale x" + QString::number(d->scale, 'g', 6);
