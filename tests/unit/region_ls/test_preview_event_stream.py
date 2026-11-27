@@ -202,6 +202,15 @@ class PreviewEventStream(unittest.TestCase):
         self.assertEqual(summary['mesh_sha256'], serial_summary['mesh_sha256'],
                          diagnostics(result))
 
+        path = self.root / 'mpi-absent' / 'events'
+        self.assertFalse(path.parent.exists())
+        command = [mpi, self.cache.get('MPIEXEC_NUMPROC_FLAG', '-n'), '2',
+                   *self.command('--events-file', str(path))]
+        result = self.invoke(command)
+        self.error(result, 'events file: ', prefix=True)
+        self.assertFalse(path.exists(), diagnostics(result))
+        self.assertFalse(path.parent.exists(), diagnostics(result))
+
     def error(self, result, message, prefix=False):
         context = diagnostics(result)
         self.assertEqual(result.returncode, 1, context)
@@ -280,12 +289,23 @@ class PreviewEventStream(unittest.TestCase):
 
     def test_other_argument_error_is_mirrored(self):
         path = self.root / 'argument-error.events'
-        command = [str(self.preview), str(self.fixture), '-o', str(self.root / 'bad-grid'),
-                   '--events-file', str(path), '--nx']
-        result = self.invoke(command)
-        self.error(result, 'missing value for --nx')
-        self.assertEqual(self.events(result, path)[-1]['stage'], 'error', diagnostics(result))
-        self.assertEqual(path.read_bytes(), result.stdout.encode('utf-8'), diagnostics(result))
+        cases = [
+            (['--events-file', str(path), '--nx'], 'missing value for --nx'),
+            (['--nx', '--events-file', str(path)], 'invalid integer: --events-file'),
+            (['--nx', '', '--events-file', str(path)], 'missing value for --nx'),
+        ]
+        for flags, message in cases:
+            with self.subTest(flags=flags):
+                path.unlink(missing_ok=True)
+                command = [str(self.preview), str(self.fixture), '-o',
+                           str(self.root / 'bad-grid'), *flags]
+                result = self.invoke(command)
+                self.error(result, message)
+                self.assertTrue(path.is_file(), diagnostics(result))
+                self.assertEqual(self.events(result, path)[-1]['stage'], 'error',
+                                 diagnostics(result))
+                self.assertEqual(path.read_bytes(), result.stdout.encode('utf-8'),
+                                 diagnostics(result))
 
     def test_option_name_consumed_as_another_value_is_not_prescanned(self):
         command = self.command('--surface', '--events-file')
