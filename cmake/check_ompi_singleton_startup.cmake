@@ -341,7 +341,75 @@ def dynamic_coverage_check(build):
     print("independent audit rejects unprotected shell, Python and generated CMake dispatch")
 
 
-def configuration_check(build):
+def build_cmake_requirements(text):
+    # Tokenize just enough CMake to find commands, ignoring comments and keeping
+    # quoted/bracket arguments atomic so example declarations cannot count.
+    lexemes = re.finditer(
+        r'(?P<comment>\#\[(?P<equals>=*)\[.*?\](?P=equals)\]|\#[^\n]*)'
+        r'|"(?:\\.|[^"\\])*"|\[(?P<bracket>=*)\[.*?\](?P=bracket)\]'
+        r'|[^\s()"#\[\]]+|[^\s]', text, re.S)
+    tokens = [match[0] for match in lexemes if match.lastgroup != "comment"]
+    commands = []
+    index = 0
+    while index + 1 < len(tokens):
+        name = tokens[index].lower()
+        assert tokens[index + 1] == "(", (
+            f"CMakeLists.txt: expected command after {tokens[index]!r}")
+        end, depth = index + 2, 1
+        while end < len(tokens) and depth:
+            depth += (tokens[end] == "(") - (tokens[end] == ")")
+            end += 1
+        assert depth == 0, f"CMakeLists.txt: unterminated {name} command"
+        commands.append((name, tokens[index + 2:end - 1]))
+        index = end
+        if name == "project":
+            break
+    minimum = next((i for i, command in enumerate(commands)
+                    if command[0] == "cmake_minimum_required"), None)
+    assert minimum is not None, "CMakeLists.txt: expected cmake_minimum_required VERSION 3.28; missing"
+    arguments = commands[minimum][1]
+    assert len(arguments) >= 2 and arguments[:2] == ["VERSION", "3.28"], (
+        f"CMakeLists.txt: expected exact minimum VERSION 3.28; actual arguments={arguments!r}")
+    following = commands[minimum + 1] if minimum + 1 < len(commands) else None
+    assert following == ("cmake_policy", ["VERSION", "3.20"]), (
+        f"CMakeLists.txt: expected next command cmake_policy(VERSION 3.20); actual={following!r}")
+    project = next((i for i, command in enumerate(commands) if command[0] == "project"), None)
+    assert project is not None and minimum + 1 < project, (
+        "CMakeLists.txt: expected minimum and policy before project(); project missing or precedes policy")
+
+
+def build_readme_requirements(text):
+    section = re.search(r"^## 构建\s*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+    assert section and "CMake 3.28 或更高版本" in section[1], (
+        "README.md: expected 构建 requirement 'CMake 3.28 或更高版本'; missing")
+    assert "CMake 3.20 或更高版本" not in section[1], (
+        "README.md: expected current minimum 3.28; found 'CMake 3.20 或更高版本'")
+
+
+def build_ci_requirements(text):
+    assert not re.search(r"CMake\s*<\s*3\.28[^.]*automatic assignment warns and is skipped", text), (
+        "docs/ci.md: expected no supported CMake < 3.28 warning/skip path; found obsolete compatibility text")
+    assert re.search(r"(?:minimum[^.\n]*CMake\s+3\.28|CMake\s+3\.28[^.\n]*minimum|"
+                     r"CMake\s*(?:>=|≥)\s*3\.28|CMake\s+3\.28\s+or (?:newer|higher|later)|"
+                     r"CMake\s+3\.28\s*或更高版本)", text, re.I), (
+        "docs/ci.md: expected explicit minimum CMake 3.28 requirement; missing")
+
+
+def build_requirements_check(script):
+    root = Path(script).resolve().parent.parent
+    failures = []
+    for filename, check in (("CMakeLists.txt", build_cmake_requirements),
+                            ("README.md", build_readme_requirements),
+                            ("docs/ci.md", build_ci_requirements)):
+        try:
+            check((root / filename).read_text(encoding="utf-8"))
+        except AssertionError as error:
+            failures.append(str(error))
+    assert not failures, "build requirements:\n" + "\n".join(failures)
+    print("build requirements: exact CMake 3.28 minimum, 3.20 policy and documentation verified")
+
+
+def configuration_check(build, script):
     result = subprocess.run(["ctest", "--test-dir", build, "--show-only=json-v1"],
                             check=True, stdout=subprocess.PIPE, text=True)
     entries = json.loads(result.stdout)["tests"]
@@ -391,6 +459,7 @@ def configuration_check(build):
         else:
             raise AssertionError(f"independent audit missed unprotected {omitted}")
     dynamic_coverage_check(build)
+    build_requirements_check(script)
     print("singleton registration, independent caller coverage and existing test properties verified")
 
 
@@ -795,8 +864,10 @@ elif mode in ("dynamic_execution", "cross_compile", "non_runnable", "c_only", "s
     module_check(mode, script, python, build)
 elif mode == "coverage_dynamic":
     dynamic_coverage_check(build)
+elif mode == "build_requirements":
+    build_requirements_check(script)
 elif mode == "configuration":
-    configuration_check(build)
+    configuration_check(build, script)
 elif mode in ("disabled", "non_open_mpi", "tests_off"):
     gating_check(mode, script)
 elif mode:

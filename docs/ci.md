@@ -2,6 +2,8 @@
 
 Linux only. There is no macOS or Windows job.
 
+The project requires CMake 3.28 or higher for the cross-directory test property APIs used by Open MPI test protection.
+
 The hosted budget for this private repository is **1,500 minutes per month**. GitHub's Free plan includes 2,000 minutes; the remaining 500 minutes are headroom and are not part of this budget. The estimate below is the planning number for chipcae. It is not a GitHub invoice.
 
 Repository settings (branch protection, variables, secrets) are not changed by the workflows. Names to set by hand are listed below.
@@ -89,8 +91,7 @@ Without an explicit tier, perf takes precedence over acceptance, then module,
 then unit. Auto-collected tests default to TIMEOUT 120 s and therefore module.
 `highmem` is reserved for the three measured tests sharing `chipcae_highmem`;
 never add it based only on timeout or test size. Run `ctest -R '^ctest_tier_labels$'`
-to audit the full configured inventory (also required with CMake < 3.28, where
-automatic assignment warns and is skipped).
+to audit the full configured inventory.
 
 Hosted PR CI runs `-L '^(unit|module)$'` first, then `-LE '^(unit|module)$'`, so
 all previously configured merge-gating tests still run. Hosted lacks MFEM/PETSc,

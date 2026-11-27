@@ -11,6 +11,7 @@
 #include "cut_output.hpp"
 #include "direct_refine.hpp"
 #include "outline_contains.hpp"
+#include "q2_export.hpp"
 #include "sha256.hpp"
 
 #include <algorithm>
@@ -1158,6 +1159,21 @@ int run(const RunInputs& inputs, const std::filesystem::path& output) {
                                  [&](const auto& layer) { return layer.name == record.layer; });
                 part.layer_id.push_back(static_cast<int>(it - inputs.stack.layers.begin()) + 1);
             }
+        if (detail::q2_export_requested()) {
+            const auto stats = detail::write_q2_export(
+                output / ("accuracy-q2-rank" + std::to_string(rank) + ".json"),
+                mesh,
+                scalar,
+                displacement,
+                temperature,
+                arrays.elem_gid,
+                arrays.partitioning,
+                rank);
+            std::ostringstream line;
+            line << "q2_export elements=" << stats.elements << " nodes=" << stats.nodes
+                 << " bytes=" << stats.bytes << " seconds=" << stats.seconds;
+            emit(io::LogLine{1, rank, line.str(), "", 0});
+        }
         writer.write_step(0, 0, result);
         // Thermal-only runs retain the zero displacement field. Publish its zero
         // summaries explicitly to satisfy the unchanged ResultsWriter contract.

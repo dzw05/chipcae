@@ -23,3 +23,10 @@ SYSTEM_MPI_VERSION=4.1.6-7ubuntu2
 # already hashes this lock. Apt resolves only the distro runtime dependencies.
 SYSTEM_OCCT_VERSION=7.6.3+dfsg1-7.1build1
 SYSTEM_OCCT_PACKAGES="libocct-foundation-dev libocct-modeling-data-dev libocct-modeling-algorithms-dev libocct-ocaf-dev libocct-visualization-dev libocct-data-exchange-dev libocct-foundation-7.6t64 libocct-modeling-data-7.6t64 libocct-modeling-algorithms-7.6t64 libocct-ocaf-7.6t64 libocct-visualization-7.6t64 libocct-data-exchange-7.6t64"
+
+# Official release archive: https://petsc.org/release/install/download/
+# Independently downloaded the linked source tarball and ran sha256sum (2026-11-27).
+# The result matches the existing apps/chipcae-solve/ci/deps_cuda.lock pin.
+PETSC_VERSION=3.26.1
+PETSC_URL=https://web.cels.anl.gov/projects/petsc/download/release-snapshots/petsc-3.26.1.tar.gz
+PETSC_SHA256=a4dc46c1b4403545ac2274741ce10801366c4a9a7b2683b678d18f6663b93496

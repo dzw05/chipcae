@@ -74,7 +74,8 @@ its map into every dependent face equation, including earlier pivots. Fill depen
 are tracked until all interface displacements are resolved before evaluating LS samples.
 No connected-interface dense matrix or inverse is allocated. The existing
 one-sided Jacobi SVD retains squared singular values strictly greater than
-`largest*1e-26`, with unchanged arithmetic on the legacy path. Incomplete gradient
+`largest*1e-26` (equivalently, singular values greater than `sigma_max*1e-13`),
+with unchanged arithmetic and threshold on the legacy path. Incomplete gradient
 or elimination rank and nonpositive acoustic Cholesky pivots report `INTERNAL`
 with the lo gid and face index. Zero projected distances also report `INTERNAL`;
 negative or nonfinite projected distances fail input validation with `INPUT_INVALID`
@@ -108,9 +109,12 @@ follows from the region bypass, rather than a numerical material comparison.
 
 Only the lo owner constructs each interface equation and its LS maps. Construction
 errors are reduced before any coefficient broadcast; ordered integer keys and
-floating-point coefficients are then replicated separately. Each rank eliminates
-the coupled maps in the same face order, with failures synchronized before further
-assembly. Records are sparse, cell gradients are stored once, and temporary
+floating-point coefficients are then replicated separately. Only each face's lo owner
+computes its SVD pivot and rank decision; it broadcasts the pivot before dependent
+rows are updated, including earlier pivots. Fully eliminated owner displacements
+are broadcast before the owners substitute LS samples, then the complete eliminated
+displacement and gradient maps are broadcast to every rank. Owner failures are
+synchronized before each communication phase and further assembly. Records are sparse, cell gradients are stored once, and temporary
 elimination and duplicated gradient storage are released before PETSc allocation.
 This does not guarantee unchanged matrix support or peak RSS: stiffness contrast
 can enlarge the implicit stencil.

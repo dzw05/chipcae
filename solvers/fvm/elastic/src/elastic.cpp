@@ -1099,56 +1099,6 @@ void substitute_interface(AffineMap& map, Index key, const AffineMap& value) {
     if (!coefficient.empty())
         add_map(map, transform(value, map.rows, coefficient.mapped()), 1);
 }
-void eliminate_interfaces(const ElasticMesh& m, std::map<std::size_t, InterfaceFace>& faces) {
-    std::map<Index, std::set<std::size_t>> dependents;
-    for (const auto& [k, face] : faces)
-        for (const auto& [key, block] : face.value.cells)
-            if (key < 0)
-                dependents[key].insert(k);
-    // Block Gauss-Jordan elimination keeps each pivot local to a face's three
-    // displacement components. Update every dependent row, including earlier
-    // pivots, so fill never leaves a dependency on an already processed face.
-    // No connected-interface dense matrix or inverse is allocated.
-    for (auto& [k, face] : faces) {
-        const Index key = -1 - static_cast<Index>(k);
-        auto self = face.value.cells.extract(key);
-        std::vector<double> local(9);
-        for (int i = 0; i < 3; ++i)
-            for (int j = 0; j < 3; ++j)
-                local[3 * i + j] =
-                    (i == j ? 1.0 : 0.0) - (self.empty() ? 0.0 : self.mapped()[3 * i + j]);
-        int rank = 0;
-        const auto inverse = pseudoinverse(std::move(local), 3, 3, &rank);
-        if (rank != 3)
-            geometry_error(
-                m, m.faces[k].lo, "rank-deficient interface displacement elimination", k);
-        face.value = transform(face.value, 3, inverse);
-        auto affected = dependents.extract(key);
-        if (affected.empty())
-            continue;
-        for (auto other : affected.mapped()) {
-            if (other == k)
-                continue;
-            auto& value = faces.at(other).value;
-            substitute_interface(value, key, face.value);
-            for (const auto& [next, block] : face.value.cells)
-                if (next < 0)
-                    dependents[next].insert(other);
-        }
-    }
-    // Every face is fully resolved before substituting any LS samples. Check
-    // this invariant instead of iterating through potentially cyclic maps.
-    for (auto& [k, face] : faces) {
-        if (!face.value.cells.empty() && face.value.cells.begin()->first < 0)
-            geometry_error(m, m.faces[k].lo, "unresolved interface displacement dependency", k);
-        for (auto& gradient : face.gradient)
-            while (!gradient.cells.empty() && gradient.cells.begin()->first < 0) {
-                const Index key = gradient.cells.begin()->first;
-                substitute_interface(
-                    gradient, key, faces.at(static_cast<std::size_t>(-1 - key)).value);
-            }
-    }
-}
 // Ordered integer keys travel separately from floating-point coefficients. No
 // gids or cell/face indices are rounded through double during MPI replication.
 struct InterfaceWire {
@@ -1204,6 +1154,121 @@ void synchronize_interface_failure(MPI_Comm comm, int rank, const std::string& e
     shared.resize(static_cast<std::size_t>(length));
     MPI_Bcast(shared.data(), length, MPI_CHAR, failed, comm);
     throw std::runtime_error(shared);
+}
+void broadcast_interface(InterfaceFace& face, int owner, int rank, MPI_Comm comm) {
+    InterfaceWire wire;
+    std::string failure;
+    try {
+        if (rank == owner)
+            wire = pack_interface(face);
+    } catch (const std::exception& e) {
+        failure = e.what();
+    }
+    synchronize_interface_failure(comm, rank, failure);
+    std::array<int, 2> sizes{static_cast<int>(wire.keys.size()),
+                             static_cast<int>(wire.values.size())};
+    MPI_Bcast(sizes.data(), 2, MPI_INT, owner, comm);
+    wire.keys.resize(static_cast<std::size_t>(sizes[0]));
+    wire.values.resize(static_cast<std::size_t>(sizes[1]));
+    MPI_Bcast(wire.keys.data(), sizes[0], MPI_INT64_T, owner, comm);
+    MPI_Bcast(wire.values.data(), sizes[1], MPI_DOUBLE, owner, comm);
+    if (rank != owner)
+        face = unpack_interface(wire);
+}
+void eliminate_interfaces(const ElasticMesh& m,
+                          std::map<std::size_t, InterfaceFace>& faces,
+                          MPI_Comm comm) {
+    int owner_rank = 0, ranks = 1;
+    MPI_Comm_rank(comm, &owner_rank);
+    MPI_Comm_size(comm, &ranks);
+    std::map<Index, std::set<std::size_t>> dependents;
+    for (const auto& [k, face] : faces)
+        for (const auto& [key, block] : face.value.cells)
+            if (key < 0)
+                dependents[key].insert(k);
+    // Block Gauss-Jordan elimination keeps each pivot local to a face's three
+    // displacement components. Update every dependent row, including earlier
+    // pivots, so fill never leaves a dependency on an already processed face.
+    // No connected-interface dense matrix or inverse is allocated.
+    for (auto& [k, face] : faces) {
+        const Index key = -1 - static_cast<Index>(k);
+        const int owner = m.rank[m.faces[k].lo];
+        std::string failure;
+        // Only the lo owner makes the rank decision and computes this pivot.
+        // All dependent rows use that exact pivot, including earlier pivots.
+        try {
+            if (owner_rank == owner) {
+                auto self = face.value.cells.extract(key);
+                std::vector<double> local(9);
+                for (int i = 0; i < 3; ++i)
+                    for (int j = 0; j < 3; ++j)
+                        local[3 * i + j] =
+                            (i == j ? 1.0 : 0.0) - (self.empty() ? 0.0 : self.mapped()[3 * i + j]);
+                int rank = 0;
+                const auto inverse = pseudoinverse(std::move(local), 3, 3, &rank);
+                if (rank != 3)
+                    geometry_error(
+                        m, m.faces[k].lo, "rank-deficient interface displacement elimination", k);
+                face.value = transform(face.value, 3, inverse);
+            }
+        } catch (const std::exception& e) {
+            failure = e.what();
+        }
+        if (ranks > 1) {
+            synchronize_interface_failure(comm, owner_rank, failure);
+            broadcast_interface(face, owner, owner_rank, comm);
+        } else if (!failure.empty())
+            throw std::runtime_error(failure);
+        auto affected = dependents.extract(key);
+        if (affected.empty())
+            continue;
+        for (auto other : affected.mapped()) {
+            if (other == k)
+                continue;
+            auto& value = faces.at(other).value;
+            substitute_interface(value, key, face.value);
+            for (const auto& [next, block] : face.value.cells)
+                if (next < 0)
+                    dependents[next].insert(other);
+        }
+    }
+    // Publish the fully eliminated owner values before substituting LS samples.
+    // Ghost arithmetic must not select a different map or rank failure.
+    std::string failure;
+    try {
+        for (const auto& [k, face] : faces)
+            if (m.rank[m.faces[k].lo] == owner_rank && !face.value.cells.empty() &&
+                face.value.cells.begin()->first < 0)
+                geometry_error(m, m.faces[k].lo, "unresolved interface displacement dependency", k);
+    } catch (const std::exception& e) {
+        failure = e.what();
+    }
+    if (ranks > 1) {
+        synchronize_interface_failure(comm, owner_rank, failure);
+        for (auto& [k, face] : faces)
+            broadcast_interface(face, m.rank[m.faces[k].lo], owner_rank, comm);
+    } else if (!failure.empty())
+        throw std::runtime_error(failure);
+    failure.clear();
+    try {
+        for (auto& [k, face] : faces)
+            if (m.rank[m.faces[k].lo] == owner_rank)
+                for (auto& gradient : face.gradient)
+                    while (!gradient.cells.empty() && gradient.cells.begin()->first < 0) {
+                        const Index key = gradient.cells.begin()->first;
+                        substitute_interface(
+                            gradient, key, faces.at(static_cast<std::size_t>(-1 - key)).value);
+                    }
+    } catch (const std::exception& e) {
+        failure = e.what();
+    }
+    if (ranks > 1) {
+        synchronize_interface_failure(comm, owner_rank, failure);
+        // Each consumer now receives the owner's eliminated U_f AND LS maps.
+        for (auto& [k, face] : faces)
+            broadcast_interface(face, m.rank[m.faces[k].lo], owner_rank, comm);
+    } else if (!failure.empty())
+        throw std::runtime_error(failure);
 }
 bool has_interfaces(const ElasticMesh& m, const ElasticProblem& p) {
     if (p.region.empty())
@@ -1280,7 +1345,7 @@ Reconstruction reconstruction(const ElasticMesh& m,
             }
     failure.clear();
     try {
-        eliminate_interfaces(m, out.interfaces);
+        eliminate_interfaces(m, out.interfaces, comm);
     } catch (const std::exception& e) {
         failure = e.what();
     }
@@ -1617,6 +1682,8 @@ Expected<std::vector<ElasticInterfaceSample>> evaluate_elastic_interfaces(const 
         require(u.size() == m.volume.size(), "interface displacement length");
         for (const auto& value : u)
             require(finite(value), "nonfinite interface displacement");
+        if (!has_interfaces(m, p))
+            return std::vector<ElasticInterfaceSample>{};
         const auto context = reconstruction(m, p, bc, comm);
         auto evaluate_map = [&](const AffineMap& map) {
             auto value = map.constant;

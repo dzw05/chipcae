@@ -344,23 +344,38 @@ void identical_assembly(const detail::ElasticAssembly& a, const detail::ElasticA
         }
     }
 }
-void reduction(bool graded, bool equal_eigenstrain) {
+void reduction(bool graded) {
     auto p = patch_grid(graded, false, false);
     p.problem.region.clear(); // T3 checks the legacy path, independently of layer labels.
     auto single = p.mesh;
     std::fill(single.layer.begin(), single.layer.end(), 0);
-    auto equivalent = p.problem;
-    if (equal_eigenstrain)
-        for (std::size_t c = 0; c < p.mesh.volume.size(); ++c)
-            if (p.mesh.layer[c] == 1) {
-                equivalent.alpha[c] = scale(equivalent.alpha[c], 2);
-                equivalent.dT[c] /= 2;
-            }
-    identical_assembly(assembly(p.mesh, equivalent), assembly(single, p.problem));
+    // Only layer labels differ. Both assemblies receive the same problem,
+    // including identical C, alpha and dT in every cell of both layers.
+    for (std::size_t c = 0; c < p.mesh.volume.size(); ++c) {
+        require(std::memcmp(p.problem.C[c].data(), p.problem.C[0].data(), sizeof(p.problem.C[c])) ==
+                    0,
+                "T3 has identical stiffness in both layers");
+        require(std::memcmp(p.problem.alpha[c].data(), p.problem.alpha[0].data(), sizeof(V)) == 0 &&
+                    std::memcmp(&p.problem.dT[c], &p.problem.dT[0], sizeof(double)) == 0,
+                "T3 has identical alpha and dT in both layers");
+    }
+    identical_assembly(assembly(p.mesh, p.problem), assembly(single, p.problem));
 }
 
-void region_length(std::size_t length) {
-    auto p = patch_grid(false);
+void equal_eigenstrain(bool graded) {
+    auto p = patch_grid(graded, false, false);
+    p.problem.region.clear();
+    auto equivalent = p.problem;
+    for (std::size_t c = 0; c < p.mesh.volume.size(); ++c)
+        if (p.mesh.layer[c] == 1) {
+            equivalent.alpha[c] = scale(equivalent.alpha[c], 2);
+            equivalent.dT[c] /= 2;
+        }
+    identical_assembly(assembly(p.mesh, equivalent), assembly(p.mesh, p.problem));
+}
+
+void region_length(bool graded, std::size_t length) {
+    auto p = patch_grid(graded);
     p.problem.region.resize(length);
     auto rejected = [&](const auto& result) {
         require(!result, "invalid region length must reject before assembly");
@@ -374,6 +389,8 @@ void region_length(std::size_t length) {
     };
     rejected(detail::assemble_elastic(p.mesh, p.problem, MPI_COMM_SELF));
     rejected(solve_elastic(p.mesh, p.problem, MPI_COMM_SELF));
+    rejected(
+        detail::evaluate_elastic_interfaces(p.mesh, p.problem, p.exact_cells(), MPI_COMM_SELF));
 }
 
 void region_bypass(bool graded, bool unconstrained = false) {
@@ -628,6 +645,31 @@ void junction_samples(MPI_Comm comm, int ranks, bool rank_one = false, bool reve
     }
     require(stress_scale > 0 && jump <= field_tolerance * stress_scale,
             "coupled junction maps satisfy every interface traction equation");
+    // Match the original caller face order after a permutation, and compare
+    // mixed lo-owner reconstruction with the independent serial execution.
+    if (reverse_faces || ranks > 1) {
+        auto reference_mesh = m;
+        auto reference_problem = p;
+        std::fill(reference_mesh.rank.begin(), reference_mesh.rank.end(), 0);
+        if (reverse_faces) {
+            std::reverse(reference_mesh.faces.begin(), reference_mesh.faces.end());
+            std::reverse(reference_mesh.is_embedded.begin(), reference_mesh.is_embedded.end());
+            for (auto& prescribed : reference_problem.prescribed)
+                prescribed.face = static_cast<std::int64_t>(m.faces.size() - 1) - prescribed.face;
+        }
+        const auto reference = detail::evaluate_elastic_interfaces(
+            reference_mesh, reference_problem, u, MPI_COMM_SELF);
+        require(static_cast<bool>(reference), "serial reference interface reconstruction succeeds");
+        std::map<std::size_t, V> reference_values;
+        for (const auto& sample : reference.value())
+            reference_values.emplace(sample.face, sample.displacement);
+        std::vector<V> got, want;
+        for (const auto& [k, value] : values) {
+            got.push_back(value);
+            want.push_back(reference_values.at(reverse_faces ? m.faces.size() - 1 - k : k));
+        }
+        relative_field(got, want, "junction ownership and face-order invariance");
+    }
     bool junction = false;
     for (std::size_t c = 0; c < m.volume.size(); ++c) {
         M3 expected{}, error{};
@@ -919,9 +961,9 @@ int main(int argc, char** argv) {
             suite.run("T2 " + name + " unconstrained operator",
                       [&] { matrix_invariants(patch_grid(graded)); });
             suite.run("T3 " + name + " identical material, distinct layer labels",
-                      [&] { reduction(graded, false); });
+                      [&] { reduction(graded); });
             suite.run("equal eigenstrain with distinct alpha/dT is bitwise unchanged",
-                      [&] { reduction(graded, true); });
+                      [&] { equal_eigenstrain(graded); });
             suite.run(name + " deterministic repeated assembly", [&] {
                 const auto p = patch_grid(graded);
                 identical_assembly(assembly(p.mesh, p.problem), assembly(p.mesh, p.problem));
@@ -930,10 +972,11 @@ int main(int argc, char** argv) {
                       [&] { region_bypass(graded); });
             suite.run("T6 " + name + " free nonaffine empty and equal region bytes",
                       [&] { region_bypass(graded, true); });
+            const auto cells = patch_grid(graded).mesh.volume.size();
+            for (auto length : {std::size_t{1}, cells - 1, cells + 1})
+                suite.run("T6 " + name + " invalid region length " + std::to_string(length),
+                          [&] { region_length(graded, length); });
         }
-        for (auto length : {std::size_t{1}, std::size_t{79}, std::size_t{81}})
-            suite.run("T6 invalid region length " + std::to_string(length),
-                      [&] { region_length(length); });
         suite.run("T6 interface selection uses only integer region equality",
                   region_only_predicate);
         for (bool thermal_jump : {false, true})
