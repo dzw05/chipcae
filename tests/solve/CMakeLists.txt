@@ -102,6 +102,18 @@ if(_solve_backend AND TARGET chipcae_material)
     target_link_libraries(chipcae_test_solve_mixture PRIVATE chipcae_solve_inputs chipcae_material mfem)
     add_test(NAME solve_material_mixture COMMAND chipcae_test_solve_mixture)
 
+    add_executable(chipcae_test_via_vertical_mixing test_via_vertical_mixing.cpp)
+    target_include_directories(chipcae_test_via_vertical_mixing PRIVATE
+        ${PROJECT_SOURCE_DIR}/apps/chipcae-solve/include
+        ${PROJECT_SOURCE_DIR}/apps/chipcae-solve/src)
+    target_link_libraries(chipcae_test_via_vertical_mixing PRIVATE
+        chipcae_solve_inputs chipcae_material mfem)
+    chipcae_set_warnings(chipcae_test_via_vertical_mixing)
+    add_test(NAME solve_via_vertical_mixing COMMAND chipcae_test_via_vertical_mixing
+        ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/via-vertical-mixing/inputs.json)
+    set_tests_properties(solve_via_vertical_mixing PROPERTIES
+        TIMEOUT 60 LABELS "solve;material;numerical;tierA")
+
     add_executable(chipcae_test_copper_trace_map test_copper_trace_map.cpp)
     target_include_directories(chipcae_test_copper_trace_map PRIVATE ${PROJECT_SOURCE_DIR}/apps/chipcae-solve/include)
     target_link_libraries(chipcae_test_copper_trace_map PRIVATE chipcae_solve_inputs chipcae_material mfem)
