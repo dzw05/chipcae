@@ -375,9 +375,11 @@ int main(int argc, char** argv) {
     std::ostream* events = nullptr;
     try {
         std::string initialization_error;
+        int events_open_failed = 0;
         try {
             std::optional<std::string> events_path;
-            // Follow run()'s value boundaries, including tokens that look like options.
+            // Path values may look like options, but a missing numeric value must not
+            // hide a later event option. Leave argument errors to run() for mirroring.
             // Validate the whole event option before opening (and truncating) anything.
             for (int i = 1; i < argc; ++i) {
                 const std::string arg = argv[i];
@@ -387,19 +389,24 @@ int main(int argc, char** argv) {
                     if (++i == argc || std::string(argv[i]).empty())
                         throw std::runtime_error("missing value for --events-file");
                     events_path = argv[i];
-                } else if (arg == "-o" || arg == "--surface" || arg == "--polyset" ||
-                           arg == "--nx" || arg == "--ny" || arg == "--levels" ||
+                } else if (arg == "-o" || arg == "--surface" || arg == "--polyset") {
+                    if (i + 1 < argc)
+                        ++i;
+                } else if (arg == "--nx" || arg == "--ny" || arg == "--levels" ||
                            arg == "--max-ratio" || arg == "--cell-budget" ||
                            arg == "--min-elems-per-layer") {
-                    ++i;
+                    if (i + 1 < argc && argv[i + 1][0] != '\0' && argv[i + 1][0] != '-')
+                        ++i;
                 }
             }
             if (rank == 0 && events_path) {
                 events_file.open(*events_path, std::ios::binary | std::ios::trunc);
-                if (!events_file)
+                if (!events_file) {
+                    events_open_failed = 1;
                     throw std::runtime_error(
                         "events file: " +
                         std::error_code(errno, std::generic_category()).message());
+                }
                 events = &events_file;
             }
         } catch (const std::exception& error) {
@@ -407,17 +414,23 @@ int main(int argc, char** argv) {
         }
 #ifdef CHIPCAE_ENABLE_MPI
         // A rank-zero open failure must reach every rank before run()'s collectives.
+        MPI_Bcast(&events_open_failed, 1, MPI_INT, 0, MPI_COMM_WORLD);
         int error_size = static_cast<int>(initialization_error.size());
         MPI_Bcast(&error_size, 1, MPI_INT, 0, MPI_COMM_WORLD);
         initialization_error.resize(static_cast<std::size_t>(error_size));
         MPI_Bcast(initialization_error.data(), error_size, MPI_CHAR, 0, MPI_COMM_WORLD);
 #endif
-        if (!initialization_error.empty())
+        if (!initialization_error.empty() && (!events_open_failed || rank == 0))
             throw std::runtime_error(initialization_error);
+        if (events_open_failed) {
+            // Only rank zero reports its open failure; peers still close and finalize.
+            code = chipcae::ErrorCode::INTERNAL;
+        } else {
 #ifdef CHIPCAE_ENABLE_KOKKOS
-        Kokkos::ScopeGuard guard;
+            Kokkos::ScopeGuard guard;
 #endif
-        code = run(argc, argv, events);
+            code = run(argc, argv, events);
+        }
     } catch (const MeshFailure& error) {
         std::cerr << error.what() << '\n';
         event("error", 1, error.what(), events);
