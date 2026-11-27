@@ -1,0 +1,10 @@
+thermal variant=0 N=8 L2=0.00303453 H1=0.0886867 orders=0,0 ok
+thermal variant=0 N=16 L2=0.000674093 H1=0.0439764 orders=2.17045,1.01199 ok
+thermal variant=0 N=32 L2=0.000163707 H1=0.0219661 orders=2.04183,1.00145 ok
+thermal variant=0 N=64 L2=4.04971e-05 H1=0.0109989 orders=2.01523,0.997917 ok
+thermal variant=0 N=128 L2=1.00483e-05 H1=0.00550185 orders=2.01086,0.999371 ok
+thermal variant=1 N=8 L2=0.00361997 H1=0.0887138 orders=0,0 ok
+thermal variant=1 N=16 L2=0.000785412 H1=0.0439702 orders=2.20446,1.01263 ok
+thermal variant=1 N=32 L2=0.000185177 H1=0.0219612 orders=2.08454,1.00157 ok
+thermal variant=1 N=64 L2=4.50325e-05 H1=0.0109975 orders=2.03987,0.997784 ok
+thermal variant=1 N=128 L2=1.10739e-05 H1=0.00550128 orders=2.0238,0.999334 ok
