@@ -62,26 +62,23 @@ H U_f = (K_lo/d_lo)(U_lo+G_lo Delta_lo)
 H = K_lo/d_lo+K_hi/d_hi.
 ```
 
-Each one-sided LS fit replaces the current cross-interface center sample by the
-unknown displacement at `x_f`, retaining same-material centers, prescribed face
-samples and free-face constitutive closure. Write these fits as
-`G_s = a_s + B_s U_f` and substitute into the traction equation. Cholesky solves
-apply H to every affine coefficient and constant; a three-variable local SVD
-eliminates the remaining U_f feedback. The existing one-sided Jacobi SVD retains
-squared singular values strictly greater than `largest*1e-26`, with unchanged
-arithmetic on the legacy path. Incomplete gradient or elimination rank, nonpositive
-half distances, and nonpositive acoustic Cholesky pivots report `INTERNAL` with the
-lo gid and face index. There is no interpolation fallback or connected dense solve.
-
-**Interface junction deviation:** a cell touching several qualifying faces has a
-separate one-sided gradient for each face. Each local fit omits the other qualifying
-faces, so their unknown displacements cannot create nonlocal feedback. Ordinary
-cell reconstruction uses the arithmetic mean of its incident local fits; interface
-tractions and half-face energies use their corresponding local fits. This defines
-the previously underspecified multiple-face case, but differs from solving for one
-cell gradient coupled to all incident interface values. Every required local fit
-must have full rank. This choice needs numerical design review beyond the rigid
-junction acceptance test.
+Each one-sided LS fit replaces every cross-interface center sample by that face's
+own unknown displacement at its face centroid, retaining same-material centers,
+prescribed face samples and free-face constitutive closure. Write these fits as
+`G_s = a_s + sum_g B_sg U_g` and substitute into the traction equations. Cholesky
+solves apply H's inverse to every affine coefficient and constant. Sparse block
+elimination uses a three-variable local SVD at each face, substitutes its map into
+dependent face equations, then back substitutes to resolve all interface displacements.
+No connected-interface dense matrix or inverse is allocated. The existing
+one-sided Jacobi SVD retains squared singular values strictly greater than
+`largest*1e-26`, with unchanged arithmetic on the legacy path. Incomplete gradient
+or elimination rank, nonpositive half distances, and nonpositive acoustic Cholesky
+pivots report `INTERNAL` with the lo gid and face index. There is no interpolation
+fallback. At a junction, the resulting cell gradient includes all incident
+interface samples and is shared by
+ordinary reconstruction, interface tractions and half-face energies. Sparse
+elimination can introduce fill along coupled interface maps; compact input fits
+do not imply a one-ring eliminated stencil.
 
 The same eliminated U_f operator enters both the cell Green–Gauss energy and the
 returned face displacement. Interface stabilization consists of two half-face
@@ -104,12 +101,14 @@ separate offsets need not equal the legacy common-offset formula for unequal
 gradients; their smooth-field difference is also O(h^2). Byte invariance therefore
 follows from the region bypass, rather than a numerical material comparison.
 
-Only the lo owner constructs each interface map. Construction errors are reduced
-before any coefficient broadcast; ordered integer keys and floating-point
-coefficients are then replicated separately. Records are sparse, single-interface
-cell gradients are stored once, and local elimination and extra junction gradient
-storage are released before PETSc allocation. This does not guarantee unchanged
-matrix support or peak RSS: stiffness contrast can enlarge the implicit stencil.
+Only the lo owner constructs each interface equation and its LS maps. Construction
+errors are reduced before any coefficient broadcast; ordered integer keys and
+floating-point coefficients are then replicated separately. Each rank eliminates
+the coupled maps in the same face order, with failures synchronized before further
+assembly. Records are sparse, cell gradients are stored once, and temporary
+elimination and duplicated gradient storage are released before PETSc allocation.
+This does not guarantee unchanged matrix support or peak RSS: stiffness contrast
+can enlarge the implicit stencil.
 The private interface diagnostic evaluates the common tangential gradient, signed
 half-face normal derivatives and one-sided constitutive tractions from these same
 maps. Cut faces, including either adjacent cut flag, always retain the cut path;

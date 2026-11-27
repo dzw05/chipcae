@@ -159,6 +159,24 @@ double matrix_norm(const M3& m) {
     return std::sqrt(std::inner_product(m.begin(), m.end(), m.begin(), 0.0));
 }
 
+M3 interface_gradient(
+    const Patch& p, const ElasticResult& r, const std::vector<M3>& g, std::size_t k, int side) {
+    const auto& f = p.mesh.faces[k];
+    const auto c = static_cast<std::size_t>(side == 0 ? f.lo : f.hi);
+    const auto delta = sub(f.centroid, p.mesh.centroid[c]);
+    const double signed_d = dot(delta, f.normal);
+    require(side == 0 ? signed_d > 0 : signed_d < 0, "positive half-face distances");
+    const auto tangent = sub(delta, scale(f.normal, signed_d));
+    // Replace the cell reconstruction's normal derivative using the actual returned U_f.
+    const auto dn = scale(sub(sub(r.U_face[k], r.U_cell[c]), mul(g[c], tangent)), 1 / signed_d);
+    const auto old_dn = mul(g[c], f.normal);
+    auto one_sided = g[c];
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            one_sided[3 * i + j] += (dn[i] - old_dn[i]) * f.normal[j];
+    return one_sided;
+}
+
 void check_gradients(const Patch& p, const ElasticResult& r) {
     const auto g = production_gradients(p, r);
     double error = 0, reference = 0;
@@ -170,7 +188,25 @@ void check_gradients(const Patch& p, const ElasticResult& r) {
         error = std::max(error, matrix_norm(delta));
         reference = std::max(reference, matrix_norm(exact));
     }
-    std::cout << "T4 production gradient normalized_max_error=" << error / reference << '\n';
+    std::cout << "T4 production cell gradient normalized_max_error=" << error / reference << '\n';
+    require(std::isfinite(error) && error <= field_tolerance * reference,
+            "T4 production cell gradients reproduce piecewise-affine derivatives");
+    error = 0;
+    for (auto k : p.interfaces()) {
+        const auto& f = p.mesh.faces[k];
+        for (int side = 0; side < 2; ++side) {
+            const auto c = static_cast<std::size_t>(side == 0 ? f.lo : f.hi);
+            const auto one_sided = interface_gradient(p, r, g, k, side);
+            const auto exact = p.gradient(c);
+            M3 delta{};
+            for (int j = 0; j < 9; ++j)
+                delta[j] = one_sided[j] - exact[j];
+            error = std::max(error, matrix_norm(delta));
+            reference = std::max(reference, matrix_norm(exact));
+        }
+    }
+    std::cout << "T4 face-local production gradient normalized_max_error=" << error / reference
+              << '\n';
     require(std::isfinite(error) && error <= field_tolerance * reference,
             "T4 one-sided production gradients reproduce piecewise-affine derivatives");
 }
@@ -183,18 +219,7 @@ void check_traction(const Patch& p, const ElasticResult& r) {
         std::array<V, 2> traction{};
         for (int side = 0; side < 2; ++side) {
             const auto c = static_cast<std::size_t>(side == 0 ? f.lo : f.hi);
-            const auto delta = sub(f.centroid, p.mesh.centroid[c]);
-            const double signed_d = dot(delta, f.normal);
-            require(side == 0 ? signed_d > 0 : signed_d < 0, "positive half-face distances");
-            const auto tangent = sub(delta, scale(f.normal, signed_d));
-            // The brief's two signed normal derivatives, using the actual returned U_f.
-            const auto dn =
-                scale(sub(sub(r.U_face[k], r.U_cell[c]), mul(g[c], tangent)), 1 / signed_d);
-            const auto old_dn = mul(g[c], f.normal);
-            auto one_sided = g[c];
-            for (int i = 0; i < 3; ++i)
-                for (int j = 0; j < 3; ++j)
-                    one_sided[3 * i + j] += (dn[i] - old_dn[i]) * f.normal[j];
+            const auto one_sided = interface_gradient(p, r, g, k, side);
             const auto sigma = stress(p.problem, c, one_sided);
             require(std::isfinite(matrix_norm(sigma)), "finite one-sided engineering stress");
             sigma_scale = std::max(sigma_scale, matrix_norm(sigma));
@@ -397,29 +422,135 @@ void rank_failure(MPI_Comm comm, int ranks) {
             "rank failure identifies face: " + reason);
 }
 
-void junction_rank_failure() {
+void junction_all_faces() {
     const auto m = grid(4, 4, 4);
-    auto p = problem(m);
+    auto p = problem(m, isotropic(), 0);
     p.region.resize(m.volume.size());
     std::iota(p.region.begin(), p.region.end(), 0);
+    const M3 gradient{0.0001, -0.0003, 0.0002, 0.0003, 0.0004, -0.0001, -0.0002, 0.0001, 0.0005};
+    const V translation{0.0004, -0.0005, 0.0006};
+    prescribe(p, m, gradient, translation);
+    // All six interior samples are face displacements. Together they span 3D;
+    // dropping the other interfaces incorrectly makes these fits rank deficient.
+    const auto r = solve(m, p, MPI_COMM_SELF);
+    std::vector<V> cells, faces;
+    for (const auto& x : m.centroid)
+        cells.push_back(add(mul(gradient, x), translation));
+    for (const auto& f : m.faces)
+        faces.push_back(add(mul(gradient, f.centroid), translation));
+    relative_field(r.U_cell, cells, "all-interface affine U_cell");
+    relative_field(r.U_face, faces, "all-interface affine U_face");
+}
+
+void junction_samples(MPI_Comm comm, int ranks) {
+    const auto x_axis = axis(3, 1, 1.2), z_axis = axis(4, 1, 1.3);
+    auto m = grid(x_axis, axis(3, 1, 1.1), z_axis);
+    auto p = problem(m, isotropic(), 0);
+    auto field = [](const V& x) -> V {
+        return {1e-4 * (1 + x[0] * x[2] + x[1] * x[1]),
+                2e-4 * (x[0] * x[0] - x[1] * x[2]),
+                3e-4 * (x[2] * x[2] + x[0] * x[1])};
+    };
+    std::vector<V> u;
+    for (std::size_t c = 0; c < m.volume.size(); ++c) {
+        const auto& x = m.centroid[c];
+        const bool region = (x[0] > x_axis[1]) != (x[2] > z_axis[2]);
+        p.region.push_back(region ? -7 : 12);
+        p.C[c] = isotropic(region ? 100e9 : 25e9).C;
+        p.dT[c] = 10 + 20 * x[1];
+        m.rank[c] = static_cast<int>(c % static_cast<std::size_t>(ranks));
+        u.push_back(field(x));
+    }
     p.support = ElasticProblem::Support::Fixed;
     for (std::size_t k = 0; k < m.faces.size(); ++k)
         if (m.faces[k].hi < 0)
-            p.prescribed.push_back({static_cast<std::int64_t>(k), {}});
-    // Every interior face is an interface. A face-local fit at an interior
-    // junction has no same-region tangent samples, despite valid 3D geometry.
-    auto rejected = [](const auto& result) {
-        require(!result, "unsupported interface junction must reject");
-        const auto& reason = result.error().reason;
-        require(
-            std::regex_search(
-                reason,
-                std::regex(
-                    "INTERNAL: gid=[0-9]+ face=[0-9]+ rank-deficient interface gradient closure")),
-            "missing tangent samples report INTERNAL with gid and face: " + reason);
-    };
-    rejected(detail::assemble_elastic(m, p, MPI_COMM_SELF));
-    rejected(solve_elastic(m, p, MPI_COMM_SELF));
+            p.prescribed.push_back({static_cast<std::int64_t>(k), field(m.faces[k].centroid)});
+    const auto gradients = detail::evaluate_cut_gradients(m, p, u, comm);
+    const auto samples = detail::evaluate_elastic_interfaces(m, p, u, comm);
+    int ok = gradients && samples ? 1 : 0, all_ok = 0;
+    MPI_Allreduce(&ok, &all_ok, 1, MPI_INT, MPI_MIN, comm);
+    require(all_ok != 0, "coupled junction reconstruction succeeds on every rank");
+    std::map<std::size_t, V> values;
+    double jump = 0, stress_scale = 0;
+    for (const auto& sample : samples.value()) {
+        values.emplace(sample.face, sample.displacement);
+        jump = std::max(jump, norm(sub(sample.traction[0], sample.traction[1])));
+        const auto& f = m.faces[sample.face];
+        // Both isotropic materials have the same nu, so their acoustic tensors
+        // differ only by E. The specified K-weighted tangential mean therefore
+        // reduces to this scalar weighted mean, independently of half distances.
+        const double wl = p.C[f.lo][0] / (p.C[f.lo][0] + p.C[f.hi][0]);
+        M3 tangent{};
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                for (int q = 0; q < 3; ++q)
+                    tangent[3 * i + j] += (wl * gradients.value()[f.lo][3 * i + q] +
+                                           (1 - wl) * gradients.value()[f.hi][3 * i + q]) *
+                                          ((q == j ? 1.0 : 0.0) - f.normal[q] * f.normal[j]);
+        for (int side = 0; side < 2; ++side) {
+            const auto c = static_cast<std::size_t>(side == 0 ? f.lo : f.hi);
+            const auto delta = sub(f.centroid, m.centroid[c]);
+            const double distance = dot(delta, f.normal);
+            const auto offset = sub(delta, scale(f.normal, distance));
+            const auto dn =
+                scale(sub(sub(sample.displacement, u[c]), mul(gradients.value()[c], offset)),
+                      1 / distance);
+            M3 expected = tangent, error{};
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j) {
+                    expected[3 * i + j] += dn[i] * f.normal[j];
+                    error[3 * i + j] = sample.gradient[side][3 * i + j] - expected[3 * i + j];
+                }
+            require(matrix_norm(error) <= field_tolerance * matrix_norm(expected),
+                    "junction diagnostic uses the shared eliminated cell gradient map");
+            const auto sigma = stress(p, c, expected);
+            require(norm(sub(sample.traction[side], mul(sigma, f.normal))) <=
+                        field_tolerance * matrix_norm(sigma),
+                    "junction diagnostic tractions use that same gradient map");
+        }
+        for (int side = 0; side < 2; ++side)
+            stress_scale = std::max(
+                stress_scale,
+                matrix_norm(stress(
+                    p, static_cast<std::size_t>(side == 0 ? f.lo : f.hi), sample.gradient[side])));
+    }
+    require(stress_scale > 0 && jump <= field_tolerance * stress_scale,
+            "coupled junction maps satisfy every interface traction equation");
+    bool junction = false;
+    for (std::size_t c = 0; c < m.volume.size(); ++c) {
+        M3 expected{}, error{};
+        std::array<int, 3> counts{};
+        int interfaces = 0;
+        for (std::size_t k = 0; k < m.faces.size(); ++k) {
+            const auto& f = m.faces[k];
+            if (f.lo != static_cast<std::int64_t>(c) && f.hi != static_cast<std::int64_t>(c))
+                continue;
+            const auto nb = f.lo == static_cast<std::int64_t>(c) ? f.hi : f.lo;
+            const bool marked = nb >= 0 && p.region[c] != p.region[nb];
+            require(!marked || values.contains(k), "each marked face has its own displacement");
+            interfaces += marked ? 1 : 0;
+            const auto delta = sub(nb < 0 || marked ? f.centroid : m.centroid[nb], m.centroid[c]);
+            const auto value = marked ? values.at(k) : (nb < 0 ? field(f.centroid) : u[nb]);
+            // On this orthogonal grid the coordinate-scaled, weighted LS rows
+            // are signed coordinate axes. Each derivative is the mean slope.
+            for (int j = 0; j < 3; ++j)
+                if (std::abs(delta[j]) > 1e-14) {
+                    ++counts[j];
+                    for (int i = 0; i < 3; ++i)
+                        expected[3 * i + j] += (value[i] - u[c][i]) / delta[j];
+                }
+        }
+        junction = junction || interfaces >= 2;
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j) {
+                require(counts[j] == 2, "two independent LS samples along every axis");
+                expected[3 * i + j] /= counts[j];
+                error[3 * i + j] = gradients.value()[c][3 * i + j] - expected[3 * i + j];
+            }
+        require(matrix_norm(error) <= field_tolerance * matrix_norm(expected),
+                "junction LS fit retains every marked face's own displacement");
+    }
+    require(junction, "fixture exercises multiple marked faces in one cell");
 }
 
 void cut_exclusion(bool cut_lo) {
@@ -505,6 +636,7 @@ void multiple_interfaces() {
         faces.push_back(add(mul(rotation, f.centroid), translation));
     relative_field(r.U_cell, cells, "multiple-interface rigid U_cell");
     relative_field(r.U_face, faces, "multiple-interface rigid U_face");
+    matrix_invariants({m, p});
 }
 
 void free_boundary_closure() {
@@ -652,6 +784,8 @@ int main(int argc, char** argv) {
             mpi_comparison(suite, graded);
         suite.run("rank failure is synchronized across interface owners",
                   [&] { rank_failure(suite.comm, ranks); });
+        suite.run("coupled junction samples across interface owners",
+                  [&] { junction_samples(suite.comm, ranks); });
     } else {
         for (bool graded : {false, true}) {
             const std::string name = graded ? "graded 6x5x(2+2)" : "uniform 4x4x(2+3)";
@@ -691,8 +825,10 @@ int main(int argc, char** argv) {
                       [&] { skew_interface_diagnostic(exact); });
         suite.run("insufficient-rank interface closure reports INTERNAL gid and face",
                   [&] { rank_failure(MPI_COMM_SELF, 1); });
-        suite.run("interface junction missing tangent samples reports INTERNAL gid and face",
-                  junction_rank_failure);
+        suite.run("interface junction retains all face samples for affine fields",
+                  junction_all_faces);
+        suite.run("junction LS fits retain each interface displacement",
+                  [&] { junction_samples(MPI_COMM_SELF, 1); });
         suite.run("nonpositive acoustic Cholesky pivot reports INTERNAL gid and face",
                   nonpositive_acoustic_pivot);
         for (bool cut_lo : {false, true})

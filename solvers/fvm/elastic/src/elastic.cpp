@@ -365,8 +365,6 @@ ElasticGradient cell_gradient(const ElasticMesh& m,
     for (auto k : incident) {
         const auto& f = m.faces[k];
         const Index nb = f.lo == static_cast<Index>(c) ? f.hi : f.lo;
-        if (interfaces && (*interfaces)[k] && k != current)
-            continue;
         const V d =
             subtract(nb < 0 || (interfaces && (*interfaces)[k]) ? f.centroid : m.centroid[nb],
                      m.centroid[c]);
@@ -388,8 +386,6 @@ ElasticGradient cell_gradient(const ElasticMesh& m,
     for (auto k : incident) {
         const auto& f = m.faces[k];
         const Index nb = f.lo == static_cast<Index>(c) ? f.hi : f.lo;
-        if (interfaces && (*interfaces)[k] && k != current)
-            continue;
         const bool sample = interfaces && (*interfaces)[k];
         if (nb >= 0 || bc.prescribed[k]) {
             V d = subtract(nb < 0 || sample ? f.centroid : m.centroid[nb], m.centroid[c]);
@@ -404,7 +400,7 @@ ElasticGradient cell_gradient(const ElasticMesh& m,
                 Load load;
                 load.blocks[static_cast<Index>(c)][i] = -w;
                 if (sample)
-                    load.blocks[-1][i] = w; // The current face's three local unknowns.
+                    load.blocks[-1 - static_cast<Index>(k)][i] = w;
                 else if (nb >= 0)
                     load.blocks[nb][i] = w;
                 else {
@@ -788,12 +784,9 @@ std::vector<ElasticGradient> cut_gradients(const ElasticMesh& m,
     }
     return out;
 }
-// Each interface owns its two one-sided LS closures. Other marked faces are
-// omitted from that local fit: their unknowns must not connect independent face
-// eliminations into a dense interface solve. A cell incident to several marked
-// faces uses the arithmetic mean of those exactness-preserving local closures
-// for its ordinary faces. Interface tractions and half-face energies always use
-// the corresponding face-local closure.
+// Negative cell keys temporarily denote distinct interface displacements.
+// Every incident marked face contributes its own sample to a cell's LS fit.
+// Sparse three-variable eliminations resolve their coupled affine maps below.
 struct InterfaceFace {
     AffineMap value;
     std::array<AffineMap, 2> gradient;
@@ -898,8 +891,6 @@ InterfaceFace interface_face(const ElasticMesh& m,
                 weights[side][3 * i + j] = column[i];
         }
     InterfaceFace out;
-    std::array<std::vector<double>, 2> feedback;
-    std::array<std::vector<double>, 2> face_coefficient;
     AffineMap rhs;
     for (int side = 0; side < 2; ++side) {
         const Index c = side == 0 ? f.lo : f.hi;
@@ -913,8 +904,7 @@ InterfaceFace interface_face(const ElasticMesh& m,
         const double normal_distance = dot(delta, f.normal);
         for (int j = 0; j < 3; ++j)
             delta[j] -= normal_distance * f.normal[j];
-        auto& coefficient = face_coefficient[side];
-        coefficient.resize(27);
+        std::vector<double> coefficient(27);
         for (int i = 0; i < 3; ++i)
             for (int a0 = 0; a0 < 3; ++a0)
                 for (int b = 0; b < 3; ++b) {
@@ -928,8 +918,6 @@ InterfaceFace interface_face(const ElasticMesh& m,
                 }
         auto g = gradient_map(
             cell_gradient(m, p, bc, incident, static_cast<std::size_t>(c), &marked, k));
-        auto sample = g.cells.extract(-1);
-        feedback[side] = std::move(sample.mapped());
         add_map(rhs, transform(g, 3, coefficient), 1);
         out.gradient[side] = std::move(g);
     }
@@ -937,30 +925,68 @@ InterfaceFace interface_face(const ElasticMesh& m,
     const V thermal_hi = thermal_traction(th, p, static_cast<std::size_t>(f.hi));
     for (int i = 0; i < 3; ++i)
         rhs.constant[i] += thermal_lo[i] - thermal_hi[i];
-    rhs = cholesky_solve(chol, std::move(rhs));
-    AffineMap dependence;
-    dependence.rows = 3;
-    dependence.constant.resize(3);
-    dependence.cells[0].resize(9);
-    for (int side = 0; side < 2; ++side)
+    out.value = cholesky_solve(chol, std::move(rhs));
+    return out;
+}
+void substitute_interface(AffineMap& map, Index key, const AffineMap& value) {
+    auto coefficient = map.cells.extract(key);
+    if (!coefficient.empty())
+        add_map(map, transform(value, map.rows, coefficient.mapped()), 1);
+}
+void eliminate_interfaces(const ElasticMesh& m, std::map<std::size_t, InterfaceFace>& faces) {
+    std::map<Index, std::set<std::size_t>> dependents;
+    for (const auto& [k, face] : faces)
+        for (const auto& [key, block] : face.value.cells)
+            if (key < 0 && nonzero(block))
+                dependents[key].insert(k);
+    // Block Gaussian elimination keeps each pivot local to a face's three
+    // displacement components. Only existing sparse dependencies are updated;
+    // no connected-interface dense matrix or inverse is allocated.
+    for (auto& [k, face] : faces) {
+        const Index key = -1 - static_cast<Index>(k);
+        auto self = face.value.cells.extract(key);
+        std::vector<double> local(9);
         for (int i = 0; i < 3; ++i)
             for (int j = 0; j < 3; ++j)
-                for (int q = 0; q < 9; ++q)
-                    dependence.cells[0][3 * i + j] +=
-                        face_coefficient[side][9 * i + q] * feedback[side][3 * q + j];
-    dependence = cholesky_solve(chol, std::move(dependence));
-    std::vector<double> local(9);
-    for (int i = 0; i < 3; ++i)
-        for (int j = 0; j < 3; ++j)
-            local[3 * i + j] = (i == j ? 1.0 : 0.0) - dependence.cells[0][3 * i + j];
-    int rank = 0;
-    const auto inverse = pseudoinverse(std::move(local), 3, 3, &rank);
-    if (rank != 3)
-        geometry_error(m, f.lo, "rank-deficient interface displacement elimination", k);
-    out.value = transform(rhs, 3, inverse);
-    for (int side = 0; side < 2; ++side)
-        add_map(out.gradient[side], transform(out.value, 9, feedback[side]), 1);
-    return out;
+                local[3 * i + j] =
+                    (i == j ? 1.0 : 0.0) - (self.empty() ? 0.0 : self.mapped()[3 * i + j]);
+        int rank = 0;
+        const auto inverse = pseudoinverse(std::move(local), 3, 3, &rank);
+        if (rank != 3)
+            geometry_error(
+                m, m.faces[k].lo, "rank-deficient interface displacement elimination", k);
+        face.value = transform(face.value, 3, inverse);
+        auto affected = dependents.extract(key);
+        if (affected.empty())
+            continue;
+        for (auto other : affected.mapped()) {
+            if (other <= k)
+                continue;
+            auto& value = faces.at(other).value;
+            substitute_interface(value, key, face.value);
+            for (const auto& [next, block] : face.value.cells)
+                if (next < 0 && nonzero(block))
+                    dependents[next].insert(other);
+        }
+    }
+    // Back substitution resolves every face value before substituting any LS
+    // samples, so junction gradients share the same displacement on each face.
+    for (auto it = faces.rbegin(); it != faces.rend(); ++it) {
+        auto& value = it->second.value;
+        while (!value.cells.empty() && value.cells.begin()->first < 0) {
+            const Index key = value.cells.begin()->first;
+            substitute_interface(value, key, faces.at(static_cast<std::size_t>(-1 - key)).value);
+        }
+    }
+    for (auto& [k, face] : faces) {
+        (void)k;
+        for (auto& gradient : face.gradient)
+            while (!gradient.cells.empty() && gradient.cells.begin()->first < 0) {
+                const Index key = gradient.cells.begin()->first;
+                substitute_interface(
+                    gradient, key, faces.at(static_cast<std::size_t>(-1 - key)).value);
+            }
+    }
 }
 // Ordered integer keys travel separately from floating-point coefficients. No
 // gids or cell/face indices are rounded through double during MPI replication.
@@ -1077,29 +1103,31 @@ Reconstruction reconstruction(const ElasticMesh& m,
                 MPI_Bcast(wire.values.data(), sizes[1], MPI_DOUBLE, owner, comm);
                 out.interfaces.emplace(k, unpack_interface(wire));
             }
+    failure.clear();
+    try {
+        eliminate_interfaces(m, out.interfaces);
+    } catch (const std::exception& e) {
+        failure = e.what();
+    }
+    synchronize_interface_failure(comm, rank, failure);
     out.gradients.resize(m.volume.size());
     for (std::size_t c = 0; c < m.volume.size(); ++c) {
         if (count[c] == 0) {
             out.gradients[c] = cell_gradient(m, p, bc, incident, c);
             continue;
         }
-        AffineMap mean;
+        // All incident interfaces now contain the same complete cell LS fit.
         for (auto k : incident[c])
-            if (marked[k])
-                add_map(
-                    mean,
-                    out.interfaces.at(k).gradient[m.faces[k].lo == static_cast<Index>(c) ? 0 : 1],
-                    1.0 / count[c]);
-        out.gradients[c] = cell_operator(mean);
+            if (marked[k]) {
+                out.gradients[c] = cell_operator(
+                    out.interfaces.at(k).gradient[m.faces[k].lo == static_cast<Index>(c) ? 0 : 1]);
+                break;
+            }
     }
-    // Single-interface cells already store the same closure in the cell array.
-    // Only junctions need additional face-local gradients after construction.
+    // Cell storage suffices for every interface, including junctions.
     for (auto& [k, face] : out.interfaces) {
-        const auto& f = m.faces[k];
-        if (count[f.lo] == 1)
-            face.gradient[0] = {};
-        if (count[f.hi] == 1)
-            face.gradient[1] = {};
+        (void)k;
+        face.gradient = {};
     }
     out.gradients = cut_gradients(m, bc, out.gradients);
     return out;
@@ -1324,12 +1352,10 @@ ElasticAssembly assemble(const ElasticMesh& m,
         if (const auto it = context.interfaces.find(k); it != context.interfaces.end()) {
             for (int side = 0; side < 2; ++side) {
                 const Index c = side == 0 ? f.lo : f.hi;
-                const auto& local = it->second.gradient[side];
-                const auto gradient = local.rows == 0 ? gradient_map(ls[c]) : local;
                 AffineMap residual = it->second.value;
                 add_map(residual, displacement_map(c), -1);
                 const V delta = subtract(f.centroid, m.centroid[c]);
-                add_map(residual, extrapolation(gradient, delta), -1);
+                add_map(residual, extrapolation(ls[c], delta), -1);
                 const double distance = (side == 0 ? 1 : -1) * dot(delta, f.normal);
                 const M acoustic = acoustic_tensor(traction_map(p.C[c], f.normal), f.normal);
                 energy(c, residual, {acoustic.begin(), acoustic.end()}, f.area / distance);
@@ -1434,9 +1460,7 @@ Expected<std::vector<ElasticInterfaceSample>> evaluate_elastic_interfaces(const 
             M sum{}, tangent{};
             for (int side = 0; side < 2; ++side) {
                 const Index c = side == 0 ? f.lo : f.hi;
-                const auto value =
-                    evaluate_map(maps.gradient[side].rows == 0 ? gradient_map(context.gradients[c])
-                                                               : maps.gradient[side]);
+                const auto value = evaluate_map(gradient_map(context.gradients[c]));
                 std::copy(value.begin(), value.end(), ls[side].begin());
                 traction[side] = traction_map(p.C[c], f.normal);
                 acoustic[side] = acoustic_tensor(traction[side], f.normal);
@@ -2260,12 +2284,6 @@ solve_elastic(const ElasticMesh& m, const ElasticProblem& p, MPI_Comm comm) {
         const auto bc = detail::validate(m, p, comm, &measured);
         auto context = detail::reconstruction(m, p, bc, comm);
         const auto assembly = detail::assemble(m, p, bc, context, false);
-        // Half-face closure maps are assembly temporaries; retain only the shared
-        // face displacement and ordinary cell maps across PETSc allocation.
-        for (auto& [face, maps] : context.interfaces) {
-            (void)face;
-            maps.gradient = {};
-        }
         auto result = solve_system(m, p, comm, bc, context, assembly);
         result.min_dn_ratio = measured.min_dn_ratio;
         result.min_dn_gid = measured.min_dn_gid;
