@@ -100,10 +100,9 @@ must stop on any other state rather than substitute another reference.
   Invalid supplied values raise `Q2RefError`; the CLI requires `--tol` and reports
   an omitted option as `Q2REF_BAD_ARG`.
 - A MONOTONE Richardson sequence with `f_fine=0` has undefined relative GCI.
-  It is rejected with `Q2REF_BAD_ARG` rather than emitting a nonfinite result.
-  This conservative choice needs an architect ruling if zero-valued fine
-  references are to be supported. Unrepresentable arithmetic also fails
-  explicitly; JSON never emits NaN or Infinity.
+  It retains the defined `p` and `f_ext` and reports `gci_fine=None` (JSON
+  `null`). Unrepresentable arithmetic still fails explicitly; JSON never emits
+  NaN or Infinity.
 - The numerical import path uses only standard library and NumPy. The mandated
   `field_compare.ensure_output_allowed` reuse is imported lazily for `--json`;
   that existing module imports h5py. Thus JSON file output retains that existing

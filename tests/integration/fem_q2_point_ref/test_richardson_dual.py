@@ -41,6 +41,27 @@ class RichardsonDualTests(unittest.TestCase):
         gci = fs*abs((fine-medium)/fine)/(ratio**p-1)
         self.assertLessEqual(abs(result["gci_fine"]-gci), 1e-12*gci)
 
+    def test_monotone_zero_fine_preserves_order_and_extrapolate(self):
+        # f(h) = -1 + (ratio**2 * h)**p at h = 1, 1/ratio, 1/ratio**2;
+        # negating the sequence changes only the extrapolate's sign.
+        cases = [((15, 3, 0.0), 2, 2, 0.25, -1),
+                 ((-15, -3, 0.0), 2, 2, 0.25, 1),
+                 ((63, 7, -0.0), 2, 3, 0.125, -1),
+                 ((-63, -7, -0.0), 2, 3, 0.125, 1),
+                 ((80, 8, 0.0), 3, 2, 1/9, -1),
+                 ((-80, -8, -0.0), 3, 2, 1/9, 1)]
+        for values, ratio, p, expected_R, f_ext in cases:
+            with self.subTest(values=values, ratio=ratio):
+                result = ref.richardson(*values, ratio=ratio)
+                self.assertEqual(set(result), RICHARDSON_KEYS)
+                self.assertEqual(result["status"], "MONOTONE")
+                self.assertLessEqual(abs(result["R"]-expected_R), 1e-12*expected_R)
+                self.assertLessEqual(abs(result["p"]-p), 1e-10*p)
+                self.assertLessEqual(abs(result["f_ext"]-f_ext), 1e-12*abs(f_ext))
+                for key in ("R", "p", "f_ext"):
+                    self.assertTrue(math.isfinite(result[key]))
+                self.assertIsNone(result["gci_fine"])
+
     def test_nonmonotone_and_indeterminate_states(self):
         cases = [((1, 1.1, 1.05), "OSCILLATORY", -0.5),
                  ((1, 1.1, 1.3), "DIVERGENT", 2.0),

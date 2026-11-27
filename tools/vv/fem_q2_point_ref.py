@@ -383,15 +383,17 @@ def richardson(f_coarse: float, f_medium: float, f_fine: float, ratio: float = 2
     elif R == 0:
         raise Q2RefError("Q2REF_BAD_ARG: convergence ratio underflows float64")
     else:
-        if f_fine == 0:
-            raise Q2RefError("Q2REF_BAD_ARG: GCI is undefined for a zero fine value")
         # (1-R)/R equals ratio**p-1, with no power overflow for large p.
         correction = (f_fine - f_medium) * R / (1 - R)
         p = -math.log(R) / math.log(ratio)
         f_ext = f_fine + correction
-        gci = fs * abs(correction / f_fine)
-        _finite(p=p, f_ext=f_ext, gci_fine=gci)
-        result.update(p=p, f_ext=f_ext, gci_fine=gci, status="MONOTONE")
+        _finite(p=p, f_ext=f_ext)
+        result.update(p=p, f_ext=f_ext, status="MONOTONE")
+        # Relative GCI is undefined at zero; the order and extrapolate remain valid.
+        if f_fine != 0:
+            gci = fs * abs(correction / f_fine)
+            _finite(gci_fine=gci)
+            result["gci_fine"] = gci
     return result
 
 
