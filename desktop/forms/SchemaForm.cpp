@@ -394,7 +394,7 @@ void SchemaForm::render(QVBoxLayout* rows, const Json& input, const QString& pat
         editor->setObjectName(path);
         Json displayed = Json::array();
         int selected = -1;
-        int i = 0;
+        int displayedIndex = 0;
         for (const auto& option : schema.at("enum").array_range()) {
             bool hidden = false;
             if (option.is_string()) {
@@ -406,13 +406,13 @@ void SchemaForm::render(QVBoxLayout* rows, const Json& input, const QString& pat
             editor->addItem(text(option));
             displayed.push_back(option);
             if (option == value) {
-                selected = i;
+                selected = displayedIndex;
             }
-            ++i;
+            ++displayedIndex;
         }
         if (selected < 0) {
             editor->addItem("Invalid: " + text(value));
-            selected = i;
+            selected = displayedIndex;
         }
         editor->setCurrentIndex(selected);
         rows->addWidget(editor);

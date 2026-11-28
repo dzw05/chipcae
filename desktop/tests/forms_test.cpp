@@ -318,6 +318,8 @@ static void hiddenEnumAcceptance() {
     run("current boomeramg retains only itself among hidden preconditioners", [&] {
         SchemaForm form;
         load(form, schema, Json::parse(R"({"s":"fem.solid","pc":"boomeramg"})"));
+        require(editor(form, "/pc")->currentIndex() == 4,
+                "retained boomeramg is selected at displayed index 4 after hidden pmg_colagg");
         choices(editor(form, "/pc"),
                 {"column_gmg", "direct", "jacobi", "gamg", "boomeramg"},
                 "boomeramg");
