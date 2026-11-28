@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <set>
@@ -326,19 +327,83 @@ Expected<ThermalResult> detail::solve_thermal_on_comm(const FvGrid& g,
             check(PCSetType(pc, p.preconditioner == "jacobi" ? PCJACOBI : PCGAMG), "PCSetType");
             check(KSPSetTolerances(solver.value, p.rtol, 1e-50, PETSC_DEFAULT, p.max_iter),
                   "tolerances");
-            check(KSPSolve(solver.value, rhs.value, x.value), "KSPSolve");
-            KSPConvergedReason reason;
-            PetscInt its = 0;
-            PetscReal residual = 0;
-            check(KSPGetConvergedReason(solver.value, &reason), "reason");
-            check(KSPGetIterationNumber(solver.value, &its), "iterations");
-            check(KSPGetResidualNorm(solver.value, &residual), "residual");
-            result.iterations = static_cast<int>(its);
-            result.residual = residual;
-            if (reason <= 0) {
-                std::ostringstream s;
-                s << "INTERNAL: KSP nonconvergence iterations=" << its << " residual=" << residual;
-                return mesh::Error{"fvm/thermal", s.str()};
+            check(KSPSetNormType(solver.value, KSP_NORM_UNPRECONDITIONED), "norm type");
+            check(KSPSetInitialGuessNonzero(solver.value, PETSC_FALSE), "zero initial guess");
+            check(KSPSetOptionsPrefix(solver.value, "fvm_thermal_"), "options prefix");
+            // Preserve the configured global target across independent checks and restarts.
+            check(KSPSetFromOptions(solver.value), "KSPSetFromOptions");
+            PetscReal configured_rtol = 0, atol = 0, divtol = 0;
+            PetscInt max_iterations = 0;
+            KSPNormType norm_type;
+            check(KSPGetTolerances(solver.value, &configured_rtol, &atol, &divtol, &max_iterations),
+                  "effective tolerances");
+            check(KSPGetNormType(solver.value, &norm_type), "effective norm type");
+            check(VecSet(x.value, 0), "zero solution");
+            PetscReal bnorm = 0;
+            check(VecNorm(rhs.value, NORM_2, &bnorm), "RHS norm");
+            if (bnorm != 0) {
+                detail::Vector residual;
+                check(VecDuplicate(rhs.value, &residual.value), "residual vector");
+                KSPConvergedReason reason = KSP_CONVERGED_ITERATING;
+                PetscInt its = 0;
+                PetscReal rho = std::numeric_limits<PetscReal>::infinity();
+                bool converged = false;
+                while (its < max_iterations) {
+                    check(KSPSolve(solver.value, rhs.value, x.value), "KSPSolve");
+                    PetscInt count = 0;
+                    check(KSPGetConvergedReason(solver.value, &reason), "reason");
+                    check(KSPGetIterationNumber(solver.value, &count), "iterations");
+                    its += count;
+                    check(MatMult(matrix.value, x.value, residual.value), "true residual MatMult");
+                    check(VecAYPX(residual.value, -1, rhs.value), "true residual b-Ax");
+                    PetscReal rnorm = 0;
+                    check(VecNorm(residual.value, NORM_2, &rnorm), "true residual norm");
+                    rho = rnorm / bnorm;
+                    if (reason > 0 && std::isfinite(rho) && rho <= configured_rtol) {
+                        converged = true;
+                        break;
+                    }
+                    if (reason <= 0 || !std::isfinite(rho) || count == 0 || its >= max_iterations)
+                        break;
+                    check(KSPSetInitialGuessNonzero(solver.value, PETSC_TRUE), "restart guess");
+                    // Use the initial residual in the effective KSP norm, rather than b.
+                    // In the default unpreconditioned norm, this targets configured_rtol*||b||.
+                    // Injected norms still require the independent true-residual check.
+                    check(KSPConvergedDefaultSetUIRNorm(solver.value),
+                          "restart initial residual norm");
+                    const PetscReal restart_rtol = configured_rtol / rho;
+                    check(KSPSetTolerances(
+                              solver.value, restart_rtol, atol, divtol, max_iterations - its),
+                          "restart tolerances");
+                }
+                result.iterations = static_cast<int>(its);
+                result.residual = rho;
+                if (!converged) {
+                    const char* norm_name = "unknown";
+                    switch (norm_type) {
+                    case KSP_NORM_NONE:
+                        norm_name = "none";
+                        break;
+                    case KSP_NORM_PRECONDITIONED:
+                        norm_name = "preconditioned";
+                        break;
+                    case KSP_NORM_UNPRECONDITIONED:
+                        norm_name = "unpreconditioned";
+                        break;
+                    case KSP_NORM_NATURAL:
+                        norm_name = "natural";
+                        break;
+                    default:
+                        break;
+                    }
+                    std::ostringstream s;
+                    s.precision(std::numeric_limits<PetscReal>::max_digits10);
+                    s << "INTERNAL: SOLVER_NOT_CONVERGED (KSP nonconvergence) field=T reason="
+                      << static_cast<int>(reason) << " iterations=" << its
+                      << " true_residual=" << rho << " rtol=" << configured_rtol
+                      << " norm_type=" << norm_name;
+                    return mesh::Error{"fvm/thermal", s.str()};
+                }
             }
         }
         Dense lambda(nf);
