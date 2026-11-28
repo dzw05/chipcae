@@ -63,6 +63,9 @@ struct HexMeshArrays {
             Real raster = 0;
         };
         std::map<std::string, CopperArea> copper_area_m2;
+        // Areas of role=opening copper blocks (solder-mask openings), same keys/units as
+        // copper_area_m2. A layer appears in exactly one of the two maps.
+        std::map<std::string, CopperArea> opening_area_m2;
     } grid_report;
     AttributeTable attr_table;
     // Named face groups. Cut-face attributes also appear here (and therefore in

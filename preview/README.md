@@ -49,14 +49,19 @@ errors may come from any rank. The success `message` is itself valid JSON with
 coarse grid dimensions, `AxB`). The success object also reports the effective
 `cell_budget` and `min_elems_per_layer` (the supplied integer, or JSON `null` when
 omitted), both in `message` and as top-level keys. The keys `cell_budget`, then
-`min_elems_per_layer`, immediately follow `mesh_sha256`. The final message key is
-`copper_area_m2`. The top-level order is `stage`, `progress`, the same message
+`min_elems_per_layer`, immediately follow `mesh_sha256`. After `copper_area_m2`,
+the final key `opening_area_m2` is appended only when the stack has a layer with
+`copper.role = "opening"`, including zero-area openings. Without opening layers,
+the output is unchanged. The top-level order is `stage`, `progress`, the same message
 keys in order, then `message`. Mesh failures use the shared
 solve error mapping: unsupported cuts
 exit 13, invalid outline input exits 14. Other failures use `INTERNAL` (exit 1).
 
-`copper_area_m2` is `{}` when no layer has copper. Otherwise it contains each
-copper layer's exact stack name in input layer order, with inner keys `polygons`,
+`copper_area_m2` contains only `role="metal"` layers, including those with
+`orientation="vertical"`, and is `{}` when there are no metal copper layers.
+Opening layers appear only in `opening_area_m2`, with the same area definitions;
+their φ represents the opening area fraction. Each report uses the layer's exact
+stack name in input layer order, with inner keys `polygons`,
 then `raster`, both in m². Polygon area is the NonZero union of the entire
 referenced polyset layer in its native database units. Raster area sums the stored
 column fractions times column areas over the background grid, including padding,

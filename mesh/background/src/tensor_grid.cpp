@@ -607,6 +607,9 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
         if (s.layers[li].copper) {
             if (s.layers[li].copper->polygons && !polyset)
                 return Error{"copper", "polygon sidecar data is not available to tensor_grid"};
+            const auto& role = s.layers[li].copper->role;
+            if (role != "metal" && role != "opening")
+                return Error{"copper", "unsupported copper role: " + role};
             m.copper_layer_of_layer[li] = static_cast<Local>(copper_layers++);
         }
     m.copper_phi.assign(copper_layers * nx * ny, 0);
@@ -670,7 +673,10 @@ build_tensor_grid(const StackModel& s, const GridOptions& o, const Polyset* poly
             if (s.layers[li].copper->fraction)
                 // Fraction layers report their uniform fill over the padded grid in both fields.
                 area.polygons = area.raster;
-            m.grid_report.copper_area_m2[s.layers[li].name] = area;
+            if (s.layers[li].copper->role == "metal")
+                m.grid_report.copper_area_m2[s.layers[li].name] = area;
+            else
+                m.grid_report.opening_area_m2[s.layers[li].name] = area;
         }
     if (nx > static_cast<std::size_t>(o.cell_budget) / ny / nz)
         return Error{"cell_budget",

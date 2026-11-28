@@ -315,7 +315,10 @@ int run(int argc, char** argv, std::ostream* events) {
               << ",\"cell_budget\":" << options.cell_budget << ",\"min_elems_per_layer\":"
               << (min_elems_per_layer ? std::to_string(*min_elems_per_layer) : "null")
               << ",\"copper_area_m2\":{";
-    bool first_copper = true;
+    std::ostringstream copper_areas, opening_areas;
+    copper_areas << std::setprecision(17);
+    opening_areas << std::setprecision(17);
+    bool first_copper = true, first_opening = true;
     for (std::size_t li = 0; li < stack.layers.size(); ++li) {
         const auto& layer = stack.layers[li];
         if (!layer.copper)
@@ -332,13 +335,19 @@ int run(int argc, char** argv, std::ostream* events) {
                 });
             polygon_area = copper_union_area_m2(*source, polygons.dbu_m);
         }
-        if (!first_copper)
-            effective << ',';
-        first_copper = false;
-        effective << quote(layer.name) << ":{\"polygons\":" << polygon_area
-                  << ",\"raster\":" << raster_area << '}';
+        const bool opening = layer.copper->role == "opening";
+        auto& areas = opening ? opening_areas : copper_areas;
+        auto& first = opening ? first_opening : first_copper;
+        if (!first)
+            areas << ',';
+        first = false;
+        areas << quote(layer.name) << ":{\"polygons\":" << polygon_area
+              << ",\"raster\":" << raster_area << '}';
     }
-    effective << "}}";
+    effective << copper_areas.str() << '}';
+    if (!first_opening)
+        effective << ",\"opening_area_m2\":{" << opening_areas.str() << '}';
+    effective << '}';
     event("success", 1, effective.str(), events);
     return 0;
 }
