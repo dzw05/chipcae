@@ -1,0 +1,59 @@
+{
+  "schema": "chipcae.material_library/1",
+  "materials": [
+    {
+      "id": "sio2_eq",
+      "schema_version": "1",
+      "unit_system": "SI",
+      "density": 2201,
+      "model": "thermo_elastic",
+      "provenance": {
+        "source_type": "literature",
+        "confidence": "low",
+        "reference": "Corning Incorporated, HPFS® Fused Silica Standard Grade, Corning code 7980, Product Information Sheet, September 30, 2003, p. 2, Mechanical and Thermal Properties table (25 °C unless specified): k = 1.30 W/m K; rho = 2.201 g/cm³ (2201 kg/m³); E = 72.7 GPa; nu = 0.16; G = 31.4 GPa (consistency check only); average alpha = 0.52 ppm/K over 5–35 °C (5.2e-7 1/K). Source of the card values: https://www.tecsam.co.jp/products/tec_info/pdf/02-1.pdf ; corroborating values only: Corning HPFS® Fused Silica ArF Grade, code 7980, Product Information Sheet, p. 2, https://www.corning.com/media/worldwide/global/documents/semi%20ArF%20Grade%20Product%20Information%20Sheet%20PDF-3.pdf .",
+        "notes": "近似材料：Corning 7980 块体合成熔融石英的 25 °C 公开典型值，用作中介层 ILD 等薄膜 SiO₂ 介质的 Homogenized 等效卡；薄膜的 k、E、alpha 随热氧化、PECVD 等工艺而异，尚未按实际薄膜工艺标定，故 confidence 为 low。alpha 取 5–35 °C 区间平均值 0.52 ppm/K，作为各向同性 tangent 常数；同表另列 0–200 °C 为 0.57 ppm/K、−100–200 °C 为 0.48 ppm/K，仅在此记录，不入表。k、E、nu 取 25 °C 单值，rho 取块体常数，均不建模温度相关性；弹性和 CTE 表在 250 K、400 K 两点同值，这两个温度仅为表格端点，不是测量温度，表间线性插值、表外钳位。应力自由温度 298.15 K 是与现有材料库一致的方法选择，非实测材料参数。"
+      },
+      "elastic": {
+        "symmetry": "isotropic",
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "E": [
+              72.7e9,
+              72.7e9
+            ],
+            "nu": [
+              0.16,
+              0.16
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      },
+      "thermal_expansion": {
+        "cte_type": "tangent",
+        "symmetry": "isotropic",
+        "stress_free_temperature": 298.15,
+        "table": {
+          "temperatures": [
+            250,
+            400
+          ],
+          "columns": {
+            "alpha": [
+              5.2e-7,
+              5.2e-7
+            ]
+          },
+          "interpolation": "linear",
+          "extrapolation": "clamp"
+        }
+      },
+      "conductivity": 1.30
+    }
+  ]
+}
