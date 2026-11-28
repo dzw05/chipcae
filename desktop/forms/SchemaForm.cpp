@@ -14,9 +14,12 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <jsoncons_ext/jsonpointer/jsonpointer.hpp>
+#include <string_view>
 
 namespace chipcae::desktop {
 namespace {
+constexpr std::string_view hiddenEnumValues[] = {"fem_vem.solid", "pmg_colagg", "boomeramg"};
+
 QString escaped(QString key) {
     return key.replace("~", "~0").replace("/", "~1");
 }
@@ -389,24 +392,33 @@ void SchemaForm::render(QVBoxLayout* rows, const Json& input, const QString& pat
     } else if (schema.is_object() && schema.contains("enum")) {
         auto* editor = new QComboBox;
         editor->setObjectName(path);
+        Json displayed = Json::array();
         int selected = -1;
-        int i = 0;
+        int displayedIndex = 0;
         for (const auto& option : schema.at("enum").array_range()) {
-            editor->addItem(text(option));
-            if (option == value) {
-                selected = i;
+            bool hidden = false;
+            if (option.is_string()) {
+                for (const auto candidate : hiddenEnumValues)
+                    hidden = hidden || option.as_string_view() == candidate;
             }
-            ++i;
+            if (hidden && option != value)
+                continue;
+            editor->addItem(text(option));
+            displayed.push_back(option);
+            if (option == value) {
+                selected = displayedIndex;
+            }
+            ++displayedIndex;
         }
         if (selected < 0) {
             editor->addItem("Invalid: " + text(value));
-            selected = i;
+            selected = displayedIndex;
         }
         editor->setCurrentIndex(selected);
         rows->addWidget(editor);
-        connect(editor, &QComboBox::activated, this, [this, path, schema](int index) {
-            if (static_cast<std::size_t>(index) < schema.at("enum").size()) {
-                setValue(path, schema.at("enum").at(index));
+        connect(editor, &QComboBox::activated, this, [this, path, displayed](int index) {
+            if (index >= 0 && static_cast<std::size_t>(index) < displayed.size()) {
+                setValue(path, displayed.at(index));
             }
         });
     } else {

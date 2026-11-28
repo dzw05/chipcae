@@ -238,6 +238,145 @@ void schemaPathTests(const QString& root) {
     require(failures == 0, "schema path acceptance failures");
 }
 
+// These scenarios catch unavailable choices leaking into menus and filtered-index writes.
+static void hiddenEnumAcceptance() {
+    QTemporaryDir schemas;
+    require(schemas.isValid(), "hidden enum temporary schema directory");
+    const auto schemaPath = schemas.filePath("enum.schema.json");
+    const auto schema = Json::parse(R"({"type":"object","properties":{
+        "s":{"enum":["fem.solid","fvm.solid","fem_vem.solid"]},
+        "pc":{"enum":["column_gmg","direct","jacobi","gamg","pmg_colagg","boomeramg"]}
+    }})");
+    auto load = [&](SchemaForm& form, const Json& source, const Json& document) {
+        QFile file(schemaPath);
+        require(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "open enum schema");
+        const auto bytes = QByteArray::fromStdString(source.to_string());
+        require(file.write(bytes) == bytes.size(), "write complete enum schema");
+        file.close();
+        require(form.load(schemaPath, document), "load enum schema and document");
+    };
+    auto editor = [](SchemaForm& form, const char* path) {
+        auto* combo = form.findChild<QComboBox*>(path);
+        require(combo != nullptr, "enum editor exists at exact JSON pointer");
+        return combo;
+    };
+    auto choices = [](QComboBox* combo, const QStringList& expected, const QString& selected) {
+        require(combo->count() == expected.size(), "enum count matches retained values exactly");
+        for (int i = 0; i < combo->count(); ++i)
+            require(combo->itemText(i) == expected.at(i),
+                    "enum text and schema order match exactly");
+        require(combo->currentText() == selected, "enum current text matches exactly");
+    };
+    int failures = 0;
+    auto run = [&](const char* name, auto test) {
+        try {
+            test();
+            std::cout << "PASS D14n-1 " << name << '\n';
+        } catch (const std::exception& error) {
+            ++failures;
+            std::cerr << "FAIL D14n-1 " << name << ": " << error.what() << '\n';
+        }
+    };
+    const auto ordinary = Json::parse(R"({"s":"fem.solid","pc":"column_gmg"})");
+    run("ordinary solver hides fem_vem", [&] {
+        SchemaForm form;
+        load(form, schema, ordinary);
+        choices(editor(form, "/s"), {"fem.solid", "fvm.solid"}, "fem.solid");
+    });
+    run("ordinary preconditioner hides unavailable values", [&] {
+        SchemaForm form;
+        load(form, schema, ordinary);
+        choices(editor(form, "/pc"), {"column_gmg", "direct", "jacobi", "gamg"}, "column_gmg");
+    });
+    run("repeated displayed activations write their values", [&] {
+        SchemaForm form;
+        load(form, schema, ordinary);
+        auto* solver = editor(form, "/s");
+        auto* pc = editor(form, "/pc");
+        for (int i = 0; i < 2; ++i) {
+            solver->setCurrentIndex(1);
+            solver->activated(1);
+            require(form.document().at("s") == "fvm.solid", "displayed solver index 1 writes fvm");
+            pc->setCurrentIndex(3);
+            pc->activated(3);
+            require(form.document().at("pc") == "gamg",
+                    "displayed preconditioner index 3 writes gamg");
+        }
+    });
+    run("current fem_vem is retained and selected", [&] {
+        SchemaForm form;
+        load(form, schema, Json::parse(R"({"s":"fem_vem.solid","pc":"pmg_colagg"})"));
+        choices(editor(form, "/s"), {"fem.solid", "fvm.solid", "fem_vem.solid"}, "fem_vem.solid");
+    });
+    run("current pmg_colagg retains only itself among hidden preconditioners", [&] {
+        SchemaForm form;
+        load(form, schema, Json::parse(R"({"s":"fem_vem.solid","pc":"pmg_colagg"})"));
+        choices(editor(form, "/pc"),
+                {"column_gmg", "direct", "jacobi", "gamg", "pmg_colagg"},
+                "pmg_colagg");
+    });
+    run("current boomeramg retains only itself among hidden preconditioners", [&] {
+        SchemaForm form;
+        load(form, schema, Json::parse(R"({"s":"fem.solid","pc":"boomeramg"})"));
+        require(editor(form, "/pc")->currentIndex() == 4,
+                "retained boomeramg is selected at displayed index 4 after hidden pmg_colagg");
+        choices(editor(form, "/pc"),
+                {"column_gmg", "direct", "jacobi", "gamg", "boomeramg"},
+                "boomeramg");
+    });
+    run("interleaved hidden solver does not shift activation mapping", [&] {
+        SchemaForm form;
+        load(form,
+             Json::parse(R"({"type":"object","properties":{"s":{
+            "enum":["fem.solid","fem_vem.solid","fvm.solid"]}}})"),
+             Json::parse(R"({"s":"fem.solid"})"));
+        auto* combo = editor(form, "/s");
+        for (int i = 0; i < 2; ++i) {
+            combo->setCurrentIndex(1);
+            combo->activated(1);
+            require(form.document().at("s") == "fvm.solid",
+                    "interleaved displayed index 1 writes fvm.solid");
+        }
+        choices(combo, {"fem.solid", "fvm.solid"}, "fvm.solid");
+    });
+    run("case variants remain visible in schema order", [&] {
+        SchemaForm form;
+        load(form,
+             Json::parse(R"({"type":"object","properties":{"s":{
+            "enum":["fem.solid","FEM_VEM.SOLID","Fem_vem.solid"]}}})"),
+             Json::parse(R"({"s":"fem.solid"})"));
+        choices(editor(form, "/s"), {"fem.solid", "FEM_VEM.SOLID", "Fem_vem.solid"}, "fem.solid");
+    });
+    run("all hidden keeps inert Invalid item", [&] {
+        SchemaForm form;
+        const auto source = Json::parse(R"({"type":"object","properties":{"s":{
+            "enum":["fem_vem.solid"]}}})");
+        const auto document = Json::parse(R"({"s":"fem.solid"})");
+        load(form, source, document);
+        auto* combo = editor(form, "/s");
+        choices(combo, {"Invalid: fem.solid"}, "Invalid: fem.solid");
+        for (int i = 0; i < 2; ++i) {
+            combo->activated(0);
+            require(form.document() == document, "activating synthetic Invalid item cannot write");
+        }
+    });
+    run("empty enum keeps inert Invalid item", [&] {
+        SchemaForm form;
+        const auto source = Json::parse(R"({"type":"object","properties":{"s":{"enum":[]}}})");
+        const auto document = Json::parse(R"({"s":"fem.solid"})");
+        load(form, source, document);
+        auto* combo = editor(form, "/s");
+        // The renderer adds the invalid current value even when the schema enum is empty.
+        choices(combo, {"Invalid: fem.solid"}, "Invalid: fem.solid");
+        for (int i = 0; i < 2; ++i) {
+            combo->activated(0);
+            require(form.document() == document,
+                    "activating empty enum's Invalid item cannot write");
+        }
+    });
+    require(failures == 0, "D14n-1 hidden enum acceptance failures");
+}
+
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     try {
@@ -395,6 +534,7 @@ int main(int argc, char** argv) {
         std::cout
             << "Schema forms: sample, refs, enum, required, extra, nested, conditional and UI OK\n";
         schemaPathTests(root);
+        hiddenEnumAcceptance();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

@@ -540,6 +540,202 @@ static void heatSourceAcceptance() {
     require(failures == 0, "D14i-1 heat source acceptance failures");
 }
 
+// A schema-valid fem_vem fixture ensures schema rejection cannot mask a missing guard.
+static void femVemThermalAcceptance() {
+    const QString root = CHIPCAE_REPOSITORY;
+    QTemporaryDir schemas;
+    require(schemas.isValid(), "fem_vem temporary schema directory");
+    auto schema = SchemaValidator::read(root + "/schema/case-1.0.schema.json");
+    bool foundMech = false;
+    for (auto& branch : schema["properties"]["physics"]["items"]["oneOf"].array_range()) {
+        const auto& properties = branch.at("properties");
+        if (properties.at("id").at("const") != "mech")
+            continue;
+        foundMech = true;
+        auto& solvers = branch["properties"]["solver"]["enum"];
+        bool present = false;
+        for (const auto& solver : solvers.array_range())
+            present = present || solver == "fem_vem.solid";
+        if (!present)
+            solvers.push_back("fem_vem.solid");
+    }
+    require(foundMech, "official schema contains mech oneOf branch");
+    const auto schemaPath = schemas.filePath("case-1.0.schema.json");
+    QFile file(schemaPath);
+    require(file.open(QIODevice::WriteOnly), "open fem_vem schema copy");
+    const auto bytes = QByteArray::fromStdString(schema.to_string());
+    require(file.write(bytes) == bytes.size(), "write complete fem_vem schema copy");
+    file.close();
+    require(QFile::copy(root + "/schema/parameters.schema.json",
+                        schemas.filePath("parameters.schema.json")),
+            "copy external parameters schema dependency");
+    const SchemaValidator validator(schemaPath);
+    const auto femVem = Json::parse(R"({
+        "schema":"chipcae.case/1.0",
+        "stack":{"ref":"fcbga_demo.stack.json"},
+        "materials":{"ref":"fcbga_demo.materials.json"},
+        "mesh":{"type":"aligned_cartesian_cut","nx":2,"ny":2,"max_ratio":10,
+                "levels":1,"cut":{"stabilization":"ghost_penalty"}},
+        "physics":[{"id":"mech","solver":"fem_vem.solid"}],
+        "loads":[{"id":"uniform","type":"uniform_temperature","T_ref":298.15,"T_target":398.15}],
+        "constraints":{"rigid":"3-2-1"},
+        "output":{"format":"vtkhdf","warpage":{"standard":"JESD22-B112","remove_rigid":"best_fit_plane"}}
+    })");
+    require(validator.validate(femVem).empty(),
+            "fem_vem guard fixture validates against extended schema");
+    const auto enabledFem = Json::parse(R"({
+        "schema":"chipcae.case/1.0",
+        "stack":{"ref":"fcbga_demo.stack.json"},
+        "materials":{"ref":"fcbga_demo.materials.json"},
+        "mesh":{"type":"aligned_cartesian_cut","nx":2,"ny":2,"max_ratio":10,
+                "levels":1,"cut":{"stabilization":"ghost_penalty"}},
+        "physics":[{"id":"mech","solver":"fem.solid","temp_from":"thermal","T_ref":298.15},
+                   {"id":"thermal","solver":"fem.conduction","mode":"steady"}],
+        "loads":[{"id":"fixed","type":"fixed_temperature","target":"face:zmin","T":310}],
+        "constraints":{"rigid":"3-2-1"},
+        "output":{"format":"vtkhdf","warpage":{"standard":"JESD22-B112","remove_rigid":"best_fit_plane"},
+                  "fields":["T","U","layer_id","material_id","cell_kind","elem_gid"]}
+    })");
+    auto enabledFvm = enabledFem;
+    enabledFvm["physics"] = Json::parse(R"([
+        {"id":"mech","solver":"fvm.solid","temp_from":"thermal","T_ref":298.15},
+        {"id":"thermal","solver":"fem.conduction","mode":"steady"}
+    ])");
+    auto stage = [&](CaseDocument& doc, const Json& input) {
+        require(doc.load(root + "/schema/examples/fcbga_demo.case.json"),
+                "load assets before staging thermal fixture");
+        doc.applyJson(input);
+        require(doc.toJson() == input,
+                "literal thermal fixture staged without changing asset references");
+    };
+    int failures = 0;
+    auto run = [&](const char* name, auto test) {
+        try {
+            test();
+            std::cout << "PASS D14n-1 " << name << '\n';
+        } catch (const std::exception& error) {
+            ++failures;
+            std::cerr << "FAIL D14n-1 " << name << ": " << error.what() << '\n';
+        }
+    };
+    run("fem.solid thermal enable preserves literal expected behavior", [&] {
+        auto staged = femVem;
+        staged["physics"] = Json::parse(R"([{"id":"mech","solver":"fem.solid"}])");
+        staged["loads"] = Json::parse(
+            R"([{"id":"fixed","type":"fixed_temperature","target":"face:zmin","T":310}])");
+        // This staged state intentionally lacks the nonthermal uniform load. Its fixed ID
+        // avoids the random fallback ID during enabling; the expected final state is valid.
+        require(!validator.validate(staged).empty(),
+                "positive fixture is explicitly staged and schema-invalid");
+        require(validator.validate(enabledFem).empty(),
+                "literal expected FEM thermal result validates");
+        CaseDocument doc;
+        stage(doc, staged);
+        CaseTreeModel tree(&doc);
+        tree.setCaseSchemaPath(schemaPath);
+        tree.setThermalMode(true);
+        require(doc.toJson() == enabledFem,
+                "FEM enabled document equals whole literal expectation");
+    });
+    run("fvm.solid thermal enable preserves literal expected behavior", [&] {
+        auto staged = femVem;
+        staged["physics"] = Json::parse(R"([{"id":"mech","solver":"fvm.solid"}])");
+        staged["loads"] = Json::parse(
+            R"([{"id":"fixed","type":"fixed_temperature","target":"face:zmin","T":310}])");
+        require(!validator.validate(staged).empty(),
+                "FVM positive fixture is explicitly schema-invalid");
+        require(validator.validate(enabledFvm).empty(),
+                "literal expected FVM thermal result validates");
+        CaseDocument doc;
+        stage(doc, staged);
+        CaseTreeModel tree(&doc);
+        tree.setCaseSchemaPath(schemaPath);
+        tree.setThermalMode(true);
+        require(doc.toJson() == enabledFvm,
+                "FVM enabled document equals whole literal expectation");
+    });
+    run("fem_vem rejects repeated thermal enabling without any mutation", [&] {
+        CaseDocument doc;
+        stage(doc, femVem);
+        CaseTreeModel tree(&doc);
+        tree.setCaseSchemaPath(schemaPath);
+        const auto before = doc.toJson();
+        int mutations = 0;
+        bool conduction = false;
+        for (int i = 0; i < 2; ++i) {
+            tree.setThermalMode(true);
+            if (doc.toJson() != before)
+                ++mutations;
+            const auto physics = doc.toJson().at("physics");
+            for (const auto& entry : physics.array_range())
+                conduction = conduction || entry.at("solver") == "fem.conduction";
+        }
+        require(mutations == 0, "each fem_vem enable must preserve the complete pre-call document");
+        require(!conduction, "neither fem_vem enable adds fem.conduction");
+    });
+    run("disabling nonthermal fem_vem leaves complete document unchanged", [&] {
+        CaseDocument doc;
+        stage(doc, femVem);
+        CaseTreeModel tree(&doc);
+        tree.setCaseSchemaPath(schemaPath);
+        const auto before = doc.toJson();
+        tree.setThermalMode(false);
+        require(doc.toJson() == before, "nonthermal fem_vem disable is an exact no-op");
+    });
+    run("disabling already thermal fem_vem remains supported", [&] {
+        auto thermal = enabledFem;
+        thermal["physics"] = Json::parse(R"([
+            {"id":"mech","solver":"fem_vem.solid","temp_from":"thermal","T_ref":298.15},
+            {"id":"thermal","solver":"fem.conduction","mode":"steady"}
+        ])");
+        require(validator.validate(thermal).empty(),
+                "already thermal fem_vem fixture is schema-valid");
+        const auto expected = Json::parse(R"({
+            "schema":"chipcae.case/1.0",
+            "stack":{"ref":"fcbga_demo.stack.json"},
+            "materials":{"ref":"fcbga_demo.materials.json"},
+            "mesh":{"type":"aligned_cartesian_cut","nx":2,"ny":2,"max_ratio":10,
+                    "levels":1,"cut":{"stabilization":"ghost_penalty"}},
+            "physics":[{"id":"mech","solver":"fem_vem.solid","T_ref":298.15}],
+            "loads":[{"type":"uniform_temperature","T_ref":298.15,"T_target":398.15}],
+            "constraints":{"rigid":"3-2-1"},
+            "output":{"format":"vtkhdf","warpage":{"standard":"JESD22-B112","remove_rigid":"best_fit_plane"},
+                      "fields":["T","U","layer_id","material_id","cell_kind","elem_gid"]}
+        })");
+        CaseDocument doc;
+        stage(doc, thermal);
+        CaseTreeModel tree(&doc);
+        tree.setCaseSchemaPath(schemaPath);
+        tree.setThermalMode(false);
+        auto actual = doc.toJson();
+        require(validator.validate(actual).empty(), "disabled fem_vem document validates");
+        require(actual.at("loads").size() == 1,
+                "disable creates exactly one fallback uniform load");
+        auto& load = actual["loads"][0];
+        require(load.contains("id") && load.at("id").is_string(), "fallback load has string id");
+        require(QRegularExpression("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
+                    .match(QString::fromStdString(load.at("id").as<std::string>()))
+                    .hasMatch(),
+                "fallback load id has UUID format");
+        // The only nondeterministic value is checked independently before normalization.
+        load.erase("id");
+        require(actual == expected,
+                "disabled fem_vem equals literal document apart from generated UUID");
+    });
+    run("missing physics thermal enable is unchanged", [&] {
+        auto missingPhysics = femVem;
+        missingPhysics.erase("physics");
+        CaseDocument doc;
+        stage(doc, missingPhysics);
+        CaseTreeModel tree(&doc);
+        tree.setCaseSchemaPath(schemaPath);
+        const auto before = doc.toJson();
+        tree.setThermalMode(true);
+        require(doc.toJson() == before, "missing physics enable preserves complete document");
+    });
+    require(failures == 0, "D14n-1 fem_vem thermal acceptance failures");
+}
+
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     try {
@@ -649,6 +845,7 @@ int main(int argc, char** argv) {
         caseSchemaPathAcceptance();
         std::cout << "tree tests passed\n";
         heatSourceAcceptance();
+        femVemThermalAcceptance();
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;
