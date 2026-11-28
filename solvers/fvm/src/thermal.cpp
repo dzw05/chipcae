@@ -330,12 +330,12 @@ Expected<ThermalResult> detail::solve_thermal_on_comm(const FvGrid& g,
             check(KSPSetNormType(solver.value, KSP_NORM_UNPRECONDITIONED), "norm type");
             check(KSPSetInitialGuessNonzero(solver.value, PETSC_FALSE), "zero initial guess");
             check(KSPSetOptionsPrefix(solver.value, "fvm_thermal_"), "options prefix");
-            // Options configure KSP; independent acceptance still uses p.rtol.
+            // Preserve the configured global target across independent checks and restarts.
             check(KSPSetFromOptions(solver.value), "KSPSetFromOptions");
-            PetscReal atol = 0, divtol = 0;
+            PetscReal configured_rtol = 0, atol = 0, divtol = 0;
             PetscInt max_iterations = 0;
             KSPNormType norm_type;
-            check(KSPGetTolerances(solver.value, nullptr, &atol, &divtol, &max_iterations),
+            check(KSPGetTolerances(solver.value, &configured_rtol, &atol, &divtol, &max_iterations),
                   "effective tolerances");
             check(KSPGetNormType(solver.value, &norm_type), "effective norm type");
             check(VecSet(x.value, 0), "zero solution");
@@ -359,7 +359,7 @@ Expected<ThermalResult> detail::solve_thermal_on_comm(const FvGrid& g,
                     PetscReal rnorm = 0;
                     check(VecNorm(residual.value, NORM_2, &rnorm), "true residual norm");
                     rho = rnorm / bnorm;
-                    if (reason > 0 && std::isfinite(rho) && rho <= p.rtol) {
+                    if (reason > 0 && std::isfinite(rho) && rho <= configured_rtol) {
                         converged = true;
                         break;
                     }
@@ -367,10 +367,11 @@ Expected<ThermalResult> detail::solve_thermal_on_comm(const FvGrid& g,
                         break;
                     check(KSPSetInitialGuessNonzero(solver.value, PETSC_TRUE), "restart guess");
                     // Use the initial residual in the effective KSP norm, rather than b.
-                    // In the default unpreconditioned norm, this targets p.rtol*||b||.
+                    // In the default unpreconditioned norm, this targets configured_rtol*||b||.
                     // Injected norms still require the independent true-residual check.
-                    KSPConvergedDefaultSetUIRNorm(solver.value);
-                    const PetscReal restart_rtol = p.rtol / rho;
+                    check(KSPConvergedDefaultSetUIRNorm(solver.value),
+                          "restart initial residual norm");
+                    const PetscReal restart_rtol = configured_rtol / rho;
                     check(KSPSetTolerances(
                               solver.value, restart_rtol, atol, divtol, max_iterations - its),
                           "restart tolerances");
@@ -399,7 +400,7 @@ Expected<ThermalResult> detail::solve_thermal_on_comm(const FvGrid& g,
                     s.precision(std::numeric_limits<PetscReal>::max_digits10);
                     s << "INTERNAL: SOLVER_NOT_CONVERGED (KSP nonconvergence) field=T reason="
                       << static_cast<int>(reason) << " iterations=" << its
-                      << " true_residual=" << rho << " rtol=" << p.rtol
+                      << " true_residual=" << rho << " rtol=" << configured_rtol
                       << " norm_type=" << norm_name;
                     return mesh::Error{"fvm/thermal", s.str()};
                 }

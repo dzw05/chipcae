@@ -338,9 +338,10 @@ void accepted(const fv::ThermalResult& result,
               const Exported& exported,
               const CaseFiles& files,
               int cap,
-              int minimum_solves = 1) {
+              int minimum_solves = 1,
+              double target = rtol) {
     const auto rho = exported.residual();
-    together(std::isfinite(rho) && rho <= rtol,
+    together(std::isfinite(rho) && rho <= target,
              "independent true relative residual must be finite and <= rtol");
     // Synchronize numerical assertion failures before the following text-file collectives.
     std::string error;
@@ -373,7 +374,8 @@ int failure(const mesh::Expected<fv::ThermalResult>& result,
             const CaseFiles& files,
             const std::string& norm,
             int cap,
-            int minimum_solves = 1) {
+            int minimum_solves = 1,
+            double configured_rtol = rtol) {
     together(!result, "solve must return error without ThermalResult");
     const auto& error = result.error();
     std::string canonical_path = error.path, canonical_reason = error.reason;
@@ -403,7 +405,7 @@ int failure(const mesh::Expected<fv::ThermalResult>& result,
     require(its >= 0 && its <= cap, "total iteration budget exceeded: " + error.reason);
     const auto rho = diagnostic_real(fields[3].str());
     const auto target = diagnostic_real(fields[4].str());
-    near(target, rtol, 0, 0, "diagnostic rtol must equal the requested global target");
+    near(target, configured_rtol, 0, 0, "diagnostic rtol must equal the configured global target");
     require(fields[5].str() == norm, "diagnostic must report effective norm: " + error.reason);
     require(reason < 0 || rho > target,
             "positive-reason rejection must explain an excessive true residual: " + error.reason);
@@ -447,6 +449,29 @@ void capped(bool options) {
         f.problem.max_iter = 3;
     require(failure(solve(f), files, "unpreconditioned", 3) == -3,
             "iteration cap must report KSP_DIVERGED_ITS (-3)");
+}
+void configured_target() {
+    CaseFiles files;
+    files.set("ksp_rtol", "9e-9");
+    auto f = fixture(true, "gamg");
+    f.problem.rtol = 1e-10;
+    auto result = solve(f);
+    together(bool(result), "configured relative tolerance must govern independent acceptance");
+    Exported exported(files);
+    accepted(result.value(), exported, files, f.problem.max_iter, 1, 9e-9);
+    together(exported.solves == 1,
+             "configured convergence must not trigger an unnecessary restart");
+    together(exported.residual() > f.problem.rtol,
+             "fixture must distinguish configured tolerance from the problem tolerance");
+    converged_text(files);
+}
+void configured_failure() {
+    CaseFiles files;
+    files.set("ksp_rtol", "9e-9");
+    auto f = fixture(true, "jacobi");
+    f.problem.max_iter = 3;
+    require(failure(solve(f), files, "unpreconditioned", 3, 1, 9e-9) == KSP_DIVERGED_ITS,
+            "iteration-capped diagnostic must preserve the configured relative tolerance");
 }
 
 struct OldResult {
@@ -559,7 +584,7 @@ void restart_target() {
     auto result = solve(f);
     together(bool(result), "restart must reach the requested global target");
     Exported exported(injected);
-    accepted(result.value(), exported, injected, f.problem.max_iter, 2);
+    accepted(result.value(), exported, injected, f.problem.max_iter, 2, 9e-9);
     together(result.value().iterations > old.iterations, "old-norm injection must restart");
     root_io([&] {
         const auto view = read_text(injected.directory / "view.txt");
@@ -576,10 +601,10 @@ void restart_target() {
         // PETSc's ASCII view prints tolerances with %g (six significant digits).
         near(tolerance(first), 9e-9, 0, 1e-5, "prefixed tolerance must apply to initial solve");
         near(tolerance(last) * old.rho,
-             rtol,
+             9e-9,
              0,
              1e-5,
-             "restarted KSP must target problem.rtol times the original RHS norm");
+             "restarted KSP must preserve the configured target times the original RHS norm");
     });
 }
 void divergence() {
@@ -681,9 +706,12 @@ int main(int argc, char** argv) {
                     [&] { convergence(cut, pc); });
         run("problem max_iter=3 rejects without fields", [] { capped(false); });
         run("prefixed max_it=3 remains authoritative", [] { capped(true); });
+        run("prefixed rtol governs independent acceptance without extra restarts",
+            configured_target);
+        run("prefixed rtol is preserved in nonconvergence diagnostics", configured_failure);
         run("old positive convergence cannot bypass true residual guard", false_green);
         run("old-norm restart respects prefixed total iteration budget", restart_budget);
-        run("restart restores global target after a tighter initial tolerance", restart_target);
+        run("restart preserves the effective configured global target", restart_target);
         run("injected no-PC one-iteration divergence is structured", divergence);
         run("positive reason with zero progress rejects without restarting", zero_progress);
         run("zero RHS with unknowns keeps zero diagnostics", zero_rhs);
