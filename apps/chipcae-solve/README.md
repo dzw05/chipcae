@@ -292,3 +292,41 @@ This optional sidecar leaves the manifest and VTKHDF format unchanged. Expect ro
 4–5 KB per cell, or approximately 0.5 GB for 100,000 cells. Export streams one cell at a
 time and logs local `q2_export elements=… nodes=… bytes=… seconds=…` metrics through the
 existing event logger (persisted on rank 0).
+
+## K1 stop measure (CHIPCAE_K1_STOP)
+
+`CHIPCAE_K1_STOP` is an internal switch, off by default. Unset or `legacy` keeps the
+existing direct solve and timing output. The exact value `ir` enables mixed precision
+iterative refinement for the displacement field U when the selected preconditioner is
+`direct` on a structured (non-clipped) mesh. Clipped meshes retain legacy refinement
+and timing output even when `ir` is selected. Other values, including an empty string
+or `IR`, fail with
+`CHIPCAE_K1_STOP must be unset, legacy or ir`.
+
+The acceptance gate is the explicitly recomputed binary64 residual
+`rel_d = ||b-Ax||₂ / ||b||₂ <= 1e-12`, with `atol=0` and no residual floor. Products
+and sums follow CSR row order without implicit FMA contraction. Correction residuals
+use portable double-double accumulation (Ogita–Rump–Oishi Dot2, Knuth TwoSum and explicit
+`std::fma` TwoProduct); the solution, factors and corrections remain binary64. No
+extended `long double` precision is required. Zero numerator and denominator give a
+zero ratio; a nonzero numerator over zero gives infinity, including for the diagnostic
+estimates.
+
+Refinement reuses the existing scaled PETSc LU factors. A zero Dot2 residual stops
+immediately; otherwise stagnation is checked after at least two corrections, using
+`rel_e > previous_rel_e/2`, with at most nine corrections. Satisfying the gate alone
+does not stop refinement. The smallest binary64 relative residual is retained, with
+later iterates winning ties. Nonfinite inputs, intermediates or statistics invalidate
+the solve. Invalid results or a retained residual above the gate fail with
+`K1 stop measure failed: ...`; there is no fallback to legacy.
+
+The existing U timing line gains `k1_stop`, `rel_d`, `rel_e`, `est_inf`, `est_abs`,
+`ir_corrections`, `gate`, `atol`, `gate_precision=binary64`, `gate_order=csr_row`,
+`residual_precision=double-double` and `k1_ir_seconds`. The estimates and backward
+errors are diagnostics only. Structured Residual events retain their existing norm
+and the result formats remain unchanged. T and column_gmg (including its direct
+fallback) retain their existing refinement.
+
+The intended scope is the structured Q2 direct solve on synthetic boxes with 2–16
+cells per layer (up to about 44,000 displacement DOFs), and manufactured unit systems
+up to 10,000 unknowns. No accuracy claim is made for kz >= 32 or iterative solvers.

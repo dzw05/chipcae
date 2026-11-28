@@ -410,3 +410,27 @@ if(_solve_backend AND TARGET chipcae-preview)
     set_tests_properties(solve_n8_geometry PROPERTIES
         TIMEOUT 300 LABELS "solve;mesh;cut;geometry")
 endif()
+
+if(_solve_backend)
+    add_executable(chipcae_test_k1_stop test_k1_stop.cpp)
+    target_include_directories(chipcae_test_k1_stop PRIVATE ${PROJECT_SOURCE_DIR}/apps/chipcae-solve/src)
+    target_link_libraries(chipcae_test_k1_stop PRIVATE chipcae_solve_k1_stop)
+    # The independent Thomas and long-double oracles also require sequential rounding.
+    target_compile_options(chipcae_test_k1_stop PRIVATE
+        $<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-ffp-contract=off -fno-fast-math>)
+    chipcae_set_warnings(chipcae_test_k1_stop)
+    add_test(NAME solve_k1_stop COMMAND chipcae_test_k1_stop)
+    set_tests_properties(solve_k1_stop PROPERTIES TIMEOUT 120 LABELS "solve;numerical")
+endif()
+if(_solve_backend AND Python3_EXECUTABLE)
+    add_test(NAME solve_k1_stop_e2e COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_k1_stop_e2e.py
+        $<TARGET_FILE:chipcae-solve> ${MPIEXEC_EXECUTABLE} ${PROJECT_SOURCE_DIR})
+    set_tests_properties(solve_k1_stop_e2e PROPERTIES TIMEOUT 900 LABELS "solve;numerical;mpi"
+        ENVIRONMENT "OMP_NUM_THREADS=2;OPENBLAS_NUM_THREADS=1;OMPI_ALLOW_RUN_AS_ROOT=1;OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1")
+endif()
+
+if(_solve_backend AND TARGET chipcae_test_solve_parts)
+    # The generated parts harness includes pipeline.cpp and needs its K1 implementation.
+    target_link_libraries(chipcae_test_solve_parts PRIVATE chipcae_solve_k1_stop)
+endif()
