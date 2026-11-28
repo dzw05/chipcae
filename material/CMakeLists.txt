@@ -336,3 +336,14 @@ if(CHIPCAE_MATERIAL_ENABLE_TESTS)
     set_tests_properties(material_library_silicon PROPERTIES LABELS tierA TIMEOUT 60
         ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
 endif()
+
+if(CHIPCAE_MATERIAL_ENABLE_TESTS)
+    add_executable(material_library_sio2_eq tests/library_sio2_eq.cpp)
+    target_link_libraries(material_library_sio2_eq PRIVATE chipcae_material)
+    target_include_directories(material_library_sio2_eq SYSTEM PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../desktop/third_party/jsoncons/include)
+    add_test(NAME material_library_sio2_eq COMMAND material_library_sio2_eq
+        ${CMAKE_CURRENT_SOURCE_DIR}/library/sio2_eq.materials.json)
+    set_tests_properties(material_library_sio2_eq PROPERTIES LABELS tierA TIMEOUT 60
+        ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
+endif()
