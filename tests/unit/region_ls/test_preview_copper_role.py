@@ -95,7 +95,8 @@ class PreviewCopperRole(unittest.TestCase):
     def invoke(self, source, nx=4, ny=4, success=True):
         stem = self.root / 'mesh'
         command = [str(self.preview), str(source), '-o', str(stem),
-                   '--nx', str(nx), '--ny', str(ny), '--levels', '1']
+                   '--nx', str(nx), '--ny', str(ny), '--levels', '1',
+                   '--max-ratio', '10']
         try:
             result = subprocess.run(command, capture_output=True, text=True,
                                     env=self.env, timeout=8)

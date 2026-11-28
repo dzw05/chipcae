@@ -21,7 +21,7 @@ StackModel fraction_stack() {
         layer.name = name;
         layer.kind = "Patterned";
         layer.material = "fr4_eq";
-        layer.thickness = .1;
+        layer.thickness = .5;
         layer.n_elem_min = 1;
         layer.copper = CopperSpec{};
         layer.copper->metal = "cu";
